@@ -49,6 +49,9 @@ type DeployInput struct {
 	ServerIDs  []string
 	// Config 是可选部署参数(如目标路径);本期最小消费(dist 用 Path 决定部署目录)。
 	Config map[string]string
+	// HealthCheck 是可选的部署后健康门控(Story 4.3 / FR-12)。
+	// nil 或 type=none → 跳过(向后兼容 4-2:部署命令成功即 success)。
+	HealthCheck *HealthCheck
 }
 
 // TargetResult 是一台目标机的部署结果(与 run.DeployTarget 同形,供 HTTP 层映射回 DTO)。
@@ -137,7 +140,7 @@ func (s *service) Deploy(ctx context.Context, in DeployInput) ([]TargetResult, e
 	// 4) 逐机执行部署命令(顺序;失败不连累其它机。多机并行细节留 4-5)。
 	results := make([]TargetResult, 0, len(servers))
 	for _, srv := range servers {
-		results = append(results, s.deployOne(ctx, srv, *artifact, in.Config))
+		results = append(results, s.deployOne(ctx, srv, *artifact, in.Config, in.HealthCheck))
 	}
 
 	// 5) 持久化每机结果(填 run-detail targets slot)。
@@ -166,8 +169,10 @@ func (s *service) Deploy(ctx context.Context, in DeployInput) ([]TargetResult, e
 }
 
 // deployOne 在一台目标机上构造并执行该产物类型的部署命令,返回该机结果。
+// 部署命令全部成功后,若配置了健康检查(Story 4.3),再经同一 Exec 链路做健康门控:
+// 探测通过 → success(message 含"健康检查通过");重试耗尽仍失败 → failed + 人读 message。
 // 执行错误**不上抛**:映射为 status=failed + 人读 message(绝无明文密钥)。
-func (s *service) deployOne(ctx context.Context, srv *target.Server, a run.Artifact, cfg map[string]string) TargetResult {
+func (s *service) deployOne(ctx context.Context, srv *target.Server, a run.Artifact, cfg map[string]string, hc *HealthCheck) TargetResult {
 	started := time.Now().UTC()
 	res := TargetResult{
 		ServerID:   srv.ID,
@@ -205,6 +210,23 @@ func (s *service) deployOne(ctx context.Context, srv *target.Server, a run.Artif
 			res.FinishedAt = &finish
 			return res
 		}
+	}
+
+	// 部署命令全部成功 → 若配置了健康检查,做部署后健康门控(Story 4.3 / FR-12)。
+	// 探测在部署命令成功之后跑;每机独立;经同一 target.Exec 链路(array 不拼 shell)。
+	if hc.enabled() {
+		if herr := s.runHealthCheck(execCtx, srv.ID, hc); herr != nil {
+			finish := time.Now().UTC()
+			res.Status = run.TargetFailed
+			res.Message = herr.Error()
+			res.FinishedAt = &finish
+			return res
+		}
+		finish := time.Now().UTC()
+		res.Status = run.TargetSuccess
+		res.Message = summary + "(健康检查通过)"
+		res.FinishedAt = &finish
+		return res
 	}
 
 	finish := time.Now().UTC()

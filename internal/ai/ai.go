@@ -20,7 +20,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -286,10 +288,17 @@ func (s *service) Test(ctx context.Context, in TestInput) (*TestResult, error) {
 
 // probe 向 provider 发轻量探测;2xx → ok+延迟;否则 ok=false + 人读错误(绝无密钥)。
 func (s *service) probe(ctx context.Context, provider, baseURL, apiKey string) *TestResult {
-	url, header := probeRequest(provider, baseURL, apiKey)
+	// SSRF 收口:baseUrl 用户可控,探测向其发请求——拒云元数据/链路本地/未指定;
+	// 回环仅 ollama(本地默认 localhost:11434)放行,其余 provider 拒回环;私网放行(自托管,
+	// 与仓库既定策略一致)。否则管理员可借 test 探测做内网/元数据端口探活(盲 SSRF)。
+	if !validProbeURL(provider, baseURL) {
+		return &TestResult{OK: false, Error: "baseUrl 不被允许:仅 http/https,且不可指向云元数据/链路本地地址"}
+	}
+
+	reqURL, header := probeRequest(provider, baseURL, apiKey)
 
 	start := time.Now()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		// URL 构造失败(如 baseUrl 非法):人读错误,绝不含 key。
 		return &TestResult{OK: false, Error: "请求构造失败:baseUrl 可能非法"}
@@ -415,10 +424,13 @@ func (s *service) load(ctx context.Context) (*Config, []byte, error) {
 	}
 
 	// 掩码:有密钥时解密即时算掩码、明文用完即弃;无密钥(ollama / 未设)为空。
+	// master key 缺失/轮换致密钥不可解密时**优雅降级**(NFR-10):掩码退化为占位,
+	// 其余字段(provider/baseUrl/model/budget/enabled)照常返回,**不让整个 GET 503**;
+	// 需要明文的 Save/Test 仍在各自解密路径报 ErrVaultUnconfigured。
 	if len(sealed) > 0 {
 		masked, merr := s.maskSealed(sealed)
 		if merr != nil {
-			return nil, nil, merr
+			masked = "••••" // 占位:有密钥但当前不可读
 		}
 		cfg.APIKeyMasked = masked
 	}
@@ -471,10 +483,48 @@ func (s *service) maskSealed(sealed []byte) (string, error) {
 // 不足以还原密钥;短 key 全掩码。
 func maskKey(key string) string {
 	const dots = "••••"
-	if len(key) <= 4 {
+	r := []rune(key)
+	if len(r) <= 4 {
 		return dots
 	}
-	return dots + key[len(key)-4:]
+	return dots + string(r[len(r)-4:]) // 按 rune 取末 4,避免切坏多字节 UTF-8
+}
+
+// validProbeURL 对 test 探测 baseUrl 做 SSRF 收口:scheme 仅 http/https;**恒拒云元数据
+// (169.254.169.254,链路本地)/链路本地/未指定地址**(最高价值 SSRF 目标)。
+// 回环(本地 Ollama / 管理员本机)与私网(自托管内网 LLM)放行——与 analyze.go/prober「放行私网」
+// 的既定自托管姿态一致(单管理员对 localhost/内网本就有访问,不构成提权)。
+func validProbeURL(_ /*provider*/, baseURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+	default:
+		return false
+	}
+	host := u.Hostname()
+	if host == "" {
+		return false
+	}
+	blocked := func(ip net.IP) bool {
+		// 云元数据 169.254.169.254 / 链路本地 / 未指定:恒拒(回环、私网放行)。
+		return ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return !blocked(ip)
+	}
+	addrs, lerr := net.LookupIP(host)
+	if lerr != nil || len(addrs) == 0 {
+		return true // DNS 抖动不误拒;探测自身会自然失败
+	}
+	for _, ip := range addrs {
+		if blocked(ip) {
+			return false
+		}
+	}
+	return true
 }
 
 // isConfigured 判定配置是否「已配置」:provider 非空 +(ollama 无需 key / 否则有 key)。

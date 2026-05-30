@@ -39,7 +39,7 @@
 # - 开建 Epic 7 / 4-6 前先完成 PRD Open Q#7 的 AI 差异化前置验证实验
 
 generated: 2026-05-28
-last_updated: 2026-05-30 (code-review: 1-4/1-6/1-7/2-2/2-4 → done, 17 patches applied, D1 resolved)
+last_updated: 2026-05-30 (code-review: 2-5/2-6/7-1 → done, review patches applied; 7-2 review)
 project: devopsTool
 project_key: NOKEY
 tracking_system: file-system
@@ -63,8 +63,8 @@ development_status:
   2-2-pipeline-config-editor: done
   2-3-triggers-and-branch-mapping: done
   2-4-build-deploy-config: done
-  2-5-ai-generate-pipeline-config: review
-  2-6-pipeline-config-validation: review
+  2-5-ai-generate-pipeline-config: done
+  2-6-pipeline-config-validation: done
   epic-2-retrospective: optional
 
   # ===== Epic 3: 隔离构建与产物 =====
@@ -106,7 +106,7 @@ development_status:
 
   # ===== Epic 7: AI 失败诊断与代码洞察(王牌) =====
   epic-7: in-progress
-  7-1-configurable-ai-provider: review
+  7-1-configurable-ai-provider: done
   7-2-ai-failure-diagnosis: review
   7-3-success-fail-diff: backlog
   7-4-code-browse-diff: backlog

@@ -58,3 +58,8 @@
 ## Deferred from: 7-2 AI 失败分析 (2026-05-30)
 - failure_log 落盘前脱敏:本期诊断「发往 LLM 前 + 响应/evidence/diagnosis_json」已脱敏(AC-SEC-04 扩展);但 pipeline_runs.failure_log 原始列仍可能含明文(桩为假 secret)。3-6 真实日志落地时须对 failure_log **落盘前**也脱敏(1-4 AC-SEC-04),registerRunSecrets 从桩假 secret 改为从 vault 取该 run 实际凭据登记。
 - 失败通知推送诊断摘要(FR-22)留 Epic5;partial_failed 等其它终态本期不诊断。
+
+## Deferred from: code review of 2-5/2-6/7-1 (2026-05-30)
+- 7-1: budget 无上限校验;Test 路径 load() 调两次(效率瑕疵)。
+- 2-5: selectAll();apply() 同步读 ref 时序脆弱(当前可用,建议 apply 显式传选择集)。
+- 2-6: 触发事件全关但分支映射非空无提示(死配置盲区);镜像仓库 type 空时悬挂 credentialId 漏检(一致性瑕疵)。

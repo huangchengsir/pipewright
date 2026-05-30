@@ -69,12 +69,20 @@ func makeGetPipelineValidationHandler(
 		// 构建/部署配置。
 		st, err := ps.Get(ctx, id)
 		if err != nil {
+			if isVaultUnconfiguredErr(err) {
+				writeJSON(w, http.StatusOK, toValidationDTO(degradedVaultIssues()))
+				return
+			}
 			writeValidationError(w, err)
 			return
 		}
 		// 触发配置(密钥仅掩码;此处只读 events/分支映射)。
 		tcfg, err := tr.Get(ctx, id)
 		if err != nil {
+			if isVaultUnconfiguredErr(err) {
+				writeJSON(w, http.StatusOK, toValidationDTO(degradedVaultIssues()))
+				return
+			}
 			writeValidationError(w, err)
 			return
 		}
@@ -145,7 +153,36 @@ func buildValidationInput(
 	// 项目主凭据存在性(项目创建已要求凭据,此为兜底)。
 	in.ProjectCredentialOK = proj.CredentialID != "" && credentialExists(v, proj.CredentialID)
 
+	// 保险库未配置(master key 缺失)是环境级状态:纯函数据此抑制 credential_missing 误报、
+	// 改发 vault_unconfigured warning,而非把「保险库没起来」呈现为「所有凭据悬挂」。
+	in.VaultUnconfigured = vaultUnconfigured(v)
+
 	return in
+}
+
+// isVaultUnconfiguredErr 判断聚合读取错误是否为「保险库未配置 master key」类(settings/trigger/vault)。
+// 保险库未起来是环境级状态,不应让 validation 落 500;短路为降级提示。
+func isVaultUnconfiguredErr(err error) bool {
+	return errors.Is(err, vault.ErrVaultUnconfigured) ||
+		errors.Is(err, trigger.ErrVaultUnconfigured) ||
+		errors.Is(err, pipeline.ErrSettingsVaultUnconfigured)
+}
+
+// degradedVaultIssues 返回保险库未配置时的降级校验结果(单条 warning,不报一堆 credential_missing)。
+func degradedVaultIssues() []pipeline.Issue {
+	return []pipeline.Issue{{
+		Severity: pipeline.SeverityWarning, Code: "vault_unconfigured", Scope: pipeline.ScopeEnvs,
+		Field: "", Message: "保险库未配置 master key,暂无法校验流水线配置;请先在 设置·凭据保险库 配置",
+	}}
+}
+
+// vaultUnconfigured 报告保险库是否未配置 master key(nil 或 Exists 返回 ErrVaultUnconfigured)。
+func vaultUnconfigured(v vault.Vault) bool {
+	if v == nil {
+		return true
+	}
+	_, err := v.Exists("__vault_probe__")
+	return errors.Is(err, vault.ErrVaultUnconfigured)
 }
 
 // toValidationVars 把领域变量转中性视图;secret 项经 vault.Exists 预判引用存在性。

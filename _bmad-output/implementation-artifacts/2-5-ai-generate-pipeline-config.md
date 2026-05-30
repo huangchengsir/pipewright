@@ -88,3 +88,9 @@ Base:认证保护,写过 CSRF,`MaxBytesReader` 限体。错误体 `{"error":{"co
 - **前端必跑 `npm --prefix web run typecheck`(不是 build!)** + build。
 - 真二进制:**未配 AI → ai-generate available=false 友好 reason,手动建项目不受阻** · 配置指向**本地 stub LLM** + **本地 file:// node 夹具仓库**(test-only 放行)→ generate 返回 analysis(language=node/version=22)+ proposal(node:22 build) · NL 补充重生成反映 main→生产 · apply 全选 → spec+settings+triggers 写入(GET 各端点确认) · apply 部分选 → 仅勾选项写入 · clone 失败(不可达 url)→ cloned=false 降级不 500 · **响应/日志/DB 无明文 key** · 401/403/404。
 - 真浏览器:ProjectPipeline「AI 生成流水线」开向导 · 生成中态 · 分析卡 + 提案预览勾选 · NL 输入重生成 · 全部/部分接受 → 画布刷新 · 未配 AI 友好引导 · **截图肉眼审质量**(看截图,别只信正则;selector 精确)。
+
+## Review Findings (code-review 2026-05-30,综合对抗)
+**已修 patch:**
+- [x] [Patch][Major] LLM 失败降级时前端崩溃:后端返 available=true+proposal=null,向导 result 块未守 proposal → 解引用 null 白屏 → 加 v-if="response.proposal" 守卫(含 footer 应用按钮)[AIGenerateWizard.vue]
+**复核通过:** 编排者已修的 apply 合并阶段重复 bug 逐路径正确;无 key 泄漏/clone SSRF/OOM 边界/两路降级均通过。
+**deferred:** selectAll();apply() 同 tick 读 ref 时序脆弱(当前可用)

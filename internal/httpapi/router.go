@@ -52,6 +52,7 @@ type options struct {
 	audit            audit.Recorder
 	account          accountService
 	aiSettings       ai.Service
+	aiAnalyzer       ai.RepoAnalyzer
 }
 
 // WithVault 注入凭据保险库,挂载 /api/credentials* 路由。
@@ -117,6 +118,13 @@ func WithAccount(s accountService) Option {
 // 下游优雅禁用,核心 CI/CD 完全不依赖此服务(NFR-10)。
 func WithAISettings(s ai.Service) Option {
 	return func(o *options) { o.aiSettings = s }
+}
+
+// WithAIGenerate 注入仓库分析器(go-git 浅克隆),挂载 /api/projects/{id}/pipeline/ai-generate
+// 与 ai-apply 路由(Story 2.5)。generate 复用已注入的 ai.Service + projects + vault;
+// apply 复用 pipelines + pipelineSettings + triggers。analyzer 为 nil 时 generate 返回 503。
+func WithAIGenerate(a ai.RepoAnalyzer) Option {
+	return func(o *options) { o.aiAnalyzer = a }
 }
 
 // New 构建 HTTP 处理器:健康端点 + Auth API + (可选)凭据 API + 内嵌 SPA 静态托管。
@@ -234,6 +242,22 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Get("/settings/ai", makeGetAISettingsHandler(aiSvc))
 		ar.Put("/settings/ai", makeSaveAISettingsHandler(aiSvc))
 		ar.Post("/settings/ai/test", makeTestAISettingsHandler(aiSvc))
+
+		// AI 生成流水线配置(Story 2.5):浅克隆分析 + LLM 生成提案 + 全/部分接受应用。
+		// generate 复用 aiSvc + projects(p)+ vault(v);apply 复用 pipelines(pl)+ settings(ps)+ triggers(t)。
+		// /pipeline/ai-generate、/pipeline/ai-apply 比 /pipeline 多一段,不会被吞;均为写方法,过 auth + CSRF。
+		// 两路优雅降级(AI 未配 / clone 失败 / LLM 失败)均 HTTP 200,绝不 500、绝无明文密钥。
+		aiGenDeps := aiGenerateDeps{
+			analyzer: o.aiAnalyzer,
+			aiSvc:    aiSvc,
+			projects: p,
+			pipes:    pl,
+			settings: ps,
+			triggers: t,
+			vault:    v,
+		}
+		ar.Post("/projects/{id}/pipeline/ai-generate", makeAIGenerateHandler(aiGenDeps))
+		ar.Post("/projects/{id}/pipeline/ai-apply", makeAIApplyHandler(aiGenDeps))
 
 		// 后续 story 在此挂载其他 API 路由。
 	})

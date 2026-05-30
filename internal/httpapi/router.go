@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/huangchengsir/pipewright/internal/ai"
+	"github.com/huangchengsir/pipewright/internal/anomaly"
 	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/auth"
 	"github.com/huangchengsir/pipewright/internal/deploy"
@@ -62,6 +63,7 @@ type options struct {
 	servers          target.Service
 	notifications    notify.Service
 	deployer         deploy.Service
+	anomaly          anomaly.Service
 }
 
 // WithVault 注入凭据保险库,挂载 /api/credentials* 路由。
@@ -178,6 +180,14 @@ func WithDeploy(s deploy.Service) Option {
 // hasPassword。不传则相关端点返回 503(服务未初始化)。
 func WithNotifications(s notify.Service) Option {
 	return func(o *options) { o.notifications = s }
+}
+
+// WithAnomaly 注入可配置异常检测服务(Story 6.5;FR-23),挂载 /api/anomaly/* 路由
+// (GET rules/alerts auth;POST rules/check + DELETE rules/{id} auth + CSRF)。检测复用 6-1
+// 指标采集(metricsCollector 适配 collectServerMetrics);不可达/指标 null 的服务器跳过(不误报)。
+// 不传则相关端点返回 503(服务未初始化)。
+func WithAnomaly(s anomaly.Service) Option {
+	return func(o *options) { o.anomaly = s }
 }
 
 // New 构建 HTTP 处理器:健康端点 + Auth API + (可选)凭据 API + 内嵌 SPA 静态托管。
@@ -414,6 +424,19 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Post("/notifications/templates", makeCreateTemplateHandler(nf))
 		ar.Put("/notifications/templates/{id}", makeUpdateTemplateHandler(nf))
 		ar.Delete("/notifications/templates/{id}", makeDeleteTemplateHandler(nf))
+
+		// 可配置异常检测与告警(Story 6.5;FR-23)。an 为 nil 时 handler 返回 503。
+		// 规则 CRUD + 立即检测 + 告警列表;检测复用 6-1 指标采集(metricsCollector 适配
+		// collectServerMetrics)逐服务器逐 enabled 规则求值,命中产告警入库(指标 null /
+		// 不可达跳过,不误报)。GET(rules/alerts)过 auth;POST(rules/check)+ DELETE 为
+		// 写方法,过 auth + CSRF。metric/operator 枚举校验;无规则 → 空检测不报错。
+		// /anomaly/rules 字面段优先于 {id},/anomaly/check、/anomaly/alerts 不会被吞。
+		an := o.anomaly
+		ar.Get("/anomaly/rules", makeListAnomalyRulesHandler(an))
+		ar.Post("/anomaly/rules", makeCreateAnomalyRuleHandler(an))
+		ar.Delete("/anomaly/rules/{id}", makeDeleteAnomalyRuleHandler(an))
+		ar.Post("/anomaly/check", makeAnomalyCheckHandler(an))
+		ar.Get("/anomaly/alerts", makeListAnomalyAlertsHandler(an))
 
 		// 后续 story 在此挂载其他 API 路由。
 	})

@@ -1,0 +1,244 @@
+package anomaly
+
+import (
+	"context"
+	"database/sql"
+	"testing"
+
+	_ "modernc.org/sqlite"
+)
+
+// testDB 建一个内存库并应用 anomaly schema(独立于 store 包,免循环依赖)。
+func testDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:anomaly_test?mode=memory&cache=shared&_pragma=foreign_keys(on)")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	schema := `
+CREATE TABLE anomaly_rules (
+    id TEXT PRIMARY KEY, metric TEXT NOT NULL, operator TEXT NOT NULL,
+    threshold REAL NOT NULL, server_id TEXT, enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE anomaly_alerts (
+    id TEXT PRIMARY KEY, server_id TEXT NOT NULL, server_name TEXT NOT NULL,
+    metric TEXT NOT NULL, operator TEXT NOT NULL, threshold REAL NOT NULL,
+    value REAL NOT NULL, message TEXT NOT NULL, created_at TEXT NOT NULL
+);`
+	if _, err := db.Exec(schema); err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+	return db
+}
+
+// stubCollector 返回预置快照,不触网。
+type stubCollector struct {
+	snaps []ServerMetricsSnapshot
+	err   error
+}
+
+func (c stubCollector) Collect(_ context.Context, _ []string) ([]ServerMetricsSnapshot, error) {
+	return c.snaps, c.err
+}
+
+func ptr(s string) *string    { return &s }
+func fptr(f float64) *float64 { return &f }
+
+func TestCreateRuleValidation(t *testing.T) {
+	svc := New(testDB(t), nil)
+	ctx := context.Background()
+
+	if _, err := svc.CreateRule(ctx, CreateRuleInput{Metric: "bogus", Operator: "gt", Threshold: 90, Enabled: true}); err != ErrInvalidMetric {
+		t.Fatalf("want ErrInvalidMetric, got %v", err)
+	}
+	if _, err := svc.CreateRule(ctx, CreateRuleInput{Metric: "cpu", Operator: "ge", Threshold: 90, Enabled: true}); err != ErrInvalidOperator {
+		t.Fatalf("want ErrInvalidOperator, got %v", err)
+	}
+	r, err := svc.CreateRule(ctx, CreateRuleInput{Metric: "cpu", Operator: "gt", Threshold: 90, Enabled: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if r.ID == "" || r.ServerID != nil || !r.Enabled {
+		t.Fatalf("rule wrong: %+v", r)
+	}
+}
+
+func TestCreateRuleScopedServer(t *testing.T) {
+	svc := New(testDB(t), nil)
+	ctx := context.Background()
+	r, err := svc.CreateRule(ctx, CreateRuleInput{Metric: "disk", Operator: "gt", Threshold: 85, ServerID: ptr("srv-1"), Enabled: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if r.ServerID == nil || *r.ServerID != "srv-1" {
+		t.Fatalf("scoped serverId wrong: %+v", r)
+	}
+	// 列表回读保持。
+	rules, _ := svc.ListRules(ctx)
+	if len(rules) != 1 || rules[0].ServerID == nil || *rules[0].ServerID != "srv-1" {
+		t.Fatalf("list scoped wrong: %+v", rules)
+	}
+}
+
+func TestDeleteRule(t *testing.T) {
+	svc := New(testDB(t), nil)
+	ctx := context.Background()
+	r, _ := svc.CreateRule(ctx, CreateRuleInput{Metric: "cpu", Operator: "gt", Threshold: 90, Enabled: true})
+	if err := svc.DeleteRule(ctx, r.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if err := svc.DeleteRule(ctx, r.ID); err != ErrNotFound {
+		t.Fatalf("second delete want ErrNotFound, got %v", err)
+	}
+}
+
+// TestCheckDiskHitsLowThreshold 对应本机真验:disk gt 1 必命中 → 产 disk 告警(value>threshold)。
+func TestCheckDiskHitsLowThreshold(t *testing.T) {
+	disk := 92.3
+	col := stubCollector{snaps: []ServerMetricsSnapshot{
+		{ServerID: "s1", ServerName: "web-1", Available: true, DiskPercent: &disk},
+	}}
+	svc := New(testDB(t), col)
+	ctx := context.Background()
+	if _, err := svc.CreateRule(ctx, CreateRuleInput{Metric: "disk", Operator: "gt", Threshold: 1, Enabled: true}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	alerts, err := svc.Check(ctx)
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if len(alerts) != 1 {
+		t.Fatalf("want 1 alert, got %d", len(alerts))
+	}
+	a := alerts[0]
+	if a.Metric != "disk" || a.Value <= a.Threshold || a.ServerID != "s1" || a.ServerName != "web-1" {
+		t.Fatalf("alert wrong: %+v", a)
+	}
+	// 入库可见。
+	stored, _ := svc.ListAlerts(ctx, "", 0)
+	if len(stored) != 1 || stored[0].Message == "" {
+		t.Fatalf("alert not persisted: %+v", stored)
+	}
+}
+
+// TestCheckCPUMissesHighThreshold 对应真验:cpu gt 9999 不命中 → 无告警。
+func TestCheckCPUMissesHighThreshold(t *testing.T) {
+	cpu := 12.5
+	col := stubCollector{snaps: []ServerMetricsSnapshot{
+		{ServerID: "s1", ServerName: "web-1", Available: true, CPUPercent: &cpu},
+	}}
+	svc := New(testDB(t), col)
+	ctx := context.Background()
+	_, _ = svc.CreateRule(ctx, CreateRuleInput{Metric: "cpu", Operator: "gt", Threshold: 9999, Enabled: true})
+	alerts, err := svc.Check(ctx)
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if len(alerts) != 0 {
+		t.Fatalf("want 0 alerts, got %d: %+v", len(alerts), alerts)
+	}
+}
+
+// TestCheckSkipsUnreachableAndNullMetric:不可达 / 指标 null 的服务器跳过(不误报)。
+func TestCheckSkipsUnreachableAndNullMetric(t *testing.T) {
+	col := stubCollector{snaps: []ServerMetricsSnapshot{
+		// 不可达 → 整台跳过。
+		{ServerID: "down", ServerName: "down", Available: false},
+		// 可达但 memory 指标 null(如 macOS 无 free)→ memory 规则跳过。
+		{ServerID: "mac", ServerName: "mac", Available: true, MemoryPercent: nil, DiskPercent: fptr(50)},
+	}}
+	svc := New(testDB(t), col)
+	ctx := context.Background()
+	// 全局 memory 规则(低阈值,若不跳过会误命中)。
+	_, _ = svc.CreateRule(ctx, CreateRuleInput{Metric: "memory", Operator: "gt", Threshold: 1, Enabled: true})
+	alerts, err := svc.Check(ctx)
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if len(alerts) != 0 {
+		t.Fatalf("unreachable/null metric must be skipped, got %d: %+v", len(alerts), alerts)
+	}
+}
+
+// TestCheckNoRulesNoError:无规则 → 空检测不报错(且不调用采集)。
+func TestCheckNoRulesNoError(t *testing.T) {
+	col := stubCollector{err: context.Canceled} // 若被调用会暴露
+	svc := New(testDB(t), col)
+	alerts, err := svc.Check(context.Background())
+	if err != nil {
+		t.Fatalf("no rules should not error: %v", err)
+	}
+	if len(alerts) != 0 {
+		t.Fatalf("want empty, got %d", len(alerts))
+	}
+}
+
+// TestCheckScopedRuleOnlyMatchesServer:指定服务器规则不作用于其它服务器。
+func TestCheckScopedRuleOnlyMatchesServer(t *testing.T) {
+	d := 90.0
+	col := stubCollector{snaps: []ServerMetricsSnapshot{
+		{ServerID: "s1", ServerName: "s1", Available: true, DiskPercent: &d},
+		{ServerID: "s2", ServerName: "s2", Available: true, DiskPercent: &d},
+	}}
+	svc := New(testDB(t), col)
+	ctx := context.Background()
+	_, _ = svc.CreateRule(ctx, CreateRuleInput{Metric: "disk", Operator: "gt", Threshold: 1, ServerID: ptr("s1"), Enabled: true})
+	alerts, _ := svc.Check(ctx)
+	if len(alerts) != 1 || alerts[0].ServerID != "s1" {
+		t.Fatalf("scoped rule should only hit s1, got %+v", alerts)
+	}
+}
+
+// TestCheckDisabledRuleSkipped:未启用规则不参与检测。
+func TestCheckDisabledRuleSkipped(t *testing.T) {
+	d := 90.0
+	col := stubCollector{snaps: []ServerMetricsSnapshot{{ServerID: "s1", ServerName: "s1", Available: true, DiskPercent: &d}}}
+	svc := New(testDB(t), col)
+	ctx := context.Background()
+	_, _ = svc.CreateRule(ctx, CreateRuleInput{Metric: "disk", Operator: "gt", Threshold: 1, Enabled: false})
+	alerts, _ := svc.Check(ctx)
+	if len(alerts) != 0 {
+		t.Fatalf("disabled rule must not fire, got %+v", alerts)
+	}
+}
+
+// TestListAlertsFilterAndLimit:按 serverId 过滤 + limit 上限。
+func TestListAlertsFilterAndLimit(t *testing.T) {
+	d := 90.0
+	col := stubCollector{snaps: []ServerMetricsSnapshot{
+		{ServerID: "s1", ServerName: "s1", Available: true, DiskPercent: &d},
+		{ServerID: "s2", ServerName: "s2", Available: true, DiskPercent: &d},
+	}}
+	svc := New(testDB(t), col)
+	ctx := context.Background()
+	_, _ = svc.CreateRule(ctx, CreateRuleInput{Metric: "disk", Operator: "gt", Threshold: 1, Enabled: true})
+	if _, err := svc.Check(ctx); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	all, _ := svc.ListAlerts(ctx, "", 0)
+	if len(all) != 2 {
+		t.Fatalf("want 2 alerts, got %d", len(all))
+	}
+	s1, _ := svc.ListAlerts(ctx, "s1", 0)
+	if len(s1) != 1 || s1[0].ServerID != "s1" {
+		t.Fatalf("filter s1 wrong: %+v", s1)
+	}
+	lim, _ := svc.ListAlerts(ctx, "", 1)
+	if len(lim) != 1 {
+		t.Fatalf("limit 1 wrong: %d", len(lim))
+	}
+}
+
+func TestEvaluate(t *testing.T) {
+	if !evaluate("gt", 92, 85) || evaluate("gt", 80, 85) {
+		t.Fatalf("gt wrong")
+	}
+	if !evaluate("lt", 5, 10) || evaluate("lt", 20, 10) {
+		t.Fatalf("lt wrong")
+	}
+	if evaluate("bogus", 1, 0) {
+		t.Fatalf("unknown op must be false")
+	}
+}

@@ -55,10 +55,23 @@ type environmentDTO struct {
 	ImageRegistry   imageRegistryDTO `json:"imageRegistry"`
 }
 
+// pipelineStepDTO 是一条自定义脚本步骤的契约 DTO(Epic 8 · Story 8-1;冻结)。
+// secret env 项绝无明文,仅 credentialId + maskedValue。
+type pipelineStepDTO struct {
+	ID       string        `json:"id"`
+	Name     string        `json:"name"`
+	Type     string        `json:"type"`
+	Image    string        `json:"image"`
+	Commands []string      `json:"commands"`
+	Env      []buildVarDTO `json:"env"`
+	WorkDir  string        `json:"workDir"`
+}
+
 type settingsDTO struct {
-	Build        buildConfigDTO   `json:"build"`
-	Environments []environmentDTO `json:"environments"`
-	UpdatedAt    string           `json:"updatedAt"`
+	Build        buildConfigDTO    `json:"build"`
+	Environments []environmentDTO  `json:"environments"`
+	Steps        []pipelineStepDTO `json:"steps"`
+	UpdatedAt    string            `json:"updatedAt"`
 }
 
 // toBuildVarDTOs 把领域变量转 DTO(secret 项只暴露 credentialId + maskedValue,绝无明文)。
@@ -112,9 +125,27 @@ func toSettingsDTO(st *pipeline.Settings) settingsDTO {
 		})
 	}
 
+	steps := make([]pipelineStepDTO, 0, len(st.Steps))
+	for _, s := range st.Steps {
+		cmds := s.Commands
+		if cmds == nil {
+			cmds = []string{}
+		}
+		steps = append(steps, pipelineStepDTO{
+			ID:       s.ID,
+			Name:     s.Name,
+			Type:     s.Type,
+			Image:    s.Image,
+			Commands: cmds,
+			Env:      toBuildVarDTOs(s.Env),
+			WorkDir:  s.WorkDir,
+		})
+	}
+
 	return settingsDTO{
 		Build:        build,
 		Environments: envs,
+		Steps:        steps,
 		UpdatedAt:    st.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 }
@@ -134,6 +165,8 @@ func writeSettingsError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnprocessableEntity, "invalid_var", "变量键不能为空且同作用域内不可重复,secret 项须指定保险库凭据")
 	case errors.Is(err, pipeline.ErrInvalidEnvironment):
 		writeError(w, http.StatusUnprocessableEntity, "invalid_environment", "环境名不能为空,镜像仓库类型须为 harbor/acr/dockerhub/custom")
+	case errors.Is(err, pipeline.ErrInvalidStep):
+		writeError(w, http.StatusUnprocessableEntity, "invalid_step", "脚本步骤名不能为空,type 须为 script,且必须指定 image 与至少一条命令")
 	default:
 		writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
 	}
@@ -196,6 +229,15 @@ func makeSavePipelineSettingsHandler(svc pipeline.SettingsService) http.HandlerF
 					CredentialID string `json:"credentialId"`
 				} `json:"imageRegistry"`
 			} `json:"environments"`
+			Steps []struct {
+				ID       string   `json:"id"`
+				Name     string   `json:"name"`
+				Type     string   `json:"type"`
+				Image    string   `json:"image"`
+				Commands []string `json:"commands"`
+				Env      []reqVar `json:"env"`
+				WorkDir  string   `json:"workDir"`
+			} `json:"steps"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
@@ -229,7 +271,20 @@ func makeSavePipelineSettingsHandler(svc pipeline.SettingsService) http.HandlerF
 			})
 		}
 
-		st, err := svc.Save(r.Context(), id, pipeline.SettingsInput{Build: build, Environments: envs})
+		steps := make([]pipeline.PipelineStep, 0, len(req.Steps))
+		for _, s := range req.Steps {
+			steps = append(steps, pipeline.PipelineStep{
+				ID:       s.ID,
+				Name:     s.Name,
+				Type:     s.Type,
+				Image:    s.Image,
+				Commands: s.Commands,
+				Env:      toDomainVars(s.Env),
+				WorkDir:  s.WorkDir,
+			})
+		}
+
+		st, err := svc.Save(r.Context(), id, pipeline.SettingsInput{Build: build, Environments: envs, Steps: steps})
 		if err != nil {
 			writeSettingsError(w, err)
 			return

@@ -16,11 +16,13 @@ import {
   type SaveSettingsInput,
 } from '../api/pipelineSettings'
 import { listCredentials, type Credential } from '../api/credentials'
+import { getValidation, type ValidationDTO, type IssueScope } from '../api/pipelineValidation'
 import { HttpError } from '../api/http'
 import PipelineCanvas from '../components/pipeline/PipelineCanvas.vue'
 import VarsCacheTab from '../components/pipeline/VarsCacheTab.vue'
 import EnvCredsTab from '../components/pipeline/EnvCredsTab.vue'
 import TriggersPanel from '../components/TriggersPanel.vue'
+import ValidationPanel from '../components/pipeline/ValidationPanel.vue'
 
 // ─── Route ────────────────────────────────────────────────────────────────────
 
@@ -224,6 +226,8 @@ async function handleSave(): Promise<void> {
       applyPipeline(dto)
     }
     showSaveSuccess()
+    // Revalidate after a successful save (debounced, only when panel is open).
+    scheduleValidation(400)
   } catch (err) {
     if (err instanceof HttpError) {
       saveBanner.value = err.status === 0
@@ -246,6 +250,52 @@ function handleAI(): void {
   // Use a non-error banner style
   saveBanner.value = 'AI 生成流水线将在 Story 2-5 提供,敬请期待。'
 }
+
+// ─── Validation (Story 2-6, FR-9) ────────────────────────────────────────────
+
+const validationOpen    = ref(false)
+const validationLoading = ref(false)
+const validationData    = ref<ValidationDTO | null>(null)
+
+/** Debounce handle for auto-revalidation after tab switch / save. */
+let validationDebounce: ReturnType<typeof setTimeout> | null = null
+
+async function fetchValidation(): Promise<void> {
+  if (!projectId.value) return
+  validationLoading.value = true
+  try {
+    validationData.value = await getValidation(projectId.value)
+  } catch {
+    // Non-fatal: panel stays open but shows stale data or nothing.
+    // We intentionally swallow errors here — validation is a read-only aid.
+  } finally {
+    validationLoading.value = false
+  }
+}
+
+function scheduleValidation(delay = 600): void {
+  if (!validationOpen.value) return
+  if (validationDebounce) clearTimeout(validationDebounce)
+  validationDebounce = setTimeout(() => { void fetchValidation() }, delay)
+}
+
+function handleValidateClick(): void {
+  validationOpen.value = true
+  void fetchValidation()
+}
+
+function handleValidationClose(): void {
+  validationOpen.value = false
+  if (validationDebounce) clearTimeout(validationDebounce)
+}
+
+/** Emitted by ValidationPanel when user clicks an issue row. */
+function handleLocate(scope: IssueScope): void {
+  setTab(scope as TabKey)
+}
+
+// Re-fetch after tab switch (debounced, only when panel is open).
+watch(activeTab, () => { scheduleValidation() })
 
 // ─── Project name display (from route state or fallback to ID) ────────────────
 
@@ -275,6 +325,29 @@ const projectName = computed(() => String(route.params.id))
             <path d="M3 12h3.5l2.2-6 3.6 12 2.4-7 1.3 1h4.5"/>
           </svg>
           AI 生成流水线
+        </button>
+
+        <!-- ─── Validation button + ready badge (Story 2-6) ─────────────── -->
+        <button
+          class="top-btn top-btn--validate"
+          :class="{ 'top-btn--validate-active': validationOpen }"
+          :aria-pressed="validationOpen"
+          :aria-label="validationOpen ? '关闭校验面板' : '校验配置'"
+          @click="validationOpen ? handleValidationClose() : handleValidateClick()"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+          </svg>
+          校验配置
+          <!-- inline ready badge when data is available -->
+          <span
+            v-if="validationData !== null && !validationLoading"
+            class="top-btn-badge"
+            :class="validationData.ready ? 'top-btn-badge--ok' : 'top-btn-badge--err'"
+            aria-hidden="true"
+          >
+            {{ validationData.ready ? '就绪' : validationData.issues.filter(i => i.severity === 'error').length + ' 错误' }}
+          </span>
         </button>
 
         <button
@@ -327,88 +400,117 @@ const projectName = computed(() => String(route.params.id))
       >{{ tab.label }}</button>
     </nav>
 
-    <!-- ─── Tab panels ─────────────────────────────────────────────────────── -->
+    <!-- ─── Tab body: panels + optional validation side-drawer ─────────────── -->
+    <!--
+      The tab-body is a horizontal flex row.
+      Tab panels fill the left area (flex: 1).
+      The ValidationPanel occupies a fixed-width right column (360px) when open,
+      visible regardless of which tab is active, enabling cross-tab locate jumps.
+    -->
+    <div class="tab-body">
 
-    <!-- 流水线编排 -->
-    <div
-      v-show="activeTab === 'canvas'"
-      id="tabpanel-canvas"
-      class="tab-panel tab-panel--canvas"
-      role="tabpanel"
-      aria-labelledby="tab-canvas"
-    >
-      <!-- Load error -->
-      <div v-if="loadState === 'error'" class="pipeline-banner pipeline-banner--error" role="alert">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-          <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
-        </svg>
-        <span>{{ loadError }}</span>
-        <button class="banner-retry" @click="loadPipeline">↻ 重试</button>
-      </div>
+      <!-- ─── Tab panels (left column) ─────────────────────────────────────── -->
+      <div class="tab-panels">
 
-      <!-- Loading skeleton -->
-      <div v-else-if="loadState === 'loading'" class="canvas-skeleton" aria-busy="true" aria-label="加载中">
-        <div class="skel-flow">
-          <div v-for="i in 4" :key="i" class="skel-stage" aria-hidden="true">
-            <div class="skel skel--stage-head"/>
-            <div class="skel skel--card"/>
-            <div class="skel skel--card" style="opacity:.6"/>
+        <!-- 流水线编排 -->
+        <div
+          v-show="activeTab === 'canvas'"
+          id="tabpanel-canvas"
+          class="tab-panel tab-panel--canvas"
+          role="tabpanel"
+          aria-labelledby="tab-canvas"
+        >
+          <!-- Load error -->
+          <div v-if="loadState === 'error'" class="pipeline-banner pipeline-banner--error" role="alert">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
+            </svg>
+            <span>{{ loadError }}</span>
+            <button class="banner-retry" @click="loadPipeline">↻ 重试</button>
           </div>
+
+          <!-- Loading skeleton -->
+          <div v-else-if="loadState === 'loading'" class="canvas-skeleton" aria-busy="true" aria-label="加载中">
+            <div class="skel-flow">
+              <div v-for="i in 4" :key="i" class="skel-stage" aria-hidden="true">
+                <div class="skel skel--stage-head"/>
+                <div class="skel skel--card"/>
+                <div class="skel skel--card" style="opacity:.6"/>
+              </div>
+            </div>
+          </div>
+
+          <!-- Canvas -->
+          <PipelineCanvas
+            v-else-if="loadState === 'idle' && pipeline"
+            :stages="editStages"
+            :yaml="pipeline.yaml"
+            @update="handleCanvasUpdate"
+          />
         </div>
-      </div>
 
-      <!-- Canvas -->
-      <PipelineCanvas
-        v-else-if="loadState === 'idle' && pipeline"
-        :stages="editStages"
-        :yaml="pipeline.yaml"
-        @update="handleCanvasUpdate"
+        <!-- 变量与缓存 -->
+        <div
+          v-show="activeTab === 'vars'"
+          id="tabpanel-vars"
+          class="tab-panel"
+          role="tabpanel"
+          aria-labelledby="tab-vars"
+        >
+          <VarsCacheTab
+            v-if="editBuild"
+            :build="editBuild"
+            :credentials="credentials"
+            :disabled="saveSubmitting"
+            @update="handleBuildUpdate"
+          />
+        </div>
+
+        <!-- 触发设置 -->
+        <div
+          v-show="activeTab === 'triggers'"
+          id="tabpanel-triggers"
+          class="tab-panel"
+          role="tabpanel"
+          aria-labelledby="tab-triggers"
+        >
+          <TriggersPanel :project-id="projectId" />
+        </div>
+
+        <!-- 环境与凭据 -->
+        <div
+          v-show="activeTab === 'envs'"
+          id="tabpanel-envs"
+          class="tab-panel"
+          role="tabpanel"
+          aria-labelledby="tab-envs"
+        >
+          <EnvCredsTab
+            :environments="editEnvs"
+            :credentials="credentials"
+            :disabled="saveSubmitting"
+            @update="handleEnvsUpdate"
+          />
+        </div>
+
+      </div><!-- /tab-panels -->
+
+      <!-- ─── Validation side-drawer (Story 2-6) ────────────────────────────── -->
+      <!--
+        Persists across tab switches so the user can see all cross-tab issues
+        while editing. The 'locate' event triggers setTab() to jump to the
+        relevant tab without closing the panel.
+      -->
+      <ValidationPanel
+        v-if="validationOpen"
+        :loading="validationLoading"
+        :ready="validationData?.ready ?? false"
+        :issues="validationData?.issues ?? []"
+        @locate="handleLocate"
+        @close="handleValidationClose"
       />
-    </div>
 
-    <!-- 变量与缓存 (placeholder) -->
-    <div
-      v-show="activeTab === 'vars'"
-      id="tabpanel-vars"
-      class="tab-panel"
-      role="tabpanel"
-      aria-labelledby="tab-vars"
-    >
-      <VarsCacheTab
-        v-if="editBuild"
-        :build="editBuild"
-        :credentials="credentials"
-        :disabled="saveSubmitting"
-        @update="handleBuildUpdate"
-      />
-    </div>
-
-    <!-- 触发设置 -->
-    <div
-      v-show="activeTab === 'triggers'"
-      id="tabpanel-triggers"
-      class="tab-panel"
-      role="tabpanel"
-      aria-labelledby="tab-triggers"
-    >
-      <TriggersPanel :project-id="projectId" />
-    </div>
-
-    <!-- 环境与凭据 (placeholder) -->
-    <div
-      v-show="activeTab === 'envs'"
-      id="tabpanel-envs"
-      class="tab-panel"
-      role="tabpanel"
-      aria-labelledby="tab-envs"
-    >
-      <EnvCredsTab
-        :environments="editEnvs"
-        :credentials="credentials"
-        :disabled="saveSubmitting"
-        @update="handleEnvsUpdate"
-      />
-    </div>
+    </div><!-- /tab-body -->
 
   </div>
 </template>
@@ -542,6 +644,66 @@ const projectName = computed(() => String(route.params.id))
   transform: none;
 }
 
+/* ─── Validate button (Story 2-6) ────────────────────────────────────────── */
+.top-btn--validate {
+  color: var(--color-green);
+  border-color: var(--color-green-line);
+  background: var(--color-green-soft);
+}
+
+.top-btn--validate:hover:not(:disabled) {
+  border-color: var(--color-green);
+}
+
+.top-btn--validate-active {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+/* ─── Inline ready badge inside validate button ───────────────────────────── */
+.top-btn-badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 100px;
+  border: 1px solid transparent;
+  line-height: 1;
+}
+
+.top-btn-badge--ok {
+  background: var(--color-green-soft);
+  color: var(--color-green);
+  border-color: var(--color-green-line);
+}
+
+.top-btn-badge--err {
+  background: var(--color-red-soft);
+  color: var(--color-red);
+  border-color: var(--color-red-line);
+}
+
+/* ─── Tab body: panels row ───────────────────────────────────────────────── */
+/*
+ * Wraps all tab panels + the optional ValidationPanel side-drawer.
+ * Flex row: panels fill flex-1, drawer is fixed 360px on the right.
+ */
+.tab-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.tab-panels {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
 /* ─── Tab strip ──────────────────────────────────────────────────────────── */
 .tab-strip {
   display: flex;
@@ -574,13 +736,18 @@ const projectName = computed(() => String(route.params.id))
 }
 
 /* ─── Tab panels ─────────────────────────────────────────────────────────── */
+/*
+ * Each tab panel fills the .tab-panels column.
+ * v-show toggles display; when visible, panel should fill all available height.
+ */
 .tab-panel {
-  flex: 1;
+  /* When shown, fill parent column height */
+  height: 100%;
   min-height: 0;
   overflow: hidden;
 }
 
-/* Canvas panel: own flex layout for sidebar drawer */
+/* Canvas panel: own flex layout for canvas + drawer */
 .tab-panel--canvas {
   display: flex;
   flex-direction: column;

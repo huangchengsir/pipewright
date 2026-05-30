@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -324,20 +325,24 @@ func toRouteDTO(r *notify.Route) routeDTO {
 }
 
 // routeRequest 是创建路由的请求体(camelCase)。enabled 省略默认启用。
+// projectId 可选:非空 = 项目级覆盖路由(Story 5.4);空/省略 = 全局默认。
 type routeRequest struct {
+	ProjectID *string `json:"projectId"`
 	Event     *string `json:"event"`
 	ChannelID *string `json:"channelId"`
 	Enabled   *bool   `json:"enabled"`
 }
 
 // makeListRoutesHandler 返回 GET /api/notifications/routes handler。响应 { items: [...] }。
+// 可选 query ?projectId=<id>:非空 → 仅该项目级路由(Story 5.4);省略/空 → 全局路由。
 func makeListRoutesHandler(svc notify.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if svc == nil {
 			writeError(w, http.StatusServiceUnavailable, "internal", "通知服务未初始化")
 			return
 		}
-		routes, err := svc.ListRoutes(r.Context())
+		projectID := strings.TrimSpace(r.URL.Query().Get("projectId"))
+		routes, err := svc.ListRoutesForProject(r.Context(), projectID)
 		if err != nil {
 			writeNotifyError(w, err)
 			return
@@ -365,6 +370,9 @@ func makeCreateRouteHandler(svc notify.Service) http.HandlerFunc {
 			return
 		}
 		in := notify.CreateRouteInput{Enabled: true} // 默认启用
+		if req.ProjectID != nil {
+			in.ProjectID = *req.ProjectID // 非空 = 项目级覆盖(Story 5.4);空 = 全局
+		}
 		if req.Event != nil {
 			in.Event = *req.Event
 		}

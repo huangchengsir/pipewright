@@ -41,6 +41,7 @@ import {
   type NotificationEvent,
   type NotificationTemplate,
 } from '../../api/notifications'
+import { listProjects, type Project } from '../../api/projects'
 
 // ─── types / metadata ──────────────────────────────────────────────────────────
 
@@ -451,6 +452,139 @@ async function handleDeleteRoute(route: NotificationRoute): Promise<void> {
 }
 
 onMounted(loadRoutes)
+
+// ─── per-pipeline routing override (Story 5.4 / FR-20) ─────────────────────────
+// 「按项目覆盖」区:选一个项目 → 看它的事件路由。整体覆盖语义:项目一旦为某事件配了
+// 任一项目级路由,该事件该项目就**只**走项目级(不与全局合并);未配 → 继承全局默认。
+// 复用上方全局路由 UI 的事件 → 渠道形状,只多一个 projectId 维度。
+
+const projects = ref<Project[]>([])
+const projectsLoadState = ref<LoadState>('loading')
+const projectsLoadError = ref('')
+
+async function loadProjects(): Promise<void> {
+  projectsLoadState.value = 'loading'
+  projectsLoadError.value = ''
+  try {
+    projects.value = await listProjects()
+    projectsLoadState.value = 'ready'
+  } catch (err) {
+    projectsLoadError.value = httpMessage(err, '加载项目列表失败,请稍后重试')
+    projectsLoadState.value = 'error'
+  }
+}
+
+/** Currently selected project for the override editor; '' = none selected. */
+const selectedProjectId = ref('')
+const projectRoutes = ref<NotificationRoute[]>([])
+const projectRoutesLoadState = ref<LoadState>('ready')
+const projectRoutesLoadError = ref('')
+
+const selectedProject = computed<Project | null>(
+  () => projects.value.find((p) => p.id === selectedProjectId.value) ?? null,
+)
+
+/** Events for which this project has at least one (override) route. */
+const overriddenEventIds = computed<Set<string>>(() => {
+  const s = new Set<string>()
+  for (const r of projectRoutes.value) s.add(r.event)
+  return s
+})
+
+/** Whole-scope override: a project with ANY override route stops inheriting global. */
+const hasAnyOverride = computed(() => projectRoutes.value.length > 0)
+
+async function loadProjectRoutes(): Promise<void> {
+  if (!selectedProjectId.value) {
+    projectRoutes.value = []
+    projectRoutesLoadState.value = 'ready'
+    return
+  }
+  projectRoutesLoadState.value = 'loading'
+  projectRoutesLoadError.value = ''
+  try {
+    projectRoutes.value = await listRoutes(selectedProjectId.value)
+    projectRoutesLoadState.value = 'ready'
+  } catch (err) {
+    projectRoutesLoadError.value = httpMessage(err, '加载项目路由失败,请稍后重试')
+    projectRoutesLoadState.value = 'error'
+  }
+}
+
+function onSelectProject(id: string): void {
+  selectedProjectId.value = id
+  cancelAddProjectRoute()
+  void loadProjectRoutes()
+}
+
+/** Project routes grouped by event id (preserves server order within each group). */
+const projectRoutesByEvent = computed<Record<string, NotificationRoute[]>>(() => {
+  const map: Record<string, NotificationRoute[]> = {}
+  for (const e of EVENTS) map[e.id] = []
+  for (const r of projectRoutes.value) {
+    if (!map[r.event]) map[r.event] = []
+    map[r.event].push(r)
+  }
+  return map
+})
+
+// Add-project-route picker state, keyed per event.
+const addingProjectEvent = ref<NotificationEvent | null>(null)
+const addProjectChannelId = ref('')
+const savingProjectRoute = ref(false)
+
+function openAddProjectRoute(event: NotificationEvent): void {
+  addingProjectEvent.value = event
+  const used = new Set((projectRoutesByEvent.value[event] ?? []).map((r) => r.channelId))
+  const free = channels.value.find((c) => !used.has(c.id))
+  addProjectChannelId.value = free?.id ?? channels.value[0]?.id ?? ''
+}
+
+function cancelAddProjectRoute(): void {
+  addingProjectEvent.value = null
+  addProjectChannelId.value = ''
+}
+
+async function handleAddProjectRoute(): Promise<void> {
+  if (!addingProjectEvent.value || !addProjectChannelId.value || !selectedProjectId.value) return
+  savingProjectRoute.value = true
+  try {
+    await createRoute({
+      projectId: selectedProjectId.value,
+      event: addingProjectEvent.value,
+      channelId: addProjectChannelId.value,
+      enabled: true,
+    })
+    toast.success('已添加项目级路由')
+    cancelAddProjectRoute()
+    await loadProjectRoutes()
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 422 && err.apiError) {
+      toast.error('添加失败', { detail: err.apiError.message })
+    } else {
+      toast.error('添加失败', { detail: httpMessage(err, '请稍后重试') })
+    }
+  } finally {
+    savingProjectRoute.value = false
+  }
+}
+
+const deletingProjectRouteId = ref<string | null>(null)
+
+async function handleDeleteProjectRoute(route: NotificationRoute): Promise<void> {
+  deletingProjectRouteId.value = route.id
+  try {
+    await deleteRoute(route.id)
+    toast.success('已移除项目级路由')
+    await loadProjectRoutes()
+  } catch (err) {
+    toast.error('移除失败', { detail: httpMessage(err, '请稍后重试') })
+  } finally {
+    deletingProjectRouteId.value = null
+  }
+}
+
+onMounted(loadProjects)
 
 // ─── notification templates (Story 5.3 / FR-21) ───────────────────────────────
 // 「事件(可选按渠道)→ 标题/正文模板」自定义区:占位 {{name}} 纯文本替换(无 RCE);
@@ -1050,6 +1184,174 @@ function configSummary(ch: NotificationChannel): string {
           </div>
         </li>
       </ul>
+    </section>
+
+    <!-- ─── per-pipeline routing override (Story 5.4 / FR-20) ─────────────────── -->
+    <section class="override-section" aria-labelledby="override-heading">
+      <div class="section-head">
+        <div class="section-head-text">
+          <h2 id="override-heading" class="section-title">按项目覆盖</h2>
+          <p class="section-desc">
+            为特定项目配置<strong>专属事件路由</strong>,覆盖上方全局默认。<strong>整体覆盖</strong>:某项目一旦为某事件配了任一项目级路由,该事件该项目就<strong>只</strong>走项目级渠道(不与全局叠加);未配则继承全局。
+          </p>
+        </div>
+      </div>
+
+      <!-- projects load error -->
+      <div v-if="projectsLoadState === 'error'" class="banner banner--error" role="alert">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" />
+        </svg>
+        <span>{{ projectsLoadError }}</span>
+        <button class="banner-retry" @click="loadProjects">↻ 重试</button>
+      </div>
+
+      <!-- projects loading -->
+      <div v-else-if="projectsLoadState === 'loading'" class="panel panel--anim">
+        <div class="skel-body">
+          <div v-for="i in 1" :key="i" class="skel skel--row" aria-hidden="true" />
+        </div>
+      </div>
+
+      <!-- no channels -->
+      <div v-else-if="channels.length === 0" class="soon-hint" role="note">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" />
+        </svg>
+        先在上方新增至少一个通知渠道,才能为项目配置覆盖路由。
+      </div>
+
+      <!-- no projects -->
+      <div v-else-if="projects.length === 0" class="soon-hint" role="note">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" />
+        </svg>
+        暂无项目。创建项目后可在此为其配置专属通知路由。
+      </div>
+
+      <template v-else>
+        <!-- project picker -->
+        <div class="override-picker">
+          <FormField label="选择项目" field-id="override-project" hint="选一个项目查看并覆盖其事件路由">
+            <template #default="{ fieldId, ariaDescribedby }">
+              <select
+                :id="fieldId"
+                class="route-select"
+                :value="selectedProjectId"
+                :aria-describedby="ariaDescribedby"
+                aria-label="选择要覆盖路由的项目"
+                @change="onSelectProject(($event.target as HTMLSelectElement).value)"
+              >
+                <option value="">— 请选择项目 —</option>
+                <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
+              </select>
+            </template>
+          </FormField>
+        </div>
+
+        <!-- selected project routes -->
+        <template v-if="selectedProjectId">
+          <!-- inheritance banner -->
+          <div v-if="!hasAnyOverride && projectRoutesLoadState === 'ready'" class="inherit-banner" role="note">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M12 2v6m0 0 3-3m-3 3L9 5M5 12H2m20 0h-3M12 22v-6m0 0 3 3m-3-3-3 3" />
+            </svg>
+            <span>
+              <strong>{{ selectedProject?.name }}</strong> 当前<strong>继承全局默认</strong>路由。在下方任一事件添加项目级渠道即可自定义——一旦该事件有项目级路由,它就<strong>只</strong>走项目级(整体切换),不再叠加全局。
+            </span>
+          </div>
+          <div v-else-if="hasAnyOverride" class="custom-banner" role="note">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M12 2 2 7l10 5 10-5-10-5ZM2 17l10 5 10-5M2 12l10 5 10-5" />
+            </svg>
+            <span>
+              <strong>{{ selectedProject?.name }}</strong> 已自定义路由。<strong>有项目级路由的事件只走项目级渠道</strong>;无项目级路由的事件仍继承全局。移除某事件的全部项目级路由即回退继承。
+            </span>
+          </div>
+
+          <!-- project routes load error -->
+          <div v-if="projectRoutesLoadState === 'error'" class="banner banner--error" role="alert">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" />
+            </svg>
+            <span>{{ projectRoutesLoadError }}</span>
+            <button class="banner-retry" @click="loadProjectRoutes">↻ 重试</button>
+          </div>
+
+          <!-- project routes loading -->
+          <div v-else-if="projectRoutesLoadState === 'loading'" class="panel panel--anim">
+            <div class="skel-body">
+              <div v-for="i in 3" :key="i" class="skel skel--row" aria-hidden="true" />
+            </div>
+          </div>
+
+          <!-- event → project channel mapping table -->
+          <ul v-else class="event-list">
+            <li v-for="ev in EVENTS" :key="ev.id" class="event-card panel--anim">
+              <div class="event-head">
+                <div class="event-text">
+                  <span class="event-name">{{ ev.label }}</span>
+                  <span class="event-code mono">{{ ev.id }}</span>
+                  <span
+                    v-if="overriddenEventIds.has(ev.id)"
+                    class="scope-tag scope-tag--project"
+                  >项目级</span>
+                  <span v-else class="scope-tag scope-tag--inherit">继承全局</span>
+                </div>
+                <AppButton
+                  v-if="addingProjectEvent !== ev.id"
+                  variant="default"
+                  type="button"
+                  @click="openAddProjectRoute(ev.id)"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
+                    <path d="M12 5v14M5 12h14" />
+                  </svg>
+                  添加渠道
+                </AppButton>
+              </div>
+
+              <!-- project routed channel chips -->
+              <div
+                v-if="projectRoutesByEvent[ev.id] && projectRoutesByEvent[ev.id].length > 0"
+                class="route-chips"
+              >
+                <span v-for="r in projectRoutesByEvent[ev.id]" :key="r.id" class="route-chip">
+                  <span class="route-chip-dot" :class="{ 'route-chip-dot--on': r.enabled }" aria-hidden="true" />
+                  {{ channelName(r.channelId) }}
+                  <button
+                    class="route-chip-x"
+                    type="button"
+                    :aria-label="`移除 ${channelName(r.channelId)}`"
+                    :disabled="deletingProjectRouteId === r.id"
+                    @click="handleDeleteProjectRoute(r)"
+                  >
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
+                      <path d="M18 6 6 18M6 6l12 12" />
+                    </svg>
+                  </button>
+                </span>
+              </div>
+              <div v-else-if="addingProjectEvent !== ev.id" class="route-empty">
+                继承全局 · 未覆盖
+              </div>
+
+              <!-- add-project-route inline picker -->
+              <div v-if="addingProjectEvent === ev.id" class="route-add">
+                <select v-model="addProjectChannelId" class="route-select" :disabled="savingProjectRoute" aria-label="选择渠道">
+                  <option v-for="c in channels" :key="c.id" :value="c.id">
+                    {{ c.name }}{{ c.enabled ? '' : '(已停用)' }}
+                  </option>
+                </select>
+                <AppButton variant="primary" type="button" :loading="savingProjectRoute" :disabled="!addProjectChannelId" @click="handleAddProjectRoute">
+                  添加
+                </AppButton>
+                <AppButton variant="ghost" type="button" :disabled="savingProjectRoute" @click="cancelAddProjectRoute">取消</AppButton>
+              </div>
+            </li>
+          </ul>
+        </template>
+      </template>
     </section>
 
     <!-- ─── notification templates (Story 5.3 / FR-21) ───────────────────────── -->
@@ -2094,6 +2396,56 @@ function configSummary(ch: NotificationChannel): string {
 
 .tpl-body-code {
   white-space: pre-wrap;
+}
+
+/* ─── per-pipeline override (Story 5.4) ───────────────────────────────────── */
+.override-picker {
+  max-width: 420px;
+}
+
+.inherit-banner,
+.custom-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px 14px;
+  border-radius: var(--rounded);
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--color-dim);
+}
+
+.inherit-banner {
+  background: var(--color-inset);
+  border: 1px solid var(--color-border);
+}
+
+.inherit-banner svg { flex-shrink: 0; color: var(--color-faint); margin-top: 1px; }
+
+.custom-banner {
+  background: var(--color-primary-soft);
+  border: 1px solid var(--color-primary);
+  color: var(--color-text);
+}
+
+.custom-banner svg { flex-shrink: 0; color: var(--color-primary); margin-top: 1px; }
+
+.scope-tag {
+  font-size: 0.64rem;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: var(--rounded-full);
+  letter-spacing: 0.01em;
+}
+
+.scope-tag--project {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+.scope-tag--inherit {
+  background: var(--color-inset);
+  color: var(--color-faint);
 }
 
 /* ─── reduced motion ──────────────────────────────────────────────────────── */

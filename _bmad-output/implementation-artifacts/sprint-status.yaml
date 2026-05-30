@@ -81,7 +81,7 @@ development_status:
   epic-4: backlog
   4-1-server-registry-and-ssh-layer: done
   4-2-ssh-deploy-execution: done
-  4-3-deploy-health-check: backlog
+  4-3-deploy-health-check: in-progress
   4-4-zero-downtime-switch-rollback: backlog
   4-5-multi-target-partial-failure: backlog
   4-6-min-diagnosis-feedback-seed: backlog
@@ -91,13 +91,13 @@ development_status:
   epic-5: backlog
   5-1-notification-channels: done
   5-2-event-routing-defaults: done
-  5-3-notification-templates: backlog
+  5-3-notification-templates: in-progress
   5-4-per-pipeline-routing-override: backlog
   epic-5-retrospective: optional
 
   # ===== Epic 6: 服务器与服务运维 =====
   epic-6: backlog
-  6-1-multi-host-status-metrics: backlog
+  6-1-multi-host-status-metrics: in-progress
   6-2-service-logs-viewer: done
   6-3-service-operations: backlog
   6-4-container-terminal: backlog

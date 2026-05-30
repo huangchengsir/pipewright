@@ -236,6 +236,61 @@ func TestDeployServerNotFound422(t *testing.T) {
 	}
 }
 
+// TestRetryDeployRunNotFound404 验证 retry:run 不存在 → 404。
+func TestRetryDeployRunNotFound404(t *testing.T) {
+	srv, client, csrf, _, _, _ := setupDeployServer(t,
+		stubDialer{res: &target.ExecResult{ExitCode: 0}})
+	body := `{"artifactId":"x"}`
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/runs/nonexistent/deploy/retry", csrf, body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("retry run 不存在 status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestRetryDeployNoFailedTargets422 验证 retry:全成功 run(无失败目标)→ 422 人读,不 500。
+func TestRetryDeployNoFailedTargets422(t *testing.T) {
+	srv, client, csrf, projID, rsvc, _ := setupDeployServer(t,
+		stubDialer{res: &target.ExecResult{ExitCode: 0}})
+	r, _ := rsvc.Create(context.Background(), projID,
+		run.Trigger{Type: run.TriggerManual, Branch: "main", Commit: "abc", Actor: "admin"})
+	waitRunStatus(t, client, srv, csrf, r.ID, run.StatusSuccess)
+	artID := firstArtifactID(t, client, srv.URL, csrf, r.ID)
+	serverID := createServer(t, client, srv.URL, csrf, "ok-1")
+
+	// 先成功部署一台。
+	body := `{"artifactId":"` + artID + `","serverIds":["` + serverID + `"]}`
+	dresp := doJSON(t, client, http.MethodPost, srv.URL+"/api/runs/"+r.ID+"/deploy", csrf, body)
+	dresp.Body.Close()
+
+	// 无失败目标 → retry 应 422。
+	rresp := doJSON(t, client, http.MethodPost, srv.URL+"/api/runs/"+r.ID+"/deploy/retry", csrf,
+		`{"artifactId":"`+artID+`"}`)
+	rraw, _ := io.ReadAll(rresp.Body)
+	rresp.Body.Close()
+	if rresp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("retry 无失败目标 status = %d, want 422: %s", rresp.StatusCode, rraw)
+	}
+	if strings.Contains(string(rraw), "LEAKMARKER") {
+		t.Fatalf("retry 响应泄漏凭据明文: %s", rraw)
+	}
+}
+
+// TestRetryDeployRequiresCSRF 验证 retry 写方法缺 CSRF → 403。
+func TestRetryDeployRequiresCSRF(t *testing.T) {
+	srv, client, _, _, _, _ := setupDeployServer(t,
+		stubDialer{res: &target.ExecResult{ExitCode: 0}})
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/runs/whatever/deploy/retry", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("retry 缺 CSRF status = %d, want 403", resp.StatusCode)
+	}
+}
+
 // TestDeployRequiresCSRF 验证写方法缺 CSRF → 403。
 func TestDeployRequiresCSRF(t *testing.T) {
 	srv, client, csrf, projID, rsvc, _ := setupDeployServer(t,

@@ -21,6 +21,7 @@ import {
   subscribeRunEvents,
   diagnoseRun,
   deployRun,
+  retryFailedDeploy,
   type RunDetail,
   type RunStatus,
   type StepStatus,
@@ -213,6 +214,43 @@ function deriveStatus(targets: { status: string }[]): RunStatus {
   if (anyBad && anyOk) return 'partial_failed'
   if (anyBad) return 'failed'
   return run.value?.status ?? 'success'
+}
+
+// ─── retry only failed targets (Story 4-5 / FR-13) ───────────────────────────
+// 有失败/回滚目标时,DeployTargets 显「重试失败目标」→ emit retry → 这里复用上次部署的
+// 产物(selectedArtifactId,回退首个产物)+ 配置 + 健康检查,只对失败台重跑;成功台不动。
+// 后端逐目标 upsert + 重算终态,返回全量最新 targets;直接回填 slot。
+
+const retrying = ref(false)
+const retryError = ref('')
+
+async function handleRetryFailed(): Promise<void> {
+  if (!run.value || retrying.value) return
+  // 复用产物:优先上次部署选中的;否则回退首个产物(刷新页面后表单态丢失的兜底)。
+  const artifactId = selectedArtifactId.value || run.value.artifacts[0]?.id || ''
+  if (!artifactId) {
+    retryError.value = '无可用产物,无法重试'
+    return
+  }
+  retrying.value = true
+  retryError.value = ''
+  try {
+    const res = await retryFailedDeploy(run.value.id, {
+      artifactId,
+      // serverIds 省略 → 后端重试该 run 当前所有失败/回滚目标。
+      deployConfig: buildDeployConfig(),
+      healthCheck: buildHealthCheck(),
+    })
+    run.value = { ...run.value, targets: res.targets, status: deriveStatus(res.targets) }
+  } catch (err) {
+    if (err instanceof HttpError) {
+      retryError.value = err.apiError?.message ?? `重试失败(${err.status})`
+    } else {
+      retryError.value = '重试请求失败,请稍后重试'
+    }
+  } finally {
+    retrying.value = false
+  }
 }
 
 // ─── data loading ─────────────────────────────────────────────────────────────
@@ -667,8 +705,14 @@ function nodeClass(status: StepStatus): string {
               ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             -->
 
-            <!-- 已部署 → 渲染每机结果卡(填 targets slot) -->
-            <DeployTargets v-if="hasDeployed && run.targets" :targets="run.targets" />
+            <!-- 已部署 → 渲染每机结果卡(填 targets slot);有失败目标时可仅重试失败台(4-5) -->
+            <DeployTargets
+              v-if="hasDeployed && run.targets"
+              :targets="run.targets"
+              :retrying="retrying"
+              :retry-error="retryError"
+              @retry="handleRetryFailed"
+            />
 
             <!-- 部署入口:仅在有产物时可用 -->
             <div v-if="run.artifacts.length > 0" class="deploy-entry">
@@ -967,14 +1011,21 @@ function nodeClass(status: StepStatus): string {
 
             <!--
               ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-              SLOT: 多机目标扇出聚合 (Epic 4 接入)
-              骨架所有权: 本区块归 Story 3.1;
-              Epic 4 在此区块内填入多机扇出卡(各台独立状态卡+步骤+耗时+重试入口),
-              targets 字段已在 run-detail DTO 前向声明为可选块,
-              不改骨架结构。
+              SLOT: 多机目标扇出聚合 (Story 4-5 / FR-13 实现)
+              partial_failed 态填 run-detail 冻结 targets slot:各台独立状态卡(success/failed/
+              rolled_back)+ 人读 message + 耗时,有失败台时显「仅重试失败目标」入口(成功台不动)。
+              并行扇出有界(后端信号量);命令 array 化(AC-SEC-02);message 绝无明文密钥。
               ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             -->
-            <div class="slot-panel slot-panel--multi" role="region" aria-label="多机目标状态(尚未接入)">
+            <DeployTargets
+              v-if="hasDeployed && run.targets"
+              :targets="run.targets"
+              :retrying="retrying"
+              :retry-error="retryError"
+              @retry="handleRetryFailed"
+            />
+            <!-- 兜底:partial_failed 但无 targets(理论上不该出现)— 占位提示,不白屏 -->
+            <div v-else class="slot-panel slot-panel--multi" role="region" aria-label="多机目标状态">
               <div class="slot-header">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
                   <rect x="2" y="14" width="6" height="6" rx="1"/>
@@ -983,12 +1034,9 @@ function nodeClass(status: StepStatus): string {
                   <path d="M5 14v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 7v4"/>
                 </svg>
                 <span class="slot-title">多机目标扇出</span>
-                <span class="slot-badge slot-badge--epic">Epic 4</span>
               </div>
               <div class="slot-body">
-                <span class="slot-placeholder-text">多机并行部署详情将在 Epic 4 接入</span>
-                <span class="slot-placeholder-hint">各台独立状态 · 失败台回滚 · 仅重试失败目标</span>
-                <!-- run.targets is null in this story — Epic 4 fills it -->
+                <span class="slot-placeholder-text">暂无多机部署结果</span>
               </div>
             </div>
             <!-- END SLOT: 多机目标扇出 -->

@@ -285,6 +285,11 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 取 run + 产物 + 服务器 → deploy.Deploy(逐机经 SSH 执行部署命令,array 不拼 shell)
 		// → 据结果更新 run 终态 → 返回填好的 targets。部署执行失败不 500(每机 status=failed)。
 		ar.Post("/runs/{id}/deploy", makeDeployRunHandler(o.deployer, rs))
+		// 仅重试失败目标(Story 4.5 / FR-13):认证 + CSRF(写方法)。dep 为 nil → 503。
+		// 取 run 当前 failed/rolled_back 目标 → 复用产物 + 配置并行重跑 → 逐目标 upsert(成功机不动)
+		// → 重算 run 终态 → 返回全量最新 targets。run 非失败 / 无失败目标 → 422;不存在 → 404。
+		// 重试执行失败不 500(被重试目标 status=failed)。比 /deploy 多一段,不会被吞。
+		ar.Post("/runs/{id}/deploy/retry", makeRetryDeployHandler(o.deployer, rs))
 
 		// AI 失败诊断(Story 7.2):显式(重)诊断。认证 + CSRF(写方法)。
 		// 取 run 失败日志 → 脱敏 → ai.Diagnose → 持久化 → 返回 diagnosis 子 DTO。

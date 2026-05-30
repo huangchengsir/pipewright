@@ -1,3 +1,0 @@
-# 真实失败日志可能含敏感信息:真实数据集与真跑产物不入库(只保留 protocol/harness/seed)。
-dataset/cases.json
-results/

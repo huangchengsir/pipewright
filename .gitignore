@@ -31,3 +31,9 @@
 /runs/
 /results/
 /test-results/
+
+# 内部 AI 开发过程产物(BMad / Claude 工具链)—— 不进公开仓库,仅本地开发用
+/_bmad/
+/_bmad-output/
+/.claude/
+/CLAUDE.md

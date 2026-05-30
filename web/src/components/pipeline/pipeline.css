@@ -1,0 +1,593 @@
+/**
+ * Pipeline canvas styles.
+ * Uses OKLCH design tokens from tokens.css — no hardcoded colours.
+ * Motion: only transform / opacity; prefers-reduced-motion kills flow animation.
+ */
+
+/* ─── Canvas host ─────────────────────────────────────────────────────────── */
+.pipeline-canvas {
+  flex: 1;
+  overflow: auto;
+  background-color: var(--color-canvas);
+  background-image: radial-gradient(oklch(100% 0 0 / 0.04) 1px, transparent 1px);
+  background-size: 22px 22px;
+  padding: 34px 30px;
+  min-height: 0;
+}
+
+[data-theme="light"] .pipeline-canvas {
+  background-image: radial-gradient(oklch(20% 0.02 270 / 0.06) 1px, transparent 1px);
+}
+
+/* ─── Flow row: stages + connectors ─────────────────────────────────────── */
+.pipeline-flow {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  min-width: max-content;
+  padding-bottom: 24px;
+}
+
+/* ─── Stage column ───────────────────────────────────────────────────────── */
+.stage-col {
+  width: 248px;
+  flex: none;
+}
+
+.stage-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.stage-index {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background: var(--color-inset);
+  border: 1px solid var(--color-border);
+  display: grid;
+  place-items: center;
+  font-size: 0.66rem;
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  flex: none;
+}
+
+.stage-add-job {
+  margin-left: auto;
+  font-size: 0.74rem;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-weight: 500;
+  background: none;
+  border: none;
+  padding: 0;
+  line-height: 1;
+  transition: opacity var(--duration-fast);
+}
+
+.stage-add-job:hover {
+  opacity: 0.75;
+}
+
+.stage-add-job:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.stage-del {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--color-faint);
+  cursor: pointer;
+  padding: 0;
+  transition: color var(--duration-fast), border-color var(--duration-fast), background-color var(--duration-fast);
+  margin-left: 2px;
+}
+
+.stage-del:hover {
+  color: var(--color-red);
+  border-color: var(--color-red-line);
+  background: var(--color-red-soft);
+}
+
+.stage-del:focus-visible {
+  outline: 2px solid var(--color-red);
+  outline-offset: 1px;
+}
+
+/* ─── Job card ───────────────────────────────────────────────────────────── */
+.job-card {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 13px 14px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  transition: border-color var(--duration-fast), transform var(--duration-fast), box-shadow var(--duration-fast);
+  position: relative;
+  user-select: none;
+}
+
+.job-card:hover {
+  border-color: var(--color-border-strong);
+  transform: translateY(-1px);
+}
+
+.job-card--selected {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary), var(--shadow);
+}
+
+.job-card:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .job-card:hover {
+    transform: none;
+  }
+}
+
+.job-card-top {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 0.86rem;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.job-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  font-size: 0.7rem;
+  flex: none;
+  line-height: 1;
+}
+
+.job-icon--source { background: var(--color-cyan-soft); color: var(--color-cyan); }
+.job-icon--build  { background: var(--color-primary-soft); color: var(--color-primary); }
+.job-icon--deploy { background: var(--color-green-soft); color: var(--color-green); }
+.job-icon--notify { background: var(--color-cyan-soft); color: var(--color-cyan); }
+.job-icon--custom { background: var(--color-inset); color: var(--color-faint); }
+
+.job-card-del {
+  margin-left: auto;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--color-faint);
+  cursor: pointer;
+  padding: 0;
+  opacity: 0;
+  transition: opacity var(--duration-fast), color var(--duration-fast), border-color var(--duration-fast), background-color var(--duration-fast);
+}
+
+.job-card:hover .job-card-del,
+.job-card--selected .job-card-del {
+  opacity: 1;
+}
+
+.job-card-del:hover {
+  color: var(--color-red);
+  border-color: var(--color-red-line);
+  background: var(--color-red-soft);
+}
+
+.job-card-del:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--color-red);
+  outline-offset: 1px;
+}
+
+.job-summary {
+  font-size: 0.74rem;
+  color: var(--color-faint);
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ─── Add job button ─────────────────────────────────────────────────────── */
+.add-job-btn {
+  border: 1px dashed var(--color-border-strong);
+  border-radius: 12px;
+  padding: 11px;
+  text-align: center;
+  font-size: 0.78rem;
+  color: var(--color-faint);
+  cursor: pointer;
+  width: 100%;
+  background: none;
+  font-family: var(--font-sans);
+  transition: color var(--duration-fast), border-color var(--duration-fast);
+  margin-bottom: 10px;
+}
+
+.add-job-btn:hover {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.add-job-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* ─── SVG connector ─────────────────────────────────────────────────────── */
+.stage-connector {
+  width: 74px;
+  flex: none;
+  margin-top: 44px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.stage-connector svg {
+  width: 74px;
+  height: 30px;
+  overflow: visible;
+}
+
+.conn-edge {
+  fill: none;
+  stroke: var(--color-primary);
+  stroke-width: 2;
+  stroke-linecap: round;
+  opacity: 0.55;
+}
+
+.conn-flow {
+  fill: none;
+  stroke: var(--color-cyan);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-dasharray: 4 10;
+  animation: pipeline-flow 1.2s linear infinite;
+}
+
+.conn-port {
+  fill: var(--color-primary);
+}
+
+@keyframes pipeline-flow {
+  to { stroke-dashoffset: -14; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conn-flow {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+/* ─── Add stage button ────────────────────────────────────────────────────── */
+.add-stage-btn {
+  width: 150px;
+  flex: none;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: 12px;
+  min-height: 90px;
+  display: grid;
+  place-items: center;
+  color: var(--color-faint);
+  font-size: 0.82rem;
+  cursor: pointer;
+  margin-top: 30px;
+  background: none;
+  font-family: var(--font-sans);
+  transition: color var(--duration-fast), border-color var(--duration-fast);
+}
+
+.add-stage-btn:hover {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.add-stage-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* ─── Job drawer ──────────────────────────────────────────────────────────── */
+.job-drawer {
+  width: 360px;
+  flex: none;
+  border-left: 1px solid var(--color-border);
+  background: var(--color-card);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  animation: drawer-slide 0.22s var(--ease-out-expo) both;
+}
+
+@keyframes drawer-slide {
+  from { opacity: 0; transform: translateX(16px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .job-drawer { animation: none; }
+}
+
+.drawer-head {
+  padding: 15px 18px;
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+
+.drawer-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+
+.drawer-title {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--color-text);
+  flex: 1;
+  min-width: 0;
+}
+
+.drawer-subtitle {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--color-faint);
+  font-weight: 400;
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.drawer-close {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: var(--color-faint);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: color var(--duration-fast), background-color var(--duration-fast);
+  flex: none;
+}
+
+.drawer-close:hover {
+  color: var(--color-text);
+  background: var(--color-inset);
+}
+
+.drawer-close:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.drawer-section {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.drawer-section:last-child {
+  border-bottom: none;
+}
+
+.drawer-section-label {
+  font-size: 0.72rem;
+  color: var(--color-faint);
+  font-weight: 600;
+  margin-bottom: 9px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.drawer-field {
+  margin-bottom: 11px;
+}
+
+.drawer-field:last-child {
+  margin-bottom: 0;
+}
+
+.drawer-field-label {
+  font-size: 0.76rem;
+  color: var(--color-dim);
+  margin-bottom: 5px;
+}
+
+.drawer-input,
+.drawer-select {
+  width: 100%;
+  height: 36px;
+  background: var(--color-inset);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--rounded);
+  padding: 0 11px;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.84rem;
+  transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
+}
+
+.drawer-input:focus,
+.drawer-select:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-soft);
+}
+
+.drawer-select {
+  appearance: none;
+  cursor: pointer;
+  padding-right: 30px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2.2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+
+/* ─── KV config editor ───────────────────────────────────────────────────── */
+.kv-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 22px;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.kv-input {
+  width: 100%;
+  height: 30px;
+  background: var(--color-inset);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-md);
+  padding: 0 8px;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.8rem;
+  font-family: var(--font-mono);
+  transition: border-color var(--duration-fast);
+}
+
+.kv-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary-soft);
+}
+
+.kv-del {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  background: none;
+  border: none;
+  color: var(--color-faint);
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0;
+  transition: color var(--duration-fast);
+}
+
+.kv-del:hover {
+  color: var(--color-red);
+}
+
+.kv-del:focus-visible {
+  outline: 2px solid var(--color-red);
+  outline-offset: 1px;
+}
+
+.kv-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  background: none;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--rounded-md);
+  color: var(--color-primary);
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 500;
+  cursor: pointer;
+  margin-top: 4px;
+  transition: border-color var(--duration-fast), background-color var(--duration-fast);
+}
+
+.kv-add-btn:hover {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.kv-add-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* ─── YAML viewer (collapsible) ───────────────────────────────────────────── */
+.yaml-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 12px 18px;
+  color: var(--color-dim);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  border-top: 1px solid var(--color-border);
+  text-align: left;
+  transition: background-color var(--duration-fast);
+}
+
+.yaml-toggle:hover {
+  background: var(--color-inset);
+}
+
+.yaml-toggle:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+.yaml-toggle svg {
+  transition: transform var(--duration-fast);
+}
+
+.yaml-toggle--open svg {
+  transform: rotate(90deg);
+}
+
+.yaml-block {
+  padding: 12px 18px;
+  background: var(--color-term);
+  border-top: 1px solid var(--color-border);
+  overflow: auto;
+  max-height: 280px;
+}
+
+.yaml-code {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--color-dim);
+  line-height: 1.7;
+  white-space: pre;
+}

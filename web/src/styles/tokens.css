@@ -1,0 +1,147 @@
+/**
+ * devopsTool design tokens — OKLCH dual-theme CSS custom properties.
+ * Source of truth: DESIGN.md frontmatter.
+ * Dark is default (:root), light overrides via [data-theme="light"].
+ */
+
+:root,
+[data-theme="dark"] {
+  /* ——— Surface / Structure ——— */
+  --color-bg:           oklch(15% 0.003 270);
+  --color-card:         oklch(20% 0.004 272);
+  --color-card-2:       oklch(23% 0.005 272);
+  --color-inset:        oklch(17.5% 0.004 270);
+  --color-canvas:       oklch(13.5% 0.003 270);
+  --color-term:         oklch(8.5% 0.004 270);
+  --color-code:         oklch(13% 0.004 270);
+  --color-border:       oklch(100% 0 0 / 0.055);
+  --color-border-strong:oklch(100% 0 0 / 0.12);
+
+  /* ——— Background glow (right-top, brand electric-blue radial) ——— */
+  --bg-glow: radial-gradient(900px 440px at 94% -16%, oklch(66% 0.155 258 / 0.07), transparent 60%);
+
+  /* ——— Text hierarchy ——— */
+  --color-text:         oklch(95% 0.004 270);
+  --color-dim:          oklch(72% 0.008 270);
+  --color-faint:        oklch(55% 0.01 272);
+  --color-line-num:     oklch(42% 0.012 270);
+
+  /* ——— Brand: electric blue (sole brand accent) ——— */
+  --color-primary:      oklch(66% 0.155 258);
+  --color-primary-press:oklch(60% 0.155 258);
+  --color-primary-soft: oklch(66% 0.155 258 / 0.2);
+
+  /* ——— AI semantic: cyan (AI-only) ——— */
+  --color-cyan:         oklch(82% 0.1 205);
+  --color-cyan-soft:    oklch(82% 0.1 205 / 0.14);
+  --color-cyan-line:    oklch(82% 0.1 205 / 0.3);
+
+  /* ——— Status semantics ——— */
+  --color-green:        oklch(77% 0.15 150);
+  --color-green-soft:   oklch(72% 0.16 150 / 0.14);
+  --color-green-line:   oklch(72% 0.16 150 / 0.35);
+  --color-amber:        oklch(83% 0.13 82);
+  --color-amber-soft:   oklch(83% 0.13 82 / 0.14);
+  --color-amber-line:   oklch(83% 0.13 82 / 0.4);
+  --color-red:          oklch(69% 0.17 22);
+  --color-red-soft:     oklch(62% 0.18 22 / 0.15);
+  --color-red-line:     oklch(62% 0.18 22 / 0.4);
+  --color-logblue:      oklch(74% 0.11 248);
+
+  /* ——— Shadows / inner shadows ——— */
+  --shadow:             0 1px 2px oklch(0% 0 0 / 0.4), 0 14px 34px oklch(0% 0 0 / 0.3);
+  --shadow-modal:       0 24px 70px oklch(0% 0 0 / 0.55);
+  --shadow-inner:       inset 0 1px 12px oklch(0% 0 0 / 0.55);
+}
+
+[data-theme="light"] {
+  /* ——— Surface / Structure ——— */
+  --color-bg:           oklch(96.5% 0.004 270);
+  --color-card:         oklch(100% 0 0);
+  --color-card-2:       oklch(98% 0.004 270);
+  --color-inset:        oklch(97.5% 0.004 270);
+  --color-canvas:       oklch(98.5% 0.004 270);
+  --color-term:         oklch(20% 0.01 270);
+  --color-border:       oklch(20% 0.02 270 / 0.1);
+  --color-border-strong:oklch(20% 0.02 270 / 0.16);
+
+  /* ——— Background glow ——— */
+  --bg-glow: radial-gradient(900px 440px at 94% -16%, oklch(66% 0.155 258 / 0.1), transparent 60%);
+
+  /* ——— Text hierarchy ——— */
+  --color-text:         oklch(25% 0.01 270);
+  --color-dim:          oklch(45% 0.014 270);
+  --color-faint:        oklch(58% 0.016 270);
+  --color-line-num:     oklch(62% 0.02 270);
+
+  /* ——— Brand: electric blue ——— */
+  --color-primary:      oklch(55% 0.17 258);
+  --color-primary-press:oklch(49% 0.17 258);
+  --color-primary-soft: oklch(55% 0.17 258 / 0.12);
+
+  /* ——— AI semantic: cyan ——— */
+  --color-cyan:         oklch(52% 0.11 215);
+  --color-cyan-soft:    oklch(52% 0.11 215 / 0.1);
+  --color-cyan-line:    oklch(52% 0.11 215 / 0.28);
+
+  /* ——— Status semantics ——— */
+  --color-green:        oklch(56% 0.14 150);
+  --color-green-soft:   oklch(62% 0.15 150 / 0.12);
+  --color-green-line:   oklch(56% 0.14 150 / 0.35);
+  --color-amber:        oklch(62% 0.12 70);
+  --color-amber-soft:   oklch(62% 0.12 70 / 0.12);
+  --color-amber-line:   oklch(62% 0.12 70 / 0.38);
+  --color-red:          oklch(55% 0.18 22);
+  --color-red-soft:     oklch(60% 0.19 22 / 0.1);
+  --color-red-line:     oklch(55% 0.18 22 / 0.4);
+  --color-logblue:      oklch(60% 0.13 248);
+
+  /* ——— Shadows ——— */
+  --shadow:             0 1px 2px oklch(50% 0.02 270 / 0.06), 0 12px 30px oklch(50% 0.03 270 / 0.1);
+  --shadow-modal:       0 24px 60px oklch(40% 0.03 270 / 0.22);
+  --shadow-inner:       inset 0 1px 10px oklch(0% 0 0 / 0.16);
+}
+
+/* ——— Typography scale ——— */
+:root {
+  --font-sans:    "Inter", ui-sans-serif, system-ui, "PingFang SC", sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, Menlo, monospace;
+
+  --text-display:     1.5rem;
+  --text-h1:          1.16rem;
+  --text-kpi:         1.7rem;
+  --text-section:     0.86rem;
+  --text-body:        0.86rem;
+  --text-label:       0.83rem;
+  --text-caps:        0.71rem;
+  --text-micro:       0.68rem;
+  --text-mono:        0.8rem;
+
+  /* ——— Rounded corners ——— */
+  --rounded-sm:       4px;
+  --rounded-md:       7px;
+  --rounded:          9px;
+  --rounded-lg:       11px;
+  --rounded-xl:       14px;
+  --rounded-card:     15px;
+  --rounded-full:     9999px;
+
+  /* ——— Spacing ——— */
+  --space-1:          4px;
+  --space-2:          8px;
+  --space-3:          12px;
+  --space-4:          16px;
+  --space-5:          20px;
+  --space-6:          24px;
+  --rail-width:       62px;
+  --main-pad:         48px;
+  --main-pad-top:     26px;
+  --main-pad-bottom:  90px;
+  --card-gap:         18px;
+  --content-max:      1680px;
+
+  /* ——— Duration / easing ——— */
+  --duration-fast:    150ms;
+  --duration-normal:  280ms;
+  --ease-out-expo:    cubic-bezier(0.16, 1, 0.3, 1);
+}

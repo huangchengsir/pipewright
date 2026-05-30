@@ -1,0 +1,31 @@
+# Go
+/devopstool
+/devopstool-*
+*.test
+*.out
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Frontend
+/web/node_modules/
+# 注:/web/dist 为 go:embed 所需,保留占位 index.html;真实产物由 vite build 生成。
+
+# Claude Code 本地设置(机器特定权限/覆盖,不入库)
+.claude/settings.local.json
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# sky-aitest（自动注入：工作区/凭证/运行时配置不入库）
+.sky-aitest/
+auth/
+.mcp.json
+seed.spec.ts
+runs/
+results/
+test-results/

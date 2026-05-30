@@ -402,17 +402,15 @@ async function handleTriggerSubmit(): Promise<void> {
   triggerBranchError.value = ''
   triggerBanner.value      = ''
 
+  // 分支可选:留空时后端按项目默认分支解析(项目已知默认分支,不必逼用户填)。
   const branch = triggerForm.value.branch.trim()
-  if (!branch) {
-    triggerBranchError.value = '请输入目标分支'
-    return
-  }
 
   if (!triggerProject.value) return
   triggerSubmitting.value = true
 
   try {
-    const input: { branch: string; commit?: string } = { branch }
+    const input: { branch?: string; commit?: string } = {}
+    if (branch) input.branch = branch
     const commit = triggerForm.value.commit.trim()
     if (commit) input.commit = commit
 
@@ -832,7 +830,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
           <div class="field">
             <label class="field-label" for="trigger-branch">
               分支
-              <span class="field-hint-inline">（必填）</span>
+              <span class="field-hint-inline">（可选,留空用项目默认分支）</span>
             </label>
             <input
               id="trigger-branch"

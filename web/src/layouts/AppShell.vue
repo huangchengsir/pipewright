@@ -2,11 +2,9 @@
 import type { Component } from 'vue'
 import { useRoute } from 'vue-router'
 import {
-  LayoutGrid,
   GitBranch,
   GitFork,
   Server,
-  Activity,
   AlertTriangle,
   Bell,
   Settings,
@@ -25,15 +23,13 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { name: 'overview',      to: '/',              icon: LayoutGrid, label: '概览',  ariaLabel: '概览' },
   { name: 'projects',      to: '/projects',      icon: GitBranch,  label: '项目',  ariaLabel: '项目' },
   { name: 'runs',          to: '/runs',          icon: GitFork,    label: '运行',  ariaLabel: '运行' },
-  { name: 'servers',       to: '/servers',       icon: Server,     label: '服务器', ariaLabel: '服务器' },
-  // Story 6-1: multi-host status overview (server-layer metrics, FR-15)
-  { name: 'server-status', to: '/server-status', icon: Activity,   label: '服务器状态', ariaLabel: '服务器状态' },
+  // Story 6-1: 多机状态总览(服务器层指标 FR-15);登记在 设置 → 服务器。
+  { name: 'server-status', to: '/server-status', icon: Server,     label: '服务器', ariaLabel: '服务器' },
   // Story 6-5: configurable anomaly detection & alerts (FR-23)
   { name: 'anomaly',       to: '/anomaly',       icon: AlertTriangle, label: '异常检测', ariaLabel: '异常检测' },
-  { name: 'notifications', to: '/notifications', icon: Bell,       label: '通知',  ariaLabel: '通知' },
+  { name: 'notifications', to: '/settings/notifications', icon: Bell, label: '通知',  ariaLabel: '通知' },
 ]
 
 const settingsItem: NavItem = {

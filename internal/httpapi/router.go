@@ -53,6 +53,7 @@ type options struct {
 	runs             run.Service
 	runSub           runSubscriber
 	feedback         run.FeedbackService
+	secretSource     *RunSecretSource
 	receiver         *trigger.Receiver
 	audit            audit.Recorder
 	account          accountService
@@ -112,6 +113,12 @@ func WithRuns(s run.Service, sub runSubscriber) Option {
 // run 无诊断 → 422 no_diagnosis;不传则相关端点返回 503(服务未初始化)。
 func WithDiagnosisFeedback(s run.FeedbackService) Option {
 	return func(o *options) { o.feedback = s }
+}
+
+// WithSecretSource 注入 run 凭据解析器(红线修):诊断/反馈端点据此构建登记了该 run 真实凭据的
+// Masker,出网/落库前脱敏(项目/registry/secret 变量明文 → [MASKED])。不传则降级为只登记桩 secret。
+func WithSecretSource(s *RunSecretSource) Option {
+	return func(o *options) { o.secretSource = s }
 }
 
 // WithWebhooks 注入 webhook 接收器(Story 3.2),挂载**公开**端点 POST /api/webhooks/{token}
@@ -305,7 +312,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 取 run 失败日志 → 脱敏 → ai.Diagnose → 持久化 → 返回 diagnosis 子 DTO。
 		// 非失败 → 422 run_not_failed;不存在 → 404;任何 LLM 失败 → 200 + status=unavailable
 		// (绝不 500、绝无密钥)。复用已注入 rs + aiSettings(o.aiSettings),无新顶层依赖。
-		ar.Post("/runs/{id}/diagnose", makeDiagnoseRunHandler(rs, o.aiSettings))
+		ar.Post("/runs/{id}/diagnose", makeDiagnoseRunHandler(rs, o.aiSettings, o.secretSource))
 
 		// 成功/失败差异对比(Story 7.3;FR-25):只读 + 认证。取本次 run(commit)+ LastSuccessfulRun
 		// (同项目+同分支+更早+最近成功)+ 项目 repoURL/凭据 → RunDiffer(go-git 克隆 + tree diff)→ DTO。
@@ -322,7 +329,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// run 不存在 → 404;无诊断 → 422 no_diagnosis;同 run 重复提交 = upsert 覆盖最新。
 		// correctRootCause 脱敏(过 mask)+ 长度上限。复用已注入 rs + o.feedback(WithDiagnosisFeedback)。
 		// fb 为 nil → 503。GET diagnosis-stats 在 /settings 组内(只读 + 认证)。
-		ar.Post("/runs/{id}/diagnosis/feedback", makeSubmitDiagnosisFeedbackHandler(rs, o.feedback))
+		ar.Post("/runs/{id}/diagnosis/feedback", makeSubmitDiagnosisFeedbackHandler(rs, o.feedback, o.secretSource))
 
 		// 手动触发创建运行(Story 3.2):认证 + CSRF;actor=admin;返 201 run-detail DTO。
 		ar.Post("/projects/{id}/runs", makeManualRunHandler(rs, aud))

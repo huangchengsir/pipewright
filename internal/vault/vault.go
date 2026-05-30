@@ -77,6 +77,10 @@ type Vault interface {
 	List() ([]Credential, error)
 	// Get 解密并返回指定凭据的明文,**仅供进程内领域调用**;同时更新 last_used_at。
 	Get(id string) (string, error)
+	// Reveal 解密并返回指定凭据的明文,**不更新 last_used_at**(供脱敏登记等「只读取值、非真正使用」
+	// 的场景:把凭据明文登记进 Masker 以便日志/诊断/通知出网前替换为 [MASKED],不应算「最近使用」)。
+	// 未配置 master key → ErrVaultUnconfigured;不存在 → ErrNotFound;解密失败 → ErrDecrypt(不泄漏)。
+	Reveal(id string) (string, error)
 	// Exists 仅校验凭据是否存在,**不解密、不刷新 last_used_at**(供保存配置时校验引用,
 	// 避免「仅编辑也算用过」的语义失真与无谓解密)。未配置 master key → ErrVaultUnconfigured。
 	Exists(id string) (bool, error)
@@ -208,6 +212,26 @@ func (s *service) Get(id string) (string, error) {
 	// 更新最近使用时间(尽力而为:失败不影响取用)。
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, _ = s.db.Exec(`UPDATE credentials SET last_used_at = ? WHERE id = ?`, now, id)
+	return string(plaintext), nil
+}
+
+// Reveal 同 Get 但**不更新 last_used_at**(供脱敏登记等只读取值场景)。
+func (s *service) Reveal(id string) (string, error) {
+	if !s.configured() {
+		return "", ErrVaultUnconfigured
+	}
+	var sealed []byte
+	err := s.db.QueryRow(`SELECT ciphertext FROM credentials WHERE id = ?`, id).Scan(&sealed)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return "", fmt.Errorf("vault: reveal credential: %w", err)
+	}
+	plaintext, err := open(s.key, sealed)
+	if err != nil {
+		return "", err // ErrDecrypt:不泄漏明文/密钥
+	}
 	return string(plaintext), nil
 }
 

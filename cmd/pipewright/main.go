@@ -136,11 +136,11 @@ func main() {
 	// 装配进程内 worker pool(Story 3.1)+ best-effort 自动诊断钩子(Story 7.2)。
 	// 钩子在 run→failed 后「取失败日志→脱敏→ai.Diagnose→保存」,经 Option 注入使 run 包不 import ai。
 	// AI 未配/失败仅降级(status=unavailable),绝不阻断 run 终态(NFR-10)。pool 调度多 run 并行、结果独立。
-	// 日志脱敏器(Story 3.6 / AC-SEC-04):dbStepSink.Log 落 run_logs / 发 SSE 前一律 Scrub。
-	// 本期同 7-2 的 registerRunSecrets 债:只登记桩假 secret;3-3/3-6 真实日志落地后改为从
-	// vault 取该 run 实际凭据明文登记(届时凭 run→项目→凭据解析)。
-	logMasker := mask.NewMasker()
-	logMasker.RegisterSecret(run.StubFailureSecret)
+	// 日志/诊断/反馈/通知出网脱敏器(Story 3.6/7-2/7-5/5-3;AC-SEC-04)——**红线修**:
+	// 不再只登记桩假 secret,而是 per-run 解析该 run 真实用到的全部凭据(项目主凭据 + 流水线
+	// settings 的 secret 构建/环境变量 + 镜像仓库凭据),从 vault Reveal 明文登记进 Masker。
+	// 这样 3-3 真实构建落地后,真实日志/诊断/反馈/通知里的真凭据也一律 [MASKED],绝不明文外发。
+	secretSrc := httpapi.NewRunSecretSource(runSvc, projectSvc, pipelineSettingsSvc, credVault)
 
 	// 装配通知渠道服务(Story 5.1;FR-19):复用 vault secretbox 加密敏感字段(如 SMTP 密码,密文入库)。
 	// webhook 投递用带超时的注入 HTTP 客户端(~8s);webhook URL 经 SSRF 收口(拒云元数据/链路本地)。
@@ -149,11 +149,12 @@ func main() {
 	notifySvc := notify.New(st.DB, credVault, &http.Client{Timeout: 8 * time.Second})
 
 	pool := run.NewWorkerPool(runSvc,
-		run.WithDiagnoseHook(httpapi.NewDiagnoseHook(runSvc, aiSvc)),
-		run.WithLogMasker(logMasker),
+		run.WithDiagnoseHook(httpapi.NewDiagnoseHook(runSvc, aiSvc, secretSrc)),
+		// per-run 日志脱敏:每个 run 构建登记了该 run 真实凭据的 Masker(红线修)。
+		run.WithLogMaskerFunc(secretSrc.MaskerForRun),
 		// best-effort 通知钩子(Story 5.2;FR-20):run 终态 → event → 构 Payload → Router.RouteEvent。
 		// 未配路由的事件不发送;单渠道失败续发;绝不阻断 run 终态。run 包不 import notify(钩子解耦)。
-		run.WithNotifyHook(httpapi.NewNotifyHook(runSvc, notifySvc)),
+		run.WithNotifyHook(httpapi.NewNotifyHook(runSvc, notifySvc, secretSrc)),
 	)
 	pool.Start()
 	log.Printf("[run] worker pool started")
@@ -174,7 +175,7 @@ func main() {
 	// (notifySvc 已在 pool 装配前声明〔Story 5.2 注入 NotifyHook〕,此处不重复。)
 	// Story 4.6(FR-22 种子):注入诊断钩子 → 部署失败(failed/partial_failed)合成失败日志 +
 	// best-effort 触发 7-2 AI 诊断,让诊断飞轮覆盖部署失败(而非只覆盖构建失败)。复用 7-2 NewDiagnoseHook。
-	deploySvc := deploy.New(targetSvc, runSvc, deploy.WithDiagnoseHook(httpapi.NewDiagnoseHook(runSvc, aiSvc)))
+	deploySvc := deploy.New(targetSvc, runSvc, deploy.WithDiagnoseHook(httpapi.NewDiagnoseHook(runSvc, aiSvc, secretSrc)))
 
 	// 装配可配置异常检测服务(Story 6.5;FR-23):按阈值规则对服务器指标做检测,命中产告警入库。
 	// 检测复用 6-1 指标采集(NewAnomalyCollector 适配 collectServerMetrics);不可达/指标 null 的
@@ -183,7 +184,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithServers(targetSvc), httpapi.WithDeploy(deploySvc), httpapi.WithNotifications(notifySvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc)),
+		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithServers(targetSvc), httpapi.WithDeploy(deploySvc), httpapi.WithNotifications(notifySvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithSecretSource(secretSrc)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;

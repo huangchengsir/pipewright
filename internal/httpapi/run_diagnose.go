@@ -100,14 +100,14 @@ func aiToRunDiagnosis(d *ai.Diagnosis) *run.Diagnosis {
 //   - 显式端点 POST /diagnose 传 true:用户主动请求,落库以便刷新仍能回显「诊断不可用 + reason」。
 //   - 自动钩子传 false:仅落 ready 诊断,避免污染「diagnosis=null 即未诊断」干净态、并杜绝
 //     「AI 未配 / 用户取消(取消复用 StatusFailed)的每个失败 run 都无谓写一条 unavailable」。
-func diagnoseRun(ctx context.Context, runs run.Service, aiSvc ai.Service, id string, persistUnavailable bool) (*run.Diagnosis, error) {
+func diagnoseRun(ctx context.Context, runs run.Service, aiSvc ai.Service, secretSrc *RunSecretSource, id string, persistUnavailable bool) (*run.Diagnosis, error) {
 	failureLog, err := runs.GetFailureLog(ctx, id)
 	if err != nil {
 		return nil, err // ErrNotFound 等,由调用方映射
 	}
 
-	masker := mask.NewMasker()
-	registerRunSecrets(masker, failureLog)
+	// 出网前脱敏:登记该 run 真实用到的全部凭据(+ 桩假 secret)。secretSrc 为 nil 时降级为只登记桩。
+	masker := maskerFor(ctx, secretSrc, id)
 
 	var diag *ai.Diagnosis
 	if aiSvc != nil {
@@ -141,14 +141,15 @@ func diagnoseRun(ctx context.Context, runs run.Service, aiSvc ai.Service, id str
 	return domain, nil
 }
 
-// registerRunSecrets 把失败日志中**已知的敏感串**登记进 Masker(出网前脱敏)。
-//
-// 真实日志的凭据登记点在 3-3/3-6 落地后接入(届时从 vault 取该 run 用到的凭据明文登记)。
-// 本期日志为桩合成,内嵌一个固定假 secret(run.StubFailureSecret)以验脱敏链路端到端有效;
-// 此处据该已知串登记,使 prompt/响应/evidence/DB 中它一律 [MASKED]。
-func registerRunSecrets(m *mask.Masker, failureLog string) {
-	_ = failureLog
-	m.RegisterSecret(run.StubFailureSecret)
+// maskerFor 返回一个登记了该 run 真实凭据(+ 桩假 secret)的 Masker;secretSrc 为 nil 时降级为
+// 只登记桩 secret(纯单测/未装配场景)。供诊断/反馈出网前脱敏复用。见 RunSecretSource。
+func maskerFor(ctx context.Context, src *RunSecretSource, runID string) *mask.Masker {
+	if src == nil {
+		m := mask.NewMasker()
+		m.RegisterSecret(run.StubFailureSecret)
+		return m
+	}
+	return src.MaskerForRun(ctx, runID)
 }
 
 // NewDiagnoseHook 把 run.Service + ai.Service 适配为 run.WorkerPool 的 best-effort 自动诊断钩子
@@ -156,7 +157,7 @@ func registerRunSecrets(m *mask.Masker, failureLog string) {
 //
 // 钩子在 run→failed 后被 worker 在独立 goroutine 调用:它「取失败日志 → 脱敏 → ai.Diagnose →
 // 保存」,自带超时(防黑洞 LLM 把 goroutine 挂死);失败仅记日志,**绝不影响 run 终态**。
-func NewDiagnoseHook(runs run.Service, aiSvc ai.Service) func(ctx context.Context, runID string) {
+func NewDiagnoseHook(runs run.Service, aiSvc ai.Service, secretSrc *RunSecretSource) func(ctx context.Context, runID string) {
 	return func(ctx context.Context, runID string) {
 		if runs == nil {
 			return
@@ -165,7 +166,7 @@ func NewDiagnoseHook(runs run.Service, aiSvc ai.Service) func(ctx context.Contex
 		hookCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		// 自动诊断:仅持久化 ready 结果(persistUnavailable=false),不污染未诊断干净态。
-		if _, err := diagnoseRun(hookCtx, runs, aiSvc, runID, false); err != nil {
+		if _, err := diagnoseRun(hookCtx, runs, aiSvc, secretSrc, runID, false); err != nil {
 			log.Printf("[diagnose] run %s: auto-diagnose best-effort failed: %v", runID, err)
 		}
 	}
@@ -176,7 +177,7 @@ func NewDiagnoseHook(runs run.Service, aiSvc ai.Service) func(ctx context.Contex
 // 取 run:非失败态 → 422 run_not_failed;不存在 → 404。失败态 → 编排诊断(取日志→脱敏→
 // ai.Diagnose→保存)→ 返回 diagnosis 子 DTO。**任何 LLM 失败均 200 + status=unavailable,
 // 绝不 500、绝无密钥。**
-func makeDiagnoseRunHandler(runs run.Service, aiSvc ai.Service) http.HandlerFunc {
+func makeDiagnoseRunHandler(runs run.Service, aiSvc ai.Service, secretSrc *RunSecretSource) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if runs == nil {
 			writeError(w, http.StatusServiceUnavailable, "internal", "运行服务未初始化")
@@ -197,7 +198,7 @@ func makeDiagnoseRunHandler(runs run.Service, aiSvc ai.Service) http.HandlerFunc
 		}
 
 		// 显式诊断:用户主动请求,落库 unavailable 也无妨(刷新仍能回显 reason)。
-		domain, derr := diagnoseRun(ctx, runs, aiSvc, id, true)
+		domain, derr := diagnoseRun(ctx, runs, aiSvc, secretSrc, id, true)
 		if derr != nil {
 			if errors.Is(derr, run.ErrNotFound) {
 				writeError(w, http.StatusNotFound, "run_not_found", "运行不存在")

@@ -156,3 +156,80 @@ export async function createRoute(input: CreateRouteInput): Promise<Notification
 export async function deleteRoute(id: string): Promise<void> {
   await http.delete<void>(`/api/notifications/routes/${id}`)
 }
+
+/**
+ * Notification Templates API — Story 5.3 (FR-21).
+ *
+ * GET    /api/notifications/templates        → { items: NotificationTemplate[] }
+ * POST   /api/notifications/templates        → NotificationTemplate   (needs CSRF)
+ * PUT    /api/notifications/templates/{id}   → NotificationTemplate   (needs CSRF)
+ * DELETE /api/notifications/templates/{id}   → 204                    (needs CSRF)
+ *
+ * Customizes notification title/body per event (optionally per channel). Placeholders
+ * use {{name}} plain-text substitution (no RCE). Variable set is frozen:
+ * project / branch / commit / status / event / durationMs / runId / errorSummary.
+ * Unknown placeholders render to empty string. An event with no template falls back to
+ * the platform default copy (5-2 behaviour unchanged). Match priority: exact channelId >
+ * generic (empty channelId) > platform default. projectId is reserved for 5-4.
+ */
+
+/** Frozen template variable placeholders (for the "available variables" hint). */
+export const TEMPLATE_VARIABLES = [
+  'project',
+  'branch',
+  'commit',
+  'status',
+  'event',
+  'durationMs',
+  'runId',
+  'errorSummary',
+] as const
+
+/** GET response item — an event(+optional channel) → title/body template mapping. */
+export interface NotificationTemplate {
+  id: string
+  /** Reserved for 5-4 per-pipeline override; empty = global default this release. */
+  projectId?: string
+  event: NotificationEvent
+  /** Empty = applies to all channels for this event; non-empty = only that channel. */
+  channelId?: string
+  titleTemplate: string
+  bodyTemplate: string
+  createdAt: string
+}
+
+/** Create body. channelId empty/omitted = generic (all channels for the event). */
+export interface CreateTemplateInput {
+  event: NotificationEvent
+  channelId?: string
+  titleTemplate: string
+  bodyTemplate: string
+}
+
+/** Update body — all fields optional (omit = keep existing). */
+export interface UpdateTemplateInput {
+  event?: NotificationEvent
+  channelId?: string
+  titleTemplate?: string
+  bodyTemplate?: string
+}
+
+export async function listTemplates(): Promise<NotificationTemplate[]> {
+  const res = await http.get<{ items: NotificationTemplate[] }>('/api/notifications/templates')
+  return res.items ?? []
+}
+
+export async function createTemplate(input: CreateTemplateInput): Promise<NotificationTemplate> {
+  return http.post<NotificationTemplate>('/api/notifications/templates', input)
+}
+
+export async function updateTemplate(
+  id: string,
+  input: UpdateTemplateInput,
+): Promise<NotificationTemplate> {
+  return http.put<NotificationTemplate>(`/api/notifications/templates/${id}`, input)
+}
+
+export async function deleteTemplate(id: string): Promise<void> {
+  await http.delete<void>(`/api/notifications/templates/${id}`)
+}

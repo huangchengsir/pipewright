@@ -28,12 +28,18 @@ import {
   listRoutes,
   createRoute,
   deleteRoute,
+  listTemplates,
+  createTemplate,
+  updateTemplate,
+  deleteTemplate,
+  TEMPLATE_VARIABLES,
   type ChannelType,
   type NotificationChannel,
   type ChannelConfigInput,
   type ChannelTestResult,
   type NotificationRoute,
   type NotificationEvent,
+  type NotificationTemplate,
 } from '../../api/notifications'
 
 // ─── types / metadata ──────────────────────────────────────────────────────────
@@ -445,6 +451,134 @@ async function handleDeleteRoute(route: NotificationRoute): Promise<void> {
 }
 
 onMounted(loadRoutes)
+
+// ─── notification templates (Story 5.3 / FR-21) ───────────────────────────────
+// 「事件(可选按渠道)→ 标题/正文模板」自定义区:占位 {{name}} 纯文本替换(无 RCE);
+// 未配模板的事件用平台默认文案(5-2 行为不变)。独立于上方渠道 / 路由既有区。
+
+const templatesLoadState = ref<LoadState>('loading')
+const templatesLoadError = ref('')
+const templates = ref<NotificationTemplate[]>([])
+
+async function loadTemplates(): Promise<void> {
+  templatesLoadState.value = 'loading'
+  templatesLoadError.value = ''
+  try {
+    templates.value = await listTemplates()
+    templatesLoadState.value = 'ready'
+  } catch (err) {
+    templatesLoadError.value = httpMessage(err, '加载通知模板失败,请稍后重试')
+    templatesLoadState.value = 'error'
+  }
+}
+
+/** Event label lookup for rendering template rows. */
+function eventLabel(event: string): string {
+  return EVENTS.find((e) => e.id === event)?.label ?? event
+}
+
+/** A template's channel scope label: empty channelId = 该事件通用. */
+function templateScope(t: NotificationTemplate): string {
+  if (!t.channelId) return '该事件所有渠道'
+  return channelName(t.channelId)
+}
+
+// Add/edit template form. A single inline form (create or edit) shared across rows.
+interface TemplateForm {
+  id: string | null
+  event: NotificationEvent
+  channelId: string
+  titleTemplate: string
+  bodyTemplate: string
+}
+
+const blankTemplateForm = (): TemplateForm => ({
+  id: null,
+  event: 'build_failed',
+  channelId: '',
+  titleTemplate: '',
+  bodyTemplate: '',
+})
+
+const templateForm = reactive<TemplateForm>(blankTemplateForm())
+const templateFormOpen = ref(false)
+const savingTemplate = ref(false)
+
+const availableVariables = TEMPLATE_VARIABLES
+
+// Literal {{x}} strings rendered in the template (kept out of the template to avoid
+// Vue's interpolation parser choking on nested {{ }}).
+const placeholderSyntax = '{{变量}}'
+function placeholderToken(name: string): string {
+  return `{{${name}}}`
+}
+
+function openCreateTemplate(): void {
+  Object.assign(templateForm, blankTemplateForm())
+  templateFormOpen.value = true
+}
+
+function openEditTemplate(t: NotificationTemplate): void {
+  Object.assign(templateForm, {
+    id: t.id,
+    event: t.event,
+    channelId: t.channelId ?? '',
+    titleTemplate: t.titleTemplate,
+    bodyTemplate: t.bodyTemplate,
+  })
+  templateFormOpen.value = true
+}
+
+function cancelTemplateForm(): void {
+  templateFormOpen.value = false
+  Object.assign(templateForm, blankTemplateForm())
+}
+
+async function handleSaveTemplate(): Promise<void> {
+  savingTemplate.value = true
+  try {
+    const payload = {
+      event: templateForm.event,
+      channelId: templateForm.channelId || undefined,
+      titleTemplate: templateForm.titleTemplate,
+      bodyTemplate: templateForm.bodyTemplate,
+    }
+    if (templateForm.id) {
+      await updateTemplate(templateForm.id, payload)
+      toast.success('已更新通知模板')
+    } else {
+      await createTemplate(payload)
+      toast.success('已添加通知模板')
+    }
+    cancelTemplateForm()
+    await loadTemplates()
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 422 && err.apiError) {
+      toast.error('保存失败', { detail: err.apiError.message })
+    } else {
+      toast.error('保存失败', { detail: httpMessage(err, '请稍后重试') })
+    }
+  } finally {
+    savingTemplate.value = false
+  }
+}
+
+const deletingTemplateId = ref<string | null>(null)
+
+async function handleDeleteTemplate(t: NotificationTemplate): Promise<void> {
+  deletingTemplateId.value = t.id
+  try {
+    await deleteTemplate(t.id)
+    toast.success('已移除通知模板')
+    await loadTemplates()
+  } catch (err) {
+    toast.error('移除失败', { detail: httpMessage(err, '请稍后重试') })
+  } finally {
+    deletingTemplateId.value = null
+  }
+}
+
+onMounted(loadTemplates)
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -916,6 +1050,158 @@ function configSummary(ch: NotificationChannel): string {
           </div>
         </li>
       </ul>
+    </section>
+
+    <!-- ─── notification templates (Story 5.3 / FR-21) ───────────────────────── -->
+    <section class="templates-section" aria-labelledby="templates-heading">
+      <div class="section-head">
+        <div class="section-head-text">
+          <h2 id="templates-heading" class="section-title">通知模板</h2>
+          <p class="section-desc">
+            自定义通知的<strong>标题与正文</strong>,用 <code class="mono">{{ placeholderSyntax }}</code> 占位插入项目、分支、耗时等真实值。<strong>未配置模板的事件使用平台默认文案</strong>,行为不变。可按事件配置,也可仅对某个渠道生效。
+          </p>
+        </div>
+        <AppButton
+          v-if="templatesLoadState === 'ready' && !templateFormOpen"
+          variant="default"
+          type="button"
+          @click="openCreateTemplate"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+          新增模板
+        </AppButton>
+      </div>
+
+      <!-- available variables hint -->
+      <div class="tpl-vars" role="note">
+        <span class="tpl-vars-label">可用变量</span>
+        <code v-for="v in availableVariables" :key="v" class="tpl-var mono">{{ placeholderToken(v) }}</code>
+      </div>
+
+      <!-- templates load error -->
+      <div v-if="templatesLoadState === 'error'" class="banner banner--error" role="alert">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" />
+        </svg>
+        <span>{{ templatesLoadError }}</span>
+        <button class="banner-retry" @click="loadTemplates">↻ 重试</button>
+      </div>
+
+      <!-- templates loading -->
+      <div v-else-if="templatesLoadState === 'loading'" class="panel panel--anim">
+        <div class="skel-body">
+          <div v-for="i in 2" :key="i" class="skel skel--row" aria-hidden="true" />
+        </div>
+      </div>
+
+      <template v-else>
+        <!-- add/edit template form -->
+        <form v-if="templateFormOpen" class="tpl-form panel--anim" @submit.prevent="handleSaveTemplate">
+          <div class="tpl-form-row">
+            <FormField label="事件" field-id="tpl-event" required>
+              <template #default="{ fieldId, ariaDescribedby }">
+                <select :id="fieldId" v-model="templateForm.event" class="route-select" :aria-describedby="ariaDescribedby" :disabled="savingTemplate">
+                  <option v-for="ev in EVENTS" :key="ev.id" :value="ev.id">{{ ev.label }}({{ ev.id }})</option>
+                </select>
+              </template>
+            </FormField>
+            <FormField label="渠道(可选)" field-id="tpl-channel" hint="留空 = 该事件所有渠道通用;指定 = 仅该渠道">
+              <template #default="{ fieldId, ariaDescribedby }">
+                <select :id="fieldId" v-model="templateForm.channelId" class="route-select" :aria-describedby="ariaDescribedby" :disabled="savingTemplate">
+                  <option value="">该事件所有渠道(通用)</option>
+                  <option v-for="c in channels" :key="c.id" :value="c.id">{{ c.name }}{{ c.enabled ? '' : '(已停用)' }}</option>
+                </select>
+              </template>
+            </FormField>
+          </div>
+
+          <FormField label="标题模板" field-id="tpl-title" hint="留空时回退平台默认标题">
+            <template #default="{ fieldId, ariaDescribedby }">
+              <input
+                :id="fieldId"
+                v-model="templateForm.titleTemplate"
+                class="field-input field-input--mono"
+                type="text"
+                :aria-describedby="ariaDescribedby"
+                :disabled="savingTemplate"
+                placeholder="构建失败:{{project}}"
+              />
+            </template>
+          </FormField>
+
+          <FormField label="正文模板" field-id="tpl-body">
+            <template #default="{ fieldId, ariaDescribedby }">
+              <textarea
+                :id="fieldId"
+                v-model="templateForm.bodyTemplate"
+                class="field-input field-input--mono tpl-textarea"
+                rows="4"
+                :aria-describedby="ariaDescribedby"
+                :disabled="savingTemplate"
+                placeholder="{{branch}}@{{commit}} 失败,耗时 {{durationMs}}ms&#10;{{errorSummary}}"
+              />
+            </template>
+          </FormField>
+
+          <div class="tpl-form-actions">
+            <AppButton variant="primary" type="submit" :loading="savingTemplate">
+              {{ templateForm.id ? '保存修改' : '创建模板' }}
+            </AppButton>
+            <AppButton variant="ghost" type="button" :disabled="savingTemplate" @click="cancelTemplateForm">取消</AppButton>
+          </div>
+        </form>
+
+        <!-- empty state -->
+        <div v-if="templates.length === 0 && !templateFormOpen" class="soon-hint" role="note">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" />
+          </svg>
+          暂无自定义模板,所有事件使用平台默认文案。点击「新增模板」可自定义通知内容。
+        </div>
+
+        <!-- template list -->
+        <ul v-if="templates.length > 0" class="tpl-list">
+          <li v-for="t in templates" :key="t.id" class="tpl-card panel--anim">
+            <div class="tpl-card-head">
+              <div class="tpl-card-meta">
+                <span class="event-name">{{ eventLabel(t.event) }}</span>
+                <span class="event-code mono">{{ t.event }}</span>
+                <span class="tpl-scope">{{ templateScope(t) }}</span>
+              </div>
+              <div class="tpl-card-actions">
+                <button class="tpl-icon-btn" type="button" :aria-label="`编辑 ${eventLabel(t.event)} 模板`" @click="openEditTemplate(t)">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                    <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                  </svg>
+                </button>
+                <button
+                  class="tpl-icon-btn tpl-icon-btn--danger"
+                  type="button"
+                  :aria-label="`删除 ${eventLabel(t.event)} 模板`"
+                  :disabled="deletingTemplateId === t.id"
+                  @click="handleDeleteTemplate(t)"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                    <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div class="tpl-card-body">
+              <div v-if="t.titleTemplate" class="tpl-line">
+                <span class="tpl-line-label">标题</span>
+                <code class="mono">{{ t.titleTemplate }}</code>
+              </div>
+              <div v-if="t.bodyTemplate" class="tpl-line">
+                <span class="tpl-line-label">正文</span>
+                <code class="mono tpl-body-code">{{ t.bodyTemplate }}</code>
+              </div>
+            </div>
+          </li>
+        </ul>
+      </template>
     </section>
   </div>
 </template>
@@ -1644,6 +1930,170 @@ function configSummary(ch: NotificationChannel): string {
   outline: none;
   border-color: var(--color-primary);
   box-shadow: 0 0 0 3px var(--color-primary-soft);
+}
+
+/* ─── notification templates (Story 5.3) ──────────────────────────────────── */
+.templates-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.tpl-vars {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--color-inset);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--rounded);
+}
+
+.tpl-vars-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--color-text-soft);
+}
+
+.tpl-var {
+  padding: 2px 7px;
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  border-radius: 5px;
+  font-size: 0.78rem;
+}
+
+.tpl-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-lg);
+}
+
+.tpl-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.tpl-form-row > * {
+  flex: 1 1 220px;
+}
+
+.tpl-textarea {
+  min-height: 92px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.tpl-form-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.tpl-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tpl-card {
+  padding: 16px 18px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-lg);
+}
+
+.tpl-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.tpl-card-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.tpl-scope {
+  font-size: 0.78rem;
+  color: var(--color-text-soft);
+  padding: 2px 8px;
+  background: var(--color-inset);
+  border-radius: 999px;
+}
+
+.tpl-card-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.tpl-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--rounded);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-soft);
+  cursor: pointer;
+  transition: color var(--duration-fast, 150ms), border-color var(--duration-fast, 150ms), background var(--duration-fast, 150ms);
+}
+
+.tpl-icon-btn:hover {
+  color: var(--color-text);
+  border-color: var(--color-border-strong, var(--color-border));
+  background: var(--color-inset);
+}
+
+.tpl-icon-btn--danger:hover {
+  color: var(--color-danger, oklch(58% 0.2 25));
+  border-color: var(--color-danger, oklch(58% 0.2 25));
+}
+
+.tpl-icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.tpl-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tpl-line {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.tpl-line-label {
+  flex-shrink: 0;
+  width: 38px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--color-text-soft);
+}
+
+.tpl-line code {
+  font-size: 0.82rem;
+  color: var(--color-text);
+  word-break: break-word;
+}
+
+.tpl-body-code {
+  white-space: pre-wrap;
 }
 
 /* ─── reduced motion ──────────────────────────────────────────────────────── */

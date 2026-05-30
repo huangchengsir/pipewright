@@ -204,6 +204,43 @@ func TestDeployFailureNotFatal(t *testing.T) {
 	}
 }
 
+// TestDeployFailureSeedsDiagnosis 验证 Story 4.6:部署失败 → 合成失败日志(SetFailureLog)+
+// best-effort 触发注入的诊断钩子(让 7-2 飞轮覆盖部署失败)。
+func TestDeployFailureSeedsDiagnosis(t *testing.T) {
+	db := testDB(t)
+	rsvc := run.New(db)
+	tgt := &stubTarget{execFn: func(string, []string) (*target.ExecResult, error) {
+		return nil, target.ErrUnreachable
+	}}
+	srv := seedServer(t, tgt, "dead-1")
+	runID, artID := seedSuccessRunWithArtifact(t, db, rsvc, run.ArtifactImage, "registry/shop:1.0")
+
+	hookCalled := make(chan string, 1)
+	svc := New(tgt, rsvc, WithDiagnoseHook(func(_ context.Context, rid string) {
+		hookCalled <- rid
+	}))
+	if _, err := svc.Deploy(context.Background(), DeployInput{
+		RunID: runID, ArtifactID: artID, ServerIDs: []string{srv.ID},
+	}); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+
+	// 失败日志已落(从失败目标 message 合成,无明文密钥)。
+	fl, _ := rsvc.GetFailureLog(context.Background(), runID)
+	if !strings.Contains(fl, "部署失败") || !strings.Contains(fl, "dead-1") {
+		t.Fatalf("失败日志未合成: %q", fl)
+	}
+	// 诊断钩子被 best-effort 触发(异步)。
+	select {
+	case rid := <-hookCalled:
+		if rid != runID {
+			t.Fatalf("钩子 runID = %q, want %q", rid, runID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("部署失败未触发诊断钩子")
+	}
+}
+
 // TestDeployPartialFailed 验证多机有成功有失败 → run 终态 partial_failed。
 func TestDeployPartialFailed(t *testing.T) {
 	db := testDB(t)

@@ -106,7 +106,7 @@ development_status:
 
   # ===== Epic 7: AI 失败诊断与代码洞察(王牌) =====
   epic-7: in-progress
-  7-1-configurable-ai-provider: in-progress
+  7-1-configurable-ai-provider: review
   7-2-ai-failure-diagnosis: backlog
   7-3-success-fail-diff: backlog
   7-4-code-browse-diff: backlog

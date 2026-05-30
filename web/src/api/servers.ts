@@ -202,3 +202,65 @@ export function subscribeServerLogs(
 
   return cleanup
 }
+
+// ─── Server-layer metrics (Story 6-1, FR-15) ─────────────────────────────────
+//
+// GET /api/servers/:id/metrics  → ServerMetrics      (single host; read-only)
+// GET /api/servers/metrics      → { items: ServerMetrics[] }  (batch; parallel)
+//
+// Metrics are collected over SSH by running a FIXED read-only command whitelist
+// (`cat /proc/loadavg`/`uptime`, `nproc`/`getconf`, `free -b`, `df -B1 /`/`df -k /`).
+// AC-SEC-02: the commands are static argv arrays and never incorporate any user
+// input — no injection surface; metrics carry no secrets.
+//
+// Fault tolerance: an unreachable / auth-failed host returns reachable:false +
+// a human `error` (HTTP 200, never 500), and does not affect other hosts. A
+// metric whose command is missing or whose output can't be parsed comes back
+// null (cross-platform best-effort: Linux first, macOS partial), independently
+// of the other metrics.
+
+/** CPU load + core count. Either sub-field may be null when unparseable. */
+export interface CpuMetric {
+  loadavg1: number | null
+  cores: number | null
+}
+
+/** Memory used/total in bytes. */
+export interface MemoryMetric {
+  usedBytes: number
+  totalBytes: number
+}
+
+/** Disk used/total in bytes for a mount path (root `/`). */
+export interface DiskMetric {
+  path: string
+  usedBytes: number
+  totalBytes: number
+}
+
+export interface ServerMetrics {
+  serverId: string
+  /** False when SSH/auth/connect failed; metrics are null and `error` is human-readable. */
+  reachable: boolean
+  /** Human-readable error when unreachable; empty otherwise. Never contains secrets. */
+  error: string
+  /** Null when the host is unreachable or CPU collection failed entirely. */
+  cpu: CpuMetric | null
+  /** Null on hosts without `free` (e.g. macOS) or on parse failure. */
+  memory: MemoryMetric | null
+  /** Null on parse failure; `df` is cross-platform so usually present. */
+  disk: DiskMetric | null
+  /** RFC3339 collection timestamp. */
+  collectedAt: string
+}
+
+/** Fetch resource metrics for a single registered server (one-shot, read-only). */
+export async function getServerMetrics(id: string): Promise<ServerMetrics> {
+  return http.get<ServerMetrics>(`/api/servers/${id}/metrics`)
+}
+
+/** Fetch metrics for all registered servers (collected in parallel, each independent). */
+export async function getAllServerMetrics(): Promise<ServerMetrics[]> {
+  const res = await http.get<{ items: ServerMetrics[] }>('/api/servers/metrics')
+  return res.items
+}

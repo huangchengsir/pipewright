@@ -85,7 +85,36 @@ const composed = computed<BuildConfig>(() => ({
   },
 }))
 
-watch(composed, (b) => emit('update', b), { deep: true })
+// 规范化内容键:用于比对「子组件当前内容」与「上游 props.build」是否真不同。
+// 防双向绑定回环:父收到 update 后回写 :build,本组件 watch(()=>props.build) 重置本地态
+// (含 keySeq++ 造新 _key)→ composed 重算 → 若无脑 emit 则父再回写 → 无限循环 → 渲染器 OOM。
+// 仅当规范化内容确有差异时才 emit,回环在内容收敛后即止。
+function buildKey(b: BuildConfig): string {
+  return JSON.stringify({
+    model: b.model,
+    dockerfilePath: (b.dockerfilePath || 'Dockerfile').trim() || 'Dockerfile',
+    language: (b.toolchain?.language ?? '').trim(),
+    version: (b.toolchain?.version ?? '').trim(),
+    artifactType: b.artifactType,
+    vars: b.vars.map((v) => ({
+      id: v.id ?? '',
+      key: v.key,
+      secret: !!v.secret,
+      value: v.value ?? '',
+      credentialId: v.credentialId ?? '',
+    })),
+    cacheEnabled: !!b.cache?.enabled,
+    cachePaths: (b.cache?.paths ?? []).map((p) => p.trim()).filter(Boolean),
+  })
+}
+
+watch(
+  composed,
+  (b) => {
+    if (buildKey(b) !== buildKey(props.build)) emit('update', b)
+  },
+  { deep: true },
+)
 
 // ─── Variable row ops ───────────────────────────────────────────────────────────
 

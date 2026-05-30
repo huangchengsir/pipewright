@@ -96,7 +96,37 @@ function compose(): Environment[] {
   }))
 }
 
-watch(envs, () => emit('update', compose()), { deep: true })
+// 规范化内容键:防双向绑定回环(同 VarsCacheTab)。父回写 :environments → watch 重置本地
+// (keySeq++ 造新 _key)→ envs 变 → 若无脑 emit 则父再回写 → 无限循环 → 渲染器 OOM。
+// 仅当规范化内容确有差异时才 emit。
+function envsKey(list: Environment[]): string {
+  return JSON.stringify(
+    list.map((e) => ({
+      id: e.id ?? '',
+      name: e.name,
+      targetServerIds: (e.targetServerIds ?? []).map((s) => s.trim()).filter(Boolean),
+      envVars: e.envVars.map((v) => ({
+        id: v.id ?? '',
+        key: v.key,
+        secret: !!v.secret,
+        value: v.value ?? '',
+        credentialId: v.credentialId ?? '',
+      })),
+      registryType: e.imageRegistry.type,
+      registryUrl: e.imageRegistry.url.trim(),
+      registryCredentialId: e.imageRegistry.credentialId || '',
+    })),
+  )
+}
+
+watch(
+  envs,
+  () => {
+    const next = compose()
+    if (envsKey(next) !== envsKey(props.environments)) emit('update', next)
+  },
+  { deep: true },
+)
 
 // ─── Env ops ────────────────────────────────────────────────────────────────────
 

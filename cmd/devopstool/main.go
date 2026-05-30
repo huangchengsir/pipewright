@@ -25,6 +25,7 @@ import (
 	"github.com/huangjiawei/devopstool/internal/project"
 	"github.com/huangjiawei/devopstool/internal/run"
 	"github.com/huangjiawei/devopstool/internal/store"
+	"github.com/huangjiawei/devopstool/internal/target"
 	"github.com/huangjiawei/devopstool/internal/trigger"
 	"github.com/huangjiawei/devopstool/internal/vault"
 )
@@ -140,9 +141,15 @@ func main() {
 	// 克隆失败优雅降级(不致命)。无 init 副作用/不驻留。
 	sourceReader := httpapi.NewSourceReader()
 
+	// 装配目标服务器服务(Story 4.1;internal/target,FR-14):通用 SSH exec/session 基座,
+	// 供 Epic 4 部署 + Epic 6 运维共享。SSH 私钥/口令经 vault 即用即弃,绝不入库/日志/响应/错误。
+	// dialer 传 nil → 使用默认 x/crypto/ssh 实现(无宿主依赖,不驻留)。master key 未配置时
+	// Exec/Test 降级为明确错误(不 panic)。
+	targetSvc := target.New(st.DB, credVault, nil)
+
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithSource(sourceReader)),
+		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithSource(sourceReader), httpapi.WithServers(targetSvc)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;

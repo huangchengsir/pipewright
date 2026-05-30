@@ -22,6 +22,7 @@ import (
 	"github.com/huangjiawei/devopstool/internal/pipeline"
 	"github.com/huangjiawei/devopstool/internal/project"
 	"github.com/huangjiawei/devopstool/internal/run"
+	"github.com/huangjiawei/devopstool/internal/target"
 	"github.com/huangjiawei/devopstool/internal/trigger"
 	"github.com/huangjiawei/devopstool/internal/vault"
 )
@@ -54,6 +55,7 @@ type options struct {
 	aiSettings       ai.Service
 	aiAnalyzer       ai.RepoAnalyzer
 	sourceReader     SourceReader
+	servers          target.Service
 }
 
 // WithVault 注入凭据保险库,挂载 /api/credentials* 路由。
@@ -133,6 +135,13 @@ func WithAIGenerate(a ai.RepoAnalyzer) Option {
 // 不传则 source 端点返回 503(服务未初始化)。
 func WithSource(reader SourceReader) Option {
 	return func(o *options) { o.sourceReader = reader }
+}
+
+// WithServers 注入目标服务器服务(Story 4.1;internal/target 通用 SSH 层),挂载
+// /api/servers* 路由(GET auth;写方法 + test auth + CSRF)。SSH 私钥/口令仅经 vault
+// 密文,响应/错误绝无明文。不传则相关端点返回 503(服务未初始化)。
+func WithServers(s target.Service) Option {
+	return func(o *options) { o.servers = s }
 }
 
 // New 构建 HTTP 处理器:健康端点 + Auth API + (可选)凭据 API + 内嵌 SPA 静态托管。
@@ -281,6 +290,18 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		srcDeps := sourceDeps{projects: p, vault: v, reader: o.sourceReader}
 		ar.Get("/projects/{id}/source/tree", makeSourceTreeHandler(srcDeps))
 		ar.Get("/projects/{id}/source/blob", makeSourceBlobHandler(srcDeps))
+
+		// 目标服务器登记 + 通用 SSH 执行层(Story 4.1;internal/target,FR-14)。
+		// sv 为 nil 时 handler 返回 503。GET/List/Get 过 auth;create/update/delete/test 为写方法,
+		// 过 auth + CSRF。/servers/{id}/test 比 /servers/{id} 多一段,不会被吞。
+		// SSH 私钥/口令经 vault 即用即弃,响应/错误绝无明文(AC-SEC-01/02)。
+		sv := o.servers
+		ar.Get("/servers", makeListServersHandler(sv))
+		ar.Post("/servers", makeCreateServerHandler(sv))
+		ar.Get("/servers/{id}", makeGetServerHandler(sv))
+		ar.Put("/servers/{id}", makeUpdateServerHandler(sv))
+		ar.Delete("/servers/{id}", makeDeleteServerHandler(sv))
+		ar.Post("/servers/{id}/test", makeTestServerHandler(sv))
 
 		// 后续 story 在此挂载其他 API 路由。
 	})

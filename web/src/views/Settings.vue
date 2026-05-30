@@ -12,6 +12,7 @@
     <!-- Secondary nav -->
     <nav class="settings-nav" aria-label="设置二级导航">
       <router-link to="/settings/ai" class="settings-nav-item">AI 提供商</router-link>
+      <router-link to="/settings/oauth" class="settings-nav-item">OAuth 应用</router-link>
       <router-link to="/settings/notifications" class="settings-nav-item">通知</router-link>
       <router-link to="/settings/vault" class="settings-nav-item">凭据保险库</router-link>
       <router-link to="/settings/account" class="settings-nav-item">账户</router-link>

@@ -22,6 +22,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/auth"
 	"github.com/huangchengsir/pipewright/internal/deploy"
 	"github.com/huangchengsir/pipewright/internal/notify"
+	"github.com/huangchengsir/pipewright/internal/oauth"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/run"
@@ -65,6 +66,7 @@ type options struct {
 	notifications    notify.Service
 	deployer         deploy.Service
 	anomaly          anomaly.Service
+	oauth            oauth.Service
 }
 
 // WithVault 注入凭据保险库,挂载 /api/credentials* 路由。
@@ -195,6 +197,19 @@ func WithNotifications(s notify.Service) Option {
 // 不传则相关端点返回 503(服务未初始化)。
 func WithAnomaly(s anomaly.Service) Option {
 	return func(o *options) { o.anomaly = s }
+}
+
+// WithOAuth 注入多 provider OAuth 凭据接入服务,挂载 /api/oauth/* 路由:
+//   - GET  /api/oauth/apps(auth):列已配 OAuth 应用(secret 掩码)。
+//   - PUT  /api/oauth/apps/{provider}(auth+CSRF):upsert 应用配置(clientSecret 只写)。
+//   - GET  /api/oauth/{provider}/authorize(auth):生成 state → 302 跳 provider 授权页。
+//   - GET  /api/oauth/{provider}/callback(auth;豁免 CSRF——GET 回跳,靠 state 校验):
+//     验 state → Exchange → 把 access_token 经 vault.Create 存成 git_token 凭据 → 302 跳回。
+//
+// 复用已注入的 vault(o.vault)存 token 凭据。client_secret/access_token 经 vault 密文,
+// 响应/错误/日志绝无明文。不传则相关端点返回 503。
+func WithOAuth(s oauth.Service) Option {
+	return func(o *options) { o.oauth = s }
 }
 
 // New 构建 HTTP 处理器:健康端点 + Auth API + (可选)凭据 API + 内嵌 SPA 静态托管。
@@ -451,6 +466,18 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Delete("/anomaly/rules/{id}", makeDeleteAnomalyRuleHandler(an))
 		ar.Post("/anomaly/check", makeAnomalyCheckHandler(an))
 		ar.Get("/anomaly/alerts", makeListAnomalyAlertsHandler(an))
+
+		// 多 provider OAuth 凭据接入(连接 Gitee/GitHub/GitLab/自建)。oa 为 nil → handler 503。
+		// apps 列表/upsert:GET 过 auth;PUT 写方法过 auth + CSRF(clientSecret 只写、加密入库、响应仅掩码)。
+		// authorize/callback 均为 GET(过 auth、豁免 CSRF):authorize 生成绑会话 state → 302 跳授权页;
+		// callback 验 state(CSRF 防护)→ Exchange → 经已注入 vault(v)把 access_token 存成 git_token
+		// 凭据 → 302 跳回 /settings/vault。token/client_secret 经 vault 密文,响应/错误绝无明文。
+		// 字面段 apps 优先于 {provider},/oauth/{provider}/authorize 不会被 /oauth/apps 吞。
+		oa := o.oauth
+		ar.Get("/oauth/apps", makeListOAuthAppsHandler(oa))
+		ar.Put("/oauth/apps/{provider}", makeSaveOAuthAppHandler(oa))
+		ar.Get("/oauth/{provider}/authorize", makeOAuthAuthorizeHandler(oa))
+		ar.Get("/oauth/{provider}/callback", makeOAuthCallbackHandler(oa, v))
 
 		// 后续 story 在此挂载其他 API 路由。
 	})

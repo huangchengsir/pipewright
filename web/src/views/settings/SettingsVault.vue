@@ -9,6 +9,14 @@ import {
 import type { Credential, CredentialType, CreateCredentialInput, UpdateCredentialInput } from '../../api/credentials'
 import { HttpError } from '../../api/http'
 import AuditTimeline from '../../components/AuditTimeline.vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useToast } from '../../composables/useToast'
+import {
+  getOAuthApps,
+  authorizeUrl,
+  type OAuthApp,
+  type OAuthProvider,
+} from '../../api/oauth'
 
 // ─── state ──────────────────────────────────────────────────────────────────
 
@@ -51,6 +59,80 @@ const deleteBanner = ref('')
 // ─── copy feedback ──────────────────────────────────────────────────────────
 
 const copiedId = ref<string | null>(null)
+
+// ─── OAuth connect (enabled providers only) ──────────────────────────────────
+
+const toast = useToast()
+const route = useRoute()
+const router = useRouter()
+
+const oauthApps = ref<OAuthApp[]>([])
+
+const PROVIDER_LABELS: Record<OAuthProvider, string> = {
+  gitee: 'Gitee',
+  github: 'GitHub',
+  gitlab: 'GitLab',
+  custom: '自建',
+}
+
+const PROVIDER_LOGO: Record<OAuthProvider, { text: string; style: string }> = {
+  gitee: { text: 'G', style: 'background:#c71d23;color:#fff' },
+  github: { text: '', style: 'background:#1f2328;color:#fff' },
+  gitlab: { text: '', style: 'background:#fc6d26;color:#fff' },
+  custom: { text: '⚙', style: 'background:var(--color-inset);color:var(--color-dim)' },
+}
+
+const connectableProviders = computed(() =>
+  oauthApps.value.filter((a) => a.enabled && a.configured),
+)
+
+async function loadOAuthApps(): Promise<void> {
+  try {
+    oauthApps.value = await getOAuthApps()
+  } catch {
+    // Non-fatal: the connect section just stays empty if OAuth apps can't load.
+    oauthApps.value = []
+  }
+}
+
+/** Kick off the OAuth dance via a FULL-PAGE navigation (not fetch). */
+function connectProvider(provider: OAuthProvider): void {
+  window.location.href = authorizeUrl(provider)
+}
+
+/**
+ * Read OAuth callback result from the URL query:
+ *   ?connected={provider}&account={login}  → success toast + refresh
+ *   ?oauth_error={reason}                   → error toast
+ * The query is then stripped so a refresh doesn't re-fire the toast.
+ */
+function handleOAuthCallback(): void {
+  const connected = route.query.connected
+  const oauthError = route.query.oauth_error
+
+  if (typeof connected === 'string' && connected) {
+    const account = typeof route.query.account === 'string' ? route.query.account : ''
+    const label = PROVIDER_LABELS[connected as OAuthProvider] ?? connected
+    toast.success(
+      account ? `已连接 ${label}(${account})` : `已连接 ${label}`,
+      { detail: '凭据已自动写入保险库' },
+    )
+    void loadCredentials()
+    clearOAuthQuery()
+  } else if (typeof oauthError === 'string' && oauthError) {
+    toast.error('连接失败', { detail: oauthError })
+    clearOAuthQuery()
+  }
+}
+
+/** Remove OAuth-related query params, preserving any others. */
+function clearOAuthQuery(): void {
+  const query = { ...route.query }
+  delete query.connected
+  delete query.account
+  delete query.oauth_error
+  void router.replace({ query })
+}
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -109,7 +191,11 @@ async function loadCredentials(): Promise<void> {
   }
 }
 
-onMounted(loadCredentials)
+onMounted(() => {
+  void loadCredentials()
+  void loadOAuthApps()
+  handleOAuthCallback()
+})
 
 // ─── modal open / close ─────────────────────────────────────────────────────
 
@@ -289,6 +375,32 @@ async function copyReference(c: Credential): Promise<void> {
         </svg>
         添加凭据
       </button>
+    </div>
+
+    <!-- ─── OAuth connect (only for enabled & configured providers) ────────── -->
+    <div v-if="connectableProviders.length > 0" class="connect-panel">
+      <div class="connect-head">
+        <div class="connect-head-text">
+          <strong>连接 git 账号</strong>
+          <span>一键授权,自动写入凭据 —— 无需手动粘贴 PAT。</span>
+        </div>
+        <router-link to="/settings/oauth" class="connect-config-link">管理 OAuth 应用 →</router-link>
+      </div>
+      <div class="connect-grid">
+        <button
+          v-for="app in connectableProviders"
+          :key="app.provider"
+          type="button"
+          class="connect-btn"
+          :aria-label="`连接 ${PROVIDER_LABELS[app.provider]}`"
+          @click="connectProvider(app.provider)"
+        >
+          <span class="connect-logo" :style="PROVIDER_LOGO[app.provider].style" aria-hidden="true">
+            {{ PROVIDER_LOGO[app.provider].text }}
+          </span>
+          连接 {{ PROVIDER_LABELS[app.provider] }}
+        </button>
+      </div>
     </div>
 
     <!-- ─── load error banner ─────────────────────────────────────────────── -->
@@ -735,6 +847,105 @@ async function copyReference(c: Credential): Promise<void> {
   margin-top: 4px;
   max-width: 68ch;
   line-height: 1.55;
+}
+
+/* ─── OAuth connect panel ─────────────────────────────────────────────────── */
+.connect-panel {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-card);
+  box-shadow: var(--shadow);
+  padding: 16px 18px;
+  animation: panel-in 0.45s var(--ease-out-expo) both;
+}
+
+.connect-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 13px;
+}
+
+.connect-head-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.connect-head-text strong {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.connect-head-text span {
+  font-size: 0.78rem;
+  color: var(--color-faint);
+  line-height: 1.5;
+}
+
+.connect-config-link {
+  flex-shrink: 0;
+  font-size: 0.76rem;
+  font-weight: 500;
+  color: var(--color-primary);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.connect-config-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.connect-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.connect-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 16px 0 8px;
+  background: var(--color-inset);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--rounded);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast),
+    transform var(--duration-fast),
+    box-shadow var(--duration-fast);
+}
+
+.connect-btn:hover {
+  border-color: var(--color-faint);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow);
+}
+
+.connect-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.connect-logo {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--rounded-md);
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 0.8rem;
+  flex-shrink: 0;
 }
 
 /* ─── panel ───────────────────────────────────────────────────────────────── */

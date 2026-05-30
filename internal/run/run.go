@@ -80,6 +80,8 @@ var (
 	ErrPoolStopped = errors.New("run: worker pool stopped")
 	// ErrInvalidArtifactType 表示产物 type 非冻结枚举(image|jar|dist|archive)。
 	ErrInvalidArtifactType = errors.New("run: invalid artifact type")
+	// ErrInvalidTargetStatus 表示部署目标 status 非冻结枚举(pending|deploying|success|failed|rolled_back)。
+	ErrInvalidTargetStatus = errors.New("run: invalid deploy target status")
 )
 
 // Trigger 是运行触发上下文(冻结 DTO 的 trigger 块来源)。

@@ -60,6 +60,18 @@ type Service interface {
 	// ListArtifacts 取某次运行的全部产物(按 created_at 升序;无产物 → 空切片)。
 	// run 不存在不报错(返回空切片);由 HTTP 层据 run 存在性决定 404(仿 GetLogs 语义)。
 	ListArtifacts(ctx context.Context, runID string) ([]Artifact, error)
+
+	// SaveDeployTargets 持久化一次部署的多机结果(Story 4.2 / FR-10;参数化 SQL,单事务)。
+	// status 须为冻结枚举(pending|deploying|success|failed|rolled_back),否则 ErrInvalidTargetStatus;
+	// run 不存在 → ErrNotFound。供 internal/deploy 写;httpapi run-detail 读填 targets slot。
+	SaveDeployTargets(ctx context.Context, runID string, targets []DeployTarget) error
+	// ListDeployTargets 取某次运行的全部部署目标结果(按 started_at 升序;无部署 → 空切片)。
+	// run 不存在不报错(返回空切片);由 HTTP 层据 run 存在性决定 404。
+	ListDeployTargets(ctx context.Context, runID string) ([]DeployTarget, error)
+	// SetDeployTerminal 在部署后据每机结果置 run 终态:全成功 → success(保持);有失败 → partial_failed;
+	// 全失败 → failed。部署在 run 已是成功终态后发生,故此处直接覆盖终态(不走常规转移图)。
+	// 仅接受这三个终态;run 不存在 → ErrNotFound。
+	SetDeployTerminal(ctx context.Context, runID, status string) error
 }
 
 // service 是 store 支撑的 Service 实现,并持有内存事件总线与正在执行运行的取消句柄。

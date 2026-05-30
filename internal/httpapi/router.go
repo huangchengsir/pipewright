@@ -19,6 +19,7 @@ import (
 	"github.com/huangjiawei/devopstool/internal/ai"
 	"github.com/huangjiawei/devopstool/internal/audit"
 	"github.com/huangjiawei/devopstool/internal/auth"
+	"github.com/huangjiawei/devopstool/internal/deploy"
 	"github.com/huangjiawei/devopstool/internal/notify"
 	"github.com/huangjiawei/devopstool/internal/pipeline"
 	"github.com/huangjiawei/devopstool/internal/project"
@@ -58,6 +59,7 @@ type options struct {
 	sourceReader     SourceReader
 	servers          target.Service
 	notifications    notify.Service
+	deployer         deploy.Service
 }
 
 // WithVault 注入凭据保险库,挂载 /api/credentials* 路由。
@@ -144,6 +146,14 @@ func WithSource(reader SourceReader) Option {
 // 密文,响应/错误绝无明文。不传则相关端点返回 503(服务未初始化)。
 func WithServers(s target.Service) Option {
 	return func(o *options) { o.servers = s }
+}
+
+// WithDeploy 注入部署执行服务(Story 4.2;internal/deploy,FR-10),挂载
+// POST /api/runs/{id}/deploy 路由(认证 + CSRF;本期同步执行返回最终 targets)。
+// 经 target.Exec 把产物按 type 部署到目标机(命令 array 化,AC-SEC-02);输出/message 绝无明文密钥。
+// 不传则该端点返回 503(服务未初始化)。
+func WithDeploy(s deploy.Service) Option {
+	return func(o *options) { o.deployer = s }
 }
 
 // WithNotifications 注入通知渠道服务(Story 5.1;FR-19),挂载 /api/notifications/channels* 路由
@@ -254,6 +264,10 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 构建产物契约(Story 3.4 / FR-6):只读 + 认证;按 (type, reference) 供 Epic 4 消费。
 		ar.Get("/runs/{id}/artifacts", makeRunArtifactsHandler(rs))
 		ar.Post("/runs/{id}/cancel", makeCancelRunHandler(rs))
+		// SSH 部署执行(Story 4.2 / FR-10):认证 + CSRF(写方法)。dep 为 nil → 503。
+		// 取 run + 产物 + 服务器 → deploy.Deploy(逐机经 SSH 执行部署命令,array 不拼 shell)
+		// → 据结果更新 run 终态 → 返回填好的 targets。部署执行失败不 500(每机 status=failed)。
+		ar.Post("/runs/{id}/deploy", makeDeployRunHandler(o.deployer, rs))
 
 		// AI 失败诊断(Story 7.2):显式(重)诊断。认证 + CSRF(写方法)。
 		// 取 run 失败日志 → 脱敏 → ai.Diagnose → 持久化 → 返回 diagnosis 子 DTO。

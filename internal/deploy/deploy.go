@@ -111,15 +111,58 @@ type Service interface {
 type service struct {
 	targets target.Service
 	runs    run.Service
+	// diagnoseHook 是部署失败后的 best-effort 自动诊断钩子(Story 4.6;FR-22 种子)。
+	// 由 main 注入(复用 7-2 NewDiagnoseHook);nil 则跳过。deploy 不 import ai(钩子解耦)。
+	diagnoseHook func(ctx context.Context, runID string)
+}
+
+// Option 配置 deploy.Service(如注入诊断钩子)。
+type Option func(*service)
+
+// WithDiagnoseHook 注入部署失败后的 best-effort 自动诊断钩子(Story 4.6;FR-22 种子):
+// 部署 failed/partial_failed → 合成失败日志(SetFailureLog)+ 触发钩子,让 7-2 诊断飞轮覆盖部署失败。
+func WithDiagnoseHook(fn func(ctx context.Context, runID string)) Option {
+	return func(s *service) { s.diagnoseHook = fn }
 }
 
 // New 构造部署 Service。
 //   - targetSvc:通用 SSH 执行层(Story 4.1),部署命令经其 Exec 执行(array 不拼 shell)。
 //   - runSvc   :运行领域层,取产物 / 写部署结果 / 更新终态。
+//   - opts     :可选(如 WithDiagnoseHook 注入部署失败诊断,Story 4.6)。
 //
 // 不做任何重活(无 init() 副作用,避免抬高空载内存)。
-func New(targetSvc target.Service, runSvc run.Service) Service {
-	return &service{targets: targetSvc, runs: runSvc}
+func New(targetSvc target.Service, runSvc run.Service, opts ...Option) Service {
+	s := &service{targets: targetSvc, runs: runSvc}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
+}
+
+// seedDiagnosisOnFailure 在部署终态为 failed/partial_failed 时合成失败日志并触发 best-effort 诊断
+// (Story 4.6;FR-22 种子):让 7-2 的 AI 失败分析 + 7-5 反馈闭环覆盖部署失败,而非只覆盖构建失败。
+// 失败日志取自各失败/回滚目标的 message(平台构造,无明文密钥)。绝不阻断部署结果返回。
+func (s *service) seedDiagnosisOnFailure(ctx context.Context, runID, status string, targets []TargetResult) {
+	if status != run.StatusFailed && status != run.StatusPartialFailed {
+		return
+	}
+	var b strings.Builder
+	b.WriteString("[部署失败 deploy] 以下目标机部署未成功:\n")
+	for _, t := range targets {
+		if t.Status == run.TargetFailed || t.Status == run.TargetRolledBack {
+			fmt.Fprintf(&b, "- %s(%s):%s\n", t.ServerName, t.Status, t.Message)
+		}
+	}
+	if err := s.runs.SetFailureLog(ctx, runID, b.String()); err != nil {
+		return // best-effort:写失败日志失败则不诊断,不阻断
+	}
+	if s.diagnoseHook != nil {
+		hook := s.diagnoseHook
+		go func() {
+			defer func() { _ = recover() }()
+			hook(context.WithoutCancel(ctx), runID)
+		}()
+	}
 }
 
 func (s *service) Deploy(ctx context.Context, in DeployInput) ([]TargetResult, error) {
@@ -192,9 +235,13 @@ func (s *service) Deploy(ctx context.Context, in DeployInput) ([]TargetResult, e
 	}
 
 	// 6) 据结果置 run 终态:全成功 → success;有失败 → partial_failed;全失败 → failed。
-	if err := s.runs.SetDeployTerminal(ctx, in.RunID, overallStatus(results)); err != nil {
+	final := overallStatus(results)
+	if err := s.runs.SetDeployTerminal(ctx, in.RunID, final); err != nil {
 		return nil, err
 	}
+
+	// 7) 部署失败 → best-effort 触发 AI 诊断(Story 4.6;FR-22 种子;不阻断返回)。
+	s.seedDiagnosisOnFailure(ctx, in.RunID, final, results)
 
 	return results, nil
 }
@@ -300,7 +347,8 @@ func (s *service) RetryFailed(ctx context.Context, in RetryInput) ([]TargetResul
 	if err != nil {
 		return nil, err
 	}
-	if err := s.runs.SetDeployTerminal(ctx, in.RunID, overallStatusOfTargets(all)); err != nil {
+	final := overallStatusOfTargets(all)
+	if err := s.runs.SetDeployTerminal(ctx, in.RunID, final); err != nil {
 		return nil, err
 	}
 
@@ -317,6 +365,10 @@ func (s *service) RetryFailed(ctx context.Context, in RetryInput) ([]TargetResul
 			FinishedAt: t.FinishedAt,
 		})
 	}
+
+	// 重试后仍失败 → best-effort 触发 AI 诊断(Story 4.6;不阻断返回)。
+	s.seedDiagnosisOnFailure(ctx, in.RunID, final, out)
+
 	return out, nil
 }
 

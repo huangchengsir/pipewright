@@ -123,13 +123,26 @@ func main() {
 	// 装配进程内 worker pool(Story 3.1)+ best-effort 自动诊断钩子(Story 7.2)。
 	// 钩子在 run→failed 后「取失败日志→脱敏→ai.Diagnose→保存」,经 Option 注入使 run 包不 import ai。
 	// AI 未配/失败仅降级(status=unavailable),绝不阻断 run 终态(NFR-10)。pool 调度多 run 并行、结果独立。
-	pool := run.NewWorkerPool(runSvc, run.WithDiagnoseHook(httpapi.NewDiagnoseHook(runSvc, aiSvc)))
+	// 日志脱敏器(Story 3.6 / AC-SEC-04):dbStepSink.Log 落 run_logs / 发 SSE 前一律 Scrub。
+	// 本期同 7-2 的 registerRunSecrets 债:只登记桩假 secret;3-3/3-6 真实日志落地后改为从
+	// vault 取该 run 实际凭据明文登记(届时凭 run→项目→凭据解析)。
+	logMasker := mask.NewMasker()
+	logMasker.RegisterSecret(run.StubFailureSecret)
+
+	pool := run.NewWorkerPool(runSvc,
+		run.WithDiagnoseHook(httpapi.NewDiagnoseHook(runSvc, aiSvc)),
+		run.WithLogMasker(logMasker),
+	)
 	pool.Start()
 	log.Printf("[run] worker pool started")
 
+	// 装配只读源码读取器(Story 3.6;FR-4 预埋):go-git 浅克隆读 tree/blob;严格 SSRF 收口;
+	// 克隆失败优雅降级(不致命)。无 init 副作用/不驻留。
+	sourceReader := httpapi.NewSourceReader()
+
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer)),
+		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithSource(sourceReader)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;

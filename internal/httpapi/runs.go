@@ -270,6 +270,17 @@ func makeRunEventsHandler(svc run.Service, sub runSubscriber) http.HandlerFunc {
 		w.Header().Set("X-Accel-Buffering", "no")
 		w.WriteHeader(http.StatusOK)
 
+		// 连接即回放(Story 3.6):先按 seq 升序补发该 run 全部历史 log 事件(已脱敏,从 DB 读
+		// 不全量驻留内存),让刷新者拿到完整日志,再转入实时。订阅已在快照前注册,故回放窗口内
+		// 新产生的行也会经实时通道补达(前端按 seq 去重)。
+		replaySeq := 0
+		if hist, herr := svc.GetLogs(r.Context(), id, 0); herr == nil {
+			for i := range hist {
+				writeSSE(w, flusher, string(run.EventLog), logPayload(id, hist[i]))
+				replaySeq = hist[i].Seq
+			}
+		}
+
 		// 初始 status 事件:让客户端立刻拿到当前态(进行中据此渲染)。
 		writeSSE(w, flusher, string(run.EventStatus), statusPayload(id, rn.Status))
 		// 若快照已终态:发完初始帧立即收流(无后续事件)。
@@ -309,6 +320,13 @@ func makeRunEventsHandler(svc run.Service, sub runSubscriber) http.HandlerFunc {
 					}
 				case run.EventStep:
 					writeSSE(w, flusher, string(run.EventStep), stepPayload(ev.RunID, ev.Step))
+				case run.EventLog:
+					// 去重:回放已补发 seq<=replaySeq 的历史行(回放与订阅窗口可能重叠)。
+					if ev.Log.Seq <= replaySeq {
+						continue
+					}
+					replaySeq = ev.Log.Seq
+					writeSSE(w, flusher, string(run.EventLog), logPayload(ev.RunID, ev.Log))
 				}
 			}
 		}
@@ -337,4 +355,87 @@ func stepPayload(runID string, st run.Step) string {
 		"ordinal": st.Ordinal,
 	})
 	return string(b)
+}
+
+// ---- 冻结 log 契约(Story 3.6;camelCase;text 已脱敏) ----------------------
+
+// logLineDTO 是单行日志(SSE log 事件负载 + logs 拉取 DTO 共用形状)。
+type logLineDTO struct {
+	Seq         int    `json:"seq"`
+	Ts          string `json:"ts"`
+	Stream      string `json:"stream"`
+	StepOrdinal int    `json:"stepOrdinal"`
+	Text        string `json:"text"`
+}
+
+// runLogsDTO 是 GET /api/runs/{id}/logs 响应体(冻结)。
+type runLogsDTO struct {
+	Lines    []logLineDTO `json:"lines"`
+	NextSeq  int          `json:"nextSeq"`
+	Complete bool         `json:"complete"`
+}
+
+func toLogLineDTO(l run.LogLine) logLineDTO {
+	return logLineDTO{
+		Seq:         l.Seq,
+		Ts:          l.Ts.UTC().Format(time.RFC3339),
+		Stream:      l.Stream,
+		StepOrdinal: l.StepOrdinal,
+		Text:        l.Text,
+	}
+}
+
+// logPayload 构造 log SSE 事件 JSON(已脱敏文本;经 json.Marshal 安全转义)。
+func logPayload(_ string, l run.LogLine) string {
+	b, _ := json.Marshal(toLogLineDTO(l))
+	return string(b)
+}
+
+// makeRunLogsHandler 返回 GET /api/runs/{id}/logs handler(认证;非 SSE 历史拉取 / 分页)。
+// 查询 ?sinceSeq=<int>(默认 0)→ 返回该 seq 之后的行(升序);nextSeq=末行 seq+1;
+// complete=run 是否已终态(前端据此停止轮询)。run 不存在 → 404 run_not_found。
+func makeRunLogsHandler(svc run.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "运行服务未初始化")
+			return
+		}
+		id := chi.URLParam(r, "id")
+
+		// run 存在性 + 终态:不存在 → 404(GetLogs 对不存在 run 返回空,不报错)。
+		rn, err := svc.Get(r.Context(), id)
+		if err != nil {
+			writeRunError(w, err)
+			return
+		}
+
+		sinceSeq := 0
+		if v := r.URL.Query().Get("sinceSeq"); v != "" {
+			n, perr := strconv.Atoi(v)
+			if perr != nil || n < 0 {
+				writeError(w, http.StatusBadRequest, "invalid_since_seq", "sinceSeq 必须为不小于 0 的整数")
+				return
+			}
+			sinceSeq = n
+		}
+
+		lines, err := svc.GetLogs(r.Context(), id, sinceSeq)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
+			return
+		}
+
+		dto := runLogsDTO{
+			Lines:    make([]logLineDTO, 0, len(lines)),
+			NextSeq:  sinceSeq,
+			Complete: run.IsTerminal(rn.Status),
+		}
+		for i := range lines {
+			dto.Lines = append(dto.Lines, toLogLineDTO(lines[i]))
+		}
+		if n := len(lines); n > 0 {
+			dto.NextSeq = lines[n-1].Seq + 1
+		}
+		writeJSON(w, http.StatusOK, dto)
+	}
 }

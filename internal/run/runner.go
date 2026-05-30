@@ -19,6 +19,10 @@ type StepSink interface {
 	// SetFailureLog 报告本次运行的失败日志原文(脱敏前;持久化到 run.failure_log,
 	// 供后续 AI 诊断消费)。Runner 在失败路径调用;best-effort,失败不应阻断 run 终态。
 	SetFailureLog(ctx context.Context, log string) error
+	// Log 报告一行运行日志(Story 3.6)。worker 侧实现负责**先脱敏**→落 run_logs(分配
+	// run 内单调 seq)→ 经事件总线发 EventLog。stream ∈ stdout|stderr;stepOrdinal 关联
+	// 步骤(-1 表示运行级);line 为单行文本(无尾换行)。3-3 真实构建只经此接口喂行、不改形状。
+	Log(ctx context.Context, stream string, stepOrdinal int, line string) error
 }
 
 // Runner 抽象「执行一次运行」的能力(可插拔)。本期为桩;真实构建/部署=3-3/4-x 换实现。
@@ -54,6 +58,58 @@ func NewStubRunner() *StubRunner {
 // 3-3/3-6 真实日志落地后,凭据登记改为从 vault 取该 run 用到的凭据明文。
 const StubFailureSecret = "SECRET_LEAK_zzz9k3"
 
+// 步骤 stream 取值(StubRunner 逐行 emit 用;真实构建经同一 StepSink.Log 喂行)。
+const (
+	streamStdout = "stdout"
+	streamStderr = "stderr"
+)
+
+// stubStepLogs 合成某步骤的真实感 stdout 日志行(每步若干行)。
+// 其中一行内嵌假 secret(StubFailureSecret),用以验证「落库/出网前脱敏」铁律:
+// dbStepSink.Log 先经 mask.Masker.Scrub 再落 run_logs/发 SSE,自动化测试断言裸 DB 无明文。
+// 3-3 真实构建落地后由真实日志经同一接口替换,日志形状不变。
+func stubStepLogs(stepName string) []string {
+	switch stepName {
+	case "构建镜像":
+		return []string{
+			"> app@1.0.0 build",
+			"> vite build",
+			"vite v5.0.0 building for production...",
+			"npm config set //registry.npmjs.org/:_authToken=" + StubFailureSecret,
+			"✓ 142 modules transformed.",
+			"dist/index.html  0.46 kB",
+			"✓ built in 1.84s",
+		}
+	case "部署":
+		return []string{
+			"$ kubectl apply -f deploy.yaml",
+			"deployment.apps/app configured",
+			"service/app unchanged",
+			"waiting for rollout to finish...",
+			"deployment \"app\" successfully rolled out",
+		}
+	default:
+		return []string{
+			"$ git fetch --depth=1 origin",
+			"$ npm install",
+			"added 218 packages in 3s",
+			"$ npm run lint",
+			"✓ no lint errors",
+		}
+	}
+}
+
+// stubStepStderr 合成失败步骤的 stderr 日志行(追加在 stdout 之后)。
+func stubStepStderr(stepName string) []string {
+	return []string{
+		"npm ERR! code E404",
+		"npm ERR! 404 Not Found - GET https://registry.npmjs.org/leftpad - Not found",
+		"npm ERR! 404 'leftpad@^1.0.0' is not in this registry.",
+		"Build failed with exit code 1",
+		"步骤「" + stepName + "」失败",
+	}
+}
+
 // stubFailureLog 合成一段真实感构建失败日志(多行,含一个假 secret),供 AI 诊断消费。
 // 诚实标注「桩日志」:3-3 真实构建 / 3-6 实时日志落地后由真实日志替换。
 // failedStep 为命中失败的步骤名(用于日志上下文)。
@@ -87,12 +143,21 @@ func (s *StubRunner) Run(ctx context.Context, _ *Run, sink StepSink) error {
 		if err := sink.StepRunning(ctx, i); err != nil {
 			return err
 		}
+		// 逐行 emit 本步骤 stdout 日志(驱动实时流 + 持久化 + 回放;含一个假 secret 验脱敏)。
+		// best-effort:单行落库失败仅忽略,不阻断步骤/运行(日志不应连累 run 终态)。
+		for _, line := range stubStepLogs(names[i]) {
+			_ = sink.Log(ctx, streamStdout, i, line)
+		}
 		// 取消可在「步骤运行中」发生:再次检查,使取消可被及时观察。
 		if ctxCanceled(ctx) {
 			_ = sink.StepDone(ctx, i, StepFailed)
 			return ErrCanceled
 		}
 		if s.FailAt >= 0 && i == s.FailAt {
+			// 失败步骤追加 stderr 日志行(真实感错误输出)。
+			for _, line := range stubStepStderr(names[i]) {
+				_ = sink.Log(ctx, streamStderr, i, line)
+			}
 			if err := sink.StepDone(ctx, i, StepFailed); err != nil {
 				return err
 			}

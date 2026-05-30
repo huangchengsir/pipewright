@@ -93,6 +93,10 @@ type RouteService interface {
 	// SendVia 发送 payload。**未配置任何路由 → 不发送(返回 nil)**(FR-20)。
 	// best-effort:单渠道发送失败仅记日志、续发其余;整体返回 nil(绝不阻断调用方)。
 	RouteEvent(ctx context.Context, event string, payload Payload) error
+	// RouteEventVars 路由一次事件并按渠道渲染模板(Story 5.3;FR-21):查 enabled route → 对每
+	// 渠道经 RenderPayload(最具体匹配模板;无则平台默认)产 Payload → SendVia。
+	// 未配置任何路由 → 不发送;best-effort,始终返回 nil。
+	RouteEventVars(ctx context.Context, event string, vars TemplateVars) error
 }
 
 // ListRoutes 实现 RouteService.ListRoutes。
@@ -184,6 +188,38 @@ func (s *service) DeleteRoute(ctx context.Context, id string) error {
 // **未配置任何路由 → 不发送(返回 nil)**(FR-20)。best-effort:单渠道失败仅记日志、续发
 // 其余;整体始终返回 nil(绝不把发送失败冒泡为阻断 run 终态/500 的错误,NFR-10)。
 func (s *service) RouteEvent(ctx context.Context, event string, payload Payload) error {
+	channelIDs := s.channelIDsForEvent(ctx, event)
+	// 未配置任何路由(FR-20):不发送。
+	for _, cid := range channelIDs {
+		// SendVia 内部:渠道不存在 → ErrNotFound;未启用 → 优雅跳过(nil)。
+		if derr := s.SendVia(ctx, cid, payload); derr != nil {
+			// 单渠道失败:记日志、续发其余(best-effort)。错误体已人读、绝无敏感字段。
+			log.Printf("[notify] route event %q: 渠道 %s 发送失败(已跳过续发):%v", event, cid, derr)
+		}
+	}
+	return nil
+}
+
+// RouteEventVars 路由一次事件并按渠道渲染模板(Story 5.3;FR-21,供 NotifyHook 消费)。
+//
+// 查该 event 的所有 enabled route → 对每个 channelID 经 RenderPayload 按该渠道最具体匹配的模板
+// 渲染 Payload(无模板 → 平台默认,5-2 行为不变)→ SendVia。**未配置任何路由 → 不发送**。
+// best-effort:单渠道失败仅记日志、续发其余;整体始终返回 nil(绝不阻断调用方,NFR-10)。
+func (s *service) RouteEventVars(ctx context.Context, event string, vars TemplateVars) error {
+	channelIDs := s.channelIDsForEvent(ctx, event)
+	for _, cid := range channelIDs {
+		// 按渠道渲染:channelID 精确模板 > 该事件通用模板 > 平台默认(无 RCE 纯文本替换)。
+		payload := s.RenderPayload(ctx, event, cid, vars)
+		if derr := s.SendVia(ctx, cid, payload); derr != nil {
+			log.Printf("[notify] route event %q: 渠道 %s 发送失败(已跳过续发):%v", event, cid, derr)
+		}
+	}
+	return nil
+}
+
+// channelIDsForEvent 查该 event 的所有 enabled route 渠道 id(去重 + 稳定排序)。
+// 未配置任何路由 / 查询失败 → 返回空(best-effort,不发不报错;FR-20)。
+func (s *service) channelIDsForEvent(ctx context.Context, event string) []string {
 	if !validEvent(event) {
 		// 未知事件:防御性忽略(不发、不报错)。
 		log.Printf("[notify] route event 跳过:未知事件 %q", event)
@@ -217,21 +253,9 @@ func (s *service) RouteEvent(ctx context.Context, event string, payload Payload)
 	}
 	_ = rows.Close()
 
-	// 未配置任何路由(FR-20):不发送。
-	if len(channelIDs) == 0 {
-		return nil
-	}
 	// 稳定顺序(便于日志/测试)。
 	sort.Strings(channelIDs)
-
-	for _, cid := range channelIDs {
-		// SendVia 内部:渠道不存在 → ErrNotFound;未启用 → 优雅跳过(nil)。
-		if derr := s.SendVia(ctx, cid, payload); derr != nil {
-			// 单渠道失败:记日志、续发其余(best-effort)。错误体已人读、绝无敏感字段。
-			log.Printf("[notify] route event %q: 渠道 %s 发送失败(已跳过续发):%v", event, cid, derr)
-		}
-	}
-	return nil
+	return channelIDs
 }
 
 // scanRoute 把一行扫描为 Route 视图。

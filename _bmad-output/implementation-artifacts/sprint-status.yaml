@@ -63,7 +63,7 @@ development_status:
   2-2-pipeline-config-editor: done
   2-3-triggers-and-branch-mapping: done
   2-4-build-deploy-config: done
-  2-5-ai-generate-pipeline-config: in-progress
+  2-5-ai-generate-pipeline-config: review
   2-6-pipeline-config-validation: review
   epic-2-retrospective: optional
 

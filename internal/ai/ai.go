@@ -54,6 +54,10 @@ var (
 	ErrAPIKeyRequired = errors.New("ai: api key required")
 	// ErrVaultUnconfigured 表示保险库未配置 master key,无法加密/读取 apiKey。
 	ErrVaultUnconfigured = errors.New("ai: vault unconfigured")
+	// ErrAINotConfigured 表示 AI 提供商未配置 / 未启用,生成不可用(优雅降级,不致命)。
+	ErrAINotConfigured = errors.New("ai: provider not configured or disabled")
+	// ErrGenerateFailed 表示 LLM 调用 / 响应解析失败(人读错误,绝无密钥)。
+	ErrGenerateFailed = errors.New("ai: generate failed")
 )
 
 // Budget 是预算声明(本期仅存,不强制执行)。MonthlyTokenLimit 为 nil 表示不限。
@@ -112,6 +116,9 @@ type Service interface {
 	Save(ctx context.Context, in SaveInput) (*Config, error)
 	// Test 向 provider 发轻量探测(注入的 http.Client),回显 ok/延迟/错误(人读,绝无密钥)。
 	Test(ctx context.Context, in TestInput) (*TestResult, error)
+	// Generate 据仓库分析 + 自然语言补充,构 prompt 调 LLM chat 生成结构化流水线提案(Story 2.5)。
+	// 未配置 / 未启用 → ErrAINotConfigured;调用 / 解析失败 → 人读错误(绝无密钥)。
+	Generate(ctx context.Context, in GenerateInput) (*Proposal, error)
 }
 
 // service 是 store + vault + 注入 http.Client 支撑的 Service 实现。

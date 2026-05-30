@@ -23,6 +23,7 @@ import VarsCacheTab from '../components/pipeline/VarsCacheTab.vue'
 import EnvCredsTab from '../components/pipeline/EnvCredsTab.vue'
 import TriggersPanel from '../components/TriggersPanel.vue'
 import ValidationPanel from '../components/pipeline/ValidationPanel.vue'
+import AIGenerateWizard from '../components/pipeline/AIGenerateWizard.vue'
 
 // ─── Route ────────────────────────────────────────────────────────────────────
 
@@ -241,14 +242,20 @@ async function handleSave(): Promise<void> {
   }
 }
 
-// ─── AI button handler ────────────────────────────────────────────────────────
+// ─── AI wizard (Story 2-5) ────────────────────────────────────────────────────
+
+const aiWizardOpen = ref(false)
 
 function handleAI(): void {
-  // Story 2-5: AI generation
-  saveBanner.value = ''
-  saveSuccess.value = false
-  // Use a non-error banner style
-  saveBanner.value = 'AI 生成流水线将在 Story 2-5 提供,敬请期待。'
+  aiWizardOpen.value = true
+}
+
+/** Called by AIGenerateWizard after a successful apply. Reload all data. */
+async function handleAIApplied(): Promise<void> {
+  await Promise.all([loadPipeline(), loadSettings()])
+  // Trigger TriggersPanel to refresh — it is self-loading, close+reopen is the
+  // simplest approach; alternatively emit a key-change or use a triggerKey ref.
+  scheduleValidation(400)
 }
 
 // ─── Validation (Story 2-6, FR-9) ────────────────────────────────────────────
@@ -365,8 +372,7 @@ const projectName = computed(() => String(route.params.id))
     <!-- ─── Banners (save success / error) ────────────────────────────────── -->
     <div
       v-if="saveBanner"
-      class="pipeline-banner pipeline-banner--info"
-      :class="{ 'pipeline-banner--error': !saveBanner.includes('2-5') }"
+      class="pipeline-banner pipeline-banner--error"
       role="alert"
       aria-live="assertive"
     >
@@ -511,6 +517,14 @@ const projectName = computed(() => String(route.params.id))
       />
 
     </div><!-- /tab-body -->
+
+    <!-- ─── AI Generate Wizard (Story 2-5) ──────────────────────────────── -->
+    <AIGenerateWizard
+      v-if="aiWizardOpen"
+      :project-id="projectId"
+      @close="aiWizardOpen = false"
+      @applied="handleAIApplied"
+    />
 
   </div>
 </template>

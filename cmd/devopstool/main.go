@@ -21,6 +21,7 @@ import (
 	"github.com/huangjiawei/devopstool/internal/config"
 	"github.com/huangjiawei/devopstool/internal/httpapi"
 	"github.com/huangjiawei/devopstool/internal/mask"
+	"github.com/huangjiawei/devopstool/internal/notify"
 	"github.com/huangjiawei/devopstool/internal/pipeline"
 	"github.com/huangjiawei/devopstool/internal/project"
 	"github.com/huangjiawei/devopstool/internal/run"
@@ -147,9 +148,14 @@ func main() {
 	// Exec/Test 降级为明确错误(不 panic)。
 	targetSvc := target.New(st.DB, credVault, nil)
 
+	// 装配通知渠道服务(Story 5.1;FR-19):复用 vault secretbox 加密敏感字段(如 SMTP 密码,密文入库)。
+	// webhook 投递用带超时的注入 HTTP 客户端(~8s);webhook URL 经 SSRF 收口(拒云元数据/链路本地)。
+	// master key 未配置时,涉及敏感字段的保存/读取降级为明确错误(不 panic)。未启用渠道发送时优雅跳过。
+	notifySvc := notify.New(st.DB, credVault, &http.Client{Timeout: 8 * time.Second})
+
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithSource(sourceReader), httpapi.WithServers(targetSvc)),
+		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithSource(sourceReader), httpapi.WithServers(targetSvc), httpapi.WithNotifications(notifySvc)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;

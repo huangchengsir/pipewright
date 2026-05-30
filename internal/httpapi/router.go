@@ -19,6 +19,7 @@ import (
 	"github.com/huangjiawei/devopstool/internal/ai"
 	"github.com/huangjiawei/devopstool/internal/audit"
 	"github.com/huangjiawei/devopstool/internal/auth"
+	"github.com/huangjiawei/devopstool/internal/notify"
 	"github.com/huangjiawei/devopstool/internal/pipeline"
 	"github.com/huangjiawei/devopstool/internal/project"
 	"github.com/huangjiawei/devopstool/internal/run"
@@ -56,6 +57,7 @@ type options struct {
 	aiAnalyzer       ai.RepoAnalyzer
 	sourceReader     SourceReader
 	servers          target.Service
+	notifications    notify.Service
 }
 
 // WithVault 注入凭据保险库,挂载 /api/credentials* 路由。
@@ -142,6 +144,13 @@ func WithSource(reader SourceReader) Option {
 // 密文,响应/错误绝无明文。不传则相关端点返回 503(服务未初始化)。
 func WithServers(s target.Service) Option {
 	return func(o *options) { o.servers = s }
+}
+
+// WithNotifications 注入通知渠道服务(Story 5.1;FR-19),挂载 /api/notifications/channels* 路由
+// (GET auth;POST/PUT/DELETE/test auth + CSRF)。敏感字段(SMTP 密码)经 vault 加密入库、响应仅
+// hasPassword。不传则相关端点返回 503(服务未初始化)。
+func WithNotifications(s notify.Service) Option {
+	return func(o *options) { o.notifications = s }
 }
 
 // New 构建 HTTP 处理器:健康端点 + Auth API + (可选)凭据 API + 内嵌 SPA 静态托管。
@@ -304,6 +313,16 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Put("/servers/{id}", makeUpdateServerHandler(sv))
 		ar.Delete("/servers/{id}", makeDeleteServerHandler(sv))
 		ar.Post("/servers/{id}/test", makeTestServerHandler(sv))
+		// 通知渠道(Story 5.1;FR-19)。nf 为 nil 时 handler 返回 503。
+		// GET(列表/详情)过 auth;POST/PUT/DELETE/test 为写方法,过 auth + CSRF。
+		// 敏感字段(SMTP 密码)加密入库、响应仅 hasPassword。test 须在 {id} 路由内单独注册。
+		nf := o.notifications
+		ar.Get("/notifications/channels", makeListChannelsHandler(nf))
+		ar.Post("/notifications/channels", makeCreateChannelHandler(nf))
+		ar.Get("/notifications/channels/{id}", makeGetChannelHandler(nf))
+		ar.Put("/notifications/channels/{id}", makeUpdateChannelHandler(nf))
+		ar.Delete("/notifications/channels/{id}", makeDeleteChannelHandler(nf))
+		ar.Post("/notifications/channels/{id}/test", makeTestChannelHandler(nf))
 
 		// 后续 story 在此挂载其他 API 路由。
 	})

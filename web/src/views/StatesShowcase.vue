@@ -27,8 +27,6 @@ import AppBanner     from '../components/ui/AppBanner.vue'
 import SkeletonBlock from '../components/ui/SkeletonBlock.vue'
 import EmptyState    from '../components/ui/EmptyState.vue'
 import ErrorState    from '../components/ui/ErrorState.vue'
-import ConfirmDialog from '../components/ui/ConfirmDialog.vue'
-import ToastHost     from '../components/ui/ToastHost.vue'
 import FormField     from '../components/ui/FormField.vue'
 import AppTooltip   from '../components/ui/AppTooltip.vue'
 import ProgressBar   from '../components/ui/ProgressBar.vue'
@@ -522,9 +520,8 @@ const progressVal = ref(55)
 
     </div><!-- /showcase-wrap -->
 
-    <!-- Global overlays (mount here for showcase page) -->
-    <ToastHost />
-    <ConfirmDialog />
+    <!-- ToastHost/ConfirmDialog 由 App.vue 全局挂载(模块级单例);此处不再自挂,
+         否则 /states 下双挂导致 toast 渲染两份、确认对话框双焦点陷阱互殴。 -->
 
     <!-- Theme toggle -->
     <button

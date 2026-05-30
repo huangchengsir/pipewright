@@ -87,7 +87,11 @@ func TestPipelineSaveRoundTrip(t *testing.T) {
 	srv, client, csrf, projID := setupPipelineServer(t)
 	base := srv.URL + "/api/projects/" + projID + "/pipeline"
 
+	// 含源阶段(前端 save 始终带源阶段;API 要求恰一个 source 阶段不变式)。
 	body := `{"stages":[
+	  {"name":"流水线源","kind":"source","jobs":[
+	    {"name":"Gitee 源","type":"git_source","summary":"main","config":{}}
+	  ]},
 	  {"name":"构建","kind":"build","jobs":[
 	    {"name":"打镜像","type":"build_image","summary":"docker build","config":{"dockerfile":"Dockerfile"}}
 	  ]},
@@ -103,8 +107,8 @@ func TestPipelineSaveRoundTrip(t *testing.T) {
 	var dto map[string]any
 	_ = json.Unmarshal(raw, &dto)
 	stages, _ := dto["stages"].([]any)
-	if len(stages) != 2 {
-		t.Fatalf("阶段数 = %d, want 2", len(stages))
+	if len(stages) != 3 {
+		t.Fatalf("阶段数 = %d, want 3", len(stages))
 	}
 	// 服务端补全 id。
 	s0, _ := stages[0].(map[string]any)
@@ -124,8 +128,8 @@ func TestPipelineSaveRoundTrip(t *testing.T) {
 	graw, _ := io.ReadAll(gresp.Body)
 	var gdto map[string]any
 	_ = json.Unmarshal(graw, &gdto)
-	if gs, _ := gdto["stages"].([]any); len(gs) != 2 {
-		t.Fatalf("GET 后阶段数 = %d, want 2", len(gs))
+	if gs, _ := gdto["stages"].([]any); len(gs) != 3 {
+		t.Fatalf("GET 后阶段数 = %d, want 3", len(gs))
 	}
 }
 

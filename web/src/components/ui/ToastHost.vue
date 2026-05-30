@@ -34,7 +34,6 @@ const icons: Record<string, string> = {
         :key="item.id"
         class="toast-item"
         :class="`toast-item--${item.type}`"
-        role="alert"
         :aria-label="`${item.type} 通知: ${item.title}`"
       >
         <!-- Accent edge -->

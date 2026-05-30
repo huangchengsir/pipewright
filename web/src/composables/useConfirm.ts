@@ -45,6 +45,10 @@ const pending = ref<PendingConfirm | null>(null)
 export function useConfirm() {
   function open(options: ConfirmOptions): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
+      // 若已有未结算的确认请求,先以 false 结算它,避免旧 Promise 的 await 永久挂起。
+      if (pending.value) {
+        pending.value.resolve(false)
+      }
       pending.value = { options, resolve }
     })
   }

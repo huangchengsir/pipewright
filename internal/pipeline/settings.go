@@ -461,15 +461,18 @@ func (s *settingsService) ensureCredentialExists(credID string) error {
 	if s.vault == nil {
 		return ErrSettingsVaultUnconfigured
 	}
-	if _, err := s.vault.Get(credID); err != nil {
+	// 仅校验存在性(Exists 不解密、不刷新 last_used_at):保存配置只是「引用」凭据而非「使用」。
+	// 用 Get 会无谓解密并把所有被引用 secret 标记为「最近使用」,语义失真且扩大解密面。
+	ok, err := s.vault.Exists(credID)
+	if err != nil {
 		if errors.Is(err, vault.ErrVaultUnconfigured) {
 			return ErrSettingsVaultUnconfigured
 		}
-		if errors.Is(err, vault.ErrNotFound) {
-			return fmt.Errorf("%w: %s", ErrCredentialNotFound, credID)
-		}
-		// 解密失败等(错误 master key):按未配置态处理,不泄漏细节。
+		// 其它查询错误:不泄漏细节,按未配置态处理。
 		return ErrSettingsVaultUnconfigured
+	}
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrCredentialNotFound, credID)
 	}
 	return nil
 }

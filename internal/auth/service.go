@@ -201,6 +201,11 @@ func (s *Service) Logout(token string) error {
 //
 // 与当前口令相同的新口令也允许(不强制不同)。
 func (s *Service) ChangePassword(current, newPassword, currentToken string) error {
+	// 当前会话 token 必须存在(requireAuth 已保证 cookie 在;空 token 属异常状态)。
+	// 守住此前提,避免后续 DeleteOthers("") 误删全部会话(含当前)。
+	if currentToken == "" {
+		return ErrInvalidCurrentPassword
+	}
 	// 强度校验先行(无需触 argon2,避免无谓内存分配)。
 	if len(newPassword) < minPasswordLen {
 		return ErrWeakPassword

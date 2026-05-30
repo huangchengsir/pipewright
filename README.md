@@ -109,9 +109,13 @@ docker run -p 8080:8080 -e PIPEWRIGHT_MASTER_KEY=... -e PIPEWRIGHT_ADMIN_PASSWOR
 
 🚧 **积极开发中**(借多 AI agent 并行实现)。Epic 1(安全地基)与 Epic 2(项目/流水线配置)已完成;隔离构建、SSH 部署、通知、运维、AI 洞察各 epic 多数已落地;部分依赖 Docker 的隔离构建仍在推进。
 
+## 贡献 / Contributing
+
+欢迎 PR 与 Issue!动手前请读 [CONTRIBUTING.md](CONTRIBUTING.md)(搭环境 / 测试 / 提交规范),并遵守[行为准则](CODE_OF_CONDUCT.md)。安全漏洞请走私密渠道,见 [SECURITY.md](SECURITY.md)。
+
 ## License
 
-待定。
+MIT — 见 [LICENSE](LICENSE)。
 
 ---
 

@@ -16,6 +16,7 @@ import type {
 import { listCredentials } from '../../api/credentials'
 import type { Credential } from '../../api/credentials'
 import { HttpError } from '../../api/http'
+import ServiceLogViewer from '../../components/ops/ServiceLogViewer.vue'
 
 // ─── state ──────────────────────────────────────────────────────────────────
 
@@ -64,6 +65,21 @@ const deleteBanner = ref('')
 
 const testingId = ref<string | null>(null)
 const testResults = ref<Record<string, ServerTestResult>>({})
+
+// ─── service logs viewer (Story 6-2, FR-16) ──────────────────────────────────
+
+const logsModalOpen = ref(false)
+const logsServer = ref<Server | null>(null)
+
+function openLogsModal(s: Server): void {
+  logsServer.value = s
+  logsModalOpen.value = true
+}
+
+function closeLogsModal(): void {
+  logsModalOpen.value = false
+  logsServer.value = null
+}
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -361,6 +377,7 @@ async function handleTest(s: Server): Promise<void> {
             <button class="btn-ghost" :disabled="testingId === s.id" @click="handleTest(s)">
               {{ testingId === s.id ? '测试中…' : '测试连接' }}
             </button>
+            <button class="btn-ghost" @click="openLogsModal(s)">日志</button>
             <button class="btn-ghost" @click="openEditModal(s)">编辑</button>
             <button class="btn-ghost btn-danger" @click="openDeleteModal(s)">删除</button>
           </div>
@@ -436,6 +453,26 @@ async function handleTest(s: Server): Promise<void> {
             {{ deleteSubmitting ? '删除中…' : '确认删除' }}
           </button>
         </div>
+      </div>
+    </div>
+
+    <!-- ─── service logs modal (Story 6-2, FR-16) ─────────────────────────────── -->
+    <div v-if="logsModalOpen" class="modal-backdrop" @click.self="closeLogsModal">
+      <div class="modal modal--wide" role="dialog" aria-modal="true" aria-labelledby="server-logs-title">
+        <div class="logs-modal-head">
+          <h3 id="server-logs-title" class="modal-title">
+            服务日志 · {{ logsServer?.name }}
+          </h3>
+          <button type="button" class="btn-ghost" aria-label="关闭" @click="closeLogsModal">关闭</button>
+        </div>
+        <p class="logs-modal-sub mono">
+          {{ logsServer?.user }}@{{ logsServer?.host }}:{{ logsServer?.port }}
+        </p>
+        <ServiceLogViewer
+          v-if="logsServer"
+          :server-id="logsServer.id"
+          :server-name="logsServer.name"
+        />
       </div>
     </div>
   </div>
@@ -686,6 +723,20 @@ async function handleTest(s: Server): Promise<void> {
   flex-direction: column;
   gap: 16px;
   box-shadow: var(--shadow-lg, 0 24px 60px rgba(0, 0, 0, 0.24));
+}
+.modal--wide {
+  max-width: min(960px, 92vw);
+}
+.logs-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.logs-modal-sub {
+  font-size: 0.78rem;
+  color: var(--color-dim);
+  margin-top: -8px;
 }
 .modal-title {
   font-size: var(--text-heading);

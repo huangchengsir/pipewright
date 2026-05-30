@@ -24,6 +24,17 @@ func (d stubDialer) Run(_ context.Context, _ string, _ target.SSHConfig, _ []str
 	return d.res, d.err
 }
 
+func (d stubDialer) RunStream(_ context.Context, _ string, _ target.SSHConfig, _ []string) (io.ReadCloser, error) {
+	if d.err != nil {
+		return nil, d.err
+	}
+	out := ""
+	if d.res != nil {
+		out = d.res.Stdout
+	}
+	return io.NopCloser(strings.NewReader(out)), nil
+}
+
 // setupServerAPI 构造带 auth + vault + target 的测试 server。
 func setupServerAPI(t *testing.T, dialer target.SSHDialer) (*httptest.Server, *http.Client, string) {
 	t.Helper()

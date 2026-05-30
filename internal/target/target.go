@@ -17,6 +17,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -121,6 +122,10 @@ type Service interface {
 	// Exec 通用执行:对指定服务器经 SSH 跑 cmd(程序 + 参数,**array 不拼 shell**,AC-SEC-02),
 	// 返回 stdout/stderr/exitCode。超时经 ctx。供 Epic 4 部署 / Epic 6 运维复用。
 	Exec(ctx context.Context, serverID string, cmd []string) (*ExecResult, error)
+	// ExecStream 流式执行(Story 6.2 append):经 SSH session 跑 cmd 并返回 stdout 的流(供
+	// 实时 tail -f / journalctl -f)。调用方读到底或关闭 ReadCloser 即释放 SSH session;ctx
+	// 取消亦关 session(防泄漏/挂死)。cmd 同样是 array,经各参数 shell 转义(AC-SEC-02)。
+	ExecStream(ctx context.Context, serverID string, cmd []string) (io.ReadCloser, error)
 }
 
 // SSHDialer 抽象「用装配好的 SSH 配置连服务器并跑一条 array 命令」的能力。
@@ -129,6 +134,9 @@ type SSHDialer interface {
 	// Run 连 addr(host:port)、以 cfg 认证、跑 cmd(已是程序+参数 array),返回结果。
 	// 连接/认证失败映射为 ErrUnreachable / ErrAuth(绝不含凭据明文)。
 	Run(ctx context.Context, addr string, cfg SSHConfig, cmd []string) (*ExecResult, error)
+	// RunStream 连 addr、以 cfg 认证、跑 cmd 并返回 stdout 的流(供实时 tail)。
+	// 返回的 ReadCloser 被关闭或 ctx 取消时,底层 SSH session/client 一并关闭(不泄漏)。
+	RunStream(ctx context.Context, addr string, cfg SSHConfig, cmd []string) (io.ReadCloser, error)
 }
 
 // SSHConfig 是拨号所需的最小认证材料(进程内,用完即弃)。
@@ -396,6 +404,56 @@ func (s *service) Exec(ctx context.Context, serverID string, cmd []string) (*Exe
 		return nil, runErr
 	}
 	return res, nil
+}
+
+// ExecStream 取凭据明文装配 SSH 配置并流式跑 array 命令(供实时 tail)。
+// 与 Exec 同样的凭据取用/清引用纪律:明文仅进程内,装配完 cfg 后立即清零本地引用。
+// 注意 cfg.PrivateKey/Password 的副本随 RunStream 进入 dialer 持有的 session 生命周期,
+// 用于建连;连接建立后由 dialer 持有的 client/session 负责;调用方读完/关闭流即释放。
+func (s *service) ExecStream(ctx context.Context, serverID string, cmd []string) (io.ReadCloser, error) {
+	if len(cmd) == 0 {
+		return nil, fmt.Errorf("target: empty command")
+	}
+	srv, err := s.Get(ctx, serverID)
+	if err != nil {
+		return nil, err
+	}
+	if s.vault == nil {
+		return nil, ErrVaultUnconfigured
+	}
+
+	secret, err := s.vault.Get(srv.CredentialID)
+	if err != nil {
+		switch {
+		case errors.Is(err, vault.ErrVaultUnconfigured):
+			return nil, ErrVaultUnconfigured
+		case errors.Is(err, vault.ErrNotFound):
+			return nil, ErrCredentialNotFound
+		default:
+			return nil, ErrAuth
+		}
+	}
+
+	cfg := SSHConfig{User: srv.User}
+	if looksLikePEM(secret) {
+		cfg.PrivateKey = secret
+	} else {
+		cfg.Password = secret
+	}
+
+	addr := fmt.Sprintf("%s:%d", srv.Host, srv.Port)
+	rc, runErr := s.dialer.RunStream(ctx, addr, cfg, cmd)
+
+	// 清本地明文引用(dialer 已用 cfg 完成建连/装配;此处本地引用不再需要)。
+	secret = ""
+	cfg.PrivateKey = ""
+	cfg.Password = ""
+	_ = secret
+
+	if runErr != nil {
+		return nil, runErr
+	}
+	return rc, nil
 }
 
 // looksLikePEM 判定凭据明文是否为 PEM 私钥(决定走私钥还是口令认证)。

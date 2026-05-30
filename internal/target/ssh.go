@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -87,6 +89,100 @@ func (sshDialer) Run(ctx context.Context, addr string, cfg SSHConfig, cmd []stri
 	}
 	res.ExitCode = 0
 	return res, nil
+}
+
+// RunStream 建连后在 session 上启动 cmd 并返回 stdout 流。底层 client/session 的生命周期
+// 绑定到返回的 ReadCloser:Close()(或 ctx 取消)即关 session + client,释放远端进程与 TCP。
+//
+// AC-SEC-02:cmd 经 quoteArgs 各参数 POSIX 转义后 Start,杜绝注入(同 Run)。
+func (sshDialer) RunStream(ctx context.Context, addr string, cfg SSHConfig, cmd []string) (io.ReadCloser, error) {
+	auth, err := authMethods(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	clientCfg := &ssh.ClientConfig{
+		User:            cfg.User,
+		Auth:            auth,
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // dev-only;生产固定 known_hosts(deferred)
+		Timeout:         resolveTimeout(ctx),
+	}
+
+	d := net.Dialer{Timeout: clientCfg.Timeout}
+	conn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("%w", classifyDialErr(err))
+	}
+
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, clientCfg)
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("%w", classifyHandshakeErr(err))
+	}
+	client := ssh.NewClient(sshConn, chans, reqs)
+
+	session, err := client.NewSession()
+	if err != nil {
+		_ = client.Close()
+		return nil, fmt.Errorf("%w", ErrUnreachable)
+	}
+
+	stdout, err := session.StdoutPipe()
+	if err != nil {
+		_ = session.Close()
+		_ = client.Close()
+		return nil, fmt.Errorf("%w", ErrUnreachable)
+	}
+
+	if err := session.Start(quoteArgs(cmd)); err != nil {
+		_ = session.Close()
+		_ = client.Close()
+		return nil, fmt.Errorf("%w", ErrUnreachable)
+	}
+
+	rc := &streamReadCloser{
+		r:       stdout,
+		session: session,
+		client:  client,
+	}
+
+	// ctx 取消时主动收尾(客户端断开 / 超时):杀远端进程并关 session/client,防泄漏挂死。
+	stop := make(chan struct{})
+	rc.stop = stop
+	go func() {
+		select {
+		case <-ctx.Done():
+			rc.Close()
+		case <-stop:
+		}
+	}()
+
+	return rc, nil
+}
+
+// streamReadCloser 把 SSH session 的 stdout 包成 ReadCloser,Close 时杀远端进程并关 session/client。
+// Close 幂等(防多次关 + ctx 协程与调用方并发关)。
+type streamReadCloser struct {
+	r       io.Reader
+	session *ssh.Session
+	client  *ssh.Client
+	stop    chan struct{}
+	once    sync.Once
+}
+
+func (s *streamReadCloser) Read(p []byte) (int, error) { return s.r.Read(p) }
+
+func (s *streamReadCloser) Close() error {
+	s.once.Do(func() {
+		if s.stop != nil {
+			close(s.stop)
+		}
+		// 先发 SIGKILL 杀远端 tail -f / journalctl -f(否则远端进程驻留);忽略错误。
+		_ = s.session.Signal(ssh.SIGKILL)
+		_ = s.session.Close()
+		_ = s.client.Close()
+	})
+	return nil
 }
 
 // runWithContext 在 session 上跑 cmd,并让 ctx 取消/超时能中断阻塞的 Run。

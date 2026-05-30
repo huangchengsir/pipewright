@@ -79,6 +79,10 @@ func writeNotifyError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnprocessableEntity, "invalid_event", "事件类型非法:只能为 build_succeeded、build_failed、deploy_succeeded、deploy_failed、rollback 或 health_check_failed")
 	case errors.Is(err, notify.ErrRouteChannelNotFound):
 		writeError(w, http.StatusUnprocessableEntity, "route_channel_not_found", "路由引用的通知渠道不存在")
+	case errors.Is(err, notify.ErrTemplateNotFound):
+		writeError(w, http.StatusNotFound, "template_not_found", "通知模板不存在")
+	case errors.Is(err, notify.ErrTemplateChannelNotFound):
+		writeError(w, http.StatusUnprocessableEntity, "template_channel_not_found", "模板引用的通知渠道不存在")
 	case errors.Is(err, notify.ErrNotFound):
 		writeError(w, http.StatusNotFound, "channel_not_found", "通知渠道不存在")
 	case errors.Is(err, notify.ErrInvalidType):
@@ -387,6 +391,141 @@ func makeDeleteRouteHandler(svc notify.Service) http.HandlerFunc {
 			return
 		}
 		if err := svc.DeleteRoute(r.Context(), chi.URLParam(r, "id")); err != nil {
+			writeNotifyError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// ---- 通知模板 DTO + handler(Story 5.3;FR-21;camelCase) ----
+
+// templateDTO 是通知模板对外响应体(冻结契约)。channelId 空 = 该事件通用;projectId 本期恒空。
+type templateDTO struct {
+	ID            string `json:"id"`
+	ProjectID     string `json:"projectId,omitempty"`
+	Event         string `json:"event"`
+	ChannelID     string `json:"channelId,omitempty"`
+	TitleTemplate string `json:"titleTemplate"`
+	BodyTemplate  string `json:"bodyTemplate"`
+	CreatedAt     string `json:"createdAt"`
+}
+
+// toTemplateDTO 把领域 Template 转契约 DTO。
+func toTemplateDTO(t *notify.Template) templateDTO {
+	return templateDTO{
+		ID:            t.ID,
+		ProjectID:     t.ProjectID,
+		Event:         t.Event,
+		ChannelID:     t.ChannelID,
+		TitleTemplate: t.TitleTemplate,
+		BodyTemplate:  t.BodyTemplate,
+		CreatedAt:     t.CreatedAt.UTC().Format(time.RFC3339),
+	}
+}
+
+// templateRequest 是创建/更新模板的请求体(camelCase)。
+// 更新时各字段经指针区分「省略(保留)」与「显式赋值」。channelId 空串 = 改为该事件通用。
+type templateRequest struct {
+	Event         *string `json:"event"`
+	ChannelID     *string `json:"channelId"`
+	TitleTemplate *string `json:"titleTemplate"`
+	BodyTemplate  *string `json:"bodyTemplate"`
+}
+
+// makeListTemplatesHandler 返回 GET /api/notifications/templates handler。响应 { items: [...] }。
+func makeListTemplatesHandler(svc notify.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "通知服务未初始化")
+			return
+		}
+		tpls, err := svc.ListTemplates(r.Context())
+		if err != nil {
+			writeNotifyError(w, err)
+			return
+		}
+		items := make([]templateDTO, 0, len(tpls))
+		for i := range tpls {
+			items = append(items, toTemplateDTO(&tpls[i]))
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	}
+}
+
+// makeCreateTemplateHandler 返回 POST /api/notifications/templates handler(认证 + CSRF)。
+// 事件枚举非法 → 422 invalid_event;渠道指定但不存在 → 422 template_channel_not_found。
+func makeCreateTemplateHandler(svc notify.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "通知服务未初始化")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
+		var req templateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
+			return
+		}
+		in := notify.CreateTemplateInput{}
+		if req.Event != nil {
+			in.Event = *req.Event
+		}
+		if req.ChannelID != nil {
+			in.ChannelID = *req.ChannelID
+		}
+		if req.TitleTemplate != nil {
+			in.TitleTemplate = *req.TitleTemplate
+		}
+		if req.BodyTemplate != nil {
+			in.BodyTemplate = *req.BodyTemplate
+		}
+		tpl, err := svc.CreateTemplate(r.Context(), in)
+		if err != nil {
+			writeNotifyError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, toTemplateDTO(tpl))
+	}
+}
+
+// makeUpdateTemplateHandler 返回 PUT /api/notifications/templates/{id} handler(认证 + CSRF)。
+func makeUpdateTemplateHandler(svc notify.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "通知服务未初始化")
+			return
+		}
+		id := chi.URLParam(r, "id")
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
+		var req templateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
+			return
+		}
+		in := notify.UpdateTemplateInput{
+			Event:         req.Event,
+			ChannelID:     req.ChannelID,
+			TitleTemplate: req.TitleTemplate,
+			BodyTemplate:  req.BodyTemplate,
+		}
+		tpl, err := svc.UpdateTemplate(r.Context(), id, in)
+		if err != nil {
+			writeNotifyError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, toTemplateDTO(tpl))
+	}
+}
+
+// makeDeleteTemplateHandler 返回 DELETE /api/notifications/templates/{id} handler(认证 + CSRF)。
+func makeDeleteTemplateHandler(svc notify.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "通知服务未初始化")
+			return
+		}
+		if err := svc.DeleteTemplate(r.Context(), chi.URLParam(r, "id")); err != nil {
 			writeNotifyError(w, err)
 			return
 		}

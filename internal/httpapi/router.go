@@ -350,6 +350,14 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Post("/notifications/routes", makeCreateRouteHandler(nf))
 		ar.Delete("/notifications/routes/{id}", makeDeleteRouteHandler(nf))
 
+		// 通知模板(Story 5.3;FR-21)。复用同一 notify.Service。「事件(可选按渠道)→ 标题/正文
+		// 模板」:渲染纯文本替换占位(无 RCE);未配模板的事件 → 平台默认文案(5-2 行为不变)。
+		// GET(列表)过 auth;POST/PUT/DELETE 为写方法,过 auth + CSRF。
+		ar.Get("/notifications/templates", makeListTemplatesHandler(nf))
+		ar.Post("/notifications/templates", makeCreateTemplateHandler(nf))
+		ar.Put("/notifications/templates/{id}", makeUpdateTemplateHandler(nf))
+		ar.Delete("/notifications/templates/{id}", makeDeleteTemplateHandler(nf))
+
 		// 后续 story 在此挂载其他 API 路由。
 	})
 

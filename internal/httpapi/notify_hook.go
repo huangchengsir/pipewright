@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/huangjiawei/devopstool/internal/notify"
@@ -37,24 +38,39 @@ func NewNotifyHook(runs run.Service, notifySvc notify.Service) func(ctx context.
 		hookCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
-		// 取运行元数据构造默认 Payload(项目名/分支/commit/状态/耗时)。取失败仅记日志、
-		// 用降级 Payload(仅含事件/状态)继续:通知 best-effort,不因取数失败而完全不发。
+		// 取运行元数据构造 TemplateVars(项目名/分支/commit/状态/耗时/runId/errorSummary)。
+		// 取失败仅记日志、用降级 vars(仅含事件/状态/runId)继续:通知 best-effort,不因取数
+		// 失败而完全不发。errorSummary 经 notify.MaskErrorSummary 尽力脱敏(绝无明文 secret)。
 		var (
-			projectName, branch, commit string
-			durationMs                  int64
+			projectName, branch, commit, errorSummary string
+			durationMs                                int64
 		)
 		if r, err := runs.Get(hookCtx, runID); err != nil {
-			log.Printf("[notify] run %s: 取运行元数据失败(用降级 payload):%v", runID, err)
+			log.Printf("[notify] run %s: 取运行元数据失败(用降级 vars):%v", runID, err)
 		} else {
 			projectName = r.ProjectName
 			branch = r.Trigger.Branch
 			commit = r.Trigger.Commit
 			durationMs = runDurationMs(r)
+			errorSummary = notify.SummarizeFailure(r.FailureLog)
 		}
 
-		payload := notify.EventPayload(event, projectName, branch, commit, finalStatus, durationMs)
-		if err := notifySvc.RouteEvent(hookCtx, event, payload); err != nil {
-			// RouteEvent 本身始终返回 nil;此处兜底防御。
+		vars := notify.TemplateVars{
+			Project:      projectName,
+			Branch:       branch,
+			Commit:       notify.ShortCommit(commit),
+			Status:       finalStatus,
+			Event:        event,
+			RunID:        runID,
+			ErrorSummary: errorSummary,
+		}
+		if durationMs > 0 {
+			vars.DurationMs = strconv.FormatInt(durationMs, 10)
+		}
+
+		// 按渠道渲染模板(无模板 → 平台默认,5-2 行为不变)→ SendVia。RouteEventVars 始终返回
+		// nil;此处兜底防御。
+		if err := notifySvc.RouteEventVars(hookCtx, event, vars); err != nil {
 			log.Printf("[notify] run %s: 事件 %s 路由 best-effort 失败:%v", runID, event, err)
 		}
 	}

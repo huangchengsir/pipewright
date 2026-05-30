@@ -12,6 +12,8 @@ const Runs        = () => import('../views/Runs.vue')
 const Servers     = () => import('../views/Servers.vue')
 // Story 6-1: multi-host status overview (server-layer CPU/memory/disk metrics, FR-15)
 const ServerStatus = () => import('../views/ServerStatus.vue')
+// Story 6-5: configurable anomaly detection & alerts (FR-23)
+const AnomalyDetection = () => import('../views/AnomalyDetection.vue')
 const Notifications = () => import('../views/Notifications.vue')
 const Settings    = () => import('../views/Settings.vue')
 const SettingsAI  = () => import('../views/settings/SettingsAI.vue')
@@ -72,6 +74,8 @@ const router = createRouter({
         { path: 'servers', name: 'servers', component: Servers },
         // Story 6-1: multi-host status overview (server-layer metrics, FR-15)
         { path: 'server-status', name: 'server-status', component: ServerStatus },
+        // Story 6-5: configurable anomaly detection & alerts (FR-23)
+        { path: 'anomaly', name: 'anomaly', component: AnomalyDetection },
         { path: 'notifications', name: 'notifications', component: Notifications },
         {
           path: 'settings',

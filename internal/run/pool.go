@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/huangjiawei/devopstool/internal/mask"
 )
 
 // defaultConcurrency 是 worker pool 默认并发上限(有界;NFR-4 内存约束)。
@@ -40,6 +41,10 @@ type WorkerPool struct {
 	// diagnoseSem 为自动诊断并发上限信号量(有界;NFR-4);满则跳过本次自动诊断。
 	diagnoseSem chan struct{}
 
+	// logMasker 是日志行落库/出网前的脱敏器(AC-SEC-04;由 main 经 WithLogMasker 注入)。
+	// nil 则 dbStepSink.Log 不脱敏(纯单测可省);生产装配须注入并登记该 run 相关 secret。
+	logMasker *mask.Masker
+
 	startOnce sync.Once
 	stopOnce  sync.Once
 	ctx       context.Context
@@ -63,6 +68,19 @@ func WithRunner(r Runner) PoolOption {
 	return func(p *WorkerPool) {
 		if r != nil {
 			p.runner = r
+		}
+	}
+}
+
+// WithLogMasker 注入日志脱敏器(Story 3.6 / AC-SEC-04)。dbStepSink.Log 在落 run_logs /
+// 发 EventLog 前一律经此 Masker.Scrub,确保日志表/SSE/响应绝无明文 secret。
+//
+// 本期同 7-2 的 registerRunSecrets 债:只登记桩假 secret(StubFailureSecret 等),由 main
+// 装配时登记;3-3/3-6 真实日志落地后改为从 vault 取该 run 实际凭据明文登记。m 为 nil 时不注入。
+func WithLogMasker(m *mask.Masker) PoolOption {
+	return func(p *WorkerPool) {
+		if m != nil {
+			p.logMasker = m
 		}
 	}
 }
@@ -193,7 +211,7 @@ func (p *WorkerPool) execute(runID string) {
 		p.svc.mu.Unlock()
 	}()
 
-	sink := &dbStepSink{svc: p.svc, runID: runID}
+	sink := &dbStepSink{svc: p.svc, runID: runID, masker: p.logMasker}
 
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -276,6 +294,8 @@ type dbStepSink struct {
 	runID   string
 	stepIDs []string
 	names   []string
+	// masker 在日志行落库/出网前脱敏(AC-SEC-04);nil 则不脱敏(纯单测可省)。
+	masker *mask.Masker
 }
 
 func (d *dbStepSink) Plan(ctx context.Context, names []string) error {
@@ -345,6 +365,35 @@ func (d *dbStepSink) SetFailureLog(_ context.Context, logText string) error {
 	if err != nil {
 		return fmt.Errorf("run: set failure log: %w", err)
 	}
+	return nil
+}
+
+// Log 实现 StepSink.Log(Story 3.6):**先脱敏**(注入的 mask.Masker)→ 落 run_logs(分配
+// run 内单调 seq)→ 经事件总线发 EventLog(text 已脱敏)。AC-SEC-04:落库/出网前一律 Scrub,
+// 桩假 secret 在 run_logs 表/SSE 中一律 [MASKED]、绝无明文。
+//
+// 用后台 ctx 落库以容忍取消场景(日志须被持久化);best-effort:落库失败返回 error 由
+// 调用方(StubRunner)忽略,绝不阻断步骤/运行终态。
+func (d *dbStepSink) Log(_ context.Context, stream string, stepOrdinal int, line string) error {
+	text := line
+	if d.masker != nil {
+		text = d.masker.Scrub(line)
+	}
+	seq, err := d.svc.AppendLog(context.Background(), d.runID, stream, stepOrdinal, text)
+	if err != nil {
+		return fmt.Errorf("run: append log: %w", err)
+	}
+	d.svc.bus.publish(Event{
+		Kind:  EventLog,
+		RunID: d.runID,
+		Log: LogLine{
+			Seq:         seq,
+			Ts:          time.Now().UTC(),
+			Stream:      stream,
+			StepOrdinal: stepOrdinal,
+			Text:        text,
+		},
+	})
 	return nil
 }
 

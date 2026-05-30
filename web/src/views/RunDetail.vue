@@ -27,6 +27,7 @@ import {
 } from '../api/runs'
 import { HttpError } from '../api/http'
 import DiagnosisPanel from '../components/run/DiagnosisPanel.vue'
+import RunTerminal from '../components/run/RunTerminal.vue'
 
 // ─── route ────────────────────────────────────────────────────────────────────
 
@@ -450,19 +451,8 @@ function nodeClass(status: StepStatus): string {
                 Story 3-6 在此区块内填入真实日志终端组件,不改骨架结构。
                 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
               -->
-              <div class="slot-log" role="region" aria-label="实时日志(尚未接入)">
-                <div class="slot-header">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-                    <rect x="2" y="3" width="20" height="18" rx="3"/>
-                    <path d="M7 8l4 4-4 4M13 16h4"/>
-                  </svg>
-                  <span class="slot-title">实时日志终端</span>
-                  <span class="slot-badge">Story 3-6</span>
-                </div>
-                <div class="slot-body slot-body--term">
-                  <span class="slot-placeholder-text">实时日志将在 Story 3-6 接入</span>
-                  <span class="slot-placeholder-hint">SSE 状态/步骤推送已就绪;日志流内容尚未连接</span>
-                </div>
+              <div class="slot-log-live" role="region" aria-label="实时日志终端">
+                <RunTerminal :run-id="run.id" :live="true" />
               </div>
               <!-- END SLOT: 实时日志终端 -->
 
@@ -501,6 +491,11 @@ function nodeClass(status: StepStatus): string {
                 <span class="summary-key">总耗时</span>
                 <span class="summary-val mono">{{ formatDuration(run.durationMs) }}</span>
               </div>
+            </div>
+
+            <!-- 历史日志回放(只读,Story 3-6) -->
+            <div class="log-history" role="region" aria-label="历史运行日志">
+              <RunTerminal :run-id="run.id" :live="false" />
             </div>
 
             <!--
@@ -579,6 +574,12 @@ function nodeClass(status: StepStatus): string {
               </div>
             </div>
 
+            <!-- 失败日志证据(只读历史回放,Story 3-6)。在 AI 诊断面板之上;
+                 不属于 7-2 的 DiagnosisPanel slot,二者共存。 -->
+            <div class="log-history" role="region" aria-label="失败运行日志">
+              <RunTerminal :run-id="run.id" :live="false" />
+            </div>
+
             <!--
               ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
               SLOT: AI 失败诊断 (Story 7-2 实现)
@@ -636,6 +637,11 @@ function nodeClass(status: StepStatus): string {
                 <path d="M12 9v4M12 17h.01"/>
               </svg>
               部分目标失败,失败台已独立回滚;其余台继续运行,互不连累。
+            </div>
+
+            <!-- 历史日志回放(只读,Story 3-6) -->
+            <div class="log-history" role="region" aria-label="历史运行日志">
+              <RunTerminal :run-id="run.id" :live="false" />
             </div>
 
             <!--
@@ -732,6 +738,11 @@ function nodeClass(status: StepStatus): string {
                   </div>
                 </li>
               </ul>
+            </div>
+
+            <!-- 历史日志回放(只读,Story 3-6) -->
+            <div class="log-history" role="region" aria-label="历史运行日志">
+              <RunTerminal :run-id="run.id" :live="false" />
             </div>
 
           </div>
@@ -1234,19 +1245,10 @@ function nodeClass(status: StepStatus): string {
   align-items: center;
 }
 
-.slot-body--term {
-  background: var(--color-term);
-}
-
 .slot-placeholder-text {
   font-size: 0.83rem;
   color: var(--color-dim);
   font-weight: 500;
-}
-
-.slot-body--term .slot-placeholder-text {
-  color: var(--color-faint);
-  font-family: var(--font-mono);
 }
 
 .slot-placeholder-hint {
@@ -1255,17 +1257,18 @@ function nodeClass(status: StepStatus): string {
   line-height: 1.5;
 }
 
-/* Log slot */
-.slot-log {
-  border-radius: var(--rounded-lg);
-  border: 1px solid var(--color-border);
-  overflow: hidden;
+/* Live log terminal slot (Story 3-6) — sits in running-body's second column */
+.slot-log-live {
+  min-width: 0;
 }
 
-.slot-log .slot-header {
-  background: oklch(12% 0.004 270);
-  border-bottom: 1px solid var(--color-border);
-  color: var(--color-dim);
+.slot-log-live :deep(.term) {
+  min-height: 320px;
+}
+
+/* Historical log replay (terminal states) — full width below summaries */
+.log-history {
+  min-width: 0;
 }
 
 /* ─── success summary ────────────────────────────────────────────────────── */

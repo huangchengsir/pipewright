@@ -53,6 +53,7 @@ type options struct {
 	account          accountService
 	aiSettings       ai.Service
 	aiAnalyzer       ai.RepoAnalyzer
+	sourceReader     SourceReader
 }
 
 // WithVault 注入凭据保险库,挂载 /api/credentials* 路由。
@@ -125,6 +126,13 @@ func WithAISettings(s ai.Service) Option {
 // apply 复用 pipelines + pipelineSettings + triggers。analyzer 为 nil 时 generate 返回 503。
 func WithAIGenerate(a ai.RepoAnalyzer) Option {
 	return func(o *options) { o.aiAnalyzer = a }
+}
+
+// WithSource 注入只读源码读取器(go-git 浅克隆),挂载 /api/projects/{id}/source/{tree,blob}
+// 路由(Story 3.6;FR-4 预埋,7-4 前端消费)。复用已注入的 projects + vault 取仓库凭据。
+// 不传则 source 端点返回 503(服务未初始化)。
+func WithSource(reader SourceReader) Option {
+	return func(o *options) { o.sourceReader = reader }
 }
 
 // New 构建 HTTP 处理器:健康端点 + Auth API + (可选)凭据 API + 内嵌 SPA 静态托管。
@@ -223,6 +231,8 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Get("/runs", makeListRunsHandler(rs))
 		ar.Get("/runs/{id}", makeGetRunHandler(rs))
 		ar.Get("/runs/{id}/events", makeRunEventsHandler(rs, o.runSub))
+		// 历史日志拉取 / 分页(Story 3.6):只读 + 认证;sinceSeq 分页;complete=终态。
+		ar.Get("/runs/{id}/logs", makeRunLogsHandler(rs))
 		ar.Post("/runs/{id}/cancel", makeCancelRunHandler(rs))
 
 		// AI 失败诊断(Story 7.2):显式(重)诊断。认证 + CSRF(写方法)。
@@ -264,6 +274,13 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		}
 		ar.Post("/projects/{id}/pipeline/ai-generate", makeAIGenerateHandler(aiGenDeps))
 		ar.Post("/projects/{id}/pipeline/ai-apply", makeAIApplyHandler(aiGenDeps))
+
+		// 只读源码读取(Story 3.6;FR-4 预埋,7-4 消费):go-git 浅克隆读 tree/blob。
+		// 复用已注入 projects(p)+ vault(v)取凭据 + 注入的 SourceReader。reader 为 nil → 503。
+		// /source/tree、/source/blob 比 /projects/{id} 多两段,不会被吞;GET 过 auth。
+		srcDeps := sourceDeps{projects: p, vault: v, reader: o.sourceReader}
+		ar.Get("/projects/{id}/source/tree", makeSourceTreeHandler(srcDeps))
+		ar.Get("/projects/{id}/source/blob", makeSourceBlobHandler(srcDeps))
 
 		// 后续 story 在此挂载其他 API 路由。
 	})

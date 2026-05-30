@@ -74,7 +74,7 @@ development_status:
   3-3-isolated-build: backlog
   3-4-artifacts-and-contract: backlog
   3-5-registry-push: backlog
-  3-6-live-run-logs-and-source-endpoint: in-progress
+  3-6-live-run-logs-and-source-endpoint: review
   epic-3-retrospective: optional
 
   # ===== Epic 4: 多服务器部署(零停机 + 回滚 + 多机) =====

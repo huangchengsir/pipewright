@@ -175,19 +175,60 @@ export function triggerManual(projectId: string, input: TriggerManualInput): Pro
   return http.post<RunDetail>(`/api/projects/${projectId}/runs`, input)
 }
 
+// ─── Run logs (Story 3-6 frozen contract) ─────────────────────────────────────
+//
+// A single log line. `text` is already secret-masked by the backend ([MASKED]
+// substrings present) — the frontend never re-processes secrets, only renders.
+// `seq` is monotonic per-run (from 1); the client uses it to de-dupe / order /
+// resume. `stream` distinguishes stdout vs stderr for coloring. `stepOrdinal`
+// associates the line with a step (-1 ⇒ run-level).
+
+export type LogStream = 'stdout' | 'stderr'
+
+export interface RunLogLine {
+  seq: number
+  ts: string            // RFC3339
+  stream: LogStream
+  stepOrdinal: number
+  text: string          // single line, already masked, no trailing newline
+}
+
+// GET /api/runs/{id}/logs?sinceSeq=<int>  → historical / paginated pull (non-SSE)
+// Returns lines after `sinceSeq` (ascending). `nextSeq` = last seq + 1 (resume
+// cursor); `complete` = run has reached a terminal state (stop polling). 404
+// run_not_found if the run does not exist.
+
+export interface RunLogsResponse {
+  lines: RunLogLine[]
+  nextSeq: number
+  complete: boolean
+}
+
+export function getRunLogs(id: string, sinceSeq = 0): Promise<RunLogsResponse> {
+  const qs = sinceSeq > 0 ? `?sinceSeq=${sinceSeq}` : ''
+  return http.get<RunLogsResponse>(`/api/runs/${id}/logs${qs}`)
+}
+
 // ─── SSE subscription ────────────────────────────────────────────────────────
 //
 // Listens to GET /api/runs/:id/events (text/event-stream).
-// Two named events: "status" (run status update) and "step" (step status update).
+// Named events: "status" (run status update), "step" (step status update) and
+// "log" (Story 3-6: live log line). On connect the backend first replays this
+// run's full history of `log` events (seq-ascending) so a refresher receives the
+// complete log, then transitions to live tailing — the client de-dupes by seq.
 // Same-origin EventSource carries session cookie automatically.
 // On connection error, falls back to polling getRun (graceful degradation).
 
 export type SseStatusEvent = { runId: string; status: RunStatus }
 export type SseStepEvent   = { runId: string; step: RunStep }
+// The "log" event payload IS a RunLogLine (no envelope) — matches the frozen
+// contract: {"seq","ts","stream","stepOrdinal","text"}.
+export type SseLogEvent    = RunLogLine
 
 export interface SseHandlers {
   onStatus: (e: SseStatusEvent) => void
   onStep:   (e: SseStepEvent) => void
+  onLog?:   (e: SseLogEvent) => void
   onError?: (err: Event) => void
 }
 
@@ -250,6 +291,16 @@ export function subscribeRunEvents(runId: string, handlers: SseHandlers): () => 
       try {
         const data = JSON.parse(ev.data) as SseStepEvent
         handlers.onStep(data)
+      } catch {
+        // Malformed JSON — ignore
+      }
+    })
+
+    es.addEventListener('log', (ev: MessageEvent) => {
+      if (closed) return
+      try {
+        const data = JSON.parse(ev.data) as SseLogEvent
+        handlers.onLog?.(data)
       } catch {
         // Malformed JSON — ignore
       }

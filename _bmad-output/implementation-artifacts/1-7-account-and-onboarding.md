@@ -66,3 +66,10 @@ Base:认证保护,写方法过 CSRF。错误体沿用 `{"error":{"code,message}}
 - **前端必跑 `npm --prefix web run typecheck`(不是 build!)** + `npm --prefix web run build`。
 - 真二进制:改口令(错当前→401 · 弱新→422 · 成功 204 + 旧其它会话失效 + 当前不掉线)· `GET /api/account/sessions` 不含原 token + current 标识 · 撤销会话 204 · 改口令入审计无明文。
 - 真浏览器:全新库登录→引导(三卡+3步,建项目 CTA,AI/服务器"即将可用")· 跳过→概览空态 · 账户设置改口令表单 + 会话列表 + 撤销二次确认 + 重新引导 · 截图肉眼审质量(复用 1-6 组件、无模板感)。
+
+## Review Findings (code-review 2026-05-30,9-agent 三层对抗)
+**已修 patch:**
+- [x] [Patch] ChangePassword 空 currentToken 守卫 + DeleteOthers 拒空 keepToken(防误删全部会话)[auth/service.go, session.go]
+- [x] [Patch] clientIP 默认 RemoteAddr,XFF 仅可信代理采信(审计 IP 防伪造)[httpapi/audit.go]
+- [x] [Patch] session.Get 滑动过期写节流(>60s,防每请求写放大/SSE BUSY)[auth/session.go]
+**deferred:** 会话无绝对上限 · SessionID 前缀碰撞 · 并发改密竞态 · internal/auth 缺领域单测

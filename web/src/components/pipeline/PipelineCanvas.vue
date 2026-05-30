@@ -102,11 +102,12 @@ function addStage(): void {
   const existing = props.stages.map((s) => s.kind)
   const nextKind: StageKind = KIND_SEQ.find((k) => !existing.includes(k)) ?? 'custom'
   const nextNum = props.stages.filter((s) => s.kind !== 'source').length + 1
+  const KIND_LABELS: Partial<Record<StageKind, string>> = {
+    build: '构建', deploy: '部署', notify: '通知',
+  }
   const newStage: PipelineStage = {
     id:   `stg_${uid()}`,
-    name: nextKind === 'custom' ? `自定义 ${nextNum}` : ({
-      build: '构建', deploy: '部署', notify: '通知',
-    }[nextKind] ?? `阶段 ${nextNum}`),
+    name: nextKind === 'custom' ? `自定义 ${nextNum}` : (KIND_LABELS[nextKind] ?? `阶段 ${nextNum}`),
     kind: nextKind,
     jobs: [],
   }

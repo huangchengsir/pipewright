@@ -25,6 +25,8 @@ import {
   type RunStatus,
   type StepStatus,
   type DiagnosisDTO,
+  type HealthCheckType,
+  type HealthCheckInput,
 } from '../api/runs'
 import { listServers, type Server } from '../api/servers'
 import { HttpError } from '../api/http'
@@ -81,6 +83,45 @@ const deploying = ref(false)
 const deployError = ref('')
 const showDeployPanel = ref(false)
 
+// ─── deploy-time health gate (Story 4-3 / FR-12) ─────────────────────────────
+// 部署后健康门控:type none(默认,跳过)/ http(curl 探测)/ command(命令探测)。
+// 字段值仅作表单状态;提交时按 type 收敛为 HealthCheckInput(none → 不传)。
+const hcType = ref<HealthCheckType>('none')
+const hcUrl = ref('')
+const hcCommand = ref('') // 以空格分词为 command array(逐个 array 元素,经后端不拼 shell)
+const hcRetries = ref(3)
+const hcIntervalSeconds = ref(3)
+const hcTimeoutSeconds = ref(5)
+
+// buildHealthCheck 据表单 type 收敛 HealthCheckInput;none → undefined(等同 4-2 不做健康检查)。
+function buildHealthCheck(): HealthCheckInput | undefined {
+  if (hcType.value === 'none') return undefined
+  const base = {
+    retries: clampInt(hcRetries.value, 1, 20, 3),
+    intervalSeconds: clampInt(hcIntervalSeconds.value, 0, 3600, 3),
+    timeoutSeconds: clampInt(hcTimeoutSeconds.value, 1, 60, 5),
+  }
+  if (hcType.value === 'http') {
+    return { type: 'http', url: hcUrl.value.trim(), ...base }
+  }
+  // command:按空白分词为 array(各元素独立,AC-SEC-02 不拼 shell)。
+  const command = hcCommand.value.trim().split(/\s+/).filter(Boolean)
+  return { type: 'command', command, ...base }
+}
+
+function clampInt(v: number, lo: number, hi: number, fallback: number): number {
+  const n = Math.trunc(Number(v))
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(hi, Math.max(lo, n))
+}
+
+// 提交前的健康检查表单是否有效(http 需 url;command 需至少一个 token;none 永远有效)。
+const healthCheckValid = computed(() => {
+  if (hcType.value === 'http') return hcUrl.value.trim().length > 0
+  if (hcType.value === 'command') return hcCommand.value.trim().length > 0
+  return true
+})
+
 // 是否已部署过(run.targets 非空 → 已有部署结果)。
 const hasDeployed = computed(() => !!run.value?.targets && run.value.targets.length > 0)
 
@@ -112,7 +153,11 @@ function toggleServer(id: string): void {
 }
 
 const canDeploy = computed(
-  () => !!selectedArtifactId.value && selectedServerIds.value.length > 0 && !deploying.value,
+  () =>
+    !!selectedArtifactId.value &&
+    selectedServerIds.value.length > 0 &&
+    healthCheckValid.value &&
+    !deploying.value,
 )
 
 async function handleDeploy(): Promise<void> {
@@ -123,6 +168,7 @@ async function handleDeploy(): Promise<void> {
     const res = await deployRun(run.value.id, {
       artifactId: selectedArtifactId.value,
       serverIds: [...selectedServerIds.value],
+      healthCheck: buildHealthCheck(),
     })
     // 同步执行:用返回的 targets 直接填 slot(与 run-detail 同源形状)。
     run.value = { ...run.value, targets: res.targets, status: deriveStatus(res.targets) }
@@ -655,6 +701,56 @@ function nodeClass(status: StepStatus): string {
                       <span class="deploy-server-host mono">{{ s.user }}@{{ s.host }}:{{ s.port }}</span>
                     </label>
                   </div>
+                </div>
+
+                <!-- 健康检查(Story 4-3 / FR-12):部署后门控,通过才算该机成功 -->
+                <div class="deploy-field">
+                  <label class="deploy-label" for="deploy-hc-type">健康检查</label>
+                  <select id="deploy-hc-type" v-model="hcType" class="deploy-select">
+                    <option value="none">不检查(命令成功即视为部署成功)</option>
+                    <option value="http">HTTP 探测(curl)</option>
+                    <option value="command">命令探测</option>
+                  </select>
+
+                  <!-- http:探测 url -->
+                  <input
+                    v-if="hcType === 'http'"
+                    v-model="hcUrl"
+                    class="deploy-select hc-input"
+                    type="url"
+                    inputmode="url"
+                    placeholder="http://localhost:8080/healthz"
+                    aria-label="健康检查 URL"
+                  />
+
+                  <!-- command:探测命令(空格分词为 array,不拼 shell) -->
+                  <input
+                    v-if="hcType === 'command'"
+                    v-model="hcCommand"
+                    class="deploy-select hc-input mono"
+                    type="text"
+                    placeholder="例:systemctl is-active shop"
+                    aria-label="健康检查命令"
+                  />
+
+                  <!-- 重试 / 间隔 / 超时(http + command 通用) -->
+                  <div v-if="hcType !== 'none'" class="hc-params">
+                    <label class="hc-param">
+                      <span class="hc-param-key">重试次数</span>
+                      <input v-model.number="hcRetries" class="hc-num" type="number" min="1" max="20" />
+                    </label>
+                    <label class="hc-param">
+                      <span class="hc-param-key">间隔(秒)</span>
+                      <input v-model.number="hcIntervalSeconds" class="hc-num" type="number" min="0" max="3600" />
+                    </label>
+                    <label class="hc-param">
+                      <span class="hc-param-key">超时(秒)</span>
+                      <input v-model.number="hcTimeoutSeconds" class="hc-num" type="number" min="1" max="60" />
+                    </label>
+                  </div>
+                  <p v-if="hcType !== 'none' && !healthCheckValid" class="deploy-empty">
+                    {{ hcType === 'http' ? '请填写探测 URL。' : '请填写探测命令。' }}
+                  </p>
                 </div>
 
                 <!-- 部署错误 -->
@@ -1857,5 +1953,50 @@ function nodeClass(status: StepStatus): string {
 .deploy-hint {
   font-size: 0.76rem;
   color: var(--color-dim);
+}
+
+/* ─── deploy-time health gate (Story 4-3 / FR-12) ─────────────────────────── */
+.hc-input {
+  margin-top: 2px;
+}
+
+.hc-params {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.hc-param {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 90px;
+  min-width: 90px;
+}
+
+.hc-param-key {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--color-faint);
+}
+
+.hc-num {
+  height: 32px;
+  padding: 0 8px;
+  background: var(--color-card);
+  color: var(--color-text);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--rounded-md);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  width: 100%;
+}
+
+.hc-num:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+  border-color: var(--color-primary);
 }
 </style>

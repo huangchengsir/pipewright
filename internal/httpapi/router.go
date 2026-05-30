@@ -193,6 +193,13 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Get("/projects/{id}/pipeline/settings", makeGetPipelineSettingsHandler(ps))
 		ar.Put("/projects/{id}/pipeline/settings", makeSavePipelineSettingsHandler(ps))
 
+		// 流水线配置合法性校验(Story 2.6):只读聚合视图 + 认证。
+		// 聚合 spec(2-2)+ settings(2-4)+ trigger(2-3)+ 项目凭据,跑跨 tab 校验。
+		// 复用已注入的 o.pipelines/o.pipelineSettings/o.triggers/o.projects/o.vault,无需新 Option。
+		// /pipeline/validation 比 /pipeline 多一段,不会被吞;GET 过 auth。
+		ar.Get("/projects/{id}/pipeline/validation",
+			makeGetPipelineValidationHandler(pl, ps, t, p, v))
+
 		// 运行模型 + 列表 + 详情 + 取消 + SSE 状态流(Story 3.1)。rs 为 nil 时返回 503。
 		// SSE events 为 GET,豁免 CSRF;cancel 为写方法,过 CSRF。均过 requireAuth。
 		rs := o.runs

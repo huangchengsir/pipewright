@@ -191,6 +191,41 @@ export function diagnoseRun(id: string): Promise<DiagnosisDTO> {
   return http.post<DiagnosisDTO>(`/api/runs/${id}/diagnose`)
 }
 
+// ─── Success/fail diff (Story 7-3 frozen contract — FR-25) ────────────────────
+//
+// GET /api/runs/{id}/diff → file-level diff between the last successful run
+// (baseline) and this run (current). Read-only, authenticated.
+//
+// available=false (no baseline success run / this run has no commit / clone
+// failed / commit unreachable) is a graceful degraded response — NEVER a 500.
+// `reason` is human-readable. `status` is the frozen four-word file set. Large
+// diffs are truncated (truncated=true; backend caps file count). `summary` is a
+// human one-liner that may carry a "most suspect" heuristic hint.
+
+export type RunDiffFileStatus = 'added' | 'modified' | 'deleted' | 'renamed'
+
+export interface RunDiffFile {
+  path: string
+  status: RunDiffFileStatus
+  additions: number
+  deletions: number
+}
+
+export interface RunDiffDTO {
+  available: boolean
+  reason: string             // human-readable when available=false
+  baselineRunId: string      // empty when no baseline
+  baselineCommit: string     // empty when no baseline
+  currentCommit: string
+  files: RunDiffFile[]       // [] when available=false
+  truncated: boolean
+  summary: string
+}
+
+export function getRunDiff(id: string): Promise<RunDiffDTO> {
+  return http.get<RunDiffDTO>(`/api/runs/${id}/diff`)
+}
+
 // ─── Manual trigger ───────────────────────────────────────────────────────────
 //
 // POST /api/projects/{id}/runs  body { branch, commit? }

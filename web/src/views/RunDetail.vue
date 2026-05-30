@@ -31,6 +31,7 @@ import {
 import { listServers, type Server } from '../api/servers'
 import { HttpError } from '../api/http'
 import DiagnosisPanel from '../components/run/DiagnosisPanel.vue'
+import SuccessFailDiff from '../components/run/SuccessFailDiff.vue'
 import RunTerminal from '../components/run/RunTerminal.vue'
 import ArtifactList from '../components/run/ArtifactList.vue'
 import DeployTargets from '../components/run/DeployTargets.vue'
@@ -848,6 +849,12 @@ function nodeClass(status: StepStatus): string {
               @diagnosed="(dto: DiagnosisDTO) => { if (run) run = { ...run, diagnosis: dto } }"
             />
             <!-- END SLOT: AI 失败诊断 -->
+
+            <!-- 成功/失败差异对比(Story 7-3;FR-25)。作为诊断「证据」补充,挂在 AI 诊断面板之后;
+                 独立区块,不属于 7-2 的 DiagnosisPanel slot,二者共存。无 baseline/克隆失败时组件自身降级。 -->
+            <div class="diff-section" role="region" aria-label="成功失败代码差异对比">
+              <SuccessFailDiff :run-id="run.id" />
+            </div>
 
           </div>
         </template>

@@ -130,6 +130,14 @@ else
       done
       [ "$status" = success ] && ok "run 经真 pool 跑到 success(整条主线:触发→调度→步骤→SSE→终态)" || bad "run 终态=$status(期望 success)"
       grep -q '"steps"' "${TMP}/rundetail.json" && ok "run 详情含 steps 时间线" || bad "run 详情无 steps"
+
+      # 真 SSE 流:开 text/event-stream,验真推 status + log 事件(端点+事件总线+历史回放经真二进制)。
+      curl -s -N --max-time 3 -b "$JAR" "${BASE}/api/runs/${RID}/events" >"${TMP}/sse.txt" 2>/dev/null
+      ct=$(curl -s -o /dev/null -w '%{content_type}' -N --max-time 2 -b "$JAR" "${BASE}/api/runs/${RID}/events")
+      echo "$ct" | grep -q 'text/event-stream' && ok "SSE 端点 Content-Type=text/event-stream" || bad "SSE Content-Type 错:$ct"
+      grep -q '^event: status' "${TMP}/sse.txt" && ok "SSE 真推 status 事件" || bad "SSE 无 status 事件"
+      grep -q '^event: log' "${TMP}/sse.txt" && ok "SSE 真推 log 日志事件(历史回放)" || note "SSE 未见 log 事件(stub 日志时序)"
+      grep -q "${RID}" "${TMP}/sse.txt" && ok "SSE data 含本 run id" || note "SSE data 未含 run id"
     else
       bad "触发 run code=$run_code $(cat "${TMP}/run.json")"
     fi

@@ -104,3 +104,55 @@ export async function deleteChannel(id: string): Promise<void> {
 export async function testChannel(id: string): Promise<ChannelTestResult> {
   return http.post<ChannelTestResult>(`/api/notifications/channels/${id}/test`, {})
 }
+
+/**
+ * Notification Event Routes API — Story 5.2 (FR-20).
+ *
+ * GET    /api/notifications/routes        → { items: NotificationRoute[] }
+ * POST   /api/notifications/routes        → NotificationRoute   (needs CSRF)
+ * DELETE /api/notifications/routes/{id}   → 204                 (needs CSRF)
+ *
+ * Maps events → channels. An event with no enabled route is NOT delivered (FR-20).
+ * An event may map to multiple channels (multiple routes). projectId is reserved
+ * for 5-4 (per-pipeline override) and is always empty this release (global default).
+ */
+
+/** Frozen event enum (run terminal status → event mapping lives server-side). */
+export type NotificationEvent =
+  | 'build_succeeded'
+  | 'build_failed'
+  | 'deploy_succeeded'
+  | 'deploy_failed'
+  | 'rollback'
+  | 'health_check_failed'
+
+/** GET response item — an event→channel mapping. */
+export interface NotificationRoute {
+  id: string
+  /** Reserved for 5-4 per-pipeline override; empty = global default this release. */
+  projectId?: string
+  event: NotificationEvent
+  channelId: string
+  enabled: boolean
+  createdAt: string
+}
+
+/** Create body. enabled defaults to true server-side when omitted. */
+export interface CreateRouteInput {
+  event: NotificationEvent
+  channelId: string
+  enabled?: boolean
+}
+
+export async function listRoutes(): Promise<NotificationRoute[]> {
+  const res = await http.get<{ items: NotificationRoute[] }>('/api/notifications/routes')
+  return res.items ?? []
+}
+
+export async function createRoute(input: CreateRouteInput): Promise<NotificationRoute> {
+  return http.post<NotificationRoute>('/api/notifications/routes', input)
+}
+
+export async function deleteRoute(id: string): Promise<void> {
+  await http.delete<void>(`/api/notifications/routes/${id}`)
+}

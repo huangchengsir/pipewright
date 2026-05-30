@@ -23,10 +23,11 @@
 *.swp
 
 # sky-aitest（自动注入：工作区/凭证/运行时配置不入库）
+# 注:这些规则全部锚定根目录(前导 /),避免裸目录名误伤源码(如 auth/ 曾误吞 internal/auth)。
 .sky-aitest/
-auth/
+/auth/
 .mcp.json
-seed.spec.ts
-runs/
-results/
-test-results/
+/seed.spec.ts
+/runs/
+/results/
+/test-results/

@@ -41,6 +41,12 @@ type WorkerPool struct {
 	// diagnoseSem 为自动诊断并发上限信号量(有界;NFR-4);满则跳过本次自动诊断。
 	diagnoseSem chan struct{}
 
+	// notifyHook 是 run 终态后的 best-effort 通知钩子(Story 5.2;由 main 经 Option 注入)。
+	// nil 则跳过(未配通知时核心 CI/CD 不依赖,NFR-10)。**run 包不 import notify**:钩子内部
+	// (在 main 装配)负责「run 终态 → event → 构 Payload → Router.RouteEvent」,仿 diagnoseHook 解耦。
+	// 钩子在独立 goroutine + recover 中调用,失败仅记日志,**绝不阻断 run 终态**。
+	notifyHook func(ctx context.Context, runID, finalStatus string)
+
 	// logMasker 是日志行落库/出网前的脱敏器(AC-SEC-04;由 main 经 WithLogMasker 注入)。
 	// nil 则 dbStepSink.Log 不脱敏(纯单测可省);生产装配须注入并登记该 run 相关 secret。
 	logMasker *mask.Masker
@@ -93,6 +99,18 @@ func WithDiagnoseHook(fn func(ctx context.Context, runID string)) PoolOption {
 	return func(p *WorkerPool) {
 		if fn != nil {
 			p.diagnoseHook = fn
+		}
+	}
+}
+
+// WithNotifyHook 注入 run 终态后的 best-effort 通知钩子(Story 5.2;FR-20)。
+// 由 main 装配(钩子内做「run 终态 → event → 构 Payload → notify.Router.RouteEvent」),
+// 使 run 包不 import notify。钩子在独立 goroutine 中调用、自带 recover:失败仅记日志,
+// 绝不阻断 run 终态(未配路由的事件不发送由 Router 内部保证)。fn 为 nil 时不注入。
+func WithNotifyHook(fn func(ctx context.Context, runID, finalStatus string)) PoolOption {
+	return func(p *WorkerPool) {
+		if fn != nil {
+			p.notifyHook = fn
 		}
 	}
 }
@@ -259,6 +277,12 @@ func (p *WorkerPool) execute(runID string) {
 	if final == StatusFailed && p.diagnoseHook != nil {
 		p.runDiagnoseHook(runID)
 	}
+
+	// run 落任意终态后触发 best-effort 通知(Story 5.2;已注入钩子时)。绝不阻断 run 终态:
+	// 在独立 goroutine + recover 中调用,钩子失败仅记日志。未配路由的事件由 Router 内部保证不发送。
+	if p.notifyHook != nil {
+		p.runNotifyHook(runID, final)
+	}
 }
 
 // runDiagnoseHook 在独立 goroutine 中调用注入的诊断钩子(纳入 WaitGroup 以便 Stop 等待),
@@ -284,6 +308,24 @@ func (p *WorkerPool) runDiagnoseHook(runID string) {
 			}
 		}()
 		p.diagnoseHook(p.ctx, runID)
+	}()
+}
+
+// runNotifyHook 在独立 goroutine 中调用注入的通知钩子(纳入 WaitGroup 以便 Stop 等待),
+// 自带 recover:钩子 panic/失败绝不连累 worker 或 run 终态。钩子内部自带超时(在 main 装配)。
+//
+// 通知本身经 Router 已是 best-effort(单渠道失败续发、未配路由不发);此处再套独立 goroutine +
+// recover,确保「构 Payload / 调 RouteEvent」任何环节出错都不冒泡阻断 run 终态(NFR-10)。
+func (p *WorkerPool) runNotifyHook(runID, finalStatus string) {
+	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("[run] notify hook recovered from panic on run %s: %v", runID, rec)
+			}
+		}()
+		p.notifyHook(p.ctx, runID, finalStatus)
 	}()
 }
 

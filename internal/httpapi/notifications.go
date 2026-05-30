@@ -73,6 +73,12 @@ func toChannelDTO(c *notify.Channel) channelDTO {
 // writeNotifyError 把领域错误映射为契约错误码/状态码;绝不回显敏感字段明文/密文。
 func writeNotifyError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, notify.ErrRouteNotFound):
+		writeError(w, http.StatusNotFound, "route_not_found", "通知路由不存在")
+	case errors.Is(err, notify.ErrInvalidEvent):
+		writeError(w, http.StatusUnprocessableEntity, "invalid_event", "事件类型非法:只能为 build_succeeded、build_failed、deploy_succeeded、deploy_failed、rollback 或 health_check_failed")
+	case errors.Is(err, notify.ErrRouteChannelNotFound):
+		writeError(w, http.StatusUnprocessableEntity, "route_channel_not_found", "路由引用的通知渠道不存在")
 	case errors.Is(err, notify.ErrNotFound):
 		writeError(w, http.StatusNotFound, "channel_not_found", "通知渠道不存在")
 	case errors.Is(err, notify.ErrInvalidType):
@@ -287,4 +293,103 @@ func configFromRequest(req channelRequest) (notify.Config, string) {
 		secret = *c.Password
 	}
 	return cfg, secret
+}
+
+// ---- 通知事件路由 DTO + handler(Story 5.2;FR-20;camelCase) ----
+
+// routeDTO 是事件路由对外响应体(冻结契约)。projectId 本期恒空(全局默认),5-4 填项目维度。
+type routeDTO struct {
+	ID        string `json:"id"`
+	ProjectID string `json:"projectId,omitempty"`
+	Event     string `json:"event"`
+	ChannelID string `json:"channelId"`
+	Enabled   bool   `json:"enabled"`
+	CreatedAt string `json:"createdAt"`
+}
+
+// toRouteDTO 把领域 Route 转契约 DTO。
+func toRouteDTO(r *notify.Route) routeDTO {
+	return routeDTO{
+		ID:        r.ID,
+		ProjectID: r.ProjectID,
+		Event:     r.Event,
+		ChannelID: r.ChannelID,
+		Enabled:   r.Enabled,
+		CreatedAt: r.CreatedAt.UTC().Format(time.RFC3339),
+	}
+}
+
+// routeRequest 是创建路由的请求体(camelCase)。enabled 省略默认启用。
+type routeRequest struct {
+	Event     *string `json:"event"`
+	ChannelID *string `json:"channelId"`
+	Enabled   *bool   `json:"enabled"`
+}
+
+// makeListRoutesHandler 返回 GET /api/notifications/routes handler。响应 { items: [...] }。
+func makeListRoutesHandler(svc notify.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "通知服务未初始化")
+			return
+		}
+		routes, err := svc.ListRoutes(r.Context())
+		if err != nil {
+			writeNotifyError(w, err)
+			return
+		}
+		items := make([]routeDTO, 0, len(routes))
+		for i := range routes {
+			items = append(items, toRouteDTO(&routes[i]))
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	}
+}
+
+// makeCreateRouteHandler 返回 POST /api/notifications/routes handler(认证 + CSRF)。
+// 事件枚举非法 → 422 invalid_event;渠道不存在 → 422 route_channel_not_found。
+func makeCreateRouteHandler(svc notify.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "通知服务未初始化")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
+		var req routeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
+			return
+		}
+		in := notify.CreateRouteInput{Enabled: true} // 默认启用
+		if req.Event != nil {
+			in.Event = *req.Event
+		}
+		if req.ChannelID != nil {
+			in.ChannelID = *req.ChannelID
+		}
+		if req.Enabled != nil {
+			in.Enabled = *req.Enabled
+		}
+		route, err := svc.CreateRoute(r.Context(), in)
+		if err != nil {
+			writeNotifyError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, toRouteDTO(route))
+	}
+}
+
+// makeDeleteRouteHandler 返回 DELETE /api/notifications/routes/{id} handler(认证 + CSRF)。
+func makeDeleteRouteHandler(svc notify.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "通知服务未初始化")
+			return
+		}
+		if err := svc.DeleteRoute(r.Context(), chi.URLParam(r, "id")); err != nil {
+			writeNotifyError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
 }

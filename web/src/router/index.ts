@@ -5,6 +5,8 @@ import { useSessionStore } from '../stores/session'
 const Login       = () => import('../views/Login.vue')
 const AppShell    = () => import('../layouts/AppShell.vue')
 const Overview    = () => import('../views/Overview.vue')
+// Story 1-7: first-run onboarding guide
+const Onboarding  = () => import('../views/Onboarding.vue')
 const Projects    = () => import('../views/Projects.vue')
 const Runs        = () => import('../views/Runs.vue')
 const Servers     = () => import('../views/Servers.vue')
@@ -46,6 +48,8 @@ const router = createRouter({
       meta: { requiresAuth: true },
       children: [
         { path: '', name: 'overview', component: Overview },
+        // Story 1-7: first-run onboarding guide (inside shell, auth-required)
+        { path: 'onboarding', name: 'onboarding', component: Onboarding },
         { path: 'projects', name: 'projects', component: Projects },
         // Story 2-2: 4-tab pipeline editor (primary config entry point)
         { path: 'projects/:id/pipeline', name: 'project-pipeline', component: ProjectPipeline },

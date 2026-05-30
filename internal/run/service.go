@@ -132,6 +132,15 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 		return nil, err
 	}
 
+	// 分支留空 → 取项目默认分支(手动触发可不填:项目已知默认分支,系统自动解析)。
+	if strings.TrimSpace(trigger.Branch) == "" {
+		var defaultBranch string
+		if qerr := s.db.QueryRowContext(ctx,
+			`SELECT default_branch FROM projects WHERE id = ?`, projectID).Scan(&defaultBranch); qerr == nil {
+			trigger.Branch = strings.TrimSpace(defaultBranch)
+		}
+	}
+
 	tt := trigger.Type
 	if tt != TriggerWebhook && tt != TriggerManual {
 		tt = TriggerManual

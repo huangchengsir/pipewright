@@ -16,14 +16,14 @@ describe('theme store', () => {
     vi.restoreAllMocks()
   })
 
-  it('defaults to dark when nothing is stored', () => {
+  it('defaults to light when nothing is stored', () => {
     const store = useThemeStore()
-    expect(store.current).toBe('dark')
+    expect(store.current).toBe('light')
   })
 
   it('applies the theme to <html data-theme> on init', () => {
     useThemeStore()
-    expect(document.documentElement.dataset.theme).toBe('dark')
+    expect(document.documentElement.dataset.theme).toBe('light')
   })
 
   it('reads a previously stored light theme', () => {
@@ -36,21 +36,21 @@ describe('theme store', () => {
   it('ignores a corrupt stored value and falls back to default', () => {
     localStorage.setItem(KEY, 'rainbow')
     const store = useThemeStore()
-    expect(store.current).toBe('dark')
+    expect(store.current).toBe('light')
   })
 
-  it('toggle flips dark <-> light and persists + applies to DOM', async () => {
+  it('toggle flips light <-> dark and persists + applies to DOM', async () => {
     const store = useThemeStore()
-    store.toggle()
-    expect(store.current).toBe('light')
-    await nextTick()
-    expect(localStorage.getItem(KEY)).toBe('light')
-    expect(document.documentElement.dataset.theme).toBe('light')
-
     store.toggle()
     expect(store.current).toBe('dark')
     await nextTick()
     expect(localStorage.getItem(KEY)).toBe('dark')
+    expect(document.documentElement.dataset.theme).toBe('dark')
+
+    store.toggle()
+    expect(store.current).toBe('light')
+    await nextTick()
+    expect(localStorage.getItem(KEY)).toBe('light')
   })
 
   it('degrades gracefully when localStorage.getItem throws (private mode)', () => {
@@ -58,6 +58,6 @@ describe('theme store', () => {
       throw new Error('SecurityError')
     })
     const store = useThemeStore()
-    expect(store.current).toBe('dark') // fell back, did not crash
+    expect(store.current).toBe('light') // fell back, did not crash
   })
 })

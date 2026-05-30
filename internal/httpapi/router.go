@@ -327,6 +327,12 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Put("/servers/{id}", makeUpdateServerHandler(sv))
 		ar.Delete("/servers/{id}", makeDeleteServerHandler(sv))
 		ar.Post("/servers/{id}/test", makeTestServerHandler(sv))
+		// 服务日志查看(Story 6.2;FR-16,经 SSH 取目标服务器日志)。复用 sv(4-1 装配,无新服务)。
+		// 均为 GET 只读 → 过 auth、豁免 CSRF。source/target 严格白名单校验(AC-SEC-02);
+		// SSH/命令失败人读不 500;实时 /logs/stream 为 SSE,客户端断开即关 SSH session。
+		// 比 /servers/{id} 多一段,不会被吞。
+		ar.Get("/servers/{id}/logs", makeServerLogsHandler(sv))
+		ar.Get("/servers/{id}/logs/stream", makeServerLogsStreamHandler(sv))
 		// 通知渠道(Story 5.1;FR-19)。nf 为 nil 时 handler 返回 503。
 		// GET(列表/详情)过 auth;POST/PUT/DELETE/test 为写方法,过 auth + CSRF。
 		// 敏感字段(SMTP 密码)加密入库、响应仅 hasPassword。test 须在 {id} 路由内单独注册。

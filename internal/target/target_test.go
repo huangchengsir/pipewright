@@ -3,6 +3,7 @@ package target
 import (
 	"context"
 	"database/sql"
+	"io"
 	"net"
 	"os"
 	"os/user"
@@ -48,11 +49,13 @@ func newSSHCred(t *testing.T, v vault.Vault, secret string) string {
 
 // capturingDialer 记录收到的 addr/cfg/cmd,并返回可编程结果/错误。
 type capturingDialer struct {
-	gotAddr string
-	gotCfg  SSHConfig
-	gotCmd  []string
-	res     *ExecResult
-	err     error
+	gotAddr   string
+	gotCfg    SSHConfig
+	gotCmd    []string
+	res       *ExecResult
+	err       error
+	streamOut string // RunStream 返回的流内容
+	streamErr error  // RunStream 返回的错误
 }
 
 func (d *capturingDialer) Run(_ context.Context, addr string, cfg SSHConfig, cmd []string) (*ExecResult, error) {
@@ -60,6 +63,16 @@ func (d *capturingDialer) Run(_ context.Context, addr string, cfg SSHConfig, cmd
 	d.gotCfg = cfg
 	d.gotCmd = append([]string(nil), cmd...)
 	return d.res, d.err
+}
+
+func (d *capturingDialer) RunStream(_ context.Context, addr string, cfg SSHConfig, cmd []string) (io.ReadCloser, error) {
+	d.gotAddr = addr
+	d.gotCfg = cfg
+	d.gotCmd = append([]string(nil), cmd...)
+	if d.streamErr != nil {
+		return nil, d.streamErr
+	}
+	return io.NopCloser(strings.NewReader(d.streamOut)), nil
 }
 
 func TestCRUD(t *testing.T) {
@@ -328,4 +341,68 @@ func loadLocalPrivateKey() (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// TestExecStream 验证流式执行返回 stdout 流、命令 array 原样传递、PEM 走私钥认证。
+func TestExecStream(t *testing.T) {
+	db := testDB(t)
+	v := vault.New(db, testMasterKey())
+	credID := newSSHCred(t, v, "-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----")
+	dialer := &capturingDialer{streamOut: "a\nb\nc\n"}
+	svc := New(db, v, dialer)
+
+	srv, err := svc.Create(context.Background(), CreateInput{Name: "n", Host: "h", User: "u", CredentialID: credID})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	cmd := []string{"tail", "-n", "10", "-f", "/var/log/a.log"}
+	rc, err := svc.ExecStream(context.Background(), srv.ID, cmd)
+	if err != nil {
+		t.Fatalf("ExecStream: %v", err)
+	}
+	got, _ := io.ReadAll(rc)
+	_ = rc.Close()
+	if string(got) != "a\nb\nc\n" {
+		t.Fatalf("stream = %q, want a\\nb\\nc\\n", got)
+	}
+	if len(dialer.gotCmd) != len(cmd) {
+		t.Fatalf("cmd array 未原样传递: %v", dialer.gotCmd)
+	}
+	if dialer.gotCfg.PrivateKey == "" {
+		t.Fatalf("PEM 凭据应走私钥认证")
+	}
+}
+
+// TestExecStreamErrorNoLeak 验证流式失败错误体不含凭据明文。
+func TestExecStreamErrorNoLeak(t *testing.T) {
+	db := testDB(t)
+	v := vault.New(db, testMasterKey())
+	credID := newSSHCred(t, v, leakMarker)
+	dialer := &capturingDialer{streamErr: ErrUnreachable}
+	svc := New(db, v, dialer)
+
+	srv, err := svc.Create(context.Background(), CreateInput{Name: "n", Host: "h", User: "u", CredentialID: credID})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	_, err = svc.ExecStream(context.Background(), srv.ID, []string{"tail", "-f", "/x"})
+	if err == nil {
+		t.Fatalf("want error")
+	}
+	if strings.Contains(err.Error(), leakMarker) {
+		t.Fatalf("错误体泄漏凭据明文: %v", err)
+	}
+}
+
+// TestExecStreamEmptyCmd 验证空命令被拒。
+func TestExecStreamEmptyCmd(t *testing.T) {
+	db := testDB(t)
+	v := vault.New(db, testMasterKey())
+	credID := newSSHCred(t, v, "pw")
+	svc := New(db, v, &capturingDialer{})
+	srv, _ := svc.Create(context.Background(), CreateInput{Name: "n", Host: "h", User: "u", CredentialID: credID})
+	if _, err := svc.ExecStream(context.Background(), srv.ID, nil); err == nil {
+		t.Fatalf("空命令应被拒")
+	}
 }

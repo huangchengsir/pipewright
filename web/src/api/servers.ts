@@ -75,3 +75,126 @@ export async function deleteServer(id: string): Promise<void> {
 export async function testServer(id: string): Promise<ServerTestResult> {
   return http.post<ServerTestResult>(`/api/servers/${id}/test`)
 }
+
+// ─── Service logs (Story 6-2, FR-16) ──────────────────────────────────────────
+//
+// GET /api/servers/:id/logs         → ServerLogsResponse  (history; read-only)
+// GET /api/servers/:id/logs/stream  → SSE `logline` (live tail) + `error`
+//
+// AC-SEC-02: source ∈ {journald|file|docker}; the target is strictly validated
+// server-side (file: absolute path, no `..`, no shell metacharacters; journald
+// unit `[\w.@-]+`; docker `[\w.-]+`) → 400 invalid_log_target. Commands are built
+// as an argv array and never assembled into a shell string. SSH/command failures
+// return 200 + a human `error` field instead of 500 — never the secret.
+
+/** Log source kind. */
+export type LogSource = 'journald' | 'file' | 'docker'
+
+/** One log line. `ts` is always null in this contract (no per-line timestamp). */
+export interface ServerLogLine {
+  text: string
+  ts: string | null
+}
+
+export interface ServerLogsResponse {
+  serverId: string
+  source: LogSource
+  target: string
+  lines: ServerLogLine[]
+  truncated: boolean
+  /** Human-readable error when SSH/command failed; absent on success. */
+  error?: string
+}
+
+export interface GetServerLogsParams {
+  source: LogSource
+  target: string
+  lines?: number
+}
+
+/** Fetch the most recent N lines of a log (history; one-shot). */
+export async function getServerLogs(
+  id: string,
+  params: GetServerLogsParams,
+): Promise<ServerLogsResponse> {
+  const qs = new URLSearchParams({ source: params.source, target: params.target })
+  if (params.lines != null) qs.set('lines', String(params.lines))
+  return http.get<ServerLogsResponse>(`/api/servers/${id}/logs?${qs.toString()}`)
+}
+
+export interface ServerLogStreamHandlers {
+  /** A new live log line arrived. */
+  onLine: (line: string) => void
+  /** Backend signalled a human-readable stream error (SSH/command failure). */
+  onError?: (message: string) => void
+  /** EventSource transport error (connection dropped). */
+  onTransportError?: (err: Event) => void
+}
+
+/**
+ * Subscribe to a live `tail -f` style log stream over SSE.
+ * Returns a cleanup function; calling it closes the EventSource, which makes the
+ * backend tear down the SSH session (no leak). Same-origin EventSource carries
+ * the session cookie automatically.
+ */
+export function subscribeServerLogs(
+  id: string,
+  params: GetServerLogsParams,
+  handlers: ServerLogStreamHandlers,
+): () => void {
+  const qs = new URLSearchParams({ source: params.source, target: params.target })
+  if (params.lines != null) qs.set('lines', String(params.lines))
+  const url = `/api/servers/${id}/logs/stream?${qs.toString()}`
+
+  let es: EventSource | null = null
+  let closed = false
+
+  function cleanup(): void {
+    closed = true
+    if (es) {
+      es.close()
+      es = null
+    }
+  }
+
+  try {
+    es = new EventSource(url)
+
+    es.addEventListener('logline', (ev: MessageEvent) => {
+      if (closed) return
+      try {
+        const data = JSON.parse(ev.data) as { text: string }
+        handlers.onLine(data.text)
+      } catch {
+        // Malformed JSON — ignore.
+      }
+    })
+
+    es.addEventListener('error', (ev: MessageEvent) => {
+      // Note: this fires for the backend-sent `error` event (named), which
+      // carries JSON data. The transport `onerror` (below) has no `.data`.
+      if (closed) return
+      const data = (ev as MessageEvent).data
+      if (typeof data === 'string' && data.length > 0) {
+        try {
+          const parsed = JSON.parse(data) as { error: string }
+          handlers.onError?.(parsed.error)
+          return
+        } catch {
+          // fall through to transport-error handling
+        }
+      }
+    })
+
+    es.onerror = (err) => {
+      if (closed) return
+      handlers.onTransportError?.(err)
+      // EventSource auto-reconnects; we leave it to retry unless caller cleans up.
+    }
+  } catch {
+    // EventSource unsupported / invalid URL — surface as transport error once.
+    handlers.onTransportError?.(new Event('error'))
+  }
+
+  return cleanup
+}

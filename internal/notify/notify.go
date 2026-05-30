@@ -162,6 +162,9 @@ type Service interface {
 
 	// RouteService 嵌入事件路由 CRUD + 引擎(Story 5.2;FR-20)。
 	RouteService
+
+	// TemplateService 嵌入通知模板 CRUD + 渲染(Story 5.3;FR-21)。
+	TemplateService
 }
 
 // service 是 store + vault + 注入 http.Client + 注入 emailSender 支撑的 Service 实现。

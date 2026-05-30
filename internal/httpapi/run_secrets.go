@@ -85,6 +85,14 @@ func (s *RunSecretSource) registerProjectSecrets(ctx context.Context, m *mask.Ma
 				}
 				reveal(e.ImageRegistry.CredentialID)
 			}
+			// ③ 自定义脚本步骤(Epic 8)的 secret env 引用。
+			for _, step := range st.Steps {
+				for _, v := range step.Env {
+					if v.Secret {
+						reveal(v.CredentialID)
+					}
+				}
+			}
 		}
 	}
 }

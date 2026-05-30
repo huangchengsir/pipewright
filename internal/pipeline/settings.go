@@ -56,6 +56,13 @@ const (
 	RegistryCustom    = "custom"
 )
 
+// 自定义脚本步骤类型枚举(Epic 8 · Story 8-1)。本期仅支持 "script"(在隔离容器跑任意命令);
+// 后续可扩(如 "deploy"/"approval"),DTO 形状冻结。
+const (
+	// StepTypeScript 表示「在隔离构建容器内跑一组命令」的脚本步骤(对标 Jenkins sh / 云效自定义命令)。
+	StepTypeScript = "script"
+)
+
 // defaultDockerfilePath 是模型 A 的默认 Dockerfile 路径。
 const defaultDockerfilePath = "Dockerfile"
 
@@ -67,6 +74,8 @@ var (
 	ErrInvalidVar = errors.New("pipeline: invalid variable")
 	// ErrInvalidEnvironment 表示环境定义校验失败(名称空 / 目标服务器 id 空 / 镜像仓库类型非法)。
 	ErrInvalidEnvironment = errors.New("pipeline: invalid environment")
+	// ErrInvalidStep 表示自定义脚本步骤校验失败(名称空 / 类型非法 / script 缺 image 或 commands)。
+	ErrInvalidStep = errors.New("pipeline: invalid step")
 	// ErrCredentialNotFound 表示 secret 引用的 credentialId 不存在于保险库。
 	ErrCredentialNotFound = errors.New("pipeline: referenced credential not found")
 	// ErrSettingsVaultUnconfigured 表示保险库未配置但存在 secret 引用,无法校验/掩码。
@@ -124,10 +133,27 @@ type Environment struct {
 	ImageRegistry   ImageRegistry `json:"imageRegistry"`
 }
 
+// PipelineStep 是一条自定义脚本步骤(Epic 8 地基 · Story 8-1)。**冻结 DTO**:前端按此对接。
+//
+// 一条 script 步骤在隔离构建容器(Image)内,以克隆出的源码工作区(挂载到 WorkDir 上下文)
+// 为 cwd 跑 Commands(多行命令合成脚本经 sh -c 执行,绝不在中控机宿主跑)。Env 复用 BuildVar:
+// 非 secret 存明文 Value;secret 只存 CredentialID 引用(明文绝不入库),执行时经 vault.Reveal
+// 即取即注入容器,命令回显/出网/落库前一律脱敏。
+type PipelineStep struct {
+	ID       string     `json:"id"`
+	Name     string     `json:"name"`
+	Type     string     `json:"type"`              // 枚举:本期仅 "script"
+	Image    string     `json:"image"`             // 构建镜像(如 node:20 / golang:1.23),script 必填
+	Commands []string   `json:"commands"`          // 多行命令(顺序执行),script 必填且至少一条非空
+	Env      []BuildVar `json:"env,omitempty"`     // 步骤级环境变量(非 secret 明文 + secret 引用 CredentialID)
+	WorkDir  string     `json:"workDir,omitempty"` // 容器内相对工作目录(相对克隆工作区根;空=工作区根)
+}
+
 // Settings 是构建/部署配置领域模型(冻结 DTO 外层形状)。
 type Settings struct {
 	Build        BuildConfig
 	Environments []Environment
+	Steps        []PipelineStep
 	UpdatedAt    time.Time
 }
 
@@ -135,6 +161,7 @@ type Settings struct {
 type SettingsInput struct {
 	Build        BuildConfig
 	Environments []Environment
+	Steps        []PipelineStep
 }
 
 // SettingsService 定义构建/部署配置领域对外接口。
@@ -189,6 +216,10 @@ func (s *settingsService) Save(ctx context.Context, projectID string, in Setting
 	if err != nil {
 		return nil, err
 	}
+	steps, err := s.normalizeSteps(in.Steps)
+	if err != nil {
+		return nil, err
+	}
 
 	// 持久化前剥离掩码字段(掩码绝不入库;明文 secret 从不存在于此结构)。
 	buildJSON, err := json.Marshal(toStoredBuild(build))
@@ -199,13 +230,17 @@ func (s *settingsService) Save(ctx context.Context, projectID string, in Setting
 	if err != nil {
 		return nil, fmt.Errorf("pipeline: marshal environments: %w", err)
 	}
+	stepsJSON, err := json.Marshal(toStoredSteps(steps))
+	if err != nil {
+		return nil, fmt.Errorf("pipeline: marshal steps: %w", err)
+	}
 
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 	_, err = s.db.ExecContext(ctx,
 		`UPDATE pipeline_settings
-		 SET build_json = ?, environments_json = ?, updated_at = ?
+		 SET build_json = ?, environments_json = ?, steps_json = ?, updated_at = ?
 		 WHERE project_id = ?`,
-		string(buildJSON), string(envsJSON), nowStr, projectID,
+		string(buildJSON), string(envsJSON), string(stepsJSON), nowStr, projectID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("pipeline: update settings: %w", err)
@@ -218,12 +253,13 @@ func (s *settingsService) load(ctx context.Context, projectID string) (*Settings
 	var (
 		buildJSON  string
 		envsJSON   string
+		stepsJSON  string
 		updatedStr string
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT build_json, environments_json, updated_at
+		`SELECT build_json, environments_json, steps_json, updated_at
 		 FROM pipeline_settings WHERE project_id = ?`, projectID,
-	).Scan(&buildJSON, &envsJSON, &updatedStr)
+	).Scan(&buildJSON, &envsJSON, &stepsJSON, &updatedStr)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, sql.ErrNoRows
@@ -243,13 +279,19 @@ func (s *settingsService) load(ctx context.Context, projectID string) (*Settings
 			return nil, fmt.Errorf("pipeline: parse environments: %w", err)
 		}
 	}
+	var steps []PipelineStep
+	if strings.TrimSpace(stepsJSON) != "" {
+		if err := json.Unmarshal([]byte(stepsJSON), &steps); err != nil {
+			return nil, fmt.Errorf("pipeline: parse steps: %w", err)
+		}
+	}
 
 	updated, err := time.Parse(time.RFC3339, updatedStr)
 	if err != nil {
 		return nil, fmt.Errorf("pipeline: parse updated_at: %w", err)
 	}
 
-	st := &Settings{Build: build, Environments: envs, UpdatedAt: updated}
+	st := &Settings{Build: build, Environments: envs, Steps: steps, UpdatedAt: updated}
 	normalizeSettingsShape(st)
 	// 回算掩码(读取库内引用对应保险库 masked_value;明文 secret 从不入库)。
 	if err := s.applyMasks(ctx, st); err != nil {
@@ -294,7 +336,7 @@ func (s *settingsService) createDefault(ctx context.Context, projectID string) (
 	if lerr != nil {
 		// 极端情况下行被并发删除:退化为内存默认(避免 500)。
 		if errors.Is(lerr, sql.ErrNoRows) {
-			return &Settings{Build: defaultBuild, Environments: []Environment{}, UpdatedAt: now}, nil
+			return &Settings{Build: defaultBuild, Environments: []Environment{}, Steps: []PipelineStep{}, UpdatedAt: now}, nil
 		}
 		return nil, lerr
 	}
@@ -388,6 +430,65 @@ func (s *settingsService) normalizeEnvironments(in []Environment) ([]Environment
 			TargetServerIDs: ids,
 			EnvVars:         envVars,
 			ImageRegistry:   registry,
+		})
+	}
+	return out, nil
+}
+
+// normalizeSteps 校验并规范化自定义脚本步骤列表(Epic 8 · Story 8-1)。
+//   - name 非空(去空白后);id 缺省补 uuid。
+//   - type 缺省 "script";仅支持 "script"(其它 → ErrInvalidStep)。
+//   - script 类型:image 必填(去空白后非空);commands 至少一条非空(逐条 trim,空行剔除)。
+//   - env 复用 normalizeVars(key 非空不重复;secret 经保险库校验存在,只留 credentialId 引用)。
+//   - workDir trim(空=工作区根)。
+func (s *settingsService) normalizeSteps(in []PipelineStep) ([]PipelineStep, error) {
+	out := make([]PipelineStep, 0, len(in))
+	for _, st := range in {
+		name := strings.TrimSpace(st.Name)
+		if name == "" {
+			return nil, fmt.Errorf("%w: step name must not be empty", ErrInvalidStep)
+		}
+		id := strings.TrimSpace(st.ID)
+		if id == "" {
+			id = uuid.NewString()
+		}
+		stepType := strings.TrimSpace(st.Type)
+		if stepType == "" {
+			stepType = StepTypeScript
+		}
+		if stepType != StepTypeScript {
+			return nil, fmt.Errorf("%w: unsupported step type %q", ErrInvalidStep, st.Type)
+		}
+
+		image := strings.TrimSpace(st.Image)
+		if image == "" {
+			return nil, fmt.Errorf("%w: script step %q requires an image", ErrInvalidStep, name)
+		}
+
+		cmds := make([]string, 0, len(st.Commands))
+		for _, c := range st.Commands {
+			c = strings.TrimRight(c, "\r\n")
+			if strings.TrimSpace(c) != "" {
+				cmds = append(cmds, c)
+			}
+		}
+		if len(cmds) == 0 {
+			return nil, fmt.Errorf("%w: script step %q requires at least one command", ErrInvalidStep, name)
+		}
+
+		env, err := s.normalizeVars(st.Env)
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, PipelineStep{
+			ID:       id,
+			Name:     name,
+			Type:     stepType,
+			Image:    image,
+			Commands: cmds,
+			Env:      env,
+			WorkDir:  strings.TrimSpace(st.WorkDir),
 		})
 	}
 	return out, nil
@@ -507,6 +608,17 @@ func (s *settingsService) applyMasks(ctx context.Context, st *Settings) error {
 			st.Environments[ei].ImageRegistry.MaskedCredential = masked
 		}
 	}
+	for si := range st.Steps {
+		for vi := range st.Steps[si].Env {
+			if st.Steps[si].Env[vi].Secret {
+				masked, err := s.maskedFor(ctx, st.Steps[si].Env[vi].CredentialID)
+				if err != nil {
+					return err
+				}
+				st.Steps[si].Env[vi].MaskedValue = masked
+			}
+		}
+	}
 	return nil
 }
 
@@ -568,6 +680,16 @@ type storedEnvironment struct {
 	ImageRegistry   storedRegistry `json:"imageRegistry"`
 }
 
+type storedStep struct {
+	ID       string      `json:"id"`
+	Name     string      `json:"name"`
+	Type     string      `json:"type"`
+	Image    string      `json:"image"`
+	Commands []string    `json:"commands"`
+	Env      []storedVar `json:"env,omitempty"`
+	WorkDir  string      `json:"workDir,omitempty"`
+}
+
 func toStoredVars(in []BuildVar) []storedVar {
 	out := make([]storedVar, 0, len(in))
 	for _, v := range in {
@@ -619,6 +741,27 @@ func toStoredEnvironments(in []Environment) []storedEnvironment {
 	return out
 }
 
+// toStoredSteps 把脚本步骤转持久化形状(剥离掩码;明文 secret 从不存在于此结构)。
+func toStoredSteps(in []PipelineStep) []storedStep {
+	out := make([]storedStep, 0, len(in))
+	for _, st := range in {
+		cmds := st.Commands
+		if cmds == nil {
+			cmds = []string{}
+		}
+		out = append(out, storedStep{
+			ID:       st.ID,
+			Name:     st.Name,
+			Type:     st.Type,
+			Image:    st.Image,
+			Commands: cmds,
+			Env:      toStoredVars(st.Env),
+			WorkDir:  st.WorkDir,
+		})
+	}
+	return out
+}
+
 // normalizeSettingsShape 保证从库回读的切片非 nil(JSON 输出 [] 而非 null)。
 func normalizeSettingsShape(st *Settings) {
 	if st.Build.Vars == nil {
@@ -636,6 +779,17 @@ func normalizeSettingsShape(st *Settings) {
 		}
 		if st.Environments[i].EnvVars == nil {
 			st.Environments[i].EnvVars = []BuildVar{}
+		}
+	}
+	if st.Steps == nil {
+		st.Steps = []PipelineStep{}
+	}
+	for i := range st.Steps {
+		if st.Steps[i].Commands == nil {
+			st.Steps[i].Commands = []string{}
+		}
+		if st.Steps[i].Env == nil {
+			st.Steps[i].Env = []BuildVar{}
 		}
 	}
 }

@@ -131,9 +131,18 @@ func main() {
 	logMasker := mask.NewMasker()
 	logMasker.RegisterSecret(run.StubFailureSecret)
 
+	// 装配通知渠道服务(Story 5.1;FR-19):复用 vault secretbox 加密敏感字段(如 SMTP 密码,密文入库)。
+	// webhook 投递用带超时的注入 HTTP 客户端(~8s);webhook URL 经 SSRF 收口(拒云元数据/链路本地)。
+	// master key 未配置时,涉及敏感字段的保存/读取降级为明确错误(不 panic)。未启用渠道发送时优雅跳过。
+	// 提前装配(先于 pool)以便把通知钩子注入 pool(Story 5.2;FR-20)。
+	notifySvc := notify.New(st.DB, credVault, &http.Client{Timeout: 8 * time.Second})
+
 	pool := run.NewWorkerPool(runSvc,
 		run.WithDiagnoseHook(httpapi.NewDiagnoseHook(runSvc, aiSvc)),
 		run.WithLogMasker(logMasker),
+		// best-effort 通知钩子(Story 5.2;FR-20):run 终态 → event → 构 Payload → Router.RouteEvent。
+		// 未配路由的事件不发送;单渠道失败续发;绝不阻断 run 终态。run 包不 import notify(钩子解耦)。
+		run.WithNotifyHook(httpapi.NewNotifyHook(runSvc, notifySvc)),
 	)
 	pool.Start()
 	log.Printf("[run] worker pool started")
@@ -147,11 +156,6 @@ func main() {
 	// dialer 传 nil → 使用默认 x/crypto/ssh 实现(无宿主依赖,不驻留)。master key 未配置时
 	// Exec/Test 降级为明确错误(不 panic)。
 	targetSvc := target.New(st.DB, credVault, nil)
-
-	// 装配通知渠道服务(Story 5.1;FR-19):复用 vault secretbox 加密敏感字段(如 SMTP 密码,密文入库)。
-	// webhook 投递用带超时的注入 HTTP 客户端(~8s);webhook URL 经 SSRF 收口(拒云元数据/链路本地)。
-	// master key 未配置时,涉及敏感字段的保存/读取降级为明确错误(不 panic)。未启用渠道发送时优雅跳过。
-	notifySvc := notify.New(st.DB, credVault, &http.Client{Timeout: 8 * time.Second})
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

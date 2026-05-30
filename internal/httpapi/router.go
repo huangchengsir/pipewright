@@ -324,6 +324,12 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Delete("/notifications/channels/{id}", makeDeleteChannelHandler(nf))
 		ar.Post("/notifications/channels/{id}/test", makeTestChannelHandler(nf))
 
+		// 通知事件路由(Story 5.2;FR-20)。复用同一 notify.Service。「事件 → 渠道」映射:
+		// GET(列表)过 auth;POST/DELETE 为写方法,过 auth + CSRF。未配置路由的事件不发送。
+		ar.Get("/notifications/routes", makeListRoutesHandler(nf))
+		ar.Post("/notifications/routes", makeCreateRouteHandler(nf))
+		ar.Delete("/notifications/routes/{id}", makeDeleteRouteHandler(nf))
+
 		// 后续 story 在此挂载其他 API 路由。
 	})
 

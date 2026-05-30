@@ -89,3 +89,21 @@ func TestMaskRegistry(t *testing.T) {
 		t.Fatalf("password leaked: %q", got)
 	}
 }
+
+// TestMaskRegistryNoColon 验证无冒号的纯 token registry 凭据(Docker Hub/ACR 访问令牌)
+// 绝不回显整串明文:整串视为敏感,只暴露末 4 位(长串)或全打点(短串)。
+// 回归:曾因 "无冒号 → s + ' ••••'" 把整个明文 token 写进 masked_value(落库+UI 泄漏)。
+func TestMaskRegistryNoColon(t *testing.T) {
+	const tok = "REGSECRET_plain_zzz" // 纯 token,无 user:pass 分隔
+	got := mask(TypeRegistry, tok)
+	if strings.Contains(got, tok) || strings.Contains(got, "REGSECRET_plain") {
+		t.Fatalf("plaintext token leaked in mask: %q", got)
+	}
+	if !strings.HasPrefix(got, maskDots) {
+		t.Fatalf("expected dotted mask, got %q", got)
+	}
+	// 短 token 全打点,不暴露任何尾部。
+	if short := mask(TypeRegistry, "shorttok"); short != maskDots {
+		t.Fatalf("short token should be fully masked, got %q", short)
+	}
+}

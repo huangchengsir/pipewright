@@ -74,14 +74,20 @@ func maskSSHKey(secret string) string {
 	return algo + maskDots + tail
 }
 
-// maskRegistry 暴露用户名,掩码密码。secret 约定为 "username:password" 或仅 "username"。
+// maskRegistry 掩码镜像仓库凭据。
+//   - "username:password" 形式:暴露用户名(非密钥),掩码密码 → "alice ••••"。
+//   - 无冒号(纯 token / 仅密码,如 Docker Hub / ACR 访问令牌):**整串视为敏感**,
+//     按长度门槛只暴露末 4 位,短于阈值全打点。绝不回显整串明文(AC-SEC-01/06)。
 func maskRegistry(secret string) string {
 	s := strings.TrimSpace(secret)
 	if i := strings.Index(s, ":"); i >= 0 {
 		user := s[:i]
 		return user + " " + maskDots
 	}
-	return s + " " + maskDots
+	if len([]rune(s)) < maskMinLen {
+		return maskDots
+	}
+	return maskDots + lastN(s, 4)
 }
 
 // lastN 返回 s 末尾 n 个字符(按 rune 安全);不足 n 个则返回全部。

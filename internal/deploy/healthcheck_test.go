@@ -34,10 +34,22 @@ func TestHealthCheckCommandSuccess(t *testing.T) {
 	if !strings.Contains(res[0].Message, "健康检查通过") {
 		t.Fatalf("message 应含「健康检查通过」: %q", res[0].Message)
 	}
-	// 最后一条 Exec 应为健康探测命令(array 化的 ["true"])。
-	last := tgt.calls[len(tgt.calls)-1]
-	if len(last) != 1 || last[0] != "true" {
-		t.Fatalf("末条命令应为健康探测 [\"true\"], got %v", last)
+	// 健康探测命令(array 化的 ["true"])应出现在调用序列中,且在 current 软链切换之后
+	// (dist 走 release 模式;探测后可能再跟 keepReleases 清理,故不强求是末条)。
+	probeIdx, lnIdx := -1, -1
+	for i, c := range tgt.calls {
+		if len(c) == 1 && c[0] == "true" {
+			probeIdx = i
+		}
+		if len(c) > 0 && c[0] == "ln" && lnIdx < 0 {
+			lnIdx = i
+		}
+	}
+	if probeIdx < 0 {
+		t.Fatalf("应含健康探测命令 [\"true\"], got %v", tgt.calls)
+	}
+	if lnIdx < 0 || probeIdx < lnIdx {
+		t.Fatalf("健康探测应在 current 切换之后跑: lnIdx=%d probeIdx=%d", lnIdx, probeIdx)
 	}
 }
 

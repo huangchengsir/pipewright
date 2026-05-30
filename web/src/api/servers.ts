@@ -311,3 +311,112 @@ export async function serviceAction(
 ): Promise<ServiceActionResult> {
   return http.post<ServiceActionResult>(`/api/servers/${id}/service/action`, input)
 }
+
+// ─── Container interactive terminal (Story 6-4, FR-18) ───────────────────────
+//
+// GET /api/servers/:id/containers/:containerId/terminal  → WebSocket upgrade
+//
+// Per the architecture rule, **WebSocket is used ONLY for the interactive
+// container terminal**; every other realtime stream uses SSE. The WS handshake
+// is a GET that passes through the same session-cookie auth as the rest of /api
+// (not logged in → 401, no upgrade); CSRF is exempt for GET, so the server does
+// a same-origin (Origin) check instead to prevent cross-site WS hijacking.
+//
+// AC-SEC-02: the command is `docker exec -it <containerId> <shell>`. The
+// containerId is strictly validated server-side (first char `[\w]`, never `-`,
+// so it can't be parsed as a flag; no shell metacharacters: `^[\w][\w.-]*$`) and
+// the shell is restricted to an enum whitelist. The command is built as an argv
+// array and never assembled into a shell string — no injection surface. The SSH
+// credential is taken from the vault, used in-process, and never enters a WS
+// frame or a log. Opening a terminal is audited (append-only; detail scrubbed).
+
+/** Shells the backend allows entering a container with. */
+export type TerminalShell =
+  | '/bin/sh'
+  | '/bin/bash'
+  | '/bin/ash'
+  | '/bin/zsh'
+  | 'sh'
+  | 'bash'
+
+export interface TerminalHandlers {
+  /** A chunk of terminal output (stdout+stderr merged) arrived from the container. */
+  onData: (chunk: Uint8Array) => void
+  /** The socket opened and the remote PTY is live. */
+  onOpen?: () => void
+  /** The socket closed (remote session ended or transport dropped). `reason` is human-readable. */
+  onClose?: (reason: string) => void
+}
+
+/** A live container-terminal connection. */
+export interface TerminalConnection {
+  /** Send raw keystrokes / input bytes to the container stdin. */
+  send: (data: string) => void
+  /** Notify the backend of a new terminal size so it issues an SSH WindowChange. */
+  resize: (cols: number, rows: number) => void
+  /** Close the socket; the backend tears down the SSH PTY (no leak). */
+  close: () => void
+}
+
+/**
+ * Open an interactive terminal into a container on a registered server.
+ *
+ * Same-origin WebSocket carries the session cookie automatically. `shell`
+ * defaults server-side to `/bin/sh` when omitted. Returns a connection handle
+ * for input / resize / close. Output is delivered as binary chunks via
+ * `handlers.onData`.
+ */
+export function openContainerTerminal(
+  serverId: string,
+  containerId: string,
+  handlers: TerminalHandlers,
+  shell?: TerminalShell,
+): TerminalConnection {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const qs = shell ? `?shell=${encodeURIComponent(shell)}` : ''
+  const url = `${proto}//${location.host}/api/servers/${serverId}/containers/${encodeURIComponent(
+    containerId,
+  )}/terminal${qs}`
+
+  const ws = new WebSocket(url)
+  ws.binaryType = 'arraybuffer'
+  let closed = false
+
+  ws.onopen = () => {
+    handlers.onOpen?.()
+  }
+  ws.onmessage = (ev: MessageEvent) => {
+    if (ev.data instanceof ArrayBuffer) {
+      handlers.onData(new Uint8Array(ev.data))
+    } else if (typeof ev.data === 'string') {
+      handlers.onData(new TextEncoder().encode(ev.data))
+    }
+  }
+  ws.onclose = (ev: CloseEvent) => {
+    if (closed) return
+    closed = true
+    handlers.onClose?.(ev.reason || '终端会话已结束')
+  }
+  ws.onerror = () => {
+    // The browser fires a generic error before close; defer the human message to onclose.
+  }
+
+  return {
+    send(data: string): void {
+      if (ws.readyState === WebSocket.OPEN) ws.send(data)
+    },
+    resize(cols: number, rows: number): void {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'resize', cols, rows }))
+      }
+    },
+    close(): void {
+      closed = true
+      try {
+        ws.close()
+      } catch {
+        // already closing/closed
+      }
+    },
+  }
+}

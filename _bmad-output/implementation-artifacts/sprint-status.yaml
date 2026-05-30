@@ -51,9 +51,9 @@ development_status:
   1-1-project-scaffold: done
   1-2-admin-auth-login: done
   1-3-credential-vault: done
-  1-4-audit-and-secret-masking: backlog
+  1-4-audit-and-secret-masking: review
   1-5-app-shell-theming: done
-  1-6-component-state-library: backlog
+  1-6-component-state-library: review
   1-7-account-and-onboarding: backlog
   epic-1-retrospective: optional
 

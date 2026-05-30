@@ -10,11 +10,28 @@
   RunDetail 成功态据 run.targets 渲染;不扰终端(3-6)/诊断(7-2)/产物(3-4)slot。
 -->
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { DeployTarget, TargetStatus } from '../../api/runs'
 
-defineProps<{
-  targets: DeployTarget[]
-}>()
+const props = withDefaults(
+  defineProps<{
+    targets: DeployTarget[]
+    // 重试进行中(由父组件 RunDetail 持有 artifactId/config 后发起 API);禁用按钮 + 转圈。
+    retrying?: boolean
+    // 重试错误(人读);非空时在面板内展示。
+    retryError?: string
+  }>(),
+  { retrying: false, retryError: '' },
+)
+
+// 「仅重试失败目标」事件:本组件纯展示,不自取 artifactId/config;
+// 由父组件(RunDetail,持有上次部署表单)发起 retryFailedDeploy 并刷新 targets。
+const emit = defineEmits<{ retry: [] }>()
+
+// 当前有几台 failed/rolled_back 目标可重试(rolled_back 亦计入:健康失败已回滚,可再试)。
+const failedCount = computed(
+  () => props.targets.filter((t) => t.status === 'failed' || t.status === 'rolled_back').length,
+)
 
 // ─── Status badge config (semantic color per fixed five-word set) ────────────
 
@@ -156,6 +173,33 @@ function counts(targets: DeployTarget[]): { ok: number; bad: number; rolledBack:
         </div>
       </li>
     </ul>
+
+    <!--
+      仅重试失败目标(Story 4-5 / FR-13):有 failed/rolled_back 目标时显「重试失败目标」。
+      点击 → 父组件 RunDetail(持上次部署产物/配置)发起 retryFailedDeploy → 刷新 targets;
+      成功台不动,只重跑失败台。本组件纯展示,只 emit 事件。
+    -->
+    <footer v-if="failedCount > 0" class="dt-foot">
+      <div v-if="retryError" class="dt-retry-error" role="alert">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" />
+        </svg>
+        <span>{{ retryError }}</span>
+      </div>
+      <button
+        class="dt-retry-btn"
+        :disabled="retrying"
+        :aria-busy="retrying"
+        @click="emit('retry')"
+      >
+        <span v-if="retrying" class="dt-retry-spinner" aria-hidden="true" />
+        <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M3 7v6h6" />
+          <path d="M3 13a9 9 0 1 0 3-7.7L3 8" />
+        </svg>
+        {{ retrying ? '重试中…' : `重试失败目标（${failedCount}）` }}
+      </button>
+    </footer>
   </section>
 </template>
 
@@ -341,4 +385,82 @@ function counts(targets: DeployTarget[]): { ok: number; bad: number; rolledBack:
 }
 
 .mono { font-family: var(--font-mono); }
+
+/* ─── retry-failed footer (Story 4-5 / FR-13) ─────────────────────────────── */
+.dt-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-inset);
+}
+
+.dt-retry-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  font-size: 0.78rem;
+  color: var(--color-red);
+  background: var(--color-red-soft);
+  padding: 5px 10px;
+  border-radius: var(--rounded-sm);
+}
+
+.dt-retry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  font-family: var(--font-sans);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-amber);
+  background: var(--color-amber-soft);
+  border: 1px solid var(--color-amber-line);
+  border-radius: var(--rounded-md);
+  cursor: pointer;
+  transition: background-color var(--duration-fast), transform var(--duration-fast), box-shadow var(--duration-fast);
+}
+
+.dt-retry-btn:hover:not(:disabled) {
+  background: var(--color-amber);
+  color: var(--color-card);
+  box-shadow: var(--shadow);
+}
+
+.dt-retry-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.dt-retry-btn:focus-visible {
+  outline: 2px solid var(--color-amber);
+  outline-offset: 2px;
+}
+
+.dt-retry-btn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.dt-retry-spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: var(--rounded-full);
+  animation: dt-spin 0.7s linear infinite;
+}
+
+@keyframes dt-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dt-retry-spinner { animation-duration: 1.6s; }
+  .dt-retry-btn { transition: none; }
+}
 </style>

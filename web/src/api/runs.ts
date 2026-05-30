@@ -357,6 +357,33 @@ export function deployRun(id: string, input: DeployRunInput): Promise<DeployRunR
   return http.post<DeployRunResponse>(`/api/runs/${id}/deploy`, input)
 }
 
+// ─── Retry only failed targets (Story 4-5 frozen contract — FR-13) ────────────
+//
+// POST /api/runs/{id}/deploy/retry  body { artifactId, serverIds?, deployConfig?, healthCheck? }
+// Re-runs the deploy only on the run's current failed/rolled_back targets (commands
+// array-ized server-side; AC-SEC-02). Successful targets are untouched. serverIds
+// omitted ⇒ all currently-failed targets; given ⇒ only those among the failed set.
+// Reuses the prior deploy's artifact + config (carried by the caller — the frontend
+// still holds the last deploy form). Returns the run's FULL latest `targets` array.
+//
+// 200 with the updated `targets`. Per-target execution failure is NOT an HTTP error —
+// that target carries status='failed' + human message (never 500, never secrets).
+// 404 run_not_found; 422 when the run is not failed / has no failed targets to retry.
+
+export interface RetryFailedDeployInput {
+  artifactId: string
+  serverIds?: string[]
+  deployConfig?: Record<string, string>
+  healthCheck?: HealthCheckInput
+}
+
+export function retryFailedDeploy(
+  id: string,
+  input: RetryFailedDeployInput,
+): Promise<DeployRunResponse> {
+  return http.post<DeployRunResponse>(`/api/runs/${id}/deploy/retry`, input)
+}
+
 // ─── SSE subscription ────────────────────────────────────────────────────────
 //
 // Listens to GET /api/runs/:id/events (text/event-stream).

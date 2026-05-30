@@ -70,6 +70,10 @@ type Service interface {
 	// status 须为冻结枚举(pending|deploying|success|failed|rolled_back),否则 ErrInvalidTargetStatus;
 	// run 不存在 → ErrNotFound。供 internal/deploy 写;httpapi run-detail 读填 targets slot。
 	SaveDeployTargets(ctx context.Context, runID string, targets []DeployTarget) error
+	// UpsertDeployTargets 逐目标 upsert 一次重试的部分机结果(Story 4.5「仅重试失败目标」)。
+	// 与 SaveDeployTargets(整批删旧重写)不同:按 (run_id, server_id) 只更新/插入给定目标行,
+	// **绝不删整批**,保留本次未重试的成功目标。非法 status → ErrInvalidTargetStatus;run 不存在 → ErrNotFound。
+	UpsertDeployTargets(ctx context.Context, runID string, targets []DeployTarget) error
 	// ListDeployTargets 取某次运行的全部部署目标结果(按 started_at 升序;无部署 → 空切片)。
 	// run 不存在不报错(返回空切片);由 HTTP 层据 run 存在性决定 404。
 	ListDeployTargets(ctx context.Context, runID string) ([]DeployTarget, error)

@@ -148,7 +148,7 @@ func makeManualRunHandler(svc run.Service, aud audit.Recorder) http.HandlerFunc 
 			Detail:     map[string]any{"projectId": id, "branch": branch, "commit": commit},
 			IP:         clientIP(r),
 		})
-		// 刚创建(queued)的运行尚无产物;nil → []。产物在成功路径由 worker emit、详情页读取。
-		writeJSON(w, http.StatusCreated, toRunDetailDTO(rn, nil))
+		// 刚创建(queued)的运行尚无产物/无部署;nil → []/null。产物在成功路径由 worker emit、部署经 deploy 端点。
+		writeJSON(w, http.StatusCreated, toRunDetailDTO(rn, nil, nil))
 	}
 }

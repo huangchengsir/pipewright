@@ -40,7 +40,8 @@ type runDetailDTO struct {
 	DurationMs  *int64      `json:"durationMs"`
 	// artifacts:Story 3.4 填(构建产物契约 / FR-6);成功/有产物时为数组,否则 []。形状冻结。
 	Artifacts []artifactDTO `json:"artifacts"`
-	// targets:Epic 4 填(多机扇出);本期恒 null。形状冻结,不在本期建模。
+	// targets:Epic 4(Story 4.2)填(SSH 部署执行 / FR-10)。部署过 → 数组;否则 null。
+	// 子 DTO 形状冻结(serverId/serverName/status/message/startedAt/finishedAt);4-4/4-5 只置状态/新增,不改形状。
 	Targets *any `json:"targets"`
 	// diagnosis:Epic 7 填(AI 诊断);本期恒 null。形状冻结,不在本期建模。
 	Diagnosis *any `json:"diagnosis"`
@@ -102,7 +103,8 @@ func toTriggerInfo(t run.Trigger) triggerInfo {
 
 // toRunDetailDTO 映射运行到冻结 run-detail DTO。artifacts 填 Story 3.4 的产物 slot
 // (成功/有产物时非空,否则 []);刚创建/进行中的运行传 nil(尚无产物 → [])。
-func toRunDetailDTO(r *run.Run, artifacts []run.Artifact) runDetailDTO {
+// targets 填 Story 4.2 的部署 slot:部署过 → 数组;否则 null(传 nil/空切片 → null)。
+func toRunDetailDTO(r *run.Run, artifacts []run.Artifact, targets []run.DeployTarget) runDetailDTO {
 	steps := make([]stepDTO, 0, len(r.Steps))
 	for i := range r.Steps {
 		st := r.Steps[i]
@@ -122,6 +124,13 @@ func toRunDetailDTO(r *run.Run, artifacts []run.Artifact) runDetailDTO {
 		diagnosis = &v
 	}
 
+	// targets:Story 4.2 填(部署过 → 数组;否则 null)。冻结子 DTO 形状。
+	var targetsSlot *any
+	if len(targets) > 0 {
+		var v any = toTargetDTOs(targets)
+		targetsSlot = &v
+	}
+
 	return runDetailDTO{
 		ID:          r.ID,
 		ProjectID:   r.ProjectID,
@@ -134,7 +143,7 @@ func toRunDetailDTO(r *run.Run, artifacts []run.Artifact) runDetailDTO {
 		FinishedAt:  rfc3339Ptr(r.FinishedAt),
 		DurationMs:  durationMs(r.StartedAt, r.FinishedAt),
 		Artifacts:   toArtifactDTOs(artifacts), // Story 3.4 填(FR-6);无产物 → []
-		Targets:     nil,                       // Epic 4 填;形状冻结
+		Targets:     targetsSlot,               // Story 4.2 填(部署过 → 数组;否则 null);形状冻结
 		Diagnosis:   diagnosis,                 // Story 7.2 填(无诊断 → nil);形状冻结
 	}
 }
@@ -223,7 +232,12 @@ func makeGetRunHandler(svc run.Service) http.HandlerFunc {
 		if aerr != nil {
 			artifacts = nil
 		}
-		writeJSON(w, http.StatusOK, toRunDetailDTO(rn, artifacts))
+		// 填 Story 4.2 部署 slot(部署过 → 数组;否则 null)。读失败不阻断详情(降级为无部署)。
+		targets, terr := svc.ListDeployTargets(r.Context(), id)
+		if terr != nil {
+			targets = nil
+		}
+		writeJSON(w, http.StatusOK, toRunDetailDTO(rn, artifacts, targets))
 	}
 }
 
@@ -240,8 +254,8 @@ func makeCancelRunHandler(svc run.Service) http.HandlerFunc {
 			writeRunError(w, err)
 			return
 		}
-		// 取消返回的是进行中→终态(failed)快照,通常无产物;nil → [](仿成功路径 slot 形状)。
-		writeJSON(w, http.StatusOK, toRunDetailDTO(rn, nil))
+		// 取消返回的是进行中→终态(failed)快照,通常无产物/无部署;nil → []/null(仿成功路径 slot 形状)。
+		writeJSON(w, http.StatusOK, toRunDetailDTO(rn, nil, nil))
 	}
 }
 

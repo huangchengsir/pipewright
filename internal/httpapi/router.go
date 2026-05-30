@@ -378,6 +378,13 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// chi 字面段优先于 {id},/servers/metrics 不会被 /servers/{id} 吞。
 		ar.Get("/servers/metrics", makeAllServerMetricsHandler(sv))
 		ar.Get("/servers/{id}/metrics", makeServerMetricsHandler(sv))
+		// 服务操作 —— 重启/停止/启动(Story 6.3;FR-17,经 SSH 跑 systemctl/docker)。
+		// 复用 sv(4-1 装配)+ aud(1-4 装配),无需新服务。写操作 → 过 auth + CSRF。
+		// type/target/action 严格白名单(AC-SEC-02:首字符非 `-` 防 flag 注入、无 shell 元字符
+		// 防命令注入、action 枚举);命令 array 化经 target.Exec 不拼 shell。非法 → 400
+		// invalid_service_target;SSH/命令失败人读不 500;成功投递后写审计(detail 脱敏)。
+		// 比 /servers/{id} 多两段,不会被吞。
+		ar.Post("/servers/{id}/service/action", makeServiceActionHandler(sv, aud))
 		// 通知渠道(Story 5.1;FR-19)。nf 为 nil 时 handler 返回 503。
 		// GET(列表/详情)过 auth;POST/PUT/DELETE/test 为写方法,过 auth + CSRF。
 		// 敏感字段(SMTP 密码)加密入库、响应仅 hasPassword。test 须在 {id} 路由内单独注册。

@@ -144,6 +144,79 @@ func (s *service) SetDeployTerminal(ctx context.Context, runID, status string) e
 	return nil
 }
 
+// UpsertDeployTargets 逐目标 upsert 一次重试的部分机结果(Story 4.5「仅重试失败目标」)。
+//
+// 与 SaveDeployTargets(整批删旧重写)语义相反:retry 只更新失败/回滚目标对应的行,
+// **绝不删整批**(否则会连带删掉本次未重试的成功目标,破坏「成功机不动」)。按 (run_id, server_id)
+// 匹配既有行:命中 → UPDATE(status/message/started_at/finished_at);未命中 → INSERT 新行。
+//
+// 单事务,全成或全不入(避免半截 targets);非法 status → ErrInvalidTargetStatus;
+// run 不存在 → ErrNotFound(外键失败)。空切片为合法 no-op。
+func (s *service) UpsertDeployTargets(ctx context.Context, runID string, targets []DeployTarget) error {
+	for i := range targets {
+		if !IsValidTargetStatus(targets[i].Status) {
+			return ErrInvalidTargetStatus
+		}
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("run: begin upsert deploy targets tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for i := range targets {
+		t := targets[i]
+		if t.StartedAt.IsZero() {
+			t.StartedAt = time.Now().UTC()
+		}
+		var finished any
+		if t.FinishedAt != nil {
+			finished = t.FinishedAt.UTC().Format(time.RFC3339)
+		}
+
+		// 先按 (run_id, server_id) 尝试更新既有行(逐目标 upsert,不碰其它机)。
+		res, uerr := tx.ExecContext(ctx,
+			`UPDATE deploy_targets
+			   SET server_name = ?, status = ?, message = ?, started_at = ?, finished_at = ?
+			 WHERE run_id = ? AND server_id = ?`,
+			t.ServerName, t.Status, t.Message,
+			t.StartedAt.UTC().Format(time.RFC3339), finished,
+			runID, t.ServerID,
+		)
+		if uerr != nil {
+			return fmt.Errorf("run: update deploy target: %w", uerr)
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			continue
+		}
+
+		// 无既有行:插入(重试目标若历史上未落过结果的兜底)。
+		if t.ID == "" {
+			t.ID = uuid.NewString()
+		}
+		if _, ierr := tx.ExecContext(ctx,
+			`INSERT INTO deploy_targets
+			   (id, run_id, server_id, server_name, status, message, started_at, finished_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			t.ID, runID, t.ServerID, t.ServerName, t.Status, t.Message,
+			t.StartedAt.UTC().Format(time.RFC3339), finished,
+		); ierr != nil {
+			if isForeignKeyErr(ierr) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("run: insert deploy target: %w", ierr)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("run: commit upsert deploy targets: %w", err)
+	}
+	return nil
+}
+
 // ListDeployTargets 取某次运行的全部部署目标结果(按 started_at 升序,rowid 破并列;
 // 无部署 → 空切片)。run 不存在不报错(返回空切片);HTTP 层据 run 存在性决定 404。
 // 参数化 SQL;不全量驻留无关数据。

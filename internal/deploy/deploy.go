@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/huangchengsir/pipewright/internal/run"
@@ -34,6 +35,10 @@ var (
 	ErrServerNotFound = errors.New("deploy: target server not found")
 	// ErrNoServers 表示未指定任何目标服务器。
 	ErrNoServers = errors.New("deploy: no target servers specified")
+	// ErrNoFailedTargets 表示该 run 当前无 failed/rolled_back 目标可重试(retry 专用)。
+	ErrNoFailedTargets = errors.New("deploy: run has no failed targets to retry")
+	// ErrRunNotDeployed 表示该 run 尚未部署过(无 deploy_targets),不可重试。
+	ErrRunNotDeployed = errors.New("deploy: run has not been deployed yet")
 )
 
 // truncateLen 是写入 message 的命令输出最大长度(防超大输出撑爆响应 / 内存)。
@@ -41,6 +46,10 @@ const truncateLen = 800
 
 // execTimeout 是单台部署的执行超时(防一台挂死拖垮整次部署;失败不连累其它机)。
 const execTimeout = 60 * time.Second
+
+// maxParallelDeploys 是多机扇出的有界并发上限(Story 4.5;信号量防同时打爆 N 台 SSH)。
+// 每机独立 goroutine,信号量 cap 4:目标机再多也不会一次性建超过 4 条 SSH 连接。
+const maxParallelDeploys = 4
 
 // DeployInput 是一次部署请求(对齐 POST /api/runs/{id}/deploy 请求体)。
 type DeployInput struct {
@@ -51,6 +60,20 @@ type DeployInput struct {
 	Config map[string]string
 	// HealthCheck 是可选的部署后健康门控(Story 4.3 / FR-12)。
 	// nil 或 type=none → 跳过(向后兼容 4-2:部署命令成功即 success)。
+	HealthCheck *HealthCheck
+}
+
+// RetryInput 是一次「仅重试失败目标」请求(对齐 POST /api/runs/{id}/deploy/retry 请求体)。
+//
+// 无迁移、复用 deploy_targets:retry 不持久化原始部署产物/配置,故 ArtifactID + Config +
+// HealthCheck 由调用方(前端已持有上次部署表单)随请求带回,复用既有 deployOne 链路。
+// ServerIDs 可选:省略 → 重试该 run 当前所有 failed/rolled_back 目标;给定 → 只重试其中指定的
+// (须是已有失败目标;不在失败集合内的忽略)。
+type RetryInput struct {
+	RunID       string
+	ArtifactID  string
+	ServerIDs   []string
+	Config      map[string]string
 	HealthCheck *HealthCheck
 }
 
@@ -72,6 +95,16 @@ type Service interface {
 	// 定位类错误(run 非成功 / 无产物 / 服务器不存在 / 未指定服务器)上抛,供 HTTP 层 422/404。
 	// **执行失败不上抛**:该机 status=failed + 人读 message,整体仍返回结果(整体 200)。
 	Deploy(ctx context.Context, in DeployInput) ([]TargetResult, error)
+
+	// RetryFailed 仅重试该 run 当前 failed/rolled_back 的目标(Story 4.5;FR-13「仅重试失败」)。
+	//
+	// 查 run 既有 deploy_targets → 取失败/回滚目标(可经 ServerIDs 进一步限定)→ 复用产物 + 配置
+	// 对这些机并行重跑 deployOne → **逐目标 upsert**(成功目标不动,只覆盖被重试目标的行)→
+	// 据全量目标重算 run 终态 → 返回该 run 全量最新 targets。
+	//
+	// 定位类错误(run 不存在 / 非失败态 / 无失败目标 / 无产物 / 服务器不存在)上抛,供 HTTP 层 422/404。
+	// 执行失败不上抛:重试目标置 failed + 人读 message,整体仍 200。
+	RetryFailed(ctx context.Context, in RetryInput) ([]TargetResult, error)
 }
 
 // service 是 run + target 支撑的 Service 实现。
@@ -137,11 +170,9 @@ func (s *service) Deploy(ctx context.Context, in DeployInput) ([]TargetResult, e
 		servers = append(servers, srv)
 	}
 
-	// 4) 逐机执行部署命令(顺序;失败不连累其它机。多机并行细节留 4-5)。
-	results := make([]TargetResult, 0, len(servers))
-	for _, srv := range servers {
-		results = append(results, s.deployOne(ctx, srv, *artifact, in.Config, in.HealthCheck))
-	}
+	// 4) **并行扇出**执行部署命令(Story 4.5):每机独立 goroutine + recover,有界信号量(cap 4)
+	// 防同时打爆 N 台;单机 panic/失败不连累其它机;结果按输入顺序独立收集。
+	results := s.deployFanout(ctx, servers, *artifact, in.Config, in.HealthCheck)
 
 	// 5) 持久化每机结果(填 run-detail targets slot)。
 	dts := make([]run.DeployTarget, 0, len(results))
@@ -166,6 +197,162 @@ func (s *service) Deploy(ctx context.Context, in DeployInput) ([]TargetResult, e
 	}
 
 	return results, nil
+}
+
+// RetryFailed 仅重试该 run 当前 failed/rolled_back 的目标(Story 4.5;FR-13)。见 Service 接口注释。
+func (s *service) RetryFailed(ctx context.Context, in RetryInput) ([]TargetResult, error) {
+	// 1) 校验 run 存在 + 处于失败/部分失败态(成功 run 无失败目标可重试)。
+	rn, err := s.runs.Get(ctx, in.RunID)
+	if err != nil {
+		if errors.Is(err, run.ErrNotFound) {
+			return nil, ErrRunNotFound
+		}
+		return nil, err
+	}
+	if rn.Status != run.StatusFailed && rn.Status != run.StatusPartialFailed {
+		// 仅失败/部分失败的部署有「失败目标」可重试;成功/进行中/排队 → 422 人读。
+		return nil, ErrNoFailedTargets
+	}
+
+	// 2) 取该 run 既有部署目标;无 → 未部署过(不可重试)。
+	existing, err := s.runs.ListDeployTargets(ctx, in.RunID)
+	if err != nil {
+		return nil, err
+	}
+	if len(existing) == 0 {
+		return nil, ErrRunNotDeployed
+	}
+
+	// 3) 取失败/回滚目标集合;若请求给定 ServerIDs,取其与失败集合的交集(只重试已有失败目标)。
+	wantSet := map[string]struct{}{}
+	for _, sid := range in.ServerIDs {
+		wantSet[sid] = struct{}{}
+	}
+	retrySIDs := make([]string, 0, len(existing))
+	for i := range existing {
+		t := existing[i]
+		if t.Status != run.TargetFailed && t.Status != run.TargetRolledBack {
+			continue
+		}
+		if len(wantSet) > 0 {
+			if _, ok := wantSet[t.ServerID]; !ok {
+				continue
+			}
+		}
+		retrySIDs = append(retrySIDs, t.ServerID)
+	}
+	if len(retrySIDs) == 0 {
+		return nil, ErrNoFailedTargets
+	}
+
+	// 4) 定位产物(复用上次部署的产物;由请求携带 artifactId,必须属于该 run)。
+	arts, err := s.runs.ListArtifacts(ctx, in.RunID)
+	if err != nil {
+		return nil, err
+	}
+	var artifact *run.Artifact
+	for i := range arts {
+		if arts[i].ID == in.ArtifactID {
+			a := arts[i]
+			artifact = &a
+			break
+		}
+	}
+	if artifact == nil {
+		return nil, ErrArtifactNotFound
+	}
+
+	// 5) 解析待重试服务器(任一不存在 → 422,整次拒绝)。
+	servers := make([]*target.Server, 0, len(retrySIDs))
+	for _, sid := range retrySIDs {
+		srv, gerr := s.targets.Get(ctx, sid)
+		if gerr != nil {
+			if errors.Is(gerr, target.ErrNotFound) {
+				return nil, ErrServerNotFound
+			}
+			return nil, gerr
+		}
+		servers = append(servers, srv)
+	}
+
+	// 6) 对这些机并行重跑 deployOne(复用产物 + 配置)。
+	retried := s.deployFanout(ctx, servers, *artifact, in.Config, in.HealthCheck)
+
+	// 7) **逐目标 upsert**:只更新被重试目标对应行,**保留**本次未重试的成功目标(别用整批删的 SaveDeployTargets)。
+	dts := make([]run.DeployTarget, 0, len(retried))
+	for _, r := range retried {
+		dts = append(dts, run.DeployTarget{
+			RunID:      in.RunID,
+			ServerID:   r.ServerID,
+			ServerName: r.ServerName,
+			Status:     r.Status,
+			Message:    r.Message,
+			StartedAt:  r.StartedAt,
+			FinishedAt: r.FinishedAt,
+		})
+	}
+	if err := s.runs.UpsertDeployTargets(ctx, in.RunID, dts); err != nil {
+		return nil, err
+	}
+
+	// 8) 据**全量**最新目标重算 run 终态(全成功 → success;仍有失败 → partial_failed/failed)。
+	all, err := s.runs.ListDeployTargets(ctx, in.RunID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.runs.SetDeployTerminal(ctx, in.RunID, overallStatusOfTargets(all)); err != nil {
+		return nil, err
+	}
+
+	// 返回该 run 全量最新 targets(经 TargetResult 形状,供 HTTP 层映射;HTTP 层亦会回读权威结果)。
+	out := make([]TargetResult, 0, len(all))
+	for i := range all {
+		t := all[i]
+		out = append(out, TargetResult{
+			ServerID:   t.ServerID,
+			ServerName: t.ServerName,
+			Status:     t.Status,
+			Message:    t.Message,
+			StartedAt:  t.StartedAt,
+			FinishedAt: t.FinishedAt,
+		})
+	}
+	return out, nil
+}
+
+// deployFanout 并行扇出多机部署(Story 4.5):每机独立 goroutine + recover,有界信号量
+// (maxParallelDeploys)限并发 SSH;单机 panic 不连累其它机(recover → 该机 failed 人读)。
+// 结果按 servers 输入顺序回填(稳定可断言),失败台不阻断其它台。
+func (s *service) deployFanout(ctx context.Context, servers []*target.Server, a run.Artifact, cfg map[string]string, hc *HealthCheck) []TargetResult {
+	results := make([]TargetResult, len(servers))
+	sem := make(chan struct{}, maxParallelDeploys)
+	var wg sync.WaitGroup
+
+	for i := range servers {
+		wg.Add(1)
+		go func(idx int, srv *target.Server) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			// 单机 panic 兜底:绝不让一台崩溃带垮整次扇出(goroutine panic 会终止进程)。
+			defer func() {
+				if rec := recover(); rec != nil {
+					finish := time.Now().UTC()
+					results[idx] = TargetResult{
+						ServerID:   srv.ID,
+						ServerName: srv.Name,
+						Status:     run.TargetFailed,
+						Message:    "部署执行异常中断",
+						StartedAt:  finish,
+						FinishedAt: &finish,
+					}
+				}
+			}()
+			results[idx] = s.deployOne(ctx, srv, a, cfg, hc)
+		}(i, servers[i])
+	}
+	wg.Wait()
+	return results
 }
 
 // deployOne 在一台目标机上构造并执行该产物类型的部署命令,返回该机结果。
@@ -249,6 +436,29 @@ func overallStatus(results []TargetResult) string {
 	anySuccess, anyFailed := false, false
 	for _, r := range results {
 		switch r.Status {
+		case run.TargetSuccess:
+			anySuccess = true
+		default:
+			anyFailed = true
+		}
+	}
+	switch {
+	case anyFailed && anySuccess:
+		return run.StatusPartialFailed
+	case anyFailed:
+		return run.StatusFailed
+	default:
+		return run.StatusSuccess
+	}
+}
+
+// overallStatusOfTargets 据**全量持久化目标**聚合 run 终态(retry 后重算用)。
+// 与 overallStatus 同语义,但作用于 run.DeployTarget(rolled_back 计为失败侧:有成功有失败 →
+// partial_failed;全失败/全回滚 → failed;全成功 → success)。
+func overallStatusOfTargets(targets []run.DeployTarget) string {
+	anySuccess, anyFailed := false, false
+	for i := range targets {
+		switch targets[i].Status {
 		case run.TargetSuccess:
 			anySuccess = true
 		default:

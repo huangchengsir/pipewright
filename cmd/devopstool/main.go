@@ -90,12 +90,9 @@ func main() {
 	// 回算掩码。master key 未配置时,涉及 secret 引用的保存降级为明确错误(不 panic)。
 	pipelineSettingsSvc := pipeline.NewSettingsService(st.DB, credVault)
 
-	// 装配运行服务 + 进程内 worker pool(Story 3.1):本期桩 runner 跑占位步骤打通状态机;
-	// 真实构建/部署执行=3-3/4-x 换 Runner 实现。pool 调度多 run 并行、结果独立。
+	// 装配运行服务(Story 3.1):本期桩 runner 跑占位步骤打通状态机;真实构建/部署=3-3/4-x。
+	// worker pool 在 aiSvc 装配后创建(以便注入 best-effort 自动诊断钩子,Story 7.2)。
 	runSvc := run.New(st.DB)
-	pool := run.NewWorkerPool(runSvc)
-	pool.Start()
-	log.Printf("[run] worker pool started")
 
 	// 装配 webhook 接收器(Story 3.2):按 token 定位项目触发配置、解密密钥验签、
 	// 解析 Gitee 投递、按 events+分支映射匹配、去重后经 RunService 创建运行(入 pool 调度)。
@@ -122,6 +119,13 @@ func main() {
 	// 装配仓库分析器(Story 2.5):go-git 浅克隆(内存 storer + memfs,Depth:1)读 manifest
 	// 检测技术栈;严格 SSRF 收口;克隆失败优雅降级(不致命)。无 init 副作用/不驻留。
 	repoAnalyzer := ai.NewRepoAnalyzer()
+
+	// 装配进程内 worker pool(Story 3.1)+ best-effort 自动诊断钩子(Story 7.2)。
+	// 钩子在 run→failed 后「取失败日志→脱敏→ai.Diagnose→保存」,经 Option 注入使 run 包不 import ai。
+	// AI 未配/失败仅降级(status=unavailable),绝不阻断 run 终态(NFR-10)。pool 调度多 run 并行、结果独立。
+	pool := run.NewWorkerPool(runSvc, run.WithDiagnoseHook(httpapi.NewDiagnoseHook(runSvc, aiSvc)))
+	pool.Start()
+	log.Printf("[run] worker pool started")
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

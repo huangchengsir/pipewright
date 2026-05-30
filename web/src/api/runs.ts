@@ -50,6 +50,31 @@ export interface TargetRun {
   rolledBackTo: string | null
 }
 
+// ─── DiagnosisDTO (Story 7-2 frozen contract) ────────────────────────────────
+// status=ready: full diagnosis available; unavailable: graceful fallback;
+// pending: diagnosis in progress.
+
+export interface DiagnosisEvidence {
+  line: number
+  text: string
+  highlight: boolean
+}
+
+export type DiagnosisStatus = 'ready' | 'unavailable' | 'pending'
+export type DiagnosisConfidence = 'high' | 'medium' | 'low'
+
+export interface DiagnosisDTO {
+  status: DiagnosisStatus
+  reason: string              // non-empty when status !== 'ready'
+  hypothesis: string          // AI root-cause hypothesis (ready only)
+  confidence: DiagnosisConfidence
+  alternateCauses: string[]   // populated when confidence='low'
+  fixSuggestions: string[]
+  evidence: DiagnosisEvidence[]
+  generatedAt: string         // RFC3339
+}
+
+/** @deprecated Use DiagnosisDTO — removed in 7-2 */
 export interface Diagnosis {
   rootCause: string
   confidence: number
@@ -70,8 +95,8 @@ export interface RunDetail {
   startedAt: string | null
   finishedAt: string | null
   durationMs: number | null
-  targets: TargetRun[] | null   // Epic 4 fills — slot owner: Story 4.x
-  diagnosis: Diagnosis | null   // Epic 7 fills — slot owner: Story 7.x
+  targets: TargetRun[] | null       // Epic 4 fills — slot owner: Story 4.x
+  diagnosis: DiagnosisDTO | null    // Epic 7 fills — slot owner: Story 7.x (Story 7-2 defines shape)
 }
 
 // ─── Run list item (compact; no steps/targets/diagnosis) ────────────────────
@@ -121,6 +146,18 @@ export function getRun(id: string): Promise<RunDetail> {
 
 export function cancelRun(id: string): Promise<RunDetail> {
   return http.post<RunDetail>(`/api/runs/${id}/cancel`)
+}
+
+// ─── (Re-)diagnose a failed run ───────────────────────────────────────────────
+//
+// POST /api/runs/{id}/diagnose
+// Triggers (or re-triggers) AI diagnosis for the given run.
+// Returns the DiagnosisDTO directly (not a full RunDetail).
+// 422 if the run is not in failed state; 404 if run not found.
+// Any LLM failure yields 200 + status=unavailable — never 500, never secrets.
+
+export function diagnoseRun(id: string): Promise<DiagnosisDTO> {
+  return http.post<DiagnosisDTO>(`/api/runs/${id}/diagnose`)
 }
 
 // ─── Manual trigger ───────────────────────────────────────────────────────────

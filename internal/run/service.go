@@ -32,6 +32,18 @@ type Service interface {
 	List(ctx context.Context, f ListFilter) (*ListResult, error)
 	// Cancel 取消进行中(queued/running)运行:经 context 传播到 Runner;终态 → ErrNotCancelable。
 	Cancel(ctx context.Context, id string) (*Run, error)
+
+	// SetFailureLog 持久化某次运行的失败日志原文(脱敏前)。供 runner 失败路径 / 重试用。
+	// 不存在 → ErrNotFound。
+	SetFailureLog(ctx context.Context, id, log string) error
+	// GetFailureLog 取某次运行的失败日志原文(脱敏前;空串 = 无)。不存在 → ErrNotFound。
+	GetFailureLog(ctx context.Context, id string) (string, error)
+	// SaveDiagnosis 持久化某次运行的 AI 诊断(覆盖既有;d 为 nil 视为清空诊断)。
+	// 诊断须由调用方在出网前脱敏(evidence 取自脱敏后日志);本层只搬运形状,绝无明文 secret 责任下放。
+	// 不存在 → ErrNotFound。
+	SaveDiagnosis(ctx context.Context, id string, d *Diagnosis) error
+	// GetDiagnosis 取某次运行已持久化的诊断(未诊断 → nil, nil)。不存在 → ErrNotFound。
+	GetDiagnosis(ctx context.Context, id string) (*Diagnosis, error)
 }
 
 // service 是 store 支撑的 Service 实现,并持有内存事件总线与正在执行运行的取消句柄。
@@ -133,27 +145,36 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 
 func (s *service) Get(ctx context.Context, id string) (*Run, error) {
 	var (
-		r          Run
-		createdStr string
-		startedStr sql.NullString
-		finishStr  sql.NullString
+		r             Run
+		createdStr    string
+		startedStr    sql.NullString
+		finishStr     sql.NullString
+		failureLog    string
+		diagnosisJSON string
 	)
 	r.ID = id
 	err := s.db.QueryRowContext(ctx,
 		`SELECT pr.project_id, COALESCE(p.name, ''), pr.status,
 		        pr.trigger_type, pr.trigger_branch, pr.trigger_commit, pr.trigger_actor,
-		        pr.created_at, pr.started_at, pr.finished_at
+		        pr.created_at, pr.started_at, pr.finished_at,
+		        pr.failure_log, pr.diagnosis_json
 		 FROM pipeline_runs pr
 		 LEFT JOIN projects p ON p.id = pr.project_id
 		 WHERE pr.id = ?`, id,
 	).Scan(&r.ProjectID, &r.ProjectName, &r.Status,
 		&r.Trigger.Type, &r.Trigger.Branch, &r.Trigger.Commit, &r.Trigger.Actor,
-		&createdStr, &startedStr, &finishStr)
+		&createdStr, &startedStr, &finishStr,
+		&failureLog, &diagnosisJSON)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("run: load run: %w", err)
+	}
+
+	r.FailureLog = failureLog
+	if d, derr := decodeDiagnosis(diagnosisJSON); derr == nil {
+		r.Diagnosis = d
 	}
 
 	if r.CreatedAt, err = time.Parse(time.RFC3339, createdStr); err != nil {
@@ -339,6 +360,66 @@ func (s *service) Cancel(ctx context.Context, id string) (*Run, error) {
 		return nil, err
 	}
 	return s.Get(ctx, id)
+}
+
+// SetFailureLog 持久化某次运行的失败日志原文(脱敏前)。参数化 SQL;不存在 → ErrNotFound。
+func (s *service) SetFailureLog(ctx context.Context, id, logText string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE pipeline_runs SET failure_log = ? WHERE id = ?`, logText, id)
+	if err != nil {
+		return fmt.Errorf("run: set failure log: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// GetFailureLog 取某次运行的失败日志原文(脱敏前;空串 = 无)。不存在 → ErrNotFound。
+func (s *service) GetFailureLog(ctx context.Context, id string) (string, error) {
+	var logText string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT failure_log FROM pipeline_runs WHERE id = ?`, id).Scan(&logText)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return "", fmt.Errorf("run: get failure log: %w", err)
+	}
+	return logText, nil
+}
+
+// SaveDiagnosis 持久化某次运行的 AI 诊断(覆盖既有;d 为 nil 视为清空)。
+// **诊断须由调用方在出网前脱敏**(evidence 取自脱敏后日志);本层只搬运形状落库。
+// 参数化 SQL;不存在 → ErrNotFound。
+func (s *service) SaveDiagnosis(ctx context.Context, id string, d *Diagnosis) error {
+	encoded, err := encodeDiagnosis(d)
+	if err != nil {
+		return fmt.Errorf("run: encode diagnosis: %w", err)
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE pipeline_runs SET diagnosis_json = ? WHERE id = ?`, encoded, id)
+	if err != nil {
+		return fmt.Errorf("run: save diagnosis: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// GetDiagnosis 取某次运行已持久化的诊断(未诊断 → nil, nil)。不存在 → ErrNotFound。
+func (s *service) GetDiagnosis(ctx context.Context, id string) (*Diagnosis, error) {
+	var diagnosisJSON string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT diagnosis_json FROM pipeline_runs WHERE id = ?`, id).Scan(&diagnosisJSON)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("run: get diagnosis: %w", err)
+	}
+	return decodeDiagnosis(diagnosisJSON)
 }
 
 // transition 校验并持久化运行状态转移:CAS 式更新(WHERE status=from),

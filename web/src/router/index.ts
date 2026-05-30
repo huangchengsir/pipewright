@@ -17,6 +17,8 @@ const AnomalyDetection = () => import('../views/AnomalyDetection.vue')
 const Notifications = () => import('../views/Notifications.vue')
 const Settings    = () => import('../views/Settings.vue')
 const SettingsAI  = () => import('../views/settings/SettingsAI.vue')
+// OAuth app config: per-provider Client ID/Secret for one-click "连接" in the vault
+const SettingsOAuth = () => import('../views/settings/SettingsOAuth.vue')
 const SettingsVault = () => import('../views/settings/SettingsVault.vue')
 const SettingsAccount = () => import('../views/settings/SettingsAccount.vue')
 const SettingsSystem = () => import('../views/settings/SettingsSystem.vue')
@@ -84,6 +86,7 @@ const router = createRouter({
           children: [
             { path: '', redirect: { name: 'settings-ai' } },
             { path: 'ai', name: 'settings-ai', component: SettingsAI },
+            { path: 'oauth', name: 'settings-oauth', component: SettingsOAuth },
             { path: 'notifications', name: 'settings-notifications', component: SettingsNotifications },
             { path: 'vault', name: 'settings-vault', component: SettingsVault },
             { path: 'account', name: 'settings-account', component: SettingsAccount },

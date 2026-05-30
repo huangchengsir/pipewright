@@ -160,6 +160,142 @@ func (sshDialer) RunStream(ctx context.Context, addr string, cfg SSHConfig, cmd 
 	return rc, nil
 }
 
+// RunInteractive 建连后请求 PTY、接好 stdin/stdout/stderr,启动 cmd 并返回双向 Session
+// (Story 6.4;FR-18)。底层 client/session 的生命周期绑定到返回的 Session:Close()(或
+// ctx 取消)即关 session + client,释放远端 PTY/进程与 TCP(不泄漏)。
+//
+// AC-SEC-02:cmd 经 quoteArgs 各参数 POSIX 转义后作为单行命令 Start(同 Run/RunStream),
+// 杜绝注入(`docker exec -it <id> <shell>` 各参数被当字面量,绝不被远端 shell 二次解释)。
+func (sshDialer) RunInteractive(ctx context.Context, addr string, cfg SSHConfig, cmd []string) (Session, error) {
+	auth, err := authMethods(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	clientCfg := &ssh.ClientConfig{
+		User:            cfg.User,
+		Auth:            auth,
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // dev-only;生产固定 known_hosts(deferred)
+		Timeout:         resolveTimeout(ctx),
+	}
+
+	d := net.Dialer{Timeout: clientCfg.Timeout}
+	conn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("%w", classifyDialErr(err))
+	}
+
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, clientCfg)
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("%w", classifyHandshakeErr(err))
+	}
+	client := ssh.NewClient(sshConn, chans, reqs)
+
+	session, err := client.NewSession()
+	if err != nil {
+		_ = client.Close()
+		return nil, fmt.Errorf("%w", ErrUnreachable)
+	}
+
+	stdin, err := session.StdinPipe()
+	if err != nil {
+		_ = session.Close()
+		_ = client.Close()
+		return nil, fmt.Errorf("%w", ErrUnreachable)
+	}
+	// stdout + stderr 合流到同一个管道(交互终端里二者本就交织呈现)。
+	pr, pw := io.Pipe()
+	session.Stdout = pw
+	session.Stderr = pw
+
+	// 请求 PTY。xterm + 合理初值;后续 WindowChange 据前端 fit 调整。
+	modes := ssh.TerminalModes{
+		ssh.ECHO:          1,
+		ssh.TTY_OP_ISPEED: 14400,
+		ssh.TTY_OP_OSPEED: 14400,
+	}
+	if err := session.RequestPty("xterm-256color", 24, 80, modes); err != nil {
+		_ = session.Close()
+		_ = client.Close()
+		return nil, fmt.Errorf("%w", ErrUnreachable)
+	}
+
+	if err := session.Start(quoteArgs(cmd)); err != nil {
+		_ = session.Close()
+		_ = client.Close()
+		return nil, fmt.Errorf("%w", ErrUnreachable)
+	}
+
+	is := &interactiveSession{
+		stdin:   stdin,
+		out:     pr,
+		outW:    pw,
+		session: session,
+		client:  client,
+	}
+
+	// 远端进程退出 → 关 pw 让读侧得到 EOF(否则 Read 永久阻塞)。
+	go func() {
+		_ = session.Wait()
+		_ = pw.Close()
+	}()
+
+	// ctx 取消(客户端断开 / 超时)→ 主动收尾,防泄漏挂死。
+	stop := make(chan struct{})
+	is.stop = stop
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = is.Close()
+		case <-stop:
+		}
+	}()
+
+	return is, nil
+}
+
+// interactiveSession 实现 target.Session:把 SSH PTY 会话包成双向 ReadWriteCloser + Resize。
+// Close 幂等(防 ctx 协程与调用方并发关 + 多次关)。
+type interactiveSession struct {
+	stdin   io.WriteCloser
+	out     io.Reader // io.Pipe 读端(stdout+stderr 合流)
+	outW    io.Closer // io.Pipe 写端(Close 时一并关,解阻塞 Wait 协程外的 Read)
+	session *ssh.Session
+	client  *ssh.Client
+	stop    chan struct{}
+	once    sync.Once
+}
+
+func (s *interactiveSession) Read(p []byte) (int, error)  { return s.out.Read(p) }
+func (s *interactiveSession) Write(p []byte) (int, error) { return s.stdin.Write(p) }
+
+// Resize 通知远端 PTY 调整窗口(列 cols × 行 rows)。非法尺寸归一为 1;失败忽略(非致命)。
+func (s *interactiveSession) Resize(cols, rows int) error {
+	if cols <= 0 {
+		cols = 1
+	}
+	if rows <= 0 {
+		rows = 1
+	}
+	return s.session.WindowChange(rows, cols)
+}
+
+func (s *interactiveSession) Close() error {
+	s.once.Do(func() {
+		if s.stop != nil {
+			close(s.stop)
+		}
+		// 先发 SIGKILL 杀远端 shell/容器 exec(否则远端进程驻留);忽略错误。
+		_ = s.session.Signal(ssh.SIGKILL)
+		_ = s.stdin.Close()
+		_ = s.session.Close()
+		_ = s.client.Close()
+		_ = s.outW.Close() // 解阻塞任何在 Read 上等待的读者
+	})
+	return nil
+}
+
 // streamReadCloser 把 SSH session 的 stdout 包成 ReadCloser,Close 时杀远端进程并关 session/client。
 // Close 幂等(防多次关 + ctx 协程与调用方并发关)。
 type streamReadCloser struct {

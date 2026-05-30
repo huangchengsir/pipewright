@@ -40,6 +40,7 @@ const (
 	ActionPasswordChange     = "password_change"
 	ActionSessionRevoke      = "session_revoke"
 	ActionServiceOp          = "service_op"
+	ActionContainerTerminal  = "container_terminal"
 )
 
 // 目标类型枚举(供 TargetType 填值;非强制白名单,便于后续 story 扩展)。

@@ -56,6 +56,9 @@ type capturingDialer struct {
 	err       error
 	streamOut string // RunStream 返回的流内容
 	streamErr error  // RunStream 返回的错误
+
+	interactive    *fakeSession // RunInteractive 返回的会话(nil 时按 streamOut 造一个)
+	interactiveErr error        // RunInteractive 返回的错误
 }
 
 func (d *capturingDialer) Run(_ context.Context, addr string, cfg SSHConfig, cmd []string) (*ExecResult, error) {
@@ -73,6 +76,19 @@ func (d *capturingDialer) RunStream(_ context.Context, addr string, cfg SSHConfi
 		return nil, d.streamErr
 	}
 	return io.NopCloser(strings.NewReader(d.streamOut)), nil
+}
+
+func (d *capturingDialer) RunInteractive(_ context.Context, addr string, cfg SSHConfig, cmd []string) (Session, error) {
+	d.gotAddr = addr
+	d.gotCfg = cfg
+	d.gotCmd = append([]string(nil), cmd...)
+	if d.interactiveErr != nil {
+		return nil, d.interactiveErr
+	}
+	if d.interactive != nil {
+		return d.interactive, nil
+	}
+	return newFakeSession(d.streamOut), nil
 }
 
 func TestCRUD(t *testing.T) {

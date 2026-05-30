@@ -18,6 +18,12 @@ import type { Credential } from '../../api/credentials'
 import { HttpError } from '../../api/http'
 import ServiceLogViewer from '../../components/ops/ServiceLogViewer.vue'
 import ServiceOpsPanel from '../../components/ops/ServiceOpsPanel.vue'
+// Story 6-4: container interactive terminal (FR-18). Heavy (xterm) — dynamic-imported
+// so it stays off the main bundle; only loaded when the terminal modal opens.
+import { defineAsyncComponent } from 'vue'
+const ContainerTerminal = defineAsyncComponent(
+  () => import('../../components/ops/ContainerTerminal.vue'),
+)
 
 // ─── state ──────────────────────────────────────────────────────────────────
 
@@ -95,6 +101,21 @@ function openOpsModal(s: Server): void {
 function closeOpsModal(): void {
   opsModalOpen.value = false
   opsServer.value = null
+}
+
+// ─── container terminal (Story 6-4, FR-18) ───────────────────────────────────
+
+const terminalModalOpen = ref(false)
+const terminalServer = ref<Server | null>(null)
+
+function openTerminalModal(s: Server): void {
+  terminalServer.value = s
+  terminalModalOpen.value = true
+}
+
+function closeTerminalModal(): void {
+  terminalModalOpen.value = false
+  terminalServer.value = null
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -394,6 +415,7 @@ async function handleTest(s: Server): Promise<void> {
               {{ testingId === s.id ? '测试中…' : '测试连接' }}
             </button>
             <button class="btn-ghost" @click="openLogsModal(s)">日志</button>
+            <button class="btn-ghost" @click="openTerminalModal(s)">终端</button>
             <button class="btn-ghost" @click="openOpsModal(s)">服务操作</button>
             <button class="btn-ghost" @click="openEditModal(s)">编辑</button>
             <button class="btn-ghost btn-danger" @click="openDeleteModal(s)">删除</button>
@@ -509,6 +531,32 @@ async function handleTest(s: Server): Promise<void> {
           v-if="opsServer"
           :server-id="opsServer.id"
           :server-name="opsServer.name"
+        />
+      </div>
+    </div>
+
+    <!-- ─── container terminal modal (Story 6-4, FR-18) ───────────────────────── -->
+    <div
+      v-if="terminalModalOpen"
+      class="modal-backdrop"
+      tabindex="-1"
+      @click.self="closeTerminalModal"
+      @keydown.esc="closeTerminalModal"
+    >
+      <div class="modal modal--wide" role="dialog" aria-modal="true" aria-labelledby="server-term-title">
+        <div class="logs-modal-head">
+          <h3 id="server-term-title" class="modal-title">
+            容器终端 · {{ terminalServer?.name }}
+          </h3>
+          <button type="button" class="btn-ghost" aria-label="关闭" @click="closeTerminalModal">关闭</button>
+        </div>
+        <p class="logs-modal-sub mono">
+          {{ terminalServer?.user }}@{{ terminalServer?.host }}:{{ terminalServer?.port }}
+        </p>
+        <ContainerTerminal
+          v-if="terminalServer"
+          :server-id="terminalServer.id"
+          :server-name="terminalServer.name"
         />
       </div>
     </div>

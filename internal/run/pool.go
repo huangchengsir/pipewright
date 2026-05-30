@@ -397,6 +397,18 @@ func (d *dbStepSink) Log(_ context.Context, stream string, stepOrdinal int, line
 	return nil
 }
 
+// EmitArtifact 实现 StepSink.EmitArtifact(Story 3.4 / FR-6):把 runner 报告的构建产物落
+// run_artifacts(经 service.AddArtifact)。RunID 由本 sink 填充(runner 无需关心)。
+// 用后台 ctx 落库以容忍取消场景(成功产物须被持久化)。best-effort:落库失败返回 error 由
+// 调用方(StubRunner)忽略,绝不阻断步骤/运行终态。3-3 真实构建经同一接口喂真实产物、契约不变。
+func (d *dbStepSink) EmitArtifact(_ context.Context, a Artifact) error {
+	a.RunID = d.runID
+	if _, err := d.svc.AddArtifact(context.Background(), a); err != nil {
+		return fmt.Errorf("run: emit artifact: %w", err)
+	}
+	return nil
+}
+
 // reconcile 在 run 落终态后校正所有仍处于非终态(pending/running)的步骤,
 // 避免"run=success/failed 但某 step 永远 running/pending"的不一致(StepDone 失败/runner 漏置)。
 //

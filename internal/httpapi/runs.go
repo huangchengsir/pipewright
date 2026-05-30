@@ -38,6 +38,8 @@ type runDetailDTO struct {
 	StartedAt   *string     `json:"startedAt"`
 	FinishedAt  *string     `json:"finishedAt"`
 	DurationMs  *int64      `json:"durationMs"`
+	// artifacts:Story 3.4 填(构建产物契约 / FR-6);成功/有产物时为数组,否则 []。形状冻结。
+	Artifacts []artifactDTO `json:"artifacts"`
 	// targets:Epic 4 填(多机扇出);本期恒 null。形状冻结,不在本期建模。
 	Targets *any `json:"targets"`
 	// diagnosis:Epic 7 填(AI 诊断);本期恒 null。形状冻结,不在本期建模。
@@ -98,7 +100,9 @@ func toTriggerInfo(t run.Trigger) triggerInfo {
 	return triggerInfo{Type: t.Type, Branch: t.Branch, Commit: t.Commit, Actor: t.Actor}
 }
 
-func toRunDetailDTO(r *run.Run) runDetailDTO {
+// toRunDetailDTO 映射运行到冻结 run-detail DTO。artifacts 填 Story 3.4 的产物 slot
+// (成功/有产物时非空,否则 []);刚创建/进行中的运行传 nil(尚无产物 → [])。
+func toRunDetailDTO(r *run.Run, artifacts []run.Artifact) runDetailDTO {
 	steps := make([]stepDTO, 0, len(r.Steps))
 	for i := range r.Steps {
 		st := r.Steps[i]
@@ -129,8 +133,9 @@ func toRunDetailDTO(r *run.Run) runDetailDTO {
 		StartedAt:   rfc3339Ptr(r.StartedAt),
 		FinishedAt:  rfc3339Ptr(r.FinishedAt),
 		DurationMs:  durationMs(r.StartedAt, r.FinishedAt),
-		Targets:     nil,       // Epic 4 填;形状冻结
-		Diagnosis:   diagnosis, // Story 7.2 填(无诊断 → nil);形状冻结
+		Artifacts:   toArtifactDTOs(artifacts), // Story 3.4 填(FR-6);无产物 → []
+		Targets:     nil,                       // Epic 4 填;形状冻结
+		Diagnosis:   diagnosis,                 // Story 7.2 填(无诊断 → nil);形状冻结
 	}
 }
 
@@ -213,7 +218,12 @@ func makeGetRunHandler(svc run.Service) http.HandlerFunc {
 			writeRunError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, toRunDetailDTO(rn))
+		// 填 Story 3.4 产物 slot(成功/有产物时非空,否则 [])。读失败不阻断详情(降级为空产物)。
+		artifacts, aerr := svc.ListArtifacts(r.Context(), id)
+		if aerr != nil {
+			artifacts = nil
+		}
+		writeJSON(w, http.StatusOK, toRunDetailDTO(rn, artifacts))
 	}
 }
 
@@ -230,7 +240,8 @@ func makeCancelRunHandler(svc run.Service) http.HandlerFunc {
 			writeRunError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, toRunDetailDTO(rn))
+		// 取消返回的是进行中→终态(failed)快照,通常无产物;nil → [](仿成功路径 slot 形状)。
+		writeJSON(w, http.StatusOK, toRunDetailDTO(rn, nil))
 	}
 }
 

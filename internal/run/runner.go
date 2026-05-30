@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"errors"
+	"strings"
 )
 
 // StepSink 是 Runner 向外报告步骤进展的回调汇。Runner 不直接触库/发事件;
@@ -23,6 +24,11 @@ type StepSink interface {
 	// run 内单调 seq)→ 经事件总线发 EventLog。stream ∈ stdout|stderr;stepOrdinal 关联
 	// 步骤(-1 表示运行级);line 为单行文本(无尾换行)。3-3 真实构建只经此接口喂行、不改形状。
 	Log(ctx context.Context, stream string, stepOrdinal int, line string) error
+	// EmitArtifact 报告一条本次运行产出的构建产物(Story 3.4 / FR-6)。worker 侧实现负责落
+	// run_artifacts(AddArtifact)。a.Type 须为冻结枚举(image|jar|dist|archive);RunID 由
+	// 实现填充(runner 无需关心)。best-effort:落库失败返回 error 由调用方忽略,不阻断 run 终态。
+	// 3-3 真实构建只经此接口喂真实产物、不改契约形状;Epic 4 按 (type, reference) 消费。
+	EmitArtifact(ctx context.Context, a Artifact) error
 }
 
 // Runner 抽象「执行一次运行」的能力(可插拔)。本期为桩;真实构建/部署=3-3/4-x 换实现。
@@ -125,9 +131,74 @@ func stubFailureLog(failedStep string) string {
 		"Build failed with exit code 1\n"
 }
 
+// stubArtifacts 合成本次成功运行的 1~2 个桩产物(诚实标注 metadata.stub=true)。
+// reference 用类型寻址语义占位:image=local/stub-<proj>:<commit>;dist=目录寻址。
+// 3-3 真实构建落地后由真实产物经同一 StepSink.EmitArtifact 替换,契约形状不变。
+func stubArtifacts(r *Run) []Artifact {
+	proj := "app"
+	if r != nil && strings.TrimSpace(r.ProjectName) != "" {
+		proj = slugify(r.ProjectName)
+	}
+	commit := "latest"
+	if r != nil {
+		if c := strings.TrimSpace(r.Trigger.Commit); c != "" {
+			if len(c) > 7 {
+				c = c[:7]
+			}
+			commit = c
+		}
+	}
+	return []Artifact{
+		{
+			Type:      ArtifactImage,
+			Name:      proj,
+			Reference: "local/stub-" + proj + ":" + commit,
+			SizeBytes: 48210432,
+			Metadata: map[string]any{
+				"stub":   true,
+				"digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			},
+		},
+		{
+			Type:      ArtifactDist,
+			Name:      proj + "-dist",
+			Reference: "dist/" + proj + "-" + commit,
+			SizeBytes: 1048576,
+			Metadata: map[string]any{
+				"stub": true,
+				"path": "dist/",
+			},
+		},
+	}
+}
+
+// slugify 把展示名归一为引用安全的小写 slug(非字母数字折成 '-';空 → "app")。
+func slugify(s string) string {
+	var b strings.Builder
+	prevDash := false
+	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			prevDash = false
+		default:
+			if !prevDash && b.Len() > 0 {
+				b.WriteByte('-')
+				prevDash = true
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "app"
+	}
+	return out
+}
+
 // Run 实现 Runner:声明步骤 → 逐步 running→success;遇 FailAt 置 failed 并返回错误;
 // 每步前检查 ctx 取消(取消则当前步骤 failed 并返回 ErrCanceled)。
-func (s *StubRunner) Run(ctx context.Context, _ *Run, sink StepSink) error {
+// 全步成功后 emit 1~2 个桩产物(metadata.stub=true)演示产物契约(FR-6);3-3 落地后换真实产物。
+func (s *StubRunner) Run(ctx context.Context, r *Run, sink StepSink) error {
 	names := s.Steps
 	if len(names) == 0 {
 		names = []string{"拉取源码", "构建镜像", "部署"}
@@ -168,6 +239,11 @@ func (s *StubRunner) Run(ctx context.Context, _ *Run, sink StepSink) error {
 		if err := sink.StepDone(ctx, i, StepSuccess); err != nil {
 			return err
 		}
+	}
+	// 成功路径:emit 桩产物演示产物契约(FR-6;诚实标注 stub=true)。
+	// best-effort:单条落库失败仅忽略,不阻断 run 成功终态(产物不应连累 run 结果)。
+	for _, a := range stubArtifacts(r) {
+		_ = sink.EmitArtifact(ctx, a)
 	}
 	return nil
 }

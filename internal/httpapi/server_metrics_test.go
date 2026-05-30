@@ -130,6 +130,10 @@ func (d cmdDialer) RunStream(_ context.Context, _ string, _ target.SSHConfig, _ 
 	return io.NopCloser(strings.NewReader("")), nil
 }
 
+func (d cmdDialer) RunInteractive(_ context.Context, _ string, _ target.SSHConfig, _ []string) (target.Session, error) {
+	return nil, nil
+}
+
 // linuxLikeDialer 模拟一台 Linux 服务器:loadavg/nproc/free/df 全可回显。
 func linuxLikeDialer() cmdDialer {
 	return cmdDialer{fn: func(cmd []string) (*target.ExecResult, error) {

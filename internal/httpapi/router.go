@@ -407,6 +407,13 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// invalid_service_target;SSH/命令失败人读不 500;成功投递后写审计(detail 脱敏)。
 		// 比 /servers/{id} 多两段,不会被吞。
 		ar.Post("/servers/{id}/service/action", makeServiceActionHandler(sv, aud))
+		// 容器内交互终端(Story 6.4;FR-18,WS ↔ SSH → docker exec -it)。复用 sv(4-1 装配)
+		// + aud(1-4 装配),无需新服务。**平台唯一 WS 升级点**(其余实时流走 SSE)。GET 升级
+		// → 过 auth(未登录 401 不升级);CSRF 对 GET 豁免,改以同源(Origin)校验防跨站劫持。
+		// containerId 严格白名单(首字符非 `-` 防 flag 注入、无 shell 元字符)+ shell 枚举白名单;
+		// 命令 array 化经 target.ExecInteractive 不拼 shell。握手成功(PTY 建立)后写审计(detail 脱敏)。
+		// 比 /servers/{id} 多两段,不会被吞。
+		ar.Get("/servers/{id}/containers/{containerId}/terminal", makeContainerTerminalHandler(sv, aud))
 		// 通知渠道(Story 5.1;FR-19)。nf 为 nil 时 handler 返回 503。
 		// GET(列表/详情)过 auth;POST/PUT/DELETE/test 为写方法,过 auth + CSRF。
 		// 敏感字段(SMTP 密码)加密入库、响应仅 hasPassword。test 须在 {id} 路由内单独注册。

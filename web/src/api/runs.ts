@@ -40,14 +40,26 @@ export interface RunTrigger {
   actor: string
 }
 
-// ─── targets / diagnosis: forward-declared optional blocks (Epic 4 / Epic 7) ─
-// Shape is frozen here; Epic 4/7 fills content — do not modify these types.
+// ─── targets: SSH deploy execution (Story 4-2 frozen contract — FR-10) ───────
+// Per-target deploy result. Shape is frozen here; 4-4 rollback sets status to
+// 'rolled_back', 4-5 multi-fanout appends rows — neither changes this shape.
+// `message` is human-readable (success summary / failure reason) and NEVER
+// contains plaintext secrets. `status` is the fixed five-word target set.
 
-export interface TargetRun {
-  server: string
-  status: RunStatus
-  steps: RunStep[]
-  rolledBackTo: string | null
+export type TargetStatus =
+  | 'pending'
+  | 'deploying'
+  | 'success'
+  | 'failed'
+  | 'rolled_back'
+
+export interface DeployTarget {
+  serverId: string
+  serverName: string
+  status: TargetStatus
+  message: string
+  startedAt: string          // RFC3339
+  finishedAt: string | null  // RFC3339; null while not finished
 }
 
 // ─── DiagnosisDTO (Story 7-2 frozen contract) ────────────────────────────────
@@ -114,7 +126,7 @@ export interface RunDetail {
   finishedAt: string | null
   durationMs: number | null
   artifacts: ArtifactDTO[]          // Story 3-4 fills (FR-6) — empty [] when no artifacts
-  targets: TargetRun[] | null       // Epic 4 fills — slot owner: Story 4.x
+  targets: DeployTarget[] | null    // Story 4-2 fills (FR-10) — deployed ⇒ array, else null
   diagnosis: DiagnosisDTO | null    // Epic 7 fills — slot owner: Story 7.x (Story 7-2 defines shape)
 }
 
@@ -241,6 +253,32 @@ export interface RunArtifactsResponse {
 
 export function getRunArtifacts(id: string): Promise<RunArtifactsResponse> {
   return http.get<RunArtifactsResponse>(`/api/runs/${id}/artifacts`)
+}
+
+// ─── SSH deploy execution (Story 4-2 frozen contract — FR-10) ─────────────────
+//
+// POST /api/runs/{id}/deploy  body { artifactId, serverIds, deployConfig? }
+// Deploys the given artifact to the selected target servers over SSH (commands
+// are array-ized server-side; AC-SEC-02). Synchronous this story: returns the
+// final per-target results once execution completes.
+//
+// 200 with the filled `targets` array. Per-target execution failure is NOT an
+// HTTP error — that target carries status='failed' + human message (never 500,
+// never secrets). 404 run_not_found; 422 when the run is not successful, the
+// artifact is missing, or a target server does not exist.
+
+export interface DeployRunInput {
+  artifactId: string
+  serverIds: string[]
+  deployConfig?: Record<string, string>
+}
+
+export interface DeployRunResponse {
+  targets: DeployTarget[]
+}
+
+export function deployRun(id: string, input: DeployRunInput): Promise<DeployRunResponse> {
+  return http.post<DeployRunResponse>(`/api/runs/${id}/deploy`, input)
 }
 
 // ─── SSE subscription ────────────────────────────────────────────────────────

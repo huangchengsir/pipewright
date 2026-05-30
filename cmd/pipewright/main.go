@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/anomaly"
 	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/auth"
+	"github.com/huangchengsir/pipewright/internal/build"
 	"github.com/huangchengsir/pipewright/internal/config"
 	"github.com/huangchengsir/pipewright/internal/deploy"
 	"github.com/huangchengsir/pipewright/internal/httpapi"
@@ -148,13 +150,23 @@ func main() {
 	// 提前装配(先于 pool)以便把通知钩子注入 pool(Story 5.2;FR-20)。
 	notifySvc := notify.New(st.DB, credVault, &http.Client{Timeout: 8 * time.Second})
 
+	// 选择运行执行器(Story 3-3/3-5):按 PIPEWRIGHT_BUILDER 开关装配真实隔离构建器或桩。
+	//   - real :强制真实 Builder(探测不到容器 CLI 即启动失败,诚实不假装)。
+	//   - stub :强制桩 runner(合成日志,不碰容器;dev/CI 无 Docker 时用)。
+	//   - 缺省 auto:探测到 docker/nerdctl/podman 用 real,否则回退桩(优雅降级,NFR-10)。
+	// 真实 Builder 经构造函数注入 projectSvc/pipelineSettingsSvc/credVault;真实日志/产物/失败日志
+	// 经同一 run.StepSink 喂出,复用既有持久化/SSE/脱敏(下方 WithLogMaskerFunc 对真实日志同样生效)。
+	runnerOpts := buildRunnerOption(projectSvc, pipelineSettingsSvc, credVault)
+
 	pool := run.NewWorkerPool(runSvc,
-		run.WithDiagnoseHook(httpapi.NewDiagnoseHook(runSvc, aiSvc, secretSrc)),
-		// per-run 日志脱敏:每个 run 构建登记了该 run 真实凭据的 Masker(红线修)。
-		run.WithLogMaskerFunc(secretSrc.MaskerForRun),
-		// best-effort 通知钩子(Story 5.2;FR-20):run 终态 → event → 构 Payload → Router.RouteEvent。
-		// 未配路由的事件不发送;单渠道失败续发;绝不阻断 run 终态。run 包不 import notify(钩子解耦)。
-		run.WithNotifyHook(httpapi.NewNotifyHook(runSvc, notifySvc, secretSrc)),
+		append(runnerOpts,
+			run.WithDiagnoseHook(httpapi.NewDiagnoseHook(runSvc, aiSvc, secretSrc)),
+			// per-run 日志脱敏:每个 run 构建登记了该 run 真实凭据的 Masker(红线修)。
+			run.WithLogMaskerFunc(secretSrc.MaskerForRun),
+			// best-effort 通知钩子(Story 5.2;FR-20):run 终态 → event → 构 Payload → Router.RouteEvent。
+			// 未配路由的事件不发送;单渠道失败续发;绝不阻断 run 终态。run 包不 import notify(钩子解耦)。
+			run.WithNotifyHook(httpapi.NewNotifyHook(runSvc, notifySvc, secretSrc)),
+		)...,
 	)
 	pool.Start()
 	log.Printf("[run] worker pool started")
@@ -215,4 +227,35 @@ func main() {
 	// HTTP 停机后停 worker pool:取消在途运行执行,等 worker 退出(随 shutdownCtx 超时)。
 	pool.Stop(shutdownCtx)
 	log.Printf("[run] worker pool stopped")
+}
+
+// buildRunnerOption 按 PIPEWRIGHT_BUILDER 开关返回注入 pool 的运行执行器选项(Story 3-3/3-5)。
+//
+//   - real :强制真实 Builder;构造失败(无容器 CLI)直接 fail-fast(用户显式要真实却没环境,应明确报错)。
+//   - stub :不注入 WithRunner(pool 默认 StubRunner),返回空选项。
+//   - 其它/缺省 auto:尝试构造真实 Builder,探测不到容器 CLI 时回退桩(优雅降级,NFR-10)。
+//
+// 返回 []run.PoolOption(可能为空):空 ⇒ 用 pool 默认 StubRunner。
+func buildRunnerOption(projectSvc project.Service, settingsSvc pipeline.SettingsService, v vault.Vault) []run.PoolOption {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("PIPEWRIGHT_BUILDER")))
+	switch mode {
+	case "stub":
+		log.Printf("[build] PIPEWRIGHT_BUILDER=stub:使用桩 runner(合成日志,不碰容器)")
+		return nil
+	case "real":
+		b, err := build.NewBuilder(projectSvc, settingsSvc, v)
+		if err != nil {
+			log.Fatalf("[build] PIPEWRIGHT_BUILDER=real 但构建器不可用:%v", err)
+		}
+		log.Printf("[build] 真实隔离构建器已启用(容器 CLI=%s)", b.DriverBinary())
+		return []run.PoolOption{run.WithRunner(b)}
+	default:
+		b, err := build.NewBuilder(projectSvc, settingsSvc, v)
+		if err != nil {
+			log.Printf("[build] 未探测到容器 CLI(docker/nerdctl/podman),回退桩 runner(PIPEWRIGHT_BUILDER=real 可强制要求真实):%v", err)
+			return nil
+		}
+		log.Printf("[build] auto:真实隔离构建器已启用(容器 CLI=%s)", b.DriverBinary())
+		return []run.PoolOption{run.WithRunner(b)}
+	}
 }

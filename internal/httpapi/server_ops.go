@@ -142,18 +142,38 @@ func makeServiceActionHandler(svc target.Service, aud audit.Recorder) http.Handl
 		cmd := buildServiceCmd(req.Type, req.Action, req.Target)
 		out := serviceActionDTO{ServerID: id, Type: req.Type, Target: req.Target, Action: req.Action}
 
+		// 审计 helper(code-review P5):写操作的**任何尝试**都留痕(NFR-8 取证),
+		// 不只成功投递。connect/auth/凭据失败等也是需取证的安全事件(谁反复戳哪台机)。
+		// detail 仅白名单结构化字段(无自由输出/凭据);Recorder 再过 Masker。
+		auditOp := func(ok bool) {
+			recordAudit(r.Context(), aud, audit.Entry{
+				Actor:      auditActor,
+				Action:     audit.ActionServiceOp,
+				TargetType: audit.TargetServer,
+				TargetID:   id,
+				Detail:     map[string]any{"type": req.Type, "target": req.Target, "action": req.Action, "ok": ok},
+				IP:         clientIP(r),
+			})
+		}
+
 		res, err := svc.Exec(r.Context(), id, cmd)
 		if err != nil {
 			// 定位类错误(服务器/凭据不存在、保险库未配)→ 走标准映射(404/422/503)。
-			if errors.Is(err, target.ErrNotFound) ||
-				errors.Is(err, target.ErrCredentialNotFound) ||
+			// 服务器不存在无可审计目标;凭据/vault 错误是对真实服务器的写尝试 → 留痕。
+			if errors.Is(err, target.ErrNotFound) {
+				writeServerError(w, err)
+				return
+			}
+			if errors.Is(err, target.ErrCredentialNotFound) ||
 				errors.Is(err, target.ErrVaultUnconfigured) {
+				auditOp(false)
 				writeServerError(w, err)
 				return
 			}
 			// 连接/认证/执行类 → 200 + ok:false + 人读 error,不 500(契约作者定)。
 			out.OK = false
 			out.Error = humanServiceError(err)
+			auditOp(false)
 			writeJSON(w, http.StatusOK, out)
 			return
 		}
@@ -175,21 +195,8 @@ func makeServiceActionHandler(svc target.Service, aud audit.Recorder) http.Handl
 			out.Output = truncateLog(strings.TrimSpace(res.Stdout), 4096)
 		}
 
-		// 写操作受审计(NFR-8):成功投递即留痕(谁、对哪台机、什么服务、什么操作、是否成功)。
-		// detail 仅含白名单后的结构化字段(无自由输出、无凭据);Recorder 再过 Masker 脱敏。
-		recordAudit(r.Context(), aud, audit.Entry{
-			Actor:      auditActor,
-			Action:     audit.ActionServiceOp,
-			TargetType: audit.TargetServer,
-			TargetID:   id,
-			Detail: map[string]any{
-				"type":   req.Type,
-				"target": req.Target,
-				"action": req.Action,
-				"ok":     out.OK,
-			},
-			IP: clientIP(r),
-		})
+		// 写操作受审计(NFR-8):命令已投递,按退出码记 ok 真伪。
+		auditOp(out.OK)
 
 		writeJSON(w, http.StatusOK, out)
 	}

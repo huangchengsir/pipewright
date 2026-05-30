@@ -38,6 +38,9 @@ const diffCloneTimeout = 30 * time.Second
 // maxDiffFiles 是 diff 文件数上限:超出则截断(Truncated=true),防大改动 OOM(NFR-4)。
 const maxDiffFiles = 200
 
+// maxFileDiffLines 是单文件增删行数统计上限(code-review P1;防巨型单文件计数撑爆)。
+const maxFileDiffLines = 50000
+
 // 文件级 diff 状态枚举(冻结契约;与前端/DTO 对齐)。
 const (
 	diffStatusAdded    = "added"
@@ -159,23 +162,43 @@ func commitTree(repo *gogit.Repository, sha string) (*object.Tree, error) {
 }
 
 // buildRunDiff 把 go-git Changes 折算为文件级 RunDiff(状态 + 增删行数 + 截断 + summary)。
+//
+// OOM 护栏(code-review P1):**先据轻量路径排序 + 截断到 maxDiffFiles,再只对保留文件算 patch**
+// (`PatchContext` 会把整份文件 patch 物化进内存)。否则巨 diff 先算完上万份完整 patch 占满内存、
+// 再丢弃——截断在内存峰值之后生效=纸面合规。单文件行数另由 fileDiffFromChange 封顶。
 func buildRunDiff(ctx context.Context, changes object.Changes) RunDiff {
-	files := make([]FileDiff, 0, len(changes))
+	// 阶段一:仅取路径(不触 patch),用于确定性排序 + 截断。
+	type lightChange struct {
+		ch   *object.Change
+		path string
+	}
+	light := make([]lightChange, 0, len(changes))
 	for _, ch := range changes {
-		fd, ok := fileDiffFromChange(ctx, ch)
+		p := ch.To.Name
+		if p == "" {
+			p = ch.From.Name // deleted
+		}
+		if p == "" {
+			continue
+		}
+		light = append(light, lightChange{ch: ch, path: p})
+	}
+	sort.SliceStable(light, func(i, j int) bool { return light[i].path < light[j].path })
+
+	truncated := false
+	if len(light) > maxDiffFiles {
+		light = light[:maxDiffFiles]
+		truncated = true
+	}
+
+	// 阶段二:只对截断后保留的文件算 patch(限内存峰值)。
+	files := make([]FileDiff, 0, len(light))
+	for _, lc := range light {
+		fd, ok := fileDiffFromChange(ctx, lc.ch)
 		if !ok {
 			continue
 		}
 		files = append(files, fd)
-	}
-
-	// 稳定排序:按 path 升序(确定性输出便于前端/测试)。
-	sort.SliceStable(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-
-	truncated := false
-	if len(files) > maxDiffFiles {
-		files = files[:maxDiffFiles]
-		truncated = true
 	}
 
 	return RunDiff{
@@ -216,7 +239,10 @@ func fileDiffFromChange(ctx context.Context, ch *object.Change) (FileDiff, bool)
 
 	// 统计增删行数:经 patch 的 file-patch chunks(Add/Delete 类型按行计数)。
 	// 二进制文件 chunks 为空 → 0/0(仍记一条 modified/added/deleted,行数计 0)。
+	// 单文件行数封顶(code-review P1):统计到 maxFileDiffLines 即停,防被改成几百万行的单文件
+	// 的计数撑爆(patch 物化由上游 200 文件截断 + 30s 超时兜底,此处再封单文件计数上限)。
 	if patch, perr := ch.PatchContext(ctx); perr == nil && patch != nil {
+	count:
 		for _, fp := range patch.FilePatches() {
 			if fp.IsBinary() {
 				continue
@@ -228,6 +254,9 @@ func fileDiffFromChange(ctx context.Context, ch *object.Change) (FileDiff, bool)
 					fd.Additions += n
 				case fdiff.Delete:
 					fd.Deletions += n
+				}
+				if fd.Additions+fd.Deletions >= maxFileDiffLines {
+					break count
 				}
 			}
 		}

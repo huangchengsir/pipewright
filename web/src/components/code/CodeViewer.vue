@@ -136,9 +136,10 @@ async function loadBlob(filePath: string): Promise<void> {
       viewState.value = 'binary'
       return
     }
-    // 克隆失败降级:后端返 content 空(且 size 不可信)。空文件也 content 空,
-    // 但 size=0 时是真正的空文件,可正常显示;size>0 而 content 空 ⇒ degraded。
-    if (b.content === '' && b.size > 0) {
+    // 克隆失败降级:后端显式 degraded 标志(code-review P6)。此前靠 `content==''&&size>0`
+    // 推断,但克隆失败时 size=0 → 漏判 → 显空白编辑器。改据后端 degraded 标志,真实空文件(size=0、
+    // 非 degraded)仍正常显示空内容。
+    if (b.degraded) {
       disposeEditor()
       viewState.value = 'degraded'
       return

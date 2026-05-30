@@ -14,6 +14,8 @@ import (
 // ln -sfn <release> <current> → 更新指向。其余命令默认成功(可被 failCmd 覆盖)。
 type fakeFS struct {
 	current string // current 软链当前指向(空 = 不存在)
+	// tmpTargets 模拟「ln -sfn target link.tmp」建的临时软链(link → target),供 mv -T 原子提交。
+	tmpTargets map[string]string
 	// failHealthCmd 命中健康探测命令时返回非零(模拟健康失败)。
 	failHealth bool
 	// failLn 命中 ln 切换/回滚时返回执行错误(模拟回滚命令失败)。
@@ -35,12 +37,27 @@ func (f *fakeFS) exec(cmd []string) (*target.ExecResult, error) {
 		}
 		return &target.ExecResult{ExitCode: 0, Stdout: f.current + "\n"}, nil
 	case "ln":
-		// ln -sfn <release> <current>:更新 current 指向(幂等)。
+		// 原子切换序列第一步:ln -sfn <target> <link.tmp>(建临时软链,不动 current)。
 		if f.failLn {
 			return nil, target.ErrUnreachable
 		}
 		if len(cmd) >= 4 && cmd[1] == "-sfn" {
-			f.current = cmd[2]
+			if f.tmpTargets == nil {
+				f.tmpTargets = map[string]string{}
+			}
+			f.tmpTargets[cmd[3]] = cmd[2] // link.tmp → target
+		}
+		return &target.ExecResult{ExitCode: 0}, nil
+	case "mv":
+		// 原子切换序列第二步:mv -T <link.tmp> <current> → 提交临时软链为 current。
+		if f.failLn {
+			return nil, target.ErrUnreachable
+		}
+		if len(cmd) >= 4 && cmd[1] == "-T" {
+			if tgt, ok := f.tmpTargets[cmd[2]]; ok {
+				f.current = tgt
+				delete(f.tmpTargets, cmd[2])
+			}
 		}
 		return &target.ExecResult{ExitCode: 0}, nil
 	case "curl":
@@ -99,10 +116,14 @@ func TestReleaseDistAtomicSwitch(t *testing.T) {
 	if mkdir == nil || !strings.Contains(mkdir[len(mkdir)-1], "/srv/shop/releases/") {
 		t.Fatalf("mkdir 未落 releases/<runId>: %v", mkdir)
 	}
-	// ln -sfn <release> /srv/shop/current(原子切换;array 化)。
+	// 原子切换:ln -sfn <release> /srv/shop/current.tmp + mv -T .tmp /srv/shop/current(array 化)。
 	ln := findCmd(tgt.calls, "ln")
-	if ln == nil || ln[1] != "-sfn" || ln[3] != "/srv/shop/current" {
-		t.Fatalf("current 软链切换命令异常: %v", ln)
+	if ln == nil || ln[1] != "-sfn" || ln[3] != "/srv/shop/current.tmp" {
+		t.Fatalf("current 软链临时切换命令异常: %v", ln)
+	}
+	mv := findCmd(tgt.calls, "mv")
+	if mv == nil || mv[1] != "-T" || mv[2] != "/srv/shop/current.tmp" || mv[3] != "/srv/shop/current" {
+		t.Fatalf("current 原子 rename 命令异常: %v", mv)
 	}
 	if fs.current == "" || !strings.Contains(fs.current, "/srv/shop/releases/") {
 		t.Fatalf("current 未指向新发布: %q", fs.current)

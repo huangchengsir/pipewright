@@ -289,13 +289,30 @@ func (s *service) channelIDsForEventScoped(ctx context.Context, projectID, event
 
 	projectID = strings.TrimSpace(projectID)
 	if projectID != "" {
-		// 先查项目级:非空则整体覆盖(只用项目级),空则继续回退全局。
-		if cids := s.queryChannelIDs(ctx, projectID, event); len(cids) > 0 {
-			return cids
+		// 整体覆盖语义(code-review P8):项目级**存在任一路由**(无论 enabled)→ 该项目该事件
+		// **只**用项目级(enabled 子集,可能为空=该项目此事件静音),**不回退全局**。
+		// 此前用 enabled 渠道的存在性同时承担「是否覆盖」与「发哪些」→ 项目级全 disabled 会被
+		// 误判为「无覆盖」而偷偷走全局,违反「继承 or 自定义二选一」。
+		if s.projectHasRoute(ctx, projectID, event) {
+			return s.queryChannelIDs(ctx, projectID, event)
 		}
 	}
-	// 全局回退(project_id IS NULL)。
+	// 无项目级覆盖 → 继承全局(project_id IS NULL)。
 	return s.queryChannelIDs(ctx, "", event)
+}
+
+// projectHasRoute 报告某项目+事件是否存在**任一**路由(无论 enabled);用于判定是否整体覆盖全局。
+func (s *service) projectHasRoute(ctx context.Context, projectID, event string) bool {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(1) FROM notification_routes WHERE project_id = ? AND event = ?`,
+		projectID, event,
+	).Scan(&n)
+	if err != nil {
+		log.Printf("[notify] projectHasRoute(project=%q,event=%q): %v", projectID, event, err)
+		return false
+	}
+	return n > 0
 }
 
 // queryChannelIDs 查指定作用域(projectID 空 = 全局 IS NULL;非空 = 该项目)某 event 的 enabled

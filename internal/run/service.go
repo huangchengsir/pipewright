@@ -52,6 +52,14 @@ type Service interface {
 	// GetLogs 取某次运行 sinceSeq 之后的日志行(升序;sinceSeq<=0 取全部)。
 	// 不全量驻留:调用方按需分页(NFR-4)。run 不存在不报错(返回空切片);由 HTTP 层据 run 存在性决定 404。
 	GetLogs(ctx context.Context, runID string, sinceSeq int) ([]LogLine, error)
+
+	// AddArtifact 持久化一条运行产物到 run_artifacts(Story 3.4 / FR-6)。
+	// type 须为冻结枚举(image|jar|dist|archive),否则 ErrInvalidArtifactType;
+	// run 不存在 → ErrNotFound。runner 报告产物(经 StepSink.EmitArtifact)/ 真实构建(3-3)同此接口接入。
+	AddArtifact(ctx context.Context, a Artifact) (*Artifact, error)
+	// ListArtifacts 取某次运行的全部产物(按 created_at 升序;无产物 → 空切片)。
+	// run 不存在不报错(返回空切片);由 HTTP 层据 run 存在性决定 404(仿 GetLogs 语义)。
+	ListArtifacts(ctx context.Context, runID string) ([]Artifact, error)
 }
 
 // service 是 store 支撑的 Service 实现,并持有内存事件总线与正在执行运行的取消句柄。

@@ -82,6 +82,24 @@ export interface Diagnosis {
   feedback: 'positive' | 'negative' | null
 }
 
+// ─── Artifact (Story 3-4 frozen contract — FR-6) ─────────────────────────────
+// Build-artifact contract is an Epic 3 first-class deliverable: the `type` enum
+// (image|jar|dist|archive) and `reference` (type-addressing) are frozen. Epic 4
+// deploy consumes by (type, reference) without knowing build internals. Real
+// builds (3-3) feed via the same EmitArtifact interface — shape never changes.
+
+export type ArtifactType = 'image' | 'jar' | 'dist' | 'archive'
+
+export interface ArtifactDTO {
+  id: string
+  type: ArtifactType
+  name: string
+  reference: string          // type-addressing ref (Epic 4 consumes this)
+  sizeBytes: number          // 0 when unknown
+  metadata: Record<string, unknown> // free KV (digest/path/stub…)
+  createdAt: string          // RFC3339
+}
+
 // ─── Run Detail (frozen DTO contract — do not change shape) ─────────────────
 
 export interface RunDetail {
@@ -95,6 +113,7 @@ export interface RunDetail {
   startedAt: string | null
   finishedAt: string | null
   durationMs: number | null
+  artifacts: ArtifactDTO[]          // Story 3-4 fills (FR-6) — empty [] when no artifacts
   targets: TargetRun[] | null       // Epic 4 fills — slot owner: Story 4.x
   diagnosis: DiagnosisDTO | null    // Epic 7 fills — slot owner: Story 7.x (Story 7-2 defines shape)
 }
@@ -207,6 +226,21 @@ export interface RunLogsResponse {
 export function getRunLogs(id: string, sinceSeq = 0): Promise<RunLogsResponse> {
   const qs = sinceSeq > 0 ? `?sinceSeq=${sinceSeq}` : ''
   return http.get<RunLogsResponse>(`/api/runs/${id}/logs${qs}`)
+}
+
+// ─── Run artifacts (Story 3-4 frozen contract — FR-6) ─────────────────────────
+//
+// GET /api/runs/{id}/artifacts → { artifacts: ArtifactDTO[] }
+// Read-only, authenticated. Epic 4 deploy consumes by (type, reference).
+// 404 run_not_found if the run does not exist. The run-detail DTO also carries
+// the same artifacts under `run.artifacts`; this endpoint is the standalone view.
+
+export interface RunArtifactsResponse {
+  artifacts: ArtifactDTO[]
+}
+
+export function getRunArtifacts(id: string): Promise<RunArtifactsResponse> {
+  return http.get<RunArtifactsResponse>(`/api/runs/${id}/artifacts`)
 }
 
 // ─── SSE subscription ────────────────────────────────────────────────────────

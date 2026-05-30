@@ -28,6 +28,7 @@ import {
 import { HttpError } from '../api/http'
 import DiagnosisPanel from '../components/run/DiagnosisPanel.vue'
 import RunTerminal from '../components/run/RunTerminal.vue'
+import ArtifactList from '../components/run/ArtifactList.vue'
 
 // ─── route ────────────────────────────────────────────────────────────────────
 
@@ -492,6 +493,16 @@ function nodeClass(status: StepStatus): string {
                 <span class="summary-val mono">{{ formatDuration(run.durationMs) }}</span>
               </div>
             </div>
+
+            <!--
+              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+              构建产物列表 (Story 3-4 / FR-6 实现)
+              成功态填 run-detail 冻结 artifacts slot:type 徽标 + name + reference(可复制)+ 大小。
+              产物契约是 Epic 3 一等交付物;Epic 4 部署按 (type, reference) 消费。
+              不扰终端(3-6)/零停机(Epic 4)/诊断(7-2)slot。
+              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            -->
+            <ArtifactList :artifacts="run.artifacts" />
 
             <!-- 历史日志回放(只读,Story 3-6) -->
             <div class="log-history" role="region" aria-label="历史运行日志">

@@ -95,7 +95,12 @@ func aiToRunDiagnosis(d *ai.Diagnosis) *run.Diagnosis {
 //
 // 优雅降级:ai.Diagnose 对所有 AI 不可用路径返回 status=unavailable 的诊断(非 error);
 // 故本函数几乎总返回一个非 nil 诊断。保存失败仅返回 error 供 handler 决策(钩子忽略)。
-func diagnoseRun(ctx context.Context, runs run.Service, aiSvc ai.Service, id string) (*run.Diagnosis, error) {
+//
+// persistUnavailable 控制是否把**非 ready**(unavailable)诊断落库:
+//   - 显式端点 POST /diagnose 传 true:用户主动请求,落库以便刷新仍能回显「诊断不可用 + reason」。
+//   - 自动钩子传 false:仅落 ready 诊断,避免污染「diagnosis=null 即未诊断」干净态、并杜绝
+//     「AI 未配 / 用户取消(取消复用 StatusFailed)的每个失败 run 都无谓写一条 unavailable」。
+func diagnoseRun(ctx context.Context, runs run.Service, aiSvc ai.Service, id string, persistUnavailable bool) (*run.Diagnosis, error) {
 	failureLog, err := runs.GetFailureLog(ctx, id)
 	if err != nil {
 		return nil, err // ErrNotFound 等,由调用方映射
@@ -124,6 +129,12 @@ func diagnoseRun(ctx context.Context, runs run.Service, aiSvc ai.Service, id str
 	}
 
 	domain := aiToRunDiagnosis(diag)
+	// 自动钩子(persistUnavailable=false)只持久化 ready 诊断:非 ready 直接返回不落库,
+	// 保持 run-detail diagnosis=null 干净态(前端显「触发诊断」而非恒「诊断不可用」),
+	// 并消除 AI 未配/取消场景下每个失败 run 的无谓写。显式端点(true)仍落库供刷新回显。
+	if domain.Status != "ready" && !persistUnavailable {
+		return domain, nil
+	}
 	if serr := runs.SaveDiagnosis(ctx, id, domain); serr != nil {
 		return domain, serr
 	}
@@ -153,7 +164,8 @@ func NewDiagnoseHook(runs run.Service, aiSvc ai.Service) func(ctx context.Contex
 		// best-effort:自带超时;父 ctx 取消(停机)时一并取消。
 		hookCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		if _, err := diagnoseRun(hookCtx, runs, aiSvc, runID); err != nil {
+		// 自动诊断:仅持久化 ready 结果(persistUnavailable=false),不污染未诊断干净态。
+		if _, err := diagnoseRun(hookCtx, runs, aiSvc, runID, false); err != nil {
 			log.Printf("[diagnose] run %s: auto-diagnose best-effort failed: %v", runID, err)
 		}
 	}
@@ -184,7 +196,8 @@ func makeDiagnoseRunHandler(runs run.Service, aiSvc ai.Service) http.HandlerFunc
 			return
 		}
 
-		domain, derr := diagnoseRun(ctx, runs, aiSvc, id)
+		// 显式诊断:用户主动请求,落库 unavailable 也无妨(刷新仍能回显 reason)。
+		domain, derr := diagnoseRun(ctx, runs, aiSvc, id, true)
 		if derr != nil {
 			if errors.Is(derr, run.ErrNotFound) {
 				writeError(w, http.StatusNotFound, "run_not_found", "运行不存在")

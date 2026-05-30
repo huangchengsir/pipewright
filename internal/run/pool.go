@@ -14,6 +14,11 @@ import (
 // defaultConcurrency 是 worker pool 默认并发上限(有界;NFR-4 内存约束)。
 const defaultConcurrency = 4
 
+// maxConcurrentDiagnoses 是 best-effort 自动诊断的并发上限(有界;NFR-4)。
+// 自动诊断脱离 worker pool 在独立 goroutine 跑,若无界,AI 配置时批量失败会无界并发
+// 打 LLM + 多份日志/解密 key 同时驻留。超限则跳过本次自动诊断(用户仍可手动触发)。
+const maxConcurrentDiagnoses = 2
+
 // WorkerPool 是进程内 goroutine 池调度器:从内存队列取 queued 运行 → 转 running →
 // 经 Runner 执行 → 按结果转终态。多 run 并行、非事务、结果独立:单 run 失败/panic
 // 不连累其它(每 run 独立 goroutine + recover)。优雅停机随 HTTP server(Stop)。
@@ -32,6 +37,8 @@ type WorkerPool struct {
 	// 钩子内部(在 main 装配)负责「取失败日志 → 脱敏 → ai.Diagnose → 保存」,仿 RunCreator 解耦。
 	// 钩子失败仅记日志,**绝不影响 run 终态**。
 	diagnoseHook func(ctx context.Context, runID string)
+	// diagnoseSem 为自动诊断并发上限信号量(有界;NFR-4);满则跳过本次自动诊断。
+	diagnoseSem chan struct{}
 
 	startOnce sync.Once
 	stopOnce  sync.Once
@@ -81,10 +88,11 @@ func NewWorkerPool(svc Service, opts ...PoolOption) *WorkerPool {
 		panic("run: NewWorkerPool requires the Service returned by run.New")
 	}
 	p := &WorkerPool{
-		svc:     s,
-		runner:  NewStubRunner(),
-		queue:   make(chan string, 256),
-		workers: defaultConcurrency,
+		svc:         s,
+		runner:      NewStubRunner(),
+		queue:       make(chan string, 256),
+		workers:     defaultConcurrency,
+		diagnoseSem: make(chan struct{}, maxConcurrentDiagnoses),
 	}
 	for _, opt := range opts {
 		opt(p)
@@ -237,10 +245,21 @@ func (p *WorkerPool) execute(runID string) {
 
 // runDiagnoseHook 在独立 goroutine 中调用注入的诊断钩子(纳入 WaitGroup 以便 Stop 等待),
 // 自带 recover:钩子 panic/失败绝不连累 worker 或 run 终态。钩子内部自带超时/脱敏(在 main 装配)。
+//
+// 并发有界(NFR-4):经 diagnoseSem 信号量限流;try-acquire 失败(已达上限)则跳过本次自动诊断
+// 并记日志——best-effort 语义不变,用户仍可在详情页手动触发诊断。
 func (p *WorkerPool) runDiagnoseHook(runID string) {
+	select {
+	case p.diagnoseSem <- struct{}{}:
+		// 取得槽位,继续。
+	default:
+		log.Printf("[run] run %s: auto-diagnose skipped (并发上限 %d 已满);手动诊断仍可用", runID, maxConcurrentDiagnoses)
+		return
+	}
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
+		defer func() { <-p.diagnoseSem }() // 释放槽位
 		defer func() {
 			if rec := recover(); rec != nil {
 				log.Printf("[run] diagnose hook recovered from panic on run %s: %v", runID, rec)

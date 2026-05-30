@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/huangjiawei/devopstool/internal/audit"
 	"github.com/huangjiawei/devopstool/internal/trigger"
 )
 
@@ -156,7 +157,8 @@ func makeSaveTriggerHandler(svc trigger.Service) http.HandlerFunc {
 
 // makeResetTriggerSecretHandler 返回 POST /api/projects/{id}/trigger/secret/reset handler。
 // 重新生成并加密签名密钥(旧值失效),完整明文仅在此响应里一次性回显(供粘贴 Gitee)。
-func makeResetTriggerSecretHandler(svc trigger.Service) http.HandlerFunc {
+// 成功后追加 trigger_secret_reset 审计;detail **绝不含密钥明文/密文**,仅记掩码。
+func makeResetTriggerSecretHandler(svc trigger.Service, aud audit.Recorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if svc == nil {
 			writeError(w, http.StatusServiceUnavailable, "internal", "触发配置服务未初始化")
@@ -168,6 +170,15 @@ func makeResetTriggerSecretHandler(svc trigger.Service) http.HandlerFunc {
 			writeTriggerError(w, err)
 			return
 		}
+		recordAudit(r.Context(), aud, audit.Entry{
+			Actor:      auditActor,
+			Action:     audit.ActionTriggerSecretReset,
+			TargetType: audit.TargetTrigger,
+			TargetID:   id,
+			// detail 仅记掩码(已脱敏值);即便 Masker 也会兜底,绝不写明文密钥。
+			Detail: map[string]any{"webhookSecretMasked": res.Masked},
+			IP:     clientIP(r),
+		})
 		writeJSON(w, http.StatusOK, map[string]string{
 			"webhookSecret":       res.Secret, // 完整明文,仅此一次
 			"webhookSecretMasked": res.Masked,

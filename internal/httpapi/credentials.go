@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/huangjiawei/devopstool/internal/audit"
 	"github.com/huangjiawei/devopstool/internal/vault"
 )
 
@@ -79,7 +80,8 @@ func makeListCredentialsHandler(v vault.Vault) http.HandlerFunc {
 }
 
 // makeCreateCredentialHandler 返回 POST /api/credentials handler。
-func makeCreateCredentialHandler(v vault.Vault) http.HandlerFunc {
+// 创建成功后追加 credential_create 审计(detail 仅元数据,经 Masker 脱敏,绝无明文)。
+func makeCreateCredentialHandler(v vault.Vault, aud audit.Recorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if v == nil {
 			writeError(w, http.StatusServiceUnavailable, "vault_unconfigured", "保险库未配置 master key")
@@ -106,12 +108,21 @@ func makeCreateCredentialHandler(v vault.Vault) http.HandlerFunc {
 			writeVaultError(w, err)
 			return
 		}
+		recordAudit(r.Context(), aud, audit.Entry{
+			Actor:      auditActor,
+			Action:     audit.ActionCredentialCreate,
+			TargetType: audit.TargetCredential,
+			TargetID:   cred.ID,
+			Detail:     map[string]any{"name": cred.Name, "type": cred.Type, "scope": cred.Scope},
+			IP:         clientIP(r),
+		})
 		writeJSON(w, http.StatusCreated, toDTO(cred))
 	}
 }
 
 // makeUpdateCredentialHandler 返回 PATCH /api/credentials/{id} handler。
-func makeUpdateCredentialHandler(v vault.Vault) http.HandlerFunc {
+// 更新成功后追加 credential_update 审计(detail 仅元数据 + 是否轮换密钥;绝无明文)。
+func makeUpdateCredentialHandler(v vault.Vault, aud audit.Recorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if v == nil {
 			writeError(w, http.StatusServiceUnavailable, "vault_unconfigured", "保险库未配置 master key")
@@ -137,12 +148,21 @@ func makeUpdateCredentialHandler(v vault.Vault) http.HandlerFunc {
 			writeVaultError(w, err)
 			return
 		}
+		recordAudit(r.Context(), aud, audit.Entry{
+			Actor:      auditActor,
+			Action:     audit.ActionCredentialUpdate,
+			TargetType: audit.TargetCredential,
+			TargetID:   cred.ID,
+			Detail:     map[string]any{"name": cred.Name, "type": cred.Type, "scope": cred.Scope, "rotated": req.Secret != nil},
+			IP:         clientIP(r),
+		})
 		writeJSON(w, http.StatusOK, toDTO(cred))
 	}
 }
 
 // makeDeleteCredentialHandler 返回 DELETE /api/credentials/{id} handler。
-func makeDeleteCredentialHandler(v vault.Vault) http.HandlerFunc {
+// 删除成功后追加 credential_delete 审计。
+func makeDeleteCredentialHandler(v vault.Vault, aud audit.Recorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if v == nil {
 			writeError(w, http.StatusServiceUnavailable, "vault_unconfigured", "保险库未配置 master key")
@@ -153,6 +173,13 @@ func makeDeleteCredentialHandler(v vault.Vault) http.HandlerFunc {
 			writeVaultError(w, err)
 			return
 		}
+		recordAudit(r.Context(), aud, audit.Entry{
+			Actor:      auditActor,
+			Action:     audit.ActionCredentialDelete,
+			TargetType: audit.TargetCredential,
+			TargetID:   id,
+			IP:         clientIP(r),
+		})
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

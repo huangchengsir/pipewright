@@ -16,6 +16,8 @@ const SettingsAI  = () => import('../views/settings/SettingsAI.vue')
 const SettingsVault = () => import('../views/settings/SettingsVault.vue')
 const SettingsAccount = () => import('../views/settings/SettingsAccount.vue')
 const SettingsSystem = () => import('../views/settings/SettingsSystem.vue')
+// Story 4-1: target server registry + shared SSH layer (FR-14)
+const SettingsServers = () => import('../views/settings/SettingsServers.vue')
 // Story 2-2: new pipeline editor
 const ProjectPipeline = () => import('../views/ProjectPipeline.vue')
 // Story 2-3: triggers (kept for backward compat; now a thin wrapper around TriggersPanel)
@@ -69,6 +71,8 @@ const router = createRouter({
             { path: 'vault', name: 'settings-vault', component: SettingsVault },
             { path: 'account', name: 'settings-account', component: SettingsAccount },
             { path: 'system', name: 'settings-system', component: SettingsSystem },
+            // Story 4-1: target servers + shared SSH layer (FR-14)
+            { path: 'servers', name: 'settings-servers', component: SettingsServers },
           ],
         },
       ],

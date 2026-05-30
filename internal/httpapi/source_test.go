@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/huangjiawei/devopstool/internal/auth"
-	"github.com/huangjiawei/devopstool/internal/project"
-	"github.com/huangjiawei/devopstool/internal/vault"
+	"github.com/huangchengsir/pipewright/internal/auth"
+	"github.com/huangchengsir/pipewright/internal/project"
+	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 // makeBareSourceRepo 在临时目录建一个含给定文件的裸仓库(file:// 可克隆),返回其 file:// URL。

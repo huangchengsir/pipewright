@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/huangjiawei/devopstool/internal/mask"
+	"github.com/huangchengsir/pipewright/internal/mask"
 )
 
 // diagnoseMaxTokens 是诊断 chat 的 max_tokens(够装一份结构化诊断)。

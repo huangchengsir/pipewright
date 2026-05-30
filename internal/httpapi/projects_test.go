@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/huangjiawei/devopstool/internal/auth"
-	"github.com/huangjiawei/devopstool/internal/project"
-	"github.com/huangjiawei/devopstool/internal/vault"
+	"github.com/huangchengsir/pipewright/internal/auth"
+	"github.com/huangchengsir/pipewright/internal/project"
+	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 // stubProber 让 HTTP 层测试可控仓库探测结果,不触网。

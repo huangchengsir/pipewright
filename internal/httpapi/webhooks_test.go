@@ -9,11 +9,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/huangjiawei/devopstool/internal/auth"
-	"github.com/huangjiawei/devopstool/internal/project"
-	"github.com/huangjiawei/devopstool/internal/run"
-	"github.com/huangjiawei/devopstool/internal/trigger"
-	"github.com/huangjiawei/devopstool/internal/vault"
+	"github.com/huangchengsir/pipewright/internal/auth"
+	"github.com/huangchengsir/pipewright/internal/project"
+	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/trigger"
+	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 // setupWebhookServer 构造带 auth + project + trigger + run(worker pool)+ webhook 接收器的 server。

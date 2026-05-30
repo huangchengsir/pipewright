@@ -20,7 +20,7 @@ As a 前端开发者,I want 一套可复用的基础组件与状态模式(状态
 - ❌ 不做:任何新业务页 · 后端改动(纯 FE)· 把所有既有页面全量重构到新组件(渐进迁移,后续 story 顺手替换)。
 
 ## 视觉锚点(务必照做,品味要求高)
-- `_bmad-output/planning-artifacts/ux-designs/ux-devopsTool-2026-05-27/mockups/mock-states-components.html`(组件与状态规范页:状态徽标/按钮交互态/Toast4型/Banner/骨架/空态/错误态含 AI 降级/二次确认含输入确认/表单控件态/Tooltip/进度,每节标 token + 行为)。
+- `_bmad-output/planning-artifacts/ux-designs/ux-Pipewright-2026-05-27/mockups/mock-states-components.html`(组件与状态规范页:状态徽标/按钮交互态/Toast4型/Banner/骨架/空态/错误态含 AI 降级/二次确认含输入确认/表单控件态/Tooltip/进度,每节标 token + 行为)。
 - `DESIGN.md`(令牌 + 组件规格 + Do/Don't「避免 AI 味」)。
 - 既有令牌:`web/src/styles/tokens.css`(或 styles 目录)、Inter + JetBrains Mono、naive-ui。复用,别引新 UI 库,别硬编码调色板。
 

@@ -1,8 +1,8 @@
 ---
 title: 输入对账 — Brief vs PRD
 created: 2026-05-27
-source_brief: ../briefs/brief-devopsTool-2026-05-27/brief.md
-source_addendum: ../briefs/brief-devopsTool-2026-05-27/addendum.md
+source_brief: ../briefs/brief-Pipewright-2026-05-27/brief.md
+source_addendum: ../briefs/brief-Pipewright-2026-05-27/addendum.md
 target_prd: ./prd.md
 ---
 

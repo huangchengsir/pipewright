@@ -8,11 +8,11 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/huangjiawei/devopstool/internal/ai"
-	"github.com/huangjiawei/devopstool/internal/pipeline"
-	"github.com/huangjiawei/devopstool/internal/project"
-	"github.com/huangjiawei/devopstool/internal/trigger"
-	"github.com/huangjiawei/devopstool/internal/vault"
+	"github.com/huangchengsir/pipewright/internal/ai"
+	"github.com/huangchengsir/pipewright/internal/pipeline"
+	"github.com/huangchengsir/pipewright/internal/project"
+	"github.com/huangchengsir/pipewright/internal/trigger"
+	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 // ---- AI 生成 / 应用 DTO(冻结契约;camelCase;绝无明文密钥) ----

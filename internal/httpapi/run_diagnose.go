@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/huangjiawei/devopstool/internal/ai"
-	"github.com/huangjiawei/devopstool/internal/mask"
-	"github.com/huangjiawei/devopstool/internal/run"
+	"github.com/huangchengsir/pipewright/internal/ai"
+	"github.com/huangchengsir/pipewright/internal/mask"
+	"github.com/huangchengsir/pipewright/internal/run"
 )
 
 // ---- 冻结 diagnosis 子 DTO(Story 7.2 定义并冻结;camelCase) ------------------

@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/huangjiawei/devopstool/internal/audit"
-	"github.com/huangjiawei/devopstool/internal/auth"
-	"github.com/huangjiawei/devopstool/internal/mask"
-	"github.com/huangjiawei/devopstool/internal/store"
+	"github.com/huangchengsir/pipewright/internal/audit"
+	"github.com/huangchengsir/pipewright/internal/auth"
+	"github.com/huangchengsir/pipewright/internal/mask"
+	"github.com/huangchengsir/pipewright/internal/store"
 )
 
 // mustURL 解析 URL,失败即 fatal。

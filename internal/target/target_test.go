@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huangjiawei/devopstool/internal/store"
-	"github.com/huangjiawei/devopstool/internal/vault"
+	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 // 泄漏标记:任何错误/响应中出现它都说明私钥/口令明文外泄。

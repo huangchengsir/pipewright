@@ -1,4 +1,4 @@
-module github.com/huangjiawei/devopstool
+module github.com/huangchengsir/pipewright
 
 go 1.26.3
 

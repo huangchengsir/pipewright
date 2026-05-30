@@ -4,12 +4,12 @@ lastStep: 8
 status: 'complete'
 completedAt: '2026-05-27'
 inputDocuments:
-  - '_bmad-output/planning-artifacts/prds/prd-devopsTool-2026-05-27/prd.md'
-  - '_bmad-output/planning-artifacts/prds/prd-devopsTool-2026-05-27/addendum.md'
-  - '_bmad-output/planning-artifacts/briefs/brief-devopsTool-2026-05-27/brief.md'
-  - '_bmad-output/planning-artifacts/briefs/brief-devopsTool-2026-05-27/addendum.md'
+  - '_bmad-output/planning-artifacts/prds/prd-Pipewright-2026-05-27/prd.md'
+  - '_bmad-output/planning-artifacts/prds/prd-Pipewright-2026-05-27/addendum.md'
+  - '_bmad-output/planning-artifacts/briefs/brief-Pipewright-2026-05-27/brief.md'
+  - '_bmad-output/planning-artifacts/briefs/brief-Pipewright-2026-05-27/addendum.md'
 workflowType: 'architecture'
-project_name: 'devopsTool'
+project_name: 'Pipewright'
 user_name: ''
 date: '2026-05-27'
 ---
@@ -166,7 +166,7 @@ Webhook 网关 · 流水线引擎 · 容器隔离构建执行器 · 外部 regis
 - **Vue/TS:** 组件 PascalCase(`ServerCard.vue`);组合式函数 `useXxx`;Pinia store `useXxxStore`;变量 camelCase。
 
 ### 结构规范
-- **Go:** `cmd/devopstool/main.go` 入口;领域包在 `internal/` 下按领域分(`pipeline` `build` `deploy` `server` `notify` `ai` `auth` `vault` `audit` `store`);测试就近 `_test.go`;迁移在 `internal/store/migrations/`。
+- **Go:** `cmd/pipewright/main.go` 入口;领域包在 `internal/` 下按领域分(`pipeline` `build` `deploy` `server` `notify` `ai` `auth` `vault` `audit` `store`);测试就近 `_test.go`;迁移在 `internal/store/migrations/`。
 - **前端:** `web/`,内部按领域 `src/{views,components,composables,stores,api}`;构建产物 `go:embed`。
 
 ### 格式规范
@@ -201,12 +201,12 @@ Webhook 网关 · 流水线引擎 · 容器隔离构建执行器 · 外部 regis
 
 ### Complete Project Directory Structure
 ```
-devopstool/
+pipewright/
 ├── README.md  ·  LICENSE  ·  go.mod  ·  go.sum
 ├── Makefile                      # build / test / lint / embed-frontend / ≤100MB 断言
 ├── Dockerfile                    # 双运行模式之一(容器运行)
 ├── .github/workflows/ci.yml      # gofmt·golangci-lint·eslint·test·≤100MB 回归断言
-├── cmd/devopstool/main.go        # 入口:加载配置 → 装配依赖 → 起 HTTP
+├── cmd/pipewright/main.go        # 入口:加载配置 → 装配依赖 → 起 HTTP
 ├── embed.go                      # //go:embed web/dist
 ├── internal/
 │   ├── httpapi/                  # chi 路由·中间件(auth/CSRF/限流)·error mapper·SSE·WS

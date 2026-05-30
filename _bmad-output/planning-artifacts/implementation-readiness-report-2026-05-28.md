@@ -4,18 +4,18 @@ status: 'complete'
 readiness: 'READY'
 completedAt: '2026-05-28'
 inputDocuments:
-  - '_bmad-output/planning-artifacts/prds/prd-devopsTool-2026-05-27/prd.md'
-  - '_bmad-output/planning-artifacts/prds/prd-devopsTool-2026-05-27/addendum.md'
+  - '_bmad-output/planning-artifacts/prds/prd-Pipewright-2026-05-27/prd.md'
+  - '_bmad-output/planning-artifacts/prds/prd-Pipewright-2026-05-27/addendum.md'
   - '_bmad-output/planning-artifacts/architecture.md'
-  - '_bmad-output/planning-artifacts/ux-designs/ux-devopsTool-2026-05-27/DESIGN.md'
-  - '_bmad-output/planning-artifacts/ux-designs/ux-devopsTool-2026-05-27/EXPERIENCE.md'
+  - '_bmad-output/planning-artifacts/ux-designs/ux-Pipewright-2026-05-27/DESIGN.md'
+  - '_bmad-output/planning-artifacts/ux-designs/ux-Pipewright-2026-05-27/EXPERIENCE.md'
   - '_bmad-output/planning-artifacts/epics.md'
 ---
 
 # Implementation Readiness Assessment Report
 
 **Date:** 2026-05-28
-**Project:** devopsTool
+**Project:** Pipewright
 
 ## Step 1 — 文档盘点(Document Discovery)
 
@@ -23,10 +23,10 @@ inputDocuments:
 
 | 类型 | 路径 | 形式 | 状态 |
 |---|---|---|---|
-| PRD | `prds/prd-devopsTool-2026-05-27/prd.md`(+ `addendum.md`) | 整文档(非分片) | final |
+| PRD | `prds/prd-Pipewright-2026-05-27/prd.md`(+ `addendum.md`) | 整文档(非分片) | final |
 | 架构 | `architecture.md` | 整文档(非分片) | complete |
-| UX · 视觉 | `ux-designs/ux-devopsTool-2026-05-27/DESIGN.md` | 整文档 | final |
-| UX · 体验 | `ux-designs/ux-devopsTool-2026-05-27/EXPERIENCE.md` | 整文档 | final |
+| UX · 视觉 | `ux-designs/ux-Pipewright-2026-05-27/DESIGN.md` | 整文档 | final |
+| UX · 体验 | `ux-designs/ux-Pipewright-2026-05-27/EXPERIENCE.md` | 整文档 | final |
 | Epics & Stories | `epics.md`(7 epic / 39 story) | 整文档(非分片) | complete |
 
 ### 问题

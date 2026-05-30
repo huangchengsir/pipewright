@@ -14,8 +14,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/huangjiawei/devopstool/internal/store"
-	"github.com/huangjiawei/devopstool/internal/vault"
+	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 func testMasterKey() *[32]byte {
@@ -248,7 +248,7 @@ func TestEmailTestViaStubSender(t *testing.T) {
 	if gotAuth == nil {
 		t.Fatalf("有密码应构造 auth")
 	}
-	if !bytes.Contains(gotMsg, []byte("Subject: devopsTool 测试通知")) {
+	if !bytes.Contains(gotMsg, []byte("Subject: Pipewright 测试通知")) {
 		t.Fatalf("消息应含 Subject: %s", gotMsg)
 	}
 	// 消息体绝不含密码明文。

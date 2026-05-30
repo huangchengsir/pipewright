@@ -132,7 +132,7 @@ claude-opus-4-8[1m] (Task 1-3 后端部分)
 - `internal/run/run.go`(改:`Trigger` 增 Resolved* 内部字段)
 - `internal/run/service.go`(改:`Create` 持久化 resolved 内部列)
 - `internal/httpapi/router.go`(改:`WithWebhooks` Option + 公开 webhook 路由 + 手动触发路由)
-- `cmd/devopstool/main.go`(改:装配 Receiver 并注入 `WithWebhooks`)
+- `cmd/pipewright/main.go`(改:装配 Receiver 并注入 `WithWebhooks`)
 
 前端(Task 4):
 - `web/src/api/runs.ts` — 新增 `TriggerManualInput` 接口 + `triggerManual` 函数

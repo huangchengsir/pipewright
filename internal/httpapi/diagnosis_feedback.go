@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/huangjiawei/devopstool/internal/mask"
-	"github.com/huangjiawei/devopstool/internal/run"
+	"github.com/huangchengsir/pipewright/internal/mask"
+	"github.com/huangchengsir/pipewright/internal/run"
 )
 
 // diagnosis_feedback.go 是「诊断反馈闭环」HTTP 层(FR-26 / Story 7.5)。

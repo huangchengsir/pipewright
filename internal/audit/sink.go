@@ -19,7 +19,7 @@ import (
 //   - 其它非空值视为本地第二文件路径(file:// 前缀可选)→ JSON Lines append
 //
 // 空/未设 → 无远端 sink(仅本地 append-only 表)。
-const envAuditSink = "DEVOPSTOOL_AUDIT_SINK"
+const envAuditSink = "PIPEWRIGHT_AUDIT_SINK"
 
 // sinkRecordDTO 是 sink 推送的脱敏审计记录线格式(已脱敏;绝无明文 secret)。
 type sinkRecordDTO struct {
@@ -46,7 +46,7 @@ func toSinkDTO(r Record) sinkRecordDTO {
 	}
 }
 
-// SinkFromEnv 按 DEVOPSTOOL_AUDIT_SINK 构造远端 sink;未配置返回 (nil, nil)。
+// SinkFromEnv 按 PIPEWRIGHT_AUDIT_SINK 构造远端 sink;未配置返回 (nil, nil)。
 // 不做网络/磁盘探测(无 init 副作用,避免抬高空载内存);失败延迟到 Send 时降级。
 func SinkFromEnv() (Sink, error) {
 	raw := strings.TrimSpace(os.Getenv(envAuditSink))

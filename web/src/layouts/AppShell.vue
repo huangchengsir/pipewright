@@ -54,7 +54,7 @@ function isActive(item: NavItem): boolean {
     <!-- Left rail navigation -->
     <nav class="rail" aria-label="主导航">
       <!-- Brand mark -->
-      <router-link to="/" class="brand-mark" aria-label="devopsTool 主页">
+      <router-link to="/" class="brand-mark" aria-label="Pipewright 主页">
         <span class="mono">d&gt;</span>
       </router-link>
 

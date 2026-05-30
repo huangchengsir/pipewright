@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/huangjiawei/devopstool/internal/audit"
-	"github.com/huangjiawei/devopstool/internal/vault"
+	"github.com/huangchengsir/pipewright/internal/audit"
+	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 // credentialDTO 是凭据对外响应体(冻结契约;camelCase;无明文/无密文)。

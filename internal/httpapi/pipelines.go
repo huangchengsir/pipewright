@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/huangjiawei/devopstool/internal/pipeline"
+	"github.com/huangchengsir/pipewright/internal/pipeline"
 )
 
 // pipelineDTO 是流水线配置对外响应体(冻结契约;camelCase)。外层形状定死,

@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/huangjiawei/devopstool/internal/mask"
+	"github.com/huangchengsir/pipewright/internal/mask"
 )
 
 // defaultConcurrency 是 worker pool 默认并发上限(有界;NFR-4 内存约束)。

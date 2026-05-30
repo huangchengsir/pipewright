@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/huangjiawei/devopstool/internal/pipeline"
+	"github.com/huangchengsir/pipewright/internal/pipeline"
 )
 
 // ---- 构建/部署配置 DTO(冻结契约;camelCase;secret 项绝无明文,仅 credentialId + maskedValue) ----

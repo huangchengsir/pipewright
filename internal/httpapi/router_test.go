@@ -11,7 +11,7 @@ import (
 
 func testWebFS() fs.FS {
 	return fstest.MapFS{
-		"index.html":    &fstest.MapFile{Data: []byte("<!doctype html><title>devopstool</title>")},
+		"index.html":    &fstest.MapFile{Data: []byte("<!doctype html><title>pipewright</title>")},
 		"assets/app.js": &fstest.MapFile{Data: []byte("console.log('hi')")},
 	}
 }

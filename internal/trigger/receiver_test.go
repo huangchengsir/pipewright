@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huangjiawei/devopstool/internal/vault"
+	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 // fakeRunCreator 记录被请求创建的运行(不触 run 包,避免领域互引)。

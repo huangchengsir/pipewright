@@ -1,5 +1,5 @@
 /**
- * Naive UI theme overrides aligned to devopsTool design tokens.
+ * Naive UI theme overrides aligned to Pipewright design tokens.
  * Primary color = electric blue oklch(66% 0.155 258) ≈ #3B82F6-ish in sRGB.
  */
 

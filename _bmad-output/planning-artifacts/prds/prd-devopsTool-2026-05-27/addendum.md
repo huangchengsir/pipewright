@@ -1,4 +1,4 @@
-# Addendum — devopsTool PRD 附录
+# Addendum — Pipewright PRD 附录
 
 保留属于下游(架构/方案设计)的技术-how 与实现取向,不挤占 PRD 正文。PRD 约束能力,addendum 记实现意向。
 
@@ -8,7 +8,7 @@
 
 ## 承自产品简报的技术约束
 
-- 技术栈 **Go**(平台主体 + 未来 agent);平台双运行模式:Docker / 本地编译原生。详见简报 addendum `../briefs/brief-devopsTool-2026-05-27/addendum.md`。
+- 技术栈 **Go**(平台主体 + 未来 agent);平台双运行模式:Docker / 本地编译原生。详见简报 addendum `../briefs/brief-Pipewright-2026-05-27/addendum.md`。
 - 多版本隔离构建经容器实现,宿主机零污染。
 - MVP 部署为无 agent / 纯 SSH;agent 配合运行时运维(§4.6)在后续引入。
 

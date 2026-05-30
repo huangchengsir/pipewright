@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huangjiawei/devopstool/internal/store"
-	"github.com/huangjiawei/devopstool/internal/vault"
+	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 // testMasterKey 返回确定性测试用 master key。

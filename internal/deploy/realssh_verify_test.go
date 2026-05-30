@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/huangjiawei/devopstool/internal/run"
-	"github.com/huangjiawei/devopstool/internal/target"
-	"github.com/huangjiawei/devopstool/internal/vault"
+	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/target"
+	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 func TestRealLocalhostDistDeploy(t *testing.T) {
@@ -61,7 +61,7 @@ func TestRealLocalhostDistDeploy(t *testing.T) {
 	runID, artID := seedSuccessRunWithArtifact(t, db, rsvc, run.ArtifactDist, "dist/shop-v1.tar.gz")
 
 	// 唯一目标目录(便于断言落地)。
-	dir := "/tmp/devopstool-deploy-real-" + uuid.NewString()[:8]
+	dir := "/tmp/pipewright-deploy-real-" + uuid.NewString()[:8]
 	t.Cleanup(func() { _ = os.RemoveAll(dir); _ = os.RemoveAll(dir + "-current") })
 
 	dsvc := New(tgt, rsvc)

@@ -1,6 +1,6 @@
 # Go
-/devopstool
-/devopstool-*
+/pipewright
+/pipewright-*
 *.test
 *.out
 *.db

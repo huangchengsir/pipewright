@@ -25,7 +25,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/huangjiawei/devopstool/internal/vault"
+	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 // 未匹配策略枚举(DB 存 snake/小写字串;JSON camelCase 字段)。

@@ -154,7 +154,7 @@ async function loadSettings(): Promise<void> {
       if (err.status === 0) {
         loadError.value = '无法连接到服务器,请检查后端是否运行后重试'
       } else if (err.apiError?.code === 'vault_unconfigured') {
-        loadError.value = '保险库未配置 master key,请设置 DEVOPSTOOL_MASTER_KEY 环境变量'
+        loadError.value = '保险库未配置 master key,请设置 PIPEWRIGHT_MASTER_KEY 环境变量'
       } else {
         loadError.value = err.apiError?.message ?? `加载失败(${err.status})`
       }
@@ -315,7 +315,7 @@ function relativeTime(iso: string | null): string {
       <div class="section-head-text">
         <h2 class="section-title">AI 提供商</h2>
         <p class="section-desc">
-          devopsTool 不自训模型 —— 接入你自己的 LLM 用于失败诊断与配置生成。密钥仅存于本实例的加密保险库,绝不外泄。
+          Pipewright 不自训模型 —— 接入你自己的 LLM 用于失败诊断与配置生成。密钥仅存于本实例的加密保险库,绝不外泄。
         </p>
       </div>
       <!-- Connection status badge -->
@@ -372,7 +372,7 @@ function relativeTime(iso: string | null): string {
         </div>
         <div class="guidance-text">
           <strong>配置 LLM 以解锁 AI 诊断</strong>
-          <p>接入 Claude、OpenAI 或本地 Ollama 后,流水线失败时 devopsTool 将自动生成根因假说与修复建议,无需手动排查日志。</p>
+          <p>接入 Claude、OpenAI 或本地 Ollama 后,流水线失败时 Pipewright 将自动生成根因假说与修复建议,无需手动排查日志。</p>
         </div>
       </div>
 

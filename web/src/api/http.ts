@@ -1,7 +1,7 @@
 /**
- * Fetch wrapper for devopsTool API.
+ * Fetch wrapper for Pipewright API.
  *
- * - Reads devops_csrf cookie and attaches X-CSRF-Token header on write methods
+ * - Reads pipewright_csrf cookie and attaches X-CSRF-Token header on write methods
  *   (POST / PUT / PATCH / DELETE) — "double-submit cookie" CSRF protection.
  * - On 401, redirects to /login (preserving current URL as ?redirect=).
  * - Parses the canonical error envelope { error: { code, message } }.
@@ -46,7 +46,7 @@ async function request<T>(
   }
 
   if (WRITE_METHODS.has(method)) {
-    const csrfToken = getCookie('devops_csrf')
+    const csrfToken = getCookie('pipewright_csrf')
     if (csrfToken) {
       headers.set('X-CSRF-Token', csrfToken)
     }

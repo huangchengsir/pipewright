@@ -13,8 +13,8 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/huangjiawei/devopstool/internal/auth"
-	"github.com/huangjiawei/devopstool/internal/store"
+	"github.com/huangchengsir/pipewright/internal/auth"
+	"github.com/huangchengsir/pipewright/internal/store"
 )
 
 // ---- test helpers --------------------------------------------------------
@@ -34,7 +34,7 @@ func testStoreAuth(t *testing.T) *store.Store {
 // testWebFSAuth 返回测试用 FS。
 func testWebFSAuth() fs.FS {
 	return fstest.MapFS{
-		"index.html":    &fstest.MapFile{Data: []byte("<!doctype html><title>devopstool</title>")},
+		"index.html":    &fstest.MapFile{Data: []byte("<!doctype html><title>pipewright</title>")},
 		"assets/app.js": &fstest.MapFile{Data: []byte("console.log('hi')")},
 	}
 }
@@ -101,7 +101,7 @@ func loginWithClient(t *testing.T, client *http.Client, srvURL string) string {
 			return c.Value
 		}
 	}
-	t.Fatal("devops_csrf cookie not found after login")
+	t.Fatal("pipewright_csrf cookie not found after login")
 	return ""
 }
 
@@ -157,16 +157,16 @@ func TestLoginSuccess(t *testing.T) {
 		}
 	}
 	if sessionCookie == nil {
-		t.Fatal("devops_session cookie not set")
+		t.Fatal("pipewright_session cookie not set")
 	}
 	if !sessionCookie.HttpOnly {
-		t.Fatal("devops_session cookie should be HttpOnly")
+		t.Fatal("pipewright_session cookie should be HttpOnly")
 	}
 	if csrfCookie == nil {
-		t.Fatal("devops_csrf cookie not set")
+		t.Fatal("pipewright_csrf cookie not set")
 	}
 	if csrfCookie.HttpOnly {
-		t.Fatal("devops_csrf cookie should NOT be HttpOnly (frontend must read it)")
+		t.Fatal("pipewright_csrf cookie should NOT be HttpOnly (frontend must read it)")
 	}
 }
 

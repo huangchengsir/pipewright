@@ -75,7 +75,7 @@ Change Log(2026-05-30 后端 B 块 patch):
 - **2-1 边界**:本期新建项目是**简单表单**(名称/仓库/凭据/测试连接),**不含 AI 生成向导**(=Story 2-5)、不含流水线配置编辑(=2-2/2-3/2-4);列表的"上次运行/目标服务器"字段就位但数据后续填。
 
 ### 环境
-- Go 在 `~/sdk/go/bin`(`export PATH`);`go get github.com/go-git/go-git/v5` 需联网 → 加 `dangerouslyDisableSandbox`;GOPROXY=goproxy.cn 已设。npm=npmmirror。master key 见 1-3(测试 vault 路径需 `DEVOPSTOOL_MASTER_KEY`)。
+- Go 在 `~/sdk/go/bin`(`export PATH`);`go get github.com/go-git/go-git/v5` 需联网 → 加 `dangerouslyDisableSandbox`;GOPROXY=goproxy.cn 已设。npm=npmmirror。master key 见 1-3(测试 vault 路径需 `PIPEWRIGHT_MASTER_KEY`)。
 
 ### 禁止
 - ❌ 凭据明文入库/日志/响应/错误体;❌ 前端显凭据明文;❌ 本期塞 AI 向导或流水线配置;❌ 字符串拼接执行命令;❌ CGO sqlite;❌ 后端碰 web/ 或前端碰 Go;❌ init() 跑重活;❌ 回退 1-1/1-2/1-3 安全修复。
@@ -100,7 +100,7 @@ claude-opus-4-8 (后端 Task 1-4)
 - (后端)`gofmt -l cmd internal embed.go` → 空(干净)
 - (后端)`go vet . ./cmd/... ./internal/...` → 干净
 - (后端)`go test . ./cmd/... ./internal/...` → 全绿(httpapi/project/store/vault 全 ok)
-- (后端)`CGO_ENABLED=0 go build ./cmd/devopstool` → OK
+- (后端)`CGO_ENABLED=0 go build ./cmd/pipewright` → OK
 - (后端)`go mod tidy` → OK(新增 go-git/v5 v5.19.1 及其传递依赖)
 - (后端)`make mem-check` → resident 20016 KB(19 MB),≤100 MB,未回退(go-git 仅增二进制,不驻留)
 - (后端)真实二进制冒烟:test-clone 坏 URL→422 repo_unreachable;创建指向不存在凭据→422 credential_error;file:// 裸仓库创建→201 且 defaultBranch 由远端 HEAD 探测为 production;GET 列表 DTO 含 credentialName/lastRunStatus:null/targetServers:[];PATCH 200 / DELETE 204 / 再 DELETE 404;`grep` 整库(db/wal/shm)+ 日志 → 0 处明文 token
@@ -135,7 +135,7 @@ claude-opus-4-8 (后端 Task 1-4)
 - `internal/httpapi/projects.go` (新建:DTO + 5 端点 handler + 错误映射)
 - `internal/httpapi/projects_test.go` (新建:HTTP CRUD/422 路径/CSRF/auth/无明文断言)
 - `internal/httpapi/router.go` (修改:WithProjects Option + 挂载 /api/projects* 路由)
-- `cmd/devopstool/main.go` (修改:装配 project.Service 并注入)
+- `cmd/pipewright/main.go` (修改:装配 project.Service 并注入)
 - `go.mod` / `go.sum` (修改:新增 go-git/v5 依赖)
 
 ## Change Log

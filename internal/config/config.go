@@ -31,29 +31,29 @@ type Config struct {
 // Load 从环境变量读取配置,缺失项回退到合理默认值。
 func Load() Config {
 	return Config{
-		Addr:          getenv("DEVOPSTOOL_ADDR", ":8080"),
-		DBPath:        getenv("DEVOPSTOOL_DB", "devopstool.db"),
-		AdminUsername: getenv("DEVOPSTOOL_ADMIN_USERNAME", "admin"),
-		AdminPassword: os.Getenv("DEVOPSTOOL_ADMIN_PASSWORD"), // 无默认值,空串表示未设置
+		Addr:          getenv("PIPEWRIGHT_ADDR", ":8080"),
+		DBPath:        getenv("PIPEWRIGHT_DB", "pipewright.db"),
+		AdminUsername: getenv("PIPEWRIGHT_ADMIN_USERNAME", "admin"),
+		AdminPassword: os.Getenv("PIPEWRIGHT_ADMIN_PASSWORD"), // 无默认值,空串表示未设置
 	}
 }
 
-// ErrNoMasterKey 表示既未设置 DEVOPSTOOL_MASTER_KEY 也未设置 _FILE。
+// ErrNoMasterKey 表示既未设置 PIPEWRIGHT_MASTER_KEY 也未设置 _FILE。
 // 调用方据此让保险库进入「未配置」态,而非视为致命错误。
 var ErrNoMasterKey = errors.New("config: no master key configured")
 
 // LoadMasterKey 读取凭据保险库 master key。
 //
-// 优先级:DEVOPSTOOL_MASTER_KEY(base64 编码的 32 字节)> DEVOPSTOOL_MASTER_KEY_FILE
+// 优先级:PIPEWRIGHT_MASTER_KEY(base64 编码的 32 字节)> PIPEWRIGHT_MASTER_KEY_FILE
 // (文件内容为 base64,允许尾随空白/换行)。两者皆未设置时返回 (nil, ErrNoMasterKey),
 // 由调用方决定进入未配置态(不 panic)。
 //
 // 解码失败或长度不为 32B 时返回非 nil error(配置错误,应被察觉)。
 // 错误信息绝不含 key 内容。
 func LoadMasterKey() (*[MasterKeyLen]byte, error) {
-	raw := os.Getenv("DEVOPSTOOL_MASTER_KEY")
+	raw := os.Getenv("PIPEWRIGHT_MASTER_KEY")
 	if raw == "" {
-		if path := os.Getenv("DEVOPSTOOL_MASTER_KEY_FILE"); path != "" {
+		if path := os.Getenv("PIPEWRIGHT_MASTER_KEY_FILE"); path != "" {
 			b, err := os.ReadFile(path)
 			if err != nil {
 				return nil, fmt.Errorf("config: read master key file: %w", err)

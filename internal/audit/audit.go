@@ -2,7 +2,7 @@
 //
 // 敏感操作(凭据增删改、trigger secret reset、项目增删改、手动触发运行)成功后,
 // 同步写入本地 append-only 审计表(0009_audit.sql,SQLite trigger 硬拦 UPDATE/DELETE),
-// 并可选地同步到远端 sink(env DEVOPSTOOL_AUDIT_SINK)。本地日志被删后,远端 sink
+// 并可选地同步到远端 sink(env PIPEWRIGHT_AUDIT_SINK)。本地日志被删后,远端 sink
 // 仍持完整记录(AC-SEC-03)。
 //
 // 脱敏铁律:Entry.Detail 写库前一律过 mask.Masker.ScrubMap,detail_json 绝不含
@@ -24,7 +24,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/huangjiawei/devopstool/internal/mask"
+	"github.com/huangchengsir/pipewright/internal/mask"
 )
 
 // Action 操作枚举(snake_case;DB 存字串)。只增不改语义。

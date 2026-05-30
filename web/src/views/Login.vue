@@ -121,7 +121,7 @@ const canSubmit = computed(() => !loading.value && !isLockedOut.value)
           <span class="mono">d&gt;</span>
         </div>
         <div class="brand-name">
-          <span class="brand-title">devopsTool</span>
+          <span class="brand-title">Pipewright</span>
           <span class="brand-sub">自托管 · 单管理员</span>
         </div>
       </div>

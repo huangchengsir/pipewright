@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huangjiawei/devopstool/internal/run"
-	"github.com/huangjiawei/devopstool/internal/target"
+	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/target"
 )
 
 // TestHealthCheckCommandSuccess 验证 command 探测一次通过 → 该机 success,message 含「健康检查通过」。

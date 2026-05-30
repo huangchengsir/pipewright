@@ -100,7 +100,7 @@ function skip(): void {
     <header class="ob-hero">
       <div class="ob-mark mono" aria-hidden="true">d&gt;</div>
       <div>
-        <h1 class="ob-title">欢迎使用 devopsTool</h1>
+        <h1 class="ob-title">欢迎使用 Pipewright</h1>
         <p class="ob-lede">
           把 <b>CI + 部署编排 + 服务器管理</b> 收进一个 <b>≤100MB</b> 的二进制,并把 AI 做进失败诊断。三步即可让第一个服务跑起来。
         </p>

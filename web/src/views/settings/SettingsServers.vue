@@ -105,7 +105,7 @@ async function loadServers(): Promise<void> {
       if (err.status === 0) {
         loadError.value = '无法连接到服务器,请检查后端是否运行后重试'
       } else if (err.apiError?.code === 'vault_unconfigured') {
-        loadError.value = '保险库未配置 master key,请联系管理员设置 DEVOPSTOOL_MASTER_KEY 环境变量'
+        loadError.value = '保险库未配置 master key,请联系管理员设置 PIPEWRIGHT_MASTER_KEY 环境变量'
       } else {
         loadError.value = err.apiError?.message ?? `加载服务器失败(${err.status})`
       }

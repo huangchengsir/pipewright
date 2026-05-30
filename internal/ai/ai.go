@@ -26,7 +26,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/huangjiawei/devopstool/internal/vault"
+	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 // Provider 枚举(DB 存小写字串;JSON 同名)。空串 = 未配置。

@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/huangjiawei/devopstool/internal/audit"
-	"github.com/huangjiawei/devopstool/internal/auth"
+	"github.com/huangchengsir/pipewright/internal/audit"
+	"github.com/huangchengsir/pipewright/internal/auth"
 )
 
 // accountService 是账户设置 handler 依赖的窄接口(改口令 / 会话列表 / 撤销)。

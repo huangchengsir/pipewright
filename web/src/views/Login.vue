@@ -3,6 +3,8 @@ import { ref, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { login } from '../api/auth'
 import { HttpError } from '../api/http'
+import { listProjects } from '../api/projects'
+import { isOnboardingDismissed } from '../composables/useOnboarding'
 import { useSessionStore } from '../stores/session'
 import ThemeToggle from '../components/ThemeToggle.vue'
 
@@ -59,13 +61,30 @@ async function handleSubmit(): Promise<void> {
     // Validate redirect: must start with '/' and must NOT start with '//'
     // (double-slash opens a protocol-relative open-redirect vector).
     const rawRedirect = route.query.redirect as string | undefined
-    const safeRedirect =
+    const hasExplicitRedirect =
       typeof rawRedirect === 'string' &&
       rawRedirect.startsWith('/') &&
       !rawRedirect.startsWith('//')
-        ? rawRedirect
-        : '/'
-    await router.replace(safeRedirect)
+
+    if (hasExplicitRedirect) {
+      await router.replace(rawRedirect as string)
+      return
+    }
+
+    // No explicit target: first-run instances (no project, not dismissed) land on
+    // the onboarding guide; otherwise fall to the overview. hasAI/hasServer are
+    // forward-declared (7-1/4-1 not built) so onboarding is gated on project存在.
+    let goOnboarding = false
+    if (!isOnboardingDismissed()) {
+      try {
+        const projects = await listProjects()
+        goOnboarding = projects.length === 0
+      } catch {
+        // Projects unreachable — don't block login; fall to overview.
+        goOnboarding = false
+      }
+    }
+    await router.replace(goOnboarding ? '/onboarding' : '/')
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 429) {

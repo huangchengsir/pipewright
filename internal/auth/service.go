@@ -24,6 +24,15 @@ type Authenticator interface {
 // ErrInvalidCredentials 用户名或口令错误。
 var ErrInvalidCredentials = errors.New("auth: invalid credentials")
 
+// ErrInvalidCurrentPassword 改口令时当前口令校验失败。
+var ErrInvalidCurrentPassword = errors.New("auth: invalid current password")
+
+// ErrWeakPassword 新口令不满足强度规则(至少 8 位、非空)。
+var ErrWeakPassword = errors.New("auth: weak password")
+
+// minPasswordLen 新口令最小长度。
+const minPasswordLen = 8
+
 // ErrLockedOut 登录失败次数过多被锁定。
 type ErrLockedOut struct {
 	RetryAfter time.Duration
@@ -183,4 +192,69 @@ func (s *Service) Verify(token string) (*Session, error) {
 // Logout 删除会话。
 func (s *Service) Logout(token string) error {
 	return s.sessions.Delete(token)
+}
+
+// ChangePassword 校验当前口令 → 更新为新 argon2id 哈希 → 删除除当前会话外的所有会话。
+//   - current 错 → ErrInvalidCurrentPassword(401)。
+//   - new 不满足强度(< minPasswordLen 或空)→ ErrWeakPassword(422)。
+//   - 成功:更新 admin_user.password_hash;DELETE WHERE token != currentToken(当前不掉线)。
+//
+// 与当前口令相同的新口令也允许(不强制不同)。
+func (s *Service) ChangePassword(current, newPassword, currentToken string) error {
+	// 强度校验先行(无需触 argon2,避免无谓内存分配)。
+	if len(newPassword) < minPasswordLen {
+		return ErrWeakPassword
+	}
+
+	var storedHash string
+	err := s.db.QueryRow(`SELECT password_hash FROM admin_user WHERE id = 1`).Scan(&storedHash)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrInvalidCurrentPassword
+		}
+		return fmt.Errorf("auth: query admin hash: %w", err)
+	}
+
+	ok, err := VerifyPassword(current, storedHash)
+	if err != nil {
+		return fmt.Errorf("auth: verify current password: %w", err)
+	}
+	if !ok {
+		return ErrInvalidCurrentPassword
+	}
+
+	newHash, err := HashPassword(newPassword)
+	if err != nil {
+		return fmt.Errorf("auth: hash new password: %w", err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := s.db.Exec(
+		`UPDATE admin_user SET password_hash = ?, updated_at = ? WHERE id = 1`,
+		newHash, now,
+	); err != nil {
+		return fmt.Errorf("auth: update password hash: %w", err)
+	}
+
+	// 改口令后使其它会话失效(当前 token 保留,用户不掉线)。
+	if _, err := s.sessions.DeleteOthers(currentToken); err != nil {
+		return fmt.Errorf("auth: revoke other sessions: %w", err)
+	}
+	return nil
+}
+
+// ListSessions 返回所有未过期会话元数据(不含原 token);currentToken 标识 current。
+func (s *Service) ListSessions(currentToken string) ([]SessionMeta, error) {
+	return s.sessions.List(currentToken)
+}
+
+// RevokeSession 按 id(sha256 前缀)删除会话;无匹配 → ErrSessionNotFound。
+func (s *Service) RevokeSession(id string) error {
+	n, err := s.sessions.DeleteByIDPrefix(id)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrSessionNotFound
+	}
+	return nil
 }

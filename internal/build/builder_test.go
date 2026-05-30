@@ -138,6 +138,8 @@ type fakeCommander struct {
 	mu      sync.Mutex
 	scripts map[string]fakeCmd // key = 子命令(build/run/tag/login/push/inspect)
 	execs   []recordedExec
+	// onBuild 在执行 docker build 时回调一次(测试用:模拟构建后取消 ctx 验脚本阶段取消)。
+	onBuild func()
 }
 
 func newFakeCommander() *fakeCommander {
@@ -148,13 +150,18 @@ func (c *fakeCommander) script(sub string, cmd fakeCmd) { c.scripts[sub] = cmd }
 
 func (c *fakeCommander) record(name string, args []string, stdin string) fakeCmd {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.execs = append(c.execs, recordedExec{name: name, args: append([]string(nil), args...), stdin: stdin})
 	sub := ""
 	if len(args) > 0 {
 		sub = args[0]
 	}
-	return c.scripts[sub]
+	hook := c.onBuild
+	cmd := c.scripts[sub]
+	c.mu.Unlock()
+	if sub == "build" && hook != nil {
+		hook()
+	}
+	return cmd
 }
 
 func (c *fakeCommander) Run(_ context.Context, name string, args []string, stdin string) (string, string, int, error) {

@@ -1,0 +1,54 @@
+# devopsTool 自身仓库的 CI(GitHub Actions)。与产品面向用户的首发平台 Gitee(FR-1)无关。
+# 用内置 gofmt + go vet(项目 config-protection 钩子禁止提交 lint 配置文件,故不引入 golangci)。
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      # go:embed 需要 web/dist 存在;后端 job 用占位即可(真实产物在 frontend job 验证)
+      - name: ensure web/dist placeholder
+        run: |
+          mkdir -p web/dist
+          [ -f web/dist/index.html ] || echo '<!doctype html><div id="app"></div>' > web/dist/index.html
+      - name: gofmt check
+        run: |
+          out="$(gofmt -l cmd internal embed.go)"
+          if [ -n "$out" ]; then echo "gofmt needed:"; echo "$out"; exit 1; fi
+      - run: go vet . ./cmd/... ./internal/...
+      - run: go test . ./cmd/... ./internal/...
+      - name: static build
+        run: CGO_ENABLED=0 go build -o devopstool ./cmd/devopstool
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: cd web && npm ci
+      - run: cd web && npm run build
+
+  mem-budget:
+    runs-on: ubuntu-latest
+    needs: [frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: cd web && npm ci && npm run build
+      - name: resident memory <= 100MB
+        run: bash scripts/mem-check.sh

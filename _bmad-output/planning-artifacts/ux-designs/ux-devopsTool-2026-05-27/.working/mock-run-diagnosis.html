@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>devopsTool — 运行 #128 · AI 失败诊断</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root,
+[data-theme="dark"]{
+  --bg: oklch(18% 0.02 250);
+  --bg-grad: radial-gradient(1200px 600px at 78% -8%, oklch(28% 0.05 215 / .45), transparent 60%);
+  --surface-1: oklch(22% 0.02 250);
+  --surface-2: oklch(26% 0.022 250);
+  --surface-3: oklch(30% 0.024 250);
+  --border: oklch(36% 0.02 250 / .7);
+  --border-soft: oklch(34% 0.02 250 / .4);
+  --text: oklch(95% 0.008 250);
+  --text-dim: oklch(74% 0.018 250);
+  --text-faint: oklch(60% 0.02 250);
+  --accent: oklch(80% 0.135 200);
+  --accent-strong: oklch(72% 0.14 200);
+  --accent-glow: oklch(80% 0.135 200 / .25);
+  --success: oklch(80% 0.16 155);
+  --warning: oklch(83% 0.15 85);
+  --danger: oklch(70% 0.2 25);
+  --danger-bg: oklch(32% 0.09 25 / .55);
+  --danger-line: oklch(70% 0.2 25 / .14);
+  --add-bg: oklch(40% 0.12 155 / .16);
+  --del-bg: oklch(40% 0.14 25 / .16);
+  --shadow: 0 1px 2px oklch(0% 0 0 / .4), 0 12px 32px oklch(0% 0 0 / .35);
+}
+[data-theme="light"]{
+  --bg: oklch(97% 0.004 250);
+  --bg-grad: radial-gradient(1200px 600px at 78% -8%, oklch(85% 0.07 215 / .35), transparent 60%);
+  --surface-1: oklch(100% 0 0);
+  --surface-2: oklch(98.5% 0.004 250);
+  --surface-3: oklch(96% 0.006 250);
+  --border: oklch(88% 0.01 250);
+  --border-soft: oklch(91% 0.008 250);
+  --text: oklch(24% 0.02 250);
+  --text-dim: oklch(45% 0.02 250);
+  --text-faint: oklch(58% 0.02 250);
+  --accent: oklch(58% 0.14 205);
+  --accent-strong: oklch(52% 0.15 205);
+  --accent-glow: oklch(58% 0.14 205 / .18);
+  --success: oklch(58% 0.15 155);
+  --warning: oklch(64% 0.14 75);
+  --danger: oklch(56% 0.2 25);
+  --danger-bg: oklch(94% 0.04 25);
+  --danger-line: oklch(56% 0.2 25 / .08);
+  --add-bg: oklch(70% 0.12 155 / .14);
+  --del-bg: oklch(70% 0.14 25 / .13);
+  --shadow: 0 1px 2px oklch(50% 0.02 250 / .08), 0 12px 28px oklch(50% 0.03 250 / .1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{font-size:15px}
+body{
+  font-family:"Inter",ui-sans-serif,system-ui,"PingFang SC","Microsoft YaHei",sans-serif;
+  background:var(--bg); background-image:var(--bg-grad); background-attachment:fixed;
+  color:var(--text); line-height:1.5; -webkit-font-smoothing:antialiased;
+  display:grid; grid-template-columns:236px 1fr; min-height:100vh;
+}
+.mono{font-family:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+
+/* ---- sidebar ---- */
+.side{border-right:1px solid var(--border-soft); padding:20px 14px; display:flex; flex-direction:column; gap:4px; position:sticky; top:0; height:100vh}
+.brand{display:flex; align-items:center; gap:10px; padding:6px 10px 18px; font-weight:700; font-size:1.05rem; letter-spacing:-.01em}
+.brand .dot{width:11px; height:11px; border-radius:3px; background:var(--accent); box-shadow:0 0 14px var(--accent-glow)}
+.nav{font-size:.875rem; color:var(--text-dim); border-radius:9px; padding:8px 11px; display:flex; gap:10px; align-items:center; cursor:pointer; transition:background .18s ease, color .18s ease, transform .18s ease}
+.nav svg{width:16px;height:16px;opacity:.8}
+.nav:hover{background:var(--surface-2); color:var(--text); transform:translateX(2px)}
+.nav.active{background:var(--surface-3); color:var(--text); font-weight:500}
+.nav.active svg{color:var(--accent); opacity:1}
+.side .spacer{flex:1}
+.theme-toggle{margin-top:8px; border:1px solid var(--border); background:var(--surface-1); color:var(--text-dim); border-radius:9px; padding:8px 11px; font:inherit; font-size:.8rem; cursor:pointer; display:flex; gap:8px; align-items:center; transition:border-color .18s, color .18s}
+.theme-toggle:hover{border-color:var(--accent); color:var(--text)}
+
+/* ---- main ---- */
+.main{padding:0 34px 60px; max-width:1180px}
+.topbar{display:flex; align-items:center; gap:14px; padding:20px 0 14px; position:sticky; top:0; background:linear-gradient(var(--bg), var(--bg) 70%, transparent); z-index:5}
+.crumb{font-size:.83rem; color:var(--text-faint); display:flex; gap:8px; align-items:center}
+.crumb b{color:var(--text-dim); font-weight:500}
+.topbar .grow{flex:1}
+.btn{border:1px solid var(--border); background:var(--surface-1); color:var(--text); border-radius:9px; padding:8px 14px; font:inherit; font-size:.84rem; font-weight:500; cursor:pointer; transition:transform .15s ease, border-color .15s, background .15s}
+.btn:hover{transform:translateY(-1px); border-color:var(--accent)}
+.btn.primary{background:var(--accent); color:oklch(18% 0.02 250); border-color:transparent; box-shadow:0 4px 16px var(--accent-glow)}
+.btn.primary:hover{background:var(--accent-strong)}
+
+/* run header */
+.run-head{display:flex; align-items:flex-start; gap:18px; padding:6px 0 22px; animation:rise .5s var(--e,cubic-bezier(.16,1,.3,1)) both}
+.run-title{font-size:1.7rem; font-weight:700; letter-spacing:-.02em; display:flex; align-items:center; gap:12px}
+.run-meta{margin-top:7px; display:flex; flex-wrap:wrap; gap:7px 16px; font-size:.83rem; color:var(--text-faint)}
+.run-meta b{color:var(--text-dim); font-weight:500}
+.pill{font-size:.74rem; font-weight:600; padding:4px 11px; border-radius:100px; letter-spacing:.02em; display:inline-flex; align-items:center; gap:6px}
+.pill.fail{background:var(--danger-bg); color:var(--danger)}
+.pill .x{width:6px;height:6px;border-radius:50%;background:currentColor}
+
+/* timeline */
+.timeline{display:flex; gap:0; margin:0 0 26px; animation:rise .5s .06s cubic-bezier(.16,1,.3,1) both}
+.stage{flex:1; padding:13px 16px; border:1px solid var(--border-soft); border-right:none; background:var(--surface-1); position:relative}
+.stage:first-child{border-radius:12px 0 0 12px}
+.stage:last-child{border-radius:0 12px 12px 0; border-right:1px solid var(--border-soft)}
+.stage .s-name{font-size:.8rem; font-weight:600; display:flex; align-items:center; gap:8px}
+.stage .s-dur{font-size:.72rem; color:var(--text-faint); margin-top:3px}
+.stage .ic{width:16px;height:16px;border-radius:50%;display:grid;place-items:center;font-size:10px;font-weight:700}
+.ic.ok{background:var(--success); color:var(--bg)}
+.ic.failed{background:var(--danger); color:#fff}
+.ic.skip{background:var(--surface-3); color:var(--text-faint); border:1px solid var(--border)}
+.stage.is-failed{background:linear-gradient(var(--danger-line),var(--danger-line)); border-color:var(--danger)}
+.stage.is-failed::after{content:""; position:absolute; left:0; right:0; bottom:-1px; height:2px; background:var(--danger)}
+
+/* ===== AI diagnosis hero ===== */
+.diag{border:1px solid var(--border); border-radius:16px; background:
+   linear-gradient(180deg, oklch(80% 0.135 200 / .07), transparent 120px), var(--surface-1);
+   box-shadow:var(--shadow); overflow:hidden; animation:rise .55s .12s cubic-bezier(.16,1,.3,1) both; margin-bottom:22px}
+.diag-head{display:flex; align-items:center; gap:12px; padding:16px 20px; border-bottom:1px solid var(--border-soft)}
+.spark{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;background:var(--accent);color:oklch(18% 0.02 250);box-shadow:0 0 0 5px var(--accent-glow); animation:pulse 3.2s ease-in-out infinite}
+.diag-head h2{font-size:1.02rem; font-weight:600; letter-spacing:-.01em}
+.diag-head .tag{font-size:.7rem; color:var(--text-faint); border:1px solid var(--border); border-radius:6px; padding:2px 7px; margin-left:2px}
+.diag-body{padding:20px; display:grid; grid-template-columns:1fr 188px; gap:24px}
+.hypo-label{font-size:.72rem; text-transform:uppercase; letter-spacing:.09em; color:var(--text-faint); font-weight:600}
+.hypo{font-size:1.32rem; font-weight:600; letter-spacing:-.015em; margin:8px 0 4px; line-height:1.32}
+.hypo .hi{color:var(--accent)}
+.because{font-size:.9rem; color:var(--text-dim); margin-bottom:16px}
+
+/* confidence ring */
+.conf{display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; border-left:1px solid var(--border-soft); padding-left:22px}
+.ring{--p:88; width:118px; height:118px; border-radius:50%;
+  background:conic-gradient(var(--accent) calc(var(--p)*1%), var(--surface-3) 0);
+  display:grid; place-items:center; animation:fill 1.1s .35s cubic-bezier(.16,1,.3,1) both}
+.ring::before{content:""; position:absolute; width:90px;height:90px;border-radius:50%;background:var(--surface-1)}
+.ring b{position:relative; font-size:1.7rem; font-weight:700; letter-spacing:-.02em}
+.ring small{position:relative; display:block; font-size:.62rem; color:var(--text-faint); text-align:center; font-weight:600; letter-spacing:.06em; margin-top:-2px}
+.conf .cap{font-size:.72rem; color:var(--text-faint); text-align:center}
+
+/* evidence */
+.evidence{margin-top:4px; border:1px solid var(--border-soft); border-radius:10px; background:var(--surface-2); overflow:hidden}
+.ev-bar{font-size:.74rem; color:var(--text-faint); padding:8px 12px; border-bottom:1px solid var(--border-soft); display:flex; gap:8px; align-items:center}
+.ev-bar .file{color:var(--text-dim)}
+.code{font-size:.8rem; line-height:1.7; padding:10px 0; overflow-x:auto}
+.code .ln{display:grid; grid-template-columns:42px 1fr; padding:0 14px}
+.code .ln .n{color:var(--text-faint); text-align:right; padding-right:14px; user-select:none}
+.code .ln.bad{background:var(--danger-line)}
+.code .ln.bad .n{color:var(--danger)}
+.code .ln .c{color:var(--text-dim); white-space:pre}
+.code .ln.bad .c{color:var(--text)}
+.code .tok-err{color:var(--danger); font-weight:600}
+.code .tok-key{color:var(--accent)}
+
+/* fix */
+.fix{margin-top:16px}
+.fix .h{font-size:.72rem; text-transform:uppercase; letter-spacing:.09em; color:var(--text-faint); font-weight:600; margin-bottom:8px}
+.cmd{display:flex; align-items:center; gap:10px; background:oklch(14% 0.02 250); border:1px solid var(--border); border-radius:10px; padding:11px 13px; font-size:.84rem}
+[data-theme="light"] .cmd{background:oklch(96% 0.006 250)}
+.cmd .c{flex:1; color:var(--text)}
+.cmd .c .tok-key{color:var(--accent)}
+.copy{border:1px solid var(--border); background:var(--surface-2); color:var(--text-dim); border-radius:7px; padding:5px 10px; font:inherit; font-size:.74rem; cursor:pointer; transition:.15s}
+.copy:hover{border-color:var(--accent); color:var(--text)}
+
+/* feedback */
+.diag-foot{display:flex; align-items:center; gap:10px; padding:13px 20px; border-top:1px solid var(--border-soft); background:var(--surface-2)}
+.diag-foot .q{font-size:.82rem; color:var(--text-dim); flex:1}
+.fb{border:1px solid var(--border); background:var(--surface-1); border-radius:8px; padding:6px 13px; font:inherit; font-size:.8rem; cursor:pointer; color:var(--text-dim); transition:.16s; display:flex; gap:6px; align-items:center}
+.fb:hover{transform:translateY(-1px)}
+.fb.up:hover{border-color:var(--success); color:var(--success)}
+.fb.down:hover{border-color:var(--danger); color:var(--danger)}
+
+/* diff panel */
+.diff{border:1px solid var(--border); border-radius:16px; background:var(--surface-1); box-shadow:var(--shadow); overflow:hidden; animation:rise .55s .18s cubic-bezier(.16,1,.3,1) both}
+.diff-head{display:flex; align-items:center; gap:10px; padding:15px 20px; border-bottom:1px solid var(--border-soft); font-size:.94rem; font-weight:600}
+.diff-head .vs{font-size:.78rem; color:var(--text-faint); font-weight:400}
+.diff-head .vs .ok{color:var(--success)} .diff-head .vs .bad{color:var(--danger)}
+.diff-sec{padding:6px 0}
+.diff-row{display:grid; grid-template-columns:26px 1fr; gap:6px; padding:5px 18px; font-size:.83rem; align-items:center}
+.diff-row .mk{font-weight:700; text-align:center}
+.diff-row.del{background:var(--del-bg)} .diff-row.del .mk{color:var(--danger)}
+.diff-row.add{background:var(--add-bg)} .diff-row.add .mk{color:var(--success)}
+.diff-row .k{color:var(--text-dim)} .diff-row .k b{color:var(--text)}
+.diff-row.del .badge{font-size:.68rem; color:var(--danger); border:1px solid var(--danger); border-radius:5px; padding:1px 6px; margin-left:8px}
+.diff-grp{font-size:.72rem; text-transform:uppercase; letter-spacing:.08em; color:var(--text-faint); padding:10px 18px 4px; font-weight:600}
+
+@keyframes rise{from{opacity:0; transform:translateY(14px)} to{opacity:1; transform:none}}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 5px var(--accent-glow)} 50%{box-shadow:0 0 0 9px oklch(80% 0.135 200 / .07)}}
+@keyframes fill{from{transform:scale(.85); opacity:0} to{transform:scale(1); opacity:1}}
+.run-dot{width:7px;height:7px;border-radius:50%;background:var(--warning); animation:blink 1.3s ease-in-out infinite}
+@keyframes blink{50%{opacity:.3}}
+@media (prefers-reduced-motion: reduce){*{animation:none !important; transition:none !important}}
+</style>
+</head>
+<body>
+  <!-- SIDEBAR -->
+  <aside class="side">
+    <div class="brand"><span class="dot"></span> devopsTool</div>
+    <div class="nav"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>概览</div>
+    <div class="nav"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h18M3 12h18M3 17h18"/></svg>项目</div>
+    <div class="nav active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3v18M5 7h10l-2 3 2 3H5"/></svg>运行</div>
+    <div class="nav"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="6" rx="1"/><rect x="3" y="14" width="18" height="6" rx="1"/><path d="M7 7h.01M7 17h.01"/></svg>服务器</div>
+    <div class="nav"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>通知</div>
+    <div class="spacer"></div>
+    <div class="nav"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.5-2.4 1a7 7 0 0 0-1.7-1L14.5 2h-5l-.3 2.5a7 7 0 0 0-1.7 1l-2.4-1-2 3.5L3 11a7 7 0 0 0 0 2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 1.7 1l.3 2.5h5l.3-2.5a7 7 0 0 0 1.7-1l2.4 1 2-3.5-2-1.5a7 7 0 0 0 .1-1z"/></svg>设置</div>
+    <button class="theme-toggle" onclick="document.documentElement.dataset.theme = document.documentElement.dataset.theme==='dark'?'light':'dark'">◐ 切换明 / 暗</button>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="main">
+    <div class="topbar">
+      <div class="crumb">项目 <b>acme-web</b> <span>/</span> 运行 <b class="mono">#128</b></div>
+      <div class="grow"></div>
+      <button class="btn">查看完整日志</button>
+      <button class="btn primary">重新部署</button>
+    </div>
+
+    <div class="run-head">
+      <div style="flex:1">
+        <div class="run-title">部署到 生产-1 失败 <span class="pill fail"><span class="x"></span>FAILED</span></div>
+        <div class="run-meta">
+          <span><b>分支</b> <span class="mono">main</span></span>
+          <span><b>提交</b> <span class="mono">a3f9c1d</span> · 修复购物车结算</span>
+          <span><b>触发</b> Gitee push</span>
+          <span><b>耗时</b> 1m 47s</span>
+          <span><b>时间</b> 03:17</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- timeline -->
+    <div class="timeline">
+      <div class="stage"><div class="s-name"><span class="ic ok">✓</span> 拉取代码</div><div class="s-dur">4s</div></div>
+      <div class="stage"><div class="s-name"><span class="ic ok">✓</span> 隔离构建 · node:22</div><div class="s-dur">1m 12s</div></div>
+      <div class="stage is-failed"><div class="s-name"><span class="ic failed">!</span> 部署 生产-1</div><div class="s-dur">31s · 已回滚到 #126</div></div>
+      <div class="stage"><div class="s-name"><span class="ic skip">·</span> 健康检查</div><div class="s-dur">已跳过</div></div>
+    </div>
+
+    <!-- ===== AI DIAGNOSIS HERO ===== -->
+    <section class="diag">
+      <div class="diag-head">
+        <span class="spark">✦</span>
+        <h2>AI 失败诊断</h2>
+        <span class="tag">假说,非结论 · 由 Claude 生成</span>
+      </div>
+      <div class="diag-body">
+        <div>
+          <div class="hypo-label">最可能的根因</div>
+          <div class="hypo">环境变量 <span class="hi mono">DB_PASSWORD</span> 未注入,导致新版本启动时数据库连接失败、健康检查超时。</div>
+          <div class="because">这是唯一触发后续 cascade 失败的节点 —— 上次成功的 #126 里该变量存在,本次 #128 缺失。</div>
+
+          <div class="evidence">
+            <div class="ev-bar">证据 · <span class="file mono">deploy/生产-1/app.log</span> · 第 251 行</div>
+            <div class="code mono">
+              <div class="ln"><span class="n">249</span><span class="c">[boot] loading config from /etc/app/env</span></div>
+              <div class="ln"><span class="n">250</span><span class="c">[boot] connecting to postgres://db:5432 ...</span></div>
+              <div class="ln bad"><span class="n">251</span><span class="c"><span class="tok-err">FATAL</span>: <span class="tok-key">DB_PASSWORD</span> is empty — auth failed for user "app"</span></div>
+              <div class="ln"><span class="n">252</span><span class="c">[health] /health did not return 200 within 30s → abort</span></div>
+            </div>
+          </div>
+
+          <div class="fix">
+            <div class="h">修复建议</div>
+            <div class="cmd mono"><span class="c">在 生产-1 的流水线凭据里补回 <span class="tok-key">DB_PASSWORD</span>,或从 #126 的环境快照恢复</span><button class="copy">恢复 #126 环境 →</button></div>
+          </div>
+        </div>
+
+        <div class="conf">
+          <div class="ring"><b>88<small>% 置信</small></b></div>
+          <div class="cap">高置信。另有 12% 可能与<br>第 389 行连接池配置相关。</div>
+        </div>
+      </div>
+      <div class="diag-foot">
+        <span class="q">这个诊断帮到你了吗?</span>
+        <button class="fb up">👍 有用</button>
+        <button class="fb down">👎 不对</button>
+      </div>
+    </section>
+
+    <!-- ===== DIFF PANEL ===== -->
+    <section class="diff">
+      <div class="diff-head">上次成功 vs 本次失败
+        <span class="vs">· <span class="ok mono">#126 ✓</span> ↔ <span class="bad mono">#128 ✗</span></span>
+      </div>
+      <div class="diff-grp">环境变量</div>
+      <div class="diff-sec">
+        <div class="diff-row del"><span class="mk">−</span><span class="k"><b class="mono">DB_PASSWORD</b> 在 #126 存在,本次缺失 <span class="badge">疑似根因</span></span></div>
+        <div class="diff-row add"><span class="mk">+</span><span class="k"><b class="mono">FEATURE_CHECKOUT_V2</b> = true(本次新增)</span></div>
+      </div>
+      <div class="diff-grp">变更文件(a3f9c1d ↔ 7b2e004,3 个提交)</div>
+      <div class="diff-sec">
+        <div class="diff-row"><span class="mk mono" style="color:var(--text-faint)">~</span><span class="k mono">src/checkout/payment.ts · +48 −12</span></div>
+        <div class="diff-row"><span class="mk mono" style="color:var(--text-faint)">~</span><span class="k mono">src/checkout/cart.vue · +21 −5</span></div>
+        <div class="diff-row"><span class="mk mono" style="color:var(--success)">+</span><span class="k mono">src/checkout/v2-flag.ts · 新文件</span></div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

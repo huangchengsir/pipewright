@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>devopsTool · 弹窗设计系统</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;450;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root,[data-theme="dark"]{--bg:oklch(15% 0.003 270);--scrim:oklch(6% 0.004 270 / .62);--card:oklch(21% 0.004 272);--card-2:oklch(24% 0.005 272);--inset:oklch(17.5% 0.004 270);--border:oklch(100% 0 0 / .07);--border-strong:oklch(100% 0 0 / .13);--text:oklch(95% 0.004 270);--dim:oklch(72% 0.008 270);--faint:oklch(55% 0.01 272);--primary:oklch(66% 0.155 258);--primary-press:oklch(60% 0.155 258);--primary-soft:oklch(66% 0.155 258 / .2);--cyan:oklch(82% 0.1 205);--cyan-soft:oklch(82% 0.1 205 / .14);--green:oklch(77% 0.15 150);--green-soft:oklch(72% 0.16 150 / .14);--amber:oklch(83% 0.13 82);--red:oklch(69% 0.17 22);--red-soft:oklch(62% 0.18 22 / .14);--red-line:oklch(62% 0.18 22 / .4);--shadow:0 1px 2px oklch(0% 0 0/.4),0 14px 34px oklch(0% 0 0/.3);--modal-shadow:0 24px 70px oklch(0% 0 0/.55),0 2px 8px oklch(0% 0 0/.4);}
+[data-theme="light"]{--bg:oklch(96.5% 0.004 270);--scrim:oklch(40% 0.02 270 / .35);--card:oklch(100% 0 0);--card-2:oklch(98% 0.004 270);--inset:oklch(97% 0.004 270);--border:oklch(20% 0.02 270 / .1);--border-strong:oklch(20% 0.02 270 / .16);--text:oklch(25% 0.01 270);--dim:oklch(45% 0.014 270);--faint:oklch(58% 0.016 270);--primary:oklch(55% 0.17 258);--primary-press:oklch(49% 0.17 258);--primary-soft:oklch(55% 0.17 258 / .12);--cyan:oklch(52% 0.11 215);--cyan-soft:oklch(52% 0.11 215 / .1);--green:oklch(50% 0.14 150);--green-soft:oklch(62% 0.15 150 / .14);--amber:oklch(62% 0.12 70);--red:oklch(55% 0.18 22);--red-soft:oklch(60% 0.19 22 / .1);--red-line:oklch(55% 0.18 22 / .4);--shadow:0 1px 2px oklch(50% 0.02 270/.06),0 12px 30px oklch(50% 0.03 270/.1);--modal-shadow:0 24px 60px oklch(40% 0.03 270/.22),0 2px 8px oklch(40% 0.03 270/.12);}
+*{box-sizing:border-box;margin:0;padding:0}html{font-size:15px}
+body{font-family:"Inter",ui-sans-serif,system-ui,"PingFang SC",sans-serif;color:var(--text);min-height:100vh;-webkit-font-smoothing:antialiased;
+  background:var(--scrim),
+    repeating-linear-gradient(0deg,transparent,transparent 38px,oklch(100% 0 0/.012) 38px,oklch(100% 0 0/.012) 39px),
+    radial-gradient(900px 440px at 88% -10%,oklch(66% 0.155 258 / .08),transparent 60%),
+    var(--bg);
+  background-attachment:fixed;padding:34px 40px 60px}
+.mono{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace}
+.pgcap{display:flex;align-items:center;gap:11px;margin-bottom:6px}
+.pgcap h1{font-size:1.18rem;font-weight:700;letter-spacing:-.01em}
+.pgcap .tg{font-size:.68rem;color:var(--cyan);background:var(--cyan-soft);border:1px solid oklch(82% 0.1 205 / .3);border-radius:6px;padding:3px 9px;font-weight:600}
+.pgsub{font-size:.83rem;color:var(--faint);margin-bottom:26px;max-width:70ch}
+
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:26px;max-width:1080px}
+@media(max-width:900px){.grid{grid-template-columns:1fr}}
+
+.modal{background:var(--card);border:1px solid var(--border-strong);border-radius:16px;box-shadow:var(--modal-shadow);overflow:hidden;animation:pop .45s cubic-bezier(.16,1,.3,1) both}
+.modal:nth-child(2){animation-delay:.06s}.modal:nth-child(3){animation-delay:.12s}.modal:nth-child(4){animation-delay:.18s}
+.m-h{display:flex;align-items:center;gap:11px;padding:16px 18px 14px}
+.m-h .ic{width:32px;height:32px;border-radius:9px;background:var(--primary-soft);color:var(--primary);display:grid;place-items:center;flex:none}.m-h .ic svg{width:17px;height:17px}
+.m-h .ic.cy{background:var(--cyan-soft);color:var(--cyan)}.m-h .ic.gr{background:var(--green-soft);color:var(--green)}
+.m-h .ti{font-size:.98rem;font-weight:600}.m-h .ti span{display:block;font-size:.74rem;color:var(--faint);font-weight:400;margin-top:2px}
+.m-h .x{margin-left:auto;color:var(--faint);cursor:pointer;width:28px;height:28px;border-radius:7px;display:grid;place-items:center;font-size:1rem}.m-h .x:hover{background:var(--inset);color:var(--text)}
+.m-b{padding:4px 18px 16px}
+.fld{margin-top:13px}
+.fld .l{font-size:.78rem;font-weight:500;color:var(--dim);margin-bottom:6px;display:flex;gap:7px;align-items:center}
+.fld .l .opt{color:var(--faint);font-weight:400}
+.inp{height:38px;width:100%;background:var(--inset);border:1px solid var(--border);border-radius:9px;padding:0 12px;color:var(--text);font-size:.83rem;outline:none;transition:.14s;display:flex;align-items:center;gap:8px}
+.inp.foc{border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-soft)}
+.inp .ph{color:var(--faint)}.inp .val{color:var(--text)}.inp.mono,.inp .mono{font-family:"JetBrains Mono"}
+.inp .car{width:1.5px;height:16px;background:var(--primary);animation:blink 1s steps(1) infinite}
+.two{display:grid;grid-template-columns:1fr 92px;gap:10px}
+.ta{min-height:62px;width:100%;background:var(--inset);border:1px solid var(--border);border-radius:9px;padding:9px 12px;color:var(--dim);font-size:.8rem;font-family:"JetBrains Mono";line-height:1.6}
+.seg{display:flex;background:var(--inset);border:1px solid var(--border);border-radius:9px;padding:3px;gap:2px}
+.seg button{flex:1;height:30px;border:none;background:none;color:var(--dim);font-size:.78rem;font-family:inherit;font-weight:500;border-radius:6px;cursor:pointer;transition:.14s;display:flex;align-items:center;justify-content:center;gap:6px}
+.seg button:hover{color:var(--text)}.seg button.on{background:var(--card);color:var(--text);box-shadow:var(--shadow)}
+.seg button .ci{width:14px;height:14px}
+.sel{height:38px;width:100%;background:var(--inset);border:1px solid var(--border);border-radius:9px;padding:0 12px;display:flex;align-items:center;gap:8px;font-size:.83rem;cursor:pointer;justify-content:space-between}
+.sel .ar{color:var(--faint);font-size:.72rem}
+.chips{display:flex;flex-wrap:wrap;gap:7px}
+.chk{font-size:.77rem;border:1px solid var(--border);background:var(--inset);color:var(--dim);border-radius:8px;padding:6px 11px;cursor:pointer;display:flex;align-items:center;gap:7px;transition:.14s}
+.chk .b{width:14px;height:14px;border-radius:4px;border:1.5px solid var(--border-strong);display:grid;place-items:center}
+.chk.on{border-color:var(--primary);color:var(--text);background:var(--primary-soft)}.chk.on .b{background:var(--primary);border-color:var(--primary);color:#fff;font-size:.6rem}
+.kvrow{display:grid;grid-template-columns:1fr 1fr 32px;gap:8px;margin-bottom:8px}
+.kvrow .rm{border:1px solid var(--border);background:var(--inset);color:var(--faint);border-radius:8px;cursor:pointer}
+.addkv{font-size:.77rem;color:var(--primary);font-weight:500;cursor:pointer;margin-top:2px}
+.sw{width:38px;height:22px;border-radius:100px;background:var(--primary);position:relative;cursor:pointer;flex:none}.sw::after{content:"";position:absolute;top:2.5px;left:18px;width:17px;height:17px;border-radius:50%;background:#fff;transition:.16s}.sw.off{background:var(--border-strong)}.sw.off::after{left:2.5px}
+.swrow{display:flex;align-items:center;gap:12px;margin-top:14px;padding:11px 12px;background:var(--inset);border-radius:9px}.swrow .tx{flex:1}.swrow .tx b{font-size:.81rem;font-weight:500}.swrow .tx span{display:block;font-size:.73rem;color:var(--faint);margin-top:2px}
+.testbtn{height:34px;border:1px solid oklch(82% 0.1 205 / .3);background:var(--cyan-soft);color:var(--cyan);font-size:.79rem;font-weight:500;border-radius:9px;padding:0 13px;cursor:pointer;white-space:nowrap}
+.testres{display:flex;align-items:center;gap:7px;font-size:.77rem;color:var(--green);margin-top:9px}.testres svg{width:14px;height:14px}
+.hint{font-size:.73rem;color:var(--faint);margin-top:6px;line-height:1.5}
+.m-f{display:flex;align-items:center;gap:10px;padding:14px 18px;border-top:1px solid var(--border);background:var(--card-2)}
+.m-f .note{font-size:.74rem;color:var(--faint)}
+.grow{flex:1}
+.btn{height:36px;font-size:.83rem;font-weight:600;border:none;background:var(--primary);color:#fff;border-radius:9px;padding:0 16px;cursor:pointer;box-shadow:0 5px 16px var(--primary-soft);transition:.16s}.btn:hover{background:var(--primary-press)}
+.btn.ghost{background:transparent;color:var(--dim);border:1px solid var(--border-strong);box-shadow:none}.btn.ghost:hover{color:var(--text)}
+.toggle{position:fixed;right:20px;bottom:18px;font-size:.74rem;color:var(--dim);border:1px solid var(--border);background:var(--card);border-radius:9px;padding:8px 13px;cursor:pointer;box-shadow:var(--shadow)}
+@keyframes pop{from{opacity:0;transform:translateY(16px) scale(.97)}to{opacity:1;transform:none}}
+@keyframes blink{50%{opacity:0}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+  <div class="pgcap"><h1>弹窗设计系统</h1><span class="tg">关键操作 · 模态规范</span></div>
+  <div class="pgsub">同一套模态语言:左上图标 + 标题/副标题、字段网格、底部「次按钮 + 主按钮」、危险操作右对齐。下面 4 个为产品中出现频率最高的弹窗。</div>
+
+  <div class="grid">
+    <!-- 1. 添加服务器 -->
+    <div class="modal">
+      <div class="m-h">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="6" rx="1.6"/><rect x="3" y="14" width="18" height="6" rx="1.6"/><path d="M7 7h.01M7 17h.01"/></svg></span>
+        <div class="ti">添加服务器<span>agentless · 仅需 SSH 可达</span></div>
+        <span class="x">✕</span>
+      </div>
+      <div class="m-b">
+        <div class="fld"><div class="l">名称</div><div class="inp"><span class="val">生产-3</span><span class="car"></span></div></div>
+        <div class="fld"><div class="l">主机 / IP <span class="opt">· 端口</span></div>
+          <div class="two"><div class="inp mono"><span class="val">10.0.1.23</span></div><div class="inp mono"><span class="val">22</span></div></div>
+        </div>
+        <div class="fld"><div class="l">SSH 用户</div><div class="inp mono"><span class="val">deploy</span></div></div>
+        <div class="fld"><div class="l">认证方式</div>
+          <div class="seg"><button class="on"><svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17l6-6-6-6M12 19h8"/></svg>SSH 私钥</button><button>密码</button></div>
+        </div>
+        <div class="fld"><div class="l">私钥来源</div><div class="sel"><span>从保险库选择 · <span class="mono">生产-1 部署密钥</span></span><span class="ar">▾</span></div></div>
+        <div class="testres"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="m5 13 4 4 10-11"/></svg>连接成功 · OpenSSH 9.6 · 检测到 Docker 已安装</div>
+      </div>
+      <div class="m-f"><button class="testbtn">测试连接</button><div class="grow"></div><button class="btn ghost">取消</button><button class="btn">添加</button></div>
+    </div>
+
+    <!-- 2. 手动触发 -->
+    <div class="modal">
+      <div class="m-h">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 4l14 8-14 8z"/></svg></span>
+        <div class="ti">手动触发运行<span class="mono" style="font-family:'Inter'">acme-web</span></div>
+        <span class="x">✕</span>
+      </div>
+      <div class="m-b">
+        <div class="fld"><div class="l">分支</div><div class="sel"><span class="mono">main</span><span class="ar">▾</span></div></div>
+        <div class="fld"><div class="l">目标环境</div>
+          <div class="seg"><button class="on">生产-1</button><button>生产-2</button><button>测试-1</button></div>
+        </div>
+        <div class="fld"><div class="l">构建参数 <span class="opt">· 覆盖默认值</span></div>
+          <div class="kvrow"><div class="inp mono"><span class="ph">KEY</span></div><div class="inp mono"><span class="ph">value</span></div><button class="rm">✕</button></div>
+          <div class="kvrow"><div class="inp mono"><span class="val">DEBUG</span></div><div class="inp mono"><span class="val">false</span></div><button class="rm">✕</button></div>
+          <span class="addkv">+ 添加参数</span>
+        </div>
+        <div class="swrow"><div class="sw off"></div><div class="tx"><b>跳过构建缓存</b><span>强制全量重建,排查"本地能跑、CI 失败"</span></div></div>
+      </div>
+      <div class="m-f"><span class="note">将立即进入构建队列</span><div class="grow"></div><button class="btn ghost">取消</button><button class="btn">触发运行</button></div>
+    </div>
+
+    <!-- 3. 添加凭据 -->
+    <div class="modal">
+      <div class="m-h">
+        <span class="ic gr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></span>
+        <div class="ti">添加凭据<span>加密入库 · 写入后不可读出</span></div>
+        <span class="x">✕</span>
+      </div>
+      <div class="m-b">
+        <div class="fld"><div class="l">名称</div><div class="inp"><span class="val">DB_PASSWORD · 生产</span></div></div>
+        <div class="fld"><div class="l">类型</div><div class="sel"><span>环境密钥</span><span class="ar">▾</span></div></div>
+        <div class="fld"><div class="l">值</div><div class="ta">••••••••••••••••<span style="color:var(--faint)">  ← 粘贴后立即掩码</span></div></div>
+        <div class="fld"><div class="l">作用域 <span class="opt">· 仅这些项目可引用</span></div>
+          <div class="chips">
+            <span class="chk on"><span class="b">✓</span>acme-web</span>
+            <span class="chk on"><span class="b">✓</span>生产-1</span>
+            <span class="chk"><span class="b"></span>api-gateway</span>
+            <span class="chk"><span class="b"></span>blog</span>
+            <span class="chk"><span class="b"></span>全部项目</span>
+          </div>
+        </div>
+      </div>
+      <div class="m-f"><span class="note">绝不进入日志或诊断上下文</span><div class="grow"></div><button class="btn ghost">取消</button><button class="btn">保存到保险库</button></div>
+    </div>
+
+    <!-- 4. 添加通知渠道 -->
+    <div class="modal">
+      <div class="m-h">
+        <span class="ic cy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M10 21h4"/></svg></span>
+        <div class="ti">添加通知渠道<span>失败、回滚、上线时推送</span></div>
+        <span class="x">✕</span>
+      </div>
+      <div class="m-b">
+        <div class="fld"><div class="l">渠道类型</div>
+          <div class="seg"><button class="on">飞书</button><button>钉钉</button><button>企微</button><button>Webhook</button></div>
+        </div>
+        <div class="fld"><div class="l">Webhook 地址</div><div class="inp mono"><span class="val" style="font-size:.78rem">https://open.feishu.cn/…/hook/9f2c</span></div></div>
+        <div class="fld"><div class="l">签名密钥 <span class="opt">· 可选</span></div><div class="inp mono"><span class="ph">用于校验请求来源</span></div></div>
+        <div class="swrow"><div class="sw"></div><div class="tx"><b>仅推送失败与回滚</b><span>成功部署不打扰 —— 只在需要你介入时响</span></div></div>
+        <div class="testres"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="m5 13 4 4 10-11"/></svg>测试消息已送达 · 14:32</div>
+      </div>
+      <div class="m-f"><button class="testbtn">发送测试</button><div class="grow"></div><button class="btn ghost">取消</button><button class="btn">保存</button></div>
+    </div>
+  </div>
+  <button class="toggle" onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'light':'dark'">◐ 明 / 暗</button>
+</body>
+</html>

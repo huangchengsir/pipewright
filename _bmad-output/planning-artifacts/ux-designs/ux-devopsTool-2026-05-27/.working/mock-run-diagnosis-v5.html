@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>devopsTool · 运行 #128 诊断</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;450;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root,[data-theme="dark"]{
+  --bg: oklch(15% 0.003 270);            /* #121214 */
+  --bg-glow: radial-gradient(900px 440px at 94% -16%, oklch(66% 0.155 258 / .07), transparent 60%);
+  --card: oklch(20% 0.004 272);          /* #1E1E22 */
+  --card-2: oklch(23% 0.005 272);
+  --inset: oklch(17.5% 0.004 270);
+  --term: oklch(11% 0.003 270);          /* #09090B */
+  --border: oklch(100% 0 0 / .055);
+  --border-strong: oklch(100% 0 0 / .12);
+  --text: oklch(95% 0.004 270);
+  --dim: oklch(72% 0.008 270);
+  --faint: oklch(55% 0.01 272);
+  --line-num: oklch(42% 0.012 270);
+  --primary: oklch(66% 0.155 258);
+  --primary-press: oklch(60% 0.155 258);
+  --primary-soft: oklch(66% 0.155 258 / .2);
+  --cyan: oklch(82% 0.1 205);
+  --cyan-soft: oklch(82% 0.1 205 / .14);
+  --green: oklch(77% 0.15 150);
+  --green-soft: oklch(72% 0.16 150 / .12);
+  --amber: oklch(83% 0.13 82);
+  --red: oklch(69% 0.17 22);
+  --red-soft: oklch(62% 0.18 22 / .15);
+  --red-line: oklch(62% 0.18 22 / .4);
+  --logblue: oklch(74% 0.11 248);
+  --shadow: 0 1px 2px oklch(0% 0 0/.4), 0 14px 34px oklch(0% 0 0/.3);
+  --inner: inset 0 1px 12px oklch(0% 0 0/.55);
+}
+[data-theme="light"]{
+  --bg: oklch(96.5% 0.004 270); --bg-glow: radial-gradient(900px 440px at 94% -16%, oklch(66% 0.155 258 / .1), transparent 60%);
+  --card: oklch(100% 0 0); --card-2: oklch(98% 0.004 270); --inset: oklch(97.5% 0.004 270); --term: oklch(20% 0.01 270);
+  --border: oklch(20% 0.02 270 / .1); --border-strong: oklch(20% 0.02 270 / .16);
+  --text: oklch(25% 0.01 270); --dim: oklch(45% 0.014 270); --faint: oklch(58% 0.016 270); --line-num: oklch(62% 0.02 270);
+  --primary: oklch(55% 0.17 258); --primary-press: oklch(49% 0.17 258); --primary-soft: oklch(55% 0.17 258 / .12);
+  --cyan: oklch(52% 0.11 215); --cyan-soft: oklch(52% 0.11 215 / .1);
+  --green: oklch(56% 0.14 150); --green-soft: oklch(62% 0.15 150 / .12); --amber: oklch(62% 0.12 70);
+  --red: oklch(55% 0.18 22); --red-soft: oklch(60% 0.19 22 / .1); --red-line: oklch(55% 0.18 22 / .4); --logblue: oklch(60% 0.13 248);
+  --shadow: 0 1px 2px oklch(50% 0.02 270/.06), 0 12px 30px oklch(50% 0.03 270/.1); --inner: inset 0 1px 10px oklch(0% 0 0/.16);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{font-size:15px}
+body{font-family:"Inter",ui-sans-serif,system-ui,"PingFang SC",sans-serif;color:var(--text);
+  background:var(--bg);background-image:var(--bg-glow);background-attachment:fixed;-webkit-font-smoothing:antialiased;
+  display:grid;grid-template-columns:62px 1fr;min-height:100vh}
+.mono{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace}
+
+/* rail */
+.rail{border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;gap:7px;padding:20px 0;position:sticky;top:0;height:100vh}
+.logo{width:30px;height:30px;border-radius:9px;background:var(--primary);color:#fff;display:grid;place-items:center;font-weight:700;font-family:"JetBrains Mono";margin-bottom:14px}
+.ri{position:relative;width:40px;height:40px;border-radius:10px;display:grid;place-items:center;color:var(--faint);cursor:pointer;transition:.18s}
+.ri svg{width:19px;height:19px}.ri:hover{color:var(--text);background:var(--border)}
+.ri.on{color:var(--primary)}
+.ri.on::before{content:"";position:absolute;left:-20px;top:9px;bottom:9px;width:2.5px;border-radius:2px;background:var(--primary)}
+.sp{flex:1}
+
+.main{max-width:1040px;padding:26px 42px 90px}
+
+/* HEADER PANEL */
+.header{background:var(--card);border:1px solid var(--border);border-radius:15px;box-shadow:var(--shadow);padding:16px 20px;margin-bottom:20px;animation:in .5s cubic-bezier(.16,1,.3,1) both}
+.h-top{display:flex;align-items:center;gap:12px}
+.h-crumb{font-size:.78rem;color:var(--faint);display:flex;gap:6px;align-items:center;margin-bottom:7px}
+.h-crumb b{color:var(--dim);font-weight:500}.h-crumb .here{color:var(--text);font-weight:600;font-family:"JetBrains Mono"}
+.h-name{display:flex;align-items:center;gap:11px}
+.h-name h1{font-size:1.16rem;font-weight:600;letter-spacing:-.01em}
+.badge{font-size:.68rem;font-weight:600;color:var(--red);background:var(--red-soft);border:1px solid var(--red-line);border-radius:6px;padding:2px 8px;letter-spacing:.03em;display:inline-flex;gap:5px;align-items:center}
+.badge .pd{width:5px;height:5px;border-radius:50%;background:var(--red)}
+.h-roll{font-size:.78rem;color:var(--faint)}
+.grow{flex:1}
+.chip{height:34px;font-size:.74rem;color:var(--dim);border:1px solid var(--border);border-radius:8px;padding:0 12px;display:flex;gap:7px;align-items:center}
+.chip .d{width:6px;height:6px;border-radius:50%;background:var(--green)}
+.btn{height:34px;font-size:.83rem;font-weight:500;border:1px solid var(--border-strong);background:var(--card-2);color:var(--text);border-radius:9px;padding:0 15px;cursor:pointer;transition:.16s}
+.btn:hover{transform:translateY(-1px);border-color:var(--faint)}
+.btn.primary{background:var(--primary);color:#fff;border-color:transparent;font-weight:600;box-shadow:0 5px 16px var(--primary-soft)}
+.btn.primary:hover{background:var(--primary-press)}
+.h-meta{display:flex;flex-wrap:wrap;align-items:center;gap:11px;font-size:.79rem;color:var(--dim);margin-top:14px;padding:9px 12px;background:var(--inset);border-radius:9px}
+.h-meta .sep{color:var(--border-strong)}
+.h-meta s{text-decoration:none;color:var(--faint)}.h-meta .v{color:var(--text)}
+
+/* PIPELINE — skewer line through nodes */
+.pipe{display:flex;align-items:flex-start;padding:6px 10px 0;margin-bottom:26px;animation:in .5s .05s cubic-bezier(.16,1,.3,1) both}
+.node{display:flex;flex-direction:column;align-items:center;gap:8px;position:relative;z-index:1}
+.node .dot{width:13px;height:13px;border-radius:50%;background:var(--card-2);border:2px solid var(--faint);display:grid;place-items:center}
+.node.ok .dot{background:var(--green);border-color:var(--green);box-shadow:0 0 0 4px var(--green-soft)}
+.node.skip .dot{border-color:var(--border-strong);background:var(--inset)}
+.node.bad{padding:8px 16px 10px;margin-top:-9px;border:1px solid var(--red-line);background:linear-gradient(180deg,var(--red-soft),transparent);border-radius:11px}
+.node.bad .dot{background:var(--red);border-color:var(--red);box-shadow:0 0 0 4px var(--red-soft);animation:blink 1.2s infinite}
+.node .lab{font-size:.8rem;font-weight:500}.node.bad .lab{color:var(--red)}
+.node .t{font-size:.7rem;color:var(--faint)}
+.seg{flex:1;height:2px;margin-top:6px;border-radius:2px;background:var(--border-strong)}
+.seg.done{background:var(--green)}.seg.bad{background:linear-gradient(90deg,var(--green),var(--red))}
+
+.sect{display:flex;align-items:center;gap:9px;margin:0 0 13px}
+.sect .ico{width:20px;height:20px;border-radius:6px;background:var(--primary-soft);color:var(--primary);display:grid;place-items:center;font-size:12px}
+.sect .ti{font-size:.86rem;font-weight:600;color:var(--text)}
+.conf{margin-left:auto;display:flex;align-items:center;gap:9px;font-size:.74rem;color:var(--cyan);background:var(--cyan-soft);border:1px solid oklch(82% 0.1 205 / .3);border-radius:100px;padding:4px 10px 4px 11px;font-weight:500}
+.conf .b{width:64px;height:4px;border-radius:100px;background:oklch(82% 0.1 205 / .2);overflow:hidden}
+.conf .b i{display:block;height:100%;width:88%;background:var(--cyan);border-radius:100px;animation:grow 1s .3s cubic-bezier(.16,1,.3,1) both}
+
+/* DIAGNOSIS CARD */
+.diag{background:var(--card);border:1px solid var(--border);border-radius:15px;box-shadow:var(--shadow);overflow:hidden;animation:in .55s .1s cubic-bezier(.16,1,.3,1) both}
+.d-kick{font-size:.74rem;color:var(--faint);padding:17px 22px 0}.d-kick b{color:var(--dim);font-weight:600}
+.d-title{padding:9px 22px 0;font-size:1.18rem;font-weight:600;line-height:1.5;letter-spacing:-.005em}
+.hl{color:var(--primary);font-family:"JetBrains Mono";font-weight:500;font-size:.84em;background:var(--primary-soft);padding:1px 5px;border-radius:4px}
+.d-why{padding:10px 22px 0;color:var(--dim);font-size:.9rem;max-width:66ch}
+
+.action{margin:18px 22px 0;display:flex;align-items:center;gap:13px;background:var(--inset);border:1px solid var(--border);border-radius:11px;padding:12px 15px}
+.action .l{font-size:.69rem;color:var(--faint);font-weight:600;white-space:nowrap}
+.action .t{flex:1;font-size:.88rem}.action .t .hl{font-size:.82em}
+.action .go{height:34px;border:none;background:var(--primary);color:#fff;font-weight:600;font-size:.81rem;padding:0 15px;border-radius:9px;cursor:pointer;white-space:nowrap;box-shadow:0 5px 16px var(--primary-soft);transition:.16s}
+.action .go:hover{background:var(--primary-press);transform:translateY(-1px)}
+
+/* terminal */
+.block{margin:18px 22px 0}
+.block .cap{font-size:.72rem;color:var(--faint);margin-bottom:8px}.block .cap .f{color:var(--dim)}
+.term{background:var(--term);border:1px solid var(--border);border-radius:11px;box-shadow:var(--inner);overflow:hidden}
+.term .tb{display:flex;gap:7px;align-items:center;padding:9px 13px;border-bottom:1px solid oklch(100% 0 0/.05)}
+.term .tb i{width:11px;height:11px;border-radius:50%}
+.term .tb i:nth-child(1){background:#ff5f56}.term .tb i:nth-child(2){background:#ffbd2e}.term .tb i:nth-child(3){background:#27c93f}
+.term .tb .nm{margin-left:8px;font-family:"JetBrains Mono";font-size:.7rem;color:var(--faint)}
+.feed{font-family:"JetBrains Mono";font-size:.8rem;line-height:2;padding:9px 0}
+.ln{display:grid;grid-template-columns:46px 1fr;padding:0 14px}
+.ln .n{color:var(--line-num);text-align:right;padding-right:16px;user-select:none}
+.ln .c{color:oklch(66% 0.015 270);white-space:pre}
+.ln.hit{background:var(--red-soft)}.ln.hit .n{color:var(--red)}.ln.hit .c{color:var(--text)}
+.t-fatal{color:var(--red);font-weight:600}.t-tag{color:oklch(50% 0.015 270)}.t-url{color:var(--logblue)}.t-key{color:var(--amber)}
+
+/* git diff */
+.diff{border:1px solid var(--border);border-radius:11px;overflow:hidden;background:var(--card-2)}
+.diff .dh{padding:11px 16px;border-bottom:1px solid var(--border);font-size:.82rem;font-weight:600;display:flex;align-items:center;gap:9px}
+.diff .dh .vs{margin-left:auto;font-family:"JetBrains Mono";font-size:.73rem;color:var(--faint);font-weight:400}
+.diff .dh .vs .ok{color:var(--green)}.diff .dh .vs .bad{color:var(--red)}
+.dgrp{font-size:.67rem;color:var(--faint);font-weight:600;padding:11px 14px 4px;letter-spacing:.02em;text-transform:uppercase}
+.drow{display:grid;grid-template-columns:24px 1fr;align-items:center;padding:6px 14px;font-family:"JetBrains Mono";font-size:.81rem;border-left:2px solid transparent}
+.drow .m{font-weight:700;text-align:center}
+.drow.minus{background:var(--red-soft);border-left-color:var(--red)}.drow.minus .m{color:var(--red)}
+.drow.plus{background:var(--green-soft);border-left-color:var(--green)}.drow.plus .m{color:var(--green)}
+.drow .k{color:var(--dim)}.drow .k b{color:var(--text)}
+.drow .flag{margin-left:8px;font-family:"Inter";font-size:.65rem;color:var(--red);border:1px solid var(--red-line);border-radius:5px;padding:1px 7px}
+.drow.file{color:var(--faint)}.drow.file .k{color:var(--faint)}
+
+.fbbar{display:flex;align-items:center;padding:15px 22px 18px}
+.fbbar .q{font-size:.77rem;color:var(--faint);flex:1}
+.fbbar .fb{width:33px;height:30px;border:1px solid var(--border);background:transparent;color:var(--faint);border-radius:8px;cursor:pointer;font-size:.88rem;transition:.16s}
+.fbbar .fb+.fb{margin-left:7px}
+.fbbar .fb.y:hover{color:var(--green);border-color:var(--green)}.fbbar .fb.n:hover{color:var(--red);border-color:var(--red)}
+
+.toggle{position:fixed;right:20px;bottom:18px;font-size:.74rem;color:var(--dim);border:1px solid var(--border);background:var(--card);border-radius:9px;padding:8px 13px;cursor:pointer}
+@keyframes in{from{opacity:0;transform:translateY(13px)}to{opacity:1;transform:none}}
+@keyframes blink{50%{opacity:.4}}
+@keyframes grow{from{width:0}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+  <nav class="rail">
+    <div class="logo mono">d&gt;</div>
+    <div class="ri"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.6"/></svg></div>
+    <div class="ri on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 3v18M5 7h10l-2 3 2 3H5"/></svg></div>
+    <div class="ri"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="6" rx="1.6"/><rect x="3" y="14" width="18" height="6" rx="1.6"/></svg></div>
+    <div class="ri"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/></svg></div>
+    <div class="sp"></div>
+    <div class="ri"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></div>
+  </nav>
+
+  <main class="main">
+    <!-- HEADER -->
+    <div class="header">
+      <div class="h-top">
+        <div>
+          <div class="h-crumb">acme-web <span>/</span> <b>运行</b> <span>/</span> <span class="here">#128</span></div>
+          <div class="h-name">
+            <h1>部署到 生产-1 失败</h1>
+            <span class="badge"><span class="pd"></span>FAILED</span>
+            <span class="h-roll">已自动回滚到 #126</span>
+          </div>
+        </div>
+        <div class="grow"></div>
+        <div class="chip"><span class="d"></span>AI 已连接 · Claude</div>
+        <button class="btn">查看日志</button>
+        <button class="btn primary">重新部署</button>
+      </div>
+      <div class="h-meta">
+        <span><s>分支</s> <span class="v mono">main</span></span><span class="sep">|</span>
+        <span><s>提交</s> <span class="v mono">a3f9c1d</span> 修复购物车结算</span><span class="sep">|</span>
+        <span><s>触发</s> <span class="v">Gitee push</span></span><span class="sep">|</span>
+        <span><s>耗时</s> <span class="v">1m 47s</span></span><span class="sep">|</span>
+        <span><s>构建</s> <span class="v mono">node:22</span> 隔离</span><span class="sep">|</span>
+        <span class="v">03:17</span>
+      </div>
+    </div>
+
+    <!-- PIPELINE skewer -->
+    <div class="pipe">
+      <div class="node ok"><span class="dot"></span><span class="lab">拉取代码</span><span class="t">4s</span></div>
+      <div class="seg done"></div>
+      <div class="node ok"><span class="dot"></span><span class="lab">隔离构建</span><span class="t">1m 12s</span></div>
+      <div class="seg bad"></div>
+      <div class="node bad"><span class="dot"></span><span class="lab">部署 生产-1</span><span class="t">31s · 失败</span></div>
+      <div class="seg"></div>
+      <div class="node skip"><span class="dot"></span><span class="lab">健康检查</span><span class="t">跳过</span></div>
+    </div>
+
+    <div class="sect">
+      <span class="ico">✦</span><span class="ti">AI 失败诊断</span>
+      <span class="conf">置信度 88% · 高 <span class="b"><i></i></span></span>
+    </div>
+
+    <section class="diag">
+      <div class="d-kick"><b>最可能的根因</b> · 假说,非结论</div>
+      <div class="d-title">环境变量 <span class="hl">DB_PASSWORD</span> 未注入,新版本启动即数据库认证失败、健康检查超时。</div>
+      <div class="d-why">这是唯一触发后续 cascade 失败的节点 —— 上次成功的 #126 里该变量存在,本次 #128 缺失。残余 12% 可能指向连接池配置(L389)。</div>
+
+      <div class="action">
+        <span class="l">修复建议</span>
+        <span class="t">在 生产-1 流水线凭据补回 <span class="hl">DB_PASSWORD</span>,或从 #126 环境快照恢复</span>
+        <button class="go">恢复 #126 环境 →</button>
+      </div>
+
+      <div class="block">
+        <div class="cap">证据 · <span class="f mono">deploy/生产-1/app.log</span></div>
+        <div class="term">
+          <div class="tb"><i></i><i></i><i></i><span class="nm">app.log — 生产-1</span></div>
+          <div class="feed">
+            <div class="ln"><span class="n">249</span><span class="c"><span class="t-tag">[boot]</span> loading config /etc/app/env</span></div>
+            <div class="ln"><span class="n">250</span><span class="c"><span class="t-tag">[boot]</span> connecting <span class="t-url">postgres://db:5432</span> …</span></div>
+            <div class="ln hit"><span class="n">251</span><span class="c"><span class="t-fatal">FATAL</span> <span class="t-key">DB_PASSWORD</span> is empty — auth failed for "app"</span></div>
+            <div class="ln"><span class="n">252</span><span class="c"><span class="t-tag">[health]</span> /health no 200 within 30s → abort</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="block">
+        <div class="diff">
+          <div class="dh">成功 / 失败 差异对比<span class="vs"><span class="ok mono">#126 ✓</span> ↔ <span class="bad mono">#128 ✗</span></span></div>
+          <div class="dgrp">环境变量</div>
+          <div class="drow minus"><span class="m">−</span><span class="k"><b>DB_PASSWORD</b> &nbsp;#126 存在,本次缺失 <span class="flag">疑似根因</span></span></div>
+          <div class="drow plus"><span class="m">+</span><span class="k"><b>FEATURE_CHECKOUT_V2</b> = true(本次新增)</span></div>
+          <div class="dgrp">变更文件 · 3 个提交</div>
+          <div class="drow file"><span class="m">~</span><span class="k">src/checkout/payment.ts &nbsp;<span style="color:var(--green)">+48</span> <span style="color:var(--red)">−12</span></span></div>
+          <div class="drow file"><span class="m">~</span><span class="k">src/checkout/cart.vue &nbsp;<span style="color:var(--green)">+21</span> <span style="color:var(--red)">−5</span></span></div>
+          <div class="drow plus"><span class="m">+</span><span class="k">src/checkout/v2-flag.ts &nbsp;新文件</span></div>
+        </div>
+      </div>
+
+      <div class="fbbar">
+        <span class="q">这个诊断准吗?你的反馈会让后续诊断更聪明。</span>
+        <button class="fb y" title="准确">👍</button>
+        <button class="fb n" title="不对">👎</button>
+      </div>
+    </section>
+  </main>
+  <button class="toggle" onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'light':'dark'">◐ 明 / 暗</button>
+</body>
+</html>

@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>devopsTool · 开始使用</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;450;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root,[data-theme="dark"]{--bg:oklch(15% 0.003 270);--bg-glow:radial-gradient(1100px 560px at 78% -18%,oklch(66% 0.155 258 / .1),transparent 58%);--card:oklch(20% 0.004 272);--card-2:oklch(23% 0.005 272);--inset:oklch(17.5% 0.004 270);--border:oklch(100% 0 0 / .055);--border-strong:oklch(100% 0 0 / .12);--text:oklch(95% 0.004 270);--dim:oklch(72% 0.008 270);--faint:oklch(55% 0.01 272);--primary:oklch(66% 0.155 258);--primary-press:oklch(60% 0.155 258);--primary-soft:oklch(66% 0.155 258 / .2);--cyan:oklch(82% 0.1 205);--cyan-soft:oklch(82% 0.1 205 / .14);--green:oklch(77% 0.15 150);--green-soft:oklch(72% 0.16 150 / .14);--green-line:oklch(72% 0.16 150 / .35);--amber:oklch(83% 0.13 82);--red:oklch(69% 0.17 22);--shadow:0 1px 2px oklch(0% 0 0/.4),0 14px 34px oklch(0% 0 0/.3);}
+[data-theme="light"]{--bg:oklch(96.5% 0.004 270);--bg-glow:radial-gradient(1100px 560px at 78% -18%,oklch(66% 0.155 258 / .14),transparent 58%);--card:oklch(100% 0 0);--card-2:oklch(98% 0.004 270);--inset:oklch(97.5% 0.004 270);--border:oklch(20% 0.02 270 / .1);--border-strong:oklch(20% 0.02 270 / .16);--text:oklch(25% 0.01 270);--dim:oklch(45% 0.014 270);--faint:oklch(58% 0.016 270);--primary:oklch(55% 0.17 258);--primary-press:oklch(49% 0.17 258);--primary-soft:oklch(55% 0.17 258 / .12);--cyan:oklch(52% 0.11 215);--cyan-soft:oklch(52% 0.11 215 / .1);--green:oklch(50% 0.14 150);--green-soft:oklch(62% 0.15 150 / .12);--green-line:oklch(56% 0.14 150 / .4);--amber:oklch(62% 0.12 70);--red:oklch(55% 0.18 22);--shadow:0 1px 2px oklch(50% 0.02 270/.06),0 12px 30px oklch(50% 0.03 270/.1);}
+*{box-sizing:border-box;margin:0;padding:0}html{font-size:15px}
+body{font-family:"Inter",ui-sans-serif,system-ui,"PingFang SC",sans-serif;color:var(--text);background:var(--bg);background-image:var(--bg-glow);background-attachment:fixed;-webkit-font-smoothing:antialiased;display:grid;grid-template-columns:62px 1fr;min-height:100vh}
+.mono{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace}
+.rail{border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;gap:7px;padding:20px 0;position:sticky;top:0;height:100vh}.logo{width:30px;height:30px;border-radius:9px;background:var(--primary);color:#fff;display:grid;place-items:center;font-weight:700;font-family:"JetBrains Mono";margin-bottom:14px}
+.ri{position:relative;width:40px;height:40px;border-radius:10px;display:grid;place-items:center;color:var(--faint);transition:.18s}.ri svg{width:19px;height:19px}.ri.on{color:var(--primary)}.ri.on::before{content:"";position:absolute;left:-20px;top:9px;bottom:9px;width:2.5px;border-radius:2px;background:var(--primary)}
+.ri.lock{opacity:.35}.sp{flex:1}
+.main{padding:54px 48px 90px;max-width:1080px;margin:0 auto}
+
+.hero{display:flex;align-items:flex-start;gap:18px;margin-bottom:30px;animation:in .5s cubic-bezier(.16,1,.3,1) both}
+.hero .mk{width:54px;height:54px;border-radius:15px;background:var(--primary);color:#fff;display:grid;place-items:center;font-weight:700;font-family:"JetBrains Mono";font-size:1.5rem;flex:none;box-shadow:0 8px 26px var(--primary-soft)}
+.hero h1{font-size:1.7rem;font-weight:700;letter-spacing:-.025em}
+.hero p{font-size:.95rem;color:var(--dim);margin-top:6px;max-width:62ch;line-height:1.55}
+.hero p b{color:var(--text)}
+
+/* value props */
+.props{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:30px}
+.prop{background:var(--card);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);padding:16px 17px;animation:in .5s .05s cubic-bezier(.16,1,.3,1) both}
+.prop .i{width:32px;height:32px;border-radius:9px;background:var(--primary-soft);color:var(--primary);display:grid;place-items:center;margin-bottom:11px}.prop .i svg{width:17px;height:17px}
+.prop.cy .i{background:var(--cyan-soft);color:var(--cyan)}.prop.gr .i{background:var(--green-soft);color:var(--green)}
+.prop b{font-size:.9rem;font-weight:600}.prop b .u{font-size:.72rem;color:var(--faint);font-weight:500}
+.prop span{display:block;font-size:.79rem;color:var(--faint);margin-top:5px;line-height:1.5}
+
+/* setup steps */
+.setup{background:var(--card);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow);overflow:hidden;animation:in .55s .1s cubic-bezier(.16,1,.3,1) both}
+.setup-h{display:flex;align-items:center;gap:13px;padding:17px 20px;border-bottom:1px solid var(--border)}
+.setup-h .t{font-size:1rem;font-weight:600}.setup-h .t span{display:block;font-size:.78rem;color:var(--faint);font-weight:400;margin-top:2px}
+.setup-h .prog{margin-left:auto;display:flex;align-items:center;gap:10px}
+.setup-h .prog .bar{width:120px;height:6px;border-radius:100px;background:var(--inset);overflow:hidden}.setup-h .prog .bar i{display:block;height:100%;width:33%;background:var(--primary);border-radius:100px}
+.setup-h .prog .n{font-size:.78rem;color:var(--dim);font-family:"JetBrains Mono"}
+
+.step{display:flex;align-items:center;gap:15px;padding:16px 20px;border-bottom:1px solid var(--border)}.step:last-child{border-bottom:none}
+.step .num{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;flex:none;font-weight:600;font-size:.85rem;font-family:"JetBrains Mono"}
+.step.done .num{background:var(--green-soft);color:var(--green)}.step.done .num svg{width:15px;height:15px}
+.step.now .num{background:var(--primary);color:#fff;box-shadow:0 4px 14px var(--primary-soft)}
+.step.wait .num{background:var(--inset);color:var(--faint);border:1px dashed var(--border-strong)}
+.step .bd{flex:1}.step .bd b{font-size:.9rem;font-weight:600}.step.wait .bd b{color:var(--faint)}
+.step .bd .ic{margin-left:7px;font-size:.66rem;color:var(--cyan);background:var(--cyan-soft);border-radius:5px;padding:1px 7px;font-weight:500}
+.step .bd span{display:block;font-size:.79rem;color:var(--faint);margin-top:3px;line-height:1.5}
+.step .act .go{height:36px;border:none;background:var(--primary);color:#fff;font-weight:600;font-size:.82rem;padding:0 16px;border-radius:9px;cursor:pointer;box-shadow:0 5px 16px var(--primary-soft);transition:.16s}.step .act .go:hover{background:var(--primary-press);transform:translateY(-1px)}
+.step .act .ed{height:36px;border:1px solid var(--border-strong);background:var(--card-2);color:var(--dim);font-size:.82rem;padding:0 14px;border-radius:9px;cursor:pointer}
+.step .act .lk{font-size:.78rem;color:var(--faint)}
+.step.done .doneval{font-size:.78rem;color:var(--green);display:flex;align-items:center;gap:6px}.step.done .doneval .d{width:6px;height:6px;border-radius:50%;background:var(--green)}
+
+.skip{text-align:center;margin-top:22px;font-size:.82rem;color:var(--faint)}.skip a{color:var(--dim);cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.toggle{position:fixed;right:20px;bottom:18px;font-size:.74rem;color:var(--dim);border:1px solid var(--border);background:var(--card);border-radius:9px;padding:8px 13px;cursor:pointer}
+@keyframes in{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+  <nav class="rail">
+    <div class="logo mono">d&gt;</div>
+    <div class="ri on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.6"/></svg></div>
+    <div class="ri lock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 3v18M5 7h10l-2 3 2 3H5"/></svg></div>
+    <div class="ri lock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="6" rx="1.6"/><rect x="3" y="14" width="18" height="6" rx="1.6"/></svg></div>
+    <div class="ri lock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/></svg></div>
+    <div class="sp"></div>
+    <div class="ri"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></div>
+  </nav>
+
+  <main class="main">
+    <div class="hero">
+      <div class="mk">d&gt;</div>
+      <div>
+        <h1>欢迎使用 devopsTool</h1>
+        <p>把 <b>CI + 部署编排 + 服务器管理</b> 收进一个 <b>≤100MB</b> 的二进制,并把 AI 做进失败诊断。三步即可让第一个服务跑起来。</p>
+      </div>
+    </div>
+
+    <div class="props">
+      <div class="prop gr"><div class="i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M13 2 3 14h7l-1 8 10-12h-7z"/></svg></div><b>轻量 <span class="u">≤100MB</span></b><span>单二进制,Docker 或原生直跑,远低于 Jenkins 500MB+。</span></div>
+      <div class="prop"><div class="i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></div><b>一个工具替三件套</b><span>CI + Ansible/Kamal + Portainer,从 push 到多机部署一站搞定。</span></div>
+      <div class="prop cy"><div class="i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h3.5l2.2-6 3.6 12 2.4-7 1.3 1h4.5"/></svg></div><b>AI 失败诊断</b><span>构建/部署失败时直接给根因假说 + 证据 + 修复建议。</span></div>
+    </div>
+
+    <div class="setup">
+      <div class="setup-h">
+        <div class="t">开始设置<span>完成后即可触发第一次部署</span></div>
+        <div class="prog"><span class="n">1 / 3</span><div class="bar"><i></i></div></div>
+      </div>
+
+      <div class="step done">
+        <span class="num"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2"><path d="m5 13 4 4 10-11"/></svg></span>
+        <div class="bd"><b>连接 AI 提供商<span class="ic">诊断王牌</span></b><span>接入你自己的 LLM(Claude / OpenAI / 本地 Ollama),密钥存入加密保险库。</span></div>
+        <div class="act"><span class="doneval"><span class="d"></span>已连接 Claude</span></div>
+      </div>
+
+      <div class="step now">
+        <span class="num">2</span>
+        <div class="bd"><b>添加第一台服务器</b><span>填 host + 选 SSH 凭据,平台校验 SSH + Docker 连通性。agentless,无需在目标机装任何东西。</span></div>
+        <div class="act"><button class="go">添加服务器 →</button></div>
+      </div>
+
+      <div class="step wait">
+        <span class="num">3</span>
+        <div class="bd"><b>创建第一个项目</b><span>接入 Gitee 仓库,AI 分析代码自动生成流水线配置。</span></div>
+        <div class="act"><span class="lk">完成上一步后解锁</span></div>
+      </div>
+    </div>
+
+    <div class="skip">也可以 <a>跳过引导,直接进入控制台</a> · 引导项随时可在设置中重新打开</div>
+  </main>
+  <button class="toggle" onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'light':'dark'">◐ 明 / 暗</button>
+</body>
+</html>

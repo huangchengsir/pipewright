@@ -1,0 +1,44 @@
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(browser-use:*)",
+      "Bash(npx playwright:*)",
+      "Bash(npx --no-install playwright:*)"
+    ],
+    "defaultMode": "bypassPermissions"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/playwright-fail-blocker.sh"
+          },
+          {
+            "type": "command",
+            "command": ".claude/hooks/browser-use-recorder-nudge.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/playwright-timeout-detector.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "enabledPlugins": {
+    "sky-aitest@sky-aitest": false
+  }
+}

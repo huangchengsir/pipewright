@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>devopsTool · 设置 · 账户</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;450;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root,[data-theme="dark"]{--bg:oklch(15% 0.003 270);--bg-glow:radial-gradient(900px 440px at 94% -16%,oklch(66% 0.155 258 / .07),transparent 60%);--card:oklch(20% 0.004 272);--card-2:oklch(23% 0.005 272);--inset:oklch(17.5% 0.004 270);--border:oklch(100% 0 0 / .055);--border-strong:oklch(100% 0 0 / .12);--text:oklch(95% 0.004 270);--dim:oklch(72% 0.008 270);--faint:oklch(55% 0.01 272);--primary:oklch(66% 0.155 258);--primary-press:oklch(60% 0.155 258);--primary-soft:oklch(66% 0.155 258 / .2);--cyan:oklch(82% 0.1 205);--cyan-soft:oklch(82% 0.1 205 / .14);--green:oklch(77% 0.15 150);--green-soft:oklch(72% 0.16 150 / .14);--amber:oklch(83% 0.13 82);--red:oklch(69% 0.17 22);--red-soft:oklch(62% 0.18 22 / .14);--red-line:oklch(62% 0.18 22 / .4);--shadow:0 1px 2px oklch(0% 0 0/.4),0 14px 34px oklch(0% 0 0/.3);}
+[data-theme="light"]{--bg:oklch(96.5% 0.004 270);--bg-glow:radial-gradient(900px 440px at 94% -16%,oklch(66% 0.155 258 / .1),transparent 60%);--card:oklch(100% 0 0);--card-2:oklch(98% 0.004 270);--inset:oklch(97.5% 0.004 270);--border:oklch(20% 0.02 270 / .1);--border-strong:oklch(20% 0.02 270 / .16);--text:oklch(25% 0.01 270);--dim:oklch(45% 0.014 270);--faint:oklch(58% 0.016 270);--primary:oklch(55% 0.17 258);--primary-press:oklch(49% 0.17 258);--primary-soft:oklch(55% 0.17 258 / .12);--cyan:oklch(52% 0.11 215);--cyan-soft:oklch(52% 0.11 215 / .1);--green:oklch(50% 0.14 150);--green-soft:oklch(62% 0.15 150 / .12);--amber:oklch(62% 0.12 70);--red:oklch(55% 0.18 22);--red-soft:oklch(60% 0.19 22 / .1);--red-line:oklch(55% 0.18 22 / .4);--shadow:0 1px 2px oklch(50% 0.02 270/.06),0 12px 30px oklch(50% 0.03 270/.1);}
+*{box-sizing:border-box;margin:0;padding:0}html{font-size:15px}
+body{font-family:"Inter",ui-sans-serif,system-ui,"PingFang SC",sans-serif;color:var(--text);background:var(--bg);background-image:var(--bg-glow);background-attachment:fixed;-webkit-font-smoothing:antialiased;display:grid;grid-template-columns:62px 1fr;min-height:100vh}
+.mono{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace}
+.rail{border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;gap:7px;padding:20px 0;position:sticky;top:0;height:100vh}.logo{width:30px;height:30px;border-radius:9px;background:var(--primary);color:#fff;display:grid;place-items:center;font-weight:700;font-family:"JetBrains Mono";margin-bottom:14px}
+.ri{position:relative;width:40px;height:40px;border-radius:10px;display:grid;place-items:center;color:var(--faint);cursor:pointer;transition:.18s}.ri svg{width:19px;height:19px}.ri:hover{color:var(--text);background:var(--border)}.ri.on{color:var(--primary)}.ri.on::before{content:"";position:absolute;left:-20px;top:9px;bottom:9px;width:2.5px;border-radius:2px;background:var(--primary)}.sp{flex:1}
+.main{padding:26px 48px 90px}
+.top{margin-bottom:22px}.top h1{font-size:1.4rem;font-weight:700;letter-spacing:-.02em}.top .sub{font-size:.8rem;color:var(--faint);margin-top:3px}
+.layout{display:grid;grid-template-columns:212px 1fr;gap:26px;align-items:start}@media(max-width:980px){.layout{grid-template-columns:1fr}}
+.snav{position:sticky;top:26px;display:flex;flex-direction:column;gap:2px}
+.snav .si{display:flex;align-items:center;gap:11px;padding:9px 12px;border-radius:9px;font-size:.85rem;color:var(--dim);cursor:pointer;transition:.14s}.snav .si svg{width:17px;height:17px;color:var(--faint)}
+.snav .si:hover{background:var(--inset);color:var(--text)}.snav .si.on{background:var(--primary-soft);color:var(--text);font-weight:500}.snav .si.on svg{color:var(--primary)}
+.snav .grp{font-size:.68rem;color:var(--faint);font-weight:600;text-transform:uppercase;letter-spacing:.04em;padding:14px 12px 6px}
+.content{display:flex;flex-direction:column;gap:18px;max-width:760px}
+.shead h2{font-size:1.12rem;font-weight:600;letter-spacing:-.01em}.shead p{font-size:.82rem;color:var(--faint);margin-top:4px}
+.panel{background:var(--card);border:1px solid var(--border);border-radius:15px;box-shadow:var(--shadow);overflow:hidden;animation:in .5s cubic-bezier(.16,1,.3,1) both}
+.ph{padding:14px 18px;border-bottom:1px solid var(--border);font-size:.88rem;font-weight:600;display:flex;align-items:center;gap:9px}.ph .ic{width:22px;height:22px;border-radius:6px;background:var(--primary-soft);color:var(--primary);display:grid;place-items:center}.ph .ic svg{width:13px;height:13px}
+.pb{padding:18px}
+/* identity */
+.idrow{display:flex;align-items:center;gap:15px}
+.avatar{width:56px;height:56px;border-radius:15px;background:linear-gradient(135deg,var(--primary),oklch(72% 0.13 300));color:#fff;display:grid;place-items:center;font-size:1.4rem;font-weight:700;flex:none}
+.idrow .who b{font-size:1rem;font-weight:600}.idrow .who span{display:block;font-size:.8rem;color:var(--faint);margin-top:3px}
+.idrow .tag{margin-left:auto;font-size:.7rem;color:var(--cyan);background:var(--cyan-soft);border:1px solid oklch(82% 0.1 205 / .3);border-radius:7px;padding:4px 10px;font-weight:500}
+.field{margin-bottom:14px}.field:last-child{margin-bottom:0}.field .l{font-size:.78rem;font-weight:500;color:var(--dim);margin-bottom:6px}
+.inp{height:38px;width:100%;background:var(--inset);border:1px solid var(--border);border-radius:9px;padding:0 13px;color:var(--text);font-size:.83rem;outline:none;display:flex;align-items:center}
+.inp.foc{border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-soft)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.savebar{display:flex;align-items:center;gap:12px;padding:14px 18px;background:var(--card-2);border-top:1px solid var(--border)}.savebar .grow{flex:1}
+.btn{height:36px;font-size:.83rem;font-weight:600;border:none;background:var(--primary);color:#fff;border-radius:9px;padding:0 16px;cursor:pointer;box-shadow:0 5px 16px var(--primary-soft)}.btn:hover{background:var(--primary-press)}
+.btn.ghost{background:transparent;color:var(--dim);border:1px solid var(--border-strong);box-shadow:none}.btn.ghost:hover{color:var(--text)}
+.strength{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:.74rem;color:var(--green)}.strength .b{flex:1;height:4px;border-radius:100px;background:var(--inset);overflow:hidden}.strength .b i{display:block;height:100%;width:78%;background:var(--green);border-radius:100px}
+/* sessions */
+.sess{display:flex;align-items:center;gap:13px;padding:13px 18px;border-bottom:1px solid var(--border)}.sess:last-child{border-bottom:none}
+.sess .ic{width:34px;height:34px;border-radius:9px;background:var(--inset);border:1px solid var(--border);display:grid;place-items:center;color:var(--dim);flex:none}.sess .ic svg{width:16px;height:16px}
+.sess .m b{font-size:.84rem;font-weight:500}.sess .m b .cur{font-size:.66rem;color:var(--green);background:var(--green-soft);border-radius:5px;padding:1px 7px;margin-left:7px;font-weight:600}
+.sess .m span{display:block;font-size:.74rem;color:var(--faint);margin-top:2px;font-family:"JetBrains Mono"}
+.sess .grow{flex:1}.sess .rv{font-size:.78rem;color:var(--red);border:1px solid var(--red-line);background:var(--red-soft);border-radius:8px;padding:6px 11px;cursor:pointer}.sess .this{font-size:.74rem;color:var(--faint)}
+/* security note */
+.secnote{display:flex;gap:11px;padding:14px 18px;font-size:.79rem;color:var(--dim);line-height:1.55}.secnote svg{width:16px;height:16px;color:var(--cyan);flex:none;margin-top:1px}.secnote b{color:var(--text)}
+.logout{display:flex;align-items:center;gap:12px;padding:16px 18px}.logout .tx{flex:1;font-size:.82rem;color:var(--dim)}
+.lobtn{height:36px;border:1px solid var(--red-line);background:var(--red-soft);color:var(--red);font-size:.82rem;font-weight:500;border-radius:9px;padding:0 16px;cursor:pointer}
+.toggle{position:fixed;right:20px;bottom:18px;font-size:.74rem;color:var(--dim);border:1px solid var(--border);background:var(--card);border-radius:9px;padding:8px 13px;cursor:pointer}
+@keyframes in{from{opacity:0;transform:translateY(13px)}to{opacity:1;transform:none}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+  <nav class="rail">
+    <div class="logo mono">d&gt;</div>
+    <div class="ri"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.6"/></svg></div>
+    <div class="ri"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 3v18M5 7h10l-2 3 2 3H5"/></svg></div>
+    <div class="ri"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="6" rx="1.6"/><rect x="3" y="14" width="18" height="6" rx="1.6"/></svg></div>
+    <div class="ri"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/></svg></div>
+    <div class="sp"></div>
+    <div class="ri on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></div>
+  </nav>
+
+  <main class="main">
+    <div class="top"><h1>设置</h1><div class="sub">单管理员实例 · acme</div></div>
+    <div class="layout">
+      <nav class="snav">
+        <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 12h3.5l2.2-6 3.6 12 2.4-7 1.3 1h4.5"/></svg>AI 提供商</div>
+        <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>凭据保险库</div>
+        <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 8v4l3 2"/><circle cx="12" cy="12" r="9"/></svg>审计日志</div>
+        <div class="grp">实例</div>
+        <div class="si on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>账户</div>
+        <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>系统</div>
+      </nav>
+
+      <div class="content">
+        <div class="shead"><h2>账户</h2><p>管理员身份、密码与登录会话。v1 为单管理员,无多用户 / RBAC。</p></div>
+
+        <!-- identity -->
+        <div class="panel">
+          <div class="ph"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></span>管理员账户</div>
+          <div class="pb">
+            <div class="idrow" style="margin-bottom:16px"><span class="avatar">H</span><div class="who"><b>huangjiawei</b><span>admin@acme.io</span></div><span class="tag">唯一管理员</span></div>
+            <div class="two">
+              <div class="field"><div class="l">用户名</div><div class="inp">huangjiawei</div></div>
+              <div class="field"><div class="l">邮箱(用于告警与找回)</div><div class="inp">admin@acme.io</div></div>
+            </div>
+          </div>
+          <div class="savebar"><span style="font-size:.78rem;color:var(--faint)">改动尚未保存</span><span class="grow"></span><button class="btn ghost">放弃</button><button class="btn">保存</button></div>
+        </div>
+
+        <!-- password -->
+        <div class="panel">
+          <div class="ph"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></span>修改密码</div>
+          <div class="pb">
+            <div class="field"><div class="l">当前密码</div><div class="inp" style="letter-spacing:.1em;color:var(--dim)">••••••••••••</div></div>
+            <div class="two">
+              <div class="field"><div class="l">新密码</div><div class="inp foc" style="letter-spacing:.1em">••••••••••••••</div><div class="strength"><div class="b"><i></i></div>强</div></div>
+              <div class="field"><div class="l">确认新密码</div><div class="inp" style="letter-spacing:.1em;color:var(--dim)">••••••••••••••</div></div>
+            </div>
+          </div>
+          <div class="savebar"><span style="font-size:.78rem;color:var(--faint)">修改后其它设备会话将失效</span><span class="grow"></span><button class="btn">更新密码</button></div>
+        </div>
+
+        <!-- sessions -->
+        <div class="panel">
+          <div class="ph"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg></span>登录会话 <span style="font-weight:400;color:var(--faint);font-size:.78rem;margin-left:6px">2 个活跃</span></div>
+          <div class="sess">
+            <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/></svg></span>
+            <div class="m"><b>macOS · Chrome<span class="cur">当前设备</span></b><span>192.168.1.5 · 杭州 · 刚刚活跃</span></div>
+            <span class="grow"></span><span class="this">本次会话</span>
+          </div>
+          <div class="sess">
+            <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg></span>
+            <div class="m"><b>iOS · Safari</b><span>10.0.1.5 · 杭州 · 3 小时前</span></div>
+            <span class="grow"></span><button class="rv">撤销</button>
+          </div>
+        </div>
+
+        <!-- security note + logout -->
+        <div class="panel">
+          <div class="secnote"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M12 2 4 6v6c0 5 3.5 8 8 10 4.5-2 8-5 8-10V6z"/></svg><span>连续 <b>5 次</b>登录失败将锁定 15 分钟;Web UI 必须登录,不在网络上裸奔。v1 单管理员,企业级多用户 / RBAC 见路线图。</span></div>
+          <div class="logout" style="border-top:1px solid var(--border)"><div class="tx">登出当前设备会话</div><button class="lobtn">登出</button></div>
+        </div>
+      </div>
+    </div>
+  </main>
+  <button class="toggle" onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'light':'dark'">◐ 明 / 暗</button>
+</body>
+</html>

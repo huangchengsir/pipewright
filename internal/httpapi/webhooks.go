@@ -123,12 +123,8 @@ func makeManualRunHandler(svc run.Service, aud audit.Recorder) http.HandlerFunc 
 			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
 			return
 		}
+		// 分支可选:留空时由 run.Service.Create 取项目默认分支(项目已知默认分支,系统自动解析)。
 		branch := strings.TrimSpace(req.Branch)
-		if branch == "" {
-			writeError(w, http.StatusBadRequest, "branch_required", "必须指定分支")
-			return
-		}
-
 		commit := strings.TrimSpace(req.Commit)
 		rn, err := svc.Create(r.Context(), id, run.Trigger{
 			Type:   run.TriggerManual,

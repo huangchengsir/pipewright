@@ -4,22 +4,18 @@ import { useSessionStore } from '../stores/session'
 // Lazy-loaded views
 const Login       = () => import('../views/Login.vue')
 const AppShell    = () => import('../layouts/AppShell.vue')
-const Overview    = () => import('../views/Overview.vue')
 // Story 1-7: first-run onboarding guide
 const Onboarding  = () => import('../views/Onboarding.vue')
 const Projects    = () => import('../views/Projects.vue')
 const Runs        = () => import('../views/Runs.vue')
-const Servers     = () => import('../views/Servers.vue')
 // Story 6-1: multi-host status overview (server-layer CPU/memory/disk metrics, FR-15)
 const ServerStatus = () => import('../views/ServerStatus.vue')
 // Story 6-5: configurable anomaly detection & alerts (FR-23)
 const AnomalyDetection = () => import('../views/AnomalyDetection.vue')
-const Notifications = () => import('../views/Notifications.vue')
 const Settings    = () => import('../views/Settings.vue')
 const SettingsAI  = () => import('../views/settings/SettingsAI.vue')
 const SettingsVault = () => import('../views/settings/SettingsVault.vue')
 const SettingsAccount = () => import('../views/settings/SettingsAccount.vue')
-const SettingsSystem = () => import('../views/settings/SettingsSystem.vue')
 // Story 4-1: target server registry + shared SSH layer (FR-14)
 const SettingsServers = () => import('../views/settings/SettingsServers.vue')
 // Story 5-1: notification channels (FR-19)
@@ -59,7 +55,8 @@ const router = createRouter({
       component: AppShell,
       meta: { requiresAuth: true },
       children: [
-        { path: '', name: 'overview', component: Overview },
+        // 首页:概览仪表盘尚未建,暂重定向到项目页(避免落到占位页)。
+        { path: '', name: 'overview', redirect: { name: 'projects' } },
         // Story 1-7: first-run onboarding guide (inside shell, auth-required)
         { path: 'onboarding', name: 'onboarding', component: Onboarding },
         { path: 'projects', name: 'projects', component: Projects },
@@ -71,12 +68,14 @@ const router = createRouter({
         { path: 'projects/:id/code', name: 'project-code', component: ProjectCode },
         { path: 'runs', name: 'runs', component: Runs },
         { path: 'runs/:id', name: 'run-detail', component: RunDetail },
-        { path: 'servers', name: 'servers', component: Servers },
+        // 顶层「服务器」占位页 → 重定向到真实的多机状态页(登记在 /settings/servers)。
+        { path: 'servers', name: 'servers', redirect: { name: 'server-status' } },
         // Story 6-1: multi-host status overview (server-layer metrics, FR-15)
         { path: 'server-status', name: 'server-status', component: ServerStatus },
         // Story 6-5: configurable anomaly detection & alerts (FR-23)
         { path: 'anomaly', name: 'anomaly', component: AnomalyDetection },
-        { path: 'notifications', name: 'notifications', component: Notifications },
+        // 顶层「通知」占位页 → 重定向到真实的通知配置页。
+        { path: 'notifications', name: 'notifications', redirect: { name: 'settings-notifications' } },
         {
           path: 'settings',
           name: 'settings',
@@ -87,7 +86,8 @@ const router = createRouter({
             { path: 'notifications', name: 'settings-notifications', component: SettingsNotifications },
             { path: 'vault', name: 'settings-vault', component: SettingsVault },
             { path: 'account', name: 'settings-account', component: SettingsAccount },
-            { path: 'system', name: 'settings-system', component: SettingsSystem },
+            // 「系统」设置占位页 → 重定向到 AI 配置(尚未建,避免落占位页)。
+            { path: 'system', name: 'settings-system', redirect: { name: 'settings-ai' } },
             // Story 4-1: target servers + shared SSH layer (FR-14)
             { path: 'servers', name: 'settings-servers', component: SettingsServers },
             // Story 7-5: diagnosis feedback-loop stats (FR-26)

@@ -255,7 +255,7 @@ export function submitDiagnosisFeedback(
 // Caller uses the returned run.id to navigate to /runs/:id.
 
 export interface TriggerManualInput {
-  branch: string
+  branch?: string
   commit?: string
 }
 

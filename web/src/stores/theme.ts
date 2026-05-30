@@ -4,7 +4,7 @@ import { ref, watch } from 'vue'
 export type Theme = 'dark' | 'light'
 
 const STORAGE_KEY = 'pipewright-theme'
-const DEFAULT_THEME: Theme = 'dark'
+const DEFAULT_THEME: Theme = 'light'
 
 function applyTheme(theme: Theme): void {
   document.documentElement.dataset.theme = theme

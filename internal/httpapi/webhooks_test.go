@@ -116,11 +116,12 @@ func TestManualTriggerCreatesAndAdvancesToSuccess(t *testing.T) {
 }
 
 // TestManualTriggerMissingBranch 验证缺分支 → 400。
-func TestManualTriggerMissingBranch(t *testing.T) {
+// 分支可选:省略 branch 时由后端取项目默认分支并创建运行(201),不再 400。
+func TestManualTriggerEmptyBranchUsesProjectDefault(t *testing.T) {
 	srv, client, csrf, projID, _, _ := setupWebhookServer(t)
 	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/projects/"+projID+"/runs", csrf, `{}`)
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("空 branch 应用项目默认分支创建成功(201),got %d", resp.StatusCode)
 	}
 	_ = resp.Body.Close()
 }

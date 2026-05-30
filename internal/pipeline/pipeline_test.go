@@ -122,6 +122,9 @@ func TestGetIdempotent(t *testing.T) {
 
 func validSpec() Spec {
 	return Spec{Stages: []Stage{
+		{Name: "流水线源", Kind: KindSource, Jobs: []Job{
+			{Name: "Gitee 源", Type: "git_source", Summary: "main", Config: map[string]any{}},
+		}},
 		{Name: "构建", Kind: KindBuild, Jobs: []Job{
 			{Name: "打镜像", Type: "build_image", Summary: "docker build", Config: map[string]any{"dockerfile": "Dockerfile"}},
 		}},
@@ -136,11 +139,24 @@ func TestSaveValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if len(cfg.Spec.Stages) != 2 {
-		t.Fatalf("阶段数 = %d, want 2", len(cfg.Spec.Stages))
+	if len(cfg.Spec.Stages) != 3 {
+		t.Fatalf("阶段数 = %d, want 3", len(cfg.Spec.Stages))
 	}
 	if cfg.Status != "draft" {
 		t.Fatalf("status = %q, want draft", cfg.Status)
+	}
+}
+
+// TestSaveRejectsNoSourceStage 验证源阶段不变式:无 source 阶段的 spec 被拒(防抹除仓库引用)。
+func TestSaveRejectsNoSourceStage(t *testing.T) {
+	svc, _, projID := newSvc(t)
+	spec := Spec{Stages: []Stage{{Name: "构建", Kind: KindBuild, Jobs: []Job{}}}}
+	if _, err := svc.Save(context.Background(), projID, spec); !errors.Is(err, ErrInvalidStage) {
+		t.Fatalf("无源阶段 Save err = %v, want ErrInvalidStage", err)
+	}
+	// 空 stages 同样被拒。
+	if _, err := svc.Save(context.Background(), projID, Spec{Stages: []Stage{}}); !errors.Is(err, ErrInvalidStage) {
+		t.Fatalf("空 stages Save err = %v, want ErrInvalidStage", err)
 	}
 }
 
@@ -208,6 +224,7 @@ func TestSaveNormalizesMissingIDsAndConfig(t *testing.T) {
 	svc, _, projID := newSvc(t)
 	spec := Spec{Stages: []Stage{
 		{Name: " 构建 ", Kind: KindBuild, Jobs: []Job{{Name: " j ", Type: " t ", Config: nil}}},
+		{Name: "源", Kind: KindSource, Jobs: []Job{{Name: "src", Type: "git_source"}}}, // 满足源阶段不变式
 	}}
 	cfg, err := svc.Save(context.Background(), projID, spec)
 	if err != nil {

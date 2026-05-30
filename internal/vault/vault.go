@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -37,6 +38,8 @@ var (
 	ErrEmptySecret = errors.New("vault: secret must not be empty")
 	// ErrEmptyName 表示名称为空。
 	ErrEmptyName = errors.New("vault: name must not be empty")
+	// ErrCredentialInUse 表示凭据正被项目/流水线配置引用,不可删除(防悬挂引用)。
+	ErrCredentialInUse = errors.New("vault: credential in use")
 )
 
 // Credential 是对外可见的凭据视图:只含掩码 + 元数据,绝无明文/密文。
@@ -74,6 +77,9 @@ type Vault interface {
 	List() ([]Credential, error)
 	// Get 解密并返回指定凭据的明文,**仅供进程内领域调用**;同时更新 last_used_at。
 	Get(id string) (string, error)
+	// Exists 仅校验凭据是否存在,**不解密、不刷新 last_used_at**(供保存配置时校验引用,
+	// 避免「仅编辑也算用过」的语义失真与无谓解密)。未配置 master key → ErrVaultUnconfigured。
+	Exists(id string) (bool, error)
 	// Update 改名/改作用域/轮换密钥;返回更新后的掩码视图。
 	Update(id string, in UpdateInput) (*Credential, error)
 	// Delete 删除凭据。
@@ -205,6 +211,21 @@ func (s *service) Get(id string) (string, error) {
 	return string(plaintext), nil
 }
 
+func (s *service) Exists(id string) (bool, error) {
+	if !s.configured() {
+		return false, ErrVaultUnconfigured
+	}
+	var one int
+	err := s.db.QueryRow(`SELECT 1 FROM credentials WHERE id = ?`, id).Scan(&one)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("vault: check credential exists: %w", err)
+	}
+	return true, nil
+}
+
 func (s *service) Update(id string, in UpdateInput) (*Credential, error) {
 	if !s.configured() {
 		return nil, ErrVaultUnconfigured
@@ -270,8 +291,22 @@ func (s *service) Delete(id string) error {
 	if !s.configured() {
 		return ErrVaultUnconfigured
 	}
+	// 在用守卫:被流水线配置 secret 引用的凭据不可删,否则悬挂引用使该项目配置再不可保存。
+	// pipeline_settings 的引用以 JSON 存(无外键),此处显式 LIKE 检查;credentialId 为 UUID,
+	// 无子串歧义。表不存在(迁移未应用)时 QueryRow 报错,跳过此检查、退回普通删除。
+	var refCount int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM pipeline_settings WHERE build_json LIKE ? OR environments_json LIKE ?`,
+		"%"+id+"%", "%"+id+"%",
+	).Scan(&refCount); err == nil && refCount > 0 {
+		return ErrCredentialInUse
+	}
 	res, err := s.db.Exec(`DELETE FROM credentials WHERE id = ?`, id)
 	if err != nil {
+		// projects.credential_id 等外键(ON DELETE RESTRICT)引用 → 约束错误,映射为在用。
+		if isConstraintErr(err) {
+			return ErrCredentialInUse
+		}
 		return fmt.Errorf("vault: delete credential: %w", err)
 	}
 	n, _ := res.RowsAffected()
@@ -279,6 +314,15 @@ func (s *service) Delete(id string) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// isConstraintErr 判断错误是否为 SQLite 约束失败(外键/RESTRICT 等;modernc 文本匹配)。
+func isConstraintErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToUpper(err.Error())
+	return strings.Contains(msg, "FOREIGN KEY") || strings.Contains(msg, "CONSTRAINT")
 }
 
 func (s *service) SealSecret(plaintext []byte) ([]byte, error) {

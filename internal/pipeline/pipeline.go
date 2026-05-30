@@ -221,7 +221,13 @@ func (s *service) createDefault(ctx context.Context, projectID string) (*Config,
 	}
 
 	// 不管本协程是否赢得插入,统一回读权威行(并发竞态下另一协程可能已写入)。
-	return s.load(ctx, projectID)
+	// 若回读时行已被并发删除(如项目级联删),映射为 ErrProjectNotFound 而非裸 sql.ErrNoRows,
+	// 避免 writePipelineError 落到默认 500(与兄弟 settingsService 一致)。
+	cfg, err := s.load(ctx, projectID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrProjectNotFound
+	}
+	return cfg, err
 }
 
 // sourceSummary 读取项目仓库信息拼出源阶段任务摘要;项目不存在 → ErrProjectNotFound。
@@ -327,6 +333,19 @@ func normalizeSpec(in Spec) (Spec, error) {
 
 		out.Stages = append(out.Stages, Stage{ID: stageID, Name: name, Kind: kind, Jobs: jobs})
 	}
+
+	// 源阶段不变式:流水线必须恰有一个 source 阶段(引用项目仓库)。前端不渲染删源阶段的入口,
+	// 但 API 层须守住此不变式——否则 PUT `{"stages":[]}` 或漏传源阶段会静默抹除仓库引用。
+	sourceCount := 0
+	for _, st := range out.Stages {
+		if st.Kind == KindSource {
+			sourceCount++
+		}
+	}
+	if sourceCount != 1 {
+		return Spec{}, fmt.Errorf("%w: pipeline must have exactly one source stage", ErrInvalidStage)
+	}
+
 	return out, nil
 }
 

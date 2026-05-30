@@ -19,12 +19,12 @@ const labelMap: Record<BadgeStatus, string> = {
   running:    '进行中',
   partial:    '部分失败',
   rolledback: '已回滚',
-  queued:     '排队中',
+  queued:     '排队',
 }
 </script>
 
 <template>
-  <span class="badge" :class="`badge--${props.status}`" role="status">
+  <span class="badge" :class="`badge--${props.status}`">
     <span class="badge__dot" aria-hidden="true" />
     <span class="badge__label">{{ labelMap[props.status] }}</span>
   </span>

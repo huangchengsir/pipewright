@@ -2,8 +2,10 @@ package httpapi
 
 import (
 	"context"
+	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -14,14 +16,20 @@ import (
 // 即 "admin"(与 manual run handler 一致)。未来多用户时由 session 携带身份再细化。
 const auditActor = "admin"
 
-// clientIP 从请求提取来源 IP:优先 X-Forwarded-For 首段(反代场景),否则 RemoteAddr。
-// 仅用于审计记录(非安全判定),取尽力而为值。
+// clientIP 从请求提取来源 IP,用于审计记录(非安全判定)。
+//
+// **默认只用 RemoteAddr**:devopsTool 常作单二进制直连暴露,无反代。若无条件采信
+// X-Forwarded-For,任意客户端可发 `X-Forwarded-For: 1.2.3.4` 把伪造来源写进 append-only
+// 的审计 ip 列,削弱 AC-SEC-03「不可篡改」的取证价值。仅当显式配置可信反代
+// (DEVOPSTOOL_TRUST_PROXY=1/true)时才采信 XFF 首段。
 func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[:i])
+	if trustForwardedHeader() {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			if i := strings.IndexByte(xff, ','); i >= 0 {
+				return strings.TrimSpace(xff[:i])
+			}
+			return strings.TrimSpace(xff)
 		}
-		return strings.TrimSpace(xff)
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -30,13 +38,26 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
+// trustForwardedHeader 报告是否采信 X-Forwarded-For(仅在显式配置可信反代时)。
+func trustForwardedHeader() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("DEVOPSTOOL_TRUST_PROXY"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
 // recordAudit 在业务成功后追加一行审计;rec 为 nil 时静默跳过(不阻断业务)。
-// 本地写入失败不回滚业务,仅由 Recorder 内部决定可观测性(此处吞错以保证「审计不阻断」)。
+// 本地写入失败**不回滚业务**(审计不阻断),但必须**记日志**——否则敏感操作的审计缺口
+// 完全静默,损害 AC-SEC-03 的「完整」保证。
 func recordAudit(ctx context.Context, rec audit.Recorder, e audit.Entry) {
 	if rec == nil {
 		return
 	}
-	_ = rec.Record(ctx, e)
+	if err := rec.Record(ctx, e); err != nil {
+		log.Printf("[audit] 警告:写审计失败(action=%s target=%s/%s): %v", e.Action, e.TargetType, e.TargetID, err)
+	}
 }
 
 // auditEntryDTO 是审计条目对外响应体(冻结契约;camelCase;detail 已脱敏,绝无明文)。
@@ -80,7 +101,7 @@ func toAuditEntryDTO(r audit.Record) auditEntryDTO {
 func makeListAuditHandler(rec audit.Recorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if rec == nil {
-			writeError(w, http.StatusServiceUnavailable, "internal", "审计服务未初始化")
+			writeError(w, http.StatusServiceUnavailable, "audit_unavailable", "审计服务未初始化")
 			return
 		}
 		q := r.URL.Query()

@@ -35,6 +35,8 @@ export interface ShowToastOptions {
 
 let _idCounter = 0
 const toasts = ref<ToastItem[]>([])
+// 跟踪每个自动消失 toast 的定时器句柄,以便手动关闭/清空时取消,避免野定时器残留。
+const timers = new Map<number, ReturnType<typeof setTimeout>>()
 
 const AUTO_DISMISS_MS: Record<ToastType, number | undefined> = {
   success: 4000,
@@ -61,18 +63,25 @@ function show(type: ToastType, title: string, options: ShowToastOptions = {}): n
   toasts.value.push(item)
 
   if (duration !== undefined) {
-    setTimeout(() => dismiss(id), duration)
+    timers.set(id, setTimeout(() => dismiss(id), duration))
   }
 
   return id
 }
 
 function dismiss(id: number): void {
+  const t = timers.get(id)
+  if (t !== undefined) {
+    clearTimeout(t)
+    timers.delete(id)
+  }
   const idx = toasts.value.findIndex(t => t.id === id)
   if (idx !== -1) toasts.value.splice(idx, 1)
 }
 
 function clear(): void {
+  for (const t of timers.values()) clearTimeout(t)
+  timers.clear()
   toasts.value = []
 }
 

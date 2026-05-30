@@ -38,8 +38,8 @@ watch(
   },
 )
 
-function objectToKV(obj: Record<string, string>): KVRow[] {
-  return Object.entries(obj).map(([k, v]) => ({ _key: ++_kvSeq, k, v }))
+function objectToKV(obj: Record<string, string> | null | undefined): KVRow[] {
+  return Object.entries(obj ?? {}).map(([k, v]) => ({ _key: ++_kvSeq, k, v }))
 }
 
 function kvToObject(rows: KVRow[]): Record<string, string> {

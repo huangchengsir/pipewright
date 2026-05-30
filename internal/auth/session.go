@@ -13,6 +13,9 @@ import (
 const (
 	// sessionTTL 会话有效期(7 天)。
 	sessionTTL = 7 * 24 * time.Hour
+	// sessionRefreshInterval 是滑动过期的最小写库间隔:Get 命中有效会话后,
+	// 仅当距上次 last_seen 超过此间隔才写库刷新,避免每请求一次 UPDATE 的写放大。
+	sessionRefreshInterval = 60 * time.Second
 	// tokenBytes 会话 token 随机字节数(32B → 64 hex chars)。
 	tokenBytes = 32
 )
@@ -107,16 +110,21 @@ func (ss *SessionStore) Get(token string) (*Session, error) {
 		return nil, ErrSessionNotFound
 	}
 
-	// 滑动空闲超时:命中有效会话时把 expires_at 前移为 now+TTL,
-	// 并同步刷新 last_seen_at。如此会话在连续活跃下不会到期,
-	// 仅在空闲满 sessionTTL 后才过期(名实相符的滑动过期)。
-	newExp := now.Add(sessionTTL)
-	_, _ = ss.db.Exec(
-		`UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE token = ?`,
-		now.Format(time.RFC3339), newExp.Format(time.RFC3339), token,
-	)
-	s.LastSeenAt = now
-	s.ExpiresAt = newExp
+	// 滑动空闲超时:命中有效会话时把 expires_at 前移为 now+TTL,并刷新 last_seen_at。
+	// **写节流**:仅当距上次 last_seen 超过 sessionRefreshInterval 才写库。否则每个
+	// 认证请求(列表/SSE 等)都触发一次 UPDATE,在单写 modernc/sqlite 上造成写放大与
+	// 锁竞争(SSE 并发下易 SQLITE_BUSY)。TTL(7d)远大于刷新间隔(1min),跳过几次刷新
+	// 不影响滑动过期语义。
+	if now.Sub(s.LastSeenAt) >= sessionRefreshInterval {
+		newExp := now.Add(sessionTTL)
+		if _, err := ss.db.Exec(
+			`UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE token = ?`,
+			now.Format(time.RFC3339), newExp.Format(time.RFC3339), token,
+		); err == nil {
+			s.LastSeenAt = now
+			s.ExpiresAt = newExp
+		}
+	}
 	return &s, nil
 }
 
@@ -236,7 +244,14 @@ func (ss *SessionStore) DeleteByIDPrefix(id string) (int64, error) {
 }
 
 // DeleteOthers 删除除 keepToken 外的所有会话(改口令后使其它会话失效)。返回删除行数。
+//
+// keepToken 为空时**拒绝**(返回错误):空 token 会让 `token != ”` 匹配所有真实会话,
+// 误删包括当前会话在内的全部,与「当前会话保留」语义相悖。这是危险原语的兜底护栏
+// (调用方应保证传入有效的当前会话 token)。
 func (ss *SessionStore) DeleteOthers(keepToken string) (int64, error) {
+	if keepToken == "" {
+		return 0, errors.New("auth: DeleteOthers 拒绝空 keepToken(避免误删全部会话)")
+	}
 	res, err := ss.db.Exec(`DELETE FROM sessions WHERE token != ?`, keepToken)
 	if err != nil {
 		return 0, fmt.Errorf("auth: delete other sessions: %w", err)

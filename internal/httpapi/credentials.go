@@ -47,6 +47,8 @@ func writeVaultError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusServiceUnavailable, "vault_unconfigured", "保险库未配置 master key")
 	case errors.Is(err, vault.ErrNotFound):
 		writeError(w, http.StatusNotFound, "credential_not_found", "凭据不存在")
+	case errors.Is(err, vault.ErrCredentialInUse):
+		writeError(w, http.StatusConflict, "credential_in_use", "凭据正被项目或流水线配置引用,无法删除;请先解除引用")
 	case errors.Is(err, vault.ErrInvalidType):
 		writeError(w, http.StatusBadRequest, "invalid_credential", "凭据类型非法")
 	case errors.Is(err, vault.ErrEmptySecret):

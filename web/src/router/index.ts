@@ -22,6 +22,8 @@ const SettingsSystem = () => import('../views/settings/SettingsSystem.vue')
 const SettingsServers = () => import('../views/settings/SettingsServers.vue')
 // Story 5-1: notification channels (FR-19)
 const SettingsNotifications = () => import('../views/settings/SettingsNotifications.vue')
+// Story 7-5: diagnosis feedback-loop stats (FR-26)
+const SettingsDiagnosisStats = () => import('../views/settings/SettingsDiagnosisStats.vue')
 // Story 2-2: new pipeline editor
 const ProjectPipeline = () => import('../views/ProjectPipeline.vue')
 // Story 2-3: triggers (kept for backward compat; now a thin wrapper around TriggersPanel)
@@ -80,6 +82,8 @@ const router = createRouter({
             { path: 'system', name: 'settings-system', component: SettingsSystem },
             // Story 4-1: target servers + shared SSH layer (FR-14)
             { path: 'servers', name: 'settings-servers', component: SettingsServers },
+            // Story 7-5: diagnosis feedback-loop stats (FR-26)
+            { path: 'diagnosis-stats', name: 'settings-diagnosis-stats', component: SettingsDiagnosisStats },
           ],
         },
       ],

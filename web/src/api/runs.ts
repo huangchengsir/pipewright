@@ -226,6 +226,28 @@ export function getRunDiff(id: string): Promise<RunDiffDTO> {
   return http.get<RunDiffDTO>(`/api/runs/${id}/diff`)
 }
 
+// ─── Diagnosis feedback loop (Story 7-5 frozen contract — FR-26) ──────────────
+//
+// POST /api/runs/{id}/diagnosis/feedback  body { verdict, correctRootCause? }
+// Submit 👍/👎 feedback on a ready diagnosis. `correctRootCause` only meaningful
+// for verdict='down' (knowledge-base seed; masked + length-capped server-side).
+// Returns { ok: true }. 404 if run not found; 422 no_diagnosis if the run has no
+// diagnosis yet; same-run resubmit overwrites (upsert by runId).
+
+export type FeedbackVerdict = 'up' | 'down'
+
+export interface DiagnosisFeedbackInput {
+  verdict: FeedbackVerdict
+  correctRootCause?: string
+}
+
+export function submitDiagnosisFeedback(
+  id: string,
+  input: DiagnosisFeedbackInput,
+): Promise<{ ok: boolean }> {
+  return http.post<{ ok: boolean }>(`/api/runs/${id}/diagnosis/feedback`, input)
+}
+
 // ─── Manual trigger ───────────────────────────────────────────────────────────
 //
 // POST /api/projects/{id}/runs  body { branch, commit? }

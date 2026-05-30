@@ -25,10 +25,15 @@ import {
   updateChannel,
   deleteChannel,
   testChannel,
+  listRoutes,
+  createRoute,
+  deleteRoute,
   type ChannelType,
   type NotificationChannel,
   type ChannelConfigInput,
   type ChannelTestResult,
+  type NotificationRoute,
+  type NotificationEvent,
 } from '../../api/notifications'
 
 // ─── types / metadata ──────────────────────────────────────────────────────────
@@ -336,6 +341,110 @@ async function handleTest(ch: NotificationChannel): Promise<void> {
     testingId.value = null
   }
 }
+
+// ─── event routes (Story 5.2 / FR-20) ─────────────────────────────────────────
+// 「事件 → 渠道」映射区:独立于上方渠道 CRUD;未配路由的事件不发送。
+
+interface EventMeta {
+  id: NotificationEvent
+  label: string
+  desc: string
+}
+
+const EVENTS: EventMeta[] = [
+  { id: 'build_succeeded', label: '构建成功', desc: '运行成功完成' },
+  { id: 'build_failed', label: '构建失败', desc: '运行失败' },
+  { id: 'deploy_succeeded', label: '部署成功', desc: '部署完成' },
+  { id: 'deploy_failed', label: '部署失败', desc: '部分目标失败' },
+  { id: 'rollback', label: '回滚', desc: '已回滚到上一版本' },
+  { id: 'health_check_failed', label: '健康检查失败', desc: '部署后健康检查未通过' },
+]
+
+const routesLoadState = ref<LoadState>('loading')
+const routesLoadError = ref('')
+const routes = ref<NotificationRoute[]>([])
+
+async function loadRoutes(): Promise<void> {
+  routesLoadState.value = 'loading'
+  routesLoadError.value = ''
+  try {
+    routes.value = await listRoutes()
+    routesLoadState.value = 'ready'
+  } catch (err) {
+    routesLoadError.value = httpMessage(err, '加载事件路由失败,请稍后重试')
+    routesLoadState.value = 'error'
+  }
+}
+
+/** Routes grouped by event id (preserves server order within each group). */
+const routesByEvent = computed<Record<string, NotificationRoute[]>>(() => {
+  const map: Record<string, NotificationRoute[]> = {}
+  for (const e of EVENTS) map[e.id] = []
+  for (const r of routes.value) {
+    if (!map[r.event]) map[r.event] = []
+    map[r.event].push(r)
+  }
+  return map
+})
+
+/** Channel name lookup for rendering route rows. */
+function channelName(channelId: string): string {
+  return channels.value.find((c) => c.id === channelId)?.name ?? '(已删除渠道)'
+}
+
+// Add-route form state, keyed per event so each event row has its own picker.
+const addingEvent = ref<NotificationEvent | null>(null)
+const addChannelId = ref('')
+const savingRoute = ref(false)
+
+function openAddRoute(event: NotificationEvent): void {
+  addingEvent.value = event
+  // Default to first channel not already routed for this event.
+  const used = new Set((routesByEvent.value[event] ?? []).map((r) => r.channelId))
+  const free = channels.value.find((c) => !used.has(c.id))
+  addChannelId.value = free?.id ?? channels.value[0]?.id ?? ''
+}
+
+function cancelAddRoute(): void {
+  addingEvent.value = null
+  addChannelId.value = ''
+}
+
+async function handleAddRoute(): Promise<void> {
+  if (!addingEvent.value || !addChannelId.value) return
+  savingRoute.value = true
+  try {
+    await createRoute({ event: addingEvent.value, channelId: addChannelId.value, enabled: true })
+    toast.success('已添加事件路由')
+    cancelAddRoute()
+    await loadRoutes()
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 422 && err.apiError) {
+      toast.error('添加失败', { detail: err.apiError.message })
+    } else {
+      toast.error('添加失败', { detail: httpMessage(err, '请稍后重试') })
+    }
+  } finally {
+    savingRoute.value = false
+  }
+}
+
+const deletingRouteId = ref<string | null>(null)
+
+async function handleDeleteRoute(route: NotificationRoute): Promise<void> {
+  deletingRouteId.value = route.id
+  try {
+    await deleteRoute(route.id)
+    toast.success('已移除事件路由')
+    await loadRoutes()
+  } catch (err) {
+    toast.error('移除失败', { detail: httpMessage(err, '请稍后重试') })
+  } finally {
+    deletingRouteId.value = null
+  }
+}
+
+onMounted(loadRoutes)
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -715,6 +824,99 @@ function configSummary(ch: NotificationChannel): string {
       </ul>
 
     </template>
+
+    <!-- ─── event routes (Story 5.2 / FR-20) ─────────────────────────────────── -->
+    <section class="routes-section" aria-labelledby="routes-heading">
+      <div class="section-head">
+        <div class="section-head-text">
+          <h2 id="routes-heading" class="section-title">事件路由</h2>
+          <p class="section-desc">
+            配置「哪些事件经哪些渠道通知」。<strong>未配置路由的事件不会发送任何通知</strong>,你只在关心的事件上被打扰。一个事件可路由到多个渠道。
+          </p>
+        </div>
+      </div>
+
+      <!-- routes load error -->
+      <div v-if="routesLoadState === 'error'" class="banner banner--error" role="alert">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" />
+        </svg>
+        <span>{{ routesLoadError }}</span>
+        <button class="banner-retry" @click="loadRoutes">↻ 重试</button>
+      </div>
+
+      <!-- routes loading -->
+      <div v-else-if="routesLoadState === 'loading'" class="panel panel--anim">
+        <div class="skel-body">
+          <div v-for="i in 3" :key="i" class="skel skel--row" aria-hidden="true" />
+        </div>
+      </div>
+
+      <!-- no channels: routes need a channel first -->
+      <div v-else-if="channels.length === 0" class="soon-hint" role="note">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" />
+        </svg>
+        先在上方新增至少一个通知渠道,才能为事件配置路由。
+      </div>
+
+      <!-- event → channel mapping table -->
+      <ul v-else class="event-list">
+        <li v-for="ev in EVENTS" :key="ev.id" class="event-card panel--anim">
+          <div class="event-head">
+            <div class="event-text">
+              <span class="event-name">{{ ev.label }}</span>
+              <span class="event-code mono">{{ ev.id }}</span>
+              <span class="event-desc">{{ ev.desc }}</span>
+            </div>
+            <AppButton
+              v-if="addingEvent !== ev.id"
+              variant="default"
+              type="button"
+              @click="openAddRoute(ev.id)"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              添加渠道
+            </AppButton>
+          </div>
+
+          <!-- routed channel chips -->
+          <div v-if="routesByEvent[ev.id] && routesByEvent[ev.id].length > 0" class="route-chips">
+            <span v-for="r in routesByEvent[ev.id]" :key="r.id" class="route-chip">
+              <span class="route-chip-dot" :class="{ 'route-chip-dot--on': r.enabled }" aria-hidden="true" />
+              {{ channelName(r.channelId) }}
+              <button
+                class="route-chip-x"
+                type="button"
+                :aria-label="`移除 ${channelName(r.channelId)}`"
+                :disabled="deletingRouteId === r.id"
+                @click="handleDeleteRoute(r)"
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
+                  <path d="M18 6 6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </span>
+          </div>
+          <div v-else-if="addingEvent !== ev.id" class="route-empty">未配置 · 该事件不通知</div>
+
+          <!-- add-route inline picker -->
+          <div v-if="addingEvent === ev.id" class="route-add">
+            <select v-model="addChannelId" class="route-select" :disabled="savingRoute" aria-label="选择渠道">
+              <option v-for="c in channels" :key="c.id" :value="c.id">
+                {{ c.name }}{{ c.enabled ? '' : '(已停用)' }}
+              </option>
+            </select>
+            <AppButton variant="primary" type="button" :loading="savingRoute" :disabled="!addChannelId" @click="handleAddRoute">
+              添加
+            </AppButton>
+            <AppButton variant="ghost" type="button" :disabled="savingRoute" @click="cancelAddRoute">取消</AppButton>
+          </div>
+        </li>
+      </ul>
+    </section>
   </div>
 </template>
 
@@ -1296,6 +1498,153 @@ function configSummary(ch: NotificationChannel): string {
 .fade-leave-active { transition: opacity var(--duration-fast), transform var(--duration-fast); }
 .fade-enter-from { opacity: 0; transform: translateY(6px); }
 .fade-leave-to { opacity: 0; transform: translateY(-4px); }
+
+/* ─── event routes (Story 5.2) ────────────────────────────────────────────── */
+.routes-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--card-gap);
+  margin-top: 8px;
+  padding-top: var(--card-gap);
+  border-top: 1px solid var(--color-border);
+}
+
+.event-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0;
+  margin: 0;
+}
+
+.event-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-card);
+  box-shadow: var(--shadow);
+  transition: border-color var(--duration-fast);
+}
+
+.event-card:hover { border-color: var(--color-border-strong); }
+
+.event-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.event-text {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.event-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.event-code {
+  font-size: 0.68rem;
+  color: var(--color-faint);
+  background: var(--color-inset);
+  padding: 1px 6px;
+  border-radius: var(--rounded-full);
+}
+
+.event-desc {
+  font-size: 0.74rem;
+  color: var(--color-faint);
+}
+
+.route-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.route-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--color-text);
+  background: var(--color-inset);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-full);
+  padding: 4px 6px 4px 10px;
+}
+
+.route-chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--rounded-full);
+  background: var(--color-faint);
+  flex-shrink: 0;
+}
+
+.route-chip-dot--on {
+  background: var(--color-green);
+  box-shadow: 0 0 0 3px var(--color-green-soft);
+}
+
+.route-chip-x {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: var(--rounded-full);
+  background: transparent;
+  color: var(--color-faint);
+  cursor: pointer;
+  transition: color var(--duration-fast), background-color var(--duration-fast);
+}
+
+.route-chip-x:hover { color: var(--color-red); background: var(--color-red-soft); }
+.route-chip-x:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.route-empty {
+  font-size: 0.76rem;
+  color: var(--color-faint);
+  font-style: italic;
+}
+
+.route-add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.route-select {
+  height: 36px;
+  min-width: 200px;
+  background: var(--color-inset);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded);
+  padding: 0 10px;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 0.84rem;
+  cursor: pointer;
+}
+
+.route-select:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-soft);
+}
 
 /* ─── reduced motion ──────────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {

@@ -159,6 +159,9 @@ type Service interface {
 	// 渠道不存在 → ErrNotFound;**未启用 → 优雅跳过(返回 nil,不发不报错)**;
 	// 投递失败 → 人读错误。
 	SendVia(ctx context.Context, channelID string, payload Payload) error
+
+	// RouteService 嵌入事件路由 CRUD + 引擎(Story 5.2;FR-20)。
+	RouteService
 }
 
 // service 是 store + vault + 注入 http.Client + 注入 emailSender 支撑的 Service 实现。

@@ -267,10 +267,29 @@ export function getRunArtifacts(id: string): Promise<RunArtifactsResponse> {
 // never secrets). 404 run_not_found; 422 when the run is not successful, the
 // artifact is missing, or a target server does not exist.
 
+// ─── Deploy-time health gate (Story 4-3 frozen sub-contract — FR-12) ──────────
+// Optional post-deploy health probe. type='none' / omitted ⇒ skipped (4-2
+// backward compatible). For type='http' the backend builds an array-ized
+// `curl -fsS --max-time T <url>`; for type='command' it runs the given array
+// directly — never shell-concatenated (AC-SEC-02). retries/interval/timeout
+// have backend defaults (3 / 3s / 5s) and caps (retries≤20, timeout≤60s).
+export type HealthCheckType = 'none' | 'http' | 'command'
+
+export interface HealthCheckInput {
+  type: HealthCheckType
+  url?: string              // type='http'
+  command?: string[]        // type='command' (array, AC-SEC-02)
+  retries?: number          // default 3, cap 20
+  intervalSeconds?: number  // default 3
+  timeoutSeconds?: number   // default 5, cap 60
+}
+
 export interface DeployRunInput {
   artifactId: string
   serverIds: string[]
   deployConfig?: Record<string, string>
+  // Optional health gate (Story 4-3). Omit ⇒ identical to 4-2 behavior.
+  healthCheck?: HealthCheckInput
 }
 
 export interface DeployRunResponse {

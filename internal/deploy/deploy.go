@@ -173,6 +173,12 @@ func (s *service) Deploy(ctx context.Context, in DeployInput) ([]TargetResult, e
 // 探测通过 → success(message 含"健康检查通过");重试耗尽仍失败 → failed + 人读 message。
 // 执行错误**不上抛**:映射为 status=failed + 人读 message(绝无明文密钥)。
 func (s *service) deployOne(ctx context.Context, srv *target.Server, a run.Artifact, cfg map[string]string, hc *HealthCheck) TargetResult {
+	// dist / jar 走「发布目录 + current 软链原子切换 + 健康门控 + 失败回滚」零停机模式(Story 4.4)。
+	// image 本期仍 docker run、archive 维持文件部署,走下方既有命令链路。
+	if releaseModeArtifact(a) {
+		return s.deployReleaseOne(ctx, srv, a, cfg, hc)
+	}
+
 	started := time.Now().UTC()
 	res := TargetResult{
 		ServerID:   srv.ID,

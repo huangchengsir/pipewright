@@ -62,6 +62,9 @@ type healthCheckDTO struct {
 
 // deployRequest 是 POST /api/runs/{id}/deploy 请求体。
 // 4-3 扩展:可选 healthCheck(部署后健康门控);targets 子 DTO 形状不变(4-2 冻结)。
+// 4-4 扩展:零停机切换 / 回滚的可选参数经既有 deployConfig map 透传(不加新字段 / 路由):
+//   - deployConfig["releaseBase"] : 发布根目录 <base>(缺省从 path 推导);dist/jar 落 <base>/releases/<runId>,current 软链落 <base>/current。
+//   - deployConfig["keepReleases"]: 额外保留旧发布份数(缺省 1,上限 50)。
 type deployRequest struct {
 	ArtifactID   string            `json:"artifactId"`
 	ServerIDs    []string          `json:"serverIds"`

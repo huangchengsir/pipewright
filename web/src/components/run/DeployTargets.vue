@@ -64,14 +64,16 @@ function formatTime(iso: string | null): string {
 
 // ─── summary counts (for the header) ──────────────────────────────────────────
 
-function counts(targets: DeployTarget[]): { ok: number; bad: number } {
+function counts(targets: DeployTarget[]): { ok: number; bad: number; rolledBack: number } {
   let ok = 0
   let bad = 0
+  let rolledBack = 0
   for (const t of targets) {
     if (t.status === 'success') ok++
+    else if (t.status === 'rolled_back') rolledBack++
     else if (t.status === 'failed') bad++
   }
-  return { ok, bad }
+  return { ok, bad, rolledBack }
 }
 </script>
 
@@ -94,6 +96,7 @@ function counts(targets: DeployTarget[]): { ok: number; bad: number } {
       </div>
       <div class="dt-head-stats">
         <span v-if="counts(targets).ok > 0" class="dt-stat dt-stat--ok">{{ counts(targets).ok }} 成功</span>
+        <span v-if="counts(targets).rolledBack > 0" class="dt-stat dt-stat--rollback">{{ counts(targets).rolledBack }} 已回滚</span>
         <span v-if="counts(targets).bad > 0" class="dt-stat dt-stat--bad">{{ counts(targets).bad }} 失败</span>
       </div>
     </header>
@@ -124,7 +127,22 @@ function counts(targets: DeployTarget[]): { ok: number; bad: number } {
           <span class="dt-duration mono" :aria-label="`耗时 ${durationText(t)}`">{{ durationText(t) }}</span>
         </div>
 
-        <p v-if="t.message" class="dt-message">{{ t.message }}</p>
+        <p
+          v-if="t.message"
+          class="dt-message"
+          :class="{ 'dt-message--rollback': t.status === 'rolled_back' }"
+        >
+          <svg
+            v-if="t.status === 'rolled_back'"
+            class="dt-message-icon"
+            width="13" height="13" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" aria-hidden="true"
+          >
+            <path d="M3 7v6h6" />
+            <path d="M3 13a9 9 0 1 0 3-7.7L3 8" />
+          </svg>
+          <span>{{ t.message }}</span>
+        </p>
 
         <div class="dt-times">
           <span class="dt-time">
@@ -190,8 +208,9 @@ function counts(targets: DeployTarget[]): { ok: number; bad: number } {
   border-radius: var(--rounded-sm);
 }
 
-.dt-stat--ok  { color: var(--color-green); background: var(--color-green-soft); }
-.dt-stat--bad { color: var(--color-red);   background: var(--color-red-soft);   }
+.dt-stat--ok       { color: var(--color-green); background: var(--color-green-soft); }
+.dt-stat--bad      { color: var(--color-red);   background: var(--color-red-soft);   }
+.dt-stat--rollback { color: var(--color-amber); background: var(--color-amber-soft); }
 
 .dt-list {
   list-style: none;
@@ -277,6 +296,23 @@ function counts(targets: DeployTarget[]): { ok: number; bad: number } {
   color: var(--color-dim);
   line-height: 1.5;
   word-break: break-word;
+}
+
+/* rolled_back:回滚信息醒目展示(amber 强调 + 撤回图标),区别于普通 message。 */
+.dt-message--rollback {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--color-amber);
+  background: var(--color-amber-soft);
+  border-radius: var(--rounded-sm);
+  padding: 7px 10px;
+  font-weight: 500;
+}
+
+.dt-message-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
 }
 
 .dt-times {

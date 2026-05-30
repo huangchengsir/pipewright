@@ -225,6 +225,12 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Get("/runs/{id}/events", makeRunEventsHandler(rs, o.runSub))
 		ar.Post("/runs/{id}/cancel", makeCancelRunHandler(rs))
 
+		// AI 失败诊断(Story 7.2):显式(重)诊断。认证 + CSRF(写方法)。
+		// 取 run 失败日志 → 脱敏 → ai.Diagnose → 持久化 → 返回 diagnosis 子 DTO。
+		// 非失败 → 422 run_not_failed;不存在 → 404;任何 LLM 失败 → 200 + status=unavailable
+		// (绝不 500、绝无密钥)。复用已注入 rs + aiSettings(o.aiSettings),无新顶层依赖。
+		ar.Post("/runs/{id}/diagnose", makeDiagnoseRunHandler(rs, o.aiSettings))
+
 		// 手动触发创建运行(Story 3.2):认证 + CSRF;actor=admin;返 201 run-detail DTO。
 		ar.Post("/projects/{id}/runs", makeManualRunHandler(rs, aud))
 

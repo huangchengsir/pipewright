@@ -119,6 +119,11 @@ type Service interface {
 	// Generate 据仓库分析 + 自然语言补充,构 prompt 调 LLM chat 生成结构化流水线提案(Story 2.5)。
 	// 未配置 / 未启用 → ErrAINotConfigured;调用 / 解析失败 → 人读错误(绝无密钥)。
 	Generate(ctx context.Context, in GenerateInput) (*Proposal, error)
+	// Diagnose 据失败日志构 prompt 调 LLM chat 生成失败诊断(根因假说+置信度+证据;Story 7.2)。
+	// **出网前必脱敏**:入参 Masker 登记的 secret 在日志进 prompt / 取证据前一律 [MASKED]。
+	// 优雅降级铁律:AI 未配 / 超时 / 不可解析 / 空 hypothesis / 低质 → status=unavailable + reason,
+	// **绝不返回 error 致上层 500**(本方法对降级路径返回 (*Diagnosis, nil),仅极少内部错回 error)。
+	Diagnose(ctx context.Context, in DiagnoseInput) (*Diagnosis, error)
 }
 
 // service 是 store + vault + 注入 http.Client 支撑的 Service 实现。

@@ -19,11 +19,14 @@ import {
   getRun,
   cancelRun,
   subscribeRunEvents,
+  diagnoseRun,
   type RunDetail,
   type RunStatus,
   type StepStatus,
+  type DiagnosisDTO,
 } from '../api/runs'
 import { HttpError } from '../api/http'
+import DiagnosisPanel from '../components/run/DiagnosisPanel.vue'
 
 // ─── route ────────────────────────────────────────────────────────────────────
 
@@ -578,28 +581,17 @@ function nodeClass(status: StepStatus): string {
 
             <!--
               ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-              SLOT: AI 失败诊断 (Epic 7 接入)
+              SLOT: AI 失败诊断 (Story 7-2 实现)
               骨架所有权: 本区块归 Story 3.1;
-              Epic 7 在此区块内填入 AI 诊断卡(根因假说+证据+置信度+反馈闭环),
-              diagnosis 字段已在 run-detail DTO 前向声明为可选块,
-              不改骨架结构。
+              Story 7-2 在此区块内填入 DiagnosisPanel 组件.
+              仅修改此区块内容;不改骨架结构。
               ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             -->
-            <div class="slot-panel slot-panel--ai" role="region" aria-label="AI 失败诊断(尚未接入)">
-              <div class="slot-header">
-                <!-- Activity-pulse line icon (no star-sparkle per DESIGN.md) -->
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-                  <polyline points="2 12 6 12 8 4 10 20 12 10 14 15 16 12 22 12"/>
-                </svg>
-                <span class="slot-title slot-title--ai">AI 失败诊断</span>
-                <span class="slot-badge slot-badge--epic">Epic 7</span>
-              </div>
-              <div class="slot-body">
-                <span class="slot-placeholder-text">AI 诊断将在 Epic 7 接入</span>
-                <span class="slot-placeholder-hint">根因假说 · 证据日志 · 置信度 · 👍/👎 反馈闭环</span>
-                <!-- run.diagnosis is null in this story — Epic 7 fills it -->
-              </div>
-            </div>
+            <DiagnosisPanel
+              :diagnosis="run.diagnosis"
+              :run-id="run.id"
+              @diagnosed="(dto: DiagnosisDTO) => { if (run) run = { ...run, diagnosis: dto } }"
+            />
             <!-- END SLOT: AI 失败诊断 -->
 
           </div>

@@ -118,6 +118,43 @@ type Run struct {
 	CreatedAt   time.Time
 	StartedAt   *time.Time
 	FinishedAt  *time.Time
+
+	// FailureLog 是失败日志原文(脱敏前;桩 runner 合成,3-3/3-6 落地换真实日志)。
+	// 空串 = 无失败日志。**绝不**原样出网:出网前必过 mask.Masker(诊断在 ai 层脱敏)。
+	FailureLog string
+	// Diagnosis 是已持久化的 AI 诊断(失败且已诊断时非 nil;否则 nil → run-detail diagnosis=null)。
+	// 领域层只搬运形状(由 ai 层生成、httpapi 层落库),run 包不 import ai(经 hook 解耦)。
+	Diagnosis *Diagnosis
+}
+
+// 诊断状态枚举(对齐冻结 run-detail diagnosis 子 DTO 的 status)。
+const (
+	// DiagnosisReady 表示诊断有效(有 hypothesis 等)。
+	DiagnosisReady = "ready"
+	// DiagnosisUnavailable 表示诊断不可用(AI 未配/超时/不可解析/低质);带 reason。
+	DiagnosisUnavailable = "unavailable"
+	// DiagnosisPending 表示诊断进行中(本期不主动用;前端据此显 loading)。
+	DiagnosisPending = "pending"
+)
+
+// DiagnosisEvidence 是一条日志证据(取自**脱敏后**日志;绝无明文 secret)。
+type DiagnosisEvidence struct {
+	Line      int    // 失败日志行号(1-based)
+	Text      string // 该行脱敏后文本
+	Highlight bool   // 是否命中行(高亮)
+}
+
+// Diagnosis 是 AI 失败诊断的领域模型(对齐冻结 diagnosis 子 DTO,与 ai 层解耦)。
+// run 包仅持有此搬运形状,不依赖 ai 包;ai 层产出结构经 httpapi 层映射后落库。
+type Diagnosis struct {
+	Status          string              // ready | unavailable | pending
+	Reason          string              // status≠ready 时人读原因(绝无密钥)
+	Hypothesis      string              // 根因假说(措辞「假说,非结论」)
+	Confidence      string              // high | medium | low
+	AlternateCauses []string            // 低置信时非空
+	FixSuggestions  []string            // 修复建议
+	Evidence        []DiagnosisEvidence // 脱敏后日志证据
+	GeneratedAt     time.Time           // 生成时刻
 }
 
 // ListFilter 是运行列表筛选/分页入参(零值合理:不筛选、首页)。

@@ -54,3 +54,7 @@
 ## Deferred from: 2-5 AI 生成流水线配置 (2026-05-30)
 - TriggersPanel apply 后不自动刷新(写入后端已成功,但面板自持加载,需切 tab 才见新分支映射)。修:给 TriggersPanel 加 expose({reload}) 经 templateRef 调,或 ProjectPipeline 加 triggersKey ref 触发重渲染。
 - 2-5 强 schema 校验交由各服务 Save + 2-6 校验兜底(本期不做)。
+
+## Deferred from: 7-2 AI 失败分析 (2026-05-30)
+- failure_log 落盘前脱敏:本期诊断「发往 LLM 前 + 响应/evidence/diagnosis_json」已脱敏(AC-SEC-04 扩展);但 pipeline_runs.failure_log 原始列仍可能含明文(桩为假 secret)。3-6 真实日志落地时须对 failure_log **落盘前**也脱敏(1-4 AC-SEC-04),registerRunSecrets 从桩假 secret 改为从 vault 取该 run 实际凭据登记。
+- 失败通知推送诊断摘要(FR-22)留 Epic5;partial_failed 等其它终态本期不诊断。

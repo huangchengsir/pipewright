@@ -111,6 +111,13 @@ func toRunDetailDTO(r *run.Run) runDetailDTO {
 			DurationMs: durationMs(st.StartedAt, st.FinishedAt),
 		})
 	}
+	// diagnosis:Story 7.2 填(失败且已诊断时非 null;否则 null)。冻结子 DTO 形状。
+	var diagnosis *any
+	if dto := toDiagnosisDTO(r.Diagnosis); dto != nil {
+		var v any = dto
+		diagnosis = &v
+	}
+
 	return runDetailDTO{
 		ID:          r.ID,
 		ProjectID:   r.ProjectID,
@@ -122,8 +129,8 @@ func toRunDetailDTO(r *run.Run) runDetailDTO {
 		StartedAt:   rfc3339Ptr(r.StartedAt),
 		FinishedAt:  rfc3339Ptr(r.FinishedAt),
 		DurationMs:  durationMs(r.StartedAt, r.FinishedAt),
-		Targets:     nil, // Epic 4 填;形状冻结
-		Diagnosis:   nil, // Epic 7 填;形状冻结
+		Targets:     nil,       // Epic 4 填;形状冻结
+		Diagnosis:   diagnosis, // Story 7.2 填(无诊断 → nil);形状冻结
 	}
 }
 

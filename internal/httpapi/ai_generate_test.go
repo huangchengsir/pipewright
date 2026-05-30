@@ -41,6 +41,9 @@ func (s *stubAIService) Generate(_ context.Context, in ai.GenerateInput) (*ai.Pr
 	}
 	return s.proposal, nil
 }
+func (s *stubAIService) Diagnose(context.Context, ai.DiagnoseInput) (*ai.Diagnosis, error) {
+	return &ai.Diagnosis{Status: "unavailable", Reason: "stub"}, nil
+}
 
 // ---- stub analyzer ----
 

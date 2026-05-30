@@ -27,6 +27,12 @@ type WorkerPool struct {
 	workers int
 	wg      sync.WaitGroup
 
+	// diagnoseHook 是 run→failed 后的 best-effort 自动诊断钩子(由 main 经 Option 注入)。
+	// nil 则跳过(无 AI 时核心 CI/CD 不依赖此服务,NFR-10)。**run 包不 import ai**:
+	// 钩子内部(在 main 装配)负责「取失败日志 → 脱敏 → ai.Diagnose → 保存」,仿 RunCreator 解耦。
+	// 钩子失败仅记日志,**绝不影响 run 终态**。
+	diagnoseHook func(ctx context.Context, runID string)
+
 	startOnce sync.Once
 	stopOnce  sync.Once
 	ctx       context.Context
@@ -50,6 +56,18 @@ func WithRunner(r Runner) PoolOption {
 	return func(p *WorkerPool) {
 		if r != nil {
 			p.runner = r
+		}
+	}
+}
+
+// WithDiagnoseHook 注入 run→failed 后的 best-effort 自动诊断钩子(Story 7.2)。
+// 由 main 装配(钩子内做「取失败日志 → 脱敏 → ai.Diagnose → 保存」),使 run 包不 import ai。
+// 钩子在独立 goroutine 中调用、自带 recover + 超时:失败/超时仅记日志,绝不阻断 run 终态。
+// fn 为 nil 时不注入(等价于无诊断)。
+func WithDiagnoseHook(fn func(ctx context.Context, runID string)) PoolOption {
+	return func(p *WorkerPool) {
+		if fn != nil {
+			p.diagnoseHook = fn
 		}
 	}
 }
@@ -209,6 +227,27 @@ func (p *WorkerPool) execute(runID string) {
 	}
 	// 落终态后校正所有非终态步骤(StepDone 失败/runner 漏置不致留下"run=终态但 step 永远 running")。
 	sink.reconcile(final)
+
+	// run 落 failed 后触发 best-effort 自动诊断(已注入钩子时)。绝不阻断 run 终态:
+	// 在独立 goroutine + recover 中调用,钩子失败仅记日志(NFR-10 优雅降级)。
+	if final == StatusFailed && p.diagnoseHook != nil {
+		p.runDiagnoseHook(runID)
+	}
+}
+
+// runDiagnoseHook 在独立 goroutine 中调用注入的诊断钩子(纳入 WaitGroup 以便 Stop 等待),
+// 自带 recover:钩子 panic/失败绝不连累 worker 或 run 终态。钩子内部自带超时/脱敏(在 main 装配)。
+func (p *WorkerPool) runDiagnoseHook(runID string) {
+	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("[run] diagnose hook recovered from panic on run %s: %v", runID, rec)
+			}
+		}()
+		p.diagnoseHook(p.ctx, runID)
+	}()
 }
 
 // dbStepSink 是 StepSink 实现:把 Runner 的步骤进展持久化到 run_steps，
@@ -276,6 +315,17 @@ func (d *dbStepSink) StepDone(ctx context.Context, ordinal int, status string) e
 		return fmt.Errorf("run: step done: %w", err)
 	}
 	d.publish(ordinal, status, nil, &now)
+	return nil
+}
+
+// SetFailureLog 持久化本次运行的失败日志原文(脱敏前)到 pipeline_runs.failure_log。
+// 用后台 ctx 落库(取消场景下派生 ctx 已 Done,失败日志仍须持久化)。参数化 SQL。
+func (d *dbStepSink) SetFailureLog(_ context.Context, logText string) error {
+	_, err := d.svc.db.ExecContext(context.Background(),
+		`UPDATE pipeline_runs SET failure_log = ? WHERE id = ?`, logText, d.runID)
+	if err != nil {
+		return fmt.Errorf("run: set failure log: %w", err)
+	}
 	return nil
 }
 

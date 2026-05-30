@@ -2,6 +2,7 @@ package auth
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -138,6 +139,110 @@ func (ss *SessionStore) Delete(token string) error {
 		return fmt.Errorf("auth: delete session: %w", err)
 	}
 	return nil
+}
+
+// sessionIDPrefixLen 是会话对外 id 的长度(token 的 sha256 hex 前缀字符数)。
+// 16 hex = 64 bit,足够在单实例会话集合内唯一定位,且**绝不回传原 token**。
+const sessionIDPrefixLen = 16
+
+// SessionID 返回 token 的 sha256 hex 前 16 位,作为对外可定位 id(绝不暴露原 token)。
+func SessionID(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])[:sessionIDPrefixLen]
+}
+
+// SessionMeta 是会话的对外只读元数据(用于列表;不含原 token)。
+type SessionMeta struct {
+	ID         string // token 的 sha256 hex 前缀
+	CreatedAt  time.Time
+	LastSeenAt time.Time
+	ExpiresAt  time.Time
+	Current    bool // 是否为当前请求所属会话
+}
+
+// List 返回所有未过期会话的元数据(不含原 token)。currentToken 用于标识 current。
+// 按 created_at DESC 排序(最新在前)。
+func (ss *SessionStore) List(currentToken string) ([]SessionMeta, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	rows, err := ss.db.Query(
+		`SELECT token, created_at, last_seen_at, expires_at
+		 FROM sessions WHERE expires_at >= ? ORDER BY created_at DESC`,
+		now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("auth: list sessions: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	currentID := SessionID(currentToken)
+	var out []SessionMeta
+	for rows.Next() {
+		var token, createdStr, lastSeenStr, expiresStr string
+		if err := rows.Scan(&token, &createdStr, &lastSeenStr, &expiresStr); err != nil {
+			return nil, fmt.Errorf("auth: scan session: %w", err)
+		}
+		m := SessionMeta{ID: SessionID(token)}
+		if m.CreatedAt, err = time.Parse(time.RFC3339, createdStr); err != nil {
+			return nil, fmt.Errorf("auth: parse created_at: %w", err)
+		}
+		if m.LastSeenAt, err = time.Parse(time.RFC3339, lastSeenStr); err != nil {
+			return nil, fmt.Errorf("auth: parse last_seen_at: %w", err)
+		}
+		if m.ExpiresAt, err = time.Parse(time.RFC3339, expiresStr); err != nil {
+			return nil, fmt.Errorf("auth: parse expires_at: %w", err)
+		}
+		m.Current = m.ID == currentID
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("auth: iterate sessions: %w", err)
+	}
+	return out, nil
+}
+
+// DeleteByIDPrefix 删除 sha256 前缀匹配 id 的会话。返回删除行数。
+// 因 id 为 token 自身 sha256 即时算(未存库),逐行比对 token 的 sha256 定位。
+func (ss *SessionStore) DeleteByIDPrefix(id string) (int64, error) {
+	rows, err := ss.db.Query(`SELECT token FROM sessions`)
+	if err != nil {
+		return 0, fmt.Errorf("auth: scan tokens: %w", err)
+	}
+	var target string
+	for rows.Next() {
+		var token string
+		if err := rows.Scan(&token); err != nil {
+			_ = rows.Close()
+			return 0, fmt.Errorf("auth: scan token: %w", err)
+		}
+		if SessionID(token) == id {
+			target = token
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return 0, fmt.Errorf("auth: iterate tokens: %w", err)
+	}
+	_ = rows.Close()
+	if target == "" {
+		return 0, nil
+	}
+	res, err := ss.db.Exec(`DELETE FROM sessions WHERE token = ?`, target)
+	if err != nil {
+		return 0, fmt.Errorf("auth: delete session by id: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
+// DeleteOthers 删除除 keepToken 外的所有会话(改口令后使其它会话失效)。返回删除行数。
+func (ss *SessionStore) DeleteOthers(keepToken string) (int64, error) {
+	res, err := ss.db.Exec(`DELETE FROM sessions WHERE token != ?`, keepToken)
+	if err != nil {
+		return 0, fmt.Errorf("auth: delete other sessions: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
 }
 
 // randHex 生成 n 字节随机数并返回 hex 编码字串。

@@ -1,6 +1,6 @@
 # Story 7.2: AI 失败分析(假说 + 证据 + 置信度)(FR-22)
 
-status: ready-for-dev
+status: done
 epic: 7
 基线: master(16 story;7-1 AI provider done → 消费 ai.Service;3-1 run-detail DTO 有冻结 `diagnosis` null slot;1-4 mask.Masker 脱敏)
 covers: FR-22(失败日志→LLM→根因假说+修复建议+置信度,AI/证据分栏,优雅降级)· NFR-10 · AC-SEC-04 扩展(出网前脱敏)
@@ -74,3 +74,15 @@ As a 管理员,I want 构建/部署失败时平台基于失败日志给出根因
 - **前端必跑 `npm --prefix web run typecheck`(不是 build!)** + build。
 - 真二进制:造一个**失败 run**(桩 runner FailAt + 合成日志)→ AI 未配 → diagnose status=unavailable reason「AI 未配置」不阻断 · 配**本地 stub LLM** → diagnose status=ready(hypothesis/confidence/fixSuggestions/evidence)· **桩日志含假 secret → 诊断响应/evidence/DB/日志 [MASKED] 无明文** · run 非失败 → 422 · 不存在 404 · 401/403 · GET run-detail diagnosis 填值 · stub 返不可解析 → status=unavailable 不 500。
 - 真浏览器:失败 run 详情页渲染诊断面板(AI 认为/日志证据 分栏、置信度徽标、命中行高亮)· unavailable 态 + 重新诊断按钮 · **截图肉眼审(看截图非正则,selector 精确,等够异步)**。
+
+## Review Findings (code-review 2026-05-30,Blind/Edge/Acceptance 三层对抗)
+
+综合裁决:Auditor 确认 4 条 AC 全满足、冻结 DTO 形状对齐、核心护栏(run 不 import ai / 出网前脱敏 / 降级不 500 不阻断终态 / 参数化 SQL / 桩日志诚实标注)到位,**无阻断性 AC 违反**。两条 agent 高危被读真代码证伪(见 dismissed)。
+
+**待修 patch:**(均已修 + 加回归测试 TestDiagnoseRunPersistUnavailableFlag + 全 `-race` 绿)
+- [x] [Review][Patch][Major] 自动诊断钩子无条件 persist `unavailable` 诊断,污染「null=未诊断」干净态 + 无谓 DB 写/LLM 调:取消复用 StatusFailed(run.go:27/36)→ 用户取消的 run 也触发钩子;AI 未配时**每个失败/取消 run 都落一条 unavailable**,run-detail 恒非 null 显「诊断不可用」而非干净「触发诊断」。修:`diagnoseRun` 加 `persistUnavailable bool`——自动钩子传 false(仅 persist ready),显式端点传 true(用户主动请求,回显结果可留)。[internal/httpapi/run_diagnose.go:98,148]
+- [x] [Review][Patch][Major] 自动诊断 goroutine 无并发上限:`runDiagnoseHook` 每个失败 run 起一独立 goroutine(脱离 worker pool 的 4 并发),AI 配置时批量失败 → 无界并发打 LLM + 多份日志/解密 key 同时驻留(NFR-4 内存 + provider 限流风险)。修:加有界信号量(try-acquire,满则跳过 + 记日志,best-effort 语义不变,用户仍可手动诊断)。[internal/run/pool.go:240]
+
+**复核通过(读真代码证伪/已防御):** DiagnosisPanel 仅在 `v-else-if run.status==='failed'` 块内渲染(非无条件,不会对成功 run 出 422)· secret 跨截断边界泄漏不存在(Scrub 先于截断,secret 已 [MASKED] 再切)· chat 错误路径有 LimitReader(4096)+ 8s client 超时(无独立超时担忧化解)· Stop 阻塞被 p.ctx 取消 + Stop 自带 deadline 化解(wg 纳入为有意设计)· confidenceLabel 由后端 normalizeConfidence 保证枚举(TS union 穷尽)· apiKey="" 仅注释瑕疵(Go string 不可变,无实际泄漏)。
+
+**deferred(见 deferred-work.md):** registerRunSecrets 仅对桩假 secret 有效(真实日志凭据登记留 3-3/3-6,生产前必修)· failure_log 明文列(留 3-6 落盘前脱敏)· chat 成功响应体无大小上限(7-1/2-5 既存,跨切面 AI client 加固)· decodeDiagnosis 坏 JSON 静默(nil,nil)+ derr 死守卫(有意容错,观测性瑕疵)· parseDiagnosis 无「提取首尾大括号」容错(质量门控设计,增强项)· 自动 vs 显式诊断对 diagnosis_json 双写竞态(last-writer-wins,均有效;patch1 已减少自动写)· humanizeDiagnoseErr 可回显自身 endpoint host(管理员自有,无 apiKey)· pending 态前端死代码(后端不产 pending,预留流式)· 自动诊断完成后页面需刷新才见(SSE 收尾刷新增强)· 取消的 run 仍渲染诊断面板(取消=failed 的产品语义)。

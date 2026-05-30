@@ -63,3 +63,14 @@
 - 7-1: budget 无上限校验;Test 路径 load() 调两次(效率瑕疵)。
 - 2-5: selectAll();apply() 同步读 ref 时序脆弱(当前可用,建议 apply 显式传选择集)。
 - 2-6: 触发事件全关但分支映射非空无提示(死配置盲区);镜像仓库 type 空时悬挂 credentialId 漏检(一致性瑕疵)。
+
+## Deferred from: code review of 7-2-ai-failure-diagnosis (2026-05-30)
+- registerRunSecrets 仅登记桩假 secret(run.StubFailureSecret),对真实日志中未登记的凭据脱敏失效;3-3/3-6 真实日志落地前**生产前必修**:从 vault 取该 run 实际用到的凭据明文登记进 Masker。当前 AC-SEC-04 仅靠「桩 secret == 已登记串」成立。
+- ai chat 成功响应体无大小上限(io.LimitReader 仅在错误漏出路径);7-1/2-5 既存,跨切面 AI client 加固(防被攻陷/中间人 endpoint 返超大体 OOM)。8s client 超时部分缓解。
+- decodeDiagnosis 对坏 JSON 静默返回 (nil,nil)+ service.go Get 的 `derr==nil` 守卫成死代码;有意容错(坏数据不阻断 run-detail)但损失「诊断数据损坏」可观测性。
+- parseDiagnosis 仅 stripJSONFence + 严格 Unmarshal,无「提取第一个 { 到最后一个 }」容错;模型输出散文前缀会判不可解析降级。增强项。
+- 自动诊断钩子 vs 显式 POST /diagnose 对同一 run 的 diagnosis_json 双写无 CAS/锁(last-writer-wins,二者均有效;patch 已让自动钩子不写 unavailable,减少冲突面)。
+- humanizeDiagnoseErr 取首个 ": " 后子串,可能回显自身 LLM endpoint host/IP(管理员自配,非 secret;apiKey 在 header 不入 error)。可白名单化固定文案。
+- 前端 DiagnosisPanel pending 态为死代码(后端只产 ready/unavailable);预留未来流式诊断。
+- 自动诊断异步完成后 run-detail 短时仍显「触发诊断」直到手动刷新;SSE 终态事件触发 re-fetch 可消除。
+- 取消的 run(取消复用 StatusFailed)仍渲染失败诊断面板;取消=failed 的产品语义,本期接受。

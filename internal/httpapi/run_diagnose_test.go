@@ -269,3 +269,32 @@ func TestDiagnoseRequiresCSRF(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 }
+
+// TestDiagnoseRunPersistUnavailableFlag 验证 code-review P1:
+//   - persistUnavailable=false(自动钩子语义):unavailable 诊断**不落库**,GetDiagnosis 仍 nil
+//     (保持「diagnosis=null 即未诊断」干净态;AI 未配/取消的 run 不被污染为「诊断不可用」)。
+//   - persistUnavailable=true(显式端点语义):unavailable **落库**,刷新仍能回显 reason。
+func TestDiagnoseRunPersistUnavailableFlag(t *testing.T) {
+	stub := &diagStubAI{} // 默认返回 unavailable
+	srv, client, csrf, projID, rsvc := setupDiagnoseServer(t, stub)
+	runID := createFailedRun(t, client, srv, csrf, projID)
+	ctx := context.Background()
+
+	// 自动钩子语义:不持久化 unavailable。
+	d, err := diagnoseRun(ctx, rsvc, stub, runID, false)
+	if err != nil || d == nil || d.Status != "unavailable" {
+		t.Fatalf("diagnoseRun(false) 应返回 unavailable: d=%+v err=%v", d, err)
+	}
+	if got, gerr := rsvc.GetDiagnosis(ctx, runID); gerr != nil || got != nil {
+		t.Fatalf("persistUnavailable=false 不应落库,GetDiagnosis 应 nil,得 %+v err=%v", got, gerr)
+	}
+
+	// 显式端点语义:持久化 unavailable。
+	if _, err := diagnoseRun(ctx, rsvc, stub, runID, true); err != nil {
+		t.Fatalf("diagnoseRun(true): %v", err)
+	}
+	got, gerr := rsvc.GetDiagnosis(ctx, runID)
+	if gerr != nil || got == nil || got.Status != "unavailable" {
+		t.Fatalf("persistUnavailable=true 应落库 unavailable,得 %+v err=%v", got, gerr)
+	}
+}

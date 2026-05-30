@@ -24,6 +24,11 @@ function goToPipeline(projectId: string): void {
   void router.push({ name: 'project-pipeline', params: { id: projectId } })
 }
 
+// Story 7-4: read-only code browsing (FR-4)
+function goToCode(projectId: string): void {
+  void router.push({ name: 'project-code', params: { id: projectId } })
+}
+
 // ─── load state ──────────────────────────────────────────────────────────────
 
 type LoadState = 'idle' | 'loading' | 'error'
@@ -720,6 +725,19 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
                   <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                   <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                </svg>
+              </button>
+
+              <!-- Code browse (Story 7-4: read-only source viewer, FR-4) -->
+              <button
+                class="action-btn"
+                :title="`代码浏览 · ${project.name}`"
+                :aria-label="`浏览项目 ${project.name} 的代码`"
+                @click="goToCode(project.id)"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="16 18 22 12 16 6"/>
+                  <polyline points="8 6 2 12 8 18"/>
                 </svg>
               </button>
 

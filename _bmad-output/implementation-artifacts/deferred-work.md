@@ -74,3 +74,16 @@
 - 前端 DiagnosisPanel pending 态为死代码(后端只产 ready/unavailable);预留未来流式诊断。
 - 自动诊断异步完成后 run-detail 短时仍显「触发诊断」直到手动刷新;SSE 终态事件触发 re-fetch 可消除。
 - 取消的 run(取消复用 StatusFailed)仍渲染失败诊断面板;取消=failed 的产品语义,本期接受。
+
+## Deferred from: batch code-review of 3-6/3-4/4-1/5-1/4-2/5-2/6-2 (2026-05-30)
+**已应用 8 patch(P1~P8,见 commit);以下为 defer:**
+- **【生产前必修红线】3-6 registerRunSecrets 仅登记桩假 secret**:真实日志凭据未登记 → 3-3 真实构建落地前,真实 token 会经 run_logs/SSE/响应明文泄漏(AC-SEC-04 在真实路径下不满足)。3-3/3-6 真实日志接入时必须从 vault 取该 run 实际凭据登记进 logMasker。(与 7-2 同根债。)
+- DNS rebinding TOCTOU(5-1 webhook + 3-6 source + 底层 ai.validProbeURL 模板):校验时 LookupIP 与拨号时二次解析之间可被翻转到内网/元数据。彻底修需绑定到已校验 IP 的自定义 DialContext。P1 已堵重定向绕过(最大洞);rebind 较重留后续。建议统一收敛到 project/prober.go 的生产级 SSRF 守卫。
+- 5-1 webhook SSRF 放行回环+私网(自托管姿态,抄了 ai.validProbeURL 而非 prober);LookupIP 失败 fail-open。自托管下可接受,但与 prober/source 策略不一致;考虑对齐或显式豁免文档化。
+- 5-1 SMTP 未强制 TLS(net/smtp 在服务器不宣告 STARTTLS 时可能明文发 PlainAuth)。文档化「仅用支持 STARTTLS 的 SMTP」或强制 TLS。
+- 4-1 HostKeyCallback InsecureIgnoreHostKey(已四处标注 deferred;生产固定 known_hosts;SSHConfig 宜预留入口避免改冻结签名)· vault.Get 在 Test 时刷新 last_used_at(语义失真)· looksLikePEM 改 ssh.ParsePrivateKey 探测 · runWithContext 取消路径 goroutine/double-close · classifyDialErr 死分支。
+- 4-1 servers CRUD 无审计(与 credentials/account/trigger 既有惯例不一致;登记 SSH 目标属高敏感,建议补 audit)。
+- 4-2 dist/jar 部署路径无白名单(admin 可写目标机任意路径)· 占位产物内容是 reference 文本非真实字节(3-3 后换)· docker run 无端口/卷 + 同名容器跨 run 串台 · 多机顺序部署累计超时(4-5 并行解决)· 缺 deploy 层注入对抗回归测试(建议补)。
+- 5-2 缺 UNIQUE(event,channel_id) 约束(可建重复 route,发送侧 dedup 不重发但 UI 脏)· CreateRoute 返回丢 ProjectID(5-4 前埋雷)· deploy_succeeded 事件无 run 终态映射(4-x 细化)。
+- 6-2 输出脱敏(AC-4「尽力」)未接 mask · journald/docker 可加 `--` 终止符进一步硬化(P5 首字符约束已堵主要面)。
+- 3-4 metadata 无大小上限 · EmitArtifact 落库失败静默(建议 log)· 3-6 blob degraded 缺标志(与 tree 不对等)· blob 字节截断劈裂多字节 UTF-8 · binary 检测可用 utf8.Valid 更稳 · AppendLog 缺 UNIQUE(run_id,seq) 约束(单进程不触发)。

@@ -20,6 +20,11 @@ const defaultConcurrency = 4
 // 打 LLM + 多份日志/解密 key 同时驻留。超限则跳过本次自动诊断(用户仍可手动触发)。
 const maxConcurrentDiagnoses = 2
 
+// maxConcurrentNotifies 是 best-effort 通知钩子的并发上限(有界;NFR-4;code-review P8 对齐 diagnose)。
+// 通知脱离 worker pool 在独立 goroutine 跑,每个最长 ~8s(webhook client 超时)× 渠道数;
+// 批量 run 同时落终态会瞬时堆起大量发送 goroutine 各占一条 HTTP 连接。超限跳过(通知 best-effort)。
+const maxConcurrentNotifies = 4
+
 // WorkerPool 是进程内 goroutine 池调度器:从内存队列取 queued 运行 → 转 running →
 // 经 Runner 执行 → 按结果转终态。多 run 并行、非事务、结果独立:单 run 失败/panic
 // 不连累其它(每 run 独立 goroutine + recover)。优雅停机随 HTTP server(Stop)。
@@ -40,6 +45,8 @@ type WorkerPool struct {
 	diagnoseHook func(ctx context.Context, runID string)
 	// diagnoseSem 为自动诊断并发上限信号量(有界;NFR-4);满则跳过本次自动诊断。
 	diagnoseSem chan struct{}
+	// notifySem 为通知钩子并发上限信号量(有界;NFR-4;P8);满则跳过本次通知(best-effort)。
+	notifySem chan struct{}
 
 	// notifyHook 是 run 终态后的 best-effort 通知钩子(Story 5.2;由 main 经 Option 注入)。
 	// nil 则跳过(未配通知时核心 CI/CD 不依赖,NFR-10)。**run 包不 import notify**:钩子内部
@@ -129,6 +136,7 @@ func NewWorkerPool(svc Service, opts ...PoolOption) *WorkerPool {
 		queue:       make(chan string, 256),
 		workers:     defaultConcurrency,
 		diagnoseSem: make(chan struct{}, maxConcurrentDiagnoses),
+		notifySem:   make(chan struct{}, maxConcurrentNotifies),
 	}
 	for _, opt := range opts {
 		opt(p)
@@ -317,9 +325,17 @@ func (p *WorkerPool) runDiagnoseHook(runID string) {
 // 通知本身经 Router 已是 best-effort(单渠道失败续发、未配路由不发);此处再套独立 goroutine +
 // recover,确保「构 Payload / 调 RouteEvent」任何环节出错都不冒泡阻断 run 终态(NFR-10)。
 func (p *WorkerPool) runNotifyHook(runID, finalStatus string) {
+	// 并发有界(NFR-4;P8):try-acquire,满则跳过本次通知(best-effort 语义不变)。
+	select {
+	case p.notifySem <- struct{}{}:
+	default:
+		log.Printf("[run] run %s: notify skipped (并发上限 %d 已满)", runID, maxConcurrentNotifies)
+		return
+	}
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
+		defer func() { <-p.notifySem }() // 释放槽位
 		defer func() {
 			if rec := recover(); rec != nil {
 				log.Printf("[run] notify hook recovered from panic on run %s: %v", runID, rec)

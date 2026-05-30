@@ -350,6 +350,16 @@ func (s *service) Test(ctx context.Context, id string) (*TestResult, error) {
 		// 连接/认证/执行类错误:映射为 TestResult.ok=false + 人读错误(绝不含凭据明文)。
 		return &TestResult{OK: false, LatencyMs: latency, Err: humanError(err)}, nil
 	}
+	// 探测命令非零退出(code-review P4):SSH 连通但远端命令失败(受限 shell / PATH / command
+	// not found)不应谎报「连接成功」。ExitCode≠0 → ok=false + 人读(纳入 stderr,不泄密)。
+	if res.ExitCode != 0 {
+		detail := strings.TrimSpace(truncate(res.Stderr, 512))
+		msg := "已连接,但探测命令返回非零退出码"
+		if detail != "" {
+			msg = msg + ":" + detail
+		}
+		return &TestResult{OK: false, LatencyMs: latency, Err: msg}, nil
+	}
 	return &TestResult{
 		OK:        true,
 		LatencyMs: latency,

@@ -184,6 +184,20 @@ func New(db *sql.DB, v vault.Vault, client *http.Client) Service {
 	if client == nil {
 		client = &http.Client{Timeout: 8 * time.Second}
 	}
+	// SSRF 收口(code-review P1):webhook 投递跟随 3xx 重定向时,**每一跳**的目标 URL 都必须
+	// 重新过 validWebhookURL。否则攻击者可配一个合法 URL,服务端 302 跳转到云元数据
+	// (169.254.169.254)/内网,绕过仅校验初始 URL 的收口。未注入 CheckRedirect 时才装(不覆盖调用方)。
+	if client.CheckRedirect == nil {
+		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("webhook: stopped after 10 redirects")
+			}
+			if !validWebhookURL(req.URL.String()) {
+				return errors.New("webhook: redirect to blocked address")
+			}
+			return nil
+		}
+	}
 	return &service{db: db, vault: v, client: client, sendMail: smtpSend}
 }
 

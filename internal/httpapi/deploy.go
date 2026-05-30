@@ -47,11 +47,41 @@ func toTargetDTOs(ts []run.DeployTarget) []targetDTO {
 	return out
 }
 
-// deployRequest 是 POST /api/runs/{id}/deploy 请求体(冻结)。
+// healthCheckDTO 是部署后健康门控配置(Story 4.3 / FR-12;冻结子结构)。
+// type=none / 缺省 → 不做健康检查(向后兼容 4-2)。retries/interval/timeout 的
+// 默认值与上限由领域层 deploy.HealthCheck 归一(retries 默认 3、≤20;interval 默认 3s;
+// timeout 默认 5s、≤60s)。命令 array 化经 target.Exec 执行(AC-SEC-02,不拼 shell)。
+type healthCheckDTO struct {
+	Type            string   `json:"type"`            // none | http | command
+	URL             string   `json:"url"`             // type=http
+	Command         []string `json:"command"`         // type=command(array)
+	Retries         int      `json:"retries"`         // 默认 3,上限 20
+	IntervalSeconds int      `json:"intervalSeconds"` // 默认 3
+	TimeoutSeconds  int      `json:"timeoutSeconds"`  // 默认 5,上限 60
+}
+
+// deployRequest 是 POST /api/runs/{id}/deploy 请求体。
+// 4-3 扩展:可选 healthCheck(部署后健康门控);targets 子 DTO 形状不变(4-2 冻结)。
 type deployRequest struct {
 	ArtifactID   string            `json:"artifactId"`
 	ServerIDs    []string          `json:"serverIds"`
 	DeployConfig map[string]string `json:"deployConfig"`
+	HealthCheck  *healthCheckDTO   `json:"healthCheck"`
+}
+
+// toHealthCheck 把请求 DTO 映射为领域 HealthCheck(nil / type=none → nil,跳过健康检查)。
+func toHealthCheck(h *healthCheckDTO) *deploy.HealthCheck {
+	if h == nil || h.Type == "" || h.Type == deploy.HealthCheckNone {
+		return nil
+	}
+	return &deploy.HealthCheck{
+		Type:            h.Type,
+		URL:             h.URL,
+		Command:         h.Command,
+		Retries:         h.Retries,
+		IntervalSeconds: h.IntervalSeconds,
+		TimeoutSeconds:  h.TimeoutSeconds,
+	}
 }
 
 // deployResponse 是 POST /api/runs/{id}/deploy 响应体:本期同步执行,返回填好的 targets 数组。
@@ -82,10 +112,11 @@ func makeDeployRunHandler(svc deploy.Service, runSvc run.Service) http.HandlerFu
 		}
 
 		results, err := svc.Deploy(r.Context(), deploy.DeployInput{
-			RunID:      id,
-			ArtifactID: req.ArtifactID,
-			ServerIDs:  req.ServerIDs,
-			Config:     req.DeployConfig,
+			RunID:       id,
+			ArtifactID:  req.ArtifactID,
+			ServerIDs:   req.ServerIDs,
+			Config:      req.DeployConfig,
+			HealthCheck: toHealthCheck(req.HealthCheck),
 		})
 		if err != nil {
 			writeDeployError(w, err)

@@ -19,6 +19,8 @@ const ProjectPipeline = () => import('../views/ProjectPipeline.vue')
 // Story 2-3: triggers (kept for backward compat; now a thin wrapper around TriggersPanel)
 const ProjectTriggers = () => import('../views/ProjectTriggers.vue')
 const RunDetail = () => import('../views/RunDetail.vue')
+// Story 1-6: living styleguide (public — no auth required for dev browsing)
+const StatesShowcase = () => import('../views/StatesShowcase.vue')
 
 const router = createRouter({
   history: createWebHistory(),
@@ -28,6 +30,13 @@ const router = createRouter({
       path: '/login',
       name: 'login',
       component: Login,
+      meta: { public: true },
+    },
+    // ——— Story 1-6: Component library living styleguide (shell-free, public) ———
+    {
+      path: '/states',
+      name: 'states-showcase',
+      component: StatesShowcase,
       meta: { public: true },
     },
     // ——— Shell-inside: authenticated routes ———

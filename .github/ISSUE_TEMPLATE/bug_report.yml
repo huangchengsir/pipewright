@@ -1,0 +1,70 @@
+name: 🐛 Bug 报告 / Bug report
+description: 报告一个可复现的问题 / Report something that is broken
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢上报!请尽量填全,便于快速定位。
+        Thanks for reporting! The more detail, the faster we can help.
+        ⚠️ 安全漏洞请勿走这里,见 SECURITY.md / For security issues, use SECURITY.md instead.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: 提交前确认 / Pre-flight
+      options:
+        - label: 我已搜索过现有 Issue,没有重复 / I searched existing issues and found no duplicate
+          required: true
+        - label: 这不是安全漏洞(安全问题走 SECURITY.md)/ This is not a security vulnerability
+          required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 问题描述 / What happened?
+      description: 期望行为 vs 实际行为 / Expected vs actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+        3. 看到 / see ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / 截图 / Logs or screenshots
+      description: 粘贴相关日志(请脱敏!)/ Paste relevant logs (redact secrets!)
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: 版本 / Version
+      description: pipewright 二进制版本或 commit / binary version or commit hash
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: 模块 / Area
+      options:
+        - 流水线配置 / Pipeline config
+        - 隔离构建 / Isolated build
+        - SSH 部署 / Deploy
+        - 通知 / Notifications
+        - 运维 / Server ops
+        - AI 失败诊断 / AI diagnosis
+        - 鉴权 / 凭据 / Auth & credentials
+        - 前端 UI / Frontend
+        - 其他 / Other
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: 运行环境 / Environment
+      placeholder: "OS / Docker 版本 / 部署方式 — OS / Docker version / how deployed"

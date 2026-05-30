@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/huangchengsir/pipewright/internal/mask"
 	"github.com/huangchengsir/pipewright/internal/run"
 )
 
@@ -57,7 +56,7 @@ type correctionDTO struct {
 // 取 run:不存在 → 404。取诊断:无诊断(nil)→ 422 no_diagnosis(不创建空反馈)。
 // 有诊断 → 脱敏 correctRootCause(尽力)+ 快照诊断 → upsert by runID(同 run 改判覆盖)→ 200 {ok:true}。
 // verdict 非法(非 up|down)→ 422 invalid_verdict。
-func makeSubmitDiagnosisFeedbackHandler(runs run.Service, fb run.FeedbackService) http.HandlerFunc {
+func makeSubmitDiagnosisFeedbackHandler(runs run.Service, fb run.FeedbackService, secretSrc *RunSecretSource) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if runs == nil || fb == nil {
 			writeError(w, http.StatusServiceUnavailable, "internal", "反馈服务未初始化")
@@ -85,12 +84,9 @@ func makeSubmitDiagnosisFeedbackHandler(runs run.Service, fb run.FeedbackService
 			return
 		}
 
-		// 脱敏 correctRootCause(尽力):登记该 run 失败日志中的已知 secret + 诊断已知 secret,
-		// 再 Scrub 用户输入(绝无明文 secret 入库)。失败日志取不到不阻断(尽力)。
-		masker := mask.NewMasker()
-		if failureLog, ferr := runs.GetFailureLog(ctx, id); ferr == nil {
-			registerRunSecrets(masker, failureLog)
-		}
+		// 脱敏 correctRootCause:登记该 run 真实用到的全部凭据(项目/registry/secret 变量)+ 桩 secret,
+		// 再 Scrub 用户输入(绝无明文 secret 入库/回吐)。secretSrc 为 nil 时降级只登记桩。
+		masker := maskerFor(ctx, secretSrc, id)
 		correct := masker.Scrub(req.CorrectRootCause)
 
 		// 诊断快照(脱敏后落 pipeline_runs.diagnosis_json 的诊断;此处经 DTO 再编码为快照)。

@@ -67,7 +67,7 @@ func TestNotifyHookEndToEndWebhook(t *testing.T) {
 	runSvc := run.New(st.DB)
 	pool := run.NewWorkerPool(runSvc,
 		run.WithRunner(&branchFailRunner{}),
-		run.WithNotifyHook(NewNotifyHook(runSvc, notifySvc)),
+		run.WithNotifyHook(NewNotifyHook(runSvc, notifySvc, nil)),
 	)
 	pool.Start()
 	t.Cleanup(func() { pool.Stop(context.Background()) })
@@ -207,7 +207,7 @@ func TestNotifyHookProjectOverrideEndToEnd(t *testing.T) {
 	runSvc := run.New(st.DB)
 	pool := run.NewWorkerPool(runSvc,
 		run.WithRunner(&branchFailRunner{}),
-		run.WithNotifyHook(NewNotifyHook(runSvc, notifySvc)),
+		run.WithNotifyHook(NewNotifyHook(runSvc, notifySvc, nil)),
 	)
 	pool.Start()
 	t.Cleanup(func() { pool.Stop(context.Background()) })

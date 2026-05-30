@@ -281,7 +281,7 @@ func TestDiagnoseRunPersistUnavailableFlag(t *testing.T) {
 	ctx := context.Background()
 
 	// 自动钩子语义:不持久化 unavailable。
-	d, err := diagnoseRun(ctx, rsvc, stub, runID, false)
+	d, err := diagnoseRun(ctx, rsvc, stub, nil, runID, false)
 	if err != nil || d == nil || d.Status != "unavailable" {
 		t.Fatalf("diagnoseRun(false) 应返回 unavailable: d=%+v err=%v", d, err)
 	}
@@ -290,7 +290,7 @@ func TestDiagnoseRunPersistUnavailableFlag(t *testing.T) {
 	}
 
 	// 显式端点语义:持久化 unavailable。
-	if _, err := diagnoseRun(ctx, rsvc, stub, runID, true); err != nil {
+	if _, err := diagnoseRun(ctx, rsvc, stub, nil, runID, true); err != nil {
 		t.Fatalf("diagnoseRun(true): %v", err)
 	}
 	got, gerr := rsvc.GetDiagnosis(ctx, runID)

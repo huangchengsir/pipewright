@@ -24,7 +24,7 @@ import (
 //   - rolled_back    → rollback
 //
 // 其余终态/非终态不映射任何事件(不发)。
-func NewNotifyHook(runs run.Service, notifySvc notify.Service) func(ctx context.Context, runID, finalStatus string) {
+func NewNotifyHook(runs run.Service, notifySvc notify.Service, secretSrc *RunSecretSource) func(ctx context.Context, runID, finalStatus string) {
 	return func(ctx context.Context, runID, finalStatus string) {
 		if runs == nil || notifySvc == nil {
 			return
@@ -53,7 +53,9 @@ func NewNotifyHook(runs run.Service, notifySvc notify.Service) func(ctx context.
 			branch = r.Trigger.Branch
 			commit = r.Trigger.Commit
 			durationMs = runDurationMs(r)
-			errorSummary = notify.SummarizeFailure(r.FailureLog)
+			// errorSummary 出网脱敏(红线修):先用该 run 真实凭据 Masker 替换(项目/registry/secret
+			// 变量的明文),再过 notify 的关键字/形态正则兜底——双层确保通知正文绝无明文凭据。
+			errorSummary = maskerFor(hookCtx, secretSrc, runID).Scrub(notify.SummarizeFailure(r.FailureLog))
 		}
 
 		vars := notify.TemplateVars{

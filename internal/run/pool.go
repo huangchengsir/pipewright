@@ -54,9 +54,13 @@ type WorkerPool struct {
 	// 钩子在独立 goroutine + recover 中调用,失败仅记日志,**绝不阻断 run 终态**。
 	notifyHook func(ctx context.Context, runID, finalStatus string)
 
-	// logMasker 是日志行落库/出网前的脱敏器(AC-SEC-04;由 main 经 WithLogMasker 注入)。
-	// nil 则 dbStepSink.Log 不脱敏(纯单测可省);生产装配须注入并登记该 run 相关 secret。
+	// logMasker 是日志行落库/出网前的**静态**脱敏器(AC-SEC-04;由 main 经 WithLogMasker 注入)。
+	// nil 则 dbStepSink.Log 不脱敏(纯单测可省)。被 logMaskerFunc 优先(若设)。
 	logMasker *mask.Masker
+	// logMaskerFunc 是**按 run** 构建脱敏器的工厂(红线修;由 main 经 WithLogMaskerFunc 注入)。
+	// 每个 run 执行时调一次构建 per-run masker(登记该 run 真实用到的凭据),供该 run 全部日志行复用。
+	// 设了则优先于静态 logMasker;让真实凭据(非仅桩假 secret)在真实日志里也被脱敏。
+	logMaskerFunc func(ctx context.Context, runID string) *mask.Masker
 
 	startOnce sync.Once
 	stopOnce  sync.Once
@@ -94,6 +98,17 @@ func WithLogMasker(m *mask.Masker) PoolOption {
 	return func(p *WorkerPool) {
 		if m != nil {
 			p.logMasker = m
+		}
+	}
+}
+
+// WithLogMaskerFunc 注入**按 run** 的日志脱敏器工厂(红线修;优先于 WithLogMasker)。
+// main 传 RunSecretSource.MaskerForRun:每个 run 执行时构建登记了该 run 真实凭据的 Masker,
+// 让真实日志里的真凭据(非仅桩假 secret)也被脱敏。fn 为 nil 时不注入。
+func WithLogMaskerFunc(fn func(ctx context.Context, runID string) *mask.Masker) PoolOption {
+	return func(p *WorkerPool) {
+		if fn != nil {
+			p.logMaskerFunc = fn
 		}
 	}
 }
@@ -237,7 +252,15 @@ func (p *WorkerPool) execute(runID string) {
 		p.svc.mu.Unlock()
 	}()
 
-	sink := &dbStepSink{svc: p.svc, runID: runID, masker: p.logMasker}
+	// per-run 脱敏器:有工厂则按 run 构建(登记该 run 真实凭据),否则用静态 masker。构建一次、
+	// 该 run 全部日志行复用(避免每行重解析/解密)。
+	logMasker := p.logMasker
+	if p.logMaskerFunc != nil {
+		if m := p.logMaskerFunc(runCtx, runID); m != nil {
+			logMasker = m
+		}
+	}
+	sink := &dbStepSink{svc: p.svc, runID: runID, masker: logMasker}
 
 	defer func() {
 		if rec := recover(); rec != nil {

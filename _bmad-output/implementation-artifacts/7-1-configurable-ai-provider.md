@@ -63,3 +63,10 @@ Base:认证保护,写过 CSRF。错误体 `{"error":{"code,message}}`。
 - **前端必跑 `npm --prefix web run typecheck`(不是 build!)** + build。
 - 真二进制:GET 未配置默认 configured=false · PUT 存 claude+key → 掩码呈现、裸 DB 无明文 key · PUT 省略 key 二次保存 → 旧 key 保留(test 仍可用)· **test 指向本地 stub server(curl 起个回 200 的 HTTP)→ ok=true+latencyMs;指向死端口 → ok=false+连接错误,错误无明文** · provider=ollama 无 key 可 configured · 切 provider 保存 · 未认证 401 · 无 CSRF 403。
 - 真浏览器:SettingsAI 三 provider 切换(Ollama 隐 key)· 填 key(只写掩码)· 测试连接显结果 · budget · enabled · 保存 · 未配置态引导 · 截图肉眼审质量。
+
+## Review Findings (code-review 2026-05-30,综合对抗)
+**已修 patch:**
+- [x] [Patch][Major] Test 探测对用户可控 baseUrl 无 SSRF 收口 → 加 validProbeURL(恒拒云元数据169.254/链路本地/未指定;回环+私网放行,符合自托管姿态)[ai/ai.go]
+- [x] [Patch][Major] GET /api/settings/ai 在 master key 缺失但有存储 key 时整页 503 → 掩码降级为占位"••••",其余字段照常返回(NFR-10)[ai/ai.go load]
+- [x] [Patch][Minor] maskKey 按字节切末4位可能切坏多字节 UTF-8 → 改 rune-safe [ai/ai.go]
+**deferred:** budget 无上限校验 · Test 路径 load() 调两次(效率)

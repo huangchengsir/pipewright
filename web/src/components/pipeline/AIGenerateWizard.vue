@@ -366,6 +366,9 @@ watch(() => props.projectId, () => {
               </div>
             </section>
 
+            <!-- 提案区:守 null proposal(LLM 失败降级时后端返 available=true + proposal=null,
+                 此处不渲染提案以免解引用崩溃;仅显上方警告 banner + 分析卡)。 -->
+            <template v-if="response.proposal">
             <!-- Rationale -->
             <div v-if="response.proposal.rationale" class="rationale-text">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -500,6 +503,7 @@ watch(() => props.projectId, () => {
                 </div>
               </div>
             </section>
+            </template><!-- /v-if response.proposal -->
 
             <!-- Apply error banner -->
             <AppBanner v-if="applyError" variant="error" class="wiz-inner-banner">
@@ -580,7 +584,8 @@ watch(() => props.projectId, () => {
               重新生成
             </AppButton>
 
-            <div class="footer-right">
+            <!-- 应用按钮仅在有提案时显示;LLM 失败降级(proposal=null)时只能重新生成/关闭。 -->
+            <div v-if="response && response.proposal" class="footer-right">
               <AppButton
                 variant="default"
                 :disabled="noneSelected || isApplying"
@@ -598,6 +603,7 @@ watch(() => props.projectId, () => {
                 全部接受
               </AppButton>
             </div>
+            <AppButton v-else variant="ghost" @click="emit('close')">关闭</AppButton>
           </template>
         </template>
 

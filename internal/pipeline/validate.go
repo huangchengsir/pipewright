@@ -102,18 +102,49 @@ type ValidationInput struct {
 	Events ValidationEvents
 	// ProjectCredentialOK 表示项目主凭据存在且可读(handler 层预判)。
 	ProjectCredentialOK bool
+	// VaultUnconfigured 表示保险库未配置 master key(环境级状态)。为 true 时抑制
+	// credential_missing/project_credential_missing(无法校验存在性),改发一条 vault_unconfigured warning。
+	VaultUnconfigured bool
 }
 
 // Validate 执行跨 tab 整体就绪度校验,返回 Issue 列表(顺序:canvas→vars→envs→triggers→project)。
 // 纯函数:不触 DB、无副作用。
 func Validate(in ValidationInput) []Issue {
 	issues := make([]Issue, 0)
+	// 保险库未配置(master key 缺失)是**环境级**状态,不应被呈现为「所有凭据都悬挂」的配置级错误。
+	// 此时无法校验任何 secret 引用存在性 → 抑制 credential_missing/project_credential_missing
+	// (把存在性视为已知,避免逐条误报),改发一条 vault_unconfigured warning。
+	if in.VaultUnconfigured {
+		in.ProjectCredentialOK = true
+		in.BuildVars = markCredentialExists(in.BuildVars)
+		envs := make([]ValidationEnvironment, len(in.Environments))
+		copy(envs, in.Environments)
+		for i := range envs {
+			envs[i].EnvVars = markCredentialExists(envs[i].EnvVars)
+			envs[i].ImageRegistry.CredentialExists = true
+		}
+		in.Environments = envs
+		issues = append(issues, Issue{
+			Severity: SeverityWarning, Code: "vault_unconfigured", Scope: ScopeEnvs,
+			Field: "", Message: "保险库未配置 master key,暂无法校验 secret 凭据引用;请先在 设置·凭据保险库 配置",
+		})
+	}
 	issues = append(issues, validateCanvas(in)...)
 	issues = append(issues, validateVars(in)...)
 	issues = append(issues, validateEnvs(in)...)
 	issues = append(issues, validateTriggers(in)...)
 	issues = append(issues, validateProject(in)...)
 	return issues
+}
+
+// markCredentialExists 返回把每个变量 CredentialExists 置 true 的副本(保险库未配置时抑制悬挂误报)。
+func markCredentialExists(vars []ValidationVar) []ValidationVar {
+	out := make([]ValidationVar, len(vars))
+	copy(out, vars)
+	for i := range out {
+		out[i].CredentialExists = true
+	}
+	return out
 }
 
 // Ready 报告 issues 中是否无 error 级 issue(warning/info 不影响就绪)。

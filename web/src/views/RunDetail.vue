@@ -94,6 +94,25 @@ const hcRetries = ref(3)
 const hcIntervalSeconds = ref(3)
 const hcTimeoutSeconds = ref(5)
 
+// ─── 零停机切换高级选项(Story 4-4 / FR-11)──────────────────────────────────
+// dist/jar 走「releases/<runId> + current 软链原子切换」;以下为可选高级覆盖,默认隐藏。
+// releaseBase:发布根目录 <base>(空 → 后端从 path 推导);keepReleases:额外保留旧发布份数。
+// 经既有 deployConfig map 透传,不改部署端点形状。
+const showAdvanced = ref(false)
+const releaseBase = ref('')
+const keepReleases = ref(1)
+
+// buildDeployConfig 据高级选项收敛 deployConfig;空字段不传(后端取默认)。
+function buildDeployConfig(): Record<string, string> | undefined {
+  const cfg: Record<string, string> = {}
+  const base = releaseBase.value.trim()
+  if (base) cfg.releaseBase = base
+  const keep = clampInt(keepReleases.value, 1, 50, 1)
+  // 仅在非默认(1)时下发,避免无谓字段。
+  if (keep !== 1) cfg.keepReleases = String(keep)
+  return Object.keys(cfg).length > 0 ? cfg : undefined
+}
+
 // buildHealthCheck 据表单 type 收敛 HealthCheckInput;none → undefined(等同 4-2 不做健康检查)。
 function buildHealthCheck(): HealthCheckInput | undefined {
   if (hcType.value === 'none') return undefined
@@ -169,6 +188,7 @@ async function handleDeploy(): Promise<void> {
     const res = await deployRun(run.value.id, {
       artifactId: selectedArtifactId.value,
       serverIds: [...selectedServerIds.value],
+      deployConfig: buildDeployConfig(),
       healthCheck: buildHealthCheck(),
     })
     // 同步执行:用返回的 targets 直接填 slot(与 run-detail 同源形状)。
@@ -752,6 +772,46 @@ function nodeClass(status: StepStatus): string {
                   <p v-if="hcType !== 'none' && !healthCheckValid" class="deploy-empty">
                     {{ hcType === 'http' ? '请填写探测 URL。' : '请填写探测命令。' }}
                   </p>
+                </div>
+
+                <!-- 零停机切换高级选项(Story 4-4):默认隐藏;dist/jar 走 releases + current 软链 -->
+                <div class="deploy-field">
+                  <button
+                    type="button"
+                    class="adv-toggle"
+                    :aria-expanded="showAdvanced"
+                    @click="showAdvanced = !showAdvanced"
+                  >
+                    <svg
+                      class="adv-chevron"
+                      :class="{ 'adv-chevron--open': showAdvanced }"
+                      width="12" height="12" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" stroke-width="2.4" aria-hidden="true"
+                    >
+                      <path d="M9 18l6-6-6-6" />
+                    </svg>
+                    高级:零停机发布选项
+                  </button>
+
+                  <div v-if="showAdvanced" class="adv-body">
+                    <label class="adv-row">
+                      <span class="adv-key">发布根目录</span>
+                      <input
+                        v-model="releaseBase"
+                        class="deploy-select mono"
+                        type="text"
+                        placeholder="留空 → 后端从部署路径推导(<base>/releases/<runId> + <base>/current)"
+                        aria-label="发布根目录"
+                      />
+                    </label>
+                    <label class="adv-row">
+                      <span class="adv-key">保留旧发布份数</span>
+                      <input v-model.number="keepReleases" class="hc-num" type="number" min="1" max="50" />
+                    </label>
+                    <p class="adv-hint">
+                      dist / jar 部署到版本化发布目录并原子切换 current 软链;健康检查失败时自动回滚到上一发布。
+                    </p>
+                  </div>
                 </div>
 
                 <!-- 部署错误 -->
@@ -2005,5 +2065,63 @@ function nodeClass(status: StepStatus): string {
   outline: 2px solid var(--color-primary);
   outline-offset: 1px;
   border-color: var(--color-primary);
+}
+
+/* ── 零停机发布高级选项(Story 4-4)──────────────────────────────────────── */
+.adv-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+  color: var(--color-dim);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.adv-toggle:hover { color: var(--color-text); }
+
+.adv-chevron {
+  transition: transform var(--duration-fast);
+}
+
+.adv-chevron--open { transform: rotate(90deg); }
+
+@media (prefers-reduced-motion: reduce) {
+  .adv-chevron { transition: none; }
+}
+
+.adv-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 12px;
+  background: var(--color-inset);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-md);
+}
+
+.adv-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.adv-key {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-faint);
+}
+
+.adv-row .hc-num { width: 120px; }
+
+.adv-hint {
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: var(--color-faint);
 }
 </style>

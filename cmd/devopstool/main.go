@@ -97,6 +97,11 @@ func main() {
 	// worker pool 在 aiSvc 装配后创建(以便注入 best-effort 自动诊断钩子,Story 7.2)。
 	runSvc := run.New(st.DB)
 
+	// 装配诊断反馈服务(Story 7.5;FR-26):诊断 👍/👎(👎 可附正确根因)持久化 + 准确率统计(知识库种子)。
+	// 复用同一 *sql.DB(参数化 SQL);correctRootCause 脱敏在 httpapi 层(过 mask)+ 领域层长度上限兜底。
+	// upsert by run_id(同 run 改判覆盖)。无 init 副作用、不抬高空载内存。
+	feedbackSvc := run.NewFeedbackService(st.DB)
+
 	// 装配 webhook 接收器(Story 3.2):按 token 定位项目触发配置、解密密钥验签、
 	// 解析 Gitee 投递、按 events+分支映射匹配、去重后经 RunService 创建运行(入 pool 调度)。
 	webhookReceiver := trigger.NewReceiver(st.DB, credVault, httpapi.NewRunCreator(runSvc))
@@ -166,7 +171,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithSource(sourceReader), httpapi.WithServers(targetSvc), httpapi.WithDeploy(deploySvc), httpapi.WithNotifications(notifySvc)),
+		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithSource(sourceReader), httpapi.WithServers(targetSvc), httpapi.WithDeploy(deploySvc), httpapi.WithNotifications(notifySvc), httpapi.WithDiagnosisFeedback(feedbackSvc)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;

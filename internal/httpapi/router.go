@@ -51,6 +51,7 @@ type options struct {
 	pipelineSettings pipeline.SettingsService
 	runs             run.Service
 	runSub           runSubscriber
+	feedback         run.FeedbackService
 	receiver         *trigger.Receiver
 	audit            audit.Recorder
 	account          accountService
@@ -100,6 +101,14 @@ func WithRuns(s run.Service, sub runSubscriber) Option {
 		o.runs = s
 		o.runSub = sub
 	}
+}
+
+// WithDiagnosisFeedback 注入诊断反馈服务(Story 7.5;FR-26),挂载
+// POST /api/runs/{id}/diagnosis/feedback(认证 + CSRF)+ GET /api/settings/diagnosis-stats(认证)。
+// 对 ready 诊断 👍/👎(👎 可附正确根因,脱敏 + 长度上限);反馈 upsert by runID、汇入统计(知识库种子)。
+// run 无诊断 → 422 no_diagnosis;不传则相关端点返回 503(服务未初始化)。
+func WithDiagnosisFeedback(s run.FeedbackService) Option {
+	return func(o *options) { o.feedback = s }
 }
 
 // WithWebhooks 注入 webhook 接收器(Story 3.2),挂载**公开**端点 POST /api/webhooks/{token}
@@ -275,6 +284,12 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// (绝不 500、绝无密钥)。复用已注入 rs + aiSettings(o.aiSettings),无新顶层依赖。
 		ar.Post("/runs/{id}/diagnose", makeDiagnoseRunHandler(rs, o.aiSettings))
 
+		// 诊断反馈闭环(Story 7.5;FR-26):对 ready 诊断 👍/👎(👎 可附正确根因)。认证 + CSRF(写方法)。
+		// run 不存在 → 404;无诊断 → 422 no_diagnosis;同 run 重复提交 = upsert 覆盖最新。
+		// correctRootCause 脱敏(过 mask)+ 长度上限。复用已注入 rs + o.feedback(WithDiagnosisFeedback)。
+		// fb 为 nil → 503。GET diagnosis-stats 在 /settings 组内(只读 + 认证)。
+		ar.Post("/runs/{id}/diagnosis/feedback", makeSubmitDiagnosisFeedbackHandler(rs, o.feedback))
+
 		// 手动触发创建运行(Story 3.2):认证 + CSRF;actor=admin;返 201 run-detail DTO。
 		ar.Post("/projects/{id}/runs", makeManualRunHandler(rs, aud))
 
@@ -292,6 +307,10 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Get("/settings/ai", makeGetAISettingsHandler(aiSvc))
 		ar.Put("/settings/ai", makeSaveAISettingsHandler(aiSvc))
 		ar.Post("/settings/ai/test", makeTestAISettingsHandler(aiSvc))
+
+		// 诊断反馈闭环统计(Story 7.5;FR-26):准确率/计数/最近趋势/最近 corrections(知识库种子可视化)。
+		// 只读 + 认证;无反馈 → 全 0 / 空数组 / accuracy:null(不报错)。fb 为 nil → 503。
+		ar.Get("/settings/diagnosis-stats", makeDiagnosisStatsHandler(o.feedback))
 
 		// AI 生成流水线配置(Story 2.5):浅克隆分析 + LLM 生成提案 + 全/部分接受应用。
 		// generate 复用 aiSvc + projects(p)+ vault(v);apply 复用 pipelines(pl)+ settings(ps)+ triggers(t)。

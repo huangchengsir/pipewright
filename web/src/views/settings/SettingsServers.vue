@@ -17,6 +17,7 @@ import { listCredentials } from '../../api/credentials'
 import type { Credential } from '../../api/credentials'
 import { HttpError } from '../../api/http'
 import ServiceLogViewer from '../../components/ops/ServiceLogViewer.vue'
+import ServiceOpsPanel from '../../components/ops/ServiceOpsPanel.vue'
 
 // ─── state ──────────────────────────────────────────────────────────────────
 
@@ -79,6 +80,21 @@ function openLogsModal(s: Server): void {
 function closeLogsModal(): void {
   logsModalOpen.value = false
   logsServer.value = null
+}
+
+// ─── service operations panel (Story 6-3, FR-17) ─────────────────────────────
+
+const opsModalOpen = ref(false)
+const opsServer = ref<Server | null>(null)
+
+function openOpsModal(s: Server): void {
+  opsServer.value = s
+  opsModalOpen.value = true
+}
+
+function closeOpsModal(): void {
+  opsModalOpen.value = false
+  opsServer.value = null
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -378,6 +394,7 @@ async function handleTest(s: Server): Promise<void> {
               {{ testingId === s.id ? '测试中…' : '测试连接' }}
             </button>
             <button class="btn-ghost" @click="openLogsModal(s)">日志</button>
+            <button class="btn-ghost" @click="openOpsModal(s)">服务操作</button>
             <button class="btn-ghost" @click="openEditModal(s)">编辑</button>
             <button class="btn-ghost btn-danger" @click="openDeleteModal(s)">删除</button>
           </div>
@@ -472,6 +489,26 @@ async function handleTest(s: Server): Promise<void> {
           v-if="logsServer"
           :server-id="logsServer.id"
           :server-name="logsServer.name"
+        />
+      </div>
+    </div>
+
+    <!-- ─── service operations modal (Story 6-3, FR-17) ───────────────────────── -->
+    <div v-if="opsModalOpen" class="modal-backdrop" @click.self="closeOpsModal">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="server-ops-title">
+        <div class="logs-modal-head">
+          <h3 id="server-ops-title" class="modal-title">
+            服务操作 · {{ opsServer?.name }}
+          </h3>
+          <button type="button" class="btn-ghost" aria-label="关闭" @click="closeOpsModal">关闭</button>
+        </div>
+        <p class="logs-modal-sub mono">
+          {{ opsServer?.user }}@{{ opsServer?.host }}:{{ opsServer?.port }}
+        </p>
+        <ServiceOpsPanel
+          v-if="opsServer"
+          :server-id="opsServer.id"
+          :server-name="opsServer.name"
         />
       </div>
     </div>

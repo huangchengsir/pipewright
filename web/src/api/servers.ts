@@ -264,3 +264,50 @@ export async function getAllServerMetrics(): Promise<ServerMetrics[]> {
   const res = await http.get<{ items: ServerMetrics[] }>('/api/servers/metrics')
   return res.items
 }
+
+// ─── Service operations (Story 6-3, FR-17) ───────────────────────────────────
+//
+// POST /api/servers/:id/service/action → ServiceActionResult  (needs CSRF; write)
+//
+// Restart / stop / start a systemd unit or a docker container on a target host
+// over SSH. AC-SEC-02: `type` ∈ {systemd|docker}; `target` is strictly validated
+// server-side (first char `[\w]` — never `-`, so it can't be parsed as a flag;
+// no shell metacharacters: systemd `^[\w][\w.@-]*$`, docker `^[\w][\w.-]*$`);
+// `action` ∈ {restart|stop|start}. Illegal input → 400 invalid_service_target.
+// The command is built as an argv array (`systemctl <action> <unit>` /
+// `docker <action> <name>`) and never assembled into a shell string. SSH/command
+// failures return 200 + ok:false + a human `error` instead of 500 — never the
+// secret. Success is audited (append-only; detail scrubbed).
+
+/** Service kind the operation targets. */
+export type ServiceType = 'systemd' | 'docker'
+
+/** Lifecycle operation. Destructive (restart/stop) — UI should confirm. */
+export type ServiceAction = 'restart' | 'stop' | 'start'
+
+export interface ServiceActionInput {
+  type: ServiceType
+  target: string
+  action: ServiceAction
+}
+
+export interface ServiceActionResult {
+  serverId: string
+  type: ServiceType
+  target: string
+  action: ServiceAction
+  /** True when the remote command exited 0. */
+  ok: boolean
+  /** Truncated stdout from the command; may be empty. */
+  output: string
+  /** Human-readable error when ok is false; empty on success. Never contains secrets. */
+  error: string
+}
+
+/** Execute a restart/stop/start against a systemd unit or docker container. */
+export async function serviceAction(
+  id: string,
+  input: ServiceActionInput,
+): Promise<ServiceActionResult> {
+  return http.post<ServiceActionResult>(`/api/servers/${id}/service/action`, input)
+}

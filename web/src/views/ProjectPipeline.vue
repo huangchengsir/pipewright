@@ -7,8 +7,19 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getPipeline, savePipeline, type PipelineDTO, type PipelineStage } from '../api/pipeline'
+import {
+  getSettings,
+  saveSettings,
+  type SettingsDTO,
+  type BuildConfig,
+  type Environment,
+  type SaveSettingsInput,
+} from '../api/pipelineSettings'
+import { listCredentials, type Credential } from '../api/credentials'
 import { HttpError } from '../api/http'
 import PipelineCanvas from '../components/pipeline/PipelineCanvas.vue'
+import VarsCacheTab from '../components/pipeline/VarsCacheTab.vue'
+import EnvCredsTab from '../components/pipeline/EnvCredsTab.vue'
 import TriggersPanel from '../components/TriggersPanel.vue'
 
 // ─── Route ────────────────────────────────────────────────────────────────────
@@ -81,8 +92,43 @@ async function loadPipeline(): Promise<void> {
   }
 }
 
-watch(projectId, loadPipeline)
-onMounted(loadPipeline)
+// ─── Build/deploy settings data (Story 2.4) ───────────────────────────────────
+
+const settings    = ref<SettingsDTO | null>(null)
+const editBuild    = ref<BuildConfig | null>(null)
+const editEnvs     = ref<Environment[]>([])
+const credentials  = ref<Credential[]>([])
+
+function applySettings(dto: SettingsDTO): void {
+  settings.value = dto
+  editBuild.value = JSON.parse(JSON.stringify(dto.build)) as BuildConfig
+  editEnvs.value  = JSON.parse(JSON.stringify(dto.environments)) as Environment[]
+}
+
+async function loadSettings(): Promise<void> {
+  try {
+    const [dto, creds] = await Promise.all([
+      getSettings(projectId.value),
+      listCredentials().catch(() => [] as Credential[]),
+    ])
+    applySettings(dto)
+    credentials.value = creds
+  } catch {
+    // Settings load failure is non-fatal for the canvas; the vars/envs tabs show
+    // their own empty state until a successful save. Surfaced on save attempts.
+  }
+}
+
+function handleBuildUpdate(build: BuildConfig): void {
+  editBuild.value = build
+}
+
+function handleEnvsUpdate(envs: Environment[]): void {
+  editEnvs.value = envs
+}
+
+watch(projectId, () => { void loadPipeline(); void loadSettings() })
+onMounted(() => { void loadPipeline(); void loadSettings() })
 
 // ─── Canvas update ────────────────────────────────────────────────────────────
 
@@ -107,10 +153,54 @@ function showSaveSuccess(): void {
 function mapSaveError(err: HttpError): string {
   const code = err.apiError?.code
   switch (code) {
-    case 'invalid_stage':   return '阶段名不能为空或 kind 不在允许值内,请检查后重试。'
-    case 'invalid_job':     return '任务名称或类型不能为空,请补充后重试。'
-    case 'duplicate_id':    return '阶段或任务 ID 重复,请删除重复项后重试。'
-    default:                return err.apiError?.message ?? `保存失败(${err.status})`
+    case 'invalid_stage':        return '阶段名不能为空或 kind 不在允许值内,请检查后重试。'
+    case 'invalid_job':          return '任务名称或类型不能为空,请补充后重试。'
+    case 'duplicate_id':         return '阶段或任务 ID 重复,请删除重复项后重试。'
+    case 'invalid_build':        return '构建模型须为 dockerfile/toolchain,产物类型须为 image/jar/dist。'
+    case 'invalid_var':          return '变量键不能为空且同作用域内不可重复;secret 变量须选择保险库凭据。'
+    case 'invalid_environment':  return '环境名不能为空,镜像仓库类型须为 harbor/acr/dockerhub/custom。'
+    case 'credential_not_found': return '引用的保险库凭据不存在,请重新选择后重试。'
+    case 'vault_unconfigured':   return '保险库未配置 master key,无法引用 secret 凭据。'
+    default:                     return err.apiError?.message ?? `保存失败(${err.status})`
+  }
+}
+
+/** Builds the settings save payload from local edit state. */
+function buildSettingsPayload(): SaveSettingsInput | null {
+  if (!editBuild.value) return null
+  const b = editBuild.value
+  return {
+    build: {
+      model: b.model,
+      dockerfilePath: b.dockerfilePath,
+      toolchain: b.toolchain,
+      artifactType: b.artifactType,
+      vars: b.vars.map((v) => ({
+        id: v.id || undefined,
+        key: v.key,
+        secret: v.secret,
+        value: v.secret ? undefined : v.value,
+        credentialId: v.secret ? v.credentialId : undefined,
+      })),
+      cache: b.cache,
+    },
+    environments: editEnvs.value.map((e) => ({
+      id: e.id || undefined,
+      name: e.name,
+      targetServerIds: e.targetServerIds,
+      envVars: e.envVars.map((v) => ({
+        id: v.id || undefined,
+        key: v.key,
+        secret: v.secret,
+        value: v.secret ? undefined : v.value,
+        credentialId: v.secret ? v.credentialId : undefined,
+      })),
+      imageRegistry: {
+        type: e.imageRegistry.type,
+        url: e.imageRegistry.url,
+        credentialId: e.imageRegistry.credentialId || undefined,
+      },
+    })),
   }
 }
 
@@ -120,8 +210,19 @@ async function handleSave(): Promise<void> {
   saveSuccess.value    = false
 
   try {
-    const dto = await savePipeline(projectId.value, { stages: editStages.value })
-    applyPipeline(dto)
+    // The vars/envs tabs persist build/deploy settings; canvas/triggers persist the spec.
+    if (activeTab.value === 'vars' || activeTab.value === 'envs') {
+      const payload = buildSettingsPayload()
+      if (payload) {
+        const dto = await saveSettings(projectId.value, payload)
+        applySettings(dto)
+        // Refresh credential masks in case a referenced credential changed.
+        credentials.value = await listCredentials().catch(() => credentials.value)
+      }
+    } else {
+      const dto = await savePipeline(projectId.value, { stages: editStages.value })
+      applyPipeline(dto)
+    }
     showSaveSuccess()
   } catch (err) {
     if (err instanceof HttpError) {
@@ -273,16 +374,13 @@ const projectName = computed(() => String(route.params.id))
       role="tabpanel"
       aria-labelledby="tab-vars"
     >
-      <div class="placeholder-card">
-        <div class="placeholder-icon" aria-hidden="true">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-            <path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
-          </svg>
-        </div>
-        <p class="placeholder-title">变量与缓存</p>
-        <p class="placeholder-desc">环境变量、构建缓存策略及 Secret 引用管理将在 Story 2-4 落地。</p>
-        <span class="placeholder-badge">将在 Story 2-4 提供</span>
-      </div>
+      <VarsCacheTab
+        v-if="editBuild"
+        :build="editBuild"
+        :credentials="credentials"
+        :disabled="saveSubmitting"
+        @update="handleBuildUpdate"
+      />
     </div>
 
     <!-- 触发设置 -->
@@ -304,16 +402,12 @@ const projectName = computed(() => String(route.params.id))
       role="tabpanel"
       aria-labelledby="tab-envs"
     >
-      <div class="placeholder-card">
-        <div class="placeholder-icon" aria-hidden="true">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-            <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-          </svg>
-        </div>
-        <p class="placeholder-title">环境与凭据</p>
-        <p class="placeholder-desc">目标环境绑定、凭据引用及 Secret 安全存储将在 Story 2-4 落地。</p>
-        <span class="placeholder-badge">将在 Story 2-4 提供</span>
-      </div>
+      <EnvCredsTab
+        :environments="editEnvs"
+        :credentials="credentials"
+        :disabled="saveSubmitting"
+        @update="handleEnvsUpdate"
+      />
     </div>
 
   </div>

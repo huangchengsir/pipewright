@@ -12,6 +12,10 @@
 /web/node_modules/
 # 注:/web/dist 为 go:embed 所需,保留占位 index.html;真实产物(带 hash 的 assets)由 vite build 生成,不入库(避免每次构建 churn)。
 /web/dist/assets/
+# Playwright e2e 产物(报告/trace/截图)— 不入库
+/web/test-results/
+/web/playwright-report/
+/web/.playwright/
 
 # Claude Code 本地设置(机器特定权限/覆盖,不入库)
 .claude/settings.local.json

@@ -8,6 +8,10 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run",
+    "test:watch": "vitest",
+    "e2e": "playwright test",
     "lint": "eslint .",
     "format": "prettier --write src"
   },
@@ -24,12 +28,16 @@
     "vue-router": "^4.5.0"
   },
   "devDependencies": {
-    "@vitejs/plugin-vue": "^5.2.1",
+    "@playwright/test": "^1.60.0",
+    "@vitejs/plugin-vue": "^5.2.4",
+    "@vue/test-utils": "^2.4.10",
     "eslint": "^9.17.0",
     "eslint-plugin-vue": "^9.32.0",
+    "jsdom": "^25.0.1",
     "prettier": "^3.4.2",
     "typescript": "^5.7.2",
     "vite": "^6.0.7",
+    "vitest": "^3.2.4",
     "vue-tsc": "^2.2.0"
   }
 }

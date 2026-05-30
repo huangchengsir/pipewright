@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
@@ -16,5 +17,17 @@ export default defineConfig({
       '/api': 'http://localhost:8080',
       '/healthz': 'http://localhost:8080',
     },
+  },
+  // Vitest 单元/组件测试配置(内联到 vite.config,复用同一份插件与解析规则)。
+  // jsdom 提供 DOM/localStorage/document.cookie;setup 注册全局 stub。
+  // e2e/ 由 Playwright 拥有,排除在 Vitest 之外避免被当成单测收集。
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./src/test/setup.ts'],
+    include: ['src/**/*.{test,spec}.ts'],
+    exclude: ['node_modules', 'dist', 'e2e'],
+    css: false,
+    clearMocks: true,
   },
 })

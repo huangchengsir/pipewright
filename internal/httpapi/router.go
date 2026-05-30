@@ -56,6 +56,7 @@ type options struct {
 	account          accountService
 	aiSettings       ai.Service
 	aiAnalyzer       ai.RepoAnalyzer
+	runDiffer        ai.RunDiffer
 	sourceReader     SourceReader
 	servers          target.Service
 	notifications    notify.Service
@@ -132,6 +133,13 @@ func WithAISettings(s ai.Service) Option {
 // apply 复用 pipelines + pipelineSettings + triggers。analyzer 为 nil 时 generate 返回 503。
 func WithAIGenerate(a ai.RepoAnalyzer) Option {
 	return func(o *options) { o.aiAnalyzer = a }
+}
+
+// WithRunDiff 注入成功/失败差异计算器(go-git 克隆 + tree diff),挂载 GET /api/runs/{id}/diff
+// 路由(Story 7.3;FR-25)。复用已注入的 runs(取本次 run + LastSuccessfulRun)+ projects + vault
+// (取 repoURL/凭据)。不传则 diff 端点返回 503(服务未初始化)。
+func WithRunDiff(d ai.RunDiffer) Option {
+	return func(o *options) { o.runDiffer = d }
 }
 
 // WithSource 注入只读源码读取器(go-git 浅克隆),挂载 /api/projects/{id}/source/{tree,blob}
@@ -274,6 +282,17 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 非失败 → 422 run_not_failed;不存在 → 404;任何 LLM 失败 → 200 + status=unavailable
 		// (绝不 500、绝无密钥)。复用已注入 rs + aiSettings(o.aiSettings),无新顶层依赖。
 		ar.Post("/runs/{id}/diagnose", makeDiagnoseRunHandler(rs, o.aiSettings))
+
+		// 成功/失败差异对比(Story 7.3;FR-25):只读 + 认证。取本次 run(commit)+ LastSuccessfulRun
+		// (同项目+同分支+更早+最近成功)+ 项目 repoURL/凭据 → RunDiffer(go-git 克隆 + tree diff)→ DTO。
+		// 无 baseline / 无 commit / 克隆失败 / commit 不可达 → 200 available:false degraded(绝不 500);
+		// run 不存在 → 404。复用已注入 rs + p + v + 注入的 RunDiffer。differ 为 nil → 503。
+		ar.Get("/runs/{id}/diff", makeRunDiffHandler(runDiffDeps{
+			runs:     rs,
+			projects: p,
+			vault:    v,
+			differ:   o.runDiffer,
+		}))
 
 		// 手动触发创建运行(Story 3.2):认证 + CSRF;actor=admin;返 201 run-detail DTO。
 		ar.Post("/projects/{id}/runs", makeManualRunHandler(rs, aud))

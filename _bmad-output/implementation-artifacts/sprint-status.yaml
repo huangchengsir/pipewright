@@ -1,5 +1,5 @@
 # generated: 2026-05-28
-# last_updated: 2026-05-30 (并行波 3-4/4-1/5-1 合并 → review;merge 冲突解 + 产物排序确定性修复)
+# last_updated: 2026-05-30 (并行波2 4-2/5-2/6-2 合并 → review;merge 解 + 跨story接口演化修复)
 # project: devopsTool
 # project_key: NOKEY
 # tracking_system: file-system
@@ -39,7 +39,7 @@
 # - 开建 Epic 7 / 4-6 前先完成 PRD Open Q#7 的 AI 差异化前置验证实验
 
 generated: 2026-05-28
-last_updated: 2026-05-30 (并行波 3-4/4-1/5-1 合并 → review;merge 冲突解 + 产物排序确定性修复)
+last_updated: 2026-05-30 (并行波2 4-2/5-2/6-2 合并 → review;merge 解 + 跨story接口演化修复)
 project: devopsTool
 project_key: NOKEY
 tracking_system: file-system
@@ -80,7 +80,7 @@ development_status:
   # ===== Epic 4: 多服务器部署(零停机 + 回滚 + 多机) =====
   epic-4: backlog
   4-1-server-registry-and-ssh-layer: review
-  4-2-ssh-deploy-execution: in-progress
+  4-2-ssh-deploy-execution: review
   4-3-deploy-health-check: backlog
   4-4-zero-downtime-switch-rollback: backlog
   4-5-multi-target-partial-failure: backlog
@@ -90,7 +90,7 @@ development_status:
   # ===== Epic 5: 构建与部署通知 =====
   epic-5: backlog
   5-1-notification-channels: review
-  5-2-event-routing-defaults: in-progress
+  5-2-event-routing-defaults: review
   5-3-notification-templates: backlog
   5-4-per-pipeline-routing-override: backlog
   epic-5-retrospective: optional
@@ -98,7 +98,7 @@ development_status:
   # ===== Epic 6: 服务器与服务运维 =====
   epic-6: backlog
   6-1-multi-host-status-metrics: backlog
-  6-2-service-logs-viewer: in-progress
+  6-2-service-logs-viewer: review
   6-3-service-operations: backlog
   6-4-container-terminal: backlog
   6-5-anomaly-detection-alerts: backlog

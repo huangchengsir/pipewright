@@ -106,6 +106,11 @@ func (d *capturingDialer) RunStream(_ context.Context, _ string, _ target.SSHCon
 	return nil, d.err
 }
 
+func (d *capturingDialer) RunInteractive(_ context.Context, _ string, _ target.SSHConfig, cmd []string) (target.Session, error) {
+	d.lastCmd = cmd
+	return nil, d.err
+}
+
 func setupServiceOpsAPI(t *testing.T, dialer target.SSHDialer) (*httptest.Server, *http.Client, string, audit.Recorder) {
 	t.Helper()
 	st := testStoreAuth(t)

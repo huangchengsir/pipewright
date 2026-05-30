@@ -126,6 +126,25 @@ type Service interface {
 	// 实时 tail -f / journalctl -f)。调用方读到底或关闭 ReadCloser 即释放 SSH session;ctx
 	// 取消亦关 session(防泄漏/挂死)。cmd 同样是 array,经各参数 shell 转义(AC-SEC-02)。
 	ExecStream(ctx context.Context, serverID string, cmd []string) (io.ReadCloser, error)
+	// ExecInteractive 双向交互会话(Story 6.4 append;FR-18):经 SSH 开 PTY 跑 cmd(array,
+	// 典型为 `docker exec -it <id> <shell>`),返回可写 stdin / 可读 stdout+stderr / resize /
+	// close 的 Session。供容器内交互终端(WS ↔ SSH)使用。cmd 同样 array 化、各参数 shell 转义
+	// (AC-SEC-02);凭据经 vault 即用即弃,绝不日志。调用方关闭 Session(或 ctx 取消)即释放远端
+	// PTY + SSH session/client(不泄漏)。
+	ExecInteractive(ctx context.Context, serverID string, cmd []string) (Session, error)
+}
+
+// Session 是一个双向交互式 SSH/PTY 会话(Story 6.4;FR-18)。
+//
+// 它把远端伪终端的 stdin(写)/ stdout+stderr 合流(读)/ 窗口尺寸(resize)/ 生命周期
+// (close)抽象为最小接口,供上层(WS 终端泵)消费。实现须保证:
+//   - Read 阻塞直至有 PTY 输出或会话结束(EOF / 远端进程退出);
+//   - Close 幂等,且关闭后释放远端 PTY + 底层 SSH session/client(不泄漏);
+//   - Resize 在窗口尺寸变化时通知远端(WindowChange),失败可忽略(非致命)。
+type Session interface {
+	io.ReadWriteCloser
+	// Resize 通知远端 PTY 调整为 cols 列 rows 行(窗口变化)。失败不致命(忽略)。
+	Resize(cols, rows int) error
 }
 
 // SSHDialer 抽象「用装配好的 SSH 配置连服务器并跑一条 array 命令」的能力。
@@ -137,6 +156,10 @@ type SSHDialer interface {
 	// RunStream 连 addr、以 cfg 认证、跑 cmd 并返回 stdout 的流(供实时 tail)。
 	// 返回的 ReadCloser 被关闭或 ctx 取消时,底层 SSH session/client 一并关闭(不泄漏)。
 	RunStream(ctx context.Context, addr string, cfg SSHConfig, cmd []string) (io.ReadCloser, error)
+	// RunInteractive 连 addr、以 cfg 认证、开 PTY 并启动 cmd(array;典型容器交互 shell),
+	// 返回双向 Session(stdin 写 / stdout+stderr 读 / resize / close)。Session 关闭或 ctx
+	// 取消时,远端 PTY + 底层 SSH session/client 一并关闭(不泄漏)。cmd 经各参数 shell 转义。
+	RunInteractive(ctx context.Context, addr string, cfg SSHConfig, cmd []string) (Session, error)
 }
 
 // SSHConfig 是拨号所需的最小认证材料(进程内,用完即弃)。
@@ -464,6 +487,55 @@ func (s *service) ExecStream(ctx context.Context, serverID string, cmd []string)
 		return nil, runErr
 	}
 	return rc, nil
+}
+
+// ExecInteractive 取凭据明文装配 SSH 配置并开 PTY 跑 array 命令(供容器交互终端,Story 6.4)。
+// 与 Exec/ExecStream 同样的凭据取用/清引用纪律:明文仅进程内,装配完 cfg 后立即清零本地引用。
+// 返回的 Session 持有底层 SSH client/session 生命周期;调用方 Close()(或 ctx 取消)即释放。
+func (s *service) ExecInteractive(ctx context.Context, serverID string, cmd []string) (Session, error) {
+	if len(cmd) == 0 {
+		return nil, fmt.Errorf("target: empty command")
+	}
+	srv, err := s.Get(ctx, serverID)
+	if err != nil {
+		return nil, err
+	}
+	if s.vault == nil {
+		return nil, ErrVaultUnconfigured
+	}
+
+	secret, err := s.vault.Get(srv.CredentialID)
+	if err != nil {
+		switch {
+		case errors.Is(err, vault.ErrVaultUnconfigured):
+			return nil, ErrVaultUnconfigured
+		case errors.Is(err, vault.ErrNotFound):
+			return nil, ErrCredentialNotFound
+		default:
+			return nil, ErrAuth
+		}
+	}
+
+	cfg := SSHConfig{User: srv.User}
+	if looksLikePEM(secret) {
+		cfg.PrivateKey = secret
+	} else {
+		cfg.Password = secret
+	}
+
+	addr := fmt.Sprintf("%s:%d", srv.Host, srv.Port)
+	sess, runErr := s.dialer.RunInteractive(ctx, addr, cfg, cmd)
+
+	// 清本地明文引用(dialer 已用 cfg 完成建连/装配)。
+	secret = ""
+	cfg.PrivateKey = ""
+	cfg.Password = ""
+	_ = secret
+
+	if runErr != nil {
+		return nil, runErr
+	}
+	return sess, nil
 }
 
 // looksLikePEM 判定凭据明文是否为 PEM 私钥(决定走私钥还是口令认证)。

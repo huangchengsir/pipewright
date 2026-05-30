@@ -60,6 +60,10 @@ func (s *stubTarget) ExecStream(context.Context, string, []string) (io.ReadClose
 	return nil, errors.New("execstream not supported in stub")
 }
 
+func (s *stubTarget) ExecInteractive(context.Context, string, []string) (target.Session, error) {
+	return nil, errors.New("execinteractive not supported in stub")
+}
+
 // ---- 测试脚手架 -------------------------------------------------------------
 
 func testDB(t *testing.T) *sql.DB {

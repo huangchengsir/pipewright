@@ -85,6 +85,10 @@ func main() {
 	// 装配流水线配置服务(Story 2.2):经 store 触库,惰性默认 + spec 校验 + YAML 渲染。
 	pipelineSvc := pipeline.New(st.DB)
 
+	// 装配构建/部署配置服务(Story 2.4):独立于 2-2 spec;经 vault 校验 secret 引用存在性 +
+	// 回算掩码。master key 未配置时,涉及 secret 引用的保存降级为明确错误(不 panic)。
+	pipelineSettingsSvc := pipeline.NewSettingsService(st.DB, credVault)
+
 	// 装配运行服务 + 进程内 worker pool(Story 3.1):本期桩 runner 跑占位步骤打通状态机;
 	// 真实构建/部署执行=3-3/4-x 换 Runner 实现。pool 调度多 run 并行、结果独立。
 	runSvc := run.New(st.DB)
@@ -111,7 +115,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec)),
+		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;

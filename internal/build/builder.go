@@ -119,10 +119,17 @@ func (b *Builder) Run(ctx context.Context, r *run.Run, sink run.StepSink) error 
 	artifactType := settings.Build.ArtifactType
 	willPush := artifactType == pipeline.ArtifactImage && registry != nil
 
-	// 步骤计划:拉取源码 → 构建 →(可选)推送镜像。
+	// 自定义脚本步骤(Epic 8 · Story 8-2):配置里的有序 script 步骤,接在构建/推送之后。
+	customSteps := scriptSteps(settings)
+
+	// 步骤计划:拉取源码 → 构建 →(可选)推送镜像 → 自定义脚本步骤(按声明顺序)。
 	steps := []string{stepClone, stepBuild}
 	if willPush {
 		steps = append(steps, stepPush)
+	}
+	scriptStepBase := len(steps) // 第一个脚本步骤在计划里的序号
+	for _, cs := range customSteps {
+		steps = append(steps, cs.Name)
 	}
 	if err := sink.Plan(ctx, steps); err != nil {
 		return err
@@ -203,6 +210,27 @@ func (b *Builder) Run(ctx context.Context, r *run.Run, sink run.StepSink) error 
 			artifact.Metadata["digest"] = pdigest
 		}
 		if err := sink.StepDone(ctx, 2, run.StepSuccess); err != nil {
+			return err
+		}
+	}
+
+	// ---- 自定义脚本步骤(Story 8-2):按声明顺序在隔离容器内逐个执行 ----
+	for i, cs := range customSteps {
+		ordinal := scriptStepBase + i
+		if canceled(ctx) {
+			return b.cancelAt(ctx, sink, ordinal)
+		}
+		if err := sink.StepRunning(ctx, ordinal); err != nil {
+			return err
+		}
+		serr := b.runScriptStep(ctx, sink, ordinal, cs, workspace)
+		if serr != nil {
+			if errors.Is(serr, run.ErrCanceled) || errors.Is(ctx.Err(), context.Canceled) {
+				return b.cancelAt(ctx, sink, ordinal)
+			}
+			return b.failStep(ctx, sink, ordinal, "自定义步骤「"+cs.Name+"」失败")
+		}
+		if err := sink.StepDone(ctx, ordinal, run.StepSuccess); err != nil {
 			return err
 		}
 	}

@@ -320,8 +320,8 @@ func (s *service) Delete(id string) error {
 	// 无子串歧义。表不存在(迁移未应用)时 QueryRow 报错,跳过此检查、退回普通删除。
 	var refCount int
 	if err := s.db.QueryRow(
-		`SELECT COUNT(*) FROM pipeline_settings WHERE build_json LIKE ? OR environments_json LIKE ?`,
-		"%"+id+"%", "%"+id+"%",
+		`SELECT COUNT(*) FROM pipeline_settings WHERE build_json LIKE ? OR environments_json LIKE ? OR steps_json LIKE ?`,
+		"%"+id+"%", "%"+id+"%", "%"+id+"%",
 	).Scan(&refCount); err == nil && refCount > 0 {
 		return ErrCredentialInUse
 	}

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🔐 安全漏洞 / Security vulnerability
+    url: https://github.com/huangchengsir/pipewright/security/advisories/new
+    about: 请通过私密渠道上报,勿开公开 Issue / Report privately, do not open a public issue
+  - name: 💬 提问与讨论 / Questions & discussion
+    url: https://github.com/huangchengsir/pipewright/discussions
+    about: 使用问题、想法、求助请走 Discussions / For usage questions, ideas, and help

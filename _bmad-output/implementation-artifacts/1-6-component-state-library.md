@@ -55,3 +55,12 @@ As a 前端开发者,I want 一套可复用的基础组件与状态模式(状态
 ## 编排者亲验清单
 - `npm --prefix web run build`(vue-tsc 0 错 + vite build 成功)。
 - 真浏览器:开 `/states` 展示页 → 截图肉眼审每组件各态(状态徽标六词+脉冲、Toast 堆叠自动消/手动关、type-to-confirm 禁用逻辑、空态/错误态/AI 降级、focus 环、Esc 关浮层)· 切暗/亮双主题各截一张 · reduced-motion 下脉冲/入场关闭验证。
+
+## Review Findings (code-review 2026-05-30,9-agent 三层对抗)
+**已修 patch:**
+- [x] [Patch][Crit] StatesShowcase 移除自挂 ToastHost/ConfirmDialog → 消除 /states 双挂载(双焦点陷阱/重复 toast)[web/views/StatesShowcase.vue]
+- [x] [Patch][Crit] useConfirm 连续 open 先 resolve(false) 旧 pending(防 await 永久挂起)[web/composables/useConfirm.ts]
+- [x] [Patch] ConfirmDialog aria-labelledby 固定 id;ToastHost 子项去 role=alert(解嵌套 live region)
+- [x] [Patch] StatusBadge 去 role=status 噪音;queued 文案 排队中→排队(冻结六词)[web/components/ui/StatusBadge.vue]
+- [x] [Patch] useToast 定时器 clearTimeout 清理 [web/composables/useToast.ts]
+**deferred:** Toast 堆叠上限 · ProgressBar NaN · 焦点还原已卸载元素 · Tooltip 触屏 · FormField 多错误

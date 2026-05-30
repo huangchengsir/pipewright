@@ -58,3 +58,10 @@ As a 管理员,I want 敏感操作写入 append-only 审计、运行日志落盘
 - **AC-SEC-03/04 回归测试必须真跑过**(删本地 sink 后远端完整 · echo secret→[MASKED])。
 - 真二进制:做一次改凭据 → `GET /api/audit` 见 `credential_create` 一行,detail 无明文 · DB `audit_log` UPDATE 被 trigger 拒。
 - 真浏览器:保险库设置页审计时间线渲染真实条目(非占位)+ 截图审 UI。
+
+## Review Findings (code-review 2026-05-30,9-agent 三层对抗)
+**已修 patch:**
+- [x] [Patch] recordAudit 本地写失败记日志(损 AC-SEC-03 完整性可观测)[httpapi/audit.go]
+- [x] [Patch] 审计列表 503 错误码 internal → audit_unavailable [httpapi/audit.go]
+**deferred(见 deferred-work.md):**
+- [x] [Defer] audit Masker 生产路径从未 RegisterSecret → detail 脱敏兜底空跑(当前无泄漏)

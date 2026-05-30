@@ -27,3 +27,26 @@
 - **globMatch `*` 跨 `/` 过度匹配 + matchBranch 首条命中无优先级**(`internal/trigger/receiver.go`):`release/*` 命中 `release/a/b/c`。明确单段语义或 UX 说明 + 显式映射优先级。
 - **webhook_deliveries 去重表无 TTL/清理**:长期运行无界增长。加保留期清理任务。
 - **删除项目不取消在跑 run / SSRF 私网策略 / 真实 runner 并发**等见各 story Review Findings 与本轮 patch。
+
+## Deferred from: code review of 1-4/1-6/1-7/2-2/2-4 (2026-05-30, 9-agent 三层对抗)
+**1-7 账户/会话:**
+- 会话无绝对生命周期上限(仅滑动过期)— 失窃 token 持续使用则永不过期。如需硬上限按 created_at 加 absolute cap。
+- SessionID 16-hex(64bit)前缀碰撞未处理(撤销 break-first / 列表同 id)— 概率极低,留观察。
+- 并发改密 + 撤销当前会话无原子性(各自独立 DELETE)— 单管理员低危。
+- `internal/auth` 缺领域层单测(ChangePassword/会话仅 httpapi 集成覆盖)— 补 session_test.go。
+**1-4 审计:**
+- audit Masker 在生产路径从未 RegisterSecret → detail 脱敏兜底空跑(当前各 handler 只放元数据,无泄漏;未来 handler 往 detail 放含 secret 字段才触发)。需在那时注册或保持人工纪律。
+**2-2/2-4 流水线:**
+- 并发保存同项目 = 静默丢更新(无乐观锁/etag)— 单管理员低危;多 tab 需 If-Match。
+- maskRegistry 有冒号路径暴露冒号前整段(按 spec「用户名可见」设计;若前段敏感则泄漏)。
+- targetServerIds 不去重(留 4-1 服务器存在性校验一起做)。
+- 跨 build/env 作用域同名变量静默并存(覆盖语义未定义)。
+- 跨 tab 编辑切走保存丢未保存草稿(无 dirty 拦截/提示)。
+- registry type 非空但 url 空可存(留 2-6 完整校验 FR-9)。
+- job.config 前端 Record<string,string> vs 后端 map[string]any(非字符串值会被强转;当前写者均字符串,latent)。
+**1-6 组件库:**
+- Toast 无堆叠上限(error 永不自动消失,可撑满视口)。
+- ProgressBar value=NaN → "NaN%"/aria-valuenow=NaN(上游 total=0 时)。
+- ConfirmDialog 焦点还原到可能已卸载元素 / 焦点陷阱无可聚焦元素兜底。
+- AppTooltip 触屏不可达(仅 hover/focus)。
+- FormField 单错误(不支持多条校验错误)。

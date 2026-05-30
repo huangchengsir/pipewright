@@ -93,3 +93,12 @@ Base:认证保护(`requireAuth`),写方法过 `requireCSRF`(双提交 `X-CSRF-To
 - 前端 `vue-tsc` 0 错 + `vite build` 成功。
 - **真二进制 API 冒烟**(就绪轮询):GET 惰性默认 4 阶段 + yaml 非空 · PUT 增删阶段/任务往返 · PUT 空阶段名 422 · PUT 重复 id 422 · 无 CSRF 403 · 未认证 401 · 不存在项目 404。
 - **真浏览器 E2E**(`.sky-aitest/runs/pipeline-check/`,headless chromium):登录回归 · 项目卡「配置」进 4-tab · 流水线编排画布渲染(4 阶段 + 曲线连线可见)· 点任务卡 → 抽屉就地展开 · 添加阶段/任务 · 保存草稿 → 刷新仍在 · 触发 tab 复用正常 · 变量/环境 tab 占位 · **截图肉眼审 UI 质量**(连线优美、内容铺满、无 AI 模板感)。
+
+## Review Findings (code-review 2026-05-30,9-agent 三层对抗)
+**已修 patch:**
+- [x] [Patch] pipeline.Get 并发删项目 sql.ErrNoRows → project_not_found(原 500)[pipeline/pipeline.go]
+- [x] [Patch] 源阶段不变式:Save 拒无 source 阶段 spec(防空 stages 抹仓库引用)[pipeline/pipeline.go]
+- [x] [Patch] JobDrawer objectToKV null 守卫 [web/components/pipeline/JobDrawer.vue]
+- [x] [Patch] PipelineCanvas/Vars/Env 双向绑定无限循环(已在实现期修,本轮复核守卫完整)
+**deferred:** 并发保存丢更新(乐观锁) · job.config TS/Go 类型不匹配 · 跨 tab 未保存草稿
+**Acceptance:无违反**(4-tab/抽屉就地/曲线/spec+YAML/冻结 DTO 全合规)

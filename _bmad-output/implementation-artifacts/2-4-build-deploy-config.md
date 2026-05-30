@@ -79,3 +79,11 @@ Base:认证保护,写过 CSRF,`MaxBytesReader` 256KB。错误体 `{"error":{"cod
 - **前端必跑 `npm --prefix web run typecheck`(不是 build!)** + build。
 - 真二进制(种子项目+凭据):GET 惰性默认 · PUT 构建模型 A/B 切换往返 · 含 secret 引用 var 往返(响应掩码,**裸 DB 无明文**)· 引用不存在凭据→422 · 坏 model/artifactType→422 · 无 CSRF 403 · 未认证 401。
 - 真浏览器:/pipeline → 变量与缓存 tab(模型切换/产物/变量含 secret 凭据下拉掩码/缓存)· 环境与凭据 tab(环境/目标服务器占位/环境变量/镜像仓库凭据下拉)· 保存往返 · DOM 无明文 · 截图肉眼审质量。
+
+## Review Findings (code-review 2026-05-30,9-agent 三层对抗)
+**已修 patch:**
+- [x] [Patch][D1] vault.Delete 在用守卫:被 pipeline_settings/项目 FK 引用的凭据 → 409 credential_in_use [vault/vault.go]
+- [x] [Patch] 加 vault.Exists 仅查存在,ensureCredentialExists 不再解密/刷 last_used_at [vault/vault.go, pipeline/settings.go]
+- [x] [Patch] maskRegistry 无冒号纯 token 掩码泄明文(实现期修 + 本轮确认)[vault/masker.go]
+**deferred:** targetServerIds 去重(→4-1) · registry url 空可存(→2-6) · 跨作用域变量同名 · maskRegistry 冒号路径前段暴露
+**Acceptance:无违反**(secret 仅 credentialId 引用、settings DTO 冻结、vault 校验存在性全合规)

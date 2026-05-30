@@ -123,8 +123,10 @@ func (s *service) deployReleaseOne(ctx context.Context, srv *target.Server, a ru
 		return finishFailed(res, failMsg)
 	}
 
-	// 3) 原子切换 current 软链 → 本次发布(ln -sfn 幂等;切换瞬时,零停机)。
-	if failMsg, ok := s.runStep(execCtx, srv.ID, [][]string{{"ln", "-sfn", release, current}}); !ok {
+	// 3) **真·原子**切换 current 软链 → 本次发布(code-review P2)。
+	// `ln -sfn` 在 current 已存在时是 unlink+symlink 两步,中间有 current 不存在的窗口(并发请求 404),
+	// 破坏「零停机」。改为「ln 到临时名 + `mv -T` 原子 rename」:rename(2) 是 POSIX 原子,无窗口。
+	if failMsg, ok := s.runStep(execCtx, srv.ID, atomicSymlinkCmds(release, current)); !ok {
 		return finishFailed(res, failMsg)
 	}
 
@@ -165,8 +167,14 @@ func (s *service) rollback(ctx context.Context, srv *target.Server, res TargetRe
 		return res
 	}
 
-	// 回滚:把 current 软链切回上一发布(ln -sfn 幂等)。
-	_, rbErr := s.targets.Exec(ctx, srv.ID, []string{"ln", "-sfn", prev, current})
+	// 回滚:把 current 软链原子切回上一发布(code-review P2:同样 ln tmp + mv -T,避免回滚窗口)。
+	var rbErr error
+	for _, cmd := range atomicSymlinkCmds(prev, current) {
+		if _, e := s.targets.Exec(ctx, srv.ID, cmd); e != nil {
+			rbErr = e
+			break
+		}
+	}
 	res.Status = run.TargetRolledBack
 	prevName := path.Base(prev)
 	if rbErr != nil {
@@ -208,9 +216,11 @@ func (s *service) pruneReleases(ctx context.Context, serverID, releasesDir, curR
 	}
 	// 固定脚本:列 releasesDir 下直接子目录(按 mtime 新→旧),跳过 current 与 prev,
 	// 保留前 keep 个,其余 rm -rf。目录 / 保留名 / keep 作位置参数($0..$3),绝不拼进脚本体。
+	// code-review P3:`for d in $(ls)` 默认按空白词分裂 + 路径名展开(glob)→ 含空格/`*` 的目录会
+	// 拆错或 `rm -rf` 误删。`set -f` 禁 glob + `IFS=换行` 只按行分(不拆空格),且 for(非管道)保留 n 计数。
 	script := `dir="$0"; keep="$1"; cur="$2"; prev="$3"; ` +
 		`[ -d "$dir" ] || exit 0; ` +
-		`n=0; ` +
+		"set -f; IFS='\n'; n=0; " +
 		`for d in $(ls -1t "$dir" 2>/dev/null); do ` +
 		`  [ -d "$dir/$d" ] || continue; ` +
 		`  if [ "$d" = "$cur" ] || [ "$d" = "$prev" ]; then continue; fi; ` +
@@ -220,6 +230,17 @@ func (s *service) pruneReleases(ctx context.Context, serverID, releasesDir, curR
 	_, _ = s.targets.Exec(ctx, serverID, []string{
 		"sh", "-c", script, releasesDir, strconv.Itoa(keep), curRunID, prevName,
 	})
+}
+
+// atomicSymlinkCmds 返回「原子替换软链 link → target」的命令序列(code-review P2):
+// `ln -sfn target link.tmp`(新建临时软链,不碰 link)+ `mv -T link.tmp link`(rename 原子替换,
+// `-T` 防 link 为目录软链时把 tmp 移进目标目录)。避免 `ln -sfn` 直接覆盖的 unlink+symlink 窗口。
+func atomicSymlinkCmds(target, link string) [][]string {
+	tmp := link + ".tmp"
+	return [][]string{
+		{"ln", "-sfn", target, tmp},
+		{"mv", "-T", tmp, link},
+	}
 }
 
 // runStep 顺序执行一组 array 命令;任一执行错误 / 非零退出 → 返回 (人读 message, false)。

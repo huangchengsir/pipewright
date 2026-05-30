@@ -38,8 +38,9 @@ const (
 	defaultHealthInterval = 3 * time.Second
 	defaultHealthTimeout  = 5 * time.Second
 
-	maxHealthRetries = 20
-	maxHealthTimeout = 60 * time.Second
+	maxHealthRetries  = 20
+	maxHealthTimeout  = 60 * time.Second
+	maxHealthInterval = 60 * time.Second // code-review P7:间隔上限,防 sleep 炸弹
 )
 
 // HealthCheck 是一次部署后健康探测的配置(对齐 deploy 请求 deployConfig.healthCheck 子结构,冻结)。
@@ -86,12 +87,18 @@ func (hc *HealthCheck) retries() int {
 	return n
 }
 
-// interval 归一重试间隔(<0 → 默认;0 合法表示无间隔)。
+// interval 归一并夹紧重试间隔(<0 → 默认;0 合法表示无间隔;> 上限 → 上限)。
+// code-review P7:retries/timeout 都夹了上限,interval 之前漏夹 → 可传 86400 当 sleep 炸弹;
+// 补 maxHealthInterval 上限,三参数夹紧自洽。
 func (hc *HealthCheck) interval() time.Duration {
 	if hc.IntervalSeconds < 0 {
 		return defaultHealthInterval
 	}
-	return time.Duration(hc.IntervalSeconds) * time.Second
+	d := time.Duration(hc.IntervalSeconds) * time.Second
+	if d > maxHealthInterval {
+		d = maxHealthInterval
+	}
+	return d
 }
 
 // timeout 归一并夹紧单次探测超时(<=0 → 默认;> 上限 → 上限)。

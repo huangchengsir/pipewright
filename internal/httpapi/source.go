@@ -52,13 +52,17 @@ type sourceTreeDTO struct {
 }
 
 // sourceBlobDTO 是 blob 端点响应(冻结)。binary=true 时 content 空、不返原始字节流。
+// degraded=true(code-review P6)= 克隆失败的降级响应,与「真实空文件」区分(否则前端误判空文件
+// 显空白编辑器);前端据 degraded 标志而非 content==""&&size>0 推断。
 type sourceBlobDTO struct {
-	Ref       string `json:"ref"`
-	Path      string `json:"path"`
-	Size      int64  `json:"size"`
-	Binary    bool   `json:"binary"`
-	Truncated bool   `json:"truncated"`
-	Content   string `json:"content"`
+	Ref            string `json:"ref"`
+	Path           string `json:"path"`
+	Size           int64  `json:"size"`
+	Binary         bool   `json:"binary"`
+	Truncated      bool   `json:"truncated"`
+	Content        string `json:"content"`
+	Degraded       bool   `json:"degraded,omitempty"`
+	DegradedReason string `json:"degradedReason,omitempty"`
 }
 
 // SourceReader 抽象「按 ref 读仓库树/blob」能力(go-git 浅克隆只读;注入便于测试)。
@@ -374,8 +378,12 @@ func makeSourceBlobHandler(d sourceDeps) http.HandlerFunc {
 			case errors.Is(err, errSourcePathNotFound):
 				writeError(w, http.StatusNotFound, "path_not_found", "文件不存在")
 			case errors.Is(err, errSourceCloneFailed):
-				// 克隆失败优雅降级:200 + 空内容(绝不 500;与 tree degraded 一致)。
-				writeJSON(w, http.StatusOK, sourceBlobDTO{Ref: ref, Path: cleanPath, Content: ""})
+				// 克隆失败优雅降级:200 + degraded 标志(code-review P6:与「真实空文件」区分,
+				// 前端据此显「源码暂不可读」而非空白编辑器;与 tree degraded 一致)。绝不 500。
+				writeJSON(w, http.StatusOK, sourceBlobDTO{
+					Ref: ref, Path: cleanPath, Content: "",
+					Degraded: true, DegradedReason: "仓库克隆失败,暂时无法读取该文件",
+				})
 			default:
 				writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
 			}

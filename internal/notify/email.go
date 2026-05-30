@@ -72,15 +72,28 @@ func splitRecipients(to string) []string {
 	return out
 }
 
+// sanitizeHeader 去除邮件头值里的 CR/LF(code-review P4:防 SMTP 头注入)。
+// Subject 来自用户模板渲染输出、From/To 来自渠道配置;任一含 `\r`/`\n` 可注入伪造头
+// (Bcc/Content-Type/提前结束头区注入正文)。头值里换行一律剥除(替换为空格)。
+func sanitizeHeader(s string) string {
+	return strings.NewReplacer("\r", " ", "\n", " ").Replace(s)
+}
+
 // buildMessage 构造极简 RFC 822 邮件(纯文本正文 + Fields 附加)。
 func buildMessage(from string, to []string, payload Payload) []byte {
 	subject := payload.Title
 	if subject == "" {
 		subject = "Pipewright 通知"
 	}
+	subject = sanitizeHeader(subject)
+	safeFrom := sanitizeHeader(from)
+	safeTo := make([]string, len(to))
+	for i, r := range to {
+		safeTo[i] = sanitizeHeader(r)
+	}
 	var b strings.Builder
-	b.WriteString("From: " + from + "\r\n")
-	b.WriteString("To: " + strings.Join(to, ", ") + "\r\n")
+	b.WriteString("From: " + safeFrom + "\r\n")
+	b.WriteString("To: " + strings.Join(safeTo, ", ") + "\r\n")
 	b.WriteString("Subject: " + subject + "\r\n")
 	b.WriteString("MIME-Version: 1.0\r\n")
 	b.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")

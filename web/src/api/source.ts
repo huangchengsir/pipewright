@@ -48,6 +48,10 @@ export interface SourceBlob {
   truncated: boolean
   /** 文本内容(binary 时为空)。 */
   content: string
+  /** true ⇒ 克隆失败的降级响应(code-review P6:与真实空文件区分,前端显「源码暂不可读」)。 */
+  degraded?: boolean
+  /** degraded 人读原因(可选)。 */
+  degradedReason?: string
 }
 
 export interface SourceQuery {

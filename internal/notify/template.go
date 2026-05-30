@@ -398,6 +398,9 @@ func scanTemplate(sc scanner) (*Template, error) {
 // AWS/GitHub 风格 token、PEM 私钥头。非穷尽,但确保通知正文不直出明文密钥。
 var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(pass(word)?|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|pwd)\b\s*[:=]\s*\S+`),
+	// code-review P9:复合标识符里的 token/secret/auth(如 `_authToken=`、`registry_token=`、
+	// `X-Auth-Token:`)——`\btoken\b` 因前置词字符无边界而漏掉(如 npm `:_authToken=...`),此条兜住。
+	regexp.MustCompile(`(?i)[A-Za-z0-9_.\-]*(token|secret|passwd|password|apikey|auth)[A-Za-z0-9_.\-]*\s*[:=]\s*\S+`),
 	regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._\-]+`),
 	regexp.MustCompile(`(?i)\bBasic\s+[A-Za-z0-9+/=]+`),
 	regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{20,}`),

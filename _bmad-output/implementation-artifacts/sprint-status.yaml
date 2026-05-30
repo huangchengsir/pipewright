@@ -54,7 +54,7 @@ development_status:
   1-4-audit-and-secret-masking: review
   1-5-app-shell-theming: done
   1-6-component-state-library: review
-  1-7-account-and-onboarding: in-progress
+  1-7-account-and-onboarding: review
   epic-1-retrospective: optional
 
   # ===== Epic 2: 项目与流水线配置(含 AI 生成) =====

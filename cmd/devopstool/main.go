@@ -15,9 +15,11 @@ import (
 	"time"
 
 	root "github.com/huangjiawei/devopstool"
+	"github.com/huangjiawei/devopstool/internal/audit"
 	"github.com/huangjiawei/devopstool/internal/auth"
 	"github.com/huangjiawei/devopstool/internal/config"
 	"github.com/huangjiawei/devopstool/internal/httpapi"
+	"github.com/huangjiawei/devopstool/internal/mask"
 	"github.com/huangjiawei/devopstool/internal/pipeline"
 	"github.com/huangjiawei/devopstool/internal/project"
 	"github.com/huangjiawei/devopstool/internal/run"
@@ -94,9 +96,22 @@ func main() {
 	// 解析 Gitee 投递、按 events+分支映射匹配、去重后经 RunService 创建运行(入 pool 调度)。
 	webhookReceiver := trigger.NewReceiver(st.DB, credVault, httpapi.NewRunCreator(runSvc))
 
+	// 装配审计地基(Story 1.4):敏感操作成功后写 append-only 审计表(SQLite trigger 硬拦
+	// UPDATE/DELETE)。Masker 在 detail 落库前脱敏(绝不写明文 secret);可选远端 sink
+	// (DEVOPSTOOL_AUDIT_SINK)使本地被删后远端仍完整。sink 失败降级不阻断主操作。
+	auditMasker := mask.NewMasker()
+	var auditSink audit.Sink
+	if sink, err := audit.SinkFromEnv(); err != nil {
+		log.Printf("[audit] 警告:远端 sink 配置无效(%v),仅启用本地审计。", err)
+	} else if sink != nil {
+		auditSink = sink
+		log.Printf("[audit] 远端审计 sink 已启用(DEVOPSTOOL_AUDIT_SINK)")
+	}
+	auditRec := audit.New(st.DB, auditMasker, auditSink)
+
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver)),
+		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;

@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/huangjiawei/devopstool/internal/audit"
 	"github.com/huangjiawei/devopstool/internal/auth"
 	"github.com/huangjiawei/devopstool/internal/pipeline"
 	"github.com/huangjiawei/devopstool/internal/project"
@@ -46,6 +47,7 @@ type options struct {
 	runs      run.Service
 	runSub    runSubscriber
 	receiver  *trigger.Receiver
+	audit     audit.Recorder
 }
 
 // WithVault 注入凭据保险库,挂载 /api/credentials* 路由。
@@ -88,6 +90,12 @@ func WithWebhooks(rc *trigger.Receiver) Option {
 	return func(o *options) { o.receiver = rc }
 }
 
+// WithAudit 注入审计 Recorder(Story 1.4),挂载 GET /api/audit 查询端点,并令既有
+// 敏感操作 handler 在业务成功后追加审计行。不传则 /api/audit 返回 503,且写操作不审计。
+func WithAudit(rec audit.Recorder) Option {
+	return func(o *options) { o.audit = rec }
+}
+
 // New 构建 HTTP 处理器:健康端点 + Auth API + (可选)凭据 API + 内嵌 SPA 静态托管。
 // webFS 是已嵌入的前端构建产物(根为 web/dist)。
 // authn 可选;为 nil 时认证中间件一律返回 401(仅便于测试静态服务)。
@@ -128,28 +136,35 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 			return requireCSRF(next)
 		})
 
+		// 审计 Recorder(Story 1.4):传给既有敏感操作 handler,业务成功后追加审计行。
+		// 为 nil 时 handler 跳过审计(不阻断业务)。
+		aud := o.audit
+
+		// 审计查询(Story 1.4):只读 + 认证保护 + 分页 + 过滤。
+		ar.Get("/audit", makeListAuditHandler(aud))
+
 		// 凭据保险库(Story 1.3)。v 为 nil 时 handler 返回 vault_unconfigured。
 		v := o.vault
 		ar.Get("/credentials", makeListCredentialsHandler(v))
-		ar.Post("/credentials", makeCreateCredentialHandler(v))
-		ar.Patch("/credentials/{id}", makeUpdateCredentialHandler(v))
-		ar.Delete("/credentials/{id}", makeDeleteCredentialHandler(v))
+		ar.Post("/credentials", makeCreateCredentialHandler(v, aud))
+		ar.Patch("/credentials/{id}", makeUpdateCredentialHandler(v, aud))
+		ar.Delete("/credentials/{id}", makeDeleteCredentialHandler(v, aud))
 
 		// 项目接入与列表(Story 2.1)。p 为 nil 时 handler 返回 503。
 		// test-clone 须在 {id} 路由之前注册,否则被 /projects/{id} 吞掉。
 		p := o.projects
 		ar.Get("/projects", makeListProjectsHandler(p))
-		ar.Post("/projects", makeCreateProjectHandler(p))
+		ar.Post("/projects", makeCreateProjectHandler(p, aud))
 		ar.Post("/projects/test-clone", makeTestCloneHandler(p))
-		ar.Patch("/projects/{id}", makeUpdateProjectHandler(p))
-		ar.Delete("/projects/{id}", makeDeleteProjectHandler(p))
+		ar.Patch("/projects/{id}", makeUpdateProjectHandler(p, aud))
+		ar.Delete("/projects/{id}", makeDeleteProjectHandler(p, aud))
 
 		// 触发设置与分支映射(Story 2.3)。t 为 nil 时 handler 返回 503。
 		// secret/reset 须在通用 trigger 路由之外单独注册;均过 auth + 写方法 CSRF。
 		t := o.triggers
 		ar.Get("/projects/{id}/trigger", makeGetTriggerHandler(t))
 		ar.Put("/projects/{id}/trigger", makeSaveTriggerHandler(t))
-		ar.Post("/projects/{id}/trigger/secret/reset", makeResetTriggerSecretHandler(t))
+		ar.Post("/projects/{id}/trigger/secret/reset", makeResetTriggerSecretHandler(t, aud))
 
 		// 流水线编排配置(Story 2.2)。pl 为 nil 时 handler 返回 503。
 		// 与 /projects/{id}/trigger 同在 {id} 路由组内并存(不会被 /projects/{id} 吞)。
@@ -167,7 +182,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Post("/runs/{id}/cancel", makeCancelRunHandler(rs))
 
 		// 手动触发创建运行(Story 3.2):认证 + CSRF;actor=admin;返 201 run-detail DTO。
-		ar.Post("/projects/{id}/runs", makeManualRunHandler(rs))
+		ar.Post("/projects/{id}/runs", makeManualRunHandler(rs, aud))
 
 		// 后续 story 在此挂载其他 API 路由。
 	})

@@ -8,6 +8,7 @@ import {
 } from '../../api/credentials'
 import type { Credential, CredentialType, CreateCredentialInput, UpdateCredentialInput } from '../../api/credentials'
 import { HttpError } from '../../api/http'
+import AuditTimeline from '../../components/AuditTimeline.vue'
 
 // ─── state ──────────────────────────────────────────────────────────────────
 
@@ -462,24 +463,8 @@ async function copyReference(c: Credential): Promise<void> {
       </template>
     </div>
 
-    <!-- ─── Audit timeline placeholder (Story 1.4) ──────────────────────── -->
-    <div class="panel audit-placeholder" aria-label="审计日志占位">
-      <div class="panel-head">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true">
-          <path d="M12 8v4l3 2"/><circle cx="12" cy="12" r="9"/>
-        </svg>
-        审计日志
-      </div>
-      <div class="audit-stub">
-        <div class="audit-stub-icon" aria-hidden="true">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-            <path d="M12 8v4l3 2"/><circle cx="12" cy="12" r="9"/>
-          </svg>
-        </div>
-        <p class="audit-stub-label">审计日志 — 将在 Story 1.4 实现</p>
-        <p class="audit-stub-hint">记录所有凭据的读取、创建、修改与删除操作,含操作者、时间与来源 IP。</p>
-      </div>
-    </div>
+    <!-- ─── Audit timeline (Story 1.4) ──────────────────────────────────── -->
+    <AuditTimeline />
   </div>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
@@ -1098,45 +1083,6 @@ async function copyReference(c: Credential): Promise<void> {
 
 .banner-retry:hover {
   opacity: 0.8;
-}
-
-/* ─── audit placeholder ───────────────────────────────────────────────────── */
-.audit-placeholder .panel-head {
-  color: var(--color-dim);
-}
-
-.audit-stub {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 36px 32px;
-  text-align: center;
-}
-
-.audit-stub-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: var(--rounded-xl);
-  background: var(--color-inset);
-  border: 1.5px dashed var(--color-border-strong);
-  display: grid;
-  place-items: center;
-  color: var(--color-faint);
-  margin-bottom: 2px;
-}
-
-.audit-stub-label {
-  font-size: 0.86rem;
-  font-weight: 600;
-  color: var(--color-dim);
-}
-
-.audit-stub-hint {
-  font-size: 0.78rem;
-  color: var(--color-faint);
-  max-width: 44ch;
-  line-height: 1.5;
 }
 
 /* ─── buttons ─────────────────────────────────────────────────────────────── */

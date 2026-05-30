@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/huangjiawei/devopstool/internal/audit"
 	"github.com/huangjiawei/devopstool/internal/run"
 	"github.com/huangjiawei/devopstool/internal/trigger"
 )
@@ -105,7 +106,8 @@ func makeWebhookHandler(rc *trigger.Receiver) http.HandlerFunc {
 
 // makeManualRunHandler 返回 POST /api/projects/{id}/runs handler(认证 + CSRF;手动触发）。
 // body {branch, commit?};actor=admin;成功 → 201 冻结 run-detail DTO。
-func makeManualRunHandler(svc run.Service) http.HandlerFunc {
+// 成功后追加 run_trigger_manual 审计(detail 记分支/commit/运行 id)。
+func makeManualRunHandler(svc run.Service, aud audit.Recorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if svc == nil {
 			writeError(w, http.StatusServiceUnavailable, "internal", "运行服务未初始化")
@@ -127,16 +129,25 @@ func makeManualRunHandler(svc run.Service) http.HandlerFunc {
 			return
 		}
 
+		commit := strings.TrimSpace(req.Commit)
 		rn, err := svc.Create(r.Context(), id, run.Trigger{
 			Type:   run.TriggerManual,
 			Branch: branch,
-			Commit: strings.TrimSpace(req.Commit),
+			Commit: commit,
 			Actor:  "admin",
 		})
 		if err != nil {
 			writeRunError(w, err)
 			return
 		}
+		recordAudit(r.Context(), aud, audit.Entry{
+			Actor:      auditActor,
+			Action:     audit.ActionRunTriggerManual,
+			TargetType: audit.TargetRun,
+			TargetID:   rn.ID,
+			Detail:     map[string]any{"projectId": id, "branch": branch, "commit": commit},
+			IP:         clientIP(r),
+		})
 		writeJSON(w, http.StatusCreated, toRunDetailDTO(rn))
 	}
 }

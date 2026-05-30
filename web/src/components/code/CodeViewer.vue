@@ -69,7 +69,11 @@ async function ensureMonaco(): Promise<typeof MonacoNS | null> {
   try {
     // worker 接线须在创建 editor 前装好(幂等)。
     installMonacoEnvironment()
-    // 动态 import → 独立 chunk(NFR-4)。
+    // 动态 import → 独立 chunk(NFR-4):monaco 不进主 bundle,仅打开文件时按需加载。
+    // 【deferred / 7-4 评审】全量 monaco 会让 vite 产出 TS/CSS/HTML/JSON 语言服务 worker
+    // (ts.worker ~7MB 等),它们被 go:embed 进二进制(+~11MB,23M→36M),但只读高亮用
+    // 主线程 Monarch、运行时从不加载这些 worker → 纯死重。瘦身法(editor.api + 按需
+    // basic-languages/<lang> 逐语言注册,绕开聚合路径)留 7-4 评审正经做 + 浏览器验高亮不挂。
     monaco = await import('monaco-editor')
     return monaco
   } catch {

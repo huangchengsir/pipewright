@@ -82,29 +82,62 @@ type CreateRouteInput struct {
 
 // RouteService 定义事件路由 CRUD + 引擎(冻结契约,供 HTTP 层与 NotifyHook 消费)。
 type RouteService interface {
-	// ListRoutes 返回所有路由(按 event 再按 createdAt 升序;稳定排序)。
+	// ListRoutes 返回所有全局路由(projectId 为空;按 event 再按 createdAt 升序;稳定排序)。
+	// 兼容 5-2 调用方;5-4 加项目维度过滤经 ListRoutesForProject。
 	ListRoutes(ctx context.Context) ([]Route, error)
+	// ListRoutesForProject 返回指定作用域路由(Story 5.4):projectID 非空 → 仅该项目级路由;
+	// projectID 空 → 仅全局路由(project_id IS NULL)。稳定排序同 ListRoutes。
+	ListRoutesForProject(ctx context.Context, projectID string) ([]Route, error)
 	// CreateRoute 校验事件枚举 + 渠道存在性后持久化一条路由。
 	// 事件非法 → ErrInvalidEvent;渠道不存在 → ErrRouteChannelNotFound。
+	// in.ProjectID 非空 = 项目级路由(5-4);空 = 全局默认。
 	CreateRoute(ctx context.Context, in CreateRouteInput) (*Route, error)
 	// DeleteRoute 删除一条路由。不存在 → ErrRouteNotFound。
 	DeleteRoute(ctx context.Context, id string) error
-	// RouteEvent 路由一次事件:查该 event 的所有 enabled route → 对每个 channelID 调
+	// RouteEvent 路由一次事件(全局):查该 event 的所有 enabled 全局 route → 对每个 channelID 调
 	// SendVia 发送 payload。**未配置任何路由 → 不发送(返回 nil)**(FR-20)。
 	// best-effort:单渠道发送失败仅记日志、续发其余;整体返回 nil(绝不阻断调用方)。
+	// 兼容 5-2 全局路径;5-4 项目维度经 RouteEventForProject。
 	RouteEvent(ctx context.Context, event string, payload Payload) error
-	// RouteEventVars 路由一次事件并按渠道渲染模板(Story 5.3;FR-21):查 enabled route → 对每
-	// 渠道经 RenderPayload(最具体匹配模板;无则平台默认)产 Payload → SendVia。
+	// RouteEventVars 路由一次事件并按渠道渲染模板(Story 5.3;FR-21;全局):查 enabled 全局 route →
+	// 对每渠道经 RenderPayload(最具体匹配模板;无则平台默认)产 Payload → SendVia。
 	// 未配置任何路由 → 不发送;best-effort,始终返回 nil。
 	RouteEventVars(ctx context.Context, event string, vars TemplateVars) error
+	// RouteEventForProject 按项目维度路由一次事件并渲染模板(Story 5.4;FR-20 细粒度,签名冻结)。
+	//
+	// **整体覆盖语义**:先查 projectID + event 的 enabled 项目级路由;非空 → **只**用项目级
+	// (不与全局合并);空 → 回退全局(project_id IS NULL)路由。projectID 为空时等价 RouteEventVars
+	// (全局路径)。未配置任何路由 → 不发送;best-effort,始终返回 nil。
+	RouteEventForProject(ctx context.Context, projectID, event string, vars TemplateVars) error
 }
 
-// ListRoutes 实现 RouteService.ListRoutes。
+// ListRoutes 实现 RouteService.ListRoutes(全局路由,兼容 5-2)。
 func (s *service) ListRoutes(ctx context.Context) ([]Route, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, project_id, event, channel_id, enabled, created_at
-		 FROM notification_routes ORDER BY event, created_at, id`,
+	return s.ListRoutesForProject(ctx, "")
+}
+
+// ListRoutesForProject 实现 RouteService.ListRoutesForProject(Story 5.4 作用域过滤)。
+func (s *service) ListRoutesForProject(ctx context.Context, projectID string) ([]Route, error) {
+	projectID = strings.TrimSpace(projectID)
+	var (
+		rows *sql.Rows
+		err  error
 	)
+	if projectID == "" {
+		// 全局路由:project_id IS NULL。
+		rows, err = s.db.QueryContext(ctx,
+			`SELECT id, project_id, event, channel_id, enabled, created_at
+			 FROM notification_routes WHERE project_id IS NULL
+			 ORDER BY event, created_at, id`,
+		)
+	} else {
+		// 项目级路由:project_id = ?。
+		rows, err = s.db.QueryContext(ctx,
+			`SELECT id, project_id, event, channel_id, enabled, created_at
+			 FROM notification_routes WHERE project_id = ?
+			 ORDER BY event, created_at, id`, projectID,
+		)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("notify: list routes: %w", err)
 	}
@@ -145,10 +178,11 @@ func (s *service) CreateRoute(ctx context.Context, in CreateRouteInput) (*Route,
 	id := uuid.NewString()
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
-	// 本期 project_id 恒空(全局默认);5-4 填充项目维度。
+	// project_id:非空 = 项目级覆盖(5-4);空 = 全局默认(存 NULL)。
+	scopedProject := strings.TrimSpace(in.ProjectID)
 	var projectID any
-	if strings.TrimSpace(in.ProjectID) != "" {
-		projectID = strings.TrimSpace(in.ProjectID)
+	if scopedProject != "" {
+		projectID = scopedProject
 	}
 
 	_, err := s.db.ExecContext(ctx,
@@ -162,6 +196,7 @@ func (s *service) CreateRoute(ctx context.Context, in CreateRouteInput) (*Route,
 
 	return &Route{
 		ID:        id,
+		ProjectID: scopedProject,
 		Event:     event,
 		ChannelID: channelID,
 		Enabled:   in.Enabled,
@@ -217,22 +252,73 @@ func (s *service) RouteEventVars(ctx context.Context, event string, vars Templat
 	return nil
 }
 
-// channelIDsForEvent 查该 event 的所有 enabled route 渠道 id(去重 + 稳定排序)。
+// RouteEventForProject 实现 RouteService.RouteEventForProject(Story 5.4;签名冻结)。
+//
+// **整体覆盖语义**:先查 projectID + event 的 enabled 项目级路由;非空 → **只**用项目级渠道集
+// (不与全局合并);空 → 回退全局(project_id IS NULL)路由。projectID 为空时直接走全局。
+// 渠道集确定后按渠道渲染模板(RenderPayload)→ SendVia。**未配置任何路由 → 不发送**;
+// best-effort:单渠道失败仅记日志、续发其余;整体始终返回 nil(绝不阻断调用方,NFR-10)。
+func (s *service) RouteEventForProject(ctx context.Context, projectID, event string, vars TemplateVars) error {
+	channelIDs := s.channelIDsForEventScoped(ctx, projectID, event)
+	for _, cid := range channelIDs {
+		payload := s.RenderPayload(ctx, event, cid, vars)
+		if derr := s.SendVia(ctx, cid, payload); derr != nil {
+			log.Printf("[notify] route event %q(project=%q): 渠道 %s 发送失败(已跳过续发):%v", event, projectID, cid, derr)
+		}
+	}
+	return nil
+}
+
+// channelIDsForEvent 查该 event 的所有 enabled **全局** route 渠道 id(去重 + 稳定排序;兼容 5-2)。
 // 未配置任何路由 / 查询失败 → 返回空(best-effort,不发不报错;FR-20)。
 func (s *service) channelIDsForEvent(ctx context.Context, event string) []string {
+	return s.channelIDsForEventScoped(ctx, "", event)
+}
+
+// channelIDsForEventScoped 按项目维度查 enabled route 渠道 id(Story 5.4;去重 + 稳定排序)。
+//
+// 整体覆盖:projectID 非空时**先**查该项目级路由,命中(非空)则只用项目级、不回退全局;
+// 项目级为空 → 回退全局(project_id IS NULL)。projectID 空时直接查全局。
+// 未配置任何路由 / 查询失败 → 返回空(best-effort,不发不报错;FR-20)。
+func (s *service) channelIDsForEventScoped(ctx context.Context, projectID, event string) []string {
 	if !validEvent(event) {
 		// 未知事件:防御性忽略(不发、不报错)。
 		log.Printf("[notify] route event 跳过:未知事件 %q", event)
 		return nil
 	}
 
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT channel_id FROM notification_routes
-		 WHERE event = ? AND enabled = 1`, event,
+	projectID = strings.TrimSpace(projectID)
+	if projectID != "" {
+		// 先查项目级:非空则整体覆盖(只用项目级),空则继续回退全局。
+		if cids := s.queryChannelIDs(ctx, projectID, event); len(cids) > 0 {
+			return cids
+		}
+	}
+	// 全局回退(project_id IS NULL)。
+	return s.queryChannelIDs(ctx, "", event)
+}
+
+// queryChannelIDs 查指定作用域(projectID 空 = 全局 IS NULL;非空 = 该项目)某 event 的 enabled
+// route 渠道 id(去重 + 稳定排序)。查询/扫描失败 → 返回空(best-effort)。
+func (s *service) queryChannelIDs(ctx context.Context, projectID, event string) []string {
+	var (
+		rows *sql.Rows
+		err  error
 	)
+	if projectID == "" {
+		rows, err = s.db.QueryContext(ctx,
+			`SELECT channel_id FROM notification_routes
+			 WHERE project_id IS NULL AND event = ? AND enabled = 1`, event,
+		)
+	} else {
+		rows, err = s.db.QueryContext(ctx,
+			`SELECT channel_id FROM notification_routes
+			 WHERE project_id = ? AND event = ? AND enabled = 1`, projectID, event,
+		)
+	}
 	if err != nil {
 		// 查询失败:best-effort,仅记日志(不阻断调用方)。
-		log.Printf("[notify] route event %q: 查询路由失败:%v", event, err)
+		log.Printf("[notify] route event %q(project=%q): 查询路由失败:%v", event, projectID, err)
 		return nil
 	}
 
@@ -241,7 +327,7 @@ func (s *service) channelIDsForEvent(ctx context.Context, event string) []string
 	for rows.Next() {
 		var cid string
 		if err := rows.Scan(&cid); err != nil {
-			log.Printf("[notify] route event %q: 扫描路由失败:%v", event, err)
+			log.Printf("[notify] route event %q(project=%q): 扫描路由失败:%v", event, projectID, err)
 			_ = rows.Close()
 			return nil
 		}

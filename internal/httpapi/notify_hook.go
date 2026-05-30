@@ -42,12 +42,13 @@ func NewNotifyHook(runs run.Service, notifySvc notify.Service) func(ctx context.
 		// 取失败仅记日志、用降级 vars(仅含事件/状态/runId)继续:通知 best-effort,不因取数
 		// 失败而完全不发。errorSummary 经 notify.MaskErrorSummary 尽力脱敏(绝无明文 secret)。
 		var (
-			projectName, branch, commit, errorSummary string
-			durationMs                                int64
+			projectID, projectName, branch, commit, errorSummary string
+			durationMs                                           int64
 		)
 		if r, err := runs.Get(hookCtx, runID); err != nil {
 			log.Printf("[notify] run %s: 取运行元数据失败(用降级 vars):%v", runID, err)
 		} else {
+			projectID = r.ProjectID
 			projectName = r.ProjectName
 			branch = r.Trigger.Branch
 			commit = r.Trigger.Commit
@@ -68,9 +69,10 @@ func NewNotifyHook(runs run.Service, notifySvc notify.Service) func(ctx context.
 			vars.DurationMs = strconv.FormatInt(durationMs, 10)
 		}
 
-		// 按渠道渲染模板(无模板 → 平台默认,5-2 行为不变)→ SendVia。RouteEventVars 始终返回
-		// nil;此处兜底防御。
-		if err := notifySvc.RouteEventVars(hookCtx, event, vars); err != nil {
+		// 按项目维度路由(Story 5.4):projectID 有项目级路由 → 整体覆盖(只走项目级);否则回退
+		// 全局。projectID 空(取数失败降级)→ 等价全局路径。按渠道渲染模板(无模板 → 平台默认,
+		// 5-2 行为不变)→ SendVia。RouteEventForProject 始终返回 nil;此处兜底防御。
+		if err := notifySvc.RouteEventForProject(hookCtx, projectID, event, vars); err != nil {
 			log.Printf("[notify] run %s: 事件 %s 路由 best-effort 失败:%v", runID, event, err)
 		}
 	}

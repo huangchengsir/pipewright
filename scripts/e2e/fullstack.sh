@@ -50,8 +50,26 @@ sqlite3 "$DB" "PRAGMA busy_timeout=5000; INSERT INTO projects(id,name,repo_url,d
   || { echo "seed 项目失败"; exit 1; }
 echo "  ✅ 项目「门户站 portal」就绪"
 
+echo "== 3b. seed 一个失败 run(给「触发诊断」旗舰流程;failure_log 含项目凭据明文以验脱敏)=="
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+FAILLOG="#8 ERROR: process \"/bin/sh -c pip install requests==99.99.99-x\" did not complete successfully: exit code 1' || char(10) || 'pip config set global.index-url https://ci:ghp_fs_e2e_tok@pypi.internal/simple"
+sqlite3 "$DB" "PRAGMA busy_timeout=5000; INSERT INTO pipeline_runs(id,project_id,status,trigger_branch,created_at,started_at,finished_at,failure_log) VALUES('fs-failrun','fs-proj','failed','main','${NOW}','${NOW}','${NOW}','${FAILLOG}');" >/dev/null || { echo "seed 失败 run 失败"; exit 1; }
+sqlite3 "$DB" "PRAGMA busy_timeout=5000; INSERT INTO run_steps(id,run_id,name,status,ordinal) VALUES('fs-s1','fs-failrun','拉取源码','success',0),('fs-s2','fs-failrun','构建','failed',1);" >/dev/null || true
+echo "  ✅ 失败 run「fs-failrun」就绪"
+
+# AI 配置(DeepSeek):仅当 DEEPSEEK_API_KEY 提供时,经真 API 配 → 启用 AI 诊断 e2e。key 不落库明文(vault 加密)。
+PW_AI=0
+if [ -n "${DEEPSEEK_API_KEY:-}" ]; then
+  ai_code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -X PUT "${BASE}/api/settings/ai" \
+    -H 'Content-Type: application/json' -H "X-CSRF-Token: ${CSRF}" \
+    -d "{\"provider\":\"openai\",\"baseUrl\":\"https://api.deepseek.com\",\"model\":\"deepseek-chat\",\"apiKey\":\"${DEEPSEEK_API_KEY}\",\"enabled\":true}")
+  [ "$ai_code" = 200 ] && { PW_AI=1; echo "  ✅ AI=DeepSeek 已配(启用诊断 e2e)"; } || echo "  ⚠️ AI 配置返回 $ai_code,跳过诊断 e2e"
+else
+  echo "  ℹ️ 未设 DEEPSEEK_API_KEY → 跳过 AI 诊断 e2e(其余照跑)"
+fi
+
 echo "== 4. Playwright 真 UI 打真后端(不 mock)=="
-( cd web && PW_BASE_URL="$BASE" PW_ADMIN_PW="$ADMIN_PW" npx playwright test --config playwright.real.config.ts )
+( cd web && PW_BASE_URL="$BASE" PW_ADMIN_PW="$ADMIN_PW" PW_AI="$PW_AI" npx playwright test --config playwright.real.config.ts )
 RC=$?
 
 echo ""

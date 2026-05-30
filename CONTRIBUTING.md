@@ -122,6 +122,32 @@ docs(readme): clarify master key handling
 
 ---
 
+## 分支规范 / Branching model
+
+主干为 `master`,**永远保持可构建、CI 全绿**;**禁止直接 push 到 `master`**,一切变更经 PR 合入。
+`master` is the trunk and must always build with green CI; **never push directly to `master`** — all changes land via PR.
+
+**一改动 = 一分支 = 一 PR**,合并后删分支;下次从最新 `master` 重新切。
+**One change = one branch = one PR.** Delete the branch after merge; branch off the latest `master` next time.
+
+分支命名(`<type>/<简短描述>`,kebab-case)/ Branch naming (`<type>/<short-desc>`, kebab-case):
+
+| 前缀 / Prefix | 用途 / Use |
+|---|---|
+| `feat/` | 新功能 / new feature |
+| `fix/` | bug 修复 / bug fix |
+| `docs/` | 文档 / docs only |
+| `refactor/` | 重构(无行为变化)/ refactor, no behavior change |
+| `chore/` | 构建 / CI / 依赖 / 杂项 / build, CI, deps, misc |
+
+示例 / Example:`feat/branch-env-mapping`、`fix/deploy-health-gate-timeout`。
+
+规则 / Rules:
+- 不要在一条分支上堆多个不相关改动;不要复用已合并的分支继续开发。
+  Don't pile unrelated changes onto one branch; don't keep developing on an already-merged branch.
+- 长期分支落后时用 rebase 跟上 `master`(`git pull --rebase origin master`)。
+  Rebase long-lived branches onto `master` (`git pull --rebase origin master`).
+
 ## Pull Request 流程 / PR workflow
 
 1. 从 `master` 切分支:`feat/...`、`fix/...`、`docs/...`。

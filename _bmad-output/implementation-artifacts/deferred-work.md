@@ -50,3 +50,7 @@
 - ConfirmDialog 焦点还原到可能已卸载元素 / 焦点陷阱无可聚焦元素兜底。
 - AppTooltip 触屏不可达(仅 hover/focus)。
 - FormField 单错误(不支持多条校验错误)。
+
+## Deferred from: 2-5 AI 生成流水线配置 (2026-05-30)
+- TriggersPanel apply 后不自动刷新(写入后端已成功,但面板自持加载,需切 tab 才见新分支映射)。修:给 TriggersPanel 加 expose({reload}) 经 templateRef 调,或 ProjectPipeline 加 triggersKey ref 触发重渲染。
+- 2-5 强 schema 校验交由各服务 Save + 2-6 校验兜底(本期不做)。

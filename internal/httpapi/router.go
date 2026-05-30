@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/huangjiawei/devopstool/internal/ai"
 	"github.com/huangjiawei/devopstool/internal/audit"
 	"github.com/huangjiawei/devopstool/internal/auth"
 	"github.com/huangjiawei/devopstool/internal/pipeline"
@@ -50,6 +51,7 @@ type options struct {
 	receiver         *trigger.Receiver
 	audit            audit.Recorder
 	account          accountService
+	aiSettings       ai.Service
 }
 
 // WithVault 注入凭据保险库,挂载 /api/credentials* 路由。
@@ -108,6 +110,13 @@ func WithAudit(rec audit.Recorder) Option {
 // (改口令 / 会话列表 / 撤销会话)。不传则相关端点返回 503。
 func WithAccount(s accountService) Option {
 	return func(o *options) { o.account = s }
+}
+
+// WithAISettings 注入可配置 AI 提供商服务(Story 7.1),挂载 /api/settings/ai* 路由
+// (GET auth;PUT/test auth + CSRF)。不传则相关端点返回 503;AI 未配置/未启用时
+// 下游优雅禁用,核心 CI/CD 完全不依赖此服务(NFR-10)。
+func WithAISettings(s ai.Service) Option {
+	return func(o *options) { o.aiSettings = s }
 }
 
 // New 构建 HTTP 处理器:健康端点 + Auth API + (可选)凭据 API + 内嵌 SPA 静态托管。
@@ -218,6 +227,13 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Post("/account/password", makeChangePasswordHandler(ac, aud))
 		ar.Get("/account/sessions", makeListSessionsHandler(ac))
 		ar.Delete("/account/sessions/{id}", makeRevokeSessionHandler(ac, aud))
+
+		// 可配置 AI 提供商(Story 7.1)。aiSvc 为 nil 时 handler 返回 503。
+		// GET 过 auth;PUT/test 为写方法,过 auth + CSRF。apiKey 加密入库、响应仅掩码。
+		aiSvc := o.aiSettings
+		ar.Get("/settings/ai", makeGetAISettingsHandler(aiSvc))
+		ar.Put("/settings/ai", makeSaveAISettingsHandler(aiSvc))
+		ar.Post("/settings/ai/test", makeTestAISettingsHandler(aiSvc))
 
 		// 后续 story 在此挂载其他 API 路由。
 	})

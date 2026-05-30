@@ -40,15 +40,16 @@ const contextKeySession contextKey = 1
 type Option func(*options)
 
 type options struct {
-	vault     vault.Vault
-	projects  project.Service
-	triggers  trigger.Service
-	pipelines pipeline.Service
-	runs      run.Service
-	runSub    runSubscriber
-	receiver  *trigger.Receiver
-	audit     audit.Recorder
-	account   accountService
+	vault            vault.Vault
+	projects         project.Service
+	triggers         trigger.Service
+	pipelines        pipeline.Service
+	pipelineSettings pipeline.SettingsService
+	runs             run.Service
+	runSub           runSubscriber
+	receiver         *trigger.Receiver
+	audit            audit.Recorder
+	account          accountService
 }
 
 // WithVault 注入凭据保险库,挂载 /api/credentials* 路由。
@@ -73,6 +74,12 @@ func WithTriggers(s trigger.Service) Option {
 // 不传则流水线相关端点返回 503(服务未初始化)。
 func WithPipelines(s pipeline.Service) Option {
 	return func(o *options) { o.pipelines = s }
+}
+
+// WithPipelineSettings 注入构建/部署配置服务,挂载 /api/projects/{id}/pipeline/settings 路由(Story 2.4)。
+// 独立于 2-2 的 pipeline spec;不传则该端点返回 503(服务未初始化)。
+func WithPipelineSettings(s pipeline.SettingsService) Option {
+	return func(o *options) { o.pipelineSettings = s }
 }
 
 // WithRuns 注入运行服务与事件订阅源(worker pool),挂载 /api/runs* 路由(含 SSE)。
@@ -179,6 +186,12 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		pl := o.pipelines
 		ar.Get("/projects/{id}/pipeline", makeGetPipelineHandler(pl))
 		ar.Put("/projects/{id}/pipeline", makeSavePipelineHandler(pl))
+
+		// 构建/部署配置(Story 2.4):独立表/端点,与 /pipeline(2-2 spec)各自路由;
+		// /pipeline/settings 比 /pipeline 多一段,不会被吞。GET 过 auth;PUT 写方法过 auth + CSRF。
+		ps := o.pipelineSettings
+		ar.Get("/projects/{id}/pipeline/settings", makeGetPipelineSettingsHandler(ps))
+		ar.Put("/projects/{id}/pipeline/settings", makeSavePipelineSettingsHandler(ps))
 
 		// 运行模型 + 列表 + 详情 + 取消 + SSE 状态流(Story 3.1)。rs 为 nil 时返回 503。
 		// SSE events 为 GET,豁免 CSRF;cancel 为写方法,过 CSRF。均过 requireAuth。

@@ -16,6 +16,7 @@
       <router-link to="/settings/vault" class="settings-nav-item">凭据保险库</router-link>
       <router-link to="/settings/account" class="settings-nav-item">账户</router-link>
       <router-link to="/settings/servers" class="settings-nav-item">服务器</router-link>
+      <router-link to="/settings/diagnosis-stats" class="settings-nav-item">诊断反馈</router-link>
       <router-link to="/settings/system" class="settings-nav-item">系统</router-link>
     </nav>
 

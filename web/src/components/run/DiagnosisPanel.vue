@@ -24,9 +24,9 @@
  *   - Hypothesis wording: "假说,非结论" — preserved from server response
  */
 
-import { ref } from 'vue'
-import type { DiagnosisDTO } from '../../api/runs'
-import { diagnoseRun } from '../../api/runs'
+import { ref, computed } from 'vue'
+import type { DiagnosisDTO, FeedbackVerdict } from '../../api/runs'
+import { diagnoseRun, submitDiagnosisFeedback } from '../../api/runs'
 import { HttpError } from '../../api/http'
 import AppButton from '../ui/AppButton.vue'
 
@@ -62,6 +62,52 @@ async function handleDiagnose(): Promise<void> {
     }
   } finally {
     diagnosing.value = false
+  }
+}
+
+// ─── Diagnosis feedback loop (Story 7-5, FR-26) ──────────────────────────────
+// Append-only feedback UI inside the ready state. 👍 submits immediately; 👎
+// expands a "correct root cause" textarea (optional) before submitting. After a
+// successful submit the panel shows a thank-you / recorded state. The diagnosis
+// rendering body itself (7-2 ownership) is untouched.
+
+type FeedbackState = 'idle' | 'down-open' | 'submitting' | 'done'
+
+const feedbackState = ref<FeedbackState>('idle')
+const feedbackSubmitting = computed(() => feedbackState.value === 'submitting')
+const submittedVerdict = ref<FeedbackVerdict | null>(null)
+const correctRootCause = ref('')
+const feedbackError = ref('')
+
+// Server caps length; mirror a generous client cap for UX (prevents runaway input).
+const MAX_ROOT_CAUSE = 2000
+
+function openDownForm(): void {
+  if (feedbackState.value === 'submitting' || feedbackState.value === 'done') return
+  feedbackError.value = ''
+  feedbackState.value = feedbackState.value === 'down-open' ? 'idle' : 'down-open'
+}
+
+async function sendFeedback(verdict: FeedbackVerdict): Promise<void> {
+  if (feedbackState.value === 'submitting' || feedbackState.value === 'done') return
+  feedbackError.value = ''
+  feedbackState.value = 'submitting'
+  try {
+    const payload =
+      verdict === 'down' && correctRootCause.value.trim()
+        ? { verdict, correctRootCause: correctRootCause.value.trim().slice(0, MAX_ROOT_CAUSE) }
+        : { verdict }
+    await submitDiagnosisFeedback(props.runId, payload)
+    submittedVerdict.value = verdict
+    feedbackState.value = 'done'
+  } catch (err) {
+    if (err instanceof HttpError) {
+      feedbackError.value = err.apiError?.message ?? `反馈提交失败(${err.status})`
+    } else {
+      feedbackError.value = '反馈提交失败,请稍后重试'
+    }
+    // Re-open the prior state so the user can retry.
+    feedbackState.value = verdict === 'down' ? 'down-open' : 'idle'
   }
 }
 
@@ -306,6 +352,76 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
           </div>
         </div>
 
+      </div>
+
+      <!-- ── Feedback footer (Story 7-5, FR-26) — append-only ──────────── -->
+      <div class="dp-feedback">
+        <!-- done state -->
+        <template v-if="feedbackState === 'done'">
+          <div class="dp-fb-done" role="status">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+            <span>
+              已记录你的反馈<template v-if="submittedVerdict === 'down'">,正确根因将作为知识库种子</template>。谢谢!
+            </span>
+          </div>
+        </template>
+
+        <!-- idle / down-open state -->
+        <template v-else>
+          <div class="dp-fb-row">
+            <span class="dp-fb-prompt">这条诊断有帮助吗?</span>
+            <div class="dp-fb-btns">
+              <button
+                class="dp-fb-btn dp-fb-btn--up"
+                :disabled="feedbackState === 'submitting'"
+                aria-label="诊断有帮助"
+                @click="sendFeedback('up')"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M7 10v12" /><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z" />
+                </svg>
+                有用
+              </button>
+              <button
+                class="dp-fb-btn dp-fb-btn--down"
+                :class="{ 'dp-fb-btn--active': feedbackState === 'down-open' }"
+                :disabled="feedbackState === 'submitting'"
+                :aria-expanded="feedbackState === 'down-open'"
+                aria-label="诊断无帮助,可附正确根因"
+                @click="openDownForm"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M17 14V2" /><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z" />
+                </svg>
+                需改进
+              </button>
+            </div>
+          </div>
+
+          <!-- down: optional correct-root-cause input -->
+          <div v-if="feedbackState === 'down-open'" class="dp-fb-correct">
+            <label class="dp-fb-label" for="dp-correct-input">
+              正确的根因是什么?(可选 — 将作为知识库种子帮助 AI 越用越准)
+            </label>
+            <textarea
+              id="dp-correct-input"
+              v-model="correctRootCause"
+              class="dp-fb-textarea"
+              rows="3"
+              :maxlength="MAX_ROOT_CAUSE"
+              placeholder="例如:实际是构建机磁盘写满,与依赖无关…"
+            />
+            <div class="dp-fb-actions">
+              <AppButton variant="ai" :loading="feedbackSubmitting" @click="sendFeedback('down')">
+                提交反馈
+              </AppButton>
+            </div>
+          </div>
+
+          <p v-if="feedbackError" class="dp-error dp-fb-error" role="alert">{{ feedbackError }}</p>
+        </template>
       </div>
     </template>
 
@@ -876,5 +992,149 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
   font-family: var(--font-mono);
   font-size: 0.78rem;
   color: var(--color-line-num);
+}
+
+/* ─── Feedback footer (Story 7-5, FR-26) ─────────────────────────────────── */
+.dp-feedback {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 20px 18px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-card-2, var(--color-inset));
+}
+
+.dp-fb-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.dp-fb-prompt {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-dim);
+}
+
+.dp-fb-btns {
+  display: flex;
+  gap: 8px;
+}
+
+.dp-fb-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-sans);
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 6px 13px;
+  border-radius: var(--rounded-full);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-card);
+  color: var(--color-faint);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast),
+    border-color var(--duration-fast),
+    background-color var(--duration-fast),
+    transform var(--duration-fast);
+}
+
+.dp-fb-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.dp-fb-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.dp-fb-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.dp-fb-btn--up:hover:not(:disabled) {
+  color: var(--color-green);
+  border-color: var(--color-green-line);
+  background: var(--color-green-soft);
+}
+
+.dp-fb-btn--down:hover:not(:disabled),
+.dp-fb-btn--down.dp-fb-btn--active {
+  color: var(--color-amber);
+  border-color: var(--color-amber-line);
+  background: var(--color-amber-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dp-fb-btn { transition: none; }
+  .dp-fb-btn:hover:not(:disabled) { transform: none; }
+}
+
+/* down: correct-root-cause input */
+.dp-fb-correct {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: dp-fb-expand 0.3s var(--ease-out-expo, cubic-bezier(0.16,1,0.3,1)) both;
+}
+
+@keyframes dp-fb-expand {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dp-fb-correct { animation: none; }
+}
+
+.dp-fb-label {
+  font-size: 0.74rem;
+  color: var(--color-faint);
+  line-height: 1.5;
+}
+
+.dp-fb-textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 64px;
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--color-text);
+  padding: 10px 12px;
+  border-radius: var(--rounded);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-card);
+  transition: border-color var(--duration-fast);
+}
+
+.dp-fb-textarea:focus {
+  outline: none;
+  border-color: var(--color-cyan);
+}
+
+.dp-fb-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* done state */
+.dp-fb-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--color-green);
+}
+
+.dp-fb-error {
+  text-align: left;
+  margin-top: 2px;
 }
 </style>

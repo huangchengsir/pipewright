@@ -92,6 +92,75 @@ func TestRoutesCRUDLifecycle(t *testing.T) {
 	resp.Body.Close()
 }
 
+// TestRoutesProjectScope 验证 HTTP 层项目维度（Story 5.4 / FR-20）：
+//   - POST 带 projectId → 项目级路由；GET ?projectId= 仅返回该项目；GET（无 query）仅全局。
+func TestRoutesProjectScope(t *testing.T) {
+	srv, client, csrf := setupNotifyServer(t, nil)
+	chBase := srv.URL + "/api/notifications/channels"
+	rtBase := srv.URL + "/api/notifications/routes"
+
+	// 建渠道。
+	resp := doJSON(t, client, http.MethodPost, chBase, csrf,
+		`{"name":"ops","type":"webhook","enabled":true,"config":{"url":"http://10.0.0.2/hook"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("create channel = %d (%s)", resp.StatusCode, raw)
+	}
+	chID, _ := decodeMap(t, resp)["id"].(string)
+	resp.Body.Close()
+
+	// 全局路由。
+	resp = doJSON(t, client, http.MethodPost, rtBase, csrf,
+		`{"event":"build_failed","channelId":"`+chID+`","enabled":true}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create global route = %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// 项目级路由（projectId=proj-x）。
+	resp = doJSON(t, client, http.MethodPost, rtBase, csrf,
+		`{"projectId":"proj-x","event":"build_failed","channelId":"`+chID+`","enabled":true}`)
+	if resp.StatusCode != http.StatusCreated {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("create project route = %d (%s)", resp.StatusCode, raw)
+	}
+	pcreated := decodeMap(t, resp)
+	resp.Body.Close()
+	if pcreated["projectId"] != "proj-x" {
+		t.Fatalf("create 应回显 projectId=proj-x，实际 %+v", pcreated)
+	}
+
+	// GET（无 query）→ 仅全局 1 条。
+	resp = doJSON(t, client, http.MethodGet, rtBase, csrf, "")
+	gitems, _ := decodeMap(t, resp)["items"].([]any)
+	resp.Body.Close()
+	if len(gitems) != 1 {
+		t.Fatalf("全局 List 应 1 条，实际 %d", len(gitems))
+	}
+	if g0, _ := gitems[0].(map[string]any); g0["projectId"] != nil && g0["projectId"] != "" {
+		t.Fatalf("全局 List 项不应带 projectId，实际 %+v", g0)
+	}
+
+	// GET ?projectId=proj-x → 仅该项目 1 条。
+	resp = doJSON(t, client, http.MethodGet, rtBase+"?projectId=proj-x", csrf, "")
+	pitems, _ := decodeMap(t, resp)["items"].([]any)
+	resp.Body.Close()
+	if len(pitems) != 1 {
+		t.Fatalf("项目 List 应 1 条，实际 %d", len(pitems))
+	}
+	if p0, _ := pitems[0].(map[string]any); p0["projectId"] != "proj-x" {
+		t.Fatalf("项目 List 项 projectId 应为 proj-x，实际 %+v", p0)
+	}
+
+	// GET ?projectId=proj-y（无覆盖）→ 空。
+	resp = doJSON(t, client, http.MethodGet, rtBase+"?projectId=proj-y", csrf, "")
+	yitems, _ := decodeMap(t, resp)["items"].([]any)
+	resp.Body.Close()
+	if len(yitems) != 0 {
+		t.Fatalf("未覆盖项目 List 应空，实际 %d", len(yitems))
+	}
+}
+
 // TestRoutesRequireAuth 验证路由端点需认证。
 func TestRoutesRequireAuth(t *testing.T) {
 	srv, _, _ := setupNotifyServer(t, nil)

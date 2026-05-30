@@ -113,8 +113,16 @@ export async function testChannel(id: string): Promise<ChannelTestResult> {
  * DELETE /api/notifications/routes/{id}   → 204                 (needs CSRF)
  *
  * Maps events → channels. An event with no enabled route is NOT delivered (FR-20).
- * An event may map to multiple channels (multiple routes). projectId is reserved
- * for 5-4 (per-pipeline override) and is always empty this release (global default).
+ * An event may map to multiple channels (multiple routes).
+ *
+ * Story 5.4 (per-pipeline override): routes carry an optional projectId.
+ *   - listRoutes(projectId) — projectId set → that project's override routes;
+ *     omitted/empty → global default routes (projectId IS NULL).
+ *   - createRoute({ projectId, ... }) — projectId set = project-level override,
+ *     omitted/empty = global default.
+ * Resolution at send time is WHOLE-SCOPE override: if a project has any enabled
+ * route for an event it uses ONLY its own routes (not merged with global);
+ * otherwise it inherits the global routes.
  */
 
 /** Frozen event enum (run terminal status → event mapping lives server-side). */
@@ -129,7 +137,7 @@ export type NotificationEvent =
 /** GET response item — an event→channel mapping. */
 export interface NotificationRoute {
   id: string
-  /** Reserved for 5-4 per-pipeline override; empty = global default this release. */
+  /** Per-pipeline override scope (Story 5.4); empty = global default. */
   projectId?: string
   event: NotificationEvent
   channelId: string
@@ -139,13 +147,20 @@ export interface NotificationRoute {
 
 /** Create body. enabled defaults to true server-side when omitted. */
 export interface CreateRouteInput {
+  /** Set = project-level override (Story 5.4); omit/empty = global default. */
+  projectId?: string
   event: NotificationEvent
   channelId: string
   enabled?: boolean
 }
 
-export async function listRoutes(): Promise<NotificationRoute[]> {
-  const res = await http.get<{ items: NotificationRoute[] }>('/api/notifications/routes')
+/**
+ * List routes for a scope. projectId set → that project's override routes;
+ * omitted/empty → global default routes.
+ */
+export async function listRoutes(projectId?: string): Promise<NotificationRoute[]> {
+  const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''
+  const res = await http.get<{ items: NotificationRoute[] }>(`/api/notifications/routes${query}`)
   return res.items ?? []
 }
 

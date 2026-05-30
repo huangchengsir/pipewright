@@ -139,6 +139,132 @@ func TestNotifyHookEndToEndWebhook(t *testing.T) {
 	}
 }
 
+// TestNotifyHookProjectOverrideEndToEnd 真验(Story 5.4 / FR-20 细粒度):
+//   - 全局 build_failed → webhookA;项目X build_failed → webhookB(覆盖)。
+//   - 项目X 失败 run → 经钩子 RouteEventForProject 整体覆盖:**只 webhookB 收**,webhookA 不收。
+//   - 全链路 best-effort:失败 run 仍正常落终态。
+func TestNotifyHookProjectOverrideEndToEnd(t *testing.T) {
+	var (
+		muA sync.Mutex
+		nA  int
+		muB sync.Mutex
+		nB  int
+	)
+	hookA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		muA.Lock()
+		nA++
+		muA.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer hookA.Close()
+	hookB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		muB.Lock()
+		nB++
+		muB.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer hookB.Close()
+
+	st, err := store.Open(t.TempDir() + "/e2e-override.db")
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	v := vault.New(st.DB, testMasterKey())
+	// 单一 client(loopback httptest 均可达)。
+	notifySvc := notify.New(st.DB, v, hookA.Client())
+
+	chA, err := notifySvc.Create(context.Background(), notify.CreateInput{
+		Name: "global-hook", Type: notify.TypeWebhook, Enabled: true,
+		Config: notify.Config{URL: hookA.URL},
+	})
+	if err != nil {
+		t.Fatalf("create channel A: %v", err)
+	}
+	chB, err := notifySvc.Create(context.Background(), notify.CreateInput{
+		Name: "project-hook", Type: notify.TypeWebhook, Enabled: true,
+		Config: notify.Config{URL: hookB.URL},
+	})
+	if err != nil {
+		t.Fatalf("create channel B: %v", err)
+	}
+
+	projID := "proj-override"
+	// 全局 build_failed → A。
+	if _, err := notifySvc.CreateRoute(context.Background(), notify.CreateRouteInput{
+		Event: notify.EventBuildFailed, ChannelID: chA.ID, Enabled: true,
+	}); err != nil {
+		t.Fatalf("create global route: %v", err)
+	}
+	// 项目X build_failed → B(覆盖)。
+	if _, err := notifySvc.CreateRoute(context.Background(), notify.CreateRouteInput{
+		ProjectID: projID, Event: notify.EventBuildFailed, ChannelID: chB.ID, Enabled: true,
+	}); err != nil {
+		t.Fatalf("create project route: %v", err)
+	}
+
+	runSvc := run.New(st.DB)
+	pool := run.NewWorkerPool(runSvc,
+		run.WithRunner(&branchFailRunner{}),
+		run.WithNotifyHook(NewNotifyHook(runSvc, notifySvc)),
+	)
+	pool.Start()
+	t.Cleanup(func() { pool.Stop(context.Background()) })
+
+	credID := "cred-override"
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := st.DB.Exec(
+		`INSERT INTO credentials (id, name, type, scope, ciphertext, masked_value, created_at, updated_at)
+		 VALUES (?, 'c', 'git_token', '', X'00', 'm', ?, ?)`,
+		credID, now, now,
+	); err != nil {
+		t.Fatalf("seed credential: %v", err)
+	}
+	if _, err := st.DB.Exec(
+		`INSERT INTO projects (id, name, repo_url, default_branch, credential_id, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		projID, "override-svc", "https://example.com/o.git", "main", credID, now, now,
+	); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+
+	failRun, err := runSvc.Create(context.Background(), projID,
+		run.Trigger{Type: run.TriggerManual, Branch: "fail", Commit: "abcdef1234567890"})
+	if err != nil {
+		t.Fatalf("create fail run: %v", err)
+	}
+	gotFail := waitRunStatusE2E(t, runSvc, failRun.ID, run.StatusFailed)
+	if gotFail.Status != run.StatusFailed {
+		t.Fatalf("失败 run 终态应为 failed(通知钩子不应破坏)")
+	}
+
+	// 等项目级渠道 B 收到。
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		muB.Lock()
+		got := nB
+		muB.Unlock()
+		if got >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	muB.Lock()
+	gotB := nB
+	muB.Unlock()
+	muA.Lock()
+	gotA := nA
+	muA.Unlock()
+	if gotB != 1 {
+		t.Fatalf("项目级渠道B 应收到 1 次,实际 %d", gotB)
+	}
+	if gotA != 0 {
+		t.Fatalf("整体覆盖:全局渠道A 不应收到,实际 %d", gotA)
+	}
+}
+
 // branchFailRunner:branch "fail" → 返回错误(run failed);否则成功。供 e2e 驱动失败/成功 run。
 type branchFailRunner struct{}
 

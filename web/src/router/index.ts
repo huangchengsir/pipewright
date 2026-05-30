@@ -18,6 +18,8 @@ const SettingsAccount = () => import('../views/settings/SettingsAccount.vue')
 const SettingsSystem = () => import('../views/settings/SettingsSystem.vue')
 // Story 4-1: target server registry + shared SSH layer (FR-14)
 const SettingsServers = () => import('../views/settings/SettingsServers.vue')
+// Story 5-1: notification channels (FR-19)
+const SettingsNotifications = () => import('../views/settings/SettingsNotifications.vue')
 // Story 2-2: new pipeline editor
 const ProjectPipeline = () => import('../views/ProjectPipeline.vue')
 // Story 2-3: triggers (kept for backward compat; now a thin wrapper around TriggersPanel)
@@ -68,6 +70,7 @@ const router = createRouter({
           children: [
             { path: '', redirect: { name: 'settings-ai' } },
             { path: 'ai', name: 'settings-ai', component: SettingsAI },
+            { path: 'notifications', name: 'settings-notifications', component: SettingsNotifications },
             { path: 'vault', name: 'settings-vault', component: SettingsVault },
             { path: 'account', name: 'settings-account', component: SettingsAccount },
             { path: 'system', name: 'settings-system', component: SettingsSystem },

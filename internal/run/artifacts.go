@@ -119,12 +119,14 @@ func (s *service) AddArtifact(ctx context.Context, a Artifact) (*Artifact, error
 	return &out, nil
 }
 
-// ListArtifacts 取某次运行的全部产物(按 created_at 升序,id 次序定;无产物 → 空切片)。
-// run 不存在不报错(返回空切片);由 HTTP 层据 run 存在性决定 404(仿 GetLogs 语义)。参数化 SQL。
+// ListArtifacts 取某次运行的全部产物(按 created_at 升序,**插入序(rowid)定 tiebreaker**;
+// 无产物 → 空切片)。created_at 为 RFC3339 秒精度,同秒插入相等 → 用 rowid(插入序)而非随机
+// UUID id 破并列,保证产物先后稳定确定。run 不存在不报错(返回空切片);HTTP 层据 run 存在性决定
+// 404(仿 GetLogs 语义)。参数化 SQL。
 func (s *service) ListArtifacts(ctx context.Context, runID string) ([]Artifact, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, run_id, type, name, reference, size_bytes, metadata_json, created_at
-		 FROM run_artifacts WHERE run_id = ? ORDER BY created_at ASC, id ASC`, runID)
+		 FROM run_artifacts WHERE run_id = ? ORDER BY created_at ASC, rowid ASC`, runID)
 	if err != nil {
 		return nil, fmt.Errorf("run: load artifacts: %w", err)
 	}

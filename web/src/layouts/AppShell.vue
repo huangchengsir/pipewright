@@ -6,6 +6,7 @@ import {
   GitBranch,
   GitFork,
   Server,
+  Activity,
   Bell,
   Settings,
 } from '@vicons/tabler'
@@ -27,6 +28,8 @@ const navItems: NavItem[] = [
   { name: 'projects',      to: '/projects',      icon: GitBranch,  label: '项目',  ariaLabel: '项目' },
   { name: 'runs',          to: '/runs',          icon: GitFork,    label: '运行',  ariaLabel: '运行' },
   { name: 'servers',       to: '/servers',       icon: Server,     label: '服务器', ariaLabel: '服务器' },
+  // Story 6-1: multi-host status overview (server-layer metrics, FR-15)
+  { name: 'server-status', to: '/server-status', icon: Activity,   label: '服务器状态', ariaLabel: '服务器状态' },
   { name: 'notifications', to: '/notifications', icon: Bell,       label: '通知',  ariaLabel: '通知' },
 ]
 

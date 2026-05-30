@@ -333,6 +333,13 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 比 /servers/{id} 多一段,不会被吞。
 		ar.Get("/servers/{id}/logs", makeServerLogsHandler(sv))
 		ar.Get("/servers/{id}/logs/stream", makeServerLogsStreamHandler(sv))
+		// 多机状态总览 —— 服务器层指标(Story 6.1;FR-15,经 SSH 跑固定白名单只读命令采集
+		// CPU/内存/磁盘)。复用 sv(4-1 装配,无新服务)。均为 GET 只读 → 过 auth、豁免 CSRF。
+		// 采集命令纯静态 array、不接受任何用户输入(AC-SEC-02);某台不可达/某指标缺失 →
+		// reachable:false / 该指标 null,不 500。批量端点逐台并行有界、各自独立。
+		// chi 字面段优先于 {id},/servers/metrics 不会被 /servers/{id} 吞。
+		ar.Get("/servers/metrics", makeAllServerMetricsHandler(sv))
+		ar.Get("/servers/{id}/metrics", makeServerMetricsHandler(sv))
 		// 通知渠道(Story 5.1;FR-19)。nf 为 nil 时 handler 返回 503。
 		// GET(列表/详情)过 auth;POST/PUT/DELETE/test 为写方法,过 auth + CSRF。
 		// 敏感字段(SMTP 密码)加密入库、响应仅 hasPassword。test 须在 {id} 路由内单独注册。

@@ -10,6 +10,8 @@ const Onboarding  = () => import('../views/Onboarding.vue')
 const Projects    = () => import('../views/Projects.vue')
 const Runs        = () => import('../views/Runs.vue')
 const Servers     = () => import('../views/Servers.vue')
+// Story 6-1: multi-host status overview (server-layer CPU/memory/disk metrics, FR-15)
+const ServerStatus = () => import('../views/ServerStatus.vue')
 const Notifications = () => import('../views/Notifications.vue')
 const Settings    = () => import('../views/Settings.vue')
 const SettingsAI  = () => import('../views/settings/SettingsAI.vue')
@@ -62,6 +64,8 @@ const router = createRouter({
         { path: 'runs', name: 'runs', component: Runs },
         { path: 'runs/:id', name: 'run-detail', component: RunDetail },
         { path: 'servers', name: 'servers', component: Servers },
+        // Story 6-1: multi-host status overview (server-layer metrics, FR-15)
+        { path: 'server-status', name: 'server-status', component: ServerStatus },
         { path: 'notifications', name: 'notifications', component: Notifications },
         {
           path: 'settings',

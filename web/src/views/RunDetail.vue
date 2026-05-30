@@ -20,15 +20,18 @@ import {
   cancelRun,
   subscribeRunEvents,
   diagnoseRun,
+  deployRun,
   type RunDetail,
   type RunStatus,
   type StepStatus,
   type DiagnosisDTO,
 } from '../api/runs'
+import { listServers, type Server } from '../api/servers'
 import { HttpError } from '../api/http'
 import DiagnosisPanel from '../components/run/DiagnosisPanel.vue'
 import RunTerminal from '../components/run/RunTerminal.vue'
 import ArtifactList from '../components/run/ArtifactList.vue'
+import DeployTargets from '../components/run/DeployTargets.vue'
 
 // ─── route ────────────────────────────────────────────────────────────────────
 
@@ -65,6 +68,84 @@ async function handleCancel(): Promise<void> {
   } finally {
     cancelling.value = false
   }
+}
+
+// ─── deploy state (Story 4-2: SSH 部署执行 / FR-10) ─────────────────────────────
+// 成功态可把某个产物部署到所选目标服务器;同步执行,回填 run.targets slot。
+
+const deployServers = ref<Server[]>([])
+const deployServersLoaded = ref(false)
+const selectedArtifactId = ref('')
+const selectedServerIds = ref<string[]>([])
+const deploying = ref(false)
+const deployError = ref('')
+const showDeployPanel = ref(false)
+
+// 是否已部署过(run.targets 非空 → 已有部署结果)。
+const hasDeployed = computed(() => !!run.value?.targets && run.value.targets.length > 0)
+
+async function ensureDeployServers(): Promise<void> {
+  if (deployServersLoaded.value) return
+  try {
+    deployServers.value = await listServers()
+  } catch {
+    deployServers.value = []
+  } finally {
+    deployServersLoaded.value = true
+  }
+}
+
+async function openDeployPanel(): Promise<void> {
+  deployError.value = ''
+  showDeployPanel.value = true
+  await ensureDeployServers()
+  // 默认选中首个产物(若存在);服务器需用户显式勾选。
+  if (!selectedArtifactId.value && run.value?.artifacts.length) {
+    selectedArtifactId.value = run.value.artifacts[0].id
+  }
+}
+
+function toggleServer(id: string): void {
+  const idx = selectedServerIds.value.indexOf(id)
+  if (idx >= 0) selectedServerIds.value.splice(idx, 1)
+  else selectedServerIds.value.push(id)
+}
+
+const canDeploy = computed(
+  () => !!selectedArtifactId.value && selectedServerIds.value.length > 0 && !deploying.value,
+)
+
+async function handleDeploy(): Promise<void> {
+  if (!run.value || !canDeploy.value) return
+  deploying.value = true
+  deployError.value = ''
+  try {
+    const res = await deployRun(run.value.id, {
+      artifactId: selectedArtifactId.value,
+      serverIds: [...selectedServerIds.value],
+    })
+    // 同步执行:用返回的 targets 直接填 slot(与 run-detail 同源形状)。
+    run.value = { ...run.value, targets: res.targets, status: deriveStatus(res.targets) }
+    showDeployPanel.value = false
+    selectedServerIds.value = []
+  } catch (err) {
+    if (err instanceof HttpError) {
+      deployError.value = err.apiError?.message ?? `部署失败(${err.status})`
+    } else {
+      deployError.value = '部署请求失败,请稍后重试'
+    }
+  } finally {
+    deploying.value = false
+  }
+}
+
+// deriveStatus 据每机结果推 run 终态(与后端 SetDeployTerminal 同语义),让状态徽标即时更新。
+function deriveStatus(targets: { status: string }[]): RunStatus {
+  const anyOk = targets.some((t) => t.status === 'success')
+  const anyBad = targets.some((t) => t.status !== 'success')
+  if (anyBad && anyOk) return 'partial_failed'
+  if (anyBad) return 'failed'
+  return run.value?.status ?? 'success'
 }
 
 // ─── data loading ─────────────────────────────────────────────────────────────
@@ -511,26 +592,92 @@ function nodeClass(status: StepStatus): string {
 
             <!--
               ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-              SLOT: 零停机切换流程图 (Epic 4 接入)
-              骨架所有权: 本区块归 Story 3.1;
-              Epic 4 在此区块内填入零停机切换 4 步流程图(起新实例→健康门控→流量切换→旧实例下线),
-              不改骨架结构。
+              SLOT: SSH 部署执行 (Story 4-2 / FR-10 实现)
+              成功态填 run-detail 冻结 targets slot:部署入口(选产物 + 选服务器 + 触发)
+              + 每机部署结果卡。命令 array 化经 SSH 执行(AC-SEC-02);message 绝无明文密钥。
+              零停机切换/回滚 = 4-4;多机扇出 = 4-5,不在本期。
+              不扰终端(3-6)/诊断(7-2)/产物(3-4)slot。
               ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             -->
-            <div class="slot-panel slot-panel--success" role="region" aria-label="零停机切换流程图(尚未接入)">
-              <div class="slot-header">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+
+            <!-- 已部署 → 渲染每机结果卡(填 targets slot) -->
+            <DeployTargets v-if="hasDeployed && run.targets" :targets="run.targets" />
+
+            <!-- 部署入口:仅在有产物时可用 -->
+            <div v-if="run.artifacts.length > 0" class="deploy-entry">
+              <button
+                v-if="!showDeployPanel"
+                class="btn-deploy"
+                @click="openDeployPanel"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path d="M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
                 </svg>
-                <span class="slot-title">零停机切换流程图</span>
-                <span class="slot-badge slot-badge--epic">Epic 4</span>
-              </div>
-              <div class="slot-body">
-                <span class="slot-placeholder-text">零停机切换详情将在 Epic 4 接入</span>
-                <span class="slot-placeholder-hint">起新实例 → 健康门控 → 流量切换 → 旧实例下线</span>
+                {{ hasDeployed ? '再次部署' : '部署到目标服务器' }}
+              </button>
+
+              <!-- 部署配置面板:选产物 + 勾选服务器 + 触发 -->
+              <div v-else class="deploy-panel" role="region" aria-label="部署配置">
+                <div class="deploy-panel-head">
+                  <span class="deploy-panel-title">部署到目标服务器</span>
+                  <button class="deploy-close" aria-label="收起部署面板" @click="showDeployPanel = false">✕</button>
+                </div>
+
+                <!-- 选择产物 -->
+                <div class="deploy-field">
+                  <label class="deploy-label" for="deploy-artifact">部署产物</label>
+                  <select id="deploy-artifact" v-model="selectedArtifactId" class="deploy-select">
+                    <option v-for="a in run.artifacts" :key="a.id" :value="a.id">
+                      {{ a.name }} · {{ a.type }} · {{ a.reference }}
+                    </option>
+                  </select>
+                </div>
+
+                <!-- 选择服务器 -->
+                <div class="deploy-field">
+                  <span class="deploy-label">目标服务器</span>
+                  <p v-if="deployServersLoaded && deployServers.length === 0" class="deploy-empty">
+                    暂无已登记的服务器,请先在「服务器」页登记。
+                  </p>
+                  <div v-else class="deploy-servers">
+                    <label
+                      v-for="s in deployServers"
+                      :key="s.id"
+                      class="deploy-server-opt"
+                      :class="{ 'deploy-server-opt--on': selectedServerIds.includes(s.id) }"
+                    >
+                      <input
+                        type="checkbox"
+                        :checked="selectedServerIds.includes(s.id)"
+                        @change="toggleServer(s.id)"
+                      />
+                      <span class="deploy-server-name">{{ s.name }}</span>
+                      <span class="deploy-server-host mono">{{ s.user }}@{{ s.host }}:{{ s.port }}</span>
+                    </label>
+                  </div>
+                </div>
+
+                <!-- 部署错误 -->
+                <div v-if="deployError" class="banner banner--error" role="alert">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                    <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
+                  </svg>
+                  {{ deployError }}
+                </div>
+
+                <!-- 触发 -->
+                <div class="deploy-actions">
+                  <button class="btn-deploy" :disabled="!canDeploy" :aria-busy="deploying" @click="handleDeploy">
+                    <span v-if="deploying" class="spinner" aria-hidden="true" />
+                    {{ deploying ? '部署中…' : '开始部署' }}
+                  </button>
+                  <span v-if="selectedServerIds.length > 0" class="deploy-hint">
+                    已选 {{ selectedServerIds.length }} 台
+                  </span>
+                </div>
               </div>
             </div>
-            <!-- END SLOT: 零停机切换流程图 -->
+            <!-- END SLOT: SSH 部署执行 -->
 
           </div>
         </template>
@@ -1555,5 +1702,160 @@ function nodeClass(status: StepStatus): string {
 
 @media (prefers-reduced-motion: reduce) {
   .spinner { animation: none; border-top-color: currentColor; }
+}
+
+/* ─── deploy entry / panel (Story 4-2) ───────────────────────────────────── */
+.deploy-entry {
+  display: flex;
+  flex-direction: column;
+}
+
+.btn-deploy {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  align-self: flex-start;
+  height: 36px;
+  padding: 0 16px;
+  background: var(--color-primary);
+  color: #fff;
+  border: none;
+  font-family: var(--font-sans);
+  font-size: 0.84rem;
+  font-weight: 600;
+  border-radius: var(--rounded);
+  cursor: pointer;
+  transition: filter var(--duration-fast), opacity var(--duration-fast);
+}
+
+.btn-deploy:hover:not(:disabled) { filter: brightness(1.08); }
+
+.btn-deploy:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.btn-deploy:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.deploy-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px;
+  background: var(--color-inset);
+  border: 1px solid var(--color-primary-soft);
+  border-radius: var(--rounded);
+}
+
+.deploy-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.deploy-panel-title {
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.deploy-close {
+  background: none;
+  border: none;
+  color: var(--color-faint);
+  font-size: 0.9rem;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--rounded-sm);
+  transition: color var(--duration-fast);
+}
+
+.deploy-close:hover { color: var(--color-text); }
+
+.deploy-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.deploy-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-faint);
+}
+
+.deploy-select {
+  height: 36px;
+  padding: 0 10px;
+  background: var(--color-card);
+  color: var(--color-text);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--rounded-md);
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+}
+
+.deploy-select:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+.deploy-empty {
+  font-size: 0.8rem;
+  color: var(--color-faint);
+  line-height: 1.5;
+}
+
+.deploy-servers {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.deploy-server-opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-md);
+  cursor: pointer;
+  transition: border-color var(--duration-fast), background-color var(--duration-fast);
+}
+
+.deploy-server-opt:hover { border-color: var(--color-faint); }
+
+.deploy-server-opt--on {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.deploy-server-name {
+  font-size: 0.84rem;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.deploy-server-host {
+  font-size: 0.74rem;
+  color: var(--color-faint);
+  margin-left: auto;
+}
+
+.deploy-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.deploy-hint {
+  font-size: 0.76rem;
+  color: var(--color-dim);
 }
 </style>

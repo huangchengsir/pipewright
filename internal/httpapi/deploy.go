@@ -1,0 +1,144 @@
+package httpapi
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/huangjiawei/devopstool/internal/deploy"
+	"github.com/huangjiawei/devopstool/internal/run"
+)
+
+// ---- 冻结 run-detail targets 子 DTO(Story 4.2;填 3-1 留的 null slot) -------
+//
+// 形状由本 story 定义并冻结:每台目标机一张结果。部署过 → 数组;否则 null。
+// status 枚举:pending | deploying | success | failed | rolled_back(冻结)。
+// 4-4 回滚置 rolled_back;4-5 多机扇出新增多条;均不改此形状。message 人读(绝无明文密钥)。
+
+// targetDTO 是单台目标机的部署结果(run-detail targets slot 元素)。
+type targetDTO struct {
+	ServerID   string  `json:"serverId"`
+	ServerName string  `json:"serverName"`
+	Status     string  `json:"status"`               // pending|deploying|success|failed|rolled_back(冻结枚举)
+	Message    string  `json:"message"`              // 人读摘要(绝无明文密钥)
+	StartedAt  string  `json:"startedAt"`            // RFC3339
+	FinishedAt *string `json:"finishedAt,omitempty"` // RFC3339;未结束为 null
+}
+
+func toTargetDTO(t run.DeployTarget) targetDTO {
+	return targetDTO{
+		ServerID:   t.ServerID,
+		ServerName: t.ServerName,
+		Status:     t.Status,
+		Message:    t.Message,
+		StartedAt:  t.StartedAt.UTC().Format(time.RFC3339),
+		FinishedAt: rfc3339Ptr(t.FinishedAt),
+	}
+}
+
+// toTargetDTOs 把领域部署目标切片映射为 DTO 切片(始终非 nil;空 → [])。
+func toTargetDTOs(ts []run.DeployTarget) []targetDTO {
+	out := make([]targetDTO, 0, len(ts))
+	for i := range ts {
+		out = append(out, toTargetDTO(ts[i]))
+	}
+	return out
+}
+
+// deployRequest 是 POST /api/runs/{id}/deploy 请求体(冻结)。
+type deployRequest struct {
+	ArtifactID   string            `json:"artifactId"`
+	ServerIDs    []string          `json:"serverIds"`
+	DeployConfig map[string]string `json:"deployConfig"`
+}
+
+// deployResponse 是 POST /api/runs/{id}/deploy 响应体:本期同步执行,返回填好的 targets 数组。
+type deployResponse struct {
+	Targets []targetDTO `json:"targets"`
+}
+
+// makeDeployRunHandler 返回 POST /api/runs/{id}/deploy handler(认证 + CSRF)。
+//
+// 取 run + 产物 + 服务器 → deploy.Deploy(逐机经 SSH 执行部署命令)→ 据结果更新 run 终态
+// → 返回每机 targets。本期同步执行返回最终 targets(简单可验)。
+//
+// run 不存在 → 404;run 非成功 / 无该产物 / 服务器不存在 / 未指定服务器 → 422(人读)。
+// **部署执行失败不 500**:每机 status=failed 记录,整体 200(由 deploy.Deploy 保证不上抛执行错误)。
+func makeDeployRunHandler(svc deploy.Service, runSvc run.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil || runSvc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "部署服务未初始化")
+			return
+		}
+		id := chi.URLParam(r, "id")
+
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
+		var req deployRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
+			return
+		}
+
+		results, err := svc.Deploy(r.Context(), deploy.DeployInput{
+			RunID:      id,
+			ArtifactID: req.ArtifactID,
+			ServerIDs:  req.ServerIDs,
+			Config:     req.DeployConfig,
+		})
+		if err != nil {
+			writeDeployError(w, err)
+			return
+		}
+
+		// 部署后回读权威持久化结果(填 run-detail targets slot 同源);保证响应与详情一致。
+		targets, lerr := runSvc.ListDeployTargets(r.Context(), id)
+		if lerr != nil {
+			// 回读失败:降级用执行结果直接映射(不阻断已成功的部署)。
+			out := make([]targetDTO, 0, len(results))
+			for i := range results {
+				out = append(out, targetResultToDTO(results[i]))
+			}
+			writeJSON(w, http.StatusOK, deployResponse{Targets: out})
+			return
+		}
+		writeJSON(w, http.StatusOK, deployResponse{Targets: toTargetDTOs(targets)})
+	}
+}
+
+// targetResultToDTO 把 deploy.TargetResult 映射为 DTO(回读降级路径用)。
+func targetResultToDTO(r deploy.TargetResult) targetDTO {
+	var finished *string
+	if r.FinishedAt != nil {
+		s := r.FinishedAt.UTC().Format(time.RFC3339)
+		finished = &s
+	}
+	return targetDTO{
+		ServerID:   r.ServerID,
+		ServerName: r.ServerName,
+		Status:     r.Status,
+		Message:    r.Message,
+		StartedAt:  r.StartedAt.UTC().Format(time.RFC3339),
+		FinishedAt: finished,
+	}
+}
+
+// writeDeployError 把部署定位类错误映射为契约错误码 / 状态码(绝不回显明文 / 私钥 / 口令 / 栈)。
+// 执行类失败由 deploy.Deploy 内化为每机 failed,不走此路径(整体 200)。
+func writeDeployError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, deploy.ErrRunNotFound), errors.Is(err, run.ErrNotFound):
+		writeError(w, http.StatusNotFound, "run_not_found", "运行不存在")
+	case errors.Is(err, deploy.ErrRunNotSuccessful):
+		writeError(w, http.StatusUnprocessableEntity, "run_not_successful", "运行非成功态,无可部署产物")
+	case errors.Is(err, deploy.ErrArtifactNotFound):
+		writeError(w, http.StatusUnprocessableEntity, "artifact_not_found", "该运行下不存在指定产物")
+	case errors.Is(err, deploy.ErrServerNotFound):
+		writeError(w, http.StatusUnprocessableEntity, "server_not_found", "目标服务器不存在")
+	case errors.Is(err, deploy.ErrNoServers):
+		writeError(w, http.StatusUnprocessableEntity, "no_servers", "请至少选择一台目标服务器")
+	default:
+		writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
+	}
+}

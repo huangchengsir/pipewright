@@ -179,6 +179,10 @@ export function subscribeServerLogs(
         try {
           const parsed = JSON.parse(data) as { error: string }
           handlers.onError?.(parsed.error)
+          // code-review P7:后端发的具名 error 事件是终态业务失败(SSH 认证/连接/命令失败),
+          // 随后后端关闭连接会触发 EventSource 默认自动重连 → 对永久失败的服务器形成无限 SSH
+          // 重拨风暴。主动 cleanup() 关闭 ES 停止重连;用户可手动重开。
+          cleanup()
           return
         } catch {
           // fall through to transport-error handling

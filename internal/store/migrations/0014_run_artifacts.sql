@@ -23,7 +23,10 @@ CREATE TABLE IF NOT EXISTS run_artifacts (
     reference     TEXT NOT NULL,
     size_bytes    INTEGER NOT NULL DEFAULT 0,
     metadata_json TEXT NOT NULL DEFAULT '',
-    created_at    TEXT NOT NULL
+    created_at    TEXT NOT NULL,
+    -- FK(code-review P2):与兄弟表 run_steps/run_logs 一致;删 run/项目时级联清产物,
+    -- 杜绝孤儿行;并使 AddArtifact 的 isForeignKeyErr→ErrNotFound 兜底真正生效(否则是死代码)。
+    FOREIGN KEY (run_id) REFERENCES pipeline_runs (id) ON DELETE CASCADE
 );
 
 -- (run_id) 索引:按 run 拉取产物列表(run-detail slot + GET /api/runs/{id}/artifacts 的主查询路径)。

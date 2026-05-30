@@ -83,6 +83,12 @@ func (s *service) SaveDeployTargets(ctx context.Context, runID string, targets [
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// 落新前清该 run 旧 deploy_targets(code-review P3):重复部署同一 run 应**替换**而非累积,
+	// 否则 run-detail targets slot(冻结形状「每机一张」)会出现同 serverId 多条 + 陈旧结果。
+	if _, err := tx.ExecContext(ctx, `DELETE FROM deploy_targets WHERE run_id = ?`, runID); err != nil {
+		return fmt.Errorf("run: clear deploy targets: %w", err)
+	}
+
 	for i := range targets {
 		t := targets[i]
 		if t.ID == "" {

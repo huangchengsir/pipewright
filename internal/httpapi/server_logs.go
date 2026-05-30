@@ -38,8 +38,10 @@ const (
 //
 // file 路径单独校验(绝对路径、无 `..`、无 shell 元字符),不用宽松正则。
 var (
-	reJournaldUnit = regexp.MustCompile(`^[\w.@-]+$`)
-	reDockerName   = regexp.MustCompile(`^[\w.-]+$`)
+	// 首字符强制 [\w](code-review P5):禁止 target 以 `-` 开头,杜绝 `journalctl -u <tgt>` /
+	// `docker logs ... <tgt>` 把 `--help`/`-f` 之类当 flag 解析的参数注入(非 shell 注入,但偏离预期)。
+	reJournaldUnit = regexp.MustCompile(`^[\w][\w.@-]*$`)
+	reDockerName   = regexp.MustCompile(`^[\w][\w.-]*$`)
 	// shellMetaChars 是文件路径里一律禁止的危险字符(纵深防御;命令本就 array 化不拼 shell)。
 	shellMetaChars = ";|&$`<>(){}[]!*?#~\n\r\t\"'\\ "
 )
@@ -266,6 +268,9 @@ func makeServerLogsStreamHandler(svc target.Service) http.HandlerFunc {
 		// 在独立 goroutine 扫描(Scan 阻塞在 SSH 读);经 channel 把行送回主循环,
 		// 让 ctx 取消(客户端断开)能即时退出 + defer 关流。
 		linesCh := make(chan string, 64)
+		// scanErr 在扫描 goroutine 关闭 linesCh **之前**写入,主循环在收到 channel 关闭(!more)
+		// **之后**读取——close→receive 是 happens-before,无竞态。用于区分「正常结束」与异常中止。
+		var scanErr error
 		go func() {
 			defer close(linesCh)
 			for scanner.Scan() {
@@ -275,6 +280,7 @@ func makeServerLogsStreamHandler(svc target.Service) http.HandlerFunc {
 					return
 				}
 			}
+			scanErr = scanner.Err() // code-review P6:捕获 ErrTooLong(单行>64KiB)等,别静默当正常结束
 		}()
 
 		heartbeat := time.NewTicker(15 * time.Second)
@@ -291,7 +297,11 @@ func makeServerLogsStreamHandler(svc target.Service) http.HandlerFunc {
 				flusher.Flush()
 			case line, more := <-linesCh:
 				if !more {
-					// 流结束(远端进程退出 / 连接关闭)。
+					// 流结束。区分正常(远端进程退出/连接关闭)与异常(扫描错误,如单行过长):
+					// 异常时发一个 error 事件告知用户「流中断」,而非静默停止让人以为日志停了。
+					if scanErr != nil {
+						writeSSE(w, flusher, "error", logErrPayload("日志流中断:"+scanErr.Error()))
+					}
 					return
 				}
 				writeSSE(w, flusher, "logline", logLinePayload(line))

@@ -28,6 +28,8 @@ const SettingsDiagnosisStats = () => import('../views/settings/SettingsDiagnosis
 const ProjectPipeline = () => import('../views/ProjectPipeline.vue')
 // Story 2-3: triggers (kept for backward compat; now a thin wrapper around TriggersPanel)
 const ProjectTriggers = () => import('../views/ProjectTriggers.vue')
+// Story 7-4: read-only code browsing (FR-4) — Monaco dynamic-imported, off the main bundle
+const ProjectCode = () => import('../views/ProjectCode.vue')
 const RunDetail = () => import('../views/RunDetail.vue')
 // Story 1-6: living styleguide (public — no auth required for dev browsing)
 const StatesShowcase = () => import('../views/StatesShowcase.vue')
@@ -63,6 +65,8 @@ const router = createRouter({
         { path: 'projects/:id/pipeline', name: 'project-pipeline', component: ProjectPipeline },
         // Story 2-3: backward-compat standalone triggers page
         { path: 'projects/:id/triggers', name: 'project-triggers', component: ProjectTriggers },
+        // Story 7-4: read-only code browsing (FR-4)
+        { path: 'projects/:id/code', name: 'project-code', component: ProjectCode },
         { path: 'runs', name: 'runs', component: Runs },
         { path: 'runs/:id', name: 'run-detail', component: RunDetail },
         { path: 'servers', name: 'servers', component: Servers },

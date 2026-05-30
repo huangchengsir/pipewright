@@ -33,6 +33,11 @@ type Service interface {
 	// Cancel 取消进行中(queued/running)运行:经 context 传播到 Runner;终态 → ErrNotCancelable。
 	Cancel(ctx context.Context, id string) (*Run, error)
 
+	// LastSuccessfulRun 查 baseline:同 project + 同 trigger.Branch、created_at 早于 before、
+	// 最近一条 status=success 的运行(Story 7.3 / FR-25 成功/失败差异对比)。
+	// 用于「本次失败运行 → 上一次成功运行」对比的基线选取。无匹配 → ErrNotFound。
+	LastSuccessfulRun(ctx context.Context, projectID, branch string, before time.Time) (*Run, error)
+
 	// SetFailureLog 持久化某次运行的失败日志原文(脱敏前)。供 runner 失败路径 / 重试用。
 	// 不存在 → ErrNotFound。
 	SetFailureLog(ctx context.Context, id, log string) error
@@ -390,6 +395,35 @@ func (s *service) Cancel(ctx context.Context, id string) (*Run, error) {
 			return cur, nil
 		}
 		return nil, err
+	}
+	return s.Get(ctx, id)
+}
+
+// LastSuccessfulRun 查 baseline:同 project + 同 trigger.Branch、created_at 严格早于 before、
+// 最近一条 status=success 的运行。参数化 SQL;无匹配 → ErrNotFound。
+//
+// 选取语义(冻结):同项目 + 同分支 + 更早 + 最近成功。created_at 以 RFC3339 文本存储,
+// 字典序与时间序一致(同一 UTC 格式),故可直接以文本比较取「早于 before」。
+func (s *service) LastSuccessfulRun(ctx context.Context, projectID, branch string, before time.Time) (*Run, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return nil, ErrNotFound
+	}
+	beforeStr := before.UTC().Format(time.RFC3339)
+
+	var id string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id FROM pipeline_runs
+		 WHERE project_id = ? AND trigger_branch = ? AND status = ? AND created_at < ?
+		 ORDER BY created_at DESC, id DESC
+		 LIMIT 1`,
+		projectID, branch, StatusSuccess, beforeStr,
+	).Scan(&id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("run: query last successful run: %w", err)
 	}
 	return s.Get(ctx, id)
 }

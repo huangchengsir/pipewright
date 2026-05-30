@@ -3,6 +3,7 @@ package build
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -29,10 +30,16 @@ func emitCmd(onLine func(stream, line string), bin string, display []string) {
 }
 
 func (d *shellDriver) Build(ctx context.Context, contextDir, dockerfile, localTag string, buildArgs, secretArgs []string, onLine func(stream, line string)) (int, error) {
+	// `-f` 的相对路径由 docker 相对**当前工作目录**(而非 context)解析,故须把相对 Dockerfile
+	// 显式拼到 contextDir 下,否则 docker 在进程 cwd 找不到克隆出的 Dockerfile。绝对路径原样用。
+	dfPath := dockerfile
+	if !filepath.IsAbs(dfPath) {
+		dfPath = filepath.Join(contextDir, dockerfile)
+	}
 	// 真实参数:含 secret 的 --build-arg K=V(注入子进程,不进可见日志)。
-	args := []string{"build", "-f", dockerfile, "-t", localTag}
+	args := []string{"build", "-f", dfPath, "-t", localTag}
 	// 回显参数:secret 的 --build-arg 只列 key(K=***),绝不打印值。
-	display := []string{"build", "-f", dockerfile, "-t", localTag}
+	display := []string{"build", "-f", dfPath, "-t", localTag}
 	for _, kv := range buildArgs {
 		args = append(args, "--build-arg", kv)
 		display = append(display, "--build-arg", kv) // 非 secret:可见

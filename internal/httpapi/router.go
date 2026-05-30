@@ -48,6 +48,7 @@ type options struct {
 	runSub    runSubscriber
 	receiver  *trigger.Receiver
 	audit     audit.Recorder
+	account   accountService
 }
 
 // WithVault 注入凭据保险库,挂载 /api/credentials* 路由。
@@ -94,6 +95,12 @@ func WithWebhooks(rc *trigger.Receiver) Option {
 // 敏感操作 handler 在业务成功后追加审计行。不传则 /api/audit 返回 503,且写操作不审计。
 func WithAudit(rec audit.Recorder) Option {
 	return func(o *options) { o.audit = rec }
+}
+
+// WithAccount 注入账户设置服务(Story 1.7),挂载 /api/account/* 路由
+// (改口令 / 会话列表 / 撤销会话)。不传则相关端点返回 503。
+func WithAccount(s accountService) Option {
+	return func(o *options) { o.account = s }
 }
 
 // New 构建 HTTP 处理器:健康端点 + Auth API + (可选)凭据 API + 内嵌 SPA 静态托管。
@@ -183,6 +190,14 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 
 		// 手动触发创建运行(Story 3.2):认证 + CSRF;actor=admin;返 201 run-detail DTO。
 		ar.Post("/projects/{id}/runs", makeManualRunHandler(rs, aud))
+
+		// 账户设置(Story 1.7):改口令 / 会话列表 / 撤销会话。ac 为 nil 时 handler 返回 503。
+		// 改口令、撤销会话为写方法,过 auth + CSRF;列表为 GET,过 auth。
+		// 改口令 / 撤销会话为敏感操作,业务成功后接 audit(detail 绝无明文口令)。
+		ac := o.account
+		ar.Post("/account/password", makeChangePasswordHandler(ac, aud))
+		ar.Get("/account/sessions", makeListSessionsHandler(ac))
+		ar.Delete("/account/sessions/{id}", makeRevokeSessionHandler(ac, aud))
 
 		// 后续 story 在此挂载其他 API 路由。
 	})

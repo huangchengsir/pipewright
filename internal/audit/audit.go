@@ -37,6 +37,8 @@ const (
 	ActionProjectUpdate      = "project_update"
 	ActionProjectDelete      = "project_delete"
 	ActionRunTriggerManual   = "run_trigger_manual"
+	ActionPasswordChange     = "password_change"
+	ActionSessionRevoke      = "session_revoke"
 )
 
 // 目标类型枚举(供 TargetType 填值;非强制白名单,便于后续 story 扩展)。
@@ -45,6 +47,8 @@ const (
 	TargetProject    = "project"
 	TargetTrigger    = "trigger"
 	TargetRun        = "run"
+	TargetAccount    = "account"
+	TargetSession    = "session"
 )
 
 // Entry 是一条审计写入入参(冻结契约)。Detail 写库前过 Masker,绝不含明文 secret。

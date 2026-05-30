@@ -1,1 +1,0 @@
-import{n as t}from"./index-D_TfHPsU.js";async function r(){return t.get("/api/credentials")}async function i(e){return t.post("/api/credentials",e)}async function s(e,n){return t.patch(`/api/credentials/${e}`,n)}async function c(e){return t.delete(`/api/credentials/${e}`)}export{i as c,c as d,r as l,s as u};

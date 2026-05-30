@@ -1,1 +1,0 @@
-import{n as e}from"./index-D_TfHPsU.js";async function r(){return e.get("/api/projects")}async function s(t){return e.post("/api/projects",t)}async function o(t){return e.post("/api/projects/test-clone",t)}async function a(t,c){return e.patch(`/api/projects/${t}`,c)}async function p(t){return e.delete(`/api/projects/${t}`)}export{s as c,p as d,r as l,o as t,a as u};

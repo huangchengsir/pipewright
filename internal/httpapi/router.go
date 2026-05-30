@@ -233,6 +233,8 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Get("/runs/{id}/events", makeRunEventsHandler(rs, o.runSub))
 		// 历史日志拉取 / 分页(Story 3.6):只读 + 认证;sinceSeq 分页;complete=终态。
 		ar.Get("/runs/{id}/logs", makeRunLogsHandler(rs))
+		// 构建产物契约(Story 3.4 / FR-6):只读 + 认证;按 (type, reference) 供 Epic 4 消费。
+		ar.Get("/runs/{id}/artifacts", makeRunArtifactsHandler(rs))
 		ar.Post("/runs/{id}/cancel", makeCancelRunHandler(rs))
 
 		// AI 失败诊断(Story 7.2):显式(重)诊断。认证 + CSRF(写方法)。

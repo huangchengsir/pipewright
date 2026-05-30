@@ -3,6 +3,8 @@ package deploy
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -46,6 +48,11 @@ func (s *stubTarget) Exec(_ context.Context, serverID string, cmd []string) (*ta
 		return s.execFn(serverID, cmd)
 	}
 	return &target.ExecResult{ExitCode: 0}, nil
+}
+
+// ExecStream 满足 target.Service 接口(Story 6.2 append);部署不用流式,桩返回 not-supported。
+func (s *stubTarget) ExecStream(context.Context, string, []string) (io.ReadCloser, error) {
+	return nil, errors.New("execstream not supported in stub")
 }
 
 // ---- 测试脚手架 -------------------------------------------------------------

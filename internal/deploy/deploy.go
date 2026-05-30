@@ -18,8 +18,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/huangjiawei/devopstool/internal/run"
-	"github.com/huangjiawei/devopstool/internal/target"
+	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/target"
 )
 
 // 领域错误。错误体永不含明文 / 私钥 / 口令 / 内部栈。

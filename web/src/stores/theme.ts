@@ -3,7 +3,7 @@ import { ref, watch } from 'vue'
 
 export type Theme = 'dark' | 'light'
 
-const STORAGE_KEY = 'devopstool-theme'
+const STORAGE_KEY = 'pipewright-theme'
 const DEFAULT_THEME: Theme = 'dark'
 
 function applyTheme(theme: Theme): void {

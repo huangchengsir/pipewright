@@ -1,4 +1,4 @@
-# devopsTool 自身仓库的 CI(GitHub Actions)。与产品面向用户的首发平台 Gitee(FR-1)无关。
+# Pipewright 自身仓库的 CI(GitHub Actions)。与产品面向用户的首发平台 Gitee(FR-1)无关。
 # 用内置 gofmt + go vet(项目 config-protection 钩子禁止提交 lint 配置文件,故不引入 golangci)。
 name: ci
 
@@ -26,7 +26,7 @@ jobs:
       - run: go vet . ./cmd/... ./internal/...
       - run: go test . ./cmd/... ./internal/...
       - name: static build
-        run: CGO_ENABLED=0 go build -o devopstool ./cmd/devopstool
+        run: CGO_ENABLED=0 go build -o pipewright ./cmd/pipewright
 
   frontend:
     runs-on: ubuntu-latest

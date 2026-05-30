@@ -52,7 +52,7 @@ func (s *service) sendWebhook(ctx context.Context, ch *Channel, payload Payload)
 		return fmt.Errorf("webhook 请求构造失败:地址可能非法")
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "devopsTool-notify/1")
+	req.Header.Set("User-Agent", "Pipewright-notify/1")
 
 	resp, err := s.client.Do(req)
 	if err != nil {

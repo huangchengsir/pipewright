@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/huangjiawei/devopstool/internal/target"
+	"github.com/huangchengsir/pipewright/internal/target"
 )
 
 // --- 纯函数:target 校验(AC-SEC-02 要害) ---

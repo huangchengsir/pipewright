@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/huangjiawei/devopstool/internal/run"
+	"github.com/huangchengsir/pipewright/internal/run"
 )
 
 // ---- 冻结 artifacts 契约(Story 3.4 / FR-6;camelCase) ----------------------

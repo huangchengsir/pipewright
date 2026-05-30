@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/huangjiawei/devopstool/internal/vault"
+	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 // 领域错误。错误体永不含明文/凭据/master key/内部栈。

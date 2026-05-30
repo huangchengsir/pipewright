@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/huangjiawei/devopstool/internal/target"
+	"github.com/huangchengsir/pipewright/internal/target"
 )
 
 // Story 6.2(FR-16):服务日志查看(历史 + 实时 tail,经 SSH)。

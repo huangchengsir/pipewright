@@ -20,10 +20,10 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=web /app/web/dist ./web/dist
-RUN go build -o /devopstool ./cmd/devopstool
+RUN go build -o /pipewright ./cmd/pipewright
 
 # ---- 运行镜像 ----
 FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build /devopstool /devopstool
+COPY --from=build /pipewright /pipewright
 EXPOSE 8080
-ENTRYPOINT ["/devopstool"]
+ENTRYPOINT ["/pipewright"]

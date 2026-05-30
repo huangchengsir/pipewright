@@ -5,10 +5,10 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/huangjiawei/devopstool/internal/pipeline"
-	"github.com/huangjiawei/devopstool/internal/project"
-	"github.com/huangjiawei/devopstool/internal/trigger"
-	"github.com/huangjiawei/devopstool/internal/vault"
+	"github.com/huangchengsir/pipewright/internal/pipeline"
+	"github.com/huangchengsir/pipewright/internal/project"
+	"github.com/huangchengsir/pipewright/internal/trigger"
+	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 // ---- 校验结果 DTO(冻结契约;camelCase;外层 {ready, issues:[{severity,code,scope,field,message}]} 定死) ----

@@ -8,7 +8,7 @@ PORT="${MEMCHECK_PORT:-18099}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-BIN="$(mktemp -t devopstool.XXXXXX)"
+BIN="$(mktemp -t pipewright.XXXXXX)"
 DB="$(mktemp -u -t dtmem.XXXXXX).db" # -u: 只取名不创建,确保实际 DB 路径与名字一致(不泄漏临时文件)
 PID=""
 cleanup() {
@@ -18,10 +18,10 @@ cleanup() {
 trap cleanup EXIT
 
 echo "==> building static binary"
-CGO_ENABLED=0 go build -o "$BIN" ./cmd/devopstool
+CGO_ENABLED=0 go build -o "$BIN" ./cmd/pipewright
 
 echo "==> starting on :$PORT"
-DEVOPSTOOL_ADDR=":$PORT" DEVOPSTOOL_DB="$DB" "$BIN" >/dev/null 2>&1 &
+PIPEWRIGHT_ADDR=":$PORT" PIPEWRIGHT_DB="$DB" "$BIN" >/dev/null 2>&1 &
 PID=$!
 
 healthy=0

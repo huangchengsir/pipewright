@@ -16,22 +16,22 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/huangjiawei/devopstool/internal/ai"
-	"github.com/huangjiawei/devopstool/internal/audit"
-	"github.com/huangjiawei/devopstool/internal/auth"
-	"github.com/huangjiawei/devopstool/internal/deploy"
-	"github.com/huangjiawei/devopstool/internal/notify"
-	"github.com/huangjiawei/devopstool/internal/pipeline"
-	"github.com/huangjiawei/devopstool/internal/project"
-	"github.com/huangjiawei/devopstool/internal/run"
-	"github.com/huangjiawei/devopstool/internal/target"
-	"github.com/huangjiawei/devopstool/internal/trigger"
-	"github.com/huangjiawei/devopstool/internal/vault"
+	"github.com/huangchengsir/pipewright/internal/ai"
+	"github.com/huangchengsir/pipewright/internal/audit"
+	"github.com/huangchengsir/pipewright/internal/auth"
+	"github.com/huangchengsir/pipewright/internal/deploy"
+	"github.com/huangchengsir/pipewright/internal/notify"
+	"github.com/huangchengsir/pipewright/internal/pipeline"
+	"github.com/huangchengsir/pipewright/internal/project"
+	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/target"
+	"github.com/huangchengsir/pipewright/internal/trigger"
+	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 const (
-	cookieSession = "devops_session"
-	cookieCsrf    = "devops_csrf"
+	cookieSession = "pipewright_session"
+	cookieCsrf    = "pipewright_csrf"
 	headerCsrf    = "X-CSRF-Token"
 )
 
@@ -453,7 +453,7 @@ func sessionFromContext(ctx context.Context) (*auth.Session, bool) {
 //
 // 相较旧的「header == cookie」双提交方案,以会话存储的 csrf_token 为权威值,
 // 子域/MITM 写入伪造 cookie 无法绕过(攻击者读不到 HttpOnly 会话对应的服务端 token)。
-// 前端契约不变:它仍发送 header = devops_csrf cookie 值,而该 cookie 下发的正是
+// 前端契约不变:它仍发送 header = pipewright_csrf cookie 值,而该 cookie 下发的正是
 // session.CSRFToken,故 header 仍等于 session.CSRFToken。
 func requireCSRF(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

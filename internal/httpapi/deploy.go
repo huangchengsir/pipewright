@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/huangjiawei/devopstool/internal/deploy"
-	"github.com/huangjiawei/devopstool/internal/run"
+	"github.com/huangchengsir/pipewright/internal/deploy"
+	"github.com/huangchengsir/pipewright/internal/run"
 )
 
 // ---- 冻结 run-detail targets 子 DTO(Story 4.2;填 3-1 留的 null slot) -------

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/huangjiawei/devopstool/internal/audit"
+	"github.com/huangchengsir/pipewright/internal/audit"
 )
 
 // auditActor 返回当前请求的操作者标识。本平台为单管理员账户,认证写操作的操作者
@@ -18,10 +18,10 @@ const auditActor = "admin"
 
 // clientIP 从请求提取来源 IP,用于审计记录(非安全判定)。
 //
-// **默认只用 RemoteAddr**:devopsTool 常作单二进制直连暴露,无反代。若无条件采信
+// **默认只用 RemoteAddr**:Pipewright 常作单二进制直连暴露,无反代。若无条件采信
 // X-Forwarded-For,任意客户端可发 `X-Forwarded-For: 1.2.3.4` 把伪造来源写进 append-only
 // 的审计 ip 列,削弱 AC-SEC-03「不可篡改」的取证价值。仅当显式配置可信反代
-// (DEVOPSTOOL_TRUST_PROXY=1/true)时才采信 XFF 首段。
+// (PIPEWRIGHT_TRUST_PROXY=1/true)时才采信 XFF 首段。
 func clientIP(r *http.Request) string {
 	if trustForwardedHeader() {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
@@ -40,7 +40,7 @@ func clientIP(r *http.Request) string {
 
 // trustForwardedHeader 报告是否采信 X-Forwarded-For(仅在显式配置可信反代时)。
 func trustForwardedHeader() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("DEVOPSTOOL_TRUST_PROXY"))) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("PIPEWRIGHT_TRUST_PROXY"))) {
 	case "1", "true", "yes", "on":
 		return true
 	default:

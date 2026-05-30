@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/huangjiawei/devopstool/internal/notify"
-	"github.com/huangjiawei/devopstool/internal/run"
+	"github.com/huangchengsir/pipewright/internal/notify"
+	"github.com/huangchengsir/pipewright/internal/run"
 )
 
 // NewNotifyHook 把 run.Service + notify.Service 适配为 run.WorkerPool 的 best-effort 通知钩子

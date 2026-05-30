@@ -9,9 +9,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/huangjiawei/devopstool/internal/auth"
-	"github.com/huangjiawei/devopstool/internal/notify"
-	"github.com/huangjiawei/devopstool/internal/vault"
+	"github.com/huangchengsir/pipewright/internal/auth"
+	"github.com/huangchengsir/pipewright/internal/notify"
+	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 // setupNotifyServer 构造带 auth + vault + notify 的测试 server;notify 用注入 client(默认指向给定 stub)。

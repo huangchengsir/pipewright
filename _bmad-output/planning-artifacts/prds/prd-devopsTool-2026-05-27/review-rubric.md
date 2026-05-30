@@ -1,4 +1,4 @@
-# PRD 质量评审 — devopsTool（2026-05-27）
+# PRD 质量评审 — Pipewright（2026-05-27）
 
 ## 总体结论（Gate verdict）
 

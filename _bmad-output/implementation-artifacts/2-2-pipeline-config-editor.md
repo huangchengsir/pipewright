@@ -59,7 +59,7 @@ Base:认证保护(`requireAuth`),写方法过 `requireCSRF`(双提交 `X-CSRF-To
 - `internal/store/migrations/0008_pipelines.sql` —— `pipeline_configs`(project_id PK·spec_json·spec_yaml·status·created_at·updated_at·FK→projects CASCADE)。
 - `internal/httpapi/pipelines.go` + `pipelines_test.go` —— GET/PUT handler + DTO 映射 + 错误映射。
 - `internal/httpapi/router.go`(改):加 `WithPipelines(s pipeline.Service)` Option + 挂载 `GET/PUT /api/projects/{id}/pipeline`(GET 过 auth;PUT 过 auth+CSRF)。
-- `cmd/devopstool/main.go`(改):装配 `pipeline.New(db)` + `httpapi.New(..., WithPipelines(...))`。
+- `cmd/pipewright/main.go`(改):装配 `pipeline.New(db)` + `httpapi.New(..., WithPipelines(...))`。
 - `go.mod`/`go.sum`:可加 `gopkg.in/yaml.v3`(渲染 YAML;纯 Go,体积小)。**拉依赖需 `dangerouslyDisableSandbox`(goproxy.cn 已配)。** 若不愿加依赖,可手写最小 YAML 序列化(spec 结构简单),二选一。
 
 **前端(只动 `web/`):**

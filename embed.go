@@ -1,6 +1,6 @@
-// Package devopstool is the module root. It embeds the built frontend (web/dist)
+// Package pipewright is the module root. It embeds the built frontend (web/dist)
 // so the whole platform ships as a single static binary (go:embed).
-package devopstool
+package pipewright
 
 import (
 	"embed"

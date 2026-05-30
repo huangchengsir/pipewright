@@ -1,5 +1,5 @@
 ---
-title: "devopsTool — Design"
+title: "Pipewright — Design"
 status: final
 created: 2026-05-27
 updated: 2026-05-28
@@ -225,13 +225,13 @@ components:
     radius: '{rounded.full}'
 ---
 
-# devopsTool — 视觉身份(DESIGN.md)
+# Pipewright — 视觉身份(DESIGN.md)
 
-> 本文件是 devopsTool 的视觉契约。**当本文件与任意 mock(`mockups/*.html`)冲突时,以本文件为准。** mock 是同一视觉语言的实现样本与可截图参考;`mockups/mock-run-diagnosis.html` 是令牌锚点(其 `:root` / `[data-theme="light"]` 即完整双主题令牌集),`mockups/mock-states-components.html` 是组件与状态目录。
+> 本文件是 Pipewright 的视觉契约。**当本文件与任意 mock(`mockups/*.html`)冲突时,以本文件为准。** mock 是同一视觉语言的实现样本与可截图参考;`mockups/mock-run-diagnosis.html` 是令牌锚点(其 `:root` / `[data-theme="light"]` 即完整双主题令牌集),`mockups/mock-states-components.html` 是组件与状态目录。
 
 ## Brand & Style
 
-devopsTool 是一个轻量、自托管、开源的 CI/CD 与部署编排平台。它的产品立场是"**冷静的工程控制台**"——为运维与开发者在低光、凌晨、出故障的真实场景里服务,刻意与 Jenkins 的杂乱后台拉开距离:干净、克制、信息密度高,每一屏都像一张可以直接放进开源首页的产品截图。
+Pipewright 是一个轻量、自托管、开源的 CI/CD 与部署编排平台。它的产品立场是"**冷静的工程控制台**"——为运维与开发者在低光、凌晨、出故障的真实场景里服务,刻意与 Jenkins 的杂乱后台拉开距离:干净、克制、信息密度高,每一屏都像一张可以直接放进开源首页的产品截图。
 
 视觉语言由此而来:**深色为默认主题**(贴合 ops 低光使用、降低与传统 CI 工具的视觉关联),**浅色为完全对等的第二主题**(同一套令牌的另一组取值,通过 `data-theme` 切换,二者都必须看起来是经过设计的、而非"深色反色")。层叠的深色表面营造纵深;卡片"浮"在带微弱品牌色辉光的背景之上。**单一品牌强调色是电蓝**,语义状态色(绿/琥珀/红)各司其职,**青色是 AI 的专属语义**——只在 AI 功能出现。
 

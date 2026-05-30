@@ -36,7 +36,7 @@ As a 管理员,I want 敏感操作写入 append-only 审计、运行日志落盘
 ## 文件切分(零冲突,前后端并行;本 story 自成一对 BE+FE)
 **后端(只动 Go):**
 - `internal/store/migrations/0009_audit.sql`:`audit_log` 表(id·timestamp·actor·action·target_type·target_id·detail_json·ip·created_at)。**append-only**:应用层只 INSERT/SELECT;可加 SQLite trigger 阻止 UPDATE/DELETE(`BEFORE UPDATE/DELETE ... RAISE(ABORT)`)硬化不可篡改。
-- `internal/audit/audit.go` + `audit_test.go`:Recorder 接口 + 本地 DB 实现 + 可选远端 sink(env 配 `DEVOPSTOOL_AUDIT_SINK`,如本地第二文件路径或 HTTP append;sink 失败不阻断主操作,但记录降级)。AC-SEC-03 测试:写 N 条 → 删本地表/文件 → 远端 sink 仍有 N 条。
+- `internal/audit/audit.go` + `audit_test.go`:Recorder 接口 + 本地 DB 实现 + 可选远端 sink(env 配 `PIPEWRIGHT_AUDIT_SINK`,如本地第二文件路径或 HTTP append;sink 失败不阻断主操作,但记录降级)。AC-SEC-03 测试:写 N 条 → 删本地表/文件 → 远端 sink 仍有 N 条。
 - `internal/mask/mask.go` + `mask_test.go`:Masker(RegisterSecret/Scrub)。AC-SEC-04 测试:注册 secret,Scrub("echo "+secret) → 含 `[MASKED]` 不含明文;短串不误伤;多次出现全替换。
 - `internal/httpapi/audit.go` + `audit_test.go`:`GET /api/audit` 列表(认证 + 分页 + 过滤)。
 - 接入点(改既有 handler,**仅在写成功后追加一行 Record 调用**,不改其逻辑):`httpapi/credentials.go`、`httpapi/triggers.go`(reset)、`httpapi/projects.go`、`httpapi/webhooks.go`(manual run)。**注意:这些文件 2-2 后端不碰,但 router.go/main.go 漏斗 2-2 会改 → 本 story 走独立 worktree,集成时我合并 router/main。**

@@ -49,6 +49,6 @@ As a 管理员,I want 运行成功后看到它产出的构建产物(类型 + 寻
 
 ## 编排者亲验清单
 - `export PATH="/Users/huangjiawei/sdk/go/bin:$PATH"`;gofmt/vet/`go test -race ./internal/run/... ./internal/httpapi/...`/`CGO_ENABLED=0 build`/mem-check。
-- 前端 `npm --prefix web run typecheck`(symlink 主仓 node_modules 进 worktree:`ln -s /Users/huangjiawei/huangjiawei/devopsTool/web/node_modules web/node_modules`)+ build。
+- 前端 `npm --prefix web run typecheck`(symlink 主仓 node_modules 进 worktree:`ln -s /Users/huangjiawei/huangjiawei/Pipewright/web/node_modules web/node_modules`)+ build。
 - 单测:成功 run → ListArtifacts 非空;GET artifacts 形态;run-detail 填 slot;404。
 - worktree 内 `git add` + commit(分支名 story/3-4)。

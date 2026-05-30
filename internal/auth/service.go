@@ -82,7 +82,7 @@ func (s *Service) Bootstrap(username, password string) error {
 	}
 	if password == "" {
 		// 无口令且无 admin:提示如何设置,但不阻断服务。
-		log.Printf("[auth] 警告:未设置管理员账号。请通过 DEVOPSTOOL_ADMIN_PASSWORD 环境变量设置口令后重启。")
+		log.Printf("[auth] 警告:未设置管理员账号。请通过 PIPEWRIGHT_ADMIN_PASSWORD 环境变量设置口令后重启。")
 		return nil
 	}
 	if username == "" {

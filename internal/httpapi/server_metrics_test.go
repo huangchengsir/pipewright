@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/huangjiawei/devopstool/internal/target"
+	"github.com/huangchengsir/pipewright/internal/target"
 )
 
 // --- 纯函数解析器单测(AC:健壮容错,空/格式异常 → 不 panic、false) ---

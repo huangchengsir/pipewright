@@ -6,7 +6,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/huangjiawei/devopstool/internal/run"
+	"github.com/huangchengsir/pipewright/internal/run"
 )
 
 // commands.go 按产物 type 构造部署命令(**全程 array 化 []string**;AC-SEC-02)。
@@ -24,7 +24,7 @@ import (
 // 返回:(命令序列, 成功摘要文案, 错误)。错误用于无法构造命令的情形(如非法 type)。
 
 // defaultDeployRoot 是未在 Config 指定路径时的部署根目录(本机真验友好:用临时区,不需 root)。
-const defaultDeployRoot = "/tmp/devopstool-deploy"
+const defaultDeployRoot = "/tmp/pipewright-deploy"
 
 // buildCommands 据产物 type 返回部署命令序列 + 成功摘要。
 func buildCommands(a run.Artifact, cfg map[string]string) ([][]string, string, error) {

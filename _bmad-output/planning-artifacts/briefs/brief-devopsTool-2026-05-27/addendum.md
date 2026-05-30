@@ -1,4 +1,4 @@
-# Addendum — devopsTool 简报附录
+# Addendum — Pipewright 简报附录
 
 保留属于下游文档(PRD / 架构 / 方案设计)的深度内容与技术约束,不挤占简报正文。
 

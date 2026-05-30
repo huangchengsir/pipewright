@@ -1,6 +1,6 @@
 # generated: 2026-05-28
 # last_updated: 2026-05-30 (并行波4 Epic7 7-3/7-4/7-5 合并 → review)
-# project: devopsTool
+# project: Pipewright
 # project_key: NOKEY
 # tracking_system: file-system
 # story_location: _bmad-output/implementation-artifacts
@@ -34,13 +34,13 @@
 # - Developer typically creates next story after previous one is 'done' to incorporate learnings
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 #
-# IMPLEMENTATION NOTE (devopsTool):
+# IMPLEMENTATION NOTE (Pipewright):
 # - 建议 M1 最薄竖切优先打通:1-1 → 2-1 → 2-3 → 3-2 → 3-3 → 4-1 → 4-2 → 4-4 → 5-1
 # - 开建 Epic 7 / 4-6 前先完成 PRD Open Q#7 的 AI 差异化前置验证实验
 
 generated: 2026-05-28
 last_updated: 2026-05-30 (并行波4 Epic7 7-3/7-4/7-5 合并 → review)
-project: devopsTool
+project: Pipewright
 project_key: NOKEY
 tracking_system: file-system
 story_location: _bmad-output/implementation-artifacts

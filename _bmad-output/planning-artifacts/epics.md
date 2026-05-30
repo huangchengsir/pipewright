@@ -3,18 +3,18 @@ stepsCompleted: [1, 2, 3, 4]
 status: 'complete'
 completedAt: '2026-05-28'
 inputDocuments:
-  - '_bmad-output/planning-artifacts/prds/prd-devopsTool-2026-05-27/prd.md'
-  - '_bmad-output/planning-artifacts/prds/prd-devopsTool-2026-05-27/addendum.md'
+  - '_bmad-output/planning-artifacts/prds/prd-Pipewright-2026-05-27/prd.md'
+  - '_bmad-output/planning-artifacts/prds/prd-Pipewright-2026-05-27/addendum.md'
   - '_bmad-output/planning-artifacts/architecture.md'
-  - '_bmad-output/planning-artifacts/ux-designs/ux-devopsTool-2026-05-27/DESIGN.md'
-  - '_bmad-output/planning-artifacts/ux-designs/ux-devopsTool-2026-05-27/EXPERIENCE.md'
+  - '_bmad-output/planning-artifacts/ux-designs/ux-Pipewright-2026-05-27/DESIGN.md'
+  - '_bmad-output/planning-artifacts/ux-designs/ux-Pipewright-2026-05-27/EXPERIENCE.md'
 ---
 
-# devopsTool - Epic Breakdown
+# Pipewright - Epic Breakdown
 
 ## Overview
 
-本文档把 devopsTool 的 PRD 需求、UX 设计契约与架构决策,拆解为可实现的 epics 与 stories。devopsTool = 轻量、自托管、开源的 CI/CD + 部署编排平台(Go 单二进制双运行,≤100MB,AI 失败诊断为王牌),v1 全程 agentless(SSH),k8s 委托延后。
+本文档把 Pipewright 的 PRD 需求、UX 设计契约与架构决策,拆解为可实现的 epics 与 stories。Pipewright = 轻量、自托管、开源的 CI/CD + 部署编排平台(Go 单二进制双运行,≤100MB,AI 失败诊断为王牌),v1 全程 agentless(SSH),k8s 委托延后。
 
 > **M1 最薄竖切(优先打通,再回填广度):** 跨 epic 取最窄一条端到端路径作为首个里程碑——`1.1 → 2.1 → 2.3(单分支映射) → 3.2 → 3.3(单镜像产物) → 4.1 → 4.2 → 4.4 → 5.1(单渠道)`。先让作者第 1 个真实服务"push→build→deploy→notify"跑通,再把各 epic 的其余 story 横向补齐。避免按能力域纵切导致迟迟没有一次真实成功部署。
 >
@@ -94,7 +94,7 @@ inputDocuments:
 
 _来自架构文档(`architecture.md`)的技术与实现需求,影响 epic/story 拆分与排序。_
 
-- **【起步 · Epic 1 Story 1】Scaffold 最小有意图栈**(不套重型脚手架):Go module + **Chi**(HTTP)+ **modernc.org/sqlite(纯 Go,无 CGO)** + 内嵌 **Vue 3 + Vite** 经 `go:embed`;布局按架构目录树(`cmd/devopstool`、`internal/<领域包>`、`web/`)。**CI 内置"常驻内存 ≤100MB"回归断言**(NFR-4 的硬门)。
+- **【起步 · Epic 1 Story 1】Scaffold 最小有意图栈**(不套重型脚手架):Go module + **Chi**(HTTP)+ **modernc.org/sqlite(纯 Go,无 CGO)** + 内嵌 **Vue 3 + Vite** 经 `go:embed`;布局按架构目录树(`cmd/pipewright`、`internal/<领域包>`、`web/`)。**CI 内置"常驻内存 ≤100MB"回归断言**(NFR-4 的硬门)。
 - **数据架构**:SQLite via modernc(支持 `CGO_DISABLED` 全静态交叉编译 = 双运行前提);入库实体:项目 / 流水线配置(YAML 文本+解析)/ 运行历史 / 环境快照(支撑 FR-25)/ 诊断反馈(FR-26)/ 凭据(加密)/ 审计;内嵌 SQL 迁移,启动自动应用;仅 `internal/store` 触库,领域包经 repository 接口。
 - **认证实现**:会话 cookie + **argon2id** 口令哈希;状态变更接口 **CSRF** 防护。
 - **凭据保险库实现**:内嵌加密(NaCl secretbox / age),master key 来自环境变量/文件、**不入库**。

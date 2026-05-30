@@ -27,7 +27,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/huangjiawei/devopstool/internal/vault"
+	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 // 构建模型枚举(model=A 自带 Dockerfile / B 平台工具链)。DB 存于 build_json;JSON camelCase。

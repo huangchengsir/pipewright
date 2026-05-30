@@ -76,7 +76,7 @@ func splitRecipients(to string) []string {
 func buildMessage(from string, to []string, payload Payload) []byte {
 	subject := payload.Title
 	if subject == "" {
-		subject = "devopsTool 通知"
+		subject = "Pipewright 通知"
 	}
 	var b strings.Builder
 	b.WriteString("From: " + from + "\r\n")

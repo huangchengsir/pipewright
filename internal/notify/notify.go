@@ -29,7 +29,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/huangjiawei/devopstool/internal/vault"
+	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 // 渠道类型枚举(DB 存小写字串;JSON 同名)。本期实现 webhook + email,其余占位。
@@ -545,10 +545,10 @@ func validateConfig(t string, c Config) error {
 // testPayload 构造一条测试通知载荷。
 func testPayload() Payload {
 	return Payload{
-		Title: "devopsTool 测试通知",
-		Body:  "这是一条来自 devopsTool 的测试通知,用于验证渠道连通性。",
+		Title: "Pipewright 测试通知",
+		Body:  "这是一条来自 Pipewright 的测试通知,用于验证渠道连通性。",
 		Fields: map[string]string{
-			"source": "devopsTool",
+			"source": "Pipewright",
 			"kind":   "test",
 		},
 	}

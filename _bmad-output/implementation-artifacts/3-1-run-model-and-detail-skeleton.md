@@ -112,7 +112,7 @@ Dismissed:`dbStepSink` StepDone 用 background ctx 与 StepRunning 用 runCtx �
 - vite build: 成功,RunDetail-BA1-Ops5.js 18.81 kB gzip 5.06 kB
 - (后端)gofmt -l cmd internal: 空;go vet . ./cmd/... ./internal/...: 干净
 - (后端)go test . ./cmd/... ./internal/...: 全绿;go test -race ./internal/run ./internal/httpapi: 全绿
-- (后端)CGO_ENABLED=0 go build ./cmd/devopstool: 成功;go mod tidy: go.mod/go.sum 无变化
+- (后端)CGO_ENABLED=0 go build ./cmd/pipewright: 成功;go mod tidy: go.mod/go.sum 无变化
 - (后端)make mem-check: resident 20MB ≤ 100MB,OK
 - (后端)真实二进制冒烟:登录 → DB 播种 queued run → GET /api/runs(列表)/GET /api/runs/{id}(targets/diagnosis=null 且 key 存在)/GET /api/runs/{id}/events(读到 `event: status` 帧)/未认证 SSE = 401
 
@@ -142,7 +142,7 @@ Dismissed:`dbStepSink` StepDone 用 background ctx 与 StepRunning 用 runCtx �
 - internal/httpapi/runs.go (新建:DTO + handlers + SSE)
 - internal/httpapi/runs_test.go (新建:HTTP/SSE/auth/CSRF 测试)
 - internal/httpapi/router.go (改:WithRuns Option + /api/runs* 路由)
-- cmd/devopstool/main.go (改:装配 RunService + pool + 优雅停机 + WriteTimeout=0)
+- cmd/pipewright/main.go (改:装配 RunService + pool + 优雅停机 + WriteTimeout=0)
 
 ## Change Log
 

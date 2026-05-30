@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/huangjiawei/devopstool/internal/store"
+	"github.com/huangchengsir/pipewright/internal/store"
 )
 
 // testDB 打开临时 SQLite(含全部迁移)。

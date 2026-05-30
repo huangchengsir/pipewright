@@ -142,9 +142,21 @@ func TestDeployDistSuccess(t *testing.T) {
 			t.Fatalf("空命令")
 		}
 	}
-	// 首条应为 mkdir -p(array 形式)。
-	if tgt.calls[0][0] != "mkdir" {
-		t.Fatalf("首条命令非 mkdir: %v", tgt.calls[0])
+	// dist 走 release 模式(4-4):首条为 readlink current(探测上一发布);随后含 mkdir releases/<runId>。
+	var sawMkdir, sawLn bool
+	for _, c := range tgt.calls {
+		if c[0] == "mkdir" {
+			sawMkdir = true
+		}
+		if c[0] == "ln" && len(c) >= 4 && c[1] == "-sfn" {
+			sawLn = true
+		}
+	}
+	if !sawMkdir {
+		t.Fatalf("release 模式应含 mkdir 命令: %v", tgt.calls)
+	}
+	if !sawLn {
+		t.Fatalf("release 模式应含 ln -sfn current 原子切换: %v", tgt.calls)
 	}
 
 	// 持久化 + 终态。

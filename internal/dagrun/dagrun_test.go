@@ -14,9 +14,15 @@ import (
 
 // ─── 测试替身 ──────────────────────────────────────────────────────────────────
 
-type fakeLoader struct{ cfg *pipeline.Config }
+type fakeLoader struct {
+	cfg        *pipeline.Config
+	gotBranch  string
+	gotProject string
+}
 
-func (f fakeLoader) Get(_ context.Context, _ string) (*pipeline.Config, error) {
+func (f *fakeLoader) Get(_ context.Context, projectID string, branch string) (*pipeline.Config, error) {
+	f.gotProject = projectID
+	f.gotBranch = branch
 	return f.cfg, nil
 }
 
@@ -73,7 +79,7 @@ func TestRunnerWhenSkipsStageAndDownstreamWithoutFailing(t *testing.T) {
 	)
 	var ranDeploy bool
 	sink := newFakeSink()
-	r := New(fakeLoader{cfg}, WithStageExecutor(
+	r := New(&fakeLoader{cfg: cfg}, WithStageExecutor(
 		func(_ context.Context, _ *run.Run, st pipeline.Stage, _ StageReporter) error {
 			if st.ID == "deploy" {
 				ranDeploy = true
@@ -113,7 +119,7 @@ func TestRunnerGateApprovedRunsStage(t *testing.T) {
 		pipeline.Stage{ID: "deploy", Name: "部署", Needs: []string{"src"}, Gate: true},
 	)
 	var ran bool
-	r := New(fakeLoader{cfg},
+	r := New(&fakeLoader{cfg: cfg},
 		WithGate(func(_ context.Context, _ *run.Run, _ pipeline.Stage) (bool, error) {
 			return true, nil // 批准
 		}),
@@ -138,7 +144,7 @@ func TestRunnerGateRejectedFailsStage(t *testing.T) {
 		pipeline.Stage{ID: "deploy", Name: "部署", Needs: []string{"src"}, Gate: true},
 	)
 	var ran bool
-	r := New(fakeLoader{cfg},
+	r := New(&fakeLoader{cfg: cfg},
 		WithGate(func(_ context.Context, _ *run.Run, _ pipeline.Stage) (bool, error) {
 			return false, nil // 拒绝
 		}),
@@ -177,7 +183,7 @@ func TestRunnerWhenMatchedRunsStage(t *testing.T) {
 	)
 	var ranDeploy bool
 	sink := newFakeSink()
-	r := New(fakeLoader{cfg}, WithStageExecutor(
+	r := New(&fakeLoader{cfg: cfg}, WithStageExecutor(
 		func(_ context.Context, _ *run.Run, st pipeline.Stage, _ StageReporter) error {
 			if st.ID == "deploy" {
 				ranDeploy = true
@@ -230,6 +236,47 @@ func TestBuildGraphExplicitNeeds(t *testing.T) {
 	}
 }
 
+// ─── SpecLoader 分支贯穿(FR-8-12)──────────────────────────────────────────────
+
+// Runner 须把本次运行的分支(run.Trigger.Branch)透传给 SpecLoader.Get,
+// 供「流水线即代码」按运行分支取 `.pipewright.yml`。
+func TestRunnerThreadsRunBranchToLoader(t *testing.T) {
+	cfg := cfgWith(pipeline.Stage{ID: "src", Name: "源"})
+	ld := &fakeLoader{cfg: cfg}
+	r := New(ld)
+	err := r.Run(context.Background(),
+		&run.Run{ProjectID: "proj-x", Trigger: run.Trigger{Type: "push", Branch: "feature/x"}}, newFakeSink())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if ld.gotProject != "proj-x" {
+		t.Errorf("loader 应收到 projectID=proj-x,实际 %q", ld.gotProject)
+	}
+	if ld.gotBranch != "feature/x" {
+		t.Errorf("loader 应收到运行分支 feature/x,实际 %q", ld.gotBranch)
+	}
+}
+
+// SpecLoaderFunc 把分支无关的 2 参库内 loader 适配成 branch 感知契约:忽略 branch,委托底层。
+func TestSpecLoaderFuncIgnoresBranchAndDelegates(t *testing.T) {
+	cfg := cfgWith(pipeline.Stage{ID: "src", Name: "源"})
+	var gotProject string
+	var adapter SpecLoader = SpecLoaderFunc(func(_ context.Context, projectID string) (*pipeline.Config, error) {
+		gotProject = projectID
+		return cfg, nil
+	})
+	got, err := adapter.Get(context.Background(), "proj-y", "any-branch")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got != cfg {
+		t.Errorf("应委托底层返回同一 cfg")
+	}
+	if gotProject != "proj-y" {
+		t.Errorf("应透传 projectID=proj-y,实际 %q", gotProject)
+	}
+}
+
 // ─── Runner.Run ────────────────────────────────────────────────────────────────
 
 func TestRunnerLinearSuccess(t *testing.T) {
@@ -239,7 +286,7 @@ func TestRunnerLinearSuccess(t *testing.T) {
 		pipeline.Stage{ID: "deploy", Name: "部署"},
 	)
 	sink := newFakeSink()
-	r := New(fakeLoader{cfg})
+	r := New(&fakeLoader{cfg: cfg})
 	err := r.Run(context.Background(), &run.Run{ProjectID: "p"}, sink)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -262,7 +309,7 @@ func TestRunnerFailBlocksDownstreamAsSkipped(t *testing.T) {
 		pipeline.Stage{ID: "deploy", Name: "部署"},
 	)
 	sink := newFakeSink()
-	r := New(fakeLoader{cfg}, WithStageExecutor(
+	r := New(&fakeLoader{cfg: cfg}, WithStageExecutor(
 		func(_ context.Context, _ *run.Run, st pipeline.Stage, _ StageReporter) error {
 			if st.ID == "build" {
 				return errors.New("build boom")
@@ -300,7 +347,7 @@ func TestRunnerParallelSiblingsContinueOnFailure(t *testing.T) {
 	)
 	var ranB atomic.Bool
 	sink := newFakeSink()
-	r := New(fakeLoader{cfg}, WithStageExecutor(
+	r := New(&fakeLoader{cfg: cfg}, WithStageExecutor(
 		func(_ context.Context, _ *run.Run, st pipeline.Stage, _ StageReporter) error {
 			if st.ID == "a" {
 				return errors.New("a boom")
@@ -344,7 +391,7 @@ func TestRunnerExecutesIndependentStagesInParallel(t *testing.T) {
 	var once sync.Once
 	const par = 3
 	sink := newFakeSink()
-	r := New(fakeLoader{cfg}, WithStageExecutor(
+	r := New(&fakeLoader{cfg: cfg}, WithStageExecutor(
 		func(_ context.Context, _ *run.Run, st pipeline.Stage, _ StageReporter) error {
 			if st.ID == "src" {
 				return nil

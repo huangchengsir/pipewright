@@ -27,6 +27,7 @@ type eventsDTO struct {
 	Push        bool `json:"push"`
 	Tag         bool `json:"tag"`
 	PullRequest bool `json:"pullRequest"`
+	Release     bool `json:"release"`
 }
 
 type branchMappingDTO struct {
@@ -58,6 +59,7 @@ func toTriggerDTO(c *trigger.Config) triggerDTO {
 			Push:        c.Events.Push,
 			Tag:         c.Events.Tag,
 			PullRequest: c.Events.PullRequest,
+			Release:     c.Events.Release,
 		},
 		BranchMappings:  mappings,
 		UnmatchedPolicy: c.UnmatchedPolicy,
@@ -115,6 +117,7 @@ func makeSaveTriggerHandler(svc trigger.Service) http.HandlerFunc {
 				Push        bool `json:"push"`
 				Tag         bool `json:"tag"`
 				PullRequest bool `json:"pullRequest"`
+				Release     bool `json:"release"`
 			} `json:"events"`
 			BranchMappings []struct {
 				ID              string   `json:"id"`
@@ -143,6 +146,7 @@ func makeSaveTriggerHandler(svc trigger.Service) http.HandlerFunc {
 				Push:        req.Events.Push,
 				Tag:         req.Events.Tag,
 				PullRequest: req.Events.PullRequest,
+				Release:     req.Events.Release,
 			},
 			BranchMappings:  mappings,
 			UnmatchedPolicy: req.UnmatchedPolicy,

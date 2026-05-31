@@ -371,6 +371,129 @@ func TestWebhookUnmatchedRecordIdempotent(t *testing.T) {
 	}
 }
 
+// newTagReleaseReceiver 装配 Receiver + 已配 tag+release 事件 + 分支映射 v*→prod 的项目;
+// 返回 token、明文密钥(供 tag/release 上下文与订阅用例复用)。
+func newTagReleaseReceiver(t *testing.T) (*Receiver, *fakeRunCreator, string, string) {
+	t.Helper()
+	db, _ := testDB(t)
+	v := vault.New(db, testMasterKey())
+	svc := New(db, v)
+	projID := seedProject(t, db)
+
+	ctx := context.Background()
+	cfg, err := svc.Get(ctx, projID)
+	if err != nil {
+		t.Fatalf("get config: %v", err)
+	}
+	token := cfg.WebhookToken
+
+	reset, err := svc.ResetSecret(ctx, projID)
+	if err != nil {
+		t.Fatalf("reset secret: %v", err)
+	}
+	secret := reset.Secret
+
+	if _, err := svc.Save(ctx, projID, SaveInput{
+		Events: Events{Tag: true, Release: true},
+		BranchMappings: []BranchMapping{
+			{BranchPattern: "v*", Environment: "prod", TargetServerIDs: []string{"srv-1"}},
+		},
+		UnmatchedPolicy: PolicyIgnore,
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	fake := &fakeRunCreator{}
+	rc := NewReceiver(db, v, fake)
+	return rc, fake, token, secret
+}
+
+// TestWebhookTagPushCarriesTagRefAndCommit 验证 Tag Push Hook 命中后:
+// 运行携带标签名(refs/tags/v1.2.3 → v1.2.3,落入 Branch)与 commit,并经 v* 映射到 prod。
+func TestWebhookTagPushCarriesTagRefAndCommit(t *testing.T) {
+	rc, fake, token, secret := newTagReleaseReceiver(t)
+	res, err := rc.Handle(context.Background(), Delivery{
+		Token:      token,
+		Event:      eventTag,
+		TokenHdr:   secret,
+		DeliveryID: "d-tagpush",
+		RawBody:    []byte(`{"ref":"refs/tags/v1.2.3","after":"tagsha123"}`),
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if !res.Accepted || res.RunID == "" {
+		t.Fatalf("expected accepted run for tag push, got %+v", res)
+	}
+	if fake.count() != 1 {
+		t.Fatalf("expected 1 run, got %d", fake.count())
+	}
+	got := fake.calls[0]
+	if got.Branch != "v1.2.3" {
+		t.Fatalf("expected tag name v1.2.3 in Branch, got %q", got.Branch)
+	}
+	if got.Commit != "tagsha123" {
+		t.Fatalf("expected commit tagsha123, got %q", got.Commit)
+	}
+	if got.ResolvedEnvironment != "prod" {
+		t.Fatalf("expected env prod via v* mapping, got %q", got.ResolvedEnvironment)
+	}
+}
+
+// TestWebhookReleaseHookCreatesRunWithTagName 验证 Release Hook 命中后:
+// 运行携带 release.tag_name(落入 Branch),commit 回退到 target_commitish,经 v* 映射到 prod。
+func TestWebhookReleaseHookCreatesRunWithTagName(t *testing.T) {
+	rc, fake, token, secret := newTagReleaseReceiver(t)
+	res, err := rc.Handle(context.Background(), Delivery{
+		Token:      token,
+		Event:      eventRelease,
+		TokenHdr:   secret,
+		DeliveryID: "d-release",
+		RawBody:    []byte(`{"action":"published","release":{"tag_name":"v2.0.0","target_commitish":"main"}}`),
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if !res.Accepted || res.RunID == "" {
+		t.Fatalf("expected accepted run for release, got %+v", res)
+	}
+	if fake.count() != 1 {
+		t.Fatalf("expected 1 run, got %d", fake.count())
+	}
+	got := fake.calls[0]
+	if got.Branch != "v2.0.0" {
+		t.Fatalf("expected release tag v2.0.0 in Branch, got %q", got.Branch)
+	}
+	if got.Commit != "main" {
+		t.Fatalf("expected commit fallback to target_commitish 'main', got %q", got.Commit)
+	}
+	if got.ResolvedEnvironment != "prod" {
+		t.Fatalf("expected env prod via v* mapping, got %q", got.ResolvedEnvironment)
+	}
+}
+
+// TestWebhookReleaseNotSubscribed 验证未勾选 Release 时,Release Hook 投递被忽略(不创建运行)。
+func TestWebhookReleaseNotSubscribed(t *testing.T) {
+	// newReceiver 只开 Push(Release=false)。
+	rc, fake, token, secret := newReceiver(t)
+	res, err := rc.Handle(context.Background(), Delivery{
+		Token:      token,
+		Event:      eventRelease,
+		TokenHdr:   secret,
+		DeliveryID: "d-rel-nosub",
+		RawBody:    []byte(`{"release":{"tag_name":"v9","target_commitish":"main"}}`),
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if res.Accepted || res.Ignored != IgnoredEventNotSubscribed {
+		t.Fatalf("expected event_not_subscribed, got %+v", res)
+	}
+	if fake.count() != 0 {
+		t.Fatalf("expected no run, got %d", fake.count())
+	}
+}
+
 func TestWebhookTokenNotFound(t *testing.T) {
 	rc, _, _, secret := newReceiver(t)
 	_, err := rc.Handle(context.Background(), Delivery{

@@ -39,6 +39,7 @@ import DiagnosisPanel from '../components/run/DiagnosisPanel.vue'
 import SuccessFailDiff from '../components/run/SuccessFailDiff.vue'
 import RunTerminal from '../components/run/RunTerminal.vue'
 import ArtifactList from '../components/run/ArtifactList.vue'
+import TestReportPanel from '../components/run/TestReportPanel.vue'
 import DeployTargets from '../components/run/DeployTargets.vue'
 import RunDagView from '../components/run/RunDagView.vue'
 
@@ -723,6 +724,16 @@ function nodeClass(status: StepStatus): string {
               ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             -->
             <ArtifactList :artifacts="run.artifacts" />
+
+            <!--
+              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+              测试报告 + 质量门禁 (Story 8-6 / FR-8-6 实现)
+              script 步骤声明 testReport=junit + reportPath → 后端解析 JUnit XML(可选 Cobertura
+              覆盖率)→ 通过/失败/跳过计数 + 覆盖率条 + 门禁裁决。门禁不过则阻断下游部署。
+              自取数据(不在冻结 run-detail DTO 内);无报告 → 不渲染。
+              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            -->
+            <TestReportPanel :run-id="run.id" />
 
             <!-- 历史日志回放(只读,Story 3-6) -->
             <div class="log-history" role="region" aria-label="历史运行日志">

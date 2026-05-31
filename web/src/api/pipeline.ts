@@ -30,6 +30,10 @@ export interface PipelineStage {
   id: string
   name: string
   kind: StageKind
+  /** Upstream stage IDs this stage depends on (Epic 8 DAG). Empty = no explicit deps. */
+  needs?: string[]
+  /** When true, this stage's failure does not block downstream stages. */
+  allowFailure?: boolean
   jobs: PipelineJob[]
 }
 
@@ -49,6 +53,8 @@ export interface SavePipelineInput {
     id?: string
     name: string
     kind: StageKind
+    needs?: string[]
+    allowFailure?: boolean
     jobs: Array<{
       id?: string
       name: string

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import type { PipelineStage, PipelineJob, StageKind } from '../../api/pipeline'
 import type { Credential } from '../../api/credentials'
 import type { Server } from '../../api/servers'
@@ -7,6 +7,7 @@ import StageColumn from './StageColumn.vue'
 import JobDrawer from './JobDrawer.vue'
 import JobTypePicker from './JobTypePicker.vue'
 import { jobTypeLabel } from './jobConfigSchema'
+import { hasAnyNeeds } from './stageDeps'
 import './pipeline.css'
 
 // ─── Props / emits ────────────────────────────────────────────────────────────
@@ -64,6 +65,11 @@ function updateJob(stageId: string, jobId: string, patch: Partial<PipelineJob>):
       jobs: s.jobs.map((j) => (j.id === jobId ? { ...j, ...patch } : j)),
     }
   })
+  emit('update', next)
+}
+
+function updateStage(stageId: string, patch: Partial<PipelineStage>): void {
+  const next = props.stages.map((s) => (s.id === stageId ? { ...s, ...patch } : s))
   emit('update', next)
 }
 
@@ -149,7 +155,13 @@ function deleteStage(stageId: string): void {
   if (idx < 0) return
   // Deselect if selected job was in this stage
   if (selectedStage.value?.id === stageId) selectedJobId.value = null
-  emit('update', props.stages.filter((s) => s.id !== stageId))
+  // Drop the deleted stage and strip any dangling needs referencing it (else save 422s).
+  const next = props.stages
+    .filter((s) => s.id !== stageId)
+    .map((s) =>
+      s.needs?.includes(stageId) ? { ...s, needs: s.needs.filter((n) => n !== stageId) } : s,
+    )
+  emit('update', next)
 }
 
 function addStage(): void {
@@ -169,6 +181,62 @@ function addStage(): void {
   emit('update', [...props.stages, newStage])
 }
 
+// ─── DAG edge overlay (Story 8-7) ─────────────────────────────────────────────
+// Draw connectors from each stage's declared needs (upstream → downstream). When no
+// stage declares needs, fall back to a linear chain (mirrors backend BuildGraph).
+
+const flowRef = ref<HTMLElement | null>(null)
+const overlay = ref({ w: 0, h: 0 })
+const edgePaths = ref<string[]>([])
+
+interface Edge { from: string; to: string }
+
+const edges = computed<Edge[]>(() => {
+  if (hasAnyNeeds(props.stages)) {
+    const out: Edge[] = []
+    for (const s of props.stages) for (const n of s.needs ?? []) out.push({ from: n, to: s.id })
+    return out
+  }
+  const out: Edge[] = []
+  for (let i = 1; i < props.stages.length; i++) {
+    out.push({ from: props.stages[i - 1].id, to: props.stages[i].id })
+  }
+  return out
+})
+
+const HEADER_Y = 13 // connect edges at stage-header vertical center
+
+function measureEdges(): void {
+  const flow = flowRef.value
+  if (!flow) return
+  const cols = Array.from(flow.querySelectorAll<HTMLElement>('.stage-col'))
+  const byId = new Map<string, HTMLElement>()
+  props.stages.forEach((s, i) => { if (cols[i]) byId.set(s.id, cols[i]) })
+  overlay.value = { w: flow.scrollWidth, h: flow.scrollHeight }
+  const paths: string[] = []
+  for (const e of edges.value) {
+    const a = byId.get(e.from)
+    const b = byId.get(e.to)
+    if (!a || !b) continue
+    const x1 = a.offsetLeft + a.offsetWidth
+    const y1 = a.offsetTop + HEADER_Y
+    const x2 = b.offsetLeft
+    const y2 = b.offsetTop + HEADER_Y
+    const dx = Math.max(26, Math.abs(x2 - x1) * 0.5)
+    paths.push(`M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`)
+  }
+  edgePaths.value = paths
+}
+
+let ro: ResizeObserver | null = null
+onMounted(() => {
+  measureEdges()
+  ro = new ResizeObserver(() => measureEdges())
+  if (flowRef.value) ro.observe(flowRef.value)
+})
+onBeforeUnmount(() => ro?.disconnect())
+watch(() => props.stages, () => nextTick(measureEdges), { deep: true })
+
 // ─── YAML preview toggle ──────────────────────────────────────────────────────
 
 const yamlOpen = ref(false)
@@ -183,7 +251,20 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
   <div class="canvas-body">
     <!-- ─── Scrollable canvas ────────────────────────────────────────────── -->
     <div class="pipeline-canvas">
-      <div class="pipeline-flow" role="list" aria-label="流水线阶段">
+      <div ref="flowRef" class="pipeline-flow pipeline-flow--dag" role="list" aria-label="流水线阶段">
+
+        <!-- DAG edge overlay (drawn from declared needs; decorative) -->
+        <svg
+          v-if="edgePaths.length"
+          class="dag-overlay"
+          :width="overlay.w"
+          :height="overlay.h"
+          :viewBox="`0 0 ${overlay.w} ${overlay.h}`"
+          aria-hidden="true"
+        >
+          <path v-for="(d, i) in edgePaths" :key="i" class="dag-edge" :d="d" />
+          <path v-for="(d, i) in edgePaths" :key="`f${i}`" class="dag-edge-flow" :d="d" />
+        </svg>
 
         <template v-for="(stage, idx) in stages" :key="stage.id">
           <!-- Stage column -->
@@ -191,27 +272,16 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
             :stage="stage"
             :stage-index="idx"
             :selected-job-id="selectedJobId"
+            :all-stages="stages"
             role="listitem"
             @select-job="selectJob"
             @delete-job="(jobId) => deleteJob(stage.id, jobId)"
             @add-job="requestAddJob(stage.id)"
             @delete-stage="deleteStage(stage.id)"
             @reorder-job="(p) => reorderJob(stage.id, p.from, p.to)"
+            @update-needs="(needs) => updateStage(stage.id, { needs })"
+            @update-allow-failure="(v) => updateStage(stage.id, { allowFailure: v })"
           />
-
-          <!-- SVG curved connector between stages -->
-          <div
-            v-if="idx < stages.length - 1"
-            class="stage-connector"
-            aria-hidden="true"
-          >
-            <svg viewBox="0 0 74 30">
-              <path class="conn-edge" d="M5,15 C28,3 46,27 69,15"/>
-              <path class="conn-flow" d="M5,15 C28,3 46,27 69,15"/>
-              <circle class="conn-port" cx="5"  cy="15" r="3.2"/>
-              <circle class="conn-port" cx="69" cy="15" r="3.2"/>
-            </svg>
-          </div>
         </template>
 
         <!-- Add stage button (dashed) -->
@@ -272,4 +342,48 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
   min-height: 0;
   overflow: hidden;
 }
+
+/* DAG layout: position the flow so the overlay anchors to it; give columns a gap for edges. */
+.pipeline-flow--dag {
+  position: relative;
+  gap: 60px;
+}
+
+.dag-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.dag-edge {
+  fill: none;
+  stroke: var(--color-border-strong);
+  stroke-width: 2;
+}
+
+/* animated flow pulse along the edge */
+.dag-edge-flow {
+  fill: none;
+  stroke: var(--color-primary);
+  stroke-width: 2;
+  stroke-dasharray: 5 12;
+  opacity: 0.75;
+  animation: dag-flow 1.4s linear infinite;
+}
+
+@keyframes dag-flow {
+  to {
+    stroke-dashoffset: -34;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dag-edge-flow {
+    animation: none;
+  }
+}
+/* The overlay (z-index 0, first child) paints below the stage columns (later siblings),
+   so edges show only in the gaps between columns. */
 </style>

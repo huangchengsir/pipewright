@@ -9,12 +9,11 @@
 // 取不到)都**静默回退**到被包住的库内 loader——运行绝不因 YAML 问题而中断。仅在 debug
 // 级别记一行原因(不含任何密钥)。
 //
-// ── 已知约束:无分支(KNOWN CONSTRAINT,显式处理)──────────────────────────────
-// dagrun.SpecLoader.Get 只拿到 projectID,**没有本次运行的分支/ref**。因此本装饰器从
-// **项目的默认分支**(项目记录里的 DefaultBranch)拉取 `.pipewright.yml`。
-// 「按运行分支覆盖」(feature 分支上改 YAML 即对该分支运行生效)需要把运行分支贯穿进
-// SpecLoader 签名 / dagrun 内核——风险较大,**本期推迟(DEFERRED)**,不动 SpecLoader
-// 签名,也不碰 dagrun 执行内核。默认分支解析是本期可交付范围。
+// ── 按运行分支取 YAML(FR-8-12 补完)─────────────────────────────────────────────
+// dagrun.SpecLoader.Get 现已带本次运行的分支(run.Trigger.Branch),本装饰器据此从
+// **该运行分支**拉取 `.pipewright.yml`:在 feature 分支上改 YAML,即对该分支的运行生效。
+// 运行分支为空(如无分支的手动运行)时,退化为从项目**默认分支**(DefaultBranch)拉取,
+// 与历史行为一致;默认分支也为空时按底层拉取器语义处理(失败即回退)。
 //
 // ── 安全 ─────────────────────────────────────────────────────────────────────
 // token 仅在进程内取用即弃,绝不进日志/错误/返回值。底层拉取错误不外泄(可能含 URL 凭据)。
@@ -75,18 +74,18 @@ func New(inner SpecLoader, projects ProjectLookup, tokens TokenRevealer, blobs B
 	return &Loader{inner: inner, projects: projects, tokens: tokens, blobs: blobs}
 }
 
-// Get 实现 dagrun.SpecLoader:尝试用仓库默认分支的 `.pipewright.yml` 覆盖;
-// 任何问题都回退到 inner(库内配置)。绝不把 YAML 问题冒泡给调用方。
-func (l *Loader) Get(ctx context.Context, projectID string) (*pipeline.Config, error) {
-	if cfg, ok := l.tryOverride(ctx, projectID); ok {
+// Get 实现 dagrun.SpecLoader:尝试用**运行分支**的 `.pipewright.yml` 覆盖(分支为空时退化为
+// 默认分支);任何问题都回退到 inner(库内配置)。绝不把 YAML 问题冒泡给调用方。
+func (l *Loader) Get(ctx context.Context, projectID, branch string) (*pipeline.Config, error) {
+	if cfg, ok := l.tryOverride(ctx, projectID, branch); ok {
 		return cfg, nil
 	}
 	return l.inner.Get(ctx, projectID)
 }
 
-// tryOverride 尝试从仓库默认分支拉取并解析 `.pipewright.yml`;成功返回 (cfg,true)。
+// tryOverride 尝试从运行分支(空则默认分支)拉取并解析 `.pipewright.yml`;成功返回 (cfg,true)。
 // 任何环节失败返回 (nil,false)(调用方回退)。失败只记 debug 原因(无密钥)。
-func (l *Loader) tryOverride(ctx context.Context, projectID string) (*pipeline.Config, bool) {
+func (l *Loader) tryOverride(ctx context.Context, projectID, branch string) (*pipeline.Config, bool) {
 	if l.projects == nil || l.blobs == nil {
 		return nil, false
 	}
@@ -108,7 +107,13 @@ func (l *Loader) tryOverride(ctx context.Context, projectID string) (*pipeline.C
 		}
 	}
 
-	content, degraded, ferr := l.blobs.FetchBlob(ctx, info.RepoURL, token, info.DefaultBranch, DefaultFile)
+	// 优先用本次运行分支取 YAML(feature 分支改 YAML 即对该分支生效);分支为空退化为默认分支。
+	ref := strings.TrimSpace(branch)
+	if ref == "" {
+		ref = info.DefaultBranch
+	}
+
+	content, degraded, ferr := l.blobs.FetchBlob(ctx, info.RepoURL, token, ref, DefaultFile)
 	if ferr != nil {
 		// 文件不存在 / 克隆失败 → 回退(正常路径:多数项目没有 .pipewright.yml)。
 		debugf("项目 %s 未读到 %s(回退库内配置)", projectID, DefaultFile)
@@ -128,7 +133,7 @@ func (l *Loader) tryOverride(ctx context.Context, projectID string) (*pipeline.C
 		debugf("项目 %s 的 %s 解析/校验失败,回退库内配置", projectID, DefaultFile)
 		return nil, false
 	}
-	debugf("项目 %s 命中仓库 %s(默认分支 %s),用其驱动本次运行", projectID, DefaultFile, info.DefaultBranch)
+	debugf("项目 %s 命中仓库 %s(分支 %s),用其驱动本次运行", projectID, DefaultFile, ref)
 	return &cfg, true
 }
 

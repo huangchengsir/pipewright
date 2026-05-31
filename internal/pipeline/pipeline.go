@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/dag"
 	yaml "gopkg.in/yaml.v3"
 )
 
@@ -66,11 +67,18 @@ type Job struct {
 }
 
 // Stage 是一个阶段(阶段列),含若干 Job。Kind 为 kind 枚举之一。
+//
+// Needs 是该阶段依赖的上游阶段 ID 列表(Epic 8 · Story 8-1,构成 DAG):为空表示「无显式依赖」。
+// 当**整个流水线**无任何阶段声明 needs 时,执行层按声明序退化为线性(向后兼容存量「直线」流水线);
+// 一旦有阶段声明 needs,则严格按声明的 DAG 调度(见 dagrun 适配)。AllowFailure 为 true 时,
+// 该阶段失败仍放行下游(自身仍记 failed)。Needs 在保存时校验:引用必须存在、不可自指、不可成环。
 type Stage struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Kind string `json:"kind"`
-	Jobs []Job  `json:"jobs"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Kind         string   `json:"kind"`
+	Needs        []string `json:"needs,omitempty"`
+	AllowFailure bool     `json:"allowFailure,omitempty"`
+	Jobs         []Job    `json:"jobs"`
 }
 
 // Spec 是流水线编排声明式配置(阶段集合)。
@@ -331,7 +339,10 @@ func normalizeSpec(in Spec) (Spec, error) {
 			})
 		}
 
-		out.Stages = append(out.Stages, Stage{ID: stageID, Name: name, Kind: kind, Jobs: jobs})
+		// Needs 规范化:trim、去空、去重、剔除自指(自指交由 dag 校验报错以给明确信息)。
+		needs := normalizeNeeds(st.Needs)
+
+		out.Stages = append(out.Stages, Stage{ID: stageID, Name: name, Kind: kind, Needs: needs, AllowFailure: st.AllowFailure, Jobs: jobs})
 	}
 
 	// 源阶段不变式:流水线必须恰有一个 source 阶段(引用项目仓库)。前端不渲染删源阶段的入口,
@@ -346,7 +357,59 @@ func normalizeSpec(in Spec) (Spec, error) {
 		return Spec{}, fmt.Errorf("%w: pipeline must have exactly one source stage", ErrInvalidStage)
 	}
 
+	// 阶段依赖(needs)校验:引用必须存在、不可自指、不可成环(Epic 8 · 8-1)。
+	// 复用 dag 的构造期校验(Kahn 环检测),把其错误归一为 ErrInvalidStage(不外泄内部细节)。
+	if err := validateStageDAG(out.Stages); err != nil {
+		return Spec{}, err
+	}
+
 	return out, nil
+}
+
+// normalizeNeeds 规范化阶段依赖列表:trim、剔空、去重(保留首次出现序)。
+func normalizeNeeds(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, d := range in {
+		d = strings.TrimSpace(d)
+		if d == "" {
+			continue
+		}
+		if _, ok := seen[d]; ok {
+			continue
+		}
+		seen[d] = struct{}{}
+		out = append(out, d)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// validateStageDAG 用 dag 包做阶段依赖的构造期校验(存在性 + 自指 + 环)。
+// 任一问题归一为 ErrInvalidStage(附简短原因,不外泄底层细节)。
+func validateStageDAG(stages []Stage) error {
+	nodes := make([]dag.Node, 0, len(stages))
+	for _, st := range stages {
+		nodes = append(nodes, dag.Node{ID: st.ID, Needs: st.Needs, AllowFailure: st.AllowFailure})
+	}
+	if _, err := dag.New(nodes); err != nil {
+		switch {
+		case errors.Is(err, dag.ErrUnknownDep):
+			return fmt.Errorf("%w: stage needs reference an unknown stage", ErrInvalidStage)
+		case errors.Is(err, dag.ErrSelfDep):
+			return fmt.Errorf("%w: stage must not depend on itself", ErrInvalidStage)
+		case errors.Is(err, dag.ErrCycle):
+			return fmt.Errorf("%w: stage dependencies form a cycle", ErrInvalidStage)
+		default:
+			return fmt.Errorf("%w: invalid stage dependencies", ErrInvalidStage)
+		}
+	}
+	return nil
 }
 
 // normalizeSpecShape 保证从库回读的 spec 切片/map 非 nil(JSON 输出为 [] / {} 而非 null)。

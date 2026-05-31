@@ -41,6 +41,7 @@ const webhookSecretMasked = ref('')
 const eventPush = ref(false)
 const eventTag = ref(false)
 const eventPullRequest = ref(false)
+const eventRelease = ref(false)
 
 interface MappingRow {
   _key: number
@@ -194,7 +195,7 @@ async function handleSave(): Promise<void> {
 
   try {
     const updated = await saveTrigger(props.projectId, {
-      events: { push: eventPush.value, tag: eventTag.value, pullRequest: eventPullRequest.value },
+      events: { push: eventPush.value, tag: eventTag.value, pullRequest: eventPullRequest.value, release: eventRelease.value },
       branchMappings: mappings.value.map((r) => ({
         branchPattern: r.branchPattern.trim(),
         environment:   r.environment.trim(),
@@ -229,6 +230,7 @@ function applyConfig(config: TriggerConfig): void {
   eventPush.value             = config.events.push
   eventTag.value              = config.events.tag
   eventPullRequest.value      = config.events.pullRequest
+  eventRelease.value          = config.events.release ?? false
   unmatchedPolicy.value       = config.unmatchedPolicy
   mappings.value = config.branchMappings.map((m) => ({
     _key: ++_keySeq,
@@ -383,7 +385,7 @@ const displayWebhookUrl = computed(() => {
           </div>
           <div class="webhook-row">
             <span class="wk-label">推送配置</span>
-            <p class="wk-hint">在 Gitee 仓库 → 管理 → WebHooks 粘贴以上地址与密钥,事件勾选 Push / Tag Push / Pull Request。</p>
+            <p class="wk-hint">在 Gitee 仓库 → 管理 → WebHooks 粘贴以上地址与密钥,事件勾选 Push / Tag Push / Release / Pull Request。</p>
           </div>
         </div>
       </section>
@@ -413,6 +415,13 @@ const displayWebhookUrl = computed(() => {
             </button>
             <div class="ev-text"><span class="ev-name">Tag</span><span class="ev-desc">打 tag 触发(常用于 release 分支发版)</span></div>
             <span class="ev-code mono">tag</span>
+          </div>
+          <div class="event-row">
+            <button class="ev-toggle" :class="{ 'ev-toggle--on': eventRelease }" role="switch" :aria-checked="eventRelease" aria-label="Release 事件触发" @click="eventRelease = !eventRelease">
+              <span class="ev-toggle-knob" aria-hidden="true"/>
+            </button>
+            <div class="ev-text"><span class="ev-name">Release</span><span class="ev-desc">发布 Release 触发(按 tag 名匹配分支映射)</span></div>
+            <span class="ev-code mono">release</span>
           </div>
           <div class="event-row">
             <button class="ev-toggle" :class="{ 'ev-toggle--on': eventPullRequest }" role="switch" :aria-checked="eventPullRequest" aria-label="Pull Request 事件触发" @click="eventPullRequest = !eventPullRequest">

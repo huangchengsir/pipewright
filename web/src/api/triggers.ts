@@ -21,6 +21,7 @@ export interface TriggerEvents {
   push: boolean
   tag: boolean
   pullRequest: boolean
+  release: boolean
 }
 
 export interface BranchMapping {

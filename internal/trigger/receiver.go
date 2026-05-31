@@ -39,6 +39,8 @@ const (
 	eventPush         = "Push Hook"
 	eventTag          = "Tag Push Hook"
 	eventMergeRequest = "Merge Request Hook"
+	// eventRelease 是 Gitee「发行版」事件(Story 8-11 / FR-8-11)。
+	eventRelease = "Release Hook"
 )
 
 // 投递处理结果(accepted / 各 ignored 原因枚举,冻结契约)。
@@ -385,6 +387,8 @@ func eventSubscribed(event string, ev Events) bool {
 		return ev.Tag
 	case eventMergeRequest:
 		return ev.PullRequest
+	case eventRelease:
+		return ev.Release
 	default:
 		return false
 	}
@@ -396,7 +400,7 @@ type parsedPayload struct {
 	Commit string
 }
 
-// giteePayload 是 Gitee push/tag/MR webhook 的部分字段(只取所需,容忍多余字段)。
+// giteePayload 是 Gitee push/tag/MR/release webhook 的部分字段(只取所需,容忍多余字段)。
 type giteePayload struct {
 	Ref         string `json:"ref"`
 	After       string `json:"after"`
@@ -410,15 +414,30 @@ type giteePayload struct {
 			SHA string `json:"sha"`
 		} `json:"head"`
 	} `json:"pull_request"`
+	// Release 是 Gitee「Release Hook」/ GitHub「release」事件载荷:tag 名在 tag_name,
+	// 目标 commit-ish(分支名或 SHA)在 target_commitish(Story 8-11 / FR-8-11)。
+	Release struct {
+		TagName         string `json:"tag_name"`
+		TargetCommitish string `json:"target_commitish"`
+	} `json:"release"`
 }
 
-// parsePayload 用 encoding/json 解析投递体,提取分支(从 ref 取 refs/heads/<x> 末段)与 commit。
+// parsePayload 用 encoding/json 解析投递体,提取分支/标签(从 ref 取 refs/heads|tags/<x>
+// 末段;release 事件取 release.tag_name)与 commit。
 // 解析失败/字段缺失返回零值(匹配阶段据空分支不命中,不 panic)。
+//
+// 标签语义(tag push 与 release 一致):标签名落入 Branch 字段,沿用既有
+// branch→环境映射(如模式 v* 命中 v1.2.3),保持下游处理统一简单——上游对
+// Branch 的语义是「触发引用名」,push 为分支名、tag/release 为标签名。
 func parsePayload(body []byte) parsedPayload {
 	var p giteePayload
 	_ = json.Unmarshal(body, &p)
 
+	// 触发引用名:push/tag 取 ref 末段;release 事件 ref 缺省,取 release.tag_name。
 	branch := refToBranch(p.Ref)
+	if branch == "" {
+		branch = strings.TrimSpace(p.Release.TagName)
+	}
 	if branch == "" {
 		branch = strings.TrimSpace(p.PullRequest.Head.Ref)
 	}
@@ -432,6 +451,10 @@ func parsePayload(body []byte) parsedPayload {
 	}
 	if commit == "" {
 		commit = strings.TrimSpace(p.PullRequest.Head.SHA)
+	}
+	// release 事件无 head_commit:回退到 target_commitish(分支名或 SHA)作为 commit 上下文。
+	if commit == "" {
+		commit = strings.TrimSpace(p.Release.TargetCommitish)
 	}
 	return parsedPayload{Branch: branch, Commit: commit}
 }

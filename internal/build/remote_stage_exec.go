@@ -84,7 +84,7 @@ func (b *Builder) runStageRemote(ctx context.Context, r *run.Run, stage pipeline
 	defer func() { _ = os.RemoveAll(workspace) }()
 
 	token := b.revealToken(proj.CredentialID)
-	_, cerr := b.cloner.Clone(ctx, proj.RepoURL, token, r.Trigger.Branch, r.Trigger.Commit, workspace)
+	resolved, cerr := b.cloner.Clone(ctx, proj.RepoURL, token, r.Trigger.Branch, r.Trigger.Commit, workspace)
 	token = ""
 	_ = token
 	if cerr != nil {
@@ -93,6 +93,9 @@ func (b *Builder) runStageRemote(ctx context.Context, r *run.Run, stage pipeline
 		}
 		_ = rep.Log(ctx, streamStderr, "源码克隆失败(鉴权/网络/ref 不存在或被 SSRF 拒绝)")
 		return ErrBuildFailed
+	}
+	if resolved != nil && resolved.CommitShort != "" && b.recordCommit != nil {
+		b.recordCommit(ctx, r.ID, resolved.CommitShort)
 	}
 
 	// 2) 打包工作区 → 经 SSH 传到远程并解包。

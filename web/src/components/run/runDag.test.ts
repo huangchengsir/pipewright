@@ -23,8 +23,9 @@ function mkStage(
   id: string,
   name: string,
   needs: string[] = [],
+  jobs: PipelineStage['jobs'] = [{ id: `${id}-j`, name: 'job', type: 'script', summary: '', config: {} }],
 ): PipelineStage {
-  return { id, name, kind: 'custom', needs, jobs: [] }
+  return { id, name, kind: 'custom', needs, jobs }
 }
 
 // ─── deriveStageStatus ────────────────────────────────────────────────────────
@@ -108,6 +109,27 @@ describe('buildRunStages', () => {
     const deployStage = result.find((r) => r.id === 'stg-b')!
     expect(deployStage.needs).toEqual(['stg-a'])
     expect(deployStage.status).toBe('running')
+  })
+
+  it('drops stages with no jobs (空阶段不画进拓扑) and cleans dangling needs', () => {
+    const steps = [mkStep('step-1', 'Build', 'success')]
+    const stages = [
+      mkStage('stg-a', 'Build'), // 有 job
+      mkStage('stg-b', 'Deploy', ['stg-a'], []), // 空阶段 → 应被剔除
+      mkStage('stg-c', 'Notify', ['stg-b'], []), // 空阶段 → 应被剔除
+    ]
+    const result = buildRunStages(steps, stages)
+    expect(result.map((r) => r.id)).toEqual(['stg-a'])
+    // stg-a 不应残留指向被剔除阶段的 needs(此处本就无)
+    expect(result[0].needs).toEqual([])
+  })
+
+  it('keeps a configured-but-not-yet-run stage (有 job 未跑 → pending,仍展示)', () => {
+    const steps = [mkStep('step-1', 'Build', 'success')]
+    const stages = [mkStage('stg-a', 'Build'), mkStage('stg-b', 'Deploy', ['stg-a'])]
+    const result = buildRunStages(steps, stages)
+    // Deploy 有 job 但还没产生 step → 保留(状态由 deriveStageStatus 推为 pending)
+    expect(result.map((r) => r.id)).toEqual(['stg-a', 'stg-b'])
   })
 
   it('puts unmatched steps into _unmatched synthetic stage', () => {

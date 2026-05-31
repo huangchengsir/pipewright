@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/huangchengsir/pipewright/internal/artifactstore"
+	"github.com/huangchengsir/pipewright/internal/deploy"
+	"github.com/huangchengsir/pipewright/internal/notify"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/run"
@@ -52,6 +54,13 @@ type Builder struct {
 	artStore *artifactstore.Store
 	// disableImageGC 关闭「构建后清悬空镜像」(Story 8-17);默认开(false)。由 main 经 env 设置。
 	disableImageGC bool
+	// recordCommit 在克隆解析出实际 commit 后回写到 run(触发未指定 commit 时补真实值)。
+	// nil 则不回写(向后兼容)。由 main 注入(WithCommitRecorder),解耦 build 对 run.Service 的直依赖。
+	recordCommit func(ctx context.Context, runID, commit string)
+	// deployer/notifier:dag 里 deploy_ssh / notify 节点真实化所需(main 注入 deploy.Service / notify.Service)。
+	// nil → 该类节点退化为占位日志(向后兼容;非-dag Builder.Run 路径不用)。
+	deployer deploy.Service
+	notifier notify.Service
 }
 
 // repoCloner 抽象「把仓库在 ref 上克隆到磁盘工作区」的能力(便于 fake 单测注入,
@@ -94,6 +103,22 @@ func WithArtifactStore(s *artifactstore.Store) BuilderOption {
 // WithImageGC 开关「构建后清悬空镜像」(Story 8-17);默认开。传 false 关闭(如宿主另有镜像 GC 策略)。
 func WithImageGC(enabled bool) BuilderOption {
 	return func(b *Builder) { b.disableImageGC = !enabled }
+}
+
+// WithCommitRecorder 注入「回写实际检出 commit 到 run」的回调(由 main 接 run.Service.SetCommit)。
+// 克隆解析出 commit 后调用,补全运行详情里的 COMMIT 字段(触发未指定 commit 时尤其有用)。
+func WithCommitRecorder(fn func(ctx context.Context, runID, commit string)) BuilderOption {
+	return func(b *Builder) { b.recordCommit = fn }
+}
+
+// WithStageDeployer 注入部署服务,使 dag 里的 deploy_ssh 节点真实部署(中途部署,不动 run 终态)。
+func WithStageDeployer(d deploy.Service) BuilderOption {
+	return func(b *Builder) { b.deployer = d }
+}
+
+// WithStageNotifier 注入通知服务,使 dag 里的 notify 节点真实发通知。
+func WithStageNotifier(n notify.Service) BuilderOption {
+	return func(b *Builder) { b.notifier = n }
 }
 
 // NewBuilder 构造真实 Builder。driver 经 DetectDriver 探测(全无容器 CLI → ErrNoContainerCLI,
@@ -179,6 +204,9 @@ func (b *Builder) Run(ctx context.Context, r *run.Run, sink run.StepSink) error 
 		}
 		_ = sink.Log(ctx, streamStderr, 0, "源码克隆失败(鉴权/网络/ref 不存在或被 SSRF 拒绝)")
 		return b.failStep(ctx, sink, 0, "源码克隆失败:"+cerr.Error())
+	}
+	if resolved != nil && resolved.CommitShort != "" && b.recordCommit != nil {
+		b.recordCommit(ctx, r.ID, resolved.CommitShort)
 	}
 	commitTag := resolved.CommitShort
 	if commitTag == "" {

@@ -68,6 +68,8 @@ export interface JobTypeSpec {
   /** Category the type belongs to (picker grouping) */
   category: CategoryId
   fields: JobField[]
+  /** 模板节点的预填配置(选中即带上,用户只改参数);普通节点省略。 */
+  defaultConfig?: Record<string, string>
 }
 
 // ─── Shared option sets ─────────────────────────────────────────────────────────
@@ -134,6 +136,46 @@ const SCRIPT_FIELDS: JobField[] = [
     monospace: true,
     placeholder: '.',
     hint: '相对克隆工作区根;留空为工作区根',
+  },
+  {
+    key: 'artifactPath',
+    label: '产物路径',
+    kind: 'textarea',
+    monospace: true,
+    placeholder: 'frontend/dist\nbackend/target/app.jar',
+    hint: '可选,每行一条。相对工作区根:目录→dist、*.jar→jar、其它文件→archive。一个节点可出多件;填了才归档进制品库并在运行详情可下载/部署。镜像产物请用「构建」节点(build_image),不在这里',
+  },
+]
+
+// SSH 部署节点的字段(deploy_ssh 与 deploy_frontend 模板共用)。
+const DEPLOY_SSH_FIELDS: JobField[] = [
+  {
+    key: 'serverId',
+    label: '目标服务器',
+    kind: 'server',
+    hint: '选择已登记的服务器(凭据按引用绑定)',
+  },
+  {
+    key: 'deployPath',
+    label: '部署路径',
+    kind: 'text',
+    monospace: true,
+    placeholder: '/opt/app',
+    hint: '产物发布到 <部署路径>/releases/<runId>/,current 软链原子切到本次发布(零停机,旧发布保留供回滚)',
+  },
+  {
+    key: 'strategy',
+    label: '部署策略',
+    kind: 'select',
+    options: DEPLOY_STRATEGY_OPTIONS,
+  },
+  {
+    key: 'restartCommand',
+    label: '重启 / 切换命令',
+    kind: 'textarea',
+    monospace: true,
+    placeholder: 'systemctl restart app\nnginx -s reload',
+    hint: '可选,多行(set -e 逐行执行);部署后在目标机 current 目录下执行,用于重启/重载;失败自动回滚',
   },
 ]
 
@@ -282,35 +324,7 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
     description: '通过 SSH 把产物部署到目标服务器',
     accent: 'green',
     category: 'deploy',
-    fields: [
-      {
-        key: 'serverId',
-        label: '目标服务器',
-        kind: 'server',
-        hint: '选择已登记的服务器(凭据按引用绑定)',
-      },
-      {
-        key: 'deployPath',
-        label: '部署路径',
-        kind: 'text',
-        monospace: true,
-        placeholder: '/opt/app',
-      },
-      {
-        key: 'strategy',
-        label: '部署策略',
-        kind: 'select',
-        options: DEPLOY_STRATEGY_OPTIONS,
-      },
-      {
-        key: 'restartCommand',
-        label: '重启 / 切换命令',
-        kind: 'text',
-        monospace: true,
-        placeholder: 'systemctl restart app',
-        hint: '部署后在目标机执行,用于重启或原子切换',
-      },
-    ],
+    fields: DEPLOY_SSH_FIELDS,
   },
 
   health_check: {
@@ -374,6 +388,100 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
     ],
   },
 
+  // ── 模板节点:预填好常见步骤参数,改改就能用,不必都写自定义脚本 ──
+  build_frontend: {
+    type: 'build_frontend',
+    label: '前端构建',
+    description: 'Node 容器里装依赖 + 构建,产出 dist',
+    accent: 'primary',
+    category: 'build',
+    fields: SCRIPT_FIELDS,
+    defaultConfig: {
+      image: 'node:20',
+      commands: 'cd frontend\nnpm install --no-audit --no-fund\nnpm run build',
+      artifactPath: 'frontend/dist',
+    },
+  },
+
+  build_backend: {
+    type: 'build_backend',
+    label: '后端构建',
+    description: 'Maven/Gradle 容器里打包,产出 jar',
+    accent: 'amber',
+    category: 'build',
+    fields: SCRIPT_FIELDS,
+    defaultConfig: {
+      image: 'maven:3.9-eclipse-temurin-21',
+      commands: 'cd backend\nmvn -B -DskipTests package',
+      artifactPath: 'backend/target/*.jar',
+    },
+  },
+
+  deploy_frontend: {
+    type: 'deploy_frontend',
+    label: '前端推送部署',
+    description: '把前端 dist 经 SSH 零停机部署到服务器',
+    accent: 'green',
+    category: 'deploy',
+    fields: DEPLOY_SSH_FIELDS,
+    defaultConfig: { strategy: 'rolling', restartCommand: 'nginx -s reload' },
+  },
+
+  templated: {
+    type: 'templated',
+    label: '自定义节点',
+    description: '自己定义参数 + 命令模板({{参数}}),配参数即用',
+    accent: 'cyan',
+    category: 'custom',
+    fields: [
+      {
+        key: 'image',
+        label: '运行镜像',
+        kind: 'text',
+        monospace: true,
+        placeholder: 'node:20',
+      },
+      {
+        key: 'params',
+        label: '参数表',
+        kind: 'textarea',
+        monospace: true,
+        placeholder: 'dir=frontend\nbuildCmd=npm run build',
+        hint: '每行一条 key=value,完全自由;命令模板/产物路径里用 {{key}} 引用',
+      },
+      {
+        key: 'commandTemplate',
+        label: '命令模板',
+        kind: 'textarea',
+        monospace: true,
+        placeholder: 'cd {{dir}}\nnpm install\n{{buildCmd}}',
+        hint: '多行;{{参数}} 会被参数表的值替换,$ENV 仍交给容器内 shell',
+      },
+      {
+        key: 'artifactPath',
+        label: '产物路径',
+        kind: 'textarea',
+        monospace: true,
+        placeholder: '{{dir}}/dist',
+        hint: '可选,每行一条,支持 {{参数}} 与通配;目录→dist、*.jar→jar、其它→archive',
+      },
+      {
+        key: 'workDir',
+        label: '工作目录',
+        kind: 'text',
+        monospace: true,
+        placeholder: '.',
+        hint: '可选,相对克隆工作区根',
+      },
+    ],
+    defaultConfig: {
+      image: 'node:20',
+      params: 'dir=frontend\nbuildCmd=npm run build',
+      commandTemplate: 'cd {{dir}}\nnpm install --no-audit --no-fund\n{{buildCmd}}',
+      artifactPath: '{{dir}}/dist',
+    },
+  },
+
   script: {
     type: 'script',
     label: '自定义脚本',
@@ -398,12 +506,16 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
 /** Canonical, ordered list of pickable types (excludes the `custom` alias of `script`). */
 export const PICKABLE_TYPES: readonly string[] = [
   'git_source',
+  'build_frontend',
+  'build_backend',
   'build_image',
   'push_image',
+  'deploy_frontend',
   'deploy_ssh',
   'health_check',
   'notify',
   'script',
+  'templated',
 ]
 
 /** Dropdown options for the job type selector (friendly label + token). */

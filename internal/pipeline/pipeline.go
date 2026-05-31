@@ -277,7 +277,9 @@ func (s *service) sourceSummary(ctx context.Context, projectID string) (string, 
 	return repo + " · " + branch, nil
 }
 
-// defaultSpec 构造默认种子:源阶段(git_source 引用项目仓库)+ 空构建/部署/通知三阶段。
+// defaultSpec 构造默认种子:仅 源阶段(git_source 引用项目仓库)+ 空构建阶段。
+// 部署/通知等阶段不再预置——按需由用户「+添加阶段」动态加入,空阶段不写死、不冒充已配置
+// (空阶段既不展示为「已执行步骤」,也不在拓扑图里画出,见 dagrun 与 runDag)。
 func defaultSpec(sourceSummary string) Spec {
 	return Spec{Stages: []Stage{
 		{
@@ -293,8 +295,6 @@ func defaultSpec(sourceSummary string) Spec {
 			}},
 		},
 		{ID: "stg_build", Name: "构建", Kind: KindBuild, Jobs: []Job{}},
-		{ID: "stg_deploy", Name: "部署", Kind: KindDeploy, Jobs: []Job{}},
-		{ID: "stg_notify", Name: "通知", Kind: KindNotify, Jobs: []Job{}},
 	}}
 }
 

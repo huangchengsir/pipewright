@@ -179,16 +179,64 @@ func TestStageExecutorNonScriptPlaceholder(t *testing.T) {
 	exec := NewStageExecutor(b, nil)
 	rep := &fakeReporter{}
 
-	stage := pipeline.Stage{ID: "s", Name: "构建", Kind: pipeline.KindBuild,
-		Jobs: []pipeline.Job{{Name: "img", Type: "build_image", Config: map[string]any{}}}}
+	// health_check 仍是未真实化的类型 → 走诚实占位放行(script/build_image/deploy_ssh/notify 已支持,其余占位)。
+	stage := pipeline.Stage{ID: "s", Name: "门禁", Kind: pipeline.KindCustom,
+		Jobs: []pipeline.Job{{Name: "health", Type: "health_check", Config: map[string]any{}}}}
 	if err := exec(context.Background(), &run.Run{ProjectID: "p1"}, stage, rep); err != nil {
 		t.Fatalf("exec: %v", err)
 	}
 	if drv.callCount != 0 {
-		t.Error("non-script job must not invoke RunToolchain")
+		t.Error("placeholder job must not invoke RunToolchain")
 	}
 	if !strings.Contains(strings.Join(rep.logs, "\n"), "真实执行未接入") {
 		t.Errorf("expected honest placeholder log, got %v", rep.logs)
+	}
+}
+
+// imgDriver 是支持 Build/InspectImage 的测试驱动(build_image 真实化测试用)。
+type imgDriver struct {
+	buildCalls    int
+	gotDockerfile string
+}
+
+func (d *imgDriver) Binary() string { return "fake" }
+func (d *imgDriver) RunToolchain(context.Context, string, string, string, []string, []string, func(string, string)) (int, error) {
+	return 0, nil
+}
+func (d *imgDriver) Build(_ context.Context, _, dockerfile, _ string, _, _ []string, _ func(string, string)) (int, error) {
+	d.buildCalls++
+	d.gotDockerfile = dockerfile
+	return 0, nil
+}
+func (d *imgDriver) Tag(context.Context, string, string, func(string, string)) (int, error) {
+	return 0, nil
+}
+func (d *imgDriver) Login(context.Context, string, string, string, func(string, string)) (int, error) {
+	return 0, nil
+}
+func (d *imgDriver) Push(context.Context, string, func(string, string)) (int, error) { return 0, nil }
+func (d *imgDriver) InspectImage(context.Context, string) (string, int64, error) {
+	return "sha256:deadbeef", 4096, nil
+}
+
+func TestStageExecutorBuildImageReal(t *testing.T) {
+	drv := &imgDriver{}
+	b := newDAGTestBuilder(drv, &markerCloner{})
+	exec := NewStageExecutor(b, nil)
+	rep := &fakeReporter{}
+
+	stage := pipeline.Stage{ID: "s", Name: "构建", Kind: pipeline.KindBuild,
+		Jobs: []pipeline.Job{{Name: "镜像", Type: "build_image", Config: map[string]any{
+			"artifactType": "image", "buildModel": "dockerfile", "dockerfilePath": "Dockerfile",
+		}}}}
+	if err := exec(context.Background(), &run.Run{ProjectID: "p1"}, stage, rep); err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	if drv.buildCalls != 1 {
+		t.Fatalf("build_image 应调用 driver.Build 一次,实际 %d", drv.buildCalls)
+	}
+	if len(rep.arts) != 1 || rep.arts[0].Type != run.ArtifactImage {
+		t.Fatalf("应 emit 一件 image 产物,实际 %+v", rep.arts)
 	}
 }
 
@@ -255,5 +303,42 @@ func TestE2EDockerStageExecutorReal(t *testing.T) {
 	}
 	if !strings.Contains(logs, "RAN-IN-CONTAINER") {
 		t.Errorf("容器命令未真实执行;日志:\n%s", logs)
+	}
+}
+
+func TestRenderTemplate(t *testing.T) {
+	ctx := map[string]string{"dir": "frontend", "cmd": "npm run build"}
+	if got := renderTemplate("cd {{dir}} && {{cmd}}", ctx); got != "cd frontend && npm run build" {
+		t.Fatalf("render = %q", got)
+	}
+	// 未知占位原样保留;无 {{ 零开销直返
+	if got := renderTemplate("echo {{missing}} $HOME", ctx); got != "echo {{missing}} $HOME" {
+		t.Fatalf("unknown placeholder = %q", got)
+	}
+}
+
+func TestTemplateContextFreeParams(t *testing.T) {
+	// 自由参数表(每行 key=value / key: value)+ config 字段都进上下文。
+	cfg := map[string]any{"image": "node:20", "params": "dir=frontend\nbranch: main\n# 注释行无=跳过"}
+	ctx := templateContext(cfg)
+	if ctx["dir"] != "frontend" || ctx["branch"] != "main" || ctx["image"] != "node:20" {
+		t.Fatalf("ctx = %+v", ctx)
+	}
+}
+
+func TestScriptStepFromTemplatedJob(t *testing.T) {
+	jb := pipeline.Job{ID: "j", Name: "自定义", Type: "templated", Config: map[string]any{
+		"image": "node:{{ver}}", "ver": "20",
+		"commandTemplate": "cd {{dir}}\nnpm ci", "dir": "web",
+	}}
+	step, err := scriptStepFromJob(jb)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if step.Image != "node:20" {
+		t.Errorf("image = %q, want node:20", step.Image)
+	}
+	if len(step.Commands) != 2 || step.Commands[0] != "cd web" {
+		t.Errorf("commands = %v", step.Commands)
 	}
 }

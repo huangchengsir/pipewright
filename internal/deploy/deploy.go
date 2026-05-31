@@ -275,19 +275,14 @@ func (s *service) DeployForStage(ctx context.Context, runID string, serverIDs []
 	if len(serverIDs) == 0 {
 		return nil, ErrNoServers
 	}
-	// 取该 run 已产出的首个可发布产物(dist/jar/archive;镜像类不走发布目录,本节点跳过)。
+	// 取该 run 已产出的可部署产物。dist/jar/archive 走文件发布;image 走容器 pull→停旧起新→
+	// 健康→回滚(复用 image_release.go)。二者都在时按节点 cfg["artifactType"] 选(空 → 默认优先
+	// 文件发布,保持既有行为;显式 image → 选镜像)。选定后由 deployWithStrategy 据产物类型自动路由。
 	arts, err := s.runs.ListArtifacts(ctx, runID)
 	if err != nil {
 		return nil, err
 	}
-	var artifact *run.Artifact
-	for i := range arts {
-		if releaseModeArtifact(arts[i]) {
-			a := arts[i]
-			artifact = &a
-			break
-		}
-	}
+	artifact := pickStageArtifact(arts, strings.TrimSpace(cfg["artifactType"]))
 	if artifact == nil {
 		return nil, ErrArtifactNotFound
 	}
@@ -318,6 +313,57 @@ func (s *service) DeployForStage(ctx context.Context, runID string, serverIDs []
 		return nil, err
 	}
 	return results, nil
+}
+
+// deployableStageArtifact 判定产物在「流水线部署节点」可被部署:文件发布类(dist/jar/archive)
+// 或镜像类(image)。其余类型不可部署(无对应编排)。
+func deployableStageArtifact(a run.Artifact) bool {
+	return releaseModeArtifact(a) || a.Type == run.ArtifactImage
+}
+
+// pickStageArtifact 从该 run 的产物里挑「部署节点」要部署的一件,返回 nil = 无可部署产物。
+//
+// 选取规则(参数自由,不写死单一类型):
+//   - prefer == "image":优先选首个 image 产物;无 image → 退回首个文件发布产物(尽力部署)。
+//   - prefer 为文件类(dist/jar/archive):优先选该精确类型;无则退回任一文件发布产物。
+//   - prefer 空:默认优先文件发布产物(保持既有行为),无文件发布则退回 image。
+//
+// 任何情况下都只在「可部署产物」(deployableStageArtifact)中挑选;选定的类型由
+// deployWithStrategy 自动路由到文件发布 or 镜像编排。
+func pickStageArtifact(arts []run.Artifact, prefer string) *run.Artifact {
+	prefer = strings.ToLower(prefer)
+	var firstImage, firstRelease, firstExact *run.Artifact
+	for i := range arts {
+		a := arts[i]
+		if !deployableStageArtifact(a) {
+			continue
+		}
+		if firstExact == nil && prefer != "" && a.Type == prefer {
+			firstExact = &arts[i]
+		}
+		if a.Type == run.ArtifactImage && firstImage == nil {
+			firstImage = &arts[i]
+		}
+		if releaseModeArtifact(a) && firstRelease == nil {
+			firstRelease = &arts[i]
+		}
+	}
+	// 1) 显式偏好且精确命中 → 选它。
+	if firstExact != nil {
+		return firstExact
+	}
+	// 2) 显式偏好 image(未精确命中走这里)→ image 优先,退回文件发布。
+	if prefer == run.ArtifactImage {
+		if firstImage != nil {
+			return firstImage
+		}
+		return firstRelease
+	}
+	// 3) 默认 / 偏好文件类:文件发布优先(保持既有行为),退回 image。
+	if firstRelease != nil {
+		return firstRelease
+	}
+	return firstImage
 }
 
 // RetryFailed 仅重试该 run 当前 failed/rolled_back 的目标(Story 4.5;FR-13)。见 Service 接口注释。

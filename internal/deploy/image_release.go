@@ -22,13 +22,17 @@ import (
 
 // imageState 是一台机的 image 蓝绿中间态(stageImageOne 产出,activateImageOne 消费)。
 type imageState struct {
-	name      string // 容器名(sanitizeName(产物名))
-	ref       string // 本次新镜像 ref(repo:tag / image id)
-	prevImage string // 切换前容器所用镜像(回滚目标;"" = 无上一容器,首次部署)
+	name      string   // 容器名(cfg["containerName"] 优先,否则 sanitizeName(产物名))
+	ref       string   // 本次新镜像 ref(repo:tag / image id)
+	prevImage string   // 切换前容器所用镜像(回滚目标;"" = 无上一容器,首次部署)
+	runArgs   []string // docker run 的附加参数(端口映射 / env 等;由 cfg 解析,参数自由)
 }
 
-// imageContainerName 取部署容器名(产物名净化;空 → app)。
-func imageContainerName(a run.Artifact) string {
+// imageContainerName 取部署容器名:cfg["containerName"] 显式优先(净化),否则产物名净化(空 → app)。
+func imageContainerName(a run.Artifact, cfg map[string]string) string {
+	if c := sanitizeName(strings.TrimSpace(cfg["containerName"])); c != "" {
+		return c
+	}
 	n := sanitizeName(a.Name)
 	if n == "" {
 		n = "app"
@@ -36,10 +40,50 @@ func imageContainerName(a run.Artifact) string {
 	return n
 }
 
+// imageRunArgs 解析 docker run 的附加参数(端口映射 / 自定义 run 参数;参数自由,不写死)。
+// 各参数原样作为 array 元素(绝不拼接 shell;AC-SEC-02),依序拼到 `docker run -d --name <name>` 之后、
+// 镜像 ref 之前:
+//   - cfg["ports"]   : 端口映射,逗号 / 空白分隔,每项展开为 `-p <map>`(如 "8080:80,9000:9000")。
+//   - cfg["runArgs"] : 任意 docker run 参数,按空白切词逐元素追加(如 "-e KEY=v --restart always")。
+//
+// 注意:凭据绝不经此进命令(registry 凭据沿用既有 docker login 模式);此处仅承载端口 / 运行参数。
+func imageRunArgs(cfg map[string]string) []string {
+	if cfg == nil {
+		return nil
+	}
+	var args []string
+	for _, p := range splitImageList(cfg["ports"]) {
+		args = append(args, "-p", p)
+	}
+	args = append(args, strings.Fields(cfg["runArgs"])...)
+	return args
+}
+
+// splitImageList 按逗号 / 空白切分并去空(端口列表用)。
+func splitImageList(s string) []string {
+	var out []string
+	for _, f := range strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n'
+	}) {
+		if f = strings.TrimSpace(f); f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// dockerRunCmd 组装 `docker run -d --name <name> [runArgs...] <ref>`(各元素独立,不拼 shell)。
+func dockerRunCmd(name string, runArgs []string, ref string) []string {
+	cmd := []string{"docker", "run", "-d", "--name", name}
+	cmd = append(cmd, runArgs...)
+	cmd = append(cmd, ref)
+	return cmd
+}
+
 // stageImageOne 执行 image 蓝绿**预备阶段**:pull 新镜像(不停旧容器)+ 探测当前容器镜像(回滚目标)。
 // 拉取失败 → (中间态, 人读 message, false)。
-func (s *service) stageImageOne(ctx context.Context, srv *target.Server, a run.Artifact) (imageState, string, bool) {
-	st := imageState{name: imageContainerName(a), ref: strings.TrimSpace(a.Reference)}
+func (s *service) stageImageOne(ctx context.Context, srv *target.Server, a run.Artifact, cfg map[string]string) (imageState, string, bool) {
+	st := imageState{name: imageContainerName(a, cfg), ref: strings.TrimSpace(a.Reference), runArgs: imageRunArgs(cfg)}
 	if st.ref == "" {
 		return st, "image 产物缺少 reference(repo:tag 或镜像 id)", false
 	}
@@ -62,10 +106,10 @@ func (s *service) activateImageOne(ctx context.Context, srv *target.Server, a ru
 	execCtx, cancel := context.WithTimeout(ctx, execTimeout)
 	defer cancel()
 
-	// 切换:移除同名旧容器(幂等)→ 后台起新镜像容器。
+	// 切换:移除同名旧容器(幂等)→ 后台起新镜像容器(带 cfg 解析的端口 / run 参数)。
 	swap := [][]string{
 		{"docker", "rm", "-f", st.name},
-		{"docker", "run", "-d", "--name", st.name, st.ref},
+		dockerRunCmd(st.name, st.runArgs, st.ref),
 	}
 	if failMsg, ok := s.runStep(execCtx, srv.ID, swap); !ok {
 		return finishFailed(res, failMsg)
@@ -102,7 +146,7 @@ func (s *service) rollbackImage(ctx context.Context, srv *target.Server, res Tar
 	var rbErr error
 	for _, cmd := range [][]string{
 		{"docker", "rm", "-f", st.name},
-		{"docker", "run", "-d", "--name", st.name, st.prevImage},
+		dockerRunCmd(st.name, st.runArgs, st.prevImage),
 	} {
 		if _, e := s.targets.Exec(ctx, srv.ID, cmd); e != nil {
 			rbErr = e
@@ -126,7 +170,7 @@ func (s *service) fleetRollbackImageOne(ctx context.Context, srv *target.Server,
 	var rbErr error
 	for _, cmd := range [][]string{
 		{"docker", "rm", "-f", st.name},
-		{"docker", "run", "-d", "--name", st.name, st.prevImage},
+		dockerRunCmd(st.name, st.runArgs, st.prevImage),
 	} {
 		if _, e := s.targets.Exec(execCtx, srv.ID, cmd); e != nil {
 			rbErr = e

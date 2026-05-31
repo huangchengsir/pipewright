@@ -16,6 +16,7 @@ import {
   type SaveSettingsInput,
 } from '../api/pipelineSettings'
 import { listCredentials, type Credential } from '../api/credentials'
+import { listServers, type Server } from '../api/servers'
 import { getValidation, type ValidationDTO, type IssueScope } from '../api/pipelineValidation'
 import { HttpError } from '../api/http'
 import PipelineCanvas from '../components/pipeline/PipelineCanvas.vue'
@@ -101,6 +102,7 @@ const settings    = ref<SettingsDTO | null>(null)
 const editBuild    = ref<BuildConfig | null>(null)
 const editEnvs     = ref<Environment[]>([])
 const credentials  = ref<Credential[]>([])
+const servers      = ref<Server[]>([])
 
 function applySettings(dto: SettingsDTO): void {
   settings.value = dto
@@ -110,12 +112,14 @@ function applySettings(dto: SettingsDTO): void {
 
 async function loadSettings(): Promise<void> {
   try {
-    const [dto, creds] = await Promise.all([
+    const [dto, creds, srvs] = await Promise.all([
       getSettings(projectId.value),
       listCredentials().catch(() => [] as Credential[]),
+      listServers().catch(() => [] as Server[]),
     ])
     applySettings(dto)
     credentials.value = creds
+    servers.value = srvs
   } catch {
     // Settings load failure is non-fatal for the canvas; the vars/envs tabs show
     // their own empty state until a successful save. Surfaced on save attempts.
@@ -451,6 +455,8 @@ const projectName = computed(() => String(route.params.id))
             v-else-if="loadState === 'idle' && pipeline"
             :stages="editStages"
             :yaml="pipeline.yaml"
+            :credentials="credentials"
+            :servers="servers"
             @update="handleCanvasUpdate"
           />
         </div>

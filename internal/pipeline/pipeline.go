@@ -79,7 +79,10 @@ type Stage struct {
 	Needs        []string `json:"needs,omitempty"`
 	AllowFailure bool     `json:"allowFailure,omitempty"`
 	When         When     `json:"when,omitempty"`
-	Jobs         []Job    `json:"jobs"`
+	// Gate 为 true 时,进入该阶段前需人工审批(Story 8-4):运行阻塞、状态置 waiting_approval,
+	// 批准→继续,拒绝→该阶段失败(运行终止)。
+	Gate bool  `json:"gate,omitempty"`
+	Jobs []Job `json:"jobs"`
 }
 
 // Spec 是流水线编排声明式配置(阶段集合)。
@@ -343,7 +346,7 @@ func normalizeSpec(in Spec) (Spec, error) {
 		// Needs 规范化:trim、去空、去重、剔除自指(自指交由 dag 校验报错以给明确信息)。
 		needs := normalizeNeeds(st.Needs)
 
-		out.Stages = append(out.Stages, Stage{ID: stageID, Name: name, Kind: kind, Needs: needs, AllowFailure: st.AllowFailure, When: normalizeWhen(st.When), Jobs: jobs})
+		out.Stages = append(out.Stages, Stage{ID: stageID, Name: name, Kind: kind, Needs: needs, AllowFailure: st.AllowFailure, When: normalizeWhen(st.When), Gate: st.Gate, Jobs: jobs})
 	}
 
 	// 源阶段不变式:流水线必须恰有一个 source 阶段(引用项目仓库)。前端不渲染删源阶段的入口,

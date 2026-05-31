@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/huangchengsir/pipewright/internal/ai"
 	"github.com/huangchengsir/pipewright/internal/anomaly"
+	"github.com/huangchengsir/pipewright/internal/approval"
 	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/auth"
 	"github.com/huangchengsir/pipewright/internal/cron"
@@ -69,6 +70,17 @@ type options struct {
 	deployer         deploy.Service
 	anomaly          anomaly.Service
 	oauth            oauth.Service
+	approvalCoord    *approval.Coordinator
+	approvalStore    *approval.Store
+}
+
+// WithApprovals 注入审批门协调器 + 持久层(Story 8-4),挂载 /api/runs/{id}/{approve,reject,approvals} 路由。
+// 不传则审批端点返回 503。
+func WithApprovals(coord *approval.Coordinator, store *approval.Store) Option {
+	return func(o *options) {
+		o.approvalCoord = coord
+		o.approvalStore = store
+	}
 }
 
 // WithVault 注入凭据保险库,挂载 /api/credentials* 路由。
@@ -324,6 +336,11 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 构建产物契约(Story 3.4 / FR-6):只读 + 认证;按 (type, reference) 供 Epic 4 消费。
 		ar.Get("/runs/{id}/artifacts", makeRunArtifactsHandler(rs))
 		ar.Post("/runs/{id}/cancel", makeCancelRunHandler(rs))
+		// 人工审批门(Story 8-4):批准/拒绝某运行的审批门阶段 + 列审批记录。
+		// approve/reject 为写方法,过 auth + CSRF;coord/store 为 nil → 503。
+		ar.Post("/runs/{id}/approve", makeApprovalDecisionHandler(o.approvalCoord, o.approvalStore, aud, true))
+		ar.Post("/runs/{id}/reject", makeApprovalDecisionHandler(o.approvalCoord, o.approvalStore, aud, false))
+		ar.Get("/runs/{id}/approvals", makeListApprovalsHandler(o.approvalStore))
 		// SSH 部署执行(Story 4.2 / FR-10):认证 + CSRF(写方法)。dep 为 nil → 503。
 		// 取 run + 产物 + 服务器 → deploy.Deploy(逐机经 SSH 执行部署命令,array 不拼 shell)
 		// → 据结果更新 run 终态 → 返回填好的 targets。部署执行失败不 500(每机 status=failed)。

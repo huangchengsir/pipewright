@@ -107,6 +107,68 @@ func TestRunnerWhenSkipsStageAndDownstreamWithoutFailing(t *testing.T) {
 	}
 }
 
+func TestRunnerGateApprovedRunsStage(t *testing.T) {
+	cfg := cfgWith(
+		pipeline.Stage{ID: "src", Name: "源"},
+		pipeline.Stage{ID: "deploy", Name: "部署", Needs: []string{"src"}, Gate: true},
+	)
+	var ran bool
+	r := New(fakeLoader{cfg},
+		WithGate(func(_ context.Context, _ *run.Run, _ pipeline.Stage) (bool, error) {
+			return true, nil // 批准
+		}),
+		WithStageExecutor(func(_ context.Context, _ *run.Run, st pipeline.Stage, _ StageReporter) error {
+			if st.ID == "deploy" {
+				ran = true
+			}
+			return nil
+		}))
+	sink := newFakeSink()
+	if err := r.Run(context.Background(), &run.Run{ProjectID: "p"}, sink); err != nil {
+		t.Fatalf("批准后 Run 不应失败:%v", err)
+	}
+	if !ran {
+		t.Error("批准后 deploy 应执行")
+	}
+}
+
+func TestRunnerGateRejectedFailsStage(t *testing.T) {
+	cfg := cfgWith(
+		pipeline.Stage{ID: "src", Name: "源"},
+		pipeline.Stage{ID: "deploy", Name: "部署", Needs: []string{"src"}, Gate: true},
+	)
+	var ran bool
+	r := New(fakeLoader{cfg},
+		WithGate(func(_ context.Context, _ *run.Run, _ pipeline.Stage) (bool, error) {
+			return false, nil // 拒绝
+		}),
+		WithStageExecutor(func(_ context.Context, _ *run.Run, st pipeline.Stage, _ StageReporter) error {
+			if st.ID == "deploy" {
+				ran = true
+			}
+			return nil
+		}))
+	sink := newFakeSink()
+	err := r.Run(context.Background(), &run.Run{ProjectID: "p"}, sink)
+	if err == nil {
+		t.Fatal("拒绝应使 Run 失败")
+	}
+	if ran {
+		t.Error("拒绝后 deploy executor 不应被调用")
+	}
+	ord := func(name string) int {
+		for i, n := range sink.planned {
+			if n == name {
+				return i
+			}
+		}
+		return -1
+	}
+	if sink.done[ord("部署")] != run.StepFailed {
+		t.Errorf("部署 step = %q, want failed(被拒绝)", sink.done[ord("部署")])
+	}
+}
+
 func TestRunnerWhenMatchedRunsStage(t *testing.T) {
 	cfg := cfgWith(
 		pipeline.Stage{ID: "src", Name: "源"},

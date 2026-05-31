@@ -217,3 +217,115 @@ func assertErrorCode(t *testing.T, resp *http.Response, wantStatus int, wantCode
 		t.Fatalf("error code = %q, want %q, body=%s", body.Error.Code, wantCode, raw)
 	}
 }
+
+// ─── 流水线即代码导入/预览(FR-8-12) ────────────────────────────────────────
+
+const importYAMLDoc = `version: 1
+stages:
+  - id: stg_src
+    name: 流水线源
+    kind: source
+    jobs:
+      - name: Gitee 源
+        type: git_source
+  - id: stg_build
+    name: 构建
+    kind: build
+    needs: [stg_src]
+    jobs:
+      - name: 运行测试
+        type: script
+        script:
+          image: golang:1.23
+          commands:
+            - go vet ./...
+            - go test ./...
+          workdir: .
+  - id: stg_deploy
+    name: 部署
+    kind: deploy
+    needs: [stg_build]
+    gate: true
+    when:
+      branches: [main]
+    jobs:
+      - name: SSH 部署
+        type: deploy_ssh
+`
+
+func TestPipelineImportPreviewNoSave(t *testing.T) {
+	srv, client, csrf, projID := setupPipelineServer(t)
+	body, _ := json.Marshal(map[string]any{"yaml": importYAMLDoc})
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/projects/"+projID+"/pipeline/import", csrf, string(body))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, raw)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	var dto map[string]any
+	_ = json.Unmarshal(raw, &dto)
+	stages, ok := dto["stages"].([]any)
+	if !ok || len(stages) != 3 {
+		t.Fatalf("预览应 3 阶段, got %v", dto["stages"])
+	}
+
+	// 预览不落库:GET 仍是默认 4 阶段种子。
+	g := doJSON(t, client, http.MethodGet, srv.URL+"/api/projects/"+projID+"/pipeline", csrf, "")
+	defer g.Body.Close()
+	graw, _ := io.ReadAll(g.Body)
+	var gd map[string]any
+	_ = json.Unmarshal(graw, &gd)
+	if gs, _ := gd["stages"].([]any); len(gs) != 4 {
+		t.Fatalf("预览不应落库,GET 应仍为默认 4 阶段, got %d", len(gs))
+	}
+}
+
+func TestPipelineImportSavePersists(t *testing.T) {
+	srv, client, csrf, projID := setupPipelineServer(t)
+	body, _ := json.Marshal(map[string]any{"yaml": importYAMLDoc, "save": true})
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/projects/"+projID+"/pipeline/import", csrf, string(body))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, raw)
+	}
+
+	// save=true 应落库:GET 返回导入的 3 阶段。
+	g := doJSON(t, client, http.MethodGet, srv.URL+"/api/projects/"+projID+"/pipeline", csrf, "")
+	defer g.Body.Close()
+	graw, _ := io.ReadAll(g.Body)
+	var gd map[string]any
+	_ = json.Unmarshal(graw, &gd)
+	gs, _ := gd["stages"].([]any)
+	if len(gs) != 3 {
+		t.Fatalf("save=true 应落库 3 阶段, got %d", len(gs))
+	}
+}
+
+func TestPipelineImportInvalidYAML(t *testing.T) {
+	srv, client, csrf, projID := setupPipelineServer(t)
+	body, _ := json.Marshal(map[string]any{"yaml": "not: [valid"})
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/projects/"+projID+"/pipeline/import", csrf, string(body))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("非法 YAML status = %d, want 422", resp.StatusCode)
+	}
+}
+
+func TestPipelineImportInvalidStage(t *testing.T) {
+	srv, client, csrf, projID := setupPipelineServer(t)
+	doc := "stages:\n  - name: x\n    kind: bogus\n    jobs: [{name: j, type: git_source}]\n"
+	body, _ := json.Marshal(map[string]any{"yaml": doc})
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/projects/"+projID+"/pipeline/import", csrf, string(body))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("非法 kind status = %d, want 422", resp.StatusCode)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	var body2 struct{ Error struct{ Code string } }
+	_ = json.Unmarshal(raw, &body2)
+	if body2.Error.Code != "invalid_stage" {
+		t.Fatalf("error code = %q, want invalid_stage, body=%s", body2.Error.Code, raw)
+	}
+}

@@ -352,6 +352,10 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Get("/projects/{id}/pipeline", makeGetPipelineHandler(pl))
 		ar.Put("/projects/{id}/pipeline", makeSavePipelineHandler(pl))
 
+		// 流水线即代码导入/预览(FR-8-12):POST 收 .pipewright.yml 文档,解析+校验为同一套 spec。
+		// /pipeline/import 比 /pipeline 多一段,不会被吞;写方法,过 auth + CSRF。
+		ar.Post("/projects/{id}/pipeline/import", makeImportPipelineHandler(pl))
+
 		// 构建/部署配置(Story 2.4):独立表/端点,与 /pipeline(2-2 spec)各自路由;
 		// /pipeline/settings 比 /pipeline 多一段,不会被吞。GET 过 auth;PUT 写方法过 auth + CSRF。
 		ps := o.pipelineSettings

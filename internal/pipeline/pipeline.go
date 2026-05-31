@@ -108,6 +108,17 @@ type Service interface {
 	Save(ctx context.Context, projectID string, spec Spec) (*Config, error)
 }
 
+// StatusDraft 是本期唯一发布状态(导出供 pipelineyaml 等同包域外构造 Config 时复用)。
+const StatusDraft = statusDraft
+
+// NormalizeSpec 校验并规范化 spec(导出包装 normalizeSpec):trim、补空 id、Config nil 补 {}、
+// 阶段名/kind 枚举/任务名/type 非空、id 全局唯一、恰一个 source 阶段、needs 存在性/自指/环检测。
+// 供「流水线即代码」(pipelineyaml)等域外入口走同一套校验,不另起规则。
+func NormalizeSpec(in Spec) (Spec, error) { return normalizeSpec(in) }
+
+// RenderYAML 把 spec 渲染为确定性 YAML 文本(导出包装 renderYAML),供导入预览回填规范 YAML。
+func RenderYAML(spec Spec) (string, error) { return renderYAML(spec) }
+
 // service 是 store 支撑的 Service 实现。
 type service struct {
 	db *sql.DB

@@ -26,6 +26,14 @@ export interface PipelineJob {
   config: Record<string, string>
 }
 
+/** Conditional execution rule (Epic 8 · 8-5). Empty = always run. */
+export interface StageWhen {
+  /** Run only if the trigger branch matches one of these globs (empty = any). */
+  branches?: string[]
+  /** Run only on these trigger types: manual | webhook | schedule (empty = any). */
+  events?: string[]
+}
+
 export interface PipelineStage {
   id: string
   name: string
@@ -34,6 +42,8 @@ export interface PipelineStage {
   needs?: string[]
   /** When true, this stage's failure does not block downstream stages. */
   allowFailure?: boolean
+  /** Conditional execution; unmet → stage (and downstream) skipped. */
+  when?: StageWhen
   jobs: PipelineJob[]
 }
 
@@ -55,6 +65,7 @@ export interface SavePipelineInput {
     kind: StageKind
     needs?: string[]
     allowFailure?: boolean
+    when?: StageWhen
     jobs: Array<{
       id?: string
       name: string

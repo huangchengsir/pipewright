@@ -8,6 +8,8 @@ const AppShell    = () => import('../layouts/AppShell.vue')
 const Onboarding  = () => import('../views/Onboarding.vue')
 const Projects    = () => import('../views/Projects.vue')
 const Runs        = () => import('../views/Runs.vue')
+// FR-8-15: DORA 四指标仪表盘(部署频率 / 前置时长 / 变更失败率 / MTTR;只读聚合)
+const DoraDashboard = () => import('../views/DoraDashboard.vue')
 // Story 6-1: multi-host status overview (server-layer CPU/memory/disk metrics, FR-15)
 const ServerStatus = () => import('../views/ServerStatus.vue')
 // Story 6-5: configurable anomaly detection & alerts (FR-23)
@@ -70,6 +72,8 @@ const router = createRouter({
         { path: 'projects/:id/code', name: 'project-code', component: ProjectCode },
         { path: 'runs', name: 'runs', component: Runs },
         { path: 'runs/:id', name: 'run-detail', component: RunDetail },
+        // FR-8-15: DORA 指标仪表盘(只读聚合;projectId / window 经 query 即状态)
+        { path: 'metrics/dora', name: 'dora', component: DoraDashboard },
         // 顶层「服务器」占位页 → 重定向到真实的多机状态页(登记在 /settings/servers)。
         { path: 'servers', name: 'servers', redirect: { name: 'server-status' } },
         // Story 6-1: multi-host status overview (server-layer metrics, FR-15)

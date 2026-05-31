@@ -19,6 +19,7 @@ import {
 } from '../api/triggers'
 import { HttpError } from '../api/http'
 import CronPanel from './CronPanel.vue'
+import EnvironmentsPanel from './EnvironmentsPanel.vue'
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -519,6 +520,9 @@ const displayWebhookUrl = computed(() => {
 
       <!-- ═══ Scheduled (cron) trigger · Story 8-6 ════════════════════════ -->
       <CronPanel :project-id="props.projectId" />
+
+      <!-- ═══ Environment promotion chain · Story 8-7 / FR-8-7 ════════════ -->
+      <EnvironmentsPanel :project-id="props.projectId" />
 
       <!-- ═══ Save bar ════════════════════════════════════════════════════ -->
       <div class="save-bar">

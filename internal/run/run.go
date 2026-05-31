@@ -177,6 +177,7 @@ type Diagnosis struct {
 	Confidence      string              // high | medium | low
 	AlternateCauses []string            // 低置信时非空
 	FixSuggestions  []string            // 修复建议
+	FixScript       string              // 可执行修复脚本/补丁片段(护城河;脱敏后搬运;空串=无)
 	Evidence        []DiagnosisEvidence // 脱敏后日志证据
 	GeneratedAt     time.Time           // 生成时刻
 }

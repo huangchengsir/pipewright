@@ -111,6 +111,23 @@ async function sendFeedback(verdict: FeedbackVerdict): Promise<void> {
   }
 }
 
+// ─── Fix script (AI moat): copy-to-clipboard ────────────────────────────────
+
+const fixScriptCopied = ref(false)
+
+async function copyFixScript(): Promise<void> {
+  const text = props.diagnosis?.fixScript ?? ''
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    fixScriptCopied.value = true
+    setTimeout(() => { fixScriptCopied.value = false }, 1800)
+  } catch {
+    // Clipboard may be unavailable (insecure context / denied) — fail silently;
+    // the script is still visible for manual selection.
+  }
+}
+
 // ─── Confidence helpers ───────────────────────────────────────────────────────
 
 type ConfLabel = { text: string; cls: string }
@@ -264,6 +281,33 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
                 <span>{{ fix }}</span>
               </li>
             </ul>
+          </div>
+
+          <!-- Fix script (AI moat): concrete copy-pasteable patch/command snippet -->
+          <div v-if="diagnosis.fixScript" class="dp-fixscript">
+            <div class="dp-fixscript-head">
+              <div class="dp-fixscript-label">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
+                  <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+                </svg>
+                一键修复脚本
+              </div>
+              <button
+                class="dp-fixscript-copy"
+                :class="{ 'dp-fixscript-copy--done': fixScriptCopied }"
+                type="button"
+                @click="copyFixScript"
+              >
+                <svg v-if="!fixScriptCopied" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                </svg>
+                <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+                {{ fixScriptCopied ? '已复制' : '复制' }}
+              </button>
+            </div>
+            <pre class="dp-fixscript-code"><code>{{ diagnosis.fixScript }}</code></pre>
           </div>
 
           <!-- Alternate causes (low confidence) -->
@@ -823,6 +867,89 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
   font-family: var(--font-mono);
   font-size: 0.75rem;
   margin-top: 1px;
+}
+
+/* ─── fix script (AI moat) ───────────────────────────────────────────────── */
+.dp-fixscript {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dp-fixscript-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dp-fixscript-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-cyan);
+}
+
+.dp-fixscript-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-sans);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-faint);
+  background: var(--color-card);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--rounded-full);
+  padding: 3px 10px;
+  cursor: pointer;
+  transition:
+    color var(--duration-fast),
+    border-color var(--duration-fast),
+    background-color var(--duration-fast);
+}
+
+.dp-fixscript-copy:hover {
+  color: var(--color-cyan);
+  border-color: var(--color-cyan-line);
+  background: var(--color-cyan-soft);
+}
+
+.dp-fixscript-copy:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.dp-fixscript-copy--done {
+  color: var(--color-green);
+  border-color: var(--color-green-line);
+  background: var(--color-green-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dp-fixscript-copy { transition: none; }
+}
+
+.dp-fixscript-code {
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--color-term);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-lg);
+  box-shadow: var(--shadow-inner);
+  overflow-x: auto;
+}
+
+.dp-fixscript-code code {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono);
+  line-height: 1.7;
+  color: oklch(80% 0.04 160);
+  white-space: pre;
 }
 
 /* ─── alternate causes ───────────────────────────────────────────────────── */

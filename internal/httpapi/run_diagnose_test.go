@@ -20,9 +20,11 @@ import (
 
 // diagStubAI 是可配置的 ai.Service 桩(只实现诊断路径所需;其余返回零值)。
 type diagStubAI struct {
-	diag       *ai.Diagnosis // Diagnose 返回值
-	gotLog     string        // 记录收到的失败日志(脱敏前)
-	gotMaskLog bool          // Diagnose 内是否已脱敏(经 Masker.Scrub 验证)
+	diag       *ai.Diagnosis  // Diagnose 返回值
+	gotLog     string         // 记录收到的失败日志(脱敏前)
+	gotMaskLog bool           // Diagnose 内是否已脱敏(经 Masker.Scrub 验证)
+	risk       *ai.RiskReport // AnnotateRisks 返回值(nil → 空报告)
+	gotSteps   []ai.ScriptStep
 }
 
 func (s *diagStubAI) Get(context.Context) (*ai.Config, error) { return &ai.Config{}, nil }
@@ -51,6 +53,13 @@ func (s *diagStubAI) Diagnose(_ context.Context, in ai.DiagnoseInput) (*ai.Diagn
 		Evidence:        []ai.DiagnosisEvidence{},
 		GeneratedAt:     time.Now().UTC(),
 	}, nil
+}
+func (s *diagStubAI) AnnotateRisks(_ context.Context, in ai.AnnotateRisksInput) (*ai.RiskReport, error) {
+	s.gotSteps = in.Steps
+	if s.risk != nil {
+		return s.risk, nil
+	}
+	return &ai.RiskReport{Findings: []ai.RiskFinding{}, GeneratedAt: time.Now().UTC()}, nil
 }
 
 // setupDiagnoseServer 构造带 auth + project + run(失败 runner,FailAt=0)+ stub AI 的 server。

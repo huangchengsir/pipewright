@@ -47,6 +47,19 @@ func (s *RunSecretSource) MaskerForRun(ctx context.Context, runID string) *mask.
 	return m
 }
 
+// MaskerForProject 返回一个登记了该项目全部真实凭据明文(+ 桩假 secret)的 Masker。
+// 供「不绑定具体 run」的出网脱敏复用(如脚本风险标注:把 settings secret env 明文登记后,
+// 命令进 LLM prompt 前一律脱敏)。best-effort,绝不 panic。
+func (s *RunSecretSource) MaskerForProject(ctx context.Context, projectID string) *mask.Masker {
+	m := mask.NewMasker()
+	m.RegisterSecret(run.StubFailureSecret)
+	if s == nil || projectID == "" {
+		return m
+	}
+	s.registerProjectSecrets(ctx, m, projectID)
+	return m
+}
+
 // registerProjectSecrets 把某项目相关的所有 secret 凭据明文登记进 Masker(best-effort)。
 func (s *RunSecretSource) registerProjectSecrets(ctx context.Context, m *mask.Masker, projectID string) {
 	if s.vault == nil {

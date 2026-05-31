@@ -67,6 +67,8 @@ const (
 	TriggerManual = "manual"
 	// TriggerSchedule 表示定时(cron)触发(Story 8-6)。
 	TriggerSchedule = "schedule"
+	// TriggerChain 表示由上游流水线成功后串联触发(Story FR-8-11;由 internal/chain 串联钩子创建)。
+	TriggerChain = "chain"
 )
 
 // 领域错误。错误体不含敏感数据。
@@ -110,6 +112,13 @@ type Trigger struct {
 	// Params 是参数化手动运行的 key=value 参数(Story 8-11);执行时注入 script 步骤容器作环境变量。
 	// 非敏感明文(含密钥应走保险库引用);为空表示无参数。
 	Params map[string]string
+
+	// ChainSourceRunID 是串联触发(TriggerChain)时**触发本次运行的上游运行 id**(溯源;FR-8-11)。
+	// 空 = 非串联触发(根运行)。持久化到 pipeline_runs.chain_source_run_id,经 Get 回读。
+	ChainSourceRunID string
+	// ChainDepth 是串联深度:根运行=0,每向下游串联一层 +1。由串联钩子据上游 depth+1 填入。
+	// 用于环路安全(钩子拒绝超过上限的串联);持久化到 pipeline_runs.chain_depth,经 Get 回读。
+	ChainDepth int
 }
 
 // Step 是穿珠时间线节点(运行步骤)。

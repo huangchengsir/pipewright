@@ -48,6 +48,10 @@ const (
 	ActionVarGroupCreate = "variable_group_create"
 	ActionVarGroupUpdate = "variable_group_update"
 	ActionVarGroupDelete = "variable_group_delete"
+	// 自定义节点(复用库 Tier 2)。
+	ActionCustomNodeCreate = "custom_node_create"
+	ActionCustomNodeUpdate = "custom_node_update"
+	ActionCustomNodeDelete = "custom_node_delete"
 )
 
 // 目标类型枚举(供 TargetType 填值;非强制白名单,便于后续 story 扩展)。
@@ -61,6 +65,7 @@ const (
 	TargetServer     = "server"
 	TargetTemplate   = "template"
 	TargetVarGroup   = "variable_group"
+	TargetCustomNode = "custom_node"
 )
 
 // Entry 是一条审计写入入参(冻结契约)。Detail 写库前过 Masker,绝不含明文 secret。

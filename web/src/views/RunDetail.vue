@@ -22,12 +22,16 @@ import {
   diagnoseRun,
   deployRun,
   retryFailedDeploy,
+  listApprovals,
+  approveStage,
+  rejectStage,
   type RunDetail,
   type RunStatus,
   type StepStatus,
   type DiagnosisDTO,
   type HealthCheckType,
   type HealthCheckInput,
+  type ApprovalRecord,
 } from '../api/runs'
 import { listServers, type Server } from '../api/servers'
 import { HttpError } from '../api/http'
@@ -71,6 +75,44 @@ async function handleCancel(): Promise<void> {
     }
   } finally {
     cancelling.value = false
+  }
+}
+
+// ─── approval gate (Story 8-4) ──────────────────────────────────────────────────
+// 运行阻塞在审批门(status=waiting_approval)时,展示待批阶段 + 批准/拒绝按钮。
+
+const pendingApproval = ref<ApprovalRecord | null>(null)
+const approving = ref(false)
+const approvalError = ref('')
+
+async function loadApprovals(): Promise<void> {
+  try {
+    const { items } = await listApprovals(runId.value)
+    pendingApproval.value = items.find((a) => a.status === 'pending') ?? null
+  } catch {
+    pendingApproval.value = null
+  }
+}
+
+async function decideApproval(approve: boolean): Promise<void> {
+  const stage = pendingApproval.value
+  if (!stage || approving.value) return
+  approving.value = true
+  approvalError.value = ''
+  try {
+    if (approve) await approveStage(runId.value, stage.stageId)
+    else await rejectStage(runId.value, stage.stageId)
+    pendingApproval.value = null
+    // status flips via SSE (waiting_approval → running → terminal); refresh run + approvals.
+    run.value = await getRun(runId.value)
+    await loadApprovals()
+  } catch (err) {
+    approvalError.value =
+      err instanceof HttpError
+        ? (err.apiError?.message ?? `操作失败(${err.status})`)
+        : '审批请求失败,请稍后重试'
+  } finally {
+    approving.value = false
   }
 }
 
@@ -261,6 +303,7 @@ async function loadRun(): Promise<void> {
   try {
     run.value = await getRun(runId.value)
     loadState.value = 'idle'
+    if (run.value.status === 'waiting_approval') void loadApprovals()
   } catch (err) {
     if (err instanceof HttpError) {
       loadError.value = err.status === 404
@@ -285,6 +328,9 @@ function startSse(): void {
     onStatus({ status }) {
       if (!run.value) return
       run.value = { ...run.value, status }
+      // Approval gate (8-4): load pending stage when blocked; clear once resumed.
+      if (status === 'waiting_approval') void loadApprovals()
+      else pendingApproval.value = null
       // Stop SSE on terminal state
       if (isTerminal(status)) stopSse()
     },
@@ -313,7 +359,7 @@ watch(
   () => run.value?.status,
   (status) => {
     if (!status) return
-    if ((status === 'running' || status === 'queued') && !cleanupSse) {
+    if ((status === 'running' || status === 'queued' || status === 'waiting_approval') && !cleanupSse) {
       startSse()
     } else if (isTerminal(status)) {
       stopSse()
@@ -323,7 +369,8 @@ watch(
 
 onMounted(async () => {
   await loadRun()
-  if (run.value && (run.value.status === 'running' || run.value.status === 'queued')) {
+  const s = run.value?.status
+  if (s === 'running' || s === 'queued' || s === 'waiting_approval') {
     startSse()
   }
 })
@@ -344,6 +391,7 @@ interface StatusConfig {
 const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
   queued:        { label: '排队中',   dot: 'var(--color-faint)',  bg: 'var(--color-card-2)',     border: 'var(--color-border-strong)', text: 'var(--color-dim)',   pulse: false },
   running:       { label: '进行中',   dot: 'var(--color-amber)',  bg: 'var(--color-amber-soft)', border: 'transparent',               text: 'var(--color-amber)', pulse: true  },
+  waiting_approval:{ label: '等待审批', dot: 'var(--color-amber)', bg: 'var(--color-amber-soft)', border: 'var(--color-amber-line)',   text: 'var(--color-amber)', pulse: true  },
   success:       { label: '成功',     dot: 'var(--color-green)',  bg: 'var(--color-green-soft)', border: 'transparent',               text: 'var(--color-green)', pulse: false },
   failed:        { label: '失败',     dot: 'var(--color-red)',    bg: 'var(--color-red-soft)',   border: 'var(--color-red-line)',     text: 'var(--color-red)',   pulse: false },
   partial_failed:{ label: '部分失败', dot: 'var(--color-red)',    bg: 'var(--color-red-soft)',   border: 'var(--color-red-line)',     text: 'var(--color-red)',   pulse: false },
@@ -505,6 +553,33 @@ function nodeClass(status: StepStatus): string {
             <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
           </svg>
           {{ cancelError }}
+        </div>
+
+        <!-- ── Approval gate (Story 8-4): waiting for manual approval ── -->
+        <div
+          v-if="run.status === 'waiting_approval' && pendingApproval"
+          class="approval-gate"
+          role="region"
+          aria-label="等待人工审批"
+        >
+          <div class="approval-gate-icon" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+          </div>
+          <div class="approval-gate-body">
+            <div class="approval-gate-title">阶段「{{ pendingApproval.stageName }}」等待人工审批</div>
+            <div class="approval-gate-sub">批准后继续执行,拒绝则该阶段失败、运行终止。</div>
+            <div v-if="approvalError" class="approval-gate-error" role="alert">{{ approvalError }}</div>
+          </div>
+          <div class="approval-gate-actions">
+            <button class="approval-btn approval-btn--reject" :disabled="approving" @click="decideApproval(false)">
+              拒绝
+            </button>
+            <button class="approval-btn approval-btn--approve" :disabled="approving" @click="decideApproval(true)">
+              {{ approving ? '处理中…' : '批准' }}
+            </button>
+          </div>
         </div>
 
         <!-- ── Meta strip: trigger / branch / commit / duration ──────── -->
@@ -1128,6 +1203,53 @@ function nodeClass(status: StepStatus): string {
 </template>
 
 <style scoped>
+/* ─── approval gate (Story 8-4) ──────────────────────────────────────────── */
+.approval-gate {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  margin: 14px 0;
+  padding: 14px 16px;
+  background: var(--color-amber-soft);
+  border: 1px solid var(--color-amber);
+  border-radius: var(--rounded);
+}
+.approval-gate-icon {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--rounded-md);
+  background: var(--color-amber);
+  color: #fff;
+}
+.approval-gate-body { flex: 1; min-width: 0; }
+.approval-gate-title { font-size: 0.92rem; font-weight: 650; color: var(--color-text); }
+.approval-gate-sub { margin-top: 2px; font-size: 0.8rem; color: var(--color-dim); }
+.approval-gate-error { margin-top: 6px; font-size: 0.78rem; color: var(--color-red); }
+.approval-gate-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.approval-btn {
+  height: 34px;
+  padding: 0 16px;
+  border-radius: var(--rounded-md);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: filter var(--duration-fast), background-color var(--duration-fast);
+}
+.approval-btn:disabled { opacity: 0.6; cursor: default; }
+.approval-btn--approve { background: var(--color-green); color: #fff; }
+.approval-btn--approve:not(:disabled):hover { filter: brightness(1.06); }
+.approval-btn--reject {
+  background: transparent;
+  border-color: var(--color-border-strong);
+  color: var(--color-dim);
+}
+.approval-btn--reject:not(:disabled):hover { border-color: var(--color-red); color: var(--color-red); }
+
 /* ─── root ───────────────────────────────────────────────────────────────── */
 .run-detail-root {
   display: flex;

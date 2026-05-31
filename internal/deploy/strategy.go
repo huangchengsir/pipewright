@@ -264,7 +264,7 @@ func (s *service) deployBlueGreenImage(ctx context.Context, servers []*target.Se
 
 	// 阶段 2:全机统一停旧起新 + 健康。
 	s.forEachServer(servers, func(idx int, srv *target.Server) {
-		results[idx] = s.activateImageOne(ctx, srv, a, hc, states[idx], started[idx])
+		results[idx] = s.activateImageOne(ctx, srv, a, hc, states[idx], started[idx], "蓝绿")
 	}, func(idx int, srv *target.Server) {
 		results[idx] = abortedResult(srv, "蓝绿切换阶段执行异常中断")
 	})

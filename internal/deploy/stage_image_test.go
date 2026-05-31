@@ -254,6 +254,108 @@ func TestStageImageBlueGreenRollback(t *testing.T) {
 	}
 }
 
+// hasRunWithRef 报告命令序列里是否有「docker run … <ref>」(ref 为末参,用于断言回滚到上一镜像)。
+func hasRunWithRef(calls [][]string, ref string) bool {
+	for _, c := range calls {
+		if len(c) >= 3 && c[0] == "docker" && c[1] == "run" && c[len(c)-1] == ref {
+			return true
+		}
+	}
+	return false
+}
+
+// TestRollingImageHealthFailureRollsBack 滚动(默认)image 部署:切后健康失败 → 回滚到上一镜像
+// (rolled_back)。此前 buildImageDeploy 扁平路径无回滚,健康失败会把目标机留在坏容器上。
+func TestRollingImageHealthFailureRollsBack(t *testing.T) {
+	db := testDB(t)
+	rsvc := run.New(db)
+	rec := &touchRecorder{
+		inspectImage: "registry/app:v1", // 已有上一镜像 → 可回滚
+		failOn: func(_ string, cmd []string) bool {
+			return len(cmd) > 0 && cmd[0] == "true" // 健康命令失败
+		},
+	}
+	tgt := &stubTarget{execFn: rec.exec}
+	srv := seedServer(t, tgt, "web-1")
+	runID, artID := seedSuccessRunWithArtifact(t, db, rsvc, run.ArtifactImage, "registry/app:v2")
+
+	svc := New(tgt, rsvc)
+	hc := &HealthCheck{Type: HealthCheckCommand, Command: []string{"true"}, Retries: 1}
+	res, err := svc.Deploy(context.Background(), DeployInput{
+		RunID: runID, ArtifactID: artID, ServerIDs: []string{srv.ID},
+		Strategy: "rolling", HealthCheck: hc,
+	})
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if len(res) != 1 || res[0].Status != run.TargetRolledBack {
+		t.Fatalf("滚动 image 健康失败应 rolled_back,实际 %+v", res)
+	}
+	if !hasRunWithRef(rec.calls2, "registry/app:v1") {
+		t.Fatalf("应回滚到上一镜像 registry/app:v1: %v", rec.calls2)
+	}
+}
+
+// TestRollingImageFirstDeployHealthFailureFails 滚动 image 首次部署(无上一镜像)健康失败 → failed
+// (无可回滚目标,不谎报回滚)。
+func TestRollingImageFirstDeployHealthFailureFails(t *testing.T) {
+	db := testDB(t)
+	rsvc := run.New(db)
+	rec := &touchRecorder{
+		// inspectImage 空 → 无上一镜像(首次部署)。
+		failOn: func(_ string, cmd []string) bool {
+			return len(cmd) > 0 && cmd[0] == "true"
+		},
+	}
+	tgt := &stubTarget{execFn: rec.exec}
+	srv := seedServer(t, tgt, "web-1")
+	runID, artID := seedSuccessRunWithArtifact(t, db, rsvc, run.ArtifactImage, "registry/app:v2")
+
+	svc := New(tgt, rsvc)
+	hc := &HealthCheck{Type: HealthCheckCommand, Command: []string{"true"}, Retries: 1}
+	res, err := svc.Deploy(context.Background(), DeployInput{
+		RunID: runID, ArtifactID: artID, ServerIDs: []string{srv.ID},
+		Strategy: "rolling", HealthCheck: hc,
+	})
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if len(res) != 1 || res[0].Status != run.TargetFailed {
+		t.Fatalf("首次部署健康失败应 failed,实际 %+v", res)
+	}
+}
+
+// TestRollingImageSwapFailureRollsBack 滚动 image 部署:起新容器(docker run 新镜像)失败 →
+// 回滚到上一镜像(避免目标机被 rm 旧容器后留在无容器状态)。
+func TestRollingImageSwapFailureRollsBack(t *testing.T) {
+	db := testDB(t)
+	rsvc := run.New(db)
+	rec := &touchRecorder{
+		inspectImage: "registry/app:v1",
+		failOn: func(_ string, cmd []string) bool {
+			// 仅让「起新容器」(docker run … v2)失败;回滚的 docker run v1 放行。
+			return len(cmd) >= 3 && cmd[0] == "docker" && cmd[1] == "run" && cmd[len(cmd)-1] == "registry/app:v2"
+		},
+	}
+	tgt := &stubTarget{execFn: rec.exec}
+	srv := seedServer(t, tgt, "web-1")
+	runID, artID := seedSuccessRunWithArtifact(t, db, rsvc, run.ArtifactImage, "registry/app:v2")
+
+	svc := New(tgt, rsvc)
+	res, err := svc.Deploy(context.Background(), DeployInput{
+		RunID: runID, ArtifactID: artID, ServerIDs: []string{srv.ID}, Strategy: "rolling",
+	})
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if len(res) != 1 || res[0].Status != run.TargetRolledBack {
+		t.Fatalf("起新容器失败应回滚 rolled_back,实际 %+v", res)
+	}
+	if !hasRunWithRef(rec.calls2, "registry/app:v1") {
+		t.Fatalf("应回滚到上一镜像 v1: %v", rec.calls2)
+	}
+}
+
 // mustArtID 取该 run 首件产物 id(测试便捷)。
 func mustArtID(t *testing.T, rsvc run.Service, runID string) string {
 	t.Helper()

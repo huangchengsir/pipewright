@@ -100,8 +100,24 @@ func (s *service) stageImageOne(ctx context.Context, srv *target.Server, a run.A
 	return st, "", true
 }
 
-// activateImageOne 执行 image 蓝绿**切换阶段**:停旧容器 + 起新镜像容器 + 切后健康门控 + 失败回滚。
-func (s *service) activateImageOne(ctx context.Context, srv *target.Server, a run.Artifact, hc *HealthCheck, st imageState, started time.Time) TargetResult {
+// deployImageOne 执行**滚动 / 金丝雀**单机 image 部署:pull 新镜像(捕获上一镜像作回滚目标)→
+// 停旧起新 + 切后健康门控 → 健康失败回滚到上一镜像。复用蓝绿单机原语 stageImageOne/activateImageOne,
+// 但每机独立(无机群协调)。
+//
+// 这补齐了此前缺口:旧的 buildImageDeploy 扁平命令路径(pull→rm→run)**无任何回滚** —— 新容器起不来
+// 或切后健康失败时,旧容器已被 rm,目标机被留在「无容器 / 坏容器」状态。现在与蓝绿一致:失败即回滚
+// 到上一镜像(首次部署无上一镜像可回滚则记 failed)。
+func (s *service) deployImageOne(ctx context.Context, srv *target.Server, a run.Artifact, cfg map[string]string, hc *HealthCheck, started time.Time) TargetResult {
+	st, failMsg, ok := s.stageImageOne(ctx, srv, a, cfg)
+	if !ok {
+		return finishFailed(TargetResult{ServerID: srv.ID, ServerName: srv.Name, StartedAt: started}, failMsg)
+	}
+	return s.activateImageOne(ctx, srv, a, hc, st, started, "")
+}
+
+// activateImageOne 执行 image **切换阶段**:停旧容器 + 起新镜像容器 + 切后健康门控 + 失败回滚到上一镜像。
+// modeLabel 仅用于成功文案区分编排策略("蓝绿" / 空=滚动/金丝雀);回滚文案策略无关。
+func (s *service) activateImageOne(ctx context.Context, srv *target.Server, a run.Artifact, hc *HealthCheck, st imageState, started time.Time, modeLabel string) TargetResult {
 	res := TargetResult{ServerID: srv.ID, ServerName: srv.Name, StartedAt: started}
 	execCtx, cancel := context.WithTimeout(ctx, execTimeout)
 	defer cancel()
@@ -112,7 +128,8 @@ func (s *service) activateImageOne(ctx context.Context, srv *target.Server, a ru
 		dockerRunCmd(st.name, st.runArgs, st.ref),
 	}
 	if failMsg, ok := s.runStep(execCtx, srv.ID, swap); !ok {
-		return finishFailed(res, failMsg)
+		// 起新容器失败:尽力回滚到上一镜像(与健康失败同语义),避免目标机被留在坏状态。
+		return s.rollbackImage(execCtx, srv, res, st, failMsg)
 	}
 
 	// 切后健康门控;失败触发回滚到上一镜像。
@@ -125,9 +142,9 @@ func (s *service) activateImageOne(ctx context.Context, srv *target.Server, a ru
 	finish := time.Now().UTC()
 	res.Status = run.TargetSuccess
 	if hc.enabled() {
-		res.Message = fmt.Sprintf("image 蓝绿部署完成 → 容器 %s(%s,健康检查通过)", st.name, st.ref)
+		res.Message = fmt.Sprintf("image %s部署完成 → 容器 %s(%s,健康检查通过)", modeLabel, st.name, st.ref)
 	} else {
-		res.Message = fmt.Sprintf("image 蓝绿部署完成 → 容器 %s(%s)", st.name, st.ref)
+		res.Message = fmt.Sprintf("image %s部署完成 → 容器 %s(%s)", modeLabel, st.name, st.ref)
 	}
 	res.FinishedAt = &finish
 	return res

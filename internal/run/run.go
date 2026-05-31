@@ -106,6 +106,10 @@ type Trigger struct {
 	ResolvedEnvironment string
 	// ResolvedTargetServerIDs 是解析出的目标服务器引用 id 列表(手动触发为空)。
 	ResolvedTargetServerIDs []string
+
+	// Params 是参数化手动运行的 key=value 参数(Story 8-11);执行时注入 script 步骤容器作环境变量。
+	// 非敏感明文(含密钥应走保险库引用);为空表示无参数。
+	Params map[string]string
 }
 
 // Step 是穿珠时间线节点(运行步骤)。

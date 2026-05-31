@@ -10,8 +10,9 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport"
-	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+
 	"github.com/go-git/go-git/v5/storage/memory"
+	"github.com/huangchengsir/pipewright/internal/gitauth"
 
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
@@ -54,8 +55,8 @@ func (p goGitProber) Probe(ctx context.Context, repoURL, token string) (string, 
 		URLs: []string{repoURL},
 	})
 
-	// Gitee/GitHub 等 HTTPS token 鉴权:用户名任意非空,密码=token。
-	auth := &githttp.BasicAuth{Username: "git", Password: token}
+	// HTTPS token 鉴权:用户名按平台选取(Gitee 须真实账号名,其余 "git"),密码=token。见 gitauth 包。
+	auth := gitauth.BasicAuth(repoURL, token)
 
 	// 硬超时:防黑洞 IP/慢 DNS 把请求 goroutine 挂死。
 	cctx, cancel := context.WithTimeout(ctx, probeTimeout)

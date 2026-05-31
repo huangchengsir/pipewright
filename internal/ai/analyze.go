@@ -26,8 +26,9 @@ import (
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/memfs"
 	gogit "github.com/go-git/go-git/v5"
-	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+
 	"github.com/go-git/go-git/v5/storage/memory"
+	"github.com/huangchengsir/pipewright/internal/gitauth"
 )
 
 // cloneTimeout 是单次浅克隆的硬超时(防黑洞 IP / 慢 DNS 把 goroutine 挂死)。
@@ -106,7 +107,7 @@ func (a goGitAnalyzer) Analyze(ctx context.Context, repoURL, token string) RepoA
 	fs := memfs.New()
 	storer := memory.NewStorage()
 
-	auth := &githttp.BasicAuth{Username: "git", Password: token}
+	auth := gitauth.BasicAuth(repoURL, token)
 
 	cctx, cancel := context.WithTimeout(ctx, cloneTimeout)
 	defer cancel()

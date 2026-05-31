@@ -18,8 +18,9 @@ import (
 	"github.com/go-git/go-billy/v5/memfs"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
-	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+
 	"github.com/go-git/go-git/v5/storage/memory"
+	"github.com/huangchengsir/pipewright/internal/gitauth"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
@@ -105,7 +106,7 @@ func (g goGitSourceReader) cloneWorktree(ctx context.Context, repoURL, token, re
 
 	fs := memfs.New()
 	storer := memory.NewStorage()
-	auth := &githttp.BasicAuth{Username: "git", Password: token}
+	auth := gitauth.BasicAuth(repoURL, token)
 
 	cctx, cancel := context.WithTimeout(ctx, sourceCloneTimeout)
 	defer cancel()

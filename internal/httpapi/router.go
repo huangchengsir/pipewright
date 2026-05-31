@@ -27,6 +27,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/oauth"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
+	"github.com/huangchengsir/pipewright/internal/promotion"
 	"github.com/huangchengsir/pipewright/internal/run"
 	"github.com/huangchengsir/pipewright/internal/target"
 	"github.com/huangchengsir/pipewright/internal/trigger"
@@ -73,6 +74,7 @@ type options struct {
 	oauth            oauth.Service
 	approvalCoord    *approval.Coordinator
 	approvalStore    *approval.Store
+	promotionStore   *promotion.Store
 }
 
 // WithApprovals 注入审批门协调器 + 持久层(Story 8-4),挂载 /api/runs/{id}/{approve,reject,approvals} 路由。
@@ -82,6 +84,13 @@ func WithApprovals(coord *approval.Coordinator, store *approval.Store) Option {
 		o.approvalCoord = coord
 		o.approvalStore = store
 	}
+}
+
+// WithPromotion 注入环境晋级流持久层(Story 8-7),挂载环境链配置 / 晋级触发 / 晋级历史路由。
+// 晋级审批门复用既有 WithApprovals 装配的协调器 + 持久层(approve/reject 端点共用)。
+// 不传则晋级端点返回 503。
+func WithPromotion(store *promotion.Store) Option {
+	return func(o *options) { o.promotionStore = store }
 }
 
 // WithVault 注入凭据保险库,挂载 /api/credentials* 路由。
@@ -316,6 +325,13 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Get("/projects/{id}/concurrency", makeGetConcurrencyHandler(o.concurrency))
 		ar.Put("/projects/{id}/concurrency", makeSaveConcurrencyHandler(o.concurrency))
 
+		// 环境晋级流配置(Story 8-7 / FR-8-7):有序环境链 + 逐环境作用域变量/密钥。
+		// /environments、/promotions 比 /projects/{id} 多一段,不会被吞。
+		// GET 过 auth;PUT 为写方法,过 auth + CSRF。o.promotionStore 为 nil → 503。
+		ar.Get("/projects/{id}/environments", makeGetEnvironmentsHandler(o.promotionStore))
+		ar.Put("/projects/{id}/environments", makeSaveEnvironmentsHandler(o.promotionStore, aud))
+		ar.Get("/projects/{id}/promotions", makeListProjectPromotionsHandler(o.promotionStore))
+
 		// 流水线编排配置(Story 2.2)。pl 为 nil 时 handler 返回 503。
 		// 与 /projects/{id}/trigger 同在 {id} 路由组内并存(不会被 /projects/{id} 吞)。
 		// GET 过 auth;PUT 为写方法,过 auth + CSRF。
@@ -352,6 +368,10 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Post("/runs/{id}/approve", makeApprovalDecisionHandler(o.approvalCoord, o.approvalStore, aud, true))
 		ar.Post("/runs/{id}/reject", makeApprovalDecisionHandler(o.approvalCoord, o.approvalStore, aud, false))
 		ar.Get("/runs/{id}/approvals", makeListApprovalsHandler(o.approvalStore))
+		// 环境晋级流(Story 8-7 / FR-8-7):把成功运行晋级到下一环境(gated 复用审批门内核)+ 列晋级历史。
+		// promote 为写方法,过 auth + CSRF;o.promotionStore 为 nil → 503。
+		ar.Post("/runs/{id}/promote", makePromoteRunHandler(o.promotionStore, rs, o.approvalCoord, o.approvalStore, o.vault, aud))
+		ar.Get("/runs/{id}/promotions", makeListRunPromotionsHandler(o.promotionStore))
 		// SSH 部署执行(Story 4.2 / FR-10):认证 + CSRF(写方法)。dep 为 nil → 503。
 		// 取 run + 产物 + 服务器 → deploy.Deploy(逐机经 SSH 执行部署命令,array 不拼 shell)
 		// → 据结果更新 run 终态 → 返回填好的 targets。部署执行失败不 500(每机 status=failed)。

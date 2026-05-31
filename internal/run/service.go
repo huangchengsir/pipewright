@@ -142,7 +142,7 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 	}
 
 	tt := trigger.Type
-	if tt != TriggerWebhook && tt != TriggerManual {
+	if tt != TriggerWebhook && tt != TriggerManual && tt != TriggerSchedule {
 		tt = TriggerManual
 	}
 

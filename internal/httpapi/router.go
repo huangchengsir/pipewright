@@ -362,6 +362,8 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Get("/runs/{id}/logs", makeRunLogsHandler(rs))
 		// 构建产物契约(Story 3.4 / FR-6):只读 + 认证;按 (type, reference) 供 Epic 4 消费。
 		ar.Get("/runs/{id}/artifacts", makeRunArtifactsHandler(rs))
+		// 测试报告 + 质量门禁(Story 8-6 / FR-8-6):只读 + 认证;通过/失败/跳过 + 覆盖率 + 门禁裁决。
+		ar.Get("/runs/{id}/test-report", makeRunTestReportHandler(rs))
 		ar.Post("/runs/{id}/cancel", makeCancelRunHandler(rs))
 		// 人工审批门(Story 8-4):批准/拒绝某运行的审批门阶段 + 列审批记录。
 		// approve/reject 为写方法,过 auth + CSRF;coord/store 为 nil → 503。

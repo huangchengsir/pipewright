@@ -77,6 +77,14 @@ type Service interface {
 	// run 不存在不报错(返回空切片);由 HTTP 层据 run 存在性决定 404(仿 GetLogs 语义)。
 	ListArtifacts(ctx context.Context, runID string) ([]Artifact, error)
 
+	// SaveTestReport 持久化一条测试报告汇总(Story 8-6 / FR-8-6)。
+	// 计数 + 可选覆盖率 + 门禁裁决;同 run 多阶段产报告时各存一条(按 stage 区分)。
+	// run 不存在 → ErrNotFound(外键失败)。
+	SaveTestReport(ctx context.Context, tr TestReport) (*TestReport, error)
+	// ListTestReports 取某次运行的全部测试报告汇总(按 created_at 升序;无 → 空切片)。
+	// run 不存在不报错(返回空切片);由 HTTP 层据 run 存在性决定 404(仿 ListArtifacts 语义)。
+	ListTestReports(ctx context.Context, runID string) ([]TestReport, error)
+
 	// SaveDeployTargets 持久化一次部署的多机结果(Story 4.2 / FR-10;参数化 SQL,单事务)。
 	// status 须为冻结枚举(pending|deploying|success|failed|rolled_back),否则 ErrInvalidTargetStatus;
 	// run 不存在 → ErrNotFound。供 internal/deploy 写;httpapi run-detail 读填 targets slot。

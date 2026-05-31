@@ -94,6 +94,9 @@ func NewStageExecutor(b *Builder) dagrun.StageExecutor {
 				_ = rep.Log(ctx, streamStderr, fmt.Sprintf("script job「%s」配置无效:%v", jb.Name, verr))
 				return ErrBuildFailed
 			}
+			// 参数化运行(Story 8-11):把本次运行参数作明文环境变量注入容器(置于 step env 前,
+			// step 自身 env 同名可覆盖)。明文 K=V,经 buildArgs 进容器。
+			step.Env = append(runParamsAsEnv(r.Trigger.Params), step.Env...)
 			// runScriptStep 用 lineSink(sink, ordinal) 喂日志;reporterSink 忽略 ordinal、转 rep(已绑定本阶段序号)。
 			if err := b.runScriptStep(ctx, sink, 0, step, workspace); err != nil {
 				return err // ErrBuildFailed / run.ErrCanceled
@@ -122,6 +125,19 @@ func scriptStepFromJob(jb pipeline.Job) (pipeline.PipelineStep, error) {
 		Commands: cmds,
 		WorkDir:  cfgString(jb.Config, "workDir"),
 	}, nil
+}
+
+// runParamsAsEnv 把运行参数(明文 K=V)转为非 secret BuildVar(注入容器环境)。键序确定性不保证(map),
+// 但同名键不会重复(map 天然去重)。
+func runParamsAsEnv(params map[string]string) []pipeline.BuildVar {
+	if len(params) == 0 {
+		return nil
+	}
+	out := make([]pipeline.BuildVar, 0, len(params))
+	for k, v := range params {
+		out = append(out, pipeline.BuildVar{Key: k, Value: v, Secret: false})
+	}
+	return out
 }
 
 // cfgString 从自由 KV config 取字符串值(非字符串/缺失 → "")。

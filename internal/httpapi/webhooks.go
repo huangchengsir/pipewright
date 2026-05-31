@@ -116,8 +116,9 @@ func makeManualRunHandler(svc run.Service, aud audit.Recorder) http.HandlerFunc 
 		id := chi.URLParam(r, "id")
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
 		var req struct {
-			Branch string `json:"branch"`
-			Commit string `json:"commit"`
+			Branch string            `json:"branch"`
+			Commit string            `json:"commit"`
+			Params map[string]string `json:"params"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
@@ -126,11 +127,14 @@ func makeManualRunHandler(svc run.Service, aud audit.Recorder) http.HandlerFunc 
 		// 分支可选:留空时由 run.Service.Create 取项目默认分支(项目已知默认分支,系统自动解析)。
 		branch := strings.TrimSpace(req.Branch)
 		commit := strings.TrimSpace(req.Commit)
+		// 参数化运行(Story 8-11):trim key、剔空 key;明文构建参数(注入 script 步骤容器环境)。
+		params := normalizeRunParams(req.Params)
 		rn, err := svc.Create(r.Context(), id, run.Trigger{
 			Type:   run.TriggerManual,
 			Branch: branch,
 			Commit: commit,
 			Actor:  "admin",
+			Params: params,
 		})
 		if err != nil {
 			writeRunError(w, err)
@@ -141,10 +145,28 @@ func makeManualRunHandler(svc run.Service, aud audit.Recorder) http.HandlerFunc 
 			Action:     audit.ActionRunTriggerManual,
 			TargetType: audit.TargetRun,
 			TargetID:   rn.ID,
-			Detail:     map[string]any{"projectId": id, "branch": branch, "commit": commit},
+			Detail:     map[string]any{"projectId": id, "branch": branch, "commit": commit, "paramCount": len(params)},
 			IP:         clientIP(r),
 		})
 		// 刚创建(queued)的运行尚无产物/无部署;nil → []/null。产物在成功路径由 worker emit、部署经 deploy 端点。
 		writeJSON(w, http.StatusCreated, toRunDetailDTO(rn, nil, nil))
 	}
+}
+
+// normalizeRunParams 规范化运行参数:trim key、剔除空 key(value 原样保留)。nil/空 → nil。
+func normalizeRunParams(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		k = strings.TrimSpace(k)
+		if k != "" {
+			out[k] = v
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

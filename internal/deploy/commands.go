@@ -33,9 +33,9 @@ func buildCommands(a run.Artifact, cfg map[string]string) ([][]string, string, e
 		return buildFileDeploy(a, cfg)
 	case run.ArtifactJar:
 		return buildJarDeploy(a, cfg)
-	case run.ArtifactImage:
-		return buildImageDeploy(a, cfg)
 	default:
+		// image 产物已在 deployOne 早于 buildCommands 拦截,走 deployImageOne
+		//(pull→停旧起新→健康→失败回滚上一镜像);故此处不再构造扁平 image 命令。
 		return nil, "", fmt.Errorf("不支持的产物类型:%s", a.Type)
 	}
 }
@@ -125,21 +125,4 @@ func buildJarDeploy(a run.Artifact, cfg map[string]string) ([][]string, string, 
 		{"java", "-jar", jarPath, "--version"},
 	}
 	return cmds, fmt.Sprintf("jar 部署完成 → %s(已调起 java -jar)", jarPath), nil
-}
-
-// buildImageDeploy 构造 image 的 `docker pull` + `docker run`(目标无 docker → failed 人读)。
-// 容器名 / 端口映射 / run 参数由 cfg 解析(参数自由,不写死;见 imageContainerName / imageRunArgs)。
-func buildImageDeploy(a run.Artifact, cfg map[string]string) ([][]string, string, error) {
-	ref := strings.TrimSpace(a.Reference)
-	if ref == "" {
-		return nil, "", fmt.Errorf("image 产物缺少 reference(repo:tag 或镜像 id)")
-	}
-	name := imageContainerName(a, cfg)
-	cmds := [][]string{
-		{"docker", "pull", ref},
-		// 先移除同名旧容器(幂等;无则忽略由 docker 处理),再后台起新容器(带 cfg 端口 / run 参数)。
-		{"docker", "rm", "-f", name},
-		dockerRunCmd(name, imageRunArgs(cfg), ref),
-	}
-	return cmds, fmt.Sprintf("image 部署完成 → 已拉取并启动容器 %s(%s)", name, ref), nil
 }

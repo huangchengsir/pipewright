@@ -37,15 +37,17 @@ type recordingDriver struct {
 	gotImage  string
 	gotCmd    []string
 	gotWork   string
+	gotEnv    []string
 	callCount int
 }
 
 func (d *recordingDriver) Binary() string { return "fake" }
-func (d *recordingDriver) RunToolchain(_ context.Context, image, _, workdir string, _ []string, cmd []string, onLine func(stream, line string)) (int, error) {
+func (d *recordingDriver) RunToolchain(_ context.Context, image, _, workdir string, env []string, cmd []string, onLine func(stream, line string)) (int, error) {
 	d.callCount++
 	d.gotImage = image
 	d.gotCmd = cmd
 	d.gotWork = workdir
+	d.gotEnv = env
 	for _, l := range d.emit {
 		onLine("stdout", l)
 	}
@@ -157,6 +159,20 @@ func TestStageExecutorRunsScriptJobInContainer(t *testing.T) {
 	}
 }
 
+func TestStageExecutorInjectsRunParams(t *testing.T) {
+	drv := &recordingDriver{code: 0}
+	b := newDAGTestBuilder(drv, &markerCloner{})
+	exec := NewStageExecutor(b)
+	r := &run.Run{ProjectID: "p1", Trigger: run.Trigger{Params: map[string]string{"DEPLOY_ENV": "staging", "VER": "1.2"}}}
+	if err := exec(context.Background(), r, scriptStage(scriptJob("unit", "busybox", "echo hi")), &fakeReporter{}); err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	env := strings.Join(drv.gotEnv, " ")
+	if !strings.Contains(env, "DEPLOY_ENV=staging") || !strings.Contains(env, "VER=1.2") {
+		t.Errorf("run params not injected into container env: %v", drv.gotEnv)
+	}
+}
+
 func TestStageExecutorNonScriptPlaceholder(t *testing.T) {
 	drv := &recordingDriver{}
 	b := newDAGTestBuilder(drv, &markerCloner{})
@@ -198,6 +214,25 @@ func TestStageExecutorInvalidScriptConfig(t *testing.T) {
 }
 
 // ─── 真 Docker e2e(gated)─────────────────────────────────────────────────────
+
+func TestE2EDockerStageExecutorParamsReal(t *testing.T) {
+	drv := dockerReadyOrSkip(t)
+	b := newDAGTestBuilder(drv, &markerCloner{})
+	exec := NewStageExecutor(b)
+	rep := &fakeReporter{}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	// 参数化运行:容器内 echo 注入的参数,断言真值被注入并执行。
+	r := &run.Run{ProjectID: "p1", Trigger: run.Trigger{Branch: "main", Params: map[string]string{"PW_PARAM": "HELLO_FROM_PARAM"}}}
+	job := scriptJob("verify", "busybox", `echo "p=$PW_PARAM"`)
+	if err := exec(ctx, r, scriptStage(job), rep); err != nil {
+		t.Fatalf("真 Docker 参数化执行失败: %v\n日志:\n%s", err, strings.Join(rep.logs, "\n"))
+	}
+	if !strings.Contains(strings.Join(rep.logs, "\n"), "p=HELLO_FROM_PARAM") {
+		t.Errorf("容器未读到注入的运行参数;日志:\n%s", strings.Join(rep.logs, "\n"))
+	}
+}
 
 func TestE2EDockerStageExecutorReal(t *testing.T) {
 	drv := dockerReadyOrSkip(t)

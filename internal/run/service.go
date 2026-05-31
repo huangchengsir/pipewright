@@ -168,15 +168,25 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 		return nil, fmt.Errorf("run: marshal resolved target server ids: %w", err)
 	}
 
+	// 参数化运行参数(Story 8-11):空 → {}。
+	params := trigger.Params
+	if params == nil {
+		params = map[string]string{}
+	}
+	paramsJSON, err := json.Marshal(params)
+	if err != nil {
+		return nil, fmt.Errorf("run: marshal params: %w", err)
+	}
+
 	now := time.Now().UTC()
 	id := uuid.NewString()
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO pipeline_runs
 		   (id, project_id, status, trigger_type, trigger_branch, trigger_commit, trigger_actor,
-		    resolved_environment, resolved_target_server_ids, created_at, started_at, finished_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+		    resolved_environment, resolved_target_server_ids, params_json, created_at, started_at, finished_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
 		id, projectID, StatusQueued, tt, trigger.Branch, trigger.Commit, trigger.Actor,
-		trigger.ResolvedEnvironment, string(targetIDsJSON),
+		trigger.ResolvedEnvironment, string(targetIDsJSON), string(paramsJSON),
 		now.Format(time.RFC3339),
 	)
 	if err != nil {
@@ -212,20 +222,21 @@ func (s *service) Get(ctx context.Context, id string) (*Run, error) {
 		finishStr     sql.NullString
 		failureLog    string
 		diagnosisJSON string
+		paramsJSON    string
 	)
 	r.ID = id
 	err := s.db.QueryRowContext(ctx,
 		`SELECT pr.project_id, COALESCE(p.name, ''), pr.status,
 		        pr.trigger_type, pr.trigger_branch, pr.trigger_commit, pr.trigger_actor,
 		        pr.created_at, pr.started_at, pr.finished_at,
-		        pr.failure_log, pr.diagnosis_json
+		        pr.failure_log, pr.diagnosis_json, pr.params_json
 		 FROM pipeline_runs pr
 		 LEFT JOIN projects p ON p.id = pr.project_id
 		 WHERE pr.id = ?`, id,
 	).Scan(&r.ProjectID, &r.ProjectName, &r.Status,
 		&r.Trigger.Type, &r.Trigger.Branch, &r.Trigger.Commit, &r.Trigger.Actor,
 		&createdStr, &startedStr, &finishStr,
-		&failureLog, &diagnosisJSON)
+		&failureLog, &diagnosisJSON, &paramsJSON)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -236,6 +247,12 @@ func (s *service) Get(ctx context.Context, id string) (*Run, error) {
 	r.FailureLog = failureLog
 	if d, derr := decodeDiagnosis(diagnosisJSON); derr == nil {
 		r.Diagnosis = d
+	}
+	if strings.TrimSpace(paramsJSON) != "" {
+		var params map[string]string
+		if json.Unmarshal([]byte(paramsJSON), &params) == nil {
+			r.Trigger.Params = params
+		}
 	}
 
 	if r.CreatedAt, err = time.Parse(time.RFC3339, createdStr); err != nil {

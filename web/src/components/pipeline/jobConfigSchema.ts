@@ -51,12 +51,22 @@ export interface JobField {
   when?: (config: Record<string, string>) => boolean
 }
 
+/** Accent palette keys — map to --color-{accent} / --color-{accent}-soft tokens. */
+export type AccentName = 'cyan' | 'primary' | 'green' | 'amber' | 'red' | 'neutral'
+
+/** Picker category id for grouping task types (Jenkins/云效-style gallery). */
+export type CategoryId = 'source' | 'build' | 'deploy' | 'quality' | 'notify' | 'custom'
+
 export interface JobTypeSpec {
   type: string
-  /** Friendly zh label shown in the type dropdown and drawer */
+  /** Friendly zh label shown in the picker, drawer, and node card */
   label: string
-  /** One-line description of what this node does */
+  /** One-line description of what this node does (shown in the picker card) */
   description: string
+  /** Accent colour for the type icon */
+  accent: AccentName
+  /** Category the type belongs to (picker grouping) */
+  category: CategoryId
   fields: JobField[]
 }
 
@@ -132,6 +142,8 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
     type: 'git_source',
     label: '拉取源码',
     description: '克隆 Git 仓库到构建工作区',
+    accent: 'cyan',
+    category: 'source',
     fields: [
       {
         key: 'repoUrl',
@@ -170,6 +182,8 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
     type: 'build_image',
     label: '构建',
     description: '构建产物(镜像 / JAR / 静态资源)',
+    accent: 'primary',
+    category: 'build',
     fields: [
       { key: 'artifactType', label: '产物类型', kind: 'select', options: ARTIFACT_OPTIONS },
       {
@@ -227,6 +241,8 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
     type: 'push_image',
     label: '推送镜像',
     description: '推送镜像到容器仓库',
+    accent: 'amber',
+    category: 'build',
     fields: [
       {
         key: 'registry',
@@ -264,6 +280,8 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
     type: 'deploy_ssh',
     label: 'SSH 部署',
     description: '通过 SSH 把产物部署到目标服务器',
+    accent: 'green',
+    category: 'deploy',
     fields: [
       {
         key: 'serverId',
@@ -299,6 +317,8 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
     type: 'health_check',
     label: '健康门控',
     description: '部署后探测健康,失败则回滚',
+    accent: 'green',
+    category: 'quality',
     fields: [
       { key: 'probeMode', label: '探测方式', kind: 'select', options: PROBE_MODE_OPTIONS },
       {
@@ -333,6 +353,8 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
     type: 'notify',
     label: '通知',
     description: '运行结束时发送通知',
+    accent: 'cyan',
+    category: 'notify',
     fields: [
       {
         key: 'channel',
@@ -356,6 +378,8 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
     type: 'script',
     label: '自定义脚本',
     description: '在隔离容器内执行任意命令',
+    accent: 'primary',
+    category: 'custom',
     fields: SCRIPT_FIELDS,
   },
 
@@ -363,14 +387,16 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
     type: 'custom',
     label: '自定义脚本',
     description: '在隔离容器内执行任意命令',
+    accent: 'primary',
+    category: 'custom',
     fields: SCRIPT_FIELDS,
   },
 }
 
 // ─── Lookups ──────────────────────────────────────────────────────────────────
 
-/** Dropdown options for the job type selector (friendly label + token). */
-export const JOB_TYPE_OPTIONS: SelectOption[] = [
+/** Canonical, ordered list of pickable types (excludes the `custom` alias of `script`). */
+export const PICKABLE_TYPES: readonly string[] = [
   'git_source',
   'build_image',
   'push_image',
@@ -378,7 +404,37 @@ export const JOB_TYPE_OPTIONS: SelectOption[] = [
   'health_check',
   'notify',
   'script',
-].map((type) => ({ value: type, label: `${JOB_TYPE_SPECS[type].label} · ${type}` }))
+]
+
+/** Dropdown options for the job type selector (friendly label + token). */
+export const JOB_TYPE_OPTIONS: SelectOption[] = PICKABLE_TYPES.map((type) => ({
+  value: type,
+  label: `${JOB_TYPE_SPECS[type].label} · ${type}`,
+}))
+
+/** Picker categories in display order. */
+export const JOB_CATEGORIES: ReadonlyArray<{ id: CategoryId; label: string }> = [
+  { id: 'source', label: '源' },
+  { id: 'build', label: '构建与制品' },
+  { id: 'deploy', label: '部署' },
+  { id: 'quality', label: '质量门禁' },
+  { id: 'notify', label: '通知' },
+  { id: 'custom', label: '自定义' },
+]
+
+/** Pickable specs grouped by category, in display order; empty groups omitted. */
+export function groupedJobTypes(): Array<{ id: CategoryId; label: string; specs: JobTypeSpec[] }> {
+  return JOB_CATEGORIES.map((cat) => ({
+    id: cat.id,
+    label: cat.label,
+    specs: PICKABLE_TYPES.map((t) => JOB_TYPE_SPECS[t]).filter((s) => s.category === cat.id),
+  })).filter((g) => g.specs.length > 0)
+}
+
+/** Accent colour for a type, falling back to neutral for unknown types. */
+export function jobTypeAccent(type: string): AccentName {
+  return JOB_TYPE_SPECS[type]?.accent ?? 'neutral'
+}
 
 /** Spec for a job type, or null when the type has no typed schema. */
 export function getJobTypeSpec(type: string): JobTypeSpec | null {

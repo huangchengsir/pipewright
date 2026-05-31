@@ -2,8 +2,11 @@ import { describe, it, expect } from 'vitest'
 import {
   JOB_TYPE_SPECS,
   JOB_TYPE_OPTIONS,
+  PICKABLE_TYPES,
   getJobTypeSpec,
   jobTypeLabel,
+  jobTypeAccent,
+  groupedJobTypes,
   schemaKeys,
   splitConfig,
 } from './jobConfigSchema'
@@ -22,6 +25,40 @@ describe('jobConfigSchema', () => {
     expect(getJobTypeSpec('totally_unknown')).toBeNull()
     expect(jobTypeLabel('totally_unknown')).toBe('totally_unknown')
     expect(jobTypeLabel('build_image')).toBe('构建')
+  })
+
+  it('every spec has a valid accent and category', () => {
+    const accents = ['cyan', 'primary', 'green', 'amber', 'red', 'neutral']
+    for (const spec of Object.values(JOB_TYPE_SPECS)) {
+      expect(accents, `${spec.type} accent`).toContain(spec.accent)
+      expect(typeof spec.category).toBe('string')
+    }
+  })
+
+  describe('groupedJobTypes', () => {
+    it('covers every pickable type exactly once across groups', () => {
+      const grouped = groupedJobTypes()
+      const flat = grouped.flatMap((g) => g.specs.map((s) => s.type))
+      expect(flat.slice().sort()).toEqual([...PICKABLE_TYPES].sort())
+      expect(new Set(flat).size).toBe(PICKABLE_TYPES.length)
+    })
+
+    it('omits empty groups and keeps display order', () => {
+      const grouped = groupedJobTypes()
+      for (const g of grouped) expect(g.specs.length).toBeGreaterThan(0)
+      // source group comes before custom group
+      const ids = grouped.map((g) => g.id)
+      expect(ids.indexOf('source')).toBeLessThan(ids.indexOf('custom'))
+    })
+
+    it('never lists the custom alias as a pickable type', () => {
+      expect(PICKABLE_TYPES).not.toContain('custom')
+    })
+  })
+
+  it('jobTypeAccent falls back to neutral for unknown types', () => {
+    expect(jobTypeAccent('build_image')).toBe('primary')
+    expect(jobTypeAccent('totally_unknown')).toBe('neutral')
   })
 
   it('every field key is unique within a type', () => {

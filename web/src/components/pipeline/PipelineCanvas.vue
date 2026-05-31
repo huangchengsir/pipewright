@@ -5,6 +5,8 @@ import type { Credential } from '../../api/credentials'
 import type { Server } from '../../api/servers'
 import StageColumn from './StageColumn.vue'
 import JobDrawer from './JobDrawer.vue'
+import JobTypePicker from './JobTypePicker.vue'
+import { jobTypeLabel } from './jobConfigSchema'
 import './pipeline.css'
 
 // ─── Props / emits ────────────────────────────────────────────────────────────
@@ -74,23 +76,72 @@ function deleteJob(stageId: string, jobId: string): void {
   emit('update', next)
 }
 
-function addJob(stageId: string): void {
-  const stage = props.stages.find((s) => s.id === stageId)
-  if (!stage) return
-  const newJob: PipelineJob = {
-    id:      `job_${uid()}`,
-    name:    '新任务',
-    type:    'custom',
-    summary: '',
-    config:  {},
+// ─── Type picker (add new job / change existing job's type) ───────────────────
+
+interface PickerState {
+  open: boolean
+  mode: 'add' | 'change'
+  stageId: string
+  jobId: string
+  current: string
+}
+
+const picker = ref<PickerState>({ open: false, mode: 'add', stageId: '', jobId: '', current: '' })
+
+/** Open the type picker to add a new job to a stage. */
+function requestAddJob(stageId: string): void {
+  picker.value = { open: true, mode: 'add', stageId, jobId: '', current: '' }
+}
+
+/** Open the type picker to change the selected job's type (from the drawer). */
+function requestChangeType(): void {
+  if (!selectedJob.value || !selectedStage.value) return
+  picker.value = {
+    open: true,
+    mode: 'change',
+    stageId: selectedStage.value.id,
+    jobId: selectedJob.value.id,
+    current: selectedJob.value.type,
   }
+}
+
+function closePicker(): void {
+  picker.value = { ...picker.value, open: false }
+}
+
+function onPickerSelect(type: string): void {
+  const p = picker.value
+  if (p.mode === 'add') {
+    const stage = props.stages.find((s) => s.id === p.stageId)
+    if (!stage) return closePicker()
+    const newJob: PipelineJob = {
+      id:      `job_${uid()}`,
+      name:    jobTypeLabel(type),
+      type,
+      summary: '',
+      config:  {},
+    }
+    const next = props.stages.map((s) =>
+      s.id === p.stageId ? { ...s, jobs: [...s.jobs, newJob] } : s,
+    )
+    emit('update', next)
+    selectedJobId.value = newJob.id
+  } else {
+    updateJob(p.stageId, p.jobId, { type })
+  }
+  closePicker()
+}
+
+function reorderJob(stageId: string, from: number, to: number): void {
   const next = props.stages.map((s) => {
     if (s.id !== stageId) return s
-    return { ...s, jobs: [...s.jobs, newJob] }
+    const jobs = [...s.jobs]
+    if (from < 0 || from >= jobs.length || to < 0 || to >= jobs.length) return s
+    const [moved] = jobs.splice(from, 1)
+    jobs.splice(to, 0, moved)
+    return { ...s, jobs }
   })
   emit('update', next)
-  // Auto-select the new job
-  selectedJobId.value = newJob.id
 }
 
 function deleteStage(stageId: string): void {
@@ -143,8 +194,9 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
             role="listitem"
             @select-job="selectJob"
             @delete-job="(jobId) => deleteJob(stage.id, jobId)"
-            @add-job="addJob(stage.id)"
+            @add-job="requestAddJob(stage.id)"
             @delete-stage="deleteStage(stage.id)"
+            @reorder-job="(p) => reorderJob(stage.id, p.from, p.to)"
           />
 
           <!-- SVG curved connector between stages -->
@@ -199,6 +251,16 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
       :servers="props.servers"
       @close="closeDrawer"
       @update="handleDrawerUpdate"
+      @change-type="requestChangeType"
+    />
+
+    <!-- Type picker modal (add new job / change type) -->
+    <JobTypePicker
+      :open="picker.open"
+      :current="picker.mode === 'change' ? picker.current : ''"
+      :title="picker.mode === 'change' ? '更换任务类型' : '添加任务'"
+      @select="onPickerSelect"
+      @close="closePicker"
     />
   </div>
 </template>

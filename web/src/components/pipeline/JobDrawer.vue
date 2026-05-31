@@ -6,9 +6,10 @@ import type { Server } from '../../api/servers'
 import {
   getJobTypeSpec,
   splitConfig,
-  JOB_TYPE_OPTIONS,
+  jobTypeLabel,
   type JobField,
 } from './jobConfigSchema'
+import JobTypeIcon from './JobTypeIcon.vue'
 
 const props = defineProps<{
   job: PipelineJob
@@ -20,6 +21,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'close'): void
   (e: 'update', patch: Partial<PipelineJob>): void
+  (e: 'change-type'): void
 }>()
 
 // ─── Local editable copy ──────────────────────────────────────────────────────
@@ -122,16 +124,6 @@ function extrasToObject(rows: KVRow[]): Record<string, string> {
   return out
 }
 
-// ─── Type change ───────────────────────────────────────────────────────────────
-
-function onTypeChange(type: string): void {
-  // Preserve all current values, just re-split owned vs. extra for the new type.
-  const merged = { ...extrasToObject(extraRows.value), ...typedConfig.value }
-  localType.value = type
-  splitOnType(type, merged)
-  flush()
-}
-
 // ─── Flush ─────────────────────────────────────────────────────────────────────
 
 function flush(): void {
@@ -189,24 +181,19 @@ function flush(): void {
 
       <div class="drawer-field">
         <div class="drawer-field-label">任务类型</div>
-        <select
-          :value="localType"
-          class="drawer-select"
-          aria-label="任务类型"
-          @change="onTypeChange(($event.target as HTMLSelectElement).value)"
+        <button
+          type="button"
+          class="type-trigger"
+          aria-label="更换任务类型"
+          @click="emit('change-type')"
         >
-          <option
-            v-for="opt in JOB_TYPE_OPTIONS"
-            :key="opt.value"
-            :value="opt.value"
-          >{{ opt.label }}</option>
-          <!-- Allow custom types not in the list -->
-          <option
-            v-if="!JOB_TYPE_OPTIONS.some(o => o.value === localType) && localType"
-            :value="localType"
-          >{{ localType }}</option>
-        </select>
-        <p v-if="spec" class="field-desc">{{ spec.description }}</p>
+          <JobTypeIcon :type="localType" :size="32" />
+          <span class="type-trigger-body">
+            <span class="type-trigger-name">{{ jobTypeLabel(localType) }}</span>
+            <span class="type-trigger-desc">{{ spec ? spec.description : localType }}</span>
+          </span>
+          <span class="type-trigger-action">更换</span>
+        </button>
       </div>
 
       <div class="drawer-field">
@@ -389,6 +376,59 @@ function flush(): void {
   margin: 6px 0 0;
   font-size: 0.74rem;
   color: var(--color-faint);
+}
+
+.type-trigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--color-inset);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--rounded);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
+}
+
+.type-trigger:hover {
+  border-color: var(--color-primary);
+}
+
+.type-trigger:focus-visible {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-soft);
+}
+
+.type-trigger-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.type-trigger-name {
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.type-trigger-desc {
+  font-size: 0.73rem;
+  color: var(--color-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.type-trigger-action {
+  flex-shrink: 0;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--color-primary);
 }
 
 .field-hint {

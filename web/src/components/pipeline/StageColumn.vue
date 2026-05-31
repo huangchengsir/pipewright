@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import type { PipelineJob, PipelineStage } from '../../api/pipeline'
+import { ref } from 'vue'
+import type { PipelineStage } from '../../api/pipeline'
 import JobCard from './JobCard.vue'
 
 const props = defineProps<{
@@ -13,11 +14,36 @@ const emit = defineEmits<{
   (e: 'delete-job', jobId: string): void
   (e: 'add-job'): void
   (e: 'delete-stage'): void
+  (e: 'reorder-job', payload: { from: number; to: number }): void
 }>()
 
 function stageLabel(index: number): string {
   if (props.stage.kind === 'source') return '源'
   return String(index)
+}
+
+// ─── Drag-to-reorder (within this stage) ──────────────────────────────────────
+
+const dragFrom = ref<number | null>(null)
+const dragOver = ref<number | null>(null)
+
+function onDragStart(i: number): void {
+  dragFrom.value = i
+}
+
+function onDragEnter(i: number): void {
+  if (dragFrom.value !== null) dragOver.value = i
+}
+
+function onDrop(i: number): void {
+  const from = dragFrom.value
+  if (from !== null && from !== i) emit('reorder-job', { from, to: i })
+  resetDrag()
+}
+
+function resetDrag(): void {
+  dragFrom.value = null
+  dragOver.value = null
 }
 </script>
 
@@ -49,13 +75,19 @@ function stageLabel(index: number): string {
 
     <!-- Job cards -->
     <JobCard
-      v-for="job in stage.jobs"
+      v-for="(job, i) in stage.jobs"
       :key="job.id"
       :job="job"
       :stage-kind="stage.kind"
       :selected="job.id === selectedJobId"
+      :dragging="dragFrom === i"
+      :drag-over="dragOver === i && dragFrom !== i"
       @select="emit('select-job', job.id)"
       @delete="emit('delete-job', job.id)"
+      @dragstart="onDragStart(i)"
+      @dragend="resetDrag"
+      @dragenter="onDragEnter(i)"
+      @drop="onDrop(i)"
     />
 
     <!-- Add job trigger (source stage has no add-job since it's preset) -->

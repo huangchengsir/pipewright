@@ -62,6 +62,74 @@ func cfgWith(stages ...pipeline.Stage) *pipeline.Config {
 	return &pipeline.Config{Spec: pipeline.Spec{Stages: stages}}
 }
 
+func TestRunnerWhenSkipsStageAndDownstreamWithoutFailing(t *testing.T) {
+	// src → deploy(when branches=[main]) → notify。 触发分支=dev:
+	// deploy 条件不满足 → skipped;notify(下游)→ skipped;但整体 run **不失败**(无真失败阶段)。
+	cfg := cfgWith(
+		pipeline.Stage{ID: "src", Name: "源"},
+		pipeline.Stage{ID: "deploy", Name: "部署", Needs: []string{"src"},
+			When: pipeline.When{Branches: []string{"main"}}},
+		pipeline.Stage{ID: "notify", Name: "通知", Needs: []string{"deploy"}},
+	)
+	var ranDeploy bool
+	sink := newFakeSink()
+	r := New(fakeLoader{cfg}, WithStageExecutor(
+		func(_ context.Context, _ *run.Run, st pipeline.Stage, _ StageReporter) error {
+			if st.ID == "deploy" {
+				ranDeploy = true
+			}
+			return nil
+		}))
+	// 触发分支 dev(不匹配 when branches=[main])。
+	err := r.Run(context.Background(), &run.Run{ProjectID: "p", Trigger: run.Trigger{Type: "manual", Branch: "dev"}}, sink)
+	if err != nil {
+		t.Fatalf("条件跳过不应使 Run 失败,得 %v", err)
+	}
+	if ranDeploy {
+		t.Error("deploy 阶段条件不满足,executor 不应被调用")
+	}
+	ord := func(name string) int {
+		for i, n := range sink.planned {
+			if n == name {
+				return i
+			}
+		}
+		return -1
+	}
+	if sink.done[ord("源")] != run.StepSuccess {
+		t.Errorf("源 = %q, want success", sink.done[ord("源")])
+	}
+	if sink.done[ord("部署")] != run.StepSkipped {
+		t.Errorf("部署 = %q, want skipped(条件不满足)", sink.done[ord("部署")])
+	}
+	if sink.done[ord("通知")] != run.StepSkipped {
+		t.Errorf("通知 = %q, want skipped(上游被跳过)", sink.done[ord("通知")])
+	}
+}
+
+func TestRunnerWhenMatchedRunsStage(t *testing.T) {
+	cfg := cfgWith(
+		pipeline.Stage{ID: "src", Name: "源"},
+		pipeline.Stage{ID: "deploy", Name: "部署", Needs: []string{"src"},
+			When: pipeline.When{Branches: []string{"main"}, Events: []string{"manual"}}},
+	)
+	var ranDeploy bool
+	sink := newFakeSink()
+	r := New(fakeLoader{cfg}, WithStageExecutor(
+		func(_ context.Context, _ *run.Run, st pipeline.Stage, _ StageReporter) error {
+			if st.ID == "deploy" {
+				ranDeploy = true
+			}
+			return nil
+		}))
+	if err := r.Run(context.Background(), &run.Run{ProjectID: "p", Trigger: run.Trigger{Type: "manual", Branch: "main"}}, sink); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !ranDeploy {
+		t.Error("分支与触发类型均匹配,deploy 应执行")
+	}
+}
+
 // ─── BuildGraph ────────────────────────────────────────────────────────────────
 
 func TestBuildGraphLinearFallback(t *testing.T) {

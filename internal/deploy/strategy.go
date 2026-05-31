@@ -54,11 +54,16 @@ func (s *service) deployWithStrategy(ctx context.Context, servers []*target.Serv
 	case StrategyCanary:
 		return s.deployCanary(ctx, servers, a, cfg, hc)
 	case StrategyBlueGreen:
-		// 蓝绿需要 stage/cutover 两阶段,仅 release 类产物(dist/jar)成立;其余退化滚动。
-		if releaseModeArtifact(a) {
+		// 蓝绿需 stage/cutover 两阶段:release 类文件产物(dist/jar/archive)走软链切换;image 走
+		// pull→停旧起新→回滚上一镜像;其余类型无两阶段语义 → 退化滚动。
+		switch {
+		case releaseModeArtifact(a):
 			return s.deployBlueGreen(ctx, servers, a, cfg, hc)
+		case a.Type == run.ArtifactImage:
+			return s.deployBlueGreenImage(ctx, servers, a, hc)
+		default:
+			return s.deployFanout(ctx, servers, a, cfg, hc)
 		}
-		return s.deployFanout(ctx, servers, a, cfg, hc)
 	default:
 		return s.deployFanout(ctx, servers, a, cfg, hc)
 	}
@@ -210,6 +215,68 @@ func (s *service) deployBlueGreen(ctx context.Context, servers []*target.Server,
 		}, func(idx int, srv *target.Server) {
 			// 回滚异常:保留原成功结果,不致命(尽力回滚)。
 		})
+	}
+	return results
+}
+
+// deployBlueGreenImage 镜像蓝绿:stage-all(全机 pull)→ cutover-all(全机停旧起新+健康)→
+// 切换阶段任一失败则把已成功切换的机一并回滚到上一镜像(机群级原子性)。语义同 deployBlueGreen,
+// 只是单机原语换成 stageImageOne/activateImageOne(容器 pull/swap 而非软链切换)。
+func (s *service) deployBlueGreenImage(ctx context.Context, servers []*target.Server, a run.Artifact, hc *HealthCheck) []TargetResult {
+	n := len(servers)
+	if n == 0 {
+		return nil
+	}
+	results := make([]TargetResult, n)
+	states := make([]imageState, n)
+	staged := make([]bool, n)
+	started := make([]time.Time, n)
+
+	// 阶段 1:全机 pull(不停旧容器)。
+	s.forEachServer(servers, func(idx int, srv *target.Server) {
+		started[idx] = time.Now().UTC()
+		st, failMsg, ok := s.stageImageOne(ctx, srv, a)
+		states[idx] = st
+		if !ok {
+			results[idx] = finishFailed(TargetResult{ServerID: srv.ID, ServerName: srv.Name, StartedAt: started[idx]}, failMsg)
+			return
+		}
+		staged[idx] = true
+	}, func(idx int, srv *target.Server) {
+		results[idx] = abortedResult(srv, "蓝绿预备(pull)阶段执行异常中断(本机未切换)")
+	})
+
+	allStaged := true
+	for i := range staged {
+		if !staged[i] {
+			allStaged = false
+			break
+		}
+	}
+	if !allStaged {
+		for i, srv := range servers {
+			if staged[i] {
+				results[i] = abortedResult(srv, "蓝绿:预备(pull)阶段其它机失败,已中止本机切换(旧容器仍在跑)")
+			}
+		}
+		return results
+	}
+
+	// 阶段 2:全机统一停旧起新 + 健康。
+	s.forEachServer(servers, func(idx int, srv *target.Server) {
+		results[idx] = s.activateImageOne(ctx, srv, a, hc, states[idx], started[idx])
+	}, func(idx int, srv *target.Server) {
+		results[idx] = abortedResult(srv, "蓝绿切换阶段执行异常中断")
+	})
+
+	// 阶段 3:切换任一失败 → 已成功切换且有上一镜像的机一并回滚。
+	if !allSuccess(results) {
+		s.forEachServer(servers, func(idx int, srv *target.Server) {
+			if results[idx].Status != run.TargetSuccess || states[idx].prevImage == "" {
+				return
+			}
+			s.fleetRollbackImageOne(ctx, srv, states[idx], &results[idx])
+		}, func(idx int, srv *target.Server) {})
 	}
 	return results
 }

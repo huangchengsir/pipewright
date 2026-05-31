@@ -509,6 +509,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 
 		// 列仓库分支/tag(代码管理区 · Story 8-18):供前端触发时分支/commit 下拉。o.refsLister 为 nil → 503。
 		ar.Get("/projects/{id}/refs", makeListRefsHandler(p, v, o.refsLister))
+		ar.Get("/projects/{id}/commits", makeListCommitsHandler(p, v, o.refsLister))
 
 		// 目标服务器登记 + 通用 SSH 执行层(Story 4.1;internal/target,FR-14)。
 		// sv 为 nil 时 handler 返回 503。GET/List/Get 过 auth;create/update/delete/test 为写方法,

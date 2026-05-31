@@ -16,6 +16,7 @@ package dagrun
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -57,15 +58,34 @@ func StubStageExecutor(ctx context.Context, _ *run.Run, stage pipeline.Stage, re
 	return nil
 }
 
+// GateFunc 在进入「审批门」阶段(Gate=true)前阻塞等待人工决定(Story 8-4)。
+// 返回 (true,nil)=批准继续;(false,nil)=拒绝(该阶段失败);(_,err)=取消/超时等(阶段失败)。
+// 实现(在 main/httpapi 装配)负责:登记待批 + 置 run 状态 waiting_approval + 阻塞协调器 +
+// 决定后置回 running。dagrun 经此 hook 解耦,不直接 import run.Service / approval。
+type GateFunc func(ctx context.Context, r *run.Run, stage pipeline.Stage) (approved bool, err error)
+
+// ErrGateRejected 表示审批门被人工拒绝(该阶段失败 → 运行终止)。
+var ErrGateRejected = errors.New("dagrun: approval gate rejected")
+
 // Runner 是 DAG 感知的 run.Runner 实现。
 type Runner struct {
 	loader      SpecLoader
 	exec        StageExecutor
+	gate        GateFunc
 	concurrency int
 }
 
 // Option 配置 Runner。
 type Option func(*Runner)
+
+// WithGate 注入审批门 hook(Story 8-4)。nil 忽略(无门:Gate 阶段直接执行)。
+func WithGate(g GateFunc) Option {
+	return func(r *Runner) {
+		if g != nil {
+			r.gate = g
+		}
+	}
+}
 
 // WithConcurrency 设阶段并行上限(<=0 用阶段总数,即「能并行的全并行」)。
 func WithConcurrency(n int) Option {
@@ -153,6 +173,26 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 		}
 		if err := lockedSink(func() error { return sink.StepRunning(ctx, ord) }); err != nil {
 			return err
+		}
+		// 人工审批门(Story 8-4):进入该阶段前阻塞等待批准。run 状态由 gate 置 waiting_approval。
+		if stage.Gate && r.gate != nil {
+			_ = lockedSink(func() error {
+				return sink.Log(ctx, "stdout", ord, fmt.Sprintf("⏸ 阶段「%s」等待人工审批…", stage.Name))
+			})
+			approved, gerr := r.gate(ctx, rn, stage)
+			if gerr != nil {
+				_ = lockedSink(func() error {
+					return sink.Log(ctx, "stderr", ord, fmt.Sprintf("审批门中断:%v", gerr))
+				})
+				_ = lockedSink(func() error { return sink.StepDone(ctx, ord, run.StepFailed) })
+				return gerr
+			}
+			if !approved {
+				_ = lockedSink(func() error { return sink.Log(ctx, "stderr", ord, "⛔ 审批被拒绝,终止该阶段") })
+				_ = lockedSink(func() error { return sink.StepDone(ctx, ord, run.StepFailed) })
+				return ErrGateRejected
+			}
+			_ = lockedSink(func() error { return sink.Log(ctx, "stdout", ord, "✅ 审批通过,继续执行") })
 		}
 		rep := &stageReporter{sink: sink, mu: &mu, ordinal: ord}
 		execErr := r.exec(ctx, rn, stage, rep)

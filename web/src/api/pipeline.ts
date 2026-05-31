@@ -44,6 +44,8 @@ export interface PipelineStage {
   allowFailure?: boolean
   /** Conditional execution; unmet → stage (and downstream) skipped. */
   when?: StageWhen
+  /** Require manual approval before entering this stage (Epic 8 · 8-4). */
+  gate?: boolean
   jobs: PipelineJob[]
 }
 
@@ -66,6 +68,7 @@ export interface SavePipelineInput {
     needs?: string[]
     allowFailure?: boolean
     when?: StageWhen
+    gate?: boolean
     jobs: Array<{
       id?: string
       name: string

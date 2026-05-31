@@ -13,6 +13,7 @@ import { http } from './http'
 export type RunStatus =
   | 'queued'
   | 'running'
+  | 'waiting_approval'
   | 'success'
   | 'failed'
   | 'partial_failed'
@@ -20,7 +21,26 @@ export type RunStatus =
 
 // ─── Step ────────────────────────────────────────────────────────────────────
 
-export type StepStatus = 'pending' | 'running' | 'success' | 'failed' | 'skipped'
+export type StepStatus =
+  | 'pending'
+  | 'running'
+  | 'waiting_approval'
+  | 'success'
+  | 'failed'
+  | 'skipped'
+
+// ─── Approval gate (Epic 8 · 8-4) ──────────────────────────────────────────────
+
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected'
+
+export interface ApprovalRecord {
+  stageId: string
+  stageName: string
+  status: ApprovalStatus
+  decidedBy: string
+  decidedAt: string
+  createdAt: string
+}
 
 export interface RunStep {
   id: string
@@ -177,6 +197,20 @@ export function getRun(id: string): Promise<RunDetail> {
 
 export function cancelRun(id: string): Promise<RunDetail> {
   return http.post<RunDetail>(`/api/runs/${id}/cancel`)
+}
+
+// ─── Approval gate (Epic 8 · 8-4) ──────────────────────────────────────────────
+
+export function listApprovals(runId: string): Promise<{ items: ApprovalRecord[] }> {
+  return http.get<{ items: ApprovalRecord[] }>(`/api/runs/${runId}/approvals`)
+}
+
+export function approveStage(runId: string, stageId: string): Promise<{ ok: boolean }> {
+  return http.post<{ ok: boolean }>(`/api/runs/${runId}/approve`, { stageId })
+}
+
+export function rejectStage(runId: string, stageId: string): Promise<{ ok: boolean }> {
+  return http.post<{ ok: boolean }>(`/api/runs/${runId}/reject`, { stageId })
 }
 
 // ─── (Re-)diagnose a failed run ───────────────────────────────────────────────

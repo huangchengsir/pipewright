@@ -24,6 +24,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/chain"
 	"github.com/huangchengsir/pipewright/internal/cron"
 	"github.com/huangchengsir/pipewright/internal/deploy"
+	"github.com/huangchengsir/pipewright/internal/library"
 	"github.com/huangchengsir/pipewright/internal/notify"
 	"github.com/huangchengsir/pipewright/internal/oauth"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
@@ -78,6 +79,8 @@ type options struct {
 	approvalStore    *approval.Store
 	promotionStore   *promotion.Store
 	doraMetrics      run.MetricsService
+	templates        library.TemplateService
+	varGroups        library.VarGroupService
 }
 
 // WithApprovals 注入审批门协调器 + 持久层(Story 8-4),挂载 /api/runs/{id}/{approve,reject,approvals} 路由。
@@ -101,6 +104,20 @@ func WithPromotion(store *promotion.Store) Option {
 // 不传则该端点返回 503(服务未初始化)。
 func WithDoraMetrics(s run.MetricsService) Option {
 	return func(o *options) { o.doraMetrics = s }
+}
+
+// WithTemplates 注入流水线模板服务(FR-8-13 复用基座),挂载 /api/templates* 与
+// POST /api/projects/{id}/pipeline/apply-template 路由。GET 过 auth;写方法过 auth + CSRF + 审计。
+// 不传则相关端点返回 503(服务未初始化)。
+func WithTemplates(s library.TemplateService) Option {
+	return func(o *options) { o.templates = s }
+}
+
+// WithVariableGroups 注入变量组服务(FR-8-13 复用基座),挂载 /api/variable-groups* 路由。
+// GET 过 auth;POST/PUT/DELETE 过 auth + CSRF + 审计。secret 变量只存/回 credentialId + 掩码,绝无明文。
+// 不传则相关端点返回 503(服务未初始化)。
+func WithVariableGroups(s library.VarGroupService) Option {
+	return func(o *options) { o.varGroups = s }
 }
 
 // WithVault 注入凭据保险库,挂载 /api/credentials* 路由。
@@ -569,6 +586,26 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 对既有运行数据做纯聚合(无新表、无副作用)。GET 只读 → 过 auth、豁免 CSRF。
 		// projectId 可选过滤;window 形如 30d(默认)。o.doraMetrics 为 nil → handler 返回 503。
 		ar.Get("/metrics/dora", makeDoraMetricsHandler(o.doraMetrics))
+
+		// 流水线模板(FR-8-13 复用基座):命名、可复用的流水线定义,跨项目共享。
+		// tpl 为 nil → handler 返回 503。GET(列表/详情)过 auth;POST/DELETE/apply 为写方法,
+		// 过 auth + CSRF + 审计。模板 spec 不含明文 secret。apply-template 比 /pipeline 多一段,不会被吞。
+		tpl := o.templates
+		ar.Get("/templates", makeListPipelineTemplatesHandler(tpl))
+		ar.Post("/templates", makeCreatePipelineTemplateHandler(tpl, aud))
+		ar.Get("/templates/{id}", makeGetPipelineTemplateHandler(tpl))
+		ar.Delete("/templates/{id}", makeDeletePipelineTemplateHandler(tpl, aud))
+		ar.Post("/projects/{id}/pipeline/apply-template", makeApplyTemplateHandler(tpl, aud))
+
+		// 变量组(FR-8-13 复用基座):命名、可复用的变量集合(key=value + secret 引用)。
+		// vg 为 nil → handler 返回 503。GET 过 auth;POST/PUT/DELETE 为写方法,过 auth + CSRF + 审计。
+		// secret 变量只存/回 credentialId + 掩码,绝无明文。
+		vg := o.varGroups
+		ar.Get("/variable-groups", makeListVarGroupsHandler(vg))
+		ar.Post("/variable-groups", makeCreateVarGroupHandler(vg, aud))
+		ar.Get("/variable-groups/{id}", makeGetVarGroupHandler(vg))
+		ar.Put("/variable-groups/{id}", makeUpdateVarGroupHandler(vg, aud))
+		ar.Delete("/variable-groups/{id}", makeDeleteVarGroupHandler(vg, aud))
 
 		// 后续 story 在此挂载其他 API 路由。
 	})

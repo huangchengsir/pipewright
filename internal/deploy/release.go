@@ -135,7 +135,15 @@ func (s *service) stageReleaseOne(ctx context.Context, srv *target.Server, a run
 	// 1) 探测上一发布(readlink current);失败 / 无软链 → prev 为空(首次部署,无可回滚)。
 	st.prev = s.readCurrentRelease(execCtx, srv.ID, st.current)
 
-	// 2) mkdir 发布目录 → 写入产物负载(base64 经 array 命令落地,不拼 shell)。
+	// 2) 放置产物到发布目录。**制品库支撑的产物(Story 8-16)走「上传真字节」**;否则旧占位路径。
+	if isStoredArtifact(a) {
+		if failMsg, ok := s.stageStoredArtifact(execCtx, srv, a, st, file); !ok {
+			return st, failMsg, false
+		}
+		return st, "", true
+	}
+
+	// 旧路径(向后兼容:无制品库的历史产物)——把 reference 串当占位写入(非真字节)。
 	payload := base64.StdEncoding.EncodeToString([]byte(a.Reference + "\n"))
 	placeCmds := [][]string{
 		{"mkdir", "-p", st.release},
@@ -149,6 +157,83 @@ func (s *service) stageReleaseOne(ctx context.Context, srv *target.Server, a run
 		return st, failMsg, false
 	}
 	return st, "", true
+}
+
+// stageStoredArtifact 把制品库里的**真字节**落到目标机发布目录(Story 8-16):
+//   - jar  (format=file)  : 上传到 <release>/<filename>,再探 java -jar 启动命令。
+//   - dist (format=tar.gz): 上传 tar.gz → 远端解包到 <release> → 删临时包。
+//
+// jarFile 是旧占位路径算出的目标文件路径(<release>/<deployFileName>);jar 沿用它,
+// dist 用 metadata 的 tar.gz 临时名。制品库未配 / 取字节失败 / 上传失败 → (人读 message, false)。
+func (s *service) stageStoredArtifact(ctx context.Context, srv *target.Server, a run.Artifact, st releaseState, jarFile string) (string, bool) {
+	if s.artStore == nil {
+		return "部署侧未配置制品库,无法取产物真字节(产物已归档但制品库不可用)", false
+	}
+	rc, err := s.artStore.Open(a.Reference)
+	if err != nil {
+		return "从制品库取产物失败:" + err.Error(), false
+	}
+	defer func() { _ = rc.Close() }()
+
+	// 先建发布目录(Upload 自身也会 mkdir 父目录,这里显式建一次,语义清晰)。
+	if failMsg, ok := s.runStep(ctx, srv.ID, [][]string{{"mkdir", "-p", st.release}}); !ok {
+		return failMsg, false
+	}
+
+	switch artifactFormat(a) {
+	case "tar.gz":
+		// dist:上传 tar.gz → 远端解包 → 删包。
+		tarPath := path.Join(st.release, ".pw-artifact.tar.gz")
+		if err := s.targets.Upload(ctx, srv.ID, rc, tarPath); err != nil {
+			return "上传 dist 制品到目标机失败:" + humanExecError(err), false
+		}
+		unpack := [][]string{
+			{"tar", "-xzf", tarPath, "-C", st.release},
+			{"rm", "-f", tarPath},
+		}
+		if failMsg, ok := s.runStep(ctx, srv.ID, unpack); !ok {
+			return "目标机解包 dist 失败:" + failMsg, false
+		}
+		return "", true
+
+	default:
+		// jar / 其它单文件:上传到目标文件路径。
+		dest := jarFile
+		if name := artifactFilename(a); name != "" {
+			dest = path.Join(st.release, name)
+		}
+		if err := s.targets.Upload(ctx, srv.ID, rc, dest); err != nil {
+			return "上传 jar 制品到目标机失败:" + humanExecError(err), false
+		}
+		if a.Type == run.ArtifactJar {
+			if failMsg, ok := s.runStep(ctx, srv.ID, [][]string{{"java", "-jar", dest, "--version"}}); !ok {
+				return failMsg, false
+			}
+		}
+		return "", true
+	}
+}
+
+// isStoredArtifact 报告产物是否由制品库归档(metadata.stored=true → 部署取真字节)。
+func isStoredArtifact(a run.Artifact) bool {
+	v, ok := a.Metadata["stored"].(bool)
+	return ok && v
+}
+
+// artifactFormat 取产物存储格式(file | tar.gz;缺省 file)。
+func artifactFormat(a run.Artifact) string {
+	if f, ok := a.Metadata["format"].(string); ok && f != "" {
+		return f
+	}
+	return "file"
+}
+
+// artifactFilename 取产物原始文件名(jar 部署落盘名;缺省空)。
+func artifactFilename(a run.Artifact) string {
+	if n, ok := a.Metadata["filename"].(string); ok {
+		return n
+	}
+	return ""
 }
 
 // activateReleaseOne 执行 release 模式的**切换阶段**:原子切换 current → 本次发布 + 切后健康门控 +

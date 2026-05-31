@@ -417,12 +417,22 @@ export interface HealthCheckInput {
   timeoutSeconds?: number   // default 5, cap 60
 }
 
+// Deploy strategy (Story 8-8 / FR-8-8). 'rolling' (default) = fan out to all
+// targets in parallel, each self-heals. 'canary' = deploy a small batch first,
+// gate on its health, then the rest (abort the rest if the canary fails).
+// 'blue_green' = stage every target, then cut over all at once; if any cutover
+// fails, roll back the whole fleet (release-mode artifacts: dist/jar).
+export type DeployStrategy = 'rolling' | 'canary' | 'blue_green'
+
 export interface DeployRunInput {
   artifactId: string
   serverIds: string[]
   deployConfig?: Record<string, string>
   // Optional health gate (Story 4-3). Omit ⇒ identical to 4-2 behavior.
   healthCheck?: HealthCheckInput
+  // Optional rollout strategy (Story 8-8). Omit/'rolling' ⇒ identical to prior
+  // behavior. Canary batch size flows via deployConfig.canaryCount/canaryPercent.
+  strategy?: DeployStrategy
 }
 
 export interface DeployRunResponse {

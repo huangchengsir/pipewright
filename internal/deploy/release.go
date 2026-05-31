@@ -90,29 +90,55 @@ func keepReleases(cfg map[string]string) int {
 	return n
 }
 
+// releaseState 是「发布目录就绪、尚未切换 current」的一机中间态(Story 8-8 蓝绿两阶段用)。
+// stageReleaseOne 产出;activateReleaseOne 消费(切换 + 健康 + 回滚)。rolling/canary 走
+// deployReleaseOne(= stage 紧接 activate,行为与拆分前字节级一致);蓝绿才分两阶段跨机编排。
+type releaseState struct {
+	releasesDir string // <base>/releases
+	current     string // <base>/current 软链路径
+	release     string // <base>/releases/<runId> 本次发布目录
+	prev        string // 上一发布绝对路径("" = 首次部署,无可回滚)
+}
+
 // deployReleaseOne 在一台目标机上执行「发布目录 + current 软链原子切换 + 健康门控 + 失败回滚」。
 // 仅在 releaseModeArtifact(a) 为真时被 deployOne 调用。执行错误**不上抛**:映射为 status=failed /
 // rolled_back + 人读 message(绝无明文密钥)。
+//
+// 实现 = stageReleaseOne(置发布目录,不切换)紧接 activateReleaseOne(原子切换 + 健康 + 回滚);
+// 行为与未拆分前完全一致(rolling/canary 单机路径)。蓝绿策略另行跨机分两阶段调度这两个原语。
 func (s *service) deployReleaseOne(ctx context.Context, srv *target.Server, a run.Artifact, cfg map[string]string, hc *HealthCheck) TargetResult {
 	started := time.Now().UTC()
 	res := TargetResult{ServerID: srv.ID, ServerName: srv.Name, StartedAt: started}
 
+	st, failMsg, ok := s.stageReleaseOne(ctx, srv, a, cfg)
+	if !ok {
+		return finishFailed(res, failMsg)
+	}
+	return s.activateReleaseOne(ctx, srv, a, cfg, hc, st, started)
+}
+
+// stageReleaseOne 执行 release 模式的**预备阶段**:探测上一发布 + mkdir 发布目录 + 写入产物负载,
+// **不切换 current**(切换在 activateReleaseOne)。返回就绪中间态;放置失败 → (中间态, 人读 message, false)。
+// 拆出以支撑蓝绿「全机先就绪、再统一切换」(stage-all → cutover-all)。
+func (s *service) stageReleaseOne(ctx context.Context, srv *target.Server, a run.Artifact, cfg map[string]string) (releaseState, string, bool) {
 	base := releaseBase(a, cfg)
-	releasesDir := path.Join(base, "releases")
-	current := path.Join(base, "current")
-	release := path.Join(releasesDir, sanitizeRunID(a.RunID))
-	file := path.Join(release, deployFileName(a))
+	st := releaseState{
+		releasesDir: path.Join(base, "releases"),
+		current:     path.Join(base, "current"),
+		release:     path.Join(base, "releases", sanitizeRunID(a.RunID)),
+	}
+	file := path.Join(st.release, deployFileName(a))
 
 	execCtx, cancel := context.WithTimeout(ctx, execTimeout)
 	defer cancel()
 
 	// 1) 探测上一发布(readlink current);失败 / 无软链 → prev 为空(首次部署,无可回滚)。
-	prev := s.readCurrentRelease(execCtx, srv.ID, current)
+	st.prev = s.readCurrentRelease(execCtx, srv.ID, st.current)
 
 	// 2) mkdir 发布目录 → 写入产物负载(base64 经 array 命令落地,不拼 shell)。
 	payload := base64.StdEncoding.EncodeToString([]byte(a.Reference + "\n"))
 	placeCmds := [][]string{
-		{"mkdir", "-p", release},
+		{"mkdir", "-p", st.release},
 		{"sh", "-c", `printf '%s' "$1" | base64 -d > "$0"`, file, payload},
 	}
 	if a.Type == run.ArtifactJar {
@@ -120,33 +146,43 @@ func (s *service) deployReleaseOne(ctx context.Context, srv *target.Server, a ru
 		placeCmds = append(placeCmds, []string{"java", "-jar", file, "--version"})
 	}
 	if failMsg, ok := s.runStep(execCtx, srv.ID, placeCmds); !ok {
-		return finishFailed(res, failMsg)
+		return st, failMsg, false
 	}
+	return st, "", true
+}
+
+// activateReleaseOne 执行 release 模式的**切换阶段**:原子切换 current → 本次发布 + 切后健康门控 +
+// 失败回滚 + 旧发布清理。消费 stageReleaseOne 产出的就绪中间态。started 透传以保留单机起始时刻。
+func (s *service) activateReleaseOne(ctx context.Context, srv *target.Server, a run.Artifact, cfg map[string]string, hc *HealthCheck, st releaseState, started time.Time) TargetResult {
+	res := TargetResult{ServerID: srv.ID, ServerName: srv.Name, StartedAt: started}
+
+	execCtx, cancel := context.WithTimeout(ctx, execTimeout)
+	defer cancel()
 
 	// 3) **真·原子**切换 current 软链 → 本次发布(code-review P2)。
 	// `ln -sfn` 在 current 已存在时是 unlink+symlink 两步,中间有 current 不存在的窗口(并发请求 404),
 	// 破坏「零停机」。改为「ln 到临时名 + `mv -T` 原子 rename」:rename(2) 是 POSIX 原子,无窗口。
-	if failMsg, ok := s.runStep(execCtx, srv.ID, atomicSymlinkCmds(release, current)); !ok {
+	if failMsg, ok := s.runStep(execCtx, srv.ID, atomicSymlinkCmds(st.release, st.current)); !ok {
 		return finishFailed(res, failMsg)
 	}
 
 	// 4) 切换之后跑健康门控(4-3);失败触发回滚。
 	if hc.enabled() {
 		if herr := s.runHealthCheck(execCtx, srv.ID, hc); herr != nil {
-			return s.rollback(execCtx, srv, res, current, prev, release, herr.Error())
+			return s.rollback(execCtx, srv, res, st.current, st.prev, st.release, herr.Error())
 		}
 	}
 
 	// 5) 成功(健康通过或未配置健康检查)→ 清理超 keepReleases 的旧发布(尽力;失败不影响成功态)。
 	keep := keepReleases(cfg)
-	s.pruneReleases(execCtx, srv.ID, releasesDir, sanitizeRunID(a.RunID), prev, keep)
+	s.pruneReleases(execCtx, srv.ID, st.releasesDir, sanitizeRunID(a.RunID), st.prev, keep)
 
 	finish := time.Now().UTC()
 	res.Status = run.TargetSuccess
 	if hc.enabled() {
-		res.Message = fmt.Sprintf("%s 零停机部署完成 → current → %s(健康检查通过)", a.Type, release)
+		res.Message = fmt.Sprintf("%s 零停机部署完成 → current → %s(健康检查通过)", a.Type, st.release)
 	} else {
-		res.Message = fmt.Sprintf("%s 零停机部署完成 → current → %s", a.Type, release)
+		res.Message = fmt.Sprintf("%s 零停机部署完成 → current → %s", a.Type, st.release)
 	}
 	res.FinishedAt = &finish
 	return res

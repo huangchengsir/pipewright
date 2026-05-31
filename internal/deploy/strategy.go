@@ -60,7 +60,7 @@ func (s *service) deployWithStrategy(ctx context.Context, servers []*target.Serv
 		case releaseModeArtifact(a):
 			return s.deployBlueGreen(ctx, servers, a, cfg, hc)
 		case a.Type == run.ArtifactImage:
-			return s.deployBlueGreenImage(ctx, servers, a, hc)
+			return s.deployBlueGreenImage(ctx, servers, a, cfg, hc)
 		default:
 			return s.deployFanout(ctx, servers, a, cfg, hc)
 		}
@@ -222,7 +222,7 @@ func (s *service) deployBlueGreen(ctx context.Context, servers []*target.Server,
 // deployBlueGreenImage 镜像蓝绿:stage-all(全机 pull)→ cutover-all(全机停旧起新+健康)→
 // 切换阶段任一失败则把已成功切换的机一并回滚到上一镜像(机群级原子性)。语义同 deployBlueGreen,
 // 只是单机原语换成 stageImageOne/activateImageOne(容器 pull/swap 而非软链切换)。
-func (s *service) deployBlueGreenImage(ctx context.Context, servers []*target.Server, a run.Artifact, hc *HealthCheck) []TargetResult {
+func (s *service) deployBlueGreenImage(ctx context.Context, servers []*target.Server, a run.Artifact, cfg map[string]string, hc *HealthCheck) []TargetResult {
 	n := len(servers)
 	if n == 0 {
 		return nil
@@ -235,7 +235,7 @@ func (s *service) deployBlueGreenImage(ctx context.Context, servers []*target.Se
 	// 阶段 1:全机 pull(不停旧容器)。
 	s.forEachServer(servers, func(idx int, srv *target.Server) {
 		started[idx] = time.Now().UTC()
-		st, failMsg, ok := s.stageImageOne(ctx, srv, a)
+		st, failMsg, ok := s.stageImageOne(ctx, srv, a, cfg)
 		states[idx] = st
 		if !ok {
 			results[idx] = finishFailed(TargetResult{ServerID: srv.ID, ServerName: srv.Name, StartedAt: started[idx]}, failMsg)

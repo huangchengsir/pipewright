@@ -14,6 +14,7 @@ import {
 } from '../api/projects'
 import { listCredentials, type Credential } from '../api/credentials'
 import { triggerManual, type RunDetail, type TriggerManualInput } from '../api/runs'
+import { listRefs, type GitRef } from '../api/refs'
 import RunParamsEditor from '../components/RunParamsEditor.vue'
 import { HttpError } from '../api/http'
 
@@ -393,6 +394,19 @@ function openTriggerModal(p: Project): void {
   triggerBanner.value      = ''
   triggerSubmitting.value  = false
   triggerModalOpen.value   = true
+  void loadBranchOptions(p.id)
+}
+
+// 代码管理区(Story 8-18):拉取真实分支供下拉建议(datalist);未启用/失败 → 静默回退手填。
+const branchOptions = ref<GitRef[]>([])
+async function loadBranchOptions(projectId: string): Promise<void> {
+  branchOptions.value = []
+  try {
+    const refs = await listRefs(projectId)
+    branchOptions.value = [...refs.branches, ...refs.tags]
+  } catch {
+    // 代码管理区未启用(503)或仓库不可达:静默,保持纯文本输入(优雅降级)。
+  }
 }
 
 function closeTriggerModal(): void {
@@ -844,11 +858,16 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
               type="text"
               placeholder="main"
               autocomplete="off"
+              list="trigger-branch-options"
               :disabled="triggerSubmitting"
               :aria-invalid="triggerBranchError ? 'true' : undefined"
               :aria-describedby="triggerBranchError ? 'trigger-branch-err' : undefined"
               @input="triggerBranchError = ''"
             />
+            <!-- 代码管理区:真实分支/tag 下拉建议(空则纯文本输入,优雅降级) -->
+            <datalist id="trigger-branch-options">
+              <option v-for="r in branchOptions" :key="r.name" :value="r.name" />
+            </datalist>
             <span
               v-if="triggerBranchError"
               id="trigger-branch-err"

@@ -70,6 +70,7 @@ type options struct {
 	aiAnalyzer       ai.RepoAnalyzer
 	runDiffer        ai.RunDiffer
 	sourceReader     SourceReader
+	refsLister       RefsLister
 	servers          target.Service
 	notifications    notify.Service
 	deployer         deploy.Service
@@ -235,6 +236,11 @@ func WithRunDiff(d ai.RunDiffer) Option {
 // 不传则 source 端点返回 503(服务未初始化)。
 func WithSource(reader SourceReader) Option {
 	return func(o *options) { o.sourceReader = reader }
+}
+
+// WithRefs 注入「列仓库分支/tag」能力(代码管理区 repocache;Story 8-18)。nil → 端点 503。
+func WithRefs(lister RefsLister) Option {
+	return func(o *options) { o.refsLister = lister }
 }
 
 // WithServers 注入目标服务器服务(Story 4.1;internal/target 通用 SSH 层),挂载
@@ -500,6 +506,9 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		srcDeps := sourceDeps{projects: p, vault: v, reader: o.sourceReader}
 		ar.Get("/projects/{id}/source/tree", makeSourceTreeHandler(srcDeps))
 		ar.Get("/projects/{id}/source/blob", makeSourceBlobHandler(srcDeps))
+
+		// 列仓库分支/tag(代码管理区 · Story 8-18):供前端触发时分支/commit 下拉。o.refsLister 为 nil → 503。
+		ar.Get("/projects/{id}/refs", makeListRefsHandler(p, v, o.refsLister))
 
 		// 目标服务器登记 + 通用 SSH 执行层(Story 4.1;internal/target,FR-14)。
 		// sv 为 nil 时 handler 返回 503。GET/List/Get 过 auth;create/update/delete/test 为写方法,

@@ -78,6 +78,7 @@ type Stage struct {
 	Kind         string   `json:"kind"`
 	Needs        []string `json:"needs,omitempty"`
 	AllowFailure bool     `json:"allowFailure,omitempty"`
+	When         When     `json:"when,omitempty"`
 	Jobs         []Job    `json:"jobs"`
 }
 
@@ -342,7 +343,7 @@ func normalizeSpec(in Spec) (Spec, error) {
 		// Needs 规范化:trim、去空、去重、剔除自指(自指交由 dag 校验报错以给明确信息)。
 		needs := normalizeNeeds(st.Needs)
 
-		out.Stages = append(out.Stages, Stage{ID: stageID, Name: name, Kind: kind, Needs: needs, AllowFailure: st.AllowFailure, Jobs: jobs})
+		out.Stages = append(out.Stages, Stage{ID: stageID, Name: name, Kind: kind, Needs: needs, AllowFailure: st.AllowFailure, When: normalizeWhen(st.When), Jobs: jobs})
 	}
 
 	// 源阶段不变式:流水线必须恰有一个 source 阶段(引用项目仓库)。前端不渲染删源阶段的入口,

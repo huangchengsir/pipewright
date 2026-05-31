@@ -313,6 +313,35 @@ func TestScheduleContextCanceled(t *testing.T) {
 
 // ─── 结果辅助 ──────────────────────────────────────────────────────────────────
 
+func TestScheduleErrSkipMarksSkippedNotFailed(t *testing.T) {
+	// a → b → c ;  a → d。 b 返回 ErrSkip(条件跳过):b=skipped、c=skipped(下游)、d=success。
+	// 关键:条件跳过不计入 StatusFailed(整体不因 when 跳过而失败)。
+	g, _ := New([]Node{
+		{ID: "a"},
+		{ID: "b", Needs: []string{"a"}},
+		{ID: "c", Needs: []string{"b"}},
+		{ID: "d", Needs: []string{"a"}},
+	})
+	res := g.Schedule(context.Background(), func(_ context.Context, id string) error {
+		if id == "b" {
+			return ErrSkip
+		}
+		return nil
+	}, Options{})
+	if res["b"].Status != StatusSkipped {
+		t.Errorf("b = %v, want skipped", res["b"].Status)
+	}
+	if res["c"].Status != StatusSkipped {
+		t.Errorf("c = %v, want skipped (downstream of skipped)", res["c"].Status)
+	}
+	if res["d"].Status != StatusSuccess {
+		t.Errorf("d = %v, want success (independent)", res["d"].Status)
+	}
+	if n := res.Counts()[StatusFailed]; n != 0 {
+		t.Errorf("条件跳过不应计为失败,StatusFailed=%d", n)
+	}
+}
+
 func TestResultCounts(t *testing.T) {
 	g, _ := New([]Node{
 		{ID: "a"},

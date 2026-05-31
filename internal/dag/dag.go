@@ -101,6 +101,11 @@ var (
 	ErrCycle = errors.New("dag: cycle detected")
 )
 
+// ErrSkip 是 RunFunc 可返回的哨兵:表示「按条件跳过本节点」(非失败)。
+// 节点据此记 StatusSkipped(而非 StatusFailed),其下游照「上游未成功」逻辑被跳过;
+// 但它**不算失败**——调用方据 Counts()[StatusFailed] 判定整体是否失败,条件跳过不令整体失败。
+var ErrSkip = errors.New("dag: node skipped by condition")
+
 // Graph 是一张已校验的 DAG。
 type Graph struct {
 	nodes      map[string]Node
@@ -263,7 +268,10 @@ func (g *Graph) Schedule(ctx context.Context, run RunFunc, opts Options) Result 
 			}
 			err := run(ctx, id)
 			st := StatusSuccess
-			if err != nil {
+			switch {
+			case errors.Is(err, ErrSkip):
+				st = StatusSkipped // 条件跳过:非失败,但下游照「未成功」跳过
+			case err != nil:
 				st = StatusFailed
 			}
 			finCh <- fin{id, st, err}

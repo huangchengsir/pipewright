@@ -8,6 +8,8 @@ const AppShell    = () => import('../layouts/AppShell.vue')
 const Onboarding  = () => import('../views/Onboarding.vue')
 const Projects    = () => import('../views/Projects.vue')
 const Runs        = () => import('../views/Runs.vue')
+// FR-8-13: 复用库(流水线模板 + 变量组)
+const Library     = () => import('../views/Library.vue')
 // FR-8-15: DORA 四指标仪表盘(部署频率 / 前置时长 / 变更失败率 / MTTR;只读聚合)
 const DoraDashboard = () => import('../views/DoraDashboard.vue')
 // Story 6-1: multi-host status overview (server-layer CPU/memory/disk metrics, FR-15)
@@ -71,6 +73,8 @@ const router = createRouter({
         // Story 7-4: read-only code browsing (FR-4)
         { path: 'projects/:id/code', name: 'project-code', component: ProjectCode },
         { path: 'runs', name: 'runs', component: Runs },
+        // FR-8-13: 复用库(流水线模板 + 变量组)
+        { path: 'library', name: 'library', component: Library },
         { path: 'runs/:id', name: 'run-detail', component: RunDetail },
         // FR-8-15: DORA 指标仪表盘(只读聚合;projectId / window 经 query 即状态)
         { path: 'metrics/dora', name: 'dora', component: DoraDashboard },

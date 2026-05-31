@@ -190,6 +190,36 @@ func NewSettingsService(db *sql.DB, v vault.Vault) SettingsService {
 	return &settingsService{db: db, vault: v}
 }
 
+// NormalizeVars 校验并规范化一组变量(key 非空且组内不重复;secret 只保留 credentialId 引用
+// 并经保险库校验存在性,明文绝不留存;非 secret 保留明文 value),供域外复用同一套语义
+// (如 library 的变量组——FR-8-13)。v 为 nil/未配置且存在 secret 引用 → ErrSettingsVaultUnconfigured。
+// 返回的 secret 项不含 MaskedValue(掩码回算请用 MaskedVarsFor)。
+func NormalizeVars(v vault.Vault, in []BuildVar) ([]BuildVar, error) {
+	return (&settingsService{vault: v}).normalizeVars(in)
+}
+
+// ApplyVarMasks 为一组变量的 secret 引用回算掩码(读 credentials.masked_value;明文从不入库),
+// 供域外复用(如 library 的变量组读路径)。凭据已删 → 退化为通用点掩码(不报错)。
+func ApplyVarMasks(ctx context.Context, db *sql.DB, vars []BuildVar) error {
+	s := &settingsService{db: db}
+	for i := range vars {
+		if vars[i].Secret {
+			masked, err := s.maskedFor(ctx, vars[i].CredentialID)
+			if err != nil {
+				return err
+			}
+			vars[i].MaskedValue = masked
+		}
+	}
+	return nil
+}
+
+// ToStoredVarsJSON 把一组变量转持久化形状并序列化(剥离掩码;明文 secret 从不存在于此结构),
+// 供域外复用(如 library 变量组落库)。
+func ToStoredVarsJSON(vars []BuildVar) ([]byte, error) {
+	return json.Marshal(toStoredVars(vars))
+}
+
 func (s *settingsService) Get(ctx context.Context, projectID string) (*Settings, error) {
 	st, err := s.load(ctx, projectID)
 	if err == nil {

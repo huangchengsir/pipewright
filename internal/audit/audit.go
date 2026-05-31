@@ -41,6 +41,13 @@ const (
 	ActionSessionRevoke      = "session_revoke"
 	ActionServiceOp          = "service_op"
 	ActionContainerTerminal  = "container_terminal"
+	// 流水线模板 + 变量组(FR-8-13 复用基座)。
+	ActionTemplateCreate = "template_create"
+	ActionTemplateDelete = "template_delete"
+	ActionTemplateApply  = "template_apply"
+	ActionVarGroupCreate = "variable_group_create"
+	ActionVarGroupUpdate = "variable_group_update"
+	ActionVarGroupDelete = "variable_group_delete"
 )
 
 // 目标类型枚举(供 TargetType 填值;非强制白名单,便于后续 story 扩展)。
@@ -52,6 +59,8 @@ const (
 	TargetAccount    = "account"
 	TargetSession    = "session"
 	TargetServer     = "server"
+	TargetTemplate   = "template"
+	TargetVarGroup   = "variable_group"
 )
 
 // Entry 是一条审计写入入参(冻结契约)。Detail 写库前过 Masker,绝不含明文 secret。

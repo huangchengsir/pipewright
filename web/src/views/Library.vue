@@ -27,6 +27,7 @@ import {
 import { listCredentials, type Credential } from '../api/credentials'
 import {
   listCustomNodes,
+  updateCustomNode,
   deleteCustomNode,
   type CustomNode,
 } from '../api/customNodes'
@@ -253,6 +254,108 @@ function configPreview(n: CustomNode): Array<{ k: string; v: string }> {
     .map(([k, v]) => ({ k, v: typeof v === 'string' ? v : JSON.stringify(v) }))
 }
 
+// ─── custom-node editor modal ────────────────────────────────────────────────
+// config 是自由 KV(用户铁律:参数不限死);用普通 KV 行编辑,无 secret 概念。
+// 值原样为字符串则原样回填/回存;原为非字符串(数字/对象等)则以 JSON 文本编辑,
+// 保存时尝试 JSON 还原,无法解析则当字符串存。
+interface CnEditorRow {
+  key: string
+  value: string
+}
+
+const cnEditorOpen = ref(false)
+const cnEditingId = ref<string | null>(null)
+const cnEditorName = ref('')
+const cnEditorDescription = ref('')
+const cnEditorSummary = ref('')
+const cnEditorNodeType = ref('')
+const cnEditorRows = ref<CnEditorRow[]>([])
+const cnEditorBanner = ref('')
+const cnEditorSaving = ref(false)
+
+const cnEditorTypeLabel = computed(() => jobTypeLabel(cnEditorNodeType.value))
+
+function openEditCustomNode(n: CustomNode): void {
+  cnEditingId.value = n.id
+  cnEditorName.value = n.name
+  cnEditorDescription.value = n.description
+  cnEditorSummary.value = n.summary
+  cnEditorNodeType.value = n.nodeType
+  cnEditorRows.value = Object.entries(n.config ?? {}).map(([k, v]) => ({
+    key: k,
+    value: typeof v === 'string' ? v : JSON.stringify(v),
+  }))
+  cnEditorBanner.value = ''
+  cnEditorOpen.value = true
+}
+
+function addCnRow(): void {
+  cnEditorRows.value.push({ key: '', value: '' })
+}
+
+function removeCnRow(idx: number): void {
+  cnEditorRows.value.splice(idx, 1)
+}
+
+/** 把一行的字符串值尽量还原为原始 JSON 类型(数字/布尔/对象/数组),失败则按字符串存。 */
+function parseCnValue(raw: string): unknown {
+  const trimmed = raw.trim()
+  if (trimmed === '') return raw
+  if (
+    trimmed === 'true' ||
+    trimmed === 'false' ||
+    trimmed === 'null' ||
+    /^-?\d+(\.\d+)?$/.test(trimmed) ||
+    trimmed.startsWith('{') ||
+    trimmed.startsWith('[')
+  ) {
+    try {
+      return JSON.parse(trimmed)
+    } catch {
+      return raw
+    }
+  }
+  return raw
+}
+
+async function saveCustomNode(): Promise<void> {
+  cnEditorBanner.value = ''
+  const name = cnEditorName.value.trim()
+  if (!name) {
+    cnEditorBanner.value = '自定义节点名称不能为空'
+    return
+  }
+  if (!cnEditingId.value) return
+
+  // 仅提交 key 非空的参数;后写覆盖同名,保留用户填写顺序。
+  const config: Record<string, unknown> = {}
+  for (const row of cnEditorRows.value) {
+    const k = row.key.trim()
+    if (k === '') continue
+    config[k] = parseCnValue(row.value)
+  }
+
+  cnEditorSaving.value = true
+  try {
+    await updateCustomNode(cnEditingId.value, {
+      name,
+      description: cnEditorDescription.value.trim(),
+      nodeType: cnEditorNodeType.value,
+      summary: cnEditorSummary.value.trim(),
+      config,
+    })
+    message.success(`已更新自定义节点「${name}」`)
+    cnEditorOpen.value = false
+    await loadCustomNodes()
+  } catch (err: unknown) {
+    cnEditorBanner.value = err instanceof HttpError
+      ? err.apiError?.message ?? `保存失败(${err.status})`
+      : '保存失败'
+  } finally {
+    cnEditorSaving.value = false
+  }
+}
+
 function switchTab(t: Tab): void {
   tab.value = t
   if (t === 'templates' && templates.value.length === 0 && tplState.value !== 'error') loadTemplates()
@@ -449,7 +552,10 @@ onMounted(() => {
           </ul>
           <div class="cn-card-foot">
             <span class="cn-time">更新于 {{ new Date(n.updatedAt).toLocaleDateString() }}</span>
-            <button class="link-danger" @click="removeCustomNode(n)">删除</button>
+            <div class="cn-card-actions">
+              <button class="btn-secondary btn-sm" @click="openEditCustomNode(n)">编辑</button>
+              <button class="link-danger" @click="removeCustomNode(n)">删除</button>
+            </div>
           </div>
         </li>
       </ul>
@@ -534,6 +640,92 @@ onMounted(() => {
           </button>
           <button class="btn-primary" :disabled="editorSaving" @click="saveGroup">
             {{ editorSaving ? '保存中…' : '保存' }}
+          </button>
+        </footer>
+      </div>
+    </div>
+
+    <!-- ─── Custom-node editor modal ─── -->
+    <div v-if="cnEditorOpen" class="modal-scrim" @click.self="cnEditorOpen = false">
+      <div class="modal" role="dialog" aria-modal="true" aria-label="编辑自定义节点">
+        <header class="modal-head">
+          <h2 class="modal-title">编辑自定义节点</h2>
+          <button class="modal-close" aria-label="关闭" @click="cnEditorOpen = false">✕</button>
+        </header>
+
+        <div v-if="cnEditorBanner" class="banner banner--error">{{ cnEditorBanner }}</div>
+
+        <div class="field">
+          <label class="field-label" for="cn-name">名称</label>
+          <input
+            id="cn-name"
+            v-model="cnEditorName"
+            class="input"
+            placeholder="如 build-and-push"
+            autocomplete="off"
+          />
+        </div>
+        <div class="field">
+          <label class="field-label" for="cn-desc">说明(可选)</label>
+          <input
+            id="cn-desc"
+            v-model="cnEditorDescription"
+            class="input"
+            placeholder="这个节点的用途"
+            autocomplete="off"
+          />
+        </div>
+        <div class="field">
+          <label class="field-label" for="cn-summary">摘要(可选)</label>
+          <input
+            id="cn-summary"
+            v-model="cnEditorSummary"
+            class="input"
+            placeholder="一句话摘要,展示在卡片上"
+            autocomplete="off"
+          />
+        </div>
+        <div class="field">
+          <span class="field-label">底层类型</span>
+          <div class="cn-type-readonly">
+            <span class="cn-type-pill">{{ cnEditorTypeLabel }}</span>
+            <span class="cn-type-hint">底层任务类型不可更改</span>
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="field-label-row">
+            <span class="field-label">参数</span>
+            <button class="link-add" @click="addCnRow">+ 添加参数</button>
+          </div>
+          <div class="var-rows">
+            <div v-for="(row, idx) in cnEditorRows" :key="idx" class="var-row">
+              <input
+                v-model="row.key"
+                class="input input--key"
+                placeholder="KEY"
+                autocomplete="off"
+              />
+              <input
+                v-model="row.value"
+                class="input input--val"
+                placeholder="value"
+                autocomplete="off"
+              />
+              <button class="var-remove" title="移除" @click="removeCnRow(idx)">✕</button>
+            </div>
+            <p v-if="cnEditorRows.length === 0" class="cn-rows-empty">
+              暂无参数,点「+ 添加参数」新增。
+            </p>
+          </div>
+        </div>
+
+        <footer class="modal-foot">
+          <button class="btn-secondary" :disabled="cnEditorSaving" @click="cnEditorOpen = false">
+            取消
+          </button>
+          <button class="btn-primary" :disabled="cnEditorSaving" @click="saveCustomNode">
+            {{ cnEditorSaving ? '保存中…' : '保存' }}
           </button>
         </footer>
       </div>
@@ -736,6 +928,28 @@ onMounted(() => {
 .cn-time {
   font-size: 0.76rem;
   color: var(--color-faint);
+}
+.cn-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Custom-node editor — read-only type display + empty-params hint */
+.cn-type-readonly {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.cn-type-hint {
+  font-size: 0.78rem;
+  color: var(--color-faint);
+}
+.cn-rows-empty {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--color-faint);
+  font-style: italic;
 }
 
 .vg-var-list {

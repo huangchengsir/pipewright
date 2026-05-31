@@ -1,8 +1,19 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import type { PipelineStage } from '../../api/pipeline'
+import type { PipelineStage, StageWhen } from '../../api/pipeline'
 import JobCard from './JobCard.vue'
 import { eligibleNeeds, toggleNeed } from './stageDeps'
+import {
+  WHEN_EVENTS,
+  WHEN_EVENT_LABELS,
+  parseBranches,
+  branchesToText,
+  toggleWhenEvent,
+  normalizeWhen,
+  hasWhen,
+  whenSummary,
+  type WhenEvent,
+} from './stageSettings'
 
 const props = defineProps<{
   stage: PipelineStage
@@ -20,6 +31,8 @@ const emit = defineEmits<{
   (e: 'reorder-job', payload: { from: number; to: number }): void
   (e: 'update-needs', needs: string[]): void
   (e: 'update-allow-failure', value: boolean): void
+  (e: 'update-when', when: StageWhen | undefined): void
+  (e: 'update-gate', value: boolean): void
 }>()
 
 function stageLabel(index: number): string {
@@ -45,6 +58,31 @@ const needLabels = computed(() =>
 
 function toggleDep(needId: string): void {
   emit('update-needs', toggleNeed(currentNeeds.value, needId))
+}
+
+// ─── Stage settings (when 条件 · 8-5 / gate 审批门 · 8-4) ──────────────────────
+
+const settingsOpen = ref(false)
+
+/** Editable branch-glob text (parsed → array only on commit). */
+const branchText = computed<string>(() => branchesToText(props.stage.when?.branches))
+
+const currentEvents = computed<string[]>(() => props.stage.when?.events ?? [])
+
+/** Active when settings or gate → highlight the settings button. */
+const hasStageRules = computed(() => hasWhen(props.stage.when) || props.stage.gate === true)
+
+const whenChip = computed(() => whenSummary(props.stage.when))
+
+/** Commit a new branch-glob set, preserving the current events. */
+function commitBranches(text: string): void {
+  emit('update-when', normalizeWhen(parseBranches(text), currentEvents.value))
+}
+
+/** Toggle a trigger event, preserving the current branch globs. */
+function toggleEvent(ev: WhenEvent): void {
+  const events = toggleWhenEvent(currentEvents.value, ev)
+  emit('update-when', normalizeWhen(props.stage.when?.branches ?? [], events))
 }
 
 // ─── Drag-to-reorder (within this stage) ──────────────────────────────────────
@@ -95,6 +133,21 @@ function resetDrag(): void {
       </button>
       <button
         v-if="stage.kind !== 'source'"
+        class="stage-deps-btn"
+        :class="{ 'stage-deps-btn--active': settingsOpen || hasStageRules }"
+        :aria-label="`编辑阶段 ${stage.name} 的条件与审批门`"
+        :aria-expanded="settingsOpen"
+        title="条件执行 / 审批门"
+        @click="settingsOpen = !settingsOpen"
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+        条件<span v-if="hasStageRules" class="stage-deps-count stage-deps-count--dot" aria-hidden="true"></span>
+      </button>
+      <button
+        v-if="stage.kind !== 'source'"
         class="stage-add-job"
         :aria-label="`在阶段 ${stage.name} 中添加任务`"
         @click="emit('add-job')"
@@ -119,6 +172,18 @@ function resetDrag(): void {
       <span v-for="label in needLabels" :key="label" class="stage-need-chip">{{ label }}</span>
     </div>
 
+    <!-- Condition / gate chips (when · 8-5 / gate · 8-4) -->
+    <div v-if="hasStageRules" class="stage-rule-chips" aria-label="阶段条件与审批门">
+      <span v-if="whenChip" class="stage-rule-chip stage-rule-chip--when" title="仅满足条件时执行">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>
+        {{ whenChip }}
+      </span>
+      <span v-if="stage.gate" class="stage-rule-chip stage-rule-chip--gate" title="进入前需人工审批">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        审批门
+      </span>
+    </div>
+
     <!-- Dependency editor popover -->
     <div v-if="depsOpen && stage.kind !== 'source'" class="deps-popover" role="group" aria-label="阶段依赖编辑">
       <div class="deps-popover-title">依赖的上游阶段</div>
@@ -141,6 +206,44 @@ function resetDrag(): void {
         <span>失败不阻断下游(allowFailure)</span>
       </label>
       <p class="deps-hint">留空 = 无显式依赖;全流水线无依赖时按从左到右线性执行</p>
+    </div>
+
+    <!-- Stage settings popover (when 条件 + gate 审批门) -->
+    <div v-if="settingsOpen && stage.kind !== 'source'" class="deps-popover settings-popover" role="group" aria-label="阶段条件与审批门编辑">
+      <div class="deps-popover-title">条件执行(when)</div>
+      <label class="settings-field-label" :for="`branches-${stage.id}`">分支(glob,空格/逗号分隔)</label>
+      <input
+        :id="`branches-${stage.id}`"
+        class="settings-input"
+        type="text"
+        :value="branchText"
+        placeholder="如 main release/*"
+        @change="commitBranches(($event.target as HTMLInputElement).value)"
+      />
+      <div class="settings-events-label">触发事件</div>
+      <div class="settings-events">
+        <label v-for="ev in WHEN_EVENTS" :key="ev" class="settings-event">
+          <input
+            type="checkbox"
+            :checked="currentEvents.includes(ev)"
+            @change="toggleEvent(ev)"
+          />
+          <span>{{ WHEN_EVENT_LABELS[ev] }}</span>
+        </label>
+      </div>
+      <p class="deps-hint">两者都留空 = 始终执行;不满足时本阶段及下游跳过(不计失败)</p>
+
+      <div class="deps-divider"></div>
+      <div class="deps-popover-title">审批门(gate)</div>
+      <label class="deps-option deps-option--toggle">
+        <input
+          type="checkbox"
+          :checked="stage.gate === true"
+          @change="emit('update-gate', ($event.target as HTMLInputElement).checked)"
+        />
+        <span>进入本阶段前需人工审批</span>
+      </label>
+      <p class="deps-hint">开启后运行将暂停在此,等待批准/拒绝</p>
     </div>
 
     <!-- Job cards -->
@@ -267,4 +370,71 @@ function resetDrag(): void {
 .deps-option--toggle { color: var(--color-dim); }
 .deps-divider { height: 1px; background: var(--color-border); margin: 8px 0; }
 .deps-hint { margin: 7px 0 0; font-size: 0.68rem; color: var(--color-faint); line-height: 1.4; }
+
+/* ─── Condition / gate chips ──────────────────────────────────────────────── */
+.stage-deps-count--dot {
+  min-width: 7px;
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  border-radius: 50%;
+}
+.stage-rule-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: -4px 0 8px;
+}
+.stage-rule-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.66rem;
+  font-weight: 600;
+  padding: 1px 7px 1px 6px;
+  border-radius: 8px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stage-rule-chip svg { flex: none; }
+.stage-rule-chip--when { background: var(--color-primary-soft); color: var(--color-primary); }
+.stage-rule-chip--gate { background: var(--color-amber-soft, rgba(217, 119, 6, 0.14)); color: var(--color-amber, #b45309); }
+
+/* ─── Settings popover fields ─────────────────────────────────────────────── */
+.settings-popover { width: 232px; }
+.settings-field-label,
+.settings-events-label {
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--color-dim);
+  margin: 2px 0 5px;
+}
+.settings-events-label { margin-top: 10px; }
+.settings-input {
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  font: inherit;
+  font-size: 0.76rem;
+  color: var(--color-text);
+  background: var(--color-bg-subtle, var(--color-card));
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--rounded-md);
+  box-sizing: border-box;
+  transition: border-color var(--duration-fast);
+}
+.settings-input:focus { outline: none; border-color: var(--color-primary); }
+.settings-events { display: flex; flex-wrap: wrap; gap: 6px 12px; }
+.settings-event {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.76rem;
+  color: var(--color-text);
+  cursor: pointer;
+}
+.settings-event input { width: 14px; height: 14px; accent-color: var(--color-primary); cursor: pointer; }
 </style>

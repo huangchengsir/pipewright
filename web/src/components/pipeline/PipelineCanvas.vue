@@ -281,6 +281,8 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
             @reorder-job="(p) => reorderJob(stage.id, p.from, p.to)"
             @update-needs="(needs) => updateStage(stage.id, { needs })"
             @update-allow-failure="(v) => updateStage(stage.id, { allowFailure: v })"
+            @update-when="(when) => updateStage(stage.id, { when })"
+            @update-gate="(v) => updateStage(stage.id, { gate: v })"
           />
         </template>
 

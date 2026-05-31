@@ -427,6 +427,61 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
     defaultConfig: { strategy: 'rolling', restartCommand: 'nginx -s reload' },
   },
 
+  templated: {
+    type: 'templated',
+    label: '自定义节点',
+    description: '自己定义参数 + 命令模板({{参数}}),配参数即用',
+    accent: 'cyan',
+    category: 'custom',
+    fields: [
+      {
+        key: 'image',
+        label: '运行镜像',
+        kind: 'text',
+        monospace: true,
+        placeholder: 'node:20',
+      },
+      {
+        key: 'params',
+        label: '参数表',
+        kind: 'textarea',
+        monospace: true,
+        placeholder: 'dir=frontend\nbuildCmd=npm run build',
+        hint: '每行一条 key=value,完全自由;命令模板/产物路径里用 {{key}} 引用',
+      },
+      {
+        key: 'commandTemplate',
+        label: '命令模板',
+        kind: 'textarea',
+        monospace: true,
+        placeholder: 'cd {{dir}}\nnpm install\n{{buildCmd}}',
+        hint: '多行;{{参数}} 会被参数表的值替换,$ENV 仍交给容器内 shell',
+      },
+      {
+        key: 'artifactPath',
+        label: '产物路径',
+        kind: 'textarea',
+        monospace: true,
+        placeholder: '{{dir}}/dist',
+        hint: '可选,每行一条,支持 {{参数}} 与通配;目录→dist、*.jar→jar、其它→archive',
+      },
+      {
+        key: 'workDir',
+        label: '工作目录',
+        kind: 'text',
+        monospace: true,
+        placeholder: '.',
+        hint: '可选,相对克隆工作区根',
+      },
+    ],
+    defaultConfig: {
+      image: 'node:20',
+      params: 'dir=frontend\nbuildCmd=npm run build',
+      commandTemplate: 'cd {{dir}}\nnpm install --no-audit --no-fund\n{{buildCmd}}',
+      artifactPath: '{{dir}}/dist',
+    },
+  },
+
   script: {
     type: 'script',
     label: '自定义脚本',
@@ -460,6 +515,7 @@ export const PICKABLE_TYPES: readonly string[] = [
   'health_check',
   'notify',
   'script',
+  'templated',
 ]
 
 /** Dropdown options for the job type selector (friendly label + token). */

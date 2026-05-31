@@ -305,3 +305,40 @@ func TestE2EDockerStageExecutorReal(t *testing.T) {
 		t.Errorf("容器命令未真实执行;日志:\n%s", logs)
 	}
 }
+
+func TestRenderTemplate(t *testing.T) {
+	ctx := map[string]string{"dir": "frontend", "cmd": "npm run build"}
+	if got := renderTemplate("cd {{dir}} && {{cmd}}", ctx); got != "cd frontend && npm run build" {
+		t.Fatalf("render = %q", got)
+	}
+	// 未知占位原样保留;无 {{ 零开销直返
+	if got := renderTemplate("echo {{missing}} $HOME", ctx); got != "echo {{missing}} $HOME" {
+		t.Fatalf("unknown placeholder = %q", got)
+	}
+}
+
+func TestTemplateContextFreeParams(t *testing.T) {
+	// 自由参数表(每行 key=value / key: value)+ config 字段都进上下文。
+	cfg := map[string]any{"image": "node:20", "params": "dir=frontend\nbranch: main\n# 注释行无=跳过"}
+	ctx := templateContext(cfg)
+	if ctx["dir"] != "frontend" || ctx["branch"] != "main" || ctx["image"] != "node:20" {
+		t.Fatalf("ctx = %+v", ctx)
+	}
+}
+
+func TestScriptStepFromTemplatedJob(t *testing.T) {
+	jb := pipeline.Job{ID: "j", Name: "自定义", Type: "templated", Config: map[string]any{
+		"image": "node:{{ver}}", "ver": "20",
+		"commandTemplate": "cd {{dir}}\nnpm ci", "dir": "web",
+	}}
+	step, err := scriptStepFromJob(jb)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if step.Image != "node:20" {
+		t.Errorf("image = %q, want node:20", step.Image)
+	}
+	if len(step.Commands) != 2 || step.Commands[0] != "cd web" {
+		t.Errorf("commands = %v", step.Commands)
+	}
+}

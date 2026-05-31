@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/huangchengsir/pipewright/internal/dagrun"
@@ -35,10 +36,50 @@ import (
 // 工作区共享(跨阶段复用同一 clone)是性能优化项,留后续;本期每阶段独立 clone 以求简单与并行安全。
 
 // scriptJobTypes 是会触发真实容器执行的 job 类型。build_frontend/build_backend 是「前端/后端构建」
-// 模板节点,本质就是带预填命令的 script(在隔离容器跑 + 收 artifactPath 产物),故按 script 执行。
+// 模板节点,本质是带预填命令的 script;templated 是「用户自定义节点」(参数 + 命令模板),
+// 渲染 {{参数}} 后同样在隔离容器跑。三者都按 script 路径执行(容器跑 + 收 artifactPath 产物)。
 func isScriptJob(jobType string) bool {
 	t := strings.TrimSpace(jobType)
-	return t == pipeline.StepTypeScript || t == "custom" || t == "build_frontend" || t == "build_backend"
+	return t == pipeline.StepTypeScript || t == "custom" || t == "build_frontend" || t == "build_backend" || t == "templated"
+}
+
+// tplPlaceholder 匹配 {{key}} 占位(key 为标识符)。自定义节点参数渲染用。
+var tplPlaceholder = regexp.MustCompile(`\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}`)
+
+// templateContext 收集自定义节点的渲染上下文:config 里的字符串值 + 自由「参数表」(params 字段,
+// 每行 `key=value` 或 `key: value`)。参数完全自由(用户随便定义键),不锁死 schema。
+func templateContext(cfg map[string]any) map[string]string {
+	ctx := make(map[string]string, len(cfg)+4)
+	for k, v := range cfg {
+		if s, ok := v.(string); ok {
+			ctx[k] = s
+		}
+	}
+	for _, line := range splitCommands(cfgString(cfg, "params")) {
+		i := strings.IndexAny(line, "=:")
+		if i <= 0 {
+			continue
+		}
+		if k := strings.TrimSpace(line[:i]); k != "" {
+			ctx[k] = strings.TrimSpace(line[i+1:])
+		}
+	}
+	return ctx
+}
+
+// renderTemplate 把 {{key}} 替换为 ctx[key]。未知占位原样保留(不报错;$ENV 交给容器内 shell;
+// 无 {{ 则零开销直返)。ctx 由 templateContext 收集(config 字段 + params 自由参数)。
+func renderTemplate(tpl string, ctx map[string]string) string {
+	if tpl == "" || !strings.Contains(tpl, "{{") {
+		return tpl
+	}
+	return tplPlaceholder.ReplaceAllStringFunc(tpl, func(m string) string {
+		key := tplPlaceholder.FindStringSubmatch(m)[1]
+		if v, ok := ctx[key]; ok {
+			return v
+		}
+		return m
+	})
 }
 
 // isDeployJob 判断是否「SSH 部署」类节点(deploy_ssh 通用 / deploy_frontend 前端部署模板)。
@@ -348,7 +389,7 @@ func (b *Builder) runBuildImageJob(ctx context.Context, sink run.StepSink, rep d
 func (b *Builder) collectScriptArtifacts(ctx context.Context, jobs []pipeline.Job, workspace, slug, stageName string, rep dagrun.StageReporter) {
 	onLine := func(stream, line string) { _ = rep.Log(ctx, stream, line) }
 	for _, jb := range jobs {
-		for _, rel := range splitCommands(cfgString(jb.Config, "artifactPath")) { // 复用按行拆分(trim + 去空行)
+		for _, rel := range splitCommands(renderTemplate(cfgString(jb.Config, "artifactPath"), templateContext(jb.Config))) { // 渲染 {{参数}} + 按行拆分
 			// 通配(如 backend/target/*.jar)→ 展开为实际文件逐个收集;否则按原路径收集。
 			if strings.ContainsAny(rel, "*?[") {
 				clean := filepath.Clean(rel)
@@ -416,13 +457,19 @@ func (b *Builder) collectOneFileArtifact(ctx context.Context, workspace, rel, sl
 // scriptStepFromJob 从画布 job.Config 构造一条 script 步骤(image + 多行 commands + 可选 workDir)。
 // image 缺失或 commands 全空 → 错误(诚实失败,不静默跳过)。
 func scriptStepFromJob(jb pipeline.Job) (pipeline.PipelineStep, error) {
-	image := cfgString(jb.Config, "image")
+	ctx := templateContext(jb.Config)
+	image := renderTemplate(cfgString(jb.Config, "image"), ctx)
 	if image == "" {
 		return pipeline.PipelineStep{}, errors.New("缺少运行镜像(image)")
 	}
-	cmds := splitCommands(cfgString(jb.Config, "commands"))
+	// 自定义节点(templated):有 commandTemplate 则渲染 {{参数}} 作命令;否则用原始 commands。
+	rawCmds := cfgString(jb.Config, "commands")
+	if tpl := cfgString(jb.Config, "commandTemplate"); tpl != "" {
+		rawCmds = renderTemplate(tpl, ctx)
+	}
+	cmds := splitCommands(rawCmds)
 	if len(cmds) == 0 {
-		return pipeline.PipelineStep{}, errors.New("缺少执行命令(commands)")
+		return pipeline.PipelineStep{}, errors.New("缺少执行命令(commands / commandTemplate)")
 	}
 	return pipeline.PipelineStep{
 		ID:       jb.ID,
@@ -430,7 +477,7 @@ func scriptStepFromJob(jb pipeline.Job) (pipeline.PipelineStep, error) {
 		Type:     pipeline.StepTypeScript,
 		Image:    image,
 		Commands: cmds,
-		WorkDir:  cfgString(jb.Config, "workDir"),
+		WorkDir:  renderTemplate(cfgString(jb.Config, "workDir"), ctx),
 	}, nil
 }
 

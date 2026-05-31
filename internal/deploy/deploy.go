@@ -61,6 +61,9 @@ type DeployInput struct {
 	// HealthCheck 是可选的部署后健康门控(Story 4.3 / FR-12)。
 	// nil 或 type=none → 跳过(向后兼容 4-2:部署命令成功即 success)。
 	HealthCheck *HealthCheck
+	// Strategy 是部署策略(Story 8-8 / FR-8-8):rolling(默认)| canary | blue_green。
+	// 空 / 未知 → rolling(行为与未加策略前一致)。金丝雀批量经 Config["canaryCount"|"canaryPercent"]。
+	Strategy string
 }
 
 // RetryInput 是一次「仅重试失败目标」请求(对齐 POST /api/runs/{id}/deploy/retry 请求体)。
@@ -213,9 +216,10 @@ func (s *service) Deploy(ctx context.Context, in DeployInput) ([]TargetResult, e
 		servers = append(servers, srv)
 	}
 
-	// 4) **并行扇出**执行部署命令(Story 4.5):每机独立 goroutine + recover,有界信号量(cap 4)
-	// 防同时打爆 N 台;单机 panic/失败不连累其它机;结果按输入顺序独立收集。
-	results := s.deployFanout(ctx, servers, *artifact, in.Config, in.HealthCheck)
+	// 4) 按**部署策略**执行(Story 8-8 / FR-8-8):rolling(默认,= 4-5 并行扇出)| canary | blue_green。
+	// 每机独立 goroutine + recover,有界信号量(cap 4)防同时打爆 N 台;单机 panic/失败不连累其它机;
+	// 结果按输入顺序独立收集。策略仅改机群编排(分批门控 / 统一切换),不改单机执行语义。
+	results := s.deployWithStrategy(ctx, servers, *artifact, in.Config, in.HealthCheck, NormalizeStrategy(in.Strategy))
 
 	// 5) 持久化每机结果(填 run-detail targets slot)。
 	dts := make([]run.DeployTarget, 0, len(results))

@@ -31,6 +31,7 @@ import {
   type DiagnosisDTO,
   type HealthCheckType,
   type HealthCheckInput,
+  type DeployStrategy,
   type ApprovalRecord,
 } from '../api/runs'
 import { listServers, type Server } from '../api/servers'
@@ -148,6 +149,19 @@ const showAdvanced = ref(false)
 const releaseBase = ref('')
 const keepReleases = ref(1)
 
+// ─── 部署策略(Story 8-8 / FR-8-8)──────────────────────────────────────────
+// rolling(默认)= 全机并行各自成败;canary = 先发金丝雀批次、健康通过才铺其余;
+// blue_green = 全机先就绪、统一切换、失败机群回滚(release 类产物 dist/jar)。
+// 金丝雀批量经 deployConfig.canaryCount 透传。
+const deployStrategy = ref<DeployStrategy>('rolling')
+const canaryCount = ref(1)
+
+const deployStrategyOptions: ReadonlyArray<{ value: DeployStrategy; label: string; desc: string }> = [
+  { value: 'rolling', label: '滚动', desc: '全机并行,各自成败' },
+  { value: 'canary', label: '金丝雀', desc: '先发小批,通过再铺' },
+  { value: 'blue_green', label: '蓝绿', desc: '统一切换,失败全退' },
+]
+
 // buildDeployConfig 据高级选项收敛 deployConfig;空字段不传(后端取默认)。
 function buildDeployConfig(): Record<string, string> | undefined {
   const cfg: Record<string, string> = {}
@@ -156,6 +170,11 @@ function buildDeployConfig(): Record<string, string> | undefined {
   const keep = clampInt(keepReleases.value, 1, 50, 1)
   // 仅在非默认(1)时下发,避免无谓字段。
   if (keep !== 1) cfg.keepReleases = String(keep)
+  // 金丝雀批量:仅 canary 策略且 >1 时下发(默认 1 台)。
+  if (deployStrategy.value === 'canary') {
+    const n = clampInt(canaryCount.value, 1, 100, 1)
+    if (n > 1) cfg.canaryCount = String(n)
+  }
   return Object.keys(cfg).length > 0 ? cfg : undefined
 }
 
@@ -236,6 +255,7 @@ async function handleDeploy(): Promise<void> {
       serverIds: [...selectedServerIds.value],
       deployConfig: buildDeployConfig(),
       healthCheck: buildHealthCheck(),
+      strategy: deployStrategy.value,
     })
     // 同步执行:用返回的 targets 直接填 slot(与 run-detail 同源形状)。
     run.value = { ...run.value, targets: res.targets, status: deriveStatus(res.targets) }
@@ -876,6 +896,34 @@ function nodeClass(status: StepStatus): string {
                   </div>
                   <p v-if="hcType !== 'none' && !healthCheckValid" class="deploy-empty">
                     {{ hcType === 'http' ? '请填写探测 URL。' : '请填写探测命令。' }}
+                  </p>
+                </div>
+
+                <!-- 部署策略(Story 8-8 / FR-8-8):rolling | canary | blue_green -->
+                <div class="deploy-field">
+                  <span class="deploy-label">发布策略</span>
+                  <div class="strat-seg" role="radiogroup" aria-label="发布策略">
+                    <button
+                      v-for="opt in deployStrategyOptions"
+                      :key="opt.value"
+                      type="button"
+                      class="strat-opt"
+                      :class="{ 'strat-opt--active': deployStrategy === opt.value }"
+                      role="radio"
+                      :aria-checked="deployStrategy === opt.value"
+                      @click="deployStrategy = opt.value"
+                    >
+                      <span class="strat-opt-name">{{ opt.label }}</span>
+                      <span class="strat-opt-desc">{{ opt.desc }}</span>
+                    </button>
+                  </div>
+                  <label v-if="deployStrategy === 'canary'" class="adv-row strat-canary">
+                    <span class="adv-key">金丝雀台数</span>
+                    <input v-model.number="canaryCount" class="hc-num" type="number" min="1" max="100" aria-label="金丝雀台数" />
+                    <span class="adv-hint strat-canary-hint">先发这么多台并健康门控,通过后再铺其余</span>
+                  </label>
+                  <p v-else-if="deployStrategy === 'blue_green'" class="adv-hint">
+                    全机先就绪发布目录、再统一原子切换;任一机切换失败则整个机群回滚到上一发布(dist / jar)。
                   </p>
                 </div>
 
@@ -2238,4 +2286,35 @@ function nodeClass(status: StepStatus): string {
   line-height: 1.5;
   color: var(--color-faint);
 }
+
+/* ─── 部署策略选择器(Story 8-8)──────────────────────────────────────────── */
+.strat-seg {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 6px;
+}
+.strat-opt {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 10px;
+  text-align: left;
+  background: var(--color-bg-subtle, var(--color-card));
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--rounded-md);
+  cursor: pointer;
+  transition: border-color var(--duration-fast), background-color var(--duration-fast);
+}
+.strat-opt:hover { border-color: var(--color-primary); }
+.strat-opt--active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+.strat-opt:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 1px; }
+.strat-opt-name { font-size: 0.82rem; font-weight: 650; color: var(--color-text); }
+.strat-opt--active .strat-opt-name { color: var(--color-primary); }
+.strat-opt-desc { font-size: 0.68rem; color: var(--color-faint); line-height: 1.35; }
+.strat-canary { margin-top: 10px; }
+.strat-canary-hint { margin-left: 8px; }
 </style>

@@ -70,6 +70,9 @@ type deployRequest struct {
 	ServerIDs    []string          `json:"serverIds"`
 	DeployConfig map[string]string `json:"deployConfig"`
 	HealthCheck  *healthCheckDTO   `json:"healthCheck"`
+	// Strategy 是部署策略(Story 8-8 / FR-8-8):rolling(默认)| canary | blue_green。
+	// 空 / 未知 → rolling。金丝雀批量经 deployConfig["canaryCount"|"canaryPercent"] 透传。
+	Strategy string `json:"strategy"`
 }
 
 // toHealthCheck 把请求 DTO 映射为领域 HealthCheck(nil / type=none → nil,跳过健康检查)。
@@ -120,6 +123,7 @@ func makeDeployRunHandler(svc deploy.Service, runSvc run.Service) http.HandlerFu
 			ServerIDs:   req.ServerIDs,
 			Config:      req.DeployConfig,
 			HealthCheck: toHealthCheck(req.HealthCheck),
+			Strategy:    req.Strategy,
 		})
 		if err != nil {
 			writeDeployError(w, err)

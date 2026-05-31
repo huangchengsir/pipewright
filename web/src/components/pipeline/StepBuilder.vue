@@ -75,6 +75,7 @@ const addOptions: ReadonlyArray<{ kind: StepKind; label: string; desc: string }>
   { kind: 'command', label: STEP_KIND_META.command.label, desc: 'shell 命令(可多行)' },
   { kind: 'env', label: STEP_KIND_META.env.label, desc: 'KEY=VALUE 注入环境' },
   { kind: 'workDir', label: STEP_KIND_META.workDir.label, desc: '切换后续命令工作目录' },
+  { kind: 'condition', label: STEP_KIND_META.condition.label, desc: '不成立则跳过后续步骤' },
   { kind: 'artifact', label: STEP_KIND_META.artifact.label, desc: 'glob 归档产物' },
 ]
 
@@ -243,6 +244,23 @@ const stepCount = computed(() => steps.value.length)
           @blur="flush"
         />
 
+        <!-- 条件守卫 -->
+        <div v-else-if="step.kind === 'condition'" class="sb-cond">
+          <input
+            :value="step.condition ?? ''"
+            class="sb-input is-mono"
+            type="text"
+            placeholder='[ "$BRANCH" = "main" ]'
+            :aria-label="`条件 ${index + 1}`"
+            @input="patchStep(step.id, { condition: ($event.target as HTMLInputElement).value })"
+            @blur="flush"
+          />
+          <p class="sb-cond-hint">
+            shell 条件,不成立则<strong>跳过后续所有步骤</strong>(成功结束)。如
+            <code>[ -f package.json ]</code>
+          </p>
+        </div>
+
         <!-- 上传产物 -->
         <input
           v-else
@@ -348,6 +366,7 @@ const stepCount = computed(() => steps.value.length)
 .sb-step--env { --accent: var(--color-cyan); }
 .sb-step--workDir { --accent: var(--color-amber); }
 .sb-step--artifact { --accent: var(--color-green); }
+.sb-step--condition { --accent: var(--color-red); }
 
 .sb-step--dragging {
   opacity: 0.5;
@@ -484,6 +503,33 @@ const stepCount = computed(() => steps.value.length)
   font-weight: 700;
 }
 
+.sb-cond {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.sb-cond-hint {
+  margin: 0;
+  font-size: 0.68rem;
+  line-height: 1.45;
+  color: var(--color-faint);
+}
+
+.sb-cond-hint strong {
+  color: var(--color-red);
+  font-weight: 600;
+}
+
+.sb-cond-hint code {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--color-border);
+  color: var(--color-dim);
+}
+
 .sb-empty {
   font-size: 0.78rem;
   color: var(--color-faint);
@@ -560,6 +606,7 @@ const stepCount = computed(() => steps.value.length)
 .sb-add-item--command { --item-accent: var(--color-primary); }
 .sb-add-item--env { --item-accent: var(--color-cyan); }
 .sb-add-item--workDir { --item-accent: var(--color-amber); }
+.sb-add-item--condition { --item-accent: var(--color-red); }
 .sb-add-item--artifact { --item-accent: var(--color-green); }
 
 .sb-add-dot {

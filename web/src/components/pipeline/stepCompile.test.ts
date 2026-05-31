@@ -5,6 +5,7 @@ import {
   shellUnquote,
   stepToCommandLines,
   compileSteps,
+  conditionGuardLine,
   lineToStep,
   parseSteps,
   configUsesTemplate,
@@ -165,6 +166,57 @@ describe('stepCompile', () => {
     })
   })
 
+  describe('condition guard (set -e safe)', () => {
+    it('compiles to a single-line if-guard that exits 0 when condition fails', () => {
+      const line = conditionGuardLine('[ "$BRANCH" = "main" ]')
+      expect(line).toBe(
+        `if ! ( [ "$BRANCH" = "main" ] ); then echo '条件不成立,跳过后续步骤'; exit 0; fi`,
+      )
+      // 单行(逐行 round-trip 不破裂)。
+      expect(line.includes('\n')).toBe(false)
+      // 条件在 if 测试上下文(set -e 豁免),命中走 exit 0(干净早退)。
+      expect(line.startsWith('if ! (')).toBe(true)
+      expect(line.includes('; exit 0; fi')).toBe(true)
+    })
+
+    it('stepToCommandLines emits one guard line; empty condition → none', () => {
+      expect(stepToCommandLines(step({ kind: 'condition', condition: 'test -f package.json' }))).toEqual([
+        `if ! ( test -f package.json ); then echo '条件不成立,跳过后续步骤'; exit 0; fi`,
+      ])
+      expect(stepToCommandLines(step({ kind: 'condition', condition: '   ' }))).toEqual([])
+    })
+
+    it('flattens a multiline condition to a single line', () => {
+      expect(stepToCommandLines(step({ kind: 'condition', condition: '[ -d dist ]\n' }))).toEqual([
+        `if ! ( [ -d dist ] ); then echo '条件不成立,跳过后续步骤'; exit 0; fi`,
+      ])
+    })
+
+    it('lineToStep parses a guard line back to a condition step (round-trip)', () => {
+      const cond = '[ "$BRANCH" = "main" ] && [ -f deploy.sh ]'
+      const back = lineToStep(conditionGuardLine(cond))
+      expect(back.kind).toBe('condition')
+      expect(back.condition).toBe(cond)
+    })
+
+    it('round-trips a condition step through compile + parse', () => {
+      const steps: StepBlock[] = [
+        step({ kind: 'condition', condition: 'test -f package.json' }),
+        step({ kind: 'command', command: 'npm ci' }),
+      ]
+      const compiled = compileSteps(steps)
+      const parsed = parseSteps({ commands: compiled.commands })
+      expect(parsed.map((s) => s.kind)).toEqual(['condition', 'command'])
+      expect(parsed[0].condition).toBe('test -f package.json')
+      expect(parsed[1].command).toBe('npm ci')
+    })
+
+    it('a plain command is not misclassified as a condition', () => {
+      expect(lineToStep('echo hello').kind).toBe('command')
+      expect(lineToStep('if true; then echo hi; fi').kind).toBe('command')
+    })
+  })
+
   describe('configUsesTemplate', () => {
     it('detects commandTemplate / params', () => {
       expect(configUsesTemplate({ commandTemplate: 'cd {{dir}}' })).toBe(true)
@@ -178,6 +230,6 @@ describe('stepCompile', () => {
   })
 
   it('STEP_KIND_META covers every kind', () => {
-    expect(Object.keys(STEP_KIND_META).sort()).toEqual(['artifact', 'command', 'env', 'workDir'])
+    expect(Object.keys(STEP_KIND_META).sort()).toEqual(['artifact', 'command', 'condition', 'env', 'workDir'])
   })
 })

@@ -26,14 +26,17 @@ type diagnosisEvidenceDTO struct {
 
 // diagnosisDTO 是冻结的 diagnosis 子 DTO。status≠ready 时 hypothesis 等为空、reason 人读。
 type diagnosisDTO struct {
-	Status          string                 `json:"status"` // ready | unavailable | pending
-	Reason          string                 `json:"reason"`
-	Hypothesis      string                 `json:"hypothesis"`
-	Confidence      string                 `json:"confidence"` // high | medium | low
-	AlternateCauses []string               `json:"alternateCauses"`
-	FixSuggestions  []string               `json:"fixSuggestions"`
-	Evidence        []diagnosisEvidenceDTO `json:"evidence"`
-	GeneratedAt     string                 `json:"generatedAt"`
+	Status          string   `json:"status"` // ready | unavailable | pending
+	Reason          string   `json:"reason"`
+	Hypothesis      string   `json:"hypothesis"`
+	Confidence      string   `json:"confidence"` // high | medium | low
+	AlternateCauses []string `json:"alternateCauses"`
+	FixSuggestions  []string `json:"fixSuggestions"`
+	// FixScript 是可复制粘贴的修复脚本/补丁片段(护城河 · AI moat;additive 字段)。脱敏后输出;
+	// 模型未给出 → 空串。前端在诊断面板展示「一键复制修复脚本」。
+	FixScript   string                 `json:"fixScript"`
+	Evidence    []diagnosisEvidenceDTO `json:"evidence"`
+	GeneratedAt string                 `json:"generatedAt"`
 }
 
 // toDiagnosisDTO 把领域 run.Diagnosis 映射为冻结 DTO(nil → nil,run-detail diagnosis=null)。
@@ -60,6 +63,7 @@ func toDiagnosisDTO(d *run.Diagnosis) *diagnosisDTO {
 		Confidence:      d.Confidence,
 		AlternateCauses: alt,
 		FixSuggestions:  fixes,
+		FixScript:       d.FixScript,
 		Evidence:        ev,
 		GeneratedAt:     d.GeneratedAt.UTC().Format(time.RFC3339),
 	}
@@ -81,6 +85,7 @@ func aiToRunDiagnosis(d *ai.Diagnosis) *run.Diagnosis {
 		Confidence:      d.Confidence,
 		AlternateCauses: d.AlternateCauses,
 		FixSuggestions:  d.FixSuggestions,
+		FixScript:       d.FixScript,
 		Evidence:        ev,
 		GeneratedAt:     d.GeneratedAt,
 	}

@@ -487,6 +487,13 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Post("/projects/{id}/pipeline/ai-generate", makeAIGenerateHandler(aiGenDeps))
 		ar.Post("/projects/{id}/pipeline/ai-apply", makeAIApplyHandler(aiGenDeps))
 
+		// AI 脚本风险标注(护城河 · AI moat):对流水线脚本步骤(Epic 8 script step)做风险标注 —
+		// 确定性正则预扫(rm -rf /、curl|sh、chmod 777、明文密钥、latest 镜像)+ 可选 LLM 语义增强。
+		// 复用 aiSvc + projects(p)+ settings(ps)+ secretSource(出网前脱敏)。写方法,过 auth + CSRF。
+		// AI 未配/失败均 200 + 确定性结果 + aiEnhanced=false,绝不 500、绝无明文密钥。
+		aiRisk := aiRiskDeps{aiSvc: aiSvc, projects: p, settings: ps, secretSource: o.secretSource}
+		ar.Post("/projects/{id}/pipeline/analyze-risks", makeAnalyzeRisksHandler(aiRisk))
+
 		// 只读源码读取(Story 3.6;FR-4 预埋,7-4 消费):go-git 浅克隆读 tree/blob。
 		// 复用已注入 projects(p)+ vault(v)取凭据 + 注入的 SourceReader。reader 为 nil → 503。
 		// /source/tree、/source/blob 比 /projects/{id} 多两段,不会被吞;GET 过 auth。

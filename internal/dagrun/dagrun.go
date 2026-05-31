@@ -25,9 +25,23 @@ import (
 	"github.com/huangchengsir/pipewright/internal/run"
 )
 
-// SpecLoader 加载某项目的流水线配置(pipeline.Service 即满足此接口)。
+// SpecLoader 加载某项目「在某运行分支上」的流水线配置。
+//
+// branch 是本次运行的目标分支(run.Trigger.Branch),供「流水线即代码」按运行分支取
+// `.pipewright.yml`(FR-8-12);库内 loader(pipeline.Service,分支无关)可经 SpecLoaderFunc
+// 包成此契约并忽略 branch。branch 为空(如无分支的手动运行)时,实现应退化为既有默认分支行为。
 type SpecLoader interface {
-	Get(ctx context.Context, projectID string) (*pipeline.Config, error)
+	Get(ctx context.Context, projectID, branch string) (*pipeline.Config, error)
+}
+
+// SpecLoaderFunc 把任意「按 projectID 取配置」的库内 loader(如 pipeline.Service.Get,分支无关)
+// 适配成 branch 感知的 SpecLoader:它忽略 branch,直接委托底层 2 参方法。用于把存量库内 loader
+// 接进 branch 感知的 dagrun 内核,而不改动其公有 2 参签名(其它调用方不受影响)。
+type SpecLoaderFunc func(ctx context.Context, projectID string) (*pipeline.Config, error)
+
+// Get 实现 SpecLoader:忽略 branch,委托底层分支无关的 loader。
+func (f SpecLoaderFunc) Get(ctx context.Context, projectID, _ string) (*pipeline.Config, error) {
+	return f(ctx, projectID)
 }
 
 // StageReporter 给 StageExecutor 上报「本阶段」的日志/产物(自动关联到该阶段的 run_steps 序号)。
@@ -115,7 +129,7 @@ func New(loader SpecLoader, opts ...Option) *Runner {
 // StepSink 非并发安全约定:本 Runner 用单一 mutex 串行化所有 sink 调用,即便阶段并行执行,
 // 对 sink 的 Plan/StepRunning/StepDone/Log/EmitArtifact 也互斥,安全复用既有持久化管道。
 func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error {
-	cfg, err := r.loader.Get(ctx, rn.ProjectID)
+	cfg, err := r.loader.Get(ctx, rn.ProjectID, rn.Trigger.Branch)
 	if err != nil {
 		return fmt.Errorf("dagrun: load pipeline spec: %w", err)
 	}

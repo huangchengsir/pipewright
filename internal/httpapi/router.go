@@ -31,6 +31,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/promotion"
 	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/runner"
 	"github.com/huangchengsir/pipewright/internal/target"
 	"github.com/huangchengsir/pipewright/internal/trigger"
 	"github.com/huangchengsir/pipewright/internal/vault"
@@ -71,6 +72,7 @@ type options struct {
 	runDiffer        ai.RunDiffer
 	sourceReader     SourceReader
 	refsLister       RefsLister
+	runnerConfig     runner.Service
 	servers          target.Service
 	notifications    notify.Service
 	deployer         deploy.Service
@@ -241,6 +243,11 @@ func WithSource(reader SourceReader) Option {
 // WithRefs 注入「列仓库分支/tag」能力(代码管理区 repocache;Story 8-18)。nil → 端点 503。
 func WithRefs(lister RefsLister) Option {
 	return func(o *options) { o.refsLister = lister }
+}
+
+// WithRunnerConfig 注入项目「远程构建 runner」配置服务(FR-8-14 续)。nil → 端点 503。
+func WithRunnerConfig(svc runner.Service) Option {
+	return func(o *options) { o.runnerConfig = svc }
 }
 
 // WithServers 注入目标服务器服务(Story 4.1;internal/target 通用 SSH 层),挂载
@@ -510,6 +517,8 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 列仓库分支/tag(代码管理区 · Story 8-18):供前端触发时分支/commit 下拉。o.refsLister 为 nil → 503。
 		ar.Get("/projects/{id}/refs", makeListRefsHandler(p, v, o.refsLister))
 		ar.Get("/projects/{id}/commits", makeListCommitsHandler(p, v, o.refsLister))
+		ar.Get("/projects/{id}/runner", makeGetRunnerHandler(o.runnerConfig))
+		ar.Put("/projects/{id}/runner", makeSaveRunnerHandler(o.runnerConfig, aud))
 
 		// 目标服务器登记 + 通用 SSH 执行层(Story 4.1;internal/target,FR-14)。
 		// sv 为 nil 时 handler 返回 503。GET/List/Get 过 auth;create/update/delete/test 为写方法,

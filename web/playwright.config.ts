@@ -4,7 +4,7 @@ import { defineConfig, devices } from '@playwright/test'
  * Playwright e2e (smoke) config.
  *
  * Drives the Vite dev server (no real Go backend needed): every spec stubs
- * `**​/api/**` with page.route, so flows are deterministic and offline.
+ * the `/api` routes with page.route, so flows are deterministic and offline.
  * Backend integration e2e lives elsewhere (whole-system run), not here.
  *
  * Run: npm run e2e   (browsers must be installed: npx playwright install chromium)

@@ -41,6 +41,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/prstatus"
 	"github.com/huangchengsir/pipewright/internal/repocache"
 	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/runner"
 	"github.com/huangchengsir/pipewright/internal/store"
 	"github.com/huangchengsir/pipewright/internal/target"
 	"github.com/huangchengsir/pipewright/internal/trigger"
@@ -210,6 +211,11 @@ func main() {
 	// 缺省/其它值仍走 PIPEWRIGHT_BUILDER 选出的真实 Builder / 桩 runner。
 	// ⚠ 当前阶段执行体为占位 stub(仅打日志即成功);真实「阶段内并行 job → job 内有序 step
 	// 在隔离容器构建/部署」= Story 8-2 尚未接入,故 dag 模式现仅用于验证编排,不做真实构建。
+	// 目标服务器(SSH 执行层)+ 远程构建 runner 配置(FR-8-14 续):项目可指定一台 server 作远程构建机,
+	// 配置后该项目构建下沉到远程执行(控制机本地克隆 → 经 SSH 传工作区 → 远程容器跑;token 只在控制机)。
+	targetSvc := target.New(st.DB, credVault, nil)
+	runnerSvc := runner.New(st.DB, targetExister{targetSvc})
+
 	// 制品库(Story 8-16 / FR-8-16):构建后把 jar/dist 真字节归档,部署时取真字节上传目标机
 	// (否则只有占位 reference,jar/dist 无法真正部署)。默认落 DB 同级 artifacts/,可经
 	// PIPEWRIGHT_ARTIFACT_DIR 改。构造失败 → 降级 nil(保持旧占位行为,不中断启动)。
@@ -263,7 +269,7 @@ func main() {
 		if b, berr := build.NewBuilder(projectSvc, pipelineSettingsSvc, credVault, build.WithArtifactStore(artStore), build.WithImageGC(os.Getenv("PIPEWRIGHT_NO_IMAGE_GC") != "1"), clonerOpt); berr == nil {
 			// runSvc 作测试报告持久层注入(Story 8-6 / FR-8-6):script 步骤产报告 → 解析 →
 			// 落库 → 质量门禁裁决(不过则阶段失败,阻断下游部署)。
-			dagOpts = append(dagOpts, dagrun.WithStageExecutor(build.NewStageExecutor(b, runSvc)))
+			dagOpts = append(dagOpts, dagrun.WithStageExecutor(build.NewStageExecutorWithRunner(b, runSvc, runnerSvc, targetSvc)))
 			log.Printf("[run] PIPEWRIGHT_RUNNER=dag:DAG 调度执行器已启用(阶段按 needs 编排;script 类型 job 在隔离容器真实执行,CLI=%s;build_image/push_image/deploy_ssh 真实化=后续)", b.DriverBinary())
 		} else {
 			log.Printf("[run] PIPEWRIGHT_RUNNER=dag:DAG 调度执行器已启用(阶段按 needs 编排;⚠ 未探测到容器 CLI,阶段执行体回退 stub:%v)", berr)
@@ -368,7 +374,6 @@ func main() {
 	// 供 Epic 4 部署 + Epic 6 运维共享。SSH 私钥/口令经 vault 即用即弃,绝不入库/日志/响应/错误。
 	// dialer 传 nil → 使用默认 x/crypto/ssh 实现(无宿主依赖,不驻留)。master key 未配置时
 	// Exec/Test 降级为明确错误(不 panic)。
-	targetSvc := target.New(st.DB, credVault, nil)
 
 	// 装配部署执行服务(Story 4.2;internal/deploy,FR-10):把成功运行的产物经 SSH 部署到目标机。
 	// 部署命令 array 化经 targetSvc.Exec 执行(AC-SEC-02,不拼 shell);每机结果落 deploy_targets,
@@ -391,7 +396,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithServers(targetSvc), httpapi.WithDeploy(deploySvc), httpapi.WithNotifications(notifySvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithConcurrency(concurrencySvc), httpapi.WithPromotion(promotionStore), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc)),
+		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithServers(targetSvc), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithNotifications(notifySvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithConcurrency(concurrencySvc), httpapi.WithPromotion(promotionStore), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;
@@ -487,4 +492,12 @@ func buildRunnerOption(projectSvc project.Service, settingsSvc pipeline.Settings
 		log.Printf("[build] auto:真实隔离构建器已启用(容器 CLI=%s)", b.DriverBinary())
 		return []run.PoolOption{run.WithRunner(b)}
 	}
+}
+
+// targetExister 把 target.Service 适配为 runner.ServerExister(Get 无错即存在),供 runner 配置校验。
+type targetExister struct{ svc target.Service }
+
+func (t targetExister) Exists(ctx context.Context, id string) bool {
+	_, err := t.svc.Get(ctx, id)
+	return err == nil
 }

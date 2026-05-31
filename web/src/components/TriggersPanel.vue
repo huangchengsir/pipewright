@@ -22,6 +22,7 @@ import CronPanel from './CronPanel.vue'
 import EnvironmentsPanel from './EnvironmentsPanel.vue'
 import ConcurrencyPanel from './ConcurrencyPanel.vue'
 import ChainPanel from './ChainPanel.vue'
+import RunnerPanel from './RunnerPanel.vue'
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -531,6 +532,9 @@ const displayWebhookUrl = computed(() => {
 
       <!-- ═══ Downstream chaining · Story 8-11 / FR-8-11 ══════════════════ -->
       <ChainPanel :project-id="props.projectId" />
+
+      <!-- 远程构建 runner(FR-8-14 续) -->
+      <RunnerPanel :project-id="props.projectId" />
 
       <!-- ═══ Save bar ════════════════════════════════════════════════════ -->
       <div class="save-bar">

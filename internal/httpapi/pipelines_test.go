@@ -58,8 +58,8 @@ func TestPipelineGetLazyDefault(t *testing.T) {
 	_ = json.Unmarshal(raw, &dto)
 
 	stages, ok := dto["stages"].([]any)
-	if !ok || len(stages) != 4 {
-		t.Fatalf("默认应 4 阶段, got %v", dto["stages"])
+	if !ok || len(stages) != 2 {
+		t.Fatalf("默认应 2 阶段(源+构建), got %v", dto["stages"])
 	}
 	if dto["status"] != "draft" {
 		t.Fatalf("status = %v, want draft", dto["status"])
@@ -276,8 +276,8 @@ func TestPipelineImportPreviewNoSave(t *testing.T) {
 	graw, _ := io.ReadAll(g.Body)
 	var gd map[string]any
 	_ = json.Unmarshal(graw, &gd)
-	if gs, _ := gd["stages"].([]any); len(gs) != 4 {
-		t.Fatalf("预览不应落库,GET 应仍为默认 4 阶段, got %d", len(gs))
+	if gs, _ := gd["stages"].([]any); len(gs) != 2 {
+		t.Fatalf("预览不应落库,GET 应仍为默认 2 阶段(源+构建), got %d", len(gs))
 	}
 }
 

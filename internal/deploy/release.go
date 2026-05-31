@@ -252,6 +252,15 @@ func (s *service) activateReleaseOne(ctx context.Context, srv *target.Server, a 
 		return finishFailed(res, failMsg)
 	}
 
+	// 3.5) 切换后执行「重启 / 切换命令」(支持多行;在 current 目录下跑,$0=current 经位置参传入防注入)。
+	// 多行 = set -e 单脚本逐行执行(与自定义脚本节点同语义)。失败 → 回滚(有上一发布时),与健康失败一致。
+	if rc := strings.TrimSpace(cfg["restartCommand"]); rc != "" {
+		script := "cd \"$0\" && set -e\n" + rc
+		if failMsg, ok := s.runStep(execCtx, srv.ID, [][]string{{"sh", "-c", script, st.current}}); !ok {
+			return s.rollback(execCtx, srv, res, st.current, st.prev, st.release, "重启/切换命令失败:"+failMsg)
+		}
+	}
+
 	// 4) 切换之后跑健康门控(4-3);失败触发回滚。
 	if hc.enabled() {
 		if herr := s.runHealthCheck(execCtx, srv.ID, hc); herr != nil {

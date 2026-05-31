@@ -110,7 +110,10 @@ function isActive(item: NavItem): boolean {
 <style scoped>
 .app-shell {
   display: grid;
-  grid-template-columns: var(--rail-width) 1fr;
+  /* minmax(0,1fr) 而非 1fr:1fr 的最小尺寸是 min-content,会被内部超宽元素(如终端里不换行的
+     超长日志行)撑到比窗口还宽 → 整页横向溢出、卡片顶出右边。minmax(0,…) 允许主区收缩到窗口宽度,
+     超长内容只在各自容器内(终端横向滚动)处理,布局自适应窗口。 */
+  grid-template-columns: var(--rail-width) minmax(0, 1fr);
   min-height: 100vh;
 }
 
@@ -214,7 +217,10 @@ function isActive(item: NavItem): boolean {
 /* ——— Main area ——— */
 .main-area {
   min-height: 100vh;
-  overflow-x: hidden;
+  /* 用 clip 而非 hidden:hidden 会让 overflow-y 被规范强制计算成 auto,使 .main-area 变成一个
+     「装不下却又无法滚动」的隐性滚动容器,劫持滚轮/scrollIntoView,导致长页面(如运行详情的
+     日志终端)滑不到底。clip 只裁横向、不改纵向(保持 visible),整页交给 window 单一滚动。 */
+  overflow-x: clip;
 }
 
 .main-inner {

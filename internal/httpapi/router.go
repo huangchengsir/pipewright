@@ -19,6 +19,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/ai"
 	"github.com/huangchengsir/pipewright/internal/anomaly"
 	"github.com/huangchengsir/pipewright/internal/approval"
+	"github.com/huangchengsir/pipewright/internal/artifactstore"
 	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/auth"
 	"github.com/huangchengsir/pipewright/internal/chain"
@@ -84,6 +85,13 @@ type options struct {
 	doraMetrics      run.MetricsService
 	templates        library.TemplateService
 	varGroups        library.VarGroupService
+	artifactStore    *artifactstore.Store
+}
+
+// WithArtifactStore 注入制品库(Story 8-16):挂载产物下载端点
+// GET /api/runs/{id}/artifacts/{artifactId}/download(按 reference 句柄取真字节)。nil → 端点 503。
+func WithArtifactStore(s *artifactstore.Store) Option {
+	return func(o *options) { o.artifactStore = s }
 }
 
 // WithApprovals 注入审批门协调器 + 持久层(Story 8-4),挂载 /api/runs/{id}/{approve,reject,approvals} 路由。
@@ -417,6 +425,8 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Get("/runs/{id}/logs", makeRunLogsHandler(rs))
 		// 构建产物契约(Story 3.4 / FR-6):只读 + 认证;按 (type, reference) 供 Epic 4 消费。
 		ar.Get("/runs/{id}/artifacts", makeRunArtifactsHandler(rs))
+		// 产物下载(Story 8-16 续):按 reference 句柄从制品库取真字节流下载。o.artifactStore 为 nil → 503。
+		ar.Get("/runs/{id}/artifacts/{artifactId}/download", makeArtifactDownloadHandler(rs, o.artifactStore))
 		// 测试报告 + 质量门禁(Story 8-6 / FR-8-6):只读 + 认证;通过/失败/跳过 + 覆盖率 + 门禁裁决。
 		ar.Get("/runs/{id}/test-report", makeRunTestReportHandler(rs))
 		ar.Post("/runs/{id}/cancel", makeCancelRunHandler(rs))

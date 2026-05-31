@@ -98,7 +98,7 @@ function skip(): void {
   <div class="onboarding">
     <!-- Hero -->
     <header class="ob-hero">
-      <div class="ob-mark mono" aria-hidden="true">d&gt;</div>
+      <div class="ob-mark mono" aria-hidden="true">p&gt;</div>
       <div>
         <h1 class="ob-title">欢迎使用 Pipewright</h1>
         <p class="ob-lede">

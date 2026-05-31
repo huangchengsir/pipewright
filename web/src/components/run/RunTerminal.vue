@@ -29,6 +29,8 @@ const props = defineProps<{
   runId: string
   /** true ⇒ 进行中,订阅 SSE 实时 tail;false ⇒ 终态,仅历史回放只读。 */
   live: boolean
+  /** 仅显示该步骤序号(stepOrdinal)的日志;null/undefined = 全部步骤。点步骤详情切换。 */
+  filterOrdinal?: number | null
 }>()
 
 // ─── log buffer: seq-keyed, ascending ─────────────────────────────────────────
@@ -135,22 +137,23 @@ const stickToBottom = ref(true)
 // px tolerance: treat "near bottom" as bottom (sub-pixel / rounding slack).
 const BOTTOM_EPS = 24
 
+// 终端封顶 56vh、框内纵向滚动:贴底判断与跟随都作用于终端元素内部滚动(实时 tail 在框内滚到底,
+// 不动整页)。用户在框内上滚 → 暂停跟随;滚回底部 → 恢复。
 function onScroll(): void {
   const el = scrollEl.value
   if (!el) return
   const distance = el.scrollHeight - el.scrollTop - el.clientHeight
-  // User scrolled up → pause auto-scroll; back at bottom → resume.
   stickToBottom.value = distance <= BOTTOM_EPS
 }
 
 let scrollQueued = false
 function scheduleAutoScroll(): void {
-  if (!stickToBottom.value || scrollQueued) return
+  if (!props.live || !stickToBottom.value || scrollQueued) return
   scrollQueued = true
   void nextTick(() => {
     scrollQueued = false
     const el = scrollEl.value
-    if (el && stickToBottom.value) {
+    if (el && props.live && stickToBottom.value) {
       el.scrollTop = el.scrollHeight
     }
   })
@@ -162,7 +165,13 @@ function jumpToBottom(): void {
   if (el) el.scrollTop = el.scrollHeight
 }
 
-const hasLines = computed(() => lines.value.length > 0)
+// 仅展示当前所选步骤的日志(filterOrdinal 为 null = 全部)。
+const visibleLines = computed(() =>
+  props.filterOrdinal == null
+    ? lines.value
+    : lines.value.filter((l) => l.stepOrdinal === props.filterOrdinal),
+)
+const hasLines = computed(() => visibleLines.value.length > 0)
 const showFollowButton = computed(() => !stickToBottom.value && hasLines.value)
 
 // ─── [MASKED] segmentation ─────────────────────────────────────────────────────
@@ -198,7 +207,7 @@ function lineKey(line: RunLogLine): number {
 </script>
 
 <template>
-  <div class="term" role="region" aria-label="运行日志终端">
+  <div class="term" :class="{ 'term--live': props.live }" role="region" aria-label="运行日志终端">
     <!-- Terminal chrome bar -->
     <div class="term-bar">
       <span class="term-dots" aria-hidden="true">
@@ -215,10 +224,10 @@ function lineKey(line: RunLogLine): number {
         <span class="term-live-dot" aria-hidden="true" />
         LIVE
       </span>
-      <span class="term-count mono" v-if="hasLines">{{ lines.length }} 行</span>
+      <span class="term-count mono" v-if="hasLines">{{ visibleLines.length }} 行</span>
     </div>
 
-    <!-- Scrollable log surface -->
+    <!-- Log surface — 封顶 56vh,框内纵向滚动;实时 tail 框内贴底跟随 -->
     <div
       ref="scrollEl"
       class="term-scroll"
@@ -248,9 +257,9 @@ function lineKey(line: RunLogLine): number {
       </div>
 
       <!-- Lines -->
-      <ol v-else class="term-lines" :aria-label="`共 ${lines.length} 行日志`">
+      <ol v-else class="term-lines" :aria-label="`共 ${visibleLines.length} 行日志`">
         <li
-          v-for="line in lines"
+          v-for="line in visibleLines"
           :key="lineKey(line)"
           class="term-line"
           :class="{ 'term-line--err': line.stream === 'stderr' }"
@@ -293,7 +302,8 @@ function lineKey(line: RunLogLine): number {
   border-radius: var(--rounded-lg);
   overflow: hidden;
   box-shadow: var(--shadow-inner);
-  min-height: 220px;
+  /* 终端高度贴合内容(不拉伸、不设上限):空/少行时是小盒子、底边紧跟最后一行,随日志增长
+     而长高,整页单一滚动条。不再用大 min-height 撑出「拉不到底边」的空黑盒。 */
 }
 
 /* ─── chrome bar ──────────────────────────────────────────────────────────── */
@@ -363,12 +373,14 @@ function lineKey(line: RunLogLine): number {
 
 /* ─── scroll surface ──────────────────────────────────────────────────────── */
 .term-scroll {
-  flex: 1;
-  overflow-y: auto;
+  /* 高度贴合内容,但封顶 56vh:超过则框内纵向滚动(主区 overflow-x:clip 已修好整页滚动,
+     不再有「嵌套双滚动滑不到底」的老问题)。空状态给个小下限避免太矮;长行横向滚动。 */
   overflow-x: auto;
+  overflow-y: auto;
+  min-height: 72px;
+  max-height: 56vh;
   /* Comfortable but dense terminal feel */
   padding: 8px 0 12px;
-  max-height: 560px;
   scrollbar-width: thin;
   scrollbar-color: var(--color-border-strong) transparent;
 }

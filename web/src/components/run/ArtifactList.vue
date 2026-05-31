@@ -12,9 +12,27 @@
 import { ref } from 'vue'
 import type { ArtifactDTO, ArtifactType } from '../../api/runs'
 
-defineProps<{
+const props = defineProps<{
   artifacts: ArtifactDTO[]
+  runId: string
 }>()
+
+// 已归档真字节(metadata.stored=true 且有 reference 句柄)才可下载;占位/镜像类不可。
+function downloadable(a: ArtifactDTO): boolean {
+  return a.metadata?.stored === true && !!a.reference
+}
+
+function downloadUrl(a: ArtifactDTO): string {
+  return `/api/runs/${props.runId}/artifacts/${a.id}/download`
+}
+
+// 来源节点(阶段 · 节点名),由后端写进 metadata.sourceStage/sourceJob;标注「哪个节点产的」。
+function sourceLabel(a: ArtifactDTO): string {
+  const stage = typeof a.metadata?.sourceStage === 'string' ? a.metadata.sourceStage : ''
+  const job = typeof a.metadata?.sourceJob === 'string' ? a.metadata.sourceJob : ''
+  if (stage && job) return `${stage} · ${job}`
+  return job || stage || ''
+}
 
 // ─── Type badge config (each type its own color — semantic, not decorative) ──
 
@@ -127,6 +145,12 @@ async function copyReference(a: ArtifactDTO): Promise<void> {
         <div class="artifact-main">
           <div class="artifact-name-row">
             <span class="artifact-name">{{ a.name }}</span>
+            <span v-if="sourceLabel(a)" class="source-tag" :title="`产出节点:${sourceLabel(a)}`">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M6 8.5v7M18 8a4 4 0 0 1-4 4H8.5"/><circle cx="18" cy="6" r="2.5"/>
+              </svg>
+              {{ sourceLabel(a) }}
+            </span>
             <span v-if="isStub(a)" class="stub-tag" title="桩产物(无真实构建,3-3 后换真实产物)">桩</span>
           </div>
           <button
@@ -151,6 +175,21 @@ async function copyReference(a: ArtifactDTO): Promise<void> {
 
         <!-- Size -->
         <span class="artifact-size mono" :aria-label="`大小 ${humanSize(a.sizeBytes)}`">{{ humanSize(a.sizeBytes) }}</span>
+
+        <!-- Download (仅已归档真字节可下载) -->
+        <a
+          v-if="downloadable(a)"
+          class="download-btn"
+          :href="downloadUrl(a)"
+          download
+          :title="`下载产物 ${a.name}`"
+          :aria-label="`下载产物 ${a.name}`"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+          </svg>
+          下载
+        </a>
       </li>
     </ul>
   </section>
@@ -277,6 +316,25 @@ async function copyReference(a: ArtifactDTO): Promise<void> {
   border: 1px solid var(--color-amber-line);
 }
 
+/* 来源节点标签(哪个节点产的) */
+.source-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  font-weight: 500;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: var(--rounded-sm);
+  background: var(--color-inset);
+  color: var(--color-faint);
+  border: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.source-tag svg { opacity: 0.8; }
+
 /* ─── reference (copyable) ───────────────────────────────────────────────── */
 .reference-row {
   display: inline-flex;
@@ -339,6 +397,34 @@ async function copyReference(a: ArtifactDTO): Promise<void> {
 }
 
 .mono { font-family: var(--font-mono); }
+
+/* ─── download button ────────────────────────────────────────────────────── */
+.download-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 5px 11px;
+  border-radius: var(--rounded-md);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-card-2);
+  color: var(--color-text);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: border-color var(--duration-fast), background-color var(--duration-fast), color var(--duration-fast);
+}
+
+.download-btn:hover {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+.download-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
 
 @media (max-width: 640px) {
   .artifact-card {

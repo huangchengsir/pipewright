@@ -26,6 +26,7 @@ type stageDTO struct {
 	Needs        []string `json:"needs"`
 	AllowFailure bool     `json:"allowFailure"`
 	When         whenDTO  `json:"when"`
+	Gate         bool     `json:"gate"`
 	Jobs         []jobDTO `json:"jobs"`
 }
 
@@ -75,7 +76,7 @@ func toPipelineDTO(c *pipeline.Config) pipelineDTO {
 		if needs == nil {
 			needs = []string{}
 		}
-		stages = append(stages, stageDTO{ID: st.ID, Name: st.Name, Kind: st.Kind, Needs: needs, AllowFailure: st.AllowFailure, When: toWhenDTO(st.When), Jobs: jobs})
+		stages = append(stages, stageDTO{ID: st.ID, Name: st.Name, Kind: st.Kind, Needs: needs, AllowFailure: st.AllowFailure, When: toWhenDTO(st.When), Gate: st.Gate, Jobs: jobs})
 	}
 	return pipelineDTO{
 		Stages:    stages,
@@ -141,6 +142,7 @@ func makeSavePipelineHandler(svc pipeline.Service) http.HandlerFunc {
 					Branches []string `json:"branches"`
 					Events   []string `json:"events"`
 				} `json:"when"`
+				Gate bool `json:"gate"`
 				Jobs []struct {
 					ID      string         `json:"id"`
 					Name    string         `json:"name"`
@@ -174,6 +176,7 @@ func makeSavePipelineHandler(svc pipeline.Service) http.HandlerFunc {
 				Needs:        st.Needs,
 				AllowFailure: st.AllowFailure,
 				When:         pipeline.When{Branches: st.When.Branches, Events: st.When.Events},
+				Gate:         st.Gate,
 				Jobs:         jobs,
 			})
 		}

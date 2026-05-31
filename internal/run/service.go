@@ -33,6 +33,17 @@ type Service interface {
 	// Cancel 取消进行中(queued/running)运行:经 context 传播到 Runner;终态 → ErrNotCancelable。
 	Cancel(ctx context.Context, id string) (*Run, error)
 
+	// MarkWaitingApproval 把运行从 running 置为 waiting_approval(Story 8-4 审批门阻塞)。
+	// 非 running → ErrInvalidTransition。
+	MarkWaitingApproval(ctx context.Context, id string) error
+	// ResumeFromApproval 把运行从 waiting_approval 置回 running(批准/拒绝后让 worker 收尾)。
+	// 非 waiting_approval → ErrInvalidTransition。
+	ResumeFromApproval(ctx context.Context, id string) error
+
+	// FailOrphanedRuns 把启动时残留的非终态运行(queued/running/waiting_approval)清为 failed。
+	// 进程重启会丢失内存队列与审批等待者,这些运行无法恢复,应一次性清理(返回清理条数)。
+	FailOrphanedRuns(ctx context.Context) (int, error)
+
 	// LastSuccessfulRun 查 baseline:同 project + 同 trigger.Branch、created_at 早于 before、
 	// 最近一条 status=success 的运行(Story 7.3 / FR-25 成功/失败差异对比)。
 	// 用于「本次失败运行 → 上一次成功运行」对比的基线选取。无匹配 → ErrNotFound。
@@ -567,6 +578,31 @@ func (s *service) GetLogs(ctx context.Context, runID string, sinceSeq int) ([]Lo
 // transition 校验并持久化运行状态转移:CAS 式更新(WHERE status=from),
 // 顺带按 to 维护 started_at/finished_at;成功后经事件总线发布 status 事件。
 // requireFrom=true 时,当前状态非 from(竞态/非法)→ ErrInvalidTransition。
+// MarkWaitingApproval 实现 Service:running → waiting_approval(审批门进入)。
+func (s *service) MarkWaitingApproval(ctx context.Context, id string) error {
+	return s.transition(ctx, id, StatusRunning, StatusWaitingApproval, true)
+}
+
+// ResumeFromApproval 实现 Service:waiting_approval → running(决定后让 worker 收尾)。
+func (s *service) ResumeFromApproval(ctx context.Context, id string) error {
+	return s.transition(ctx, id, StatusWaitingApproval, StatusRunning, true)
+}
+
+// FailOrphanedRuns 实现 Service:启动时把残留非终态运行清为 failed(孤儿,不可恢复)。
+func (s *service) FailOrphanedRuns(ctx context.Context) (int, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE pipeline_runs SET status = ?, finished_at = ?
+		 WHERE status IN (?, ?, ?)`,
+		StatusFailed, now, StatusQueued, StatusRunning, StatusWaitingApproval,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("run: fail orphaned runs: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 func (s *service) transition(ctx context.Context, id, from, to string, requireFrom bool) error {
 	if !canTransition(from, to) {
 		return ErrInvalidTransition

@@ -171,8 +171,16 @@ func main() {
 	// 在隔离容器构建/部署」= Story 8-2 尚未接入,故 dag 模式现仅用于验证编排,不做真实构建。
 	var runnerOpts []run.PoolOption
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("PIPEWRIGHT_RUNNER")), "dag") {
-		log.Printf("[run] PIPEWRIGHT_RUNNER=dag:DAG 调度执行器已启用(阶段按 needs 编排;⚠ 阶段执行体=占位 stub,真实构建/部署=Story 8-2 未接入)")
-		runnerOpts = []run.PoolOption{run.WithRunner(dagrun.New(pipelineSvc))}
+		// 阶段执行体(Story 8-2):探测到容器 CLI → 注入真实阶段执行器(script 类型 job 在隔离
+		// 容器内真实跑命令,复用 Builder 的 cloner+driver);否则回退 stub(优雅降级,NFR-10)。
+		var dagOpts []dagrun.Option
+		if b, berr := build.NewBuilder(projectSvc, pipelineSettingsSvc, credVault); berr == nil {
+			dagOpts = append(dagOpts, dagrun.WithStageExecutor(build.NewStageExecutor(b)))
+			log.Printf("[run] PIPEWRIGHT_RUNNER=dag:DAG 调度执行器已启用(阶段按 needs 编排;script 类型 job 在隔离容器真实执行,CLI=%s;build_image/push_image/deploy_ssh 真实化=后续)", b.DriverBinary())
+		} else {
+			log.Printf("[run] PIPEWRIGHT_RUNNER=dag:DAG 调度执行器已启用(阶段按 needs 编排;⚠ 未探测到容器 CLI,阶段执行体回退 stub:%v)", berr)
+		}
+		runnerOpts = []run.PoolOption{run.WithRunner(dagrun.New(pipelineSvc, dagOpts...))}
 	} else {
 		runnerOpts = buildRunnerOption(projectSvc, pipelineSettingsSvc, credVault)
 	}

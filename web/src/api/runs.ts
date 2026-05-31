@@ -291,6 +291,8 @@ export function submitDiagnosisFeedback(
 export interface TriggerManualInput {
   branch?: string
   commit?: string
+  /** Parameterized run (Story 8-11): key=value injected as container env (PW_<KEY>). */
+  params?: Record<string, string>
 }
 
 export function triggerManual(projectId: string, input: TriggerManualInput): Promise<RunDetail> {

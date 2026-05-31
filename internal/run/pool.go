@@ -25,15 +25,37 @@ const maxConcurrentDiagnoses = 2
 // 批量 run 同时落终态会瞬时堆起大量发送 goroutine 各占一条 HTTP 连接。超限跳过(通知 best-effort)。
 const maxConcurrentNotifies = 4
 
-// WorkerPool 是进程内 goroutine 池调度器:从内存队列取 queued 运行 → 转 running →
+// WorkerPool 是进程内 goroutine 池调度器:从内存 FIFO 队列取 queued 运行 → 转 running →
 // 经 Runner 执行 → 按结果转终态。多 run 并行、非事务、结果独立:单 run 失败/panic
 // 不连累其它(每 run 独立 goroutine + recover)。优雅停机随 HTTP server(Stop)。
 //
-// 不轮询 DB 取队列:Create 经 Enqueue 推入内存 channel;状态变更经事件总线推 SSE。
+// 不轮询 DB 取队列:Create 经 Enqueue 推入内存 FIFO;状态变更经事件总线推 SSE。
+//
+// 并发/队列控制(FR-8-10):单 dispatcher goroutine 按 FIFO 扫描待调度队列,对每个待调度
+// 运行做**双重准入**——全局在途 < globalLimit(PIPEWRIGHT_MAX_CONCURRENT)且 该项目在途 <
+// 项目级上限(ConcurrencyLimits.LimitFor,0=不限)。准入则计数 +1 并起独立 goroutine 执行;
+// 否则保持 queued 留在队列,待某运行收尾释放槽位后重扫(FIFO 序;某项目满则跳过该项目的
+// 后续运行继续放行其它项目,避免队头阻塞拖垮全局吞吐)。计数器经 mu 串行化(并发正确)。
 type WorkerPool struct {
 	svc    *service
 	runner Runner
-	queue  chan string
+
+	// 待调度 FIFO:Enqueue 追加 runID,dispatcher 按序做准入并出队。受 mu 保护。
+	pending []string
+	// signal 唤醒 dispatcher 重扫(Enqueue 入队 / run 收尾释放槽位时各发一次,带缓冲不阻塞)。
+	signal chan struct{}
+
+	// globalLimit 是全局同时 running 上限(PIPEWRIGHT_MAX_CONCURRENT;<1 时回落 workers)。
+	globalLimit int
+	// limits 查项目级并发上限(nil 则仅受全局上限约束);经接口解耦,pool 不直接触库。
+	limits ConcurrencyLimits
+
+	// mu 保护 pending / globalInflight / projInflight / stopped(并发计数正确性铁律)。
+	mu             sync.Mutex
+	globalInflight int
+	projInflight   map[string]int
+	// stopped 在 Stop 后置位:Enqueue 返回 ErrPoolStopped、takeAdmissible 不再放行新活。
+	stopped bool
 
 	workers int
 	wg      sync.WaitGroup
@@ -76,6 +98,26 @@ func WithConcurrency(n int) PoolOption {
 	return func(p *WorkerPool) {
 		if n > 0 {
 			p.workers = n
+		}
+	}
+}
+
+// WithMaxConcurrent 设置全局同时 running 上限(FR-8-10;PIPEWRIGHT_MAX_CONCURRENT)。
+// <1 时不生效(回落到 workers 数)。突发创建超此上限的运行保持 queued,待槽位释放再调度。
+func WithMaxConcurrent(n int) PoolOption {
+	return func(p *WorkerPool) {
+		if n > 0 {
+			p.globalLimit = n
+		}
+	}
+}
+
+// WithConcurrencyLimits 注入项目级并发上限查询(FR-8-10)。nil 则仅受全局上限约束。
+// dispatcher 对每个待调度运行经此查该项目上限(0=不限项目级)做准入。
+func WithConcurrencyLimits(l ConcurrencyLimits) PoolOption {
+	return func(p *WorkerPool) {
+		if l != nil {
+			p.limits = l
 		}
 	}
 }
@@ -146,15 +188,20 @@ func NewWorkerPool(svc Service, opts ...PoolOption) *WorkerPool {
 		panic("run: NewWorkerPool requires the Service returned by run.New")
 	}
 	p := &WorkerPool{
-		svc:         s,
-		runner:      NewStubRunner(),
-		queue:       make(chan string, 256),
-		workers:     defaultConcurrency,
-		diagnoseSem: make(chan struct{}, maxConcurrentDiagnoses),
-		notifySem:   make(chan struct{}, maxConcurrentNotifies),
+		svc:          s,
+		runner:       NewStubRunner(),
+		signal:       make(chan struct{}, 1),
+		projInflight: make(map[string]int),
+		workers:      defaultConcurrency,
+		diagnoseSem:  make(chan struct{}, maxConcurrentDiagnoses),
+		notifySem:    make(chan struct{}, maxConcurrentNotifies),
 	}
 	for _, opt := range opts {
 		opt(p)
+	}
+	// 全局上限缺省回落到 workers 数(保持既有「至多 workers 个并行」行为;FR-8-10 默认)。
+	if p.globalLimit < 1 {
+		p.globalLimit = p.workers
 	}
 	// 注入调度回调:Service.Create 入库后据此把 run 推入队列。
 	s.setEnqueue(p.Enqueue)
@@ -166,54 +213,60 @@ func (p *WorkerPool) Subscribe(runID string) (<-chan Event, func()) {
 	return p.svc.bus.subscribe(runID)
 }
 
-// Enqueue 把已入库的 queued 运行推入调度队列(永不阻塞调用方)。
+// maxQueueDepth 是待调度 FIFO 的有界深度(NFR-4 内存约束;突发创建超此返回 ErrQueueFull)。
+const maxQueueDepth = 1024
+
+// Enqueue 把已入库的 queued 运行追加到待调度 FIFO(永不阻塞调用方)。
 // 由 Service.Create 之后调用(或测试直接调用)。
 //
 // 绝不阻塞:队列满或池已停机时返回错误(ErrQueueFull / ErrPoolStopped),
-// 让 Create→HTTP handler 能失败返回而非永久挂死(突发 >256 创建 / 停机后入队)。
+// 让 Create→HTTP handler 能失败返回而非永久挂死(突发 >maxQueueDepth 创建 / 停机后入队)。
 // run 仍在库中保持 queued,可经后续重启/重试调度。
 func (p *WorkerPool) Enqueue(runID string) error {
-	// 未 Start 时 ctx 为 nil:仅尝试非阻塞投递(测试场景先 Create+订阅再 Start)。
-	if p.ctx == nil {
-		select {
-		case p.queue <- runID:
-			return nil
-		default:
-			return ErrQueueFull
-		}
-	}
-	select {
-	case <-p.ctx.Done():
+	p.mu.Lock()
+	if p.stopped {
+		p.mu.Unlock()
 		return ErrPoolStopped
-	default:
 	}
-	select {
-	case p.queue <- runID:
-		return nil
-	case <-p.ctx.Done():
-		return ErrPoolStopped
-	default:
+	if len(p.pending) >= maxQueueDepth {
+		p.mu.Unlock()
 		return ErrQueueFull
+	}
+	p.pending = append(p.pending, runID)
+	p.mu.Unlock()
+	p.wake()
+	return nil
+}
+
+// wake 非阻塞地唤醒 dispatcher 重扫待调度队列(signal 带缓冲 1:合并多次唤醒)。
+func (p *WorkerPool) wake() {
+	select {
+	case p.signal <- struct{}{}:
+	default:
 	}
 }
 
-// Start 启动 worker goroutine(幂等)。停机用 Stop。
+// Start 启动 dispatcher goroutine(幂等)。停机用 Stop。
 func (p *WorkerPool) Start() {
 	p.startOnce.Do(func() {
 		p.ctx, p.cancel = context.WithCancel(context.Background())
-		for i := 0; i < p.workers; i++ {
-			p.wg.Add(1)
-			go p.worker()
-		}
+		p.wg.Add(1)
+		go p.dispatch()
+		// Start 前可能已 Enqueue(测试/启动恢复):立即触发一次调度。
+		p.wake()
 	})
 }
 
-// Stop 优雅停机:停止取新活、取消在途运行执行、等 worker 退出。随 HTTP server 调用。
+// Stop 优雅停机:停止取新活、取消在途运行执行、等在途 run 与 dispatcher 退出。随 HTTP server 调用。
 func (p *WorkerPool) Stop(ctx context.Context) {
 	p.stopOnce.Do(func() {
+		p.mu.Lock()
+		p.stopped = true
+		p.mu.Unlock()
 		if p.cancel != nil {
-			p.cancel() // 取消池上下文:worker 退出;在途 run 经派生 ctx 取消
+			p.cancel() // 取消池上下文:dispatcher 退出;在途 run 经派生 ctx 取消
 		}
+		p.wake() // 唤醒 dispatcher 让其观察到 ctx.Done 后退出
 	})
 	done := make(chan struct{})
 	go func() { p.wg.Wait(); close(done) }()
@@ -224,17 +277,100 @@ func (p *WorkerPool) Stop(ctx context.Context) {
 	}
 }
 
-// worker 是单个 goroutine 循环:取队列 → 执行一次运行。池上下文取消则退出。
-func (p *WorkerPool) worker() {
+// dispatch 是单 dispatcher 循环:被唤醒后按 FIFO 扫描待调度队列,对每个运行做全局 + 项目级
+// 双重准入;准入则计数并起独立 goroutine 执行,否则保持 queued 待下次唤醒重扫。
+// 池上下文取消则退出(已起的在途 run 经其派生 ctx 取消、由 wg 等待收尾)。
+func (p *WorkerPool) dispatch() {
 	defer p.wg.Done()
 	for {
 		select {
 		case <-p.ctx.Done():
 			return
-		case runID := <-p.queue:
-			p.execute(runID)
+		case <-p.signal:
+			p.drain()
 		}
 	}
+}
+
+// drain 按 FIFO 扫描待调度队列一遍,放行所有当前可准入的运行(全局未满 且 项目未满);
+// 某项目本轮已满则跳过其后续运行继续放行其它项目(避免队头阻塞)。受 mu 串行保证计数正确。
+func (p *WorkerPool) drain() {
+	for {
+		runID, projectID, ok := p.takeAdmissible()
+		if !ok {
+			return
+		}
+		p.wg.Add(1)
+		go func() {
+			defer p.wg.Done()
+			defer p.release(projectID)
+			p.execute(runID)
+		}()
+	}
+}
+
+// takeAdmissible 在锁内扫描 pending,取出**第一个**满足全局 + 项目级双重准入的运行并计数 +1;
+// 找到返回 (runID, projectID, true) 并已从 pending 摘除;无可放行返回 ("","",false)。
+//
+// 全局已满 → 直接返回(本轮无人可放行)。某项目满则跳过其在 pending 中的后续运行继续往后找,
+// 既保证项目级上限,又不让该项目的队头拖住其它项目(FIFO 序在各项目内仍保持)。
+func (p *WorkerPool) takeAdmissible() (string, string, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.stopped {
+		return "", "", false
+	}
+	if p.globalInflight >= p.globalLimit {
+		return "", "", false
+	}
+	for i, runID := range p.pending {
+		projectID := p.projectIDFor(runID)
+		limit := p.limitFor(projectID)
+		if limit > 0 && p.projInflight[projectID] >= limit {
+			continue // 该项目本轮已满:跳过,继续找其它项目的运行。
+		}
+		// 准入:计数 +1 并从 pending 摘除该元素(保持其余顺序)。
+		p.globalInflight++
+		p.projInflight[projectID]++
+		p.pending = append(p.pending[:i], p.pending[i+1:]...)
+		return runID, projectID, true
+	}
+	return "", "", false
+}
+
+// projectIDFor 查某 run 的 project_id(用于项目级准入)。读失败/不存在返回空串
+// (空串项目不参与项目级限流,仅受全局约束;优雅降级,绝不卡死调度)。锁内调用、查询轻量。
+func (p *WorkerPool) projectIDFor(runID string) string {
+	var pid string
+	_ = p.svc.db.QueryRowContext(context.Background(),
+		`SELECT project_id FROM pipeline_runs WHERE id = ?`, runID).Scan(&pid)
+	return pid
+}
+
+// limitFor 查项目级并发上限(未注入 limits 或空项目 → 0 不限项目级)。锁内调用,实现须无阻塞重活。
+func (p *WorkerPool) limitFor(projectID string) int {
+	if p.limits == nil || projectID == "" {
+		return 0
+	}
+	return p.limits.LimitFor(context.Background(), projectID)
+}
+
+// release 在某运行收尾后释放全局 + 项目级计数,并唤醒 dispatcher 重扫(空出的槽位让排队者递补)。
+func (p *WorkerPool) release(projectID string) {
+	p.mu.Lock()
+	if p.globalInflight > 0 {
+		p.globalInflight--
+	}
+	if projectID != "" {
+		if n := p.projInflight[projectID]; n > 0 {
+			p.projInflight[projectID] = n - 1
+		}
+		if p.projInflight[projectID] == 0 {
+			delete(p.projInflight, projectID)
+		}
+	}
+	p.mu.Unlock()
+	p.wake()
 }
 
 // execute 执行单次运行的完整生命周期:queued→running→(Runner)→终态。

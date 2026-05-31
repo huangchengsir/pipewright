@@ -132,6 +132,11 @@ type Service interface {
 	// (AC-SEC-02);凭据经 vault 即用即弃,绝不日志。调用方关闭 Session(或 ctx 取消)即释放远端
 	// PTY + SSH session/client(不泄漏)。
 	ExecInteractive(ctx context.Context, serverID string, cmd []string) (Session, error)
+	// Upload 把 content 的字节流式写到目标机的 remotePath(Story 8-16 / FR-8-16:制品库部署真字节)。
+	// 实现:经 SSH session 把 content 接到 `cat > <remotePath>` 的 stdin —— 流式、无 argv 长度上限、
+	// 大文件友好;remotePath 作 array 参数 shell 转义(AC-SEC-02),不拼 shell。远端非零退出 / 连接失败
+	// → 人读错误(绝无凭据明文)。供部署把制品库里的 jar/dist 真字节落到目标机。
+	Upload(ctx context.Context, serverID string, content io.Reader, remotePath string) error
 }
 
 // Session 是一个双向交互式 SSH/PTY 会话(Story 6.4;FR-18)。
@@ -160,6 +165,9 @@ type SSHDialer interface {
 	// 返回双向 Session(stdin 写 / stdout+stderr 读 / resize / close)。Session 关闭或 ctx
 	// 取消时,远端 PTY + 底层 SSH session/client 一并关闭(不泄漏)。cmd 经各参数 shell 转义。
 	RunInteractive(ctx context.Context, addr string, cfg SSHConfig, cmd []string) (Session, error)
+	// RunWithStdin 同 Run,但把 stdin 接到远端命令的标准输入(供 `cat > file` 流式上传)。
+	// stdin 读尽即关闭远端 stdin;返回退出码/输出。连接/认证失败映射为 ErrUnreachable / ErrAuth。
+	RunWithStdin(ctx context.Context, addr string, cfg SSHConfig, cmd []string, stdin io.Reader) (*ExecResult, error)
 }
 
 // SSHConfig 是拨号所需的最小认证材料(进程内,用完即弃)。
@@ -437,6 +445,61 @@ func (s *service) Exec(ctx context.Context, serverID string, cmd []string) (*Exe
 		return nil, runErr
 	}
 	return res, nil
+}
+
+// Upload 把 content 流式写到目标机 remotePath(Story 8-16:制品库部署真字节)。
+// 经 SSH 把 content 接到远端 `mkdir -p <dir> && cat > <remotePath>` 的 stdin —— 流式、无 argv 长度限、
+// 大文件友好;remotePath 作位置参数 shell 转义(AC-SEC-02 不拼 shell);凭据明文用完即清。
+// 远端非零退出 → 人读错误(含 stderr 摘要,绝无凭据明文);连接/认证失败 → ErrUnreachable / ErrAuth。
+func (s *service) Upload(ctx context.Context, serverID string, content io.Reader, remotePath string) error {
+	if content == nil {
+		return fmt.Errorf("target: nil content")
+	}
+	if strings.TrimSpace(remotePath) == "" {
+		return fmt.Errorf("target: empty remote path")
+	}
+	srv, err := s.Get(ctx, serverID)
+	if err != nil {
+		return err
+	}
+	if s.vault == nil {
+		return ErrVaultUnconfigured
+	}
+	secret, err := s.vault.Get(srv.CredentialID)
+	if err != nil {
+		switch {
+		case errors.Is(err, vault.ErrVaultUnconfigured):
+			return ErrVaultUnconfigured
+		case errors.Is(err, vault.ErrNotFound):
+			return ErrCredentialNotFound
+		default:
+			return ErrAuth
+		}
+	}
+	cfg := SSHConfig{User: srv.User}
+	if looksLikePEM(secret) {
+		cfg.PrivateKey = secret
+	} else {
+		cfg.Password = secret
+	}
+
+	// remotePath 作 $0(位置参数),绝不拼进脚本体;dir 先建好再写,写整文件经 stdin 流入。
+	cmd := []string{"sh", "-c", `mkdir -p "$(dirname "$0")" && cat > "$0"`, remotePath}
+	addr := fmt.Sprintf("%s:%d", srv.Host, srv.Port)
+	res, runErr := s.dialer.RunWithStdin(ctx, addr, cfg, cmd, content)
+
+	secret = ""
+	cfg.PrivateKey = ""
+	cfg.Password = ""
+	_ = secret
+
+	if runErr != nil {
+		return runErr
+	}
+	if res != nil && res.ExitCode != 0 {
+		return fmt.Errorf("target: upload 失败(退出码 %d):%s", res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	return nil
 }
 
 // ExecStream 取凭据明文装配 SSH 配置并流式跑 array 命令(供实时 tail)。

@@ -95,6 +95,9 @@ type fakeInteractiveDialer struct {
 func (d *fakeInteractiveDialer) Run(_ context.Context, _ string, _ target.SSHConfig, _ []string) (*target.ExecResult, error) {
 	return &target.ExecResult{}, nil
 }
+func (d *fakeInteractiveDialer) RunWithStdin(_ context.Context, _ string, _ target.SSHConfig, _ []string, _ io.Reader) (*target.ExecResult, error) {
+	return &target.ExecResult{}, nil
+}
 func (d *fakeInteractiveDialer) RunStream(_ context.Context, _ string, _ target.SSHConfig, _ []string) (io.ReadCloser, error) {
 	return io.NopCloser(strings.NewReader("")), nil
 }

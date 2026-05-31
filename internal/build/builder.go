@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/huangchengsir/pipewright/internal/artifactstore"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/run"
@@ -46,6 +47,11 @@ type Builder struct {
 	vault    vault.Vault
 	driver   Driver
 	cloner   repoCloner
+	// artStore 是制品库(Story 8-16):非 nil 时构建后把 jar/dist 真字节归档,产物 reference 改存句柄;
+	// nil 则保持旧行为(reference=文件名占位)。由 main 注入(WithArtifactStore)。
+	artStore *artifactstore.Store
+	// disableImageGC 关闭「构建后清悬空镜像」(Story 8-17);默认开(false)。由 main 经 env 设置。
+	disableImageGC bool
 }
 
 // repoCloner 抽象「把仓库在 ref 上克隆到磁盘工作区」的能力(便于 fake 单测注入,
@@ -73,6 +79,21 @@ func WithCloner(c repoCloner) BuilderOption {
 			b.cloner = c
 		}
 	}
+}
+
+// WithArtifactStore 注入制品库(Story 8-16):构建后把 jar/dist 真字节归档,产物 reference 改存句柄。
+// nil 不改(保持旧占位行为)。
+func WithArtifactStore(s *artifactstore.Store) BuilderOption {
+	return func(b *Builder) {
+		if s != nil {
+			b.artStore = s
+		}
+	}
+}
+
+// WithImageGC 开关「构建后清悬空镜像」(Story 8-17);默认开。传 false 关闭(如宿主另有镜像 GC 策略)。
+func WithImageGC(enabled bool) BuilderOption {
+	return func(b *Builder) { b.disableImageGC = !enabled }
 }
 
 // NewBuilder 构造真实 Builder。driver 经 DetectDriver 探测(全无容器 CLI → ErrNoContainerCLI,
@@ -239,6 +260,10 @@ func (b *Builder) Run(ctx context.Context, r *run.Run, sink run.StepSink) error 
 	if artifact != nil {
 		_ = sink.EmitArtifact(ctx, *artifact)
 	}
+
+	// 构建后清悬空镜像(Story 8-17):防中控机镜像缓存随重复构建无限增长。
+	// best-effort、只清 dangling、绝不影响构建结果(已 success);经构建步骤序号喂日志。
+	b.pruneImagesBestEffort(ctx, b.lineSink(sink, len(steps)-1))
 	return nil
 }
 
@@ -439,10 +464,13 @@ func (b *Builder) locateFileArtifact(artifactType, slug, workspace string, onLin
 		if p := findFirst(workspace, ".jar"); p != "" {
 			size := fileSize(p)
 			onLine(streamStdout, "产物:"+filepath.Base(p)+"("+itoa(size)+" bytes)")
-			return &run.Artifact{
+			art := &run.Artifact{
 				Type: run.ArtifactJar, Name: slug, Reference: filepath.Base(p), SizeBytes: size,
 				Metadata: map[string]any{"builder": b.driver.Binary(), "path": filepath.Base(p)},
 			}
+			// 制品库:把 jar 真字节归档,reference 改存句柄(供部署取真字节);未配则保持占位。
+			b.storeJarBytes(art, p, onLine)
+			return art
 		}
 	case pipeline.ArtifactDist:
 		// 常见 dist 输出目录:dist / build / out。
@@ -451,10 +479,13 @@ func (b *Builder) locateFileArtifact(artifactType, slug, workspace string, onLin
 			if isDir(full) {
 				size := dirSize(full)
 				onLine(streamStdout, "产物目录:"+d+"/("+itoa(size)+" bytes)")
-				return &run.Artifact{
+				art := &run.Artifact{
 					Type: run.ArtifactDist, Name: slug + "-dist", Reference: d + "/", SizeBytes: size,
 					Metadata: map[string]any{"builder": b.driver.Binary(), "path": d + "/"},
 				}
+				// 制品库:把 dist 目录打 tar.gz 归档,reference 改存句柄;未配则保持占位。
+				b.storeDistDir(art, full, onLine)
+				return art
 			}
 		}
 	}

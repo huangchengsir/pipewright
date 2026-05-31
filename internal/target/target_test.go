@@ -1,6 +1,7 @@
 package target
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"io"
@@ -54,6 +55,7 @@ type capturingDialer struct {
 	gotCmd    []string
 	res       *ExecResult
 	err       error
+	gotStdin  []byte // RunWithStdin 捕获的上传字节
 	streamOut string // RunStream 返回的流内容
 	streamErr error  // RunStream 返回的错误
 
@@ -76,6 +78,16 @@ func (d *capturingDialer) RunStream(_ context.Context, addr string, cfg SSHConfi
 		return nil, d.streamErr
 	}
 	return io.NopCloser(strings.NewReader(d.streamOut)), nil
+}
+
+func (d *capturingDialer) RunWithStdin(_ context.Context, addr string, cfg SSHConfig, cmd []string, stdin io.Reader) (*ExecResult, error) {
+	d.gotAddr = addr
+	d.gotCfg = cfg
+	d.gotCmd = append([]string(nil), cmd...)
+	if stdin != nil {
+		d.gotStdin, _ = io.ReadAll(stdin) // 捕获上传字节,供断言
+	}
+	return d.res, d.err
 }
 
 func (d *capturingDialer) RunInteractive(_ context.Context, addr string, cfg SSHConfig, cmd []string) (Session, error) {
@@ -193,6 +205,51 @@ func TestExecCmdArrayNotShellInjected(t *testing.T) {
 	// 私钥型凭据 → 走 PrivateKey 分支。
 	if dialer.gotCfg.PrivateKey == "" || dialer.gotCfg.Password != "" {
 		t.Fatalf("PEM 凭据应走私钥认证")
+	}
+}
+
+// TestUploadStreamsContentToCatCommand 验证 Upload 把字节经 stdin 流给远端 `cat > path`,
+// 且 remotePath 作位置参数(array 化不拼 shell)。
+func TestUploadStreamsContentToCatCommand(t *testing.T) {
+	db := testDB(t)
+	v := vault.New(db, testMasterKey())
+	credID := newSSHCred(t, v, "-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----")
+	dialer := &capturingDialer{res: &ExecResult{ExitCode: 0}}
+	svc := New(db, v, dialer)
+	srv, err := svc.Create(context.Background(), CreateInput{Name: "n", Host: "h", User: "u", CredentialID: credID})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	payload := []byte("real-jar-bytes\x00\x01binary")
+	remotePath := "/srv/app/releases/r1/app.jar"
+	if err := svc.Upload(context.Background(), srv.ID, bytes.NewReader(payload), remotePath); err != nil {
+		t.Fatalf("Upload: %v", err)
+	}
+	// 字节必须原样经 stdin 流到远端。
+	if !bytes.Equal(dialer.gotStdin, payload) {
+		t.Fatalf("上传字节与输入不一致:got %q", dialer.gotStdin)
+	}
+	// 命令应是 sh -c '<mkdir+cat>' <remotePath>,remotePath 作位置参数(不拼进脚本体)。
+	if len(dialer.gotCmd) != 4 || dialer.gotCmd[0] != "sh" || dialer.gotCmd[1] != "-c" || dialer.gotCmd[3] != remotePath {
+		t.Fatalf("upload 命令异常: %v", dialer.gotCmd)
+	}
+	if !strings.Contains(dialer.gotCmd[2], "cat >") {
+		t.Fatalf("upload 脚本体应含 cat >: %q", dialer.gotCmd[2])
+	}
+}
+
+// TestUploadRemoteNonZeroIsError 验证远端写失败(非零退出)→ Upload 报错。
+func TestUploadRemoteNonZeroIsError(t *testing.T) {
+	db := testDB(t)
+	v := vault.New(db, testMasterKey())
+	credID := newSSHCred(t, v, "-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----")
+	dialer := &capturingDialer{res: &ExecResult{ExitCode: 1, Stderr: "No space left on device"}}
+	svc := New(db, v, dialer)
+	srv, _ := svc.Create(context.Background(), CreateInput{Name: "n", Host: "h", User: "u", CredentialID: credID})
+	err := svc.Upload(context.Background(), srv.ID, bytes.NewReader([]byte("x")), "/x")
+	if err == nil {
+		t.Fatal("远端非零退出应报错")
 	}
 }
 

@@ -102,6 +102,11 @@ func (d *capturingDialer) Run(_ context.Context, _ string, _ target.SSHConfig, c
 	return d.res, d.err
 }
 
+func (d *capturingDialer) RunWithStdin(_ context.Context, _ string, _ target.SSHConfig, cmd []string, _ io.Reader) (*target.ExecResult, error) {
+	d.lastCmd = cmd
+	return d.res, d.err
+}
+
 func (d *capturingDialer) RunStream(_ context.Context, _ string, _ target.SSHConfig, _ []string) (io.ReadCloser, error) {
 	return nil, d.err
 }

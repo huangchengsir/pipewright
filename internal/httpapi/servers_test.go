@@ -39,6 +39,10 @@ func (d stubDialer) RunInteractive(_ context.Context, _ string, _ target.SSHConf
 	return nil, d.err
 }
 
+func (d stubDialer) RunWithStdin(_ context.Context, _ string, _ target.SSHConfig, _ []string, _ io.Reader) (*target.ExecResult, error) {
+	return d.res, d.err
+}
+
 // setupServerAPI 构造带 auth + vault + target 的测试 server。
 func setupServerAPI(t *testing.T, dialer target.SSHDialer) (*httptest.Server, *http.Client, string) {
 	t.Helper()

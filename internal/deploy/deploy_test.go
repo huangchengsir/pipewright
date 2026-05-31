@@ -27,6 +27,8 @@ type stubTarget struct {
 	callMu sync.Mutex
 	// calls 记录所有 Exec 命令(断言 array 化:每条是 []string 而非拼接 shell)。
 	calls [][]string
+	// uploads 记录 Upload 的 remotePath→字节(断言部署落的是真产物字节,非占位 reference)。
+	uploads map[string][]byte
 }
 
 func (s *stubTarget) Get(_ context.Context, id string) (*target.Server, error) {
@@ -62,6 +64,18 @@ func (s *stubTarget) ExecStream(context.Context, string, []string) (io.ReadClose
 
 func (s *stubTarget) ExecInteractive(context.Context, string, []string) (target.Session, error) {
 	return nil, errors.New("execinteractive not supported in stub")
+}
+
+// Upload 满足 target.Service(Story 8-16 制品库部署);桩捕获上传字节供断言「部署的是真字节」。
+func (s *stubTarget) Upload(_ context.Context, _ string, content io.Reader, remotePath string) error {
+	b, _ := io.ReadAll(content)
+	s.callMu.Lock()
+	if s.uploads == nil {
+		s.uploads = map[string][]byte{}
+	}
+	s.uploads[remotePath] = b
+	s.callMu.Unlock()
+	return nil
 }
 
 // ---- 测试脚手架 -------------------------------------------------------------

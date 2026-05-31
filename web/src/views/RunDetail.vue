@@ -39,6 +39,7 @@ import { HttpError } from '../api/http'
 import DiagnosisPanel from '../components/run/DiagnosisPanel.vue'
 import SuccessFailDiff from '../components/run/SuccessFailDiff.vue'
 import RunTerminal from '../components/run/RunTerminal.vue'
+import RunStepList from '../components/run/RunStepList.vue'
 import ArtifactList from '../components/run/ArtifactList.vue'
 import TestReportPanel from '../components/run/TestReportPanel.vue'
 import DeployTargets from '../components/run/DeployTargets.vue'
@@ -58,6 +59,9 @@ type LoadState = 'loading' | 'idle' | 'error'
 const loadState = ref<LoadState>('loading')
 const loadError = ref('')
 const run = ref<RunDetail | null>(null)
+
+// 选中的步骤序号(点击步骤详情切换「单步日志」过滤);null = 全部步骤。
+const selectedStepOrdinal = ref<number | null>(null)
 
 // ─── cancel state ─────────────────────────────────────────────────────────────
 
@@ -354,8 +358,12 @@ function startSse(): void {
       // Approval gate (8-4): load pending stage when blocked; clear once resumed.
       if (status === 'waiting_approval') void loadApprovals()
       else pendingApproval.value = null
-      // Stop SSE on terminal state
-      if (isTerminal(status)) stopSse()
+      // Stop SSE on terminal state + 重拉完整 run:终态由后端补齐的 commit / 构建产物 / 时长
+      // 经 SSE 只推了 status,需重新 GET 才能拿到 → 否则要手动刷新才出来。
+      if (isTerminal(status)) {
+        stopSse()
+        void loadRun()
+      }
     },
     onStep({ step }) {
       if (!run.value) return
@@ -653,59 +661,12 @@ function nodeClass(status: StepStatus): string {
               />
             </div>
 
-            <!-- Two-column layout: step list + log placeholder -->
+            <!-- Two-column layout: 步骤详情(点击单步看其日志) + 实时日志终端 -->
             <div class="running-body">
-
-              <!-- Step list -->
-              <div class="step-list">
-                <h3 class="subsection-title">步骤详情</h3>
-                <ul class="steps" role="list">
-                  <li
-                    v-for="step in run.steps"
-                    :key="step.id"
-                    class="step-row"
-                    :class="`step-row--${step.status}`"
-                  >
-                    <div class="step-icon" :aria-label="step.status">
-                      <!-- success -->
-                      <svg v-if="step.status === 'success'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
-                        <path d="M20 6 9 17l-5-5"/>
-                      </svg>
-                      <!-- running: spinner -->
-                      <span v-else-if="step.status === 'running'" class="spinner spinner--amber" aria-hidden="true" />
-                      <!-- failed -->
-                      <svg v-else-if="step.status === 'failed'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
-                        <path d="m18 6-12 12M6 6l12 12"/>
-                      </svg>
-                      <!-- skipped -->
-                      <svg v-else-if="step.status === 'skipped'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                        <path d="M13 17l5-5-5-5M6 17l5-5-5-5"/>
-                      </svg>
-                      <!-- pending -->
-                      <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                        <circle cx="12" cy="12" r="3"/>
-                      </svg>
-                    </div>
-                    <div class="step-info">
-                      <span class="step-name">{{ step.name }}</span>
-                      <span v-if="step.durationMs !== null" class="step-dur mono">{{ formatDuration(step.durationMs) }}</span>
-                    </div>
-                  </li>
-                </ul>
-              </div>
-
-              <!--
-                ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-                SLOT: 实时日志终端 (Story 3-6 接入)
-                骨架所有权: 本区块归 Story 3.1;
-                Story 3-6 在此区块内填入真实日志终端组件,不改骨架结构。
-                ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-              -->
+              <RunStepList :steps="run.steps" :selected="selectedStepOrdinal" @select="selectedStepOrdinal = $event" />
               <div class="slot-log-live" role="region" aria-label="实时日志终端">
-                <RunTerminal :run-id="run.id" :live="true" />
+                <RunTerminal :run-id="run.id" :live="true" :filter-ordinal="selectedStepOrdinal" />
               </div>
-              <!-- END SLOT: 实时日志终端 -->
-
             </div>
           </div>
         </template>
@@ -744,7 +705,7 @@ function nodeClass(status: StepStatus): string {
               不扰终端(3-6)/零停机(Epic 4)/诊断(7-2)slot。
               ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             -->
-            <ArtifactList :artifacts="run.artifacts" />
+            <ArtifactList :artifacts="run.artifacts" :run-id="run.id" />
 
             <!--
               ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -771,9 +732,12 @@ function nodeClass(status: StepStatus): string {
             />
             <!-- END SLOT: 环境晋级 -->
 
-            <!-- 历史日志回放(只读,Story 3-6) -->
-            <div class="log-history" role="region" aria-label="历史运行日志">
-              <RunTerminal :run-id="run.id" :live="false" />
+            <!-- 步骤详情(点击单步看其日志)+ 历史日志回放(2 列;步骤完成后仍可见) -->
+            <div class="running-body">
+              <RunStepList :steps="run.steps" :selected="selectedStepOrdinal" @select="selectedStepOrdinal = $event" />
+              <div class="log-history" role="region" aria-label="历史运行日志">
+                <RunTerminal :run-id="run.id" :live="false" :filter-ordinal="selectedStepOrdinal" />
+              </div>
             </div>
 
             <!--
@@ -1592,7 +1556,8 @@ function nodeClass(status: StepStatus): string {
 /* ─── running body: two-column (step list + log slot) ───────────────────── */
 .running-body {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  /* minmax(0,1fr):防止终端超长日志行把右列撑爆、溢出整页(自适应窗口宽度)。 */
+  grid-template-columns: 280px minmax(0, 1fr);
   gap: 16px;
   align-items: start;
 }
@@ -1743,10 +1708,6 @@ function nodeClass(status: StepStatus): string {
 /* Live log terminal slot (Story 3-6) — sits in running-body's second column */
 .slot-log-live {
   min-width: 0;
-}
-
-.slot-log-live :deep(.term) {
-  min-height: 320px;
 }
 
 /* Historical log replay (terminal states) — full width below summaries */

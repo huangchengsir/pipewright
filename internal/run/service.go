@@ -77,6 +77,10 @@ type Service interface {
 	// run 不存在不报错(返回空切片);由 HTTP 层据 run 存在性决定 404(仿 GetLogs 语义)。
 	ListArtifacts(ctx context.Context, runID string) ([]Artifact, error)
 
+	// SetCommit 回写本次运行实际检出的 commit 短 SHA(克隆解析出后由执行器调用)。
+	// 触发时未指定 commit(手动触发常见)→ 这里补上真实 commit,供运行详情展示。run 不存在 → ErrNotFound。
+	SetCommit(ctx context.Context, id, commit string) error
+
 	// SaveTestReport 持久化一条测试报告汇总(Story 8-6 / FR-8-6)。
 	// 计数 + 可选覆盖率 + 门禁裁决;同 run 多阶段产报告时各存一条(按 stage 区分)。
 	// run 不存在 → ErrNotFound(外键失败)。
@@ -489,6 +493,22 @@ func (s *service) LastSuccessfulRun(ctx context.Context, projectID, branch strin
 }
 
 // SetFailureLog 持久化某次运行的失败日志原文(脱敏前)。参数化 SQL;不存在 → ErrNotFound。
+func (s *service) SetCommit(ctx context.Context, id, commit string) error {
+	commit = strings.TrimSpace(commit)
+	if commit == "" {
+		return nil // 无解析结果 → 不动(保持触发时的值/空)
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE pipeline_runs SET trigger_commit = ? WHERE id = ?`, commit, id)
+	if err != nil {
+		return fmt.Errorf("run: set commit: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *service) SetFailureLog(ctx context.Context, id, logText string) error {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE pipeline_runs SET failure_log = ? WHERE id = ?`, logText, id)

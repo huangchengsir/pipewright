@@ -109,6 +109,13 @@ type Service interface {
 	// 定位类错误(run 不存在 / 非失败态 / 无失败目标 / 无产物 / 服务器不存在)上抛,供 HTTP 层 422/404。
 	// 执行失败不上抛:重试目标置 failed + 人读 message,整体仍 200。
 	RetryFailed(ctx context.Context, in RetryInput) ([]TargetResult, error)
+
+	// DeployForStage 是「流水线 deploy_ssh 节点」用的中途部署:取该 run 已产出的首个可发布产物
+	// (dist/jar/archive)→ 按策略部署到目标机 → 持久化每机结果(填 run-detail targets)。
+	// **不校验 run 状态**(流水线执行中 run 仍 running)、**不置 run 终态**(终态由 dag 调度器控制)。
+	// 无可发布产物 → ErrArtifactNotFound;服务器不存在 → ErrServerNotFound;有目标失败 → 返回 error
+	// 令该阶段失败、阻断下游(复用 dagrun「阶段失败→下游不执行」)。
+	DeployForStage(ctx context.Context, runID string, serverIDs []string, cfg map[string]string, strategy string) ([]TargetResult, error)
 }
 
 // service 是 run + target 支撑的 Service 实现。
@@ -260,6 +267,56 @@ func (s *service) Deploy(ctx context.Context, in DeployInput) ([]TargetResult, e
 	// 7) 部署失败 → best-effort 触发 AI 诊断(Story 4.6;FR-22 种子;不阻断返回)。
 	s.seedDiagnosisOnFailure(ctx, in.RunID, final, results)
 
+	return results, nil
+}
+
+// DeployForStage 见接口注释:流水线 deploy_ssh 节点的中途部署(不校验 run 状态、不置终态)。
+func (s *service) DeployForStage(ctx context.Context, runID string, serverIDs []string, cfg map[string]string, strategy string) ([]TargetResult, error) {
+	if len(serverIDs) == 0 {
+		return nil, ErrNoServers
+	}
+	// 取该 run 已产出的首个可发布产物(dist/jar/archive;镜像类不走发布目录,本节点跳过)。
+	arts, err := s.runs.ListArtifacts(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	var artifact *run.Artifact
+	for i := range arts {
+		if releaseModeArtifact(arts[i]) {
+			a := arts[i]
+			artifact = &a
+			break
+		}
+	}
+	if artifact == nil {
+		return nil, ErrArtifactNotFound
+	}
+
+	servers := make([]*target.Server, 0, len(serverIDs))
+	for _, sid := range serverIDs {
+		srv, gerr := s.targets.Get(ctx, sid)
+		if gerr != nil {
+			if errors.Is(gerr, target.ErrNotFound) {
+				return nil, ErrServerNotFound
+			}
+			return nil, gerr
+		}
+		servers = append(servers, srv)
+	}
+
+	results := s.deployWithStrategy(ctx, servers, *artifact, cfg, nil, NormalizeStrategy(strategy))
+
+	// 持久化每机结果(填 run-detail targets slot);**不置 run 终态**(dag 调度器控制)。
+	dts := make([]run.DeployTarget, 0, len(results))
+	for _, r := range results {
+		dts = append(dts, run.DeployTarget{
+			RunID: runID, ServerID: r.ServerID, ServerName: r.ServerName,
+			Status: r.Status, Message: r.Message, StartedAt: r.StartedAt, FinishedAt: r.FinishedAt,
+		})
+	}
+	if err := s.runs.SaveDeployTargets(ctx, runID, dts); err != nil {
+		return nil, err
+	}
 	return results, nil
 }
 

@@ -64,10 +64,12 @@ func TestGetLazyDefaultShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if len(cfg.Spec.Stages) != 4 {
-		t.Fatalf("默认应有 4 阶段, got %d", len(cfg.Spec.Stages))
+	// 默认种子只预置 源 + 构建 两阶段;部署/通知等按需由用户「+添加阶段」动态加入,
+	// 不再写死空阶段(空阶段不冒充已配置)。
+	if len(cfg.Spec.Stages) != 2 {
+		t.Fatalf("默认应有 2 阶段(源+构建), got %d", len(cfg.Spec.Stages))
 	}
-	wantKinds := []string{KindSource, KindBuild, KindDeploy, KindNotify}
+	wantKinds := []string{KindSource, KindBuild}
 	for i, k := range wantKinds {
 		if cfg.Spec.Stages[i].Kind != k {
 			t.Fatalf("阶段 %d kind = %q, want %q", i, cfg.Spec.Stages[i].Kind, k)

@@ -131,17 +131,23 @@ export function buildRunStages(
     }
   }
 
-  const result: RunStage[] = pipelineStages.map((stage) => {
-    const stageSteps = buckets.get(stage.id) ?? []
-    return {
-      id: stage.id,
-      name: stage.name,
-      needs: stage.needs ?? [],
-      steps: stageSteps,
-      status: deriveStageStatus(stageSteps),
-      gate: stage.gate ?? false,
-    }
-  })
+  // 只画「真有 job」的阶段:未配置 job 的空阶段(占位)不进拓扑图,避免冒充已执行
+  // (动态阶段语义,与后端 dagrun.executableStages 一致;存量 4 阶段 spec 也即时受益)。
+  // 被剔除阶段的 id 从 needs 中清理,避免悬挂依赖产生指向不存在节点的边。
+  const kept = new Set(pipelineStages.filter((s) => (s.jobs?.length ?? 0) > 0).map((s) => s.id))
+  const result: RunStage[] = pipelineStages
+    .filter((stage) => kept.has(stage.id))
+    .map((stage) => {
+      const stageSteps = buckets.get(stage.id) ?? []
+      return {
+        id: stage.id,
+        name: stage.name,
+        needs: (stage.needs ?? []).filter((n) => kept.has(n)),
+        steps: stageSteps,
+        status: deriveStageStatus(stageSteps),
+        gate: stage.gate ?? false,
+      }
+    })
 
   // Append unmatched steps as a synthetic stage so they're visible
   if (unmatched.length > 0) {

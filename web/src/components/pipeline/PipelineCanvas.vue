@@ -6,7 +6,7 @@ import type { Server } from '../../api/servers'
 import StageColumn from './StageColumn.vue'
 import JobDrawer from './JobDrawer.vue'
 import JobTypePicker from './JobTypePicker.vue'
-import { jobTypeLabel } from './jobConfigSchema'
+import { jobTypeLabel, getJobTypeSpec } from './jobConfigSchema'
 import { hasAnyNeeds } from './stageDeps'
 import './pipeline.css'
 
@@ -125,7 +125,8 @@ function onPickerSelect(type: string): void {
       name:    jobTypeLabel(type),
       type,
       summary: '',
-      config:  {},
+      // 模板节点带预填配置(深拷贝避免共享引用);普通节点空配置。
+      config:  { ...(getJobTypeSpec(type)?.defaultConfig ?? {}) },
     }
     const next = props.stages.map((s) =>
       s.id === p.stageId ? { ...s, jobs: [...s.jobs, newJob] } : s,

@@ -56,11 +56,13 @@ func TestCanaryCount(t *testing.T) {
 
 // recordingTarget 包装 stubTarget 语义:execFn 据 (serverID, cmd) 决定结果,并记录触达的 serverID。
 type touchRecorder struct {
-	mu       sync.Mutex
-	touched  map[string]bool // 被 Exec 过的 serverID
-	sawMv    bool            // 是否出现过 cutover 切换(mv -T → current)
-	failOn   func(serverID string, cmd []string) bool
-	prevLink string // 非空 → readlink current 返回该路径(模拟已有上一发布)
+	mu           sync.Mutex
+	touched      map[string]bool // 被 Exec 过的 serverID
+	sawMv        bool            // 是否出现过 cutover 切换(mv -T → current)
+	calls2       [][]string      // 全部命令(image 蓝绿断言 pull/run 用)
+	failOn       func(serverID string, cmd []string) bool
+	prevLink     string // 非空 → readlink current 返回该路径(模拟已有上一发布)
+	inspectImage string // 非空 → docker inspect 返回该镜像(模拟已有上一镜像)
 }
 
 func (r *touchRecorder) exec(serverID string, cmd []string) (*target.ExecResult, error) {
@@ -69,6 +71,7 @@ func (r *touchRecorder) exec(serverID string, cmd []string) (*target.ExecResult,
 		r.touched = map[string]bool{}
 	}
 	r.touched[serverID] = true
+	r.calls2 = append(r.calls2, cmd)
 	if cmd[0] == "mv" {
 		r.sawMv = true
 	}
@@ -77,6 +80,13 @@ func (r *touchRecorder) exec(serverID string, cmd []string) (*target.ExecResult,
 	if cmd[0] == "readlink" {
 		if r.prevLink != "" {
 			return &target.ExecResult{ExitCode: 0, Stdout: r.prevLink}, nil
+		}
+		return &target.ExecResult{ExitCode: 0}, nil
+	}
+	// 模拟 docker inspect → 上一镜像(供 image 机群回滚有 prevImage 可回)。
+	if len(cmd) >= 2 && cmd[0] == "docker" && cmd[1] == "inspect" {
+		if r.inspectImage != "" {
+			return &target.ExecResult{ExitCode: 0, Stdout: r.inspectImage}, nil
 		}
 		return &target.ExecResult{ExitCode: 0}, nil
 	}
@@ -271,5 +281,75 @@ func TestDeployBlueGreenFleetRollbackOnPartialFailure(t *testing.T) {
 	// good 机回滚 message 应点明机群级回滚。
 	if !strings.Contains(res[0].Message, "机群") && !strings.Contains(res[0].Message, "其它机") {
 		t.Fatalf("good 机 message = %q, want 含机群级回滚说明", res[0].Message)
+	}
+}
+
+// ---- image 蓝绿 ----------------------------------------------------------------
+
+func TestDeployBlueGreenImageSuccess(t *testing.T) {
+	db := testDB(t)
+	rsvc := run.New(db)
+	rec := &touchRecorder{}
+	tgt := &stubTarget{execFn: rec.exec}
+	s1 := seedServer(t, tgt, "web-1")
+	s2 := seedServer(t, tgt, "web-2")
+	runID, artID := seedSuccessRunWithArtifact(t, db, rsvc, run.ArtifactImage, "registry/app:v2")
+
+	svc := New(tgt, rsvc)
+	res, err := svc.Deploy(context.Background(), DeployInput{
+		RunID: runID, ArtifactID: artID, ServerIDs: []string{s1.ID, s2.ID}, Strategy: "blue_green",
+	})
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	for i, r := range res {
+		if r.Status != run.TargetSuccess {
+			t.Fatalf("image 蓝绿目标 %d 应 success,实际 %s / %q", i, r.Status, r.Message)
+		}
+	}
+	// 应发生 docker pull(预备)与 docker run(切换)。
+	var sawPull, sawRun bool
+	for _, c := range rec.calls2 {
+		if len(c) >= 2 && c[0] == "docker" && c[1] == "pull" {
+			sawPull = true
+		}
+		if len(c) >= 2 && c[0] == "docker" && c[1] == "run" {
+			sawRun = true
+		}
+	}
+	if !sawPull || !sawRun {
+		t.Fatalf("image 蓝绿应有 pull + run;pull=%v run=%v", sawPull, sawRun)
+	}
+}
+
+func TestDeployBlueGreenImageFleetRollback(t *testing.T) {
+	db := testDB(t)
+	rsvc := run.New(db)
+	badID := ""
+	rec := &touchRecorder{
+		inspectImage: "registry/app:v1", // 模拟已有上一镜像 → 可回滚
+		failOn: func(serverID string, cmd []string) bool {
+			return serverID == badID && len(cmd) > 0 && cmd[0] == "true" // bad 机健康失败
+		},
+	}
+	tgt := &stubTarget{execFn: rec.exec}
+	good := seedServer(t, tgt, "web-good")
+	bad := seedServer(t, tgt, "web-bad")
+	badID = bad.ID
+	runID, artID := seedSuccessRunWithArtifact(t, db, rsvc, run.ArtifactImage, "registry/app:v2")
+
+	svc := New(tgt, rsvc)
+	hc := &HealthCheck{Type: HealthCheckCommand, Command: []string{"true"}, Retries: 1}
+	res, err := svc.Deploy(context.Background(), DeployInput{
+		RunID: runID, ArtifactID: artID, ServerIDs: []string{good.ID, bad.ID},
+		Strategy: "blue_green", HealthCheck: hc,
+	})
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	for i, r := range res {
+		if r.Status != run.TargetRolledBack {
+			t.Fatalf("image 机群回滚:目标 %d (%s) 应 rolled_back,实际 %s / %q", i, r.ServerName, r.Status, r.Message)
+		}
 	}
 }

@@ -20,6 +20,8 @@ import {
 import { HttpError } from '../api/http'
 import CronPanel from './CronPanel.vue'
 import EnvironmentsPanel from './EnvironmentsPanel.vue'
+import ConcurrencyPanel from './ConcurrencyPanel.vue'
+import ChainPanel from './ChainPanel.vue'
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -523,6 +525,12 @@ const displayWebhookUrl = computed(() => {
 
       <!-- ═══ Environment promotion chain · Story 8-7 / FR-8-7 ════════════ -->
       <EnvironmentsPanel :project-id="props.projectId" />
+
+      <!-- ═══ Concurrency limit · Story 8-10 / FR-8-10 ═════════════════════ -->
+      <ConcurrencyPanel :project-id="props.projectId" />
+
+      <!-- ═══ Downstream chaining · Story 8-11 / FR-8-11 ══════════════════ -->
+      <ChainPanel :project-id="props.projectId" />
 
       <!-- ═══ Save bar ════════════════════════════════════════════════════ -->
       <div class="save-bar">

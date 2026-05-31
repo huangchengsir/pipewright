@@ -54,10 +54,14 @@ var (
 )
 
 // Events 是触发事件开关(手动触发常开,不建模为字段)。
+//
+// Release 为 Story 8-11 新增(FR-8-11):向后兼容——旧 events_json 缺该字段时
+// JSON 反序列化为零值 false,无需迁移(events 以 JSON 整体入库)。
 type Events struct {
 	Push        bool `json:"push"`
 	Tag         bool `json:"tag"`
 	PullRequest bool `json:"pullRequest"`
+	Release     bool `json:"release"`
 }
 
 // BranchMapping 是一条分支映射:分支(通配)模式 → 环境名 + 目标服务器引用 id 列表。
@@ -276,7 +280,7 @@ func (s *service) createDefault(ctx context.Context, projectID string) (*Config,
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO pipeline_triggers
 		   (project_id, webhook_token, webhook_secret_ciphertext, events_json, branch_mappings_json, unmatched_policy, created_at, updated_at)
-		 VALUES (?, ?, ?, '{"push":false,"tag":false,"pullRequest":false}', '[]', ?, ?, ?)
+		 VALUES (?, ?, ?, '{"push":false,"tag":false,"pullRequest":false,"release":false}', '[]', ?, ?, ?)
 		 ON CONFLICT(project_id) DO NOTHING`,
 		projectID, token, sealed, PolicyRecord, nowStr, nowStr,
 	)

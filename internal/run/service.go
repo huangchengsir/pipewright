@@ -161,8 +161,15 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 	}
 
 	tt := trigger.Type
-	if tt != TriggerWebhook && tt != TriggerManual && tt != TriggerSchedule {
+	if tt != TriggerWebhook && tt != TriggerManual && tt != TriggerSchedule && tt != TriggerChain {
 		tt = TriggerManual
+	}
+
+	// 串联溯源(FR-8-11):chain_source_run_id 记录触发本次运行的上游运行;chain_depth 为串联深度
+	// (根=0,每向下游一层 +1)。非串联触发为空串 / 0。深度负值钳为 0(防御非法入参)。
+	chainDepth := trigger.ChainDepth
+	if chainDepth < 0 {
+		chainDepth = 0
 	}
 
 	// 解析出的目标元数据(webhook 分支映射)持久化为运行内部列;手动触发为空/[]。
@@ -191,10 +198,12 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO pipeline_runs
 		   (id, project_id, status, trigger_type, trigger_branch, trigger_commit, trigger_actor,
-		    resolved_environment, resolved_target_server_ids, params_json, created_at, started_at, finished_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+		    resolved_environment, resolved_target_server_ids, params_json,
+		    chain_source_run_id, chain_depth, created_at, started_at, finished_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
 		id, projectID, StatusQueued, tt, trigger.Branch, trigger.Commit, trigger.Actor,
 		trigger.ResolvedEnvironment, string(targetIDsJSON), string(paramsJSON),
+		strings.TrimSpace(trigger.ChainSourceRunID), chainDepth,
 		now.Format(time.RFC3339),
 	)
 	if err != nil {
@@ -237,14 +246,16 @@ func (s *service) Get(ctx context.Context, id string) (*Run, error) {
 		`SELECT pr.project_id, COALESCE(p.name, ''), pr.status,
 		        pr.trigger_type, pr.trigger_branch, pr.trigger_commit, pr.trigger_actor,
 		        pr.created_at, pr.started_at, pr.finished_at,
-		        pr.failure_log, pr.diagnosis_json, pr.params_json
+		        pr.failure_log, pr.diagnosis_json, pr.params_json,
+		        pr.chain_source_run_id, pr.chain_depth
 		 FROM pipeline_runs pr
 		 LEFT JOIN projects p ON p.id = pr.project_id
 		 WHERE pr.id = ?`, id,
 	).Scan(&r.ProjectID, &r.ProjectName, &r.Status,
 		&r.Trigger.Type, &r.Trigger.Branch, &r.Trigger.Commit, &r.Trigger.Actor,
 		&createdStr, &startedStr, &finishStr,
-		&failureLog, &diagnosisJSON, &paramsJSON)
+		&failureLog, &diagnosisJSON, &paramsJSON,
+		&r.Trigger.ChainSourceRunID, &r.Trigger.ChainDepth)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound

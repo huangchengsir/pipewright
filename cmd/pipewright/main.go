@@ -33,6 +33,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/mask"
 	"github.com/huangchengsir/pipewright/internal/notify"
 	"github.com/huangchengsir/pipewright/internal/oauth"
+	"github.com/huangchengsir/pipewright/internal/pacloader"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/promotion"
@@ -222,7 +223,21 @@ func main() {
 		} else {
 			log.Printf("[run] PIPEWRIGHT_RUNNER=dag:DAG 调度执行器已启用(阶段按 needs 编排;⚠ 未探测到容器 CLI,阶段执行体回退 stub:%v)", berr)
 		}
-		runnerOpts = []run.PoolOption{run.WithRunner(dagrun.New(pipelineSvc, dagOpts...))}
+		// 「流水线即代码」运行时覆盖(FR-8-12):PIPEWRIGHT_PAC_RUNTIME=1 时,用装饰器包住库内
+		// loader——运行时若项目仓库根含合法 `.pipewright.yml` 即用它驱动本次运行,否则一律回退库内
+		// 配置(任何 YAML/拉取问题都不中断运行)。约束:SpecLoader 只有 projectID 无运行分支,故从
+		// **项目默认分支**拉取;按运行分支覆盖需改 SpecLoader 签名,本期推迟(见 internal/pacloader)。
+		var specLoader dagrun.SpecLoader = pipelineSvc
+		if strings.EqualFold(strings.TrimSpace(os.Getenv("PIPEWRIGHT_PAC_RUNTIME")), "1") {
+			specLoader = pacloader.New(
+				pipelineSvc,
+				pacProjectLookup{projectSvc},
+				credVault, // vault.Vault 满足 TokenRevealer(Reveal)
+				pacBlobFetcher{httpapi.NewSourceReader()},
+			)
+			log.Printf("[pac] 运行时 .pipewright.yml 覆盖已启用(PIPEWRIGHT_PAC_RUNTIME=1;从项目默认分支拉取;任何问题回退库内配置)")
+		}
+		runnerOpts = []run.PoolOption{run.WithRunner(dagrun.New(specLoader, dagOpts...))}
 	} else {
 		runnerOpts = buildRunnerOption(projectSvc, pipelineSettingsSvc, credVault)
 	}
@@ -362,6 +377,35 @@ func main() {
 	cronScheduler.Stop()
 	pool.Stop(shutdownCtx)
 	log.Printf("[run] worker pool stopped")
+}
+
+// ── 「流水线即代码」运行时覆盖适配器(FR-8-12)──────────────────────────────────
+// 把既有领域服务桥接到 pacloader 的小接口,使 pacloader 不反向 import project/vault/httpapi。
+
+// pacProjectLookup 把 project.Service 适配为 pacloader.ProjectLookup(取仓库/凭据/默认分支)。
+type pacProjectLookup struct{ svc project.Service }
+
+func (p pacProjectLookup) Lookup(ctx context.Context, projectID string) (pacloader.ProjectInfo, error) {
+	proj, err := p.svc.Get(ctx, projectID)
+	if err != nil {
+		return pacloader.ProjectInfo{}, err
+	}
+	return pacloader.ProjectInfo{
+		RepoURL:       proj.RepoURL,
+		CredentialID:  proj.CredentialID,
+		DefaultBranch: proj.DefaultBranch,
+	}, nil
+}
+
+// pacBlobFetcher 把 httpapi.SourceReader 适配为 pacloader.BlobFetcher(只取所需字段;token 不外泄)。
+type pacBlobFetcher struct{ reader httpapi.SourceReader }
+
+func (b pacBlobFetcher) FetchBlob(ctx context.Context, repoURL, token, ref, file string) (string, bool, error) {
+	blob, err := b.reader.Blob(ctx, repoURL, token, ref, file)
+	if err != nil {
+		return "", false, err
+	}
+	return blob.Content, blob.Degraded, nil
 }
 
 // buildRunnerOption 按 PIPEWRIGHT_BUILDER 开关返回注入 pool 的运行执行器选项(Story 3-3/3-5)。

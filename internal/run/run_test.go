@@ -295,15 +295,15 @@ func TestListFilterAndPaging(t *testing.T) {
 func TestEnqueueNonBlocking(t *testing.T) {
 	db := testDB(t)
 	svc := New(db)
-	pool := NewWorkerPool(svc) // 不 Start:worker 不消费,队列会被填满。
+	pool := NewWorkerPool(svc) // 不 Start:dispatcher 不消费,队列会被填满。
 
-	// 填满队列(cap 256)。
-	for i := 0; i < 256; i++ {
+	// 填满待调度 FIFO(深度 maxQueueDepth)。
+	for i := 0; i < maxQueueDepth; i++ {
 		if err := pool.Enqueue(uuid.NewString()); err != nil {
 			t.Fatalf("第 %d 次入队应成功: %v", i, err)
 		}
 	}
-	// 第 257 次:队列满 → ErrQueueFull(不阻塞)。
+	// 再入一个:队列满 → ErrQueueFull(不阻塞)。
 	done := make(chan error, 1)
 	go func() { done <- pool.Enqueue(uuid.NewString()) }()
 	select {

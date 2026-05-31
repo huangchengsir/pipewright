@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -104,6 +105,10 @@ func main() {
 	// 装配定时(cron)触发配置服务(Story 8-6):每项目一份 cron 表达式 + 分支 + 启用开关。
 	// 调度器(下方,pool 后)按启用配置分钟粒度扫描、到点经 run.Service 创建「定时」触发的运行。
 	cronSvc := cron.NewService(st.DB)
+
+	// 装配项目级并发上限配置服务(FR-8-10 并发/队列控制):每项目一份 max_concurrent。
+	// 注入 worker pool 做准入(下方);经 /api/projects/{id}/concurrency 读写。
+	concurrencySvc := run.NewConcurrencyService(st.DB)
 
 	// 装配运行服务(Story 3.1):本期桩 runner 跑占位步骤打通状态机;真实构建/部署=3-3/4-x。
 	// worker pool 在 aiSvc 装配后创建(以便注入 best-effort 自动诊断钩子,Story 7.2)。
@@ -218,6 +223,18 @@ func main() {
 		log.Printf("[prstatus] PR 状态回写已启用(PIPEWRIGHT_PR_STATUS=1;GitHub/Gitee,经项目凭据,best-effort)")
 	}
 
+	// 并发/队列控制(FR-8-10):全局上限经 PIPEWRIGHT_MAX_CONCURRENT 设置(默认 = worker 数);
+	// 项目级上限经 concurrencySvc(/api/projects/{id}/concurrency 配置)。突发超限的运行保持 queued
+	// 排队,待槽位释放再调度(FIFO)。非法/未设 env → 0,pool 回落到默认行为(仅受全局上限)。
+	maxConcurrent := 0
+	if v := strings.TrimSpace(os.Getenv("PIPEWRIGHT_MAX_CONCURRENT")); v != "" {
+		if n, perr := strconv.Atoi(v); perr == nil && n > 0 {
+			maxConcurrent = n
+		} else {
+			log.Printf("[run] 警告:PIPEWRIGHT_MAX_CONCURRENT=%q 非法(须为正整数),忽略", v)
+		}
+	}
+
 	pool := run.NewWorkerPool(runSvc,
 		append(runnerOpts,
 			run.WithDiagnoseHook(httpapi.NewDiagnoseHook(runSvc, aiSvc, secretSrc)),
@@ -225,6 +242,9 @@ func main() {
 			run.WithLogMaskerFunc(secretSrc.MaskerForRun),
 			// best-effort 终态钩子(通知 + 可选 PR 状态回写)。未配路由的事件不发送;绝不阻断 run 终态。
 			run.WithNotifyHook(terminalHook),
+			// 并发/队列控制(FR-8-10):全局上限 + 项目级上限准入。
+			run.WithMaxConcurrent(maxConcurrent),
+			run.WithConcurrencyLimits(concurrencySvc),
 		)...,
 	)
 	pool.Start()
@@ -268,7 +288,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithServers(targetSvc), httpapi.WithDeploy(deploySvc), httpapi.WithNotifications(notifySvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithApprovals(approvalCoord, approvalStore)),
+		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithServers(targetSvc), httpapi.WithDeploy(deploySvc), httpapi.WithNotifications(notifySvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithConcurrency(concurrencySvc)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;

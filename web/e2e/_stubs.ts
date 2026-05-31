@@ -15,8 +15,8 @@ function json(route: Route, status: number, body: unknown) {
 
 /**
  * Only intercept real backend calls (URL path begins with `/api/`).
- * A glob like `**​/api/**` would wrongly match Vite source modules such as
- * `/src/api/http.ts` and break module loading — so we match on the parsed path.
+ * A broad recursive glob over any `/api` segment would wrongly match Vite source
+ * modules such as `/src/api/http.ts` and break loading — so we match the parsed path.
  */
 function isApiPath(url: URL, suffix?: string): boolean {
   if (!url.pathname.startsWith('/api/')) return false

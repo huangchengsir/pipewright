@@ -23,6 +23,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/build"
 	"github.com/huangchengsir/pipewright/internal/config"
 	"github.com/huangchengsir/pipewright/internal/cron"
+	"github.com/huangchengsir/pipewright/internal/dagrun"
 	"github.com/huangchengsir/pipewright/internal/deploy"
 	"github.com/huangchengsir/pipewright/internal/httpapi"
 	"github.com/huangchengsir/pipewright/internal/mask"
@@ -163,7 +164,18 @@ func main() {
 	//   - 缺省 auto:探测到 docker/nerdctl/podman 用 real,否则回退桩(优雅降级,NFR-10)。
 	// 真实 Builder 经构造函数注入 projectSvc/pipelineSettingsSvc/credVault;真实日志/产物/失败日志
 	// 经同一 run.StepSink 喂出,复用既有持久化/SSE/脱敏(下方 WithLogMaskerFunc 对真实日志同样生效)。
-	runnerOpts := buildRunnerOption(projectSvc, pipelineSettingsSvc, credVault)
+	// PIPEWRIGHT_RUNNER=dag 时启用 DAG 调度执行器(Epic 8 · 8-1↔8-3):按阶段 needs 构 DAG 调度
+	// (无依赖阶段并行、失败阻断下游),阶段编排经既有 StepSink 持久化。**默认关闭**(不破存量):
+	// 缺省/其它值仍走 PIPEWRIGHT_BUILDER 选出的真实 Builder / 桩 runner。
+	// ⚠ 当前阶段执行体为占位 stub(仅打日志即成功);真实「阶段内并行 job → job 内有序 step
+	// 在隔离容器构建/部署」= Story 8-2 尚未接入,故 dag 模式现仅用于验证编排,不做真实构建。
+	var runnerOpts []run.PoolOption
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("PIPEWRIGHT_RUNNER")), "dag") {
+		log.Printf("[run] PIPEWRIGHT_RUNNER=dag:DAG 调度执行器已启用(阶段按 needs 编排;⚠ 阶段执行体=占位 stub,真实构建/部署=Story 8-2 未接入)")
+		runnerOpts = []run.PoolOption{run.WithRunner(dagrun.New(pipelineSvc))}
+	} else {
+		runnerOpts = buildRunnerOption(projectSvc, pipelineSettingsSvc, credVault)
+	}
 
 	// 终态钩子:通知(Story 5.2);PIPEWRIGHT_PR_STATUS=1 时再叠加「PR 状态回写」(Story 8-9 / FR-8-9):
 	// run 终态 → 据项目仓库识别 GitHub/Gitee → 经项目凭据回写该 commit 的提交状态(PR 检查)。

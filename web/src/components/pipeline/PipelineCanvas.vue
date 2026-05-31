@@ -6,6 +6,7 @@ import type { Server } from '../../api/servers'
 import StageColumn from './StageColumn.vue'
 import JobDrawer from './JobDrawer.vue'
 import JobTypePicker from './JobTypePicker.vue'
+import type { CustomNode } from '../../api/customNodes'
 import { jobTypeLabel, getJobTypeSpec } from './jobConfigSchema'
 import { hasAnyNeeds } from './stageDeps'
 import './pipeline.css'
@@ -128,15 +129,47 @@ function onPickerSelect(type: string): void {
       // 模板节点带预填配置(深拷贝避免共享引用);普通节点空配置。
       config:  { ...(getJobTypeSpec(type)?.defaultConfig ?? {}) },
     }
-    const next = props.stages.map((s) =>
-      s.id === p.stageId ? { ...s, jobs: [...s.jobs, newJob] } : s,
-    )
-    emit('update', next)
-    selectedJobId.value = newJob.id
+    addJobToStage(p.stageId, newJob)
   } else {
     updateJob(p.stageId, p.jobId, { type })
   }
   closePicker()
+}
+
+/**
+ * Insert a saved custom node (复用库 Tier 2): a new Job pre-filled with the saved
+ * type + summary + config snapshot. On "change" mode we overwrite type & config in place.
+ */
+function onPickerSelectCustom(node: CustomNode): void {
+  const p = picker.value
+  // config 快照转字符串 KV(Job.config 为 string KV;后端以 any 存,值实为字符串)。
+  const config: Record<string, string> = {}
+  for (const [k, v] of Object.entries(node.config ?? {})) {
+    config[k] = typeof v === 'string' ? v : JSON.stringify(v)
+  }
+  if (p.mode === 'add') {
+    const stage = props.stages.find((s) => s.id === p.stageId)
+    if (!stage) return closePicker()
+    const newJob: PipelineJob = {
+      id:      `job_${uid()}`,
+      name:    node.name || jobTypeLabel(node.nodeType),
+      type:    node.nodeType,
+      summary: node.summary ?? '',
+      config,
+    }
+    addJobToStage(p.stageId, newJob)
+  } else {
+    updateJob(p.stageId, p.jobId, { type: node.nodeType, summary: node.summary ?? '', config })
+  }
+  closePicker()
+}
+
+function addJobToStage(stageId: string, newJob: PipelineJob): void {
+  const next = props.stages.map((s) =>
+    s.id === stageId ? { ...s, jobs: [...s.jobs, newJob] } : s,
+  )
+  emit('update', next)
+  selectedJobId.value = newJob.id
 }
 
 function reorderJob(stageId: string, from: number, to: number): void {
@@ -333,6 +366,7 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
       :current="picker.mode === 'change' ? picker.current : ''"
       :title="picker.mode === 'change' ? '更换任务类型' : '添加任务'"
       @select="onPickerSelect"
+      @select-custom="onPickerSelectCustom"
       @close="closePicker"
     />
   </div>

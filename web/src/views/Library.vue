@@ -25,8 +25,14 @@ import {
   type VariableGroupVarInput,
 } from '../api/variableGroups'
 import { listCredentials, type Credential } from '../api/credentials'
+import {
+  listCustomNodes,
+  deleteCustomNode,
+  type CustomNode,
+} from '../api/customNodes'
+import { jobTypeLabel } from '../components/pipeline/jobConfigSchema'
 
-type Tab = 'templates' | 'variableGroups'
+type Tab = 'templates' | 'variableGroups' | 'customNodes'
 type LoadState = 'idle' | 'loading' | 'error'
 
 const message = useMessage()
@@ -210,15 +216,54 @@ async function removeGroup(g: VariableGroup): Promise<void> {
   }
 }
 
+// ─── custom nodes(复用库 Tier 2) ──────────────────────────────────────────────
+const cnState = ref<LoadState>('idle')
+const cnError = ref('')
+const customNodes = ref<CustomNode[]>([])
+
+async function loadCustomNodes(): Promise<void> {
+  cnState.value = 'loading'
+  cnError.value = ''
+  try {
+    customNodes.value = await listCustomNodes()
+    cnState.value = 'idle'
+  } catch (err: unknown) {
+    cnState.value = 'error'
+    cnError.value = err instanceof HttpError
+      ? err.apiError?.message ?? `加载自定义节点失败(${err.status})`
+      : '加载自定义节点失败'
+  }
+}
+
+async function removeCustomNode(n: CustomNode): Promise<void> {
+  if (!window.confirm(`删除自定义节点「${n.name}」?此操作不可撤销。`)) return
+  try {
+    await deleteCustomNode(n.id)
+    message.success(`已删除自定义节点「${n.name}」`)
+    await loadCustomNodes()
+  } catch (err: unknown) {
+    message.error(err instanceof HttpError ? err.apiError?.message ?? '删除失败' : '删除失败')
+  }
+}
+
+/** config 快照前若干键,供卡片预览(纯展示,不含 secret 明文)。 */
+function configPreview(n: CustomNode): Array<{ k: string; v: string }> {
+  return Object.entries(n.config ?? {})
+    .slice(0, 4)
+    .map(([k, v]) => ({ k, v: typeof v === 'string' ? v : JSON.stringify(v) }))
+}
+
 function switchTab(t: Tab): void {
   tab.value = t
   if (t === 'templates' && templates.value.length === 0 && tplState.value !== 'error') loadTemplates()
   if (t === 'variableGroups' && variableGroups.value.length === 0 && vgState.value !== 'error') loadVariableGroups()
+  if (t === 'customNodes' && customNodes.value.length === 0 && cnState.value !== 'error') loadCustomNodes()
 }
 
 onMounted(() => {
   loadTemplates()
   loadVariableGroups()
+  loadCustomNodes()
 })
 </script>
 
@@ -227,7 +272,7 @@ onMounted(() => {
     <header class="page-header">
       <div>
         <h1 class="page-title">复用库</h1>
-        <p class="page-sub">跨项目共享的流水线模板与变量组 · 一处定义,处处复用</p>
+        <p class="page-sub">跨项目共享的流水线模板、变量组与自定义节点 · 一处定义,处处复用</p>
       </div>
       <button
         v-if="tab === 'variableGroups'"
@@ -259,6 +304,16 @@ onMounted(() => {
       >
         变量组
         <span class="seg-count">{{ variableGroups.length }}</span>
+      </button>
+      <button
+        class="seg-item"
+        role="tab"
+        :aria-selected="tab === 'customNodes'"
+        :class="{ 'seg-item--active': tab === 'customNodes' }"
+        @click="switchTab('customNodes')"
+      >
+        自定义节点
+        <span class="seg-count">{{ customNodes.length }}</span>
       </button>
     </div>
 
@@ -347,6 +402,54 @@ onMounted(() => {
           <div class="vg-card-foot">
             <button class="btn-secondary btn-sm" @click="openEditGroup(g)">编辑</button>
             <button class="link-danger" @click="removeGroup(g)">删除</button>
+          </div>
+        </li>
+      </ul>
+    </div>
+
+    <!-- ─── Custom Nodes(复用库 Tier 2) ─── -->
+    <div v-show="tab === 'customNodes'" class="panel">
+      <div v-if="cnState === 'error'" class="banner banner--error">
+        <span>{{ cnError }}</span>
+        <button class="banner-retry" @click="loadCustomNodes">↻ 重试</button>
+      </div>
+
+      <div v-if="cnState === 'loading'" class="skeleton-grid">
+        <div v-for="i in 3" :key="i" class="skeleton-card" />
+      </div>
+
+      <div
+        v-else-if="cnState === 'idle' && customNodes.length === 0"
+        class="empty-state"
+      >
+        <div class="empty-icon">◇</div>
+        <p class="empty-label">还没有自定义节点</p>
+        <p class="empty-hint">
+          在项目流水线编辑器里把任意节点(尤其是自定义/模板节点)配好参数后,点「存为自定义节点」
+          即可沉淀到这里,之后在任意流水线的节点选择器里一键复用,免去重复填参。
+        </p>
+      </div>
+
+      <ul v-else class="card-grid" role="list">
+        <li v-for="n in customNodes" :key="n.id" class="cn-card">
+          <div class="cn-card-head">
+            <h3 class="cn-name">{{ n.name }}</h3>
+            <span class="cn-type-pill">{{ jobTypeLabel(n.nodeType) }}</span>
+          </div>
+          <p class="cn-desc">{{ n.description || n.summary || '无说明' }}</p>
+          <ul class="cn-cfg-list" role="list">
+            <li v-for="item in configPreview(n)" :key="item.k" class="cn-cfg">
+              <code class="cn-cfg-key">{{ item.k }}</code>
+              <span class="cn-cfg-val">{{ item.v || '空' }}</span>
+            </li>
+            <li v-if="Object.keys(n.config ?? {}).length > 4" class="cn-cfg cn-cfg--more">
+              +{{ Object.keys(n.config).length - 4 }} 个参数…
+            </li>
+            <li v-if="Object.keys(n.config ?? {}).length === 0" class="cn-cfg cn-cfg--more">无参数</li>
+          </ul>
+          <div class="cn-card-foot">
+            <span class="cn-time">更新于 {{ new Date(n.updatedAt).toLocaleDateString() }}</span>
+            <button class="link-danger" @click="removeCustomNode(n)">删除</button>
           </div>
         </li>
       </ul>
@@ -527,7 +630,8 @@ onMounted(() => {
 }
 
 .tpl-card,
-.vg-card {
+.vg-card,
+.cn-card {
   display: flex;
   flex-direction: column;
   gap: 0.7rem;
@@ -539,20 +643,23 @@ onMounted(() => {
   transition: transform var(--duration-fast, 150ms), border-color var(--duration-fast, 150ms);
 }
 .tpl-card:hover,
-.vg-card:hover {
+.vg-card:hover,
+.cn-card:hover {
   transform: translateY(-2px);
   border-color: var(--color-border-strong);
 }
 
 .tpl-card-head,
-.vg-card-head {
+.vg-card-head,
+.cn-card-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
 }
 .tpl-name,
-.vg-name {
+.vg-name,
+.cn-name {
   margin: 0;
   font-size: 1.05rem;
   font-weight: 640;
@@ -563,7 +670,8 @@ onMounted(() => {
   white-space: nowrap;
 }
 .tpl-stage-pill,
-.vg-count-pill {
+.vg-count-pill,
+.cn-type-pill {
   flex-shrink: 0;
   font-size: 0.72rem;
   font-weight: 600;
@@ -573,12 +681,61 @@ onMounted(() => {
   background: var(--color-primary-soft);
 }
 .tpl-desc,
-.vg-desc {
+.vg-desc,
+.cn-desc {
   margin: 0;
   font-size: 0.86rem;
   color: var(--color-dim);
   line-height: 1.45;
   min-height: 1.2em;
+}
+
+/* Custom-node config preview — mirrors the variable-group var list */
+.cn-cfg-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.6rem 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  border-top: 1px solid var(--color-border);
+}
+.cn-cfg {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.82rem;
+  min-width: 0;
+}
+.cn-cfg-key {
+  flex-shrink: 0;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--color-text);
+  background: var(--color-inset);
+  padding: 0.1rem 0.4rem;
+  border-radius: 6px;
+}
+.cn-cfg-val {
+  color: var(--color-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cn-cfg--more {
+  color: var(--color-faint);
+  font-style: italic;
+}
+.cn-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: auto;
+  padding-top: 0.4rem;
+}
+.cn-time {
+  font-size: 0.76rem;
+  color: var(--color-faint);
 }
 
 .vg-var-list {

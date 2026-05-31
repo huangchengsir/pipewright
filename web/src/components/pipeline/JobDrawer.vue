@@ -9,6 +9,7 @@ import {
   jobTypeLabel,
   type JobField,
 } from './jobConfigSchema'
+import { createCustomNode } from '../../api/customNodes'
 import JobTypeIcon from './JobTypeIcon.vue'
 
 const props = defineProps<{
@@ -126,15 +127,68 @@ function extrasToObject(rows: KVRow[]): Record<string, string> {
 
 // ─── Flush ─────────────────────────────────────────────────────────────────────
 
+/** Build the full config object from typed form + advanced extras (typed wins on conflict). */
+function currentConfig(): Record<string, string> {
+  return { ...extrasToObject(extraRows.value), ...typedConfig.value }
+}
+
 function flush(): void {
-  // typed wins over extras on key conflict (they should never overlap).
-  const config = { ...extrasToObject(extraRows.value), ...typedConfig.value }
   emit('update', {
     name:    localName.value.trim() || props.job.name,
     type:    localType.value.trim() || props.job.type,
     summary: localSummary.value,
-    config,
+    config:  currentConfig(),
   })
+}
+
+// ─── Save as custom node (复用库 Tier 2) ──────────────────────────────────────
+// Snapshot this node's type + summary + config into the reuse library so it can be
+// picked into any pipeline later, pre-filled. Free-form config (no schema enforced).
+
+const savePanelOpen = ref(false)
+const saveName      = ref('')
+const saveDesc      = ref('')
+const saving        = ref(false)
+const saveError     = ref('')
+const saveOk        = ref(false)
+
+function openSavePanel(): void {
+  saveName.value = localName.value.trim()
+  saveDesc.value = ''
+  saveError.value = ''
+  saveOk.value = false
+  savePanelOpen.value = true
+}
+
+function cancelSave(): void {
+  savePanelOpen.value = false
+  saveError.value = ''
+}
+
+async function confirmSave(): Promise<void> {
+  const name = saveName.value.trim()
+  if (!name) {
+    saveError.value = '请填写节点名称'
+    return
+  }
+  saving.value = true
+  saveError.value = ''
+  try {
+    await createCustomNode({
+      name,
+      description: saveDesc.value.trim(),
+      nodeType: localType.value.trim() || props.job.type,
+      summary: localSummary.value,
+      config: currentConfig(),
+    })
+    saveOk.value = true
+    savePanelOpen.value = false
+  } catch (err) {
+    saveError.value =
+      err instanceof Error && err.message ? err.message : '保存失败,请重试(可能重名)'
+  } finally {
+    saving.value = false
+  }
 }
 </script>
 
@@ -361,6 +415,47 @@ function flush(): void {
         </button>
       </div>
     </div>
+
+    <!-- Save as custom node (复用库 Tier 2) -->
+    <div class="drawer-section drawer-reuse">
+      <div v-if="!savePanelOpen" class="reuse-row">
+        <button class="reuse-btn" @click="openSavePanel">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+            <path d="M17 21v-8H7v8M7 3v5h8"/>
+          </svg>
+          存为自定义节点
+        </button>
+        <span v-if="saveOk" class="reuse-ok" role="status">✓ 已存入复用库</span>
+      </div>
+
+      <div v-else class="reuse-panel">
+        <div class="reuse-panel-title">存为自定义节点</div>
+        <p class="reuse-panel-hint">把当前节点的类型与参数快照存入复用库,之后可在任意流水线挑选复用。</p>
+        <input
+          v-model="saveName"
+          class="drawer-input"
+          type="text"
+          placeholder="节点名称(库内唯一)"
+          aria-label="自定义节点名称"
+          @keydown.enter.prevent="confirmSave"
+        />
+        <input
+          v-model="saveDesc"
+          class="drawer-input"
+          type="text"
+          placeholder="说明(可选)"
+          aria-label="自定义节点说明"
+        />
+        <p v-if="saveError" class="reuse-error" role="alert">{{ saveError }}</p>
+        <div class="reuse-actions">
+          <button class="reuse-cancel" :disabled="saving" @click="cancelSave">取消</button>
+          <button class="reuse-confirm" :disabled="saving" @click="confirmSave">
+            {{ saving ? '保存中…' : '保存' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </aside>
 </template>
 
@@ -510,5 +605,117 @@ function flush(): void {
 
 .advanced-body {
   margin-top: 11px;
+}
+
+/* ——— Save as custom node ——— */
+.drawer-reuse {
+  border-top: 1px dashed var(--color-border);
+  padding-top: 14px;
+}
+
+.reuse-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.reuse-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  background: var(--color-inset);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--rounded);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color var(--duration-fast), color var(--duration-fast);
+}
+
+.reuse-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.reuse-ok {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--color-green, var(--color-primary));
+}
+
+.reuse-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--color-inset);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--rounded);
+}
+
+.reuse-panel-title {
+  font-size: 0.84rem;
+  font-weight: 650;
+  color: var(--color-text);
+}
+
+.reuse-panel-hint {
+  margin: 0;
+  font-size: 0.73rem;
+  line-height: 1.45;
+  color: var(--color-faint);
+}
+
+.reuse-error {
+  margin: 0;
+  font-size: 0.74rem;
+  color: var(--color-red, #d33);
+}
+
+.reuse-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.reuse-cancel,
+.reuse-confirm {
+  padding: 6px 14px;
+  border-radius: var(--rounded);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity var(--duration-fast), background-color var(--duration-fast);
+}
+
+.reuse-cancel {
+  background: none;
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-dim);
+}
+
+.reuse-cancel:hover:not(:disabled) {
+  color: var(--color-text);
+}
+
+.reuse-confirm {
+  background: var(--color-primary);
+  border: 1px solid var(--color-primary);
+  color: #fff;
+}
+
+.reuse-confirm:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.reuse-cancel:disabled,
+.reuse-confirm:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 </style>

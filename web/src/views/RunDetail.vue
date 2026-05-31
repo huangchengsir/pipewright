@@ -42,6 +42,7 @@ import ArtifactList from '../components/run/ArtifactList.vue'
 import TestReportPanel from '../components/run/TestReportPanel.vue'
 import DeployTargets from '../components/run/DeployTargets.vue'
 import RunDagView from '../components/run/RunDagView.vue'
+import PromotionPanel from '../components/run/PromotionPanel.vue'
 
 // ─── route ────────────────────────────────────────────────────────────────────
 
@@ -734,6 +735,21 @@ function nodeClass(status: StepStatus): string {
               ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             -->
             <TestReportPanel :run-id="run.id" />
+
+            <!--
+              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+              SLOT: 环境晋级 (Story 8-7 / FR-8-7 实现)
+              成功态填 run-detail 晋级 slot:晋级按钮 + gated 审批门联动 + 晋级历史。
+              自取数据(promotion API);不扰其他 slot。
+              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            -->
+            <PromotionPanel
+              :run-id="run.id"
+              :project-id="run.projectId"
+              :run-status="run.status"
+              @promotion-pending="loadApprovals"
+            />
+            <!-- END SLOT: 环境晋级 -->
 
             <!-- 历史日志回放(只读,Story 3-6) -->
             <div class="log-history" role="region" aria-label="历史运行日志">

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import type { PipelineStage, PipelineJob, StageKind } from '../../api/pipeline'
+import type { Credential } from '../../api/credentials'
+import type { Server } from '../../api/servers'
 import StageColumn from './StageColumn.vue'
 import JobDrawer from './JobDrawer.vue'
 import './pipeline.css'
@@ -10,6 +12,8 @@ import './pipeline.css'
 const props = defineProps<{
   stages: PipelineStage[]
   yaml: string
+  credentials?: Credential[]
+  servers?: Server[]
 }>()
 
 const emit = defineEmits<{
@@ -191,6 +195,8 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
       v-if="selectedJob && selectedStage"
       :job="selectedJob"
       :stage="selectedStage"
+      :credentials="props.credentials"
+      :servers="props.servers"
       @close="closeDrawer"
       @update="handleDrawerUpdate"
     />

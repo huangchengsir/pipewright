@@ -25,6 +25,7 @@ import EnvCredsTab from '../components/pipeline/EnvCredsTab.vue'
 import TriggersPanel from '../components/TriggersPanel.vue'
 import ValidationPanel from '../components/pipeline/ValidationPanel.vue'
 import AIGenerateWizard from '../components/pipeline/AIGenerateWizard.vue'
+import YamlImportModal from '../components/pipeline/YamlImportModal.vue'
 
 // ─── Route ────────────────────────────────────────────────────────────────────
 
@@ -254,6 +255,33 @@ function handleAI(): void {
   aiWizardOpen.value = true
 }
 
+// ─── YAML import (Pipeline-as-code, FR-8-12) ──────────────────────────────────
+
+const yamlImportOpen = ref(false)
+
+function handleImport(): void {
+  yamlImportOpen.value = true
+}
+
+/**
+ * Preview (save=false): the modal parsed + validated the YAML and returned a DTO.
+ * Reflect it on the canvas WITHOUT persisting — the user reviews, then clicks 保存草稿.
+ * We jump to the canvas tab so the change is visible.
+ */
+function handleImportPreview(dto: PipelineDTO): void {
+  pipeline.value = dto
+  editStages.value = JSON.parse(JSON.stringify(dto.stages)) as PipelineStage[]
+  if (activeTab.value !== 'canvas') setTab('canvas')
+}
+
+/** Save (save=true): the modal already persisted. Reload everything + revalidate. */
+async function handleImportSaved(): Promise<void> {
+  await Promise.all([loadPipeline(), loadSettings()])
+  if (activeTab.value !== 'canvas') setTab('canvas')
+  showSaveSuccess()
+  scheduleValidation(400)
+}
+
 /** Called by AIGenerateWizard after a successful apply. Reload all data. */
 async function handleAIApplied(): Promise<void> {
   await Promise.all([loadPipeline(), loadSettings()])
@@ -336,6 +364,13 @@ const projectName = computed(() => String(route.params.id))
             <path d="M3 12h3.5l2.2-6 3.6 12 2.4-7 1.3 1h4.5"/>
           </svg>
           AI 生成流水线
+        </button>
+
+        <button class="top-btn" :disabled="saveSubmitting" @click="handleImport">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>
+          </svg>
+          从 YAML 导入
         </button>
 
         <!-- ─── Validation button + ready badge (Story 2-6) ─────────────── -->
@@ -530,6 +565,15 @@ const projectName = computed(() => String(route.params.id))
       :project-id="projectId"
       @close="aiWizardOpen = false"
       @applied="handleAIApplied"
+    />
+
+    <!-- ─── YAML Import (Pipeline-as-code, FR-8-12) ─────────────────────── -->
+    <YamlImportModal
+      v-if="yamlImportOpen"
+      :project-id="projectId"
+      @close="yamlImportOpen = false"
+      @preview="handleImportPreview"
+      @saved="handleImportSaved"
     />
 
   </div>

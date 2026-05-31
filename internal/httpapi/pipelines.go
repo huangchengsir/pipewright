@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
+	"github.com/huangchengsir/pipewright/internal/pipelineyaml"
 )
 
 // pipelineDTO 是流水线配置对外响应体(冻结契约;camelCase)。外层形状定死,
@@ -187,5 +188,69 @@ func makeSavePipelineHandler(svc pipeline.Service) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, toPipelineDTO(cfg))
+	}
+}
+
+// makeImportPipelineHandler 返回 POST /api/projects/{id}/pipeline/import handler(FR-8-12)。
+//
+// 收 {yaml:"...", save?:bool};把 `.pipewright.yml` 文档解析+校验为 pipeline.Config:
+//   - 解析失败(语法/结构/领域校验)→ 422,错误码定位(invalid_yaml / invalid_stage / ...)。
+//   - save=false(默认):仅返回解析后的预览 DTO,**不落库**(让用户先在画布看效果再决定)。
+//   - save=true:把解析出的 spec 经 svc.Save 持久化(走与画布 PUT 同一套规范化/校验/渲染)后回读返回。
+//
+// 写方法过 auth + CSRF;请求体限 256KB;错误信息不含任何 secret 明文(env 仅以引用形式出现)。
+func makeImportPipelineHandler(svc pipeline.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "流水线配置服务未初始化")
+			return
+		}
+		id := chi.URLParam(r, "id")
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<18) // 256KB
+		var req struct {
+			YAML string `json:"yaml"`
+			Save bool   `json:"save"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
+			return
+		}
+
+		parsed, err := pipelineyaml.Parse([]byte(req.YAML))
+		if err != nil {
+			writeYAMLParseError(w, err)
+			return
+		}
+
+		// 预览(默认):不落库,直接回解析后的 DTO。
+		if !req.Save {
+			writeJSON(w, http.StatusOK, toPipelineDTO(&parsed))
+			return
+		}
+
+		// 导入并持久化:走与画布 PUT 完全一致的 Save 路径(再校验 + 渲染 + 回读 + 项目存在性)。
+		cfg, err := svc.Save(r.Context(), id, parsed.Spec)
+		if err != nil {
+			writePipelineError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, toPipelineDTO(cfg))
+	}
+}
+
+// writeYAMLParseError 把 pipelineyaml.Parse 的错误映射为契约错误码(422)。
+// 领域校验错误(经 %w 挂在链上)优先精确映射;否则归为 invalid_yaml(message 已脱敏、人读)。
+func writeYAMLParseError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, pipeline.ErrInvalidStage):
+		writeError(w, http.StatusUnprocessableEntity, "invalid_stage", err.Error())
+	case errors.Is(err, pipeline.ErrInvalidJob):
+		writeError(w, http.StatusUnprocessableEntity, "invalid_job", err.Error())
+	case errors.Is(err, pipeline.ErrDuplicateID):
+		writeError(w, http.StatusUnprocessableEntity, "duplicate_id", err.Error())
+	case errors.Is(err, pipelineyaml.ErrParse):
+		writeError(w, http.StatusUnprocessableEntity, "invalid_yaml", err.Error())
+	default:
+		writeError(w, http.StatusUnprocessableEntity, "invalid_yaml", "无法解析 .pipewright.yml")
 	}
 }

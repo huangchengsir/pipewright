@@ -91,3 +91,22 @@ export async function savePipeline(
 ): Promise<PipelineDTO> {
   return http.put<PipelineDTO>(`/api/projects/${projectId}/pipeline`, input)
 }
+
+// ─── Pipeline-as-code import / preview (FR-8-12) ──────────────────────────────
+
+/**
+ * Parse + validate a `.pipewright.yml` document into the pipeline model.
+ *
+ * POST /api/projects/{id}/pipeline/import  (needs CSRF)
+ * Body: { yaml, save }
+ *   - save=false (default): returns the parsed PipelineDTO as a preview, does NOT persist.
+ *   - save=true: persists the parsed spec via the same Save path as the canvas PUT.
+ * Validation failures surface as HttpError 422 with codes invalid_yaml/invalid_stage/...
+ */
+export async function importPipeline(
+  projectId: string,
+  yaml: string,
+  save = false,
+): Promise<PipelineDTO> {
+  return http.post<PipelineDTO>(`/api/projects/${projectId}/pipeline/import`, { yaml, save })
+}

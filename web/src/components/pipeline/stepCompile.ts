@@ -13,6 +13,11 @@
  * 「切目录」步骤被编译成 `cd DIR` 命令行。因为所有命令同处一个 shell 脚本,
  * `export` / `cd` 对后续命令生效,顺序语义被忠实保留,且零后端改动。
  *
+ * 「条件守卫」(condition)步骤编译成**单行** `if ! ( <cond> ); then echo …; exit 0; fi`:
+ * 条件不成立则整段脚本提前**成功退出**,后续步骤全部跳过。这是 `set -e` **安全**的 ——
+ * 条件 `<cond>` 跑在 `if` 测试上下文里(set -e 对其豁免,即便条件命令非零退出也不会中断脚本),
+ * 命中则 `exit 0` 干净结束;且整条是单行,逐行反解析仍能原样还原条件,round-trip 不丢数据。
+ *
  * 编译(steps → config):把有序步骤列表展开为 `commands` 多行串,产物路径汇入
  * `artifactPath`;`image`/`workDir` 作为节点级字段单独保留(由调用方合并)。
  *
@@ -23,7 +28,7 @@
 
 // ─── 步骤模型 ──────────────────────────────────────────────────────────────────
 
-export type StepKind = 'command' | 'env' | 'workDir' | 'artifact'
+export type StepKind = 'command' | 'env' | 'workDir' | 'artifact' | 'condition'
 
 export interface StepBlock {
   /** 稳定的本地标识(列表 key / 拖拽用),不进 config */
@@ -39,6 +44,8 @@ export interface StepBlock {
   dir?: string
   /** artifact:产物路径(glob) */
   artifact?: string
+  /** condition:shell 条件表达式(不成立则跳过后续步骤) */
+  condition?: string
 }
 
 /** 编译产出:展开后的 config 片段(只含步骤拥有的键)。 */
@@ -61,11 +68,21 @@ export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
+// 条件守卫单行模板:`if ! ( <cond> ); then echo '…'; exit 0; fi`(set -e 安全;cond 原样,不转义)。
+const COND_GUARD_PREFIX = 'if ! ( '
+const COND_GUARD_SUFFIX = " ); then echo '条件不成立,跳过后续步骤'; exit 0; fi"
+
+/** 把条件表达式包成单行 set -e 安全的守卫(不成立→提前成功退出)。 */
+export function conditionGuardLine(cond: string): string {
+  return `${COND_GUARD_PREFIX}${cond}${COND_GUARD_SUFFIX}`
+}
+
 /**
  * 把一个步骤编译成 0 条或多条命令行。
  * - command:原样多行(空步骤跳过)
  * - env:`export K=V`(K 合法才发;值做单引号转义)
  * - workDir:`cd DIR`(DIR 做单引号转义)
+ * - condition:`if ! ( <cond> ); then echo …; exit 0; fi`(单行守卫;cond 原样,空步骤跳过)
  * - artifact:不产生命令(进 artifactPath)
  */
 export function stepToCommandLines(step: StepBlock): string[] {
@@ -83,6 +100,11 @@ export function stepToCommandLines(step: StepBlock): string[] {
       const dir = (step.dir ?? '').trim()
       if (!dir) return []
       return [`cd ${shellQuote(dir)}`]
+    }
+    case 'condition': {
+      const cond = (step.condition ?? '').replace(/\r?\n/g, ' ').trim()
+      if (!cond) return []
+      return [conditionGuardLine(cond)]
     }
     case 'artifact':
       return []
@@ -113,6 +135,8 @@ export function compileSteps(steps: readonly StepBlock[]): CompiledSteps {
 
 const ENV_LINE = /^export\s+([A-Za-z_][A-Za-z0-9_]*)=(.*)$/
 const CD_LINE = /^cd\s+(.+)$/
+// 条件守卫:`if ! ( <cond> ); then echo …; exit 0; fi` → 抽回 <cond>(贪婪到最后一个 `); then echo`)。
+const COND_LINE = /^if ! \( (.+) \); then echo .*; exit 0; fi$/
 
 /**
  * 反单引号转义:把 shellQuote 产出的 '...'(内含 '\'' 续接)还原为原始字符串。
@@ -161,6 +185,10 @@ export function shellUnquote(token: string): string {
  */
 export function lineToStep(line: string): StepBlock {
   const trimmed = line.trim()
+  const cond = COND_LINE.exec(trimmed)
+  if (cond) {
+    return { id: nextStepId(), kind: 'condition', condition: cond[1].trim() }
+  }
   const env = ENV_LINE.exec(trimmed)
   if (env) {
     return { id: nextStepId(), kind: 'env', envKey: env[1], envValue: shellUnquote(env[2]) }
@@ -205,4 +233,5 @@ export const STEP_KIND_META: Record<StepKind, { label: string; accent: string }>
   env: { label: '设环境变量', accent: 'cyan' },
   workDir: { label: '切目录', accent: 'amber' },
   artifact: { label: '上传产物', accent: 'green' },
+  condition: { label: '条件守卫', accent: 'red' },
 }

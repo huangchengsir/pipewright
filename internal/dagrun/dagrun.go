@@ -143,6 +143,14 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 	result := graph.Schedule(ctx, func(ctx context.Context, stageID string) error {
 		ord := ordinalOf[stageID]
 		stage := stageByID[stageID]
+		// 条件执行(Story 8-5):when 不满足 → 跳过(非失败),其下游照「未成功」跳过。
+		if !stage.When.Matches(rn.Trigger.Branch, rn.Trigger.Type) {
+			_ = lockedSink(func() error {
+				return sink.Log(ctx, "stdout", ord, fmt.Sprintf(
+					"阶段「%s」条件不满足(分支=%q 触发=%q),跳过", stage.Name, rn.Trigger.Branch, rn.Trigger.Type))
+			})
+			return dag.ErrSkip
+		}
 		if err := lockedSink(func() error { return sink.StepRunning(ctx, ord) }); err != nil {
 			return err
 		}
@@ -156,7 +164,7 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 		return execErr
 	}, dag.Options{MaxConcurrency: maxc})
 
-	// 被跳过/取消(从未执行)的阶段:其 step 终态记为 skipped(与 dag 判定一致),避免悬挂 pending。
+	// 被跳过/取消(从未执行)的阶段:其 step 终态记为 skipped(条件跳过 + 上游未成功皆然),避免悬挂 pending。
 	for id, nr := range result {
 		if nr.Status == dag.StatusSkipped || nr.Status == dag.StatusCanceled {
 			ord := ordinalOf[id]
@@ -164,7 +172,9 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 		}
 	}
 
-	if !result.Succeeded() {
+	// 整体失败判定:仅当有阶段**真失败**(StatusFailed)。条件跳过 / 上游被跳过不令整体失败
+	// (上游若真失败,该失败阶段本身即计入 StatusFailed)。
+	if result.Counts()[dag.StatusFailed] > 0 {
 		return fmt.Errorf("dagrun: pipeline failed (%v)", summarize(result))
 	}
 	return nil

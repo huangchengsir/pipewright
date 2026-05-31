@@ -104,6 +104,16 @@ const PROBE_MODE_OPTIONS: SelectOption[] = [
   { value: 'command', label: '命令探测' },
 ]
 
+// 部署节点的产物类型偏好(本 run 同时产出镜像与文件产物时,挑哪件部署)。
+// 留空 = 自动:优先文件产物(dist/jar/archive),没有文件产物才用镜像。
+const DEPLOY_ARTIFACT_OPTIONS: SelectOption[] = [
+  { value: '', label: '自动(优先文件产物,无则用镜像)' },
+  { value: 'image', label: '容器镜像 (image)' },
+  { value: 'dist', label: '静态资源 (dist)' },
+  { value: 'jar', label: 'JAR 包 (jar)' },
+  { value: 'archive', label: '归档包 (archive)' },
+]
+
 // `when` helpers
 const modelIs = (v: string) => (c: Record<string, string>) =>
   (c.buildModel || 'dockerfile') === v
@@ -156,12 +166,47 @@ const DEPLOY_SSH_FIELDS: JobField[] = [
     hint: '选择已登记的服务器(凭据按引用绑定)',
   },
   {
+    key: 'artifactType',
+    label: '部署产物类型',
+    kind: 'select',
+    options: DEPLOY_ARTIFACT_OPTIONS,
+    hint: '本 run 同时产出镜像与文件产物时挑哪件;镜像走目标机 docker pull → 起新容器 → 健康检查 → 失败回滚上一镜像',
+  },
+  {
     key: 'deployPath',
     label: '部署路径',
     kind: 'text',
     monospace: true,
     placeholder: '/opt/app',
-    hint: '产物发布到 <部署路径>/releases/<runId>/,current 软链原子切到本次发布(零停机,旧发布保留供回滚)',
+    hint: '文件产物:发布到 <部署路径>/releases/<runId>/,current 软链原子切到本次发布(零停机,旧发布保留供回滚)',
+    when: (c) => c.artifactType !== 'image',
+  },
+  {
+    key: 'containerName',
+    label: '容器名',
+    kind: 'text',
+    monospace: true,
+    placeholder: 'app',
+    hint: '镜像部署的目标容器名;留空则用产物名。同名旧容器会被替换并可回滚到上一镜像',
+    when: (c) => c.artifactType === 'image',
+  },
+  {
+    key: 'ports',
+    label: '端口映射',
+    kind: 'text',
+    monospace: true,
+    placeholder: '8080:80, 9000:9000',
+    hint: '镜像部署:逗号 / 空白分隔,每项展开为 docker run -p <map>',
+    when: (c) => c.artifactType === 'image',
+  },
+  {
+    key: 'runArgs',
+    label: 'docker run 参数',
+    kind: 'text',
+    monospace: true,
+    placeholder: '-e KEY=value --restart always',
+    hint: '镜像部署:原样追加到 docker run(参数自由;凭据请用 registry 登录,勿写进此处)',
+    when: (c) => c.artifactType === 'image',
   },
   {
     key: 'strategy',
@@ -176,6 +221,7 @@ const DEPLOY_SSH_FIELDS: JobField[] = [
     monospace: true,
     placeholder: 'systemctl restart app\nnginx -s reload',
     hint: '可选,多行(set -e 逐行执行);部署后在目标机 current 目录下执行,用于重启/重载;失败自动回滚',
+    when: (c) => c.artifactType !== 'image',
   },
 ]
 

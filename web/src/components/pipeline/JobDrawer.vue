@@ -7,10 +7,13 @@ import {
   getJobTypeSpec,
   splitConfig,
   jobTypeLabel,
+  isScriptClassType,
   type JobField,
 } from './jobConfigSchema'
+import { configUsesTemplate } from './stepCompile'
 import { createCustomNode } from '../../api/customNodes'
 import JobTypeIcon from './JobTypeIcon.vue'
+import StepBuilder from './StepBuilder.vue'
 
 const props = defineProps<{
   job: PipelineJob
@@ -62,20 +65,64 @@ function splitOnType(type: string, config: Record<string, string>): void {
   typedConfig.value = typed
   extraRows.value = extras.map(([k, v]) => ({ _key: ++_kvSeq, k, v }))
   showAdvanced.value = extras.length > 0
+  pickViewMode(config)
 }
 
-// Resync when the selected job changes
+// Resync when the selected job changes (initial hydrate runs after the
+// step-builder computeds below are declared, to avoid a temporal dead zone).
 watch(() => props.job, (next) => hydrate(next))
-hydrate(props.job)
 
 // ─── Field schema for the current type ────────────────────────────────────────
 
 const spec = computed(() => getJobTypeSpec(localType.value))
 
+/** 步骤构建器拥有的 config 键(commands 多行 / artifactPath 多行)。 */
+const STEP_OWNED_KEYS = new Set(['commands', 'artifactPath'])
+
+/** 该类型能用可视化步骤构建器吗(脚本类 + 有 commands/artifactPath 字段)。 */
+const canUseStepBuilder = computed<boolean>(() => {
+  if (!isScriptClassType(localType.value)) return false
+  if (!spec.value) return false
+  return spec.value.fields.some((f) => STEP_OWNED_KEYS.has(f.key))
+})
+
+/**
+ * 视图模式:'steps' 走可视化步骤构建器,'raw' 走原始 typed 表单。
+ * 默认对脚本类显示步骤视图;但若 config 用了模板渲染(commandTemplate/params,
+ * 步骤构建器不覆盖那套语义)则回退到原始视图,避免误编译丢数据。
+ */
+const viewMode = ref<'steps' | 'raw'>('raw')
+
+function pickViewMode(config: Record<string, string>): void {
+  if (canUseStepBuilder.value && !configUsesTemplate(config)) {
+    viewMode.value = 'steps'
+  } else {
+    viewMode.value = 'raw'
+  }
+}
+
+/** 步骤模式下,typed 表单只渲染「非步骤拥有」的字段(image/workDir/模板字段等)。 */
 const visibleFields = computed<JobField[]>(() => {
   if (!spec.value) return []
-  return spec.value.fields.filter((f) => !f.when || f.when(typedConfig.value))
+  return spec.value.fields.filter((f) => {
+    if (f.when && !f.when(typedConfig.value)) return false
+    if (viewMode.value === 'steps' && STEP_OWNED_KEYS.has(f.key)) return false
+    return true
+  })
 })
+
+/** 步骤构建器回传的编译片段并入 typedConfig 落库。 */
+function onStepsUpdate(patch: { commands: string; artifactPath: string }): void {
+  typedConfig.value = {
+    ...typedConfig.value,
+    commands: patch.commands,
+    artifactPath: patch.artifactPath,
+  }
+  flush()
+}
+
+// Initial hydrate (after the computeds above are declared, see watch comment).
+hydrate(props.job)
 
 function credentialOptions(field: JobField): Credential[] {
   const all = props.credentials ?? []
@@ -265,7 +312,29 @@ async function confirmSave(): Promise<void> {
 
     <!-- Typed config section (per-type form) -->
     <div v-if="spec" class="drawer-section">
-      <div class="drawer-section-label">{{ spec.label }}配置</div>
+      <div class="drawer-section-head">
+        <div class="drawer-section-label">{{ spec.label }}配置</div>
+        <div v-if="canUseStepBuilder" class="view-switch" role="tablist" aria-label="配置视图">
+          <button
+            class="view-tab"
+            :class="{ 'view-tab--active': viewMode === 'steps' }"
+            role="tab"
+            :aria-selected="viewMode === 'steps'"
+            @click="viewMode = 'steps'"
+          >
+            可视化步骤
+          </button>
+          <button
+            class="view-tab"
+            :class="{ 'view-tab--active': viewMode === 'raw' }"
+            role="tab"
+            :aria-selected="viewMode === 'raw'"
+            @click="viewMode = 'raw'"
+          >
+            原始参数
+          </button>
+        </div>
+      </div>
 
       <div
         v-for="field in visibleFields"
@@ -353,6 +422,14 @@ async function confirmSave(): Promise<void> {
         />
 
         <p v-if="field.hint && field.kind !== 'toggle'" class="field-hint">{{ field.hint }}</p>
+      </div>
+
+      <!-- 可视化步骤构建器(脚本类节点;编译进 commands/artifactPath,经 update 落库) -->
+      <div v-if="canUseStepBuilder && viewMode === 'steps'" class="drawer-field step-builder-field">
+        <StepBuilder :config="typedConfig" @update="onStepsUpdate" />
+        <p class="field-hint">
+          步骤会编译成多行命令在隔离容器内执行;切目录 / 设环境变量对后续命令生效。可随时切「原始参数」查看。
+        </p>
       </div>
     </div>
 
@@ -460,6 +537,57 @@ async function confirmSave(): Promise<void> {
 </template>
 
 <style scoped>
+.drawer-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 9px;
+}
+
+.drawer-section-head .drawer-section-label {
+  margin-bottom: 0;
+}
+
+.view-switch {
+  display: inline-flex;
+  padding: 2px;
+  background: var(--color-inset);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-full);
+}
+
+.view-tab {
+  padding: 3px 10px;
+  background: none;
+  border: none;
+  border-radius: var(--rounded-full);
+  color: var(--color-faint);
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color var(--duration-fast), background-color var(--duration-fast);
+}
+
+.view-tab:hover {
+  color: var(--color-text);
+}
+
+.view-tab--active {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.view-tab:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.step-builder-field {
+  margin-top: 4px;
+}
+
 .kv-empty {
   font-size: 0.78rem;
   color: var(--color-faint);

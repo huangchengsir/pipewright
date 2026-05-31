@@ -622,3 +622,20 @@ export function splitConfig(
   const extras = Object.entries(config).filter(([k]) => !owned.has(k))
   return { extras }
 }
+
+/**
+ * 「脚本类」节点:后端 `isScriptJob`(internal/build/dag_stage_exec.go)按 script 路径执行
+ * (容器跑 + 收 artifactPath 产物)的那批 type。可视化步骤构建器只对这些 type 出现,
+ * 因为它编译/反解析的就是这套 commands/artifactPath 键。与后端保持一致。
+ */
+const SCRIPT_CLASS_TYPES = new Set<string>([
+  'script',
+  'custom',
+  'build_frontend',
+  'build_backend',
+  'templated',
+])
+
+export function isScriptClassType(type: string): boolean {
+  return SCRIPT_CLASS_TYPES.has(type.trim())
+}

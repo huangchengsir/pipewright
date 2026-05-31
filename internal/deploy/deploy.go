@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/huangchengsir/pipewright/internal/artifactstore"
 	"github.com/huangchengsir/pipewright/internal/run"
 	"github.com/huangchengsir/pipewright/internal/target"
 )
@@ -117,6 +118,9 @@ type service struct {
 	// diagnoseHook 是部署失败后的 best-effort 自动诊断钩子(Story 4.6;FR-22 种子)。
 	// 由 main 注入(复用 7-2 NewDiagnoseHook);nil 则跳过。deploy 不 import ai(钩子解耦)。
 	diagnoseHook func(ctx context.Context, runID string)
+	// artStore 是制品库(Story 8-16):非 nil 时部署 release 类「已归档」产物会取真字节经 SSH 上传到
+	// 目标机;nil 或产物非归档 → 旧占位路径(向后兼容)。由 main 注入(WithArtifactStore)。
+	artStore *artifactstore.Store
 }
 
 // Option 配置 deploy.Service(如注入诊断钩子)。
@@ -126,6 +130,15 @@ type Option func(*service)
 // 部署 failed/partial_failed → 合成失败日志(SetFailureLog)+ 触发钩子,让 7-2 诊断飞轮覆盖部署失败。
 func WithDiagnoseHook(fn func(ctx context.Context, runID string)) Option {
 	return func(s *service) { s.diagnoseHook = fn }
+}
+
+// WithArtifactStore 注入制品库(Story 8-16):部署 release 类已归档产物时取真字节上传目标机。
+func WithArtifactStore(st *artifactstore.Store) Option {
+	return func(s *service) {
+		if st != nil {
+			s.artStore = st
+		}
+	}
 }
 
 // New 构造部署 Service。

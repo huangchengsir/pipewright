@@ -121,6 +121,7 @@ type multiHarness struct {
 	db        *sql.DB
 	rsvc      run.Service
 	dsvc      Service
+	targets   target.Service // 暴露真 target(供制品库部署 e2e 重建带 store 的 deploy.Service)
 	serverIDs []string
 }
 
@@ -152,7 +153,7 @@ func newMultiHarness(t *testing.T, fleet []*sshContainer, privKey string) *multi
 		ids = append(ids, srv.ID)
 	}
 	rsvc := run.New(st.DB)
-	return &multiHarness{db: st.DB, rsvc: rsvc, dsvc: New(tgt, rsvc), serverIDs: ids}
+	return &multiHarness{db: st.DB, rsvc: rsvc, dsvc: New(tgt, rsvc), targets: tgt, serverIDs: ids}
 }
 
 // TestE2EMultiTargetDeployAllSuccess 把一份 dist 并行部署到 3 台 CentOS,验全成功 + 每台真落地。

@@ -91,6 +91,60 @@ func (sshDialer) Run(ctx context.Context, addr string, cfg SSHConfig, cmd []stri
 	return res, nil
 }
 
+// RunWithStdin 同 Run,但把 stdin 接到远端命令标准输入(供 `cat > file` 流式上传产物字节)。
+// 与 Run 同样的连接/认证/超时/退出码语义;stdin 读尽即由 session 关闭远端 stdin。
+func (sshDialer) RunWithStdin(ctx context.Context, addr string, cfg SSHConfig, cmd []string, stdin io.Reader) (*ExecResult, error) {
+	auth, err := authMethods(cfg)
+	if err != nil {
+		return nil, err
+	}
+	clientCfg := &ssh.ClientConfig{
+		User:            cfg.User,
+		Auth:            auth,
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // dev-only;生产固定 known_hosts(deferred)
+		Timeout:         resolveTimeout(ctx),
+	}
+	d := net.Dialer{Timeout: clientCfg.Timeout}
+	conn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("%w", classifyDialErr(err))
+	}
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, clientCfg)
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("%w", classifyHandshakeErr(err))
+	}
+	client := ssh.NewClient(sshConn, chans, reqs)
+	defer func() { _ = client.Close() }()
+
+	session, err := client.NewSession()
+	if err != nil {
+		return nil, fmt.Errorf("%w", ErrUnreachable)
+	}
+	defer func() { _ = session.Close() }()
+
+	var stdout, stderr bytes.Buffer
+	session.Stdout = &stdout
+	session.Stderr = &stderr
+	session.Stdin = stdin // 产物字节经 stdin 流式喂给远端 `cat > file`(无 argv 长度限)。
+
+	runErr := runWithContext(ctx, session, quoteArgs(cmd))
+	res := &ExecResult{Stdout: stdout.String(), Stderr: stderr.String()}
+	if runErr != nil {
+		var exitErr *ssh.ExitError
+		if errors.As(runErr, &exitErr) {
+			res.ExitCode = exitErr.ExitStatus()
+			return res, nil
+		}
+		if errors.Is(runErr, context.DeadlineExceeded) || errors.Is(runErr, context.Canceled) {
+			return nil, runErr
+		}
+		return nil, fmt.Errorf("%w", ErrUnreachable)
+	}
+	res.ExitCode = 0
+	return res, nil
+}
+
 // RunStream 建连后在 session 上启动 cmd 并返回 stdout 流。底层 client/session 的生命周期
 // 绑定到返回的 ReadCloser:Close()(或 ctx 取消)即关 session + client,释放远端进程与 TCP。
 //

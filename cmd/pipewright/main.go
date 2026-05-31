@@ -20,6 +20,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/ai"
 	"github.com/huangchengsir/pipewright/internal/anomaly"
 	"github.com/huangchengsir/pipewright/internal/approval"
+	"github.com/huangchengsir/pipewright/internal/artifactstore"
 	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/auth"
 	"github.com/huangchengsir/pipewright/internal/build"
@@ -208,6 +209,23 @@ func main() {
 	// 缺省/其它值仍走 PIPEWRIGHT_BUILDER 选出的真实 Builder / 桩 runner。
 	// ⚠ 当前阶段执行体为占位 stub(仅打日志即成功);真实「阶段内并行 job → job 内有序 step
 	// 在隔离容器构建/部署」= Story 8-2 尚未接入,故 dag 模式现仅用于验证编排,不做真实构建。
+	// 制品库(Story 8-16 / FR-8-16):构建后把 jar/dist 真字节归档,部署时取真字节上传目标机
+	// (否则只有占位 reference,jar/dist 无法真正部署)。默认落 DB 同级 artifacts/,可经
+	// PIPEWRIGHT_ARTIFACT_DIR 改。构造失败 → 降级 nil(保持旧占位行为,不中断启动)。
+	var artStore *artifactstore.Store
+	{
+		artDir := strings.TrimSpace(os.Getenv("PIPEWRIGHT_ARTIFACT_DIR"))
+		if artDir == "" {
+			artDir = filepath.Join(filepath.Dir(cfg.DBPath), "artifacts")
+		}
+		if as, aerr := artifactstore.New(artDir); aerr == nil {
+			artStore = as
+			log.Printf("[artifact] 制品库已启用(归档 jar/dist 真字节供部署):%s", artDir)
+		} else {
+			log.Printf("[artifact] 警告:制品库不可用(%v),jar/dist 部署退回占位引用", aerr)
+		}
+	}
+
 	var runnerOpts []run.PoolOption
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("PIPEWRIGHT_RUNNER")), "dag") {
 		// 阶段执行体(Story 8-2):探测到容器 CLI → 注入真实阶段执行器(script 类型 job 在隔离
@@ -215,7 +233,7 @@ func main() {
 		var dagOpts []dagrun.Option
 		// 审批门 hook(Story 8-4):Gate 阶段阻塞等待人工批准/拒绝。
 		dagOpts = append(dagOpts, dagrun.WithGate(httpapi.NewApprovalGate(runSvc, approvalCoord, approvalStore)))
-		if b, berr := build.NewBuilder(projectSvc, pipelineSettingsSvc, credVault); berr == nil {
+		if b, berr := build.NewBuilder(projectSvc, pipelineSettingsSvc, credVault, build.WithArtifactStore(artStore), build.WithImageGC(os.Getenv("PIPEWRIGHT_NO_IMAGE_GC") != "1")); berr == nil {
 			// runSvc 作测试报告持久层注入(Story 8-6 / FR-8-6):script 步骤产报告 → 解析 →
 			// 落库 → 质量门禁裁决(不过则阶段失败,阻断下游部署)。
 			dagOpts = append(dagOpts, dagrun.WithStageExecutor(build.NewStageExecutor(b, runSvc)))
@@ -240,7 +258,7 @@ func main() {
 		}
 		runnerOpts = []run.PoolOption{run.WithRunner(dagrun.New(specLoader, dagOpts...))}
 	} else {
-		runnerOpts = buildRunnerOption(projectSvc, pipelineSettingsSvc, credVault)
+		runnerOpts = buildRunnerOption(projectSvc, pipelineSettingsSvc, credVault, artStore)
 	}
 
 	// 终态钩子:通知(Story 5.2);PIPEWRIGHT_PR_STATUS=1 时再叠加「PR 状态回写」(Story 8-9 / FR-8-9):
@@ -331,7 +349,7 @@ func main() {
 	// (notifySvc 已在 pool 装配前声明〔Story 5.2 注入 NotifyHook〕,此处不重复。)
 	// Story 4.6(FR-22 种子):注入诊断钩子 → 部署失败(failed/partial_failed)合成失败日志 +
 	// best-effort 触发 7-2 AI 诊断,让诊断飞轮覆盖部署失败(而非只覆盖构建失败)。复用 7-2 NewDiagnoseHook。
-	deploySvc := deploy.New(targetSvc, runSvc, deploy.WithDiagnoseHook(httpapi.NewDiagnoseHook(runSvc, aiSvc, secretSrc)))
+	deploySvc := deploy.New(targetSvc, runSvc, deploy.WithDiagnoseHook(httpapi.NewDiagnoseHook(runSvc, aiSvc, secretSrc)), deploy.WithArtifactStore(artStore))
 
 	// 装配可配置异常检测服务(Story 6.5;FR-23):按阈值规则对服务器指标做检测,命中产告警入库。
 	// 检测复用 6-1 指标采集(NewAnomalyCollector 适配 collectServerMetrics);不可达/指标 null 的
@@ -416,21 +434,21 @@ func (b pacBlobFetcher) FetchBlob(ctx context.Context, repoURL, token, ref, file
 //   - 其它/缺省 auto:尝试构造真实 Builder,探测不到容器 CLI 时回退桩(优雅降级,NFR-10)。
 //
 // 返回 []run.PoolOption(可能为空):空 ⇒ 用 pool 默认 StubRunner。
-func buildRunnerOption(projectSvc project.Service, settingsSvc pipeline.SettingsService, v vault.Vault) []run.PoolOption {
+func buildRunnerOption(projectSvc project.Service, settingsSvc pipeline.SettingsService, v vault.Vault, artStore *artifactstore.Store) []run.PoolOption {
 	mode := strings.ToLower(strings.TrimSpace(os.Getenv("PIPEWRIGHT_BUILDER")))
 	switch mode {
 	case "stub":
 		log.Printf("[build] PIPEWRIGHT_BUILDER=stub:使用桩 runner(合成日志,不碰容器)")
 		return nil
 	case "real":
-		b, err := build.NewBuilder(projectSvc, settingsSvc, v)
+		b, err := build.NewBuilder(projectSvc, settingsSvc, v, build.WithArtifactStore(artStore), build.WithImageGC(os.Getenv("PIPEWRIGHT_NO_IMAGE_GC") != "1"))
 		if err != nil {
 			log.Fatalf("[build] PIPEWRIGHT_BUILDER=real 但构建器不可用:%v", err)
 		}
 		log.Printf("[build] 真实隔离构建器已启用(容器 CLI=%s)", b.DriverBinary())
 		return []run.PoolOption{run.WithRunner(b)}
 	default:
-		b, err := build.NewBuilder(projectSvc, settingsSvc, v)
+		b, err := build.NewBuilder(projectSvc, settingsSvc, v, build.WithArtifactStore(artStore), build.WithImageGC(os.Getenv("PIPEWRIGHT_NO_IMAGE_GC") != "1"))
 		if err != nil {
 			log.Printf("[build] 未探测到容器 CLI(docker/nerdctl/podman),回退桩 runner(PIPEWRIGHT_BUILDER=real 可强制要求真实):%v", err)
 			return nil

@@ -118,7 +118,7 @@ const canSubmit = computed(() => !loading.value && !isLockedOut.value)
       <!-- Brand header -->
       <div class="brand">
         <div class="brand-logo" aria-hidden="true">
-          <span class="mono">d&gt;</span>
+          <span class="mono">p&gt;</span>
         </div>
         <div class="brand-name">
           <span class="brand-title">Pipewright</span>

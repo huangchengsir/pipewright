@@ -52,6 +52,7 @@ type options struct {
 	projects         project.Service
 	triggers         trigger.Service
 	cron             cron.Service
+	concurrency      run.ConcurrencyService
 	pipelines        pipeline.Service
 	pipelineSettings pipeline.SettingsService
 	runs             run.Service
@@ -98,6 +99,12 @@ func WithProjects(s project.Service) Option {
 // WithCron 注入定时触发配置服务,挂载 /api/projects/{id}/cron 路由(Story 8-6)。
 func WithCron(s cron.Service) Option {
 	return func(o *options) { o.cron = s }
+}
+
+// WithConcurrency 注入项目级并发上限配置服务,挂载 /api/projects/{id}/concurrency 路由(FR-8-10)。
+// 不传则该端点返回 503(服务未初始化)。GET 过 auth;PUT 过 auth + CSRF。
+func WithConcurrency(s run.ConcurrencyService) Option {
+	return func(o *options) { o.concurrency = s }
 }
 
 // WithTriggers 注入触发配置服务,挂载 /api/projects/{id}/trigger* 路由。
@@ -304,6 +311,10 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 定时(cron)触发配置(Story 8-6)。o.cron 为 nil 时 handler 返回 503。GET 过 auth;PUT 过 auth + CSRF。
 		ar.Get("/projects/{id}/cron", makeGetCronHandler(o.cron))
 		ar.Put("/projects/{id}/cron", makeSaveCronHandler(o.cron))
+
+		// 项目级并发上限(FR-8-10)。o.concurrency 为 nil 时 handler 返回 503。GET 过 auth;PUT 过 auth + CSRF。
+		ar.Get("/projects/{id}/concurrency", makeGetConcurrencyHandler(o.concurrency))
+		ar.Put("/projects/{id}/concurrency", makeSaveConcurrencyHandler(o.concurrency))
 
 		// 流水线编排配置(Story 2.2)。pl 为 nil 时 handler 返回 503。
 		// 与 /projects/{id}/trigger 同在 {id} 路由组内并存(不会被 /projects/{id} 吞)。

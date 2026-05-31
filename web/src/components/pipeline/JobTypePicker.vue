@@ -10,6 +10,7 @@
  */
 import { ref, watch, nextTick } from 'vue'
 import { groupedJobTypes } from './jobConfigSchema'
+import { listCustomNodes, type CustomNode } from '../../api/customNodes'
 import JobTypeIcon from './JobTypeIcon.vue'
 
 const props = defineProps<{
@@ -22,6 +23,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'select', type: string): void
+  (e: 'select-custom', node: CustomNode): void
   (e: 'close'): void
 }>()
 
@@ -29,8 +31,28 @@ const groups = groupedJobTypes()
 const dialogRef = ref<HTMLElement | null>(null)
 let focusedBeforeOpen: HTMLElement | null = null
 
+// 复用库 Tier 2:挑选时加载已保存的自定义节点(选中即插入预填好 config 的 Job)。
+const customNodes = ref<CustomNode[]>([])
+const customLoading = ref(false)
+
+async function loadCustomNodes(): Promise<void> {
+  customLoading.value = true
+  try {
+    customNodes.value = await listCustomNodes()
+  } catch {
+    // 复用库为附加能力,加载失败不阻断挑选内建类型。
+    customNodes.value = []
+  } finally {
+    customLoading.value = false
+  }
+}
+
 function choose(type: string): void {
   emit('select', type)
+}
+
+function chooseCustom(node: CustomNode): void {
+  emit('select-custom', node)
 }
 
 function onKeydown(e: KeyboardEvent): void {
@@ -46,6 +68,7 @@ watch(
   async (isOpen) => {
     if (isOpen) {
       focusedBeforeOpen = document.activeElement as HTMLElement | null
+      void loadCustomNodes()
       await nextTick()
       dialogRef.value?.querySelector<HTMLElement>('.type-card')?.focus()
     } else {
@@ -82,6 +105,30 @@ watch(
           </header>
 
           <div class="jtp-body">
+            <!-- 复用库 Tier 2:我的自定义节点(已保存的单节点,选中即预填 config) -->
+            <section v-if="customLoading || customNodes.length" class="jtp-group">
+              <h3 class="jtp-group-label">我的自定义节点</h3>
+              <p v-if="customLoading" class="jtp-custom-hint">加载中…</p>
+              <div v-else class="jtp-grid">
+                <button
+                  v-for="node in customNodes"
+                  :key="node.id"
+                  class="type-card type-card--custom"
+                  @click="chooseCustom(node)"
+                >
+                  <JobTypeIcon :type="node.nodeType" :size="38" />
+                  <span class="type-card-body">
+                    <span class="type-card-name">
+                      {{ node.name }}
+                      <span class="type-card-badge type-card-badge--custom">自定义</span>
+                    </span>
+                    <span class="type-card-desc">{{ node.description || node.summary || '已保存的自定义节点' }}</span>
+                    <code class="type-card-token">{{ node.nodeType }}</code>
+                  </span>
+                </button>
+              </div>
+            </section>
+
             <section v-for="group in groups" :key="group.id" class="jtp-group">
               <h3 class="jtp-group-label">{{ group.label }}</h3>
               <div class="jtp-grid">
@@ -224,6 +271,21 @@ watch(
 .type-card--current {
   border-color: var(--color-primary);
   background: var(--color-primary-soft);
+}
+
+/* 自定义节点卡:左侧强调条,与内建类型区分 */
+.type-card--custom {
+  border-left: 3px solid var(--color-primary);
+}
+
+.type-card-badge--custom {
+  background: var(--color-accent, var(--color-primary));
+}
+
+.jtp-custom-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--color-faint);
 }
 
 .type-card-body {

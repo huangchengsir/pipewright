@@ -85,6 +85,7 @@ type options struct {
 	doraMetrics      run.MetricsService
 	templates        library.TemplateService
 	varGroups        library.VarGroupService
+	customNodes      library.CustomNodeService
 	artifactStore    *artifactstore.Store
 }
 
@@ -129,6 +130,13 @@ func WithTemplates(s library.TemplateService) Option {
 // 不传则相关端点返回 503(服务未初始化)。
 func WithVariableGroups(s library.VarGroupService) Option {
 	return func(o *options) { o.varGroups = s }
+}
+
+// WithCustomNodes 注入自定义节点服务(复用库 Tier 2),挂载 /api/custom-nodes* 路由。
+// GET 过 auth;POST/PUT/DELETE 过 auth + CSRF + 审计。config 为自由 KV 快照,不含明文 secret。
+// 不传则相关端点返回 503(服务未初始化)。
+func WithCustomNodes(s library.CustomNodeService) Option {
+	return func(o *options) { o.customNodes = s }
 }
 
 // WithVault 注入凭据保险库,挂载 /api/credentials* 路由。
@@ -642,6 +650,16 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Get("/variable-groups/{id}", makeGetVarGroupHandler(vg))
 		ar.Put("/variable-groups/{id}", makeUpdateVarGroupHandler(vg, aud))
 		ar.Delete("/variable-groups/{id}", makeDeleteVarGroupHandler(vg, aud))
+
+		// 自定义节点(复用库 Tier 2):命名、可复用的「单节点」(nodeType + config 快照)。
+		// cn 为 nil → handler 返回 503。GET 过 auth;POST/PUT/DELETE 为写方法,过 auth + CSRF + 审计。
+		// config 为自由 KV 快照,不含明文 secret。
+		cn := o.customNodes
+		ar.Get("/custom-nodes", makeListCustomNodesHandler(cn))
+		ar.Post("/custom-nodes", makeCreateCustomNodeHandler(cn, aud))
+		ar.Get("/custom-nodes/{id}", makeGetCustomNodeHandler(cn))
+		ar.Put("/custom-nodes/{id}", makeUpdateCustomNodeHandler(cn, aud))
+		ar.Delete("/custom-nodes/{id}", makeDeleteCustomNodeHandler(cn, aud))
 
 		// 后续 story 在此挂载其他 API 路由。
 	})

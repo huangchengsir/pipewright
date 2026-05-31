@@ -126,6 +126,11 @@ type Service interface {
 	// 优雅降级铁律:AI 未配 / 超时 / 不可解析 / 空 hypothesis / 低质 → status=unavailable + reason,
 	// **绝不返回 error 致上层 500**(本方法对降级路径返回 (*Diagnosis, nil),仅极少内部错回 error)。
 	Diagnose(ctx context.Context, in DiagnoseInput) (*Diagnosis, error)
+	// AnnotateRisks 对脚本步骤命令做风险标注(护城河):确定性正则预扫 + 可选 LLM 语义增强。
+	// **出网前必脱敏**:入参 Masker 登记的 secret 在脚本进 prompt / 取证据前一律 [MASKED];
+	// 检测到明文密钥的标注本身绝不回显该密钥。优雅降级铁律:AI 未配 / 失败 / 不可解析 → 仅返回
+	// 确定性规则结果 + AIEnhanced=false + 人读 reason,**永远返回 (*RiskReport, nil),绝不 500**。
+	AnnotateRisks(ctx context.Context, in AnnotateRisksInput) (*RiskReport, error)
 }
 
 // service 是 store + vault + 注入 http.Client 支撑的 Service 实现。

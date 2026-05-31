@@ -128,9 +128,15 @@ func (s *service) Generate(ctx context.Context, in GenerateInput) (*Proposal, er
 	return proposal, nil
 }
 
-// chat 按 provider 构造 chat 请求并取回助手文本(经注入 http.Client)。
+// chat 按 provider 构造 chat 请求并取回助手文本(经注入 http.Client),使用默认 max_tokens。
 // 失败统一返回 ErrGenerateFailed 包裹的人读错误(不携带底层网络错误,避免 URL 密钥外泄)。
 func (s *service) chat(ctx context.Context, provider, baseURL, model, apiKey, prompt string) (string, error) {
+	return s.chatWithTokens(ctx, provider, baseURL, model, apiKey, prompt, generateMaxTokens)
+}
+
+// chatWithTokens 同 chat,但允许调用方指定 claude 的 max_tokens(openai/ollama 沿用其默认)。
+// 复用同一套 per-provider 请求构造 / 响应解析 / 错误脱敏逻辑(供风险标注等较短回包场景调小)。
+func (s *service) chatWithTokens(ctx context.Context, provider, baseURL, model, apiKey, prompt string, maxTokens int) (string, error) {
 	base := strings.TrimRight(baseURL, "/")
 
 	var (
@@ -147,7 +153,7 @@ func (s *service) chat(ctx context.Context, provider, baseURL, model, apiKey, pr
 		header["anthropic-version"] = "2023-06-01"
 		body, err = json.Marshal(map[string]any{
 			"model":      model,
-			"max_tokens": generateMaxTokens,
+			"max_tokens": maxTokens,
 			"messages": []map[string]string{
 				{"role": "user", "content": prompt},
 			},

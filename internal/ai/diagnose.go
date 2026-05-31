@@ -58,14 +58,17 @@ type DiagnosisEvidence struct {
 
 // Diagnosis 是 AI 失败诊断的领域模型(对齐冻结 diagnosis 子 DTO)。
 type Diagnosis struct {
-	Status          string              `json:"status"` // ready | unavailable | pending
-	Reason          string              `json:"reason"` // status≠ready 时人读原因(绝无密钥)
-	Hypothesis      string              `json:"hypothesis"`
-	Confidence      string              `json:"confidence"` // high | medium | low
-	AlternateCauses []string            `json:"alternateCauses"`
-	FixSuggestions  []string            `json:"fixSuggestions"`
-	Evidence        []DiagnosisEvidence `json:"evidence"`
-	GeneratedAt     time.Time           `json:"generatedAt"`
+	Status          string   `json:"status"` // ready | unavailable | pending
+	Reason          string   `json:"reason"` // status≠ready 时人读原因(绝无密钥)
+	Hypothesis      string   `json:"hypothesis"`
+	Confidence      string   `json:"confidence"` // high | medium | low
+	AlternateCauses []string `json:"alternateCauses"`
+	FixSuggestions  []string `json:"fixSuggestions"`
+	// FixScript 是可直接复制粘贴的「修复脚本/补丁片段」(护城河 · AI moat),针对失败步骤给出
+	// 具体可执行的改法(如 shell 命令、配置 diff)。脱敏后落库;空串 = 模型未给出。
+	FixScript   string              `json:"fixScript"`
+	Evidence    []DiagnosisEvidence `json:"evidence"`
+	GeneratedAt time.Time           `json:"generatedAt"`
 }
 
 // unavailable 构造一个 status=unavailable 的诊断(带人读 reason;绝无密钥)。
@@ -86,6 +89,8 @@ type llmDiagnosis struct {
 	Confidence      string   `json:"confidence"`
 	AlternateCauses []string `json:"alternateCauses"`
 	FixSuggestions  []string `json:"fixSuggestions"`
+	// FixScript 是模型给的可执行修复脚本/补丁片段(护城河);脱敏后采纳,绝不回显原始 secret。
+	FixScript string `json:"fixScript"`
 	// EvidenceLines 是模型认为命中的行号(1-based);证据正文以脱敏日志为准,不取模型回的文本。
 	EvidenceLines []int `json:"evidenceLines"`
 }
@@ -167,6 +172,7 @@ func (s *service) Diagnose(ctx context.Context, in DiagnoseInput) (*Diagnosis, e
 		Confidence:      normalizeConfidence(parsed.Confidence),
 		AlternateCauses: sanitizeMaskList(masker, parsed.AlternateCauses),
 		FixSuggestions:  sanitizeMaskList(masker, parsed.FixSuggestions),
+		FixScript:       masker.Scrub(strings.TrimSpace(parsed.FixScript)),
 		Evidence:        evidence,
 		GeneratedAt:     time.Now().UTC(),
 	}
@@ -298,13 +304,15 @@ func buildDiagnosePrompt(maskedLines []string, step, project string) string {
   "hypothesis": "最可能的根因是 ...(假说,非结论)",
   "confidence": "high|medium|low",
   "alternateCauses": ["低置信时列出的其它可能根因"],
-  "fixSuggestions": ["可执行的修复建议"],
+  "fixSuggestions": ["可执行的修复建议(人读要点,简短)"],
+  "fixScript": "可直接复制粘贴的修复脚本/补丁片段(shell 命令或配置 diff),针对失败步骤给出具体改法;若无把握则留空字符串",
   "evidenceLines": [12, 13]
 }
 约束:
 - confidence 仅能为 high/medium/low;不确定时用 low 或 medium 并填 alternateCauses。
 - evidenceLines 为上面日志中支撑你假说的**行号**(整数数组),取最相关的少数几行。
-- 不要在任何字段回显敏感信息或凭据。
+- fixScript 是单个字符串(可含换行 \n),应是能直接执行/套用的命令或补丁;无具体可执行改法时给空字符串 ""。
+- 不要在任何字段(含 fixScript)回显敏感信息或凭据。
 `)
 	return b.String()
 }

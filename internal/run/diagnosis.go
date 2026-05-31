@@ -22,6 +22,7 @@ type diagnosisRow struct {
 	Confidence      string                 `json:"confidence"`
 	AlternateCauses []string               `json:"alternateCauses"`
 	FixSuggestions  []string               `json:"fixSuggestions"`
+	FixScript       string                 `json:"fixScript,omitempty"`
 	Evidence        []diagnosisEvidenceRow `json:"evidence"`
 	GeneratedAt     string                 `json:"generatedAt"`
 }
@@ -56,6 +57,7 @@ func encodeDiagnosis(d *Diagnosis) (string, error) {
 		Confidence:      d.Confidence,
 		AlternateCauses: alt,
 		FixSuggestions:  fixes,
+		FixScript:       d.FixScript,
 		Evidence:        ev,
 		GeneratedAt:     d.GeneratedAt.UTC().Format(time.RFC3339),
 	}
@@ -88,6 +90,7 @@ func decodeDiagnosis(s string) (*Diagnosis, error) {
 		Confidence:      row.Confidence,
 		AlternateCauses: row.AlternateCauses,
 		FixSuggestions:  row.FixSuggestions,
+		FixScript:       row.FixScript,
 		Evidence:        ev,
 	}
 	if t, perr := time.Parse(time.RFC3339, row.GeneratedAt); perr == nil {

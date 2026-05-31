@@ -102,6 +102,12 @@ export interface DiagnosisDTO {
   confidence: DiagnosisConfidence
   alternateCauses: string[]   // populated when confidence='low'
   fixSuggestions: string[]
+  /**
+   * Concrete copy-pasteable fix script / patch snippet for the failing step
+   * (AI moat). Empty string when the model gave none. Already masked
+   * server-side — no secrets reach the client.
+   */
+  fixScript: string
   evidence: DiagnosisEvidence[]
   generatedAt: string         // RFC3339
 }

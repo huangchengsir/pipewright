@@ -26,6 +26,7 @@ const stubDiagnosisJSON = `{
   "confidence": "high",
   "alternateCauses": ["也可能是 lockfile 未提交"],
   "fixSuggestions": ["在 package.json 声明 leftpad 并提交 lockfile"],
+  "fixScript": "npm install leftpad@^1.3.0 --save\ngit add package.json package-lock.json",
   "evidenceLines": [2]
 }`
 
@@ -87,6 +88,10 @@ func TestDiagnoseReady(t *testing.T) {
 			if len(d.FixSuggestions) == 0 {
 				t.Fatalf("fixSuggestions 应非空")
 			}
+			// 护城河:可执行修复脚本应被采纳。
+			if !strings.Contains(d.FixScript, "npm install leftpad") {
+				t.Fatalf("fixScript 应含可执行修复命令: %q", d.FixScript)
+			}
 			if len(d.Evidence) == 0 {
 				t.Fatalf("evidence 应非空")
 			}
@@ -107,6 +112,7 @@ func TestDiagnoseMasksSecret(t *testing.T) {
 	  "confidence": "low",
 	  "alternateCauses": ["可能涉及 ` + fakeRunSecret + `"],
 	  "fixSuggestions": ["移除 ` + fakeRunSecret + ` 泄漏"],
+	  "fixScript": "echo ` + fakeRunSecret + ` # 移除此行",
 	  "evidenceLines": [3]
 	}`
 	srv, cap := diagStubLLM(t, ProviderOpenAI, echoJSON)
@@ -138,6 +144,10 @@ func TestDiagnoseMasksSecret(t *testing.T) {
 		if strings.Contains(f, fakeRunSecret) {
 			t.Fatalf("fixSuggestions 泄漏明文 secret: %q", f)
 		}
+	}
+	// fixScript(护城河)亦须二次脱敏:模型回显 secret 时绝不原样输出。
+	if strings.Contains(d.FixScript, fakeRunSecret) {
+		t.Fatalf("fixScript 泄漏明文 secret: %q", d.FixScript)
 	}
 	// 3) evidence(命中行 3,正含 secret 的那行)取自脱敏日志,应为 [MASKED] 而非明文。
 	foundMasked := false

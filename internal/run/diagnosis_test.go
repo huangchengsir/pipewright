@@ -81,6 +81,7 @@ func TestSaveAndGetDiagnosis(t *testing.T) {
 		Confidence:      "high",
 		AlternateCauses: []string{"也可能是 lockfile 未提交"},
 		FixSuggestions:  []string{"声明依赖并提交 lockfile"},
+		FixScript:       "npm install leftpad@^1.3.0 --save\ngit add package-lock.json",
 		Evidence:        []DiagnosisEvidence{{Line: 2, Text: "npm ERR! missing", Highlight: true}},
 		GeneratedAt:     time.Now().UTC().Truncate(time.Second),
 	}
@@ -97,6 +98,9 @@ func TestSaveAndGetDiagnosis(t *testing.T) {
 	}
 	if len(got.Evidence) != 1 || got.Evidence[0].Line != 2 || !got.Evidence[0].Highlight {
 		t.Fatalf("evidence 往返不一致: %+v", got.Evidence)
+	}
+	if got.FixScript != want.FixScript {
+		t.Fatalf("fixScript 往返不一致: %q vs %q", got.FixScript, want.FixScript)
 	}
 	if !got.GeneratedAt.Equal(want.GeneratedAt) {
 		t.Fatalf("generatedAt 往返不一致: %v vs %v", got.GeneratedAt, want.GeneratedAt)

@@ -25,6 +25,7 @@ import EnvCredsTab from '../components/pipeline/EnvCredsTab.vue'
 import TriggersPanel from '../components/TriggersPanel.vue'
 import ValidationPanel from '../components/pipeline/ValidationPanel.vue'
 import AIGenerateWizard from '../components/pipeline/AIGenerateWizard.vue'
+import RiskAnnotationPanel from '../components/pipeline/RiskAnnotationPanel.vue'
 import YamlImportModal from '../components/pipeline/YamlImportModal.vue'
 import TemplatePickerModal from '../components/pipeline/TemplatePickerModal.vue'
 
@@ -517,6 +518,12 @@ const projectName = computed(() => String(route.params.id))
             :credentials="credentials"
             :servers="servers"
             @update="handleCanvasUpdate"
+          />
+
+          <!-- AI 脚本风险标注(护城河):对脚本步骤命令做风险体检,提交前先发现高危/泄漏/不可复现项 -->
+          <RiskAnnotationPanel
+            v-if="loadState === 'idle' && pipeline"
+            :project-id="projectId"
           />
         </div>
 

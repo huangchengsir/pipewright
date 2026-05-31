@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import {
   GitBranch,
   GitFork,
+  ChartBar,
   Server,
   AlertTriangle,
   Bell,
@@ -25,6 +26,8 @@ interface NavItem {
 const navItems: NavItem[] = [
   { name: 'projects',      to: '/projects',      icon: GitBranch,  label: '项目',  ariaLabel: '项目' },
   { name: 'runs',          to: '/runs',          icon: GitFork,    label: '运行',  ariaLabel: '运行' },
+  // FR-8-15: DORA 四指标仪表盘(交付效能;只读聚合)。
+  { name: 'dora',          to: '/metrics/dora',  icon: ChartBar,   label: 'DORA 指标', ariaLabel: 'DORA 指标' },
   // Story 6-1: 多机状态总览(服务器层指标 FR-15);登记在 设置 → 服务器。
   { name: 'server-status', to: '/server-status', icon: Server,     label: '服务器', ariaLabel: '服务器' },
   // Story 6-5: configurable anomaly detection & alerts (FR-23)

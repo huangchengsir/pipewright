@@ -20,10 +20,12 @@ type pipelineDTO struct {
 }
 
 type stageDTO struct {
-	ID   string   `json:"id"`
-	Name string   `json:"name"`
-	Kind string   `json:"kind"`
-	Jobs []jobDTO `json:"jobs"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Kind         string   `json:"kind"`
+	Needs        []string `json:"needs"`
+	AllowFailure bool     `json:"allowFailure"`
+	Jobs         []jobDTO `json:"jobs"`
 }
 
 type jobDTO struct {
@@ -52,7 +54,11 @@ func toPipelineDTO(c *pipeline.Config) pipelineDTO {
 				Config:  cfg,
 			})
 		}
-		stages = append(stages, stageDTO{ID: st.ID, Name: st.Name, Kind: st.Kind, Jobs: jobs})
+		needs := st.Needs
+		if needs == nil {
+			needs = []string{}
+		}
+		stages = append(stages, stageDTO{ID: st.ID, Name: st.Name, Kind: st.Kind, Needs: needs, AllowFailure: st.AllowFailure, Jobs: jobs})
 	}
 	return pipelineDTO{
 		Stages:    stages,
@@ -109,10 +115,12 @@ func makeSavePipelineHandler(svc pipeline.Service) http.HandlerFunc {
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<18) // 256KB
 		var req struct {
 			Stages []struct {
-				ID   string `json:"id"`
-				Name string `json:"name"`
-				Kind string `json:"kind"`
-				Jobs []struct {
+				ID           string   `json:"id"`
+				Name         string   `json:"name"`
+				Kind         string   `json:"kind"`
+				Needs        []string `json:"needs"`
+				AllowFailure bool     `json:"allowFailure"`
+				Jobs         []struct {
 					ID      string         `json:"id"`
 					Name    string         `json:"name"`
 					Type    string         `json:"type"`
@@ -139,10 +147,12 @@ func makeSavePipelineHandler(svc pipeline.Service) http.HandlerFunc {
 				})
 			}
 			stages = append(stages, pipeline.Stage{
-				ID:   st.ID,
-				Name: st.Name,
-				Kind: st.Kind,
-				Jobs: jobs,
+				ID:           st.ID,
+				Name:         st.Name,
+				Kind:         st.Kind,
+				Needs:        st.Needs,
+				AllowFailure: st.AllowFailure,
+				Jobs:         jobs,
 			})
 		}
 

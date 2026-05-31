@@ -55,10 +55,11 @@ type jobDTO struct {
 	Config  map[string]any `json:"config"`
 }
 
-// toPipelineDTO 把领域 Config 转为契约 DTO(切片/map 保证非 nil,JSON 输出 [] / {})。
-func toPipelineDTO(c *pipeline.Config) pipelineDTO {
-	stages := make([]stageDTO, 0, len(c.Spec.Stages))
-	for _, st := range c.Spec.Stages {
+// toStageDTOs 把领域阶段集合转契约 stageDTO 列表(切片/map 保证非 nil,JSON 输出 [] / {})。
+// 供流水线配置与流水线模板(library)共用同一阶段形状。
+func toStageDTOs(in []pipeline.Stage) []stageDTO {
+	stages := make([]stageDTO, 0, len(in))
+	for _, st := range in {
 		jobs := make([]jobDTO, 0, len(st.Jobs))
 		for _, jb := range st.Jobs {
 			cfg := jb.Config
@@ -79,12 +80,66 @@ func toPipelineDTO(c *pipeline.Config) pipelineDTO {
 		}
 		stages = append(stages, stageDTO{ID: st.ID, Name: st.Name, Kind: st.Kind, Needs: needs, AllowFailure: st.AllowFailure, When: toWhenDTO(st.When), Gate: st.Gate, Jobs: jobs})
 	}
+	return stages
+}
+
+// toPipelineDTO 把领域 Config 转为契约 DTO(切片/map 保证非 nil,JSON 输出 [] / {})。
+func toPipelineDTO(c *pipeline.Config) pipelineDTO {
 	return pipelineDTO{
-		Stages:    stages,
+		Stages:    toStageDTOs(c.Spec.Stages),
 		Yaml:      c.YAML,
 		Status:    c.Status,
 		UpdatedAt: c.UpdatedAt.UTC().Format(time.RFC3339),
 	}
+}
+
+// reqStage 是请求里的一条阶段(供流水线 PUT 与模板 POST 共用同一解析形状)。
+type reqStage struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Kind         string   `json:"kind"`
+	Needs        []string `json:"needs"`
+	AllowFailure bool     `json:"allowFailure"`
+	When         struct {
+		Branches []string `json:"branches"`
+		Events   []string `json:"events"`
+	} `json:"when"`
+	Gate bool `json:"gate"`
+	Jobs []struct {
+		ID      string         `json:"id"`
+		Name    string         `json:"name"`
+		Type    string         `json:"type"`
+		Summary string         `json:"summary"`
+		Config  map[string]any `json:"config"`
+	} `json:"jobs"`
+}
+
+// reqStagesToDomain 把请求阶段转领域阶段(规范化/校验由领域层 Save / NormalizeSpec 兜)。
+func reqStagesToDomain(in []reqStage) []pipeline.Stage {
+	stages := make([]pipeline.Stage, 0, len(in))
+	for _, st := range in {
+		jobs := make([]pipeline.Job, 0, len(st.Jobs))
+		for _, jb := range st.Jobs {
+			jobs = append(jobs, pipeline.Job{
+				ID:      jb.ID,
+				Name:    jb.Name,
+				Type:    jb.Type,
+				Summary: jb.Summary,
+				Config:  jb.Config,
+			})
+		}
+		stages = append(stages, pipeline.Stage{
+			ID:           st.ID,
+			Name:         st.Name,
+			Kind:         st.Kind,
+			Needs:        st.Needs,
+			AllowFailure: st.AllowFailure,
+			When:         pipeline.When{Branches: st.When.Branches, Events: st.When.Events},
+			Gate:         st.Gate,
+			Jobs:         jobs,
+		})
+	}
+	return stages
 }
 
 // writePipelineError 把领域错误映射为契约错误码/状态码。
@@ -133,56 +188,14 @@ func makeSavePipelineHandler(svc pipeline.Service) http.HandlerFunc {
 		id := chi.URLParam(r, "id")
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<18) // 256KB
 		var req struct {
-			Stages []struct {
-				ID           string   `json:"id"`
-				Name         string   `json:"name"`
-				Kind         string   `json:"kind"`
-				Needs        []string `json:"needs"`
-				AllowFailure bool     `json:"allowFailure"`
-				When         struct {
-					Branches []string `json:"branches"`
-					Events   []string `json:"events"`
-				} `json:"when"`
-				Gate bool `json:"gate"`
-				Jobs []struct {
-					ID      string         `json:"id"`
-					Name    string         `json:"name"`
-					Type    string         `json:"type"`
-					Summary string         `json:"summary"`
-					Config  map[string]any `json:"config"`
-				} `json:"jobs"`
-			} `json:"stages"`
+			Stages []reqStage `json:"stages"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
 			return
 		}
 
-		stages := make([]pipeline.Stage, 0, len(req.Stages))
-		for _, st := range req.Stages {
-			jobs := make([]pipeline.Job, 0, len(st.Jobs))
-			for _, jb := range st.Jobs {
-				jobs = append(jobs, pipeline.Job{
-					ID:      jb.ID,
-					Name:    jb.Name,
-					Type:    jb.Type,
-					Summary: jb.Summary,
-					Config:  jb.Config,
-				})
-			}
-			stages = append(stages, pipeline.Stage{
-				ID:           st.ID,
-				Name:         st.Name,
-				Kind:         st.Kind,
-				Needs:        st.Needs,
-				AllowFailure: st.AllowFailure,
-				When:         pipeline.When{Branches: st.When.Branches, Events: st.When.Events},
-				Gate:         st.Gate,
-				Jobs:         jobs,
-			})
-		}
-
-		cfg, err := svc.Save(r.Context(), id, pipeline.Spec{Stages: stages})
+		cfg, err := svc.Save(r.Context(), id, pipeline.Spec{Stages: reqStagesToDomain(req.Stages)})
 		if err != nil {
 			writePipelineError(w, err)
 			return

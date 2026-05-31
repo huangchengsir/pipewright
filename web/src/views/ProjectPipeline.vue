@@ -26,6 +26,7 @@ import TriggersPanel from '../components/TriggersPanel.vue'
 import ValidationPanel from '../components/pipeline/ValidationPanel.vue'
 import AIGenerateWizard from '../components/pipeline/AIGenerateWizard.vue'
 import YamlImportModal from '../components/pipeline/YamlImportModal.vue'
+import TemplatePickerModal from '../components/pipeline/TemplatePickerModal.vue'
 
 // ─── Route ────────────────────────────────────────────────────────────────────
 
@@ -263,6 +264,22 @@ function handleImport(): void {
   yamlImportOpen.value = true
 }
 
+// ─── Pipeline templates (FR-8-13) ─────────────────────────────────────────────
+
+const templateModalOpen = ref(false)
+
+function handleTemplates(): void {
+  templateModalOpen.value = true
+}
+
+/** Apply-template succeeded: server already persisted; reload pipeline + settings + revalidate. */
+async function handleTemplateApplied(): Promise<void> {
+  await Promise.all([loadPipeline(), loadSettings()])
+  if (activeTab.value !== 'canvas') setTab('canvas')
+  showSaveSuccess()
+  scheduleValidation(400)
+}
+
 /**
  * Preview (save=false): the modal parsed + validated the YAML and returned a DTO.
  * Reflect it on the canvas WITHOUT persisting — the user reviews, then clicks 保存草稿.
@@ -371,6 +388,13 @@ const projectName = computed(() => String(route.params.id))
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>
           </svg>
           从 YAML 导入
+        </button>
+
+        <button class="top-btn" :disabled="saveSubmitting" @click="handleTemplates">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 3l9 4.5-9 4.5-9-4.5z"/><path d="M3 12l9 4.5 9-4.5"/><path d="M3 16.5l9 4.5 9-4.5"/>
+          </svg>
+          模板
         </button>
 
         <!-- ─── Validation button + ready badge (Story 2-6) ─────────────── -->
@@ -574,6 +598,15 @@ const projectName = computed(() => String(route.params.id))
       @close="yamlImportOpen = false"
       @preview="handleImportPreview"
       @saved="handleImportSaved"
+    />
+
+    <!-- ─── Pipeline templates (FR-8-13) ────────────────────────────────── -->
+    <TemplatePickerModal
+      v-if="templateModalOpen"
+      :project-id="projectId"
+      :stages="editStages"
+      @close="templateModalOpen = false"
+      @applied="handleTemplateApplied"
     />
 
   </div>

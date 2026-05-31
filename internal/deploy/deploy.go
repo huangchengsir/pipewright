@@ -532,10 +532,15 @@ func (s *service) deployFanout(ctx context.Context, servers []*target.Server, a 
 // 探测通过 → success(message 含"健康检查通过");重试耗尽仍失败 → failed + 人读 message。
 // 执行错误**不上抛**:映射为 status=failed + 人读 message(绝无明文密钥)。
 func (s *service) deployOne(ctx context.Context, srv *target.Server, a run.Artifact, cfg map[string]string, hc *HealthCheck) TargetResult {
-	// dist / jar 走「发布目录 + current 软链原子切换 + 健康门控 + 失败回滚」零停机模式(Story 4.4)。
-	// image 本期仍 docker run、archive 维持文件部署,走下方既有命令链路。
+	// dist / jar / archive 走「发布目录 + current 软链原子切换 + 健康门控 + 失败回滚」零停机模式(Story 4.4)。
 	if releaseModeArtifact(a) {
 		return s.deployReleaseOne(ctx, srv, a, cfg, hc)
+	}
+
+	// image 走「pull → 停旧起新 → 健康门控 → 失败回滚上一镜像」(复用蓝绿单机原语,每机独立)。
+	// 补齐此前 buildImageDeploy 扁平路径无回滚的缺口:滚动 / 金丝雀 image 部署失败也能回滚。
+	if a.Type == run.ArtifactImage {
+		return s.deployImageOne(ctx, srv, a, cfg, hc, time.Now().UTC())
 	}
 
 	started := time.Now().UTC()

@@ -14,7 +14,7 @@ import {
 } from '../api/projects'
 import { listCredentials, type Credential } from '../api/credentials'
 import { triggerManual, type RunDetail, type TriggerManualInput } from '../api/runs'
-import { listRefs, type GitRef } from '../api/refs'
+import { listRefs, listCommits, type GitRef, type GitCommit } from '../api/refs'
 import RunParamsEditor from '../components/RunParamsEditor.vue'
 import { HttpError } from '../api/http'
 
@@ -397,16 +397,36 @@ function openTriggerModal(p: Project): void {
   void loadBranchOptions(p.id)
 }
 
-// 代码管理区(Story 8-18):拉取真实分支供下拉建议(datalist);未启用/失败 → 静默回退手填。
+// 代码管理区(Story 8-18):拉取真实分支/commit 供下拉建议(datalist);未启用/失败 → 静默回退手填。
 const branchOptions = ref<GitRef[]>([])
+const commitOptions = ref<GitCommit[]>([])
 async function loadBranchOptions(projectId: string): Promise<void> {
   branchOptions.value = []
+  commitOptions.value = []
   try {
     const refs = await listRefs(projectId)
     branchOptions.value = [...refs.branches, ...refs.tags]
   } catch {
     // 代码管理区未启用(503)或仓库不可达:静默,保持纯文本输入(优雅降级)。
   }
+  void loadCommitOptions(projectId, triggerForm.value.branch)
+}
+
+// 据当前分支拉最近 commit 供 commit 下拉(分支变化时刷新);失败静默。
+let commitLoadSeq = 0
+async function loadCommitOptions(projectId: string, ref: string): Promise<void> {
+  const seq = ++commitLoadSeq
+  try {
+    const commits = await listCommits(projectId, ref, 30)
+    if (seq === commitLoadSeq) commitOptions.value = commits
+  } catch {
+    if (seq === commitLoadSeq) commitOptions.value = []
+  }
+}
+
+function onTriggerBranchInput(): void {
+  triggerBranchError.value = ''
+  if (triggerProject.value) void loadCommitOptions(triggerProject.value.id, triggerForm.value.branch)
 }
 
 function closeTriggerModal(): void {
@@ -862,7 +882,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
               :disabled="triggerSubmitting"
               :aria-invalid="triggerBranchError ? 'true' : undefined"
               :aria-describedby="triggerBranchError ? 'trigger-branch-err' : undefined"
-              @input="triggerBranchError = ''"
+              @input="onTriggerBranchInput"
             />
             <!-- 代码管理区:真实分支/tag 下拉建议(空则纯文本输入,优雅降级) -->
             <datalist id="trigger-branch-options">
@@ -889,8 +909,13 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
               type="text"
               placeholder="例:a3f1c2d"
               autocomplete="off"
+              list="trigger-commit-options"
               :disabled="triggerSubmitting"
             />
+            <!-- 代码管理区:当前分支最近 commit 下拉建议(短 sha — 首行说明) -->
+            <datalist id="trigger-commit-options">
+              <option v-for="c in commitOptions" :key="c.sha" :value="c.short">{{ c.subject }}</option>
+            </datalist>
           </div>
 
           <!-- Parameters (optional · Story 8-11) -->

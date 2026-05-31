@@ -26,6 +26,7 @@ import (
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"github.com/huangchengsir/pipewright/internal/build"
 	"github.com/huangchengsir/pipewright/internal/gitauth"
@@ -221,6 +222,91 @@ func (c *Cache) ListRefs(ctx context.Context, repoURL, token string) (*Refs, err
 	sort.Slice(out.Branches, func(i, j int) bool { return out.Branches[i].Name < out.Branches[j].Name })
 	sort.Slice(out.Tags, func(i, j int) bool { return out.Tags[i].Name < out.Tags[j].Name })
 	return out, nil
+}
+
+// Commit 是一条提交摘要(供前端 commit 下拉:sha + 首行说明 + 作者 + 时刻)。
+type Commit struct {
+	SHA     string // 完整 sha
+	Short   string // 7 位短 sha
+	Subject string // 提交说明首行
+	Author  string // 作者名
+	When    time.Time
+}
+
+// ListCommits 列出某 ref(分支名/tag/commit sha)上最近 limit 条提交(镜像增量更新后从本地 git log 读)。
+// ref 空 → 用镜像 HEAD;limit<=0 或过大 → 夹到 [1,200]。供前端选 commit 提供数据。
+func (c *Cache) ListCommits(ctx context.Context, repoURL, token, ref string, limit int) ([]Commit, error) {
+	if limit <= 0 {
+		limit = 30
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	lock := c.repoLock(repoURL)
+	lock.Lock()
+	defer lock.Unlock()
+
+	mirror, err := c.ensureMirror(ctx, repoURL, token)
+	if err != nil {
+		return nil, err
+	}
+	repo, oerr := gogit.PlainOpen(mirror)
+	if oerr != nil {
+		return nil, oerr
+	}
+
+	// 解析起点 hash:ref 是分支/tag 名 → 解析其引用;否则当 commit sha;空 → HEAD。
+	var from plumbing.Hash
+	ref = strings.TrimSpace(ref)
+	switch {
+	case ref == "":
+		h, herr := repo.Head()
+		if herr != nil {
+			return nil, herr
+		}
+		from = h.Hash()
+	default:
+		if h, rerr := repo.ResolveRevision(plumbing.Revision(ref)); rerr == nil && h != nil {
+			from = *h
+		} else {
+			from = plumbing.NewHash(ref)
+		}
+	}
+
+	iter, lerr := repo.Log(&gogit.LogOptions{From: from})
+	if lerr != nil {
+		return nil, lerr
+	}
+	defer iter.Close()
+
+	out := make([]Commit, 0, limit)
+	_ = iter.ForEach(func(co *object.Commit) error {
+		sha := co.Hash.String()
+		out = append(out, Commit{
+			SHA:     sha,
+			Short:   shortSHA(sha),
+			Subject: firstLine(co.Message),
+			Author:  co.Author.Name,
+			When:    co.Author.When,
+		})
+		if len(out) >= limit {
+			return errStopIter
+		}
+		return nil
+	})
+	return out, nil
+}
+
+// errStopIter 是提前结束 commit 遍历的哨兵(达到 limit)。
+var errStopIter = errors.New("stop")
+
+// firstLine 取多行提交说明的首行(去空白)。
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return s
 }
 
 // shortSHA 取 commit 的 7 位短 sha(与 build.Cloner 同语义)。

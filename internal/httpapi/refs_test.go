@@ -14,12 +14,17 @@ import (
 )
 
 type fakeRefsLister struct {
-	refs *repocache.Refs
-	err  error
+	refs    *repocache.Refs
+	commits []repocache.Commit
+	err     error
 }
 
 func (f fakeRefsLister) ListRefs(_ context.Context, _, _ string) (*repocache.Refs, error) {
 	return f.refs, f.err
+}
+
+func (f fakeRefsLister) ListCommits(_ context.Context, _, _, _ string, _ int) ([]repocache.Commit, error) {
+	return f.commits, f.err
 }
 
 func setupRefsServer(t *testing.T, lister RefsLister) (string, *http.Client, string, string) {
@@ -62,6 +67,28 @@ func TestListRefsEndpointReturnsBranchesAndTags(t *testing.T) {
 	}
 	if len(body.Tags) != 1 || body.Tags[0].Name != "v1.0" {
 		t.Fatalf("tags 不对: %+v", body.Tags)
+	}
+}
+
+func TestListCommitsEndpoint(t *testing.T) {
+	lister := fakeRefsLister{commits: []repocache.Commit{
+		{SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Short: "aaaaaaa", Subject: "feat: x", Author: "me"},
+	}}
+	srv, client, _, projID := setupRefsServer(t, lister)
+	resp, err := client.Get(srv + "/api/projects/" + projID + "/commits?ref=main&limit=10")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var body struct {
+		Commits []commitDTO `json:"commits"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	if len(body.Commits) != 1 || body.Commits[0].Short != "aaaaaaa" || body.Commits[0].Subject != "feat: x" {
+		t.Fatalf("commits 不对: %+v", body.Commits)
 	}
 }
 

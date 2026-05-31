@@ -43,11 +43,12 @@ const defaultKeepReleases = 1
 // maxKeepReleases 夹紧保留份数上限(防误配留太多撑爆磁盘)。
 const maxKeepReleases = 50
 
-// releaseModeArtifact 判定产物是否走「发布目录 + current 软链」零停机模式。
-// dist / jar 走 release 模式;image 本期仍 docker run(commands.go),archive 维持文件部署。
+// releaseModeArtifact 判定产物是否走「发布目录 + current 软链」零停机模式(含蓝绿/canary 编排)。
+// dist / jar / archive 走文件 release 模式(archive 与 dist 同形:制品库 tar.gz 远端解包 / 占位);
+// image 另走容器蓝绿(image_release.go,docker pull/swap/回滚)。
 func releaseModeArtifact(a run.Artifact) bool {
 	switch a.Type {
-	case run.ArtifactDist, run.ArtifactJar:
+	case run.ArtifactDist, run.ArtifactJar, run.ArtifactArchive:
 		return true
 	default:
 		return false

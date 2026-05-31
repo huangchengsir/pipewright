@@ -130,6 +130,31 @@ func TestListRefs(t *testing.T) {
 	}
 }
 
+func TestListCommits(t *testing.T) {
+	src, _ := makeSourceRepo(t)
+	addCommit(t, src, "a.txt", "a")
+	addCommit(t, src, "b.txt", "b")
+	c := newTestCache(t)
+
+	commits, err := c.ListCommits(context.Background(), src, "", "master", 10)
+	if err != nil {
+		t.Fatalf("ListCommits: %v", err)
+	}
+	if len(commits) < 3 {
+		t.Fatalf("应至少 3 条提交(c1 + a + b),实际 %d", len(commits))
+	}
+	if commits[0].Subject != "add b.txt" {
+		t.Fatalf("最新提交说明应为 add b.txt,实际 %q", commits[0].Subject)
+	}
+	if commits[0].Short == "" || len(commits[0].SHA) != 40 {
+		t.Fatalf("commit sha 异常: short=%q sha=%q", commits[0].Short, commits[0].SHA)
+	}
+	one, _ := c.ListCommits(context.Background(), src, "", "master", 1)
+	if len(one) != 1 {
+		t.Fatalf("limit=1 应只返回 1 条,实际 %d", len(one))
+	}
+}
+
 // fakeFallback 记录是否被调用。
 type fakeFallback struct{ called bool }
 

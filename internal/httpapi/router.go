@@ -21,6 +21,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/approval"
 	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/auth"
+	"github.com/huangchengsir/pipewright/internal/chain"
 	"github.com/huangchengsir/pipewright/internal/cron"
 	"github.com/huangchengsir/pipewright/internal/deploy"
 	"github.com/huangchengsir/pipewright/internal/notify"
@@ -53,6 +54,7 @@ type options struct {
 	projects         project.Service
 	triggers         trigger.Service
 	cron             cron.Service
+	chain            chain.Service
 	concurrency      run.ConcurrencyService
 	pipelines        pipeline.Service
 	pipelineSettings pipeline.SettingsService
@@ -108,6 +110,12 @@ func WithProjects(s project.Service) Option {
 // WithCron 注入定时触发配置服务,挂载 /api/projects/{id}/cron 路由(Story 8-6)。
 func WithCron(s cron.Service) Option {
 	return func(o *options) { o.cron = s }
+}
+
+// WithChain 注入流水线串联配置服务,挂载 /api/projects/{id}/chain 路由(FR-8-11)。
+// 不传则该端点返回 503(服务未初始化)。GET 过 auth;PUT 过 auth + CSRF。
+func WithChain(s chain.Service) Option {
+	return func(o *options) { o.chain = s }
 }
 
 // WithConcurrency 注入项目级并发上限配置服务,挂载 /api/projects/{id}/concurrency 路由(FR-8-10)。
@@ -324,6 +332,11 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 项目级并发上限(FR-8-10)。o.concurrency 为 nil 时 handler 返回 503。GET 过 auth;PUT 过 auth + CSRF。
 		ar.Get("/projects/{id}/concurrency", makeGetConcurrencyHandler(o.concurrency))
 		ar.Put("/projects/{id}/concurrency", makeSaveConcurrencyHandler(o.concurrency))
+
+		// 流水线串联(FR-8-11):上游成功后触发下游流水线。o.chain 为 nil → handler 返回 503。
+		// GET 过 auth;PUT 为写方法,过 auth + CSRF。
+		ar.Get("/projects/{id}/chain", makeGetChainHandler(o.chain))
+		ar.Put("/projects/{id}/chain", makeSaveChainHandler(o.chain))
 
 		// 环境晋级流配置(Story 8-7 / FR-8-7):有序环境链 + 逐环境作用域变量/密钥。
 		// /environments、/promotions 比 /projects/{id} 多一段,不会被吞。

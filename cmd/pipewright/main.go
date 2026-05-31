@@ -23,6 +23,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/auth"
 	"github.com/huangchengsir/pipewright/internal/build"
+	"github.com/huangchengsir/pipewright/internal/chain"
 	"github.com/huangchengsir/pipewright/internal/config"
 	"github.com/huangchengsir/pipewright/internal/cron"
 	"github.com/huangchengsir/pipewright/internal/dagrun"
@@ -110,6 +111,11 @@ func main() {
 	// 装配项目级并发上限配置服务(FR-8-10 并发/队列控制):每项目一份 max_concurrent。
 	// 注入 worker pool 做准入(下方);经 /api/projects/{id}/concurrency 读写。
 	concurrencySvc := run.NewConcurrencyService(st.DB)
+
+	// 装配流水线串联配置服务(FR-8-11):每项目一份「成功后触发的下游目标」列表。
+	// 串联终态钩子(下方,与通知钩子同槽组合)在 run 落 success 时据此创建下游运行;
+	// 经 /api/projects/{id}/chain 读写。环路安全在 chain.NewHook(深度门 + 路径门)。
+	chainSvc := chain.NewService(st.DB)
 
 	// 装配运行服务(Story 3.1):本期桩 runner 跑占位步骤打通状态机;真实构建/部署=3-3/4-x。
 	// worker pool 在 aiSvc 装配后创建(以便注入 best-effort 自动诊断钩子,Story 7.2)。
@@ -230,6 +236,25 @@ func main() {
 		log.Printf("[prstatus] PR 状态回写已启用(PIPEWRIGHT_PR_STATUS=1;GitHub/Gitee,经项目凭据,best-effort)")
 	}
 
+	// 流水线串联终态钩子(FR-8-11):复用同一终态槽,叠加到 terminalHook 之上。
+	// run 落 success → 据上游项目串联配置创建下游运行(TriggerChain);环路安全(深度门 + 路径门)
+	// 在 chain.NewHook 内。深度上限经 PIPEWRIGHT_CHAIN_MAX_DEPTH 覆盖(默认 5);best-effort,
+	// 失败仅记日志,绝不阻断 run 终态。
+	chainMaxDepth := chain.DefaultMaxDepth
+	if v := strings.TrimSpace(os.Getenv("PIPEWRIGHT_CHAIN_MAX_DEPTH")); v != "" {
+		if n, perr := strconv.Atoi(v); perr == nil && n > 0 {
+			chainMaxDepth = n
+		} else {
+			log.Printf("[chain] 警告:PIPEWRIGHT_CHAIN_MAX_DEPTH=%q 非法(须为正整数),用默认 %d", v, chain.DefaultMaxDepth)
+		}
+	}
+	chainHook := chain.NewHook(chainSvc, runSvc, chainMaxDepth)
+	priorTerminal := terminalHook
+	terminalHook = func(ctx context.Context, runID, finalStatus string) {
+		priorTerminal(ctx, runID, finalStatus)
+		chainHook(ctx, runID, finalStatus)
+	}
+
 	// 并发/队列控制(FR-8-10):全局上限经 PIPEWRIGHT_MAX_CONCURRENT 设置(默认 = worker 数);
 	// 项目级上限经 concurrencySvc(/api/projects/{id}/concurrency 配置)。突发超限的运行保持 queued
 	// 排队,待槽位释放再调度(FIFO)。非法/未设 env → 0,pool 回落到默认行为(仅受全局上限)。
@@ -295,7 +320,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithServers(targetSvc), httpapi.WithDeploy(deploySvc), httpapi.WithNotifications(notifySvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithConcurrency(concurrencySvc), httpapi.WithPromotion(promotionStore)),
+		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithServers(targetSvc), httpapi.WithDeploy(deploySvc), httpapi.WithNotifications(notifySvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithConcurrency(concurrencySvc), httpapi.WithPromotion(promotionStore)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;

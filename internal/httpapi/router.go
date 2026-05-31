@@ -20,6 +20,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/anomaly"
 	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/auth"
+	"github.com/huangchengsir/pipewright/internal/cron"
 	"github.com/huangchengsir/pipewright/internal/deploy"
 	"github.com/huangchengsir/pipewright/internal/notify"
 	"github.com/huangchengsir/pipewright/internal/oauth"
@@ -49,6 +50,7 @@ type options struct {
 	vault            vault.Vault
 	projects         project.Service
 	triggers         trigger.Service
+	cron             cron.Service
 	pipelines        pipeline.Service
 	pipelineSettings pipeline.SettingsService
 	runs             run.Service
@@ -79,6 +81,11 @@ func WithVault(v vault.Vault) Option {
 // 不传则项目相关端点返回 503(服务未初始化)。
 func WithProjects(s project.Service) Option {
 	return func(o *options) { o.projects = s }
+}
+
+// WithCron 注入定时触发配置服务,挂载 /api/projects/{id}/cron 路由(Story 8-6)。
+func WithCron(s cron.Service) Option {
+	return func(o *options) { o.cron = s }
 }
 
 // WithTriggers 注入触发配置服务,挂载 /api/projects/{id}/trigger* 路由。
@@ -281,6 +288,10 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Get("/projects/{id}/trigger", makeGetTriggerHandler(t))
 		ar.Put("/projects/{id}/trigger", makeSaveTriggerHandler(t))
 		ar.Post("/projects/{id}/trigger/secret/reset", makeResetTriggerSecretHandler(t, aud))
+
+		// 定时(cron)触发配置(Story 8-6)。o.cron 为 nil 时 handler 返回 503。GET 过 auth;PUT 过 auth + CSRF。
+		ar.Get("/projects/{id}/cron", makeGetCronHandler(o.cron))
+		ar.Put("/projects/{id}/cron", makeSaveCronHandler(o.cron))
 
 		// 流水线编排配置(Story 2.2)。pl 为 nil 时 handler 返回 503。
 		// 与 /projects/{id}/trigger 同在 {id} 路由组内并存(不会被 /projects/{id} 吞)。

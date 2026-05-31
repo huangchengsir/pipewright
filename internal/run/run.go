@@ -60,6 +60,8 @@ const (
 	TriggerWebhook = "webhook"
 	// TriggerManual 表示手动触发。
 	TriggerManual = "manual"
+	// TriggerSchedule 表示定时(cron)触发(Story 8-6)。
+	TriggerSchedule = "schedule"
 )
 
 // 领域错误。错误体不含敏感数据。

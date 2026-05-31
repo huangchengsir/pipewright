@@ -104,6 +104,9 @@ func (c *Cloner) Clone(ctx context.Context, repoURL, token, branch, commit, dest
 	return resolved, nil
 }
 
+// IsRepoURLAllowed 是 validRepoURL 的导出包装(供 repocache 等复用同款 SSRF 收口,不重复实现)。
+func IsRepoURLAllowed(repoURL string) bool { return validRepoURL(repoURL) }
+
 // validRepoURL 对仓库地址做 SSRF 收口(生产路径),复用全平台同款策略:
 // 仅 http/https;拒云元数据/链路本地/回环;私网放行(自托管内网 Git 友好)。
 func validRepoURL(repoURL string) bool {

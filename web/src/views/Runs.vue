@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { listRuns, triggerManual, type RunListItem, type RunStatus, type RunDetail, type ListRunsParams } from '../api/runs'
+import { listRuns, triggerManual, type RunListItem, type RunStatus, type RunDetail, type ListRunsParams, type TriggerManualInput } from '../api/runs'
+import RunParamsEditor from '../components/RunParamsEditor.vue'
 import { listProjects, type Project } from '../api/projects'
 import { HttpError } from '../api/http'
 
@@ -72,6 +73,7 @@ const triggerModalOpen    = ref(false)
 const projects            = ref<Project[]>([])
 const projectsLoading     = ref(false)
 const triggerForm         = ref({ projectId: '', branch: '', commit: '' })
+const triggerParams       = ref<Record<string, string>>({})
 const triggerBranchError  = ref('')
 const triggerProjectError = ref('')
 const triggerBanner       = ref('')
@@ -95,6 +97,7 @@ async function loadProjectsForTrigger(): Promise<void> {
 
 function openTriggerModal(): void {
   triggerForm.value        = { projectId: '', branch: '', commit: '' }
+  triggerParams.value       = {}
   triggerBranchError.value  = ''
   triggerProjectError.value = ''
   triggerBanner.value       = ''
@@ -136,9 +139,10 @@ async function handleTriggerSubmit(): Promise<void> {
 
   triggerSubmitting.value = true
   try {
-    const input: { branch: string; commit?: string } = { branch }
+    const input: TriggerManualInput = { branch }
     const commit = triggerForm.value.commit.trim()
     if (commit) input.commit = commit
+    if (Object.keys(triggerParams.value).length) input.params = triggerParams.value
 
     const run: RunDetail = await triggerManual(triggerForm.value.projectId, input)
     triggerModalOpen.value = false
@@ -598,6 +602,15 @@ function isFailedStatus(status: RunStatus): boolean {
               autocomplete="off"
               :disabled="triggerSubmitting"
             />
+          </div>
+
+          <!-- Parameters (optional · Story 8-11) -->
+          <div class="field">
+            <label class="field-label">
+              参数
+              <span class="field-hint-inline">（可选,注入流水线为环境变量）</span>
+            </label>
+            <RunParamsEditor v-model="triggerParams" :disabled="triggerSubmitting" />
           </div>
 
           <!-- Footer -->

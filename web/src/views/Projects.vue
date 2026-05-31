@@ -13,7 +13,8 @@ import {
   type UpdateProjectInput,
 } from '../api/projects'
 import { listCredentials, type Credential } from '../api/credentials'
-import { triggerManual, type RunDetail } from '../api/runs'
+import { triggerManual, type RunDetail, type TriggerManualInput } from '../api/runs'
+import RunParamsEditor from '../components/RunParamsEditor.vue'
 import { HttpError } from '../api/http'
 
 // ─── router ───────────────────────────────────────────────────────────────────
@@ -379,6 +380,7 @@ async function confirmDelete(): Promise<void> {
 const triggerModalOpen   = ref(false)
 const triggerProject     = ref<Project | null>(null)
 const triggerForm        = ref({ branch: '', commit: '' })
+const triggerParams      = ref<Record<string, string>>({})
 const triggerBranchError = ref('')
 const triggerBanner      = ref('')
 const triggerSubmitting  = ref(false)
@@ -386,6 +388,7 @@ const triggerSubmitting  = ref(false)
 function openTriggerModal(p: Project): void {
   triggerProject.value     = p
   triggerForm.value        = { branch: p.defaultBranch || '', commit: '' }
+  triggerParams.value      = {}
   triggerBranchError.value = ''
   triggerBanner.value      = ''
   triggerSubmitting.value  = false
@@ -409,10 +412,11 @@ async function handleTriggerSubmit(): Promise<void> {
   triggerSubmitting.value = true
 
   try {
-    const input: { branch?: string; commit?: string } = {}
+    const input: TriggerManualInput = {}
     if (branch) input.branch = branch
     const commit = triggerForm.value.commit.trim()
     if (commit) input.commit = commit
+    if (Object.keys(triggerParams.value).length) input.params = triggerParams.value
 
     const run: RunDetail = await triggerManual(triggerProject.value.id, input)
     triggerModalOpen.value = false
@@ -866,6 +870,19 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
               type="text"
               placeholder="例:a3f1c2d"
               autocomplete="off"
+              :disabled="triggerSubmitting"
+            />
+          </div>
+
+          <!-- Parameters (optional · Story 8-11) -->
+          <div class="field">
+            <label class="field-label">
+              参数
+              <span class="field-hint-inline">（可选,注入流水线为环境变量）</span>
+            </label>
+            <RunParamsEditor
+              :key="triggerProject.id"
+              v-model="triggerParams"
               :disabled="triggerSubmitting"
             />
           </div>

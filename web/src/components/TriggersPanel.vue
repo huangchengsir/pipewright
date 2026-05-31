@@ -18,6 +18,7 @@ import {
   type UnmatchedPolicy,
 } from '../api/triggers'
 import { HttpError } from '../api/http'
+import CronPanel from './CronPanel.vue'
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -506,6 +507,9 @@ const displayWebhookUrl = computed(() => {
           </p>
         </div>
       </section>
+
+      <!-- ═══ Scheduled (cron) trigger · Story 8-6 ════════════════════════ -->
+      <CronPanel :project-id="props.projectId" />
 
       <!-- ═══ Save bar ════════════════════════════════════════════════════ -->
       <div class="save-bar">

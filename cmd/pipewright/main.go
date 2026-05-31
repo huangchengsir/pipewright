@@ -29,6 +29,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/oauth"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
+	"github.com/huangchengsir/pipewright/internal/prstatus"
 	"github.com/huangchengsir/pipewright/internal/run"
 	"github.com/huangchengsir/pipewright/internal/store"
 	"github.com/huangchengsir/pipewright/internal/target"
@@ -159,14 +160,32 @@ func main() {
 	// 经同一 run.StepSink 喂出,复用既有持久化/SSE/脱敏(下方 WithLogMaskerFunc 对真实日志同样生效)。
 	runnerOpts := buildRunnerOption(projectSvc, pipelineSettingsSvc, credVault)
 
+	// 终态钩子:通知(Story 5.2);PIPEWRIGHT_PR_STATUS=1 时再叠加「PR 状态回写」(Story 8-9 / FR-8-9):
+	// run 终态 → 据项目仓库识别 GitHub/Gitee → 经项目凭据回写该 commit 的提交状态(PR 检查)。
+	// **默认关闭**(避免意外往用户真实仓库回写);开启时 best-effort,失败仅记日志不阻断 run 终态。
+	terminalHook := httpapi.NewNotifyHook(runSvc, notifySvc, secretSrc)
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("PIPEWRIGHT_PR_STATUS")), "1") {
+		// API base 可经 env 覆盖(GitHub/Gitee 企业版自托管;空则用公有云默认)。
+		reporter := prstatus.NewReporter(&http.Client{Timeout: 10 * time.Second}).WithBaseURLs(
+			strings.TrimSpace(os.Getenv("PIPEWRIGHT_PR_STATUS_GITHUB_BASE")),
+			strings.TrimSpace(os.Getenv("PIPEWRIGHT_PR_STATUS_GITEE_BASE")))
+		prHook := httpapi.NewPRStatusHook(runSvc, projectSvc, credVault, reporter,
+			strings.TrimSpace(os.Getenv("PIPEWRIGHT_PUBLIC_URL")))
+		notify := terminalHook
+		terminalHook = func(ctx context.Context, runID, finalStatus string) {
+			notify(ctx, runID, finalStatus)
+			prHook(ctx, runID, finalStatus)
+		}
+		log.Printf("[prstatus] PR 状态回写已启用(PIPEWRIGHT_PR_STATUS=1;GitHub/Gitee,经项目凭据,best-effort)")
+	}
+
 	pool := run.NewWorkerPool(runSvc,
 		append(runnerOpts,
 			run.WithDiagnoseHook(httpapi.NewDiagnoseHook(runSvc, aiSvc, secretSrc)),
 			// per-run 日志脱敏:每个 run 构建登记了该 run 真实凭据的 Masker(红线修)。
 			run.WithLogMaskerFunc(secretSrc.MaskerForRun),
-			// best-effort 通知钩子(Story 5.2;FR-20):run 终态 → event → 构 Payload → Router.RouteEvent。
-			// 未配路由的事件不发送;单渠道失败续发;绝不阻断 run 终态。run 包不 import notify(钩子解耦)。
-			run.WithNotifyHook(httpapi.NewNotifyHook(runSvc, notifySvc, secretSrc)),
+			// best-effort 终态钩子(通知 + 可选 PR 状态回写)。未配路由的事件不发送;绝不阻断 run 终态。
+			run.WithNotifyHook(terminalHook),
 		)...,
 	)
 	pool.Start()

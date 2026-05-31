@@ -77,6 +77,7 @@ type options struct {
 	approvalCoord    *approval.Coordinator
 	approvalStore    *approval.Store
 	promotionStore   *promotion.Store
+	doraMetrics      run.MetricsService
 }
 
 // WithApprovals 注入审批门协调器 + 持久层(Story 8-4),挂载 /api/runs/{id}/{approve,reject,approvals} 路由。
@@ -93,6 +94,13 @@ func WithApprovals(coord *approval.Coordinator, store *approval.Store) Option {
 // 不传则晋级端点返回 503。
 func WithPromotion(store *promotion.Store) Option {
 	return func(o *options) { o.promotionStore = store }
+}
+
+// WithDoraMetrics 注入 DORA 指标只读聚合服务(FR-8-15),挂载 GET /api/metrics/dora 路由
+// (认证 + 只读;projectId 可选过滤 + window 时间窗口)。对既有运行数据做纯聚合,无新表、无副作用。
+// 不传则该端点返回 503(服务未初始化)。
+func WithDoraMetrics(s run.MetricsService) Option {
+	return func(o *options) { o.doraMetrics = s }
 }
 
 // WithVault 注入凭据保险库,挂载 /api/credentials* 路由。
@@ -556,6 +564,11 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Put("/oauth/apps/{provider}", makeSaveOAuthAppHandler(oa))
 		ar.Get("/oauth/{provider}/authorize", makeOAuthAuthorizeHandler(oa))
 		ar.Get("/oauth/{provider}/callback", makeOAuthCallbackHandler(oa, v))
+
+		// DORA 四指标只读聚合(FR-8-15):部署频率 / 变更前置时长 / 变更失败率 / MTTR。
+		// 对既有运行数据做纯聚合(无新表、无副作用)。GET 只读 → 过 auth、豁免 CSRF。
+		// projectId 可选过滤;window 形如 30d(默认)。o.doraMetrics 为 nil → handler 返回 503。
+		ar.Get("/metrics/dora", makeDoraMetricsHandler(o.doraMetrics))
 
 		// 后续 story 在此挂载其他 API 路由。
 	})

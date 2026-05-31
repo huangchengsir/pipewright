@@ -11,7 +11,8 @@ import (
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
-	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+
+	"github.com/huangchengsir/pipewright/internal/gitauth"
 )
 
 // cloneTimeout 是单次克隆的硬超时(防黑洞 IP / 慢 DNS 把构建 goroutine 挂死)。
@@ -62,7 +63,7 @@ func (c *Cloner) Clone(ctx context.Context, repoURL, token, branch, commit, dest
 	cctx, cancel := context.WithTimeout(ctx, cloneTimeout)
 	defer cancel()
 
-	auth := &githttp.BasicAuth{Username: "git", Password: token}
+	auth := gitauth.BasicAuth(repoURL, token)
 	commit = strings.TrimSpace(commit)
 	branch = strings.TrimSpace(branch)
 

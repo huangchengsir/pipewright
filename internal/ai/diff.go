@@ -28,8 +28,9 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	fdiff "github.com/go-git/go-git/v5/plumbing/format/diff"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+
 	"github.com/go-git/go-git/v5/storage/memory"
+	"github.com/huangchengsir/pipewright/internal/gitauth"
 )
 
 // diffCloneTimeout 是单次克隆的硬超时(防黑洞 IP / 慢 DNS 把 goroutine 挂死)。
@@ -125,7 +126,7 @@ func (d goGitDiffer) Diff(ctx context.Context, repoURL, token, baselineCommit, c
 	// 克隆到内存(不设 Depth:浅克隆 HEAD 取不到任意历史 commit;此处需两个具体 commit 的 tree,
 	// 故取全量历史。内存 storer 限驻留,用完即随 GC 释放)。
 	storer := memory.NewStorage()
-	auth := &githttp.BasicAuth{Username: "git", Password: token}
+	auth := gitauth.BasicAuth(repoURL, token)
 	repo, err := gogit.CloneContext(cctx, storer, memfs.New(), &gogit.CloneOptions{
 		URL:  repoURL,
 		Auth: auth,

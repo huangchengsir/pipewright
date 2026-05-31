@@ -199,7 +199,9 @@ func main() {
 		// 审批门 hook(Story 8-4):Gate 阶段阻塞等待人工批准/拒绝。
 		dagOpts = append(dagOpts, dagrun.WithGate(httpapi.NewApprovalGate(runSvc, approvalCoord, approvalStore)))
 		if b, berr := build.NewBuilder(projectSvc, pipelineSettingsSvc, credVault); berr == nil {
-			dagOpts = append(dagOpts, dagrun.WithStageExecutor(build.NewStageExecutor(b)))
+			// runSvc 作测试报告持久层注入(Story 8-6 / FR-8-6):script 步骤产报告 → 解析 →
+			// 落库 → 质量门禁裁决(不过则阶段失败,阻断下游部署)。
+			dagOpts = append(dagOpts, dagrun.WithStageExecutor(build.NewStageExecutor(b, runSvc)))
 			log.Printf("[run] PIPEWRIGHT_RUNNER=dag:DAG 调度执行器已启用(阶段按 needs 编排;script 类型 job 在隔离容器真实执行,CLI=%s;build_image/push_image/deploy_ssh 真实化=后续)", b.DriverBinary())
 		} else {
 			log.Printf("[run] PIPEWRIGHT_RUNNER=dag:DAG 调度执行器已启用(阶段按 needs 编排;⚠ 未探测到容器 CLI,阶段执行体回退 stub:%v)", berr)

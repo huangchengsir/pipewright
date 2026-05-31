@@ -136,7 +136,7 @@ func TestScriptStepFromJobMissing(t *testing.T) {
 func TestStageExecutorRunsScriptJobInContainer(t *testing.T) {
 	drv := &recordingDriver{code: 0, emit: []string{"hello from container"}}
 	b := newDAGTestBuilder(drv, &markerCloner{})
-	exec := NewStageExecutor(b)
+	exec := NewStageExecutor(b, nil)
 	rep := &fakeReporter{}
 
 	err := exec(context.Background(), &run.Run{ProjectID: "p1"},
@@ -162,7 +162,7 @@ func TestStageExecutorRunsScriptJobInContainer(t *testing.T) {
 func TestStageExecutorInjectsRunParams(t *testing.T) {
 	drv := &recordingDriver{code: 0}
 	b := newDAGTestBuilder(drv, &markerCloner{})
-	exec := NewStageExecutor(b)
+	exec := NewStageExecutor(b, nil)
 	r := &run.Run{ProjectID: "p1", Trigger: run.Trigger{Params: map[string]string{"DEPLOY_ENV": "staging", "VER": "1.2"}}}
 	if err := exec(context.Background(), r, scriptStage(scriptJob("unit", "busybox", "echo hi")), &fakeReporter{}); err != nil {
 		t.Fatalf("exec: %v", err)
@@ -176,7 +176,7 @@ func TestStageExecutorInjectsRunParams(t *testing.T) {
 func TestStageExecutorNonScriptPlaceholder(t *testing.T) {
 	drv := &recordingDriver{}
 	b := newDAGTestBuilder(drv, &markerCloner{})
-	exec := NewStageExecutor(b)
+	exec := NewStageExecutor(b, nil)
 	rep := &fakeReporter{}
 
 	stage := pipeline.Stage{ID: "s", Name: "构建", Kind: pipeline.KindBuild,
@@ -195,7 +195,7 @@ func TestStageExecutorNonScriptPlaceholder(t *testing.T) {
 func TestStageExecutorScriptFailureNonZero(t *testing.T) {
 	drv := &recordingDriver{code: 1} // 容器非零退出
 	b := newDAGTestBuilder(drv, &markerCloner{})
-	exec := NewStageExecutor(b)
+	exec := NewStageExecutor(b, nil)
 	if err := exec(context.Background(), &run.Run{ProjectID: "p1"},
 		scriptStage(scriptJob("unit", "busybox", "false")), &fakeReporter{}); err == nil {
 		t.Error("expected ErrBuildFailed on nonzero container exit")
@@ -205,7 +205,7 @@ func TestStageExecutorScriptFailureNonZero(t *testing.T) {
 func TestStageExecutorInvalidScriptConfig(t *testing.T) {
 	drv := &recordingDriver{}
 	b := newDAGTestBuilder(drv, &markerCloner{})
-	exec := NewStageExecutor(b)
+	exec := NewStageExecutor(b, nil)
 	// script job 缺 image。
 	bad := pipeline.Job{Name: "x", Type: "script", Config: map[string]any{"commands": "echo hi"}}
 	if err := exec(context.Background(), &run.Run{ProjectID: "p1"}, scriptStage(bad), &fakeReporter{}); err == nil {
@@ -218,7 +218,7 @@ func TestStageExecutorInvalidScriptConfig(t *testing.T) {
 func TestE2EDockerStageExecutorParamsReal(t *testing.T) {
 	drv := dockerReadyOrSkip(t)
 	b := newDAGTestBuilder(drv, &markerCloner{})
-	exec := NewStageExecutor(b)
+	exec := NewStageExecutor(b, nil)
 	rep := &fakeReporter{}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -237,7 +237,7 @@ func TestE2EDockerStageExecutorParamsReal(t *testing.T) {
 func TestE2EDockerStageExecutorReal(t *testing.T) {
 	drv := dockerReadyOrSkip(t)
 	b := newDAGTestBuilder(drv, &markerCloner{file: "marker.txt", content: "PIPEWRIGHT_DAG_OK"})
-	exec := NewStageExecutor(b)
+	exec := NewStageExecutor(b, nil)
 	rep := &fakeReporter{}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)

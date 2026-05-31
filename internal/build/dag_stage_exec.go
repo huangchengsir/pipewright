@@ -39,7 +39,8 @@ func isScriptJob(jobType string) bool {
 
 // NewStageExecutor 返回一个复用 Builder 容器基建的真实 dagrun.StageExecutor。
 // 仅对 script/custom 类型 job 做真实容器执行;其余类型打占位日志放行。
-func NewStageExecutor(b *Builder) dagrun.StageExecutor {
+// reportSink 可选(nil = 不持久化测试报告,但质量门禁阻断仍生效;Story 8-6 / FR-8-6)。
+func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecutor {
 	return func(ctx context.Context, r *run.Run, stage pipeline.Stage, rep dagrun.StageReporter) error {
 		scriptJobs := make([]pipeline.Job, 0, len(stage.Jobs))
 		for _, jb := range stage.Jobs {
@@ -101,6 +102,13 @@ func NewStageExecutor(b *Builder) dagrun.StageExecutor {
 			if err := b.runScriptStep(ctx, sink, 0, step, workspace); err != nil {
 				return err // ErrBuildFailed / run.ErrCanceled
 			}
+		}
+
+		// 测试报告采集 + 质量门禁(Story 8-6 / FR-8-6):阶段 script job 全部成功后,据声明的
+		// 报告配置读工作区内的 JUnit/覆盖率文件 → 解析 → 持久化汇总 → 门禁裁决。门禁不过 →
+		// ErrQualityGate 令本阶段失败,阻断下游部署阶段(复用 dagrun「阶段失败→下游不执行」语义)。
+		if err := collectStageReport(ctx, reportSink, r, stage, workspace, rep); err != nil {
+			return err
 		}
 		return nil
 	}

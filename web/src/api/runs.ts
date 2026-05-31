@@ -348,6 +348,46 @@ export function getRunArtifacts(id: string): Promise<RunArtifactsResponse> {
   return http.get<RunArtifactsResponse>(`/api/runs/${id}/artifacts`)
 }
 
+// ─── Test report + quality gate (Epic 8 · Story 8-6 — FR-8-6) ────────────────
+//
+// GET /api/runs/{id}/test-report → { reports: TestReportDTO[], gate: GateVerdict }
+// Read-only, authenticated. A script step can declare it produces a JUnit report
+// (+ optional Cobertura coverage); the platform parses pass/fail/skip counts and
+// coverage%, and a quality gate can block downstream deploy when thresholds fail.
+// 404 run_not_found if the run does not exist. coverage = -1 means "not provided".
+
+export interface TestReportDTO {
+  id: string
+  stageId: string
+  stageName: string
+  format: string // junit
+  total: number
+  passed: number
+  failed: number
+  skipped: number
+  durationSec: number
+  coverage: number // line coverage %, -1 when not provided
+  gateEnabled: boolean
+  gatePassed: boolean
+  gateReason: string // human-readable block reason (no secrets — counts/thresholds only)
+  createdAt: string // RFC3339
+}
+
+export interface GateVerdict {
+  enabled: boolean // any stage declared a gate
+  passed: boolean // all gates passed (no gate ⇒ true)
+  reasons: string[] // per-stage block reasons (empty when passed)
+}
+
+export interface RunTestReportResponse {
+  reports: TestReportDTO[]
+  gate: GateVerdict
+}
+
+export function getRunTestReport(id: string): Promise<RunTestReportResponse> {
+  return http.get<RunTestReportResponse>(`/api/runs/${id}/test-report`)
+}
+
 // ─── SSH deploy execution (Story 4-2 frozen contract — FR-10) ─────────────────
 //
 // POST /api/runs/{id}/deploy  body { artifactId, serverIds, deployConfig? }

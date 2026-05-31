@@ -40,6 +40,7 @@ import SuccessFailDiff from '../components/run/SuccessFailDiff.vue'
 import RunTerminal from '../components/run/RunTerminal.vue'
 import ArtifactList from '../components/run/ArtifactList.vue'
 import DeployTargets from '../components/run/DeployTargets.vue'
+import RunDagView from '../components/run/RunDagView.vue'
 
 // ─── route ────────────────────────────────────────────────────────────────────
 
@@ -620,49 +621,14 @@ function nodeClass(status: StepStatus): string {
         <template v-if="run.status === 'running' || run.status === 'queued'">
           <div class="state-section">
 
-            <!-- Skewer timeline: 穿珠串线 -->
-            <div class="skewer-section">
+            <!-- DAG topology: stage graph with steps, replaces linear skewer -->
+            <div class="dag-section">
               <h2 class="section-title">流水线进度</h2>
-              <div
-                class="skewer"
-                role="list"
-                :aria-label="`流水线步骤,共 ${run.steps.length} 步`"
-              >
-                <div
-                  v-for="(step, idx) in run.steps"
-                  :key="step.id"
-                  class="skewer-item"
-                  role="listitem"
-                >
-                  <!-- Connector line before node (except first) -->
-                  <div
-                    v-if="idx > 0"
-                    class="skewer-connector"
-                    :class="{
-                      'connector--ok':      run.steps[idx - 1].status === 'success',
-                      'connector--bad':     run.steps[idx - 1].status === 'failed',
-                      'connector--running': run.steps[idx - 1].status === 'running',
-                    }"
-                    aria-hidden="true"
-                  />
-                  <!-- Node -->
-                  <div
-                    class="skewer-node"
-                    :class="nodeClass(step.status)"
-                    :title="step.name"
-                    :aria-label="`步骤 ${step.name}: ${step.status}`"
-                  >
-                    <!-- Running pulse ring -->
-                    <span
-                      v-if="step.status === 'running'"
-                      class="node-pulse-ring"
-                      aria-hidden="true"
-                    />
-                  </div>
-                  <!-- Step label below node -->
-                  <div class="skewer-label" aria-hidden="true">{{ step.name }}</div>
-                </div>
-              </div>
+              <RunDagView
+                :project-id="run.projectId"
+                :steps="run.steps"
+                :run-status="run.status"
+              />
             </div>
 
             <!-- Two-column layout: step list + log placeholder -->
@@ -726,21 +692,14 @@ function nodeClass(status: StepStatus): string {
         <template v-else-if="run.status === 'success'">
           <div class="state-section">
 
-            <!-- Full-green skewer -->
-            <div class="skewer-section">
+            <!-- DAG topology: full-green stage graph -->
+            <div class="dag-section">
               <h2 class="section-title">流水线完成</h2>
-              <div class="skewer" role="list" :aria-label="`流水线步骤,共 ${run.steps.length} 步,全部成功`">
-                <div
-                  v-for="(step, idx) in run.steps"
-                  :key="step.id"
-                  class="skewer-item"
-                  role="listitem"
-                >
-                  <div v-if="idx > 0" class="skewer-connector connector--ok" aria-hidden="true" />
-                  <div class="skewer-node node--ok" :title="step.name" :aria-label="`步骤 ${step.name}: 成功`" />
-                  <div class="skewer-label" aria-hidden="true">{{ step.name }}</div>
-                </div>
-              </div>
+              <RunDagView
+                :project-id="run.projectId"
+                :steps="run.steps"
+                :run-status="run.status"
+              />
             </div>
 
             <!-- Duration summary -->
@@ -962,34 +921,14 @@ function nodeClass(status: StepStatus): string {
         <template v-else-if="run.status === 'failed'">
           <div class="state-section">
 
-            <!-- Skewer with failure node -->
-            <div class="skewer-section">
+            <!-- DAG topology: failed stage highlighted -->
+            <div class="dag-section">
               <h2 class="section-title">流水线失败</h2>
-              <div class="skewer" role="list" :aria-label="`流水线步骤,含失败节点`">
-                <div
-                  v-for="(step, idx) in run.steps"
-                  :key="step.id"
-                  class="skewer-item"
-                  role="listitem"
-                >
-                  <div
-                    v-if="idx > 0"
-                    class="skewer-connector"
-                    :class="{
-                      'connector--ok':  run.steps[idx - 1].status === 'success',
-                      'connector--bad': run.steps[idx - 1].status === 'failed',
-                    }"
-                    aria-hidden="true"
-                  />
-                  <div
-                    class="skewer-node"
-                    :class="nodeClass(step.status)"
-                    :title="step.name"
-                    :aria-label="`步骤 ${step.name}: ${step.status}`"
-                  />
-                  <div class="skewer-label" aria-hidden="true">{{ step.name }}</div>
-                </div>
-              </div>
+              <RunDagView
+                :project-id="run.projectId"
+                :steps="run.steps"
+                :run-status="run.status"
+              />
             </div>
 
             <!-- Failed step summary -->
@@ -1042,33 +981,14 @@ function nodeClass(status: StepStatus): string {
         <template v-else-if="run.status === 'partial_failed'">
           <div class="state-section">
 
-            <div class="skewer-section">
+            <!-- DAG topology: partial failure view -->
+            <div class="dag-section">
               <h2 class="section-title">部分失败</h2>
-              <div class="skewer" role="list">
-                <div
-                  v-for="(step, idx) in run.steps"
-                  :key="step.id"
-                  class="skewer-item"
-                  role="listitem"
-                >
-                  <div
-                    v-if="idx > 0"
-                    class="skewer-connector"
-                    :class="{
-                      'connector--ok':  run.steps[idx - 1].status === 'success',
-                      'connector--bad': run.steps[idx - 1].status === 'failed',
-                    }"
-                    aria-hidden="true"
-                  />
-                  <div
-                    class="skewer-node"
-                    :class="nodeClass(step.status)"
-                    :title="step.name"
-                    :aria-label="`步骤 ${step.name}: ${step.status}`"
-                  />
-                  <div class="skewer-label" aria-hidden="true">{{ step.name }}</div>
-                </div>
-              </div>
+              <RunDagView
+                :project-id="run.projectId"
+                :steps="run.steps"
+                :run-status="run.status"
+              />
             </div>
 
             <div class="partial-info" role="status">
@@ -1155,33 +1075,14 @@ function nodeClass(status: StepStatus): string {
               </div>
             </div>
 
-            <!-- Steps summary for terminal states -->
-            <div class="step-list" v-if="run.steps.length > 0">
+            <!-- DAG topology: terminal state step record -->
+            <div v-if="run.steps.length > 0" class="dag-section">
               <h3 class="subsection-title">步骤记录</h3>
-              <ul class="steps" role="list">
-                <li
-                  v-for="step in run.steps"
-                  :key="step.id"
-                  class="step-row"
-                  :class="`step-row--${step.status}`"
-                >
-                  <div class="step-icon">
-                    <svg v-if="step.status === 'success'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
-                      <path d="M20 6 9 17l-5-5"/>
-                    </svg>
-                    <svg v-else-if="step.status === 'failed'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
-                      <path d="m18 6-12 12M6 6l12 12"/>
-                    </svg>
-                    <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                      <circle cx="12" cy="12" r="3"/>
-                    </svg>
-                  </div>
-                  <div class="step-info">
-                    <span class="step-name">{{ step.name }}</span>
-                    <span v-if="step.durationMs !== null" class="step-dur mono">{{ formatDuration(step.durationMs) }}</span>
-                  </div>
-                </li>
-              </ul>
+              <RunDagView
+                :project-id="run.projectId"
+                :steps="run.steps"
+                :run-status="run.status"
+              />
             </div>
 
             <!-- 历史日志回放(只读,Story 3-6) -->
@@ -1447,7 +1348,23 @@ function nodeClass(status: StepStatus): string {
   margin-bottom: 10px;
 }
 
-/* ─── skewer (穿珠时间线) ────────────────────────────────────────────────── */
+/* ─── DAG topology section (FR-8-8) ──────────────────────────────────────── */
+.dag-section {
+  padding: 16px 20px;
+  background: var(--color-inset);
+  border-radius: var(--rounded);
+  border: 1px solid var(--color-border);
+}
+
+.dag-section .section-title {
+  margin-bottom: 14px;
+}
+
+.dag-section .subsection-title {
+  margin-bottom: 12px;
+}
+
+/* ─── skewer (穿珠时间线) — kept for reference; not actively rendered ─────── */
 .skewer-section {
   padding: 16px 20px;
   background: var(--color-inset);

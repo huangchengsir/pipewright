@@ -12,6 +12,11 @@ import {
   normalizeWhen,
   hasWhen,
   whenSummary,
+  parseMatrix,
+  matrixToText,
+  hasMatrix,
+  matrixSummary,
+  matrixError,
   type WhenEvent,
 } from './stageSettings'
 
@@ -33,6 +38,7 @@ const emit = defineEmits<{
   (e: 'update-allow-failure', value: boolean): void
   (e: 'update-when', when: StageWhen | undefined): void
   (e: 'update-gate', value: boolean): void
+  (e: 'update-matrix', matrix: Record<string, string[]> | undefined): void
 }>()
 
 function stageLabel(index: number): string {
@@ -69,10 +75,28 @@ const branchText = computed<string>(() => branchesToText(props.stage.when?.branc
 
 const currentEvents = computed<string[]>(() => props.stage.when?.events ?? [])
 
-/** Active when settings or gate → highlight the settings button. */
-const hasStageRules = computed(() => hasWhen(props.stage.when) || props.stage.gate === true)
+/** Active when settings, gate, or matrix → highlight the settings button. */
+const hasStageRules = computed(
+  () => hasWhen(props.stage.when) || props.stage.gate === true || hasMatrix(props.stage.matrix),
+)
 
 const whenChip = computed(() => whenSummary(props.stage.when))
+
+// ─── Matrix build axes (P1) ───────────────────────────────────────────────────
+
+/** Editable matrix text (one `axis: a, b` per line), parsed → map only on commit. */
+const matrixText = computed<string>(() => matrixToText(props.stage.matrix))
+
+/** Chip summary for the matrix (empty when none). */
+const matrixChip = computed(() => matrixSummary(props.stage.matrix))
+
+/** Client-side validation message for the current matrix (null = ok/empty). */
+const matrixWarn = computed(() => matrixError(props.stage.matrix))
+
+/** Commit edited matrix text → parsed axes map (or undefined when empty). */
+function commitMatrix(text: string): void {
+  emit('update-matrix', parseMatrix(text))
+}
 
 /** Commit a new branch-glob set, preserving the current events. */
 function commitBranches(text: string): void {
@@ -182,6 +206,10 @@ function resetDrag(): void {
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
         审批门
       </span>
+      <span v-if="matrixChip" class="stage-rule-chip stage-rule-chip--matrix" title="矩阵展开:并行多个 cell">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        {{ matrixChip }}
+      </span>
     </div>
 
     <!-- Dependency editor popover -->
@@ -244,6 +272,20 @@ function resetDrag(): void {
         <span>进入本阶段前需人工审批</span>
       </label>
       <p class="deps-hint">开启后运行将暂停在此,等待批准/拒绝</p>
+
+      <div class="deps-divider"></div>
+      <div class="deps-popover-title">矩阵构建(matrix)</div>
+      <label class="settings-field-label" :for="`matrix-${stage.id}`">轴(每行一个:<code>名称: 值1, 值2</code>)</label>
+      <textarea
+        :id="`matrix-${stage.id}`"
+        class="settings-input settings-textarea"
+        rows="3"
+        :value="matrixText"
+        placeholder="go: 1.21, 1.22&#10;os: linux"
+        @change="commitMatrix(($event.target as HTMLTextAreaElement).value)"
+      ></textarea>
+      <p v-if="matrixWarn" class="settings-warn" role="alert">{{ matrixWarn }}</p>
+      <p class="deps-hint">展开成并行 cell(笛卡尔积),各注入 <code>MATRIX_&lt;轴名&gt;</code> 环境变量;空 = 不展开</p>
     </div>
 
     <!-- Job cards -->
@@ -401,6 +443,7 @@ function resetDrag(): void {
 .stage-rule-chip svg { flex: none; }
 .stage-rule-chip--when { background: var(--color-primary-soft); color: var(--color-primary); }
 .stage-rule-chip--gate { background: var(--color-amber-soft, rgba(217, 119, 6, 0.14)); color: var(--color-amber, #b45309); }
+.stage-rule-chip--matrix { background: var(--color-violet-soft, rgba(124, 58, 237, 0.13)); color: var(--color-violet, #6d28d9); }
 
 /* ─── Settings popover fields ─────────────────────────────────────────────── */
 .settings-popover { width: 232px; }
@@ -427,6 +470,8 @@ function resetDrag(): void {
   transition: border-color var(--duration-fast);
 }
 .settings-input:focus { outline: none; border-color: var(--color-primary); }
+.settings-textarea { height: auto; padding: 6px 8px; line-height: 1.5; resize: vertical; font-family: var(--font-mono, ui-monospace, monospace); }
+.settings-warn { margin: 5px 0 0; font-size: 0.68rem; color: var(--color-danger, #dc2626); line-height: 1.4; }
 .settings-events { display: flex; flex-wrap: wrap; gap: 6px 12px; }
 .settings-event {
   display: flex;

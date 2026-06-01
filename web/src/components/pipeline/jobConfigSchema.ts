@@ -191,6 +191,22 @@ const SCRIPT_FIELDS: JobField[] = [
     hint: '可选,每行一条。相对工作区根:目录→dist、*.jar→jar、其它文件→archive。一个节点可出多件;填了才归档进制品库并在运行详情可下载/部署。镜像产物请用「构建」节点(build_image),不在这里',
   },
   ...EXEC_OPTION_FIELDS,
+  {
+    key: 'cachePaths',
+    label: '依赖缓存目录',
+    kind: 'textarea',
+    monospace: true,
+    placeholder: 'node_modules\n.m2/repository',
+    hint: '可选,每行一条,相对工作区根。配了才启用缓存:构建前恢复、构建后保存,跨多次运行复用依赖(免重复拉 node_modules/.m2/.gradle 等)。缓存问题绝不影响构建结果',
+  },
+  {
+    key: 'cacheKey',
+    label: '缓存 Key(可选)',
+    kind: 'text',
+    monospace: true,
+    placeholder: '留空=按分支+lockfile 自动',
+    hint: '可选缓存键模板。留空则自动按「分支 + 工作区内 lockfile(package-lock/pom.xml/go.sum 等)内容」推导:依赖变则自动冷构建。支持 {{参数}}',
+  },
 ]
 
 // SSH 部署节点的字段(deploy_ssh 与 deploy_frontend 模板共用)。
@@ -556,6 +572,22 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
         hint: '可选,相对克隆工作区根',
       },
       ...EXEC_OPTION_FIELDS,
+      {
+        key: 'cachePaths',
+        label: '依赖缓存目录',
+        kind: 'textarea',
+        monospace: true,
+        placeholder: '{{dir}}/node_modules',
+        hint: '可选,每行一条,相对工作区根,支持 {{参数}}。配了才启用缓存:构建前恢复、构建后保存,跨运行复用依赖。缓存问题绝不影响构建结果',
+      },
+      {
+        key: 'cacheKey',
+        label: '缓存 Key(可选)',
+        kind: 'text',
+        monospace: true,
+        placeholder: '留空=按分支+lockfile 自动',
+        hint: '可选缓存键模板,支持 {{参数}}。留空则自动按分支 + lockfile 内容推导(依赖变则自动冷构建)',
+      },
     ],
     defaultConfig: {
       image: 'node:20',

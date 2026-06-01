@@ -61,6 +61,18 @@ type Builder struct {
 	// nil → 该类节点退化为占位日志(向后兼容;非-dag Builder.Run 路径不用)。
 	deployer deploy.Service
 	notifier notify.Service
+	// buildCache 是构建依赖缓存库(build cache · P0):非 nil 时 script 类 job 执行前后据 job.Config
+	// 的 cachePaths/cacheKey 恢复/保存依赖目录(node_modules/.m2/.gradle 等),跨 run 持久化提速。
+	// nil 则不缓存(向后兼容)。由 main 注入(WithBuildCache)。缓存问题绝不让构建失败(best-effort)。
+	buildCache buildCacheStore
+}
+
+// buildCacheStore 抽象「按 key 恢复/保存工作区缓存路径」的能力(便于 fake 单测注入)。
+// 实现是 *buildcache.Store。Restore 返回 (命中?, err);err 仅在输入非法时非 nil(缓存未命中
+// 不算错误,返回 false,nil)。Save 的 I/O 错误透出供日志,但调用方应忽略(不阻断构建)。
+type buildCacheStore interface {
+	Restore(ctx context.Context, key string, paths []string, workspace string) (bool, error)
+	Save(ctx context.Context, key string, paths []string, workspace string) error
 }
 
 // repoCloner 抽象「把仓库在 ref 上克隆到磁盘工作区」的能力(便于 fake 单测注入,
@@ -119,6 +131,16 @@ func WithStageDeployer(d deploy.Service) BuilderOption {
 // WithStageNotifier 注入通知服务,使 dag 里的 notify 节点真实发通知。
 func WithStageNotifier(n notify.Service) BuilderOption {
 	return func(b *Builder) { b.notifier = n }
+}
+
+// WithBuildCache 注入构建依赖缓存库(build cache · P0):script 类 job 配了 cachePaths 时,
+// 执行前恢复、执行后保存依赖目录到缓存库(跨 run 持久化提速)。nil 不改(不缓存,向后兼容)。
+func WithBuildCache(c buildCacheStore) BuilderOption {
+	return func(b *Builder) {
+		if c != nil {
+			b.buildCache = c
+		}
+	}
 }
 
 // NewBuilder 构造真实 Builder。driver 经 DetectDriver 探测(全无容器 CLI → ErrNoContainerCLI,

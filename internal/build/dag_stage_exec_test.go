@@ -470,6 +470,12 @@ func (d *stubStageDeployer) Deploy(context.Context, deploy.DeployInput) ([]deplo
 func (d *stubStageDeployer) RetryFailed(context.Context, deploy.RetryInput) ([]deploy.TargetResult, error) {
 	panic("RetryFailed not expected")
 }
+func (d *stubStageDeployer) ContinueDeploy(context.Context, deploy.ContinueInput) ([]deploy.TargetResult, error) {
+	panic("ContinueDeploy not expected")
+}
+func (d *stubStageDeployer) AbortDeploy(context.Context, deploy.AbortInput) ([]deploy.TargetResult, error) {
+	panic("AbortDeploy not expected")
+}
 func (d *stubStageDeployer) DeployForStage(_ context.Context, _ string, serverIDs []string, cfg map[string]string, strategy string) ([]deploy.TargetResult, error) {
 	d.gotCfg = cfg
 	d.gotStrategy = strategy

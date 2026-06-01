@@ -24,6 +24,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/auth"
 	"github.com/huangchengsir/pipewright/internal/build"
+	"github.com/huangchengsir/pipewright/internal/buildcache"
 	"github.com/huangchengsir/pipewright/internal/chain"
 	"github.com/huangchengsir/pipewright/internal/config"
 	"github.com/huangchengsir/pipewright/internal/cron"
@@ -257,12 +258,36 @@ func main() {
 		}
 	}
 
+	// 构建依赖缓存(build cache · P0):script 类节点配了 cachePaths 时,执行前恢复依赖目录
+	// (node_modules/.m2/.gradle 等)到工作区、执行后保存回缓存库,按 key(分支 + lockfile hash)
+	// 寻址,跨 run 持久化提速。默认 DB 同级 cache/(PIPEWRIGHT_CACHE_DIR 可改);
+	// PIPEWRIGHT_NO_BUILD_CACHE=1 关。缓存问题绝不让构建失败(恢复失败=冷构建,保存失败=记日志)。
+	var cacheStore *buildcache.Store
+	if os.Getenv("PIPEWRIGHT_NO_BUILD_CACHE") != "1" {
+		cacheDir := strings.TrimSpace(os.Getenv("PIPEWRIGHT_CACHE_DIR"))
+		if cacheDir == "" {
+			cacheDir = filepath.Join(filepath.Dir(cfg.DBPath), "cache")
+		}
+		if cs, cerr := buildcache.New(cacheDir); cerr == nil {
+			cacheStore = cs
+			log.Printf("[buildcache] 构建依赖缓存已启用(配 cachePaths 的脚本节点跨 run 复用依赖):%s", cacheDir)
+		} else {
+			log.Printf("[buildcache] 警告:构建依赖缓存不可用(%v),脚本节点每次冷构建", cerr)
+		}
+	}
+
 	// 把代码缓存(若启用)做成 Builder 选项;未启用 → 无操作选项(保持默认直连克隆器)。
 	clonerOpt := func(*build.Builder) {}
 	var refsLister httpapi.RefsLister
 	if repoCache != nil {
 		clonerOpt = build.WithCloner(repoCache)
 		refsLister = repoCache
+	}
+
+	// 构建依赖缓存(若启用)做成 Builder 选项;未启用 → 无操作(避免 typed-nil 接口陷阱)。
+	buildCacheOpt := func(*build.Builder) {}
+	if cacheStore != nil {
+		buildCacheOpt = build.WithBuildCache(cacheStore)
 	}
 
 	// 部署服务(提前到 dag 装配前构造,供 deploy_ssh 流水线节点注入)。Story 4.6 诊断钩子复用 7-2。
@@ -275,7 +300,7 @@ func main() {
 		var dagOpts []dagrun.Option
 		// 审批门 hook(Story 8-4):Gate 阶段阻塞等待人工批准/拒绝。
 		dagOpts = append(dagOpts, dagrun.WithGate(httpapi.NewApprovalGate(runSvc, approvalCoord, approvalStore)))
-		if b, berr := build.NewBuilder(projectSvc, pipelineSettingsSvc, credVault, build.WithArtifactStore(artStore), build.WithImageGC(os.Getenv("PIPEWRIGHT_NO_IMAGE_GC") != "1"), build.WithCommitRecorder(func(ctx context.Context, runID, commit string) { _ = runSvc.SetCommit(ctx, runID, commit) }), build.WithStageDeployer(deploySvc), build.WithStageNotifier(notifySvc), clonerOpt); berr == nil {
+		if b, berr := build.NewBuilder(projectSvc, pipelineSettingsSvc, credVault, build.WithArtifactStore(artStore), build.WithImageGC(os.Getenv("PIPEWRIGHT_NO_IMAGE_GC") != "1"), build.WithCommitRecorder(func(ctx context.Context, runID, commit string) { _ = runSvc.SetCommit(ctx, runID, commit) }), build.WithStageDeployer(deploySvc), build.WithStageNotifier(notifySvc), clonerOpt, buildCacheOpt); berr == nil {
 			// runSvc 作测试报告持久层注入(Story 8-6 / FR-8-6):script 步骤产报告 → 解析 →
 			// 落库 → 质量门禁裁决(不过则阶段失败,阻断下游部署)。
 			dagOpts = append(dagOpts, dagrun.WithStageExecutor(build.NewStageExecutorWithRunner(b, runSvc, runnerSvc, targetSvc)))

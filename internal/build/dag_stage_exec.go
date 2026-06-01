@@ -172,10 +172,13 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 					return ErrBuildFailed
 				}
 				step.Env = append(runParamsAsEnv(r.Trigger.Params), step.Env...)
-				// 任务级 timeout/retry(P0):零值时 runScriptStepWithOpts 退化为单次无超时执行(旧行为)。
+				// 构建依赖缓存(#61):执行前恢复(暖构建)、成功后保存(best-effort,缓存问题绝不让构建失败)。
+				// 任务级 timeout/retry(#63):零值时 runScriptStepWithOpts 退化为单次无超时执行(旧行为)。
+				b.restoreJobCache(ctx, rep, jb, r.Trigger.Branch, workspace)
 				if err := b.runScriptStepWithOpts(ctx, sink, 0, step, workspace); err != nil {
 					return err // ErrBuildFailed / run.ErrCanceled
 				}
+				b.saveJobCache(ctx, rep, jb, r.Trigger.Branch, workspace)
 			}
 
 			commitTag := "latest"

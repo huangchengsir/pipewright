@@ -40,6 +40,8 @@ var (
 	ErrNoFailedTargets = errors.New("deploy: run has no failed targets to retry")
 	// ErrRunNotDeployed 表示该 run 尚未部署过(无 deploy_targets),不可重试。
 	ErrRunNotDeployed = errors.New("deploy: run has not been deployed yet")
+	// ErrNoPendingTargets 表示该 run 当前无 pending 目标(分批部署续发/中止专用:无暂停中的批次)。
+	ErrNoPendingTargets = errors.New("deploy: run has no pending targets")
 )
 
 // truncateLen 是写入 message 的命令输出最大长度(防超大输出撑爆响应 / 内存)。
@@ -109,6 +111,15 @@ type Service interface {
 	// 定位类错误(run 不存在 / 非失败态 / 无失败目标 / 无产物 / 服务器不存在)上抛,供 HTTP 层 422/404。
 	// 执行失败不上抛:重试目标置 failed + 人读 message,整体仍 200。
 	RetryFailed(ctx context.Context, in RetryInput) ([]TargetResult, error)
+
+	// ContinueDeploy 续发交互式分批部署中**暂停**(pending)的其余目标(对齐 POST /runs/{id}/deploy/continue)。
+	// 复用上次产物 + 配置(由请求带回,同 RetryFailed),对 pending 机按 strategy(默认 rolling)续发 →
+	// 逐目标 upsert → 据全量重算 run 终态 → 返回全量最新 targets。无 pending → ErrNoPendingTargets。
+	ContinueDeploy(ctx context.Context, in ContinueInput) ([]TargetResult, error)
+
+	// AbortDeploy 中止交互式分批部署:把 pending(未部署)目标标记为「已中止,保留旧版本」(failed),
+	// **不触碰已部署批次** → 据全量重算 run 终态 → 返回全量最新 targets。无 pending → ErrNoPendingTargets。
+	AbortDeploy(ctx context.Context, in AbortInput) ([]TargetResult, error)
 
 	// DeployForStage 是「流水线 deploy_ssh 节点」用的中途部署:取该 run 已产出的首个可发布产物
 	// (dist/jar/archive)→ 按策略部署到目标机 → 持久化每机结果(填 run-detail targets)。
@@ -239,7 +250,15 @@ func (s *service) Deploy(ctx context.Context, in DeployInput) ([]TargetResult, e
 	// 4) 按**部署策略**执行(Story 8-8 / FR-8-8):rolling(默认,= 4-5 并行扇出)| canary | blue_green。
 	// 每机独立 goroutine + recover,有界信号量(cap 4)防同时打爆 N 台;单机 panic/失败不连累其它机;
 	// 结果按输入顺序独立收集。策略仅改机群编排(分批门控 / 统一切换),不改单机执行语义。
-	results := s.deployWithStrategy(ctx, servers, *artifact, in.Config, in.HealthCheck, NormalizeStrategy(in.Strategy))
+	strategy := NormalizeStrategy(in.Strategy)
+	var results []TargetResult
+	paused := false
+	if strategy == StrategyInteractive {
+		// 交互式分批:发首批 → 首批全过则其余登记 pending 并**暂停**(不置终态),否则中止其余。
+		results, paused = s.deployInteractiveFirstBatch(ctx, servers, *artifact, in.Config, in.HealthCheck)
+	} else {
+		results = s.deployWithStrategy(ctx, servers, *artifact, in.Config, in.HealthCheck, strategy)
+	}
 
 	// 5) 持久化每机结果(填 run-detail targets slot)。
 	dts := make([]run.DeployTarget, 0, len(results))
@@ -258,7 +277,11 @@ func (s *service) Deploy(ctx context.Context, in DeployInput) ([]TargetResult, e
 		return nil, err
 	}
 
-	// 6) 据结果置 run 终态:全成功 → success;有失败 → partial_failed;全失败 → failed。
+	// 6) 暂停态(交互式首批已过、其余 pending)→ 不置终态(run 保持成功,等续发/中止);
+	//    否则据结果置 run 终态:全成功 → success;有失败 → partial_failed;全失败 → failed。
+	if paused {
+		return results, nil
+	}
 	final := overallStatus(results)
 	if err := s.runs.SetDeployTerminal(ctx, in.RunID, final); err != nil {
 		return nil, err

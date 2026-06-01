@@ -5,6 +5,7 @@ import type { Credential } from '../../api/credentials'
 import type { Server } from '../../api/servers'
 import StageColumn from './StageColumn.vue'
 import JobDrawer from './JobDrawer.vue'
+import StageDrawer from './StageDrawer.vue'
 import JobTypePicker from './JobTypePicker.vue'
 import type { CustomNode } from '../../api/customNodes'
 import { jobTypeLabel, getJobTypeSpec } from './jobConfigSchema'
@@ -50,10 +51,37 @@ const selectedStage = computed<PipelineStage | null>(() => {
 
 function selectJob(jobId: string): void {
   selectedJobId.value = selectedJobId.value === jobId ? null : jobId
+  // Job drawer + stage-settings drawer share the one right slot — mutually exclusive.
+  if (selectedJobId.value) selectedStageSettingsId.value = null
 }
 
 function closeDrawer(): void {
   selectedJobId.value = null
+}
+
+// ─── Selected stage settings (shares the right drawer slot with the job drawer) ─
+
+const selectedStageSettingsId = ref<string | null>(null)
+
+const selectedSettingsStage = computed<PipelineStage | null>(() =>
+  selectedStageSettingsId.value
+    ? props.stages.find((s) => s.id === selectedStageSettingsId.value) ?? null
+    : null,
+)
+
+const selectedSettingsIndex = computed<number>(() =>
+  selectedStageSettingsId.value
+    ? props.stages.findIndex((s) => s.id === selectedStageSettingsId.value)
+    : -1,
+)
+
+function openStageSettings(stageId: string): void {
+  selectedStageSettingsId.value = selectedStageSettingsId.value === stageId ? null : stageId
+  if (selectedStageSettingsId.value) selectedJobId.value = null
+}
+
+function closeStageSettings(): void {
+  selectedStageSettingsId.value = null
 }
 
 // ─── Mutation helpers ─────────────────────────────────────────────────────────
@@ -189,6 +217,7 @@ function deleteStage(stageId: string): void {
   if (idx < 0) return
   // Deselect if selected job was in this stage
   if (selectedStage.value?.id === stageId) selectedJobId.value = null
+  if (selectedStageSettingsId.value === stageId) selectedStageSettingsId.value = null
   // Drop the deleted stage and strip any dangling needs referencing it (else save 422s).
   const next = props.stages
     .filter((s) => s.id !== stageId)
@@ -313,13 +342,10 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
             @add-job="requestAddJob(stage.id)"
             @delete-stage="deleteStage(stage.id)"
             @reorder-job="(p) => reorderJob(stage.id, p.from, p.to)"
+            :settings-active="selectedStageSettingsId === stage.id"
             @update-needs="(needs) => updateStage(stage.id, { needs })"
             @update-allow-failure="(v) => updateStage(stage.id, { allowFailure: v })"
-            @update-when="(when) => updateStage(stage.id, { when })"
-            @update-gate="(v) => updateStage(stage.id, { gate: v })"
-            @update-matrix="(matrix) => updateStage(stage.id, { matrix })"
-            @update-post="(post) => updateStage(stage.id, { post })"
-            @update-services="(services) => updateStage(stage.id, { services })"
+            @open-settings="openStageSettings(stage.id)"
           />
         </template>
 
@@ -351,7 +377,7 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
       </template>
     </div>
 
-    <!-- ─── Right-side drawer (selected job) ──────────────────────────── -->
+    <!-- ─── Right-side drawer (selected job OR stage settings — one shared slot) ─ -->
     <JobDrawer
       v-if="selectedJob && selectedStage"
       :job="selectedJob"
@@ -361,6 +387,18 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
       @close="closeDrawer"
       @update="handleDrawerUpdate"
       @change-type="requestChangeType"
+    />
+
+    <StageDrawer
+      v-else-if="selectedSettingsStage"
+      :stage="selectedSettingsStage"
+      :stage-index="selectedSettingsIndex"
+      @close="closeStageSettings"
+      @update-when="(when) => updateStage(selectedSettingsStage!.id, { when })"
+      @update-gate="(v) => updateStage(selectedSettingsStage!.id, { gate: v })"
+      @update-matrix="(matrix) => updateStage(selectedSettingsStage!.id, { matrix })"
+      @update-post="(post) => updateStage(selectedSettingsStage!.id, { post })"
+      @update-services="(services) => updateStage(selectedSettingsStage!.id, { services })"
     />
 
     <!-- Type picker modal (add new job / change type) -->

@@ -624,7 +624,14 @@ const projectName = computed(() => String(route.params.id))
 .pipeline-root {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  /*
+   * 流水线编辑器是「定高应用面板」(画布横向内滚 + 右侧检视抽屉纵向内滚 + 非画布 tab
+   * 内滚),需要一个相对视口确定的高度。父级 .main-inner 是 min-height:100vh(随内容
+   * 增高,height:100% 无法解析成确定值),会导致抽屉撑满内容、被 overflow:hidden 链裁掉
+   * 底部(后置步骤够不到)。这里按视口减去 .main-inner 的上下内边距锁定高度,使内部
+   * overflow:auto/hidden 的滚动真正生效。
+   */
+  height: calc(100vh - var(--main-pad-top) - var(--main-pad-bottom));
   min-height: 0;
   gap: 0;
 }

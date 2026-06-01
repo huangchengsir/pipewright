@@ -428,7 +428,9 @@ export interface HealthCheckInput {
 // gate on its health, then the rest (abort the rest if the canary fails).
 // 'blue_green' = stage every target, then cut over all at once; if any cutover
 // fails, roll back the whole fleet (release-mode artifacts: dist/jar).
-export type DeployStrategy = 'rolling' | 'canary' | 'blue_green'
+// 'interactive' = 交互式分批(对标云效 firstBatchPause):先发首批(同金丝雀子集)→ 暂停等人确认,
+// 其余登记 pending,经 continueDeploy 续发或 abortDeploy 中止。首批量经 deployConfig.canaryCount。
+export type DeployStrategy = 'rolling' | 'canary' | 'blue_green' | 'interactive'
 
 export interface DeployRunInput {
   artifactId: string
@@ -474,6 +476,29 @@ export function retryFailedDeploy(
   input: RetryFailedDeployInput,
 ): Promise<DeployRunResponse> {
   return http.post<DeployRunResponse>(`/api/runs/${id}/deploy/retry`, input)
+}
+
+// ─── Interactive batch deploy: continue / abort (P0) ──────────────────────────
+//
+// POST /api/runs/{id}/deploy/continue  body { artifactId, deployConfig?, healthCheck?, strategy? }
+//   续发交互式分批部署中暂停(pending)的其余目标。复用上次产物 + 配置(前端带回)。
+// POST /api/runs/{id}/deploy/abort     (no body)
+//   中止:pending 目标标记为「已中止,保留旧版本」,不触碰已部署批次。
+// 二者均返回该 run 全量最新 targets;404 run_not_found;422 无 pending 目标。
+
+export interface ContinueDeployInput {
+  artifactId: string
+  deployConfig?: Record<string, string>
+  healthCheck?: HealthCheckInput
+  strategy?: DeployStrategy
+}
+
+export function continueDeploy(id: string, input: ContinueDeployInput): Promise<DeployRunResponse> {
+  return http.post<DeployRunResponse>(`/api/runs/${id}/deploy/continue`, input)
+}
+
+export function abortDeploy(id: string): Promise<DeployRunResponse> {
+  return http.post<DeployRunResponse>(`/api/runs/${id}/deploy/abort`, {})
 }
 
 // ─── SSE subscription ────────────────────────────────────────────────────────

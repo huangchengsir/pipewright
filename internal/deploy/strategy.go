@@ -34,6 +34,10 @@ const (
 	StrategyCanary = "canary"
 	// StrategyBlueGreen 蓝绿:全机先就绪、统一切换、机群级失败回滚(release 类产物)。
 	StrategyBlueGreen = "blue_green"
+	// StrategyInteractive 交互式分批:先发首批(同金丝雀子集)→ **暂停等人确认**,
+	// 不自动铺其余(对标云效 firstBatchPause)。其余机登记为 pending,经 ContinueDeploy 续发
+	// 或 AbortDeploy 中止。首批失败 → 不暂停,直接中止其余(同金丝雀失败语义)。
+	StrategyInteractive = "interactive"
 )
 
 // NormalizeStrategy 归一策略串(大小写 / 连字符容错;空 / 未知 → rolling)。
@@ -43,6 +47,8 @@ func NormalizeStrategy(s string) string {
 		return StrategyCanary
 	case StrategyBlueGreen, "blue-green", "bluegreen", "blue green":
 		return StrategyBlueGreen
+	case StrategyInteractive, "interactive-batch", "batch":
+		return StrategyInteractive
 	default:
 		return StrategyRolling
 	}

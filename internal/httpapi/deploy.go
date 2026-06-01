@@ -222,6 +222,82 @@ func makeRetryDeployHandler(svc deploy.Service, runSvc run.Service) http.Handler
 	}
 }
 
+// continueDeployRequest 是 POST /api/runs/{id}/deploy/continue 请求体(交互式分批续发其余 pending)。
+// 同 retry:不持久化原始产物/配置,故前端(已持有上次部署表单)随请求带回 artifactId + 配置。
+type continueDeployRequest struct {
+	ArtifactID   string            `json:"artifactId"`
+	DeployConfig map[string]string `json:"deployConfig"`
+	HealthCheck  *healthCheckDTO   `json:"healthCheck"`
+	Strategy     string            `json:"strategy"`
+}
+
+// makeContinueDeployHandler 返回 POST /api/runs/{id}/deploy/continue handler(认证 + CSRF)。
+// 续发交互式分批部署中暂停(pending)的其余目标。run/产物/服务器定位类错误 → 404/422;
+// 执行失败不 500(目标置 failed,整体 200)。
+func makeContinueDeployHandler(svc deploy.Service, runSvc run.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil || runSvc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "部署服务未初始化")
+			return
+		}
+		id := chi.URLParam(r, "id")
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
+		var req continueDeployRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
+			return
+		}
+		results, err := svc.ContinueDeploy(r.Context(), deploy.ContinueInput{
+			RunID:       id,
+			ArtifactID:  req.ArtifactID,
+			Config:      req.DeployConfig,
+			HealthCheck: toHealthCheck(req.HealthCheck),
+			Strategy:    req.Strategy,
+		})
+		if err != nil {
+			writeDeployError(w, err)
+			return
+		}
+		targets, lerr := runSvc.ListDeployTargets(r.Context(), id)
+		if lerr != nil {
+			out := make([]targetDTO, 0, len(results))
+			for i := range results {
+				out = append(out, targetResultToDTO(results[i]))
+			}
+			writeJSON(w, http.StatusOK, deployResponse{Targets: out})
+			return
+		}
+		writeJSON(w, http.StatusOK, deployResponse{Targets: toTargetDTOs(targets)})
+	}
+}
+
+// makeAbortDeployHandler 返回 POST /api/runs/{id}/deploy/abort handler(认证 + CSRF)。
+// 中止交互式分批部署:pending 目标标记为已中止(保留旧版本),不触碰已部署批次。
+func makeAbortDeployHandler(svc deploy.Service, runSvc run.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil || runSvc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "部署服务未初始化")
+			return
+		}
+		id := chi.URLParam(r, "id")
+		results, err := svc.AbortDeploy(r.Context(), deploy.AbortInput{RunID: id})
+		if err != nil {
+			writeDeployError(w, err)
+			return
+		}
+		targets, lerr := runSvc.ListDeployTargets(r.Context(), id)
+		if lerr != nil {
+			out := make([]targetDTO, 0, len(results))
+			for i := range results {
+				out = append(out, targetResultToDTO(results[i]))
+			}
+			writeJSON(w, http.StatusOK, deployResponse{Targets: out})
+			return
+		}
+		writeJSON(w, http.StatusOK, deployResponse{Targets: toTargetDTOs(targets)})
+	}
+}
+
 // writeDeployError 把部署定位类错误映射为契约错误码 / 状态码(绝不回显明文 / 私钥 / 口令 / 栈)。
 // 执行类失败由 deploy.Deploy 内化为每机 failed,不走此路径(整体 200)。
 func writeDeployError(w http.ResponseWriter, err error) {
@@ -240,6 +316,8 @@ func writeDeployError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnprocessableEntity, "no_failed_targets", "该运行没有可重试的失败目标")
 	case errors.Is(err, deploy.ErrRunNotDeployed):
 		writeError(w, http.StatusUnprocessableEntity, "run_not_deployed", "该运行尚未部署过,无可重试目标")
+	case errors.Is(err, deploy.ErrNoPendingTargets):
+		writeError(w, http.StatusUnprocessableEntity, "no_pending_targets", "该运行没有暂停待续发的目标")
 	default:
 		writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
 	}

@@ -22,6 +22,8 @@ import {
   diagnoseRun,
   deployRun,
   retryFailedDeploy,
+  continueDeploy,
+  abortDeploy,
   listApprovals,
   approveStage,
   rejectStage,
@@ -164,6 +166,7 @@ const deployStrategyOptions: ReadonlyArray<{ value: DeployStrategy; label: strin
   { value: 'rolling', label: '滚动', desc: '全机并行,各自成败' },
   { value: 'canary', label: '金丝雀', desc: '先发小批,通过再铺' },
   { value: 'blue_green', label: '蓝绿', desc: '统一切换,失败全退' },
+  { value: 'interactive', label: '交互式分批', desc: '先发首批,暂停等人确认' },
 ]
 
 // buildDeployConfig 据高级选项收敛 deployConfig;空字段不传(后端取默认)。
@@ -174,8 +177,8 @@ function buildDeployConfig(): Record<string, string> | undefined {
   const keep = clampInt(keepReleases.value, 1, 50, 1)
   // 仅在非默认(1)时下发,避免无谓字段。
   if (keep !== 1) cfg.keepReleases = String(keep)
-  // 金丝雀批量:仅 canary 策略且 >1 时下发(默认 1 台)。
-  if (deployStrategy.value === 'canary') {
+  // 首批量:canary / interactive 策略且 >1 时下发(默认 1 台)。
+  if (deployStrategy.value === 'canary' || deployStrategy.value === 'interactive') {
     const n = clampInt(canaryCount.value, 1, 100, 1)
     if (n > 1) cfg.canaryCount = String(n)
   }
@@ -319,6 +322,53 @@ async function handleRetryFailed(): Promise<void> {
     }
   } finally {
     retrying.value = false
+  }
+}
+
+// ─── 交互式分批部署:续发 / 中止(P0)─────────────────────────────────────────
+const batchBusy = ref(false)
+const batchError = ref('')
+
+// 是否有暂停待确认的批次(pending 目标存在)。
+const hasPendingTargets = computed(() =>
+  (run.value?.targets ?? []).some((t) => t.status === 'pending'),
+)
+const pendingCount = computed(() => (run.value?.targets ?? []).filter((t) => t.status === 'pending').length)
+
+async function handleContinueDeploy(): Promise<void> {
+  if (!run.value || batchBusy.value) return
+  const artifactId = selectedArtifactId.value || run.value.artifacts[0]?.id || ''
+  if (!artifactId) {
+    batchError.value = '无可用产物,无法续发'
+    return
+  }
+  batchBusy.value = true
+  batchError.value = ''
+  try {
+    const res = await continueDeploy(run.value.id, {
+      artifactId,
+      deployConfig: buildDeployConfig(),
+      healthCheck: buildHealthCheck(),
+    })
+    run.value = { ...run.value, targets: res.targets, status: deriveStatus(res.targets) }
+  } catch (err) {
+    batchError.value = err instanceof HttpError ? (err.apiError?.message ?? `续发失败(${err.status})`) : '续发请求失败,请稍后重试'
+  } finally {
+    batchBusy.value = false
+  }
+}
+
+async function handleAbortDeploy(): Promise<void> {
+  if (!run.value || batchBusy.value) return
+  batchBusy.value = true
+  batchError.value = ''
+  try {
+    const res = await abortDeploy(run.value.id)
+    run.value = { ...run.value, targets: res.targets, status: deriveStatus(res.targets) }
+  } catch (err) {
+    batchError.value = err instanceof HttpError ? (err.apiError?.message ?? `中止失败(${err.status})`) : '中止请求失败,请稍后重试'
+  } finally {
+    batchBusy.value = false
   }
 }
 
@@ -758,6 +808,25 @@ function nodeClass(status: StepStatus): string {
               :retry-error="retryError"
               @retry="handleRetryFailed"
             />
+
+            <!-- 交互式分批部署:暂停态(有 pending 目标)→ 继续 / 中止(P0)-->
+            <div v-if="hasPendingTargets" class="batch-pause" role="status">
+              <div class="batch-pause-head">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <rect x="6" y="5" width="4" height="14" rx="1" /><rect x="14" y="5" width="4" height="14" rx="1" />
+                </svg>
+                <span>分批部署已暂停:首批已发布,其余 <strong>{{ pendingCount }}</strong> 台待确认</span>
+              </div>
+              <p v-if="batchError" class="batch-pause-err" role="alert">{{ batchError }}</p>
+              <div class="batch-pause-actions">
+                <button class="batch-btn batch-btn--go" :disabled="batchBusy" @click="handleContinueDeploy">
+                  {{ batchBusy ? '处理中…' : '继续部署其余' }}
+                </button>
+                <button class="batch-btn batch-btn--abort" :disabled="batchBusy" @click="handleAbortDeploy">
+                  中止(保留旧版本)
+                </button>
+              </div>
+            </div>
 
             <!-- 部署入口:仅在有产物时可用 -->
             <div v-if="run.artifacts.length > 0" class="deploy-entry">
@@ -2278,4 +2347,37 @@ function nodeClass(status: StepStatus): string {
 .strat-opt-desc { font-size: 0.68rem; color: var(--color-faint); line-height: 1.35; }
 .strat-canary { margin-top: 10px; }
 .strat-canary-hint { margin-left: 8px; }
+
+/* ─── 交互式分批部署:暂停态 banner(P0)─────────────────────────────────── */
+.batch-pause {
+  margin-top: 12px;
+  border: 1px solid var(--color-amber, #b8860b);
+  background: var(--color-amber-soft, #fbf3df);
+  border-radius: var(--rounded-lg, 12px);
+  padding: 13px 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.batch-pause-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--color-text);
+}
+.batch-pause-head svg { color: var(--color-amber, #b8860b); flex: none; }
+.batch-pause-head strong { color: var(--color-amber, #b8860b); }
+.batch-pause-err { margin: 0; font-size: 0.78rem; color: var(--color-danger, #dc2626); }
+.batch-pause-actions { display: flex; gap: 9px; }
+.batch-btn {
+  height: 32px; padding: 0 14px; border-radius: var(--rounded-md);
+  font: inherit; font-size: 0.8rem; font-weight: 600; cursor: pointer;
+  border: 1px solid var(--color-border-strong); background: var(--color-card); color: var(--color-text);
+  transition: background-color var(--duration-fast), transform var(--duration-fast);
+}
+.batch-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.batch-btn--go { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
+.batch-btn--go:hover:not(:disabled) { background: var(--color-primary-press, var(--color-primary)); transform: translateY(-1px); }
+.batch-btn--abort:hover:not(:disabled) { border-color: var(--color-danger, #dc2626); color: var(--color-danger, #dc2626); }
 </style>

@@ -61,6 +61,24 @@ let _keySeq = 0
 const mappings = ref<MappingRow[]>([])
 const unmatchedPolicy = ref<UnmatchedPolicy>('record')
 
+// 路径过滤(monorepo · P0):多行 glob 文本框;每行一条,空行忽略。
+// 仅当本次 push 改动文件匹配任一 glob 才触发(拿不到改动文件列表时放行,诚实降级)。
+const pathFiltersText = ref('')
+
+/** 解析多行 glob 文本为去空、trim 后的数组(去重保序)。 */
+function parsePathFilters(text: string): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const raw of text.split('\n')) {
+    const p = raw.trim()
+    if (p && !seen.has(p)) {
+      seen.add(p)
+      out.push(p)
+    }
+  }
+  return out
+}
+
 // ─── Copy state ───────────────────────────────────────────────────────────────
 
 type CopyTarget = 'url' | 'secret'
@@ -207,6 +225,7 @@ async function handleSave(): Promise<void> {
         targetServerIds: r.targetServerIds,
       })),
       unmatchedPolicy: unmatchedPolicy.value,
+      pathFilters: parsePathFilters(pathFiltersText.value),
     })
     applyConfig(updated)
     showSaveSuccess()
@@ -237,6 +256,7 @@ function applyConfig(config: TriggerConfig): void {
   eventPullRequest.value      = config.events.pullRequest
   eventRelease.value          = config.events.release ?? false
   unmatchedPolicy.value       = config.unmatchedPolicy
+  pathFiltersText.value       = (config.pathFilters ?? []).join('\n')
   mappings.value = config.branchMappings.map((m) => ({
     _key: ++_keySeq,
     id: m.id,
@@ -522,6 +542,32 @@ const displayWebhookUrl = computed(() => {
         </div>
       </section>
 
+      <!-- ═══ Section 5: Path filter (monorepo · P0) ══════════════════════ -->
+      <section class="config-card" aria-labelledby="tp-paths-heading">
+        <div class="card-head">
+          <span class="card-icon" aria-hidden="true">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+              <path d="M3 7l3-3h5l2 2h8v12a2 2 0 0 1-2 2H3z"/>
+            </svg>
+          </span>
+          <h2 id="tp-paths-heading" class="card-title">路径过滤(monorepo)</h2>
+          <span class="card-sub">仅当本次推送改动的文件匹配以下任一 glob 才触发</span>
+        </div>
+        <div class="card-body card-body--pad">
+          <textarea
+            v-model="pathFiltersText"
+            class="map-input map-input--mono path-filters-input"
+            rows="4"
+            placeholder="backend/**&#10;shared/**&#10;*.go"
+            aria-label="路径过滤 glob(每行一条)"
+          ></textarea>
+          <p class="policy-desc">
+            每行一条 glob:<code>**</code> 跨目录、<code>*</code> 单层(如 <code>backend/**</code>、<code>**/*.go</code>)。
+            留空 = 不启用(任意改动都触发)。匹配不中的推送将被忽略;无法获取改动文件列表时放行不拦。
+          </p>
+        </div>
+      </section>
+
       <!-- ═══ Scheduled (cron) trigger · Story 8-6 ════════════════════════ -->
       <CronPanel :project-id="props.projectId" />
 
@@ -685,6 +731,8 @@ const displayWebhookUrl = computed(() => {
 .seg-btn:hover:not(.seg-btn--active) { color: var(--color-text); background: oklch(100% 0 0 / 0.04); }
 .seg-btn--active { background: var(--color-card); color: var(--color-text); box-shadow: var(--shadow); }
 .policy-desc { margin-top: 12px; font-size: 0.8rem; color: var(--color-faint); line-height: 1.6; }
+.policy-desc code { font-family: var(--font-mono); font-size: 0.78em; padding: 1px 4px; border-radius: 4px; background: var(--color-inset); color: var(--color-dim); }
+.path-filters-input { height: auto; min-height: 92px; padding: 8px 10px; line-height: 1.5; resize: vertical; }
 
 /* ─── Save bar ────────────────────────────────── */
 .save-bar { display: flex; justify-content: flex-start; padding-bottom: 8px; }

@@ -49,6 +49,8 @@ export interface TriggerConfig {
   events: TriggerEvents
   branchMappings: BranchMapping[]
   unmatchedPolicy: UnmatchedPolicy
+  /** 路径过滤 glob 列表(monorepo · P0);空 = 不启用(放行一切)。 */
+  pathFilters: string[]
 }
 
 export interface SaveTriggerInput {
@@ -59,6 +61,7 @@ export interface SaveTriggerInput {
     targetServerIds: string[]
   }>
   unmatchedPolicy: UnmatchedPolicy
+  pathFilters: string[]
 }
 
 export interface SecretResetResult {

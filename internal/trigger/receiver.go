@@ -50,6 +50,8 @@ const (
 	IgnoredNoBranchMatch      = "no_branch_match"
 	IgnoredDuplicate          = "duplicate"
 	IgnoredUnmatchedIgnored   = "unmatched_ignored"
+	// IgnoredPathNoMatch:配了路径过滤,但本次 push 改动文件不匹配任一 glob(monorepo · P0)。
+	IgnoredPathNoMatch = "path_no_match"
 	// IgnoredUnmatchedRecorded:未匹配但策略=record——本期记录一次「已记录未部署」,不创建可执行运行。
 	IgnoredUnmatchedRecorded = "unmatched_recorded"
 )
@@ -176,6 +178,13 @@ func (rc *Receiver) Handle(ctx context.Context, d Delivery) (*Result, error) {
 		return &Result{Accepted: false, Ignored: reason}, nil
 	}
 
+	// 路径过滤(monorepo · P0):配了 glob 且**拿得到**改动文件时,文件不匹配任一 glob → 忽略。
+	// 拿不到改动文件列表(非 push 事件 / 畸形 payload / 无 commits)→ 放行不拦(诚实降级,见 matchPathFilters)。
+	if len(cfg.PathFilters) > 0 && len(parsed.ChangedFiles) > 0 && !matchPathFilters(cfg.PathFilters, parsed.ChangedFiles) {
+		rc.setOutcome(ctx, recID, IgnoredPathNoMatch)
+		return &Result{Accepted: false, Ignored: IgnoredPathNoMatch}, nil
+	}
+
 	runID, err := rc.runner.CreateWebhookRun(ctx, cfg.ProjectID, RunRequest{
 		Branch:                  parsed.Branch,
 		Commit:                  parsed.Commit,
@@ -231,16 +240,17 @@ func (rc *Receiver) loadForVerify(ctx context.Context, token string) (*Config, [
 		return nil, nil, ErrTokenNotFound
 	}
 	var (
-		cfg          Config
-		sealed       []byte
-		eventsJSON   string
-		mappingsJSON string
+		cfg             Config
+		sealed          []byte
+		eventsJSON      string
+		mappingsJSON    string
+		pathFiltersJSON string
 	)
 	err := rc.db.QueryRowContext(ctx,
 		`SELECT project_id, webhook_token, webhook_secret_ciphertext, events_json,
-		        branch_mappings_json, unmatched_policy
+		        branch_mappings_json, unmatched_policy, path_filters_json
 		 FROM pipeline_triggers WHERE webhook_token = ?`, token,
-	).Scan(&cfg.ProjectID, &cfg.WebhookToken, &sealed, &eventsJSON, &mappingsJSON, &cfg.UnmatchedPolicy)
+	).Scan(&cfg.ProjectID, &cfg.WebhookToken, &sealed, &eventsJSON, &mappingsJSON, &cfg.UnmatchedPolicy, &pathFiltersJSON)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, ErrTokenNotFound
@@ -255,6 +265,12 @@ func (rc *Receiver) loadForVerify(ctx context.Context, token string) (*Config, [
 	if strings.TrimSpace(mappingsJSON) != "" {
 		if err := json.Unmarshal([]byte(mappingsJSON), &cfg.BranchMappings); err != nil {
 			return nil, nil, fmt.Errorf("trigger: parse branch mappings: %w", err)
+		}
+	}
+	cfg.PathFilters = []string{}
+	if strings.TrimSpace(pathFiltersJSON) != "" {
+		if err := json.Unmarshal([]byte(pathFiltersJSON), &cfg.PathFilters); err != nil {
+			return nil, nil, fmt.Errorf("trigger: parse path filters: %w", err)
 		}
 	}
 
@@ -395,16 +411,28 @@ func eventSubscribed(event string, ev Events) bool {
 }
 
 // parsedPayload 是从 Gitee payload 解析出的关注字段。
+//
+// ChangedFiles 为本次 push 改动的文件路径并集(commits[].{added,modified,removed} 去重);
+// 仅 push 事件有意义,其余事件 / 拿不到时为空(空 → 路径过滤放行,诚实降级)。
 type parsedPayload struct {
-	Branch string
-	Commit string
+	Branch       string
+	Commit       string
+	ChangedFiles []string
+}
+
+// pushCommit 是 push 事件 commits[] 元素里本包关心的改动文件三类(GitHub/Gitee 同形)。
+type pushCommit struct {
+	Added    []string `json:"added"`
+	Modified []string `json:"modified"`
+	Removed  []string `json:"removed"`
 }
 
 // giteePayload 是 Gitee push/tag/MR/release webhook 的部分字段(只取所需,容忍多余字段)。
 type giteePayload struct {
-	Ref         string `json:"ref"`
-	After       string `json:"after"`
-	CheckoutSHA string `json:"checkout_sha"`
+	Ref         string       `json:"ref"`
+	After       string       `json:"after"`
+	CheckoutSHA string       `json:"checkout_sha"`
+	Commits     []pushCommit `json:"commits"`
 	HeadCommit  struct {
 		ID string `json:"id"`
 	} `json:"head_commit"`
@@ -456,7 +484,36 @@ func parsePayload(body []byte) parsedPayload {
 	if commit == "" {
 		commit = strings.TrimSpace(p.Release.TargetCommitish)
 	}
-	return parsedPayload{Branch: branch, Commit: commit}
+	return parsedPayload{Branch: branch, Commit: commit, ChangedFiles: changedFiles(p.Commits)}
+}
+
+// changedFiles 把 push 事件 commits[].{added,modified,removed} 汇成去重的文件路径并集
+// (保留首次出现序;trim 后剔空)。无 commits / 全空 → nil(路径过滤据此放行,诚实降级)。
+func changedFiles(commits []pushCommit) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0, 8)
+	add := func(paths []string) {
+		for _, f := range paths {
+			f = strings.TrimSpace(f)
+			if f == "" {
+				continue
+			}
+			if _, dup := seen[f]; dup {
+				continue
+			}
+			seen[f] = struct{}{}
+			out = append(out, f)
+		}
+	}
+	for _, c := range commits {
+		add(c.Added)
+		add(c.Modified)
+		add(c.Removed)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // refToBranch 从 refs/heads/main 或 refs/tags/v1 取末段分支/标签名;非 ref 形式原样返回。
@@ -526,6 +583,69 @@ func globMatch(pattern, s string) bool {
 		return strings.HasSuffix(s, last)
 	}
 	return true
+}
+
+// ---- 路径过滤(monorepo · P0)-------------------------------------------
+
+// matchPathFilters 判断「本次改动文件」是否匹配任一路径过滤 glob(任一文件命中任一 glob 即放行)。
+// 调用方已保证 filters 与 files 均非空(空文件列表走放行降级,不进此函数)。
+func matchPathFilters(filters, files []string) bool {
+	for _, pat := range filters {
+		pat = strings.TrimSpace(pat)
+		if pat == "" {
+			continue
+		}
+		for _, f := range files {
+			if pathGlobMatch(pat, strings.TrimSpace(f)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// pathGlobMatch 是支持 `**` 的路径 glob 匹配(按路径段递归):
+//   - `**` 匹配任意数量的路径段(含零段,跨 `/`),如 `backend/**` 命中 `backend/a/b.go`、`**/*.go` 命中 `a/b.go`。
+//   - `*`  匹配同一路径段内任意字符(不跨 `/`),如 `*.md` 命中 `README.md` 但不命中 `docs/x.md`。
+//   - 其余按段精确匹配(段内仍走 path.Match 支持 `*`/`?`)。
+//
+// 语义对齐常见 CI(GitLab rules:changes / GitHub paths)。pattern/name 均以 `/` 切段后比较。
+func pathGlobMatch(pattern, name string) bool {
+	if pattern == "" || name == "" {
+		return false
+	}
+	return segMatch(strings.Split(pattern, "/"), strings.Split(name, "/"))
+}
+
+// segMatch 按段做带 `**` 的 glob 匹配:`**` 段可吞 0..n 个 name 段(递归回溯);
+// 普通段用 path.Match 段内匹配(`*`/`?` 不跨 `/`)。
+func segMatch(pat, name []string) bool {
+	for len(pat) > 0 {
+		if pat[0] == "**" {
+			// 折叠连续的 `**`。
+			for len(pat) > 1 && pat[1] == "**" {
+				pat = pat[1:]
+			}
+			if len(pat) == 1 {
+				return true // 末尾 `**` 吞掉所有剩余段(含零段)。
+			}
+			// `**` 吞 0..len(name) 段,逐一尝试让后续模式从某位置起匹配。
+			for i := 0; i <= len(name); i++ {
+				if segMatch(pat[1:], name[i:]) {
+					return true
+				}
+			}
+			return false
+		}
+		if len(name) == 0 {
+			return false
+		}
+		if ok, err := path.Match(pat[0], name[0]); err != nil || !ok {
+			return false
+		}
+		pat, name = pat[1:], name[1:]
+	}
+	return len(name) == 0
 }
 
 // ---- helpers ------------------------------------------------------------

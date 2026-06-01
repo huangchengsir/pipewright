@@ -3,6 +3,7 @@ package trigger
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -152,6 +153,49 @@ func TestSaveRoundTrip(t *testing.T) {
 	}
 	if len(got.BranchMappings) != 2 || got.BranchMappings[0].Environment != "生产" {
 		t.Fatalf("回读映射不符: %+v", got.BranchMappings)
+	}
+}
+
+// TestSavePathFiltersRoundTrip 验证路径过滤 glob 往返:trim、剔空、去重、保序;回读一致。
+func TestSavePathFiltersRoundTrip(t *testing.T) {
+	svc, _, _, projID := newSvc(t)
+	in := SaveInput{
+		Events:          Events{Push: true},
+		UnmatchedPolicy: PolicyRecord,
+		PathFilters:     []string{" backend/** ", "frontend/**", "backend/**", "  ", "*.go"},
+	}
+	saved, err := svc.Save(context.Background(), projID, in)
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	want := []string{"backend/**", "frontend/**", "*.go"}
+	if len(saved.PathFilters) != len(want) {
+		t.Fatalf("path filters = %v, want %v", saved.PathFilters, want)
+	}
+	for i, p := range want {
+		if saved.PathFilters[i] != p {
+			t.Fatalf("path filter[%d] = %q, want %q (order/trim/dedup)", i, saved.PathFilters[i], p)
+		}
+	}
+	got, err := svc.Get(context.Background(), projID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(got.PathFilters) != len(want) {
+		t.Fatalf("回读路径过滤不符: %v", got.PathFilters)
+	}
+}
+
+// TestSaveInvalidPathFilter:含空白的 glob 被拒(ErrInvalidPathFilter)。
+func TestSaveInvalidPathFilter(t *testing.T) {
+	svc, _, _, projID := newSvc(t)
+	_, err := svc.Save(context.Background(), projID, SaveInput{
+		Events:          Events{Push: true},
+		UnmatchedPolicy: PolicyRecord,
+		PathFilters:     []string{"back end/**"},
+	})
+	if !errors.Is(err, ErrInvalidPathFilter) {
+		t.Fatalf("err = %v, want ErrInvalidPathFilter", err)
 	}
 }
 

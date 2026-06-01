@@ -133,6 +133,76 @@ func TestPipelineSaveRoundTrip(t *testing.T) {
 	}
 }
 
+// TestPipelineSaveRoundTripMatrixPostServices 锁画布 P1 扩展(矩阵/后置步骤/旁挂服务)
+// 经 JSON 画布 API 的端到端往返:此前 reqStage/stageDTO 未含这些字段,画布配置在 PUT
+// 时被静默丢弃、GET 也读不回(浏览器全量测试发现的真实回归)。
+func TestPipelineSaveRoundTripMatrixPostServices(t *testing.T) {
+	srv, client, csrf, projID := setupPipelineServer(t)
+	base := srv.URL + "/api/projects/" + projID + "/pipeline"
+
+	body := `{"stages":[
+	  {"name":"流水线源","kind":"source","jobs":[
+	    {"name":"Gitee 源","type":"git_source","summary":"main","config":{}}
+	  ]},
+	  {"name":"构建","kind":"build",
+	    "matrix":{"go":["1.21","1.22"],"os":["linux"]},
+	    "services":[{"name":"testdb","image":"postgres:16","env":["POSTGRES_PASSWORD=pw"],"ports":["5432"]},{"name":"redis","image":"redis:7"}],
+	    "post":[{"condition":"always","image":"alpine","commands":["echo collect"]},{"condition":"on_failure","image":"alpine","commands":["echo notify"]}],
+	    "jobs":[{"name":"打镜像","type":"build_image","summary":"docker build","config":{"dockerfile":"Dockerfile"}}]},
+	  {"name":"部署","kind":"deploy","jobs":[]}
+	]}`
+	resp := doJSON(t, client, http.MethodPut, base, csrf, body)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("PUT status = %d, body=%s", resp.StatusCode, raw)
+	}
+
+	// 刷新 GET:矩阵/post/services 必须读得回(否则画布编辑器形同虚设)。
+	gresp := doJSON(t, client, http.MethodGet, base, csrf, "")
+	defer gresp.Body.Close()
+	graw, _ := io.ReadAll(gresp.Body)
+	var gdto map[string]any
+	if err := json.Unmarshal(graw, &gdto); err != nil {
+		t.Fatalf("decode GET: %v, body=%s", err, graw)
+	}
+	stages, _ := gdto["stages"].([]any)
+	var build map[string]any
+	for _, s := range stages {
+		if m, _ := s.(map[string]any); m["kind"] == "build" {
+			build = m
+		}
+	}
+	if build == nil {
+		t.Fatalf("GET 缺 build 阶段, body=%s", graw)
+	}
+
+	matrix, _ := build["matrix"].(map[string]any)
+	if goAxis, _ := matrix["go"].([]any); len(goAxis) != 2 {
+		t.Fatalf("matrix.go = %v, want 2 值; body=%s", matrix["go"], graw)
+	}
+	if post, _ := build["post"].([]any); len(post) != 2 {
+		t.Fatalf("post = %v, want 2 步; body=%s", build["post"], graw)
+	}
+	svcs, _ := build["services"].([]any)
+	if len(svcs) != 2 {
+		t.Fatalf("services = %v, want 2 个; body=%s", build["services"], graw)
+	}
+	s0, _ := svcs[0].(map[string]any)
+	if s0["name"] != "testdb" || s0["image"] != "postgres:16" {
+		t.Fatalf("service[0] = %v, want testdb/postgres:16", s0)
+	}
+	// 源/部署阶段不应平白多出这些键(omitempty 基线契约不变)。
+	for _, s := range stages {
+		m, _ := s.(map[string]any)
+		if m["kind"] == "source" {
+			if _, ok := m["matrix"]; ok {
+				t.Fatalf("源阶段不应出现 matrix 键(omitempty), got %v", m["matrix"])
+			}
+		}
+	}
+}
+
 func TestPipelineSaveInvalidStage422(t *testing.T) {
 	srv, client, csrf, projID := setupPipelineServer(t)
 	base := srv.URL + "/api/projects/" + projID + "/pipeline"

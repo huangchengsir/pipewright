@@ -133,7 +133,10 @@ func main() {
 
 	// 装配运行服务(Story 3.1):本期桩 runner 跑占位步骤打通状态机;真实构建/部署=3-3/4-x。
 	// worker pool 在 aiSvc 装配后创建(以便注入 best-effort 自动诊断钩子,Story 7.2)。
-	runSvc := run.New(st.DB)
+	// 注入分支→环境解析器(#56):手动/定时/串联触发未显式带环境时,据项目分支映射补解析
+	// 环境 + 目标服务器,与 webhook 接收路径一致(否则 build_image 不知推哪个 registry、
+	// 部署节点 pull 不到镜像)。复用 trigger 包同一套 matchBranch glob。
+	runSvc := run.New(st.DB, run.WithEnvResolver(trigger.NewEnvironmentResolver(st.DB)))
 	// DORA 指标只读聚合(FR-8-15):同一 *service 实现暴露为 MetricsService,无新连接/新表。
 	doraMetricsSvc := run.NewMetricsService(runSvc)
 

@@ -83,3 +83,105 @@ export function whenSummary(when: StageWhen | undefined): string {
   }
   return parts.join(' · ')
 }
+
+// ─── Matrix build axes (P1) ──────────────────────────────────────────────────
+//
+// UI editor uses one textarea, one axis per line: `axisName: v1, v2, v3`
+// (or `axisName = v1, v2`). Empty/blank lines are ignored. Axis names must be
+// identifiers (matches backend stage_matrix.go isValidMatrixAxis); values split
+// on commas, trimmed, de-duped. Backend re-validates (caps cell count etc.).
+
+/** Cap on cells (cartesian product) — mirrors backend MatrixMaxCells for client-side preview. */
+export const MATRIX_MAX_CELLS = 50
+/** Cap on axes — mirrors backend MatrixMaxAxes. */
+export const MATRIX_MAX_AXES = 8
+
+const AXIS_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/** Report whether an axis name is a valid identifier (mirrors backend). */
+export function isValidAxisName(name: string): boolean {
+  return AXIS_NAME_RE.test(name)
+}
+
+/**
+ * Parse the matrix textarea into an axes map. One axis per line: `name: a, b, c`.
+ * Trims + de-dups values, drops empty values/lines. Returns `undefined` when no
+ * usable axes (so the saved spec stays minimal / single-stage behavior).
+ */
+export function parseMatrix(text: string): Record<string, string[]> | undefined {
+  const out: Record<string, string[]> = {}
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.trim()
+    if (!line) continue
+    const sep = line.search(/[:=]/)
+    if (sep <= 0) continue
+    const name = line.slice(0, sep).trim()
+    if (!name) continue
+    const seen = new Set<string>()
+    const vals: string[] = []
+    for (const raw of line.slice(sep + 1).split(',')) {
+      const v = raw.trim()
+      if (v && !seen.has(v)) {
+        seen.add(v)
+        vals.push(v)
+      }
+    }
+    if (vals.length) out[name] = vals
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+/** Render an axes map back to the editable textarea (one `name: a, b` per line). */
+export function matrixToText(matrix: Record<string, string[]> | undefined): string {
+  if (!matrix) return ''
+  return Object.keys(matrix)
+    .map((name) => `${name}: ${(matrix[name] ?? []).join(', ')}`)
+    .join('\n')
+}
+
+/** Report whether a stage actually declares a matrix (for badges/labels). */
+export function hasMatrix(matrix: Record<string, string[]> | undefined): boolean {
+  return Boolean(matrix && Object.keys(matrix).length)
+}
+
+/** Cell count = cartesian product of all axis value counts (0 when no axes). */
+export function matrixCellCount(matrix: Record<string, string[]> | undefined): number {
+  if (!hasMatrix(matrix)) return 0
+  let cells = 1
+  for (const name of Object.keys(matrix!)) {
+    cells *= (matrix![name] ?? []).length
+  }
+  return cells
+}
+
+/**
+ * Validate parsed axes client-side (mirrors backend rules for fast feedback):
+ * returns an error message, or `null` when valid / empty.
+ */
+export function matrixError(matrix: Record<string, string[]> | undefined): string | null {
+  if (!hasMatrix(matrix)) return null
+  const names = Object.keys(matrix!)
+  for (const name of names) {
+    if (!isValidAxisName(name)) {
+      return `轴名「${name}」非法(须为标识符:字母/下划线起)`
+    }
+    if (!(matrix![name] ?? []).length) {
+      return `轴「${name}」至少需要一个值`
+    }
+  }
+  if (names.length > MATRIX_MAX_AXES) {
+    return `矩阵维度 ${names.length} 超过上限 ${MATRIX_MAX_AXES}`
+  }
+  const cells = matrixCellCount(matrix)
+  if (cells > MATRIX_MAX_CELLS) {
+    return `矩阵展开 ${cells} 个 cell,超过上限 ${MATRIX_MAX_CELLS}`
+  }
+  return null
+}
+
+/** Short chip summary, e.g. `go×2 · os×1 → 2 cell` (empty when no matrix). */
+export function matrixSummary(matrix: Record<string, string[]> | undefined): string {
+  if (!hasMatrix(matrix)) return ''
+  const parts = Object.keys(matrix!).map((n) => `${n}×${(matrix![n] ?? []).length}`)
+  return `${parts.join(' · ')} → ${matrixCellCount(matrix)} cell`
+}

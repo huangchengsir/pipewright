@@ -81,8 +81,13 @@ type Stage struct {
 	When         When     `json:"when,omitempty"`
 	// Gate 为 true 时,进入该阶段前需人工审批(Story 8-4):运行阻塞、状态置 waiting_approval,
 	// 批准→继续,拒绝→该阶段失败(运行终止)。
-	Gate bool  `json:"gate,omitempty"`
-	Jobs []Job `json:"jobs"`
+	Gate bool `json:"gate,omitempty"`
+	// Matrix 声明矩阵构建轴(P1,对标 GHA matrix / GitLab parallel:matrix):
+	// 多维 axisName→值列表,调度时展开成笛卡尔积的多个并行 cell(各跑该阶段 jobs 副本),
+	// axis 值以 `MATRIX_<AXIS>`(大写)注入 cell 各 script job 的容器环境供命令引用。
+	// 空(nil / 无轴)= 行为不变(单 stage)。校验/展开见 stage_matrix.go 与 dagrun.ExpandMatrix。
+	Matrix map[string][]string `json:"matrix,omitempty"`
+	Jobs   []Job               `json:"jobs"`
 }
 
 // Spec 是流水线编排声明式配置(阶段集合)。
@@ -357,7 +362,13 @@ func normalizeSpec(in Spec) (Spec, error) {
 		// Needs 规范化:trim、去空、去重、剔除自指(自指交由 dag 校验报错以给明确信息)。
 		needs := normalizeNeeds(st.Needs)
 
-		out.Stages = append(out.Stages, Stage{ID: stageID, Name: name, Kind: kind, Needs: needs, AllowFailure: st.AllowFailure, When: normalizeWhen(st.When), Gate: st.Gate, Jobs: jobs})
+		// Matrix 规范化 + 校验(轴名合法 / 值非空 / 维度·cell 数上限):空 → nil(行为不变)。
+		matrix, merr := normalizeMatrix(st.Matrix)
+		if merr != nil {
+			return Spec{}, merr
+		}
+
+		out.Stages = append(out.Stages, Stage{ID: stageID, Name: name, Kind: kind, Needs: needs, AllowFailure: st.AllowFailure, When: normalizeWhen(st.When), Gate: st.Gate, Matrix: matrix, Jobs: jobs})
 	}
 
 	// 源阶段不变式:流水线必须恰有一个 source 阶段(引用项目仓库)。前端不渲染删源阶段的入口,

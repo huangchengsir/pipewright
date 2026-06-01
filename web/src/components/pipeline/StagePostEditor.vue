@@ -81,16 +81,50 @@ function setCommands(i: number, text: string): void {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  padding: 7px;
+  padding: 8px;
   border: 1px solid var(--color-border);
   border-left: 3px solid var(--color-amber, #b8860b);
   border-radius: var(--rounded-md, 8px);
   background: var(--color-inset);
 }
-.post-line { display: flex; align-items: center; gap: 5px; }
-.post-cond { flex: 0 0 84px; }
-.post-image { flex: 1; }
-.post-cmds { width: 100%; font-family: var(--font-mono); font-size: 0.74rem; }
+.post-line { display: flex; align-items: center; gap: 6px; }
+
+/* Self-contained input/select/textarea styling(不依赖父组件 scoped class):
+   box-sizing + min-width:0 防止溢出抽屉右缘。 */
+.post-editor input,
+.post-editor select,
+.post-editor textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--color-text);
+  background: var(--color-card);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--rounded, 8px);
+  transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
+}
+.post-editor input,
+.post-editor select { height: 34px; }
+.post-editor select { cursor: pointer; }
+.post-editor input:focus,
+.post-editor select:focus,
+.post-editor textarea:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-soft);
+}
+.post-cond { flex: 0 0 92px; min-width: 0; }
+.post-image { flex: 1; min-width: 0; }
+.post-cmds {
+  width: 100%;
+  padding: 8px 10px;
+  line-height: 1.5;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+}
 .post-del {
   flex: none; width: 22px; height: 22px; border: none; background: none;
   color: var(--color-faint); cursor: pointer; border-radius: 5px;

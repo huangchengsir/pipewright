@@ -1,29 +1,17 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import type { PipelineStage, StageWhen, PipelinePostStep, PipelineServiceSpec } from '../../api/pipeline'
+import type { PipelineStage } from '../../api/pipeline'
 import JobCard from './JobCard.vue'
-import StagePostEditor from './StagePostEditor.vue'
-import StageServicesEditor from './StageServicesEditor.vue'
 import { eligibleNeeds, toggleNeed } from './stageDeps'
 import {
-  WHEN_EVENTS,
-  WHEN_EVENT_LABELS,
-  parseBranches,
-  branchesToText,
-  toggleWhenEvent,
-  normalizeWhen,
   hasWhen,
   whenSummary,
-  parseMatrix,
-  matrixToText,
   hasMatrix,
   matrixSummary,
-  matrixError,
   hasPost,
   postSummary,
   hasServices,
   servicesSummary,
-  type WhenEvent,
 } from './stageSettings'
 
 const props = defineProps<{
@@ -32,6 +20,8 @@ const props = defineProps<{
   selectedJobId: string | null
   /** All stages — used to compute cycle-safe dependency options. */
   allStages: PipelineStage[]
+  /** True when this stage's settings drawer is open (highlights the gear button). */
+  settingsActive?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -42,11 +32,8 @@ const emit = defineEmits<{
   (e: 'reorder-job', payload: { from: number; to: number }): void
   (e: 'update-needs', needs: string[]): void
   (e: 'update-allow-failure', value: boolean): void
-  (e: 'update-when', when: StageWhen | undefined): void
-  (e: 'update-gate', value: boolean): void
-  (e: 'update-matrix', matrix: Record<string, string[]> | undefined): void
-  (e: 'update-post', post: PipelinePostStep[] | undefined): void
-  (e: 'update-services', services: PipelineServiceSpec[] | undefined): void
+  /** Open this stage's settings in the shared right-side drawer (条件/审批门/矩阵/服务/后置). */
+  (e: 'open-settings'): void
 }>()
 
 function stageLabel(index: number): string {
@@ -74,16 +61,10 @@ function toggleDep(needId: string): void {
   emit('update-needs', toggleNeed(currentNeeds.value, needId))
 }
 
-// ─── Stage settings (when 条件 · 8-5 / gate 审批门 · 8-4) ──────────────────────
+// ─── Stage rule chips (when 条件 / gate 审批门 / matrix / services / post) ──────
+// 编辑全部下沉到右侧 StageDrawer(复用 JobDrawer 卡片骨架);此处只渲染汇总 chip。
 
-const settingsOpen = ref(false)
-
-/** Editable branch-glob text (parsed → array only on commit). */
-const branchText = computed<string>(() => branchesToText(props.stage.when?.branches))
-
-const currentEvents = computed<string[]>(() => props.stage.when?.events ?? [])
-
-/** Active when settings, gate, matrix, post, or services → highlight the settings button. */
+/** Any stage rule set → highlight the gear button + show the dot. */
 const hasStageRules = computed(
   () =>
     hasWhen(props.stage.when) ||
@@ -96,33 +77,7 @@ const hasStageRules = computed(
 const whenChip = computed(() => whenSummary(props.stage.when))
 const postChip = computed(() => postSummary(props.stage.post))
 const servicesChip = computed(() => servicesSummary(props.stage.services))
-
-// ─── Matrix build axes (P1) ───────────────────────────────────────────────────
-
-/** Editable matrix text (one `axis: a, b` per line), parsed → map only on commit. */
-const matrixText = computed<string>(() => matrixToText(props.stage.matrix))
-
-/** Chip summary for the matrix (empty when none). */
 const matrixChip = computed(() => matrixSummary(props.stage.matrix))
-
-/** Client-side validation message for the current matrix (null = ok/empty). */
-const matrixWarn = computed(() => matrixError(props.stage.matrix))
-
-/** Commit edited matrix text → parsed axes map (or undefined when empty). */
-function commitMatrix(text: string): void {
-  emit('update-matrix', parseMatrix(text))
-}
-
-/** Commit a new branch-glob set, preserving the current events. */
-function commitBranches(text: string): void {
-  emit('update-when', normalizeWhen(parseBranches(text), currentEvents.value))
-}
-
-/** Toggle a trigger event, preserving the current branch globs. */
-function toggleEvent(ev: WhenEvent): void {
-  const events = toggleWhenEvent(currentEvents.value, ev)
-  emit('update-when', normalizeWhen(props.stage.when?.branches ?? [], events))
-}
 
 // ─── Drag-to-reorder (within this stage) ──────────────────────────────────────
 
@@ -173,11 +128,11 @@ function resetDrag(): void {
       <button
         v-if="stage.kind !== 'source'"
         class="stage-deps-btn"
-        :class="{ 'stage-deps-btn--active': settingsOpen || hasStageRules }"
-        :aria-label="`编辑阶段 ${stage.name} 的条件与审批门`"
-        :aria-expanded="settingsOpen"
-        title="条件执行 / 审批门"
-        @click="settingsOpen = !settingsOpen"
+        :class="{ 'stage-deps-btn--active': settingsActive || hasStageRules }"
+        :aria-label="`编辑阶段 ${stage.name} 的设置(条件/审批门/矩阵/服务/后置)`"
+        :aria-expanded="settingsActive"
+        title="阶段设置:条件 / 审批门 / 矩阵 / 服务 / 后置"
+        @click="emit('open-settings')"
       >
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <circle cx="12" cy="12" r="3"/>
@@ -257,76 +212,6 @@ function resetDrag(): void {
         <span>失败不阻断下游(allowFailure)</span>
       </label>
       <p class="deps-hint">留空 = 无显式依赖;全流水线无依赖时按从左到右线性执行</p>
-    </div>
-
-    <!-- Stage settings popover (when 条件 + gate 审批门) -->
-    <div v-if="settingsOpen && stage.kind !== 'source'" class="deps-popover settings-popover" role="group" aria-label="阶段条件与审批门编辑">
-      <div class="deps-popover-title">条件执行(when)</div>
-      <label class="settings-field-label" :for="`branches-${stage.id}`">分支(glob,空格/逗号分隔)</label>
-      <input
-        :id="`branches-${stage.id}`"
-        class="settings-input"
-        type="text"
-        :value="branchText"
-        placeholder="如 main release/*"
-        @change="commitBranches(($event.target as HTMLInputElement).value)"
-      />
-      <div class="settings-events-label">触发事件</div>
-      <div class="settings-events">
-        <label v-for="ev in WHEN_EVENTS" :key="ev" class="settings-event">
-          <input
-            type="checkbox"
-            :checked="currentEvents.includes(ev)"
-            @change="toggleEvent(ev)"
-          />
-          <span>{{ WHEN_EVENT_LABELS[ev] }}</span>
-        </label>
-      </div>
-      <p class="deps-hint">两者都留空 = 始终执行;不满足时本阶段及下游跳过(不计失败)</p>
-
-      <div class="deps-divider"></div>
-      <div class="deps-popover-title">审批门(gate)</div>
-      <label class="deps-option deps-option--toggle">
-        <input
-          type="checkbox"
-          :checked="stage.gate === true"
-          @change="emit('update-gate', ($event.target as HTMLInputElement).checked)"
-        />
-        <span>进入本阶段前需人工审批</span>
-      </label>
-      <p class="deps-hint">开启后运行将暂停在此,等待批准/拒绝</p>
-
-      <div class="deps-divider"></div>
-      <div class="deps-popover-title">矩阵构建(matrix)</div>
-      <label class="settings-field-label" :for="`matrix-${stage.id}`">轴(每行一个:<code>名称: 值1, 值2</code>)</label>
-      <textarea
-        :id="`matrix-${stage.id}`"
-        class="settings-input settings-textarea"
-        rows="3"
-        :value="matrixText"
-        placeholder="go: 1.21, 1.22&#10;os: linux"
-        @change="commitMatrix(($event.target as HTMLTextAreaElement).value)"
-      ></textarea>
-      <p v-if="matrixWarn" class="settings-warn" role="alert">{{ matrixWarn }}</p>
-      <p class="deps-hint">展开成并行 cell(笛卡尔积),各注入 <code>MATRIX_&lt;轴名&gt;</code> 环境变量;空 = 不展开</p>
-
-      <div class="deps-divider"></div>
-      <div class="deps-popover-title">旁挂服务(services)</div>
-      <StageServicesEditor
-        :services="stage.services"
-        :stage-id="stage.id"
-        @update="emit('update-services', $event)"
-      />
-      <p class="deps-hint">测试旁挂 DB/redis:与脚本容器同网,脚本里按服务名互访(如 <code>psql -h testdb</code>)</p>
-
-      <div class="deps-divider"></div>
-      <div class="deps-popover-title">后置步骤(post)</div>
-      <StagePostEditor
-        :steps="stage.post"
-        :stage-id="stage.id"
-        @update="emit('update-post', $event)"
-      />
-      <p class="deps-hint">阶段 job 跑完后按条件执行(同工作区),用于清理/通知/归档;空 = 无</p>
     </div>
 
     <!-- Job cards -->
@@ -488,41 +373,4 @@ function resetDrag(): void {
 .stage-rule-chip--svc { background: var(--color-cyan-soft, rgba(8, 145, 178, 0.13)); color: var(--color-cyan, #0e7490); }
 .stage-rule-chip--post { background: var(--color-amber-soft, rgba(217, 119, 6, 0.14)); color: var(--color-amber, #b45309); }
 
-/* ─── Settings popover fields ─────────────────────────────────────────────── */
-.settings-popover { width: 232px; }
-.settings-field-label,
-.settings-events-label {
-  display: block;
-  font-size: 0.68rem;
-  font-weight: 600;
-  color: var(--color-dim);
-  margin: 2px 0 5px;
-}
-.settings-events-label { margin-top: 10px; }
-.settings-input {
-  width: 100%;
-  height: 28px;
-  padding: 0 8px;
-  font: inherit;
-  font-size: 0.76rem;
-  color: var(--color-text);
-  background: var(--color-bg-subtle, var(--color-card));
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--rounded-md);
-  box-sizing: border-box;
-  transition: border-color var(--duration-fast);
-}
-.settings-input:focus { outline: none; border-color: var(--color-primary); }
-.settings-textarea { height: auto; padding: 6px 8px; line-height: 1.5; resize: vertical; font-family: var(--font-mono, ui-monospace, monospace); }
-.settings-warn { margin: 5px 0 0; font-size: 0.68rem; color: var(--color-danger, #dc2626); line-height: 1.4; }
-.settings-events { display: flex; flex-wrap: wrap; gap: 6px 12px; }
-.settings-event {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 0.76rem;
-  color: var(--color-text);
-  cursor: pointer;
-}
-.settings-event input { width: 14px; height: 14px; accent-color: var(--color-primary); cursor: pointer; }
 </style>

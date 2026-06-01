@@ -51,6 +51,8 @@ var (
 	ErrInvalidBranchPattern = errors.New("trigger: invalid branch pattern")
 	// ErrInvalidPolicy 表示未匹配策略枚举非法。
 	ErrInvalidPolicy = errors.New("trigger: invalid unmatched policy")
+	// ErrInvalidPathFilter 表示路径过滤 glob 非空校验失败(去空白后为空)。
+	ErrInvalidPathFilter = errors.New("trigger: invalid path filter")
 )
 
 // Events 是触发事件开关(手动触发常开,不建模为字段)。
@@ -75,6 +77,9 @@ type BranchMapping struct {
 }
 
 // Config 是触发配置领域模型。WebhookSecretMasked 为掩码;明文绝不在此模型常驻。
+//
+// PathFilters 为路径过滤 glob 列表(monorepo · P0):非空时仅当本次 push 改动文件匹配任一 glob 才触发;
+// 空列表 = 不启用(放行一切,向后兼容)。glob 支持 `*`(单段)与 `**`(跨 `/`)。
 type Config struct {
 	ProjectID           string
 	WebhookToken        string
@@ -82,6 +87,7 @@ type Config struct {
 	Events              Events
 	BranchMappings      []BranchMapping
 	UnmatchedPolicy     string
+	PathFilters         []string
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 }
@@ -91,6 +97,7 @@ type SaveInput struct {
 	Events          Events
 	BranchMappings  []BranchMapping
 	UnmatchedPolicy string
+	PathFilters     []string
 }
 
 // ResetResult 是重置密钥的结果:完整明文仅此一次返回,同时给掩码。
@@ -153,6 +160,10 @@ func (s *service) Save(ctx context.Context, projectID string, in SaveInput) (*Co
 	if err != nil {
 		return nil, err
 	}
+	pathFilters, err := normalizePathFilters(in.PathFilters)
+	if err != nil {
+		return nil, err
+	}
 
 	eventsJSON, err := json.Marshal(in.Events)
 	if err != nil {
@@ -162,13 +173,17 @@ func (s *service) Save(ctx context.Context, projectID string, in SaveInput) (*Co
 	if err != nil {
 		return nil, fmt.Errorf("trigger: marshal branch mappings: %w", err)
 	}
+	pathFiltersJSON, err := json.Marshal(pathFilters)
+	if err != nil {
+		return nil, fmt.Errorf("trigger: marshal path filters: %w", err)
+	}
 
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 	_, err = s.db.ExecContext(ctx,
 		`UPDATE pipeline_triggers
-		 SET events_json = ?, branch_mappings_json = ?, unmatched_policy = ?, updated_at = ?
+		 SET events_json = ?, branch_mappings_json = ?, unmatched_policy = ?, path_filters_json = ?, updated_at = ?
 		 WHERE project_id = ?`,
-		string(eventsJSON), string(mappingsJSON), policy, nowStr, projectID,
+		string(eventsJSON), string(mappingsJSON), policy, string(pathFiltersJSON), nowStr, projectID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("trigger: update config: %w", err)
@@ -205,20 +220,21 @@ func (s *service) ResetSecret(ctx context.Context, projectID string) (*ResetResu
 // 永不返回密钥明文;掩码由密文解密后即时计算并即弃明文。
 func (s *service) load(ctx context.Context, projectID string) (*Config, string, error) {
 	var (
-		cfg          Config
-		sealed       []byte
-		eventsJSON   string
-		mappingsJSON string
-		createdStr   string
-		updatedStr   string
+		cfg             Config
+		sealed          []byte
+		eventsJSON      string
+		mappingsJSON    string
+		pathFiltersJSON string
+		createdStr      string
+		updatedStr      string
 	)
 	cfg.ProjectID = projectID
 	err := s.db.QueryRowContext(ctx,
 		`SELECT webhook_token, webhook_secret_ciphertext, events_json, branch_mappings_json,
-		        unmatched_policy, created_at, updated_at
+		        unmatched_policy, path_filters_json, created_at, updated_at
 		 FROM pipeline_triggers WHERE project_id = ?`, projectID,
 	).Scan(&cfg.WebhookToken, &sealed, &eventsJSON, &mappingsJSON,
-		&cfg.UnmatchedPolicy, &createdStr, &updatedStr)
+		&cfg.UnmatchedPolicy, &pathFiltersJSON, &createdStr, &updatedStr)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, "", ErrNotFound
@@ -236,6 +252,15 @@ func (s *service) load(ctx context.Context, projectID string) (*Config, string, 
 		}
 		if cfg.BranchMappings == nil {
 			cfg.BranchMappings = []BranchMapping{}
+		}
+	}
+	cfg.PathFilters = []string{}
+	if strings.TrimSpace(pathFiltersJSON) != "" {
+		if err := json.Unmarshal([]byte(pathFiltersJSON), &cfg.PathFilters); err != nil {
+			return nil, "", fmt.Errorf("trigger: parse path filters: %w", err)
+		}
+		if cfg.PathFilters == nil {
+			cfg.PathFilters = []string{}
 		}
 	}
 
@@ -309,6 +334,7 @@ func (s *service) createDefault(ctx context.Context, projectID string) (*Config,
 		Events:              Events{},
 		BranchMappings:      []BranchMapping{},
 		UnmatchedPolicy:     PolicyRecord,
+		PathFilters:         []string{},
 		CreatedAt:           now,
 		UpdatedAt:           now,
 	}, nil
@@ -436,6 +462,31 @@ func normalizeMappings(in []BranchMapping) ([]BranchMapping, error) {
 			Environment:     strings.TrimSpace(m.Environment),
 			TargetServerIDs: ids,
 		})
+	}
+	return out, nil
+}
+
+// normalizePathFilters 校验并规范化路径过滤 glob 列表(monorepo · P0):
+//   - 每条 trim、剔空、去重(保留首次出现序)。
+//   - 含空白的非法 glob → ErrInvalidPathFilter(与分支模式一致:glob 不应含空白)。
+//
+// 返回非 nil 切片(空列表 = 不启用路径过滤,放行一切)。
+func normalizePathFilters(in []string) ([]string, error) {
+	out := make([]string, 0, len(in))
+	seen := make(map[string]struct{}, len(in))
+	for _, raw := range in {
+		p := strings.TrimSpace(raw)
+		if p == "" {
+			continue // 空行直接剔除(前端多行文本框常见尾随空行)
+		}
+		if strings.ContainsAny(p, " \t\n\r") {
+			return nil, fmt.Errorf("%w: path filter %q must not contain whitespace", ErrInvalidPathFilter, p)
+		}
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
 	}
 	return out, nil
 }

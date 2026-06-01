@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/huangchengsir/pipewright/internal/pipeline"
 )
 
 // shellDriver 是默认 Driver:shell 到探测出的容器 CLI(bin),所有命令经 Commander 以 array 执行。
@@ -55,10 +57,20 @@ func (d *shellDriver) Build(ctx context.Context, contextDir, dockerfile, localTa
 	return d.cmdr.Stream(ctx, d.bin, args, "", onLine)
 }
 
-func (d *shellDriver) RunToolchain(ctx context.Context, image, hostDir, workdir string, env []string, cmd []string, onLine func(stream, line string)) (int, error) {
-	// docker run --rm -v hostDir:workdir -w workdir [-e K=V...] image cmd...
+func (d *shellDriver) RunToolchain(ctx context.Context, image, hostDir, workdir string, env []string, cmd []string, res pipeline.Resource, onLine func(stream, line string)) (int, error) {
+	// docker run --rm -v hostDir:workdir -w workdir [--cpus N] [--memory M] [-e K=V...] image cmd...
 	args := []string{"run", "--rm", "-v", hostDir + ":" + workdir, "-w", workdir}
 	display := []string{"run", "--rm", "-v", hostDir + ":" + workdir, "-w", workdir}
+	// 资源规格(可选):cpu→--cpus、memory→--memory。值原样作 array 实参(不拼 shell;非法值由 docker 拒绝)。
+	// 资源 flag 非 secret,回显与真实参数一致。
+	if cpu := strings.TrimSpace(res.CPU); cpu != "" {
+		args = append(args, "--cpus", cpu)
+		display = append(display, "--cpus", cpu)
+	}
+	if mem := strings.TrimSpace(res.Memory); mem != "" {
+		args = append(args, "--memory", mem)
+		display = append(display, "--memory", mem)
+	}
 	for _, kv := range env {
 		args = append(args, "-e", kv)
 		display = append(display, "-e", maskKV(kv)) // 环境变量可能含 secret:回显只列 key

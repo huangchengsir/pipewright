@@ -3,6 +3,8 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { listRuns, triggerManual, type RunListItem, type RunStatus, type RunDetail, type ListRunsParams, type TriggerManualInput } from '../api/runs'
 import RunParamsEditor from '../components/RunParamsEditor.vue'
+import TypedRunParams from '../components/TypedRunParams.vue'
+import { getParameters, validateParamValues, type ParamDef } from '../api/parameters'
 import { listProjects, type Project } from '../api/projects'
 import { HttpError } from '../api/http'
 
@@ -74,6 +76,7 @@ const projects            = ref<Project[]>([])
 const projectsLoading     = ref(false)
 const triggerForm         = ref({ projectId: '', branch: '', commit: '' })
 const triggerParams       = ref<Record<string, string>>({})
+const triggerDefs         = ref<ParamDef[]>([])
 const triggerBranchError  = ref('')
 const triggerProjectError = ref('')
 const triggerBanner       = ref('')
@@ -98,6 +101,7 @@ async function loadProjectsForTrigger(): Promise<void> {
 function openTriggerModal(): void {
   triggerForm.value        = { projectId: '', branch: '', commit: '' }
   triggerParams.value       = {}
+  triggerDefs.value         = []
   triggerBranchError.value  = ''
   triggerProjectError.value = ''
   triggerBanner.value       = ''
@@ -118,6 +122,17 @@ function onProjectSelect(): void {
   if (proj && !triggerForm.value.branch) {
     triggerForm.value.branch = proj.defaultBranch || ''
   }
+  // 切项目 → 重载类型化参数定义(P0);清空已填值。失败静默回退自由 KV。
+  triggerParams.value = {}
+  triggerDefs.value = []
+  const pid = triggerForm.value.projectId
+  if (pid) {
+    void getParameters(pid)
+      .then((defs) => {
+        if (triggerForm.value.projectId === pid) triggerDefs.value = defs
+      })
+      .catch(() => {})
+  }
 }
 
 async function handleTriggerSubmit(): Promise<void> {
@@ -136,6 +151,14 @@ async function handleTriggerSubmit(): Promise<void> {
     ok = false
   }
   if (!ok) return
+
+  if (triggerDefs.value.length) {
+    const verr = validateParamValues(triggerDefs.value, triggerParams.value)
+    if (verr) {
+      triggerBanner.value = verr
+      return
+    }
+  }
 
   triggerSubmitting.value = true
   try {
@@ -604,13 +627,19 @@ function isFailedStatus(status: RunStatus): boolean {
             />
           </div>
 
-          <!-- Parameters (optional · Story 8-11) -->
+          <!-- Parameters · 有类型化定义(P0)→ 类型化控件;无 → 自由 KV(Story 8-11) -->
           <div class="field">
             <label class="field-label">
               参数
-              <span class="field-hint-inline">（可选,注入流水线为环境变量）</span>
+              <span class="field-hint-inline">{{ triggerDefs.length ? '（按定义填写,注入流水线为环境变量）' : '（可选,注入流水线为环境变量）' }}</span>
             </label>
-            <RunParamsEditor v-model="triggerParams" :disabled="triggerSubmitting" />
+            <TypedRunParams
+              v-if="triggerDefs.length"
+              :key="`typed-${triggerForm.projectId}`"
+              :defs="triggerDefs"
+              v-model="triggerParams"
+            />
+            <RunParamsEditor v-else v-model="triggerParams" :disabled="triggerSubmitting" />
           </div>
 
           <!-- Footer -->

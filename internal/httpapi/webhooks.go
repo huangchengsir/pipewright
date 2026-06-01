@@ -107,7 +107,7 @@ func makeWebhookHandler(rc *trigger.Receiver) http.HandlerFunc {
 // makeManualRunHandler 返回 POST /api/projects/{id}/runs handler(认证 + CSRF;手动触发）。
 // body {branch, commit?};actor=admin;成功 → 201 冻结 run-detail DTO。
 // 成功后追加 run_trigger_manual 审计(detail 记分支/commit/运行 id)。
-func makeManualRunHandler(svc run.Service, aud audit.Recorder) http.HandlerFunc {
+func makeManualRunHandler(svc run.Service, params run.ParameterService, aud audit.Recorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if svc == nil {
 			writeError(w, http.StatusServiceUnavailable, "internal", "运行服务未初始化")
@@ -128,13 +128,27 @@ func makeManualRunHandler(svc run.Service, aud audit.Recorder) http.HandlerFunc 
 		branch := strings.TrimSpace(req.Branch)
 		commit := strings.TrimSpace(req.Commit)
 		// 参数化运行(Story 8-11):trim key、剔空 key;明文构建参数(注入 script 步骤容器环境)。
-		params := normalizeRunParams(req.Params)
+		runParams := normalizeRunParams(req.Params)
+		// 类型化参数(P0):有项目参数定义时校验 + 强转 + 填默认;无定义则透传(向后兼容)。
+		// 非法值(必填缺失 / 枚举越界 / 类型不符)→ 422,不创建运行。
+		if params != nil {
+			resolved, perr := params.Resolve(r.Context(), id, runParams)
+			if perr != nil {
+				if errors.Is(perr, run.ErrInvalidParamValue) {
+					writeError(w, http.StatusUnprocessableEntity, "invalid_parameter", perr.Error())
+					return
+				}
+				writeError(w, http.StatusInternalServerError, "internal", "参数校验失败")
+				return
+			}
+			runParams = resolved
+		}
 		rn, err := svc.Create(r.Context(), id, run.Trigger{
 			Type:   run.TriggerManual,
 			Branch: branch,
 			Commit: commit,
 			Actor:  "admin",
-			Params: params,
+			Params: runParams,
 		})
 		if err != nil {
 			writeRunError(w, err)
@@ -145,7 +159,7 @@ func makeManualRunHandler(svc run.Service, aud audit.Recorder) http.HandlerFunc 
 			Action:     audit.ActionRunTriggerManual,
 			TargetType: audit.TargetRun,
 			TargetID:   rn.ID,
-			Detail:     map[string]any{"projectId": id, "branch": branch, "commit": commit, "paramCount": len(params)},
+			Detail:     map[string]any{"projectId": id, "branch": branch, "commit": commit, "paramCount": len(runParams)},
 			IP:         clientIP(r),
 		})
 		// 刚创建(queued)的运行尚无产物/无部署;nil → []/null。产物在成功路径由 worker emit、部署经 deploy 端点。

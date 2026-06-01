@@ -59,6 +59,7 @@ type options struct {
 	cron             cron.Service
 	chain            chain.Service
 	concurrency      run.ConcurrencyService
+	parameters       run.ParameterService
 	pipelines        pipeline.Service
 	pipelineSettings pipeline.SettingsService
 	runs             run.Service
@@ -166,6 +167,12 @@ func WithChain(s chain.Service) Option {
 // 不传则该端点返回 503(服务未初始化)。GET 过 auth;PUT 过 auth + CSRF。
 func WithConcurrency(s run.ConcurrencyService) Option {
 	return func(o *options) { o.concurrency = s }
+}
+
+// WithParameters 注入项目级类型化运行参数定义服务,挂载 /api/projects/{id}/parameters 路由(P0 typed params)。
+// 不传则该端点返回 503;手动触发亦据此校验提供的参数(无定义则透传,向后兼容)。
+func WithParameters(s run.ParameterService) Option {
+	return func(o *options) { o.parameters = s }
 }
 
 // WithTriggers 注入触发配置服务,挂载 /api/projects/{id}/trigger* 路由。
@@ -387,6 +394,10 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Get("/projects/{id}/concurrency", makeGetConcurrencyHandler(o.concurrency))
 		ar.Put("/projects/{id}/concurrency", makeSaveConcurrencyHandler(o.concurrency))
 
+		// 项目级类型化运行参数定义(P0 typed params)。o.parameters 为 nil → handler 返回 503。GET 过 auth;PUT 过 auth + CSRF。
+		ar.Get("/projects/{id}/parameters", makeGetParametersHandler(o.parameters))
+		ar.Put("/projects/{id}/parameters", makeSaveParametersHandler(o.parameters))
+
 		// 流水线串联(FR-8-11):上游成功后触发下游流水线。o.chain 为 nil → handler 返回 503。
 		// GET 过 auth;PUT 为写方法,过 auth + CSRF。
 		ar.Get("/projects/{id}/chain", makeGetChainHandler(o.chain))
@@ -481,7 +492,8 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Post("/runs/{id}/diagnosis/feedback", makeSubmitDiagnosisFeedbackHandler(rs, o.feedback, o.secretSource))
 
 		// 手动触发创建运行(Story 3.2):认证 + CSRF;actor=admin;返 201 run-detail DTO。
-		ar.Post("/projects/{id}/runs", makeManualRunHandler(rs, aud))
+		// o.parameters 非 nil 时,据项目参数定义校验 + 强转 + 填默认(typed params,P0);无定义则透传。
+		ar.Post("/projects/{id}/runs", makeManualRunHandler(rs, o.parameters, aud))
 
 		// 账户设置(Story 1.7):改口令 / 会话列表 / 撤销会话。ac 为 nil 时 handler 返回 503。
 		// 改口令、撤销会话为写方法,过 auth + CSRF;列表为 GET,过 auth。

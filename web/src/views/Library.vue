@@ -27,11 +27,14 @@ import {
 import { listCredentials, type Credential } from '../api/credentials'
 import {
   listCustomNodes,
+  createCustomNode,
   updateCustomNode,
   deleteCustomNode,
   type CustomNode,
 } from '../api/customNodes'
 import { jobTypeLabel } from '../components/pipeline/jobConfigSchema'
+import CustomNodeStudio from '../components/pipeline/CustomNodeStudio.vue'
+import { isStudioNode } from '../components/pipeline/studioCompile'
 
 type Tab = 'templates' | 'variableGroups' | 'customNodes'
 type LoadState = 'idle' | 'loading' | 'error'
@@ -275,7 +278,26 @@ const cnEditorSaving = ref(false)
 
 const cnEditorTypeLabel = computed(() => jobTypeLabel(cnEditorNodeType.value))
 
+// ─── 自定义节点工作室(低代码组合 → templated 节点)──────────────────────────────
+const studioOpen = ref(false)
+const studioNode = ref<CustomNode | null>(null)
+const studioSaving = ref(false)
+const studioBanner = ref('')
+
+function openCreateStudio(): void {
+  studioNode.value = null
+  studioBanner.value = ''
+  studioOpen.value = true
+}
+
+/** 工作室节点(templated 或带 __studio)走工作室;其余类型走原始 KV 编辑器。 */
 function openEditCustomNode(n: CustomNode): void {
+  if (isStudioNode(n.nodeType, n.config ?? {})) {
+    studioNode.value = n
+    studioBanner.value = ''
+    studioOpen.value = true
+    return
+  }
   cnEditingId.value = n.id
   cnEditorName.value = n.name
   cnEditorDescription.value = n.description
@@ -287,6 +309,41 @@ function openEditCustomNode(n: CustomNode): void {
   }))
   cnEditorBanner.value = ''
   cnEditorOpen.value = true
+}
+
+async function saveStudioNode(payload: {
+  id: string | null
+  name: string
+  description: string
+  summary: string
+  config: Record<string, string>
+}): Promise<void> {
+  studioBanner.value = ''
+  studioSaving.value = true
+  try {
+    const input = {
+      name: payload.name,
+      description: payload.description,
+      nodeType: 'templated',
+      summary: payload.summary,
+      config: payload.config,
+    }
+    if (payload.id) {
+      await updateCustomNode(payload.id, input)
+      message.success(`已更新自定义节点「${payload.name}」`)
+    } else {
+      await createCustomNode(input)
+      message.success(`已创建自定义节点「${payload.name}」`)
+    }
+    studioOpen.value = false
+    await loadCustomNodes()
+  } catch (err: unknown) {
+    studioBanner.value = err instanceof HttpError
+      ? err.apiError?.message ?? `保存失败(${err.status})`
+      : '保存失败'
+  } finally {
+    studioSaving.value = false
+  }
 }
 
 function addCnRow(): void {
@@ -383,6 +440,13 @@ onMounted(() => {
         @click="openCreateGroup"
       >
         + 新建变量组
+      </button>
+      <button
+        v-if="tab === 'customNodes'"
+        class="btn-primary"
+        @click="openCreateStudio"
+      >
+        + 新建工作室节点
       </button>
     </header>
 
@@ -528,9 +592,10 @@ onMounted(() => {
         <div class="empty-icon">◇</div>
         <p class="empty-label">还没有自定义节点</p>
         <p class="empty-hint">
-          在项目流水线编辑器里把任意节点(尤其是自定义/模板节点)配好参数后,点「存为自定义节点」
-          即可沉淀到这里,之后在任意流水线的节点选择器里一键复用,免去重复填参。
+          点右上「新建工作室节点」用低代码方式组合步骤 + 提升参数,沉淀成可复用节点;
+          或在流水线编辑器里把任意节点配好参数后点「存为自定义节点」。之后在任意流水线的节点选择器一键复用。
         </p>
+        <button class="btn-primary" @click="openCreateStudio">+ 新建工作室节点</button>
       </div>
 
       <ul v-else class="card-grid" role="list">
@@ -730,6 +795,16 @@ onMounted(() => {
         </footer>
       </div>
     </div>
+
+    <!-- ─── 自定义节点工作室(低代码组合) ─── -->
+    <CustomNodeStudio
+      :open="studioOpen"
+      :node="studioNode"
+      :saving="studioSaving"
+      :banner="studioBanner"
+      @close="studioOpen = false"
+      @save="saveStudioNode"
+    />
   </section>
 </template>
 

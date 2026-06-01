@@ -52,7 +52,20 @@ export interface PipelineStage {
    * `MATRIX_<AXIS>` injected as container env. Empty = no expansion (single stage).
    */
   matrix?: Record<string, string[]>
+  /**
+   * Stage post steps (P1 · Jenkins post): run after the stage's jobs regardless of
+   * success/failure, by condition, in the same workspace (cleanup/notify/archive).
+   */
+  post?: PipelinePostStep[]
   jobs: PipelineJob[]
+}
+
+/** A stage post step (P1). condition: always | on_success | on_failure. */
+export interface PipelinePostStep {
+  condition: 'always' | 'on_success' | 'on_failure'
+  image: string
+  commands: string[]
+  workDir?: string
 }
 
 export interface PipelineDTO {
@@ -76,6 +89,7 @@ export interface SavePipelineInput {
     when?: StageWhen
     gate?: boolean
     matrix?: Record<string, string[]>
+    post?: PipelinePostStep[]
     jobs: Array<{
       id?: string
       name: string

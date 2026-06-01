@@ -87,7 +87,11 @@ type Stage struct {
 	// axis 值以 `MATRIX_<AXIS>`(大写)注入 cell 各 script job 的容器环境供命令引用。
 	// 空(nil / 无轴)= 行为不变(单 stage)。校验/展开见 stage_matrix.go 与 dagrun.ExpandMatrix。
 	Matrix map[string][]string `json:"matrix,omitempty"`
-	Jobs   []Job               `json:"jobs"`
+	// Post 是阶段「后置步骤」(P1,对标 Jenkins post / GitLab after_script):阶段的 job 跑完后
+	// **无论成功失败都按条件执行**,在同一克隆工作区运行(可访问构建产物),用于清理 / 通知 / 归档日志。
+	// 空 = 行为不变。校验/执行见 stage_post.go 与 dag_stage_exec.go runStagePost。
+	Post []PostStep `json:"post,omitempty"`
+	Jobs []Job      `json:"jobs"`
 }
 
 // Spec 是流水线编排声明式配置(阶段集合)。
@@ -368,7 +372,13 @@ func normalizeSpec(in Spec) (Spec, error) {
 			return Spec{}, merr
 		}
 
-		out.Stages = append(out.Stages, Stage{ID: stageID, Name: name, Kind: kind, Needs: needs, AllowFailure: st.AllowFailure, When: normalizeWhen(st.When), Gate: st.Gate, Matrix: matrix, Jobs: jobs})
+		// Post 后置步骤规范化 + 校验(condition 枚举 / image+commands 非空):空 → nil(行为不变)。
+		post, perr := normalizePost(st.Post)
+		if perr != nil {
+			return Spec{}, perr
+		}
+
+		out.Stages = append(out.Stages, Stage{ID: stageID, Name: name, Kind: kind, Needs: needs, AllowFailure: st.AllowFailure, When: normalizeWhen(st.When), Gate: st.Gate, Matrix: matrix, Post: post, Jobs: jobs})
 	}
 
 	// 源阶段不变式:流水线必须恰有一个 source 阶段(引用项目仓库)。前端不渲染删源阶段的入口,

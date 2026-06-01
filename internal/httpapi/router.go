@@ -25,6 +25,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/chain"
 	"github.com/huangchengsir/pipewright/internal/cron"
 	"github.com/huangchengsir/pipewright/internal/deploy"
+	"github.com/huangchengsir/pipewright/internal/environments"
 	"github.com/huangchengsir/pipewright/internal/library"
 	"github.com/huangchengsir/pipewright/internal/notify"
 	"github.com/huangchengsir/pipewright/internal/oauth"
@@ -83,6 +84,7 @@ type options struct {
 	approvalCoord    *approval.Coordinator
 	approvalStore    *approval.Store
 	promotionStore   *promotion.Store
+	environments     *environments.Service
 	doraMetrics      run.MetricsService
 	templates        library.TemplateService
 	varGroups        library.VarGroupService
@@ -110,6 +112,14 @@ func WithApprovals(coord *approval.Coordinator, store *approval.Store) Option {
 // 不传则晋级端点返回 503。
 func WithPromotion(store *promotion.Store) Option {
 	return func(o *options) { o.promotionStore = store }
+}
+
+// WithEnvironments 注入「环境一等公民」只读聚合服务(对标 GitLab environments),挂载
+// 按环境部署历史时间线 + 单环境历史 + 一键回滚路由。聚合纯查询既有表(零迁移);回滚执行复用
+// 既有 deploy.Service(经 WithDeploy 注入)。GET 过 auth;rollback 为写方法,过 auth + CSRF + 审计。
+// 不传则相关端点返回 503(服务未初始化);未注入 deploy 时回滚端点 503。
+func WithEnvironments(s *environments.Service) Option {
+	return func(o *options) { o.environments = s }
 }
 
 // WithDoraMetrics 注入 DORA 指标只读聚合服务(FR-8-15),挂载 GET /api/metrics/dora 路由
@@ -409,6 +419,14 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Get("/projects/{id}/environments", makeGetEnvironmentsHandler(o.promotionStore))
 		ar.Put("/projects/{id}/environments", makeSaveEnvironmentsHandler(o.promotionStore, aud))
 		ar.Get("/projects/{id}/promotions", makeListProjectPromotionsHandler(o.promotionStore))
+
+		// 环境一等公民(对标 GitLab environments):按环境聚合部署历史 + 一键回滚到上一次成功部署。
+		// 比 /projects/{id}/environments 多一段(/deployments、/{env}/...),chi 精确匹配不会被吞。
+		// 纯查询既有表(零迁移);回滚执行复用 o.deployer(经 WithDeploy 注入)。
+		// GET 过 auth;rollback 为写方法,过 auth + CSRF + 审计。o.environments 为 nil → 503。
+		ar.Get("/projects/{id}/environments/deployments", makeListEnvironmentDeploymentsHandler(o.environments))
+		ar.Get("/projects/{id}/environments/{env}/history", makeEnvironmentHistoryHandler(o.environments))
+		ar.Post("/projects/{id}/environments/{env}/rollback", makeRollbackEnvironmentHandler(o.environments, o.deployer, o.runs, aud))
 
 		// 流水线编排配置(Story 2.2)。pl 为 nil 时 handler 返回 503。
 		// 与 /projects/{id}/trigger 同在 {id} 路由组内并存(不会被 /projects/{id} 吞)。

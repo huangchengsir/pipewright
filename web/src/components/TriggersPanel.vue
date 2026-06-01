@@ -21,6 +21,7 @@ import { HttpError } from '../api/http'
 import CronPanel from './CronPanel.vue'
 import EnvironmentsPanel from './EnvironmentsPanel.vue'
 import ConcurrencyPanel from './ConcurrencyPanel.vue'
+import ParametersPanel from './ParametersPanel.vue'
 import ChainPanel from './ChainPanel.vue'
 import RunnerPanel from './RunnerPanel.vue'
 
@@ -526,6 +527,9 @@ const displayWebhookUrl = computed(() => {
 
       <!-- ═══ Environment promotion chain · Story 8-7 / FR-8-7 ════════════ -->
       <EnvironmentsPanel :project-id="props.projectId" />
+
+      <!-- ═══ Typed run parameters · P0 ════════════════════════════════════ -->
+      <ParametersPanel :project-id="props.projectId" />
 
       <!-- ═══ Concurrency limit · Story 8-10 / FR-8-10 ═════════════════════ -->
       <ConcurrencyPanel :project-id="props.projectId" />

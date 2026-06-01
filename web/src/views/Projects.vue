@@ -16,6 +16,8 @@ import { listCredentials, type Credential } from '../api/credentials'
 import { triggerManual, type RunDetail, type TriggerManualInput } from '../api/runs'
 import { listRefs, listCommits, type GitRef, type GitCommit } from '../api/refs'
 import RunParamsEditor from '../components/RunParamsEditor.vue'
+import TypedRunParams from '../components/TypedRunParams.vue'
+import { getParameters, validateParamValues, type ParamDef } from '../api/parameters'
 import { HttpError } from '../api/http'
 
 // ─── router ───────────────────────────────────────────────────────────────────
@@ -382,6 +384,7 @@ const triggerModalOpen   = ref(false)
 const triggerProject     = ref<Project | null>(null)
 const triggerForm        = ref({ branch: '', commit: '' })
 const triggerParams      = ref<Record<string, string>>({})
+const triggerDefs        = ref<ParamDef[]>([])
 const triggerBranchError = ref('')
 const triggerBanner      = ref('')
 const triggerSubmitting  = ref(false)
@@ -390,11 +393,22 @@ function openTriggerModal(p: Project): void {
   triggerProject.value     = p
   triggerForm.value        = { branch: p.defaultBranch || '', commit: '' }
   triggerParams.value      = {}
+  triggerDefs.value        = []
   triggerBranchError.value = ''
   triggerBanner.value      = ''
   triggerSubmitting.value  = false
   triggerModalOpen.value   = true
   void loadBranchOptions(p.id)
+  void loadTriggerDefs(p.id)
+}
+
+// 类型化运行参数定义(P0):有定义 → 弹窗渲染类型化控件;无 → 回退自由 KV。失败静默(降级)。
+async function loadTriggerDefs(projectId: string): Promise<void> {
+  try {
+    triggerDefs.value = await getParameters(projectId)
+  } catch {
+    triggerDefs.value = []
+  }
 }
 
 // 代码管理区(Story 8-18):拉取真实分支/commit 供下拉建议(datalist);未启用/失败 → 静默回退手填。
@@ -443,6 +457,16 @@ async function handleTriggerSubmit(): Promise<void> {
   const branch = triggerForm.value.branch.trim()
 
   if (!triggerProject.value) return
+
+  // 类型化参数:提交前客户端即时校验(后端仍会再校验一次 422)。
+  if (triggerDefs.value.length) {
+    const verr = validateParamValues(triggerDefs.value, triggerParams.value)
+    if (verr) {
+      triggerBanner.value = verr
+      return
+    }
+  }
+
   triggerSubmitting.value = true
 
   try {
@@ -918,13 +942,20 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
             </datalist>
           </div>
 
-          <!-- Parameters (optional · Story 8-11) -->
+          <!-- Parameters · 有类型化定义(P0)→ 渲染类型化控件;无 → 自由 KV(Story 8-11) -->
           <div class="field">
             <label class="field-label">
               参数
-              <span class="field-hint-inline">（可选,注入流水线为环境变量）</span>
+              <span class="field-hint-inline">{{ triggerDefs.length ? '（按定义填写,注入流水线为环境变量）' : '（可选,注入流水线为环境变量）' }}</span>
             </label>
+            <TypedRunParams
+              v-if="triggerDefs.length"
+              :key="`typed-${triggerProject.id}`"
+              :defs="triggerDefs"
+              v-model="triggerParams"
+            />
             <RunParamsEditor
+              v-else
               :key="triggerProject.id"
               v-model="triggerParams"
               :disabled="triggerSubmitting"

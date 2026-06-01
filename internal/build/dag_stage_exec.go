@@ -171,9 +171,13 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 					return ErrBuildFailed
 				}
 				step.Env = append(runParamsAsEnv(r.Trigger.Params), step.Env...)
+				// 构建依赖缓存(build cache · P0):执行前恢复(暖构建)、成功后保存(best-effort,
+				// 缓存问题绝不让构建失败)。仅当 job 配了 cachePaths 才有动作;未注入缓存库 → 无操作。
+				b.restoreJobCache(ctx, rep, jb, r.Trigger.Branch, workspace)
 				if err := b.runScriptStep(ctx, sink, 0, step, workspace); err != nil {
 					return err // ErrBuildFailed / run.ErrCanceled
 				}
+				b.saveJobCache(ctx, rep, jb, r.Trigger.Branch, workspace)
 			}
 
 			commitTag := "latest"

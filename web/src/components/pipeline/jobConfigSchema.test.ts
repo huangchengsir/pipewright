@@ -130,4 +130,32 @@ describe('jobConfigSchema', () => {
       expect(extras.map(([k]) => k)).toEqual(['a', 'b'])
     })
   })
+
+  describe('build cache fields (build cache · P0)', () => {
+    // 脚本类节点(后端 isScriptJob 路径)都暴露 cachePaths/cacheKey 表单字段。
+    const SCRIPT_CLASS = ['script', 'custom', 'build_frontend', 'build_backend', 'templated']
+
+    it('script-class types expose cachePaths/cacheKey fields', () => {
+      for (const t of SCRIPT_CLASS) {
+        const keys = JOB_TYPE_SPECS[t].fields.map((f) => f.key)
+        expect(keys, `${t} should offer cachePaths`).toContain('cachePaths')
+        expect(keys, `${t} should offer cacheKey`).toContain('cacheKey')
+      }
+    })
+
+    it('owns cache keys (not dropped as raw extras)', () => {
+      for (const t of SCRIPT_CLASS) {
+        const keys = schemaKeys(t)
+        expect(keys.has('cachePaths'), `${t} owns cachePaths`).toBe(true)
+        expect(keys.has('cacheKey'), `${t} owns cacheKey`).toBe(true)
+        const { extras } = splitConfig(t, { cachePaths: 'node_modules', cacheKey: 'k' })
+        expect(extras.length, `${t} keeps cache keys typed, not extras`).toBe(0)
+      }
+    })
+
+    it('non-script types do not gain cache fields', () => {
+      const keys = JOB_TYPE_SPECS.git_source.fields.map((f) => f.key)
+      expect(keys).not.toContain('cachePaths')
+    })
+  })
 })

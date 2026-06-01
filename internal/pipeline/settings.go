@@ -167,11 +167,14 @@ type PipelineStep struct {
 type Resource struct {
 	CPU    string `json:"cpu,omitempty"`
 	Memory string `json:"memory,omitempty"`
+	// Network 是容器加入的 docker 网络名:由执行器在「旁挂服务(services)」阶段运行时设置,
+	// 让脚本容器与服务容器同网、按服务名互访。**非用户配置项**(用户只配 cpu/memory),空=默认网络。
+	Network string `json:"network,omitempty"`
 }
 
-// IsZero 判断资源规格是否为空(两字段都未配)。
+// IsZero 判断资源规格是否为空(cpu/memory/network 都未配)。
 func (r Resource) IsZero() bool {
-	return strings.TrimSpace(r.CPU) == "" && strings.TrimSpace(r.Memory) == ""
+	return strings.TrimSpace(r.CPU) == "" && strings.TrimSpace(r.Memory) == "" && strings.TrimSpace(r.Network) == ""
 }
 
 // Settings 是构建/部署配置领域模型(冻结 DTO 外层形状)。

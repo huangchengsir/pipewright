@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/huangchengsir/pipewright/internal/deploy"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/run"
@@ -340,5 +341,64 @@ func TestScriptStepFromTemplatedJob(t *testing.T) {
 	}
 	if len(step.Commands) != 2 || step.Commands[0] != "cd web" {
 		t.Errorf("commands = %v", step.Commands)
+	}
+}
+
+// stubStageDeployer 捕获 DeployForStage 的入参(只为断言 cfg 透传)。
+type stubStageDeployer struct {
+	gotCfg      map[string]string
+	gotStrategy string
+	gotServers  []string
+}
+
+func (d *stubStageDeployer) Deploy(context.Context, deploy.DeployInput) ([]deploy.TargetResult, error) {
+	panic("Deploy not expected")
+}
+func (d *stubStageDeployer) RetryFailed(context.Context, deploy.RetryInput) ([]deploy.TargetResult, error) {
+	panic("RetryFailed not expected")
+}
+func (d *stubStageDeployer) DeployForStage(_ context.Context, _ string, serverIDs []string, cfg map[string]string, strategy string) ([]deploy.TargetResult, error) {
+	d.gotCfg = cfg
+	d.gotStrategy = strategy
+	d.gotServers = serverIDs
+	return []deploy.TargetResult{{ServerName: "srv", Status: run.TargetSuccess, Message: "ok"}}, nil
+}
+
+// TestRunDeployJobPassesImageParams 证 #55:部署节点把镜像产物参数
+// (artifactType/containerName/ports/runArgs)透传给 deploy.DeployForStage,
+// 使流水线部署节点能部署 #51 的镜像产物(而非只透传 releaseBase/restartCommand)。
+func TestRunDeployJobPassesImageParams(t *testing.T) {
+	dep := &stubStageDeployer{}
+	b := &Builder{deployer: dep}
+	rep := &fakeReporter{}
+	jb := pipeline.Job{ID: "d", Name: "部署", Type: "deploy_ssh", Config: map[string]any{
+		"serverId":      "srv-1",
+		"artifactType":  "image",
+		"containerName": "myapp",
+		"ports":         "8080:80,9000:9000",
+		"runArgs":       "-e KEY=v --restart always",
+		"strategy":      "blue_green",
+		"deployPath":    "/opt/app", // 文件态键仍应透传,不互斥
+	}}
+	if err := b.runDeployJob(context.Background(), rep, jb, "run-1"); err != nil {
+		t.Fatalf("runDeployJob err: %v", err)
+	}
+	for k, want := range map[string]string{
+		"artifactType":  "image",
+		"containerName": "myapp",
+		"ports":         "8080:80,9000:9000",
+		"runArgs":       "-e KEY=v --restart always",
+		"releaseBase":   "/opt/app",
+	} {
+		if got := dep.gotCfg[k]; got != want {
+			t.Errorf("cfg[%q] = %q, want %q(完整 cfg=%+v)", k, got, want, dep.gotCfg)
+		}
+	}
+	if dep.gotStrategy != "blue_green" {
+		t.Errorf("strategy = %q, want blue_green", dep.gotStrategy)
+	}
+	// 空键不应混入(保持默认行为)。
+	if _, ok := dep.gotCfg["restartCommand"]; ok {
+		t.Errorf("空 restartCommand 不应入 cfg:%+v", dep.gotCfg)
 	}
 }

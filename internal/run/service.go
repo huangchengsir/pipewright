@@ -123,6 +123,10 @@ type service struct {
 	// 返回非 nil 错误(队列满/已停机)时 Create 据此回滚并失败返回(不留挂死)。
 	enqueueMu sync.RWMutex
 	enqueue   func(runID string) error
+
+	// envResolver 可选:手动/定时/串联触发未显式带环境时,据项目分支映射补解析环境
+	// (与 webhook 路径对齐)。nil(纯单测 Service / 未注入)时 Create 不补解析,行为不变。
+	envResolver EnvResolver
 }
 
 // setEnqueue 由 WorkerPool 注入调度回调(Create 入库后调用)。
@@ -132,18 +136,38 @@ func (s *service) setEnqueue(fn func(runID string) error) {
 	s.enqueueMu.Unlock()
 }
 
-// New 构造运行 Service。db 经参数化 SQL 触库;事件总线用于 SSE 推送(不轮询 DB)。
-// 不做任何重活(无 init() 副作用,避免抬高空载内存)。
-func New(db *sql.DB) Service {
-	return newService(db)
+// EnvResolver 把(项目, 分支)解析为映射的环境名 + 目标服务器引用 id 列表。
+// 手动 / 定时 / 串联触发未显式带环境时,Create 经此按项目分支映射补解析,与 webhook 接收
+// 路径保持一致(否则 build_image 不知推哪个 registry、环境变量 / 目标机全落空)。
+// 无映射命中 → ("", nil),行为不变。trigger 包提供实现(同一套 matchBranch glob)。
+type EnvResolver interface {
+	ResolveEnv(ctx context.Context, projectID, branch string) (environment string, targetServerIDs []string)
 }
 
-func newService(db *sql.DB) *service {
-	return &service{
+// Option 配置运行 Service 的可选依赖。
+type Option func(*service)
+
+// WithEnvResolver 注入分支→环境解析器(供手动/定时/串联触发补解析环境;见 EnvResolver)。
+func WithEnvResolver(r EnvResolver) Option {
+	return func(s *service) { s.envResolver = r }
+}
+
+// New 构造运行 Service。db 经参数化 SQL 触库;事件总线用于 SSE 推送(不轮询 DB)。
+// 不做任何重活(无 init() 副作用,避免抬高空载内存)。
+func New(db *sql.DB, opts ...Option) Service {
+	return newService(db, opts...)
+}
+
+func newService(db *sql.DB, opts ...Option) *service {
+	s := &service{
 		db:      db,
 		bus:     newBus(),
 		cancels: make(map[string]context.CancelFunc),
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 func (s *service) Create(ctx context.Context, projectID string, trigger Trigger) (*Run, error) {
@@ -161,6 +185,19 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 		if qerr := s.db.QueryRowContext(ctx,
 			`SELECT default_branch FROM projects WHERE id = ?`, projectID).Scan(&defaultBranch); qerr == nil {
 			trigger.Branch = strings.TrimSpace(defaultBranch)
+		}
+	}
+
+	// 环境补解析(#56):手动 / 定时 / 串联触发未显式带环境时,据项目分支映射(与 webhook 同一套
+	// glob 匹配)解析出环境名 + 目标服务器。否则 resolveRegistry(settings, env="") → nil → build_image
+	// 不知推哪个 registry(部署节点 pull 不到镜像)、环境 envVars / targetServerIds 也全落空。
+	// webhook 路径已显式带 ResolvedEnvironment → 此处跳过(不二次解析,与既有行为字节级一致)。
+	if strings.TrimSpace(trigger.ResolvedEnvironment) == "" && s.envResolver != nil {
+		if env, servers := s.envResolver.ResolveEnv(ctx, projectID, trigger.Branch); env != "" {
+			trigger.ResolvedEnvironment = env
+			if len(trigger.ResolvedTargetServerIDs) == 0 {
+				trigger.ResolvedTargetServerIDs = servers
+			}
 		}
 	}
 

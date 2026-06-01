@@ -65,12 +65,21 @@ type stageNode struct {
 	Gate         bool                `yaml:"gate,omitempty"`
 	When         *whenNode           `yaml:"when,omitempty"`
 	Matrix       map[string][]string `yaml:"matrix,omitempty"`
+	Post         []postNode          `yaml:"post,omitempty"`
 	Jobs         []jobNode           `yaml:"jobs,omitempty"`
 }
 
 type whenNode struct {
 	Branches []string `yaml:"branches,omitempty"`
 	Events   []string `yaml:"events,omitempty"`
+}
+
+// postNode 是阶段后置步骤的 YAML 块(P1 · 对标 Jenkins post)。
+type postNode struct {
+	Condition string   `yaml:"condition,omitempty"`
+	Image     string   `yaml:"image"`
+	Commands  []string `yaml:"commands,omitempty"`
+	WorkDir   string   `yaml:"workDir,omitempty"`
 }
 
 type jobNode struct {
@@ -145,6 +154,7 @@ func Parse(data []byte) (pipeline.Config, error) {
 			When:         when,
 			Gate:         sn.Gate,
 			Matrix:       sn.Matrix,
+			Post:         postsFromNodes(sn.Post),
 			Jobs:         jobs,
 		})
 	}
@@ -176,6 +186,7 @@ func Marshal(spec pipeline.Spec) ([]byte, error) {
 			AllowFailure: st.AllowFailure,
 			Gate:         st.Gate,
 			Matrix:       st.Matrix,
+			Post:         postsToNodes(st.Post),
 		}
 		if !st.When.IsEmpty() {
 			sn.When = &whenNode{Branches: nonEmpty(st.When.Branches), Events: nonEmpty(st.When.Events)}
@@ -314,6 +325,29 @@ func nonEmpty(in []string) []string {
 		return nil
 	}
 	return in
+}
+
+// postsFromNodes / postsToNodes 在 YAML postNode 与领域 pipeline.PostStep 间转换(校验由 NormalizeSpec 统一做)。
+func postsFromNodes(in []postNode) []pipeline.PostStep {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]pipeline.PostStep, 0, len(in))
+	for _, pn := range in {
+		out = append(out, pipeline.PostStep{Condition: pn.Condition, Image: pn.Image, Commands: pn.Commands, WorkDir: pn.WorkDir})
+	}
+	return out
+}
+
+func postsToNodes(in []pipeline.PostStep) []postNode {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]postNode, 0, len(in))
+	for _, ps := range in {
+		out = append(out, postNode{Condition: ps.Condition, Image: ps.Image, Commands: ps.Commands, WorkDir: ps.WorkDir})
+	}
+	return out
 }
 
 // asString 把 Job.Config 的 any 值尽量转字符串(画布存的恒为字符串;JSON 回读亦如此)。

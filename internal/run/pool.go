@@ -432,12 +432,14 @@ func (p *WorkerPool) execute(runID string) {
 	if runErr != nil {
 		final = StatusFailed
 	}
+	// **先**校正所有非终态步骤,**再**落 run 终态:保证「run 一旦观测到终态,其步骤必已一致」
+	// (StepDone 失败/runner 漏置不致留下"run=终态但 step 永远 running")。顺序反了会有竞态窗口
+	// ——观测方(SSE/轮询/waitForStatus)在 run 终态与步骤校正之间读到悬挂步骤。
+	sink.reconcile(final)
 	// 用后台 ctx 落终态:取消场景下派生 ctx 已 Done,仍须持久化终态。
 	if err := p.svc.transition(context.Background(), runID, StatusRunning, final, false); err != nil {
 		log.Printf("[run] run %s: to %s failed: %v", runID, final, err)
 	}
-	// 落终态后校正所有非终态步骤(StepDone 失败/runner 漏置不致留下"run=终态但 step 永远 running")。
-	sink.reconcile(final)
 
 	// run 落 failed 后触发 best-effort 自动诊断(已注入钩子时)。绝不阻断 run 终态:
 	// 在独立 goroutine + recover 中调用,钩子失败仅记日志(NFR-10 优雅降级)。

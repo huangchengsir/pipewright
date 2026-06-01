@@ -318,6 +318,8 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
             @update-when="(when) => updateStage(stage.id, { when })"
             @update-gate="(v) => updateStage(stage.id, { gate: v })"
             @update-matrix="(matrix) => updateStage(stage.id, { matrix })"
+            @update-post="(post) => updateStage(stage.id, { post })"
+            @update-services="(services) => updateStage(stage.id, { services })"
           />
         </template>
 

@@ -14,6 +14,12 @@ import {
   matrixSummary,
   isValidAxisName,
   MATRIX_MAX_CELLS,
+  hasPost,
+  postSummary,
+  hasServices,
+  servicesSummary,
+  envToText,
+  parseEnvText,
 } from './stageSettings'
 
 describe('parseBranches', () => {
@@ -171,5 +177,21 @@ describe('matrixError', () => {
   it('allows exactly the cap', () => {
     const vals = Array.from({ length: MATRIX_MAX_CELLS }, (_, i) => `v${i}`)
     expect(matrixError({ v: vals })).toBeNull()
+  })
+})
+
+describe('post + services helpers (P1 canvas editors)', () => {
+  it('hasPost / postSummary', () => {
+    expect(hasPost(undefined)).toBe(false)
+    expect(hasPost([])).toBe(false)
+    expect(postSummary([{ condition: 'always', image: 'x', commands: ['c'] }])).toBe('post×1')
+  })
+  it('hasServices / servicesSummary', () => {
+    expect(hasServices(undefined)).toBe(false)
+    expect(servicesSummary([{ name: 'testdb', image: 'postgres' }, { name: 'redis', image: 'redis' }])).toBe('svc: testdb, redis')
+  })
+  it('envToText / parseEnvText round-trip + drops invalid', () => {
+    expect(envToText(['A=1', 'B=2'])).toBe('A=1, B=2')
+    expect(parseEnvText('A=1, B=2 ,  , bad')).toEqual(['A=1', 'B=2'])
   })
 })

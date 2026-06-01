@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import type { PipelineStage, StageWhen } from '../../api/pipeline'
+import type { PipelineStage, StageWhen, PipelinePostStep, PipelineServiceSpec } from '../../api/pipeline'
 import JobCard from './JobCard.vue'
+import StagePostEditor from './StagePostEditor.vue'
+import StageServicesEditor from './StageServicesEditor.vue'
 import { eligibleNeeds, toggleNeed } from './stageDeps'
 import {
   WHEN_EVENTS,
@@ -17,6 +19,10 @@ import {
   hasMatrix,
   matrixSummary,
   matrixError,
+  hasPost,
+  postSummary,
+  hasServices,
+  servicesSummary,
   type WhenEvent,
 } from './stageSettings'
 
@@ -39,6 +45,8 @@ const emit = defineEmits<{
   (e: 'update-when', when: StageWhen | undefined): void
   (e: 'update-gate', value: boolean): void
   (e: 'update-matrix', matrix: Record<string, string[]> | undefined): void
+  (e: 'update-post', post: PipelinePostStep[] | undefined): void
+  (e: 'update-services', services: PipelineServiceSpec[] | undefined): void
 }>()
 
 function stageLabel(index: number): string {
@@ -75,12 +83,19 @@ const branchText = computed<string>(() => branchesToText(props.stage.when?.branc
 
 const currentEvents = computed<string[]>(() => props.stage.when?.events ?? [])
 
-/** Active when settings, gate, or matrix → highlight the settings button. */
+/** Active when settings, gate, matrix, post, or services → highlight the settings button. */
 const hasStageRules = computed(
-  () => hasWhen(props.stage.when) || props.stage.gate === true || hasMatrix(props.stage.matrix),
+  () =>
+    hasWhen(props.stage.when) ||
+    props.stage.gate === true ||
+    hasMatrix(props.stage.matrix) ||
+    hasPost(props.stage.post) ||
+    hasServices(props.stage.services),
 )
 
 const whenChip = computed(() => whenSummary(props.stage.when))
+const postChip = computed(() => postSummary(props.stage.post))
+const servicesChip = computed(() => servicesSummary(props.stage.services))
 
 // ─── Matrix build axes (P1) ───────────────────────────────────────────────────
 
@@ -210,6 +225,14 @@ function resetDrag(): void {
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
         {{ matrixChip }}
       </span>
+      <span v-if="servicesChip" class="stage-rule-chip stage-rule-chip--svc" title="旁挂服务(同网按服务名互访)">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
+        {{ servicesChip }}
+      </span>
+      <span v-if="postChip" class="stage-rule-chip stage-rule-chip--post" title="后置步骤(无论成败按条件跑)">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.5"/><path d="M21 3v6h-6"/></svg>
+        {{ postChip }}
+      </span>
     </div>
 
     <!-- Dependency editor popover -->
@@ -286,6 +309,24 @@ function resetDrag(): void {
       ></textarea>
       <p v-if="matrixWarn" class="settings-warn" role="alert">{{ matrixWarn }}</p>
       <p class="deps-hint">展开成并行 cell(笛卡尔积),各注入 <code>MATRIX_&lt;轴名&gt;</code> 环境变量;空 = 不展开</p>
+
+      <div class="deps-divider"></div>
+      <div class="deps-popover-title">旁挂服务(services)</div>
+      <StageServicesEditor
+        :services="stage.services"
+        :stage-id="stage.id"
+        @update="emit('update-services', $event)"
+      />
+      <p class="deps-hint">测试旁挂 DB/redis:与脚本容器同网,脚本里按服务名互访(如 <code>psql -h testdb</code>)</p>
+
+      <div class="deps-divider"></div>
+      <div class="deps-popover-title">后置步骤(post)</div>
+      <StagePostEditor
+        :steps="stage.post"
+        :stage-id="stage.id"
+        @update="emit('update-post', $event)"
+      />
+      <p class="deps-hint">阶段 job 跑完后按条件执行(同工作区),用于清理/通知/归档;空 = 无</p>
     </div>
 
     <!-- Job cards -->
@@ -444,6 +485,8 @@ function resetDrag(): void {
 .stage-rule-chip--when { background: var(--color-primary-soft); color: var(--color-primary); }
 .stage-rule-chip--gate { background: var(--color-amber-soft, rgba(217, 119, 6, 0.14)); color: var(--color-amber, #b45309); }
 .stage-rule-chip--matrix { background: var(--color-violet-soft, rgba(124, 58, 237, 0.13)); color: var(--color-violet, #6d28d9); }
+.stage-rule-chip--svc { background: var(--color-cyan-soft, rgba(8, 145, 178, 0.13)); color: var(--color-cyan, #0e7490); }
+.stage-rule-chip--post { background: var(--color-amber-soft, rgba(217, 119, 6, 0.14)); color: var(--color-amber, #b45309); }
 
 /* ─── Settings popover fields ─────────────────────────────────────────────── */
 .settings-popover { width: 232px; }

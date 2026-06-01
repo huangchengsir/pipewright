@@ -120,8 +120,8 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 		}
 
 		needsBuild := len(scriptJobs) > 0 || len(buildImageJobs) > 0
-		// 没有任何可执行节点(script/build_image/deploy_ssh/notify)→ 诚实占位放行。
-		if !needsBuild && len(deployJobs) == 0 && len(notifyJobs) == 0 {
+		// 没有任何可执行节点(script/build_image/deploy_ssh/notify)且无 post → 诚实占位放行。
+		if !needsBuild && len(deployJobs) == 0 && len(notifyJobs) == 0 && len(stage.Post) == 0 {
 			for _, jb := range stage.Jobs {
 				_ = rep.Log(ctx, streamStdout, fmt.Sprintf("· %s(%s)— 真实执行未接入;本阶段放行", jb.Name, jb.Type))
 			}
@@ -132,19 +132,29 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 		}
 
 		sink := &reporterSink{rep: rep}
+		hasPost := len(stage.Post) > 0
 
-		// ── 构建部分:仅当有 script / build_image 才克隆工作区并执行(部署/通知不需要工作区)──
-		if needsBuild {
-			proj, settings, perr := b.resolve(ctx, r)
+		// 工作区:有 script/build_image **或** 有 post 步骤时都需克隆(post 在同一工作区跑,可访问
+		// 构建产物,对齐 Jenkins post 语义);纯部署/通知阶段无工作区。
+		var (
+			proj      *project.Project
+			settings  *pipeline.Settings
+			workspace string
+			commitTag = "latest"
+		)
+		if needsBuild || hasPost {
+			p, s, perr := b.resolve(ctx, r)
 			if perr != nil {
 				_ = rep.Log(ctx, streamStderr, "无法加载项目构建配置:"+perr.Error())
 				return ErrBuildFailed
 			}
-			workspace, mkErr := mkTempWorkspace()
+			proj, settings = p, s
+			ws, mkErr := mkTempWorkspace()
 			if mkErr != nil {
 				_ = rep.Log(ctx, streamStderr, "创建临时工作区失败:"+mkErr.Error())
 				return ErrBuildFailed
 			}
+			workspace = ws
 			defer func() { _ = os.RemoveAll(workspace) }() // 宿主零污染
 
 			token := b.revealToken(proj.CredentialID)
@@ -158,74 +168,85 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 				_ = rep.Log(ctx, streamStderr, "源码克隆失败(鉴权/网络/ref 不存在或被 SSRF 拒绝)")
 				return ErrBuildFailed
 			}
-			if resolved != nil && resolved.CommitShort != "" && b.recordCommit != nil {
-				b.recordCommit(ctx, r.ID, resolved.CommitShort)
-			}
-
-			// 步骤输出→下游变量(P1):同阶段 job 间经 $PIPEWRIGHT_ENV 文件传值,carriedEnv 累积注入后续 job。
-			var carriedEnv []pipeline.BuildVar
-			for _, jb := range scriptJobs {
-				if canceled(ctx) {
-					return run.ErrCanceled
-				}
-				step, verr := scriptStepFromJob(jb)
-				if verr != nil {
-					_ = rep.Log(ctx, streamStderr, fmt.Sprintf("script job「%s」配置无效:%v", jb.Name, verr))
-					return ErrBuildFailed
-				}
-				// 注入顺序:运行参数 → 上游 job 输出(carriedEnv)→ job 自身 env(后者覆盖同名)→ PIPEWRIGHT_ENV(系统,末位防覆盖)。
-				base := append(runParamsAsEnv(r.Trigger.Params), carriedEnv...)
-				step.Env = append(base, step.Env...)
-				step.Env = append(step.Env, pipewrightEnvVar())
-				// 构建依赖缓存(#61):执行前恢复(暖构建)、成功后保存(best-effort,缓存问题绝不让构建失败)。
-				// 任务级 timeout/retry(#63):零值时 runScriptStepWithOpts 退化为单次无超时执行(旧行为)。
-				b.restoreJobCache(ctx, rep, jb, r.Trigger.Branch, workspace)
-				if err := b.runScriptStepWithOpts(ctx, sink, 0, step, workspace); err != nil {
-					return err // ErrBuildFailed / run.ErrCanceled
-				}
-				b.saveJobCache(ctx, rep, jb, r.Trigger.Branch, workspace)
-				// 捕获本 job 写入 $PIPEWRIGHT_ENV 的变量,供后续同阶段 job 引用。
-				carriedEnv = append(carriedEnv, captureStageEnv(ctx, rep, workspace)...)
-			}
-
-			commitTag := "latest"
 			if resolved != nil && resolved.CommitShort != "" {
 				commitTag = resolved.CommitShort
-			}
-			for _, jb := range buildImageJobs {
-				if canceled(ctx) {
-					return run.ErrCanceled
+				if b.recordCommit != nil {
+					b.recordCommit(ctx, r.ID, resolved.CommitShort)
 				}
-				if err := b.runBuildImageJob(ctx, sink, rep, jb, stage.Name, proj, settings, r.Trigger.ResolvedEnvironment, workspace, commitTag, hasPushJob); err != nil {
+			}
+		}
+
+		// 阶段主体(job 执行):捕获错误而非提前返回,以便其后无论成败都按条件跑 post 步骤。
+		jobErr := func() error {
+			if needsBuild {
+				// 步骤输出→下游变量(P1):同阶段 job 间经 $PIPEWRIGHT_ENV 文件传值,carriedEnv 累积注入后续 job。
+				var carriedEnv []pipeline.BuildVar
+				for _, jb := range scriptJobs {
+					if canceled(ctx) {
+						return run.ErrCanceled
+					}
+					step, verr := scriptStepFromJob(jb)
+					if verr != nil {
+						_ = rep.Log(ctx, streamStderr, fmt.Sprintf("script job「%s」配置无效:%v", jb.Name, verr))
+						return ErrBuildFailed
+					}
+					// 注入顺序:运行参数 → 上游 job 输出(carriedEnv)→ job 自身 env(后者覆盖同名)→ PIPEWRIGHT_ENV(系统,末位防覆盖)。
+					base := append(runParamsAsEnv(r.Trigger.Params), carriedEnv...)
+					step.Env = append(base, step.Env...)
+					step.Env = append(step.Env, pipewrightEnvVar())
+					// 构建依赖缓存(#61):执行前恢复(暖构建)、成功后保存(best-effort,缓存问题绝不让构建失败)。
+					// 任务级 timeout/retry(#63):零值时 runScriptStepWithOpts 退化为单次无超时执行(旧行为)。
+					b.restoreJobCache(ctx, rep, jb, r.Trigger.Branch, workspace)
+					if err := b.runScriptStepWithOpts(ctx, sink, 0, step, workspace); err != nil {
+						return err // ErrBuildFailed / run.ErrCanceled
+					}
+					b.saveJobCache(ctx, rep, jb, r.Trigger.Branch, workspace)
+					// 捕获本 job 写入 $PIPEWRIGHT_ENV 的变量,供后续同阶段 job 引用。
+					carriedEnv = append(carriedEnv, captureStageEnv(ctx, rep, workspace)...)
+				}
+
+				for _, jb := range buildImageJobs {
+					if canceled(ctx) {
+						return run.ErrCanceled
+					}
+					if err := b.runBuildImageJob(ctx, sink, rep, jb, stage.Name, proj, settings, r.Trigger.ResolvedEnvironment, workspace, commitTag, hasPushJob); err != nil {
+						return err
+					}
+				}
+
+				b.collectScriptArtifacts(ctx, scriptJobs, workspace, slugify(proj.Name), stage.Name, rep)
+				if err := collectStageReport(ctx, reportSink, r, stage, workspace, rep); err != nil {
 					return err
 				}
 			}
 
-			b.collectScriptArtifacts(ctx, scriptJobs, workspace, slugify(proj.Name), stage.Name, rep)
-			if err := collectStageReport(ctx, reportSink, r, stage, workspace, rep); err != nil {
-				return err
+			// ── 部署节点(deploy_ssh):把本 run 已产出的产物经 SSH 部署到目标机(中途部署,不动 run 终态)──
+			for _, jb := range deployJobs {
+				if canceled(ctx) {
+					return run.ErrCanceled
+				}
+				if err := b.runDeployJob(ctx, rep, jb, r.ID); err != nil {
+					return err
+				}
 			}
-		}
 
-		// ── 部署节点(deploy_ssh):把本 run 已产出的产物经 SSH 部署到目标机(中途部署,不动 run 终态)──
-		for _, jb := range deployJobs {
-			if canceled(ctx) {
-				return run.ErrCanceled
+			// ── 通知节点(notify):按节点配的渠道发通知(best-effort,不因通知失败而失败本阶段)──
+			for _, jb := range notifyJobs {
+				if canceled(ctx) {
+					return run.ErrCanceled
+				}
+				b.runNotifyJob(ctx, rep, jb, r)
 			}
-			if err := b.runDeployJob(ctx, rep, jb, r.ID); err != nil {
-				return err
-			}
-		}
 
-		// ── 通知节点(notify):按节点配的渠道发通知(best-effort,不因通知失败而失败本阶段)──
-		for _, jb := range notifyJobs {
-			if canceled(ctx) {
-				return run.ErrCanceled
-			}
-			b.runNotifyJob(ctx, rep, jb, r)
-		}
+			return nil
+		}()
 
-		return nil
+		// 阶段后置步骤(P1 · 对标 Jenkins post):无论 job 成败,按 condition 在同工作区跑清理/通知/归档
+		// (best-effort,post 失败只记日志、不改阶段结果)。用 WithoutCancel,使取消/失败后清理仍能跑。
+		if hasPost && workspace != "" {
+			b.runStagePost(context.WithoutCancel(ctx), sink, r, stage, workspace, jobErr != nil, rep)
+		}
+		return jobErr
 	}
 }
 

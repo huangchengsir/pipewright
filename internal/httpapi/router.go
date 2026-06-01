@@ -467,6 +467,10 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// → 重算 run 终态 → 返回全量最新 targets。run 非失败 / 无失败目标 → 422;不存在 → 404。
 		// 重试执行失败不 500(被重试目标 status=failed)。比 /deploy 多一段,不会被吞。
 		ar.Post("/runs/{id}/deploy/retry", makeRetryDeployHandler(o.deployer, rs))
+		// 交互式分批部署(P0 · 对标云效 firstBatchPause):续发暂停中的其余 pending / 中止保留旧版本。
+		// 认证 + CSRF。比 /deploy 多一段,不会被吞。dep 为 nil → 503。
+		ar.Post("/runs/{id}/deploy/continue", makeContinueDeployHandler(o.deployer, rs))
+		ar.Post("/runs/{id}/deploy/abort", makeAbortDeployHandler(o.deployer, rs))
 
 		// AI 失败诊断(Story 7.2):显式(重)诊断。认证 + CSRF(写方法)。
 		// 取 run 失败日志 → 脱敏 → ai.Diagnose → 持久化 → 返回 diagnosis 子 DTO。

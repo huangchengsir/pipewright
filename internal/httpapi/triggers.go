@@ -21,6 +21,8 @@ type triggerDTO struct {
 	Events              eventsDTO          `json:"events"`
 	BranchMappings      []branchMappingDTO `json:"branchMappings"`
 	UnmatchedPolicy     string             `json:"unmatchedPolicy"`
+	// PathFilters 为路径过滤 glob 列表(monorepo · P0);空 = 不启用(放行一切)。
+	PathFilters []string `json:"pathFilters"`
 }
 
 type eventsDTO struct {
@@ -52,6 +54,10 @@ func toTriggerDTO(c *trigger.Config) triggerDTO {
 			TargetServerIDs: ids,
 		})
 	}
+	filters := c.PathFilters
+	if filters == nil {
+		filters = []string{}
+	}
 	return triggerDTO{
 		WebhookURL:          webhookURLPrefix + c.WebhookToken,
 		WebhookSecretMasked: c.WebhookSecretMasked,
@@ -63,6 +69,7 @@ func toTriggerDTO(c *trigger.Config) triggerDTO {
 		},
 		BranchMappings:  mappings,
 		UnmatchedPolicy: c.UnmatchedPolicy,
+		PathFilters:     filters,
 	}
 }
 
@@ -79,6 +86,8 @@ func writeTriggerError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnprocessableEntity, "invalid_branch_pattern", "分支模式不能为空且需为合法通配(如 main、release/*)")
 	case errors.Is(err, trigger.ErrInvalidPolicy):
 		writeError(w, http.StatusUnprocessableEntity, "invalid_unmatched_policy", "未匹配策略只能为 record 或 ignore")
+	case errors.Is(err, trigger.ErrInvalidPathFilter):
+		writeError(w, http.StatusUnprocessableEntity, "invalid_path_filter", "路径过滤 glob 不能含空白(如 backend/**、*.go)")
 	default:
 		writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
 	}
@@ -125,7 +134,8 @@ func makeSaveTriggerHandler(svc trigger.Service) http.HandlerFunc {
 				Environment     string   `json:"environment"`
 				TargetServerIDs []string `json:"targetServerIds"`
 			} `json:"branchMappings"`
-			UnmatchedPolicy string `json:"unmatchedPolicy"`
+			UnmatchedPolicy string   `json:"unmatchedPolicy"`
+			PathFilters     []string `json:"pathFilters"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
@@ -150,6 +160,7 @@ func makeSaveTriggerHandler(svc trigger.Service) http.HandlerFunc {
 			},
 			BranchMappings:  mappings,
 			UnmatchedPolicy: req.UnmatchedPolicy,
+			PathFilters:     req.PathFilters,
 		})
 		if err != nil {
 			writeTriggerError(w, err)

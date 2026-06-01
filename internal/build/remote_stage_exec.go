@@ -148,7 +148,9 @@ func (b *Builder) runScriptOnDriver(ctx context.Context, driver Driver, onLine f
 	script := "set -e\n" + strings.Join(step.Commands, "\n")
 	cmd := []string{"sh", "-c", script}
 
-	code, err := driver.RunToolchain(ctx, step.Image, remoteWS, workdir, env, cmd, onLine)
+	// 资源规格透传给远程 docker run(--cpus/--memory);远程 docker 不支持时由其自身报错(诚实边界)。
+	// 远程模式本期不套 timeout/retry(留后续增量)。
+	code, err := driver.RunToolchain(ctx, step.Image, remoteWS, workdir, env, cmd, step.Resource, onLine)
 	if err != nil && code < 0 {
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return run.ErrCanceled

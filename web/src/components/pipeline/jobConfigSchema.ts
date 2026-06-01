@@ -122,6 +122,41 @@ const probeIs = (v: string) => (c: Record<string, string>) =>
 
 // ─── Per-type specs ──────────────────────────────────────────────────────────────
 
+// 任务级执行选项(P0 引擎能力):超时 / 重试 / 资源规格。脚本类节点共用。
+// 全部可选;留空 = 旧行为(不限超时、不重试、不限资源)。timeout/retry 为非负整数。
+const EXEC_OPTION_FIELDS: JobField[] = [
+  {
+    key: 'timeoutSeconds',
+    label: '超时(秒)',
+    kind: 'number',
+    placeholder: '0',
+    hint: '本步执行超时;超时即终止容器并判失败。留空 / 0 = 不限',
+  },
+  {
+    key: 'retries',
+    label: '失败重试次数',
+    kind: 'number',
+    placeholder: '0',
+    hint: '非零退出时重跑,达上限才判失败;用户取消不重试。留空 / 0 = 不重试',
+  },
+  {
+    key: 'cpu',
+    label: 'CPU 限额',
+    kind: 'text',
+    monospace: true,
+    placeholder: '1',
+    hint: '透传 docker --cpus(如 1、0.5);留空 = 不限。远程 runner 视其 docker 支持而定',
+  },
+  {
+    key: 'memory',
+    label: '内存限额',
+    kind: 'text',
+    monospace: true,
+    placeholder: '512m',
+    hint: '透传 docker --memory(如 512m、2g);留空 = 不限',
+  },
+]
+
 const SCRIPT_FIELDS: JobField[] = [
   {
     key: 'image',
@@ -155,6 +190,7 @@ const SCRIPT_FIELDS: JobField[] = [
     placeholder: 'frontend/dist\nbackend/target/app.jar',
     hint: '可选,每行一条。相对工作区根:目录→dist、*.jar→jar、其它文件→archive。一个节点可出多件;填了才归档进制品库并在运行详情可下载/部署。镜像产物请用「构建」节点(build_image),不在这里',
   },
+  ...EXEC_OPTION_FIELDS,
   {
     key: 'cachePaths',
     label: '依赖缓存目录',
@@ -535,6 +571,7 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
         placeholder: '.',
         hint: '可选,相对克隆工作区根',
       },
+      ...EXEC_OPTION_FIELDS,
       {
         key: 'cachePaths',
         label: '依赖缓存目录',

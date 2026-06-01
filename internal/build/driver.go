@@ -22,6 +22,8 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+
+	"github.com/huangchengsir/pipewright/internal/pipeline"
 )
 
 // 领域错误。错误体绝不含明文凭据/master key。
@@ -132,7 +134,8 @@ type Driver interface {
 	Build(ctx context.Context, contextDir, dockerfile, localTag string, buildArgs, secretArgs []string, onLine func(stream, line string)) (int, error)
 	// RunToolchain 模型 B:用工具链镜像挂载工作区跑构建命令产 jar/dist。
 	// image=工具链镜像:版本;workdir=容器内挂载点;hostDir=宿主工作区;cmd=构建命令 array。
-	RunToolchain(ctx context.Context, image, hostDir, workdir string, env []string, cmd []string, onLine func(stream, line string)) (int, error)
+	// res 为可选容器资源规格(cpu/memory → docker run --cpus/--memory);零值=不限(向后兼容)。
+	RunToolchain(ctx context.Context, image, hostDir, workdir string, env []string, cmd []string, res pipeline.Resource, onLine func(stream, line string)) (int, error)
 	// Tag 给 localTag 打远端 remoteTag(推送前)。
 	Tag(ctx context.Context, localTag, remoteTag string, onLine func(stream, line string)) (int, error)
 	// Login 经 --password-stdin 登录仓库(password 经 stdin,**绝不**进 argv/日志)。

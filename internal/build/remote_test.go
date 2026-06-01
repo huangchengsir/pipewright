@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/target"
 )
 
@@ -122,13 +123,17 @@ func TestNewRemoteDriverUsesRemoteCommander(t *testing.T) {
 	if drv.Binary() != "docker" {
 		t.Fatalf("默认 Binary = %q, want docker", drv.Binary())
 	}
-	// 触发一次 RunToolchain:应经远程机执行 `docker run ...`(命令打到 srv-1)。
-	_, err := drv.RunToolchain(context.Background(), "node:20", "/ws", "/src", nil, []string{"sh", "-c", "npm ci"}, func(string, string) {})
+	// 触发一次 RunToolchain:应经远程机执行 `docker run ...`(命令打到 srv-1);
+	// 资源规格(cpu/memory)应透传为 --cpus/--memory 投到远程 docker。
+	_, err := drv.RunToolchain(context.Background(), "node:20", "/ws", "/src", nil, []string{"sh", "-c", "npm ci"}, pipeline.Resource{CPU: "2", Memory: "1g"}, func(string, string) {})
 	if err != nil {
 		t.Fatalf("RunToolchain err: %v", err)
 	}
 	if f.gotServerID != "srv-1" || len(f.gotCmds) == 0 || f.gotCmds[0][0] != "docker" {
 		t.Fatalf("远程工具链命令未经 srv-1/docker 投递:server=%q cmds=%v", f.gotServerID, f.gotCmds)
+	}
+	if !cmdContainsPair(f.gotCmds[0], "--cpus", "2") || !cmdContainsPair(f.gotCmds[0], "--memory", "1g") {
+		t.Fatalf("远程 docker run 未透传资源规格:%v", f.gotCmds[0])
 	}
 
 	// podman:Binary 与命令前缀应随之变化。
@@ -136,4 +141,14 @@ func TestNewRemoteDriverUsesRemoteCommander(t *testing.T) {
 	if drv2.Binary() != "podman" {
 		t.Fatalf("Binary = %q, want podman", drv2.Binary())
 	}
+}
+
+// cmdContainsPair 判断 args 中存在相邻的 (flag, value) 对。
+func cmdContainsPair(args []string, flag, value string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == flag && args[i+1] == value {
+			return true
+		}
+	}
+	return false
 }

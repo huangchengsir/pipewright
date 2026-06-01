@@ -147,6 +147,31 @@ type PipelineStep struct {
 	Commands []string   `json:"commands"`          // 多行命令(顺序执行),script 必填且至少一条非空
 	Env      []BuildVar `json:"env,omitempty"`     // 步骤级环境变量(非 secret 明文 + secret 引用 CredentialID)
 	WorkDir  string     `json:"workDir,omitempty"` // 容器内相对工作目录(相对克隆工作区根;空=工作区根)
+	// TimeoutSeconds 是该步整步执行超时(秒);>0 时执行侧以 context.WithTimeout 套,超时即 kill 容器并判失败。
+	// 零值=不限(沿用旧行为,向后兼容)。
+	TimeoutSeconds int `json:"timeoutSeconds,omitempty"`
+	// Retries 是失败重试次数(整步非零退出时重跑;达上限才判失败)。零值=不重试(旧行为)。
+	// ctx 取消(用户取消 / 上层超时)不触发重试。
+	Retries int `json:"retries,omitempty"`
+	// Resource 是该步容器资源规格(cpu/memory),透传给容器运行(docker run --cpus/--memory)。
+	// 零值=不限(沿用旧行为)。
+	Resource Resource `json:"resource,omitempty"`
+}
+
+// Resource 是一条 script 步骤的容器资源规格(轻量,对齐云效 instanceType 思路)。
+//   - CPU:docker run --cpus 取值(如 "1" / "0.5"),空=不限。
+//   - Memory:docker run --memory 取值(如 "512m" / "2g"),空=不限。
+//
+// 远程 runner(SSH 投递 docker run)同样透传这两个 flag;若远程 docker 版本不支持则由其自身报错,
+// 平台不强求生效(诚实边界)。值原样作为 docker flag 实参(array,不拼 shell;非法值由 docker 拒绝)。
+type Resource struct {
+	CPU    string `json:"cpu,omitempty"`
+	Memory string `json:"memory,omitempty"`
+}
+
+// IsZero 判断资源规格是否为空(两字段都未配)。
+func (r Resource) IsZero() bool {
+	return strings.TrimSpace(r.CPU) == "" && strings.TrimSpace(r.Memory) == ""
 }
 
 // Settings 是构建/部署配置领域模型(冻结 DTO 外层形状)。
@@ -511,14 +536,26 @@ func (s *settingsService) normalizeSteps(in []PipelineStep) ([]PipelineStep, err
 			return nil, err
 		}
 
+		// 任务级 timeout/retry/资源规格(P0):负值钳为 0(=不限/不重试,旧行为);资源串 trim。
+		timeout := st.TimeoutSeconds
+		if timeout < 0 {
+			timeout = 0
+		}
+		retries := st.Retries
+		if retries < 0 {
+			retries = 0
+		}
 		out = append(out, PipelineStep{
-			ID:       id,
-			Name:     name,
-			Type:     stepType,
-			Image:    image,
-			Commands: cmds,
-			Env:      env,
-			WorkDir:  strings.TrimSpace(st.WorkDir),
+			ID:             id,
+			Name:           name,
+			Type:           stepType,
+			Image:          image,
+			Commands:       cmds,
+			Env:            env,
+			WorkDir:        strings.TrimSpace(st.WorkDir),
+			TimeoutSeconds: timeout,
+			Retries:        retries,
+			Resource:       Resource{CPU: strings.TrimSpace(st.Resource.CPU), Memory: strings.TrimSpace(st.Resource.Memory)},
 		})
 	}
 	return out, nil
@@ -711,13 +748,16 @@ type storedEnvironment struct {
 }
 
 type storedStep struct {
-	ID       string      `json:"id"`
-	Name     string      `json:"name"`
-	Type     string      `json:"type"`
-	Image    string      `json:"image"`
-	Commands []string    `json:"commands"`
-	Env      []storedVar `json:"env,omitempty"`
-	WorkDir  string      `json:"workDir,omitempty"`
+	ID             string      `json:"id"`
+	Name           string      `json:"name"`
+	Type           string      `json:"type"`
+	Image          string      `json:"image"`
+	Commands       []string    `json:"commands"`
+	Env            []storedVar `json:"env,omitempty"`
+	WorkDir        string      `json:"workDir,omitempty"`
+	TimeoutSeconds int         `json:"timeoutSeconds,omitempty"`
+	Retries        int         `json:"retries,omitempty"`
+	Resource       Resource    `json:"resource,omitempty"`
 }
 
 func toStoredVars(in []BuildVar) []storedVar {
@@ -780,13 +820,16 @@ func toStoredSteps(in []PipelineStep) []storedStep {
 			cmds = []string{}
 		}
 		out = append(out, storedStep{
-			ID:       st.ID,
-			Name:     st.Name,
-			Type:     st.Type,
-			Image:    st.Image,
-			Commands: cmds,
-			Env:      toStoredVars(st.Env),
-			WorkDir:  st.WorkDir,
+			ID:             st.ID,
+			Name:           st.Name,
+			Type:           st.Type,
+			Image:          st.Image,
+			Commands:       cmds,
+			Env:            toStoredVars(st.Env),
+			WorkDir:        st.WorkDir,
+			TimeoutSeconds: st.TimeoutSeconds,
+			Retries:        st.Retries,
+			Resource:       st.Resource,
 		})
 	}
 	return out

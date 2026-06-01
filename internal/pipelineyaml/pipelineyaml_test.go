@@ -358,3 +358,49 @@ func TestParseAutoFillsStageID(t *testing.T) {
 		t.Fatalf("缺省任务 id 应被补全")
 	}
 }
+
+func TestParseMatrixAxes(t *testing.T) {
+	doc := `stages:
+  - name: src
+    kind: source
+    jobs: [{name: a, type: git_source}]
+  - name: test
+    kind: build
+    matrix:
+      go: ["1.21", "1.22"]
+      os: [linux]
+    jobs:
+      - name: run
+        type: script
+        script:
+          image: golang
+          commands: [go test ./...]
+`
+	cfg, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	st := cfg.Spec.Stages[1]
+	if len(st.Matrix["go"]) != 2 || st.Matrix["os"][0] != "linux" {
+		t.Fatalf("matrix 轴应解析: %+v", st.Matrix)
+	}
+}
+
+func TestParseMatrixCellCap(t *testing.T) {
+	// 8×8 = 64 cell > 50 上限 → 经领域校验报错。
+	doc := `stages:
+  - name: src
+    kind: source
+    jobs: [{name: a, type: git_source}]
+  - name: big
+    kind: build
+    matrix:
+      a: ["1","2","3","4","5","6","7","8"]
+      b: ["1","2","3","4","5","6","7","8"]
+    jobs: []
+`
+	_, err := Parse([]byte(doc))
+	if !errors.Is(err, ErrParse) || !errors.Is(err, pipeline.ErrInvalidStage) {
+		t.Fatalf("cell 爆炸应回 ErrParse∧ErrInvalidStage, got %v", err)
+	}
+}

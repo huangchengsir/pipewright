@@ -133,7 +133,10 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 	if err != nil {
 		return fmt.Errorf("dagrun: load pipeline spec: %w", err)
 	}
-	stages := cfg.Spec.Stages
+	// 矩阵展开(P1):把声明了 Matrix 的阶段在纯调度层展开成笛卡尔积的并行 cell 子阶段,
+	// 并重映射 needs(下游等所有 cell)。无 matrix 阶段时原样返回。展开后阶段集作为后续
+	// 建图 / stageByID / 上报 / 执行的权威集——不改 dag 的并发与失败语义。
+	stages := ExpandMatrix(cfg.Spec.Stages)
 	if len(stages) == 0 {
 		// 无阶段:声明零步,直接成功(与既有空流水线语义一致)。
 		_ = sink.Plan(ctx, nil)

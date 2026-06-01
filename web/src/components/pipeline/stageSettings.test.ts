@@ -6,6 +6,14 @@ import {
   normalizeWhen,
   hasWhen,
   whenSummary,
+  parseMatrix,
+  matrixToText,
+  hasMatrix,
+  matrixCellCount,
+  matrixError,
+  matrixSummary,
+  isValidAxisName,
+  MATRIX_MAX_CELLS,
 } from './stageSettings'
 
 describe('parseBranches', () => {
@@ -86,5 +94,82 @@ describe('hasWhen / whenSummary', () => {
     expect(whenSummary({ branches: ['main', 'develop'] })).toBe('main, develop')
     expect(whenSummary({ events: ['manual', 'schedule'] })).toBe('手动/定时')
     expect(whenSummary({ branches: ['main'], events: ['webhook'] })).toBe('main · Webhook')
+  })
+})
+
+describe('parseMatrix / matrixToText', () => {
+  it('parses one axis per line (name: a, b)', () => {
+    const m = parseMatrix('go: 1.21, 1.22\nos: linux')
+    expect(m).toEqual({ go: ['1.21', '1.22'], os: ['linux'] })
+  })
+
+  it('accepts = separator and trims + de-dups + drops empties', () => {
+    const m = parseMatrix('go = 1.21 , 1.22, 1.21 ,\n\n  \nos: linux')
+    expect(m).toEqual({ go: ['1.21', '1.22'], os: ['linux'] })
+  })
+
+  it('returns undefined when no usable axes', () => {
+    expect(parseMatrix('')).toBeUndefined()
+    expect(parseMatrix('   \n  ')).toBeUndefined()
+    expect(parseMatrix('justname')).toBeUndefined()
+    expect(parseMatrix('go:')).toBeUndefined()
+  })
+
+  it('round-trips through matrixToText', () => {
+    const m = { go: ['1.21', '1.22'], os: ['linux'] }
+    expect(matrixToText(m)).toBe('go: 1.21, 1.22\nos: linux')
+    expect(parseMatrix(matrixToText(m))).toEqual(m)
+  })
+
+  it('matrixToText of undefined is empty', () => {
+    expect(matrixToText(undefined)).toBe('')
+  })
+})
+
+describe('matrix derived helpers', () => {
+  it('hasMatrix reflects presence', () => {
+    expect(hasMatrix(undefined)).toBe(false)
+    expect(hasMatrix({})).toBe(false)
+    expect(hasMatrix({ go: ['1.21'] })).toBe(true)
+  })
+
+  it('matrixCellCount is the cartesian product', () => {
+    expect(matrixCellCount(undefined)).toBe(0)
+    expect(matrixCellCount({ go: ['1.21', '1.22'], os: ['linux'] })).toBe(2)
+    expect(matrixCellCount({ a: ['1', '2'], b: ['x', 'y'] })).toBe(4)
+  })
+
+  it('matrixSummary renders axis counts and total cells', () => {
+    expect(matrixSummary(undefined)).toBe('')
+    expect(matrixSummary({ go: ['1.21', '1.22'], os: ['linux'] })).toBe('go×2 · os×1 → 2 cell')
+  })
+
+  it('isValidAxisName mirrors backend identifier rule', () => {
+    expect(isValidAxisName('go')).toBe(true)
+    expect(isValidAxisName('go_1')).toBe(true)
+    expect(isValidAxisName('1go')).toBe(false)
+    expect(isValidAxisName('go-v')).toBe(false)
+    expect(isValidAxisName('go.v')).toBe(false)
+  })
+})
+
+describe('matrixError', () => {
+  it('null for empty / valid matrices', () => {
+    expect(matrixError(undefined)).toBeNull()
+    expect(matrixError({ go: ['1.21', '1.22'], os: ['linux'] })).toBeNull()
+  })
+
+  it('flags invalid axis names', () => {
+    expect(matrixError({ '1bad': ['x'] })).toMatch(/非法/)
+  })
+
+  it('flags cell explosion over the cap', () => {
+    const vals = Array.from({ length: MATRIX_MAX_CELLS + 1 }, (_, i) => `v${i}`)
+    expect(matrixError({ v: vals })).toMatch(/超过上限/)
+  })
+
+  it('allows exactly the cap', () => {
+    const vals = Array.from({ length: MATRIX_MAX_CELLS }, (_, i) => `v${i}`)
+    expect(matrixError({ v: vals })).toBeNull()
   })
 })

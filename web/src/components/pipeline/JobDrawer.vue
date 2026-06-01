@@ -11,9 +11,17 @@ import {
   type JobField,
 } from './jobConfigSchema'
 import { configUsesTemplate } from './stepCompile'
+import {
+  isStudioNode,
+  parsePromotedParams,
+  promotedValues,
+  applyPromotedValues,
+  type PromotedParam,
+} from './studioCompile'
 import { createCustomNode } from '../../api/customNodes'
 import JobTypeIcon from './JobTypeIcon.vue'
 import StepBuilder from './StepBuilder.vue'
+import StudioInstanceParams from './StudioInstanceParams.vue'
 
 const props = defineProps<{
   job: PipelineJob
@@ -118,6 +126,39 @@ function onStepsUpdate(patch: { commands: string; artifactPath: string }): void 
     commands: patch.commands,
     artifactPath: patch.artifactPath,
   }
+  flush()
+}
+
+// ─── 工作室节点「实例参数短清单」 ─────────────────────────────────────────────
+// 把工作室(templated / 带 __studio)节点拖进流水线后,实例编辑默认只面对作者「提升」
+// 出来的少数参数(类型化控件),而非整段 commandTemplate/params 原始文本。提升参数的
+// 定义(label/type/options)来自 __studio 元信息,只读消费;短清单只编辑各参数的「值」,
+// 经 applyPromotedValues 写回 config.params 文本。原始视图收进可折叠「高级」入口兜底。
+
+/** 当前完整 config(typed + extras 合并),供 studio 解析提升参数定义/值。 */
+const liveConfig = computed<Record<string, string>>(() => currentConfig())
+
+/** 是否工作室节点(templated 或带 __studio)。 */
+const isStudio = computed<boolean>(() => isStudioNode(localType.value, liveConfig.value))
+
+/** 提升参数定义(只读):key/label/type/options + 当前值(default 字段)。 */
+const promotedParams = computed<PromotedParam[]>(() =>
+  isStudio.value ? parsePromotedParams(liveConfig.value) : [],
+)
+
+/** 该节点是否值得显示短清单(工作室节点且至少有一个提升参数)。 */
+const showShortlist = computed<boolean>(() => promotedParams.value.length > 0)
+
+/** 短清单当前值表(key → value),由 params 文本解析而来。 */
+const shortlistValues = computed<Record<string, string>>(() => promotedValues(liveConfig.value))
+
+/** 工作室实例:原始参数视图(image/params/commandTemplate 等)默认收起。 */
+const showStudioRaw = ref(false)
+
+/** 短清单改值 → 写回 params 文本(只动 value,不碰 __studio 定义)→ flush。 */
+function onShortlistUpdate(values: Record<string, string>): void {
+  const params = applyPromotedValues(promotedParams.value, values)
+  typedConfig.value = { ...typedConfig.value, params }
   flush()
 }
 
@@ -310,11 +351,39 @@ async function confirmSave(): Promise<void> {
       </div>
     </div>
 
+    <!-- 工作室节点「实例参数短清单」:只展示作者提升的参数,类型化控件,default 预填。 -->
+    <div v-if="showShortlist" class="drawer-section">
+      <div class="drawer-section-label">实例参数</div>
+      <p class="shortlist-hint">
+        该自定义节点提升了以下参数;按需调整,其余命令模板已由节点作者固定。
+      </p>
+      <StudioInstanceParams
+        :params="promotedParams"
+        :model-value="shortlistValues"
+        @update:model-value="onShortlistUpdate"
+      />
+    </div>
+
+    <!-- 工作室实例:原始命令模板/参数视图收进可折叠「高级」入口(默认收起)。 -->
+    <div v-if="showShortlist && spec" class="drawer-section drawer-studio-raw-toggle">
+      <button
+        class="advanced-toggle"
+        :class="{ 'advanced-toggle--open': showStudioRaw }"
+        :aria-expanded="showStudioRaw"
+        @click="showStudioRaw = !showStudioRaw"
+      >
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
+          <path d="M9 18l6-6-6-6"/>
+        </svg>
+        高级 · 查看/编辑原始参数
+      </button>
+    </div>
+
     <!-- Typed config section (per-type form) -->
-    <div v-if="spec" class="drawer-section">
+    <div v-if="spec && (!showShortlist || showStudioRaw)" class="drawer-section">
       <div class="drawer-section-head">
         <div class="drawer-section-label">{{ spec.label }}配置</div>
-        <div v-if="canUseStepBuilder" class="view-switch" role="tablist" aria-label="配置视图">
+        <div v-if="canUseStepBuilder && !showShortlist" class="view-switch" role="tablist" aria-label="配置视图">
           <button
             class="view-tab"
             :class="{ 'view-tab--active': viewMode === 'steps' }"
@@ -586,6 +655,18 @@ async function confirmSave(): Promise<void> {
 
 .step-builder-field {
   margin-top: 4px;
+}
+
+.shortlist-hint {
+  margin: 0 0 12px;
+  font-size: 0.73rem;
+  line-height: 1.45;
+  color: var(--color-faint);
+}
+
+.drawer-studio-raw-toggle {
+  padding-top: 0;
+  margin-top: -4px;
 }
 
 .kv-empty {

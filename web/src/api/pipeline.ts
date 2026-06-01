@@ -46,6 +46,12 @@ export interface PipelineStage {
   when?: StageWhen
   /** Require manual approval before entering this stage (Epic 8 · 8-4). */
   gate?: boolean
+  /**
+   * Matrix build axes (P1): axisName → value list. Scheduler expands to the
+   * cartesian product of parallel cells, each running this stage's jobs with
+   * `MATRIX_<AXIS>` injected as container env. Empty = no expansion (single stage).
+   */
+  matrix?: Record<string, string[]>
   jobs: PipelineJob[]
 }
 
@@ -69,6 +75,7 @@ export interface SavePipelineInput {
     allowFailure?: boolean
     when?: StageWhen
     gate?: boolean
+    matrix?: Record<string, string[]>
     jobs: Array<{
       id?: string
       name: string

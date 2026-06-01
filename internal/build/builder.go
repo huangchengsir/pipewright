@@ -385,7 +385,7 @@ func (b *Builder) build(ctx context.Context, sink run.StepSink, ordinal int, pro
 		}
 		env := append(buildArgs, secretArgs...) // 工具链构建经 -e 注入(secret 回显只列 key)
 		buildCmd := toolchainBuildCmd(cfg.ArtifactType)
-		code, err := b.driver.RunToolchain(ctx, image, workspace, "/src", env, buildCmd, onLine)
+		code, err := b.driver.RunToolchain(ctx, image, workspace, "/src", env, buildCmd, pipeline.Resource{}, onLine)
 		if err != nil && code < 0 {
 			return "", nil, fmt.Errorf("构建器无法启动")
 		}

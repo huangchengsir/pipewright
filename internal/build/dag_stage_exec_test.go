@@ -2,6 +2,7 @@ package build
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,16 +40,18 @@ type recordingDriver struct {
 	gotCmd    []string
 	gotWork   string
 	gotEnv    []string
+	gotRes    pipeline.Resource
 	callCount int
 }
 
 func (d *recordingDriver) Binary() string { return "fake" }
-func (d *recordingDriver) RunToolchain(_ context.Context, image, _, workdir string, env []string, cmd []string, onLine func(stream, line string)) (int, error) {
+func (d *recordingDriver) RunToolchain(_ context.Context, image, _, workdir string, env []string, cmd []string, res pipeline.Resource, onLine func(stream, line string)) (int, error) {
 	d.callCount++
 	d.gotImage = image
 	d.gotCmd = cmd
 	d.gotWork = workdir
 	d.gotEnv = env
+	d.gotRes = res
 	for _, l := range d.emit {
 		onLine("stdout", l)
 	}
@@ -174,6 +177,116 @@ func TestStageExecutorInjectsRunParams(t *testing.T) {
 	}
 }
 
+// scriptJobWithConfig 构造一条带额外 config 键的 script job(timeout/retry/cpu/memory 等)。
+func scriptJobWithConfig(name, image, commands string, extra map[string]any) pipeline.Job {
+	cfg := map[string]any{"image": image, "commands": commands}
+	for k, v := range extra {
+		cfg[k] = v
+	}
+	return pipeline.Job{Name: name, Type: pipeline.StepTypeScript, Config: cfg}
+}
+
+// TestStageExecutorPassesResourceToDriver:job.Config 的 cpu/memory 应透传进 RunToolchain。
+func TestStageExecutorPassesResourceToDriver(t *testing.T) {
+	drv := &recordingDriver{code: 0}
+	b := newDAGTestBuilder(drv, &markerCloner{})
+	exec := NewStageExecutor(b, nil)
+	job := scriptJobWithConfig("unit", "busybox", "echo hi", map[string]any{"cpu": "1.5", "memory": "512m"})
+	if err := exec(context.Background(), &run.Run{ProjectID: "p1"}, scriptStage(job), &fakeReporter{}); err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	if drv.gotRes.CPU != "1.5" || drv.gotRes.Memory != "512m" {
+		t.Errorf("resource not passed to driver: %+v", drv.gotRes)
+	}
+}
+
+// flakyDriver 在前 failUntil 次返回非零退出,其后返回 0;记录被调次数。可注入每次调用的阻塞时长(供超时测试)。
+type flakyDriver struct {
+	failUntil int // 前 failUntil 次返回非零(模拟失败)
+	calls     int
+	block     time.Duration // 每次调用阻塞时长(>0 时配合超时 ctx 测试)
+}
+
+func (d *flakyDriver) Binary() string { return "fake" }
+func (d *flakyDriver) RunToolchain(ctx context.Context, _, _, _ string, _ []string, _ []string, _ pipeline.Resource, _ func(string, string)) (int, error) {
+	d.calls++
+	if d.block > 0 {
+		select {
+		case <-time.After(d.block):
+		case <-ctx.Done():
+			return -1, ctx.Err() // 被(超时)取消:无法完成,exitCode<0
+		}
+	}
+	if d.calls <= d.failUntil {
+		return 1, nil // 非零退出 → ErrBuildFailed
+	}
+	return 0, nil
+}
+func (d *flakyDriver) Build(context.Context, string, string, string, []string, []string, func(string, string)) (int, error) {
+	panic("Build not expected")
+}
+func (d *flakyDriver) Tag(context.Context, string, string, func(string, string)) (int, error) {
+	panic("Tag not expected")
+}
+func (d *flakyDriver) Login(context.Context, string, string, string, func(string, string)) (int, error) {
+	panic("Login not expected")
+}
+func (d *flakyDriver) Push(context.Context, string, func(string, string)) (int, error) {
+	panic("Push not expected")
+}
+func (d *flakyDriver) InspectImage(context.Context, string) (string, int64, error) {
+	panic("InspectImage not expected")
+}
+
+// TestStageExecutorRetriesToSuccess:retries=2、前 2 次失败 → 第 3 次成功,共 3 次尝试,阶段成功。
+func TestStageExecutorRetriesToSuccess(t *testing.T) {
+	drv := &flakyDriver{failUntil: 2}
+	b := newDAGTestBuilder(drv, &markerCloner{})
+	exec := NewStageExecutor(b, nil)
+	job := scriptJobWithConfig("unit", "busybox", "flaky", map[string]any{"retries": 2})
+	if err := exec(context.Background(), &run.Run{ProjectID: "p1"}, scriptStage(job), &fakeReporter{}); err != nil {
+		t.Fatalf("exec should succeed after retries: %v", err)
+	}
+	if drv.calls != 3 {
+		t.Errorf("attempts = %d, want 3 (1 + 2 retries)", drv.calls)
+	}
+}
+
+// TestStageExecutorRetriesExhausted:retries=1、始终失败 → 共 2 次尝试后判失败(ErrBuildFailed)。
+func TestStageExecutorRetriesExhausted(t *testing.T) {
+	drv := &flakyDriver{failUntil: 99}
+	b := newDAGTestBuilder(drv, &markerCloner{})
+	exec := NewStageExecutor(b, nil)
+	job := scriptJobWithConfig("unit", "busybox", "always-fail", map[string]any{"retries": 1})
+	err := exec(context.Background(), &run.Run{ProjectID: "p1"}, scriptStage(job), &fakeReporter{})
+	if !errors.Is(err, ErrBuildFailed) {
+		t.Fatalf("err = %v, want ErrBuildFailed", err)
+	}
+	if drv.calls != 2 {
+		t.Errorf("attempts = %d, want 2 (1 + 1 retry)", drv.calls)
+	}
+}
+
+// TestStageExecutorTimeoutTriggersFailure:timeoutSeconds=1、容器阻塞 10s → 超时取消、判失败(非取消整次运行)。
+func TestStageExecutorTimeoutTriggersFailure(t *testing.T) {
+	drv := &flakyDriver{block: 10 * time.Second}
+	b := newDAGTestBuilder(drv, &markerCloner{})
+	exec := NewStageExecutor(b, nil)
+	rep := &fakeReporter{}
+	job := scriptJobWithConfig("unit", "busybox", "sleep 10", map[string]any{"timeoutSeconds": 1})
+	start := time.Now()
+	err := exec(context.Background(), &run.Run{ProjectID: "p1"}, scriptStage(job), rep)
+	if !errors.Is(err, ErrBuildFailed) {
+		t.Fatalf("timeout should yield ErrBuildFailed (not run-canceled), got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("timeout did not kick in promptly: %v", elapsed)
+	}
+	if !strings.Contains(strings.Join(rep.logs, "\n"), "超时") {
+		t.Errorf("expected honest timeout log, got %v", rep.logs)
+	}
+}
+
 func TestStageExecutorNonScriptPlaceholder(t *testing.T) {
 	drv := &recordingDriver{}
 	b := newDAGTestBuilder(drv, &markerCloner{})
@@ -201,7 +314,7 @@ type imgDriver struct {
 }
 
 func (d *imgDriver) Binary() string { return "fake" }
-func (d *imgDriver) RunToolchain(context.Context, string, string, string, []string, []string, func(string, string)) (int, error) {
+func (d *imgDriver) RunToolchain(context.Context, string, string, string, []string, []string, pipeline.Resource, func(string, string)) (int, error) {
 	return 0, nil
 }
 func (d *imgDriver) Build(_ context.Context, _, dockerfile, _ string, _, _ []string, _ func(string, string)) (int, error) {

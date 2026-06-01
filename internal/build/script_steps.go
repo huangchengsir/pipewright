@@ -3,7 +3,9 @@ package build
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/run"
@@ -68,7 +70,7 @@ func (b *Builder) runScriptStep(ctx context.Context, sink run.StepSink, ordinal 
 	script := "set -e\n" + strings.Join(step.Commands, "\n")
 	cmd := []string{"sh", "-c", script}
 
-	code, err := b.driver.RunToolchain(ctx, step.Image, workspace, workdir, env, cmd, onLine)
+	code, err := b.driver.RunToolchain(ctx, step.Image, workspace, workdir, env, cmd, step.Resource, onLine)
 	if err != nil && code < 0 {
 		// 容器无法启动(镜像拉取失败/CLI 不可用等);ctx 取消时 code<0 但 ctx.Err 命中,由调用方归一。
 		if errors.Is(ctx.Err(), context.Canceled) {
@@ -83,6 +85,61 @@ func (b *Builder) runScriptStep(ctx context.Context, sink run.StepSink, ordinal 
 		return ErrBuildFailed
 	}
 	return nil
+}
+
+// runScriptStepWithOpts 在 runScriptStep 之上叠加「任务级超时 + 失败重试」(P0 引擎能力)。
+//
+// 超时(step.TimeoutSeconds>0):用 context.WithTimeout 套住每次尝试;超时即取消子 ctx → kill 容器,
+// 该步判失败(ErrBuildFailed)。注意:用 context.Cause 区分「本步超时」与「上层取消(用户取消/上层超时)」——
+//   - 上层 ctx 已取消(parent.Err()!=nil)→ run.ErrCanceled,不重试(尊重取消语义)。
+//   - 仅本步超时(子 ctx 超时但 parent 未取消)→ 记一行诚实日志,按 ErrBuildFailed 走重试逻辑。
+//
+// 重试(step.Retries>0):整步非零退出/容器启动失败时重跑,达上限(共 1+Retries 次尝试)才判失败。
+// run.ErrCanceled(取消)绝不重试。每次重试前再查一次 parent ctx。
+func (b *Builder) runScriptStepWithOpts(ctx context.Context, sink run.StepSink, ordinal int, step pipeline.PipelineStep, workspace string) error {
+	onLine := b.lineSink(sink, ordinal)
+	attempts := step.Retries + 1
+	if attempts < 1 {
+		attempts = 1
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if ctx.Err() != nil {
+			return run.ErrCanceled
+		}
+		if attempt > 1 {
+			onLine("stdout", fmt.Sprintf("· 步骤「%s」失败,第 %d/%d 次重试…", step.Name, attempt-1, step.Retries))
+		}
+
+		// 每次尝试套一层可选超时子 ctx(>0 才套;=0 直接用 parent)。
+		attemptCtx := ctx
+		cancel := context.CancelFunc(func() {})
+		if step.TimeoutSeconds > 0 {
+			attemptCtx, cancel = context.WithTimeout(ctx, time.Duration(step.TimeoutSeconds)*time.Second)
+		}
+		err := b.runScriptStep(attemptCtx, sink, ordinal, step, workspace)
+		timedOut := step.TimeoutSeconds > 0 && errors.Is(attemptCtx.Err(), context.DeadlineExceeded)
+		cancel()
+
+		// 上层取消优先:用户取消 / 上层超时 → 立即终止,不重试。
+		if ctx.Err() != nil {
+			return run.ErrCanceled
+		}
+		if errors.Is(err, run.ErrCanceled) && !timedOut {
+			// runScriptStep 因子 ctx 取消返回 Canceled,但若那是本步超时所致(timedOut),
+			// 不算运行取消,转成可重试的步失败;否则尊重取消。
+			return run.ErrCanceled
+		}
+		if err == nil {
+			return nil
+		}
+		if timedOut {
+			onLine("stderr", fmt.Sprintf("步骤「%s」执行超时(>%ds),已终止本次尝试", step.Name, step.TimeoutSeconds))
+		}
+		lastErr = ErrBuildFailed // 归一为构建失败(供上层置 failed)
+	}
+	return lastErr
 }
 
 // joinContainerPath 把容器内挂载点与用户给的相对子目录拼成容器内绝对路径,去掉前导/尾随斜杠与

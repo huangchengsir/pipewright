@@ -56,6 +56,47 @@ func TestSettingsStepRoundTrip(t *testing.T) {
 	}
 }
 
+// TestSettingsStepOptsRoundTrip 验证任务级 timeout/retry/资源规格往返(存读一致;负值钳为 0)。
+func TestSettingsStepOptsRoundTrip(t *testing.T) {
+	svc, _, _, _, projID := newSettingsSvc(t)
+	ctx := context.Background()
+
+	in := SettingsInput{
+		Steps: []PipelineStep{
+			{
+				Name:           "build",
+				Image:          "node:20",
+				Commands:       []string{"npm run build"},
+				TimeoutSeconds: 600,
+				Retries:        2,
+				Resource:       Resource{CPU: "1.5", Memory: "1g"},
+			},
+			{
+				Name:           "neg",
+				Image:          "node:20",
+				Commands:       []string{"echo hi"},
+				TimeoutSeconds: -5, // 负值应钳为 0
+				Retries:        -1,
+			},
+		},
+	}
+	st, err := svc.Save(ctx, projID, in)
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	s0 := st.Steps[0]
+	if s0.TimeoutSeconds != 600 || s0.Retries != 2 {
+		t.Fatalf("timeout/retry round-trip failed: %+v", s0)
+	}
+	if s0.Resource.CPU != "1.5" || s0.Resource.Memory != "1g" {
+		t.Fatalf("resource round-trip failed: %+v", s0.Resource)
+	}
+	s1 := st.Steps[1]
+	if s1.TimeoutSeconds != 0 || s1.Retries != 0 {
+		t.Fatalf("negative timeout/retry should clamp to 0: %+v", s1)
+	}
+}
+
 func TestSettingsStepEmptyNameRejected(t *testing.T) {
 	svc, _, _, _, projID := newSettingsSvc(t)
 	_, err := svc.Save(context.Background(), projID, SettingsInput{

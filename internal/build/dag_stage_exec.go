@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/huangchengsir/pipewright/internal/dagrun"
@@ -171,7 +172,8 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 					return ErrBuildFailed
 				}
 				step.Env = append(runParamsAsEnv(r.Trigger.Params), step.Env...)
-				if err := b.runScriptStep(ctx, sink, 0, step, workspace); err != nil {
+				// 任务级 timeout/retry(P0):零值时 runScriptStepWithOpts 退化为单次无超时执行(旧行为)。
+				if err := b.runScriptStepWithOpts(ctx, sink, 0, step, workspace); err != nil {
 					return err // ErrBuildFailed / run.ErrCanceled
 				}
 			}
@@ -486,7 +488,37 @@ func scriptStepFromJob(jb pipeline.Job) (pipeline.PipelineStep, error) {
 		Image:    image,
 		Commands: cmds,
 		WorkDir:  renderTemplate(cfgString(jb.Config, "workDir"), ctx),
+		// 任务级 timeout/retry/资源规格(P0 引擎能力):从 job.Config 自由 KV 读取(非负;非法/缺失→零值=旧行为)。
+		TimeoutSeconds: cfgNonNegInt(jb.Config, "timeoutSeconds"),
+		Retries:        cfgNonNegInt(jb.Config, "retries"),
+		Resource: pipeline.Resource{
+			CPU:    cfgString(jb.Config, "cpu"),
+			Memory: cfgString(jb.Config, "memory"),
+		},
 	}, nil
+}
+
+// cfgNonNegInt 从自由 KV config 取非负整数(支持 JSON number 与字符串两种存法;
+// 缺失/非法/负数 → 0,即「不限/不重试」的旧行为,向后兼容)。
+func cfgNonNegInt(cfg map[string]any, key string) int {
+	if cfg == nil {
+		return 0
+	}
+	switch v := cfg[key].(type) {
+	case float64: // encoding/json 把数字反序列化为 float64
+		if v > 0 {
+			return int(v)
+		}
+	case int:
+		if v > 0 {
+			return v
+		}
+	case string:
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
 }
 
 // runParamsAsEnv 把运行参数(明文 K=V)转为非 secret BuildVar(注入容器环境)。键序确定性不保证(map),

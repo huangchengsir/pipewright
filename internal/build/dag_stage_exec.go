@@ -490,6 +490,7 @@ func scriptStepFromJob(jb pipeline.Job) (pipeline.PipelineStep, error) {
 		Type:     pipeline.StepTypeScript,
 		Image:    image,
 		Commands: cmds,
+		Env:      matrixEnvVars(jb.Config), // 矩阵 cell 注入的 axis 环境变量(MATRIX_<AXIS>),空时 nil
 		WorkDir:  renderTemplate(cfgString(jb.Config, "workDir"), ctx),
 		// 任务级 timeout/retry/资源规格(P0 引擎能力):从 job.Config 自由 KV 读取(非负;非法/缺失→零值=旧行为)。
 		TimeoutSeconds: cfgNonNegInt(jb.Config, "timeoutSeconds"),
@@ -522,6 +523,41 @@ func cfgNonNegInt(cfg map[string]any, key string) int {
 		}
 	}
 	return 0
+}
+
+// matrixEnvVars 读取矩阵展开(dagrun.ExpandMatrix)注入 job.Config 的 cell 环境变量,转为非 secret
+// BuildVar(`MATRIX_<AXIS>=<值>`,容器内命令可 `$MATRIX_GO` 引用)。键 "__matrixEnv" 由调度层合成、
+// 非用户配置;值通常是 map[string]string(内存构造),JSON 回环时为 map[string]any,两者皆容错。
+// 普通(非矩阵)job 无此键 → 返回 nil(零行为变化)。
+func matrixEnvVars(cfg map[string]any) []pipeline.BuildVar {
+	if cfg == nil {
+		return nil
+	}
+	raw, ok := cfg["__matrixEnv"]
+	if !ok {
+		return nil
+	}
+	collect := func(k, v string) pipeline.BuildVar {
+		return pipeline.BuildVar{Key: k, Value: v, Secret: false}
+	}
+	switch m := raw.(type) {
+	case map[string]string:
+		out := make([]pipeline.BuildVar, 0, len(m))
+		for k, v := range m {
+			out = append(out, collect(k, v))
+		}
+		return out
+	case map[string]any:
+		out := make([]pipeline.BuildVar, 0, len(m))
+		for k, v := range m {
+			if s, ok := v.(string); ok {
+				out = append(out, collect(k, s))
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // runParamsAsEnv 把运行参数(明文 K=V)转为非 secret BuildVar(注入容器环境)。键序确定性不保证(map),

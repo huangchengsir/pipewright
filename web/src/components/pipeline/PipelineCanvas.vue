@@ -317,6 +317,7 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
             @update-allow-failure="(v) => updateStage(stage.id, { allowFailure: v })"
             @update-when="(when) => updateStage(stage.id, { when })"
             @update-gate="(v) => updateStage(stage.id, { gate: v })"
+            @update-matrix="(matrix) => updateStage(stage.id, { matrix })"
           />
         </template>
 

@@ -57,14 +57,15 @@ type doc struct {
 }
 
 type stageNode struct {
-	ID           string    `yaml:"id,omitempty"`
-	Name         string    `yaml:"name"`
-	Kind         string    `yaml:"kind"`
-	Needs        []string  `yaml:"needs,omitempty"`
-	AllowFailure bool      `yaml:"allowFailure,omitempty"`
-	Gate         bool      `yaml:"gate,omitempty"`
-	When         *whenNode `yaml:"when,omitempty"`
-	Jobs         []jobNode `yaml:"jobs,omitempty"`
+	ID           string              `yaml:"id,omitempty"`
+	Name         string              `yaml:"name"`
+	Kind         string              `yaml:"kind"`
+	Needs        []string            `yaml:"needs,omitempty"`
+	AllowFailure bool                `yaml:"allowFailure,omitempty"`
+	Gate         bool                `yaml:"gate,omitempty"`
+	When         *whenNode           `yaml:"when,omitempty"`
+	Matrix       map[string][]string `yaml:"matrix,omitempty"`
+	Jobs         []jobNode           `yaml:"jobs,omitempty"`
 }
 
 type whenNode struct {
@@ -143,6 +144,7 @@ func Parse(data []byte) (pipeline.Config, error) {
 			AllowFailure: sn.AllowFailure,
 			When:         when,
 			Gate:         sn.Gate,
+			Matrix:       sn.Matrix,
 			Jobs:         jobs,
 		})
 	}
@@ -173,6 +175,7 @@ func Marshal(spec pipeline.Spec) ([]byte, error) {
 			Needs:        nonEmpty(st.Needs),
 			AllowFailure: st.AllowFailure,
 			Gate:         st.Gate,
+			Matrix:       st.Matrix,
 		}
 		if !st.When.IsEmpty() {
 			sn.When = &whenNode{Branches: nonEmpty(st.When.Branches), Events: nonEmpty(st.When.Events)}

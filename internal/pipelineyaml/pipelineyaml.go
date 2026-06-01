@@ -66,7 +66,16 @@ type stageNode struct {
 	When         *whenNode           `yaml:"when,omitempty"`
 	Matrix       map[string][]string `yaml:"matrix,omitempty"`
 	Post         []postNode          `yaml:"post,omitempty"`
+	Services     []serviceNode       `yaml:"services,omitempty"`
 	Jobs         []jobNode           `yaml:"jobs,omitempty"`
+}
+
+// serviceNode 是阶段旁挂服务的 YAML 块(P1 · 对标 GitLab services)。
+type serviceNode struct {
+	Name  string   `yaml:"name"`
+	Image string   `yaml:"image"`
+	Env   []string `yaml:"env,omitempty"`
+	Ports []string `yaml:"ports,omitempty"`
 }
 
 type whenNode struct {
@@ -155,6 +164,7 @@ func Parse(data []byte) (pipeline.Config, error) {
 			Gate:         sn.Gate,
 			Matrix:       sn.Matrix,
 			Post:         postsFromNodes(sn.Post),
+			Services:     servicesFromNodes(sn.Services),
 			Jobs:         jobs,
 		})
 	}
@@ -187,6 +197,7 @@ func Marshal(spec pipeline.Spec) ([]byte, error) {
 			Gate:         st.Gate,
 			Matrix:       st.Matrix,
 			Post:         postsToNodes(st.Post),
+			Services:     servicesToNodes(st.Services),
 		}
 		if !st.When.IsEmpty() {
 			sn.When = &whenNode{Branches: nonEmpty(st.When.Branches), Events: nonEmpty(st.When.Events)}
@@ -346,6 +357,28 @@ func postsToNodes(in []pipeline.PostStep) []postNode {
 	out := make([]postNode, 0, len(in))
 	for _, ps := range in {
 		out = append(out, postNode{Condition: ps.Condition, Image: ps.Image, Commands: ps.Commands, WorkDir: ps.WorkDir})
+	}
+	return out
+}
+
+func servicesFromNodes(in []serviceNode) []pipeline.ServiceSpec {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]pipeline.ServiceSpec, 0, len(in))
+	for _, sn := range in {
+		out = append(out, pipeline.ServiceSpec{Name: sn.Name, Image: sn.Image, Env: sn.Env, Ports: sn.Ports})
+	}
+	return out
+}
+
+func servicesToNodes(in []pipeline.ServiceSpec) []serviceNode {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]serviceNode, 0, len(in))
+	for _, sv := range in {
+		out = append(out, serviceNode{Name: sv.Name, Image: sv.Image, Env: sv.Env, Ports: sv.Ports})
 	}
 	return out
 }

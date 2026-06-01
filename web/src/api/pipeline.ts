@@ -57,6 +57,11 @@ export interface PipelineStage {
    * success/failure, by condition, in the same workspace (cleanup/notify/archive).
    */
   post?: PipelinePostStep[]
+  /**
+   * Stage sidecar services (P1 · GitLab services): DB/redis containers on the same
+   * docker network as the script container, reachable by service name.
+   */
+  services?: PipelineServiceSpec[]
   jobs: PipelineJob[]
 }
 
@@ -66,6 +71,14 @@ export interface PipelinePostStep {
   image: string
   commands: string[]
   workDir?: string
+}
+
+/** A stage sidecar service (P1). Reachable by `name` on the shared network. */
+export interface PipelineServiceSpec {
+  name: string
+  image: string
+  env?: string[]
+  ports?: string[]
 }
 
 export interface PipelineDTO {
@@ -90,6 +103,7 @@ export interface SavePipelineInput {
     gate?: boolean
     matrix?: Record<string, string[]>
     post?: PipelinePostStep[]
+    services?: PipelineServiceSpec[]
     jobs: Array<{
       id?: string
       name: string

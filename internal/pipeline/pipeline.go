@@ -91,7 +91,11 @@ type Stage struct {
 	// **无论成功失败都按条件执行**,在同一克隆工作区运行(可访问构建产物),用于清理 / 通知 / 归档日志。
 	// 空 = 行为不变。校验/执行见 stage_post.go 与 dag_stage_exec.go runStagePost。
 	Post []PostStep `json:"post,omitempty"`
-	Jobs []Job      `json:"jobs"`
+	// Services 是阶段「旁挂服务」(P1,对标 GitLab services / Woodpecker services):测试旁挂
+	// DB/redis 等容器,与脚本容器同 docker 网络、按服务名互访(testdb:5432)。空 = 行为不变。
+	// 校验/执行见 stage_services.go 与 dag_stage_exec.go runStageServices。
+	Services []ServiceSpec `json:"services,omitempty"`
+	Jobs     []Job         `json:"jobs"`
 }
 
 // Spec 是流水线编排声明式配置(阶段集合)。
@@ -378,7 +382,13 @@ func normalizeSpec(in Spec) (Spec, error) {
 			return Spec{}, perr
 		}
 
-		out.Stages = append(out.Stages, Stage{ID: stageID, Name: name, Kind: kind, Needs: needs, AllowFailure: st.AllowFailure, When: normalizeWhen(st.When), Gate: st.Gate, Matrix: matrix, Post: post, Jobs: jobs})
+		// Services 旁挂服务规范化 + 校验(服务名标识符/唯一、image 非空):空 → nil(行为不变)。
+		services, serr := normalizeServices(st.Services)
+		if serr != nil {
+			return Spec{}, serr
+		}
+
+		out.Stages = append(out.Stages, Stage{ID: stageID, Name: name, Kind: kind, Needs: needs, AllowFailure: st.AllowFailure, When: normalizeWhen(st.When), Gate: st.Gate, Matrix: matrix, Post: post, Services: services, Jobs: jobs})
 	}
 
 	// 源阶段不变式:流水线必须恰有一个 source 阶段(引用项目仓库)。前端不渲染删源阶段的入口,

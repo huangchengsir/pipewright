@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import type { PipelineStage, StageWhen, PipelinePostStep, PipelineServiceSpec } from '../../api/pipeline'
 import JobCard from './JobCard.vue'
 import StagePostEditor from './StagePostEditor.vue'
@@ -77,6 +77,27 @@ function toggleDep(needId: string): void {
 // ─── Stage settings (when 条件 · 8-5 / gate 审批门 · 8-4) ──────────────────────
 
 const settingsOpen = ref(false)
+
+// 设置抽屉(右侧滑出):Esc 关闭 + 卸载时清理监听。抽屉打开期间锁背景滚动,
+// 避免画布在抽屉后面跟滚。
+function onSettingsKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Escape') settingsOpen.value = false
+}
+watch(settingsOpen, (open) => {
+  if (typeof document === 'undefined') return
+  if (open) {
+    document.addEventListener('keydown', onSettingsKeydown)
+    document.body.style.overflow = 'hidden'
+  } else {
+    document.removeEventListener('keydown', onSettingsKeydown)
+    document.body.style.overflow = ''
+  }
+})
+onUnmounted(() => {
+  if (typeof document === 'undefined') return
+  document.removeEventListener('keydown', onSettingsKeydown)
+  document.body.style.overflow = ''
+})
 
 /** Editable branch-glob text (parsed → array only on commit). */
 const branchText = computed<string>(() => branchesToText(props.stage.when?.branches))
@@ -259,75 +280,127 @@ function resetDrag(): void {
       <p class="deps-hint">留空 = 无显式依赖;全流水线无依赖时按从左到右线性执行</p>
     </div>
 
-    <!-- Stage settings popover (when 条件 + gate 审批门) -->
-    <div v-if="settingsOpen && stage.kind !== 'source'" class="deps-popover settings-popover" role="group" aria-label="阶段条件与审批门编辑">
-      <div class="deps-popover-title">条件执行(when)</div>
-      <label class="settings-field-label" :for="`branches-${stage.id}`">分支(glob,空格/逗号分隔)</label>
-      <input
-        :id="`branches-${stage.id}`"
-        class="settings-input"
-        type="text"
-        :value="branchText"
-        placeholder="如 main release/*"
-        @change="commitBranches(($event.target as HTMLInputElement).value)"
-      />
-      <div class="settings-events-label">触发事件</div>
-      <div class="settings-events">
-        <label v-for="ev in WHEN_EVENTS" :key="ev" class="settings-event">
-          <input
-            type="checkbox"
-            :checked="currentEvents.includes(ev)"
-            @change="toggleEvent(ev)"
-          />
-          <span>{{ WHEN_EVENT_LABELS[ev] }}</span>
-        </label>
-      </div>
-      <p class="deps-hint">两者都留空 = 始终执行;不满足时本阶段及下游跳过(不计失败)</p>
+    <!-- Stage settings drawer (右侧滑出:条件 / 审批门 / 矩阵 / 服务 / 后置) -->
+    <Teleport to="body">
+      <Transition name="stage-drawer">
+        <div
+          v-if="settingsOpen && stage.kind !== 'source'"
+          class="stage-drawer-root"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="`阶段 ${stage.name} 的设置`"
+        >
+          <div class="stage-drawer-backdrop" @click="settingsOpen = false"></div>
+          <aside class="stage-drawer">
+            <header class="stage-drawer-head">
+              <div class="stage-drawer-head-text">
+                <span class="stage-drawer-eyebrow">阶段设置 · 第 {{ stageIndex }} 阶段</span>
+                <h2 class="stage-drawer-title">{{ stage.name }}</h2>
+              </div>
+              <button class="stage-drawer-close" aria-label="关闭设置" @click="settingsOpen = false">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+              </button>
+            </header>
 
-      <div class="deps-divider"></div>
-      <div class="deps-popover-title">审批门(gate)</div>
-      <label class="deps-option deps-option--toggle">
-        <input
-          type="checkbox"
-          :checked="stage.gate === true"
-          @change="emit('update-gate', ($event.target as HTMLInputElement).checked)"
-        />
-        <span>进入本阶段前需人工审批</span>
-      </label>
-      <p class="deps-hint">开启后运行将暂停在此,等待批准/拒绝</p>
+            <div class="stage-drawer-body">
+              <!-- 条件执行(WHEN) -->
+              <section class="drawer-section drawer-section--when">
+                <div class="drawer-section-head">
+                  <h3 class="drawer-section-title">条件执行</h3>
+                  <span class="drawer-section-tag">WHEN</span>
+                </div>
+                <label class="settings-field-label" :for="`branches-${stage.id}`">分支(glob,空格/逗号分隔)</label>
+                <input
+                  :id="`branches-${stage.id}`"
+                  class="settings-input"
+                  type="text"
+                  :value="branchText"
+                  placeholder="如 main release/*"
+                  @change="commitBranches(($event.target as HTMLInputElement).value)"
+                />
+                <div class="settings-events-label">触发事件</div>
+                <div class="settings-events">
+                  <label v-for="ev in WHEN_EVENTS" :key="ev" class="settings-event">
+                    <input type="checkbox" :checked="currentEvents.includes(ev)" @change="toggleEvent(ev)" />
+                    <span>{{ WHEN_EVENT_LABELS[ev] }}</span>
+                  </label>
+                </div>
+                <p class="drawer-hint">两者都留空 = 始终执行;不满足时本阶段及下游跳过(不计失败)</p>
+              </section>
 
-      <div class="deps-divider"></div>
-      <div class="deps-popover-title">矩阵构建(matrix)</div>
-      <label class="settings-field-label" :for="`matrix-${stage.id}`">轴(每行一个:<code>名称: 值1, 值2</code>)</label>
-      <textarea
-        :id="`matrix-${stage.id}`"
-        class="settings-input settings-textarea"
-        rows="3"
-        :value="matrixText"
-        placeholder="go: 1.21, 1.22&#10;os: linux"
-        @change="commitMatrix(($event.target as HTMLTextAreaElement).value)"
-      ></textarea>
-      <p v-if="matrixWarn" class="settings-warn" role="alert">{{ matrixWarn }}</p>
-      <p class="deps-hint">展开成并行 cell(笛卡尔积),各注入 <code>MATRIX_&lt;轴名&gt;</code> 环境变量;空 = 不展开</p>
+              <!-- 审批门(GATE) -->
+              <section class="drawer-section drawer-section--gate">
+                <div class="drawer-section-head">
+                  <h3 class="drawer-section-title">审批门</h3>
+                  <span class="drawer-section-tag">GATE</span>
+                </div>
+                <label class="drawer-toggle">
+                  <input
+                    type="checkbox"
+                    :checked="stage.gate === true"
+                    @change="emit('update-gate', ($event.target as HTMLInputElement).checked)"
+                  />
+                  <span>进入本阶段前需人工审批</span>
+                </label>
+                <p class="drawer-hint">开启后运行将暂停在此,等待批准/拒绝</p>
+              </section>
 
-      <div class="deps-divider"></div>
-      <div class="deps-popover-title">旁挂服务(services)</div>
-      <StageServicesEditor
-        :services="stage.services"
-        :stage-id="stage.id"
-        @update="emit('update-services', $event)"
-      />
-      <p class="deps-hint">测试旁挂 DB/redis:与脚本容器同网,脚本里按服务名互访(如 <code>psql -h testdb</code>)</p>
+              <!-- 矩阵构建(MATRIX) -->
+              <section class="drawer-section drawer-section--matrix">
+                <div class="drawer-section-head">
+                  <h3 class="drawer-section-title">矩阵构建</h3>
+                  <span class="drawer-section-tag">MATRIX</span>
+                </div>
+                <label class="settings-field-label" :for="`matrix-${stage.id}`">轴(每行一个:<code>名称: 值1, 值2</code>)</label>
+                <textarea
+                  :id="`matrix-${stage.id}`"
+                  class="settings-input settings-textarea"
+                  rows="3"
+                  :value="matrixText"
+                  placeholder="go: 1.21, 1.22&#10;os: linux"
+                  @change="commitMatrix(($event.target as HTMLTextAreaElement).value)"
+                ></textarea>
+                <p v-if="matrixWarn" class="settings-warn" role="alert">{{ matrixWarn }}</p>
+                <p class="drawer-hint">展开成并行 cell(笛卡尔积),各注入 <code>MATRIX_&lt;轴名&gt;</code> 环境变量;空 = 不展开</p>
+              </section>
 
-      <div class="deps-divider"></div>
-      <div class="deps-popover-title">后置步骤(post)</div>
-      <StagePostEditor
-        :steps="stage.post"
-        :stage-id="stage.id"
-        @update="emit('update-post', $event)"
-      />
-      <p class="deps-hint">阶段 job 跑完后按条件执行(同工作区),用于清理/通知/归档;空 = 无</p>
-    </div>
+              <!-- 旁挂服务(SERVICES) -->
+              <section class="drawer-section drawer-section--svc">
+                <div class="drawer-section-head">
+                  <h3 class="drawer-section-title">旁挂服务</h3>
+                  <span class="drawer-section-tag">SERVICES</span>
+                </div>
+                <StageServicesEditor
+                  :services="stage.services"
+                  :stage-id="stage.id"
+                  @update="emit('update-services', $event)"
+                />
+                <p class="drawer-hint">测试旁挂 DB/redis:与脚本容器同网,脚本里按服务名互访(如 <code>psql -h testdb</code>)</p>
+              </section>
+
+              <!-- 后置步骤(POST) -->
+              <section class="drawer-section drawer-section--post">
+                <div class="drawer-section-head">
+                  <h3 class="drawer-section-title">后置步骤</h3>
+                  <span class="drawer-section-tag">POST</span>
+                </div>
+                <StagePostEditor
+                  :steps="stage.post"
+                  :stage-id="stage.id"
+                  @update="emit('update-post', $event)"
+                />
+                <p class="drawer-hint">阶段 job 跑完后按条件执行(同工作区),用于清理/通知/归档;空 = 无</p>
+              </section>
+            </div>
+
+            <footer class="stage-drawer-foot">
+              <span class="stage-drawer-foot-hint">改动即时生效;点「保存草稿」落库</span>
+              <button class="stage-drawer-done" @click="settingsOpen = false">完成</button>
+            </footer>
+          </aside>
+        </div>
+      </Transition>
+    </Teleport>
 
     <!-- Job cards -->
     <JobCard
@@ -488,8 +561,182 @@ function resetDrag(): void {
 .stage-rule-chip--svc { background: var(--color-cyan-soft, rgba(8, 145, 178, 0.13)); color: var(--color-cyan, #0e7490); }
 .stage-rule-chip--post { background: var(--color-amber-soft, rgba(217, 119, 6, 0.14)); color: var(--color-amber, #b45309); }
 
-/* ─── Settings popover fields ─────────────────────────────────────────────── */
-.settings-popover { width: 232px; }
+/* ─── Stage settings drawer (右侧滑出) ────────────────────────────────────── */
+.stage-drawer-root {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+}
+.stage-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 11, 20, 0.42);
+  backdrop-filter: blur(1.5px);
+}
+.stage-drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 100vh;
+  width: min(460px, 92vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-card);
+  border-left: 1px solid var(--color-border-strong);
+  box-shadow: -18px 0 48px rgba(0, 0, 0, 0.26);
+}
+.stage-drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--color-border);
+}
+.stage-drawer-eyebrow {
+  display: block;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-faint);
+  margin-bottom: 3px;
+}
+.stage-drawer-title {
+  margin: 0;
+  font-size: 1.12rem;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--color-text);
+  word-break: break-word;
+}
+.stage-drawer-close {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--rounded-md);
+  background: none;
+  color: var(--color-dim);
+  cursor: pointer;
+  transition: border-color var(--duration-fast), color var(--duration-fast), background-color var(--duration-fast);
+}
+.stage-drawer-close:hover { border-color: var(--color-danger, #dc2626); color: var(--color-danger, #dc2626); background: var(--color-danger-soft, rgba(220, 38, 38, 0.08)); }
+.stage-drawer-close:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 1px; }
+
+.stage-drawer-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.drawer-section {
+  padding: 14px 16px 16px;
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-border-strong);
+  border-radius: var(--rounded);
+  background: var(--color-bg-subtle, var(--color-card));
+}
+.drawer-section--when { border-left-color: var(--color-primary); }
+.drawer-section--gate { border-left-color: var(--color-amber, #b45309); }
+.drawer-section--matrix { border-left-color: var(--color-violet, #6d28d9); }
+.drawer-section--svc { border-left-color: var(--color-cyan, #0e7490); }
+.drawer-section--post { border-left-color: var(--color-amber, #b45309); }
+
+.drawer-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 11px;
+}
+.drawer-section-title {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+.drawer-section-tag {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--color-border);
+  color: var(--color-faint);
+}
+.drawer-hint { margin: 9px 0 0; font-size: 0.7rem; color: var(--color-faint); line-height: 1.5; }
+.drawer-hint code,
+.drawer-section code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.92em;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--color-border);
+  color: var(--color-dim);
+}
+
+.drawer-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 0.82rem;
+  color: var(--color-text);
+  cursor: pointer;
+}
+.drawer-toggle input { width: 16px; height: 16px; accent-color: var(--color-primary); cursor: pointer; }
+
+.stage-drawer-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 20px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-card);
+}
+.stage-drawer-foot-hint { font-size: 0.68rem; color: var(--color-faint); }
+.stage-drawer-done {
+  flex: none;
+  height: 32px;
+  padding: 0 18px;
+  border: none;
+  border-radius: var(--rounded-md);
+  background: var(--color-primary);
+  color: #fff;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter var(--duration-fast);
+}
+.stage-drawer-done:hover { filter: brightness(1.06); }
+.stage-drawer-done:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+
+/* 抽屉进出:背景淡入 + 面板从右滑入(compositor-friendly:opacity + transform) */
+.stage-drawer-enter-active,
+.stage-drawer-leave-active { transition: opacity var(--duration-normal, 300ms) var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1)); }
+.stage-drawer-enter-active .stage-drawer,
+.stage-drawer-leave-active .stage-drawer { transition: transform var(--duration-normal, 300ms) var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1)); }
+.stage-drawer-enter-from,
+.stage-drawer-leave-to { opacity: 0; }
+.stage-drawer-enter-from .stage-drawer,
+.stage-drawer-leave-to .stage-drawer { transform: translateX(100%); }
+
+@media (prefers-reduced-motion: reduce) {
+  .stage-drawer-enter-active,
+  .stage-drawer-leave-active,
+  .stage-drawer-enter-active .stage-drawer,
+  .stage-drawer-leave-active .stage-drawer { transition: none; }
+}
+
+/* ─── Settings drawer fields (shared input styling) ───────────────────────── */
 .settings-field-label,
 .settings-events-label {
   display: block;

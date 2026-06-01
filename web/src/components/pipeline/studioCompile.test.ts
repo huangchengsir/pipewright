@@ -11,6 +11,8 @@ import {
   compileStudioConfig,
   isStudioNode,
   emptyStudioModel,
+  promotedValues,
+  applyPromotedValues,
 } from './studioCompile'
 
 function param(p: Partial<PromotedParam> & { key: string }): PromotedParam {
@@ -132,5 +134,65 @@ describe('studioCompile', () => {
 
   it('emptyStudioModel is a blank studio', () => {
     expect(emptyStudioModel()).toEqual({ image: '', params: [], stepConfig: { commands: '', artifactPath: '' } })
+  })
+
+  describe('instance shortlist values (promotedValues / applyPromotedValues)', () => {
+    it('reads current values keyed by param key from params text', () => {
+      const meta = encodeStudioMeta([
+        param({ key: 'node', label: '镜像', type: 'select', options: ['20', '18'] }),
+        param({ key: 'flag', label: '开关', type: 'toggle' }),
+      ])
+      const config = { params: 'node=18\nflag=true', [STUDIO_META_KEY]: meta }
+      expect(promotedValues(config)).toEqual({ node: '18', flag: 'true' })
+    })
+
+    it('reads values even without __studio (type=text fallback)', () => {
+      expect(promotedValues({ params: 'dir=web\nenv=prod' })).toEqual({ dir: 'web', env: 'prod' })
+    })
+
+    it('writes edited values back into params text, preserving key order', () => {
+      const params = [
+        param({ key: 'node', label: '镜像', type: 'select', default: '20', options: ['20', '18'] }),
+        param({ key: 'dir', label: '目录', default: 'web' }),
+      ]
+      const next = applyPromotedValues(params, { node: '18', dir: 'frontend' })
+      expect(next).toBe('node=18\ndir=frontend')
+    })
+
+    it('missing key in values keeps its existing default', () => {
+      const params = [param({ key: 'a', default: '1' }), param({ key: 'b', default: '2' })]
+      expect(applyPromotedValues(params, { a: '9' })).toBe('a=9\nb=2')
+    })
+
+    it('round-trips: read → edit → write → re-read across all types', () => {
+      const meta = encodeStudioMeta([
+        param({ key: 'ver', label: 'Go', type: 'select', options: ['1.22', '1.21'] }),
+        param({ key: 'count', label: '并发', type: 'number' }),
+        param({ key: 'verbose', label: '详细', type: 'toggle' }),
+        param({ key: 'note', label: '备注', type: 'text' }),
+      ])
+      const config = {
+        params: 'ver=1.22\ncount=4\nverbose=false\nnote=hi',
+        [STUDIO_META_KEY]: meta,
+      }
+      const defs = parsePromotedParams(config)
+      const edited = { ver: '1.21', count: '8', verbose: 'true', note: 'bye' }
+      const newParams = applyPromotedValues(defs, edited)
+      // re-read from the new params text + same __studio meta
+      const back = promotedValues({ params: newParams, [STUDIO_META_KEY]: meta })
+      expect(back).toEqual(edited)
+      // __studio definitions untouched by the value edit
+      expect(parsePromotedParams({ params: newParams, [STUDIO_META_KEY]: meta }).map((p) => ({
+        key: p.key,
+        label: p.label,
+        type: p.type,
+        options: p.options,
+      }))).toEqual([
+        { key: 'ver', label: 'Go', type: 'select', options: ['1.22', '1.21'] },
+        { key: 'count', label: '并发', type: 'number', options: undefined },
+        { key: 'verbose', label: '详细', type: 'toggle', options: undefined },
+        { key: 'note', label: '备注', type: 'text', options: undefined },
+      ])
+    })
   })
 })

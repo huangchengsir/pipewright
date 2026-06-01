@@ -150,6 +150,38 @@ export function parsePromotedParams(config: Record<string, unknown>): PromotedPa
   })
 }
 
+/**
+ * 实例编辑专用:读出每个提升参数的「当前值」(key → value)。
+ *
+ * 当前值以 `params` 文本里 `key=value` 的 value 为唯一真源 —— `parsePromotedParams`
+ * 把它解析进 `default` 字段;在实例语境下它就是「实例已填的值 / 未填则模板默认」。
+ * 供节点抽屉的短清单控件初始绑定。
+ */
+export function promotedValues(config: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const p of parsePromotedParams(config)) out[p.key] = p.default
+  return out
+}
+
+/**
+ * 实例编辑专用:把短清单控件改后的值写回 `params` 文本。
+ *
+ * 以提升参数定义(key/顺序)为骨架,仅替换各参数的 value;`values` 缺失的 key
+ * 沿用其原 default。**只动 value,不碰 key/label/type/options**,故 `__studio`
+ * 元信息不被实例编辑破坏;产出直接覆盖 config.params,回开短清单回显新值。
+ */
+export function applyPromotedValues(
+  params: readonly PromotedParam[],
+  values: Record<string, string>,
+): string {
+  return paramsToText(
+    params.map((p) => {
+      const next = values[p.key]
+      return next === undefined ? p : { ...p, default: next }
+    }),
+  )
+}
+
 /** 反解析 templated 节点 config → 工作室模型(commandTemplate 优先,兼容旧 commands)。 */
 export function parseStudioConfig(config: Record<string, unknown>): StudioModel {
   const commands = configString(config, 'commandTemplate') || configString(config, 'commands')

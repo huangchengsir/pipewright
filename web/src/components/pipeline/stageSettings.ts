@@ -6,7 +6,7 @@
  * the markup and event wiring; all branch-glob / event-set math lives here.
  */
 
-import type { StageWhen } from '../../api/pipeline'
+import type { StageWhen, PipelinePostStep, PipelineServiceSpec } from '../../api/pipeline'
 
 /** Trigger event types a stage's `when` can gate on (backend枚举 in stage_when.go). */
 export const WHEN_EVENTS = ['manual', 'webhook', 'schedule'] as const
@@ -184,4 +184,47 @@ export function matrixSummary(matrix: Record<string, string[]> | undefined): str
   if (!hasMatrix(matrix)) return ''
   const parts = Object.keys(matrix!).map((n) => `${n}×${(matrix![n] ?? []).length}`)
   return `${parts.join(' · ')} → ${matrixCellCount(matrix)} cell`
+}
+
+// ─── Post steps + Services (P1) — chips/summary helpers for the canvas editors ──
+
+/** Post step condition options (matches backend stage_post.go). */
+export const POST_CONDITIONS = ['always', 'on_success', 'on_failure'] as const
+export type PostCondition = (typeof POST_CONDITIONS)[number]
+
+export const POST_CONDITION_LABELS: Record<PostCondition, string> = {
+  always: '总是',
+  on_success: '成功时',
+  on_failure: '失败时',
+}
+
+export function hasPost(post: PipelinePostStep[] | undefined): boolean {
+  return Boolean(post && post.length > 0)
+}
+
+/** Short chip summary, e.g. `post×2`. */
+export function postSummary(post: PipelinePostStep[] | undefined): string {
+  return hasPost(post) ? `post×${post!.length}` : ''
+}
+
+export function hasServices(services: PipelineServiceSpec[] | undefined): boolean {
+  return Boolean(services && services.length > 0)
+}
+
+/** Short chip summary, e.g. `svc: testdb, redis`. */
+export function servicesSummary(services: PipelineServiceSpec[] | undefined): string {
+  if (!hasServices(services)) return ''
+  return 'svc: ' + services!.map((s) => s.name || '?').join(', ')
+}
+
+/** env array (["K=V", ...]) ↔ one-line comma text "K=V, K2=V2" for the compact services editor. */
+export function envToText(env: string[] | undefined): string {
+  return (env ?? []).join(', ')
+}
+
+export function parseEnvText(text: string): string[] {
+  return text
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '' && s.includes('='))
 }

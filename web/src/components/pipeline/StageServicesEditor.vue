@@ -80,17 +80,38 @@ function setEnv(i: number, text: string): void {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  padding: 7px;
+  padding: 8px;
   border: 1px solid var(--color-border);
   border-left: 3px solid var(--color-cyan, #0891b2);
   border-radius: var(--rounded-md, 8px);
   background: var(--color-inset);
 }
-.svc-line { display: flex; align-items: center; gap: 5px; }
-.svc-colon { color: var(--color-faint); font-family: var(--font-mono); }
-.svc-name { flex: 0 0 32%; }
-.svc-image { flex: 1; }
-.svc-env { width: 100%; font-size: 0.74rem; }
+.svc-line { display: flex; align-items: center; gap: 6px; }
+.svc-colon { color: var(--color-faint); font-family: var(--font-mono); flex: none; }
+
+/* Self-contained input styling (不依赖父组件 scoped class):box-sizing + min-width:0
+   保证 flex 内输入框能收缩、不溢出抽屉右缘。 */
+.svc-editor input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 34px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--color-text);
+  background: var(--color-card);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--rounded, 8px);
+  transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
+}
+.svc-editor input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-soft);
+}
+.svc-name { flex: 0 0 34%; min-width: 0; }
+.svc-image { flex: 1; min-width: 0; }
+.svc-env { width: 100%; font-size: 0.76rem; }
 .svc-del {
   flex: none; width: 22px; height: 22px; border: none; background: none;
   color: var(--color-faint); cursor: pointer; border-radius: 5px;

@@ -7,6 +7,10 @@
 /* ─── Canvas host ─────────────────────────────────────────────────────────── */
 .pipeline-canvas {
   flex: 1;
+  /* min-width:0:flex 行里画布默认 min-width:auto = 内容 min-content,阶段一多就拒绝收缩,
+     把右侧 360px 检视抽屉顶出 .canvas-body(overflow:hidden)右缘、抽屉右侧(✕/输入框)被裁。
+     置 0 让画布收缩到剩余空间,超宽的阶段流在自身 overflow:auto 内横向滚动,抽屉始终完整。 */
+  min-width: 0;
   overflow: auto;
   background-color: var(--color-canvas);
   background-image: radial-gradient(oklch(100% 0 0 / 0.04) 1px, transparent 1px);

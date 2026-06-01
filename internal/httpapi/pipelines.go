@@ -28,7 +28,14 @@ type stageDTO struct {
 	AllowFailure bool     `json:"allowFailure"`
 	When         whenDTO  `json:"when"`
 	Gate         bool     `json:"gate"`
-	Jobs         []jobDTO `json:"jobs"`
+	// Matrix / Post / Services 是 P1 阶段扩展(对标 matrix / Jenkins post / GitLab services)。
+	// 用 omitempty:未声明时不出现在响应里,保持原冻结契约的基线形状不变;声明时按领域
+	// json tag 原样回传,与画布编辑器(StagePostEditor / StageServicesEditor / 矩阵)读写的
+	// 形状 1:1。复用领域类型而非另立 DTO,杜绝 wire 与引擎消费形状漂移。
+	Matrix   map[string][]string    `json:"matrix,omitempty"`
+	Post     []pipeline.PostStep    `json:"post,omitempty"`
+	Services []pipeline.ServiceSpec `json:"services,omitempty"`
+	Jobs     []jobDTO               `json:"jobs"`
 }
 
 type whenDTO struct {
@@ -78,7 +85,7 @@ func toStageDTOs(in []pipeline.Stage) []stageDTO {
 		if needs == nil {
 			needs = []string{}
 		}
-		stages = append(stages, stageDTO{ID: st.ID, Name: st.Name, Kind: st.Kind, Needs: needs, AllowFailure: st.AllowFailure, When: toWhenDTO(st.When), Gate: st.Gate, Jobs: jobs})
+		stages = append(stages, stageDTO{ID: st.ID, Name: st.Name, Kind: st.Kind, Needs: needs, AllowFailure: st.AllowFailure, When: toWhenDTO(st.When), Gate: st.Gate, Matrix: st.Matrix, Post: st.Post, Services: st.Services, Jobs: jobs})
 	}
 	return stages
 }
@@ -105,7 +112,13 @@ type reqStage struct {
 		Events   []string `json:"events"`
 	} `json:"when"`
 	Gate bool `json:"gate"`
-	Jobs []struct {
+	// P1 阶段扩展:画布编辑器写入、随 PUT 上行。缺失这些字段时画布配置的
+	// 矩阵/后置步骤/旁挂服务会被静默丢弃(本次修复点)。领域层 Save/NormalizeSpec
+	// 兜规范化与校验(空 → nil = 行为不变)。
+	Matrix   map[string][]string    `json:"matrix"`
+	Post     []pipeline.PostStep    `json:"post"`
+	Services []pipeline.ServiceSpec `json:"services"`
+	Jobs     []struct {
 		ID      string         `json:"id"`
 		Name    string         `json:"name"`
 		Type    string         `json:"type"`
@@ -136,6 +149,9 @@ func reqStagesToDomain(in []reqStage) []pipeline.Stage {
 			AllowFailure: st.AllowFailure,
 			When:         pipeline.When{Branches: st.When.Branches, Events: st.When.Events},
 			Gate:         st.Gate,
+			Matrix:       st.Matrix,
+			Post:         st.Post,
+			Services:     st.Services,
 			Jobs:         jobs,
 		})
 	}

@@ -162,6 +162,8 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 				b.recordCommit(ctx, r.ID, resolved.CommitShort)
 			}
 
+			// 步骤输出→下游变量(P1):同阶段 job 间经 $PIPEWRIGHT_ENV 文件传值,carriedEnv 累积注入后续 job。
+			var carriedEnv []pipeline.BuildVar
 			for _, jb := range scriptJobs {
 				if canceled(ctx) {
 					return run.ErrCanceled
@@ -171,7 +173,10 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 					_ = rep.Log(ctx, streamStderr, fmt.Sprintf("script job「%s」配置无效:%v", jb.Name, verr))
 					return ErrBuildFailed
 				}
-				step.Env = append(runParamsAsEnv(r.Trigger.Params), step.Env...)
+				// 注入顺序:运行参数 → 上游 job 输出(carriedEnv)→ job 自身 env(后者覆盖同名)→ PIPEWRIGHT_ENV(系统,末位防覆盖)。
+				base := append(runParamsAsEnv(r.Trigger.Params), carriedEnv...)
+				step.Env = append(base, step.Env...)
+				step.Env = append(step.Env, pipewrightEnvVar())
 				// 构建依赖缓存(#61):执行前恢复(暖构建)、成功后保存(best-effort,缓存问题绝不让构建失败)。
 				// 任务级 timeout/retry(#63):零值时 runScriptStepWithOpts 退化为单次无超时执行(旧行为)。
 				b.restoreJobCache(ctx, rep, jb, r.Trigger.Branch, workspace)
@@ -179,6 +184,8 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 					return err // ErrBuildFailed / run.ErrCanceled
 				}
 				b.saveJobCache(ctx, rep, jb, r.Trigger.Branch, workspace)
+				// 捕获本 job 写入 $PIPEWRIGHT_ENV 的变量,供后续同阶段 job 引用。
+				carriedEnv = append(carriedEnv, captureStageEnv(ctx, rep, workspace)...)
 			}
 
 			commitTag := "latest"

@@ -10,6 +10,7 @@ import {
   Bell,
   Settings,
   Stack2,
+  Rocket,
 } from '@vicons/tabler'
 import { NIcon } from 'naive-ui'
 import ThemeToggle from '../components/ThemeToggle.vue'
@@ -29,6 +30,8 @@ const navItems: NavItem[] = [
   { name: 'runs',          to: '/runs',          icon: GitFork,    label: '运行',  ariaLabel: '运行' },
   // FR-8-13: 复用库(流水线模板 + 变量组)。
   { name: 'library',       to: '/library',       icon: Stack2,     label: '复用库', ariaLabel: '复用库' },
+  // 环境一等公民:按环境聚合的部署历史 + 一键回滚(对标 GitLab environments)。
+  { name: 'environments',  to: '/environments',  icon: Rocket,     label: '环境',  ariaLabel: '环境部署历史' },
   // FR-8-15: DORA 四指标仪表盘(交付效能;只读聚合)。
   { name: 'dora',          to: '/metrics/dora',  icon: ChartBar,   label: 'DORA 指标', ariaLabel: 'DORA 指标' },
   // Story 6-1: 多机状态总览(服务器层指标 FR-15);登记在 设置 → 服务器。

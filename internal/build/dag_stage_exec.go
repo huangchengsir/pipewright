@@ -179,6 +179,18 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 		// 阶段主体(job 执行):捕获错误而非提前返回,以便其后无论成败都按条件跑 post 步骤。
 		jobErr := func() error {
 			if needsBuild {
+				// 旁挂服务(P1):阶段声明 services 时,起服务容器到临时网络,脚本容器加入同网按服务名互访;
+				// 阶段结束(成败/取消)拆除。驱动不支持容器网络能力 → 直接失败(不在缺依赖下假跑)。
+				var svcNetwork string
+				if len(stage.Services) > 0 {
+					net, ok := b.startStageServices(ctx, r, stage, rep)
+					if !ok {
+						return ErrBuildFailed
+					}
+					svcNetwork = net
+					defer b.stopStageServices(context.WithoutCancel(ctx), r, stage, net, rep)
+				}
+
 				// 步骤输出→下游变量(P1):同阶段 job 间经 $PIPEWRIGHT_ENV 文件传值,carriedEnv 累积注入后续 job。
 				var carriedEnv []pipeline.BuildVar
 				for _, jb := range scriptJobs {
@@ -194,6 +206,10 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 					base := append(runParamsAsEnv(r.Trigger.Params), carriedEnv...)
 					step.Env = append(base, step.Env...)
 					step.Env = append(step.Env, pipewrightEnvVar())
+					// 旁挂服务网络:脚本容器加入,按服务名互访。
+					if svcNetwork != "" {
+						step.Resource.Network = svcNetwork
+					}
 					// 构建依赖缓存(#61):执行前恢复(暖构建)、成功后保存(best-effort,缓存问题绝不让构建失败)。
 					// 任务级 timeout/retry(#63):零值时 runScriptStepWithOpts 退化为单次无超时执行(旧行为)。
 					b.restoreJobCache(ctx, rep, jb, r.Trigger.Branch, workspace)

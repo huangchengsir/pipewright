@@ -71,6 +71,11 @@ func (d *shellDriver) RunToolchain(ctx context.Context, image, hostDir, workdir 
 		args = append(args, "--memory", mem)
 		display = append(display, "--memory", mem)
 	}
+	// 旁挂服务(services):脚本容器加入服务网络,按服务名(network-alias)互访。运行时设置,非 secret。
+	if net := strings.TrimSpace(res.Network); net != "" {
+		args = append(args, "--network", net)
+		display = append(display, "--network", net)
+	}
 	for _, kv := range env {
 		args = append(args, "-e", kv)
 		display = append(display, "-e", maskKV(kv)) // 环境变量可能含 secret:回显只列 key

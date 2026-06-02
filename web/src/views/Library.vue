@@ -9,6 +9,7 @@
  * secret 变量绝无明文:仅存/回 credentialId + maskedValue。HttpError 形状 err.apiError?.code/.message/.status。
  */
 import { ref, computed, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import { HttpError } from '../api/http'
 import {
@@ -27,20 +28,20 @@ import {
 import { listCredentials, type Credential } from '../api/credentials'
 import {
   listCustomNodes,
-  createCustomNode,
   updateCustomNode,
   deleteCustomNode,
   type CustomNode,
 } from '../api/customNodes'
 import { jobTypeLabel } from '../components/pipeline/jobConfigSchema'
-import CustomNodeStudio from '../components/pipeline/CustomNodeStudio.vue'
 import { isStudioNode } from '../components/pipeline/studioCompile'
 
 type Tab = 'templates' | 'variableGroups' | 'customNodes'
 type LoadState = 'idle' | 'loading' | 'error'
 
 const message = useMessage()
-const tab = ref<Tab>('templates')
+const route = useRoute()
+const router = useRouter()
+const tab = ref<Tab>(route.query.tab === 'customNodes' ? 'customNodes' : route.query.tab === 'variableGroups' ? 'variableGroups' : 'templates')
 
 // ─── templates ────────────────────────────────────────────────────────────────
 const tplState = ref<LoadState>('idle')
@@ -278,24 +279,15 @@ const cnEditorSaving = ref(false)
 
 const cnEditorTypeLabel = computed(() => jobTypeLabel(cnEditorNodeType.value))
 
-// ─── 自定义节点工作室(低代码组合 → templated 节点)──────────────────────────────
-const studioOpen = ref(false)
-const studioNode = ref<CustomNode | null>(null)
-const studioSaving = ref(false)
-const studioBanner = ref('')
-
+// ─── 自定义节点工作室(独立低代码页 → templated 节点)──────────────────────────────
 function openCreateStudio(): void {
-  studioNode.value = null
-  studioBanner.value = ''
-  studioOpen.value = true
+  router.push({ name: 'studio-create' })
 }
 
-/** 工作室节点(templated 或带 __studio)走工作室;其余类型走原始 KV 编辑器。 */
+/** 工作室节点(templated 或带 __studio)走独立工作室页;其余类型走原始 KV 编辑器。 */
 function openEditCustomNode(n: CustomNode): void {
   if (isStudioNode(n.nodeType, n.config ?? {})) {
-    studioNode.value = n
-    studioBanner.value = ''
-    studioOpen.value = true
+    router.push({ name: 'studio-edit', params: { id: n.id } })
     return
   }
   cnEditingId.value = n.id
@@ -309,41 +301,6 @@ function openEditCustomNode(n: CustomNode): void {
   }))
   cnEditorBanner.value = ''
   cnEditorOpen.value = true
-}
-
-async function saveStudioNode(payload: {
-  id: string | null
-  name: string
-  description: string
-  summary: string
-  config: Record<string, string>
-}): Promise<void> {
-  studioBanner.value = ''
-  studioSaving.value = true
-  try {
-    const input = {
-      name: payload.name,
-      description: payload.description,
-      nodeType: 'templated',
-      summary: payload.summary,
-      config: payload.config,
-    }
-    if (payload.id) {
-      await updateCustomNode(payload.id, input)
-      message.success(`已更新自定义节点「${payload.name}」`)
-    } else {
-      await createCustomNode(input)
-      message.success(`已创建自定义节点「${payload.name}」`)
-    }
-    studioOpen.value = false
-    await loadCustomNodes()
-  } catch (err: unknown) {
-    studioBanner.value = err instanceof HttpError
-      ? err.apiError?.message ?? `保存失败(${err.status})`
-      : '保存失败'
-  } finally {
-    studioSaving.value = false
-  }
 }
 
 function addCnRow(): void {
@@ -795,16 +752,6 @@ onMounted(() => {
         </footer>
       </div>
     </div>
-
-    <!-- ─── 自定义节点工作室(低代码组合) ─── -->
-    <CustomNodeStudio
-      :open="studioOpen"
-      :node="studioNode"
-      :saving="studioSaving"
-      :banner="studioBanner"
-      @close="studioOpen = false"
-      @save="saveStudioNode"
-    />
   </section>
 </template>
 

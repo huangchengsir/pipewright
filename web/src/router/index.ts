@@ -39,6 +39,8 @@ const ProjectCode = () => import('../views/ProjectCode.vue')
 const RunDetail = () => import('../views/RunDetail.vue')
 // Story 1-6: living styleguide (public — no auth required for dev browsing)
 const StatesShowcase = () => import('../views/StatesShowcase.vue')
+// 自定义节点工作室:路由级聚焦低代码编辑页(shell 外全屏,进出经路由)
+const CustomNodeStudioPage = () => import('../views/CustomNodeStudioPage.vue')
 
 const router = createRouter({
   history: createWebHistory(),
@@ -56,6 +58,19 @@ const router = createRouter({
       name: 'states-showcase',
       component: StatesShowcase,
       meta: { public: true },
+    },
+    // ——— 自定义节点工作室:聚焦全屏编辑器(shell 外,但需鉴权)———
+    {
+      path: '/library/studio',
+      name: 'studio-create',
+      component: CustomNodeStudioPage,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/library/studio/:id',
+      name: 'studio-edit',
+      component: CustomNodeStudioPage,
+      meta: { requiresAuth: true },
     },
     // ——— Shell-inside: authenticated routes ———
     {

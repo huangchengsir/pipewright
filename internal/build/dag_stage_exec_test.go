@@ -310,6 +310,7 @@ func TestStageExecutorNonScriptPlaceholder(t *testing.T) {
 // imgDriver 是支持 Build/InspectImage 的测试驱动(build_image 真实化测试用)。
 type imgDriver struct {
 	buildCalls    int
+	gotContextDir string
 	gotDockerfile string
 }
 
@@ -317,8 +318,9 @@ func (d *imgDriver) Binary() string { return "fake" }
 func (d *imgDriver) RunToolchain(context.Context, string, string, string, []string, []string, pipeline.Resource, func(string, string)) (int, error) {
 	return 0, nil
 }
-func (d *imgDriver) Build(_ context.Context, _, dockerfile, _ string, _, _ []string, _ func(string, string)) (int, error) {
+func (d *imgDriver) Build(_ context.Context, contextDir, dockerfile, _ string, _, _ []string, _ func(string, string)) (int, error) {
 	d.buildCalls++
+	d.gotContextDir = contextDir
 	d.gotDockerfile = dockerfile
 	return 0, nil
 }
@@ -351,6 +353,40 @@ func TestStageExecutorBuildImageReal(t *testing.T) {
 	}
 	if len(rep.arts) != 1 || rep.arts[0].Type != run.ArtifactImage {
 		t.Fatalf("应 emit 一件 image 产物,实际 %+v", rep.arts)
+	}
+}
+
+// TestStageExecutorBuildImageContextSubdir 验证 build_image 的「构建上下文(context)」配置接入:
+// monorepo 子目录 Dockerfile(如 backend/Dockerfile 内 `COPY target/x.jar` 相对 backend/)
+// 须把 docker build 的 context 设为该子目录,否则 docker 在仓库根找不到 COPY 源(走页面真部署
+// 暴露的缺口:前端有 context 字段但后端从不消费,context 恒为仓库根)。
+func TestStageExecutorBuildImageContextSubdir(t *testing.T) {
+	drv := &imgDriver{}
+	b := newDAGTestBuilder(drv, &markerCloner{})
+	exec := NewStageExecutor(b, nil)
+	rep := &fakeReporter{}
+
+	stage := pipeline.Stage{ID: "s", Name: "构建", Kind: pipeline.KindBuild,
+		Jobs: []pipeline.Job{{Name: "后端镜像", Type: "build_image", Config: map[string]any{
+			"artifactType": "image", "buildModel": "dockerfile",
+			"dockerfilePath": "backend/Dockerfile", "context": "backend",
+		}}}}
+	if err := exec(context.Background(), &run.Run{ProjectID: "p1"}, stage, rep); err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	if drv.buildCalls != 1 {
+		t.Fatalf("应调用 driver.Build 一次,实际 %d", drv.buildCalls)
+	}
+	// context=backend → docker build 的 context 目录是 <workspace>/backend(非仓库根),
+	// dockerfile 解析为相对仓库根的绝对路径 <workspace>/backend/Dockerfile(不被再 join 进子目录)。
+	if !strings.HasSuffix(filepath.Clean(drv.gotContextDir), filepath.Join("backend")) {
+		t.Fatalf("context 目录应为 <workspace>/backend,实际 %q", drv.gotContextDir)
+	}
+	if !strings.HasSuffix(filepath.Clean(drv.gotDockerfile), filepath.Join("backend", "Dockerfile")) {
+		t.Fatalf("dockerfile 应为 <workspace>/backend/Dockerfile,实际 %q", drv.gotDockerfile)
+	}
+	if !filepath.IsAbs(drv.gotDockerfile) {
+		t.Fatalf("context 非空时 dockerfile 应为绝对路径(避免被 driver 再 join),实际 %q", drv.gotDockerfile)
 	}
 }
 

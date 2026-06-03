@@ -107,12 +107,16 @@ type Cache struct {
 
 // BuildConfig 是构建配置(模型 A/B、产物类型、构建变量、依赖缓存)。
 type BuildConfig struct {
-	Model          string     `json:"model"`
-	DockerfilePath string     `json:"dockerfilePath"`
-	Toolchain      Toolchain  `json:"toolchain"`
-	ArtifactType   string     `json:"artifactType"`
-	Vars           []BuildVar `json:"vars"`
-	Cache          Cache      `json:"cache"`
+	Model          string `json:"model"`
+	DockerfilePath string `json:"dockerfilePath"`
+	// Context 是 docker build 的构建上下文目录(相对仓库根;空=仓库根)。monorepo 子目录
+	// Dockerfile(如 backend/Dockerfile 内 `COPY target/x.jar`,相对 backend/)必须把 context
+	// 设为该子目录,否则 docker 在仓库根找不到 COPY 源。空时与历史一致(context=仓库根)。
+	Context      string     `json:"context"`
+	Toolchain    Toolchain  `json:"toolchain"`
+	ArtifactType string     `json:"artifactType"`
+	Vars         []BuildVar `json:"vars"`
+	Cache        Cache      `json:"cache"`
 }
 
 // ImageRegistry 是外部镜像仓库绑定(FR-7 声明侧)。CredentialID 引用保险库凭据;

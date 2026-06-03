@@ -376,8 +376,18 @@ func (b *Builder) build(ctx context.Context, sink run.StepSink, ordinal int, pro
 		if dockerfile == "" {
 			dockerfile = "Dockerfile"
 		}
+		// 构建上下文:默认仓库根(workspace);配了 Context(monorepo 子目录)则用该子目录。
+		// dockerfilePath 与 context 都相对仓库根:故 context 非空时把 dockerfile 解析为相对
+		// workspace 的绝对路径,避免 driver 把它再 join 到子目录 contextDir 下(致路径翻倍)。
+		contextDir := workspace
+		if c := strings.TrimSpace(cfg.Context); c != "" && c != "." {
+			contextDir = filepath.Join(workspace, c)
+			if !filepath.IsAbs(dockerfile) {
+				dockerfile = filepath.Join(workspace, dockerfile)
+			}
+		}
 		localTag := localTagPrefix + "/" + slug + ":" + commitTag
-		code, err := b.driver.Build(ctx, workspace, dockerfile, localTag, buildArgs, secretArgs, onLine)
+		code, err := b.driver.Build(ctx, contextDir, dockerfile, localTag, buildArgs, secretArgs, onLine)
 		if err != nil && code < 0 {
 			return "", nil, fmt.Errorf("构建器无法启动")
 		}

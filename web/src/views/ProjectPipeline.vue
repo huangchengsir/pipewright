@@ -16,6 +16,7 @@ import {
   type SaveSettingsInput,
 } from '../api/pipelineSettings'
 import { listCredentials, type Credential } from '../api/credentials'
+import { listProjects, type Project } from '../api/projects'
 import { listServers, type Server } from '../api/servers'
 import { getValidation, type ValidationDTO, type IssueScope } from '../api/pipelineValidation'
 import { HttpError } from '../api/http'
@@ -137,8 +138,8 @@ function handleEnvsUpdate(envs: Environment[]): void {
   editEnvs.value = envs
 }
 
-watch(projectId, () => { void loadPipeline(); void loadSettings() })
-onMounted(() => { void loadPipeline(); void loadSettings() })
+watch(projectId, () => { void loadProject(); void loadPipeline(); void loadSettings() })
+onMounted(() => { void loadProject(); void loadPipeline(); void loadSettings() })
 
 // ─── Canvas update ────────────────────────────────────────────────────────────
 
@@ -354,9 +355,19 @@ function handleLocate(scope: IssueScope): void {
 // Re-fetch after tab switch (debounced, only when panel is open).
 watch(activeTab, () => { scheduleValidation() })
 
-// ─── Project name display (from route state or fallback to ID) ────────────────
+// ─── Project name display (fetch real name; fall back to ID until loaded) ─────
 
-const projectName = computed(() => String(route.params.id))
+const project = ref<Project | null>(null)
+const projectName = computed(() => project.value?.name ?? String(route.params.id))
+
+async function loadProject(): Promise<void> {
+  try {
+    const all = await listProjects()
+    project.value = all.find((p) => p.id === projectId.value) ?? null
+  } catch {
+    project.value = null // 面包屑回退显示 ID,不阻断编辑器
+  }
+}
 </script>
 
 <template>

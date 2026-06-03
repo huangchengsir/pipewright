@@ -60,6 +60,9 @@ type jobDTO struct {
 	Type    string         `json:"type"`
 	Summary string         `json:"summary"`
 	Config  map[string]any `json:"config"`
+	// Needs 是阶段内 job 级依赖(画布横向连线=串行)。omitempty:无依赖时不出现,
+	// 保持基线形状不变;有依赖时原样回传,与画布读写形状 1:1。
+	Needs []string `json:"needs,omitempty"`
 }
 
 // toStageDTOs 把领域阶段集合转契约 stageDTO 列表(切片/map 保证非 nil,JSON 输出 [] / {})。
@@ -79,6 +82,7 @@ func toStageDTOs(in []pipeline.Stage) []stageDTO {
 				Type:    jb.Type,
 				Summary: jb.Summary,
 				Config:  cfg,
+				Needs:   jb.Needs,
 			})
 		}
 		needs := st.Needs
@@ -124,6 +128,7 @@ type reqStage struct {
 		Type    string         `json:"type"`
 		Summary string         `json:"summary"`
 		Config  map[string]any `json:"config"`
+		Needs   []string       `json:"needs"`
 	} `json:"jobs"`
 }
 
@@ -139,6 +144,7 @@ func reqStagesToDomain(in []reqStage) []pipeline.Stage {
 				Type:    jb.Type,
 				Summary: jb.Summary,
 				Config:  jb.Config,
+				Needs:   jb.Needs,
 			})
 		}
 		stages = append(stages, pipeline.Stage{

@@ -9,11 +9,16 @@ defineProps<{
   selected: boolean
   dragging?: boolean
   dragOver?: boolean
+  /** Names of upstream jobs this job depends on (intra-stage DAG); shown as chips. */
+  upstreamNames?: string[]
+  /** True when the stage renders the intra-stage DAG (enables the per-job deps button). */
+  inDag?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'select'): void
   (e: 'delete'): void
+  (e: 'edit-deps'): void
   (e: 'dragstart'): void
   (e: 'dragend'): void
   (e: 'dragenter'): void
@@ -23,6 +28,11 @@ const emit = defineEmits<{
 function handleDelete(e: MouseEvent): void {
   e.stopPropagation()
   emit('delete')
+}
+
+function handleEditDeps(e: MouseEvent): void {
+  e.stopPropagation()
+  emit('edit-deps')
 }
 </script>
 
@@ -52,6 +62,18 @@ function handleDelete(e: MouseEvent): void {
       <JobTypeIcon :type="job.type" :size="24" />
       <span class="job-name">{{ job.name }}</span>
       <button
+        v-if="inDag"
+        class="job-card-del job-card-deps"
+        :aria-label="`编辑任务 ${job.name} 的依赖`"
+        title="编辑依赖(决定与哪些任务串行/并行)"
+        @click="handleEditDeps"
+      >
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/>
+          <path d="M8 6.6c5 0 3 5.4 8 5.4M8 17.4c5 0 3-5.4 8-5.4"/>
+        </svg>
+      </button>
+      <button
         class="job-card-del"
         :aria-label="`删除任务 ${job.name}`"
         title="删除此任务"
@@ -64,6 +86,10 @@ function handleDelete(e: MouseEvent): void {
     </div>
     <div class="job-card-type">{{ jobTypeLabel(job.type) }}</div>
     <div v-if="job.summary" class="job-summary">{{ job.summary }}</div>
+    <div v-if="upstreamNames && upstreamNames.length" class="job-up-chips" aria-label="上游依赖任务">
+      <span class="job-up-arrow" aria-hidden="true">⟵</span>
+      <span v-for="n in upstreamNames" :key="n" class="job-up-chip">{{ n }}</span>
+    </div>
   </div>
 </template>
 
@@ -92,5 +118,30 @@ function handleDelete(e: MouseEvent): void {
 .job-card--dragover {
   border-color: var(--color-primary);
   box-shadow: 0 -2px 0 0 var(--color-primary);
+}
+
+/* deps button sits left of delete; reuse job-card-del sizing/hover */
+.job-card-deps { color: var(--color-faint); }
+.job-card-deps:hover { color: var(--color-primary); }
+
+.job-up-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 7px;
+}
+.job-up-arrow { color: var(--color-faint); font-size: 0.72rem; }
+.job-up-chip {
+  font-size: 0.64rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 7px;
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

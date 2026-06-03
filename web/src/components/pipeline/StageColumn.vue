@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import type { PipelineStage } from '../../api/pipeline'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import type { PipelineStage, PipelineJob } from '../../api/pipeline'
 import JobCard from './JobCard.vue'
 import { eligibleNeeds, toggleNeed } from './stageDeps'
+import { hasAnyJobNeeds, layoutJobs, eligibleJobNeeds } from './jobDeps'
 import {
   hasWhen,
   whenSummary,
@@ -27,11 +28,14 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'select-job', jobId: string): void
   (e: 'delete-job', jobId: string): void
-  (e: 'add-job'): void
+  /** Add a job to this stage; optional `needs` seeds its intra-stage dependencies. */
+  (e: 'add-job', needs?: string[]): void
   (e: 'delete-stage'): void
   (e: 'reorder-job', payload: { from: number; to: number }): void
   (e: 'update-needs', needs: string[]): void
   (e: 'update-allow-failure', value: boolean): void
+  /** Update one job's intra-stage dependencies (横串竖并). */
+  (e: 'update-job-needs', payload: { jobId: string; needs: string[] }): void
   /** Open this stage's settings in the shared right-side drawer (条件/审批门/矩阵/服务/后置). */
   (e: 'open-settings'): void
 }>()
@@ -61,6 +65,112 @@ function toggleDep(needId: string): void {
   emit('update-needs', toggleNeed(currentNeeds.value, needId))
 }
 
+// ─── Intra-stage job DAG (横串竖并) ───────────────────────────────────────────
+// 阶段内任一 job 声明 needs → 渲染二维 DAG(横=串行连线、纵=并行并排);否则纵向列表(原样)。
+
+const useDag = computed(() => hasAnyJobNeeds(props.stage.jobs))
+const layout = computed(() => layoutJobs(props.stage.jobs))
+
+/** jobId → 其上游 job 名(卡片上展示 chip)。 */
+const upstreamNamesByJob = computed<Record<string, string[]>>(() => {
+  const byId = new Map(props.stage.jobs.map((j) => [j.id, j.name]))
+  const out: Record<string, string[]> = {}
+  for (const j of props.stage.jobs) {
+    if (j.needs && j.needs.length) out[j.id] = j.needs.map((n) => byId.get(n) ?? n)
+  }
+  return out
+})
+
+/** 加节点的锚点:优先当前选中(且属本阶段)的 job,否则取声明序最后一个。 */
+const anchorJob = computed<PipelineJob | null>(() => {
+  const sel = props.stage.jobs.find((j) => j.id === props.selectedJobId)
+  if (sel) return sel
+  return props.stage.jobs.length ? props.stage.jobs[props.stage.jobs.length - 1] : null
+})
+
+function addPlain(): void {
+  emit('add-job', [])
+}
+/** 串行节点:依赖锚点 job(出现在其右侧,串行其后)。 */
+function addSerial(): void {
+  emit('add-job', anchorJob.value ? [anchorJob.value.id] : [])
+}
+/** 并行节点:与锚点 job 同上游(出现在同一 rank 的并行车道)。 */
+function addParallel(): void {
+  emit('add-job', anchorJob.value ? [...(anchorJob.value.needs ?? [])] : [])
+}
+
+// ─── Per-job dependency editor (popover) ──────────────────────────────────────
+
+const jobDepsForId = ref<string | null>(null)
+const jobDepsJob = computed<PipelineJob | null>(
+  () => props.stage.jobs.find((j) => j.id === jobDepsForId.value) ?? null,
+)
+const jobDepChoices = computed<PipelineJob[]>(() =>
+  jobDepsJob.value ? eligibleJobNeeds(props.stage.jobs, jobDepsJob.value.id) : [],
+)
+
+function openJobDeps(jobId: string): void {
+  jobDepsForId.value = jobDepsForId.value === jobId ? null : jobId
+}
+function toggleJobDep(needId: string): void {
+  const job = jobDepsJob.value
+  if (!job) return
+  emit('update-job-needs', { jobId: job.id, needs: toggleNeed(job.needs ?? [], needId) })
+}
+
+// ─── Intra-stage edge overlay (SVG connectors, 横向串行) ───────────────────────
+
+const dagRef = ref<HTMLElement | null>(null)
+const dagOverlay = ref({ w: 0, h: 0 })
+const dagPaths = ref<string[]>([])
+
+function measureEdges(): void {
+  const root = dagRef.value
+  if (!root) {
+    dagPaths.value = []
+    return
+  }
+  const nodes = new Map<string, HTMLElement>()
+  root.querySelectorAll<HTMLElement>('.job-node').forEach((el) => {
+    const id = el.dataset.jobId
+    if (id) nodes.set(id, el)
+  })
+  dagOverlay.value = { w: root.scrollWidth, h: root.scrollHeight }
+  const paths: string[] = []
+  for (const j of props.stage.jobs) {
+    for (const need of j.needs ?? []) {
+      const a = nodes.get(need)
+      const b = nodes.get(j.id)
+      if (!a || !b) continue
+      const x1 = a.offsetLeft + a.offsetWidth
+      const y1 = a.offsetTop + a.offsetHeight / 2
+      const x2 = b.offsetLeft
+      const y2 = b.offsetTop + b.offsetHeight / 2
+      const dx = Math.max(18, Math.abs(x2 - x1) * 0.5)
+      paths.push(`M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`)
+    }
+  }
+  dagPaths.value = paths
+}
+
+let ro: ResizeObserver | null = null
+function remeasure(): void {
+  void nextTick(measureEdges)
+}
+onMounted(() => {
+  ro = new ResizeObserver(() => measureEdges())
+  if (dagRef.value) ro.observe(dagRef.value)
+  remeasure()
+})
+onBeforeUnmount(() => ro?.disconnect())
+watch(dagRef, (el) => {
+  ro?.disconnect()
+  if (el && ro) ro.observe(el)
+  remeasure()
+})
+watch(() => props.stage.jobs, remeasure, { deep: true })
+
 // ─── Stage rule chips (when 条件 / gate 审批门 / matrix / services / post) ──────
 // 编辑全部下沉到右侧 StageDrawer(复用 JobDrawer 卡片骨架);此处只渲染汇总 chip。
 
@@ -79,7 +189,7 @@ const postChip = computed(() => postSummary(props.stage.post))
 const servicesChip = computed(() => servicesSummary(props.stage.services))
 const matrixChip = computed(() => matrixSummary(props.stage.matrix))
 
-// ─── Drag-to-reorder (within this stage) ──────────────────────────────────────
+// ─── Drag-to-reorder (within this stage; flat-list mode only) ──────────────────
 
 const dragFrom = ref<number | null>(null)
 const dragOver = ref<number | null>(null)
@@ -105,7 +215,7 @@ function resetDrag(): void {
 </script>
 
 <template>
-  <div class="stage-col">
+  <div class="stage-col" :class="{ 'stage-col--dag': useDag }">
     <!-- Stage header -->
     <div class="stage-header">
       <span class="stage-index" aria-hidden="true">{{ stageLabel(stageIndex) }}</span>
@@ -144,7 +254,7 @@ function resetDrag(): void {
         v-if="stage.kind !== 'source'"
         class="stage-add-job"
         :aria-label="`在阶段 ${stage.name} 中添加任务`"
-        @click="emit('add-job')"
+        @click="addPlain"
       >+ 任务</button>
       <button
         v-if="stage.kind !== 'source'"
@@ -190,7 +300,7 @@ function resetDrag(): void {
       </span>
     </div>
 
-    <!-- Dependency editor popover -->
+    <!-- Stage dependency editor popover -->
     <div v-if="depsOpen && stage.kind !== 'source'" class="deps-popover" role="group" aria-label="阶段依赖编辑">
       <div class="deps-popover-title">依赖的上游阶段</div>
       <p v-if="depChoices.length === 0" class="deps-empty">没有可选的上游阶段</p>
@@ -214,36 +324,109 @@ function resetDrag(): void {
       <p class="deps-hint">留空 = 无显式依赖;全流水线无依赖时按从左到右线性执行</p>
     </div>
 
-    <!-- Job cards -->
-    <JobCard
-      v-for="(job, i) in stage.jobs"
-      :key="job.id"
-      :job="job"
-      :stage-kind="stage.kind"
-      :selected="job.id === selectedJobId"
-      :dragging="dragFrom === i"
-      :drag-over="dragOver === i && dragFrom !== i"
-      @select="emit('select-job', job.id)"
-      @delete="emit('delete-job', job.id)"
-      @dragstart="onDragStart(i)"
-      @dragend="resetDrag"
-      @dragenter="onDragEnter(i)"
-      @drop="onDrop(i)"
-    />
+    <!-- Per-job dependency editor popover (横串竖并) -->
+    <div v-if="jobDepsJob" class="deps-popover deps-popover--job" role="group" :aria-label="`任务 ${jobDepsJob.name} 的依赖`">
+      <div class="deps-popover-title">「{{ jobDepsJob.name }}」依赖的上游任务</div>
+      <p v-if="jobDepChoices.length === 0" class="deps-empty">本阶段没有其他可选任务</p>
+      <label v-for="opt in jobDepChoices" :key="opt.id" class="deps-option">
+        <input
+          type="checkbox"
+          :checked="(jobDepsJob.needs ?? []).includes(opt.id)"
+          @change="toggleJobDep(opt.id)"
+        />
+        <span>{{ opt.name }}</span>
+      </label>
+      <p class="deps-hint">勾选 = 串行(本任务排在其后);不勾任何项 = 与其并行</p>
+      <button class="deps-done" @click="jobDepsForId = null">完成</button>
+    </div>
 
-    <!-- Add job trigger (source stage has no add-job since it's preset) -->
-    <button
-      v-if="stage.kind !== 'source'"
-      class="add-job-btn"
-      :aria-label="`在阶段 ${stage.name} 末尾添加任务`"
-      @click="emit('add-job')"
-    >+ 添加任务</button>
+    <!-- Job cards — 2-D DAG (横串竖并) when this stage declares any job needs -->
+    <div
+      v-if="useDag"
+      ref="dagRef"
+      class="job-dag"
+      :style="{ '--ranks': layout.ranks }"
+      aria-label="阶段内任务依赖图"
+    >
+      <svg
+        v-if="dagPaths.length"
+        class="job-dag-overlay"
+        :width="dagOverlay.w"
+        :height="dagOverlay.h"
+        :viewBox="`0 0 ${dagOverlay.w} ${dagOverlay.h}`"
+        aria-hidden="true"
+      >
+        <path v-for="(d, i) in dagPaths" :key="i" class="job-edge" :d="d" />
+        <path v-for="(d, i) in dagPaths" :key="`f${i}`" class="job-edge-flow" :d="d" />
+      </svg>
+      <div
+        v-for="job in stage.jobs"
+        :key="job.id"
+        class="job-node"
+        :data-job-id="job.id"
+        :style="{
+          gridColumn: (layout.positions.get(job.id)?.rank ?? 0) + 1,
+          gridRow: (layout.positions.get(job.id)?.lane ?? 0) + 1,
+        }"
+      >
+        <JobCard
+          :job="job"
+          :stage-kind="stage.kind"
+          :selected="job.id === selectedJobId"
+          :in-dag="true"
+          :upstream-names="upstreamNamesByJob[job.id]"
+          @select="emit('select-job', job.id)"
+          @delete="emit('delete-job', job.id)"
+          @edit-deps="openJobDeps(job.id)"
+        />
+      </div>
+    </div>
+
+    <!-- Job cards — flat vertical list (no intra-stage deps; original behavior) -->
+    <template v-else>
+      <JobCard
+        v-for="(job, i) in stage.jobs"
+        :key="job.id"
+        :job="job"
+        :stage-kind="stage.kind"
+        :selected="job.id === selectedJobId"
+        :dragging="dragFrom === i"
+        :drag-over="dragOver === i && dragFrom !== i"
+        @select="emit('select-job', job.id)"
+        @delete="emit('delete-job', job.id)"
+        @dragstart="onDragStart(i)"
+        @dragend="resetDrag"
+        @dragenter="onDragEnter(i)"
+        @drop="onDrop(i)"
+      />
+    </template>
+
+    <!-- Add-job triggers: plain / serial(→) / parallel(↓) (source stage is preset) -->
+    <div v-if="stage.kind !== 'source'" class="add-job-row">
+      <button
+        class="add-job-btn add-job-btn--serial"
+        :aria-label="`在阶段 ${stage.name} 加一个串行任务(依赖上一个)`"
+        title="串行节点:排在锚点任务之后(横向连线)"
+        @click="addSerial"
+      >+ 串行节点</button>
+      <button
+        class="add-job-btn add-job-btn--parallel"
+        :aria-label="`在阶段 ${stage.name} 加一个并行任务`"
+        title="并行节点:与锚点任务并行(纵向并排)"
+        @click="addParallel"
+      >+ 并行节点</button>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .stage-col {
   position: relative;
+}
+
+/* DAG mode: let the column grow horizontally to fit the rank grid. */
+.stage-col--dag {
+  width: auto;
 }
 
 .stage-name-text {
@@ -316,6 +499,7 @@ function resetDrag(): void {
   border-radius: var(--rounded);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
 }
+.deps-popover--job { z-index: 41; }
 .deps-popover-title {
   font-size: 0.7rem;
   font-weight: 600;
@@ -338,6 +522,77 @@ function resetDrag(): void {
 .deps-option--toggle { color: var(--color-dim); }
 .deps-divider { height: 1px; background: var(--color-border); margin: 8px 0; }
 .deps-hint { margin: 7px 0 0; font-size: 0.68rem; color: var(--color-faint); line-height: 1.4; }
+.deps-done {
+  margin-top: 9px;
+  width: 100%;
+  height: 26px;
+  border: none;
+  border-radius: var(--rounded-md);
+  background: var(--color-primary);
+  color: #fff;
+  font: inherit;
+  font-size: 0.74rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.deps-done:hover { filter: brightness(1.06); }
+
+/* ─── Intra-stage job DAG grid (横=rank/串行, 纵=lane/并行)──────────────────── */
+.job-dag {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(var(--ranks, 1), 200px);
+  grid-auto-rows: min-content;
+  column-gap: 54px;
+  row-gap: 12px;
+  align-items: start;
+  width: max-content;
+  padding-bottom: 4px;
+}
+.job-node {
+  width: 200px;
+  position: relative;
+  z-index: 1;
+}
+/* grid handles vertical rhythm; drop the list margin inside the DAG */
+.job-dag :deep(.job-card) { margin-bottom: 0; }
+
+.job-dag-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+.job-edge {
+  fill: none;
+  stroke: var(--color-border-strong);
+  stroke-width: 2;
+}
+.job-edge-flow {
+  fill: none;
+  stroke: var(--color-primary);
+  stroke-width: 2;
+  stroke-dasharray: 5 12;
+  opacity: 0.75;
+  animation: job-dag-flow 1.4s linear infinite;
+}
+@keyframes job-dag-flow {
+  to { stroke-dashoffset: -34; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .job-edge-flow { animation: none; }
+}
+
+/* ─── Add-job row (serial / parallel) ─────────────────────────────────────── */
+.add-job-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+.add-job-row .add-job-btn { width: auto; flex: 1; }
+.add-job-btn--serial { /* horizontal serial accent */ }
+.add-job-btn--parallel { /* vertical parallel accent */ }
 
 /* ─── Condition / gate chips ──────────────────────────────────────────────── */
 .stage-deps-count--dot {

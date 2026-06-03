@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -555,5 +556,113 @@ func TestRunDeployJobPassesImageParams(t *testing.T) {
 	// 空键不应混入(保持默认行为)。
 	if _, ok := dep.gotCfg["restartCommand"]; ok {
 		t.Errorf("空 restartCommand 不应入 cfg:%+v", dep.gotCfg)
+	}
+}
+
+// ─── 阶段内 job 级 DAG 并发执行(横串竖并)─────────────────────────────────────────
+
+// orderDriver 线程安全记录 RunToolchain 的调用顺序(按 image),并可按 image 配退出码 + 阻塞时长。
+type orderDriver struct {
+	mu    sync.Mutex
+	order []string
+	codes map[string]int // image → 退出码(缺省 0)
+	block time.Duration  // >0 时每次调用阻塞,放大并发窗口
+}
+
+func (d *orderDriver) Binary() string { return "fake" }
+func (d *orderDriver) RunToolchain(ctx context.Context, image, _, _ string, _ []string, _ []string, _ pipeline.Resource, onLine func(string, string)) (int, error) {
+	if d.block > 0 {
+		select {
+		case <-time.After(d.block):
+		case <-ctx.Done():
+			return -1, ctx.Err()
+		}
+	}
+	d.mu.Lock()
+	d.order = append(d.order, image)
+	code := d.codes[image]
+	d.mu.Unlock()
+	return code, nil
+}
+func (d *orderDriver) Build(context.Context, string, string, string, []string, []string, func(string, string)) (int, error) {
+	panic("Build not expected")
+}
+func (d *orderDriver) Tag(context.Context, string, string, func(string, string)) (int, error) {
+	panic("Tag not expected")
+}
+func (d *orderDriver) Login(context.Context, string, string, string, func(string, string)) (int, error) {
+	panic("Login not expected")
+}
+func (d *orderDriver) Push(context.Context, string, func(string, string)) (int, error) {
+	panic("Push not expected")
+}
+func (d *orderDriver) InspectImage(context.Context, string) (string, int64, error) {
+	panic("InspectImage not expected")
+}
+
+func (d *orderDriver) ran(image string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, i := range d.order {
+		if i == image {
+			return true
+		}
+	}
+	return false
+}
+
+// scriptJobID 构造一条带显式 ID + job 级 needs 的 script job(image 即用作顺序标记)。
+func scriptJobID(id, image string, needs ...string) pipeline.Job {
+	return pipeline.Job{
+		ID:     id,
+		Name:   id,
+		Type:   pipeline.StepTypeScript,
+		Config: map[string]any{"image": image, "commands": "echo " + id},
+		Needs:  needs,
+	}
+}
+
+// TestStageExecutorJobDAGRunsAllRespectingDeps:A、B 无依赖(并行),C needs [A,B](串行其后)。
+// 三个 job 都执行,且 C 一定在 A、B 之后(DAG 路径生效)。
+func TestStageExecutorJobDAGRunsAllRespectingDeps(t *testing.T) {
+	drv := &orderDriver{codes: map[string]int{}, block: 20 * time.Millisecond}
+	b := newDAGTestBuilder(drv, &markerCloner{})
+	exec := NewStageExecutor(b, nil)
+	stage := pipeline.Stage{ID: "s1", Name: "构建", Kind: pipeline.KindBuild, Jobs: []pipeline.Job{
+		scriptJobID("A", "imgA"),
+		scriptJobID("B", "imgB"),
+		scriptJobID("C", "imgC", "A", "B"),
+	}}
+	if err := exec(context.Background(), &run.Run{ProjectID: "p1"}, stage, &fakeReporter{}); err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	if len(drv.order) != 3 {
+		t.Fatalf("应执行 3 个 job, got %v", drv.order)
+	}
+	if drv.order[len(drv.order)-1] != "imgC" {
+		t.Errorf("C 必须在 A、B 之后(末位), got order=%v", drv.order)
+	}
+}
+
+// TestStageExecutorJobDAGFailureSkipsDependents:A 失败 → 其下游 C 被跳过(不执行),阶段失败;
+// 与 A 无依赖的 B 仍会执行。
+func TestStageExecutorJobDAGFailureSkipsDependents(t *testing.T) {
+	drv := &orderDriver{codes: map[string]int{"imgA": 1}} // A 非零退出 → 失败
+	b := newDAGTestBuilder(drv, &markerCloner{})
+	exec := NewStageExecutor(b, nil)
+	stage := pipeline.Stage{ID: "s1", Name: "构建", Kind: pipeline.KindBuild, Jobs: []pipeline.Job{
+		scriptJobID("A", "imgA"),
+		scriptJobID("B", "imgB"),
+		scriptJobID("C", "imgC", "A"),
+	}}
+	err := exec(context.Background(), &run.Run{ProjectID: "p1"}, stage, &fakeReporter{})
+	if !errors.Is(err, ErrBuildFailed) {
+		t.Fatalf("A 失败应使阶段失败, err = %v", err)
+	}
+	if drv.ran("imgC") {
+		t.Errorf("C 依赖失败的 A,应被跳过而非执行;order=%v", drv.order)
+	}
+	if !drv.ran("imgB") {
+		t.Errorf("B 与 A 无依赖,应仍执行;order=%v", drv.order)
 	}
 }

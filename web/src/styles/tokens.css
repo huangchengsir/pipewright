@@ -9,6 +9,10 @@
   /* ——— Surface / Structure ——— */
   --color-bg:           oklch(15% 0.003 270);
   --color-card:         oklch(20% 0.004 272);
+  /* --color-surface 是「抬升面(弹窗/卡片/面板)」语义别名 = card。多处组件(servers/
+     anomaly/notifications/server-status 的弹窗与卡片)引用了 var(--color-surface) 但此 token
+     从未定义 → 无 fallback 即解析为透明,弹窗面板背景失效、页面文字透出(登记服务器弹窗丑陋)。 */
+  --color-surface:      var(--color-card);
   --color-card-2:       oklch(23% 0.005 272);
   --color-inset:        oklch(17.5% 0.004 270);
   --color-canvas:       oklch(13.5% 0.003 270);
@@ -58,6 +62,8 @@
   /* ——— Surface / Structure ——— */
   --color-bg:           oklch(96.5% 0.004 270);
   --color-card:         oklch(100% 0 0);
+  /* --color-surface 见上(dark 块注释):抬升面语义别名 = card,补齐缺失 token。 */
+  --color-surface:      var(--color-card);
   --color-card-2:       oklch(98% 0.004 270);
   --color-inset:        oklch(97.5% 0.004 270);
   --color-canvas:       oklch(98.5% 0.004 270);

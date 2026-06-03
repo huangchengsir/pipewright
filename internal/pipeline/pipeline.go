@@ -58,12 +58,19 @@ var (
 
 // Job 是一个任务(阶段下的最小编排单元)。Config 为自由 KV(本期任意结构;
 // 2-4/2-6 才在内填强 schema)。Summary 为卡片副标题展示文本(可空)。
+//
+// Needs 是该 job 依赖的「同阶段内」其他 job 的 ID 列表,构成**阶段内 job 级 DAG**:
+// 画布上横向连线=串行(依赖)、纵向并排=并行(无依赖)。为空=该 job 在阶段内无前置依赖。
+// 当某阶段**任一 job** 声明 needs 时,执行层按 job 级 DAG 调度(无依赖 job 并发跑);
+// 整阶段无任何 job needs 时退化为既有「按类型分组串行」(向后兼容存量流水线)。
+// needs 只能引用同阶段内的 job,不可自指 / 成环(保存期校验,见 validateJobDAG)。
 type Job struct {
 	ID      string         `json:"id"`
 	Name    string         `json:"name"`
 	Type    string         `json:"type"`
 	Summary string         `json:"summary"`
 	Config  map[string]any `json:"config"`
+	Needs   []string       `json:"needs,omitempty"`
 }
 
 // Stage 是一个阶段(阶段列),含若干 Job。Kind 为 kind 枚举之一。
@@ -364,7 +371,14 @@ func normalizeSpec(in Spec) (Spec, error) {
 				Type:    jobType,
 				Summary: strings.TrimSpace(jb.Summary),
 				Config:  cfg,
+				Needs:   normalizeNeeds(jb.Needs),
 			})
+		}
+
+		// 阶段内 job 依赖校验:引用须为同阶段 job、不自指、不成环(阶段内 job 级 DAG)。
+		// 复用 dag 构造期校验(Kahn 环检测),错误归一为 ErrInvalidJob(不外泄内部细节)。
+		if err := validateJobDAG(jobs); err != nil {
+			return Spec{}, err
 		}
 
 		// Needs 规范化:trim、去空、去重、剔除自指(自指交由 dag 校验报错以给明确信息)。
@@ -453,6 +467,39 @@ func validateStageDAG(stages []Stage) error {
 			return fmt.Errorf("%w: stage dependencies form a cycle", ErrInvalidStage)
 		default:
 			return fmt.Errorf("%w: invalid stage dependencies", ErrInvalidStage)
+		}
+	}
+	return nil
+}
+
+// validateJobDAG 用 dag 包做「阶段内」job 依赖的构造期校验(存在性 + 自指 + 环)。
+// 与 validateStageDAG 同构,但作用域限于单个阶段的 jobs,错误归一为 ErrInvalidJob。
+func validateJobDAG(jobs []Job) error {
+	// 无任何 job 声明 needs → 不构图(向后兼容:阶段内扁平 job 列表无需 DAG 校验)。
+	hasNeeds := false
+	for _, jb := range jobs {
+		if len(jb.Needs) > 0 {
+			hasNeeds = true
+			break
+		}
+	}
+	if !hasNeeds {
+		return nil
+	}
+	nodes := make([]dag.Node, 0, len(jobs))
+	for _, jb := range jobs {
+		nodes = append(nodes, dag.Node{ID: jb.ID, Needs: jb.Needs})
+	}
+	if _, err := dag.New(nodes); err != nil {
+		switch {
+		case errors.Is(err, dag.ErrUnknownDep):
+			return fmt.Errorf("%w: job needs reference an unknown job in the stage", ErrInvalidJob)
+		case errors.Is(err, dag.ErrSelfDep):
+			return fmt.Errorf("%w: job must not depend on itself", ErrInvalidJob)
+		case errors.Is(err, dag.ErrCycle):
+			return fmt.Errorf("%w: job dependencies form a cycle", ErrInvalidJob)
+		default:
+			return fmt.Errorf("%w: invalid job dependencies", ErrInvalidJob)
 		}
 	}
 	return nil

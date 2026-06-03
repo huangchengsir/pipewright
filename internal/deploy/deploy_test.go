@@ -259,6 +259,56 @@ func TestDeployFailureSeedsDiagnosis(t *testing.T) {
 	}
 }
 
+// TestDeployDiagnoseHookConcurrencyBounded 验证部署失败自动诊断 goroutine 有界并发(NFR-4):
+// 钩子阻塞时,同时在飞的诊断不超过 maxConcurrentDiagnoses,超限的失败 try-acquire 失败即跳过
+// (不阻断部署、不无界打 LLM)。直调 seedDiagnosisOnFailure 以聚焦限流,绕开多机部署装配。
+func TestDeployDiagnoseHookConcurrencyBounded(t *testing.T) {
+	db := testDB(t)
+	rsvc := run.New(db)
+	tgt := &stubTarget{}
+
+	entered := make(chan struct{}, 64) // 钩子进入即发信号(仅获到槽位者才会进入)
+	release := make(chan struct{})     // 钩子阻塞于此,直到测试放行
+	svc := New(tgt, rsvc, WithDiagnoseHook(func(_ context.Context, _ string) {
+		entered <- struct{}{}
+		<-release
+	})).(*service)
+
+	// 远多于 cap 的并发失败,逐一 seed 各自的 run(SetFailureLog 需 run 存在)。
+	const n = maxConcurrentDiagnoses + 4
+	runIDs := make([]string, n)
+	for i := range runIDs {
+		runIDs[i], _ = seedSuccessRunWithArtifact(t, db, rsvc, run.ArtifactDist, "dist/shop")
+	}
+	failed := []TargetResult{{ServerName: "s", Status: run.TargetFailed, Message: "boom"}}
+	var wg sync.WaitGroup
+	for _, rid := range runIDs {
+		wg.Add(1)
+		go func(rid string) {
+			defer wg.Done()
+			// seedDiagnosisOnFailure 不阻塞:钩子在独立 goroutine 跑,本调用立即返回。
+			svc.seedDiagnosisOnFailure(context.Background(), rid, run.StatusFailed, failed)
+		}(rid)
+	}
+	wg.Wait()
+
+	// 恰好 maxConcurrentDiagnoses 个钩子获到槽位并进入(其余 try-acquire 失败被跳过)。
+	for i := 0; i < maxConcurrentDiagnoses; i++ {
+		select {
+		case <-entered:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("仅 %d 个诊断进入,期望填满 cap=%d", i, maxConcurrentDiagnoses)
+		}
+	}
+	// 不应再有第 (cap+1) 个进入——信号量已封顶,超限的全部跳过。
+	select {
+	case <-entered:
+		t.Fatalf("诊断并发越界:进入数超过 cap=%d", maxConcurrentDiagnoses)
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(release) // 放行已获槽位的钩子退出
+}
+
 // TestDeployPartialFailed 验证多机有成功有失败 → run 终态 partial_failed。
 func TestDeployPartialFailed(t *testing.T) {
 	db := testDB(t)

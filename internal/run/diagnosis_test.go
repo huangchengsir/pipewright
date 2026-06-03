@@ -174,6 +174,49 @@ func TestDiagnoseHookInvokedOnFailure(t *testing.T) {
 	t.Fatalf("失败 run 应触发诊断钩子")
 }
 
+// TestCanceledRunDoesNotTriggerDiagnose 验证 #1:取消复用 StatusFailed,但被取消的 run 落 failed 后
+// **不**触发自动诊断——runCtx 已被取消(非真实执行失败),诊断「被取消的 run」无意义且白打 LLM/解密 key。
+// (真实失败仍触发,见 TestDiagnoseHookInvokedOnFailure;手动诊断不受影响。)
+func TestCanceledRunDoesNotTriggerDiagnose(t *testing.T) {
+	db := testDB(t)
+	svc := New(db)
+
+	var mu sync.Mutex
+	called := 0
+	hook := func(_ context.Context, _ string) {
+		mu.Lock()
+		called++
+		mu.Unlock()
+	}
+	gate := make(chan struct{})
+	pool := NewWorkerPool(svc, WithRunner(&blockingRunner{gate: gate}), WithDiagnoseHook(hook))
+	pool.Start()
+	t.Cleanup(func() { pool.Stop(context.Background()) })
+
+	projID := seedProject(t, db)
+	r, _ := svc.Create(context.Background(), projID, Trigger{Type: TriggerManual})
+
+	// 等 run 进入 running 后取消;runner 观察到 ctx 取消 → 落 failed。
+	waitForStatus(t, svc, r.ID, StatusRunning)
+	if _, err := svc.Cancel(context.Background(), r.ID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	close(gate)
+	got := waitForStatus(t, svc, r.ID, StatusFailed)
+	if got.Status != StatusFailed {
+		t.Fatalf("取消应落 failed, got %q", got.Status)
+	}
+
+	// 给「假如会误触发」的钩子 goroutine 充分时间,再断言它从未被调用。
+	time.Sleep(300 * time.Millisecond)
+	mu.Lock()
+	n := called
+	mu.Unlock()
+	if n != 0 {
+		t.Fatalf("被取消的 run 不应触发自动诊断, 但触发了 %d 次", n)
+	}
+}
+
 // TestDecodeDiagnosisBadData 验证坏 JSON 容错为 nil(不阻断 Get)。
 func TestDecodeDiagnosisBadData(t *testing.T) {
 	if d, _ := decodeDiagnosis("not json"); d != nil {

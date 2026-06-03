@@ -54,6 +54,11 @@ const execTimeout = 60 * time.Second
 // 每机独立 goroutine,信号量 cap 4:目标机再多也不会一次性建超过 4 条 SSH 连接。
 const maxParallelDeploys = 4
 
+// maxConcurrentDiagnoses 是部署失败 best-effort 自动诊断的并发上限(有界;NFR-4),对齐 run 侧
+// (internal/run.maxConcurrentDiagnoses)。诊断钩子脱离请求在独立 goroutine 跑,若无界,批量部署失败
+// (多机/多 run)会无界并发打 LLM + 多份日志/解密 key 同时驻留。超限则跳过本次自动诊断(用户仍可手动触发)。
+const maxConcurrentDiagnoses = 2
+
 // DeployInput 是一次部署请求(对齐 POST /api/runs/{id}/deploy 请求体)。
 type DeployInput struct {
 	RunID      string
@@ -136,6 +141,9 @@ type service struct {
 	// diagnoseHook 是部署失败后的 best-effort 自动诊断钩子(Story 4.6;FR-22 种子)。
 	// 由 main 注入(复用 7-2 NewDiagnoseHook);nil 则跳过。deploy 不 import ai(钩子解耦)。
 	diagnoseHook func(ctx context.Context, runID string)
+	// diagnoseSem 限流自动诊断 goroutine(有界并发,NFR-4;cap=maxConcurrentDiagnoses)。
+	// try-acquire 满则跳过本次自动诊断(best-effort 语义不变)。在 New 中初始化。
+	diagnoseSem chan struct{}
 	// artStore 是制品库(Story 8-16):非 nil 时部署 release 类「已归档」产物会取真字节经 SSH 上传到
 	// 目标机;nil 或产物非归档 → 旧占位路径(向后兼容)。由 main 注入(WithArtifactStore)。
 	artStore *artifactstore.Store
@@ -166,7 +174,11 @@ func WithArtifactStore(st *artifactstore.Store) Option {
 //
 // 不做任何重活(无 init() 副作用,避免抬高空载内存)。
 func New(targetSvc target.Service, runSvc run.Service, opts ...Option) Service {
-	s := &service{targets: targetSvc, runs: runSvc}
+	s := &service{
+		targets:     targetSvc,
+		runs:        runSvc,
+		diagnoseSem: make(chan struct{}, maxConcurrentDiagnoses),
+	}
 	for _, o := range opts {
 		o(s)
 	}
@@ -192,7 +204,14 @@ func (s *service) seedDiagnosisOnFailure(ctx context.Context, runID, status stri
 	}
 	if s.diagnoseHook != nil {
 		hook := s.diagnoseHook
+		// 并发有界(NFR-4):try-acquire,满则跳过本次自动诊断(用户仍可手动触发)。
+		select {
+		case s.diagnoseSem <- struct{}{}:
+		default:
+			return // 已达上限:跳过自动诊断,不阻断部署结果返回。
+		}
 		go func() {
+			defer func() { <-s.diagnoseSem }()
 			defer func() { _ = recover() }()
 			hook(context.WithoutCancel(ctx), runID)
 		}()

@@ -24,6 +24,14 @@ export interface PipelineJob {
   summary: string
   /** Arbitrary KV object; free-form in this story, tightened in 2-4/2-6 */
   config: Record<string, string>
+  /**
+   * Intra-stage job-level dependencies: IDs of other jobs *in the same stage* this
+   * job depends on. Canvas semantics — horizontal link = serial (this `needs` that);
+   * jobs with no path between them run in parallel (vertical lanes). Empty/absent =
+   * no intra-stage dependency. The engine schedules a stage's jobs by this DAG and
+   * runs independent jobs concurrently (each in its own isolated workspace).
+   */
+  needs?: string[]
 }
 
 /** Conditional execution rule (Epic 8 · 8-5). Empty = always run. */

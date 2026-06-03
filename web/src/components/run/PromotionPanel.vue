@@ -30,6 +30,7 @@ import {
   type PromotionStatus,
 } from '../../api/promotion'
 import { promotionStatusConfig, formatPromotionDate } from '../../api/promotion.helpers'
+import { approveStage, rejectStage } from '../../api/runs'
 import { HttpError } from '../../api/http'
 
 // ─── Props / emits ────────────────────────────────────────────────────────────
@@ -116,6 +117,43 @@ const nextEnv = computed<EnvStage | null>(() => {
 
 const isNextGated = computed<boolean>(() => nextEnv.value?.gated ?? false)
 
+// ─── Pending gated promotion (审批门:批准/拒绝就在本面板) ──────────────────────
+// gated 晋级提交后状态为 pending,等待人工审批。审批复用运行审批门端点
+// (/runs/{id}/approve|reject,stageId="promote:<env>")。此前面板只提示「请在审批门中批准」
+// 却无入口、运行级审批 UI 又不覆盖成功运行上的晋级门 → 晋级审批在 UI 里点不了。这里补齐。
+const pendingPromotion = computed<PromotionDTO | null>(
+  () => promotions.value.find((p) => p.status === 'pending') ?? null,
+)
+
+const deciding = ref(false)
+
+/** 批准(approve=true)/拒绝 当前待审晋级;复用审批门端点,决定后刷新历史。 */
+async function decidePromotion(approve: boolean): Promise<void> {
+  const target = pendingPromotion.value?.targetEnvironment
+  if (!target || deciding.value) return
+  deciding.value = true
+  promotionError.value = ''
+  try {
+    const stageId = `promote:${target}`
+    if (approve) await approveStage(props.runId, stageId)
+    else await rejectStage(props.runId, stageId)
+    // 审批端点只是给阻塞的 promote 协程投递决定,最终状态(promoted/rejected)由该协程写库,
+    // 与 approve 响应之间有微小窗口 → 轮询几次直到 pending 落定,确保面板及时切走待审块。
+    await loadHistory()
+    for (let i = 0; i < 5 && pendingPromotion.value; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      await loadHistory()
+    }
+  } catch (err) {
+    promotionError.value =
+      err instanceof HttpError
+        ? (err.apiError?.message ?? `审批失败(${err.status})`)
+        : '审批失败,请稍后重试'
+  } finally {
+    deciding.value = false
+  }
+}
+
 // ─── Promotion action ─────────────────────────────────────────────────────────
 
 const promoting = ref(false)
@@ -135,49 +173,72 @@ function cancelConfirm(): void {
   showConfirm.value = false
 }
 
+/** 把晋级请求错误映射为展示文案;gate_rejected 是审批拒绝/超时的正常终态,返回空串(不作错误横幅)。 */
+function mapPromoteError(err: unknown): string {
+  if (!(err instanceof HttpError)) return '晋级请求失败,请稍后重试。'
+  const code = err.apiError?.code ?? ''
+  switch (code) {
+    case 'chain_not_configured':
+      return '项目尚未配置环境链,请在「触发设置」中添加环境链后再晋级。'
+    case 'run_not_successful':
+      return '仅成功完成的运行可晋级。'
+    case 'already_promoted':
+      return '该运行已晋级到此环境。'
+    case 'already_at_top':
+      return '已到达链尾,无更高环境可晋级。'
+    case 'skip_env':
+      return '只能按顺序逐级晋级,不可跳级。'
+    case 'gate_rejected':
+      return '' // 审批拒绝/超时是正常终态,历史已反映 rejected,不弹错误横幅
+    default:
+      return err.apiError?.message ?? `晋级失败(${err.status})`
+  }
+}
+
 async function doPromote(): Promise<void> {
   showConfirm.value = false
   if (promoting.value || !nextEnv.value) return
+  const target = nextEnv.value.name
+  const gated = isNextGated.value
   promoting.value = true
   promotionError.value = ''
   promoted.value = false
-  try {
-    const dto = await promoteRun(props.runId, {
-      targetEnvironment: nextEnv.value.name,
-    })
-    // Regardless of 200 or 409-with-record, push to history
-    promotions.value = [dto, ...promotions.value.filter((p) => p.id !== dto.id)]
-    if (dto.status === 'pending') {
-      // Gated: notify parent to load approval gate
-      emit('promotion-pending')
-    } else if (dto.status === 'promoted') {
-      promoted.value = true
-    }
-  } catch (err) {
-    if (err instanceof HttpError) {
-      const code = err.apiError?.code ?? ''
-      switch (code) {
-        case 'chain_not_configured':
-          promotionError.value = '项目尚未配置环境链,请在「触发设置」中添加环境链后再晋级。'
-          break
-        case 'run_not_successful':
-          promotionError.value = '仅成功完成的运行可晋级。'
-          break
-        case 'already_promoted':
-          promotionError.value = '该运行已晋级到此环境。'
-          break
-        case 'already_at_top':
-          promotionError.value = '已到达链尾,无更高环境可晋级。'
-          break
-        case 'skip_env':
-          promotionError.value = '只能按顺序逐级晋级,不可跳级。'
-          break
-        default:
-          promotionError.value = err.apiError?.message ?? `晋级失败(${err.status})`
+
+  if (gated) {
+    // gated 晋级:POST /promote 在服务端会阻塞,挂起直到 /approve|/reject 投递决定
+    // (promotion/coordinator.go Promote → Gate.Await)。因此**绝不能 await** 这个请求——
+    // 否则待审晋级的批准/拒绝按钮永远渲染不出来(此前的 bug)。pending 记录在阻塞前已写库,
+    // 故发起请求后立即拉历史把它显示出来;请求最终(审批决定后)settle 时再刷新一次历史。
+    const inflight = promoteRun(props.runId, { targetEnvironment: target })
+    inflight.then(
+      () => loadHistory(), // 批准 → promoted
+      (err) => {
+        const msg = mapPromoteError(err)
+        if (msg) promotionError.value = msg
+        return loadHistory() // 拒绝/超时 → rejected(或快速校验错误)
+      },
+    )
+    emit('promotion-pending')
+    try {
+      await loadHistory()
+      // 偶发竞态(记录刚写库)用一次轻量重试兜底,确保 pending 块即时出现。
+      if (!pendingPromotion.value) {
+        await new Promise((resolve) => setTimeout(resolve, 300))
+        await loadHistory()
       }
-    } else {
-      promotionError.value = '晋级请求失败,请稍后重试。'
+    } finally {
+      promoting.value = false
     }
+    return
+  }
+
+  // 非 gated:同步晋级,直接 await 即可拿到 promoted 记录。
+  try {
+    const dto = await promoteRun(props.runId, { targetEnvironment: target })
+    promotions.value = [dto, ...promotions.value.filter((p) => p.id !== dto.id)]
+    if (dto.status === 'promoted') promoted.value = true
+  } catch (err) {
+    promotionError.value = mapPromoteError(err)
   } finally {
     promoting.value = false
   }
@@ -226,6 +287,36 @@ onMounted(init)
           <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
         </svg>
         <span>尚未配置环境链。请前往「触发设置 → 环境链」配置后再晋级。</span>
+      </div>
+
+      <!-- Pending gated promotion: 审批门批准/拒绝就在这里(优先于「已到链尾」,因 pending 也算到顶) -->
+      <div v-else-if="pendingPromotion" class="promo-action-body">
+        <div class="promo-banner promo-banner--pending" role="status" aria-live="polite">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+          晋级到「{{ pendingPromotion.targetEnvironment }}」等待人工审批
+        </div>
+        <div v-if="promotionError" class="promo-banner promo-banner--error" role="alert" aria-live="assertive">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
+          </svg>
+          {{ promotionError }}
+        </div>
+        <div class="promo-btn-row">
+          <button
+            class="promo-btn promo-btn--gate"
+            :disabled="deciding"
+            :aria-busy="deciding"
+            @click="decidePromotion(true)"
+          >
+            <span v-if="deciding" class="promo-spinner" aria-hidden="true" />
+            {{ deciding ? '处理中…' : `批准晋级到「${pendingPromotion.targetEnvironment}」` }}
+          </button>
+          <button class="promo-btn promo-btn--cancel" :disabled="deciding" @click="decidePromotion(false)">
+            拒绝
+          </button>
+        </div>
       </div>
 
       <!-- Already at top -->

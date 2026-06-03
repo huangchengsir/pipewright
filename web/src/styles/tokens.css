@@ -9,6 +9,10 @@
   /* ——— Surface / Structure ——— */
   --color-bg:           oklch(15% 0.003 270);
   --color-card:         oklch(20% 0.004 272);
+  /* --color-surface 是「抬升面(弹窗/卡片/面板)」语义别名 = card。多处组件(servers/
+     anomaly/notifications/server-status 的弹窗与卡片)引用了 var(--color-surface) 但此 token
+     从未定义 → 无 fallback 即解析为透明,弹窗面板背景失效、页面文字透出(登记服务器弹窗丑陋)。 */
+  --color-surface:      var(--color-card);
   --color-card-2:       oklch(23% 0.005 272);
   --color-inset:        oklch(17.5% 0.004 270);
   --color-canvas:       oklch(13.5% 0.003 270);
@@ -58,6 +62,8 @@
   /* ——— Surface / Structure ——— */
   --color-bg:           oklch(96.5% 0.004 270);
   --color-card:         oklch(100% 0 0);
+  /* --color-surface 见上(dark 块注释):抬升面语义别名 = card,补齐缺失 token。 */
+  --color-surface:      var(--color-card);
   --color-card-2:       oklch(98% 0.004 270);
   --color-inset:        oklch(97.5% 0.004 270);
   --color-canvas:       oklch(98.5% 0.004 270);
@@ -144,4 +150,34 @@
   --duration-fast:    150ms;
   --duration-normal:  280ms;
   --ease-out-expo:    cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ——— 兼容别名（多组件引用了这些 token 名，但规范库用的是另一套名字）———
+     全局扫描发现:无 fallback 的引用(radius-sm/md/lg、text-heading、color-line、color-text-soft)
+     解析为无效 → 圆角/标题字号/边框/文字色失效(登记服务器弹窗丑陋即此);带 fallback 的引用
+     (--color-danger/success/warn/accent 等)用硬编码值绕过主题 → 暗/亮主题色不一致。
+     这里把它们别名到既有规范 token,一处补齐(颜色别名经 var() 在使用处按当前主题解析)。 */
+  --radius-sm:          var(--rounded-sm);
+  --radius-md:          var(--rounded-md);
+  --radius-lg:          var(--rounded-lg);
+  --text-heading:       var(--text-h1);
+  --text-h2:            var(--text-section);
+  --text-caption:       var(--text-micro);
+  --ease-out:           var(--ease-out-expo);
+  --shadow-sm:          var(--shadow);
+  --shadow-md:          var(--shadow);
+  --shadow-lg:          var(--shadow-modal);
+  --color-line:         var(--color-border);
+  --color-line-strong:  var(--color-border-strong);
+  --color-bg-subtle:    var(--color-inset);
+  --color-code-bg:      var(--color-inset);
+  --color-surface-hover: var(--color-card-2);
+  --color-surface-raised: var(--color-card-2);
+  --color-text-soft:    var(--color-dim);
+  --color-text-muted:   var(--color-dim);
+  --color-accent:       var(--color-primary);
+  --color-danger:       var(--color-red);
+  --color-danger-soft:  var(--color-red-soft);
+  --color-success:      var(--color-green);
+  --color-warn:         var(--color-amber);
+  --color-warning:      var(--color-amber);
 }

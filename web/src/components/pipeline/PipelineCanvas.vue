@@ -106,7 +106,15 @@ function deleteJob(stageId: string, jobId: string): void {
   if (selectedJobId.value === jobId) selectedJobId.value = null
   const next = props.stages.map((s) => {
     if (s.id !== stageId) return s
-    return { ...s, jobs: s.jobs.filter((j) => j.id !== jobId) }
+    // Drop the job and strip any sibling job needs referencing it (else save 422s).
+    return {
+      ...s,
+      jobs: s.jobs
+        .filter((j) => j.id !== jobId)
+        .map((j) =>
+          j.needs?.includes(jobId) ? { ...j, needs: j.needs.filter((n) => n !== jobId) } : j,
+        ),
+    }
   })
   emit('update', next)
 }
@@ -119,13 +127,15 @@ interface PickerState {
   stageId: string
   jobId: string
   current: string
+  /** Intra-stage deps to seed on the new job (serial/parallel add); empty = orphan. */
+  needs: string[]
 }
 
-const picker = ref<PickerState>({ open: false, mode: 'add', stageId: '', jobId: '', current: '' })
+const picker = ref<PickerState>({ open: false, mode: 'add', stageId: '', jobId: '', current: '', needs: [] })
 
-/** Open the type picker to add a new job to a stage. */
-function requestAddJob(stageId: string): void {
-  picker.value = { open: true, mode: 'add', stageId, jobId: '', current: '' }
+/** Open the type picker to add a new job to a stage. `needs` seeds intra-stage deps. */
+function requestAddJob(stageId: string, needs: string[] = []): void {
+  picker.value = { open: true, mode: 'add', stageId, jobId: '', current: '', needs }
 }
 
 /** Open the type picker to change the selected job's type (from the drawer). */
@@ -137,6 +147,7 @@ function requestChangeType(): void {
     stageId: selectedStage.value.id,
     jobId: selectedJob.value.id,
     current: selectedJob.value.type,
+    needs: [],
   }
 }
 
@@ -156,6 +167,7 @@ function onPickerSelect(type: string): void {
       summary: '',
       // 模板节点带预填配置(深拷贝避免共享引用);普通节点空配置。
       config:  { ...(getJobTypeSpec(type)?.defaultConfig ?? {}) },
+      ...(p.needs.length ? { needs: [...p.needs] } : {}),
     }
     addJobToStage(p.stageId, newJob)
   } else {
@@ -184,6 +196,7 @@ function onPickerSelectCustom(node: CustomNode): void {
       type:    node.nodeType,
       summary: node.summary ?? '',
       config,
+      ...(p.needs.length ? { needs: [...p.needs] } : {}),
     }
     addJobToStage(p.stageId, newJob)
   } else {
@@ -339,12 +352,13 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
             role="listitem"
             @select-job="selectJob"
             @delete-job="(jobId) => deleteJob(stage.id, jobId)"
-            @add-job="requestAddJob(stage.id)"
+            @add-job="(needs) => requestAddJob(stage.id, needs)"
             @delete-stage="deleteStage(stage.id)"
             @reorder-job="(p) => reorderJob(stage.id, p.from, p.to)"
             :settings-active="selectedStageSettingsId === stage.id"
             @update-needs="(needs) => updateStage(stage.id, { needs })"
             @update-allow-failure="(v) => updateStage(stage.id, { allowFailure: v })"
+            @update-job-needs="(p) => updateJob(stage.id, p.jobId, { needs: p.needs })"
             @open-settings="openStageSettings(stage.id)"
           />
         </template>

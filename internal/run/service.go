@@ -281,6 +281,7 @@ func (s *service) Get(ctx context.Context, id string) (*Run, error) {
 		failureLog    string
 		diagnosisJSON string
 		paramsJSON    string
+		targetIDsJSON sql.NullString
 	)
 	r.ID = id
 	err := s.db.QueryRowContext(ctx,
@@ -288,7 +289,8 @@ func (s *service) Get(ctx context.Context, id string) (*Run, error) {
 		        pr.trigger_type, pr.trigger_branch, pr.trigger_commit, pr.trigger_actor,
 		        pr.created_at, pr.started_at, pr.finished_at,
 		        pr.failure_log, pr.diagnosis_json, pr.params_json,
-		        pr.chain_source_run_id, pr.chain_depth
+		        pr.chain_source_run_id, pr.chain_depth,
+		        pr.resolved_environment, pr.resolved_target_server_ids
 		 FROM pipeline_runs pr
 		 LEFT JOIN projects p ON p.id = pr.project_id
 		 WHERE pr.id = ?`, id,
@@ -296,12 +298,23 @@ func (s *service) Get(ctx context.Context, id string) (*Run, error) {
 		&r.Trigger.Type, &r.Trigger.Branch, &r.Trigger.Commit, &r.Trigger.Actor,
 		&createdStr, &startedStr, &finishStr,
 		&failureLog, &diagnosisJSON, &paramsJSON,
-		&r.Trigger.ChainSourceRunID, &r.Trigger.ChainDepth)
+		&r.Trigger.ChainSourceRunID, &r.Trigger.ChainDepth,
+		&r.Trigger.ResolvedEnvironment, &targetIDsJSON)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("run: load run: %w", err)
+	}
+
+	// 回填解析出的目标服务器引用(JSON 数组)。Get 此前漏读 resolved_environment /
+	// resolved_target_server_ids → 构建执行器拿到的 run 恒无环境 → resolveRegistry 返回 nil →
+	// 镜像永不推送、部署节点 pull 不到(image build→push→deploy 全链路在 Get 路径下形同虚设)。
+	if s := strings.TrimSpace(targetIDsJSON.String); s != "" {
+		var ids []string
+		if json.Unmarshal([]byte(s), &ids) == nil {
+			r.Trigger.ResolvedTargetServerIDs = ids
+		}
 	}
 
 	r.FailureLog = failureLog

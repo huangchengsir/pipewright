@@ -198,6 +198,73 @@ func TestSaveInvalidJobType(t *testing.T) {
 	}
 }
 
+// TestSaveValidJobDAG 验证阶段内 job 级依赖(横串竖并):合法 needs 被保存且无损往返。
+func TestSaveValidJobDAG(t *testing.T) {
+	svc, _, projID := newSvc(t)
+	spec := Spec{Stages: []Stage{
+		{Name: "源", Kind: KindSource, Jobs: []Job{{Name: "src", Type: "git_source"}}},
+		{ID: "s_build", Name: "构建", Kind: KindBuild, Jobs: []Job{
+			{ID: "j_fe", Name: "前端构建", Type: "build_frontend"},                               // 无依赖(与 j_be 并行)
+			{ID: "j_be", Name: "后端构建", Type: "build_backend"},                                // 无依赖(与 j_fe 并行)
+			{ID: "j_img", Name: "打镜像", Type: "build_image", Needs: []string{"j_fe", "j_be"}}, // 依赖二者(串行其后)
+		}},
+	}}
+	cfg, err := svc.Save(context.Background(), projID, spec)
+	if err != nil {
+		t.Fatalf("合法 job DAG Save: %v", err)
+	}
+	var img Job
+	for _, jb := range cfg.Spec.Stages[1].Jobs {
+		if jb.ID == "j_img" {
+			img = jb
+		}
+	}
+	if len(img.Needs) != 2 {
+		t.Fatalf("打镜像 needs 应往返保留 2 项, got %v", img.Needs)
+	}
+}
+
+// TestSaveJobSelfDep 验证 job 自指被拒。
+func TestSaveJobSelfDep(t *testing.T) {
+	svc, _, projID := newSvc(t)
+	spec := Spec{Stages: []Stage{
+		{Name: "源", Kind: KindSource, Jobs: []Job{{Name: "src", Type: "git_source"}}},
+		{Name: "构建", Kind: KindBuild, Jobs: []Job{{ID: "j1", Name: "j1", Type: "t", Needs: []string{"j1"}}}},
+	}}
+	if _, err := svc.Save(context.Background(), projID, spec); !errors.Is(err, ErrInvalidJob) {
+		t.Fatalf("job 自指 err = %v, want ErrInvalidJob", err)
+	}
+}
+
+// TestSaveJobCycle 验证 job 依赖成环被拒。
+func TestSaveJobCycle(t *testing.T) {
+	svc, _, projID := newSvc(t)
+	spec := Spec{Stages: []Stage{
+		{Name: "源", Kind: KindSource, Jobs: []Job{{Name: "src", Type: "git_source"}}},
+		{Name: "构建", Kind: KindBuild, Jobs: []Job{
+			{ID: "a", Name: "a", Type: "t", Needs: []string{"b"}},
+			{ID: "b", Name: "b", Type: "t", Needs: []string{"a"}},
+		}},
+	}}
+	if _, err := svc.Save(context.Background(), projID, spec); !errors.Is(err, ErrInvalidJob) {
+		t.Fatalf("job 成环 err = %v, want ErrInvalidJob", err)
+	}
+}
+
+// TestSaveJobUnknownDep 验证 job needs 引用阶段内不存在的 job 被拒(跨阶段引用也算未知)。
+func TestSaveJobUnknownDep(t *testing.T) {
+	svc, _, projID := newSvc(t)
+	spec := Spec{Stages: []Stage{
+		{Name: "源", Kind: KindSource, Jobs: []Job{{Name: "src", Type: "git_source"}}},
+		{Name: "构建", Kind: KindBuild, Jobs: []Job{
+			{ID: "a", Name: "a", Type: "t", Needs: []string{"nonexistent"}},
+		}},
+	}}
+	if _, err := svc.Save(context.Background(), projID, spec); !errors.Is(err, ErrInvalidJob) {
+		t.Fatalf("job 未知依赖 err = %v, want ErrInvalidJob", err)
+	}
+}
+
 func TestSaveDuplicateStageID(t *testing.T) {
 	svc, _, projID := newSvc(t)
 	spec := Spec{Stages: []Stage{

@@ -443,7 +443,12 @@ func (p *WorkerPool) execute(runID string) {
 
 	// run 落 failed 后触发 best-effort 自动诊断(已注入钩子时)。绝不阻断 run 终态:
 	// 在独立 goroutine + recover 中调用,钩子失败仅记日志(NFR-10 优雅降级)。
-	if final == StatusFailed && p.diagnoseHook != nil {
+	//
+	// 取消复用 StatusFailed(无独立 StatusCanceled),故须排除「被取消/停机」的 failed:
+	// 用户取消或 pool 停机会取消 runCtx(此处尚未触发 defer cancel),runCtx.Err()!=nil 即此类。
+	// 这些 failed 非真实执行失败,自动诊断会误触发——白打 LLM + 解密 key,且诊断「被取消的 run」无意义。
+	// (手动诊断仍可在详情页触发;真实失败的 runCtx.Err()==nil 不受影响。)
+	if final == StatusFailed && p.diagnoseHook != nil && runCtx.Err() == nil {
 		p.runDiagnoseHook(runID)
 	}
 

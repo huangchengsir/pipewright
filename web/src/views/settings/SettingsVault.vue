@@ -698,13 +698,32 @@ async function copyReference(c: Credential): Promise<void> {
               {{ modalMode === 'add' ? '密钥内容' : '新密钥内容' }}
               <span v-if="modalMode === 'edit'" class="field-optional">（留空则不轮换）</span>
             </label>
+<!-- SSH 私钥是多行 PEM/OpenSSH 文本:必须用 textarea,单行 <input> 会按 HTML 规范清除换行
+                 → 私钥结构破坏、ssh.ParsePrivateKey 失败「凭据不是可用的 SSH 私钥」。令牌/镜像仓库仍用
+                 password input(单行密文 + 掩码输入)。 -->
+            <textarea
+              v-if="form.type === 'ssh_key'"
+              id="cred-secret"
+              v-model="form.secret"
+              class="field-input field-input--mono"
+              :class="{ 'field-input--error': formErrors.secret }"
+              rows="8"
+              :placeholder="modalMode === 'add' ? '粘贴完整私钥(含 -----BEGIN/END----- 行)…' : '留空保持当前密钥不变'"
+              :disabled="formSubmitting"
+              :aria-invalid="formErrors.secret ? 'true' : undefined"
+              :aria-describedby="formErrors.secret ? 'cred-secret-err' : undefined"
+              autocomplete="off"
+              spellcheck="false"
+              @input="formErrors.secret = ''"
+            ></textarea>
             <input
+              v-else
               id="cred-secret"
               v-model="form.secret"
               class="field-input field-input--mono"
               :class="{ 'field-input--error': formErrors.secret }"
               type="password"
-              :placeholder="modalMode === 'add' ? '粘贴令牌 / 私钥内容…' : '留空保持当前密钥不变'"
+              :placeholder="modalMode === 'add' ? '粘贴令牌内容…' : '留空保持当前密钥不变'"
               :disabled="formSubmitting"
               :aria-invalid="formErrors.secret ? 'true' : undefined"
               :aria-describedby="formErrors.secret ? 'cred-secret-err' : undefined"

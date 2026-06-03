@@ -99,6 +99,35 @@ func TestCreateSkipsResolutionWhenEnvAlreadySet(t *testing.T) {
 	}
 }
 
+// TestGetHydratesResolvedEnv 证 Get 把已落库的 resolved_environment / resolved_target_server_ids
+// 回填进返回的 Run.Trigger。此前 Get 的 SELECT 漏读这两列 → 构建/部署执行器(经 Get 取 run)
+// 恒拿到空环境 → resolveRegistry 返回 nil → 镜像永不推送、deploy_ssh pull 不到(image
+// build→push→deploy 全链路在 Get 路径下形同虚设)。真 docker-in-docker 走页面部署时暴露。
+func TestGetHydratesResolvedEnv(t *testing.T) {
+	db := testDB(t)
+	res := &stubEnvResolver{env: "prod", servers: []string{"srv-a", "srv-b"}}
+	svc := New(db, WithEnvResolver(res))
+	projID := seedProject(t, db)
+
+	rn, err := svc.Create(context.Background(), projID, Trigger{Type: TriggerManual, Branch: "main"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := svc.Get(context.Background(), rn.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Trigger.ResolvedEnvironment != "prod" {
+		t.Errorf("Get 应回填 ResolvedEnvironment=prod,实得 %q", got.Trigger.ResolvedEnvironment)
+	}
+	if len(got.Trigger.ResolvedTargetServerIDs) != 2 ||
+		got.Trigger.ResolvedTargetServerIDs[0] != "srv-a" ||
+		got.Trigger.ResolvedTargetServerIDs[1] != "srv-b" {
+		t.Errorf("Get 应回填 ResolvedTargetServerIDs=[srv-a srv-b],实得 %v", got.Trigger.ResolvedTargetServerIDs)
+	}
+}
+
 // TestCreateNoResolverKeepsEmptyEnv 证无 resolver(未注入)时行为不变:手动触发环境保持空。
 func TestCreateNoResolverKeepsEmptyEnv(t *testing.T) {
 	db := testDB(t)

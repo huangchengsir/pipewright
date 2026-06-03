@@ -56,15 +56,23 @@ const extraRows    = ref<KVRow[]>([])
 
 const showAdvanced = ref(false)
 
+// 仅当「选了不同 job」或「改了 job 类型」时才重置视图模式(steps/raw);纯内容编辑不重置。
+// 否则:在「原始参数」视图编辑某字段 → blur 提交 → 父回写 props.job → 本 watch 再跑 →
+// 会把视图无端切回「可视化步骤」(用户实测的 bug)。
+let lastModeKey = ''
+
 function hydrate(job: PipelineJob): void {
   localName.value    = job.name
   localType.value    = job.type
   localSummary.value = job.summary
-  splitOnType(job.type, job.config ?? {})
+  const modeKey = `${job.id} ${job.type}`
+  const repickView = modeKey !== lastModeKey
+  lastModeKey = modeKey
+  splitOnType(job.type, job.config ?? {}, repickView)
 }
 
 /** Recompute typed config + raw extras for a given type, preserving all values. */
-function splitOnType(type: string, config: Record<string, string>): void {
+function splitOnType(type: string, config: Record<string, string>, repickView = true): void {
   const { extras } = splitConfig(type, config)
   const typed: Record<string, string> = {}
   for (const [k, v] of Object.entries(config)) {
@@ -73,7 +81,7 @@ function splitOnType(type: string, config: Record<string, string>): void {
   typedConfig.value = typed
   extraRows.value = extras.map(([k, v]) => ({ _key: ++_kvSeq, k, v }))
   showAdvanced.value = extras.length > 0
-  pickViewMode(config)
+  if (repickView) pickViewMode(config)
 }
 
 // Resync when the selected job changes (initial hydrate runs after the

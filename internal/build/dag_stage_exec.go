@@ -174,6 +174,10 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 					b.recordCommit(ctx, r.ID, resolved.CommitShort)
 				}
 			}
+			// 跨阶段产物传递:把上游阶段已归档的 jar/dist 真字节恢复回本阶段新工作区的原相对路径,
+			// 使「构建/打包/部署」拆成独立串行阶段时,下游(如 build_image)仍能拿到上游产物。
+			// best-effort(首阶段无上游产物即 no-op;失败仅记日志,不阻断)。
+			b.restorePriorArtifacts(ctx, r, workspace, rep)
 		}
 
 		// 阶段主体(job 执行):捕获错误而非提前返回,以便其后无论成败都按条件跑 post 步骤。
@@ -490,7 +494,9 @@ func (b *Builder) collectOneFileArtifact(ctx context.Context, workspace, rel, sl
 	// 产物名带上路径基名,避免一个 job 多产物同名(如多个 dist 目录)难以区分。
 	base := filepath.Base(full)
 	// metadata 记来源节点:sourceStage/sourceJob 供 UI 标注「哪个节点产的」(storeXxx 只补 stored/format,不清这些)。
-	art := &run.Artifact{Name: slug + "-" + base, Reference: base, Metadata: map[string]any{"sourceStage": stageName, "sourceJob": jobName}}
+	// workspacePath 记原始工作区相对路径,供跨阶段产物传递:下游阶段据此把本产物真字节恢复回原位
+	// (如 backend/target/x.jar),使被拆到下游阶段的 build_image「COPY target/x.jar」仍能命中。
+	art := &run.Artifact{Name: slug + "-" + base, Reference: base, Metadata: map[string]any{"sourceStage": stageName, "sourceJob": jobName, "workspacePath": clean}}
 	switch {
 	case fi.IsDir():
 		art.Type = run.ArtifactDist

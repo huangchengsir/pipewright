@@ -95,9 +95,18 @@ const spec = computed(() => getJobTypeSpec(localType.value))
 /** 步骤构建器拥有的 config 键(commands 多行 / artifactPath 多行)。 */
 const STEP_OWNED_KEYS = new Set(['commands', 'artifactPath'])
 
-/** 该类型能用可视化步骤构建器吗(脚本类 + 有 commands/artifactPath 字段)。 */
+// 「自定义脚本」节点(script/custom)天然就是写命令文本,可视化步骤构建器对它是冗余:
+// 这些类型不提供 steps/raw 切换、默认就用原始参数(命令文本框)。可视化步骤仅保留给
+// 前端构建/后端构建/模板等带预置语义的脚本类节点。
+const RAW_ONLY_SCRIPT_TYPES = new Set(['script', 'custom'])
+
+// 执行/缓存类高级字段:能力保留,但默认收进可折叠「高级」分区,主表单只留镜像/命令/工作目录。
+const ADVANCED_FIELD_KEYS = new Set(['timeoutSeconds', 'retries', 'cpu', 'memory', 'cachePaths', 'cacheKey'])
+
+/** 该类型能用可视化步骤构建器吗(脚本类 + 有 commands/artifactPath 字段;但 script/custom 除外)。 */
 const canUseStepBuilder = computed<boolean>(() => {
   if (!isScriptClassType(localType.value)) return false
+  if (RAW_ONLY_SCRIPT_TYPES.has(localType.value)) return false
   if (!spec.value) return false
   return spec.value.fields.some((f) => STEP_OWNED_KEYS.has(f.key))
 })
@@ -126,6 +135,13 @@ const visibleFields = computed<JobField[]>(() => {
     return true
   })
 })
+
+// 高级(执行/缓存)字段折叠:主表单只显示非高级字段;高级字段收进默认折叠分区。
+const showExecAdvanced = ref(false)
+/** 当前可见字段里第一个高级字段的 key —— 用于在它前面插入「高级」折叠开关。 */
+const firstAdvancedKey = computed<string>(
+  () => visibleFields.value.find((f) => ADVANCED_FIELD_KEYS.has(f.key))?.key ?? '',
+)
 
 /** 步骤构建器回传的编译片段并入 typedConfig 落库。 */
 function onStepsUpdate(patch: { commands: string; artifactPath: string }): void {
@@ -413,9 +429,23 @@ async function confirmSave(): Promise<void> {
         </div>
       </div>
 
+      <template v-for="field in visibleFields" :key="field.key">
+        <!-- 高级折叠开关:插在第一个高级(执行/缓存)字段前 -->
+        <button
+          v-if="field.key === firstAdvancedKey"
+          type="button"
+          class="advanced-toggle exec-advanced-toggle"
+          :class="{ 'advanced-toggle--open': showExecAdvanced }"
+          :aria-expanded="showExecAdvanced"
+          @click="showExecAdvanced = !showExecAdvanced"
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
+            <path d="M9 18l6-6-6-6"/>
+          </svg>
+          高级 · 超时 / 重试 / 资源 / 缓存
+        </button>
       <div
-        v-for="field in visibleFields"
-        :key="field.key"
+        v-show="!ADVANCED_FIELD_KEYS.has(field.key) || showExecAdvanced"
         class="drawer-field"
       >
         <div class="drawer-field-label">{{ field.label }}</div>
@@ -500,6 +530,7 @@ async function confirmSave(): Promise<void> {
 
         <p v-if="field.hint && field.kind !== 'toggle'" class="field-hint">{{ field.hint }}</p>
       </div>
+      </template>
 
       <!-- 可视化步骤构建器(脚本类节点;编译进 commands/artifactPath,经 update 落库) -->
       <div v-if="canUseStepBuilder && viewMode === 'steps'" class="drawer-field step-builder-field">

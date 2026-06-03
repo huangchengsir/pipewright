@@ -203,6 +203,70 @@ func TestPipelineSaveRoundTripMatrixPostServices(t *testing.T) {
 	}
 }
 
+// TestPipelineSaveRoundTripJobNeeds:阶段内 job 级依赖(横串竖并)经 PUT/GET 无损往返。
+// 此前 jobDTO/reqJob 不含 needs,画布的阶段内连线会在保存后丢失。
+func TestPipelineSaveRoundTripJobNeeds(t *testing.T) {
+	srv, client, csrf, projID := setupPipelineServer(t)
+	base := srv.URL + "/api/projects/" + projID + "/pipeline"
+
+	body := `{"stages":[
+	  {"name":"流水线源","kind":"source","jobs":[
+	    {"name":"Gitee 源","type":"git_source","summary":"main","config":{}}
+	  ]},
+	  {"name":"构建","kind":"build","jobs":[
+	    {"id":"j_fe","name":"前端构建","type":"build_frontend","config":{}},
+	    {"id":"j_be","name":"后端构建","type":"build_backend","config":{}},
+	    {"id":"j_img","name":"打镜像","type":"build_image","config":{},"needs":["j_fe","j_be"]}
+	  ]}
+	]}`
+	resp := doJSON(t, client, http.MethodPut, base, csrf, body)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("PUT status = %d, body=%s", resp.StatusCode, raw)
+	}
+
+	gresp := doJSON(t, client, http.MethodGet, base, csrf, "")
+	defer gresp.Body.Close()
+	graw, _ := io.ReadAll(gresp.Body)
+	var gdto map[string]any
+	if err := json.Unmarshal(graw, &gdto); err != nil {
+		t.Fatalf("decode GET: %v, body=%s", err, graw)
+	}
+	stages, _ := gdto["stages"].([]any)
+	var build map[string]any
+	for _, s := range stages {
+		if m, _ := s.(map[string]any); m["kind"] == "build" {
+			build = m
+		}
+	}
+	if build == nil {
+		t.Fatalf("GET 缺 build 阶段, body=%s", graw)
+	}
+	jobs, _ := build["jobs"].([]any)
+	var img map[string]any
+	for _, j := range jobs {
+		if m, _ := j.(map[string]any); m["id"] == "j_img" {
+			img = m
+		}
+	}
+	if img == nil {
+		t.Fatalf("GET 缺 j_img, body=%s", graw)
+	}
+	needs, _ := img["needs"].([]any)
+	if len(needs) != 2 {
+		t.Fatalf("j_img.needs = %v, want 2 项(往返保留); body=%s", img["needs"], graw)
+	}
+	// 无依赖的 j_fe 不应平白多出 needs 键(omitempty 基线不变)。
+	for _, j := range jobs {
+		if m, _ := j.(map[string]any); m["id"] == "j_fe" {
+			if _, ok := m["needs"]; ok {
+				t.Fatalf("无依赖 job 不应出现 needs 键(omitempty), got %v", m["needs"])
+			}
+		}
+	}
+}
+
 func TestPipelineSaveInvalidStage422(t *testing.T) {
 	srv, client, csrf, projID := setupPipelineServer(t)
 	base := srv.URL + "/api/projects/" + projID + "/pipeline"

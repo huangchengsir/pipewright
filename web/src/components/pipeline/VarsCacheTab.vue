@@ -1,9 +1,12 @@
 <script setup lang="ts">
 /**
  * VarsCacheTab — 变量与缓存 tab (Story 2.4).
- * Build model A/B toggle + artifact type + build variables (plain / secret-via-vault)
- * + dependency cache. Edits a local BuildConfig copy and emits `update` upward;
- * the parent (ProjectPipeline) owns save.
+ * Build variables (plain / secret-via-vault) + dependency cache. Edits a local
+ * BuildConfig copy and emits `update` upward; the parent (ProjectPipeline) owns save.
+ *
+ * 构建模型(Dockerfile/工具链)与产物类型(镜像/JAR/dist)已下沉到画布的 build_image 节点表单
+ * (job.config),执行引擎只读节点配置;此处不再渲染那两块全局设置。但仍把 model/dockerfilePath/
+ * toolchain/artifactType 原值透传进 composed,保证保存/AI 应用不抹除既有值(API 契约字段保留)。
  *
  * Secret variables reference a vault credential (credentialId) — plaintext is never
  * entered, stored, or shown here; only the server-computed mask appears.
@@ -58,12 +61,6 @@ watch(
     cachePaths.value = b.cache.paths.join('\n')
   },
 )
-
-const ARTIFACTS: Array<{ key: ArtifactType; label: string; desc: string }> = [
-  { key: 'image', label: '容器镜像', desc: '推送到镜像仓库' },
-  { key: 'jar', label: 'JAR 包', desc: 'Java 应用产物' },
-  { key: 'dist', label: '静态资源', desc: '前端 dist 目录' },
-]
 
 // ─── Emit composed BuildConfig on any change ────────────────────────────────────
 
@@ -156,102 +153,7 @@ function maskFor(row: VarRow): string {
 
 <template>
   <div class="vars-root">
-    <!-- ─── Build model ─────────────────────────────────────────────────────── -->
-    <section class="card">
-      <header class="card-head">
-        <span class="card-ic" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6v6H9z"/></svg>
-        </span>
-        构建模型
-        <span class="card-sub">FR-5 · 两种输入方式,二选一</span>
-      </header>
-
-      <div class="modeseg" role="radiogroup" aria-label="构建模型">
-        <button
-          type="button"
-          class="modeopt"
-          :class="{ 'modeopt--on': model === 'toolchain' }"
-          role="radio"
-          :aria-checked="model === 'toolchain'"
-          :disabled="disabled"
-          @click="model = 'toolchain'"
-        >
-          <span class="mh">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 12h3.5l2.2-6 3.6 12 2.4-7 1.3 1h4.5"/></svg>
-            平台按工具链构建
-            <span class="ck" aria-hidden="true">✓</span>
-          </span>
-          <span class="ms">选定 <code>node:22</code> 等工具链,平台在隔离容器内执行构建,<b>无需 Dockerfile</b>。</span>
-        </button>
-
-        <button
-          type="button"
-          class="modeopt"
-          :class="{ 'modeopt--on': model === 'dockerfile' }"
-          role="radio"
-          :aria-checked="model === 'dockerfile'"
-          :disabled="disabled"
-          @click="model = 'dockerfile'"
-        >
-          <span class="mh">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 8h10M7 12h6"/></svg>
-            自带 Dockerfile
-            <span class="ck" aria-hidden="true">✓</span>
-          </span>
-          <span class="ms">仓库内提供 <code>Dockerfile</code>,平台执行 <code>docker build</code>。完全自定义。</span>
-        </button>
-      </div>
-
-      <!-- model-specific inputs -->
-      <div v-if="model === 'dockerfile'" class="model-detail">
-        <label class="md-label" for="dockerfile-path">Dockerfile 路径</label>
-        <input
-          id="dockerfile-path"
-          v-model="dockerfilePath"
-          class="md-input mono"
-          type="text"
-          placeholder="Dockerfile"
-          :disabled="disabled"
-        >
-      </div>
-      <div v-else class="model-detail model-detail--two">
-        <div>
-          <label class="md-label" for="tc-lang">语言</label>
-          <input id="tc-lang" v-model="language" class="md-input" type="text" placeholder="node" :disabled="disabled">
-        </div>
-        <div>
-          <label class="md-label" for="tc-ver">版本</label>
-          <input id="tc-ver" v-model="version" class="md-input mono" type="text" placeholder="22" :disabled="disabled">
-        </div>
-      </div>
-    </section>
-
-    <!-- ─── Artifact type ───────────────────────────────────────────────────── -->
-    <section class="card">
-      <header class="card-head">
-        <span class="card-ic" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M21 16V8l-9-5-9 5v8l9 5 9-5z"/><path d="M3.3 7 12 12l8.7-5"/></svg>
-        </span>
-        产物类型
-        <span class="card-sub">FR-6 · 构建输出形态</span>
-      </header>
-      <div class="artiseg" role="radiogroup" aria-label="产物类型">
-        <button
-          v-for="a in ARTIFACTS"
-          :key="a.key"
-          type="button"
-          class="artiopt"
-          :class="{ 'artiopt--on': artifactType === a.key }"
-          role="radio"
-          :aria-checked="artifactType === a.key"
-          :disabled="disabled"
-          @click="artifactType = a.key"
-        >
-          <b>{{ a.label }}</b>
-          <span>{{ a.desc }}</span>
-        </button>
-      </div>
-    </section>
+    <!-- 构建模型 / 产物类型已移到画布 build_image 节点(job.config),此处不再重复设置。 -->
 
     <!-- ─── Build variables ─────────────────────────────────────────────────── -->
     <section class="card">
@@ -386,19 +288,11 @@ function maskFor(row: VarRow): string {
 
 <style scoped>
 .vars-root {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
+  flex-direction: column;
   gap: 18px;
-  align-items: start;
+  align-items: stretch;
   max-width: 980px;
-}
-.vars-root > .card:nth-child(1),
-.vars-root > .card:nth-child(3) {
-  grid-column: 1 / -1;
-}
-@media (max-width: 820px) {
-  .vars-root { grid-template-columns: 1fr; }
-  .vars-root > .card { grid-column: 1 / -1; }
 }
 
 .card {
@@ -435,53 +329,6 @@ function maskFor(row: VarRow): string {
   font-weight: 400;
 }
 
-/* ─── Build model segments ───────────────────────────────────────────────── */
-.modeseg { display: flex; gap: 10px; padding: 16px 18px 8px; }
-.modeopt {
-  flex: 1;
-  text-align: left;
-  border: 1px solid var(--color-border-strong);
-  border-radius: 12px;
-  padding: 13px;
-  cursor: pointer;
-  background: var(--color-card);
-  color: var(--color-text);
-  font-family: var(--font-sans);
-  transition: border-color var(--duration-fast), box-shadow var(--duration-fast), background-color var(--duration-fast);
-}
-.modeopt:hover:not(:disabled) { border-color: var(--color-faint); }
-.modeopt:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
-.modeopt--on {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 1px var(--color-primary);
-  background: var(--color-primary-soft);
-}
-.modeopt:disabled { opacity: 0.5; cursor: not-allowed; }
-.mh {
-  display: flex; align-items: center; gap: 8px;
-  font-size: 0.85rem; font-weight: 600;
-}
-.mh .ck {
-  margin-left: auto;
-  width: 16px; height: 16px;
-  border-radius: 50%;
-  background: var(--color-primary);
-  color: #fff;
-  display: none; place-items: center;
-  font-size: 0.6rem;
-}
-.modeopt--on .mh .ck { display: grid; }
-.ms {
-  display: block;
-  font-size: 0.76rem;
-  color: var(--color-faint);
-  margin-top: 6px;
-  line-height: 1.5;
-}
-.ms code { color: var(--color-dim); font-family: var(--font-mono); }
-
-.model-detail { padding: 8px 18px 16px; }
-.model-detail--two { display: grid; grid-template-columns: 1fr 120px; gap: 12px; }
 .md-label {
   display: block;
   font-size: var(--text-label);
@@ -502,27 +349,6 @@ function maskFor(row: VarRow): string {
 }
 .md-input:focus { outline: none; border-color: var(--color-primary); box-shadow: 0 0 0 3px var(--color-primary-soft); }
 .mono { font-family: var(--font-mono); }
-
-/* ─── Artifact segments ──────────────────────────────────────────────────── */
-.artiseg { display: flex; gap: 10px; padding: 16px 18px; }
-.artiopt {
-  flex: 1;
-  text-align: left;
-  border: 1px solid var(--color-border-strong);
-  border-radius: 11px;
-  padding: 11px 13px;
-  cursor: pointer;
-  background: var(--color-card);
-  color: var(--color-text);
-  font-family: var(--font-sans);
-  transition: border-color var(--duration-fast), box-shadow var(--duration-fast), background-color var(--duration-fast);
-}
-.artiopt:hover:not(:disabled) { border-color: var(--color-faint); }
-.artiopt:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
-.artiopt--on { border-color: var(--color-primary); box-shadow: 0 0 0 1px var(--color-primary); background: var(--color-primary-soft); }
-.artiopt:disabled { opacity: 0.5; cursor: not-allowed; }
-.artiopt b { display: block; font-size: 0.83rem; font-weight: 600; }
-.artiopt span { display: block; font-size: 0.72rem; color: var(--color-faint); margin-top: 3px; }
 
 /* ─── Variable table ─────────────────────────────────────────────────────── */
 .vhd, .vrow {

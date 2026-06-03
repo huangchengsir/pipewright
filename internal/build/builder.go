@@ -65,6 +65,9 @@ type Builder struct {
 	// 的 cachePaths/cacheKey 恢复/保存依赖目录(node_modules/.m2/.gradle 等),跨 run 持久化提速。
 	// nil 则不缓存(向后兼容)。由 main 注入(WithBuildCache)。缓存问题绝不让构建失败(best-effort)。
 	buildCache buildCacheStore
+	// artifactLister 列出本 run 已产出的产物(供跨阶段产物传递:下游阶段把上游归档的 jar/dist
+	// 真字节恢复到自身工作区)。nil 则不做跨阶段恢复(向后兼容)。由 main 注入 runSvc.ListArtifacts。
+	artifactLister func(ctx context.Context, runID string) ([]run.Artifact, error)
 }
 
 // buildCacheStore 抽象「按 key 恢复/保存工作区缓存路径」的能力(便于 fake 单测注入)。
@@ -121,6 +124,16 @@ func WithImageGC(enabled bool) BuilderOption {
 // 克隆解析出 commit 后调用,补全运行详情里的 COMMIT 字段(触发未指定 commit 时尤其有用)。
 func WithCommitRecorder(fn func(ctx context.Context, runID, commit string)) BuilderOption {
 	return func(b *Builder) { b.recordCommit = fn }
+}
+
+// WithArtifactLister 注入「列出 run 产物」回调(跨阶段产物传递用):下游阶段据此把上游已归档的
+// jar/dist 真字节恢复到自身工作区。nil 不注入(无跨阶段恢复,向后兼容)。main 传 runSvc.ListArtifacts。
+func WithArtifactLister(fn func(ctx context.Context, runID string) ([]run.Artifact, error)) BuilderOption {
+	return func(b *Builder) {
+		if fn != nil {
+			b.artifactLister = fn
+		}
+	}
 }
 
 // WithStageDeployer 注入部署服务,使 dag 里的 deploy_ssh 节点真实部署(中途部署,不动 run 终态)。

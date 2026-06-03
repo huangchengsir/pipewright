@@ -30,6 +30,7 @@ import {
   type PromotionStatus,
 } from '../../api/promotion'
 import { promotionStatusConfig, formatPromotionDate } from '../../api/promotion.helpers'
+import { approveStage, rejectStage } from '../../api/runs'
 import { HttpError } from '../../api/http'
 
 // ─── Props / emits ────────────────────────────────────────────────────────────
@@ -115,6 +116,37 @@ const nextEnv = computed<EnvStage | null>(() => {
 })
 
 const isNextGated = computed<boolean>(() => nextEnv.value?.gated ?? false)
+
+// ─── Pending gated promotion (审批门:批准/拒绝就在本面板) ──────────────────────
+// gated 晋级提交后状态为 pending,等待人工审批。审批复用运行审批门端点
+// (/runs/{id}/approve|reject,stageId="promote:<env>")。此前面板只提示「请在审批门中批准」
+// 却无入口、运行级审批 UI 又不覆盖成功运行上的晋级门 → 晋级审批在 UI 里点不了。这里补齐。
+const pendingPromotion = computed<PromotionDTO | null>(
+  () => promotions.value.find((p) => p.status === 'pending') ?? null,
+)
+
+const deciding = ref(false)
+
+/** 批准(approve=true)/拒绝 当前待审晋级;复用审批门端点,决定后刷新历史。 */
+async function decidePromotion(approve: boolean): Promise<void> {
+  const target = pendingPromotion.value?.targetEnvironment
+  if (!target || deciding.value) return
+  deciding.value = true
+  promotionError.value = ''
+  try {
+    const stageId = `promote:${target}`
+    if (approve) await approveStage(props.runId, stageId)
+    else await rejectStage(props.runId, stageId)
+    await loadHistory() // 决定后 pending → promoted / rejected
+  } catch (err) {
+    promotionError.value =
+      err instanceof HttpError
+        ? (err.apiError?.message ?? `审批失败(${err.status})`)
+        : '审批失败,请稍后重试'
+  } finally {
+    deciding.value = false
+  }
+}
 
 // ─── Promotion action ─────────────────────────────────────────────────────────
 
@@ -226,6 +258,36 @@ onMounted(init)
           <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
         </svg>
         <span>尚未配置环境链。请前往「触发设置 → 环境链」配置后再晋级。</span>
+      </div>
+
+      <!-- Pending gated promotion: 审批门批准/拒绝就在这里(优先于「已到链尾」,因 pending 也算到顶) -->
+      <div v-else-if="pendingPromotion" class="promo-action-body">
+        <div class="promo-banner promo-banner--pending" role="status" aria-live="polite">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+          晋级到「{{ pendingPromotion.targetEnvironment }}」等待人工审批
+        </div>
+        <div v-if="promotionError" class="promo-banner promo-banner--error" role="alert" aria-live="assertive">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
+          </svg>
+          {{ promotionError }}
+        </div>
+        <div class="promo-btn-row">
+          <button
+            class="promo-btn promo-btn--gate"
+            :disabled="deciding"
+            :aria-busy="deciding"
+            @click="decidePromotion(true)"
+          >
+            <span v-if="deciding" class="promo-spinner" aria-hidden="true" />
+            {{ deciding ? '处理中…' : `批准晋级到「${pendingPromotion.targetEnvironment}」` }}
+          </button>
+          <button class="promo-btn promo-btn--cancel" :disabled="deciding" @click="decidePromotion(false)">
+            拒绝
+          </button>
+        </div>
       </div>
 
       <!-- Already at top -->

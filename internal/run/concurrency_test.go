@@ -37,7 +37,7 @@ func (g *gatedRunner) Run(ctx context.Context, _ *Run, sink StepSink) error {
 	g.mu.Lock()
 	g.cur--
 	g.mu.Unlock()
-	if err := sink.Plan(ctx, []string{"s"}); err != nil {
+	if err := sink.Plan(ctx, []StepDecl{{Name: "s"}}); err != nil {
 		return err
 	}
 	_ = sink.StepRunning(ctx, 0)

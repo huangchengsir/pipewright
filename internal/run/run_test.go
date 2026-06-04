@@ -128,7 +128,7 @@ func TestConcurrentRunsIndependent(t *testing.T) {
 type branchRunner struct{}
 
 func (branchRunner) Run(ctx context.Context, r *Run, sink StepSink) error {
-	if err := sink.Plan(ctx, []string{"step1", "step2"}); err != nil {
+	if err := sink.Plan(ctx, []StepDecl{{Name: "step1"}, {Name: "step2"}}); err != nil {
 		return err
 	}
 	for i := 0; i < 2; i++ {
@@ -221,7 +221,7 @@ func TestCancelRunning(t *testing.T) {
 type blockingRunner struct{ gate chan struct{} }
 
 func (b *blockingRunner) Run(ctx context.Context, _ *Run, sink StepSink) error {
-	if err := sink.Plan(ctx, []string{"long"}); err != nil {
+	if err := sink.Plan(ctx, []StepDecl{{Name: "long"}}); err != nil {
 		return err
 	}
 	_ = sink.StepRunning(ctx, 0)
@@ -359,7 +359,7 @@ func TestReconcileHangingSteps(t *testing.T) {
 type hangingRunner struct{}
 
 func (hangingRunner) Run(ctx context.Context, _ *Run, sink StepSink) error {
-	if err := sink.Plan(ctx, []string{"hang"}); err != nil {
+	if err := sink.Plan(ctx, []StepDecl{{Name: "hang"}}); err != nil {
 		return err
 	}
 	_ = sink.StepRunning(ctx, 0)

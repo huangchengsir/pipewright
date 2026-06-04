@@ -37,10 +37,13 @@ type fakeSink struct {
 
 func newFakeSink() *fakeSink { return &fakeSink{done: map[int]string{}} }
 
-func (s *fakeSink) Plan(_ context.Context, names []string) error {
+func (s *fakeSink) Plan(_ context.Context, steps []run.StepDecl) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.planned = append([]string{}, names...)
+	s.planned = s.planned[:0]
+	for _, st := range steps {
+		s.planned = append(s.planned, st.Name)
+	}
 	return nil
 }
 func (s *fakeSink) StepRunning(_ context.Context, ord int) error {
@@ -291,7 +294,8 @@ func TestRunnerLinearSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !equal(sink.planned, []string{"源", "构建", "部署"}) {
+	// 节点级:src 阶段的 job「clone」各占一步;无 job 的阶段用阶段名占位。
+	if !equal(sink.planned, []string{"clone", "构建", "部署"}) {
 		t.Errorf("planned = %v", sink.planned)
 	}
 	for ord := 0; ord < 3; ord++ {

@@ -69,10 +69,13 @@ type fakeSink struct {
 
 func newFakeSink() *fakeSink { return &fakeSink{done: map[int]string{}} }
 
-func (s *fakeSink) Plan(_ context.Context, names []string) error {
+func (s *fakeSink) Plan(_ context.Context, steps []run.StepDecl) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.plan = names
+	s.plan = s.plan[:0]
+	for _, st := range steps {
+		s.plan = append(s.plan, st.Name)
+	}
 	return nil
 }
 func (s *fakeSink) StepRunning(_ context.Context, ordinal int) error {

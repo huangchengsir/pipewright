@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/huangchengsir/pipewright/internal/dag"
@@ -46,10 +47,20 @@ func (f SpecLoaderFunc) Get(ctx context.Context, projectID, _ string) (*pipeline
 
 // StageReporter 给 StageExecutor 上报「本阶段」的日志/产物(自动关联到该阶段的 run_steps 序号)。
 type StageReporter interface {
-	// Log 报告本阶段一行日志(stream ∈ stdout|stderr)。落库前由 StepSink 脱敏。
+	// Log 报告一行日志(stream ∈ stdout|stderr)。落库前由 StepSink 脱敏。
+	// 阶段级 reporter:路由到本阶段首个节点 step;节点级 reporter(JobReporter 得到):路由到该节点 step。
 	Log(ctx context.Context, stream, line string) error
-	// EmitArtifact 报告本阶段产出的一条构建产物。
+	// EmitArtifact 报告一条构建产物。
 	EmitArtifact(ctx context.Context, a run.Artifact) error
+
+	// ── 节点(job)级 step:运行详情下沉到节点粒度 ──
+	// JobRunning 将该 job 对应的 step 置 running。
+	JobRunning(ctx context.Context, jobID string) error
+	// JobDone 将该 job 对应的 step 置终态(success|failed|skipped)。
+	JobDone(ctx context.Context, jobID, status string) error
+	// JobReporter 返回一个绑定到该 job step 序号的 reporter:其 Log/EmitArtifact 都归到该节点,
+	// 供执行器把每个 job 的日志/产物归到各自 step(无需改动各 job 执行函数体)。
+	JobReporter(jobID string) StageReporter
 }
 
 // StageExecutor 执行单个阶段(跑其 job/step);返回非 nil 表示该阶段失败。须响应 ctx 取消。
@@ -148,27 +159,48 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 		return fmt.Errorf("dagrun: build graph: %w", err)
 	}
 
-	// 拓扑序决定 run_steps 的展示序与序号;每个阶段 = 一个 step。
+	// 节点级:拓扑序决定阶段展示序;每个阶段内的 job 按声明序各占一个 step(ordinal 全局连续)。
+	// jobOrdinals[stageID] = 该阶段各 job 的全局 ordinal(jobID→ordinal);stageFirstOrd 供阶段级日志归位。
 	order := graph.TopoOrder()
-	ordinalOf := make(map[string]int, len(order))
-	names := make([]string, 0, len(order))
 	stageByID := make(map[string]pipeline.Stage, len(stages))
 	for _, st := range stages {
 		stageByID[st.ID] = st
 	}
-	for i, id := range order {
-		ordinalOf[id] = i
-		names = append(names, stageByID[id].Name)
+	decls := make([]run.StepDecl, 0, len(order))
+	jobOrdinals := make(map[string]map[string]int, len(order))
+	stageFirstOrd := make(map[string]int, len(order))
+	ord := 0
+	for _, id := range order {
+		st := stageByID[id]
+		stageFirstOrd[id] = ord
+		m := make(map[string]int, len(st.Jobs))
+		if len(st.Jobs) == 0 {
+			// 无 job 的阶段:留一个以阶段名命名的占位 step(键用 stageID,供 finishRemaining 收尾)。
+			decls = append(decls, run.StepDecl{Name: st.Name, Stage: st.Name})
+			m[id] = ord
+			ord++
+		}
+		for _, jb := range st.Jobs {
+			m[jb.ID] = ord
+			decls = append(decls, run.StepDecl{Name: jb.Name, Stage: st.Name})
+			ord++
+		}
+		jobOrdinals[id] = m
 	}
 
-	var mu sync.Mutex // 串行化对 sink 的全部调用(阶段可能并行)
+	var mu sync.Mutex // 串行化对 sink 的全部调用(阶段/节点可能并行)
 	lockedSink := func(fn func() error) error {
 		mu.Lock()
 		defer mu.Unlock()
 		return fn()
 	}
 
-	if err := lockedSink(func() error { return sink.Plan(ctx, names) }); err != nil {
+	// 失败日志捕获:DAG 执行器只把 job 输出经 Log 落 run_logs,从不调 SetFailureLog,导致
+	// 失败 run 的 failure_log 为空、AI 诊断「无失败日志」。这里旁路所有经 sink 的日志行(限量
+	// 尾部缓冲),阶段失败时把尾部作为 failure_log 落库,喂给 7-2 诊断。脱敏在诊断出网前统一做。
+	tap := &tapSink{StepSink: sink}
+
+	if err := lockedSink(func() error { return sink.Plan(ctx, decls) }); err != nil {
 		return fmt.Errorf("dagrun: plan: %w", err)
 	}
 
@@ -178,76 +210,104 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 	}
 
 	result := graph.Schedule(ctx, func(ctx context.Context, stageID string) error {
-		ord := ordinalOf[stageID]
 		stage := stageByID[stageID]
-		// 条件执行(Story 8-5):when 不满足 → 跳过(非失败),其下游照「未成功」跳过。
+		rep := &stageReporter{sink: tap, mu: &mu, jobOrd: jobOrdinals[stageID], firstOrd: stageFirstOrd[stageID]}
+		// 条件执行(Story 8-5):when 不满足 → 整阶段所有节点 skipped(非失败),其下游照「未成功」跳过。
 		if !stage.When.Matches(rn.Trigger.Branch, rn.Trigger.Type) {
-			_ = lockedSink(func() error {
-				return sink.Log(ctx, "stdout", ord, fmt.Sprintf(
-					"阶段「%s」条件不满足(分支=%q 触发=%q),跳过", stage.Name, rn.Trigger.Branch, rn.Trigger.Type))
-			})
+			_ = rep.Log(ctx, "stdout", fmt.Sprintf(
+				"阶段「%s」条件不满足(分支=%q 触发=%q),跳过", stage.Name, rn.Trigger.Branch, rn.Trigger.Type))
+			rep.finishRemaining(ctx, run.StepSkipped)
 			return dag.ErrSkip
-		}
-		if err := lockedSink(func() error { return sink.StepRunning(ctx, ord) }); err != nil {
-			return err
 		}
 		// 人工审批门(Story 8-4):进入该阶段前阻塞等待批准。run 状态由 gate 置 waiting_approval。
 		if stage.Gate && r.gate != nil {
-			_ = lockedSink(func() error {
-				return sink.Log(ctx, "stdout", ord, fmt.Sprintf("⏸ 阶段「%s」等待人工审批…", stage.Name))
-			})
+			_ = rep.Log(ctx, "stdout", fmt.Sprintf("⏸ 阶段「%s」等待人工审批…", stage.Name))
 			approved, gerr := r.gate(ctx, rn, stage)
 			if gerr != nil {
-				_ = lockedSink(func() error {
-					return sink.Log(ctx, "stderr", ord, fmt.Sprintf("审批门中断:%v", gerr))
-				})
-				_ = lockedSink(func() error { return sink.StepDone(ctx, ord, run.StepFailed) })
+				_ = rep.Log(ctx, "stderr", fmt.Sprintf("审批门中断:%v", gerr))
+				rep.finishRemaining(ctx, run.StepFailed)
 				return gerr
 			}
 			if !approved {
-				_ = lockedSink(func() error { return sink.Log(ctx, "stderr", ord, "⛔ 审批被拒绝,终止该阶段") })
-				_ = lockedSink(func() error { return sink.StepDone(ctx, ord, run.StepFailed) })
+				_ = rep.Log(ctx, "stderr", "⛔ 审批被拒绝,终止该阶段")
+				rep.finishRemaining(ctx, run.StepFailed)
 				return ErrGateRejected
 			}
-			_ = lockedSink(func() error { return sink.Log(ctx, "stdout", ord, "✅ 审批通过,继续执行") })
+			_ = rep.Log(ctx, "stdout", "✅ 审批通过,继续执行")
 		}
-		rep := &stageReporter{sink: sink, mu: &mu, ordinal: ord}
+		// 阶段执行体按节点(job)各自上报 running/done(见 build.NewStageExecutor)。执行器未显式
+		// 标记的节点由 finishRemaining 兜底:阶段成功→success(如 stub/占位节点);阶段失败→failed
+		// (执行器应已把真失败节点标 failed、上游跳过节点标 skipped;剩余未报的归并到失败结果)。
 		execErr := r.exec(ctx, rn, stage, rep)
-		status := run.StepSuccess
+		sweep := run.StepSuccess
 		if execErr != nil {
-			status = run.StepFailed
+			sweep = run.StepFailed
 		}
-		_ = lockedSink(func() error { return sink.StepDone(ctx, ord, status) })
+		rep.finishRemaining(ctx, sweep)
 		return execErr
 	}, dag.Options{MaxConcurrency: maxc})
 
-	// 被跳过/取消(从未执行)的阶段:其 step 终态记为 skipped(条件跳过 + 上游未成功皆然),避免悬挂 pending。
+	// 被跳过/取消(从未进入执行)的阶段:其全部节点 step 记为 skipped,避免悬挂 pending。
 	for id, nr := range result {
 		if nr.Status == dag.StatusSkipped || nr.Status == dag.StatusCanceled {
-			ord := ordinalOf[id]
-			_ = lockedSink(func() error { return sink.StepDone(ctx, ord, run.StepSkipped) })
+			rep := &stageReporter{sink: tap, mu: &mu, jobOrd: jobOrdinals[id], firstOrd: stageFirstOrd[id]}
+			rep.finishRemaining(ctx, run.StepSkipped)
 		}
 	}
 
 	// 整体失败判定:仅当有阶段**真失败**(StatusFailed)。条件跳过 / 上游被跳过不令整体失败
 	// (上游若真失败,该失败阶段本身即计入 StatusFailed)。
 	if result.Counts()[dag.StatusFailed] > 0 {
+		// 把捕获的日志尾部落为 failure_log,喂 7-2 AI 诊断(best-effort,不阻断终态)。
+		if fl := tap.tail(); fl != "" {
+			_ = lockedSink(func() error { return sink.SetFailureLog(ctx, fl) })
+		}
 		return fmt.Errorf("dagrun: pipeline failed (%v)", summarize(result))
 	}
 	return nil
 }
 
-// stageReporter 把阶段级日志/产物绑定到该阶段的 step 序号,并经 mutex 串行化对 sink 的调用。
-type stageReporter struct {
-	sink    run.StepSink
-	mu      *sync.Mutex
-	ordinal int
+// tapSink 包装真实 StepSink:在转发 Log 的同时把日志行旁路进限量尾部缓冲,供阶段失败时
+// 合成 failure_log(DAG 执行器各 job 输出本只落 run_logs、不进 failure_log)。并发安全。
+type tapSink struct {
+	run.StepSink
+	mu  sync.Mutex
+	buf []string
 }
 
+const tapMaxLines = 400 // 仅留尾部若干行(失败原因通常在末);诊断侧另按字符再截断 + 脱敏
+
+func (t *tapSink) Log(ctx context.Context, stream string, stepOrdinal int, line string) error {
+	t.mu.Lock()
+	t.buf = append(t.buf, line)
+	if len(t.buf) > tapMaxLines {
+		t.buf = t.buf[len(t.buf)-tapMaxLines:]
+	}
+	t.mu.Unlock()
+	return t.StepSink.Log(ctx, stream, stepOrdinal, line)
+}
+
+func (t *tapSink) tail() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return strings.Join(t.buf, "\n")
+}
+
+// stageReporter 把一个阶段的节点(job)级 step 上报绑定到各 job 的全局 ordinal,并经 mutex
+// 串行化对 sink 的调用。阶段级日志(无 job 上下文)归到本阶段首个节点 step(firstOrd)。
+type stageReporter struct {
+	sink     run.StepSink
+	mu       *sync.Mutex
+	jobOrd   map[string]int // jobID → 全局 step ordinal
+	firstOrd int            // 阶段级日志/产物归位的 step ordinal
+	done     map[string]bool
+}
+
+// Log 阶段级日志 → 归到首个节点 step(节点级 reporter 见 jobReporter 覆盖到各自 ordinal)。
 func (s *stageReporter) Log(ctx context.Context, stream, line string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.sink.Log(ctx, stream, s.ordinal, line)
+	return s.sink.Log(ctx, stream, s.firstOrd, line)
 }
 
 func (s *stageReporter) EmitArtifact(ctx context.Context, a run.Artifact) error {
@@ -255,6 +315,91 @@ func (s *stageReporter) EmitArtifact(ctx context.Context, a run.Artifact) error 
 	defer s.mu.Unlock()
 	return s.sink.EmitArtifact(ctx, a)
 }
+
+func (s *stageReporter) JobRunning(ctx context.Context, jobID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ord, ok := s.jobOrd[jobID]
+	if !ok {
+		return nil
+	}
+	return s.sink.StepRunning(ctx, ord)
+}
+
+func (s *stageReporter) JobDone(ctx context.Context, jobID, status string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ord, ok := s.jobOrd[jobID]
+	if !ok {
+		return nil
+	}
+	if s.done == nil {
+		s.done = make(map[string]bool, len(s.jobOrd))
+	}
+	s.done[jobID] = true
+	return s.sink.StepDone(ctx, ord, status)
+}
+
+// JobReporter 返回绑定到该 job ordinal 的节点级 reporter(Log/EmitArtifact 都归该节点)。
+// 找不到 jobID(防御)→ 回退到首节点 ordinal。
+func (s *stageReporter) JobReporter(jobID string) StageReporter {
+	ord, ok := s.jobOrd[jobID]
+	if !ok {
+		ord = s.firstOrd
+	}
+	return &jobReporter{sink: s.sink, mu: s.mu, ordinal: ord}
+}
+
+// finishRemaining 把本阶段尚未被执行器标记终态的节点 step 统一收尾为 status(skipped/failed),
+// 兜底「上游失败被跳过 / 顺序路径提前返回 / 占位放行」等执行器未显式上报的节点,避免悬挂 pending。
+func (s *stageReporter) finishRemaining(ctx context.Context, status string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for jobID, ord := range s.jobOrd {
+		if s.done[jobID] {
+			continue
+		}
+		if s.done == nil {
+			s.done = make(map[string]bool, len(s.jobOrd))
+		}
+		s.done[jobID] = true
+		_ = s.sink.StepDone(ctx, ord, status)
+	}
+}
+
+// jobReporter 是绑定到单个 job step ordinal 的节点级 reporter;其 Log/EmitArtifact 都归该节点。
+// JobRunning/JobDone/JobReporter 作用于自身 ordinal(执行器拿到它后直接用 Log/EmitArtifact 即可)。
+type jobReporter struct {
+	sink    run.StepSink
+	mu      *sync.Mutex
+	ordinal int
+}
+
+func (j *jobReporter) Log(ctx context.Context, stream, line string) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.sink.Log(ctx, stream, j.ordinal, line)
+}
+
+func (j *jobReporter) EmitArtifact(ctx context.Context, a run.Artifact) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.sink.EmitArtifact(ctx, a)
+}
+
+func (j *jobReporter) JobRunning(ctx context.Context, _ string) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.sink.StepRunning(ctx, j.ordinal)
+}
+
+func (j *jobReporter) JobDone(ctx context.Context, _, status string) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.sink.StepDone(ctx, j.ordinal, status)
+}
+
+func (j *jobReporter) JobReporter(string) StageReporter { return j }
 
 // summarize 汇总各终态计数(用于失败错误信息,不含敏感内容)。
 func summarize(res dag.Result) map[dag.Status]int { return res.Counts() }

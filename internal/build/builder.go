@@ -212,7 +212,11 @@ func (b *Builder) Run(ctx context.Context, r *run.Run, sink run.StepSink) error 
 	for _, cs := range customSteps {
 		steps = append(steps, cs.Name)
 	}
-	if err := sink.Plan(ctx, steps); err != nil {
+	decls := make([]run.StepDecl, len(steps))
+	for i, n := range steps {
+		decls[i] = run.StepDecl{Name: n} // 非 DAG 单镜像构建路径:无阶段分组(前端单级回退)
+	}
+	if err := sink.Plan(ctx, decls); err != nil {
 		return err
 	}
 
@@ -584,7 +588,7 @@ func (b *Builder) lineSink(sink run.StepSink, ordinal int) func(stream, line str
 
 // failPlan 在尚未 Plan 时的早失败:声明单步、置 failed、写失败日志、返回错误。
 func (b *Builder) failPlan(ctx context.Context, sink run.StepSink, stepName, msg string) error {
-	if err := sink.Plan(ctx, []string{stepName}); err == nil {
+	if err := sink.Plan(ctx, []run.StepDecl{{Name: stepName}}); err == nil {
 		_ = sink.StepRunning(ctx, 0)
 		_ = sink.Log(ctx, streamStderr, 0, msg)
 		_ = sink.StepDone(ctx, 0, run.StepFailed)

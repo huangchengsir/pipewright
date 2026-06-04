@@ -125,7 +125,9 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 		// 没有任何可执行节点(script/build_image/deploy_ssh/notify)且无 post → 诚实占位放行。
 		if !needsBuild && len(deployJobs) == 0 && len(notifyJobs) == 0 && len(stage.Post) == 0 {
 			for _, jb := range stage.Jobs {
-				_ = rep.Log(ctx, streamStdout, fmt.Sprintf("· %s(%s)— 真实执行未接入;本阶段放行", jb.Name, jb.Type))
+				_ = rep.JobRunning(ctx, jb.ID)
+				_ = rep.JobReporter(jb.ID).Log(ctx, streamStdout, fmt.Sprintf("· %s(%s)— 真实执行未接入;本阶段放行", jb.Name, jb.Type))
+				_ = rep.JobDone(ctx, jb.ID, run.StepSuccess)
 			}
 			if len(stage.Jobs) == 0 {
 				_ = rep.Log(ctx, streamStdout, fmt.Sprintf("阶段「%s」无 job", stage.Name))
@@ -219,9 +221,13 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 					if canceled(ctx) {
 						return run.ErrCanceled
 					}
+					_ = rep.JobRunning(ctx, jb.ID)
+					jrep := rep.JobReporter(jb.ID)
+					jsink := &reporterSink{rep: jrep}
 					step, verr := scriptStepFromJob(jb)
 					if verr != nil {
-						_ = rep.Log(ctx, streamStderr, fmt.Sprintf("script job「%s」配置无效:%v", jb.Name, verr))
+						_ = jrep.Log(ctx, streamStderr, fmt.Sprintf("script job「%s」配置无效:%v", jb.Name, verr))
+						_ = rep.JobDone(ctx, jb.ID, run.StepFailed)
 						return ErrBuildFailed
 					}
 					// 注入顺序:运行参数 → 上游 job 输出(carriedEnv)→ job 自身 env(后者覆盖同名)→ PIPEWRIGHT_ENV(系统,末位防覆盖)。
@@ -234,22 +240,29 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 					}
 					// 构建依赖缓存(#61):执行前恢复(暖构建)、成功后保存(best-effort,缓存问题绝不让构建失败)。
 					// 任务级 timeout/retry(#63):零值时 runScriptStepWithOpts 退化为单次无超时执行(旧行为)。
-					b.restoreJobCache(ctx, rep, jb, r.Trigger.Branch, workspace)
-					if err := b.runScriptStepWithOpts(ctx, sink, 0, step, workspace); err != nil {
+					b.restoreJobCache(ctx, jrep, jb, r.Trigger.Branch, workspace)
+					if err := b.runScriptStepWithOpts(ctx, jsink, 0, step, workspace); err != nil {
+						_ = rep.JobDone(ctx, jb.ID, run.StepFailed)
 						return err // ErrBuildFailed / run.ErrCanceled
 					}
-					b.saveJobCache(ctx, rep, jb, r.Trigger.Branch, workspace)
+					b.saveJobCache(ctx, jrep, jb, r.Trigger.Branch, workspace)
 					// 捕获本 job 写入 $PIPEWRIGHT_ENV 的变量,供后续同阶段 job 引用。
-					carriedEnv = append(carriedEnv, captureStageEnv(ctx, rep, workspace)...)
+					carriedEnv = append(carriedEnv, captureStageEnv(ctx, jrep, workspace)...)
+					_ = rep.JobDone(ctx, jb.ID, run.StepSuccess)
 				}
 
 				for _, jb := range buildImageJobs {
 					if canceled(ctx) {
 						return run.ErrCanceled
 					}
-					if err := b.runBuildImageJob(ctx, sink, rep, jb, stage.Name, proj, settings, r.Trigger.ResolvedEnvironment, workspace, commitTag, hasPushJob); err != nil {
+					_ = rep.JobRunning(ctx, jb.ID)
+					jrep := rep.JobReporter(jb.ID)
+					jsink := &reporterSink{rep: jrep}
+					if err := b.runBuildImageJob(ctx, jsink, jrep, jb, stage.Name, proj, settings, r.Trigger.ResolvedEnvironment, workspace, commitTag, hasPushJob); err != nil {
+						_ = rep.JobDone(ctx, jb.ID, run.StepFailed)
 						return err
 					}
+					_ = rep.JobDone(ctx, jb.ID, run.StepSuccess)
 				}
 
 				b.collectScriptArtifacts(ctx, scriptJobs, workspace, slugify(proj.Name), stage.Name, rep)
@@ -263,9 +276,13 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 				if canceled(ctx) {
 					return run.ErrCanceled
 				}
-				if err := b.runDeployJob(ctx, rep, jb, r.ID); err != nil {
+				_ = rep.JobRunning(ctx, jb.ID)
+				jrep := rep.JobReporter(jb.ID)
+				if err := b.runDeployJob(ctx, jrep, jb, r.ID); err != nil {
+					_ = rep.JobDone(ctx, jb.ID, run.StepFailed)
 					return err
 				}
+				_ = rep.JobDone(ctx, jb.ID, run.StepSuccess)
 			}
 
 			// ── 通知节点(notify):按节点配的渠道发通知(best-effort,不因通知失败而失败本阶段)──
@@ -273,7 +290,9 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 				if canceled(ctx) {
 					return run.ErrCanceled
 				}
-				b.runNotifyJob(ctx, rep, jb, r)
+				_ = rep.JobRunning(ctx, jb.ID)
+				b.runNotifyJob(ctx, rep.JobReporter(jb.ID), jb, r)
+				_ = rep.JobDone(ctx, jb.ID, run.StepSuccess)
 			}
 
 			return nil
@@ -353,36 +372,59 @@ func (b *Builder) runStageJobsDAG(
 			envMu.Unlock()
 		}
 
-		switch {
-		case isScriptJob(jb.Type):
-			out, err := b.runScriptJobIsolated(ctx, sink, rep, r, jb, stage, proj, settings, svcNetwork, upstreamEnv, reportSink)
-			if err != nil {
-				return err
+		// 节点级 step:本 job 独占一个 step,日志/产物经 job 级 rep/sink 归到该节点 ordinal。
+		_ = rep.JobRunning(ctx, jb.ID)
+		jrep := rep.JobReporter(jb.ID)
+		jsink := &reporterSink{rep: jrep}
+
+		jobErr := func() error {
+			switch {
+			case isScriptJob(jb.Type):
+				out, err := b.runScriptJobIsolated(ctx, jsink, jrep, r, jb, stage, proj, settings, svcNetwork, upstreamEnv, reportSink)
+				if err != nil {
+					return err
+				}
+				if len(out) > 0 {
+					envMu.Lock()
+					jobEnvOut[id] = out
+					envMu.Unlock()
+				}
+				return nil
+			case isBuildImageJob(jb.Type):
+				return b.runBuildImageJobIsolated(ctx, jsink, jrep, r, jb, stage, proj, settings, hasPushJob)
+			case isDeployJob(jb.Type):
+				return b.runDeployJob(ctx, jrep, jb, r.ID)
+			case strings.TrimSpace(jb.Type) == "push_image":
+				// 推送随构建镜像节点完成(hasPushJob);本节点仅用于在 DAG 中编排顺序/展示。
+				_ = jrep.Log(ctx, streamStdout, fmt.Sprintf("· 推送镜像「%s」:已随构建镜像节点完成推送(本节点用于编排顺序)", jb.Name))
+				return nil
+			case strings.TrimSpace(jb.Type) == "notify":
+				b.runNotifyJob(ctx, jrep, jb, r)
+				return nil
+			default:
+				_ = jrep.Log(ctx, streamStdout, fmt.Sprintf("· %s(%s)— 真实执行未接入;本节点放行", jb.Name, jb.Type))
+				return nil
 			}
-			if len(out) > 0 {
-				envMu.Lock()
-				jobEnvOut[id] = out
-				envMu.Unlock()
-			}
-			return nil
-		case isBuildImageJob(jb.Type):
-			return b.runBuildImageJobIsolated(ctx, sink, rep, r, jb, stage, proj, settings, hasPushJob)
-		case isDeployJob(jb.Type):
-			return b.runDeployJob(ctx, rep, jb, r.ID)
-		case strings.TrimSpace(jb.Type) == "push_image":
-			// 推送随构建镜像节点完成(hasPushJob);本节点仅用于在 DAG 中编排顺序/展示。
-			_ = rep.Log(ctx, streamStdout, fmt.Sprintf("· 推送镜像「%s」:已随构建镜像节点完成推送(本节点用于编排顺序)", jb.Name))
-			return nil
-		case strings.TrimSpace(jb.Type) == "notify":
-			b.runNotifyJob(ctx, rep, jb, r)
-			return nil
-		default:
-			_ = rep.Log(ctx, streamStdout, fmt.Sprintf("· %s(%s)— 真实执行未接入;本节点放行", jb.Name, jb.Type))
-			return nil
+		}()
+
+		status := run.StepSuccess
+		if jobErr != nil {
+			status = run.StepFailed
 		}
+		_ = rep.JobDone(ctx, jb.ID, status)
+		return jobErr
 	}
 
 	res := g.Schedule(ctx, runJob, dag.Options{MaxConcurrency: defaultJobDAGConcurrency})
+
+	// 因上游失败/取消而从未执行的 job:显式标 skipped(其 runJob 未被调到,JobDone 未触发),
+	// 使其在运行详情里如实显示「跳过」而非被阶段失败兜底成 failed。
+	for _, jb := range stage.Jobs {
+		switch res[jb.ID].Status {
+		case dag.StatusSkipped, dag.StatusCanceled:
+			_ = rep.JobDone(ctx, jb.ID, run.StepSkipped)
+		}
+	}
 
 	if canceled(ctx) {
 		return run.ErrCanceled
@@ -584,6 +626,26 @@ func (b *Builder) runNotifyJob(ctx context.Context, rep dagrun.StageReporter, jb
 		Title:  "流水线通知",
 		Body:   fmt.Sprintf("流水线执行到通知节点:分支 %s,commit %s。", r.Trigger.Branch, commit),
 		Fields: map[string]string{"branch": r.Trigger.Branch, "commit": commit, "runId": r.ID, "stage": "notify"},
+	}
+	// 节点级内联模板(可选):配了标题/正文模板就按 {{占位}} 渲染覆盖默认文案,
+	// 占位语义与「通知」设置里的模板一致(project/branch/commit/status/runId 等)。
+	titleTpl := strings.TrimSpace(cfgString(jb.Config, "titleTemplate"))
+	bodyTpl := strings.TrimSpace(cfgString(jb.Config, "bodyTemplate"))
+	if titleTpl != "" || bodyTpl != "" {
+		vars := notify.TemplateVars{
+			Project: r.ProjectName,
+			Branch:  r.Trigger.Branch,
+			Commit:  commit,
+			Status:  r.Status,
+			Event:   "notify",
+			RunID:   r.ID,
+		}
+		if titleTpl != "" {
+			payload.Title = notify.RenderText(titleTpl, vars)
+		}
+		if bodyTpl != "" {
+			payload.Body = notify.RenderText(bodyTpl, vars)
+		}
 	}
 	if err := b.notifier.SendVia(ctx, chID, payload); err != nil {
 		_ = rep.Log(ctx, streamStderr, "通知发送失败(best-effort):"+err.Error())
@@ -892,7 +954,7 @@ type reporterSink struct {
 	rep dagrun.StageReporter
 }
 
-func (s *reporterSink) Plan(context.Context, []string) error        { return nil }
+func (s *reporterSink) Plan(context.Context, []run.StepDecl) error  { return nil }
 func (s *reporterSink) StepRunning(context.Context, int) error      { return nil }
 func (s *reporterSink) StepDone(context.Context, int, string) error { return nil }
 func (s *reporterSink) SetFailureLog(context.Context, string) error { return nil }

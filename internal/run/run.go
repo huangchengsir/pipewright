@@ -122,13 +122,24 @@ type Trigger struct {
 }
 
 // Step 是穿珠时间线节点(运行步骤)。
+//
+// 节点级粒度(Story:运行详情下沉到 job 级):每个 step = 流水线里的一个 job(节点),
+// Stage 记其所属阶段名,供前端按「阶段 → 节点」两级聚合(进度图阶段框 + 步骤详情分组)。
+// 旧数据 / 非 DAG runner 的 step 其 Stage 可能为空(前端回退为单级展示)。
 type Step struct {
 	ID         string
 	Name       string
+	Stage      string // 所属阶段名(节点级分组;空 = 未分组,前端单级回退)
 	Status     string // pending|running|success|failed|skipped
 	Ordinal    int
 	StartedAt  *time.Time
 	FinishedAt *time.Time
+}
+
+// StepDecl 是 Plan 声明一个步骤(节点)的入参:节点名 + 所属阶段名。
+type StepDecl struct {
+	Name  string
+	Stage string
 }
 
 // Run 是一次流水线运行的领域模型。Steps 按 Ordinal 升序。

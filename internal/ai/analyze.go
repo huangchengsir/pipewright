@@ -133,59 +133,113 @@ func (a goGitAnalyzer) Analyze(ctx context.Context, repoURL, token string) RepoA
 	return analysis
 }
 
-// detectStack 读 memfs 工作区根的 manifest 文件,推断语言/版本/构建工具/产物。
-// 顺序:Dockerfile(产物提示)→ node → go → java → python;首个命中确定主语言,
-// 但 Dockerfile 与产物类型可叠加。Signals 累积所有证据。
+// scanDepth 是 manifest 探测下钻的最大目录层数(根=0)。monorepo(如 backend/ + frontend/)
+// 的项目文件常在子目录,只扫根会「未识别」;下钻 2 层覆盖常见单层/双层子项目布局。
+const scanDepth = 2
+
+// scanSkipDirs 是探测时跳过的噪声目录(依赖/产物/VCS;避免误判 + 限制扫描量)。
+var scanSkipDirs = map[string]bool{
+	"node_modules": true, "target": true, "dist": true, "build": true,
+	"vendor": true, "out": true, "bin": true, "venv": true, "__pycache__": true,
+}
+
+// detectStack 推断语言/版本/构建工具/产物。先扫工作区根,根无 manifest 时下钻子目录
+// (monorepo 友好:backend/pom.xml、frontend/package.json 等)。顺序:Dockerfile(产物提示)
+// → node → go → java → python;**首个命中**确定主语言,但**所有命中**都进 Signals(含子目录
+// 路径),让 monorepo 的多技术栈都暴露给 LLM。
 func detectStack(fs billy.Filesystem) RepoAnalysis {
 	res := RepoAnalysis{Signals: []string{}}
 
-	hasDockerfile := fileExists(fs, "Dockerfile")
-	if hasDockerfile {
+	if dir, ok := findFileDir(fs, "Dockerfile", scanDepth); ok {
 		res.HasDockerfile = true
-		res.Signals = append(res.Signals, "Dockerfile")
+		res.Signals = append(res.Signals, sigName("Dockerfile", dir))
 	}
 
-	switch {
-	case fileExists(fs, "package.json"):
-		res.Language = langNode
-		res.BuildTool = "npm"
-		res.ArtifactHint = artifactFor(langNode, hasDockerfile)
-		res.Signals = append(res.Signals, "package.json")
-		if v := detectNodeVersion(fs); v != "" {
-			res.LanguageVersion = v
+	type spec struct{ file, lang, tool string }
+	specs := []spec{
+		{"package.json", langNode, "npm"},
+		{"go.mod", langGo, "go"},
+		{"pom.xml", langJava, "maven"},
+		{"build.gradle", langJava, "gradle"},
+		{"build.gradle.kts", langJava, "gradle"},
+		{"requirements.txt", langPython, "pip"},
+		{"pyproject.toml", langPython, "pip"},
+	}
+	for _, sp := range specs {
+		dir, ok := findFileDir(fs, sp.file, scanDepth)
+		if !ok {
+			continue
 		}
-	case fileExists(fs, "go.mod"):
-		res.Language = langGo
-		res.BuildTool = "go"
-		res.ArtifactHint = artifactFor(langGo, hasDockerfile)
-		res.Signals = append(res.Signals, "go.mod")
-		if v := detectGoVersion(fs); v != "" {
-			res.LanguageVersion = v
-			res.Signals = append(res.Signals, "go "+v)
+		res.Signals = append(res.Signals, sigName(sp.file, dir))
+		if res.Language != "" {
+			continue // 主语言已定;其余命中仅作附加信号(monorepo 多栈)
 		}
-	case fileExists(fs, "pom.xml"):
-		res.Language = langJava
-		res.BuildTool = "maven"
-		res.ArtifactHint = artifactFor(langJava, hasDockerfile)
-		res.Signals = append(res.Signals, "pom.xml")
-	case fileExists(fs, "build.gradle") || fileExists(fs, "build.gradle.kts"):
-		res.Language = langJava
-		res.BuildTool = "gradle"
-		res.ArtifactHint = artifactFor(langJava, hasDockerfile)
-		res.Signals = append(res.Signals, "build.gradle")
-	case fileExists(fs, "requirements.txt"):
-		res.Language = langPython
-		res.BuildTool = "pip"
-		res.ArtifactHint = artifactFor(langPython, hasDockerfile)
-		res.Signals = append(res.Signals, "requirements.txt")
-	case fileExists(fs, "pyproject.toml"):
-		res.Language = langPython
-		res.BuildTool = "pip"
-		res.ArtifactHint = artifactFor(langPython, hasDockerfile)
-		res.Signals = append(res.Signals, "pyproject.toml")
+		res.Language = sp.lang
+		res.BuildTool = sp.tool
+		res.ArtifactHint = artifactFor(sp.lang, res.HasDockerfile)
+		sub := fs
+		if dir != "" {
+			if c, cerr := fs.Chroot(dir); cerr == nil {
+				sub = c
+			}
+		}
+		switch sp.lang {
+		case langNode:
+			if v := detectNodeVersion(sub); v != "" {
+				res.LanguageVersion = v
+			}
+		case langGo:
+			if v := detectGoVersion(sub); v != "" {
+				res.LanguageVersion = v
+				res.Signals = append(res.Signals, "go "+v)
+			}
+		}
 	}
 
 	return res
+}
+
+// findFileDir 在工作区根及子目录(限 maxDepth 层、跳过噪声目录)按 BFS 查找名为 name 的文件,
+// 返回其所在目录(根 = "")与是否命中。BFS 保证「根命中优先于子目录」(存量单体项目行为不变)。
+func findFileDir(fs billy.Filesystem, name string, maxDepth int) (string, bool) {
+	type node struct {
+		dir   string
+		depth int
+	}
+	queue := []node{{"", 0}}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if fileExists(fs, sigName(name, cur.dir)) {
+			return cur.dir, true
+		}
+		if cur.depth >= maxDepth {
+			continue
+		}
+		entries, err := fs.ReadDir(cur.dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			n := e.Name()
+			if scanSkipDirs[n] || strings.HasPrefix(n, ".") {
+				continue
+			}
+			queue = append(queue, node{sigName(n, cur.dir), cur.depth + 1})
+		}
+	}
+	return "", false
+}
+
+// sigName 把目录前缀与文件名拼成路径(根目录 → 文件名本身)。
+func sigName(name, dir string) string {
+	if dir == "" {
+		return name
+	}
+	return dir + "/" + name
 }
 
 // artifactFor 由语言 + 是否有 Dockerfile 推断产物类型提示。

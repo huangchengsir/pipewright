@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/huangchengsir/pipewright/internal/ai"
+	"github.com/huangchengsir/pipewright/internal/library"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/trigger"
@@ -28,10 +30,12 @@ type aiAnalysisDTO struct {
 }
 
 type aiProposalJobDTO struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	Summary string `json:"summary"`
+	ID      string         `json:"id"`
+	Name    string         `json:"name"`
+	Type    string         `json:"type"`
+	Summary string         `json:"summary"`
+	Config  map[string]any `json:"config,omitempty"` // LLM 填好的可执行配置(前端原样回传 apply)
+	Needs   []string       `json:"needs,omitempty"`  // 同阶段依赖的 job name(串行);空=并行
 }
 
 type aiProposalStageDTO struct {
@@ -107,7 +111,7 @@ func toAIProposalDTO(p *ai.Proposal) *aiProposalDTO {
 	for _, st := range p.Stages {
 		jobs := make([]aiProposalJobDTO, 0, len(st.Jobs))
 		for _, jb := range st.Jobs {
-			jobs = append(jobs, aiProposalJobDTO{ID: jb.ID, Name: jb.Name, Type: jb.Type, Summary: jb.Summary})
+			jobs = append(jobs, aiProposalJobDTO{ID: jb.ID, Name: jb.Name, Type: jb.Type, Summary: jb.Summary, Config: jb.Config, Needs: jb.Needs})
 		}
 		stages = append(stages, aiProposalStageDTO{ID: st.ID, Name: st.Name, Kind: st.Kind, Jobs: jobs})
 	}
@@ -130,13 +134,14 @@ func toAIProposalDTO(p *ai.Proposal) *aiProposalDTO {
 
 // aiGenerateDeps 聚合 generate/apply 两 handler 所需服务(复用已注入服务,无新顶层依赖)。
 type aiGenerateDeps struct {
-	analyzer ai.RepoAnalyzer
-	aiSvc    ai.Service
-	projects project.Service
-	pipes    pipeline.Service
-	settings pipeline.SettingsService
-	triggers trigger.Service
-	vault    vault.Vault
+	analyzer    ai.RepoAnalyzer
+	aiSvc       ai.Service
+	projects    project.Service
+	pipes       pipeline.Service
+	settings    pipeline.SettingsService
+	triggers    trigger.Service
+	vault       vault.Vault
+	customNodes library.CustomNodeService // 复用库自定义节点(动态拼入 AI 节点目录;可 nil)
 }
 
 // reasonAINotConfigured 是 AI 未配置时的友好引导(不阻断手动建项目;HTTP 200,available=false)。
@@ -195,9 +200,31 @@ func makeAIGenerateHandler(d aiGenerateDeps) http.HandlerFunc {
 			Analysis:  toAIAnalysisDTO(analysis),
 		}
 
+		// 动态节点目录:内置工具清单 + 复用库自定义节点(运行时拼入,新增即生效),作为
+		// LLM 可组合的「可用节点」全集,避免只产粗粒度三段式。
+		catalog := ai.BuiltinNodeCatalog()
+		if d.customNodes != nil {
+			if nodes, lerr := d.customNodes.List(ctx); lerr == nil {
+				for _, cn := range nodes {
+					desc := strings.TrimSpace(cn.Summary)
+					if desc == "" {
+						desc = strings.TrimSpace(cn.Description)
+					}
+					nt := strings.TrimSpace(cn.NodeType)
+					if nt == "" {
+						nt = "templated"
+					}
+					catalog = append(catalog, ai.NodeKind{
+						Type: nt, Label: cn.Name, Category: "custom", Description: desc, Custom: true,
+					})
+				}
+			}
+		}
+
 		proposal, gerr := d.aiSvc.Generate(ctx, ai.GenerateInput{
 			Analysis: analysis,
 			NL:       req.NLSupplement,
+			Catalog:  catalog,
 		})
 		switch {
 		case gerr == nil:
@@ -302,10 +329,12 @@ type aiProposalReq struct {
 		Name string `json:"name"`
 		Kind string `json:"kind"`
 		Jobs []struct {
-			ID      string `json:"id"`
-			Name    string `json:"name"`
-			Type    string `json:"type"`
-			Summary string `json:"summary"`
+			ID      string         `json:"id"`
+			Name    string         `json:"name"`
+			Type    string         `json:"type"`
+			Summary string         `json:"summary"`
+			Config  map[string]any `json:"config"`
+			Needs   []string       `json:"needs"`
 		} `json:"jobs"`
 	} `json:"stages"`
 	Build struct {
@@ -349,12 +378,37 @@ func applySelectedStages(ctx context.Context, svc pipeline.Service, projectID st
 		want[sid] = struct{}{}
 	}
 
-	// 把第 i 个提案阶段转为 pipeline.Stage(id 留空让服务端补,避免与既有冲突)。
+	// 把第 i 个提案阶段转为 pipeline.Stage。为每个 job 分配稳定 id(服务端保留已给 id),
+	// 并把 LLM 按「依赖 job 的 name」写的 needs 映射为对应 job id —— 实现节点级串行依赖
+	// (如 build_image needs build_backend),否则同阶段全并行、镜像拿不到 jar 而失败。
 	toStage := func(i int) pipeline.Stage {
 		st := prop.Stages[i]
+		// 先给每个 job 定 id,并建 name/原 id → 分配 id 的映射(供 needs 解析)。
+		ids := make([]string, len(st.Jobs))
+		refToID := make(map[string]string, len(st.Jobs)*2)
+		for k, jb := range st.Jobs {
+			aid := fmt.Sprintf("aijob_%d_%d", i, k)
+			ids[k] = aid
+			if n := strings.TrimSpace(jb.Name); n != "" {
+				refToID[n] = aid
+			}
+			if id := strings.TrimSpace(jb.ID); id != "" {
+				refToID[id] = aid
+			}
+		}
 		jobs := make([]pipeline.Job, 0, len(st.Jobs))
-		for _, jb := range st.Jobs {
-			jobs = append(jobs, pipeline.Job{ID: "", Name: jb.Name, Type: jb.Type, Summary: jb.Summary, Config: map[string]any{}})
+		for k, jb := range st.Jobs {
+			cfg := jb.Config
+			if cfg == nil {
+				cfg = map[string]any{}
+			}
+			needs := make([]string, 0, len(jb.Needs))
+			for _, ref := range jb.Needs {
+				if id, ok := refToID[strings.TrimSpace(ref)]; ok && id != ids[k] {
+					needs = append(needs, id)
+				}
+			}
+			jobs = append(jobs, pipeline.Job{ID: ids[k], Name: jb.Name, Type: jb.Type, Summary: jb.Summary, Config: cfg, Needs: needs})
 		}
 		return pipeline.Stage{ID: "", Name: st.Name, Kind: st.Kind, Jobs: jobs}
 	}

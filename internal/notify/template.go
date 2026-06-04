@@ -335,6 +335,13 @@ func (s *service) matchTemplate(ctx context.Context, event, channelID string) *T
 // placeholderRE 匹配 {{name}} 占位(name 为字母数字与下划线;两侧可有空格)。
 var placeholderRE = regexp.MustCompile(`\{\{\s*([A-Za-z0-9_]+)\s*\}\}`)
 
+// RenderText 用 TemplateVars 对一段含 {{占位}} 的文本做纯文本替换(导出供 build 包的
+// notify 节点内联模板渲染复用;占位名同 TemplateVars.asMap,未知占位 → 空串)。
+// 与 RenderPayload 共用同一套占位语义,**绝不执行用户模板**(无 RCE)。
+func RenderText(tpl string, vars TemplateVars) string {
+	return renderTemplate(tpl, vars.asMap())
+}
+
 // renderTemplate 纯文本替换占位:{{name}} → vars[name];未知占位 → 空串。
 // **不执行任何用户模板**(无 text/template、无函数、无 RCE)——仅正则替换字符串。
 func renderTemplate(tpl string, vars map[string]string) string {

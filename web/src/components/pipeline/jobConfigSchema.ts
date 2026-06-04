@@ -26,6 +26,7 @@ export type FieldKind =
   | 'toggle'
   | 'credential'
   | 'server'
+  | 'channel'
 
 export interface SelectOption {
   value: string
@@ -464,24 +465,29 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
   notify: {
     type: 'notify',
     label: '通知',
-    description: '运行结束时发送通知',
+    description: '运行到此节点时发送通知',
     accent: 'cyan',
     category: 'notify',
     fields: [
       {
         key: 'channel',
         label: '通知渠道',
-        kind: 'text',
-        placeholder: '渠道 ID 或名称',
-        hint: '引用「通知」设置里已配置的渠道',
+        kind: 'channel',
+        hint: '从「通知」设置里已配置的渠道中选择;没有就先去设置里加一个',
       },
       {
-        key: 'events',
-        label: '触发事件',
+        key: 'titleTemplate',
+        label: '标题模板(可选)',
         kind: 'text',
-        monospace: true,
-        placeholder: 'success,failed',
-        hint: '逗号分隔;留空为全部终态',
+        placeholder: '部署成功:{{project}}',
+        hint: '留空用默认文案;支持占位 {{project}} {{branch}} {{commit}} {{status}} {{runId}}',
+      },
+      {
+        key: 'bodyTemplate',
+        label: '正文模板(可选)',
+        kind: 'textarea',
+        placeholder: '分支 {{branch}} @ {{commit}} 已执行到通知节点。',
+        hint: '留空用默认文案;同样支持 {{占位}},未知占位渲染为空',
       },
     ],
   },

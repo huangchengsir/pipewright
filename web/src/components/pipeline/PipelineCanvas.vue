@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import type { PipelineStage, PipelineJob, StageKind } from '../../api/pipeline'
 import type { Credential } from '../../api/credentials'
 import type { Server } from '../../api/servers'
+import type { NotificationChannel } from '../../api/notifications'
 import StageColumn from './StageColumn.vue'
 import JobDrawer from './JobDrawer.vue'
 import StageDrawer from './StageDrawer.vue'
@@ -19,6 +20,7 @@ const props = defineProps<{
   yaml: string
   credentials?: Credential[]
   servers?: Server[]
+  channels?: NotificationChannel[]
 }>()
 
 const emit = defineEmits<{
@@ -398,6 +400,7 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
       :stage="selectedStage"
       :credentials="props.credentials"
       :servers="props.servers"
+      :channels="props.channels"
       @close="closeDrawer"
       @update="handleDrawerUpdate"
       @change-type="requestChangeType"

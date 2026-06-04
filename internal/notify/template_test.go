@@ -258,3 +258,18 @@ func TestRouteEventVarsRendersConfiguredTemplate(t *testing.T) {
 		t.Fatalf("rendered body missing: %s", got)
 	}
 }
+
+// RenderText:导出给 notify 节点内联模板复用;占位替换、未知占位 → 空、空模板 → 空。
+func TestRenderText(t *testing.T) {
+	vars := TemplateVars{Project: "demo", Branch: "main", Commit: "abc1234", Status: "success", RunID: "r-1"}
+	got := RenderText("部署 {{project}} @ {{branch}}/{{commit}} = {{status}}", vars)
+	if got != "部署 demo @ main/abc1234 = success" {
+		t.Fatalf("unexpected render: %q", got)
+	}
+	if RenderText("{{unknown}}x", vars) != "x" {
+		t.Fatalf("unknown placeholder should render empty")
+	}
+	if RenderText("", vars) != "" {
+		t.Fatalf("empty template should render empty")
+	}
+}

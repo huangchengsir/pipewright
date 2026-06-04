@@ -18,6 +18,7 @@ import {
 import { listCredentials, type Credential } from '../api/credentials'
 import { listProjects, type Project } from '../api/projects'
 import { listServers, type Server } from '../api/servers'
+import { listChannels, type NotificationChannel } from '../api/notifications'
 import { getValidation, type ValidationDTO, type IssueScope } from '../api/pipelineValidation'
 import { HttpError } from '../api/http'
 import PipelineCanvas from '../components/pipeline/PipelineCanvas.vue'
@@ -107,6 +108,7 @@ const editBuild    = ref<BuildConfig | null>(null)
 const editEnvs     = ref<Environment[]>([])
 const credentials  = ref<Credential[]>([])
 const servers      = ref<Server[]>([])
+const channels     = ref<NotificationChannel[]>([])
 
 function applySettings(dto: SettingsDTO): void {
   settings.value = dto
@@ -116,14 +118,16 @@ function applySettings(dto: SettingsDTO): void {
 
 async function loadSettings(): Promise<void> {
   try {
-    const [dto, creds, srvs] = await Promise.all([
+    const [dto, creds, srvs, chs] = await Promise.all([
       getSettings(projectId.value),
       listCredentials().catch(() => [] as Credential[]),
       listServers().catch(() => [] as Server[]),
+      listChannels().catch(() => [] as NotificationChannel[]),
     ])
     applySettings(dto)
     credentials.value = creds
     servers.value = srvs
+    channels.value = chs
   } catch {
     // Settings load failure is non-fatal for the canvas; the vars/envs tabs show
     // their own empty state until a successful save. Surfaced on save attempts.
@@ -528,6 +532,7 @@ async function loadProject(): Promise<void> {
             :yaml="pipeline.yaml"
             :credentials="credentials"
             :servers="servers"
+            :channels="channels"
             @update="handleCanvasUpdate"
           />
 
@@ -641,8 +646,11 @@ async function loadProject(): Promise<void> {
    * 增高,height:100% 无法解析成确定值),会导致抽屉撑满内容、被 overflow:hidden 链裁掉
    * 底部(后置步骤够不到)。这里按视口减去 .main-inner 的上下内边距锁定高度,使内部
    * overflow:auto/hidden 的滚动真正生效。
+   *
+   * 底部只留一小段呼吸位(而非整段 --main-pad-bottom):编辑器是全幅工作面板,把原本
+   * ~90px 的底部留白还给画布,缓解「画布高度太窄」。顶部仍减 --main-pad-top 对齐父内边距。
    */
-  height: calc(100vh - var(--main-pad-top) - var(--main-pad-bottom));
+  height: calc(100vh - var(--main-pad-top) - 20px);
   min-height: 0;
   gap: 0;
 }

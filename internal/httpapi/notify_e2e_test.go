@@ -269,7 +269,7 @@ func TestNotifyHookProjectOverrideEndToEnd(t *testing.T) {
 type branchFailRunner struct{}
 
 func (branchFailRunner) Run(ctx context.Context, r *run.Run, sink run.StepSink) error {
-	_ = sink.Plan(ctx, []string{"step"})
+	_ = sink.Plan(ctx, []run.StepDecl{{Name: "step"}})
 	_ = sink.StepRunning(ctx, 0)
 	if r.Trigger.Branch == "fail" {
 		_ = sink.StepDone(ctx, 0, run.StepFailed)

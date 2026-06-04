@@ -70,6 +70,14 @@ export function findStageForStep(
   step: RunStep,
   stages: ReadonlyArray<PipelineStage>,
 ): string | null {
+  // 0. 节点级:step 自带所属阶段名(后端 run_steps.stage)时按阶段名精确归组,
+  //    一个阶段聚合其全部节点 step(进度图阶段框可展开看各节点)。最可靠,优先。
+  if (step.stage) {
+    const normStage = normalise(step.stage)
+    for (const s of stages) {
+      if (normalise(s.name) === normStage) return s.id
+    }
+  }
   const normStep = normalise(step.name)
   // 1. Exact name match (case-insensitive)
   for (const s of stages) {

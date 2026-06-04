@@ -411,8 +411,10 @@ func (s *service) deliver(ctx context.Context, ch *Channel, sealed []byte, paylo
 		return s.sendWebhook(ctx, ch, payload)
 	case TypeEmail:
 		return s.sendEmail(ctx, ch, sealed, payload)
+	case TypeFeishu:
+		return s.sendFeishu(ctx, ch, sealed, payload)
 	default:
-		// wecom / dingtalk / feishu:本期占位,人读提示(绝不 panic)。
+		// wecom / dingtalk:本期占位,人读提示(绝不 panic)。
 		return fmt.Errorf("该渠道类型(%s)暂未实现发送(not_implemented),敬请后续版本支持", ch.Type)
 	}
 }
@@ -515,6 +517,9 @@ func normalizeConfig(t string, c Config) Config {
 			To:       strings.TrimSpace(c.To),
 			Username: strings.TrimSpace(c.Username),
 		}
+	case TypeFeishu:
+		// 飞书自定义机器人:复用 URL 字段存 webhook hook 地址(签名密钥走 vault Secret)。
+		return Config{URL: strings.TrimSpace(c.URL)}
 	default:
 		return Config{}
 	}
@@ -536,8 +541,17 @@ func validateConfig(t string, c Config) error {
 			return ErrInvalidConfig
 		}
 		return nil
+	case TypeFeishu:
+		// 飞书机器人 webhook 地址必填,且过同一套 SSRF 收口(拒云元数据/链路本地)。
+		if c.URL == "" {
+			return ErrInvalidConfig
+		}
+		if !validWebhookURL(c.URL) {
+			return ErrSSRFBlocked
+		}
+		return nil
 	default:
-		// wecom/dingtalk/feishu:本期占位,不强制 config(保存合法)。
+		// wecom/dingtalk:本期占位,不强制 config(保存合法)。
 		return nil
 	}
 }

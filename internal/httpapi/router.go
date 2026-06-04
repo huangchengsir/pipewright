@@ -541,13 +541,14 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// /pipeline/ai-generate、/pipeline/ai-apply 比 /pipeline 多一段,不会被吞;均为写方法,过 auth + CSRF。
 		// 两路优雅降级(AI 未配 / clone 失败 / LLM 失败)均 HTTP 200,绝不 500、绝无明文密钥。
 		aiGenDeps := aiGenerateDeps{
-			analyzer: o.aiAnalyzer,
-			aiSvc:    aiSvc,
-			projects: p,
-			pipes:    pl,
-			settings: ps,
-			triggers: t,
-			vault:    v,
+			analyzer:    o.aiAnalyzer,
+			aiSvc:       aiSvc,
+			projects:    p,
+			pipes:       pl,
+			settings:    ps,
+			triggers:    t,
+			vault:       v,
+			customNodes: o.customNodes,
 		}
 		ar.Post("/projects/{id}/pipeline/ai-generate", makeAIGenerateHandler(aiGenDeps))
 		ar.Post("/projects/{id}/pipeline/ai-apply", makeAIApplyHandler(aiGenDeps))

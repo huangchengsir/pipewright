@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -107,6 +108,31 @@ func TestAnalyzeGoRepo(t *testing.T) {
 	}
 	if res.BuildTool != "go" {
 		t.Fatalf("BuildTool = %q, want go", res.BuildTool)
+	}
+}
+
+// monorepo:根无 manifest,项目文件在 backend/ frontend/ 子目录(如 aireboot)。
+// 旧版只扫根 → 「未识别」;下钻后应识别出语言 + 子目录 Dockerfile,且两栈都进 Signals。
+func TestAnalyzeMonorepoSubdirs(t *testing.T) {
+	url := makeBareRepo(t, map[string]string{
+		"README.md":             "# app\n",
+		"backend/pom.xml":       "<project></project>",
+		"frontend/package.json": `{"name":"web","engines":{"node":"20"}}`,
+		"backend/Dockerfile":    "FROM eclipse-temurin:21\n",
+	})
+	res := newInsecureRepoAnalyzer().Analyze(context.Background(), url, "")
+	if !res.Cloned {
+		t.Fatalf("expected Cloned=true, degrade=%q", res.DegradeReason)
+	}
+	if res.Language == "" {
+		t.Fatalf("monorepo 子目录技术栈应被识别,得空(未识别)")
+	}
+	if !res.HasDockerfile {
+		t.Fatalf("应在子目录发现 Dockerfile")
+	}
+	joined := strings.Join(res.Signals, ",")
+	if !strings.Contains(joined, "frontend/package.json") || !strings.Contains(joined, "backend/pom.xml") {
+		t.Fatalf("Signals 应含 monorepo 两栈带路径,得 %v", res.Signals)
 	}
 }
 

@@ -422,13 +422,24 @@ watch(() => props.projectId, () => {
                         :key="job.id"
                         class="proposal-job"
                       >
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                          <rect x="3" y="4" width="18" height="6" rx="1.5"/>
-                          <rect x="3" y="14" width="18" height="6" rx="1.5"/>
-                        </svg>
-                        <span class="job-name">{{ job.name }}</span>
-                        <span class="job-type">{{ job.type }}</span>
-                        <span v-if="job.summary" class="job-summary">— {{ job.summary }}</span>
+                        <div class="proposal-job-head">
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <rect x="3" y="4" width="18" height="6" rx="1.5"/>
+                            <rect x="3" y="14" width="18" height="6" rx="1.5"/>
+                          </svg>
+                          <span class="job-name">{{ job.name }}</span>
+                          <span class="job-type">{{ job.type }}</span>
+                          <span v-if="job.summary" class="job-summary">— {{ job.summary }}</span>
+                        </div>
+                        <!-- 串/并:有 needs → 串行(显示依赖);无 needs → 与同阶段其它节点并行 -->
+                        <div v-if="job.needs && job.needs.length" class="job-needs">
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                          <span>串行 · 依赖 {{ job.needs.join('、') }}</span>
+                        </div>
+                        <div v-else class="job-needs job-needs--parallel">
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M8 6v12M16 6v12"/></svg>
+                          <span>并行</span>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1263,13 +1274,31 @@ watch(() => props.projectId, () => {
 
 .proposal-job {
   display: flex;
-  align-items: center;
-  gap: 5px;
+  flex-direction: column;
+  gap: 2px;
   font-size: 0.76rem;
   color: var(--color-faint);
 }
 
+.proposal-job-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
 .proposal-job svg { color: var(--color-faint); flex-shrink: 0; }
+
+/* 串/并依赖指示:让预览体现节点编排(串行显依赖、并行显并行),不只是平铺列表。 */
+.job-needs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 16px;
+  font-size: 0.68rem;
+  color: var(--color-cyan);
+}
+.job-needs--parallel { color: var(--color-faint); }
+.job-needs svg { color: inherit; }
 
 .job-name {
   font-weight: 500;

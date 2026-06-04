@@ -45,6 +45,8 @@ export interface ApprovalRecord {
 export interface RunStep {
   id: string
   name: string
+  /** 所属阶段名(节点级分组;空 = 未分组,前端单级回退)。 */
+  stage?: string
   status: StepStatus
   startedAt: string | null
   finishedAt: string | null

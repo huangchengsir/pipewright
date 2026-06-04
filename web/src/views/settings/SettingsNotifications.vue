@@ -4,11 +4,12 @@
  *
  * Delivers:
  *   - Channel list (name / type / enabled / config summary)
- *   - Create / edit (type webhook | email + per-type fields)
+ *   - Create / edit (type webhook | email | feishu + per-type fields)
  *   - email SMTP password: WRITE-ONLY — never echoed; masked placeholder when stored
  *   - Test send with ok/latency/error result
  *   - Delete with confirm
- *   - wecom/dingtalk/feishu shown as "soon" placeholders (saveable, test=not_implemented)
+ *   - feishu: custom-bot webhook (url + optional sign secret); sends {msg_type,content}
+ *   - wecom/dingtalk shown as "soon" placeholders (saveable, test=not_implemented)
  *
  * Reuses: FormField / AppButton tokens from 1-6. No new UI libraries.
  * Animation: transform/opacity + prefers-reduced-motion. Sensitive fields never
@@ -73,9 +74,16 @@ const TYPES: TypeMeta[] = [
     glyphStyle: 'background:oklch(70% 0.14 250 / 0.16);color:oklch(62% 0.16 250)',
     implemented: true,
   },
+  {
+    id: 'feishu',
+    label: '飞书',
+    desc: '自定义机器人',
+    glyph: '飞',
+    glyphStyle: 'background:oklch(72% 0.15 200 / 0.16);color:oklch(56% 0.13 220)',
+    implemented: true,
+  },
   { id: 'wecom', label: '企业微信', desc: '即将支持', glyph: '企', glyphStyle: 'background:var(--color-inset);color:var(--color-faint)', implemented: false },
   { id: 'dingtalk', label: '钉钉', desc: '即将支持', glyph: '钉', glyphStyle: 'background:var(--color-inset);color:var(--color-faint)', implemented: false },
-  { id: 'feishu', label: '飞书', desc: '即将支持', glyph: '飞', glyphStyle: 'background:var(--color-inset);color:var(--color-faint)', implemented: false },
 ]
 
 function typeMeta(t: ChannelType): TypeMeta {
@@ -141,6 +149,7 @@ const saving = ref(false)
 
 const isEmail = computed(() => form.type === 'email')
 const isWebhook = computed(() => form.type === 'webhook')
+const isFeishu = computed(() => form.type === 'feishu')
 const selectedTypeMeta = computed(() => typeMeta(form.type))
 
 function resetForm(): void {
@@ -215,6 +224,11 @@ function validate(): boolean {
       fieldErrors.url = '请填写 Webhook 地址'
       ok = false
     }
+  } else if (isFeishu.value) {
+    if (!form.url.trim()) {
+      fieldErrors.url = '请填写飞书机器人 Webhook 地址'
+      ok = false
+    }
   } else if (isEmail.value) {
     if (!form.smtpHost.trim()) {
       fieldErrors.smtpHost = '请填写 SMTP 主机'
@@ -240,6 +254,12 @@ function validate(): boolean {
 function buildConfig(): ChannelConfigInput {
   if (isWebhook.value) {
     return { url: form.url.trim() }
+  }
+  if (isFeishu.value) {
+    // 飞书:url=机器人 webhook 地址;password=可选签名密钥(机器人开启「签名校验」时填)。
+    const cfg: ChannelConfigInput = { url: form.url.trim() }
+    if (form.password) cfg.password = form.password
+    return cfg
   }
   if (isEmail.value) {
     const cfg: ChannelConfigInput = {
@@ -860,6 +880,53 @@ function configSummary(ch: NotificationChannel): string {
                   </template>
                 </FormField>
               </div>
+
+              <!-- Feishu fields -->
+              <template v-else-if="isFeishu">
+                <div class="config-row">
+                  <FormField
+                    label="飞书机器人 Webhook 地址"
+                    field-id="nt-fs-url"
+                    :error="fieldErrors.url"
+                    hint="飞书群「设置 → 群机器人 → 自定义机器人」的 Webhook 地址(open.feishu.cn/open-apis/bot/v2/hook/…)"
+                    required
+                  >
+                    <template #default="{ fieldId, ariaDescribedby }">
+                      <input
+                        :id="fieldId"
+                        v-model="form.url"
+                        type="url"
+                        class="field-input field-input--mono"
+                        :class="{ 'field-input--error': fieldErrors.url }"
+                        placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…"
+                        :aria-describedby="ariaDescribedby"
+                        :disabled="saving"
+                        @input="fieldErrors.url = ''"
+                      />
+                    </template>
+                  </FormField>
+                </div>
+                <div class="config-row">
+                  <FormField
+                    label="签名密钥(可选)"
+                    field-id="nt-fs-secret"
+                    :hint="hasStoredPassword ? '已配置 ••••(留空则保留)' : '仅当机器人开启「签名校验」时填写;写入后绝不回显'"
+                  >
+                    <template #default="{ fieldId, ariaDescribedby }">
+                      <input
+                        :id="fieldId"
+                        v-model="form.password"
+                        type="password"
+                        class="field-input field-input--mono"
+                        :placeholder="hasStoredPassword ? '已配置 ••••(留空不变)' : '机器人未开启签名校验则留空'"
+                        autocomplete="new-password"
+                        :aria-describedby="ariaDescribedby"
+                        :disabled="saving"
+                      />
+                    </template>
+                  </FormField>
+                </div>
+              </template>
 
               <!-- Email fields -->
               <template v-else-if="isEmail">

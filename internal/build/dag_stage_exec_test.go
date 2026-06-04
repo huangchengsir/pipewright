@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/huangchengsir/pipewright/internal/dagrun"
 	"github.com/huangchengsir/pipewright/internal/deploy"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
@@ -20,8 +21,9 @@ import (
 
 // fakeReporter 记录 dagrun.StageReporter 调用。
 type fakeReporter struct {
-	logs []string
-	arts []run.Artifact
+	logs    []string
+	arts    []run.Artifact
+	jobDone []string // 记录 "jobID=status",验证节点级上报
 }
 
 func (r *fakeReporter) Log(_ context.Context, _ string, line string) error {
@@ -32,6 +34,14 @@ func (r *fakeReporter) EmitArtifact(_ context.Context, a run.Artifact) error {
 	r.arts = append(r.arts, a)
 	return nil
 }
+
+// 节点级 step:测试 fake 记录 job 终态;JobReporter 返回自身(日志继续累计到同一 fake)。
+func (r *fakeReporter) JobRunning(_ context.Context, _ string) error { return nil }
+func (r *fakeReporter) JobDone(_ context.Context, jobID, status string) error {
+	r.jobDone = append(r.jobDone, jobID+"="+status)
+	return nil
+}
+func (r *fakeReporter) JobReporter(string) dagrun.StageReporter { return r }
 
 // recordingDriver 记录 RunToolchain 调用并按配置回退码/日志(其余 Driver 方法不应被调到)。
 type recordingDriver struct {

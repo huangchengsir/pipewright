@@ -3,6 +3,7 @@ import { ref, computed, watch } from 'vue'
 import type { PipelineJob, PipelineStage } from '../../api/pipeline'
 import type { Credential } from '../../api/credentials'
 import type { Server } from '../../api/servers'
+import type { NotificationChannel } from '../../api/notifications'
 import {
   getJobTypeSpec,
   splitConfig,
@@ -28,6 +29,7 @@ const props = defineProps<{
   stage: PipelineStage
   credentials?: Credential[]
   servers?: Server[]
+  channels?: NotificationChannel[]
 }>()
 
 const emit = defineEmits<{
@@ -193,6 +195,18 @@ function credentialOptions(field: JobField): Credential[] {
   const all = props.credentials ?? []
   if (!field.credentialType) return all
   return all.filter((c) => c.type === field.credentialType)
+}
+
+const CHANNEL_TYPE_LABELS: Record<string, string> = {
+  webhook: 'Webhook',
+  email: '邮件',
+  feishu: '飞书',
+  wecom: '企业微信',
+  dingtalk: '钉钉',
+}
+
+function channelTypeLabel(type: string): string {
+  return CHANNEL_TYPE_LABELS[type] ?? type
 }
 
 // ─── Value get/set ────────────────────────────────────────────────────────────
@@ -501,6 +515,20 @@ async function confirmSave(): Promise<void> {
           <option value="">— 未选择 —</option>
           <option v-for="srv in (servers ?? [])" :key="srv.id" :value="srv.id">
             {{ srv.name }} · {{ srv.host }}
+          </option>
+        </select>
+
+        <!-- notification channel picker -->
+        <select
+          v-else-if="field.kind === 'channel'"
+          :value="fieldValue(field.key)"
+          class="drawer-select"
+          :aria-label="field.label"
+          @change="setField(field.key, ($event.target as HTMLSelectElement).value)"
+        >
+          <option value="">— 选择渠道 —</option>
+          <option v-for="ch in (channels ?? [])" :key="ch.id" :value="ch.id">
+            {{ ch.name }} · {{ channelTypeLabel(ch.type) }}{{ ch.enabled ? '' : '(已停用)' }}
           </option>
         </select>
 

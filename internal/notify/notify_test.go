@@ -280,7 +280,7 @@ func TestEmailNoPasswordNoAuth(t *testing.T) {
 
 func TestPlaceholderTypesSaveButSendNotImplemented(t *testing.T) {
 	s, _, _ := newSvc(t, http.DefaultClient)
-	for _, ty := range []string{TypeWecom, TypeDingtalk, TypeFeishu} {
+	for _, ty := range []string{TypeWecom, TypeDingtalk} {
 		ch, err := s.Create(ctx(), CreateInput{Name: ty, Type: ty, Enabled: true})
 		if err != nil {
 			t.Fatalf("占位 type %s 应保存合法: %v", ty, err)

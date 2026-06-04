@@ -748,7 +748,10 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
 /* ─── ready: two-column layout ──────────────────────────────────────────── */
 .dp-body--ready {
   display: grid;
-  grid-template-columns: 1.45fr 1fr;
+  /* minmax(0,…):fr 轨道默认 min-width:auto = 内容 min-content,修复脚本里的长 curl 行会把
+     左列撑爆、把右侧「原始日志证据」挤成只剩行号的窄条。置 0 让两列按 fr 比例收缩,长行交给
+     pre 自身 overflow-x 横向内滚 —— 小屏/窄容器下证据列不再被吞。 */
+  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
   gap: 18px;
   align-items: start;
   padding: 20px;
@@ -765,6 +768,7 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  min-width: 0; /* 允许列收缩到内容 min-content 之下(配合上面 minmax(0,…)) */
 }
 
 .dp-col-label {
@@ -874,6 +878,7 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0; /* 允许内部 pre 在收缩列里横向内滚而非撑宽 */
 }
 
 .dp-fixscript-head {
@@ -1096,17 +1101,19 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
   overflow-x: auto;
 }
 
-/* Hit line: highlighted */
+/* Hit line: highlighted。终端恒为纯黑底,故用固定深红底 + 浅色字(不能用随主题翻转的
+   --color-red-soft/--color-text:浅色主题下它们是「浅底+近黑字」,贴黑终端=黑字黑底,
+   命中行文本看着像空的)。 */
 .dp-term-line--hit {
-  background: var(--color-red-soft);
+  background: oklch(48% 0.16 25 / 0.3);
 }
 
 .dp-term-line--hit .dp-term-ln {
-  color: var(--color-red);
+  color: oklch(74% 0.19 25);
 }
 
 .dp-term-line--hit .dp-term-code {
-  color: var(--color-text);
+  color: oklch(93% 0.03 25);
   font-weight: 500;
 }
 

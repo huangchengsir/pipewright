@@ -81,6 +81,30 @@ describe('findStageForStep', () => {
   it('returns null for no match', () => {
     expect(findStageForStep(mkStep('x', 'checkout'), stages)).toBeNull()
   })
+
+  it('节点级:优先按 step.stage 精确归到同名阶段(节点名与阶段名不同也能归组)', () => {
+    const s = { ...mkStep('x', 'A'), stage: 'Build' }
+    expect(findStageForStep(s, stages)).toBe('s1')
+    // stage 精确优先于模糊名匹配:名为 deploy 但 stage=Build → 归 Build
+    const s2 = { ...mkStep('y', 'deploy'), stage: 'Build' }
+    expect(findStageForStep(s2, stages)).toBe('s1')
+  })
+})
+
+describe('buildRunStages 节点级分组', () => {
+  it('同阶段多节点按 step.stage 归到该阶段的 steps(供进度图展开 / 详情两级)', () => {
+    const stages = [mkStage('b', '构建')]
+    const steps: RunStep[] = [
+      { ...mkStep('a', 'A', 'success'), stage: '构建' },
+      { ...mkStep('bb', 'B', 'success'), stage: '构建' },
+      { ...mkStep('c', 'C', 'running'), stage: '构建' },
+    ]
+    const result = buildRunStages(steps, stages)
+    const build = result.find((s) => s.id === 'b')
+    expect(build).toBeTruthy()
+    expect(build!.steps.map((s) => s.name)).toEqual(['A', 'B', 'C'])
+    expect(build!.status).toBe('running') // 任一运行 → 阶段运行
+  })
 })
 
 // ─── buildRunStages ───────────────────────────────────────────────────────────

@@ -10,9 +10,9 @@ import (
 // 它声明步骤计划、置步骤运行/终态,由 worker 负责持久化 + 经事件总线发布。
 // 这样真实构建(3-3)只需实现 Runner、复用同一持久化/SSE 管道。
 type StepSink interface {
-	// Plan 声明本次运行的全部步骤名(按顺序);worker 据此落 run_steps(pending)。
-	// 必须在任何 StepRunning/StepDone 之前调用一次。
-	Plan(ctx context.Context, names []string) error
+	// Plan 声明本次运行的全部步骤(按顺序;每个 step = 一个 job 节点,带所属阶段名);
+	// worker 据此落 run_steps(pending)。必须在任何 StepRunning/StepDone 之前调用一次。
+	Plan(ctx context.Context, steps []StepDecl) error
 	// StepRunning 将第 ordinal 个步骤置为 running 并记录开始时刻。
 	StepRunning(ctx context.Context, ordinal int) error
 	// StepDone 将第 ordinal 个步骤置为终态(success|failed|skipped)并记录结束时刻。
@@ -203,7 +203,11 @@ func (s *StubRunner) Run(ctx context.Context, r *Run, sink StepSink) error {
 	if len(names) == 0 {
 		names = []string{"拉取源码", "构建镜像", "部署"}
 	}
-	if err := sink.Plan(ctx, names); err != nil {
+	decls := make([]StepDecl, len(names))
+	for i, n := range names {
+		decls[i] = StepDecl{Name: n} // 桩 runner 无阶段分组(Stage 留空 → 前端单级回退)
+	}
+	if err := sink.Plan(ctx, decls); err != nil {
 		return err
 	}
 	for i := range names {

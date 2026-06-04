@@ -57,6 +57,7 @@ type triggerInfo struct {
 type stepDTO struct {
 	ID         string  `json:"id"`
 	Name       string  `json:"name"`
+	Stage      string  `json:"stage,omitempty"` // 所属阶段名(节点级分组;空 = 未分组)
 	Status     string  `json:"status"`
 	StartedAt  *string `json:"startedAt"`
 	FinishedAt *string `json:"finishedAt"`
@@ -111,6 +112,7 @@ func toRunDetailDTO(r *run.Run, artifacts []run.Artifact, targets []run.DeployTa
 		steps = append(steps, stepDTO{
 			ID:         st.ID,
 			Name:       st.Name,
+			Stage:      st.Stage,
 			Status:     st.Status,
 			StartedAt:  rfc3339Ptr(st.StartedAt),
 			FinishedAt: rfc3339Ptr(st.FinishedAt),

@@ -348,7 +348,7 @@ func (s *service) Get(ctx context.Context, id string) (*Run, error) {
 
 func (s *service) loadSteps(ctx context.Context, runID string) ([]Step, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, status, ordinal, started_at, finished_at
+		`SELECT id, name, COALESCE(stage, ''), status, ordinal, started_at, finished_at
 		 FROM run_steps WHERE run_id = ? ORDER BY ordinal ASC`, runID)
 	if err != nil {
 		return nil, fmt.Errorf("run: load steps: %w", err)
@@ -362,7 +362,7 @@ func (s *service) loadSteps(ctx context.Context, runID string) ([]Step, error) {
 			startedStr sql.NullString
 			finishStr  sql.NullString
 		)
-		if err := rows.Scan(&st.ID, &st.Name, &st.Status, &st.Ordinal, &startedStr, &finishStr); err != nil {
+		if err := rows.Scan(&st.ID, &st.Name, &st.Stage, &st.Status, &st.Ordinal, &startedStr, &finishStr); err != nil {
 			return nil, fmt.Errorf("run: scan step: %w", err)
 		}
 		if st.StartedAt, err = parseNullTime(startedStr); err != nil {

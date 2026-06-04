@@ -52,6 +52,10 @@ func toChannelDTO(c *notify.Channel) channelDTO {
 	switch c.Type {
 	case notify.TypeWebhook:
 		cfg.URL = c.Config.URL
+	case notify.TypeFeishu:
+		// 飞书:回显 webhook 地址 + 是否已配签名密钥(密钥本身绝不回显)。
+		cfg.URL = c.Config.URL
+		cfg.HasPassword = c.HasSecret
 	case notify.TypeEmail:
 		cfg.SMTPHost = c.Config.SMTPHost
 		cfg.SMTPPort = c.Config.SMTPPort

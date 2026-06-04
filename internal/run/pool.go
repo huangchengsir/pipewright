@@ -518,20 +518,24 @@ type dbStepSink struct {
 	runID   string
 	stepIDs []string
 	names   []string
+	stages  []string // 各 step 所属阶段名(节点级分组;与 names/stepIDs 同序)
 	// masker 在日志行落库/出网前脱敏(AC-SEC-04);nil 则不脱敏(纯单测可省)。
 	masker *mask.Masker
 }
 
-func (d *dbStepSink) Plan(ctx context.Context, names []string) error {
-	d.names = names
-	d.stepIDs = make([]string, len(names))
-	for i, name := range names {
+func (d *dbStepSink) Plan(ctx context.Context, steps []StepDecl) error {
+	d.names = make([]string, len(steps))
+	d.stages = make([]string, len(steps))
+	d.stepIDs = make([]string, len(steps))
+	for i, st := range steps {
+		d.names[i] = st.Name
+		d.stages[i] = st.Stage
 		id := uuid.NewString()
 		d.stepIDs[i] = id
 		_, err := d.svc.db.ExecContext(ctx,
-			`INSERT INTO run_steps (id, run_id, name, status, ordinal, started_at, finished_at)
-			 VALUES (?, ?, ?, ?, ?, NULL, NULL)`,
-			id, d.runID, name, StepPending, i,
+			`INSERT INTO run_steps (id, run_id, name, stage, status, ordinal, started_at, finished_at)
+			 VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)`,
+			id, d.runID, st.Name, st.Stage, StepPending, i,
 		)
 		if err != nil {
 			return fmt.Errorf("run: insert step: %w", err)
@@ -651,7 +655,7 @@ func (d *dbStepSink) reconcile(runFinal string) {
 
 	// 用后台 ctx:取消场景下派生 ctx 已 Done,校正仍须持久化。
 	rows, err := d.svc.db.QueryContext(context.Background(),
-		`SELECT id, name, ordinal FROM run_steps
+		`SELECT id, name, COALESCE(stage, ''), ordinal FROM run_steps
 		 WHERE run_id = ? AND status NOT IN (?, ?, ?)`,
 		d.runID, StepSuccess, StepFailed, StepSkipped)
 	if err != nil {
@@ -661,12 +665,13 @@ func (d *dbStepSink) reconcile(runFinal string) {
 	type pending struct {
 		id      string
 		name    string
+		stage   string
 		ordinal int
 	}
 	var stuck []pending
 	for rows.Next() {
 		var p pending
-		if err := rows.Scan(&p.id, &p.name, &p.ordinal); err != nil {
+		if err := rows.Scan(&p.id, &p.name, &p.stage, &p.ordinal); err != nil {
 			log.Printf("[run] run %s: reconcile scan step failed: %v", d.runID, err)
 			_ = rows.Close()
 			return
@@ -690,6 +695,7 @@ func (d *dbStepSink) reconcile(runFinal string) {
 			Step: Step{
 				ID:         p.id,
 				Name:       p.name,
+				Stage:      p.stage,
 				Status:     target,
 				Ordinal:    p.ordinal,
 				FinishedAt: &now,
@@ -701,9 +707,13 @@ func (d *dbStepSink) reconcile(runFinal string) {
 // publish 经事件总线发布一个 step 事件(携带步骤快照,无日志正文)。
 func (d *dbStepSink) publish(ordinal int, status string, started, finished *time.Time) {
 	name := ""
+	stage := ""
 	id := ""
 	if ordinal >= 0 && ordinal < len(d.names) {
 		name = d.names[ordinal]
+	}
+	if ordinal >= 0 && ordinal < len(d.stages) {
+		stage = d.stages[ordinal]
 	}
 	if ordinal >= 0 && ordinal < len(d.stepIDs) {
 		id = d.stepIDs[ordinal]
@@ -715,6 +725,7 @@ func (d *dbStepSink) publish(ordinal int, status string, started, finished *time
 		Step: Step{
 			ID:         id,
 			Name:       name,
+			Stage:      stage,
 			Status:     status,
 			Ordinal:    ordinal,
 			StartedAt:  started,

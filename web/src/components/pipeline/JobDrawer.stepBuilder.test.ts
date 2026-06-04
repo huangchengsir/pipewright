@@ -6,22 +6,31 @@ import type { PipelineJob, PipelineStage } from '../../api/pipeline'
 
 const stage: PipelineStage = { id: 's1', name: '构建', kind: 'build', jobs: [] }
 
-function scriptJob(config: Record<string, string>): PipelineJob {
-  return { id: 'j1', name: '隔离构建', type: 'script', summary: '', config }
+// 步骤构建器适用于带预置语义的脚本类节点(前端/后端构建/模板),不再用于「自定义脚本」。
+function builderJob(config: Record<string, string>): PipelineJob {
+  return { id: 'j1', name: '前端构建', type: 'build_frontend', summary: '', config }
 }
 
 describe('JobDrawer + StepBuilder integration', () => {
-  it('shows the step builder by default for a fresh script node', () => {
+  it('shows the step builder by default for a fresh build node', () => {
     const wrapper = mount(JobDrawer, {
-      props: { job: scriptJob({ image: 'node:20' }), stage },
+      props: { job: builderJob({ image: 'node:20' }), stage },
     })
     expect(wrapper.findComponent(StepBuilder).exists()).toBe(true)
     // the view switch is present with two tabs
     expect(wrapper.findAll('.view-tab').length).toBe(2)
   })
 
+  // 「自定义脚本」(script/custom)节点天然写命令文本:默认原始参数、无可视化步骤切换。
+  it('uses raw view (no step builder, no view switch) for a 自定义脚本 node', () => {
+    const job: PipelineJob = { id: 'js', name: '自定义脚本', type: 'script', summary: '', config: { image: 'node:20' } }
+    const wrapper = mount(JobDrawer, { props: { job, stage } })
+    expect(wrapper.findComponent(StepBuilder).exists()).toBe(false)
+    expect(wrapper.findAll('.view-tab').length).toBe(0)
+  })
+
   it('compiles builder steps into commands/artifactPath via emit("update")', async () => {
-    const job = scriptJob({ image: 'node:20', commands: 'npm ci', artifactPath: '' })
+    const job = builderJob({ image: 'node:20', commands: 'npm ci', artifactPath: '' })
     const wrapper = mount(JobDrawer, { props: { job, stage } })
 
     const builder = wrapper.findComponent(StepBuilder)
@@ -42,7 +51,7 @@ describe('JobDrawer + StepBuilder integration', () => {
   })
 
   it('reparses an existing config back into ordered step blocks on open', () => {
-    const job = scriptJob({
+    const job = builderJob({
       image: 'node:20',
       commands: "export NODE_ENV='production'\ncd 'frontend'\nnpm ci\nnpm run build",
       artifactPath: 'frontend/dist',

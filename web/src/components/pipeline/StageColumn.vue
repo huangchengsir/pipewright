@@ -437,6 +437,21 @@ function resetDrag(): void {
   white-space: nowrap;
 }
 
+/* DAG mode: the column is as wide as the rank grid below; if the title keeps `flex:1`
+   it stretches across that whole width and dumps the action buttons to the far right
+   with an ugly empty gap in the middle. Pin the header content together at the left
+   (title takes only its own width; no auto-margin spacer) so it reads as one compact bar. */
+.stage-col--dag .stage-header {
+  width: fit-content;
+}
+.stage-col--dag .stage-name-text {
+  flex: 0 1 auto;
+  max-width: 220px;
+}
+.stage-col--dag .stage-add-job {
+  margin-left: 0;
+}
+
 .stage-deps-btn {
   display: inline-flex;
   align-items: center;

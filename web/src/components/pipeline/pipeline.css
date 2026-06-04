@@ -15,7 +15,8 @@
   background-color: var(--color-canvas);
   background-image: radial-gradient(oklch(100% 0 0 / 0.04) 1px, transparent 1px);
   background-size: 22px 22px;
-  padding: 34px 30px;
+  /* 上下内边距收窄(34→18):全幅画布把垂直空间让给节点,缓解「高度太窄」。 */
+  padding: 18px 30px;
   min-height: 0;
 }
 

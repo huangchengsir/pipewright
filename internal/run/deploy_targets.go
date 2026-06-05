@@ -217,13 +217,13 @@ func (s *service) UpsertDeployTargets(ctx context.Context, runID string, targets
 	return nil
 }
 
-// ListDeployTargets 取某次运行的全部部署目标结果(按 started_at 升序,rowid 破并列;
+// ListDeployTargets 取某次运行的全部部署目标结果(按 started_at 升序,id 破并列;
 // 无部署 → 空切片)。run 不存在不报错(返回空切片);HTTP 层据 run 存在性决定 404。
 // 参数化 SQL;不全量驻留无关数据。
 func (s *service) ListDeployTargets(ctx context.Context, runID string) ([]DeployTarget, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, run_id, server_id, server_name, status, message, started_at, finished_at
-		 FROM deploy_targets WHERE run_id = ? ORDER BY started_at ASC, rowid ASC`, runID)
+		 FROM deploy_targets WHERE run_id = ? ORDER BY started_at ASC, id ASC`, runID)
 	if err != nil {
 		return nil, fmt.Errorf("run: load deploy targets: %w", err)
 	}

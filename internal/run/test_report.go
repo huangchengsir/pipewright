@@ -74,12 +74,12 @@ func (s *service) SaveTestReport(ctx context.Context, tr TestReport) (*TestRepor
 	return &out, nil
 }
 
-// ListTestReports 取某次运行的全部测试报告汇总(按 created_at 升序,rowid tiebreaker)。
+// ListTestReports 取某次运行的全部测试报告汇总(按 created_at 升序,id tiebreaker)。
 func (s *service) ListTestReports(ctx context.Context, runID string) ([]TestReport, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, run_id, stage_id, stage_name, format, total, passed, failed, skipped,
 		        duration_sec, coverage_pct, gate_enabled, gate_passed, gate_reason, created_at
-		 FROM run_test_reports WHERE run_id = ? ORDER BY created_at ASC, rowid ASC`, runID)
+		 FROM run_test_reports WHERE run_id = ? ORDER BY created_at ASC, id ASC`, runID)
 	if err != nil {
 		return nil, fmt.Errorf("run: load test reports: %w", err)
 	}

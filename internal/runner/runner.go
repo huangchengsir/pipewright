@@ -12,6 +12,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/huangchengsir/pipewright/internal/store"
 )
 
 // 领域错误。
@@ -84,8 +86,8 @@ func (s *service) Save(ctx context.Context, projectID, runnerServerID string) (*
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO project_runners (project_id, runner_server_id, created_at, updated_at)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(project_id) DO UPDATE SET runner_server_id = excluded.runner_server_id, updated_at = excluded.updated_at`,
+		VALUES (?, ?, ?, ?) `+
+		store.UpsertSuffix(store.DialectOf(s.db), []string{"project_id"}, []string{"runner_server_id", "updated_at"}),
 		projectID, runnerServerID, now, now)
 	if err != nil {
 		return nil, err

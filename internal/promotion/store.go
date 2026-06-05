@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/store"
 )
 
 // Store 持久化环境链 / 环境变量 / 晋级记录(参数化 SQL)。
@@ -56,8 +57,8 @@ func (s *Store) SaveChain(ctx context.Context, projectID string, c Chain) (Chain
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO project_environments (project_id, chain_json, updated_at)
-		 VALUES (?, ?, ?)
-		 ON CONFLICT(project_id) DO UPDATE SET chain_json = excluded.chain_json, updated_at = excluded.updated_at`,
+		 VALUES (?, ?, ?) `+
+			store.UpsertSuffix(store.DialectOf(s.db), []string{"project_id"}, []string{"chain_json", "updated_at"}),
 		projectID, string(raw), now,
 	)
 	if err != nil {

@@ -24,6 +24,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/dag"
+	"github.com/huangchengsir/pipewright/internal/store"
 	yaml "gopkg.in/yaml.v3"
 )
 
@@ -252,8 +253,8 @@ func (s *service) createDefault(ctx context.Context, projectID string) (*Config,
 	nowStr := now.Format(time.RFC3339)
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO pipeline_configs (project_id, spec_json, spec_yaml, status, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(project_id) DO NOTHING`,
+		 VALUES (?, ?, ?, ?, ?, ?) `+
+			store.DoNothingSuffix(store.DialectOf(s.db), []string{"project_id"}),
 		projectID, string(specJSON), renderedYAML, statusDraft, nowStr, nowStr,
 	)
 	if err != nil {

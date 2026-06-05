@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/huangchengsir/pipewright/internal/store"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
@@ -182,13 +183,9 @@ func (s *service) SaveApp(ctx context.Context, in SaveAppInput) (*AppConfig, err
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO oauth_apps
 		   (provider, client_id, client_secret_ciphertext, base_url, enabled, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(provider) DO UPDATE SET
-		   client_id = excluded.client_id,
-		   client_secret_ciphertext = excluded.client_secret_ciphertext,
-		   base_url = excluded.base_url,
-		   enabled = excluded.enabled,
-		   updated_at = excluded.updated_at`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?) `+
+			store.UpsertSuffix(store.DialectOf(s.db), []string{"provider"},
+				[]string{"client_id", "client_secret_ciphertext", "base_url", "enabled", "updated_at"}),
 		provider, clientID, sealed, baseURL, enabled, now, now,
 	)
 	if err != nil {

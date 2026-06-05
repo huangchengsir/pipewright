@@ -18,12 +18,14 @@ import (
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (no CGO)
 )
 
-//go:embed migrations/*.sql
-var migrationFS embed.FS
+//go:embed migrations/sqlite/*.sql
+var sqliteMigrationFS embed.FS
 
 // Store 持有数据库连接。仅本包持有 *sql.DB;其它领域包经 repository 接口取数。
 type Store struct {
 	DB *sql.DB
+	// Dialect 标识底层方言(SQLite 默认 / MySQL);Open 时由驱动判定。
+	Dialect Dialect
 }
 
 // Open 打开(必要时创建)指定路径的 SQLite 数据库,并应用内嵌迁移。
@@ -40,12 +42,18 @@ func Open(dbPath string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("ping sqlite: %w", err)
 	}
-	s := &Store{DB: db}
+	s := &Store{DB: db, Dialect: DialectOf(db)}
 	if err := s.migrate(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+// migrationFS 返回当前方言对应的内嵌迁移文件系统与 glob。
+// MySQL 分支在 P5 接入 mysql 迁移集后启用。
+func (s *Store) migrationFS() (fs.FS, string) {
+	return sqliteMigrationFS, "migrations/sqlite/*.sql"
 }
 
 // Close 关闭底层数据库连接。
@@ -61,7 +69,8 @@ func (s *Store) migrate() error {
 		return fmt.Errorf("create schema_migrations: %w", err)
 	}
 
-	entries, err := fs.Glob(migrationFS, "migrations/*.sql")
+	fsys, glob := s.migrationFS()
+	entries, err := fs.Glob(fsys, glob)
 	if err != nil {
 		return fmt.Errorf("glob migrations: %w", err)
 	}
@@ -80,7 +89,7 @@ func (s *Store) migrate() error {
 			continue
 		}
 
-		sqlText, err := migrationFS.ReadFile(entry)
+		sqlText, err := fs.ReadFile(fsys, entry)
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", version, err)
 		}

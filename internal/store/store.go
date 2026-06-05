@@ -21,6 +21,9 @@ import (
 //go:embed migrations/sqlite/*.sql
 var sqliteMigrationFS embed.FS
 
+//go:embed migrations/mysql/*.sql
+var mysqlMigrationFS embed.FS
+
 // Store 持有数据库连接。仅本包持有 *sql.DB;其它领域包经 repository 接口取数。
 type Store struct {
 	DB *sql.DB
@@ -94,8 +97,10 @@ func openMySQL(dsn string) (*Store, error) {
 }
 
 // migrationFS 返回当前方言对应的内嵌迁移文件系统与 glob。
-// MySQL 分支在 P5 接入 mysql 迁移集后启用。
 func (s *Store) migrationFS() (fs.FS, string) {
+	if s.Dialect == MySQL {
+		return mysqlMigrationFS, "migrations/mysql/*.sql"
+	}
 	return sqliteMigrationFS, "migrations/sqlite/*.sql"
 }
 
@@ -103,12 +108,10 @@ func (s *Store) migrationFS() (fs.FS, string) {
 func (s *Store) Close() error { return s.DB.Close() }
 
 // migrate 建立 schema_migrations 跟踪表,并按版本顺序幂等应用内嵌的 *.sql 迁移。
-// 本阶段不创建任何领域表;领域表由各自 story 在需要时通过新增迁移创建。
+// 领域表由各自 story 在需要时通过新增迁移创建。bootstrap DDL 与每条迁移的执行
+// 方式按方言分叉(见 schemaMigrationsDDL / applyMigration)。
 func (s *Store) migrate() error {
-	if _, err := s.DB.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
-		version    TEXT PRIMARY KEY,
-		applied_at TEXT NOT NULL
-	)`); err != nil {
+	if _, err := s.DB.Exec(s.schemaMigrationsDDL()); err != nil {
 		return fmt.Errorf("create schema_migrations: %w", err)
 	}
 
@@ -136,31 +139,118 @@ func (s *Store) migrate() error {
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", version, err)
 		}
-		// 迁移 DDL 与版本记录在同一事务内,保证原子:崩溃/部分失败则整体回滚,
-		// 不会留下"已改但未记录"的半迁移导致下次重跑。
-		tx, err := s.DB.Begin()
-		if err != nil {
-			return fmt.Errorf("begin migration %s: %w", version, err)
-		}
-		if _, err := tx.Exec(string(sqlText)); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("apply migration %s: %w", version, err)
-		}
-		if _, err := tx.Exec(
-			`INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`,
-			version, time.Now().UTC().Format(time.RFC3339),
-		); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("record migration %s: %w", version, err)
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit migration %s: %w", version, err)
+		if err := s.applyMigration(version, string(sqlText)); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-// migrationVersion 从 "migrations/0001_baseline.sql" 提取版本键 "0001_baseline"。
+// schemaMigrationsDDL 返回方言对应的版本跟踪表 DDL。MySQL 主键不能用 TEXT,改 VARCHAR。
+func (s *Store) schemaMigrationsDDL() string {
+	if s.Dialect == MySQL {
+		return `CREATE TABLE IF NOT EXISTS schema_migrations (
+			version    VARCHAR(255) PRIMARY KEY,
+			applied_at VARCHAR(64) NOT NULL
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+	}
+	return `CREATE TABLE IF NOT EXISTS schema_migrations (
+		version    TEXT PRIMARY KEY,
+		applied_at TEXT NOT NULL
+	)`
+}
+
+// applyMigration 应用单条迁移并记录版本。
+//
+// SQLite:DDL 与版本记录在同一事务内原子提交,崩溃/部分失败整体回滚,不留半迁移。
+// MySQL :DDL 隐式提交,事务对 DDL 无回滚效力——故逐句执行(go-sql-driver 默认不允许
+// 单 Exec 多语句)后再记录版本;幂等靠 CREATE TABLE/TRIGGER IF NOT EXISTS。
+// 注意:MySQL 的 CREATE INDEX / ALTER ADD COLUMN 无 IF NOT EXISTS,真正的"只应用一次"
+// 由 schema_migrations 跟踪保证;仅当崩溃恰好发生在 DDL 已提交但版本未记录之间,重跑才会
+// 撞已存在对象(单管理员全新建库场景概率极低,可接受)。
+func (s *Store) applyMigration(version, sqlText string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	if s.Dialect == MySQL {
+		for _, stmt := range splitStatements(sqlText) {
+			if _, err := s.DB.Exec(stmt); err != nil {
+				return fmt.Errorf("apply migration %s: %w", version, err)
+			}
+		}
+		if _, err := s.DB.Exec(
+			`INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`, version, now,
+		); err != nil {
+			return fmt.Errorf("record migration %s: %w", version, err)
+		}
+		return nil
+	}
+
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return fmt.Errorf("begin migration %s: %w", version, err)
+	}
+	if _, err := tx.Exec(sqlText); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("apply migration %s: %w", version, err)
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`, version, now,
+	); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("record migration %s: %w", version, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration %s: %w", version, err)
+	}
+	return nil
+}
+
+// splitStatements 把含多条 SQL 的迁移文本拆成单条语句(供 MySQL 逐条执行)。
+// 规则:剥离整行/行尾 `--` 注释;在单引号字符串外按 `;` 切分;丢弃空白语句。
+// 我们的 mysql 迁移不在字符串字面量内出现 `;`,且触发器写成单语句 SIGNAL 形式
+// (无 BEGIN/END、体内无 `;`),故此简单切分足够且可单测。
+func splitStatements(sqlText string) []string {
+	var stmts []string
+	var b strings.Builder
+	inQuote := false
+	lineComment := false
+
+	runes := []rune(sqlText)
+	for i := 0; i < len(runes); i++ {
+		c := runes[i]
+		if lineComment {
+			if c == '\n' {
+				lineComment = false
+				b.WriteRune(c)
+			}
+			continue
+		}
+		if !inQuote && c == '-' && i+1 < len(runes) && runes[i+1] == '-' {
+			lineComment = true
+			i++ // 跳过第二个 '-'
+			continue
+		}
+		if c == '\'' {
+			inQuote = !inQuote
+			b.WriteRune(c)
+			continue
+		}
+		if c == ';' && !inQuote {
+			if stmt := strings.TrimSpace(b.String()); stmt != "" {
+				stmts = append(stmts, stmt)
+			}
+			b.Reset()
+			continue
+		}
+		b.WriteRune(c)
+	}
+	if stmt := strings.TrimSpace(b.String()); stmt != "" {
+		stmts = append(stmts, stmt)
+	}
+	return stmts
+}
+
+// migrationVersion 从 "migrations/sqlite/0001_baseline.sql" 提取版本键 "0001_baseline"。
 func migrationVersion(entry string) string {
 	return strings.TrimSuffix(path.Base(entry), ".sql")
 }

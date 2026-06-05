@@ -560,6 +560,13 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		aiRisk := aiRiskDeps{aiSvc: aiSvc, projects: p, settings: ps, secretSource: o.secretSource}
 		ar.Post("/projects/{id}/pipeline/analyze-risks", makeAnalyzeRisksHandler(aiRisk))
 
+		// AI 运维终端助手(运维终端 P1 · 护城河):中文 → 命令卡 / 命令解释。复用 aiSvc。
+		// 写方法,过 auth + CSRF。未配 AI → 200 + available=false(前端提示去设置配);命令最终
+		// risk 由领域层确定性复核(rm -rf/mkfs/dd/关机等无条件 danger),前端据此拦截直接执行。
+		ar.Post("/ai/command", makeAICommandHandler(aiSvc))
+		ar.Post("/ai/explain", makeAIExplainHandler(aiSvc))
+		ar.Post("/ai/complete", makeAICompleteHandler(aiSvc)) // P2 智能补全(前缀→完整命令)
+
 		// 只读源码读取(Story 3.6;FR-4 预埋,7-4 消费):go-git 浅克隆读 tree/blob。
 		// 复用已注入 projects(p)+ vault(v)取凭据 + 注入的 SourceReader。reader 为 nil → 503。
 		// /source/tree、/source/blob 比 /projects/{id} 多两段,不会被吞;GET 过 auth。
@@ -611,6 +618,10 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 命令 array 化经 target.ExecInteractive 不拼 shell。握手成功(PTY 建立)后写审计(detail 脱敏)。
 		// 比 /servers/{id} 多两段,不会被吞。
 		ar.Get("/servers/{id}/containers/{containerId}/terminal", makeContainerTerminalHandler(sv, aud))
+		// 主机 shell 终端(「连服务器终端」的目标:SSH 直起交互 shell)。进容器留给用户在 shell 里
+		// 自己 docker exec 自由探索(不绑死容器;很多服务器没 docker)。WS 升级,同源校验 + shell
+		// 白名单;审计 server_terminal。比 /servers/{id} 多一段,不会被吞。
+		ar.Get("/servers/{id}/terminal", makeServerTerminalHandler(sv, aud))
 		// 通知渠道(Story 5.1;FR-19)。nf 为 nil 时 handler 返回 503。
 		// GET(列表/详情)过 auth;POST/PUT/DELETE/test 为写方法,过 auth + CSRF。
 		// 敏感字段(SMTP 密码)加密入库、响应仅 hasPassword。test 须在 {id} 路由内单独注册。

@@ -41,6 +41,8 @@ const RunDetail = () => import('../views/RunDetail.vue')
 const StatesShowcase = () => import('../views/StatesShowcase.vue')
 // 自定义节点工作室:路由级聚焦低代码编辑页(shell 外全屏,进出经路由)
 const CustomNodeStudioPage = () => import('../views/CustomNodeStudioPage.vue')
+// AI 运维终端:独立全屏页(左终端 / 右 AI 助手),shell 外但需鉴权(对标阿里云 Cloud Shell)
+const ServerTerminal = () => import('../views/ServerTerminal.vue')
 
 const router = createRouter({
   history: createWebHistory(),
@@ -70,6 +72,13 @@ const router = createRouter({
       path: '/library/studio/:id',
       name: 'studio-edit',
       component: CustomNodeStudioPage,
+      meta: { requiresAuth: true },
+    },
+    // ——— AI 运维终端:独立全屏页(query: ?container=&shell=);shell 外,需鉴权 ———
+    {
+      path: '/servers/:id/terminal',
+      name: 'server-terminal',
+      component: ServerTerminal,
       meta: { requiresAuth: true },
     },
     // ——— Shell-inside: authenticated routes ———

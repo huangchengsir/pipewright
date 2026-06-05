@@ -25,6 +25,11 @@ type diagStubAI struct {
 	gotMaskLog bool           // Diagnose 内是否已脱敏(经 Masker.Scrub 验证)
 	risk       *ai.RiskReport // AnnotateRisks 返回值(nil → 空报告)
 	gotSteps   []ai.ScriptStep
+	cmd        *ai.CommandSuggestion // CommandSuggest 返回值(nil → ErrAINotConfigured)
+	cmdErr     error                 // CommandSuggest/ExplainCommand/CompleteCommand 强制错误
+	explain    *ai.CommandExplanation
+	completion *ai.CompletionResult // CompleteCommand 返回值(nil → ErrAINotConfigured)
+	gotNL      string
 }
 
 func (s *diagStubAI) Get(context.Context) (*ai.Config, error) { return &ai.Config{}, nil }
@@ -60,6 +65,34 @@ func (s *diagStubAI) AnnotateRisks(_ context.Context, in ai.AnnotateRisksInput) 
 		return s.risk, nil
 	}
 	return &ai.RiskReport{Findings: []ai.RiskFinding{}, GeneratedAt: time.Now().UTC()}, nil
+}
+func (s *diagStubAI) CommandSuggest(_ context.Context, in ai.CommandSuggestInput) (*ai.CommandSuggestion, error) {
+	s.gotNL = in.NL
+	if s.cmdErr != nil {
+		return nil, s.cmdErr
+	}
+	if s.cmd != nil {
+		return s.cmd, nil
+	}
+	return nil, ai.ErrAINotConfigured
+}
+func (s *diagStubAI) ExplainCommand(_ context.Context, _ ai.ExplainCommandInput) (*ai.CommandExplanation, error) {
+	if s.cmdErr != nil {
+		return nil, s.cmdErr
+	}
+	if s.explain != nil {
+		return s.explain, nil
+	}
+	return nil, ai.ErrAINotConfigured
+}
+func (s *diagStubAI) CompleteCommand(_ context.Context, in ai.CompleteCommandInput) (*ai.CompletionResult, error) {
+	if s.cmdErr != nil {
+		return nil, s.cmdErr
+	}
+	if s.completion != nil {
+		return s.completion, nil
+	}
+	return nil, ai.ErrAINotConfigured
 }
 
 // setupDiagnoseServer 构造带 auth + project + run(失败 runner,FailAt=0)+ stub AI 的 server。

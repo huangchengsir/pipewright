@@ -127,9 +127,4 @@ func (s *service) ListEnabled(ctx context.Context) ([]Entry, error) {
 }
 
 // isForeignKeyErr 判定是否为外键约束失败(项目不存在)。
-func isForeignKeyErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(strings.ToUpper(err.Error()), "FOREIGN KEY")
-}
+func isForeignKeyErr(err error) bool { return store.IsForeignKeyErr(err) }

@@ -306,9 +306,4 @@ func (s *Store) queryRecords(ctx context.Context, clause, arg string) ([]Record,
 }
 
 // isForeignKeyErr 判断错误是否为外键约束失败(modernc sqlite 文本含 FOREIGN KEY)。
-func isForeignKeyErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(strings.ToUpper(err.Error()), "FOREIGN KEY")
-}
+func isForeignKeyErr(err error) bool { return store.IsForeignKeyErr(err) }

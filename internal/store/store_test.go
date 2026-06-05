@@ -67,6 +67,30 @@ func TestOpenIdempotent(t *testing.T) {
 	}
 }
 
+// TestOpenWithConfig 验证驱动分派:sqlite 路径正常打开;未知驱动报错。
+func TestOpenWithConfig(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "cfg.db")
+	s, err := OpenWithConfig(OpenConfig{Driver: "sqlite", DSN: dbPath})
+	if err != nil {
+		t.Fatalf("OpenWithConfig sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	if s.Dialect != SQLite {
+		t.Fatalf("dialect = %v, want sqlite", s.Dialect)
+	}
+
+	// 空 driver 视为 sqlite。
+	s2, err := OpenWithConfig(OpenConfig{DSN: filepath.Join(t.TempDir(), "d.db")})
+	if err != nil {
+		t.Fatalf("OpenWithConfig empty driver: %v", err)
+	}
+	_ = s2.Close()
+
+	if _, err := OpenWithConfig(OpenConfig{Driver: "postgres", DSN: "x"}); err == nil {
+		t.Fatalf("expected error for unknown driver")
+	}
+}
+
 func contains(ss []string, target string) bool {
 	for _, s := range ss {
 		if s == target {

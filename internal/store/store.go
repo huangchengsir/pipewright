@@ -28,6 +28,26 @@ type Store struct {
 	Dialect Dialect
 }
 
+// OpenConfig 是驱动感知的打开参数。Driver 取 "sqlite"(默认)或 "mysql";
+// DSN 为对应驱动的连接串(SQLite 为数据库文件路径)。
+type OpenConfig struct {
+	Driver string
+	DSN    string
+}
+
+// OpenWithConfig 按驱动选择后端打开数据库并应用对应方言的内嵌迁移。
+// 空 Driver 视为 "sqlite",保持向后兼容。
+func OpenWithConfig(c OpenConfig) (*Store, error) {
+	switch c.Driver {
+	case "mysql":
+		return openMySQL(c.DSN)
+	case "", "sqlite":
+		return Open(c.DSN)
+	default:
+		return nil, fmt.Errorf("store: unknown db driver %q (want sqlite|mysql)", c.Driver)
+	}
+}
+
 // Open 打开(必要时创建)指定路径的 SQLite 数据库,并应用内嵌迁移。
 // DSN 加固:busy_timeout 避免锁竞争直接报错;WAL 提升并发;foreign_keys 默认开启
 // (SQLite 默认关闭)。SetMaxOpenConns(1) 串行化写,规避 SQLITE_BUSY。
@@ -41,6 +61,29 @@ func Open(dbPath string) (*Store, error) {
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("ping sqlite: %w", err)
+	}
+	s := &Store{DB: db, Dialect: DialectOf(db)}
+	if err := s.migrate(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+// openMySQL 打开 MySQL(8.0+)连接并应用 mysql 方言迁移。与 SQLite 不同,
+// MySQL 用常规连接池(不串行化),外键由 InnoDB 默认强制。驱动经 dialect.go
+// 的 mysql 包导入已注册,无需在此重复 blank import。
+func openMySQL(dsn string) (*Store, error) {
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open mysql: %w", err)
+	}
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(25)
+	db.SetConnMaxLifetime(5 * time.Minute)
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("ping mysql: %w", err)
 	}
 	s := &Store{DB: db, Dialect: DialectOf(db)}
 	if err := s.migrate(); err != nil {

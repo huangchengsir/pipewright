@@ -41,6 +41,7 @@ const (
 	ActionSessionRevoke      = "session_revoke"
 	ActionServiceOp          = "service_op"
 	ActionContainerTerminal  = "container_terminal"
+	ActionServerTerminal     = "server_terminal"
 	// 流水线模板 + 变量组(FR-8-13 复用基座)。
 	ActionTemplateCreate = "template_create"
 	ActionTemplateDelete = "template_delete"

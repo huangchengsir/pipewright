@@ -372,11 +372,32 @@ export function openContainerTerminal(
   handlers: TerminalHandlers,
   shell?: TerminalShell,
 ): TerminalConnection {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
   const qs = shell ? `?shell=${encodeURIComponent(shell)}` : ''
-  const url = `${proto}//${location.host}/api/servers/${serverId}/containers/${encodeURIComponent(
-    containerId,
-  )}/terminal${qs}`
+  return openTerminalWS(
+    `/api/servers/${serverId}/containers/${encodeURIComponent(containerId)}/terminal${qs}`,
+    handlers,
+  )
+}
+
+/**
+ * Open an interactive **host shell** on a registered server (SSH → login shell, no container).
+ *
+ * This is the default target of "open the server's terminal". Same-origin WebSocket carries the
+ * session cookie. `shell` defaults server-side to `/bin/sh` when omitted.
+ */
+export function openServerTerminal(
+  serverId: string,
+  handlers: TerminalHandlers,
+  shell?: TerminalShell,
+): TerminalConnection {
+  const qs = shell ? `?shell=${encodeURIComponent(shell)}` : ''
+  return openTerminalWS(`/api/servers/${serverId}/terminal${qs}`, handlers)
+}
+
+/** Shared WS wiring for both host-shell and container terminals (path is the only difference). */
+function openTerminalWS(path: string, handlers: TerminalHandlers): TerminalConnection {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const url = `${proto}//${location.host}${path}`
 
   const ws = new WebSocket(url)
   ws.binaryType = 'arraybuffer'

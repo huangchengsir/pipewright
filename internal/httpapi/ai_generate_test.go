@@ -47,6 +47,15 @@ func (s *stubAIService) Diagnose(context.Context, ai.DiagnoseInput) (*ai.Diagnos
 func (s *stubAIService) AnnotateRisks(context.Context, ai.AnnotateRisksInput) (*ai.RiskReport, error) {
 	return &ai.RiskReport{Findings: []ai.RiskFinding{}}, nil
 }
+func (s *stubAIService) CommandSuggest(context.Context, ai.CommandSuggestInput) (*ai.CommandSuggestion, error) {
+	return nil, ai.ErrAINotConfigured
+}
+func (s *stubAIService) ExplainCommand(context.Context, ai.ExplainCommandInput) (*ai.CommandExplanation, error) {
+	return nil, ai.ErrAINotConfigured
+}
+func (s *stubAIService) CompleteCommand(context.Context, ai.CompleteCommandInput) (*ai.CompletionResult, error) {
+	return nil, ai.ErrAINotConfigured
+}
 
 // ---- stub analyzer ----
 

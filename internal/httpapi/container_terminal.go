@@ -145,6 +145,71 @@ func makeContainerTerminalHandler(svc target.Service, aud audit.Recorder) http.H
 	}
 }
 
+// validateHostShell 校验主机 shell(白名单);空则默认登录 shell。供主机终端(无容器)使用。
+func validateHostShell(shell string) (string, error) {
+	if shell == "" {
+		shell = termShellDefault
+	}
+	if _, ok := allowedShells[shell]; !ok {
+		return "", errors.New("非法 shell(不在允许白名单内)")
+	}
+	return shell, nil
+}
+
+// makeServerTerminalHandler 返回 GET /api/servers/{id}/terminal handler —— **主机 shell** 终端
+// (SSH 直接起交互 shell,不进容器)。这是「连服务器终端」的默认目标;容器终端是可选的更窄目标。
+//
+// 安全姿态同容器终端:鉴权由 /api 组 requireAuth 把守;WS 同源校验防跨站劫持;shell 经白名单;
+// cmd array 化(仅 [shell],无拼接);凭据 vault 即用即弃;握手成功写审计(server_terminal)。
+// 注意:服务器注册的 SSH 凭据本就具宿主机权限(容器模式的 docker exec 亦在宿主跑),主机 shell
+// 不扩大信任边界,只是把既有权限诚实暴露。
+func makeServerTerminalHandler(svc target.Service, aud audit.Recorder) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "服务器服务未初始化")
+			return
+		}
+		id := chi.URLParam(r, "id")
+		shell, err := validateHostShell(r.URL.Query().Get("shell"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_shell", "shell 非法:"+err.Error())
+			return
+		}
+		if _, err := svc.Get(r.Context(), id); err != nil {
+			writeServerError(w, err)
+			return
+		}
+
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: originPatterns(r)})
+		if err != nil {
+			return
+		}
+		conn.SetReadLimit(wsReadLimit)
+
+		sessCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		// 主机 shell:cmd 仅为 [shell](array,无拼接)。
+		sess, err := svc.ExecInteractive(sessCtx, id, []string{shell})
+		if err != nil {
+			_ = conn.Close(websocket.StatusInternalError, truncateWSReason(humanTerminalError(err)))
+			return
+		}
+		defer func() { _ = sess.Close() }()
+
+		recordAudit(r.Context(), aud, audit.Entry{
+			Actor:      auditActor,
+			Action:     audit.ActionServerTerminal,
+			TargetType: audit.TargetServer,
+			TargetID:   id,
+			Detail:     map[string]any{"shell": shell, "target": "host"},
+			IP:         clientIP(r),
+		})
+
+		pumpTerminal(sessCtx, cancel, conn, sess)
+	}
+}
+
 // pumpTerminal 在 WS 与交互式 SSH 会话间双向泵数据,直到任一侧结束。
 //   - WS → SSH:文本帧若是 resize 控制 JSON → WindowChange;否则原样写入 stdin。
 //   - SSH → WS:PTY 输出按块读出 → 以二进制帧发回 WS。

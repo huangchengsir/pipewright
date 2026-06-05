@@ -131,6 +131,17 @@ type Service interface {
 	// 检测到明文密钥的标注本身绝不回显该密钥。优雅降级铁律:AI 未配 / 失败 / 不可解析 → 仅返回
 	// 确定性规则结果 + AIEnhanced=false + 人读 reason,**永远返回 (*RiskReport, nil),绝不 500**。
 	AnnotateRisks(ctx context.Context, in AnnotateRisksInput) (*RiskReport, error)
+	// CommandSuggest 把用户中文描述转为单条可执行 shell 命令 + 解释 + 风险等级(运维终端 AI 助手)。
+	// **出网前必脱敏**:NL / 上下文经 Masker 脱敏;模型回的命令/解释二次脱敏。生成需 AI:未配 /
+	// 未启用 → ErrAINotConfigured(上层映射「去设置配 AI」)。风险等级出库前经 classifyCommandRisk
+	// 确定性复核——破坏性命令无条件升级 danger,不依赖 AI 在线(护城河)。
+	CommandSuggest(ctx context.Context, in CommandSuggestInput) (*CommandSuggestion, error)
+	// ExplainCommand 用中文逐段解释一条既有命令(+ 确定性风险等级)。脱敏铁律同上;未配 →
+	// ErrAINotConfigured。风险等级由确定性规则给(不依赖 AI)。
+	ExplainCommand(ctx context.Context, in ExplainCommandInput) (*CommandExplanation, error)
+	// CompleteCommand 据已输入命令前缀补全为一条完整命令(P2 智能补全;以前缀原样开头)。
+	// 脱敏铁律同上;未配 → ErrAINotConfigured(前端可退化为本地字典兜底)。短回包、低 max_tokens。
+	CompleteCommand(ctx context.Context, in CompleteCommandInput) (*CompletionResult, error)
 }
 
 // service 是 store + vault + 注入 http.Client 支撑的 Service 实现。

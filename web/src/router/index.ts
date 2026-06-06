@@ -6,6 +6,7 @@ const Login       = () => import('../views/Login.vue')
 const AppShell    = () => import('../layouts/AppShell.vue')
 // Story 1-7: first-run onboarding guide
 const Onboarding  = () => import('../views/Onboarding.vue')
+const Dashboard   = () => import('../views/Dashboard.vue')
 const Projects    = () => import('../views/Projects.vue')
 const Runs        = () => import('../views/Runs.vue')
 // FR-8-13: 复用库(流水线模板 + 变量组)
@@ -90,7 +91,8 @@ const router = createRouter({
       meta: { requiresAuth: true },
       children: [
         // 首页:概览仪表盘尚未建,暂重定向到项目页(避免落到占位页)。
-        { path: '', name: 'overview', redirect: { name: 'projects' } },
+        { path: '', name: 'overview', redirect: { name: 'dashboard' } },
+        { path: 'dashboard', name: 'dashboard', component: Dashboard },
         // Story 1-7: first-run onboarding guide (inside shell, auth-required)
         { path: 'onboarding', name: 'onboarding', component: Onboarding },
         { path: 'projects', name: 'projects', component: Projects },

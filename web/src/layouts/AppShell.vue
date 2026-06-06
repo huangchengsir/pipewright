@@ -2,6 +2,7 @@
 import type { Component } from 'vue'
 import { useRoute } from 'vue-router'
 import {
+  Dashboard,
   GitBranch,
   GitFork,
   ChartBar,
@@ -26,6 +27,7 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
+  { name: 'dashboard',     to: '/dashboard',     icon: Dashboard, label: '概览',  ariaLabel: '概览' },
   { name: 'projects',      to: '/projects',      icon: GitBranch,  label: '项目',  ariaLabel: '项目' },
   { name: 'runs',          to: '/runs',          icon: GitFork,    label: '运行',  ariaLabel: '运行' },
   // FR-8-13: 复用库(流水线模板 + 变量组)。

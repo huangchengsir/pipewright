@@ -37,6 +37,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/target"
 	"github.com/huangchengsir/pipewright/internal/trigger"
 	"github.com/huangchengsir/pipewright/internal/vault"
+	"github.com/huangchengsir/pipewright/internal/version"
 )
 
 const (
@@ -336,10 +337,15 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		opt(&o)
 	}
 
+	// 更新检查器:进程级单例,内含 TTL 缓存(跨请求复用,避免反复点击打爆 GitHub 限流)。
+	updateChecker := version.NewChecker()
+
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 
 	r.Get("/healthz", handleHealthz)
+	// /version 公开只读:暴露构建版本元数据,供升级检查与运维探针使用(非敏感)。
+	r.Get("/version", handleVersion)
 
 	svc := authn
 
@@ -369,6 +375,9 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 审计 Recorder(Story 1.4):传给既有敏感操作 handler,业务成功后追加审计行。
 		// 为 nil 时 handler 跳过审计(不阻断业务)。
 		aud := o.audit
+
+		// 检查更新:鉴权只读,查 GitHub 最新发布并与当前版本比对(GET 免 CSRF)。
+		ar.Get("/version/check", makeCheckUpdateHandler(updateChecker))
 
 		// 审计查询(Story 1.4):只读 + 认证保护 + 分页 + 过滤。
 		ar.Get("/audit", makeListAuditHandler(aud))
@@ -921,6 +930,11 @@ func makeLogoutHandler(svc auth.Authenticator) http.HandlerFunc {
 
 func handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleVersion 返回构建期注入的版本元数据(version/commit/date/goVersion/platform)。
+func handleVersion(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, version.Get())
 }
 
 // spaHandler 服务嵌入文件系统中的静态资源;无扩展名的路径(前端路由)回退 index.html,

@@ -1,0 +1,116 @@
+# GoReleaser 发版配置:推 v* tag → 跨平台静态二进制 + 校验和 + changelog → GitHub Release;
+# 同时构建 linux amd64/arm64 镜像并合并为多架构清单推 ghcr.io。
+# 本地干跑:goreleaser release --snapshot --clean --skip=publish,docker
+# 校验配置:goreleaser check
+version: 2
+
+project_name: pipewright
+
+before:
+  hooks:
+    - go mod download
+    # 前端先构建,供 go:embed(web/dist)。各架构二进制共享同一份与平台无关的前端产物。
+    - bash -c "cd web && npm ci && npm run build"
+
+builds:
+  - id: pipewright
+    main: ./cmd/pipewright
+    binary: pipewright
+    env:
+      - CGO_ENABLED=0 # modernc sqlite + go-sql-driver/mysql 均纯 Go,可纯静态交叉编译
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    mod_timestamp: "{{ .CommitTimestamp }}" # 可复现构建
+    ldflags:
+      - -s -w
+      - -X github.com/huangchengsir/pipewright/internal/version.Version={{ .Version }}
+      - -X github.com/huangchengsir/pipewright/internal/version.Commit={{ .ShortCommit }}
+      - -X github.com/huangchengsir/pipewright/internal/version.Date={{ .CommitDate }}
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+      - SECURITY.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  use: github
+  groups:
+    - title: 🚀 新功能
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: 🐛 修复
+      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      order: 1
+    - title: ⚡ 性能
+      regexp: '^.*?perf(\(.+\))??!?:.+$'
+      order: 2
+    - title: 其它
+      order: 999
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "^style:"
+      - Merge pull request
+      - Merge branch
+
+# dockers_v2:单条目自动构建多架构镜像并合并清单(取代已弃用的 dockers + docker_manifests)。
+dockers_v2:
+  - id: ghcr
+    dockerfile: Dockerfile.goreleaser
+    images:
+      - ghcr.io/huangchengsir/pipewright
+    tags:
+      - "{{ .Version }}"
+      # latest 仅正式版推送(预发布 tag 跳过)。
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    labels:
+      org.opencontainers.image.title: "{{ .ProjectName }}"
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.source: https://github.com/huangchengsir/pipewright
+      org.opencontainers.image.licenses: MIT
+
+release:
+  github:
+    owner: huangchengsir
+    name: pipewright
+  draft: false
+  # 含 -rc/-beta 等预发布标识的 tag 自动标记为 prerelease。
+  prerelease: auto
+  name_template: "Pipewright {{ .Tag }}"
+  footer: |
+    ---
+    ## 安装
+
+    一键安装(Linux / macOS):
+    ```sh
+    curl -fsSL https://raw.githubusercontent.com/huangchengsir/pipewright/master/install.sh | sh
+    ```
+
+    Docker:
+    ```sh
+    docker run -d -p 8080:8080 -v pipewright-data:/data ghcr.io/huangchengsir/pipewright:{{ .Tag }}
+    ```

@@ -163,6 +163,25 @@ docs(readme): clarify master key handling
 
 ---
 
+## 发版 / Releasing(维护者)
+
+版本由 git tag 驱动,推送 `v*` tag 即触发 [`release` workflow](.github/workflows/release.yml):
+GoReleaser 跨平台构建二进制 + 校验和 + changelog 发到 GitHub Release,并推多架构镜像到 ghcr.io。
+
+```bash
+# 1. 确保 master 全绿、本地与 origin 同步
+git checkout master && git pull
+# 2. 打 SemVer tag(预发布用 -rc.1 / -beta.1 等后缀,自动标记 prerelease 且不动 latest)
+git tag -a v1.2.3 -m "v1.2.3"
+git push origin v1.2.3
+# 3. 改配置后本地干跑验证(不发布):
+#    goreleaser check && goreleaser release --snapshot --clean --skip=publish,docker
+```
+
+版本元数据经 `-ldflags` 注入 `internal/version`,运行期可由 `pipewright --version` 或 `GET /version` 读取。
+
+---
+
 ## 许可 / Licensing
 
 提交即表示你的贡献以本项目的 [MIT License](LICENSE) 授权。

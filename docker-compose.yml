@@ -1,0 +1,63 @@
+# Pipewright 自托管 —— docker compose 一键起。
+#
+#   1. cp .env.example .env  并按注释填好(至少生成 PIPEWRIGHT_MASTER_KEY)
+#   2. docker compose up -d
+#   3. 打开 http://localhost:8080,用 admin / 你设的口令登录
+#
+# 数据(sqlite 库 / 构建产物 / 仓库缓存)持久化在具名卷 pipewright-data(挂到容器 /data,
+# 镜像已将 /data 设为 nonroot 属主与工作目录)。master key 务必持久保存:换 key 旧凭据无法解密。
+services:
+  pipewright:
+    image: ghcr.io/huangchengsir/pipewright:${PIPEWRIGHT_VERSION:-latest}
+    container_name: pipewright
+    restart: unless-stopped
+    ports:
+      - "${PIPEWRIGHT_PORT:-8080}:8080"
+    environment:
+      # 初始管理员口令(首启建账;之后改这里不改库)。务必改掉。
+      PIPEWRIGHT_ADMIN_PASSWORD: ${PIPEWRIGHT_ADMIN_PASSWORD:?请在 .env 设置 PIPEWRIGHT_ADMIN_PASSWORD}
+      # 凭据保险库主密钥(base64 的 32 字节)。空则保险库进未配置态、加密凭据功能不可用。
+      PIPEWRIGHT_MASTER_KEY: ${PIPEWRIGHT_MASTER_KEY:-}
+      # 反代后部署时填外部访问 URL(用于 webhook 回调 / OAuth 回跳)。
+      PIPEWRIGHT_PUBLIC_URL: ${PIPEWRIGHT_PUBLIC_URL:-}
+      # 默认 sqlite,库落 /data/pipewright.db(WORKDIR=/data)。切 MySQL 见下方 env + 注释。
+      PIPEWRIGHT_DB_DRIVER: ${PIPEWRIGHT_DB_DRIVER:-sqlite}
+      PIPEWRIGHT_DB_DSN: ${PIPEWRIGHT_DB_DSN:-}
+    volumes:
+      - pipewright-data:/data
+      # 隔离构建 / 镜像部署需要 Docker:取消下一行挂宿主 docker.sock(注意:等同授予宿主 root 级权限,
+      # 仅在信任的自托管环境开启)。注意 distroless 镜像不含 docker CLI;需要容器内跑 docker 构建时,
+      # 建议改用 install.sh 把二进制装在带 Docker 的宿主上,而非在本容器内构建。
+      # - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      # 静态镜像无 curl/wget;用二进制自身做 TCP 探活的最小手段:复用 --version(进程可执行即健康)。
+      test: ["CMD", "/pipewright", "--version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # 可选:MySQL 8。启用方式:
+  #   docker compose --profile mysql up -d
+  # 并在 .env 设 PIPEWRIGHT_DB_DRIVER=mysql、
+  #   PIPEWRIGHT_DB_DSN=pipewright:pipewright@tcp(mysql:3306)/pipewright?parseTime=true&charset=utf8mb4
+  mysql:
+    image: mysql:8.0
+    profiles: ["mysql"]
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: pipewright
+      MYSQL_USER: pipewright
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-pipewright}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpw}
+    volumes:
+      - pipewright-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pipewright-data:
+  pipewright-mysql:

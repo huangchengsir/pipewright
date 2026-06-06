@@ -1,0 +1,54 @@
+/* 概览页共享卡片骨架。用 .dashboard 父级前缀收束作用域(不泄漏全局,
+   也避免与 CronPanel/RunnerPanel 等组件各自 scoped 的 .card-head/.card-title 冲突)。
+   各 widget 用 .card / .card-head / .card-title / .card-link / .card-empty,样式在此统一。 */
+
+.dashboard .card {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4) var(--space-5);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px -18px rgba(0, 0, 0, 0.16);
+}
+
+.dashboard .card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: var(--space-3);
+}
+
+.dashboard .card-title {
+  font-size: var(--text-heading);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
+}
+
+.dashboard .card-link {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  font-size: var(--text-micro);
+  font-weight: 600;
+  color: var(--color-primary);
+  cursor: pointer;
+  white-space: nowrap;
+  border-radius: var(--radius-sm);
+  transition: color var(--duration-fast);
+}
+.dashboard .card-link:hover {
+  color: var(--color-primary-press);
+}
+.dashboard .card-link:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+.dashboard .card-empty {
+  font-size: var(--text-caption);
+  color: var(--color-text-soft);
+  margin: 0;
+  padding: var(--space-2) 0;
+  line-height: 1.6;
+}

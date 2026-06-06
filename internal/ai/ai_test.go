@@ -6,12 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/storetest"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
@@ -26,14 +25,7 @@ func testMasterKey() *[32]byte {
 
 // testDB 打开临时 SQLite(含全部迁移),返回 *sql.DB 与库文件路径(供整库 dump 验明文)。
 func testDB(t *testing.T) (*sql.DB, string) {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	return st.DB, dbPath
+	return storetest.OpenDBWithPath(t)
 }
 
 // newService 构造带真实 vault + 注入 client 的 Service。
@@ -179,15 +171,17 @@ func TestRawDBHasNoPlaintextKey(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 	// 整库二进制 dump grep 明文 key:绝不出现。
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read db file: %v", err)
-	}
-	if strings.Contains(string(raw), secret) {
-		t.Fatalf("裸 DB 不应含明文 apiKey")
-	}
-	if strings.Contains(string(raw), "PLAINTEXTMARKER") {
-		t.Fatalf("裸 DB 不应含明文 key 片段")
+	if path != "" {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read db file: %v", err)
+		}
+		if strings.Contains(string(raw), secret) {
+			t.Fatalf("裸 DB 不应含明文 apiKey")
+		}
+		if strings.Contains(string(raw), "PLAINTEXTMARKER") {
+			t.Fatalf("裸 DB 不应含明文 key 片段")
+		}
 	}
 }
 

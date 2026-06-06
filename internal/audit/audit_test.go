@@ -3,25 +3,17 @@ package audit
 import (
 	"context"
 	"database/sql"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/huangchengsir/pipewright/internal/mask"
-	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/storetest"
 )
 
 // testDB 打开含迁移的临时 SQLite(含 0009_audit append-only 表 + trigger)。
 func testDB(t *testing.T) *sql.DB {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "audit.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	return st.DB
+	return storetest.OpenDB(t)
 }
 
 // memSink 是内存远端 sink(测试用):线程安全地累积收到的记录。

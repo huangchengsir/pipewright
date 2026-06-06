@@ -3,23 +3,16 @@ package chain
 import (
 	"context"
 	"database/sql"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/storetest"
 )
 
 // testDB 打开临时 SQLite(含全部迁移,含 0030 串联表/列)。
 func testDB(t *testing.T) *sql.DB {
-	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	return st.DB
+	return storetest.OpenDB(t)
 }
 
 // seedProject 插一个项目(满足外键),返回 project id。

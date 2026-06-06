@@ -9,12 +9,11 @@ import (
 	"net/http/httptest"
 	"net/smtp"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
-	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/storetest"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
@@ -28,14 +27,7 @@ func testMasterKey() *[32]byte {
 
 // testDB 打开临时 SQLite(含全部迁移),返回 *sql.DB 与库文件路径(供整库 dump 验明文)。
 func testDB(t *testing.T) (*sql.DB, string) {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	return st.DB, dbPath
+	return storetest.OpenDBWithPath(t)
 }
 
 func newSvc(t *testing.T, client *http.Client) (*service, *sql.DB, string) {
@@ -184,12 +176,14 @@ func TestEmailSecretNotPlaintextInDB(t *testing.T) {
 	}
 
 	// 2) 整库文件 dump 绝无明文(密文 BLOB 不可逆出明文)。
-	raw, err := os.ReadFile(dbPath)
-	if err != nil {
-		t.Fatalf("read db file: %v", err)
-	}
-	if bytes.Contains(raw, []byte(secret)) {
-		t.Fatalf("裸 DB 文件含明文 SMTP 密码")
+	if dbPath != "" {
+		raw, err := os.ReadFile(dbPath)
+		if err != nil {
+			t.Fatalf("read db file: %v", err)
+		}
+		if bytes.Contains(raw, []byte(secret)) {
+			t.Fatalf("裸 DB 文件含明文 SMTP 密码")
+		}
 	}
 
 	// 3) 视图/响应路径绝无明文(Get 返回 Channel 无密码字段,仅 HasSecret)。

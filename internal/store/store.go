@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (no CGO)
 )
 
@@ -76,8 +77,17 @@ func Open(dbPath string) (*Store, error) {
 // openMySQL 打开 MySQL(8.0+)连接并应用 mysql 方言迁移。与 SQLite 不同,
 // MySQL 用常规连接池(不串行化),外键由 InnoDB 默认强制。驱动经 dialect.go
 // 的 mysql 包导入已注册,无需在此重复 blank import。
+//
+// ClientFoundRows 强制开启:让 UPDATE 的 RowsAffected 返回"匹配行数"而非默认的
+// "实际改变行数",与 SQLite 语义一致。否则"把列更新为相同值"会返回 0,被领域层
+// (如 SetDeployTerminal / 各 RowsAffected==0→ErrNotFound 校验)误判为行不存在。
 func openMySQL(dsn string) (*Store, error) {
-	db, err := sql.Open("mysql", dsn)
+	cfg, err := mysql.ParseDSN(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parse mysql dsn: %w", err)
+	}
+	cfg.ClientFoundRows = true
+	db, err := sql.Open("mysql", cfg.FormatDSN())
 	if err != nil {
 		return nil, fmt.Errorf("open mysql: %w", err)
 	}

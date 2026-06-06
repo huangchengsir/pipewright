@@ -115,8 +115,8 @@ func TestStubRunnerEmitsMaskedLogs(t *testing.T) {
 	// 裸 DB 断言:run_logs 表内绝无明文假 secret。
 	var leak int
 	if err := db.QueryRow(
-		`SELECT COUNT(1) FROM run_logs WHERE run_id = ? AND text LIKE '%' || ? || '%'`,
-		r.ID, StubFailureSecret,
+		"SELECT COUNT(1) FROM run_logs WHERE run_id = ? AND `text` LIKE ?",
+		r.ID, "%"+StubFailureSecret+"%",
 	).Scan(&leak); err != nil {
 		t.Fatalf("查 run_logs 明文泄漏: %v", err)
 	}

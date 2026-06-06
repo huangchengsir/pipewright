@@ -66,3 +66,30 @@ func indexOf(s, sub string) int {
 	}
 	return -1
 }
+
+// TestStoreConfig 验证 driver/dsn 推导:mysql 必须有 DSN;sqlite 回退 DBPath。
+func TestStoreConfig(t *testing.T) {
+	cases := []struct {
+		name                string
+		cfg                 Config
+		wantDriver, wantDSN string
+		wantErr             bool
+	}{
+		{"default sqlite path", Config{DBDriver: "sqlite", DBPath: "p.db"}, "sqlite", "p.db", false},
+		{"empty driver falls back sqlite", Config{DBPath: "p.db"}, "sqlite", "p.db", false},
+		{"sqlite prefers dsn", Config{DBDriver: "sqlite", DBDSN: "x.db", DBPath: "p.db"}, "sqlite", "x.db", false},
+		{"mysql with dsn", Config{DBDriver: "mysql", DBDSN: "u:p@tcp(h:3306)/db"}, "mysql", "u:p@tcp(h:3306)/db", false},
+		{"mysql without dsn errors", Config{DBDriver: "mysql"}, "", "", true},
+		{"unknown driver errors", Config{DBDriver: "postgres"}, "", "", true},
+	}
+	for _, c := range cases {
+		d, dsn, err := c.cfg.StoreConfig()
+		if (err != nil) != c.wantErr {
+			t.Errorf("%s: err=%v wantErr=%v", c.name, err, c.wantErr)
+			continue
+		}
+		if !c.wantErr && (d != c.wantDriver || dsn != c.wantDSN) {
+			t.Errorf("%s: got (%q,%q) want (%q,%q)", c.name, d, dsn, c.wantDriver, c.wantDSN)
+		}
+	}
+}

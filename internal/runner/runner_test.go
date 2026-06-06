@@ -2,12 +2,12 @@ package runner
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/storetest"
 )
 
 type fakeExister struct{ ids map[string]bool }
@@ -15,13 +15,7 @@ type fakeExister struct{ ids map[string]bool }
 func (f fakeExister) Exists(_ context.Context, id string) bool { return f.ids[id] }
 
 func testDB(t *testing.T) *store.Store {
-	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	return st
+	return storetest.Open(t)
 }
 
 func seedProject(t *testing.T, st *store.Store) string {

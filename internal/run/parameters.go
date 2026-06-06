@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/huangchengsir/pipewright/internal/store"
 )
 
 // parameters.go 实现项目级「类型化运行参数」定义(P0 · 对标 Jenkins parameters / 云效 variables type)。
@@ -122,10 +124,8 @@ func (s *parameterService) Save(ctx context.Context, projectID string, defs []Pa
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO project_parameters (project_id, defs_json, created_at, updated_at)
-		 VALUES (?, ?, ?, ?)
-		 ON CONFLICT(project_id) DO UPDATE SET
-		   defs_json  = excluded.defs_json,
-		   updated_at = excluded.updated_at`,
+		 VALUES (?, ?, ?, ?) `+
+			store.UpsertSuffix(store.DialectOf(s.db), []string{"project_id"}, []string{"defs_json", "updated_at"}),
 		projectID, string(blob), now, now,
 	)
 	if err != nil {

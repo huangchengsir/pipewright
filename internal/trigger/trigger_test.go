@@ -5,13 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/storetest"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
@@ -26,14 +25,7 @@ func testMasterKey() *[32]byte {
 
 // testDB 打开临时 SQLite(含全部迁移),返回 *sql.DB 与库文件路径(供整库 dump)。
 func testDB(t *testing.T) (*sql.DB, string) {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	return st.DB, dbPath
+	return storetest.OpenDBWithPath(t)
 }
 
 // seedProject 直接插一个项目(本测试不关心仓库校验),返回 project id。
@@ -293,15 +285,17 @@ func TestSecAfterDBNoPlaintext(t *testing.T) {
 	// 检出点 + WAL 全部落盘后再 dump:用 wal_checkpoint 强制写回主库文件。
 	_, _ = db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
 
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		raw := readFileMaybe(t, dbPath+suffix)
-		if strings.Contains(string(raw), res.Secret) {
-			t.Fatalf("整库文件 %s 含 webhook 密钥明文!", dbPath+suffix)
-		}
-		// 密钥体(去前缀)也不应出现。
-		body := strings.TrimPrefix(res.Secret, secretPrefix)
-		if strings.Contains(string(raw), body) {
-			t.Fatalf("整库文件 %s 含密钥体明文!", dbPath+suffix)
+	if dbPath != "" {
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			raw := readFileMaybe(t, dbPath+suffix)
+			if strings.Contains(string(raw), res.Secret) {
+				t.Fatalf("整库文件 %s 含 webhook 密钥明文!", dbPath+suffix)
+			}
+			// 密钥体(去前缀)也不应出现。
+			body := strings.TrimPrefix(res.Secret, secretPrefix)
+			if strings.Contains(string(raw), body) {
+				t.Fatalf("整库文件 %s 含密钥体明文!", dbPath+suffix)
+			}
 		}
 	}
 }

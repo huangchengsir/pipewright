@@ -2,11 +2,10 @@ package vault
 
 import (
 	"database/sql"
-	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/storetest"
 )
 
 // pemKey 是一段以 PEM 头开头的伪 SSH 私钥(AC-SEC-01 用)。绝不可在库 dump 中出现。
@@ -32,14 +31,7 @@ func wrongKey() *[keySize]byte {
 }
 
 func testDB(t *testing.T) *sql.DB {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "vault_test.db")
-	s, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	return s.DB
+	return storetest.OpenDB(t)
 }
 
 // TestSealOpenRoundTrip 验证加解密往返 == 原文。
@@ -202,6 +194,7 @@ func TestGetNotFound(t *testing.T) {
 // TestACSEC01_NoPlaintextInDB 是 AC-SEC-01 核心回归:
 // 创建含 PEM 私钥的凭据后,遍历整库**所有表所有列** dump,grep 不到明文/PEM 头。
 func TestACSEC01_NoPlaintextInDB(t *testing.T) {
+	storetest.SkipIfMySQL(t) // 整库 dump 经 sqlite_master 遍历表,SQLite 文件专有;密文属性由 vault 层保证
 	db := testDB(t)
 	v := New(db, testKey())
 	if _, err := v.Create(CreateInput{Name: "ci key", Type: TypeSSHKey, Scope: "prod", Secret: pemKey}); err != nil {

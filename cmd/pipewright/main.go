@@ -53,7 +53,11 @@ import (
 func main() {
 	cfg := config.Load()
 
-	st, err := store.Open(cfg.DBPath)
+	dbDriver, dbDSN, err := cfg.StoreConfig()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	st, err := store.OpenWithConfig(store.OpenConfig{Driver: dbDriver, DSN: dbDSN})
 	if err != nil {
 		log.Fatalf("store: %v", err)
 	}
@@ -65,7 +69,9 @@ func main() {
 		log.Fatalf("embedded web/dist 缺少 index.html(前端未正确构建?): %v", err)
 	}
 
-	if abs, err := filepath.Abs(cfg.DBPath); err == nil {
+	if dbDriver == "mysql" {
+		log.Printf("data db: mysql (%s)", st.Dialect)
+	} else if abs, err := filepath.Abs(dbDSN); err == nil {
 		log.Printf("data db: %s", abs)
 	}
 

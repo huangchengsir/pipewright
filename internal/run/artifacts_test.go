@@ -59,20 +59,31 @@ func TestAddAndListArtifacts(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("应有 2 条产物, got %d", len(got))
 	}
-	if got[0].Type != ArtifactImage || got[1].Type != ArtifactDist {
-		t.Fatalf("产物顺序/类型不符: %s, %s", got[0].Type, got[1].Type)
+	// 同秒插入时按 id(UUID)破并列,顺序确定但非插入序(跨 SQLite/MySQL 一致),
+	// 故按 type 索引断言各产物字段,而非依赖位置。
+	byType := map[string]Artifact{}
+	for _, a := range got {
+		byType[a.Type] = a
 	}
-	if got[0].Reference != "registry.example.com/acme/shop-api:a1b2c3d" {
-		t.Fatalf("reference 不符: %q", got[0].Reference)
+	img, ok := byType[ArtifactImage]
+	if !ok {
+		t.Fatalf("缺 image 产物: %#v", got)
 	}
-	if got[0].SizeBytes != 48210432 {
-		t.Fatalf("sizeBytes 不符: %d", got[0].SizeBytes)
+	dist, ok := byType[ArtifactDist]
+	if !ok {
+		t.Fatalf("缺 dist 产物: %#v", got)
 	}
-	if v, ok := got[0].Metadata["digest"]; !ok || v != "sha256:abc" {
-		t.Fatalf("metadata digest 丢失: %#v", got[0].Metadata)
+	if img.Reference != "registry.example.com/acme/shop-api:a1b2c3d" {
+		t.Fatalf("reference 不符: %q", img.Reference)
+	}
+	if img.SizeBytes != 48210432 {
+		t.Fatalf("sizeBytes 不符: %d", img.SizeBytes)
+	}
+	if v, ok := img.Metadata["digest"]; !ok || v != "sha256:abc" {
+		t.Fatalf("metadata digest 丢失: %#v", img.Metadata)
 	}
 	// dist 无 metadata → 空 map(非 nil)。
-	if got[1].Metadata == nil {
+	if dist.Metadata == nil {
 		t.Fatalf("无 metadata 应回读为空 map 而非 nil")
 	}
 }

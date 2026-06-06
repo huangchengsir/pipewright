@@ -24,6 +24,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/dag"
+	"github.com/huangchengsir/pipewright/internal/store"
 	yaml "gopkg.in/yaml.v3"
 )
 
@@ -252,8 +253,8 @@ func (s *service) createDefault(ctx context.Context, projectID string) (*Config,
 	nowStr := now.Format(time.RFC3339)
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO pipeline_configs (project_id, spec_json, spec_yaml, status, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(project_id) DO NOTHING`,
+		 VALUES (?, ?, ?, ?, ?, ?) `+
+			store.DoNothingSuffix(store.DialectOf(s.db), []string{"project_id"}),
 		projectID, string(specJSON), renderedYAML, statusDraft, nowStr, nowStr,
 	)
 	if err != nil {
@@ -578,9 +579,4 @@ func renderYAML(spec Spec) (string, error) {
 }
 
 // isForeignKeyErr 判断错误是否为外键约束失败(modernc sqlite 文本含 FOREIGN KEY)。
-func isForeignKeyErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(strings.ToUpper(err.Error()), "FOREIGN KEY")
-}
+func isForeignKeyErr(err error) bool { return store.IsForeignKeyErr(err) }

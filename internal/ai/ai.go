@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/huangchengsir/pipewright/internal/store"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
@@ -230,15 +231,9 @@ func (s *service) Save(ctx context.Context, in SaveInput) (*Config, error) {
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO ai_config
 		   (id, provider, base_url, model, api_key_ciphertext, budget_json, enabled, created_at, updated_at)
-		 VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(id) DO UPDATE SET
-		   provider = excluded.provider,
-		   base_url = excluded.base_url,
-		   model = excluded.model,
-		   api_key_ciphertext = excluded.api_key_ciphertext,
-		   budget_json = excluded.budget_json,
-		   enabled = excluded.enabled,
-		   updated_at = excluded.updated_at`,
+		 VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?) `+
+			store.UpsertSuffix(store.DialectOf(s.db), []string{"id"},
+				[]string{"provider", "base_url", "model", "api_key_ciphertext", "budget_json", "enabled", "updated_at"}),
 		provider, baseURL, strings.TrimSpace(in.Model), sealed, string(budgetJSON), enabled, nowStr, nowStr,
 	)
 	if err != nil {

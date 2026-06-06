@@ -24,6 +24,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
+	"github.com/huangchengsir/pipewright/internal/store"
 )
 
 // 领域错误。错误体不含任何明文 secret。
@@ -228,9 +229,4 @@ func scanTemplate(row rowScanner) (*Template, error) {
 }
 
 // isUniqueErr 判定是否为唯一约束冲突(modernc sqlite 文本含 UNIQUE)。
-func isUniqueErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(strings.ToUpper(err.Error()), "UNIQUE")
-}
+func isUniqueErr(err error) bool { return store.IsUniqueErr(err) }

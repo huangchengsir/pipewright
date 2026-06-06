@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
@@ -382,8 +383,8 @@ func (s *settingsService) createDefault(ctx context.Context, projectID string) (
 	nowStr := now.Format(time.RFC3339)
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO pipeline_settings (project_id, build_json, environments_json, created_at, updated_at)
-		 VALUES (?, ?, '[]', ?, ?)
-		 ON CONFLICT(project_id) DO NOTHING`,
+		 VALUES (?, ?, '[]', ?, ?) `+
+			store.DoNothingSuffix(store.DialectOf(s.db), []string{"project_id"}),
 		projectID, string(buildJSON), nowStr, nowStr,
 	)
 	if err != nil {

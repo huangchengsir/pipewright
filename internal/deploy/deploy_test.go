@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"io"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -13,7 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/run"
-	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/storetest"
 	"github.com/huangchengsir/pipewright/internal/target"
 )
 
@@ -81,14 +80,7 @@ func (s *stubTarget) Upload(_ context.Context, _ string, content io.Reader, remo
 // ---- 测试脚手架 -------------------------------------------------------------
 
 func testDB(t *testing.T) *sql.DB {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	return st.DB
+	return storetest.OpenDB(t)
 }
 
 // seedSuccessRunWithArtifact 直接插一个 success run + 一条产物,返回 (runID, artifactID)。

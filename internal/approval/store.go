@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/store"
 )
 
 // 审批状态枚举。
@@ -37,11 +38,14 @@ func NewStore(db *sql.DB) *Store { return &Store{db: db} }
 // CreatePending 登记一条待批记录(同 run+stage upsert,重入时复位为 pending)。
 func (s *Store) CreatePending(ctx context.Context, runID, stageID, stageName string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
+	d := store.DialectOf(s.db)
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO run_approvals (id, run_id, stage_id, stage_name, status, decided_by, decided_at, created_at)
-		 VALUES (?, ?, ?, ?, 'pending', '', '', ?)
-		 ON CONFLICT(run_id, stage_id) DO UPDATE SET
-		   status = 'pending', decided_by = '', decided_at = '', stage_name = excluded.stage_name`,
+		 VALUES (?, ?, ?, ?, 'pending', '', '', ?) `+
+			store.UpsertAssignSuffix(d, []string{"run_id", "stage_id"}, []string{
+				"status = 'pending'", "decided_by = ''", "decided_at = ''",
+				"stage_name = " + store.Excluded(d, "stage_name"),
+			}),
 		uuid.NewString(), runID, stageID, stageName, now,
 	)
 	if err != nil {

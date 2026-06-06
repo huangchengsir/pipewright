@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/storetest"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
@@ -29,13 +29,7 @@ func testMasterKey() *[32]byte {
 }
 
 func testDB(t *testing.T) *sql.DB {
-	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	return st.DB
+	return storetest.OpenDB(t)
 }
 
 // newSSHCred 在 vault 建一条 ssh_key 凭据,返回 id。
@@ -323,15 +317,17 @@ func TestExecVaultUnconfigured(t *testing.T) {
 func mustInsertServer(t *testing.T, db *sql.DB, id, credID string) {
 	t.Helper()
 	now := time.Now().UTC().Format(time.RFC3339)
-	// 关外键以便插引用不存在凭据的行(仅测试)。
-	_, _ = db.Exec(`PRAGMA foreign_keys = OFF`)
+	// 关外键以便插引用不存在凭据的行(仅测试)。两方言各发一条,另一条无效即被忽略。
+	_, _ = db.Exec(`PRAGMA foreign_keys = OFF`)  // SQLite
+	_, _ = db.Exec(`SET FOREIGN_KEY_CHECKS = 0`) // MySQL
 	if _, err := db.Exec(
-		`INSERT INTO servers (id, name, host, port, user, credential_id, created_at, updated_at)
-		 VALUES (?, 'n', 'h', 22, 'u', ?, ?, ?)`, id, credID, now, now,
+		"INSERT INTO servers (id, name, host, port, `user`, credential_id, created_at, updated_at)"+
+			` VALUES (?, 'n', 'h', 22, 'u', ?, ?, ?)`, id, credID, now, now,
 	); err != nil {
 		t.Fatalf("insert server: %v", err)
 	}
 	_, _ = db.Exec(`PRAGMA foreign_keys = ON`)
+	_, _ = db.Exec(`SET FOREIGN_KEY_CHECKS = 1`)
 }
 
 // ─── 本机真连(localhost:22):本机 sshd 在则真测,否则 t.Skip ─────────────────────

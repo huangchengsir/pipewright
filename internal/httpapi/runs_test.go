@@ -56,7 +56,8 @@ func setupRunServer(t *testing.T) (*httptest.Server, *http.Client, string, strin
 // waitRunStatus 经 GET /api/runs/{id} 轮询直到达到期望状态(降级轮询路径也被覆盖)。
 func waitRunStatus(t *testing.T, client *http.Client, srv *httptest.Server, csrf, id, want string) map[string]any {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	// 10s:容纳 MySQL 后端较慢的逐步骤写盘(桩 runner 每步多次 INSERT);SQLite 通常亚秒到达。
+	deadline := time.Now().Add(10 * time.Second)
 	var last map[string]any
 	for time.Now().Before(deadline) {
 		resp := doJSON(t, client, http.MethodGet, srv.URL+"/api/runs/"+id, csrf, "")

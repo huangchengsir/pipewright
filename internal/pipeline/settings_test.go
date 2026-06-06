@@ -4,13 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/storetest"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
@@ -25,14 +24,7 @@ func testMasterKey() *[32]byte {
 
 // settingsTestDB 打开临时 SQLite(含全部迁移),返回 *sql.DB 与库文件路径(供整库 dump)。
 func settingsTestDB(t *testing.T) (*sql.DB, string) {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	return st.DB, dbPath
+	return storetest.OpenDBWithPath(t)
 }
 
 // seedSettingsProject 插入一个最小凭据 + 项目,返回 project id。
@@ -359,10 +351,12 @@ func TestSettingsSecAfterDBNoPlaintext(t *testing.T) {
 	}
 
 	// 整库文件(含 WAL/SHM)二进制也不含明文。
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		raw := readSettingsFileMaybe(t, dbPath+suffix)
-		if strings.Contains(string(raw), buildSecret) || strings.Contains(string(raw), envSecret) {
-			t.Fatalf("整库文件 %s 含明文 secret!", dbPath+suffix)
+	if dbPath != "" {
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			raw := readSettingsFileMaybe(t, dbPath+suffix)
+			if strings.Contains(string(raw), buildSecret) || strings.Contains(string(raw), envSecret) {
+				t.Fatalf("整库文件 %s 含明文 secret!", dbPath+suffix)
+			}
 		}
 	}
 }

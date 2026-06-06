@@ -5,32 +5,13 @@ import (
 	"database/sql"
 	"testing"
 
+	"github.com/huangchengsir/pipewright/internal/storetest"
 	_ "modernc.org/sqlite"
 )
 
 // testDB 建一个内存库并应用 anomaly schema(独立于 store 包,免循环依赖)。
 func testDB(t *testing.T) *sql.DB {
-	t.Helper()
-	db, err := sql.Open("sqlite", "file:anomaly_test?mode=memory&cache=shared&_pragma=foreign_keys(on)")
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	schema := `
-CREATE TABLE anomaly_rules (
-    id TEXT PRIMARY KEY, metric TEXT NOT NULL, operator TEXT NOT NULL,
-    threshold REAL NOT NULL, server_id TEXT, enabled INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL
-);
-CREATE TABLE anomaly_alerts (
-    id TEXT PRIMARY KEY, server_id TEXT NOT NULL, server_name TEXT NOT NULL,
-    metric TEXT NOT NULL, operator TEXT NOT NULL, threshold REAL NOT NULL,
-    value REAL NOT NULL, message TEXT NOT NULL, created_at TEXT NOT NULL
-);`
-	if _, err := db.Exec(schema); err != nil {
-		t.Fatalf("schema: %v", err)
-	}
-	return db
+	return storetest.OpenDB(t)
 }
 
 // stubCollector 返回预置快照,不触网。

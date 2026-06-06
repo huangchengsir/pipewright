@@ -7,11 +7,10 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/storetest"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
@@ -26,14 +25,7 @@ func testMasterKey() *[32]byte {
 
 // testDB 打开临时 SQLite(含全部迁移),返回 *sql.DB 与库文件路径(供整库 dump 验明文)。
 func testDB(t *testing.T) (*sql.DB, string) {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	return st.DB, dbPath
+	return storetest.OpenDBWithPath(t)
 }
 
 func newService(t *testing.T, client *http.Client) (Service, vault.Vault, *sql.DB, string) {
@@ -121,12 +113,14 @@ func TestSaveAppMaskedNoPlaintextAndConfigured(t *testing.T) {
 		t.Fatalf("maskedSecret 不应含明文: %q", cfg.MaskedSecret)
 	}
 	// 整库 dump 绝无明文 secret(裸断言)。
-	raw, err := os.ReadFile(dbPath)
-	if err != nil {
-		t.Fatalf("read db: %v", err)
-	}
-	if strings.Contains(string(raw), "super-secret-PLAINTEXT") {
-		t.Fatalf("DB dump 含明文 client_secret!")
+	if dbPath != "" {
+		raw, err := os.ReadFile(dbPath)
+		if err != nil {
+			t.Fatalf("read db: %v", err)
+		}
+		if strings.Contains(string(raw), "super-secret-PLAINTEXT") {
+			t.Fatalf("DB dump 含明文 client_secret!")
+		}
 	}
 }
 

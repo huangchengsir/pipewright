@@ -29,10 +29,25 @@ export interface UpdateInfo {
   checkError?: string
 }
 
+/** 一键自动更新结果。binary 模式成功后进程会自重启;docker 模式返回升级命令。 */
+export interface UpdateResult {
+  mode: 'binary' | 'docker' | ''
+  status: 'restarting' | 'manual' | 'uptodate' | 'error'
+  from: string
+  to: string
+  message: string
+  command?: string
+}
+
 export function getVersion(): Promise<VersionInfo> {
   return http.get<VersionInfo>('/version')
 }
 
 export function checkUpdate(): Promise<UpdateInfo> {
   return http.get<UpdateInfo>('/api/version/check')
+}
+
+/** 触发一键自动更新(写操作,带 CSRF)。 */
+export function applyUpdate(): Promise<UpdateResult> {
+  return http.post<UpdateResult>('/api/version/update')
 }

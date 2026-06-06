@@ -9,7 +9,7 @@
  */
 
 import { ref, computed, onMounted } from 'vue'
-import { getVersion, checkUpdate } from '../../api/version'
+import { getVersion, checkUpdate, applyUpdate } from '../../api/version'
 import type { VersionInfo, UpdateInfo } from '../../api/version'
 import { HttpError } from '../../api/http'
 import AppButton from '../../components/ui/AppButton.vue'
@@ -22,6 +22,13 @@ const checkState = ref<CheckState>('idle')
 const update = ref<UpdateInfo | null>(null)
 const checkError = ref('')
 const showNotes = ref(false)
+
+// 一键自动更新状态机。
+type UpdatePhase = 'idle' | 'applying' | 'restarting' | 'manual' | 'error'
+const updatePhase = ref<UpdatePhase>('idle')
+const updateMsg = ref('')
+const dockerCommand = ref('')
+const copied = ref(false)
 
 const isDev = computed(() => {
   const v = version.value?.version ?? ''
@@ -86,6 +93,76 @@ async function runCheck(): Promise<void> {
   } catch (err) {
     checkError.value = err instanceof HttpError ? (err.apiError?.message ?? `检查失败(${err.status})`) : '检查失败,请稍后重试'
     checkState.value = 'error'
+  }
+}
+
+// 一键自动更新:
+//  - binary 模式:后端下载+替换二进制后自重启 → 前端进入"重启中"并轮询 /version,
+//    版本变化即整页 reload 到新版。
+//  - docker 模式:后端返回升级命令,前端展示 + 复制(容器不能自换镜像)。
+async function runUpdate(): Promise<void> {
+  const from = update.value?.current ?? version.value?.version ?? ''
+  updatePhase.value = 'applying'
+  updateMsg.value = ''
+  dockerCommand.value = ''
+  try {
+    const res = await applyUpdate()
+    if (res.status === 'restarting') {
+      updatePhase.value = 'restarting'
+      updateMsg.value = res.message || '正在重启到新版本…'
+      pollUntilRestarted(from)
+    } else if (res.status === 'manual' && res.mode === 'docker') {
+      updatePhase.value = 'manual'
+      dockerCommand.value = res.command ?? ''
+      updateMsg.value = res.message || ''
+    } else if (res.status === 'manual') {
+      updatePhase.value = 'manual'
+      updateMsg.value = res.message || '请手动升级。'
+    } else if (res.status === 'uptodate') {
+      updatePhase.value = 'idle'
+      void runCheck()
+    } else {
+      updatePhase.value = 'error'
+      updateMsg.value = res.message || '更新失败'
+    }
+  } catch (err) {
+    updatePhase.value = 'error'
+    updateMsg.value =
+      err instanceof HttpError ? (err.apiError?.message ?? `更新失败(${err.status})`) : '更新失败,请稍后重试'
+  }
+}
+
+// 轮询 /version,直到版本号与旧版不同(新进程已起),然后整页刷新加载新版前端。
+function pollUntilRestarted(from: string): void {
+  let tries = 0
+  const timer = window.setInterval(async () => {
+    tries++
+    try {
+      const v = await getVersion()
+      if (v.version && v.version !== from) {
+        window.clearInterval(timer)
+        window.location.reload()
+        return
+      }
+    } catch {
+      // 重启窗口内连接会短暂失败,忽略重试。
+    }
+    if (tries > 40) {
+      // ~60s 仍未起来:停止轮询,提示手动刷新(更新已就位,可能需手动重启)。
+      window.clearInterval(timer)
+      updatePhase.value = 'error'
+      updateMsg.value = '重启超时。新版本已就位,请手动重启进程或刷新页面。'
+    }
+  }, 1500)
+}
+
+async function copyCommand(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(dockerCommand.value)
+    copied.value = true
+    window.setTimeout(() => (copied.value = false), 1800)
+  } catch {
+    // 剪贴板不可用(非 https / 权限):静默,用户可手动选中复制。
   }
 }
 
@@ -160,11 +237,39 @@ onMounted(loadVersion)
               <span v-if="update?.publishedAt" class="sys-pubdate">· 发布于 {{ fmtDate(update.publishedAt) }}</span>
             </div>
           </div>
-          <a v-if="update?.releaseUrl" class="sys-cta" :href="update.releaseUrl" target="_blank" rel="noopener noreferrer">
-            查看发布
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17L17 7M7 7h10v10" /></svg>
-          </a>
+          <div class="sys-upgrade-actions">
+            <AppButton
+              variant="primary"
+              :loading="updatePhase === 'applying' || updatePhase === 'restarting'"
+              :disabled="updatePhase === 'restarting'"
+              @click="runUpdate"
+            >
+              {{ updatePhase === 'applying' ? '准备中…' : updatePhase === 'restarting' ? '重启中…' : '立即更新' }}
+            </AppButton>
+            <a v-if="update?.releaseUrl" class="sys-cta-ghost" :href="update.releaseUrl" target="_blank" rel="noopener noreferrer">
+              查看发布
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17L17 7M7 7h10v10" /></svg>
+            </a>
+          </div>
         </div>
+
+        <!-- 自动更新进行态 -->
+        <transition name="sys-rise">
+          <div v-if="updatePhase === 'restarting'" class="sys-update-state sys-update-state--busy" role="status">
+            <span class="sys-spinner-dark" aria-hidden="true" />
+            <span>{{ updateMsg }} 正在重连新版本,稍候将自动刷新…</span>
+          </div>
+          <div v-else-if="updatePhase === 'manual'" class="sys-update-state sys-update-state--manual">
+            <p class="sys-update-state-msg">{{ updateMsg }}</p>
+            <div v-if="dockerCommand" class="sys-cmd">
+              <code>{{ dockerCommand }}</code>
+              <button type="button" class="sys-cmd-copy" @click="copyCommand">{{ copied ? '已复制 ✓' : '复制' }}</button>
+            </div>
+          </div>
+          <div v-else-if="updatePhase === 'error'" class="sys-update-state sys-update-state--err" role="alert">
+            更新失败:{{ updateMsg }}
+          </div>
+        </transition>
 
         <div v-if="update?.notes" class="sys-notes-wrap">
           <button class="sys-notes-toggle" :aria-expanded="showNotes" @click="showNotes = !showNotes">
@@ -475,35 +580,111 @@ onMounted(loadVersion)
   color: var(--color-faint);
 }
 
-/* 查看发布 CTA */
-.sys-cta {
+/* 升级操作组:立即更新(主)+ 查看发布(次,ghost 链接) */
+.sys-upgrade-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+.sys-cta-ghost {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  flex: none;
-  padding: 8px 14px;
+  gap: 4px;
   font-size: var(--text-label);
   font-weight: 600;
-  color: #fff;
-  background: var(--color-primary);
-  border-radius: var(--radius-md);
+  color: var(--color-primary);
   text-decoration: none;
+  white-space: nowrap;
+  transition: color var(--duration-fast);
+}
+.sys-cta-ghost:hover {
+  color: var(--color-primary-press);
+  text-decoration: underline;
+}
+
+/* 自动更新进行态 */
+.sys-update-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: var(--text-caption);
+  border: 1px solid transparent;
+}
+.sys-update-state--busy {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+  color: var(--color-text);
+}
+.sys-update-state--manual {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-2);
+  background: var(--color-amber-soft);
+  border-color: var(--color-amber-line);
+  color: var(--color-text);
+}
+.sys-update-state-msg {
+  margin: 0;
+  color: var(--color-text-soft);
+}
+.sys-update-state--err {
+  background: var(--color-danger-soft);
+  border-color: var(--color-red-line, var(--color-danger));
+  color: var(--color-danger);
+}
+.sys-spinner-dark {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--color-primary-soft);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: sys-spin 0.7s linear infinite;
+  flex: none;
+}
+@keyframes sys-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* docker 升级命令 + 复制 */
+.sys-cmd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--color-inset);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 6px 6px 6px 12px;
+}
+.sys-cmd code {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
+  color: var(--color-text);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.sys-cmd-copy {
+  flex: none;
+  padding: 4px 10px;
+  font-size: var(--text-micro);
+  font-weight: 600;
+  color: var(--color-primary);
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
   transition:
     background var(--duration-fast),
-    transform var(--duration-fast),
-    box-shadow var(--duration-fast);
+    border-color var(--duration-fast);
 }
-.sys-cta:hover {
-  background: var(--color-primary-press);
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px -6px var(--color-primary);
-}
-.sys-cta:active {
-  transform: translateY(0);
-}
-.sys-cta:focus-visible {
-  outline: 2px solid var(--color-primary);
-  outline-offset: 2px;
+.sys-cmd-copy:hover {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
 }
 
 /* 更新说明折叠 */

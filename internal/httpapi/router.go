@@ -339,6 +339,8 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 
 	// 更新检查器:进程级单例,内含 TTL 缓存(跨请求复用,避免反复点击打爆 GitHub 限流)。
 	updateChecker := version.NewChecker()
+	// 自更新串行闸:同一时刻仅允许一个更新进行。
+	updateInflight := newUpdateGate()
 
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
@@ -378,6 +380,8 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 
 		// 检查更新:鉴权只读,查 GitHub 最新发布并与当前版本比对(GET 免 CSRF)。
 		ar.Get("/version/check", makeCheckUpdateHandler(updateChecker))
+		// 一键自动更新:鉴权 + CSRF(写操作);binary 自替换+重启,docker 返回升级命令。
+		ar.Post("/version/update", makeSelfUpdateHandler(updateChecker, updateInflight))
 
 		// 审计查询(Story 1.4):只读 + 认证保护 + 分页 + 过滤。
 		ar.Get("/audit", makeListAuditHandler(aud))

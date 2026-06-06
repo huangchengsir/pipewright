@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -55,7 +56,7 @@ func main() {
 	// --version / -v:在任何配置加载、存储打开等副作用之前处理,纯查询即打印退出。
 	for _, a := range os.Args[1:] {
 		if a == "--version" || a == "-version" || a == "-v" {
-			println(version.String())
+			fmt.Println(version.String()) // 走 stdout(惯例),便于脚本捕获
 			return
 		}
 	}

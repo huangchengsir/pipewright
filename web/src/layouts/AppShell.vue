@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
+import { ref } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   Dashboard,
@@ -12,6 +13,7 @@ import {
   Settings,
   Stack2,
   Rocket,
+  ChevronRight,
 } from '@vicons/tabler'
 import { NIcon } from 'naive-ui'
 import ThemeToggle from '../components/ThemeToggle.vue'
@@ -57,16 +59,27 @@ function isActive(item: NavItem): boolean {
   }
   return route.path.startsWith(item.to)
 }
+
+// 侧栏展开/收起:固定按钮切换,状态持久化到 localStorage(刷新/重开保持)。
+const STORAGE_KEY = 'pipewright_sidebar_expanded'
+const expanded = ref(localStorage.getItem(STORAGE_KEY) === '1')
+function toggleExpanded(): void {
+  expanded.value = !expanded.value
+  localStorage.setItem(STORAGE_KEY, expanded.value ? '1' : '0')
+}
 </script>
 
 <template>
-  <div class="app-shell">
+  <div class="app-shell" :class="{ 'is-expanded': expanded }">
     <!-- Left rail navigation -->
     <nav class="rail" aria-label="主导航">
-      <!-- Brand mark -->
-      <router-link to="/" class="brand-mark" aria-label="Pipewright 主页">
-        <span class="mono">p&gt;</span>
-      </router-link>
+      <!-- 顶部:品牌 -->
+      <div class="rail-head">
+        <router-link to="/" class="brand" aria-label="Pipewright 主页">
+          <span class="brand-mark mono">p&gt;</span>
+          <span class="brand-name">Pipewright</span>
+        </router-link>
+      </div>
 
       <!-- Primary navigation items -->
       <ul class="nav-list" role="list">
@@ -78,8 +91,8 @@ function isActive(item: NavItem): boolean {
             :aria-label="item.ariaLabel"
             :aria-current="isActive(item) ? 'page' : undefined"
           >
-            <n-icon :component="item.icon" :size="20" />
-            <span class="sr-only">{{ item.label }}</span>
+            <n-icon class="nav-icon" :component="item.icon" :size="20" />
+            <span class="nav-label">{{ item.label }}</span>
           </router-link>
         </li>
       </ul>
@@ -95,10 +108,21 @@ function isActive(item: NavItem): boolean {
         :aria-label="settingsItem.ariaLabel"
         :aria-current="isActive(settingsItem) ? 'page' : undefined"
       >
-        <n-icon :component="settingsItem.icon" :size="20" />
-        <span class="sr-only">{{ settingsItem.label }}</span>
+        <n-icon class="nav-icon" :component="settingsItem.icon" :size="20" />
+        <span class="nav-label">{{ settingsItem.label }}</span>
       </router-link>
     </nav>
+
+    <!-- 边缘切换:骑在侧栏右缘、与品牌齐平的圆形按钮(随 --rail-width 平移)。 -->
+    <button
+      class="rail-edge-toggle"
+      type="button"
+      :aria-label="expanded ? '收起侧栏' : '展开侧栏'"
+      :aria-pressed="expanded"
+      @click="toggleExpanded"
+    >
+      <n-icon class="toggle-chevron" :class="{ flipped: expanded }" :component="ChevronRight" :size="16" />
+    </button>
 
     <!-- Main content area -->
     <main class="main-area" id="main-content">
@@ -120,6 +144,12 @@ function isActive(item: NavItem): boolean {
      超长内容只在各自容器内(终端横向滚动)处理,布局自适应窗口。 */
   grid-template-columns: var(--rail-width) minmax(0, 1fr);
   min-height: 100vh;
+  position: relative; /* 作为边缘切换按钮的定位上下文 */
+  transition: grid-template-columns var(--duration-normal) var(--ease-out-expo, ease);
+}
+/* 展开态:覆盖 --rail-width,grid 主区与 active 指示条偏移随之自适应。 */
+.app-shell.is-expanded {
+  --rail-width: 212px;
 }
 
 /* ——— Rail ——— */
@@ -134,12 +164,38 @@ function isActive(item: NavItem): boolean {
   gap: 6px;
   border-right: 1px solid var(--color-border);
   background-color: var(--color-bg);
-  /* Slightly above bg to separate rail from content at a glance */
   z-index: 10;
   overflow: hidden;
 }
+.is-expanded .rail {
+  align-items: stretch;
+  padding: 20px 12px;
+}
 
-/* Brand mark */
+/* 顶部头区:品牌 + 切换。收起态纵向叠放(logo 上、箭头下);展开态横向一行(品牌左、箭头右)。 */
+.rail-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 18px;
+  flex-shrink: 0;
+}
+.is-expanded .rail-head {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding-left: 4px;
+}
+
+/* Brand */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  flex-shrink: 0;
+}
 .brand-mark {
   width: 30px;
   height: 30px;
@@ -151,15 +207,25 @@ function isActive(item: NavItem): boolean {
   font-family: var(--font-mono);
   font-weight: 700;
   font-size: 0.78rem;
-  margin-bottom: 18px;
   box-shadow: 0 4px 14px var(--color-primary-soft);
-  text-decoration: none;
   transition: box-shadow var(--duration-fast);
   flex-shrink: 0;
 }
-
-.brand-mark:hover {
+.brand:hover .brand-mark {
   box-shadow: 0 6px 20px var(--color-primary-soft);
+}
+.brand-name {
+  font-size: var(--text-body);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  /* 收起时隐藏文字(无障碍名仍由 brand 的 aria-label 提供)。 */
+  display: none;
+}
+.is-expanded .brand-name {
+  display: inline;
 }
 
 /* Nav list */
@@ -170,6 +236,9 @@ function isActive(item: NavItem): boolean {
   gap: 4px;
   width: 100%;
   align-items: center;
+}
+.is-expanded .nav-list {
+  align-items: stretch;
 }
 
 /* Nav item */
@@ -182,37 +251,106 @@ function isActive(item: NavItem): boolean {
   place-items: center;
   color: var(--color-faint);
   text-decoration: none;
+  background: none;
+  border: none;
+  cursor: pointer;
   transition:
     color var(--duration-fast),
     background-color var(--duration-fast);
-  cursor: pointer;
 }
-
+.is-expanded .nav-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  padding: 0 12px;
+}
+.nav-icon {
+  flex-shrink: 0;
+}
 .nav-item:hover {
   color: var(--color-text);
   background-color: var(--color-border);
 }
-
 .nav-item:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
 
-/* Active state: electric blue + 2.5px left bar */
+.nav-label {
+  font-size: var(--text-label);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  display: none;
+}
+.is-expanded .nav-label {
+  display: inline;
+}
+
+/* Active state */
 .nav-item--active {
   color: var(--color-primary);
 }
-
+.is-expanded .nav-item--active {
+  background: var(--color-primary-soft);
+  font-weight: 600;
+}
 .nav-item--active::before {
   content: "";
   position: absolute;
-  /* Extends to the left edge of the rail */
+  /* 收起态:指示条贴在 rail 左缘(图标水平居中,据 rail 宽度回推偏移)。 */
   left: calc(-1 * (var(--rail-width) / 2 - 20px + 1px));
   top: 9px;
   bottom: 9px;
   width: 2.5px;
   border-radius: 2px;
   background: var(--color-primary);
+}
+/* 展开态:指示条贴在条目自身左缘(条目左对齐、占满宽度)。 */
+.is-expanded .nav-item--active::before {
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+}
+
+/* 边缘切换:骑在侧栏右缘、与品牌行齐平的圆形按钮。随 --rail-width 平移(展开/收起都跟手)。 */
+.rail-edge-toggle {
+  position: absolute;
+  top: 23px; /* 与顶部品牌 mark 垂直居中对齐 */
+  left: calc(var(--rail-width) - 13px); /* 圆心落在 rail 右缘分割线上 */
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  color: var(--color-dim);
+  cursor: pointer;
+  z-index: 30;
+  box-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.14);
+  transition:
+    left var(--duration-normal) var(--ease-out-expo, ease),
+    color var(--duration-fast),
+    border-color var(--duration-fast),
+    box-shadow var(--duration-fast);
+}
+.rail-edge-toggle:hover {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+  box-shadow: 0 4px 12px -2px var(--color-primary-soft);
+}
+.rail-edge-toggle:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+.toggle-chevron {
+  transition: transform var(--duration-normal) var(--ease-out-expo, ease);
+}
+.toggle-chevron.flipped {
+  transform: rotate(180deg);
 }
 
 .rail-spacer {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/store"
 )
 
 // feedback.go 是「诊断反馈闭环」领域层(FR-26 / Story 7.5)。
@@ -133,12 +134,9 @@ func (s *feedbackService) SaveFeedback(ctx context.Context, in SaveFeedbackInput
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO diagnosis_feedback
 		   (id, run_id, verdict, correct_root_cause, diagnosis_snapshot, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(run_id) DO UPDATE SET
-		   verdict = excluded.verdict,
-		   correct_root_cause = excluded.correct_root_cause,
-		   diagnosis_snapshot = excluded.diagnosis_snapshot,
-		   updated_at = excluded.updated_at`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?) `+
+			store.UpsertSuffix(store.DialectOf(s.db), []string{"run_id"},
+				[]string{"verdict", "correct_root_cause", "diagnosis_snapshot", "updated_at"}),
 		id, runID, verdict, correct, in.DiagnosisSnapshot, nowStr, nowStr,
 	)
 	if err != nil {

@@ -26,7 +26,7 @@ func (s *Service) loadDeploymentsByEnv(ctx context.Context, projectID string) (m
 		FROM pipeline_runs r
 		JOIN deploy_targets dt ON dt.run_id = r.id
 		WHERE r.project_id = ? AND TRIM(r.resolved_environment) <> ''
-		ORDER BY r.id ASC, dt.started_at ASC, dt.rowid ASC`, projectID)
+		ORDER BY r.id ASC, dt.started_at ASC, dt.id ASC`, projectID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("environments: query deployments: %w", err)
 	}
@@ -124,7 +124,7 @@ func (s *Service) loadDeploymentsByEnv(ctx context.Context, projectID string) (m
 func (s *Service) loadArtifacts(ctx context.Context, runID string) ([]Artifact, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, type, name, reference FROM run_artifacts
-		 WHERE run_id = ? ORDER BY created_at ASC, rowid ASC`, runID)
+		 WHERE run_id = ? ORDER BY created_at ASC, id ASC`, runID)
 	if err != nil {
 		return nil, fmt.Errorf("environments: query artifacts: %w", err)
 	}

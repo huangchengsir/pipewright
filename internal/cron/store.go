@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/huangchengsir/pipewright/internal/store"
 )
 
 // 领域错误。
@@ -90,12 +92,9 @@ func (s *service) Save(ctx context.Context, projectID string, in SaveInput) (*Co
 	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO project_crons (project_id, expression, branch, enabled, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(project_id) DO UPDATE SET
-		   expression = excluded.expression,
-		   branch     = excluded.branch,
-		   enabled    = excluded.enabled,
-		   updated_at = excluded.updated_at`,
+		 VALUES (?, ?, ?, ?, ?, ?) `+
+			store.UpsertSuffix(store.DialectOf(s.db), []string{"project_id"},
+				[]string{"expression", "branch", "enabled", "updated_at"}),
 		projectID, expr, branch, enabled, now, now,
 	)
 	if err != nil {
@@ -128,9 +127,4 @@ func (s *service) ListEnabled(ctx context.Context) ([]Entry, error) {
 }
 
 // isForeignKeyErr 判定是否为外键约束失败(项目不存在)。
-func isForeignKeyErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(strings.ToUpper(err.Error()), "FOREIGN KEY")
-}
+func isForeignKeyErr(err error) bool { return store.IsForeignKeyErr(err) }

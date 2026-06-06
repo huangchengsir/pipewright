@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/huangchengsir/pipewright/internal/store"
 )
 
 // concurrency.go 实现项目级并发上限配置(FR-8-10 并发/队列控制)。
@@ -85,10 +87,8 @@ func (s *concurrencyService) Save(ctx context.Context, projectID string, maxConc
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO project_concurrency (project_id, max_concurrent, created_at, updated_at)
-		 VALUES (?, ?, ?, ?)
-		 ON CONFLICT(project_id) DO UPDATE SET
-		   max_concurrent = excluded.max_concurrent,
-		   updated_at     = excluded.updated_at`,
+		 VALUES (?, ?, ?, ?) `+
+			store.UpsertSuffix(store.DialectOf(s.db), []string{"project_id"}, []string{"max_concurrent", "updated_at"}),
 		projectID, maxConcurrent, now, now,
 	)
 	if err != nil {

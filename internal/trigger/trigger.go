@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
@@ -305,8 +306,8 @@ func (s *service) createDefault(ctx context.Context, projectID string) (*Config,
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO pipeline_triggers
 		   (project_id, webhook_token, webhook_secret_ciphertext, events_json, branch_mappings_json, unmatched_policy, created_at, updated_at)
-		 VALUES (?, ?, ?, '{"push":false,"tag":false,"pullRequest":false,"release":false}', '[]', ?, ?, ?)
-		 ON CONFLICT(project_id) DO NOTHING`,
+		 VALUES (?, ?, ?, '{"push":false,"tag":false,"pullRequest":false,"release":false}', '[]', ?, ?, ?) `+
+			store.DoNothingSuffix(store.DialectOf(s.db), []string{"project_id"}),
 		projectID, token, sealed, PolicyRecord, nowStr, nowStr,
 	)
 	if err != nil {
@@ -523,9 +524,4 @@ func validateTargetServerIDs(ids []string) error {
 }
 
 // isForeignKeyErr 判断错误是否为外键约束失败(modernc sqlite 文本含 FOREIGN KEY)。
-func isForeignKeyErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(strings.ToUpper(err.Error()), "FOREIGN KEY")
-}
+func isForeignKeyErr(err error) bool { return store.IsForeignKeyErr(err) }

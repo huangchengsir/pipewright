@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
@@ -658,9 +659,4 @@ func zero(b []byte) {
 }
 
 // isUniqueErr 判断错误是否为唯一约束冲突(modernc sqlite 文本含 UNIQUE)。
-func isUniqueErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(strings.ToUpper(err.Error()), "UNIQUE")
-}
+func isUniqueErr(err error) bool { return store.IsUniqueErr(err) }

@@ -14,10 +14,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
@@ -404,10 +404,4 @@ func scanProject(sc scanner) (*Project, error) {
 }
 
 // isForeignKeyErr 判断错误是否为外键约束失败(modernc sqlite 文本含 FOREIGN KEY)。
-func isForeignKeyErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToUpper(err.Error())
-	return strings.Contains(msg, "FOREIGN KEY")
-}
+func isForeignKeyErr(err error) bool { return store.IsForeignKeyErr(err) }

@@ -3,12 +3,11 @@ package promotion
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/storetest"
 
 	"database/sql"
 )
@@ -16,14 +15,8 @@ import (
 // ---- 测试地基:真 SQLite store + 种子项目/运行 -----------------------------
 
 func testStore(t *testing.T) (*Store, *sql.DB) {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	return NewStore(st.DB), st.DB
+	db := storetest.OpenDB(t)
+	return NewStore(db), db
 }
 
 func seedProject(t *testing.T, db *sql.DB) string {

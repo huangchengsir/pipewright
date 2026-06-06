@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,20 +14,14 @@ import (
 
 	"github.com/huangchengsir/pipewright/internal/auth"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/storetest"
 )
 
 // ---- test helpers --------------------------------------------------------
 
 // testStoreAuth 打开临时 SQLite 数据库(包含迁移)。
 func testStoreAuth(t *testing.T) *store.Store {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	s, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	return s
+	return storetest.Open(t)
 }
 
 // testWebFSAuth 返回测试用 FS。

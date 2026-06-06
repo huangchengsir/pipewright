@@ -1,7 +1,7 @@
 # GoReleaser 发版配置:推 v* tag → 跨平台静态二进制 + 校验和 + changelog → GitHub Release;
 # 同时构建 linux amd64/arm64 镜像并合并为多架构清单推 ghcr.io。
-# 本地干跑:goreleaser release --snapshot --clean --skip=publish,docker
-# 校验配置:goreleaser check
+# 本地干跑(含真建 docker,需本机 docker daemon):goreleaser release --snapshot --clean --skip=publish
+# 仅二进制/不建镜像:再加 --skip=docker;校验配置:goreleaser check
 version: 2
 
 project_name: pipewright
@@ -73,25 +73,50 @@ changelog:
       - Merge pull request
       - Merge branch
 
-# dockers_v2:单条目自动构建多架构镜像并合并清单(取代已弃用的 dockers + docker_manifests)。
-dockers_v2:
-  - id: ghcr
+# 每架构单独构建单平台镜像(二进制在 context 根名为 pipewright,与 Dockerfile.goreleaser 匹配),
+# 再由 docker_manifests 合并为多架构清单。注:dockers_v2 一次构建多平台时二进制不落 context 根,
+# COPY 会失败,故用经典 dockers(弃用告警仅提示,功能稳定)。
+dockers:
+  - id: amd64
+    goos: linux
+    goarch: amd64
     dockerfile: Dockerfile.goreleaser
-    images:
-      - ghcr.io/huangchengsir/pipewright
-    tags:
-      - "{{ .Version }}"
-      # latest 仅正式版推送(预发布 tag 跳过)。
-      - "{{ if not .Prerelease }}latest{{ end }}"
-    platforms:
-      - linux/amd64
-      - linux/arm64
-    labels:
-      org.opencontainers.image.title: "{{ .ProjectName }}"
-      org.opencontainers.image.version: "{{ .Version }}"
-      org.opencontainers.image.revision: "{{ .FullCommit }}"
-      org.opencontainers.image.source: https://github.com/huangchengsir/pipewright
-      org.opencontainers.image.licenses: MIT
+    use: buildx
+    image_templates:
+      - "ghcr.io/huangchengsir/pipewright:{{ .Version }}-amd64"
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.source=https://github.com/huangchengsir/pipewright"
+      - "--label=org.opencontainers.image.licenses=MIT"
+  - id: arm64
+    goos: linux
+    goarch: arm64
+    dockerfile: Dockerfile.goreleaser
+    use: buildx
+    image_templates:
+      - "ghcr.io/huangchengsir/pipewright:{{ .Version }}-arm64"
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.source=https://github.com/huangchengsir/pipewright"
+      - "--label=org.opencontainers.image.licenses=MIT"
+
+docker_manifests:
+  - name_template: "ghcr.io/huangchengsir/pipewright:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/huangchengsir/pipewright:{{ .Version }}-amd64"
+      - "ghcr.io/huangchengsir/pipewright:{{ .Version }}-arm64"
+  # latest 仅正式版推送(预发布 tag 自动跳过)。
+  - name_template: "ghcr.io/huangchengsir/pipewright:latest"
+    skip_push: auto
+    image_templates:
+      - "ghcr.io/huangchengsir/pipewright:{{ .Version }}-amd64"
+      - "ghcr.io/huangchengsir/pipewright:{{ .Version }}-arm64"
 
 release:
   github:

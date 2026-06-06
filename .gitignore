@@ -3,6 +3,8 @@
 /pipewright-*
 *.test
 *.out
+# GoReleaser 发版产物(本地 snapshot / release 的输出目录),不入库
+/dist/
 *.db
 *.db-journal
 *.db-wal
@@ -23,6 +25,9 @@
 /web/pw-*.mjs
 # 一次性演示/原型 scratch — 不入库
 /demos/
+
+# docker-compose 本地密钥(含 master key / 口令),不入库;仅 .env.example 入库
+.env
 
 # Claude Code 本地设置(机器特定权限/覆盖,不入库)
 .claude/settings.local.json

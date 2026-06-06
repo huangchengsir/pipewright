@@ -4,7 +4,14 @@ BIN := pipewright
 GO_PKGS := . ./cmd/... ./internal/...
 GO_FMT_DIRS := cmd internal embed.go
 
-.PHONY: all build embed-frontend go-build test vet fmt fmt-check mem-check dev run clean
+# 版本元数据:tag 优先(git describe),源码态回退 dev。发版由 .goreleaser.yaml 注入同名变量。
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
+DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+VPKG    := github.com/huangchengsir/pipewright/internal/version
+LDFLAGS := -s -w -X $(VPKG).Version=$(VERSION) -X $(VPKG).Commit=$(COMMIT) -X $(VPKG).Date=$(DATE)
+
+.PHONY: all build embed-frontend go-build test vet fmt fmt-check mem-check dev run version clean
 
 all: build
 
@@ -13,7 +20,7 @@ embed-frontend:
 	cd web && npm ci && npm run build
 
 go-build:
-	CGO_ENABLED=0 go build -o $(BIN) ./cmd/pipewright
+	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/pipewright
 
 ## build: 前端构建 → go:embed → 静态单二进制(双运行模式之原生形态)
 build: embed-frontend go-build
@@ -40,6 +47,10 @@ mem-check:
 dev:
 	@echo "终端1: go run ./cmd/pipewright"
 	@echo "终端2: cd web && npm run dev   # 代理 /api /healthz 到 :8080"
+
+## version: 打印将注入二进制的版本元数据(调试发版用)
+version:
+	@echo "VERSION=$(VERSION)"; echo "COMMIT=$(COMMIT)"; echo "DATE=$(DATE)"
 
 run: go-build
 	./$(BIN)

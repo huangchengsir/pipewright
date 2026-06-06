@@ -37,6 +37,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/target"
 	"github.com/huangchengsir/pipewright/internal/trigger"
 	"github.com/huangchengsir/pipewright/internal/vault"
+	"github.com/huangchengsir/pipewright/internal/version"
 )
 
 const (
@@ -340,6 +341,8 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 	r.Use(middleware.Recoverer)
 
 	r.Get("/healthz", handleHealthz)
+	// /version 公开只读:暴露构建版本元数据,供升级检查与运维探针使用(非敏感)。
+	r.Get("/version", handleVersion)
 
 	svc := authn
 
@@ -921,6 +924,11 @@ func makeLogoutHandler(svc auth.Authenticator) http.HandlerFunc {
 
 func handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleVersion 返回构建期注入的版本元数据(version/commit/date/goVersion/platform)。
+func handleVersion(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, version.Get())
 }
 
 // spaHandler 服务嵌入文件系统中的静态资源;无扩展名的路径(前端路由)回退 index.html,

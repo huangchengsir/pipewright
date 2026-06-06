@@ -48,26 +48,52 @@
 
 > 安全不可妥协:凭据仅以密文存储、命令 array 化防注入(AC-SEC-02)、出网 SSRF 收口、日志脱敏。
 
-## 快速开始
+## 安装 / 部署
+
+三种形态任选,数据均落本地、无外部依赖。
+
+### ① 一键脚本(Linux / macOS)
+
+从 GitHub Release 下载对应平台的静态二进制装到 `/usr/local/bin`(含校验和核验):
 
 ```bash
-# 1. 构建(纯 Go,无 CGO;前端经 go:embed 内嵌)
-make build          # 产出单个静态二进制 ./pipewright
+curl -fsSL https://raw.githubusercontent.com/huangchengsir/pipewright/master/install.sh | sh
 
-# 2. 运行(首次启动引导管理员;master key 用于凭据保险库)
-PIPEWRIGHT_MASTER_KEY=$(head -c32 /dev/urandom | base64) \
+# 钉版本 / 自定义目录:
+VERSION=v1.0.0 INSTALL_DIR=$HOME/.local/bin \
+  sh -c "$(curl -fsSL https://raw.githubusercontent.com/huangchengsir/pipewright/master/install.sh)"
+
+# 运行(首次启动引导管理员;master key 用于凭据保险库)
+PIPEWRIGHT_MASTER_KEY=$(openssl rand -base64 32) \
 PIPEWRIGHT_ADMIN_PASSWORD=change-me \
-PIPEWRIGHT_ADDR=:8080 \
-./pipewright
-
-# 3. 打开 http://localhost:8080,用 admin / change-me 登录
+  pipewright          # 打开 http://localhost:8080,用 admin / change-me 登录
 ```
 
-容器运行:
+> Windows 用户:到 [Releases](https://github.com/huangchengsir/pipewright/releases) 下载 `.zip`。
+
+### ② docker compose(推荐自托管)
 
 ```bash
-docker build -t pipewright .
-docker run -p 8080:8080 -e PIPEWRIGHT_MASTER_KEY=... -e PIPEWRIGHT_ADMIN_PASSWORD=... pipewright
+curl -fsSLO https://raw.githubusercontent.com/huangchengsir/pipewright/master/docker-compose.yml
+curl -fsSLO https://raw.githubusercontent.com/huangchengsir/pipewright/master/.env.example
+cp .env.example .env       # 至少设 PIPEWRIGHT_ADMIN_PASSWORD,并 openssl rand -base64 32 填 MASTER_KEY
+docker compose up -d       # 数据持久化在具名卷 pipewright-data;切 MySQL 见 .env 注释
+```
+
+### ③ docker run(最快试用)
+
+```bash
+docker run -d -p 8080:8080 -v pipewright-data:/data \
+  -e PIPEWRIGHT_ADMIN_PASSWORD=change-me \
+  -e PIPEWRIGHT_MASTER_KEY=$(openssl rand -base64 32) \
+  ghcr.io/huangchengsir/pipewright:latest
+```
+
+### 从源码构建
+
+```bash
+make build          # 前端构建 → go:embed → 单个静态二进制 ./pipewright(纯 Go,无 CGO)
+./pipewright --version
 ```
 
 ### 配置(环境变量)
@@ -75,7 +101,9 @@ docker run -p 8080:8080 -e PIPEWRIGHT_MASTER_KEY=... -e PIPEWRIGHT_ADMIN_PASSWOR
 | 变量 | 说明 | 默认 |
 |---|---|---|
 | `PIPEWRIGHT_ADDR` | HTTP 监听地址 | `:8080` |
-| `PIPEWRIGHT_DB` | SQLite 数据库路径 | `pipewright.db` |
+| `PIPEWRIGHT_DB_DRIVER` | 数据库驱动:`sqlite` 或 `mysql` | `sqlite` |
+| `PIPEWRIGHT_DB` | SQLite 数据库路径(driver=sqlite 时) | `pipewright.db` |
+| `PIPEWRIGHT_DB_DSN` | MySQL DSN(driver=mysql 时必填) | 无 |
 | `PIPEWRIGHT_MASTER_KEY` | 凭据保险库主密钥(base64 的 32 字节);或用 `_FILE` 指文件 | 未配则保险库禁用 |
 | `PIPEWRIGHT_ADMIN_USERNAME` | 首次启动管理员用户名 | `admin` |
 | `PIPEWRIGHT_ADMIN_PASSWORD` | 首次启动管理员口令 | 无(须设置) |

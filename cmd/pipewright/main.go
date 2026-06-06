@@ -48,9 +48,18 @@ import (
 	"github.com/huangchengsir/pipewright/internal/target"
 	"github.com/huangchengsir/pipewright/internal/trigger"
 	"github.com/huangchengsir/pipewright/internal/vault"
+	"github.com/huangchengsir/pipewright/internal/version"
 )
 
 func main() {
+	// --version / -v:在任何配置加载、存储打开等副作用之前处理,纯查询即打印退出。
+	for _, a := range os.Args[1:] {
+		if a == "--version" || a == "-version" || a == "-v" {
+			println(version.String())
+			return
+		}
+	}
+
 	cfg := config.Load()
 
 	dbDriver, dbDSN, err := cfg.StoreConfig()

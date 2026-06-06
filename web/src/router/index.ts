@@ -30,6 +30,8 @@ const SettingsServers = () => import('../views/settings/SettingsServers.vue')
 const SettingsNotifications = () => import('../views/settings/SettingsNotifications.vue')
 // Story 7-5: diagnosis feedback-loop stats (FR-26)
 const SettingsDiagnosisStats = () => import('../views/settings/SettingsDiagnosisStats.vue')
+// 系统信息 + 一键检查更新
+const SettingsSystem = () => import('../views/settings/SettingsSystem.vue')
 // Story 2-2: new pipeline editor
 const ProjectPipeline = () => import('../views/ProjectPipeline.vue')
 // Story 2-3: triggers (kept for backward compat; now a thin wrapper around TriggersPanel)
@@ -126,8 +128,8 @@ const router = createRouter({
             { path: 'notifications', name: 'settings-notifications', component: SettingsNotifications },
             { path: 'vault', name: 'settings-vault', component: SettingsVault },
             { path: 'account', name: 'settings-account', component: SettingsAccount },
-            // 「系统」设置占位页 → 重定向到 AI 配置(尚未建,避免落占位页)。
-            { path: 'system', name: 'settings-system', redirect: { name: 'settings-ai' } },
+            // 系统信息 + 一键检查更新
+            { path: 'system', name: 'settings-system', component: SettingsSystem },
             // Story 4-1: target servers + shared SSH layer (FR-14)
             { path: 'servers', name: 'settings-servers', component: SettingsServers },
             // Story 7-5: diagnosis feedback-loop stats (FR-26)

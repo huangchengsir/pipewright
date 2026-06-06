@@ -1,0 +1,48 @@
+# 发版流水线:推送 v* tag 触发。
+# GoReleaser 跨平台构建 → GitHub Release(二进制 + 校验和 + changelog)+ ghcr.io 多架构镜像。
+# 与 ci.yml(每次 push/PR 跑测试)正交;此处只在打 tag 时跑。
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # 创建 GitHub Release、上传产物
+  packages: write # 推送镜像到 ghcr.io
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # GoReleaser 需要完整历史与 tag 生成 changelog
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # 多架构镜像构建所需:QEMU(跨架构模拟)+ buildx。
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      # 登录 ghcr.io,用 workflow 自带 GITHUB_TOKEN,无需额外配置密钥。
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,14 @@
+# 发版专用:包装 GoReleaser 已交叉编译好的静态二进制(前端已 go:embed),不在镜像内重编。
+# 由 dockers_v2 跨架构构建并合并多架构清单。手动 docker build 请用根目录 Dockerfile。
+
+# distroless 无 shell,借 busybox 预建归 nonroot(65532)所有的 /data,供持久化卷继承属主。
+FROM busybox AS prep
+RUN mkdir -p /data && chown 65532:65532 /data
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY pipewright /pipewright
+COPY --from=prep --chown=65532:65532 /data /data
+# 工作目录设为 /data:sqlite(pipewright.db)与相对路径产物默认落此,持久化卷一挂即生效。
+WORKDIR /data
+EXPOSE 8080
+ENTRYPOINT ["/pipewright"]

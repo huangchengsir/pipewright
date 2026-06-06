@@ -44,6 +44,7 @@
 - **🚀 多服务器部署** —— 经 SSH agentless 部署 · 健康门控 · 零停机端口切换 + 失败回滚 · 多机并行扇出 + 部分失败可见。
 - **📣 通知** —— 企业微信 / 钉钉 / 飞书 / 邮件 / 自定义 webhook · 事件→渠道细粒度路由 · 模板 + 变量自定义。
 - **🖥 服务器运维** —— 多机状态总览(CPU/内存/磁盘)· 实时 + 历史服务日志 · 服务操作 · 容器交互终端 · 异常检测告警。
+- **🔄 检查 + 一键自更新** —— 设置→系统 显示当前版本,一键查 GitHub 最新发布并语义比对;二进制部署可页面**一键自动更新**(下载新版 + 校验和核验 + 原子替换 + 自重启),Docker 部署给出精确升级命令。
 - **🧠 AI 洞察** —— 见上「王牌」。
 
 > 安全不可妥协:凭据仅以密文存储、命令 array 化防注入(AC-SEC-02)、出网 SSRF 收口、日志脱敏。
@@ -96,11 +97,19 @@ make build          # 前端构建 → go:embed → 单个静态二进制 ./pipe
 ./pipewright --version
 ```
 
+### 更新
+
+打开 **设置 → 系统**,点「检查更新」查最新发布;有新版时:
+
+- **二进制部署**:点「立即更新」即自动下载新版 + 校验和核验 + 替换 + 重启(需对二进制文件有写权限;装在 `$HOME/.local/bin` 免 sudo)。
+- **Docker 部署**:容器不替换自身镜像,按提示在宿主执行 `docker compose pull && docker compose up -d`(数据卷保留)。
+
 ### 配置(环境变量)
 
 | 变量 | 说明 | 默认 |
 |---|---|---|
 | `PIPEWRIGHT_ADDR` | HTTP 监听地址 | `:8080` |
+| `PIPEWRIGHT_RELEASE_REPO` | 检查更新所查的 GitHub 仓库(fork 可改) | `huangchengsir/pipewright` |
 | `PIPEWRIGHT_DB_DRIVER` | 数据库驱动:`sqlite` 或 `mysql` | `sqlite` |
 | `PIPEWRIGHT_DB` | SQLite 数据库路径(driver=sqlite 时) | `pipewright.db` |
 | `PIPEWRIGHT_DB_DSN` | MySQL DSN(driver=mysql 时必填) | 无 |

@@ -221,7 +221,7 @@ function openTerminal(serverId: string, c: ContainerInfo): void {
   const url = router.resolve({
     name: 'server-terminal',
     params: { id: serverId },
-    query: { container: c.names },
+    query: { container: c.names, cid: shortId(c.id) },
   }).href
   window.open(url, '_blank', 'noopener')
 }

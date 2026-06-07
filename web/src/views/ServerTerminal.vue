@@ -38,7 +38,13 @@ const allowedShells: TerminalShell[] = ['/bin/sh', '/bin/bash', '/bin/ash', '/bi
 // 容器目标:带 ?container=<名/ID> 时,终端直接 `docker exec -it` 进该容器;否则连主机 shell。
 // 从「容器」页点行内「终端」即带此参数过来。空串 = 主机 shell 模式。
 const containerName = computed(() => String(route.query.container ?? '').trim())
+// 容器短 ID(展示用,由「容器」页一并带过来);docker exec 用名字即可,ID 仅用于显示区分。
+const containerId = computed(() => String(route.query.cid ?? '').trim())
 const isContainer = computed(() => containerName.value !== '')
+// 容器人读标签:有 ID 则「redis · b2d5b2c20e9a」,否则仅名字。
+const containerLabel = computed(() =>
+  containerId.value ? `${containerName.value} · ${containerId.value}` : containerName.value,
+)
 
 // ─── session controls(顶栏会话段) ───────────────────────────────────────────────
 // 终端目标 = 服务器**主机 shell**(SSH 直起登录 shell),或 ?container= 指定的**容器内 shell**。
@@ -633,7 +639,7 @@ onBeforeUnmount(() => {
       <div class="seg">
         <div class="cell">
           <span class="k">{{ isContainer ? '容器' : '主机' }}</span>
-          <span class="v">{{ isContainer ? `${containerName} @ ${hostLabel}` : hostLabel }}</span>
+          <span class="v">{{ isContainer ? `${containerLabel} @ ${hostLabel}` : hostLabel }}</span>
         </div>
         <div class="cell">
           <span class="k">Shell</span>
@@ -659,7 +665,7 @@ onBeforeUnmount(() => {
       <section class="term-wrap">
         <div class="term-bar">
           <span class="tdot r" /><span class="tdot y" /><span class="tdot g" />
-          <span class="name">{{ serverName }} · <b>{{ isContainer ? `容器 ${containerName}` : '主机 shell' }}</b></span>
+          <span class="name">{{ serverName }} · <b>{{ isContainer ? `容器 ${containerLabel}` : '主机 shell' }}</b></span>
         </div>
 
         <div
@@ -678,7 +684,7 @@ onBeforeUnmount(() => {
 
         <!-- 终端状态行 -->
         <div class="term-status">
-          <span class="s">⟢ <b>{{ serverName }}</b></span>
+          <span class="s">⟢ <b>{{ isContainer ? `容器 ${containerLabel}` : serverName }}</b></span>
           <span v-if="latencyMs !== null && connState === 'connected'" class="s">延迟 <b>{{ latencyMs }}ms</b></span>
           <span class="s"><kbd>⌘C</kbd> 复制</span>
           <span class="s"><kbd>⌘V</kbd> 粘贴</span>

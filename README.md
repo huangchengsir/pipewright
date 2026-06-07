@@ -72,6 +72,19 @@ PIPEWRIGHT_ADMIN_PASSWORD=change-me \
   pipewright          # 打开 http://localhost:8080,用 admin / change-me 登录
 ```
 
+**推荐:装为 systemd 服务**(开机自启 + 崩溃重启 + 一键自更新可用;Linux,需 root)。脚本会自动持久化 master key 到 `/etc/pipewright/master.key`、数据落 `/var/lib/pipewright`、配置写 `/etc/pipewright/pipewright.env`:
+
+```bash
+SETUP_SERVICE=1 sh -c "$(curl -fsSL https://raw.githubusercontent.com/huangchengsir/pipewright/master/install.sh)"
+# 状态 / 日志:systemctl status pipewright  ·  journalctl -u pipewright -f
+# 改端口等:编辑 /etc/pipewright/pipewright.env 后 systemctl restart pipewright
+
+# 用 MySQL 而非默认 SQLite(DSN 为 go-sql-driver 格式,parseTime=true 必带):
+SETUP_SERVICE=1 PIPEWRIGHT_DB_DRIVER=mysql \
+  PIPEWRIGHT_DB_DSN='user:pw@tcp(host:3306)/pipewright?parseTime=true&charset=utf8mb4' \
+  sh -c "$(curl -fsSL https://raw.githubusercontent.com/huangchengsir/pipewright/master/install.sh)"
+```
+
 > Windows 用户:到 [Releases](https://github.com/huangchengsir/pipewright/releases) 下载 `.zip`。
 
 ### ② docker compose(推荐自托管)
@@ -103,7 +116,7 @@ make build          # 前端构建 → go:embed → 单个静态二进制 ./pipe
 
 打开 **设置 → 系统**,点「检查更新」查最新发布;有新版时:
 
-- **二进制部署**:点「立即更新」即自动下载新版 + 校验和核验 + 替换 + 重启(需对二进制文件有写权限;装在 `$HOME/.local/bin` 免 sudo)。
+- **二进制部署**:点「立即更新」即自动下载新版 + 校验和核验 + 替换 + 重启(需对二进制文件有写权限;装在 `$HOME/.local/bin` 免 sudo,或用 `SETUP_SERVICE=1` 装的 root systemd 服务亦满足)。
 - **Docker 部署**:容器不替换自身镜像,按提示在宿主执行 `docker compose pull && docker compose up -d`(数据卷保留)。
 
 ### 配置(环境变量)

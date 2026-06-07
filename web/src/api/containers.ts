@@ -112,3 +112,50 @@ export async function createContainer(
 ): Promise<CreateContainerResult> {
   return http.post<CreateContainerResult>(`/api/servers/${serverId}/containers`, input)
 }
+
+// ─── Images ──────────────────────────────────────────────────────────────────
+
+/** One image as reported by `docker images`. */
+export interface ImageInfo {
+  id: string
+  /** `<none>` for dangling images. */
+  repository: string
+  tag: string
+  /** Human-readable size, e.g. `142MB`. */
+  size: string
+  /** Human-readable age, e.g. `3 weeks ago`. */
+  createdSince: string
+}
+
+export interface ServerImages {
+  serverId: string
+  reachable: boolean
+  runtime: string
+  error: string
+  images: ImageInfo[]
+  collectedAt: string
+}
+
+export interface ImageActionResult {
+  serverId: string
+  action: string
+  image: string
+  ok: boolean
+  output: string
+  error: string
+}
+
+/** List images on a server (docker images). */
+export async function getServerImages(id: string): Promise<ServerImages> {
+  return http.get<ServerImages>(`/api/servers/${id}/images`)
+}
+
+/** Pull an image onto a server (docker pull). */
+export async function pullImage(id: string, image: string): Promise<ImageActionResult> {
+  return http.post<ImageActionResult>(`/api/servers/${id}/images/pull`, { image })
+}
+
+/** Remove an image from a server (docker rmi). */
+export async function removeImage(id: string, image: string, force = false): Promise<ImageActionResult> {
+  return http.post<ImageActionResult>(`/api/servers/${id}/images/remove`, { image, force })
+}

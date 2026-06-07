@@ -627,6 +627,10 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 新增容器(docker run) —— 写操作,过 auth + CSRF。参数严格白名单 + array 化,
 		// 非法 400 invalid_create_spec;SSH/命令失败人读不 500;成功后写审计(detail 仅 image/name)。
 		ar.Post("/servers/{id}/containers", makeCreateContainerHandler(sv, aud))
+		// 镜像管理 —— 列表(只读)+ 拉取/删除(写,过 CSRF + 审计)。镜像引用严格白名单 + array 化。
+		ar.Get("/servers/{id}/images", makeServerImagesHandler(sv))
+		ar.Post("/servers/{id}/images/pull", makeImagePullHandler(sv, aud))
+		ar.Post("/servers/{id}/images/remove", makeImageRemoveHandler(sv, aud))
 		// 服务操作 —— 重启/停止/启动(Story 6.3;FR-17,经 SSH 跑 systemctl/docker)。
 		// 复用 sv(4-1 装配)+ aud(1-4 装配),无需新服务。写操作 → 过 auth + CSRF。
 		// type/target/action 严格白名单(AC-SEC-02:首字符非 `-` 防 flag 注入、无 shell 元字符

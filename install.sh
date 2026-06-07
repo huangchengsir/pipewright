@@ -34,11 +34,16 @@ err() {
 
 # 依赖检查:下载器与校验工具。
 if command -v curl >/dev/null 2>&1; then
-	DL="curl -fsSL"
-	DL_O="curl -fsSL -o"
+	# 大文件直连在部分网络(如 CN)易卡死;加断点重试 + 卡死检测:
+	#   --retry 3 --retry-delay 2  瞬时错误自动重试
+	#   --speed-time 30 --speed-limit 2048  速率 30s 持续 <2KB/s 判定 stall → 中止并触发重试
+	# 仍下不动时,设 https_proxy / all_proxy 走代理(curl 自动识别该环境变量)。
+	DL="curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20"
+	DL_O="curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 --speed-time 30 --speed-limit 2048 -o"
 elif command -v wget >/dev/null 2>&1; then
-	DL="wget -qO-"
-	DL_O="wget -qO"
+	# wget:同样加重试 + 读超时(30s 无数据即断,配 --tries 重试),避免无限 hang。
+	DL="wget -qO- --tries=3 --timeout=30"
+	DL_O="wget -q --tries=3 --read-timeout=30 -O"
 else
 	err "需要 curl 或 wget。"
 fi
@@ -112,6 +117,14 @@ elif command -v sudo >/dev/null 2>&1; then
 	sudo mv "${TMP}/${BIN}" "${INSTALL_DIR}/${BIN}"
 else
 	err "${INSTALL_DIR} 不可写且无 sudo。可设 INSTALL_DIR=\$HOME/.local/bin 重试。"
+fi
+
+# SELinux(RHEL/CentOS/Rocky/Fedora 系,强制模式):二进制经临时目录 mv 进来会带上 user_tmp_t
+# 类型,systemd(init_t)无权执行它 → 装为服务后起不来(AVC denied execute)。重置为该路径
+# 的默认上下文(/usr/local/bin → bin_t),systemd 即可执行。非 SELinux 系统无 restorecon,跳过。
+if command -v restorecon >/dev/null 2>&1; then
+	restorecon "${INSTALL_DIR}/${BIN}" 2>/dev/null ||
+		sudo restorecon "${INSTALL_DIR}/${BIN}" 2>/dev/null || true
 fi
 
 info "完成 ✓  $("${INSTALL_DIR}/${BIN}" --version 2>/dev/null || echo "${BIN} ${TAG}")"

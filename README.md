@@ -51,17 +51,19 @@
 
 ## 安装 / 部署
 
-三种形态任选,数据均落本地、无外部依赖。
+三种形态任选,平台本体是单静态二进制、**运行时零依赖**(无需 Go/Node)。
+
+> **Docker 前置**:平台本体不依赖 Docker,但**「隔离构建 / 容器部署」需要 Docker**(没有则降级到桩 runner、不做真实构建)。控制台 / SSH 部署 / AI 诊断 / 通知不需要。一键脚本会**检测 Docker** 并在缺失时提示;Linux 下可 `INSTALL_DOCKER=1` 自动安装(经官方 get.docker.com),macOS 请装 Docker Desktop。
 
 ### ① 一键脚本(Linux / macOS)
 
-从 GitHub Release 下载对应平台的静态二进制装到 `/usr/local/bin`(含校验和核验):
+从 GitHub Release 下载对应平台的静态二进制装到 `/usr/local/bin`(含校验和核验 + Docker 检测):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/huangchengsir/pipewright/master/install.sh | sh
 
-# 钉版本 / 自定义目录:
-VERSION=v1.0.0 INSTALL_DIR=$HOME/.local/bin \
+# 钉版本 / 自定义目录 / Linux 顺带自动装 Docker:
+VERSION=v1.0.0 INSTALL_DIR=$HOME/.local/bin INSTALL_DOCKER=1 \
   sh -c "$(curl -fsSL https://raw.githubusercontent.com/huangchengsir/pipewright/master/install.sh)"
 
 # 运行(首次启动引导管理员;master key 用于凭据保险库)

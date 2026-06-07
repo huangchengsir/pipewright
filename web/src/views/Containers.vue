@@ -166,6 +166,17 @@ function actionsFor(state: ContainerState): ActionSpec[] {
   }
 }
 
+// 行内操作的 hover 提示(原生 title):点明各动作机制与区别,鼠标悬停即见。
+const ACTION_HINTS: Record<ServiceAction, string> = {
+  start: '启动已停止的容器(docker start),从头跑新进程。',
+  restart: '重启:先优雅停止(SIGTERM,10 秒宽限)再启动(docker restart)。',
+  stop: '优雅停止:发 SIGTERM,10 秒内未退再补 SIGKILL(docker stop)。日常停服务用这个,能让程序收尾、落盘。',
+  pause: '暂停:cgroup 冻结容器内所有进程(docker pause),内存原样保留、CPU 不再分给它;点「恢复」从断点续跑。不释放内存。',
+  unpause: '恢复:解冻已暂停的容器(docker unpause),同一进程从断点继续。',
+  kill: '强制 Kill:直接发 SIGKILL 立即终止,不给清理机会(docker kill),可能丢未落盘数据。仅在「停止」卡住时用。',
+  rm: '删除容器(docker rm),运行中的需先停止。容器配置移除,挂载的数据卷不受影响。',
+}
+
 const DANGER_COPY: Partial<Record<ServiceAction, { title: (n: string) => string; body: string; confirmLabel: string }>> = {
   restart: { title: (n) => `重启容器 ${n}?`, body: '容器将停止后重新启动,期间该服务短暂不可用。', confirmLabel: '确认重启' },
   stop:    { title: (n) => `停止容器 ${n}?`, body: '容器将被停止,其提供的服务会中断,直到再次启动。', confirmLabel: '确认停止' },
@@ -390,11 +401,11 @@ onUnmounted(() => {
                 <span class="crow__statelabel" :class="`txt--${stateMeta(c.state).tone}`">{{ stateMeta(c.state).label }}</span>
               </div>
               <div class="crow__main">
-                <div class="crow__name">{{ c.names }}</div>
-                <div class="crow__sub mono">{{ c.image }} · {{ shortId(c.id) }}</div>
+                <div class="crow__name" :title="c.names">{{ c.names }}</div>
+                <div class="crow__sub mono" :title="`${c.image} · ${c.id}`">{{ c.image }} · {{ shortId(c.id) }}</div>
               </div>
               <div class="crow__status">
-                <div class="crow__statustxt">{{ c.status }}</div>
+                <div class="crow__statustxt" :title="c.status">{{ c.status }}</div>
                 <div v-if="c.ports" class="crow__ports mono" :title="c.ports">{{ c.ports }}</div>
               </div>
               <div class="crow__actions">
@@ -404,11 +415,12 @@ onUnmounted(() => {
                   class="op"
                   :class="[`op--${a.variant}`, { 'op--busy': isBusy(g.serverId, c.id, a.action) }]"
                   :disabled="rowBusy(g.serverId, c.id)"
+                  :title="ACTION_HINTS[a.action]"
                   @click="runAction(g.serverId, c, a)"
                 >
                   {{ a.label }}
                 </button>
-                <button class="op op--ghost" :disabled="rowBusy(g.serverId, c.id)" @click="openTerminal(g.serverId, c)">
+                <button class="op op--ghost" :disabled="rowBusy(g.serverId, c.id)" title="进入容器交互终端(docker exec -it)" @click="openTerminal(g.serverId, c)">
                   终端
                 </button>
               </div>

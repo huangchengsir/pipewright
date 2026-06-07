@@ -68,6 +68,68 @@ func NewChecker() *Checker {
 // apiBase 允许测试把请求打到本地 stub server;生产为空时用 GitHub 公网 API。
 var apiBase = ""
 
+// htmlBase 允许测试把重定向兜底打到本地 stub server;生产为空时用 github.com 网页站。
+var htmlBase = ""
+
+// resolveLatestViaRedirect 不走 API,改读 github.com/<repo>/releases/latest 的 302 重定向
+// (会跳到 /releases/tag/<tag>),从 Location 解析出最新 tag。用于 API 被限流(常见 403)或
+// 不可达时兜底 —— 实测部分网络(如 CN)下 api.github.com 403 但 github.com 网页站可达。
+// 局限:只拿得到 tag 与 release 页 URL,拿不到 notes / 发布时间。
+func (c *Checker) resolveLatestViaRedirect(ctx context.Context) (tag, htmlURL string, err error) {
+	base := htmlBase
+	if base == "" {
+		base = "https://github.com"
+	}
+	u := fmt.Sprintf("%s/%s/releases/latest", base, c.repo)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", "", err
+	}
+	req.Header.Set("User-Agent", "pipewright/"+Version)
+	// 不跟随重定向:停在 302 读 Location 即可(避免下载整页 HTML)。
+	noRedir := &http.Client{
+		Timeout:       c.client.Timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	resp, err := noRedir.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	const marker = "/releases/tag/"
+	loc := resp.Header.Get("Location")
+	i := strings.LastIndex(loc, marker)
+	if i < 0 {
+		return "", "", fmt.Errorf("无重定向 tag(状态 %d)", resp.StatusCode)
+	}
+	tag = strings.Trim(loc[i+len(marker):], "/")
+	if tag == "" {
+		return "", "", fmt.Errorf("重定向 tag 为空")
+	}
+	htmlURL = loc
+	if strings.HasPrefix(loc, "/") {
+		htmlURL = base + loc
+	}
+	return tag, htmlURL, nil
+}
+
+// tryRedirectFallback 在 API 受限/不可达时改用重定向解析最新 tag。成功则填好 out(清空
+// CheckError、按需置 UpdateAvailable)并返回 true;失败返回 false,由调用方保留原 CheckError。
+func (c *Checker) tryRedirectFallback(ctx context.Context, out *UpdateInfo, cur string) bool {
+	tag, htmlURL, err := c.resolveLatestViaRedirect(ctx)
+	if err != nil || tag == "" {
+		return false
+	}
+	out.Latest = tag
+	out.ReleaseURL = htmlURL
+	out.CheckError = ""
+	if isComparable(cur) && CompareVersions(tag, cur) > 0 {
+		out.UpdateAvailable = true
+	}
+	return true
+}
+
 // Check 返回更新信息。命中未过期缓存则直接返回;否则查 GitHub。
 // 网络/解析失败不返回 error —— 而是在 UpdateInfo.CheckError 里带上原因(始终附当前版本),
 // 让上层端点稳定返回 200、前端优雅降级。
@@ -114,6 +176,10 @@ func (c *Checker) fetch(ctx context.Context) UpdateInfo {
 
 	resp, err := c.client.Do(req)
 	if err != nil {
+		// API 不可达:尝试网页站重定向兜底(可能 API 域被挡而网页站可达)。
+		if c.tryRedirectFallback(ctx, &out, cur) {
+			return out
+		}
 		out.CheckError = "无法连接 GitHub(网络不可达?)"
 		return out
 	}
@@ -127,6 +193,10 @@ func (c *Checker) fetch(ctx context.Context) UpdateInfo {
 		out.CheckError = ""
 		return out
 	case http.StatusForbidden, http.StatusTooManyRequests:
+		// API 限流(CN 网络常见):退回网页站重定向解析,绕开 API。
+		if c.tryRedirectFallback(ctx, &out, cur) {
+			return out
+		}
 		out.CheckError = "GitHub API 限流,请稍后再试"
 		return out
 	default:

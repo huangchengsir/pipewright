@@ -264,6 +264,11 @@ const decoder = new TextDecoder()
 /** 剪贴板是否可用(安全上下文:localhost / https)。 */
 const clipboardOK = typeof navigator !== 'undefined' && !!navigator.clipboard && window.isSecureContext
 
+// 终端字体常量:xterm 渲染在 canvas 上,CSS var() 无法解析 → 必须用字面字体栈。
+// 同一份值复用于 document.fonts.load(预热)与 .caret-ghost(行内补全)。
+const TERM_FONT_SIZE = 13
+const TERM_FONT_FAMILY = '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace'
+
 async function ensureTerm(): Promise<XTerm> {
   if (term.value) return term.value
   const [{ Terminal }, { FitAddon }] = await Promise.all([import('@xterm/xterm'), import('@xterm/addon-fit')])
@@ -271,9 +276,10 @@ async function ensureTerm(): Promise<XTerm> {
 
   const t = new Terminal({
     cursorBlink: true,
-    fontFamily: 'var(--font-mono), "JetBrains Mono", ui-monospace, monospace',
-    fontSize: 13.5,
-    lineHeight: 1.2,
+    fontFamily: TERM_FONT_FAMILY,
+    fontSize: TERM_FONT_SIZE,
+    lineHeight: 1.15,
+    letterSpacing: 0,
     convertEol: false,
     scrollback: 8000,
     theme: {
@@ -330,29 +336,86 @@ async function ensureTerm(): Promise<XTerm> {
     return true
   })
 
+  // xterm 在 canvas 上一次性测量单元格尺寸;JetBrains Mono 由 @fontsource 异步(font-display:
+  // swap)加载,若 open() 时字体未就绪会按 fallback(偏窄/偏矮)测量、算出偏多的行数,字体到位
+  // 后单元格变高 → 末行溢出到底部状态栏后面被挡。故先等该等宽字体真正加载完再 open + fit,
+  // 保证首测就用正确字体度量。本地 woff2,通常已缓存、瞬时 resolve。
+  if (typeof document !== 'undefined' && document.fonts?.load) {
+    try {
+      await document.fonts.load(`${TERM_FONT_SIZE}px "JetBrains Mono"`)
+    } catch {
+      /* 字体加载失败则退回 fallback 度量,不阻塞终端 */
+    }
+  }
   await nextTick()
+  // term.value / fitAddon.value 先就位,好让 refit() 在 open 后立即可用。
+  term.value = t
+  fitAddon.value = fit
   if (termHost.value) {
     t.open(termHost.value)
-    fit.fit()
+    refit()
+    // 兜底:字体即便已 load,canvas 字符图集仍可能缓存了首次 fallback 测量。改一下 fontSize
+    // 触发 xterm 重新测量单元格,再 refit 校正行数(双写确保值变化被监听到)。
+    if (typeof document !== 'undefined' && document.fonts?.ready) {
+      void document.fonts.ready.then(() => {
+        try {
+          t.options.fontSize = TERM_FONT_SIZE + 1
+          t.options.fontSize = TERM_FONT_SIZE
+          refit()
+        } catch {
+          /* host 尚未布局完成,忽略 */
+        }
+      })
+    }
   }
   // 键入 → 跟踪输入行(智能补全)+ 转发到容器 stdin。
   t.onData(onTermData)
 
-  term.value = t
-  fitAddon.value = fit
   return t
 }
 
+/**
+ * 适配终端尺寸。FitAddon 按「容器高 ÷ 单元格高」算行数,但单元格高的度量(canvas 字体测量 +
+ * sub-pixel 取整)偶尔偏小,会多算半行~一行 —— 多出来的末行 .xterm-screen 溢出 .term-host 底边,
+ * 落到下方状态栏(.term-status)后面被遮住一半。FitAddon 自身不感知这点。
+ * 故 fit 之后再按真实渲染几何兜底:若 .xterm-screen 底边超出 host 内容区(host 底边 − padding-bottom),
+ * 逐行 resize 收敛,直到终端完全容纳在自己的容器里、绝不与状态栏重叠。
+ */
 function refit(): void {
   const fit = fitAddon.value
   const t = term.value
-  if (!fit || !t) return
+  const host = termHost.value
+  if (!fit || !t || !host) return
   try {
     fit.fit()
+    const screen = host.querySelector('.xterm-screen') as HTMLElement | null
+    if (screen) {
+      const padBottom = parseFloat(getComputedStyle(host).paddingBottom) || 0
+      let guard = 4
+      while (guard-- > 0 && t.rows > 1) {
+        const limit = host.getBoundingClientRect().bottom - padBottom
+        if (screen.getBoundingClientRect().bottom <= limit + 0.5) break
+        t.resize(t.cols, t.rows - 1)
+      }
+    }
     conn.value?.resize(t.cols, t.rows)
   } catch {
     /* host not laid out yet */
   }
+}
+
+/**
+ * 连接成功后注入的提示符美化脚本(随 onOpen 发到 PTY)。
+ * 远端 shell 的 PS1(默认 `sh-5.1#`)是原样字节,前端无法重新着色 —— 只能让 shell 自己发
+ * 带 ANSI 的提示符。这里把 PS1 换成 `[user@host dir]$`:方括号包裹 + 主题青色(与光标/选区
+ * 同源),末尾重置颜色,使随后键入的命令保持默认色,提示符与命令/输出一眼可分。
+ *   · `\[ \]` 是 bash readline 的非打印标记(正确计算行宽),故仅在 bash 下设置;
+ *     dash/zsh 等不支持会显示成乱码,因此用 $BASH_VERSION 守卫,非 bash 保持原样只 clear。
+ *   · 颜色 38;2;127;227;240 = #7fe3f0,与终端 cursor / selection 的青色一致。
+ */
+function promptInitScript(): string {
+  const ps1 = "\\[\\e[38;2;127;227;240m\\][\\u@\\h \\W]\\$\\[\\e[0m\\] "
+  return `if [ -n "$BASH_VERSION" ]; then export PS1='${ps1}'; fi; clear\n`
 }
 
 async function connect(): Promise<void> {
@@ -374,6 +437,8 @@ async function connect(): Promise<void> {
         latencyMs.value = Math.round(performance.now() - startedAt)
         refit()
         t.focus()
+        // 注入更易读的提示符:[user@host dir]$ 形式 + 主题青色,与命令/输出区分。
+        conn.value?.send(promptInitScript())
       },
       onData(chunk) {
         t.write(decoder.decode(chunk, { stream: true }))
@@ -1075,8 +1140,8 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-family: var(--font-mono);
-  font-size: 13.5px; /* 与 xterm fontSize 对齐 */
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px; /* 与 xterm fontSize 对齐 */
   white-space: pre;
   cursor: pointer;
   user-select: none;

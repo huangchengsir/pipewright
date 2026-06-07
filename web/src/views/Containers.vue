@@ -20,6 +20,7 @@ import AppButton from '../components/ui/AppButton.vue'
 import EmptyState from '../components/ui/EmptyState.vue'
 import ErrorState from '../components/ui/ErrorState.vue'
 import SkeletonBlock from '../components/ui/SkeletonBlock.vue'
+import ContainerLogsDrawer from '../components/ops/ContainerLogsDrawer.vue'
 
 type LoadState = 'idle' | 'loading' | 'error'
 
@@ -227,6 +228,12 @@ async function runAction(serverId: string, c: ContainerInfo, spec: ActionSpec): 
   }
 }
 
+// 日志抽屉:当前查看的容器(null = 关闭)。
+const logsTarget = ref<{ serverId: string; name: string; id: string } | null>(null)
+function openLogs(serverId: string, c: ContainerInfo): void {
+  logsTarget.value = { serverId, name: c.names, id: shortId(c.id) }
+}
+
 function openTerminal(serverId: string, c: ContainerInfo): void {
   // 跳终端全屏页(新标签),带 ?container= → 直接 `docker exec -it <容器> sh` 进该容器。
   const url = router.resolve({
@@ -420,6 +427,9 @@ onUnmounted(() => {
                 >
                   {{ a.label }}
                 </button>
+                <button class="op op--ghost" title="查看容器日志(docker logs,历史 + 实时 tail)" @click="openLogs(g.serverId, c)">
+                  日志
+                </button>
                 <button class="op op--ghost" :disabled="rowBusy(g.serverId, c.id)" title="进入容器交互终端(docker exec -it)" @click="openTerminal(g.serverId, c)">
                   终端
                 </button>
@@ -429,6 +439,15 @@ onUnmounted(() => {
         </article>
       </section>
     </template>
+
+    <!-- 容器日志抽屉 -->
+    <ContainerLogsDrawer
+      v-if="logsTarget"
+      :server-id="logsTarget.serverId"
+      :container-name="logsTarget.name"
+      :container-id="logsTarget.id"
+      @close="logsTarget = null"
+    />
   </div>
 </template>
 

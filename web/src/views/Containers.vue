@@ -14,6 +14,8 @@ import { listServers, serviceAction, type Server, type ServiceAction } from '../
 import { HttpError } from '../api/http'
 import { useToast } from '../composables/useToast'
 import { useConfirm } from '../composables/useConfirm'
+import { NIcon } from 'naive-ui'
+import { BrandDocker, AlertTriangle } from '@vicons/tabler'
 import AppButton from '../components/ui/AppButton.vue'
 import EmptyState from '../components/ui/EmptyState.vue'
 import ErrorState from '../components/ui/ErrorState.vue'
@@ -42,12 +44,71 @@ const runningContainers = computed(() => groups.value.reduce((n, g) => n + g.run
 const stoppedContainers = computed(() => totalContainers.value - runningContainers.value)
 const coveredServers = computed(() => groups.value.filter((g) => g.reachable && g.runtime).length)
 
+// ─── 状态筛选 ─────────────────────────────────────────────────────────────────
+// 把六种容器状态归并为三档「桶」,供筛选段与计数使用:
+//   running   = running / restarting   （在跑)
+//   paused    = paused                 （已暂停)
+//   stopped   = exited / created / dead / unknown  （未在跑)
+type StateBucket = 'running' | 'paused' | 'stopped'
+type StateFilter = 'all' | StateBucket
+
+function stateBucket(s: ContainerState): StateBucket {
+  if (s === 'running' || s === 'restarting') return 'running'
+  if (s === 'paused') return 'paused'
+  return 'stopped'
+}
+
+const stateFilter = ref<StateFilter>('all')
+
+/** 各档全局计数(跨所有服务器)。 */
+const bucketCounts = computed(() => {
+  let running = 0
+  let paused = 0
+  let stopped = 0
+  for (const g of groups.value) {
+    for (const c of g.containers) {
+      const b = stateBucket(c.state)
+      if (b === 'running') running++
+      else if (b === 'paused') paused++
+      else stopped++
+    }
+  }
+  return { all: running + paused + stopped, running, paused, stopped }
+})
+
+interface FilterOption {
+  key: StateFilter
+  label: string
+}
+const FILTER_OPTIONS: FilterOption[] = [
+  { key: 'all', label: '全部' },
+  { key: 'running', label: '运行中' },
+  { key: 'stopped', label: '已停止' },
+  { key: 'paused', label: '已暂停' },
+]
+function filterCount(key: StateFilter): number {
+  return bucketCounts.value[key]
+}
+const activeFilterLabel = computed(() => FILTER_OPTIONS.find((f) => f.key === stateFilter.value)?.label ?? '')
+
+/** 应用当前筛选后该服务器可见的容器(all 时原样返回)。 */
+function visibleContainers(g: ServerContainers): ContainerInfo[] {
+  if (stateFilter.value === 'all') return g.containers
+  return g.containers.filter((c) => stateBucket(c.state) === stateFilter.value)
+}
+
 function serverName(id: string): string {
   return serverById.value.get(id)?.name ?? id
 }
 function serverHost(id: string): string {
   const s = serverById.value.get(id)
   return s ? `${s.user}@${s.host}:${s.port}` : ''
+}
+
+/** 运行时显示名:首字母大写(docker → Docker),未知则原样。 */
+function runtimeLabel(runtime: string): string {
+  if (!runtime) return ''
+  return runtime.charAt(0).toUpperCase() + runtime.slice(1)
 }
 
 // ─── 状态徽标 ─────────────────────────────────────────────────────────────────
@@ -242,6 +303,21 @@ onUnmounted(() => {
     />
 
     <template v-else>
+      <!-- 状态筛选段 -->
+      <div class="filter-bar" role="group" aria-label="按状态筛选容器">
+        <button
+          v-for="f in FILTER_OPTIONS"
+          :key="f.key"
+          class="filter-chip"
+          :class="{ 'filter-chip--active': stateFilter === f.key }"
+          :aria-pressed="stateFilter === f.key"
+          @click="stateFilter = f.key"
+        >
+          {{ f.label }}
+          <span class="filter-chip__count">{{ filterCount(f.key) }}</span>
+        </button>
+      </div>
+
       <!-- 聚合 KPI 条 -->
       <section class="kpi-strip" aria-label="容器聚合统计">
         <div class="kpi kpi--total">
@@ -279,7 +355,11 @@ onUnmounted(() => {
                   'rt-badge--down': !g.reachable,
                 }"
               >
-                {{ !g.reachable ? '不可达' : g.runtime ? g.runtime : '无容器运行时' }}
+                <NIcon :size="15" class="rt-badge__icon">
+                  <BrandDocker v-if="g.reachable && g.runtime" />
+                  <AlertTriangle v-else />
+                </NIcon>
+                {{ !g.reachable ? '不可达' : g.runtime ? runtimeLabel(g.runtime) : '无容器运行时' }}
               </span>
               <span v-if="g.reachable && g.runtime" class="panel__count mono">
                 {{ g.running }}/{{ g.total }} 运行
@@ -291,10 +371,13 @@ onUnmounted(() => {
           <p v-if="!g.reachable" class="panel__hint panel__hint--down">⚠ {{ g.error }}</p>
           <p v-else-if="!g.runtime" class="panel__hint">{{ g.error }}</p>
           <p v-else-if="g.total === 0" class="panel__hint">该服务器暂无容器。</p>
+          <p v-else-if="visibleContainers(g).length === 0" class="panel__hint">
+            无「{{ activeFilterLabel }}」状态的容器(该服务器共 {{ g.total }} 个)。
+          </p>
 
           <!-- 容器表 -->
           <ul v-else class="clist" role="list">
-            <li v-for="c in g.containers" :key="c.id" class="crow" :class="{ 'crow--busy': rowBusy(g.serverId, c.id) }">
+            <li v-for="c in visibleContainers(g)" :key="c.id" class="crow" :class="{ 'crow--busy': rowBusy(g.serverId, c.id) }">
               <div class="crow__state">
                 <span
                   class="dot"
@@ -367,6 +450,51 @@ onUnmounted(() => {
 .view-sub__count {
   color: var(--color-faint);
   font-variant-numeric: tabular-nums;
+}
+
+/* ── 状态筛选段 ── */
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 13px;
+  font-size: var(--text-label);
+  font-weight: 600;
+  color: var(--color-dim);
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease-out-expo),
+    border-color var(--duration-fast) var(--ease-out-expo),
+    background var(--duration-fast) var(--ease-out-expo);
+}
+.filter-chip:hover {
+  color: var(--color-text);
+  border-color: var(--color-border-strong);
+}
+.filter-chip--active {
+  color: #fff;
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+.filter-chip__count {
+  font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--color-inset);
+  color: var(--color-faint);
+}
+.filter-chip--active .filter-chip__count {
+  background: oklch(100% 0 0 / 0.22);
+  color: #fff;
 }
 
 /* ── 聚合 KPI 条:bento 式,语义左描边 ── */
@@ -474,13 +602,20 @@ onUnmounted(() => {
 }
 
 .rt-badge {
-  font-size: var(--text-micro);
-  font-weight: 600;
-  padding: 2px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-label);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  padding: 4px 11px 4px 9px;
   border-radius: 999px;
   border: 1px solid var(--color-border-strong);
   color: var(--color-dim);
   white-space: nowrap;
+}
+.rt-badge__icon {
+  display: inline-flex;
 }
 .rt-badge--ok {
   color: var(--color-green);

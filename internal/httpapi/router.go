@@ -625,6 +625,13 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// (type=docker)。chi 字面段 /servers/containers 优先于 {id},不会被吞。
 		ar.Get("/servers/containers", makeAllServerContainersHandler(sv))
 		ar.Get("/servers/{id}/containers", makeServerContainersHandler(sv))
+		// 容器实时资源 stats(docker stats --no-stream)。字面段 stats 不与 {id}/containers 冲突。
+		ar.Get("/servers/{id}/containers/stats", makeServerContainerStatsHandler(sv))
+		// 容器详情 inspect(docker inspect → 精选字段)。
+		ar.Get("/servers/{id}/containers/{containerId}/inspect", makeContainerInspectHandler(sv))
+		// 一键清理:磁盘占用(docker system df)+ prune(写,过 CSRF + 审计)。
+		ar.Get("/servers/{id}/system/df", makeSystemDfHandler(sv))
+		ar.Post("/servers/{id}/system/prune", makeSystemPruneHandler(sv, aud))
 		// 新增容器(docker run) —— 写操作,过 auth + CSRF。参数严格白名单 + array 化,
 		// 非法 400 invalid_create_spec;SSH/命令失败人读不 500;成功后写审计(detail 仅 image/name)。
 		ar.Post("/servers/{id}/containers", makeCreateContainerHandler(sv, aud))

@@ -7,9 +7,11 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getAllContainers, type ServerContainers, type ContainerInfo } from '../api/containers'
-import { listServers, type Server } from '../api/servers'
+import { listServers, serviceAction, type Server, type ServiceAction } from '../api/servers'
 import { HttpError } from '../api/http'
 import { stateBucket, type StateBucket } from '../lib/containerState'
+import { useToast } from '../composables/useToast'
+import { useConfirm } from '../composables/useConfirm'
 import AppButton from '../components/ui/AppButton.vue'
 import EmptyState from '../components/ui/EmptyState.vue'
 import ErrorState from '../components/ui/ErrorState.vue'
@@ -19,11 +21,15 @@ import ContainerLogsDrawer from '../components/ops/ContainerLogsDrawer.vue'
 import CreateContainerModal from '../components/ops/CreateContainerModal.vue'
 import AiDiagnosisModal from '../components/ops/AiDiagnosisModal.vue'
 import ContainerAiPanel from '../components/ops/ContainerAiPanel.vue'
+import ContainerInspectModal from '../components/ops/ContainerInspectModal.vue'
+import SystemPruneModal from '../components/ops/SystemPruneModal.vue'
 
 type LoadState = 'idle' | 'loading' | 'error'
 type StateFilter = 'all' | StateBucket
 
 const router = useRouter()
+const toast = useToast()
+const confirm = useConfirm()
 
 const loadState = ref<LoadState>('idle')
 const loadError = ref('')
@@ -80,6 +86,86 @@ function filterCount(key: StateFilter): number {
   return bucketCounts.value[key]
 }
 
+// ─── 文本搜索 ─────────────────────────────────────────────────────────────────
+// 透传给各 ServerCard,与状态筛选叠加(按名字 / 镜像,忽略大小写)。
+const searchText = ref('')
+
+// ─── 批量操作 ─────────────────────────────────────────────────────────────────
+// 父统一持有选择集;key = `${serverId}::${containerName}`。ServerCard 上报勾选,父加 serverId。
+const bulkMode = ref(false)
+const selected = ref<Set<string>>(new Set())
+const bulkBusy = ref(false)
+const selectedCount = computed(() => selected.value.size)
+
+function selectKey(serverId: string, name: string): string {
+  return `${serverId}::${name}`
+}
+function toggleSelect(serverId: string, name: string): void {
+  const key = selectKey(serverId, name)
+  const next = new Set(selected.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  selected.value = next
+}
+function clearSelection(): void {
+  selected.value = new Set()
+}
+function toggleBulkMode(): void {
+  bulkMode.value = !bulkMode.value
+  if (!bulkMode.value) clearSelection()
+}
+
+interface BulkAction {
+  action: ServiceAction
+  label: string
+  danger: boolean
+}
+const BULK_ACTIONS: BulkAction[] = [
+  { action: 'start', label: '启动', danger: false },
+  { action: 'stop', label: '停止', danger: true },
+  { action: 'restart', label: '重启', danger: true },
+  { action: 'rm', label: '删除', danger: true },
+]
+
+async function runBulk({ action, label, danger }: BulkAction): Promise<void> {
+  if (selected.value.size === 0 || bulkBusy.value) return
+  const targets = [...selected.value].map((key) => {
+    const i = key.indexOf('::')
+    return { serverId: key.slice(0, i), name: key.slice(i + 2) }
+  })
+  if (danger) {
+    const ok = await confirm.open({
+      title: `批量${label} ${targets.length} 个容器?`,
+      body:
+        action === 'rm'
+          ? '将对所选容器执行删除(docker rm)。运行中的容器需先停止,否则会删除失败(计入失败数)。'
+          : `将对所选 ${targets.length} 个容器执行${label}操作,期间相关服务可能短暂中断。`,
+      confirmLabel: `${label} ${targets.length} 个`,
+      variant: 'danger',
+    })
+    if (!ok) return
+  }
+  bulkBusy.value = true
+  try {
+    const results = await Promise.allSettled(
+      targets.map((t) => serviceAction(t.serverId, { type: 'docker', target: t.name, action })),
+    )
+    let okCount = 0
+    let failCount = 0
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value.ok) okCount++
+      else failCount++
+    }
+    if (failCount === 0) toast.success(`批量${label}完成`, { detail: `成功 ${okCount} 个` })
+    else if (okCount === 0) toast.error(`批量${label}失败`, { detail: `失败 ${failCount} 个` })
+    else toast.warn(`批量${label}部分完成`, { detail: `成功 ${okCount} · 失败 ${failCount}` })
+    clearSelection()
+    await load()
+  } finally {
+    bulkBusy.value = false
+  }
+}
+
 // ─── 新增容器 ─────────────────────────────────────────────────────────────────
 const showCreate = ref(false)
 const creatableServers = computed(() =>
@@ -114,6 +200,15 @@ const diagnoseTarget = ref<{ serverId: string; name: string } | null>(null)
 function openDiagnose(serverId: string, c: ContainerInfo): void {
   diagnoseTarget.value = { serverId, name: c.names }
 }
+
+// 容器详情 inspect 弹窗。
+const inspectTarget = ref<{ serverId: string; name: string } | null>(null)
+function openInspect(serverId: string, c: ContainerInfo): void {
+  inspectTarget.value = { serverId, name: c.names }
+}
+
+// 一键清理弹窗(作用于有 docker 的服务器,复用 creatableServers)。
+const showPrune = ref(false)
 
 // ─── 加载 ─────────────────────────────────────────────────────────────────────
 async function load(): Promise<void> {
@@ -167,6 +262,12 @@ onUnmounted(() => {
       </div>
       <div class="header-actions">
         <AppButton variant="ai" @click="showAi = true">✦ AI 助手</AppButton>
+        <AppButton variant="default" :disabled="creatableServers.length === 0" @click="showPrune = true">
+          🧹 清理
+        </AppButton>
+        <AppButton :variant="bulkMode ? 'primary' : 'default'" @click="toggleBulkMode">
+          {{ bulkMode ? '退出批量' : '批量' }}
+        </AppButton>
         <AppButton variant="primary" :disabled="creatableServers.length === 0" @click="showCreate = true">
           + 新增容器
         </AppButton>
@@ -219,19 +320,51 @@ onUnmounted(() => {
         </div>
       </section>
 
-      <!-- 状态筛选段(作用于各卡片的容器 tab) -->
-      <div class="filter-bar" role="group" aria-label="按状态筛选容器">
-        <button
-          v-for="f in FILTER_OPTIONS"
-          :key="f.key"
-          class="filter-chip"
-          :class="{ 'filter-chip--active': stateFilter === f.key }"
-          :aria-pressed="stateFilter === f.key"
-          @click="stateFilter = f.key"
-        >
-          {{ f.label }}
-          <span class="filter-chip__count">{{ filterCount(f.key) }}</span>
-        </button>
+      <!-- 状态筛选段 + 文本搜索(均作用于各卡片的容器 tab) -->
+      <div class="controls-row">
+        <div class="filter-bar" role="group" aria-label="按状态筛选容器">
+          <button
+            v-for="f in FILTER_OPTIONS"
+            :key="f.key"
+            class="filter-chip"
+            :class="{ 'filter-chip--active': stateFilter === f.key }"
+            :aria-pressed="stateFilter === f.key"
+            @click="stateFilter = f.key"
+          >
+            {{ f.label }}
+            <span class="filter-chip__count">{{ filterCount(f.key) }}</span>
+          </button>
+        </div>
+        <div class="search-box">
+          <input
+            v-model="searchText"
+            type="search"
+            class="search-box__input"
+            placeholder="按名字 / 镜像搜索容器"
+            aria-label="按名字或镜像搜索容器"
+          />
+          <button v-if="searchText" class="search-box__clear" title="清除搜索" @click="searchText = ''">✕</button>
+        </div>
+      </div>
+
+      <!-- 批量操作条 -->
+      <div v-if="bulkMode" class="bulk-bar" role="group" aria-label="批量操作">
+        <span class="bulk-bar__count">已选 <strong>{{ selectedCount }}</strong> 个</span>
+        <div class="bulk-bar__actions">
+          <button
+            v-for="a in BULK_ACTIONS"
+            :key="a.action"
+            class="bulk-btn"
+            :class="{ 'bulk-btn--danger': a.danger }"
+            :disabled="selectedCount === 0 || bulkBusy"
+            @click="runBulk(a)"
+          >
+            {{ a.label }}
+          </button>
+          <button class="bulk-btn bulk-btn--ghost" :disabled="selectedCount === 0 || bulkBusy" @click="clearSelection">
+            清空所选
+          </button>
+        </div>
       </div>
 
       <!-- 逐台卡片(卡片内自带 容器/镜像 tab) -->
@@ -243,10 +376,15 @@ onUnmounted(() => {
           :name="serverName(g.serverId)"
           :host="serverHost(g.serverId)"
           :state-filter="stateFilter"
+          :search="searchText"
+          :bulk-mode="bulkMode"
+          :selected-set="selected"
+          @toggle-select="(name) => toggleSelect(g.serverId, name)"
           @changed="load"
           @logs="(c) => openLogs(g.serverId, c)"
           @terminal="(c) => openTerminal(g.serverId, c)"
           @diagnose="(c) => openDiagnose(g.serverId, c)"
+          @inspect="(c) => openInspect(g.serverId, c)"
         />
       </section>
     </template>
@@ -278,6 +416,17 @@ onUnmounted(() => {
 
     <!-- AI 助手抽屉 -->
     <ContainerAiPanel v-if="showAi" :context="aiContext" @close="showAi = false" />
+
+    <!-- 容器详情 inspect 弹窗 -->
+    <ContainerInspectModal
+      v-if="inspectTarget"
+      :server-id="inspectTarget.serverId"
+      :container-name="inspectTarget.name"
+      @close="inspectTarget = null"
+    />
+
+    <!-- 一键清理弹窗 -->
+    <SystemPruneModal v-if="showPrune" :servers="creatableServers" @close="showPrune = false" />
   </div>
 </template>
 
@@ -321,11 +470,122 @@ onUnmounted(() => {
   font-variant-numeric: tabular-nums;
 }
 
+/* 筛选段 + 搜索同一行 */
+.controls-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
 /* 状态筛选段 */
 .filter-bar {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+/* 文本搜索 */
+.search-box {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 320px;
+  min-width: 200px;
+}
+.search-box__input {
+  width: 100%;
+  padding: 7px 30px 7px 13px;
+  font-size: var(--text-label);
+  color: var(--color-text);
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  transition: border-color var(--duration-fast) var(--ease-out-expo);
+}
+.search-box__input::placeholder {
+  color: var(--color-faint);
+}
+.search-box__input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+.search-box__clear {
+  position: absolute;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--color-faint);
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.search-box__clear:hover {
+  color: var(--color-text);
+}
+
+/* 批量操作条 */
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--color-card-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--rounded);
+}
+.bulk-bar__count {
+  font-size: var(--text-label);
+  color: var(--color-dim);
+}
+.bulk-bar__count strong {
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+.bulk-bar__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.bulk-btn {
+  font-size: var(--text-label);
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: var(--rounded-sm);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-card);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+.bulk-btn:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+.bulk-btn--danger:hover:not(:disabled) {
+  border-color: var(--color-red);
+  color: var(--color-red);
+}
+.bulk-btn--ghost {
+  color: var(--color-dim);
+}
+.bulk-btn--ghost:hover:not(:disabled) {
+  color: var(--color-text);
+  border-color: var(--color-text);
+}
+.bulk-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .filter-chip {
   display: inline-flex;

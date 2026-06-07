@@ -333,3 +333,100 @@ export async function stackAction(
 ): Promise<StackActionResult> {
   return http.post<StackActionResult>(`/api/servers/${id}/stacks/action`, { name, action, configFile })
 }
+
+// ─── 容器实时资源 stats(A1)──────────────────────────────────────────────────
+
+/** 单容器实时资源样本(docker stats --no-stream;字符串为运行时已格式化的人读值)。 */
+export interface ContainerStat {
+  name: string
+  cpuPerc: string
+  memUsage: string
+  memPerc: string
+  netIO: string
+  blockIO: string
+}
+export interface ServerContainerStats {
+  serverId: string
+  reachable: boolean
+  runtime: string
+  error: string
+  stats: ContainerStat[]
+  collectedAt: string
+}
+/** 一次性拉取某服务器所有运行中容器的资源样本(只读;不可达/无运行时不 500)。 */
+export async function getServerContainerStats(id: string): Promise<ServerContainerStats> {
+  return http.get<ServerContainerStats>(`/api/servers/${id}/containers/stats`)
+}
+
+// ─── 容器详情 inspect(A2)─────────────────────────────────────────────────────
+
+export interface ContainerMount {
+  source: string
+  destination: string
+  mode: string
+  rw: boolean
+}
+export interface ContainerNetwork {
+  name: string
+  ipAddress: string
+}
+export interface ContainerPort {
+  containerPort: string
+  hostIp?: string
+  hostPort?: string
+}
+export interface ContainerInspect {
+  serverId: string
+  containerId: string
+  reachable: boolean
+  error?: string
+  image?: string
+  command?: string
+  createdAt?: string
+  state?: string
+  restartPolicy?: string
+  env: string[]
+  mounts: ContainerMount[]
+  networks: ContainerNetwork[]
+  ports: ContainerPort[]
+  labels: Record<string, string>
+}
+/** 拉取指定容器的 inspect 详情(containerId 后端白名单校验)。 */
+export function getContainerInspect(serverId: string, containerId: string): Promise<ContainerInspect> {
+  return http.get<ContainerInspect>(
+    `/api/servers/${encodeURIComponent(serverId)}/containers/${encodeURIComponent(containerId)}/inspect`,
+  )
+}
+
+// ─── 一键清理 system df / prune(A3)──────────────────────────────────────────
+
+export interface DfEntry {
+  type: string
+  totalCount: number
+  active: number
+  size: string
+  reclaimable: string
+}
+export interface SystemDf {
+  serverId: string
+  reachable: boolean
+  dockerAvailable: boolean
+  entries: DfEntry[]
+  error: string
+}
+export type PruneScope = 'containers' | 'images' | 'volumes' | 'builder' | 'all'
+export interface SystemPruneResult {
+  serverId: string
+  scope: PruneScope
+  ok: boolean
+  output: string
+  error: string
+}
+/** 某主机 Docker 磁盘占用(只读)。 */
+export async function getSystemDf(id: string): Promise<SystemDf> {
+  return http.get<SystemDf>(`/api/servers/${id}/system/df`)
+}
+/** 对某主机执行指定 scope 的 docker prune(写;过 CSRF)。 */
+export async function systemPrune(id: string, scope: PruneScope): Promise<SystemPruneResult> {
+  return http.post<SystemPruneResult>(`/api/servers/${id}/system/prune`, { scope })
+}

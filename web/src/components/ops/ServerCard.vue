@@ -4,8 +4,9 @@
   tab 内容只针对这一台(Portainer 式按主机管理)。容器 tab:生命周期操作 + 日志 + 终端;
   镜像 tab:列表 + 拉取 + 删除。生命周期/镜像写操作完成后 emit('changed') 让父刷新聚合。
 */
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import {
+  getServerContainerStats,
   getServerImages,
   pullImage,
   removeImage,
@@ -23,6 +24,7 @@ import {
   disconnectNetwork,
   type ServerContainers,
   type ContainerInfo,
+  type ContainerStat,
   type ImageInfo,
   type StackInfo,
   type StackAction,
@@ -54,12 +56,20 @@ const props = defineProps<{
   host: string
   /** 容器状态筛选(来自页面级筛选段);'all' = 不筛。 */
   stateFilter: 'all' | StateBucket
+  /** 文本搜索(来自页面级搜索框);按 names / image 忽略大小写包含。 */
+  search: string
+  /** 批量模式:容器行左侧显示复选框。 */
+  bulkMode: boolean
+  /** 父持有的选择集;key = `${serverId}::${containerName}`。 */
+  selectedSet: Set<string>
 }>()
 const emit = defineEmits<{
   (e: 'changed'): void
   (e: 'logs', c: ContainerInfo): void
   (e: 'terminal', c: ContainerInfo): void
   (e: 'diagnose', c: ContainerInfo): void
+  (e: 'inspect', c: ContainerInfo): void
+  (e: 'toggle-select', name: string): void
 }>()
 
 const toast = useToast()
@@ -84,9 +94,32 @@ function isBusy(cid: string, action: string): boolean {
 }
 
 const visibleContainers = computed(() => {
-  if (props.stateFilter === 'all') return props.group.containers
-  return props.group.containers.filter((c) => stateBucket(c.state) === props.stateFilter)
+  let list = props.group.containers
+  if (props.stateFilter !== 'all') {
+    list = list.filter((c) => stateBucket(c.state) === props.stateFilter)
+  }
+  const q = props.search.trim().toLowerCase()
+  if (q) {
+    list = list.filter(
+      (c) => c.names.toLowerCase().includes(q) || c.image.toLowerCase().includes(q),
+    )
+  }
+  return list
 })
+
+// 容器 tab 过滤后为空时的提示文案(区分搜索 / 状态筛选)。
+const emptyContainersHint = computed(() => {
+  const hasSearch = props.search.trim().length > 0
+  const hasFilter = props.stateFilter !== 'all'
+  if (hasSearch && hasFilter) return `无匹配「${props.search.trim()}」且符合当前状态筛选的容器(共 ${props.group.total} 个)。`
+  if (hasSearch) return `无匹配「${props.search.trim()}」的容器(共 ${props.group.total} 个)。`
+  return `无匹配当前筛选的容器(共 ${props.group.total} 个)。`
+})
+
+// 批量:该容器是否已被选中(key 带本机 serverId)。
+function isSelected(name: string): boolean {
+  return props.selectedSet.has(`${props.group.serverId}::${name}`)
+}
 
 async function runAction(c: ContainerInfo, spec: ActionSpec): Promise<void> {
   if (spec.danger) {
@@ -114,6 +147,38 @@ async function runAction(c: ContainerInfo, spec: ActionSpec): Promise<void> {
     next.delete(key)
     busy.value = next
     setTimeout(() => emit('changed'), 600)
+  }
+}
+
+// ─── 实时资源 stats(进容器 tab 拉一次 + 手动刷新) ──────────────────────────────
+// docker stats --no-stream:仅 running 容器有样本,按容器名 merge 到行上。失败静默(只读
+// 锦上添花,不打断容器管理);不可达/无运行时 → 空 Map,行上不显示。
+const containerStats = ref<Map<string, ContainerStat>>(new Map())
+const statsLoading = ref(false)
+
+function statFor(name: string): ContainerStat | undefined {
+  return containerStats.value.get(name)
+}
+
+// 容器是默认 tab → 挂载即拉一次,让资源数据随卡片一起出现(仅当默认就是容器 tab)。
+onMounted(() => {
+  if (tab.value === 'containers') void loadStats()
+})
+
+async function loadStats(): Promise<void> {
+  if (statsLoading.value) return
+  statsLoading.value = true
+  try {
+    const res = await getServerContainerStats(props.group.serverId)
+    const next = new Map<string, ContainerStat>()
+    if (res.reachable && res.runtime) {
+      for (const s of res.stats) next.set(s.name, s)
+    }
+    containerStats.value = next
+  } catch {
+    // 静默:stats 仅为容器行的附加信息,拉失败不影响主流程。
+  } finally {
+    statsLoading.value = false
   }
 }
 
@@ -150,6 +215,7 @@ async function loadImages(): Promise<void> {
 
 function switchTab(t: TabKey): void {
   tab.value = t
+  if (t === 'containers') void loadStats()
   if (t === 'images' && imgState.value === 'idle') void loadImages()
   if (t === 'stacks' && stackState.value === 'idle') void loadStacks()
   if (t === 'volumes' && volState.value === 'idle') void loadVolumes()
@@ -592,10 +658,24 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
 
       <!-- 容器 tab -->
       <template v-if="tab === 'containers'">
+        <div v-if="group.total > 0" class="cstats-bar">
+          <span class="cstats-bar__label">实时资源(docker stats)</span>
+          <button class="op op--ghost" :disabled="statsLoading" :title="'刷新实时资源采样'" @click="loadStats">
+            {{ statsLoading ? '采样中…' : '刷新' }}
+          </button>
+        </div>
         <p v-if="group.total === 0" class="panel__hint">该服务器暂无容器。</p>
-        <p v-else-if="visibleContainers.length === 0" class="panel__hint">无匹配当前筛选的容器(共 {{ group.total }} 个)。</p>
+        <p v-else-if="visibleContainers.length === 0" class="panel__hint">{{ emptyContainersHint }}</p>
         <ul v-else class="clist" role="list">
-          <li v-for="c in visibleContainers" :key="c.id" class="crow" :class="{ 'crow--busy': rowBusy(c.id) }">
+          <li v-for="c in visibleContainers" :key="c.id" class="crow" :class="{ 'crow--busy': rowBusy(c.id), 'crow--bulk': bulkMode }">
+            <label v-if="bulkMode" class="crow__check">
+              <input
+                type="checkbox"
+                :checked="isSelected(c.names)"
+                :aria-label="`选择容器 ${c.names}`"
+                @change="emit('toggle-select', c.names)"
+              />
+            </label>
             <div class="crow__state">
               <span class="dot" :class="[`dot--${stateMeta(c.state).tone}`, { 'dot--pulse': stateMeta(c.state).pulse }]" aria-hidden="true" />
               <span class="crow__statelabel" :class="`txt--${stateMeta(c.state).tone}`">{{ stateMeta(c.state).label }}</span>
@@ -607,6 +687,13 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
             <div class="crow__status">
               <div class="crow__statustxt" :title="c.status">{{ c.status }}</div>
               <div v-if="c.ports" class="crow__ports mono" :title="c.ports">{{ c.ports }}</div>
+              <div
+                v-if="c.state === 'running' && statFor(c.names)"
+                class="crow__stats mono"
+                :title="`网络 ${statFor(c.names)!.netIO} · 块 ${statFor(c.names)!.blockIO}`"
+              >
+                CPU {{ statFor(c.names)!.cpuPerc }} · 内存 {{ statFor(c.names)!.memUsage }} ({{ statFor(c.names)!.memPerc }})
+              </div>
             </div>
             <div class="crow__actions">
               <button
@@ -620,6 +707,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
               >
                 {{ a.label }}
               </button>
+              <button class="op op--ghost" title="容器详情(docker inspect)" @click="emit('inspect', c)">详情</button>
               <button class="op op--ai" title="AI 诊断:取日志 → 根因 + 修复建议" @click="emit('diagnose', c)">✦ AI</button>
               <button class="op op--ghost" title="查看容器日志(docker logs)" @click="emit('logs', c)">日志</button>
               <button class="op op--ghost" :disabled="rowBusy(c.id)" title="进入容器终端(docker exec -it)" @click="emit('terminal', c)">终端</button>
@@ -956,6 +1044,20 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
 .crow--busy {
   opacity: 0.55;
 }
+.crow--bulk {
+  grid-template-columns: 26px 92px minmax(0, 1.4fr) minmax(0, 1.3fr) auto;
+}
+.crow__check {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+.crow__check input {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--color-primary);
+}
 .crow__state {
   display: flex;
   align-items: center;
@@ -1017,6 +1119,26 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.crow__stats {
+  margin-top: 2px;
+  font-size: var(--text-micro);
+  color: var(--color-accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cstats-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--color-border);
+}
+.cstats-bar__label {
+  font-size: var(--text-micro);
+  color: var(--color-faint);
 }
 .crow__actions {
   display: flex;
@@ -1308,7 +1430,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
 .op--busy { opacity: 0.6; pointer-events: none; }
 
 @media (max-width: 720px) {
-  .crow, .irow { grid-template-columns: 1fr; gap: 8px; }
+  .crow, .crow--bulk, .irow { grid-template-columns: 1fr; gap: 8px; }
   .crow__actions { justify-content: flex-start; }
 }
 </style>

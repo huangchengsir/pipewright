@@ -56,15 +56,61 @@ func TestParseFreeBytes(t *testing.T) {
 	out := "              total        used        free      shared  buff/cache   available\n" +
 		"Mem:    17179869184  4123456789  1000000000   100000   500000000  12000000000\n" +
 		"Swap:    2147483648           0  2147483648\n"
-	used, total, ok := parseFreeBytes(out)
-	if !ok || total != 17179869184 || used != 4123456789 {
-		t.Fatalf("parseFreeBytes = %d,%d,%v", used, total, ok)
+	used, usedWithCache, total, ok := parseFreeBytes(out)
+	// used = 「used」列(不含缓存);usedWithCache = total - free(含页缓存)。
+	if !ok || total != 17179869184 || used != 4123456789 || usedWithCache != 17179869184-1000000000 {
+		t.Fatalf("parseFreeBytes = %d,%d,%d,%v", used, usedWithCache, total, ok)
 	}
-	if _, _, ok := parseFreeBytes(""); ok {
+	if _, _, _, ok := parseFreeBytes(""); ok {
 		t.Fatalf("empty should be false")
 	}
-	if _, _, ok := parseFreeBytes("no mem line here\n"); ok {
+	if _, _, _, ok := parseFreeBytes("no mem line here\n"); ok {
 		t.Fatalf("no Mem line should be false")
+	}
+}
+
+func TestParseSwapBytes(t *testing.T) {
+	out := "" +
+		"              total        used        free\n" +
+		"Mem:    8054091776  2855583744  1000000000\n" +
+		"Swap:   2147483648   536870912  1610612736\n"
+	used, total, ok := parseSwapBytes(out)
+	if !ok || total != 2147483648 || used != 536870912 {
+		t.Fatalf("parseSwapBytes = %d,%d,%v", used, total, ok)
+	}
+	// 未配置 swap:total=0 仍算成功。
+	if u, tt, ok := parseSwapBytes("Swap:   0   0   0\n"); !ok || u != 0 || tt != 0 {
+		t.Fatalf("zero swap should be ok with 0/0, got %d,%d,%v", u, tt, ok)
+	}
+	// 无 Swap 行 → false。
+	if _, _, ok := parseSwapBytes("Mem:  1 2 3\n"); ok {
+		t.Fatalf("no swap line should be false")
+	}
+}
+
+func TestParseDmidecodeMemBytes(t *testing.T) {
+	// 现版本 dmidecode:二进制单位 GiB;含一个未装设备(应跳过)。
+	out := "" +
+		"Memory Device\n\tSize: 8 GiB\n\tLocator: DIMM 0\n" +
+		"Memory Device\n\tSize: No Module Installed\n\tLocator: DIMM 1\n"
+	got, ok := parseDmidecodeMemBytes(out)
+	if !ok || got != 8*1024*1024*1024 {
+		t.Fatalf("parseDmidecodeMemBytes(GiB) = %d,%v want %d", got, ok, int64(8*1024*1024*1024))
+	}
+
+	// 旧版 dmidecode:十进制 MB,多条相加。
+	out2 := "\tSize: 4096 MB\n\tSize: 4096 MB\n"
+	got2, ok2 := parseDmidecodeMemBytes(out2)
+	if !ok2 || got2 != 2*4096*1000*1000 {
+		t.Fatalf("parseDmidecodeMemBytes(MB) = %d,%v", got2, ok2)
+	}
+
+	// 全部未装 / 空 → false(上层留 0 不展示)。
+	if _, ok := parseDmidecodeMemBytes("Memory Device\n\tSize: No Module Installed\n"); ok {
+		t.Fatalf("no installed module should be false")
+	}
+	if _, ok := parseDmidecodeMemBytes(""); ok {
+		t.Fatalf("empty should be false")
 	}
 }
 

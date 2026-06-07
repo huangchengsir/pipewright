@@ -18,6 +18,7 @@ import ServerCard from '../components/ops/ServerCard.vue'
 import ContainerLogsDrawer from '../components/ops/ContainerLogsDrawer.vue'
 import CreateContainerModal from '../components/ops/CreateContainerModal.vue'
 import AiDiagnosisModal from '../components/ops/AiDiagnosisModal.vue'
+import ContainerAiPanel from '../components/ops/ContainerAiPanel.vue'
 
 type LoadState = 'idle' | 'loading' | 'error'
 type StateFilter = 'all' | StateBucket
@@ -104,6 +105,10 @@ function openTerminal(serverId: string, c: ContainerInfo): void {
   window.open(url, '_blank', 'noopener')
 }
 
+// AI 助手抽屉。
+const showAi = ref(false)
+const aiContext = { os: 'linux', shell: '/bin/sh', container: '(docker 主机)' }
+
 // AI 诊断弹窗。
 const diagnoseTarget = ref<{ serverId: string; name: string } | null>(null)
 function openDiagnose(serverId: string, c: ContainerInfo): void {
@@ -161,6 +166,7 @@ onUnmounted(() => {
         </p>
       </div>
       <div class="header-actions">
+        <AppButton variant="ai" @click="showAi = true">✦ AI 助手</AppButton>
         <AppButton variant="primary" :disabled="creatableServers.length === 0" @click="showCreate = true">
           + 新增容器
         </AppButton>
@@ -269,6 +275,9 @@ onUnmounted(() => {
       :container-name="diagnoseTarget.name"
       @close="diagnoseTarget = null"
     />
+
+    <!-- AI 助手抽屉 -->
+    <ContainerAiPanel v-if="showAi" :context="aiContext" @close="showAi = false" />
   </div>
 </template>
 

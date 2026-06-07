@@ -1,23 +1,37 @@
 package httpapi
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
-func TestParseStacks_JSONArray(t *testing.T) {
-	out := `[{"Name":"web","Status":"running(2)","ConfigFiles":"/opt/pipewright/stacks/web/docker-compose.yml"},{"Name":"db","Status":"exited(1)","ConfigFiles":"/x/docker-compose.yml"}]`
+func TestParseStacks_FromLabels(t *testing.T) {
+	// 格式:project|||configFiles|||state(每容器一行);空 project = 裸 docker run,跳过。
+	out := strings.Join([]string{
+		"dockercompose|||/opt/app/docker-compose.yml|||Up 2 months",
+		"dockercompose||||||Up 3 weeks (healthy)", // 同项目第二个容器,无 cfg 段
+		"dockercompose||||||Exited (0) 1 day ago", // 同项目第三个,停止
+		"nacos||||||Up 5 hours",                   // 另一项目
+		"||||||Up 1 hour",                         // 无 project(裸 run)→ 跳过
+		"",                                        // 空行
+	}, "\n")
 	got := parseStacks(out)
 	if len(got) != 2 {
-		t.Fatalf("len = %d, want 2", len(got))
+		t.Fatalf("len = %d, want 2: %+v", len(got), got)
 	}
-	if got[0].Name != "web" || got[0].Status != "running(2)" {
-		t.Fatalf("stack0 wrong: %+v", got[0])
+	byName := map[string]stackDTO{}
+	for _, s := range got {
+		byName[s.Name] = s
 	}
-}
-
-func TestParseStacks_LineDelimitedFallback(t *testing.T) {
-	out := "{\"Name\":\"a\",\"Status\":\"running(1)\"}\n{\"Name\":\"b\",\"Status\":\"exited(0)\"}\n"
-	got := parseStacks(out)
-	if len(got) != 2 || got[1].Name != "b" {
-		t.Fatalf("fallback parse wrong: %+v", got)
+	dc := byName["dockercompose"]
+	if dc.Status != "2/3 运行" {
+		t.Fatalf("dockercompose status = %q, want 2/3 运行", dc.Status)
+	}
+	if dc.ConfigFiles != "/opt/app/docker-compose.yml" {
+		t.Fatalf("dockercompose cfg = %q", dc.ConfigFiles)
+	}
+	if byName["nacos"].Status != "running(1)" {
+		t.Fatalf("nacos status = %q, want running(1)", byName["nacos"].Status)
 	}
 }
 
@@ -25,8 +39,9 @@ func TestParseStacks_Empty(t *testing.T) {
 	if got := parseStacks("  \n"); len(got) != 0 {
 		t.Fatalf("want empty, got %+v", got)
 	}
-	if got := parseStacks("[]"); len(got) != 0 {
-		t.Fatalf("want empty for [], got %+v", got)
+	// 全是裸 docker run(无 project)→ 空。
+	if got := parseStacks("||||||running\n||||||exited"); len(got) != 0 {
+		t.Fatalf("want empty for no-project lines, got %+v", got)
 	}
 }
 

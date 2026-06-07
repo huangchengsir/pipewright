@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -30,13 +32,21 @@ const (
 	composeMaxBytes = 512 << 10 // 512 KiB compose 上限
 )
 
-var cmdComposeLs = []string{"docker", "compose", "ls", "--all", "--format", "json"}
+// 列 compose 项目 **不用** `docker compose ls`(那是 v2 插件专属;装 v1 docker-compose 或
+// 无 v2 插件的主机会扫不到)。改为按容器的 compose 标签 `com.docker.compose.project` 聚合 ——
+// v1/v2 通吃,且不依赖 compose CLI。`|||` 作分隔(项目名/路径不含此串)。
+// 用 {{.Status}}(老 docker 也有;{{.State}} 是 20.10+ 才有,103 的旧 docker 会报模板错)。
+// running 与否由 deriveState(status) 判定(复用 server_containers.go)。
+var cmdComposeLabels = []string{
+	"docker", "ps", "-a", "--format",
+	`{{.Label "com.docker.compose.project"}}|||{{.Label "com.docker.compose.project.config_files"}}|||{{.Status}}`,
+}
 
 // stackDTO 是单个 compose 项目的展示 DTO(冻结契约)。
 type stackDTO struct {
 	Name        string `json:"name"`
-	Status      string `json:"status"`      // 如 "running(2)" / "exited(1)"
-	ConfigFiles string `json:"configFiles"` // compose 文件路径
+	Status      string `json:"status"`      // 如 "running(2)" / "1/2 运行"
+	ConfigFiles string `json:"configFiles"` // compose 文件路径(标签里有才填;v1 旧版常为空)
 }
 
 type serverStacksDTO struct {
@@ -48,36 +58,52 @@ type serverStacksDTO struct {
 	CollectedAt string     `json:"collectedAt"`
 }
 
-// composeLsLine 映射 `docker compose ls --format json` 的元素(JSON 数组)。
-type composeLsLine struct {
-	Name        string `json:"Name"`
-	Status      string `json:"Status"`
-	ConfigFiles string `json:"ConfigFiles"`
-}
-
+// parseStacks 据 `docker ps -a` 的 compose 标签聚合出项目(按 project 分组,空 project = 裸
+// docker run 容器,跳过)。status 给「running(R)」或「R/T 运行」。
 func parseStacks(out string) []stackDTO {
-	list := []stackDTO{}
-	out = strings.TrimSpace(out)
-	if out == "" {
-		return list
+	type acc struct {
+		running, total int
+		cfg            string
 	}
-	var arr []composeLsLine
-	if err := json.Unmarshal([]byte(out), &arr); err != nil {
-		// 个别 docker 版本逐行 JSON;回退逐行解析。
-		for _, line := range strings.Split(out, "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			var p composeLsLine
-			if json.Unmarshal([]byte(line), &p) == nil && p.Name != "" {
-				list = append(list, stackDTO{Name: p.Name, Status: p.Status, ConfigFiles: p.ConfigFiles})
+	m := map[string]*acc{}
+	order := []string{}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "|||", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		proj := strings.TrimSpace(parts[0])
+		if proj == "" {
+			continue // 非 compose 容器
+		}
+		a := m[proj]
+		if a == nil {
+			a = &acc{}
+			m[proj] = a
+			order = append(order, proj)
+		}
+		a.total++
+		if deriveState(strings.TrimSpace(parts[2])) == "running" {
+			a.running++
+		}
+		if a.cfg == "" {
+			if cfg := strings.TrimSpace(parts[1]); cfg != "" {
+				a.cfg = cfg
 			}
 		}
-		return list
 	}
-	for _, p := range arr {
-		list = append(list, stackDTO{Name: p.Name, Status: p.Status, ConfigFiles: p.ConfigFiles})
+	list := []stackDTO{}
+	for _, proj := range order {
+		a := m[proj]
+		status := fmt.Sprintf("running(%d)", a.running)
+		if a.running < a.total {
+			status = fmt.Sprintf("%d/%d 运行", a.running, a.total)
+		}
+		list = append(list, stackDTO{Name: proj, Status: status, ConfigFiles: a.cfg})
 	}
 	return list
 }
@@ -87,7 +113,7 @@ func collectServerStacks(ctx context.Context, svc target.Service, id string) (se
 	cctx, cancel := context.WithTimeout(ctx, stacksCmdTimeout)
 	defer cancel()
 
-	res, err := svc.Exec(cctx, id, cmdComposeLs)
+	res, err := svc.Exec(cctx, id, cmdComposeLabels)
 	if err != nil {
 		out.Reachable = false
 		out.Error = humanContainersError(err)
@@ -98,8 +124,7 @@ func collectServerStacks(ctx context.Context, svc target.Service, id string) (se
 	}
 	out.Reachable = true
 	if res.ExitCode != 0 {
-		// docker 未装 / 无 compose 插件 / 无权限。
-		out.Error = "未检测到 docker compose(需 docker 与 compose v2 插件,且当前用户有权限)"
+		out.Error = "未检测到容器运行时(docker 未安装或当前用户无权限)"
 		return out, nil
 	}
 	out.Runtime = "docker"
@@ -166,8 +191,38 @@ func composeFileArgs(configFile string) ([]string, error) {
 	return args, nil
 }
 
+var reContainerHexID = regexp.MustCompile(`^[a-f0-9]{6,64}$`)
+
+// detectComposeBin 探测可用的 compose CLI:v2 `docker compose` 优先,回退 v1 `docker-compose`。
+// 返回基础命令(如 ["docker","compose"] / ["docker-compose"]);都没有返回 nil。
+func detectComposeBin(ctx context.Context, svc target.Service, id string) []string {
+	if res, err := svc.Exec(ctx, id, []string{"docker", "compose", "version"}); err == nil && res.ExitCode == 0 {
+		return []string{"docker", "compose"}
+	}
+	if res, err := svc.Exec(ctx, id, []string{"docker-compose", "version"}); err == nil && res.ExitCode == 0 {
+		return []string{"docker-compose"}
+	}
+	return nil
+}
+
+// projectContainerIDs 取某 compose 项目(按标签)的所有容器 ID(校验为纯十六进制,防注入)。
+func projectContainerIDs(ctx context.Context, svc target.Service, id, project string) ([]string, error) {
+	res, err := svc.Exec(ctx, id, []string{"docker", "ps", "-aq", "--filter", "label=com.docker.compose.project=" + project})
+	if err != nil {
+		return nil, err
+	}
+	ids := []string{}
+	for _, ln := range strings.Fields(res.Stdout) {
+		if reContainerHexID.MatchString(ln) {
+			ids = append(ids, ln)
+		}
+	}
+	return ids, nil
+}
+
 // makeStackActionHandler 返回 POST /api/servers/{id}/stacks/action(认证 + CSRF;写)。
-// 对已有项目按 project name(标签)操作,无需 compose 文件。
+// 版本无关:start/stop/restart/down 按项目标签取容器 ID,用**纯 docker** 操作(不依赖 compose
+// CLI,v1/v2 都行);update 需 compose 文件 + compose CLI(v2 docker compose / v1 docker-compose)。
 func makeStackActionHandler(svc target.Service, aud audit.Recorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if svc == nil {
@@ -186,7 +241,7 @@ func makeStackActionHandler(svc target.Service, aud audit.Recorder) http.Handler
 			return
 		}
 		if !stackActions[req.Action] {
-			writeError(w, http.StatusBadRequest, "invalid_stack", "非法动作(start/stop/restart/down)")
+			writeError(w, http.StatusBadRequest, "invalid_stack", "非法动作(start/stop/restart/down/update)")
 			return
 		}
 		if _, err := svc.Get(r.Context(), id); err != nil {
@@ -194,24 +249,6 @@ func makeStackActionHandler(svc target.Service, aud audit.Recorder) http.Handler
 			return
 		}
 
-		// 构造命令 + 超时:
-		//   - update:`docker compose -p <name> -f <cfg>... up -d --pull always`(拉新镜像 + 重建,
-		//     即「升级」);需 compose ls 给的配置文件路径,给 up 的长超时。
-		//   - 其余:`docker compose -p <name> <action>`(down/start/stop/restart 按项目标签操作)。
-		var cmd []string
-		timeout := stacksCmdTimeout
-		if req.Action == "update" {
-			fileArgs, err := composeFileArgs(req.ConfigFile)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, "invalid_stack", err.Error())
-				return
-			}
-			cmd = append([]string{"docker", "compose", "-p", req.Name}, fileArgs...)
-			cmd = append(cmd, "up", "-d", "--pull", "always")
-			timeout = stacksUpTimeout
-		} else {
-			cmd = []string{"docker", "compose", "-p", req.Name, req.Action}
-		}
 		out := stackDTOResult{ServerID: id, Name: req.Name, Action: req.Action}
 		auditOp := func(ok bool) {
 			recordAudit(r.Context(), aud, audit.Entry{
@@ -219,8 +256,60 @@ func makeStackActionHandler(svc target.Service, aud audit.Recorder) http.Handler
 				Detail: map[string]any{"name": req.Name, "action": req.Action, "ok": ok}, IP: clientIP(r),
 			})
 		}
+		timeout := stacksCmdTimeout
+		if req.Action == "update" {
+			timeout = stacksUpTimeout
+		}
 		cctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
+
+		// 构造命令:
+		var cmd []string
+		if req.Action == "update" {
+			bin := detectComposeBin(cctx, svc, id)
+			if bin == nil {
+				out.OK = false
+				out.Error = "该主机未检测到 docker compose / docker-compose,无法更新(可改用重启)"
+				auditOp(false)
+				writeJSON(w, http.StatusOK, out)
+				return
+			}
+			fileArgs, ferr := composeFileArgs(req.ConfigFile)
+			if ferr != nil {
+				writeError(w, http.StatusBadRequest, "invalid_stack", ferr.Error())
+				return
+			}
+			cmd = append(append([]string{}, bin...), "-p", req.Name)
+			cmd = append(cmd, fileArgs...)
+			cmd = append(cmd, "up", "-d", "--pull", "always")
+		} else {
+			// start/stop/restart/down:按标签取容器 ID,用纯 docker 操作(版本无关)。
+			ids, ierr := projectContainerIDs(cctx, svc, id, req.Name)
+			if ierr != nil {
+				if errors.Is(ierr, target.ErrNotFound) {
+					writeServerError(w, ierr)
+					return
+				}
+				out.OK = false
+				out.Error = humanServiceError(ierr)
+				auditOp(false)
+				writeJSON(w, http.StatusOK, out)
+				return
+			}
+			if len(ids) == 0 {
+				out.OK = false
+				out.Error = "未找到该项目的容器(可能已删除)"
+				auditOp(false)
+				writeJSON(w, http.StatusOK, out)
+				return
+			}
+			if req.Action == "down" {
+				cmd = append([]string{"docker", "rm", "-f"}, ids...)
+			} else { // start / stop / restart
+				cmd = append([]string{"docker", req.Action}, ids...)
+			}
+		}
+
 		res, err := svc.Exec(cctx, id, cmd)
 		if err != nil {
 			if errors.Is(err, target.ErrNotFound) {
@@ -241,7 +330,7 @@ func makeStackActionHandler(svc target.Service, aud audit.Recorder) http.Handler
 		if res.ExitCode != 0 {
 			msg := strings.TrimSpace(res.Stderr)
 			if msg == "" {
-				msg = "docker compose " + req.Action + " 以非零状态退出"
+				msg = "stack " + req.Action + " 以非零状态退出"
 			}
 			out.OK = false
 			out.Error = truncateLog(msg, 1024)
@@ -326,8 +415,16 @@ func makeStackDeployHandler(svc target.Service, aud audit.Recorder) http.Handler
 			writeJSON(w, http.StatusOK, out)
 			return
 		}
-		// 3) up -d。
-		res, err := svc.Exec(cctx, id, []string{"docker", "compose", "-p", req.Name, "-f", composePath, "up", "-d"})
+		// 3) up -d(用探测到的 compose CLI:v2 docker compose / v1 docker-compose)。
+		bin := detectComposeBin(cctx, svc, id)
+		if bin == nil {
+			out.Error = "该主机未检测到 docker compose / docker-compose,无法部署"
+			auditOp(false)
+			writeJSON(w, http.StatusOK, out)
+			return
+		}
+		upCmd := append(append([]string{}, bin...), "-p", req.Name, "-f", composePath, "up", "-d")
+		res, err := svc.Exec(cctx, id, upCmd)
 		if err != nil {
 			out.Error = humanServiceError(err)
 			auditOp(false)

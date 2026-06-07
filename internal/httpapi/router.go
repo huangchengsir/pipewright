@@ -631,6 +631,11 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Get("/servers/{id}/images", makeServerImagesHandler(sv))
 		ar.Post("/servers/{id}/images/pull", makeImagePullHandler(sv, aud))
 		ar.Post("/servers/{id}/images/remove", makeImageRemoveHandler(sv, aud))
+		// Compose/Stacks —— 列表(只读)+ 部署(贴 yaml → up)+ start/stop/restart/down。
+		// 项目名严格白名单 + array 化;compose 内容经 Upload 落文件(非 shell 注入面)。写过 CSRF + 审计。
+		ar.Get("/servers/{id}/stacks", makeServerStacksHandler(sv))
+		ar.Post("/servers/{id}/stacks/deploy", makeStackDeployHandler(sv, aud))
+		ar.Post("/servers/{id}/stacks/action", makeStackActionHandler(sv, aud))
 		// 服务操作 —— 重启/停止/启动(Story 6.3;FR-17,经 SSH 跑 systemctl/docker)。
 		// 复用 sv(4-1 装配)+ aud(1-4 装配),无需新服务。写操作 → 过 auth + CSRF。
 		// type/target/action 严格白名单(AC-SEC-02:首字符非 `-` 防 flag 注入、无 shell 元字符

@@ -9,9 +9,14 @@ import {
   getServerImages,
   pullImage,
   removeImage,
+  getServerStacks,
+  deployStack,
+  stackAction,
   type ServerContainers,
   type ContainerInfo,
   type ImageInfo,
+  type StackInfo,
+  type StackAction,
 } from '../../api/containers'
 import { serviceAction } from '../../api/servers'
 import { HttpError } from '../../api/http'
@@ -46,7 +51,7 @@ const emit = defineEmits<{
 const toast = useToast()
 const confirm = useConfirm()
 
-type TabKey = 'containers' | 'images'
+type TabKey = 'containers' | 'images' | 'stacks'
 const tab = ref<TabKey>('containers')
 
 // 运行时显示名:首字母大写(docker → Docker)。
@@ -132,6 +137,108 @@ async function loadImages(): Promise<void> {
 function switchTab(t: TabKey): void {
   tab.value = t
   if (t === 'images' && imgState.value === 'idle') void loadImages()
+  if (t === 'stacks' && stackState.value === 'idle') void loadStacks()
+}
+
+// ─── Stacks / Compose(懒加载) ────────────────────────────────────────────────
+const stacks = ref<StackInfo[]>([])
+const stackState = ref<'idle' | 'loading' | 'loaded' | 'error'>('idle')
+const stackError = ref('')
+const busyStack = ref('')
+const showDeploy = ref(false)
+const deployName = ref('')
+const deployCompose = ref('')
+const deploying = ref(false)
+
+async function loadStacks(): Promise<void> {
+  stackState.value = 'loading'
+  stackError.value = ''
+  try {
+    const res = await getServerStacks(props.group.serverId)
+    if (!res.reachable || !res.runtime) {
+      stackState.value = 'error'
+      stackError.value = res.error || '该服务器不可达或无 docker compose'
+      return
+    }
+    stacks.value = res.stacks
+    stackState.value = 'loaded'
+  } catch (err) {
+    stackState.value = 'error'
+    stackError.value =
+      err instanceof HttpError ? (err.apiError?.message ?? `加载 Stacks 失败(${err.status})`) : '加载 Stacks 失败'
+  }
+}
+
+const STACK_ACTIONS: { action: StackAction; label: string; danger?: boolean; title?: string }[] = [
+  { action: 'update', label: '更新', danger: true, title: 'docker compose up -d --pull always:拉取新镜像 + 重建有变化的服务(升级到最新)' },
+  { action: 'start', label: '启动' },
+  { action: 'restart', label: '重启', danger: true },
+  { action: 'stop', label: '停止', danger: true },
+  { action: 'down', label: '销毁', danger: true },
+]
+
+async function doStackAction(s: StackInfo, action: StackAction, label: string, danger?: boolean): Promise<void> {
+  if (action === 'update' && !s.configFiles) {
+    toast.error('无法更新', { detail: '该 Stack 无可用 compose 配置文件' })
+    return
+  }
+  if (danger) {
+    const ok = await confirm.open({
+      title: `对 Stack ${s.name} 执行${label}?`,
+      body:
+        action === 'down'
+          ? '将销毁该 compose 项目的所有容器与网络(数据卷默认保留)。'
+          : action === 'update'
+            ? '将按现有 compose 文件拉取新镜像并重建有变化的服务(docker compose up -d --pull always),实现升级。'
+            : `将对该 compose 项目的所有服务执行${label}。`,
+      confirmLabel: label,
+      variant: 'danger',
+    })
+    if (!ok) return
+  }
+  busyStack.value = s.name
+  try {
+    const res = await stackAction(props.group.serverId, s.name, action, s.configFiles)
+    if (res.ok) {
+      toast.success(`Stack ${label}成功`, { detail: s.name })
+      void loadStacks()
+      emit('changed')
+    } else {
+      toast.error(`Stack ${label}失败`, { detail: res.error || '远端命令以非零状态退出' })
+    }
+  } catch (err) {
+    toast.error(`Stack ${label}失败`, {
+      detail: err instanceof HttpError ? (err.apiError?.message ?? `请求失败(${err.status})`) : '网络错误',
+    })
+  } finally {
+    busyStack.value = ''
+  }
+}
+
+async function doDeploy(): Promise<void> {
+  const name = deployName.value.trim()
+  const compose = deployCompose.value.trim()
+  if (!name || !compose || deploying.value) return
+  deploying.value = true
+  try {
+    const res = await deployStack(props.group.serverId, name, compose)
+    if (res.ok) {
+      toast.success('Stack 已部署', { detail: name })
+      showDeploy.value = false
+      deployName.value = ''
+      deployCompose.value = ''
+      void loadStacks()
+      emit('changed')
+    } else {
+      toast.error('部署失败', { detail: res.error || 'docker compose up 失败' })
+    }
+  } catch (err) {
+    toast.error('部署失败', {
+      detail: err instanceof HttpError ? (err.apiError?.message ?? `请求失败(${err.status})`) : '网络错误',
+    })
+  } finally {
+    deploying.value = false
+  }
 }
 
 async function doPull(): Promise<void> {
@@ -225,6 +332,9 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
         <button class="ctab" :class="{ 'ctab--active': tab === 'images' }" role="tab" @click="switchTab('images')">
           镜像 <span v-if="imgState === 'loaded'" class="ctab__n">{{ images.length }}</span>
         </button>
+        <button class="ctab" :class="{ 'ctab--active': tab === 'stacks' }" role="tab" @click="switchTab('stacks')">
+          Stacks <span v-if="stackState === 'loaded'" class="ctab__n">{{ stacks.length }}</span>
+        </button>
       </div>
 
       <!-- 容器 tab -->
@@ -265,7 +375,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
       </template>
 
       <!-- 镜像 tab -->
-      <template v-else>
+      <template v-else-if="tab === 'images'">
         <div class="img-toolbar">
           <div class="pull">
             <input v-model="pullRef" class="pull__in mono" placeholder="拉取镜像,例:nginx:latest" @keyup.enter="doPull" />
@@ -289,6 +399,58 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
             <div class="irow__age">{{ img.createdSince }}</div>
             <div class="irow__act">
               <button class="op op--ghost" :disabled="busyImage === img.id" title="删除镜像(docker rmi)" @click="doRemoveImage(img)">删除</button>
+            </div>
+          </li>
+        </ul>
+      </template>
+
+      <!-- Stacks tab -->
+      <template v-else>
+        <div class="img-toolbar">
+          <button class="pull__btn" @click="showDeploy = !showDeploy">{{ showDeploy ? '收起部署' : '+ 部署 Stack' }}</button>
+          <span class="grow" />
+          <button class="refresh" :disabled="stackState === 'loading'" @click="loadStacks">↻ 刷新</button>
+        </div>
+
+        <!-- 部署表单(贴 compose yaml) -->
+        <div v-if="showDeploy" class="deploy">
+          <input v-model="deployName" class="deploy__name mono" placeholder="项目名,例:my-stack" />
+          <textarea
+            v-model="deployCompose"
+            class="deploy__yaml mono"
+            rows="8"
+            placeholder="粘贴 docker-compose.yml 内容…&#10;services:&#10;  web:&#10;    image: nginx:latest&#10;    ports: [&quot;8088:80&quot;]"
+          />
+          <div class="deploy__act">
+            <span class="deploy__hint">将写入主机受管目录并 docker compose up -d</span>
+            <button class="pull__btn" :disabled="deploying || !deployName.trim() || !deployCompose.trim()" @click="doDeploy">
+              {{ deploying ? '部署中…' : '部署' }}
+            </button>
+          </div>
+        </div>
+
+        <p v-if="stackState === 'error'" class="panel__hint panel__hint--down">⚠ {{ stackError }}</p>
+        <p v-else-if="stackState === 'loading' && stacks.length === 0" class="panel__hint">正在加载 Stacks…</p>
+        <p v-else-if="stacks.length === 0" class="panel__hint">该服务器暂无 compose 项目。点「+ 部署 Stack」贴 yaml 部署一个。</p>
+        <ul v-else class="ilist" role="list">
+          <li v-for="s in stacks" :key="s.name" class="srow" :class="{ 'irow--busy': busyStack === s.name }">
+            <div class="srow__main">
+              <div class="srow__name">{{ s.name }}</div>
+              <div class="srow__cfg mono" :title="s.configFiles">{{ s.configFiles || '—' }}</div>
+            </div>
+            <div class="srow__status mono">{{ s.status }}</div>
+            <div class="srow__act">
+              <button
+                v-for="a in STACK_ACTIONS"
+                :key="a.action"
+                class="op"
+                :class="{ 'op--default': a.action === 'update' }"
+                :disabled="busyStack === s.name"
+                :title="a.title"
+                @click="doStackAction(s, a.action, a.label, a.danger)"
+              >
+                {{ a.label }}
+              </button>
             </div>
           </li>
         </ul>
@@ -592,6 +754,84 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
 .irow__size { font-size: var(--text-label); color: var(--color-dim); font-variant-numeric: tabular-nums; }
 .irow__age { font-size: var(--text-label); color: var(--color-faint); }
 .irow__act { display: flex; justify-content: flex-end; }
+
+/* 部署表单 + stack 行 */
+.deploy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-inset);
+}
+.deploy__name {
+  font-size: var(--text-label);
+  padding: 7px 10px;
+  border-radius: var(--rounded-sm);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-card);
+  color: var(--color-text);
+}
+.deploy__yaml {
+  font-size: var(--text-mono);
+  line-height: 1.5;
+  padding: 10px 12px;
+  border-radius: var(--rounded-sm);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-term);
+  color: oklch(88% 0.01 250);
+  resize: vertical;
+}
+.deploy__name:focus,
+.deploy__yaml:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+.deploy__act {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.deploy__hint {
+  flex: 1;
+  font-size: var(--text-micro);
+  color: var(--color-faint);
+}
+
+.srow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px auto;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--color-border);
+  transition: background var(--duration-fast) var(--ease-out-expo);
+}
+.srow:last-child { border-bottom: none; }
+.srow:hover { background: var(--color-card-2); }
+.srow__main { min-width: 0; }
+.srow__name {
+  font-size: var(--text-body);
+  font-weight: 600;
+  color: var(--color-text);
+}
+.srow__cfg {
+  font-size: var(--text-micro);
+  color: var(--color-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.srow__status {
+  font-size: var(--text-label);
+  color: var(--color-dim);
+}
+.srow__act {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
 
 /* 行内迷你操作按钮 */
 .op {

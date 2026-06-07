@@ -159,3 +159,58 @@ export async function pullImage(id: string, image: string): Promise<ImageActionR
 export async function removeImage(id: string, image: string, force = false): Promise<ImageActionResult> {
   return http.post<ImageActionResult>(`/api/servers/${id}/images/remove`, { image, force })
 }
+
+// ─── Compose / Stacks ────────────────────────────────────────────────────────
+
+/** One compose project as reported by `docker compose ls`. */
+export interface StackInfo {
+  name: string
+  /** e.g. `running(2)` / `exited(1)`. */
+  status: string
+  /** Path(s) to the compose file(s). */
+  configFiles: string
+}
+
+export interface ServerStacks {
+  serverId: string
+  reachable: boolean
+  runtime: string
+  error: string
+  stacks: StackInfo[]
+  collectedAt: string
+}
+
+export type StackAction = 'start' | 'stop' | 'restart' | 'down' | 'update'
+
+export interface StackActionResult {
+  serverId: string
+  name: string
+  action: string
+  ok: boolean
+  output: string
+  error: string
+}
+
+/** List compose projects on a server (docker compose ls). */
+export async function getServerStacks(id: string): Promise<ServerStacks> {
+  return http.get<ServerStacks>(`/api/servers/${id}/stacks`)
+}
+
+/** Deploy a stack from compose yaml (docker compose up -d). */
+export async function deployStack(id: string, name: string, compose: string): Promise<StackActionResult> {
+  return http.post<StackActionResult>(`/api/servers/${id}/stacks/deploy`, { name, compose })
+}
+
+/**
+ * Act on an existing compose project (by project name).
+ * `update` re-applies the compose file with `up -d --pull always`(拉新镜像 + 重建 = 升级);
+ * it needs `configFile`(来自 stack 列表的 configFiles)。其余动作按项目标签操作,无需文件。
+ */
+export async function stackAction(
+  id: string,
+  name: string,
+  action: StackAction,
+  configFile?: string,
+): Promise<StackActionResult> {
+  return http.post<StackActionResult>(`/api/servers/${id}/stacks/action`, { name, action, configFile })
+}

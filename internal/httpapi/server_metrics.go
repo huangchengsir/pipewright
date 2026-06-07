@@ -47,6 +47,11 @@ var (
 	cmdFreeBytes  = []string{"free", "-b"}
 	cmdDfBytes    = []string{"df", "-B1", "/"}
 	cmdDfKiB      = []string{"df", "-k", "/"}
+	// 物理/分配内存(SMBIOS Type 17 内存设备容量之和)。`free` 的 MemTotal 是内核
+	// **可用**总量(已扣固件/内核保留),通常略小于物理装机量;dmidecode 读 SMBIOS
+	// 得「物理/分配」总量,与 PVE 等宿主面板显示的总量一致。需 root;非 root / 无
+	// dmidecode / 虚拟化未暴露 SMBIOS → 采集失败 → physicalTotalBytes 为 0(不展示)。
+	cmdDmidecodeMem = []string{"dmidecode", "-t", "17"}
 )
 
 // cpuMetric / memoryMetric / diskMetric 是各维度指标 DTO(冻结契约字段形状)。
@@ -57,8 +62,16 @@ type cpuMetric struct {
 }
 
 type memoryMetric struct {
-	UsedBytes  int64 `json:"usedBytes"`
-	TotalBytes int64 `json:"totalBytes"`
+	UsedBytes int64 `json:"usedBytes"` // 不含可回收页缓存(进程真实占用 / 内存压力口径)
+	// 含页缓存(total - free);与 cgroup 总用量 / PVE 等容器面板的「已用」一致。
+	UsedWithCacheBytes int64 `json:"usedWithCacheBytes"`
+	TotalBytes         int64 `json:"totalBytes"` // free 的 MemTotal:内核**可用**总量
+	// 物理/分配总量(dmidecode SMBIOS);0 表示采集不到。通常 ≥ TotalBytes,与宿主
+	// 面板(PVE 等)显示的总量一致,用作「含缓存」口径的分母以对齐其百分比。
+	PhysicalTotalBytes int64 `json:"physicalTotalBytes"`
+	// 交换分区 used/total(free 的 Swap 行);SwapTotalBytes 为 0 表示未配置 swap。
+	SwapUsedBytes  int64 `json:"swapUsedBytes"`
+	SwapTotalBytes int64 `json:"swapTotalBytes"`
 }
 
 type diskMetric struct {
@@ -175,11 +188,65 @@ func collectMemory(ctx context.Context, svc target.Service, id string) *memoryMe
 	if err != nil {
 		return nil
 	}
-	used, total, ok := parseFreeBytes(out)
+	used, usedWithCache, total, ok := parseFreeBytes(out)
 	if !ok {
 		return nil
 	}
-	return &memoryMetric{UsedBytes: used, TotalBytes: total}
+	m := &memoryMetric{UsedBytes: used, UsedWithCacheBytes: usedWithCache, TotalBytes: total}
+	// Swap 与内存来自同一份 `free -b`:解析 Swap 行(未配置 swap → 0/0)。
+	if su, st, sok := parseSwapBytes(out); sok {
+		m.SwapUsedBytes, m.SwapTotalBytes = su, st
+	}
+	// 物理/分配总量:静态硬件量,经 host 级缓存避免每次轮询都跑一次 SSH dmidecode。
+	m.PhysicalTotalBytes = cachedPhysicalTotal(ctx, svc, id, total)
+	return m
+}
+
+// ─── 物理内存缓存 ──────────────────────────────────────────────────────────────
+//
+// dmidecode 取的物理/分配内存是静态量(不随负载变),但采集页可能每 10s 轮询一次。
+// 按 serverID 缓存:成功值(>0)长期复用;失败(非 root / 无 dmidecode / SSH 抖动)缓存
+// 一个冷却期,避免对失败主机每轮都重拨 SSH。进程重启即清空,自然容纳极少见的换内存。
+type physMemEntry struct {
+	bytes    int64 // >0:已知物理总量;0:探测过但取不到
+	probedAt time.Time
+}
+
+var (
+	physMemMu    sync.Mutex
+	physMemCache = map[string]physMemEntry{}
+)
+
+// physMemRetryCooldown:对「取不到」的主机多久重试一次 dmidecode(成功值不受此限,永久缓存)。
+const physMemRetryCooldown = 10 * time.Minute
+
+// cachedPhysicalTotal 返回该主机物理/分配内存(字节),0 表示取不到。memTotal 用于
+// 合理性校验(物理量应 ≥ 内核可用量)。SSH 调用在不持锁时进行,不串行化各主机。
+func cachedPhysicalTotal(ctx context.Context, svc target.Service, id string, memTotal int64) int64 {
+	now := time.Now()
+
+	physMemMu.Lock()
+	if e, hit := physMemCache[id]; hit {
+		// 成功值永久有效;失败值在冷却期内复用(不重拨)。
+		if e.bytes > 0 || now.Sub(e.probedAt) < physMemRetryCooldown {
+			physMemMu.Unlock()
+			return e.bytes
+		}
+	}
+	physMemMu.Unlock()
+
+	// 探测(不持锁):dmidecode 需 root,失败一律记 0,绝不连累已成功的 free 口径。
+	var phys int64
+	if dmiOut, dmiErr := runMetricCmd(ctx, svc, id, cmdDmidecodeMem); dmiErr == nil {
+		if p, pok := parseDmidecodeMemBytes(dmiOut); pok && p >= memTotal {
+			phys = p
+		}
+	}
+
+	physMemMu.Lock()
+	physMemCache[id] = physMemEntry{bytes: phys, probedAt: now}
+	physMemMu.Unlock()
+	return phys
 }
 
 // collectDisk 取根分区 used/total(字节)。`df -B1 /` 优先;macOS 不识别 -B1 → 回退 `df -k /`
@@ -256,17 +323,23 @@ func parseInt(s string) (int, bool) {
 	return v, true
 }
 
-// parseFreeBytes 解析 `free -b` 输出,取 Mem 行的 total/used(字节)。
+// parseFreeBytes 解析 `free -b` 输出,取 Mem 行的 total 与两种「已使用」口径(字节)。
 // 形如:
 //
 //	              total        used        free      shared  buff/cache   available
-//	Mem:    17179869184  4123456789  ...
+//	Mem:    17179869184   2854748160   706924544  ...
 //
-// 取 Mem 行的第 1 列 total、第 2 列 used。容错:列不足/非数字 → false。
-func parseFreeBytes(s string) (used, total int64, ok bool) {
+// 返回两口径(均常见、各有用途,不绑定任何虚拟化平台):
+//   - used:free 的「used」列(第 2 列)—— **不含可回收页缓存**,反映进程真实占用 /
+//     内存压力(htop、node_exporter 同口径)。
+//   - usedWithCache:total - free(= used + buff/cache)—— **含页缓存**,与 cgroup 总用量 /
+//     PVE 等容器面板的「已用」一致(它们把页缓存算进已用)。
+//
+// 取 Mem 行第 1 列 total、第 2 列 used、第 3 列 free。容错:列不足/非数字/越界 → false。
+func parseFreeBytes(s string) (used, usedWithCache, total int64, ok bool) {
 	for _, line := range strings.Split(s, "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 3 {
+		if len(fields) < 4 {
 			continue
 		}
 		if !strings.HasPrefix(strings.ToLower(fields[0]), "mem") {
@@ -274,12 +347,102 @@ func parseFreeBytes(s string) (used, total int64, ok bool) {
 		}
 		t, err1 := strconv.ParseInt(fields[1], 10, 64)
 		u, err2 := strconv.ParseInt(fields[2], 10, 64)
-		if err1 != nil || err2 != nil || t <= 0 || u < 0 {
+		f, err3 := strconv.ParseInt(fields[3], 10, 64)
+		if err1 != nil || err2 != nil || err3 != nil || t <= 0 || u < 0 || f < 0 || f > t {
+			return 0, 0, 0, false
+		}
+		return u, t - f, t, true
+	}
+	return 0, 0, 0, false
+}
+
+// parseSwapBytes 解析 `free -b` 的 Swap 行,取 total/used(字节)。形如:
+//
+//	Swap:    2147483648    536870912   1610612736
+//
+// 取第 1 列 total、第 2 列 used。无 Swap 行(部分系统)或列不足/非数字 → false;
+// total=0(未配置 swap)仍算成功(used/total 均 0,UI 据此不渲染 swap 行)。
+func parseSwapBytes(s string) (used, total int64, ok bool) {
+	for _, line := range strings.Split(s, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		if !strings.HasPrefix(strings.ToLower(fields[0]), "swap") {
+			continue
+		}
+		t, err1 := strconv.ParseInt(fields[1], 10, 64)
+		u, err2 := strconv.ParseInt(fields[2], 10, 64)
+		if err1 != nil || err2 != nil || t < 0 || u < 0 {
 			return 0, 0, false
 		}
 		return u, t, true
 	}
 	return 0, 0, false
+}
+
+// parseDmidecodeMemBytes 解析 `dmidecode -t 17` 输出,累加各「已装」内存设备的 Size
+// 得物理/分配总量(字节)。形如:
+//
+//	Memory Device
+//	        Size: 8 GiB
+//	Memory Device
+//	        Size: No Module Installed
+//
+// 单位大小写不敏感,兼容 dmidecode 各版本写法:kB/MB/GB/TB(十进制千)与 KiB/MiB/GiB/TiB
+// (二进制 1024)。"No Module Installed" / "Unknown" / 非数字 → 跳过该设备。
+// 一个有效 Size 都没有 → false(交由上层留 0、不展示)。
+func parseDmidecodeMemBytes(s string) (int64, bool) {
+	var total int64
+	found := false
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "Size:") {
+			continue
+		}
+		fields := strings.Fields(strings.TrimPrefix(line, "Size:"))
+		if len(fields) < 2 {
+			continue // "No Module Installed"/"Unknown" 等 → 跳过
+		}
+		n, err := strconv.ParseInt(fields[0], 10, 64)
+		if err != nil || n <= 0 {
+			continue
+		}
+		mult, uok := memUnitMultiplier(fields[1])
+		if !uok {
+			continue
+		}
+		total += n * mult
+		found = true
+	}
+	if !found || total <= 0 {
+		return 0, false
+	}
+	return total, true
+}
+
+// memUnitMultiplier 把内存单位换算为字节倍数。二进制单位(KiB/MiB/...)按 1024 进位,
+// 十进制单位(kB/MB/...)按 1000 进位;dmidecode 现版本用二进制(GiB),旧版用 MB/GB。
+func memUnitMultiplier(unit string) (int64, bool) {
+	switch strings.ToLower(unit) {
+	case "kb":
+		return 1000, true
+	case "mb":
+		return 1000 * 1000, true
+	case "gb":
+		return 1000 * 1000 * 1000, true
+	case "tb":
+		return 1000 * 1000 * 1000 * 1000, true
+	case "kib":
+		return 1024, true
+	case "mib":
+		return 1024 * 1024, true
+	case "gib":
+		return 1024 * 1024 * 1024, true
+	case "tib":
+		return 1024 * 1024 * 1024 * 1024, true
+	}
+	return 0, false
 }
 
 // parseDf 解析 `df` 输出的根分区行,取 total(第 2 列)/ used(第 3 列),乘以 unit 化为字节。

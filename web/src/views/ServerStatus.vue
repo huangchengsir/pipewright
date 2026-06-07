@@ -10,7 +10,7 @@
   这是一个**新增**的总览入口,不动 4-1 SettingsServers CRUD、6-2 日志入口。
 -->
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { getAllServerMetrics, listServers, type ServerMetrics, type Server } from '../api/servers'
 import { HttpError } from '../api/http'
 import ServerMetricsCard from '../components/ops/ServerMetricsCard.vue'
@@ -73,8 +73,45 @@ async function loadServerNames(): Promise<Map<string, string>> {
   return m
 }
 
+// ─── 自动刷新 ────────────────────────────────────────────────────────────────
+// 指标实时、不落库,这里定时轮询(stale-while-revalidate:旧数据留屏、后台静默重取)。
+// 标签页隐藏时暂停(省 SSH;终端常在新标签开,这页可能被晾在后台),回到前台立即补一次。
+const REFRESH_INTERVAL_MS = 12_000
+let pollTimer: ReturnType<typeof setInterval> | null = null
+
+function startPolling(): void {
+  if (pollTimer !== null) return
+  pollTimer = setInterval(() => {
+    // 上一轮还在飞 / 出错重试中就跳过这拍,避免叠请求。
+    if (loadState.value !== 'loading') void load()
+  }, REFRESH_INTERVAL_MS)
+}
+
+function stopPolling(): void {
+  if (pollTimer !== null) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+function onVisibilityChange(): void {
+  if (document.hidden) {
+    stopPolling()
+  } else {
+    void load() // 回前台立即补一次,再恢复轮询
+    startPolling()
+  }
+}
+
 onMounted(() => {
   void load()
+  startPolling()
+  document.addEventListener('visibilitychange', onVisibilityChange)
+})
+
+onUnmounted(() => {
+  stopPolling()
+  document.removeEventListener('visibilitychange', onVisibilityChange)
 })
 </script>
 
@@ -88,6 +125,7 @@ onMounted(() => {
           <span v-if="totalCount > 0" class="view-sub__count">
             · {{ reachableCount }}/{{ totalCount }} 可达
           </span>
+          <span class="view-sub__count">· 每 12 秒自动刷新</span>
         </p>
       </div>
       <AppButton variant="default" :loading="loadState === 'loading'" @click="load">

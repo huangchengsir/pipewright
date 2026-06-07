@@ -227,8 +227,17 @@ export interface CpuMetric {
 
 /** Memory used/total in bytes. */
 export interface MemoryMetric {
+  /** 进程真实占用,**不含**可回收页缓存(htop/node_exporter 同口径,反映内存压力)。 */
   usedBytes: number
+  /** total - free,**含**页缓存;与 cgroup 总用量 / 容器面板的「已用」一致(口径之一,不绑定平台)。 */
+  usedWithCacheBytes: number
+  /** free 的 MemTotal:内核**可用**总量(已扣固件/内核保留)。 */
   totalBytes: number
+  /** 物理/分配总量(dmidecode SMBIOS);0 表示采集不到(非 root / 无 dmidecode / 虚拟化未暴露)。 */
+  physicalTotalBytes: number
+  /** 交换分区 used/total(free 的 Swap 行);swapTotalBytes 为 0 表示未配置 swap。 */
+  swapUsedBytes: number
+  swapTotalBytes: number
 }
 
 /** Disk used/total in bytes for a mount path (root `/`). */

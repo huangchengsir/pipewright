@@ -55,9 +55,31 @@ function humanBytes(n: number): string {
 const memPercent = computed(() =>
   props.metrics.memory ? pct(props.metrics.memory.usedBytes, props.metrics.memory.totalBytes) : null,
 )
+/**
+ * 「含缓存」口径的分母:有物理/分配总量时优先用它(对齐宿主面板如 PVE 的总量),
+ * 否则回退 free 的可用总量。physicalTotalBytes 为 0 表示采集不到。
+ */
+const memCacheTotal = computed(() => {
+  const m = props.metrics.memory
+  if (!m) return null
+  return m.physicalTotalBytes > 0 ? m.physicalTotalBytes : m.totalBytes
+})
+/** 含页缓存(total - free)/ 物理总量 —— 与 cgroup / 宿主面板「已用」百分比一致。 */
+const memCachePercent = computed(() =>
+  props.metrics.memory && memCacheTotal.value
+    ? pct(props.metrics.memory.usedWithCacheBytes, memCacheTotal.value)
+    : null,
+)
 const diskPercent = computed(() =>
   props.metrics.disk ? pct(props.metrics.disk.usedBytes, props.metrics.disk.totalBytes) : null,
 )
+
+/** 交换分区用量(swapTotalBytes 为 0 → 未配置,不渲染)。 */
+const swapPercent = computed(() => {
+  const m = props.metrics.memory
+  if (!m || m.swapTotalBytes <= 0) return null
+  return pct(m.swapUsedBytes, m.swapTotalBytes)
+})
 
 /** CPU 负载相对核数的健康着色(无核数则不着色)。 */
 const loadVariant = computed<ProgressVariant>(() => {
@@ -134,8 +156,35 @@ const loadText = computed(() => {
               {{ humanBytes(metrics.memory.usedBytes) }} / {{ humanBytes(metrics.memory.totalBytes) }}
               <span class="metric-pct">({{ memPercent.toFixed(0) }}%)</span>
             </span>
+            <span
+              v-if="memCachePercent !== null && memCacheTotal !== null"
+              class="metric-sub metric-sub--cache"
+              title="含页缓存口径(total − free)/ 总量:页缓存计入已用,与 cgroup / 宿主面板(如 PVE)的「已用」一致。总量优先取物理/分配内存,取不到则用内核可用总量。"
+            >
+              含缓存 {{ humanBytes(metrics.memory.usedWithCacheBytes) }} /
+              {{ humanBytes(memCacheTotal) }}
+              <span class="metric-pct">({{ memCachePercent.toFixed(0) }}%)</span>
+              <span v-if="metrics.memory.physicalTotalBytes > 0" class="metric-tag">物理</span>
+            </span>
           </template>
           <span v-else class="metric-num metric-num--na">不可用</span>
+        </dd>
+      </div>
+
+      <!-- Swap(仅在配置了 swap 时显示) -->
+      <div v-if="swapPercent !== null && metrics.memory" class="metric-row">
+        <dt class="metric-row__label">交换</dt>
+        <dd class="metric-row__value">
+          <ProgressBar
+            :value="swapPercent"
+            :variant="usageVariant(swapPercent)"
+            :label="`交换使用 ${swapPercent.toFixed(0)}%`"
+          />
+          <span class="metric-sub">
+            {{ humanBytes(metrics.memory.swapUsedBytes) }} /
+            {{ humanBytes(metrics.memory.swapTotalBytes) }}
+            <span class="metric-pct">({{ swapPercent.toFixed(0) }}%)</span>
+          </span>
         </dd>
       </div>
 
@@ -287,6 +336,20 @@ const loadText = computed(() => {
 }
 .metric-pct {
   color: var(--color-faint);
+}
+.metric-sub--cache {
+  color: var(--color-faint);
+  cursor: help;
+}
+.metric-tag {
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: var(--rounded-sm, 4px);
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--color-dim);
+  background: var(--color-inset);
+  vertical-align: 1px;
 }
 
 .metrics-card__foot {

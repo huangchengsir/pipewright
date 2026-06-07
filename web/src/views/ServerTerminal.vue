@@ -11,8 +11,9 @@
   氛围辉光 + 栅格、设计过的 hover/focus/active。安全上下文(localhost/https)才有剪贴板,失败优雅降级。
 -->
 <script setup lang="ts">
-import { ref, shallowRef, computed, onMounted, onBeforeUnmount, nextTick, reactive } from 'vue'
+import { ref, shallowRef, computed, watch, onMounted, onBeforeUnmount, nextTick, reactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { setDocumentTitle } from '../router'
 import {
   listServers,
   openServerTerminal,
@@ -50,6 +51,18 @@ const hostLabel = computed(() =>
   server.value ? `${server.value.user}@${server.value.host}:${server.value.port}` : serverId.value,
 )
 const serverName = computed(() => server.value?.name ?? '服务器')
+
+// 标签页标题随服务器名 + 连接状态细化(终端常在新标签页打开:多开时一眼区分是哪台机,
+// 且后台挂着的 tab 掉线时标题前缀能直接看出来,不用切过去)。router 的 afterEach 先兜底
+// 成「运维终端」,这里在服务器名 / 连接态变化时覆写。
+watch(
+  [serverName, connState],
+  ([name, st]) => {
+    const prefix = st === 'connected' ? '' : st === 'connecting' ? '连接中 · ' : '⚠ 已断开 · '
+    setDocumentTitle(`${prefix}${name} · 运维终端`)
+  },
+  { immediate: true },
+)
 
 const aiContext = computed(() => ({
   os: 'linux',
@@ -346,7 +359,9 @@ async function connect(): Promise<void> {
   disconnect()
 
   const t = await ensureTerm()
-  t.clear()
+  // reset() 而非 clear():clear 会保留当前 prompt 行,重连时新会话 prompt 接在旧
+  // 「sh-5.1# 」后面叠成「sh-5.1# sh-5.1# …」;reset 彻底清空缓冲区+光标归位。
+  t.reset()
   t.focus()
   connState.value = 'connecting'
   statusMsg.value = `正在连接主机 ${hostLabel.value} …`

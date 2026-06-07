@@ -55,7 +55,7 @@ const router = createRouter({
       path: '/login',
       name: 'login',
       component: Login,
-      meta: { public: true },
+      meta: { public: true, title: '登录' },
     },
     // ——— Story 1-6: Component library living styleguide (shell-free, public) ———
     {
@@ -69,20 +69,20 @@ const router = createRouter({
       path: '/library/studio',
       name: 'studio-create',
       component: CustomNodeStudioPage,
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, title: '节点工作室' },
     },
     {
       path: '/library/studio/:id',
       name: 'studio-edit',
       component: CustomNodeStudioPage,
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, title: '节点工作室' },
     },
     // ——— AI 运维终端:独立全屏页(query: ?container=&shell=);shell 外,需鉴权 ———
     {
       path: '/servers/:id/terminal',
       name: 'server-terminal',
       component: ServerTerminal,
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, title: '运维终端' },
     },
     // ——— Shell-inside: authenticated routes ———
     {
@@ -92,50 +92,51 @@ const router = createRouter({
       children: [
         // 首页:概览仪表盘尚未建,暂重定向到项目页(避免落到占位页)。
         { path: '', name: 'overview', redirect: { name: 'dashboard' } },
-        { path: 'dashboard', name: 'dashboard', component: Dashboard },
+        { path: 'dashboard', name: 'dashboard', component: Dashboard, meta: { title: '概览' } },
         // Story 1-7: first-run onboarding guide (inside shell, auth-required)
-        { path: 'onboarding', name: 'onboarding', component: Onboarding },
-        { path: 'projects', name: 'projects', component: Projects },
+        { path: 'onboarding', name: 'onboarding', component: Onboarding, meta: { title: '快速上手' } },
+        { path: 'projects', name: 'projects', component: Projects, meta: { title: '项目' } },
         // Story 2-2: 4-tab pipeline editor (primary config entry point)
-        { path: 'projects/:id/pipeline', name: 'project-pipeline', component: ProjectPipeline },
+        { path: 'projects/:id/pipeline', name: 'project-pipeline', component: ProjectPipeline, meta: { title: '流水线' } },
         // Story 2-3: backward-compat standalone triggers page
-        { path: 'projects/:id/triggers', name: 'project-triggers', component: ProjectTriggers },
+        { path: 'projects/:id/triggers', name: 'project-triggers', component: ProjectTriggers, meta: { title: '触发器' } },
         // Story 7-4: read-only code browsing (FR-4)
-        { path: 'projects/:id/code', name: 'project-code', component: ProjectCode },
-        { path: 'runs', name: 'runs', component: Runs },
+        { path: 'projects/:id/code', name: 'project-code', component: ProjectCode, meta: { title: '代码' } },
+        { path: 'runs', name: 'runs', component: Runs, meta: { title: '运行' } },
         // FR-8-13: 复用库(流水线模板 + 变量组)
-        { path: 'library', name: 'library', component: Library },
-        { path: 'runs/:id', name: 'run-detail', component: RunDetail },
+        { path: 'library', name: 'library', component: Library, meta: { title: '复用库' } },
+        { path: 'runs/:id', name: 'run-detail', component: RunDetail, meta: { title: '运行详情' } },
         // FR-8-15: DORA 指标仪表盘(只读聚合;projectId / window 经 query 即状态)
-        { path: 'metrics/dora', name: 'dora', component: DoraDashboard },
+        { path: 'metrics/dora', name: 'dora', component: DoraDashboard, meta: { title: 'DORA 指标' } },
 
         // 环境一等公民:按环境聚合部署历史 + 一键回滚。projectId 落 query(URL 即状态)。
-        { path: 'environments', name: 'environments', component: Environments },
+        { path: 'environments', name: 'environments', component: Environments, meta: { title: '环境部署历史' } },
         // 顶层「服务器」占位页 → 重定向到真实的多机状态页(登记在 /settings/servers)。
         { path: 'servers', name: 'servers', redirect: { name: 'server-status' } },
         // Story 6-1: multi-host status overview (server-layer metrics, FR-15)
-        { path: 'server-status', name: 'server-status', component: ServerStatus },
+        { path: 'server-status', name: 'server-status', component: ServerStatus, meta: { title: '服务器状态' } },
         // Story 6-5: configurable anomaly detection & alerts (FR-23)
-        { path: 'anomaly', name: 'anomaly', component: AnomalyDetection },
+        { path: 'anomaly', name: 'anomaly', component: AnomalyDetection, meta: { title: '异常检测' } },
         // 顶层「通知」占位页 → 重定向到真实的通知配置页。
         { path: 'notifications', name: 'notifications', redirect: { name: 'settings-notifications' } },
         {
           path: 'settings',
           name: 'settings',
           component: Settings,
+          meta: { title: '设置' },
           children: [
             { path: '', redirect: { name: 'settings-ai' } },
-            { path: 'ai', name: 'settings-ai', component: SettingsAI },
-            { path: 'oauth', name: 'settings-oauth', component: SettingsOAuth },
-            { path: 'notifications', name: 'settings-notifications', component: SettingsNotifications },
-            { path: 'vault', name: 'settings-vault', component: SettingsVault },
-            { path: 'account', name: 'settings-account', component: SettingsAccount },
+            { path: 'ai', name: 'settings-ai', component: SettingsAI, meta: { title: 'AI 设置' } },
+            { path: 'oauth', name: 'settings-oauth', component: SettingsOAuth, meta: { title: 'OAuth 设置' } },
+            { path: 'notifications', name: 'settings-notifications', component: SettingsNotifications, meta: { title: '通知设置' } },
+            { path: 'vault', name: 'settings-vault', component: SettingsVault, meta: { title: '凭据保险库' } },
+            { path: 'account', name: 'settings-account', component: SettingsAccount, meta: { title: '账户设置' } },
             // 系统信息 + 一键检查更新
-            { path: 'system', name: 'settings-system', component: SettingsSystem },
+            { path: 'system', name: 'settings-system', component: SettingsSystem, meta: { title: '系统信息' } },
             // Story 4-1: target servers + shared SSH layer (FR-14)
-            { path: 'servers', name: 'settings-servers', component: SettingsServers },
+            { path: 'servers', name: 'settings-servers', component: SettingsServers, meta: { title: '服务器' } },
             // Story 7-5: diagnosis feedback-loop stats (FR-26)
-            { path: 'diagnosis-stats', name: 'settings-diagnosis-stats', component: SettingsDiagnosisStats },
+            { path: 'diagnosis-stats', name: 'settings-diagnosis-stats', component: SettingsDiagnosisStats, meta: { title: '诊断统计' } },
           ],
         },
       ],
@@ -183,6 +184,20 @@ router.beforeEach(async (to) => {
     name: 'login',
     query: { redirect: to.fullPath },
   }
+})
+
+// ——— 标签页标题:每个路由独立 document.title,多标签(尤其终端在新标签开)可区分 ———
+// 静态标题来自 route.meta.title;数据相关页面(终端带服务器名、运行详情带 ID 等)由各
+// 组件加载到数据后自行覆写 document.title,这里只兜底,避免出现一堆同名「Pipewright」。
+export const APP_TITLE = 'Pipewright'
+
+export function setDocumentTitle(part?: string): void {
+  document.title = part ? `${part} · ${APP_TITLE}` : APP_TITLE
+}
+
+router.afterEach((to) => {
+  const title = to.meta.title
+  setDocumentTitle(typeof title === 'string' ? title : undefined)
 })
 
 export default router

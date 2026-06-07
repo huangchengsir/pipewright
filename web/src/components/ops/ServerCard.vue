@@ -160,9 +160,17 @@ function statFor(name: string): ContainerStat | undefined {
   return containerStats.value.get(name)
 }
 
-// 容器是默认 tab → 挂载即拉一次,让资源数据随卡片一起出现(仅当默认就是容器 tab)。
+// 挂载时(每卡片一次,不随 12s 轮询重跑):容器 tab 拉 stats;并后台并行预取
+// 镜像/Stacks/卷/网络 的计数,让各 tab 上的数字一开始就有(不必点开)。仅对连得上且有
+// 运行时的服务器预取,避免对不可达主机白跑 SSH。
 onMounted(() => {
   if (tab.value === 'containers') void loadStats()
+  if (props.group.reachable && props.group.runtime) {
+    void loadImages()
+    void loadStacks()
+    void loadVolumes()
+    void loadNetworks()
+  }
 })
 
 async function loadStats(): Promise<void> {

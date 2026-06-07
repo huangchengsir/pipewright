@@ -9,7 +9,7 @@
   设计照 demos/ai-terminal-demo.html:cyan=智能、命令卡左色条按风险、对话气泡、入场动画。
 -->
 <script setup lang="ts">
-import { ref, nextTick, useTemplateRef } from 'vue'
+import { ref, computed, nextTick, useTemplateRef } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   suggestCommand,
@@ -21,6 +21,8 @@ import {
 const props = defineProps<{
   /** 终端会话上下文(container/shell/os),随命令一起发给 AI。 */
   context: CommandContext
+  /** 快捷提示词(默认通用运维;调用方可传领域专属,如容器管理)。 */
+  chips?: string[]
 }>()
 
 const emit = defineEmits<{
@@ -63,13 +65,14 @@ async function scrollToEnd(): Promise<void> {
   if (el) el.scrollTop = el.scrollHeight
 }
 
-const CHIPS = [
+const DEFAULT_CHIPS = [
   '磁盘占用 top 10',
   '8080 端口被谁占',
   '实时跟踪应用日志',
   '看 CPU 飙升原因',
   '清理 7 天前的日志',
 ]
+const CHIPS = computed(() => (props.chips && props.chips.length ? props.chips : DEFAULT_CHIPS))
 
 const riskLabel: Record<CommandRisk, string> = {
   safe: '● 只读 · 安全',

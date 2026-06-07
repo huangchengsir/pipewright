@@ -45,7 +45,9 @@ const targetValid = computed(() => targetInput.value.trim().length > 0)
 const pendingAction = ref<ServiceAction | null>(null)
 const submitting = ref(false)
 
-const actionLabel: Record<ServiceAction, string> = {
+// 本面板仅提供 restart/stop/start 三个动作(systemd/docker 通用);ServiceAction 联合类型
+// 另含容器专用的 pause/unpause/kill/rm(由「容器」页驱动),此处用 Partial 只列用到的键。
+const actionLabel: Partial<Record<ServiceAction, string>> = {
   restart: '重启',
   stop: '停止',
   start: '启动',

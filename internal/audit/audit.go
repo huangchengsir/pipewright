@@ -40,6 +40,12 @@ const (
 	ActionPasswordChange     = "password_change"
 	ActionSessionRevoke      = "session_revoke"
 	ActionServiceOp          = "service_op"
+	ActionContainerCreate    = "container_create"
+	ActionImageOp            = "image_op"
+	ActionStackOp            = "stack_op"
+	ActionVolumeOp           = "volume_op"
+	ActionNetworkOp          = "network_op"
+	ActionSystemPrune        = "system_prune"
 	ActionContainerTerminal  = "container_terminal"
 	ActionServerTerminal     = "server_terminal"
 	// 流水线模板 + 变量组(FR-8-13 复用基座)。

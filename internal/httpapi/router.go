@@ -579,6 +579,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Post("/ai/command", makeAICommandHandler(aiSvc))
 		ar.Post("/ai/explain", makeAIExplainHandler(aiSvc))
 		ar.Post("/ai/complete", makeAICompleteHandler(aiSvc)) // P2 智能补全(前缀→完整命令)
+		ar.Post("/ai/compose", makeAIComposeHandler(aiSvc))   // 中文 → docker-compose.yml
 
 		// 只读源码读取(Story 3.6;FR-4 预埋,7-4 消费):go-git 浅克隆读 tree/blob。
 		// 复用已注入 projects(p)+ vault(v)取凭据 + 注入的 SourceReader。reader 为 nil → 503。
@@ -617,6 +618,46 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// chi 字面段优先于 {id},/servers/metrics 不会被 /servers/{id} 吞。
 		ar.Get("/servers/metrics", makeAllServerMetricsHandler(sv))
 		ar.Get("/servers/{id}/metrics", makeServerMetricsHandler(sv))
+		// 容器管理列表/聚合(Portainer 式总览)——经 SSH 跑 `docker ps -a --format {{json .}}`
+		// 采集容器清单。复用 sv(4-1 装配,无新服务)。GET 只读 → 过 auth、豁免 CSRF。命令纯静态
+		// array、不接受任何用户输入(AC-SEC-02);某台不可达/无运行时 → reachable:false / runtime:""
+		// ,不 500。批量端点逐台并行有界、各自独立。容器**生命周期**写操作复用上面的 /service/action
+		// (type=docker)。chi 字面段 /servers/containers 优先于 {id},不会被吞。
+		ar.Get("/servers/containers", makeAllServerContainersHandler(sv))
+		ar.Get("/servers/{id}/containers", makeServerContainersHandler(sv))
+		// 容器实时资源 stats(docker stats --no-stream)。字面段 stats 不与 {id}/containers 冲突。
+		ar.Get("/servers/{id}/containers/stats", makeServerContainerStatsHandler(sv))
+		// 容器详情 inspect(docker inspect → 精选字段)。
+		ar.Get("/servers/{id}/containers/{containerId}/inspect", makeContainerInspectHandler(sv))
+		// 一键清理:磁盘占用(docker system df)+ prune(写,过 CSRF + 审计)。
+		ar.Get("/servers/{id}/system/df", makeSystemDfHandler(sv))
+		ar.Post("/servers/{id}/system/prune", makeSystemPruneHandler(sv, aud))
+		// 新增容器(docker run) —— 写操作,过 auth + CSRF。参数严格白名单 + array 化,
+		// 非法 400 invalid_create_spec;SSH/命令失败人读不 500;成功后写审计(detail 仅 image/name)。
+		ar.Post("/servers/{id}/containers", makeCreateContainerHandler(sv, aud))
+		// 镜像管理 —— 列表(只读)+ 拉取/删除(写,过 CSRF + 审计)。镜像引用严格白名单 + array 化。
+		ar.Get("/servers/{id}/images", makeServerImagesHandler(sv))
+		ar.Post("/servers/{id}/images/pull", makeImagePullHandler(sv, aud))
+		ar.Post("/servers/{id}/images/remove", makeImageRemoveHandler(sv, aud))
+		// Compose/Stacks —— 列表(只读)+ 部署(贴 yaml → up)+ start/stop/restart/down。
+		// 项目名严格白名单 + array 化;compose 内容经 Upload 落文件(非 shell 注入面)。写过 CSRF + 审计。
+		ar.Get("/servers/{id}/stacks", makeServerStacksHandler(sv))
+		ar.Post("/servers/{id}/stacks/deploy", makeStackDeployHandler(sv, aud))
+		ar.Post("/servers/{id}/stacks/action", makeStackActionHandler(sv, aud))
+		// 容器 AI 诊断 / 看日志(AI moat):取容器日志 → ai.Diagnose 出根因+修复。复用 sv +
+		// o.aiSettings。出网前脱敏;AI 未配/失败 → 200 unavailable,绝不 500。比 {id} 多两段不被吞。
+		ar.Post("/servers/{id}/containers/{containerId}/diagnose", makeContainerDiagnoseHandler(sv, o.aiSettings))
+		// 数据卷 + 网络 —— 列表(只读)+ 创建/删除(写,过 CSRF + 审计)。名称白名单 + array 化。
+		ar.Get("/servers/{id}/volumes", makeServerVolumesHandler(sv))
+		ar.Post("/servers/{id}/volumes/create", makeVolumeCreateHandler(sv, aud))
+		ar.Post("/servers/{id}/volumes/remove", makeVolumeRemoveHandler(sv, aud))
+		ar.Get("/servers/{id}/networks", makeServerNetworksHandler(sv))
+		ar.Post("/servers/{id}/networks/create", makeNetworkCreateHandler(sv, aud))
+		ar.Post("/servers/{id}/networks/remove", makeNetworkRemoveHandler(sv, aud))
+		// 网络详情:某网络上连着哪些容器 + 连接/断开。network 段白名单 + array 化。
+		ar.Get("/servers/{id}/networks/{network}/containers", makeNetworkContainersHandler(sv))
+		ar.Post("/servers/{id}/networks/{network}/connect", makeNetworkConnectHandler(sv, aud))
+		ar.Post("/servers/{id}/networks/{network}/disconnect", makeNetworkDisconnectHandler(sv, aud))
 		// 服务操作 —— 重启/停止/启动(Story 6.3;FR-17,经 SSH 跑 systemctl/docker)。
 		// 复用 sv(4-1 装配)+ aud(1-4 装配),无需新服务。写操作 → 过 auth + CSRF。
 		// type/target/action 严格白名单(AC-SEC-02:首字符非 `-` 防 flag 注入、无 shell 元字符

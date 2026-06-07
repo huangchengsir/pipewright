@@ -291,8 +291,21 @@ export async function getAllServerMetrics(): Promise<ServerMetrics[]> {
 /** Service kind the operation targets. */
 export type ServiceType = 'systemd' | 'docker'
 
-/** Lifecycle operation. Destructive (restart/stop) — UI should confirm. */
-export type ServiceAction = 'restart' | 'stop' | 'start'
+/**
+ * Lifecycle operation. Destructive (restart/stop/kill/rm) — UI should confirm.
+ *
+ * systemd accepts only restart/stop/start; docker additionally accepts
+ * pause/unpause/kill/rm (container management). The server enforces the
+ * per-type whitelist — this widened union is shared by both kinds.
+ */
+export type ServiceAction =
+  | 'restart'
+  | 'stop'
+  | 'start'
+  | 'pause'
+  | 'unpause'
+  | 'kill'
+  | 'rm'
 
 export interface ServiceActionInput {
   type: ServiceType

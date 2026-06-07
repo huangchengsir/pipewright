@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
 import { ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
   Dashboard,
   GitBranch,
@@ -14,11 +14,45 @@ import {
   Stack2,
   Rocket,
   ChevronRight,
+  Logout,
 } from '@vicons/tabler'
 import { NIcon } from 'naive-ui'
 import ThemeToggle from '../components/ThemeToggle.vue'
+import { logout } from '../api/auth'
+import { useSessionStore } from '../stores/session'
+import { useConfirm } from '../composables/useConfirm'
+import { useToast } from '../composables/useToast'
 
 const route = useRoute()
+const router = useRouter()
+const sessionStore = useSessionStore()
+const confirm = useConfirm()
+const toast = useToast()
+
+// 退出登录:确认 → POST /api/auth/logout(吊销当前会话)→ 清本地会话缓存 → 回登录页。
+// 即便后端请求失败也照样清缓存跳转(本地一定登出),避免卡在"看似已登录但实际无效"。
+const loggingOut = ref(false)
+async function handleLogout(): Promise<void> {
+  if (loggingOut.value) return
+  const ok = await confirm.open({
+    title: '退出登录?',
+    body: '退出后需重新输入账号口令才能再次进入控制台。',
+    confirmLabel: '退出登录',
+    variant: 'danger',
+  })
+  if (!ok) return
+  loggingOut.value = true
+  try {
+    await logout()
+  } catch {
+    // 后端不可达也要本地登出 —— 失败不阻塞跳转。
+    toast.info('已在本地退出', { detail: '服务器未响应,但本地会话已清除' })
+  } finally {
+    sessionStore.clearSession()
+    loggingOut.value = false
+    void router.push('/login')
+  }
+}
 
 interface NavItem {
   name: string
@@ -111,6 +145,18 @@ function toggleExpanded(): void {
         <n-icon class="nav-icon" :component="settingsItem.icon" :size="20" />
         <span class="nav-label">{{ settingsItem.label }}</span>
       </router-link>
+
+      <!-- Logout (bottom-most) -->
+      <button
+        type="button"
+        class="nav-item nav-item--logout"
+        :disabled="loggingOut"
+        aria-label="退出登录"
+        @click="handleLogout"
+      >
+        <n-icon class="nav-icon" :component="Logout" :size="20" />
+        <span class="nav-label">退出登录</span>
+      </button>
     </nav>
 
     <!-- 边缘切换:骑在侧栏右缘、与品牌齐平的圆形按钮(随 --rail-width 平移)。 -->
@@ -276,6 +322,19 @@ function toggleExpanded(): void {
 .nav-item:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
+}
+
+/* 退出登录:button 而非 link,补 font 继承;hover 转危险色与设置项区分。 */
+.nav-item--logout {
+  font: inherit;
+}
+.nav-item--logout:hover {
+  color: var(--color-red);
+  background-color: var(--color-red-soft);
+}
+.nav-item--logout:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .nav-label {

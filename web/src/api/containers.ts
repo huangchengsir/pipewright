@@ -281,6 +281,33 @@ export interface ServerNetworks {
 export async function getServerNetworks(id: string): Promise<ServerNetworks> {
   return http.get<ServerNetworks>(`/api/servers/${id}/networks`)
 }
+
+/** One container attached to a network. */
+export interface NetworkContainer {
+  id: string
+  name: string
+  ipv4: string
+}
+export interface NetworkContainers {
+  serverId: string
+  network: string
+  reachable: boolean
+  error: string
+  containers: NetworkContainer[]
+}
+
+/** List which containers are attached to a given network (docker network inspect). */
+export async function getNetworkContainers(id: string, network: string): Promise<NetworkContainers> {
+  return http.get<NetworkContainers>(`/api/servers/${id}/networks/${encodeURIComponent(network)}/containers`)
+}
+/** Attach a container to a network (docker network connect). */
+export async function connectNetwork(id: string, network: string, container: string): Promise<VolNetActionResult> {
+  return http.post<VolNetActionResult>(`/api/servers/${id}/networks/${encodeURIComponent(network)}/connect`, { container })
+}
+/** Detach a container from a network (docker network disconnect). */
+export async function disconnectNetwork(id: string, network: string, container: string): Promise<VolNetActionResult> {
+  return http.post<VolNetActionResult>(`/api/servers/${id}/networks/${encodeURIComponent(network)}/disconnect`, { container })
+}
 export async function createNetwork(id: string, name: string): Promise<VolNetActionResult> {
   return http.post<VolNetActionResult>(`/api/servers/${id}/networks/create`, { name })
 }

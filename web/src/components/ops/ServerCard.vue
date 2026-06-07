@@ -18,6 +18,8 @@ import {
   getServerNetworks,
   createNetwork,
   removeNetwork,
+  getNetworkContainers,
+  disconnectNetwork,
   type ServerContainers,
   type ContainerInfo,
   type ImageInfo,
@@ -25,6 +27,7 @@ import {
   type StackAction,
   type VolumeInfo,
   type NetworkInfo,
+  type NetworkContainer,
 } from '../../api/containers'
 import { serviceAction } from '../../api/servers'
 import { HttpError } from '../../api/http'
@@ -271,6 +274,57 @@ async function doRemoveNet(n: NetworkInfo): Promise<void> {
 
 // 内置网络(bridge/host/none)不可删,删除按钮置灰。
 const BUILTIN_NETWORKS = new Set(['bridge', 'host', 'none'])
+
+// 网络详情展开:点网络行 → 显示连着的容器(可断开)。
+const expandedNet = ref<string>('')
+const netConns = ref<NetworkContainer[]>([])
+const netConnState = ref<'idle' | 'loading' | 'loaded' | 'error'>('idle')
+const netConnError = ref('')
+const busyConn = ref('')
+
+async function toggleNetDetail(n: NetworkInfo): Promise<void> {
+  if (expandedNet.value === n.name) {
+    expandedNet.value = ''
+    return
+  }
+  expandedNet.value = n.name
+  netConnState.value = 'loading'
+  netConnError.value = ''
+  netConns.value = []
+  try {
+    const res = await getNetworkContainers(props.group.serverId, n.name)
+    if (!res.reachable) {
+      netConnState.value = 'error'
+      netConnError.value = res.error || '读取失败'
+      return
+    }
+    netConns.value = res.containers
+    netConnState.value = 'loaded'
+  } catch (err) {
+    netConnState.value = 'error'
+    netConnError.value = err instanceof HttpError ? (err.apiError?.message ?? '读取失败') : '读取失败'
+  }
+}
+
+async function doDisconnect(network: string, c: NetworkContainer): Promise<void> {
+  const ok = await confirm.open({
+    title: `把容器 ${c.name} 从网络 ${network} 断开?`,
+    body: '将执行 docker network disconnect。容器会失去该网络的连接(可能影响服务互通)。',
+    confirmLabel: '断开',
+    variant: 'danger',
+  })
+  if (!ok) return
+  busyConn.value = c.id
+  try {
+    const res = await disconnectNetwork(props.group.serverId, network, c.name)
+    if (res.ok) {
+      toast.success('已断开', { detail: `${c.name} ⇠ ${network}` })
+      netConns.value = netConns.value.filter((x) => x.id !== c.id)
+    } else toast.error('断开失败', { detail: res.error })
+  } finally {
+    busyConn.value = ''
+  }
+}
 
 // ─── Stacks / Compose(懒加载) ────────────────────────────────────────────────
 const stacks = ref<StackInfo[]>([])
@@ -635,21 +689,39 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
         <p v-else-if="netState === 'loading' && networks.length === 0" class="panel__hint">正在加载网络…</p>
         <p v-else-if="networks.length === 0" class="panel__hint">该服务器暂无网络。</p>
         <ul v-else class="ilist" role="list">
-          <li v-for="n in networks" :key="n.id" class="srow" :class="{ 'irow--busy': busyNet === n.id }">
-            <div class="srow__main">
-              <div class="srow__name">{{ n.name }}</div>
-              <div class="srow__cfg mono">{{ n.id }} · {{ n.scope }}</div>
-            </div>
-            <div class="srow__status mono">{{ n.driver }}</div>
-            <div class="srow__act">
-              <button
-                class="op op--ghost"
-                :disabled="busyNet === n.id || BUILTIN_NETWORKS.has(n.name)"
-                :title="BUILTIN_NETWORKS.has(n.name) ? '内置网络不可删除' : '删除网络(docker network rm)'"
-                @click="doRemoveNet(n)"
-              >
-                删除
+          <li v-for="n in networks" :key="n.id">
+            <div class="srow" :class="{ 'irow--busy': busyNet === n.id }">
+              <button class="srow__main netexp" @click="toggleNetDetail(n)">
+                <span class="netexp__caret" :class="{ 'netexp__caret--open': expandedNet === n.name }">▸</span>
+                <span>
+                  <span class="srow__name">{{ n.name }}</span>
+                  <span class="srow__cfg mono">{{ n.id }} · {{ n.scope }}</span>
+                </span>
               </button>
+              <div class="srow__status mono">{{ n.driver }}</div>
+              <div class="srow__act">
+                <button
+                  class="op op--ghost"
+                  :disabled="busyNet === n.id || BUILTIN_NETWORKS.has(n.name)"
+                  :title="BUILTIN_NETWORKS.has(n.name) ? '内置网络不可删除' : '删除网络(docker network rm)'"
+                  @click="doRemoveNet(n)"
+                >
+                  删除
+                </button>
+              </div>
+            </div>
+            <!-- 展开:该网络上连着的容器 -->
+            <div v-if="expandedNet === n.name" class="netdetail">
+              <p v-if="netConnState === 'loading'" class="netdetail__hint">正在读取连接的容器…</p>
+              <p v-else-if="netConnState === 'error'" class="netdetail__hint netdetail__hint--err">⚠ {{ netConnError }}</p>
+              <p v-else-if="netConns.length === 0" class="netdetail__hint">该网络上暂无容器连接。</p>
+              <ul v-else class="connlist" role="list">
+                <li v-for="c in netConns" :key="c.id" class="connrow" :class="{ 'irow--busy': busyConn === c.id }">
+                  <span class="connrow__name">{{ c.name }}</span>
+                  <span class="connrow__ip mono">{{ c.ipv4 || '—' }}</span>
+                  <button class="op op--ghost" :disabled="busyConn === c.id" @click="doDisconnect(n.name, c)">断开</button>
+                </li>
+              </ul>
             </div>
           </li>
         </ul>
@@ -1030,6 +1102,63 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
   gap: 6px;
   justify-content: flex-end;
   flex-wrap: wrap;
+}
+
+/* 网络展开:连接的容器 */
+.netexp {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+.netexp__caret {
+  color: var(--color-faint);
+  font-size: var(--text-micro);
+  transition: transform var(--duration-fast) var(--ease-out-expo);
+}
+.netexp__caret--open {
+  transform: rotate(90deg);
+}
+.netdetail {
+  padding: 4px 18px 12px 40px;
+  background: var(--color-card-2);
+  border-bottom: 1px solid var(--color-border);
+}
+.netdetail__hint {
+  margin: 0;
+  padding: 8px 0;
+  font-size: var(--text-micro);
+  color: var(--color-faint);
+}
+.netdetail__hint--err {
+  color: var(--color-red);
+}
+.connlist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.connrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0;
+}
+.connrow__name {
+  font-size: var(--text-label);
+  font-weight: 600;
+  color: var(--color-text);
+  min-width: 0;
+}
+.connrow__ip {
+  flex: 1;
+  font-size: var(--text-micro);
+  color: var(--color-faint);
 }
 
 /* 行内迷你操作按钮 */

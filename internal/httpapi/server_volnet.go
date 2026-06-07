@@ -165,6 +165,160 @@ func makeServerNetworksHandler(svc target.Service) http.HandlerFunc {
 	}
 }
 
+// ─── 网络详情:某网络上连着哪些容器 + 连接/断开 ─────────────────────────────────
+
+type netContainerDTO struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	IPv4 string `json:"ipv4"`
+}
+type networkContainersDTO struct {
+	ServerID   string            `json:"serverId"`
+	Network    string            `json:"network"`
+	Reachable  bool              `json:"reachable"`
+	Error      string            `json:"error"`
+	Containers []netContainerDTO `json:"containers"`
+}
+
+// docker network inspect 的 .Containers 是 map[容器ID]{Name,IPv4Address,...}。
+type inspectNetContainer struct {
+	Name        string `json:"Name"`
+	IPv4Address string `json:"IPv4Address"`
+}
+
+func parseNetworkContainers(out string) []netContainerDTO {
+	list := []netContainerDTO{}
+	out = strings.TrimSpace(out)
+	if out == "" || out == "null" {
+		return list
+	}
+	var m map[string]inspectNetContainer
+	if err := json.Unmarshal([]byte(out), &m); err != nil {
+		return list
+	}
+	for id, c := range m {
+		short := id
+		if len(short) > 12 {
+			short = short[:12]
+		}
+		list = append(list, netContainerDTO{ID: short, Name: c.Name, IPv4: c.IPv4Address})
+	}
+	return list
+}
+
+// makeNetworkContainersHandler 返回 GET /api/servers/{id}/networks/{network}/containers(认证,只读)。
+func makeNetworkContainersHandler(svc target.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "服务器服务未初始化")
+			return
+		}
+		id := chi.URLParam(r, "id")
+		network := chi.URLParam(r, "network")
+		if !reDockerTgt.MatchString(network) || len(network) > 128 {
+			writeError(w, http.StatusBadRequest, "invalid_name", "网络名非法")
+			return
+		}
+		if _, err := svc.Get(r.Context(), id); err != nil {
+			writeServerError(w, err)
+			return
+		}
+		out := networkContainersDTO{ServerID: id, Network: network, Containers: []netContainerDTO{}}
+		cctx, cancel := context.WithTimeout(r.Context(), volnetCmdTimeout)
+		defer cancel()
+		res, err := svc.Exec(cctx, id, []string{"docker", "network", "inspect", network, "--format", "{{json .Containers}}"})
+		if err != nil {
+			out.Reachable = false
+			out.Error = humanContainersError(err)
+			if isLocateError(err) {
+				writeServerError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, out)
+			return
+		}
+		out.Reachable = true
+		if res.ExitCode != 0 {
+			out.Error = "读取网络详情失败:" + truncateLog(strings.TrimSpace(res.Stderr), 256)
+			writeJSON(w, http.StatusOK, out)
+			return
+		}
+		out.Containers = parseNetworkContainers(res.Stdout)
+		writeJSON(w, http.StatusOK, out)
+	}
+}
+
+// netAttachRequest 是 connect/disconnect 请求体。
+type netAttachRequest struct {
+	Container string `json:"container"`
+}
+
+// makeNetworkConnectHandler / makeNetworkDisconnectHandler:把容器连到 / 移出某网络。
+func makeNetworkConnectHandler(svc target.Service, aud audit.Recorder) http.HandlerFunc {
+	return networkAttachHandler(svc, aud, "connect")
+}
+func makeNetworkDisconnectHandler(svc target.Service, aud audit.Recorder) http.HandlerFunc {
+	return networkAttachHandler(svc, aud, "disconnect")
+}
+
+func networkAttachHandler(svc target.Service, aud audit.Recorder, action string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "服务器服务未初始化")
+			return
+		}
+		id := chi.URLParam(r, "id")
+		network := chi.URLParam(r, "network")
+		if !reDockerTgt.MatchString(network) || len(network) > 128 {
+			writeError(w, http.StatusBadRequest, "invalid_name", "网络名非法")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
+		var req netAttachRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
+			return
+		}
+		if !reDockerTgt.MatchString(req.Container) || len(req.Container) > 256 {
+			writeError(w, http.StatusBadRequest, "invalid_name", "容器名非法")
+			return
+		}
+		if _, err := svc.Get(r.Context(), id); err != nil {
+			writeServerError(w, err)
+			return
+		}
+		out := volnetActionDTO{ServerID: id, Action: action, Name: network}
+		auditOp := func(ok bool) {
+			recordAudit(r.Context(), aud, audit.Entry{
+				Actor: auditActor, Action: audit.ActionNetworkOp, TargetType: audit.TargetServer, TargetID: id,
+				Detail: map[string]any{"action": action, "network": network, "container": req.Container, "ok": ok}, IP: clientIP(r),
+			})
+		}
+		cctx, cancel := context.WithTimeout(r.Context(), volnetCmdTimeout)
+		defer cancel()
+		res, err := svc.Exec(cctx, id, []string{"docker", "network", action, network, req.Container})
+		if err != nil {
+			if errors.Is(err, target.ErrNotFound) {
+				writeServerError(w, err)
+				return
+			}
+			out.OK = false
+			out.Error = humanServiceError(err)
+			auditOp(false)
+			writeJSON(w, http.StatusOK, out)
+			return
+		}
+		if res.ExitCode != 0 {
+			out.OK = false
+			out.Error = truncateLog(strings.TrimSpace(res.Stderr), 1024)
+		} else {
+			out.OK = true
+		}
+		auditOp(out.OK)
+		writeJSON(w, http.StatusOK, out)
+	}
+}
+
 // ─── 写操作(创建/删除卷与网络)共用骨架 ────────────────────────────────────────
 
 type volnetActionRequest struct {

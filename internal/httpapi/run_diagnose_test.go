@@ -94,6 +94,9 @@ func (s *diagStubAI) CompleteCommand(_ context.Context, in ai.CompleteCommandInp
 	}
 	return nil, ai.ErrAINotConfigured
 }
+func (s *diagStubAI) GenerateCompose(context.Context, ai.GenerateComposeInput) (*ai.ComposeResult, error) {
+	return nil, ai.ErrAINotConfigured
+}
 
 // setupDiagnoseServer 构造带 auth + project + run(失败 runner,FailAt=0)+ stub AI 的 server。
 // 返回 server / client / csrf / projID / run.Service。

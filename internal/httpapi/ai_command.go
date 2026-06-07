@@ -116,6 +116,42 @@ func makeAICommandHandler(aiSvc ai.Service) http.HandlerFunc {
 	}
 }
 
+// makeAIComposeHandler 返回 POST /api/ai/compose handler(中文 → docker-compose.yml)。
+// 未配 AI → 200 + available=false(前端提示去设置配)。
+func makeAIComposeHandler(aiSvc ai.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if aiSvc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "AI 助手未初始化")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
+		var req struct {
+			NL string `json:"nl"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
+			return
+		}
+		if strings.TrimSpace(req.NL) == "" {
+			writeError(w, http.StatusBadRequest, "bad_request", "请描述你想要的 compose")
+			return
+		}
+		out, err := aiSvc.GenerateCompose(r.Context(), ai.GenerateComposeInput{NL: req.NL, Masker: mask.NewMasker()})
+		switch {
+		case err == nil:
+			writeJSON(w, http.StatusOK, map[string]any{
+				"available":   true,
+				"yaml":        out.YAML,
+				"generatedAt": out.GeneratedAt.UTC().Format(time.RFC3339),
+			})
+		case errors.Is(err, ai.ErrAINotConfigured):
+			writeJSON(w, http.StatusOK, map[string]any{"available": false, "reason": reasonAINotConfigured})
+		default:
+			writeJSON(w, http.StatusOK, map[string]any{"available": true, "yaml": "", "reason": "AI 生成 compose 失败:" + humanizeGenerateErr(err)})
+		}
+	}
+}
+
 // makeAICompleteHandler 返回 POST /api/ai/complete handler(P2 智能补全:前缀 → 完整命令)。
 // 未配 AI → 200 + available=false(前端退化为本地常用命令字典兜底)。
 func makeAICompleteHandler(aiSvc ai.Service) http.HandlerFunc {

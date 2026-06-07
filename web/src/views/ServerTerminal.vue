@@ -17,6 +17,7 @@ import { setDocumentTitle } from '../router'
 import {
   listServers,
   openServerTerminal,
+  openContainerTerminal,
   type Server,
   type TerminalConnection,
   type TerminalHandlers,
@@ -34,9 +35,19 @@ const router = useRouter()
 const serverId = computed(() => String(route.params.id ?? ''))
 const allowedShells: TerminalShell[] = ['/bin/sh', '/bin/bash', '/bin/ash', '/bin/zsh', 'sh', 'bash']
 
+// 容器目标:带 ?container=<名/ID> 时,终端直接 `docker exec -it` 进该容器;否则连主机 shell。
+// 从「容器」页点行内「终端」即带此参数过来。空串 = 主机 shell 模式。
+const containerName = computed(() => String(route.query.container ?? '').trim())
+// 容器短 ID(展示用,由「容器」页一并带过来);docker exec 用名字即可,ID 仅用于显示区分。
+const containerId = computed(() => String(route.query.cid ?? '').trim())
+const isContainer = computed(() => containerName.value !== '')
+// 容器人读标签:有 ID 则「redis · b2d5b2c20e9a」,否则仅名字。
+const containerLabel = computed(() =>
+  containerId.value ? `${containerName.value} · ${containerId.value}` : containerName.value,
+)
+
 // ─── session controls(顶栏会话段) ───────────────────────────────────────────────
-// 终端目标 = 服务器**主机 shell**(SSH 直起登录 shell)。进容器留给用户在 shell 里自己
-// `docker exec` 自由探索 —— 不把终端绑死到容器(很多服务器根本没 docker)。
+// 终端目标 = 服务器**主机 shell**(SSH 直起登录 shell),或 ?container= 指定的**容器内 shell**。
 const server = ref<Server | null>(null)
 const shell = ref<TerminalShell>(
   allowedShells.includes(route.query.shell as TerminalShell) ? (route.query.shell as TerminalShell) : '/bin/sh',
@@ -59,7 +70,8 @@ watch(
   [serverName, connState],
   ([name, st]) => {
     const prefix = st === 'connected' ? '' : st === 'connecting' ? '连接中 · ' : '⚠ 已断开 · '
-    setDocumentTitle(`${prefix}${name} · 运维终端`)
+    const scope = isContainer.value ? `${containerName.value} · ` : ''
+    setDocumentTitle(`${prefix}${scope}${name} · 运维终端`)
   },
   { immediate: true },
 )
@@ -67,7 +79,7 @@ watch(
 const aiContext = computed(() => ({
   os: 'linux',
   shell: shell.value,
-  container: '(宿主机)',
+  container: isContainer.value ? containerName.value : '(宿主机)',
 }))
 
 // ─── AI 助手折叠态 ────────────────────────────────────────────────────────────────
@@ -427,7 +439,9 @@ async function connect(): Promise<void> {
   t.reset()
   t.focus()
   connState.value = 'connecting'
-  statusMsg.value = `正在连接主机 ${hostLabel.value} …`
+  statusMsg.value = isContainer.value
+    ? `正在进入容器 ${containerName.value}(${hostLabel.value})…`
+    : `正在连接主机 ${hostLabel.value} …`
   const startedAt = performance.now()
 
   const handlers: TerminalHandlers = {
@@ -455,7 +469,10 @@ async function connect(): Promise<void> {
       },
   }
 
-  conn.value = openServerTerminal(serverId.value, handlers, shell.value)
+  // 容器模式 → docker exec -it <容器> <shell>;否则主机登录 shell。
+  conn.value = isContainer.value
+    ? openContainerTerminal(serverId.value, containerName.value, handlers, shell.value)
+    : openServerTerminal(serverId.value, handlers, shell.value)
 
   if (!resizeObserver && termHost.value) {
     resizeObserver = new ResizeObserver(() => refit())
@@ -620,7 +637,10 @@ onBeforeUnmount(() => {
       <span class="grow" />
 
       <div class="seg">
-        <div class="cell"><span class="k">主机</span><span class="v">{{ hostLabel }}</span></div>
+        <div class="cell">
+          <span class="k">{{ isContainer ? '容器' : '主机' }}</span>
+          <span class="v">{{ isContainer ? `${containerLabel} @ ${hostLabel}` : hostLabel }}</span>
+        </div>
         <div class="cell">
           <span class="k">Shell</span>
           <select v-model="shell" class="seg-select" aria-label="Shell">
@@ -645,7 +665,7 @@ onBeforeUnmount(() => {
       <section class="term-wrap">
         <div class="term-bar">
           <span class="tdot r" /><span class="tdot y" /><span class="tdot g" />
-          <span class="name">{{ serverName }} · <b>主机 shell</b></span>
+          <span class="name">{{ serverName }} · <b>{{ isContainer ? `容器 ${containerLabel}` : '主机 shell' }}</b></span>
         </div>
 
         <div
@@ -657,12 +677,14 @@ onBeforeUnmount(() => {
           @contextmenu="onTermContextMenu"
         />
 
-        <div v-if="connState === 'idle'" class="term-hint">点「连接」进入主机 shell。</div>
+        <div v-if="connState === 'idle'" class="term-hint">
+          点「连接」{{ isContainer ? `进入容器 ${containerName}（docker exec）。` : '进入主机 shell。' }}
+        </div>
         <div v-else-if="statusMsg && connState !== 'connected'" class="term-hint err">{{ statusMsg }}</div>
 
         <!-- 终端状态行 -->
         <div class="term-status">
-          <span class="s">⟢ <b>{{ serverName }}</b></span>
+          <span class="s">⟢ <b>{{ isContainer ? `容器 ${containerLabel}` : serverName }}</b></span>
           <span v-if="latencyMs !== null && connState === 'connected'" class="s">延迟 <b>{{ latencyMs }}ms</b></span>
           <span class="s"><kbd>⌘C</kbd> 复制</span>
           <span class="s"><kbd>⌘V</kbd> 粘贴</span>

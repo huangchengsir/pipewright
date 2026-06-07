@@ -8,6 +8,7 @@ import {
   GitFork,
   ChartBar,
   Server,
+  Box,
   AlertTriangle,
   Bell,
   Settings,
@@ -74,6 +75,8 @@ const navItems: NavItem[] = [
   { name: 'dora',          to: '/metrics/dora',  icon: ChartBar,   label: 'DORA 指标', ariaLabel: 'DORA 指标' },
   // Story 6-1: 多机状态总览(服务器层指标 FR-15);登记在 设置 → 服务器。
   { name: 'server-status', to: '/server-status', icon: Server,     label: '服务器', ariaLabel: '服务器' },
+  // 容器管理:跨服务器聚合容器总览 + 行内生命周期操作(docker over SSH)。
+  { name: 'containers',    to: '/containers',    icon: Box,        label: '容器',  ariaLabel: '容器' },
   // Story 6-5: configurable anomaly detection & alerts (FR-23)
   { name: 'anomaly',       to: '/anomaly',       icon: AlertTriangle, label: '异常检测', ariaLabel: '异常检测' },
   { name: 'notifications', to: '/settings/notifications', icon: Bell, label: '通知',  ariaLabel: '通知' },

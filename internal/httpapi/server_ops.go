@@ -51,15 +51,22 @@ type serviceActionDTO struct {
 	Error    string `json:"error"`
 }
 
-// validateServiceParams 据 type 严格校验 target + 校验 action 枚举,合法返回 nil。
-// AC-SEC-02 要害:绝不放过可能被远端当 flag / shell 解释的危险输入。
-func validateServiceParams(typ, tgt, action string) error {
-	switch action {
-	case "restart", "stop", "start":
-		// ok
-	default:
-		return errors.New("非法 action(仅支持 restart/stop/start)")
+// systemdActions / dockerActions 是按 type 区分的 action 白名单(枚举)。
+//   - systemd:仅 restart/stop/start(单元生命周期)。
+//   - docker:容器生命周期更全 —— 起停重启 + 暂停/恢复 + kill + 删除(Portainer 式)。
+//     全部恰好是 `docker <action> <name>` 的合法子命令,无需特判;`rm` 不带 `-f`(运行中容器
+//     删除会失败 → ok:false,迫使先停再删,安全且留痕)。
+var (
+	systemdActions = map[string]bool{"restart": true, "stop": true, "start": true}
+	dockerActions  = map[string]bool{
+		"restart": true, "stop": true, "start": true,
+		"pause": true, "unpause": true, "kill": true, "rm": true,
 	}
+)
+
+// validateServiceParams 据 type 严格校验 target 与 action 枚举,合法返回 nil。
+// AC-SEC-02 要害:绝不放过可能被远端当 flag / shell 解释的危险输入。action 白名单按 type 区分。
+func validateServiceParams(typ, tgt, action string) error {
 	if tgt == "" {
 		return errors.New("target 不能为空")
 	}
@@ -68,10 +75,16 @@ func validateServiceParams(typ, tgt, action string) error {
 	}
 	switch typ {
 	case "systemd":
+		if !systemdActions[action] {
+			return errors.New("非法 action(systemd 仅支持 restart/stop/start)")
+		}
 		if !reSystemdUnit.MatchString(tgt) {
 			return errors.New("非法 systemd unit 名")
 		}
 	case "docker":
+		if !dockerActions[action] {
+			return errors.New("非法 action(docker 仅支持 restart/stop/start/pause/unpause/kill/rm)")
+		}
 		if !reDockerTgt.MatchString(tgt) {
 			return errors.New("非法 docker 容器名")
 		}

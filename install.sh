@@ -114,6 +114,14 @@ else
 	err "${INSTALL_DIR} 不可写且无 sudo。可设 INSTALL_DIR=\$HOME/.local/bin 重试。"
 fi
 
+# SELinux(RHEL/CentOS/Rocky/Fedora 系,强制模式):二进制经临时目录 mv 进来会带上 user_tmp_t
+# 类型,systemd(init_t)无权执行它 → 装为服务后起不来(AVC denied execute)。重置为该路径
+# 的默认上下文(/usr/local/bin → bin_t),systemd 即可执行。非 SELinux 系统无 restorecon,跳过。
+if command -v restorecon >/dev/null 2>&1; then
+	restorecon "${INSTALL_DIR}/${BIN}" 2>/dev/null ||
+		sudo restorecon "${INSTALL_DIR}/${BIN}" 2>/dev/null || true
+fi
+
 info "完成 ✓  $("${INSTALL_DIR}/${BIN}" --version 2>/dev/null || echo "${BIN} ${TAG}")"
 
 # ── 可选:装为 systemd 服务 ──────────────────────────────────────────

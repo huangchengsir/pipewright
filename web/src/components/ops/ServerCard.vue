@@ -19,6 +19,7 @@ import {
   createNetwork,
   removeNetwork,
   getNetworkContainers,
+  connectNetwork,
   disconnectNetwork,
   type ServerContainers,
   type ContainerInfo,
@@ -304,6 +305,36 @@ async function toggleNetDetail(n: NetworkInfo): Promise<void> {
     netConnState.value = 'error'
     netConnError.value = err instanceof HttpError ? (err.apiError?.message ?? '读取失败') : '读取失败'
   }
+}
+
+// 连接容器到网络:从该机容器里选一个,docker network connect。
+const connectName = ref('')
+async function doConnect(network: string): Promise<void> {
+  const name = connectName.value.trim()
+  if (!name) return
+  busyConn.value = '@connect'
+  try {
+    const res = await connectNetwork(props.group.serverId, network, name)
+    if (res.ok) {
+      toast.success('已连接', { detail: `${name} ⇢ ${network}` })
+      connectName.value = ''
+      // 刷新该网络的连接列表。
+      const r = await getNetworkContainers(props.group.serverId, network)
+      if (r.reachable) netConns.value = r.containers
+    } else toast.error('连接失败', { detail: res.error })
+  } catch (err) {
+    toast.error('连接失败', {
+      detail: err instanceof HttpError ? (err.apiError?.message ?? '请求失败') : '网络错误',
+    })
+  } finally {
+    busyConn.value = ''
+  }
+}
+
+/** 尚未连接到该网络的本机容器(供「连接」下拉)。 */
+function attachableContainers(): string[] {
+  const connected = new Set(netConns.value.map((c) => c.name))
+  return props.group.containers.map((c) => c.names).filter((n) => !connected.has(n))
 }
 
 async function doDisconnect(network: string, c: NetworkContainer): Promise<void> {
@@ -722,6 +753,16 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
                   <button class="op op--ghost" :disabled="busyConn === c.id" @click="doDisconnect(n.name, c)">断开</button>
                 </li>
               </ul>
+              <!-- 连接容器到该网络 -->
+              <div v-if="netConnState === 'loaded'" class="connadd">
+                <select v-model="connectName" class="connadd__sel" :disabled="attachableContainers().length === 0">
+                  <option value="">{{ attachableContainers().length ? '选择要连接的容器…' : '无可连接的容器' }}</option>
+                  <option v-for="name in attachableContainers()" :key="name" :value="name">{{ name }}</option>
+                </select>
+                <button class="op op--default" :disabled="!connectName || busyConn === '@connect'" @click="doConnect(n.name)">
+                  连接
+                </button>
+              </div>
             </div>
           </li>
         </ul>
@@ -1159,6 +1200,23 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
   flex: 1;
   font-size: var(--text-micro);
   color: var(--color-faint);
+}
+.connadd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+  margin-top: 4px;
+  border-top: 1px dashed var(--color-border);
+}
+.connadd__sel {
+  font-size: var(--text-micro);
+  padding: 5px 8px;
+  border-radius: var(--rounded-sm);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-card);
+  color: var(--color-text);
+  max-width: 240px;
 }
 
 /* 行内迷你操作按钮 */

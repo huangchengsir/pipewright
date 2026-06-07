@@ -21,6 +21,7 @@ import EmptyState from '../components/ui/EmptyState.vue'
 import ErrorState from '../components/ui/ErrorState.vue'
 import SkeletonBlock from '../components/ui/SkeletonBlock.vue'
 import ContainerLogsDrawer from '../components/ops/ContainerLogsDrawer.vue'
+import CreateContainerModal from '../components/ops/CreateContainerModal.vue'
 
 type LoadState = 'idle' | 'loading' | 'error'
 
@@ -228,6 +229,19 @@ async function runAction(serverId: string, c: ContainerInfo, spec: ActionSpec): 
   }
 }
 
+// 新增容器弹窗。
+const showCreate = ref(false)
+// 可作为创建目标的服务器(连得上且有 docker 运行时)。
+const creatableServers = computed(() =>
+  groups.value
+    .filter((g) => g.reachable && g.runtime)
+    .map((g) => ({ id: g.serverId, name: serverName(g.serverId) })),
+)
+function onContainerCreated(serverId: string): void {
+  void serverId
+  void load()
+}
+
 // 日志抽屉:当前查看的容器(null = 关闭)。
 const logsTarget = ref<{ serverId: string; name: string; id: string } | null>(null)
 function openLogs(serverId: string, c: ContainerInfo): void {
@@ -294,9 +308,18 @@ onUnmounted(() => {
           <span class="view-sub__count">· 每 12 秒自动刷新</span>
         </p>
       </div>
-      <AppButton variant="default" :loading="loadState === 'loading' && groups.length === 0" @click="load">
-        刷新
-      </AppButton>
+      <div class="header-actions">
+        <AppButton
+          variant="primary"
+          :disabled="creatableServers.length === 0"
+          @click="showCreate = true"
+        >
+          + 新增容器
+        </AppButton>
+        <AppButton variant="default" :loading="loadState === 'loading' && groups.length === 0" @click="load">
+          刷新
+        </AppButton>
+      </div>
     </header>
 
     <!-- 首屏骨架 -->
@@ -440,6 +463,14 @@ onUnmounted(() => {
       </section>
     </template>
 
+    <!-- 新增容器弹窗 -->
+    <CreateContainerModal
+      v-if="showCreate"
+      :servers="creatableServers"
+      @close="showCreate = false"
+      @created="onContainerCreated"
+    />
+
     <!-- 容器日志抽屉 -->
     <ContainerLogsDrawer
       v-if="logsTarget"
@@ -469,6 +500,12 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
 }
 .view-title {
   margin: 0;

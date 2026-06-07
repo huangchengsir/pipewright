@@ -72,3 +72,43 @@ export async function getAllContainers(): Promise<ServerContainers[]> {
 export async function getServerContainers(id: string): Promise<ServerContainers> {
   return http.get<ServerContainers>(`/api/servers/${id}/containers`)
 }
+
+/** Restart policy for a new container (docker `--restart`). */
+export type RestartPolicy = 'no' | 'always' | 'unless-stopped' | 'on-failure'
+
+/**
+ * Spec for creating (and running) a new container — maps to `docker run -d`.
+ * Every field is strictly validated server-side (AC-SEC-02) and the command is
+ * built as an argv array, never a shell string.
+ */
+export interface CreateContainerInput {
+  /** Image reference, e.g. `nginx:latest`. Required. */
+  image: string
+  name?: string
+  /** Port mappings, e.g. `["8080:80", "127.0.0.1:9090:90/tcp"]`. */
+  ports?: string[]
+  /** Env vars as `KEY=VALUE`. */
+  env?: string[]
+  /** Volume mounts, e.g. `["/host:/ctr", "/host:/ctr:ro", "vol:/ctr"]`. */
+  volumes?: string[]
+  restart?: RestartPolicy
+  /** Optional container command; split on whitespace into args (no shell). */
+  command?: string
+}
+
+export interface CreateContainerResult {
+  serverId: string
+  ok: boolean
+  /** Full container ID on success. */
+  containerId: string
+  /** Human-readable error when ok is false. Never a secret. */
+  error: string
+}
+
+/** Create and run a new container on a server (docker run -d). */
+export async function createContainer(
+  serverId: string,
+  input: CreateContainerInput,
+): Promise<CreateContainerResult> {
+  return http.post<CreateContainerResult>(`/api/servers/${serverId}/containers`, input)
+}

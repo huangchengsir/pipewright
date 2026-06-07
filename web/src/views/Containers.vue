@@ -217,10 +217,13 @@ async function runAction(serverId: string, c: ContainerInfo, spec: ActionSpec): 
 }
 
 function openTerminal(serverId: string, c: ContainerInfo): void {
-  // 跳主机终端全屏页(新标签),用户在 shell 内 `docker exec -it <name> sh` 进容器。
-  const url = router.resolve({ name: 'server-terminal', params: { id: serverId } }).href
+  // 跳终端全屏页(新标签),带 ?container= → 直接 `docker exec -it <容器> sh` 进该容器。
+  const url = router.resolve({
+    name: 'server-terminal',
+    params: { id: serverId },
+    query: { container: c.names },
+  }).href
   window.open(url, '_blank', 'noopener')
-  void c
 }
 
 // ─── 加载 ─────────────────────────────────────────────────────────────────────

@@ -138,12 +138,23 @@ func TestCheck_RateLimitedReportsError(t *testing.T) {
 	}
 }
 
-// API 限流(403)时,退回网页站 /releases/latest 的 302 重定向解析出最新 tag。
+// API 限流(403)时,退回网页站 /releases/latest 的 302 重定向解析出最新 tag,
+// 并从 releases.atom(非限流)补出 release 说明。
 func TestCheck_RateLimitFallsBackToRedirect(t *testing.T) {
+	const atom = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>tag:github.com,2008:Repository/123/v1.2.0</id>
+    <title>Pipewright v1.2.0</title>
+    <content type="html">&lt;h2&gt;Changelog&lt;/h2&gt;&lt;ul&gt;&lt;li&gt;feat: 新增 SSH 密码凭据 (#100)&lt;/li&gt;&lt;/ul&gt;</content>
+  </entry>
+</feed>`
 	c, done := newStubChecker(t, "v1.0.0", func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/repos/"):
 			w.WriteHeader(http.StatusForbidden) // API 限流
+		case strings.HasSuffix(r.URL.Path, "/releases.atom"):
+			_, _ = w.Write([]byte(atom))
 		case strings.HasSuffix(r.URL.Path, "/releases/latest"):
 			w.Header().Set("Location", "/owner/repo/releases/tag/v1.2.0")
 			w.WriteHeader(http.StatusFound) // 网页站 302 → tag
@@ -159,6 +170,21 @@ func TestCheck_RateLimitFallsBackToRedirect(t *testing.T) {
 	}
 	if info.Latest != "v1.2.0" || !info.UpdateAvailable {
 		t.Errorf("应经重定向得到 latest=v1.2.0 updateAvailable=true,实得 %+v", info)
+	}
+	if !strings.Contains(info.Notes, "SSH 密码凭据") || !strings.Contains(info.Notes, "• ") {
+		t.Errorf("应从 atom 补出 release 说明(去标签转纯文本 + li 转项目符号),实得 %q", info.Notes)
+	}
+}
+
+func TestHtmlToText(t *testing.T) {
+	got := htmlToText(`<h2>标题</h2><ul><li>第一条 <a href="x">#1</a></li><li>第二条</li></ul><hr><p>结尾 &amp; 收尾</p>`)
+	for _, want := range []string{"标题", "• 第一条 #1", "• 第二条", "结尾 & 收尾"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("htmlToText 缺 %q,实得:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "<") || strings.Contains(got, "href") {
+		t.Errorf("htmlToText 未去净标签: %q", got)
 	}
 }
 

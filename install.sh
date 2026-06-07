@@ -34,11 +34,16 @@ err() {
 
 # 依赖检查:下载器与校验工具。
 if command -v curl >/dev/null 2>&1; then
-	DL="curl -fsSL"
-	DL_O="curl -fsSL -o"
+	# 大文件直连在部分网络(如 CN)易卡死;加断点重试 + 卡死检测:
+	#   --retry 3 --retry-delay 2  瞬时错误自动重试
+	#   --speed-time 30 --speed-limit 2048  速率 30s 持续 <2KB/s 判定 stall → 中止并触发重试
+	# 仍下不动时,设 https_proxy / all_proxy 走代理(curl 自动识别该环境变量)。
+	DL="curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20"
+	DL_O="curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 --speed-time 30 --speed-limit 2048 -o"
 elif command -v wget >/dev/null 2>&1; then
-	DL="wget -qO-"
-	DL_O="wget -qO"
+	# wget:同样加重试 + 读超时(30s 无数据即断,配 --tries 重试),避免无限 hang。
+	DL="wget -qO- --tries=3 --timeout=30"
+	DL_O="wget -q --tries=3 --read-timeout=30 -O"
 else
 	err "需要 curl 或 wget。"
 fi

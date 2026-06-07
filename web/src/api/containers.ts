@@ -196,6 +196,39 @@ export async function getServerStacks(id: string): Promise<ServerStacks> {
   return http.get<ServerStacks>(`/api/servers/${id}/stacks`)
 }
 
+// ─── AI 诊断 / 看日志 ─────────────────────────────────────────────────────────
+
+export interface DiagnosisEvidence {
+  line: number
+  text: string
+  highlight: boolean
+}
+
+/** AI 容器诊断结果。status≠ready 时只有 reason 有意义。 */
+export interface ContainerDiagnosis {
+  status: 'ready' | 'unavailable' | 'pending'
+  reason: string
+  hypothesis: string
+  confidence: 'high' | 'medium' | 'low' | ''
+  alternateCauses: string[]
+  fixSuggestions: string[]
+  /** 可直接粘贴的修复脚本/补丁片段;空串表示模型未给。 */
+  fixScript: string
+  evidence: DiagnosisEvidence[]
+  generatedAt: string
+}
+
+/**
+ * 让 AI 分析/诊断一个容器:取其最近日志 → 根因假说 + 修复建议 + 修复脚本。
+ * AI 未配置 / 失败 → status=unavailable + reason(不报错)。
+ */
+export async function diagnoseContainer(serverId: string, name: string): Promise<ContainerDiagnosis> {
+  return http.post<ContainerDiagnosis>(
+    `/api/servers/${serverId}/containers/${encodeURIComponent(name)}/diagnose`,
+    {},
+  )
+}
+
 /** Deploy a stack from compose yaml (docker compose up -d). */
 export async function deployStack(id: string, name: string, compose: string): Promise<StackActionResult> {
   return http.post<StackActionResult>(`/api/servers/${id}/stacks/deploy`, { name, compose })

@@ -46,6 +46,7 @@ const emit = defineEmits<{
   (e: 'changed'): void
   (e: 'logs', c: ContainerInfo): void
   (e: 'terminal', c: ContainerInfo): void
+  (e: 'diagnose', c: ContainerInfo): void
 }>()
 
 const toast = useToast()
@@ -367,6 +368,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
               >
                 {{ a.label }}
               </button>
+              <button class="op op--ai" title="AI 诊断:取日志 → 根因 + 修复建议" @click="emit('diagnose', c)">✦ AI</button>
               <button class="op op--ghost" title="查看容器日志(docker logs)" @click="emit('logs', c)">日志</button>
               <button class="op op--ghost" :disabled="rowBusy(c.id)" title="进入容器终端(docker exec -it)" @click="emit('terminal', c)">终端</button>
             </div>
@@ -848,6 +850,8 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
 .op:hover:not(:disabled) { color: var(--color-text); border-color: var(--color-text); }
 .op--default { color: var(--color-primary); border-color: var(--color-primary-soft); }
 .op--default:hover:not(:disabled) { color: #fff; background: var(--color-primary); border-color: var(--color-primary); }
+.op--ai { color: var(--color-primary); border-color: var(--color-primary-soft); }
+.op--ai:hover:not(:disabled) { color: #fff; background: var(--color-primary); border-color: var(--color-primary); }
 .op:disabled { opacity: 0.45; cursor: not-allowed; }
 .op--busy { opacity: 0.6; pointer-events: none; }
 

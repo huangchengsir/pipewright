@@ -17,6 +17,7 @@ import SkeletonBlock from '../components/ui/SkeletonBlock.vue'
 import ServerCard from '../components/ops/ServerCard.vue'
 import ContainerLogsDrawer from '../components/ops/ContainerLogsDrawer.vue'
 import CreateContainerModal from '../components/ops/CreateContainerModal.vue'
+import AiDiagnosisModal from '../components/ops/AiDiagnosisModal.vue'
 
 type LoadState = 'idle' | 'loading' | 'error'
 type StateFilter = 'all' | StateBucket
@@ -101,6 +102,12 @@ function openTerminal(serverId: string, c: ContainerInfo): void {
     query: { container: c.names, cid: c.id.length > 12 ? c.id.slice(0, 12) : c.id },
   }).href
   window.open(url, '_blank', 'noopener')
+}
+
+// AI 诊断弹窗。
+const diagnoseTarget = ref<{ serverId: string; name: string } | null>(null)
+function openDiagnose(serverId: string, c: ContainerInfo): void {
+  diagnoseTarget.value = { serverId, name: c.names }
 }
 
 // ─── 加载 ─────────────────────────────────────────────────────────────────────
@@ -233,6 +240,7 @@ onUnmounted(() => {
           @changed="load"
           @logs="(c) => openLogs(g.serverId, c)"
           @terminal="(c) => openTerminal(g.serverId, c)"
+          @diagnose="(c) => openDiagnose(g.serverId, c)"
         />
       </section>
     </template>
@@ -252,6 +260,14 @@ onUnmounted(() => {
       :container-name="logsTarget.name"
       :container-id="logsTarget.id"
       @close="logsTarget = null"
+    />
+
+    <!-- AI 诊断弹窗 -->
+    <AiDiagnosisModal
+      v-if="diagnoseTarget"
+      :server-id="diagnoseTarget.serverId"
+      :container-name="diagnoseTarget.name"
+      @close="diagnoseTarget = null"
     />
   </div>
 </template>

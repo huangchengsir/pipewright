@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -54,11 +55,13 @@ func TestIsComparable(t *testing.T) {
 func newStubChecker(t *testing.T, current string, h http.HandlerFunc) (*Checker, func()) {
 	t.Helper()
 	srv := httptest.NewServer(h)
-	prevBase, prevVer := apiBase, Version
+	prevBase, prevHTML, prevVer := apiBase, htmlBase, Version
 	apiBase = srv.URL
+	htmlBase = srv.URL // 同一 stub 兼当网页站,避免重定向兜底打到真实 github.com
 	Version = current
 	cleanup := func() {
 		apiBase = prevBase
+		htmlBase = prevHTML
 		Version = prevVer
 		srv.Close()
 	}
@@ -132,6 +135,30 @@ func TestCheck_RateLimitedReportsError(t *testing.T) {
 	defer done()
 	if info := c.Check(context.Background()); info.CheckError == "" {
 		t.Errorf("403 should surface a checkError")
+	}
+}
+
+// API 限流(403)时,退回网页站 /releases/latest 的 302 重定向解析出最新 tag。
+func TestCheck_RateLimitFallsBackToRedirect(t *testing.T) {
+	c, done := newStubChecker(t, "v1.0.0", func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/repos/"):
+			w.WriteHeader(http.StatusForbidden) // API 限流
+		case strings.HasSuffix(r.URL.Path, "/releases/latest"):
+			w.Header().Set("Location", "/owner/repo/releases/tag/v1.2.0")
+			w.WriteHeader(http.StatusFound) // 网页站 302 → tag
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	defer done()
+
+	info := c.Check(context.Background())
+	if info.CheckError != "" {
+		t.Fatalf("重定向兜底应清空 checkError,实得 %q", info.CheckError)
+	}
+	if info.Latest != "v1.2.0" || !info.UpdateAvailable {
+		t.Errorf("应经重定向得到 latest=v1.2.0 updateAvailable=true,实得 %+v", info)
 	}
 }
 

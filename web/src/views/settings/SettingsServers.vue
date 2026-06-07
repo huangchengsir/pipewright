@@ -104,7 +104,9 @@ function closeOpsModal(): void {
 // 升级为独立全屏「AI 运维终端」页(左终端 / 右 AI 助手),替代旧内联弹窗。
 
 function openTerminal(s: Server): void {
-  router.push({ name: 'server-terminal', params: { id: s.id } })
+  // 全屏终端在**新标签页**打开,保留当前服务器列表页(终端是长会话,不该顶掉原页面)。
+  const route = router.resolve({ name: 'server-terminal', params: { id: s.id } })
+  window.open(route.href, '_blank', 'noopener')
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────

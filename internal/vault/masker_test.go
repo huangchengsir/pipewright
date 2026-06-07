@@ -38,6 +38,20 @@ func TestMaskSSHKey(t *testing.T) {
 	}
 }
 
+// TestMaskSSHPassword 验证 ssh_password 掩码:全打点,绝不暴露任何字符(含尾部),且类型校验通过。
+func TestMaskSSHPassword(t *testing.T) {
+	got := mask(TypeSSHPassword, "19980528")
+	if got != maskDots {
+		t.Fatalf("ssh_password 应全打点, got %q", got)
+	}
+	if strings.Contains(got, "1998") || strings.Contains(got, "0528") {
+		t.Fatalf("ssh_password 掩码泄露明文: %q", got)
+	}
+	if err := validateType(TypeSSHPassword); err != nil {
+		t.Fatalf("validateType(ssh_password) 应通过, got %v", err)
+	}
+}
+
 // TestMaskShortGitTokenFullyDotted 验证短 token 全打点,绝不暴露任何前缀/尾部(=明文)。
 func TestMaskShortGitToken(t *testing.T) {
 	got := mask(TypeGitToken, "ab_cdef") // 7 字符 < 阈值

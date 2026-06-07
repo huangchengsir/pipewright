@@ -160,6 +160,7 @@ function relativeTime(isoStr: string | null): string {
 const typeLabels: Record<CredentialType, string> = {
   git_token: 'Git 令牌',
   ssh_key: 'SSH 私钥',
+  ssh_password: 'SSH 密码',
   registry: '镜像仓库',
 }
 
@@ -489,6 +490,11 @@ async function copyReference(c: Credential): Promise<void> {
             <svg v-else-if="cred.type === 'ssh_key'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
               <path d="M4 17l6-6-6-6M12 19h8"/>
             </svg>
+            <!-- ssh_password(锁) -->
+            <svg v-else-if="cred.type === 'ssh_password'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+              <rect x="4" y="11" width="16" height="9" rx="2"/>
+              <path d="M8 11V7a4 4 0 0 1 8 0v4"/>
+            </svg>
             <!-- registry -->
             <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
               <rect x="3" y="3" width="8" height="8" rx="1"/>
@@ -663,7 +669,7 @@ async function copyReference(c: Credential): Promise<void> {
             <label class="field-label" for="cred-type">类型</label>
             <div class="segmented" role="group" aria-label="凭据类型">
               <button
-                v-for="opt in (['git_token', 'ssh_key', 'registry'] as CredentialType[])"
+                v-for="opt in (['git_token', 'ssh_key', 'ssh_password', 'registry'] as CredentialType[])"
                 :key="opt"
                 type="button"
                 class="seg-item"
@@ -723,7 +729,7 @@ async function copyReference(c: Credential): Promise<void> {
               class="field-input field-input--mono"
               :class="{ 'field-input--error': formErrors.secret }"
               type="password"
-              :placeholder="modalMode === 'add' ? '粘贴令牌内容…' : '留空保持当前密钥不变'"
+              :placeholder="modalMode === 'add' ? (form.type === 'ssh_password' ? '输入 SSH 登录密码…' : '粘贴令牌内容…') : '留空保持当前密钥不变'"
               :disabled="formSubmitting"
               :aria-invalid="formErrors.secret ? 'true' : undefined"
               :aria-describedby="formErrors.secret ? 'cred-secret-err' : undefined"
@@ -731,7 +737,8 @@ async function copyReference(c: Credential): Promise<void> {
               @input="formErrors.secret = ''"
             />
             <span v-if="formErrors.secret" id="cred-secret-err" class="field-error" role="alert">{{ formErrors.secret }}</span>
-            <span class="field-hint">密钥写入后不可读出，界面仅展示掩码值</span>
+            <span v-if="form.type === 'ssh_password'" class="field-hint">SSH 登录用户名在「登记服务器」时填写;此处仅存密码。写入后不可读出,仅展示掩码。</span>
+            <span v-else class="field-hint">密钥写入后不可读出，界面仅展示掩码值</span>
           </div>
 
           <!-- Footer -->

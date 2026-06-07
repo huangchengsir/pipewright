@@ -617,6 +617,13 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// chi 字面段优先于 {id},/servers/metrics 不会被 /servers/{id} 吞。
 		ar.Get("/servers/metrics", makeAllServerMetricsHandler(sv))
 		ar.Get("/servers/{id}/metrics", makeServerMetricsHandler(sv))
+		// 容器管理列表/聚合(Portainer 式总览)——经 SSH 跑 `docker ps -a --format {{json .}}`
+		// 采集容器清单。复用 sv(4-1 装配,无新服务)。GET 只读 → 过 auth、豁免 CSRF。命令纯静态
+		// array、不接受任何用户输入(AC-SEC-02);某台不可达/无运行时 → reachable:false / runtime:""
+		// ,不 500。批量端点逐台并行有界、各自独立。容器**生命周期**写操作复用上面的 /service/action
+		// (type=docker)。chi 字面段 /servers/containers 优先于 {id},不会被吞。
+		ar.Get("/servers/containers", makeAllServerContainersHandler(sv))
+		ar.Get("/servers/{id}/containers", makeServerContainersHandler(sv))
 		// 服务操作 —— 重启/停止/启动(Story 6.3;FR-17,经 SSH 跑 systemctl/docker)。
 		// 复用 sv(4-1 装配)+ aud(1-4 装配),无需新服务。写操作 → 过 auth + CSRF。
 		// type/target/action 严格白名单(AC-SEC-02:首字符非 `-` 防 flag 注入、无 shell 元字符

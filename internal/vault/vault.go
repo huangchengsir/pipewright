@@ -21,9 +21,10 @@ import (
 
 // 凭据类型枚举(DB 存 snake_case 字串;JSON camelCase 字段)。
 const (
-	TypeGitToken = "git_token"
-	TypeSSHKey   = "ssh_key"
-	TypeRegistry = "registry"
+	TypeGitToken    = "git_token"
+	TypeSSHKey      = "ssh_key"
+	TypeRegistry    = "registry"
+	TypeSSHPassword = "ssh_password" // SSH 登录密码(非 PEM);SSH 层据 looksLikePEM 自动按密码认证
 )
 
 // 领域错误。错误体永不含明文/密文/master key。
@@ -115,7 +116,7 @@ func (s *service) configured() bool { return s.key != nil }
 // validateType 校验类型枚举。
 func validateType(t string) error {
 	switch t {
-	case TypeGitToken, TypeSSHKey, TypeRegistry:
+	case TypeGitToken, TypeSSHKey, TypeRegistry, TypeSSHPassword:
 		return nil
 	default:
 		return ErrInvalidType

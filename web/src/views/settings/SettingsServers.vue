@@ -30,7 +30,7 @@ const loadState = ref<LoadState>('idle')
 const loadError = ref('')
 const servers = ref<Server[]>([])
 
-// SSH credentials available to bind (type ssh_key only).
+// SSH credentials available to bind (ssh_key private key, or ssh_password login password).
 const sshCredentials = ref<Credential[]>([])
 
 // ─── add / edit modal ───────────────────────────────────────────────────────
@@ -126,7 +126,7 @@ async function loadServers(): Promise<void> {
   try {
     const [srv, creds] = await Promise.all([listServers(), listCredentials()])
     servers.value = srv
-    sshCredentials.value = creds.filter((c) => c.type === 'ssh_key')
+    sshCredentials.value = creds.filter((c) => c.type === 'ssh_key' || c.type === 'ssh_password')
     loadState.value = 'idle'
   } catch (err) {
     if (err instanceof HttpError) {
@@ -348,7 +348,7 @@ async function handleTest(s: Server): Promise<void> {
 
     <!-- ─── no-credential hint ────────────────────────────────────────────────── -->
     <div v-if="loadState === 'idle' && !hasSSHCredentials" class="banner banner--warn" role="status">
-      <span>尚无 SSH 凭据。请先到「凭据保险库」添加一条 ssh_key 类型凭据,再登记服务器。</span>
+      <span>尚无 SSH 凭据。请先到「凭据保险库」添加一条「SSH 私钥」或「SSH 密码」凭据,再登记服务器。</span>
     </div>
 
     <!-- ─── load error banner ─────────────────────────────────────────────────── -->

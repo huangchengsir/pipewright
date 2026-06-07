@@ -30,6 +30,9 @@ func mask(credType, secret string) string {
 		return maskSSHKey(secret)
 	case TypeRegistry:
 		return maskRegistry(secret)
+	case TypeSSHPassword:
+		// 密码:全打点,绝不暴露任何字符(不留尾部)。
+		return maskDots
 	default:
 		return maskDots
 	}

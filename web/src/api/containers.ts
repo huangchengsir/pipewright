@@ -229,6 +229,65 @@ export async function diagnoseContainer(serverId: string, name: string): Promise
   )
 }
 
+// ─── 数据卷 ───────────────────────────────────────────────────────────────────
+
+export interface VolumeInfo {
+  name: string
+  driver: string
+}
+export interface ServerVolumes {
+  serverId: string
+  reachable: boolean
+  runtime: string
+  error: string
+  volumes: VolumeInfo[]
+  collectedAt: string
+}
+export interface VolNetActionResult {
+  serverId: string
+  action: string
+  name: string
+  ok: boolean
+  error: string
+}
+
+export async function getServerVolumes(id: string): Promise<ServerVolumes> {
+  return http.get<ServerVolumes>(`/api/servers/${id}/volumes`)
+}
+export async function createVolume(id: string, name: string): Promise<VolNetActionResult> {
+  return http.post<VolNetActionResult>(`/api/servers/${id}/volumes/create`, { name })
+}
+export async function removeVolume(id: string, name: string): Promise<VolNetActionResult> {
+  return http.post<VolNetActionResult>(`/api/servers/${id}/volumes/remove`, { name })
+}
+
+// ─── 网络 ─────────────────────────────────────────────────────────────────────
+
+export interface NetworkInfo {
+  id: string
+  name: string
+  driver: string
+  scope: string
+}
+export interface ServerNetworks {
+  serverId: string
+  reachable: boolean
+  runtime: string
+  error: string
+  networks: NetworkInfo[]
+  collectedAt: string
+}
+
+export async function getServerNetworks(id: string): Promise<ServerNetworks> {
+  return http.get<ServerNetworks>(`/api/servers/${id}/networks`)
+}
+export async function createNetwork(id: string, name: string): Promise<VolNetActionResult> {
+  return http.post<VolNetActionResult>(`/api/servers/${id}/networks/create`, { name })
+}
+export async function removeNetwork(id: string, name: string): Promise<VolNetActionResult> {
+  return http.post<VolNetActionResult>(`/api/servers/${id}/networks/remove`, { name })
+}
+
 /** Deploy a stack from compose yaml (docker compose up -d). */
 export async function deployStack(id: string, name: string, compose: string): Promise<StackActionResult> {
   return http.post<StackActionResult>(`/api/servers/${id}/stacks/deploy`, { name, compose })

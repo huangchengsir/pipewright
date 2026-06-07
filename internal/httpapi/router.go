@@ -639,6 +639,13 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 容器 AI 诊断 / 看日志(AI moat):取容器日志 → ai.Diagnose 出根因+修复。复用 sv +
 		// o.aiSettings。出网前脱敏;AI 未配/失败 → 200 unavailable,绝不 500。比 {id} 多两段不被吞。
 		ar.Post("/servers/{id}/containers/{containerId}/diagnose", makeContainerDiagnoseHandler(sv, o.aiSettings))
+		// 数据卷 + 网络 —— 列表(只读)+ 创建/删除(写,过 CSRF + 审计)。名称白名单 + array 化。
+		ar.Get("/servers/{id}/volumes", makeServerVolumesHandler(sv))
+		ar.Post("/servers/{id}/volumes/create", makeVolumeCreateHandler(sv, aud))
+		ar.Post("/servers/{id}/volumes/remove", makeVolumeRemoveHandler(sv, aud))
+		ar.Get("/servers/{id}/networks", makeServerNetworksHandler(sv))
+		ar.Post("/servers/{id}/networks/create", makeNetworkCreateHandler(sv, aud))
+		ar.Post("/servers/{id}/networks/remove", makeNetworkRemoveHandler(sv, aud))
 		// 服务操作 —— 重启/停止/启动(Story 6.3;FR-17,经 SSH 跑 systemctl/docker)。
 		// 复用 sv(4-1 装配)+ aud(1-4 装配),无需新服务。写操作 → 过 auth + CSRF。
 		// type/target/action 严格白名单(AC-SEC-02:首字符非 `-` 防 flag 注入、无 shell 元字符

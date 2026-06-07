@@ -130,7 +130,7 @@ void run()
 .modal-scrim {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  z-index: 500;
   background: oklch(0% 0 0 / 0.45);
   display: flex;
   align-items: center;

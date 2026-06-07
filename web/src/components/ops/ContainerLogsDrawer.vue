@@ -172,7 +172,7 @@ onBeforeUnmount(stopStream)
 .drawer-scrim {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  z-index: 500;
   background: oklch(0% 0 0 / 0.42);
   display: flex;
   justify-content: flex-end;

@@ -13,6 +13,16 @@ const emit = defineEmits<{ (e: 'close'): void }>()
 
 const toast = useToast()
 
+// 容器/镜像/compose 导向的快捷提示(区别于终端那套通用运维提示)。
+const CONTAINER_CHIPS = [
+  '看所有容器的内存和 CPU 占用',
+  '清理无用镜像、停止的容器和悬空卷',
+  '把某容器的日志导出到文件',
+  '限制某容器内存为 512M',
+  '查看某容器的端口映射和挂载',
+  '列出占空间最大的镜像',
+]
+
 async function copyCommand(command: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(command)
@@ -30,10 +40,11 @@ async function copyCommand(command: string): Promise<void> {
         <span class="ai-title"><span class="spark">✦</span> AI 助手</span>
         <button class="ai-close" aria-label="关闭" @click="emit('close')">✕</button>
       </header>
-      <p class="ai-sub">用中文描述运维意图,AI 给出命令(带风险分级)。命令复制后到服务器终端执行。</p>
+      <p class="ai-sub">围绕容器 / 镜像 / compose 描述意图,AI 给出 docker 命令(带风险分级)。命令复制后到服务器终端执行。</p>
       <div class="ai-body">
         <AiOpsPanel
           :context="context"
+          :chips="CONTAINER_CHIPS"
           @insert="copyCommand"
           @execute="copyCommand"
           @collapse="emit('close')"
@@ -47,7 +58,7 @@ async function copyCommand(command: string): Promise<void> {
 .ai-scrim {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  z-index: 500;
   background: oklch(0% 0 0 / 0.42);
   display: flex;
   justify-content: flex-end;

@@ -12,11 +12,19 @@ import {
   getServerStacks,
   deployStack,
   stackAction,
+  getServerVolumes,
+  createVolume,
+  removeVolume,
+  getServerNetworks,
+  createNetwork,
+  removeNetwork,
   type ServerContainers,
   type ContainerInfo,
   type ImageInfo,
   type StackInfo,
   type StackAction,
+  type VolumeInfo,
+  type NetworkInfo,
 } from '../../api/containers'
 import { serviceAction } from '../../api/servers'
 import { HttpError } from '../../api/http'
@@ -52,7 +60,7 @@ const emit = defineEmits<{
 const toast = useToast()
 const confirm = useConfirm()
 
-type TabKey = 'containers' | 'images' | 'stacks'
+type TabKey = 'containers' | 'images' | 'stacks' | 'volumes' | 'networks'
 const tab = ref<TabKey>('containers')
 
 // 运行时显示名:首字母大写(docker → Docker)。
@@ -139,7 +147,130 @@ function switchTab(t: TabKey): void {
   tab.value = t
   if (t === 'images' && imgState.value === 'idle') void loadImages()
   if (t === 'stacks' && stackState.value === 'idle') void loadStacks()
+  if (t === 'volumes' && volState.value === 'idle') void loadVolumes()
+  if (t === 'networks' && netState.value === 'idle') void loadNetworks()
 }
+
+// ─── 数据卷(懒加载) ──────────────────────────────────────────────────────────
+const volumes = ref<VolumeInfo[]>([])
+const volState = ref<'idle' | 'loading' | 'loaded' | 'error'>('idle')
+const volError = ref('')
+const newVol = ref('')
+const busyVol = ref('')
+
+async function loadVolumes(): Promise<void> {
+  volState.value = 'loading'
+  volError.value = ''
+  try {
+    const res = await getServerVolumes(props.group.serverId)
+    if (!res.reachable || !res.runtime) {
+      volState.value = 'error'
+      volError.value = res.error || '该服务器不可达或无容器运行时'
+      return
+    }
+    volumes.value = res.volumes
+    volState.value = 'loaded'
+  } catch (err) {
+    volState.value = 'error'
+    volError.value = err instanceof HttpError ? (err.apiError?.message ?? `加载卷失败(${err.status})`) : '加载卷失败'
+  }
+}
+async function doCreateVol(): Promise<void> {
+  const name = newVol.value.trim()
+  if (!name) return
+  busyVol.value = '@create'
+  try {
+    const res = await createVolume(props.group.serverId, name)
+    if (res.ok) {
+      toast.success('数据卷已创建', { detail: name })
+      newVol.value = ''
+      void loadVolumes()
+    } else toast.error('创建失败', { detail: res.error })
+  } finally {
+    busyVol.value = ''
+  }
+}
+async function doRemoveVol(v: VolumeInfo): Promise<void> {
+  const ok = await confirm.open({
+    title: `删除数据卷 ${v.name}?`,
+    body: '将执行 docker volume rm。若有容器在用会删除失败。卷内数据随之删除,不可恢复。',
+    confirmLabel: '删除卷',
+    variant: 'danger',
+  })
+  if (!ok) return
+  busyVol.value = v.name
+  try {
+    const res = await removeVolume(props.group.serverId, v.name)
+    if (res.ok) {
+      toast.success('数据卷已删除', { detail: v.name })
+      void loadVolumes()
+    } else toast.error('删除失败', { detail: res.error || '卷可能正被容器使用' })
+  } finally {
+    busyVol.value = ''
+  }
+}
+
+// ─── 网络(懒加载) ────────────────────────────────────────────────────────────
+const networks = ref<NetworkInfo[]>([])
+const netState = ref<'idle' | 'loading' | 'loaded' | 'error'>('idle')
+const netError = ref('')
+const newNet = ref('')
+const busyNet = ref('')
+
+async function loadNetworks(): Promise<void> {
+  netState.value = 'loading'
+  netError.value = ''
+  try {
+    const res = await getServerNetworks(props.group.serverId)
+    if (!res.reachable || !res.runtime) {
+      netState.value = 'error'
+      netError.value = res.error || '该服务器不可达或无容器运行时'
+      return
+    }
+    networks.value = res.networks
+    netState.value = 'loaded'
+  } catch (err) {
+    netState.value = 'error'
+    netError.value = err instanceof HttpError ? (err.apiError?.message ?? `加载网络失败(${err.status})`) : '加载网络失败'
+  }
+}
+async function doCreateNet(): Promise<void> {
+  const name = newNet.value.trim()
+  if (!name) return
+  busyNet.value = '@create'
+  try {
+    const res = await createNetwork(props.group.serverId, name)
+    if (res.ok) {
+      toast.success('网络已创建', { detail: name })
+      newNet.value = ''
+      void loadNetworks()
+    } else toast.error('创建失败', { detail: res.error })
+  } finally {
+    busyNet.value = ''
+  }
+}
+async function doRemoveNet(n: NetworkInfo): Promise<void> {
+  const ok = await confirm.open({
+    title: `删除网络 ${n.name}?`,
+    body: '将执行 docker network rm。若有容器连接在该网络上会删除失败。',
+    confirmLabel: '删除网络',
+    variant: 'danger',
+  })
+  if (!ok) return
+  busyNet.value = n.id
+  try {
+    const res = await removeNetwork(props.group.serverId, n.name)
+    if (res.ok) {
+      toast.success('网络已删除', { detail: n.name })
+      void loadNetworks()
+    } else toast.error('删除失败', { detail: res.error || '网络可能有容器连接' })
+  } finally {
+    busyNet.value = ''
+  }
+}
+
+// 内置网络(bridge/host/none)不可删,删除按钮置灰。
+const BUILTIN_NETWORKS = new Set(['bridge', 'host', 'none'])
 
 // ─── Stacks / Compose(懒加载) ────────────────────────────────────────────────
 const stacks = ref<StackInfo[]>([])
@@ -336,6 +467,12 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
         <button class="ctab" :class="{ 'ctab--active': tab === 'stacks' }" role="tab" @click="switchTab('stacks')">
           Stacks <span v-if="stackState === 'loaded'" class="ctab__n">{{ stacks.length }}</span>
         </button>
+        <button class="ctab" :class="{ 'ctab--active': tab === 'volumes' }" role="tab" @click="switchTab('volumes')">
+          卷 <span v-if="volState === 'loaded'" class="ctab__n">{{ volumes.length }}</span>
+        </button>
+        <button class="ctab" :class="{ 'ctab--active': tab === 'networks' }" role="tab" @click="switchTab('networks')">
+          网络 <span v-if="netState === 'loaded'" class="ctab__n">{{ networks.length }}</span>
+        </button>
       </div>
 
       <!-- 容器 tab -->
@@ -407,7 +544,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
       </template>
 
       <!-- Stacks tab -->
-      <template v-else>
+      <template v-else-if="tab === 'stacks'">
         <div class="img-toolbar">
           <button class="pull__btn" @click="showDeploy = !showDeploy">{{ showDeploy ? '收起部署' : '+ 部署 Stack' }}</button>
           <span class="grow" />
@@ -452,6 +589,66 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
                 @click="doStackAction(s, a.action, a.label, a.danger)"
               >
                 {{ a.label }}
+              </button>
+            </div>
+          </li>
+        </ul>
+      </template>
+
+      <!-- 卷 tab -->
+      <template v-else-if="tab === 'volumes'">
+        <div class="img-toolbar">
+          <div class="pull">
+            <input v-model="newVol" class="pull__in mono" placeholder="新建数据卷名" @keyup.enter="doCreateVol" />
+            <button class="pull__btn" :disabled="busyVol === '@create' || !newVol.trim()" @click="doCreateVol">创建</button>
+          </div>
+          <span class="grow" />
+          <button class="refresh" :disabled="volState === 'loading'" @click="loadVolumes">↻ 刷新</button>
+        </div>
+        <p v-if="volState === 'error'" class="panel__hint panel__hint--down">⚠ {{ volError }}</p>
+        <p v-else-if="volState === 'loading' && volumes.length === 0" class="panel__hint">正在加载数据卷…</p>
+        <p v-else-if="volumes.length === 0" class="panel__hint">该服务器暂无数据卷。</p>
+        <ul v-else class="ilist" role="list">
+          <li v-for="v in volumes" :key="v.name" class="srow" :class="{ 'irow--busy': busyVol === v.name }">
+            <div class="srow__main">
+              <div class="srow__name">{{ v.name }}</div>
+            </div>
+            <div class="srow__status mono">{{ v.driver }}</div>
+            <div class="srow__act">
+              <button class="op op--ghost" :disabled="busyVol === v.name" @click="doRemoveVol(v)">删除</button>
+            </div>
+          </li>
+        </ul>
+      </template>
+
+      <!-- 网络 tab -->
+      <template v-else>
+        <div class="img-toolbar">
+          <div class="pull">
+            <input v-model="newNet" class="pull__in mono" placeholder="新建网络名(默认 bridge 驱动)" @keyup.enter="doCreateNet" />
+            <button class="pull__btn" :disabled="busyNet === '@create' || !newNet.trim()" @click="doCreateNet">创建</button>
+          </div>
+          <span class="grow" />
+          <button class="refresh" :disabled="netState === 'loading'" @click="loadNetworks">↻ 刷新</button>
+        </div>
+        <p v-if="netState === 'error'" class="panel__hint panel__hint--down">⚠ {{ netError }}</p>
+        <p v-else-if="netState === 'loading' && networks.length === 0" class="panel__hint">正在加载网络…</p>
+        <p v-else-if="networks.length === 0" class="panel__hint">该服务器暂无网络。</p>
+        <ul v-else class="ilist" role="list">
+          <li v-for="n in networks" :key="n.id" class="srow" :class="{ 'irow--busy': busyNet === n.id }">
+            <div class="srow__main">
+              <div class="srow__name">{{ n.name }}</div>
+              <div class="srow__cfg mono">{{ n.id }} · {{ n.scope }}</div>
+            </div>
+            <div class="srow__status mono">{{ n.driver }}</div>
+            <div class="srow__act">
+              <button
+                class="op op--ghost"
+                :disabled="busyNet === n.id || BUILTIN_NETWORKS.has(n.name)"
+                :title="BUILTIN_NETWORKS.has(n.name) ? '内置网络不可删除' : '删除网络(docker network rm)'"
+                @click="doRemoveNet(n)"
+              >
+                删除
               </button>
             </div>
           </li>

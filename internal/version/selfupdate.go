@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -105,7 +106,20 @@ func (c *Checker) ApplyBinaryUpdate(ctx context.Context, tag string) error {
 	if err := os.Rename(newBin, exe); err != nil {
 		return fmt.Errorf("替换可执行文件失败(%s 无写权限?可改用有权限的用户运行,或手动升级): %w", exe, err)
 	}
+	// SELinux(RHEL/CentOS/Rocky 系强制模式):经临时文件 rename 进来的新二进制可能带上 user_tmp_t
+	// 类型,systemd(init_t)重启时无权 execute → 自更新后服务起不来。尽力 restorecon 重置为目标
+	// 路径默认上下文(/usr/local/bin → bin_t)。无 restorecon / 非 SELinux 系统静默跳过。
+	restoreSELinuxContext(exe)
 	return nil
+}
+
+// restoreSELinuxContext 尽力把文件 SELinux 上下文重置为路径默认值(best-effort,失败/不适用即跳过)。
+func restoreSELinuxContext(path string) {
+	bin, err := exec.LookPath("restorecon")
+	if err != nil {
+		return // 非 SELinux 系统或无该命令
+	}
+	_ = exec.Command(bin, path).Run()
 }
 
 // fetchChecksum 从 checksums.txt 取指定资产的 sha256。
@@ -132,7 +146,11 @@ func (c *Checker) download(ctx context.Context, url string, w io.Writer) error {
 		return err
 	}
 	req.Header.Set("User-Agent", "pipewright/"+Version)
-	resp, err := c.client.Do(req)
+	// 二进制下载量大、又可能走代理,不能受 check 用的 10s 短 Client.Timeout 限制(那是给小 JSON
+	// 用的,会在读 body 时硬超时);改用无 Client.Timeout 的客户端,真正以本函数的 3 分钟 context
+	// 为准。沿用 c.client 的 Transport(保留代理/测试注入)。
+	dlClient := &http.Client{Transport: c.client.Transport}
+	resp, err := dlClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("下载失败: %w", err)
 	}

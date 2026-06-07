@@ -3,9 +3,12 @@ package version
 import (
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
+	"html"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -124,10 +127,77 @@ func (c *Checker) tryRedirectFallback(ctx context.Context, out *UpdateInfo, cur 
 	out.Latest = tag
 	out.ReleaseURL = htmlURL
 	out.CheckError = ""
+	// 走 atom feed(非限流 API)补 release 说明 —— API 限流时仍能给用户看更新内容。
+	// 拿不到不影响主流程(说明留空,前端不显示「查看更新说明」)。
+	out.Notes = c.fetchReleaseNotes(ctx, tag)
 	if isComparable(cur) && CompareVersions(tag, cur) > 0 {
 		out.UpdateAvailable = true
 	}
 	return true
+}
+
+// fetchReleaseNotes 从 github.com 的 releases.atom(RSS,不走会限流的 api.github.com)取指定
+// tag 的 release 正文,去 HTML 标签转纯文本(前端 <pre> 直接展示)。失败返回空串。
+func (c *Checker) fetchReleaseNotes(ctx context.Context, tag string) string {
+	base := htmlBase
+	if base == "" {
+		base = "https://github.com"
+	}
+	u := fmt.Sprintf("%s/%s/releases.atom", base, c.repo)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("User-Agent", "pipewright/"+Version)
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var feed struct {
+		Entries []struct {
+			ID      string `xml:"id"`
+			Content string `xml:"content"`
+		} `xml:"entry"`
+	}
+	if err := xml.NewDecoder(resp.Body).Decode(&feed); err != nil {
+		return ""
+	}
+	for _, e := range feed.Entries {
+		// id 形如 tag:github.com,2008:Repository/<repoID>/<tag>
+		if strings.HasSuffix(e.ID, "/"+tag) {
+			return htmlToText(e.Content)
+		}
+	}
+	return ""
+}
+
+var (
+	reBlockEnd = regexp.MustCompile(`(?i)</(h[1-6]|p|div|li|ul|ol|tr|pre)>`)
+	reListItem = regexp.MustCompile(`(?i)<li[^>]*>`)
+	reHr       = regexp.MustCompile(`(?i)<hr\s*/?>`)
+	reAnyTag   = regexp.MustCompile(`<[^>]+>`)
+)
+
+// htmlToText 把 release notes 的 HTML 粗略转纯文本:块级标签转换行、li 加项目符号、去其余标签、
+// 解实体、压多余空行。用于 <pre> 展示(非渲染 HTML/Markdown),够读即可。
+func htmlToText(h string) string {
+	h = reListItem.ReplaceAllString(h, "• ")
+	h = reHr.ReplaceAllString(h, "\n———\n")
+	h = reBlockEnd.ReplaceAllString(h, "\n")
+	h = reAnyTag.ReplaceAllString(h, "")
+	h = html.UnescapeString(h)
+	lines := strings.Split(h, "\n")
+	out := make([]string, 0, len(lines))
+	for _, ln := range lines {
+		if ln = strings.TrimSpace(ln); ln != "" {
+			out = append(out, ln)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // Check 返回更新信息。命中未过期缓存则直接返回;否则查 GitHub。

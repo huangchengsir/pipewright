@@ -56,6 +56,9 @@ func (s *stubAIService) ExplainCommand(context.Context, ai.ExplainCommandInput) 
 func (s *stubAIService) CompleteCommand(context.Context, ai.CompleteCommandInput) (*ai.CompletionResult, error) {
 	return nil, ai.ErrAINotConfigured
 }
+func (s *stubAIService) GenerateCompose(context.Context, ai.GenerateComposeInput) (*ai.ComposeResult, error) {
+	return nil, ai.ErrAINotConfigured
+}
 
 // ---- stub analyzer ----
 

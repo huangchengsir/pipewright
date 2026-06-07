@@ -31,6 +31,7 @@ import {
   type NetworkContainer,
 } from '../../api/containers'
 import { serviceAction } from '../../api/servers'
+import { generateCompose } from '../../api/aiOps'
 import { HttpError } from '../../api/http'
 import { useToast } from '../../composables/useToast'
 import { useConfirm } from '../../composables/useConfirm'
@@ -432,6 +433,35 @@ async function doStackAction(s: StackInfo, action: StackAction, label: string, d
   }
 }
 
+// AI 生成 compose:中文需求 → docker-compose.yml,填进部署表单。
+const aiComposeNl = ref('')
+const aiComposeBusy = ref(false)
+async function aiGenCompose(): Promise<void> {
+  const nl = aiComposeNl.value.trim()
+  if (!nl || aiComposeBusy.value) return
+  aiComposeBusy.value = true
+  try {
+    const res = await generateCompose(nl)
+    if (!res.available) {
+      toast.error('AI 未配置', { detail: '请到「设置 › AI」配置模型' })
+      return
+    }
+    if (res.yaml) {
+      deployCompose.value = res.yaml
+      if (!deployName.value.trim()) deployName.value = 'ai-stack'
+      toast.success('AI 已生成 compose', { detail: '请核对后再部署' })
+    } else {
+      toast.error('生成失败', { detail: res.reason || '模型未产出 compose' })
+    }
+  } catch (err) {
+    toast.error('生成失败', {
+      detail: err instanceof HttpError ? (err.apiError?.message ?? '请求失败') : '网络错误',
+    })
+  } finally {
+    aiComposeBusy.value = false
+  }
+}
+
 async function doDeploy(): Promise<void> {
   const name = deployName.value.trim()
   const compose = deployCompose.value.trim()
@@ -638,6 +668,18 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
 
         <!-- 部署表单(贴 compose yaml) -->
         <div v-if="showDeploy" class="deploy">
+          <div class="deploy__ai">
+            <span class="deploy__spark">✦</span>
+            <input
+              v-model="aiComposeNl"
+              class="deploy__ainl mono"
+              placeholder="用中文描述,如:nginx + redis,nginx 映射 8080,redis 持久化"
+              @keyup.enter="aiGenCompose"
+            />
+            <button class="pull__btn" :disabled="aiComposeBusy || !aiComposeNl.trim()" @click="aiGenCompose">
+              {{ aiComposeBusy ? '生成中…' : 'AI 生成' }}
+            </button>
+          </div>
           <input v-model="deployName" class="deploy__name mono" placeholder="项目名,例:my-stack" />
           <textarea
             v-model="deployCompose"
@@ -1075,6 +1117,32 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
   padding: 14px 18px;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-inset);
+}
+.deploy__ai {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-primary-soft);
+  background: var(--color-primary-soft);
+  border-radius: var(--rounded-sm);
+}
+.deploy__spark {
+  color: var(--color-primary);
+  font-weight: 700;
+}
+.deploy__ainl {
+  flex: 1;
+  font-size: var(--text-label);
+  padding: 6px 10px;
+  border-radius: var(--rounded-sm);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-card);
+  color: var(--color-text);
+}
+.deploy__ainl:focus {
+  outline: none;
+  border-color: var(--color-primary);
 }
 .deploy__name {
   font-size: var(--text-label);

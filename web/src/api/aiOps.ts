@@ -72,3 +72,17 @@ export async function completeCommand(
 ): Promise<CompleteCommandResponse> {
   return http.post<CompleteCommandResponse>('/api/ai/complete', { partial, context }, { signal })
 }
+
+export interface GenerateComposeResponse {
+  /** false = AI 未配置。 */
+  available: boolean
+  /** 生成的 docker-compose.yml(纯 yaml,无围栏);失败/未配时为空。 */
+  yaml?: string
+  /** 降级原因(人读)。 */
+  reason?: string
+}
+
+/** 中文需求 → docker-compose.yml(容器管理「AI 生成 compose」)。 */
+export async function generateCompose(nl: string): Promise<GenerateComposeResponse> {
+  return http.post<GenerateComposeResponse>('/api/ai/compose', { nl })
+}

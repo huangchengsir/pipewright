@@ -579,6 +579,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Post("/ai/command", makeAICommandHandler(aiSvc))
 		ar.Post("/ai/explain", makeAIExplainHandler(aiSvc))
 		ar.Post("/ai/complete", makeAICompleteHandler(aiSvc)) // P2 智能补全(前缀→完整命令)
+		ar.Post("/ai/compose", makeAIComposeHandler(aiSvc))   // 中文 → docker-compose.yml
 
 		// 只读源码读取(Story 3.6;FR-4 预埋,7-4 消费):go-git 浅克隆读 tree/blob。
 		// 复用已注入 projects(p)+ vault(v)取凭据 + 注入的 SourceReader。reader 为 nil → 503。

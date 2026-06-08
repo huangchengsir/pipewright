@@ -28,7 +28,12 @@ const (
 // reImageRef 已在 container_create.go 定义(镜像引用白名单)。删除可用镜像 ID(sha256 短/长)
 // 或 repo:tag —— 同一套 reImageRef 即可覆盖(十六进制 ID 也匹配 [A-Za-z0-9._/:@-])。
 
-var cmdImagesList = []string{"docker", "images", "--format", "{{json .}}"}
+// 列表 **不用** `--format "{{json .}}"`:老 docker(如 CentOS7 自带的 1.13.1)的 `docker images`
+// 对 json 模板函数恒输出 `{}`(同版本 `docker ps` 却支持,版本怪癖),会解析出一堆空字段。
+// 改用逐字段模板 + Tab 分隔(repo/tag 不含 Tab,Size/CreatedSince 仅含空格),新旧 docker 通吃。
+const imagesFieldSep = "\t"
+
+var cmdImagesList = []string{"docker", "images", "--format", `{{.ID}}\t{{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.CreatedSince}}`}
 
 // imageDTO 是单个镜像的展示 DTO(冻结契约)。
 type imageDTO struct {
@@ -49,34 +54,36 @@ type serverImagesDTO struct {
 	CollectedAt string     `json:"collectedAt"`
 }
 
-type dockerImageLine struct {
-	ID           string `json:"ID"`
-	Repository   string `json:"Repository"`
-	Tag          string `json:"Tag"`
-	Size         string `json:"Size"`
-	CreatedSince string `json:"CreatedSince"`
-}
-
+// parseImages 解析逐字段 Tab 分隔的 `docker images` 输出。每行
+// `ID\tRepository\tTag\tSize\tCreatedSince`;按 Tab 切分(不按空格,Size 形如 "842 MB"
+// 含内部空格)。首列 ID 为空的行跳过(空输出 / 模板异常的兜底)。
 func parseImages(out string) []imageDTO {
 	list := []imageDTO{}
 	if len(out) > imagesOutMax {
 		out = out[:imagesOutMax]
 	}
 	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		var p dockerImageLine
-		if err := json.Unmarshal([]byte(line), &p); err != nil {
+		f := strings.Split(line, imagesFieldSep)
+		field := func(i int) string {
+			if i < len(f) {
+				return strings.TrimSpace(f[i])
+			}
+			return ""
+		}
+		id := field(0)
+		if id == "" {
 			continue
 		}
 		list = append(list, imageDTO{
-			ID:           p.ID,
-			Repository:   p.Repository,
-			Tag:          p.Tag,
-			Size:         p.Size,
-			CreatedSince: p.CreatedSince,
+			ID:           id,
+			Repository:   field(1),
+			Tag:          field(2),
+			Size:         field(3),
+			CreatedSince: field(4),
 		})
 	}
 	return list

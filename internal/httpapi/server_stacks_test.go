@@ -76,3 +76,66 @@ func TestComposeFileArgs(t *testing.T) {
 		}
 	}
 }
+
+func TestParseStackServices(t *testing.T) {
+	// service\tname\timage\tstatus\tports;status 含内部空格、Ports 含逗号都不应被拆错。
+	out := "web\tdc_web_1\tnginx:latest\tUp 2 hours\t0.0.0.0:8080->80/tcp\n" +
+		"db\tdc_db_1\tmysql:8\tExited (0) 3 days ago\t\n" +
+		"\tbare_named\tredis:7\tUp 5 minutes (Paused)\t6379/tcp\n"
+	got := parseStackServices(out)
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3", len(got))
+	}
+	if got[0].Service != "web" || got[0].Image != "nginx:latest" || got[0].State != "running" || got[0].Ports != "0.0.0.0:8080->80/tcp" {
+		t.Fatalf("svc0 wrong: %+v", got[0])
+	}
+	if got[1].State != "exited" {
+		t.Fatalf("svc1 state wrong: %+v", got[1])
+	}
+	if got[2].Service != "" || got[2].Name != "bare_named" || got[2].State != "paused" {
+		t.Fatalf("svc2 wrong: %+v", got[2])
+	}
+}
+
+func TestParseStackServices_SkipsBlankAndNameless(t *testing.T) {
+	// 空行、name 为空的行跳过。
+	got := parseStackServices("\n\t\t\t\t\nweb\tn1\timg\tUp\t\n")
+	if len(got) != 1 || got[0].Name != "n1" {
+		t.Fatalf("want 1, got %+v", got)
+	}
+}
+
+func TestPrimaryComposePath(t *testing.T) {
+	// 单一绝对路径 → ok。
+	if p, ok := primaryComposePath("/opt/app/docker-compose.yml"); !ok || p != "/opt/app/docker-compose.yml" {
+		t.Fatalf("single abs: p=%q ok=%v", p, ok)
+	}
+	// 空(老 v1 无标签)→ 不可编辑。
+	if _, ok := primaryComposePath(""); ok {
+		t.Fatalf("empty should not be editable")
+	}
+	// 多文件 → 不可在线编辑(写回有歧义)。
+	if _, ok := primaryComposePath("/a/x.yml,/a/y.yml"); ok {
+		t.Fatalf("multi should not be editable")
+	}
+	// 相对路径 / 含控制字符 → 拒绝。
+	for _, bad := range []string{"relative.yml", "/a\nb.yml", "/a\x00b.yml"} {
+		if _, ok := primaryComposePath(bad); ok {
+			t.Fatalf("%q should be rejected", bad)
+		}
+	}
+}
+
+func TestComposeProjectFromPath(t *testing.T) {
+	cases := map[string]string{
+		"/home/fn0S/docker-compose/nacos/docker-compose.yml": "nacos",
+		"/home/fn0S/docker-compose/docker-compose.yml":       "dockercompose", // 父目录 docker-compose → 剔连字符
+		"/opt/My_App/compose.yaml":                           "myapp",         // 大写+下划线被剔/小写
+		"/srv/web-1/docker-compose.yml":                      "web1",
+	}
+	for path, want := range cases {
+		if got := composeProjectFromPath(path); got != want {
+			t.Fatalf("composeProjectFromPath(%q) = %q, want %q", path, got, want)
+		}
+	}
+}

@@ -642,8 +642,10 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// Compose/Stacks —— 列表(只读)+ 部署(贴 yaml → up)+ start/stop/restart/down。
 		// 项目名严格白名单 + array 化;compose 内容经 Upload 落文件(非 shell 注入面)。写过 CSRF + 审计。
 		ar.Get("/servers/{id}/stacks", makeServerStacksHandler(sv))
+		ar.Get("/servers/{id}/stacks/{name}", makeServerStackDetailHandler(sv))
 		ar.Post("/servers/{id}/stacks/deploy", makeStackDeployHandler(sv, aud))
 		ar.Post("/servers/{id}/stacks/action", makeStackActionHandler(sv, aud))
+		ar.Post("/servers/{id}/stacks/save", makeStackSaveHandler(sv, aud))
 		// 容器 AI 诊断 / 看日志(AI moat):取容器日志 → ai.Diagnose 出根因+修复。复用 sv +
 		// o.aiSettings。出网前脱敏;AI 未配/失败 → 200 unavailable,绝不 500。比 {id} 多两段不被吞。
 		ar.Post("/servers/{id}/containers/{containerId}/diagnose", makeContainerDiagnoseHandler(sv, o.aiSettings))

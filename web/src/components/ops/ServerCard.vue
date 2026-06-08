@@ -11,6 +11,8 @@ import {
   pullImage,
   removeImage,
   getServerStacks,
+  getStackDetail,
+  saveStackCompose,
   deployStack,
   stackAction,
   getServerVolumes,
@@ -28,6 +30,7 @@ import {
   type ImageInfo,
   type StackInfo,
   type StackAction,
+  type StackDetail,
   type VolumeInfo,
   type NetworkInfo,
   type NetworkContainer,
@@ -470,10 +473,8 @@ const STACK_ACTIONS: { action: StackAction; label: string; danger?: boolean; tit
 ]
 
 async function doStackAction(s: StackInfo, action: StackAction, label: string, danger?: boolean): Promise<void> {
-  if (action === 'update' && !s.configFiles) {
-    toast.error('无法更新', { detail: '该 Stack 无可用 compose 配置文件' })
-    return
-  }
+  // 「更新」不再据列表 configFiles 预拦:老 compose v1 标签恒空,后端会三级解析(受管目录/探测)
+  // 兜底找 compose 文件,真定位不到才返回清晰错误。预拦会误伤可探测到文件的存量 stack。
   if (danger) {
     const ok = await confirm.open({
       title: `对 Stack ${s.name} 执行${label}?`,
@@ -504,6 +505,74 @@ async function doStackAction(s: StackInfo, action: StackAction, label: string, d
     })
   } finally {
     busyStack.value = ''
+  }
+}
+
+// ─── Stack 详情(点「详情」展开:看服务/容器 + compose 文件,可编辑就地保存) ─────────
+const detailName = ref('') // 当前展开的 stack(空 = 都收起)
+const detailState = ref<'idle' | 'loading' | 'loaded' | 'error'>('idle')
+const detailError = ref('')
+const stackDetail = ref<StackDetail | null>(null)
+const editCompose = ref('') // compose 编辑缓冲
+const savingStack = ref(false)
+
+async function toggleDetail(s: StackInfo): Promise<void> {
+  if (detailName.value === s.name) {
+    detailName.value = '' // 再点一次收起
+    return
+  }
+  detailName.value = s.name
+  stackDetail.value = null
+  detailState.value = 'loading'
+  detailError.value = ''
+  try {
+    const res = await getStackDetail(props.group.serverId, s.name)
+    if (!res.reachable || !res.runtime) {
+      detailState.value = 'error'
+      detailError.value = res.error || '该服务器不可达'
+      return
+    }
+    stackDetail.value = res
+    editCompose.value = res.compose
+    detailState.value = 'loaded'
+  } catch (err) {
+    detailState.value = 'error'
+    detailError.value =
+      err instanceof HttpError ? (err.apiError?.message ?? `加载详情失败(${err.status})`) : '加载详情失败'
+  }
+}
+
+async function doSaveStack(): Promise<void> {
+  const d = stackDetail.value
+  if (!d || !d.editable || savingStack.value) return
+  const compose = editCompose.value.trim()
+  if (!compose) {
+    toast.error('无法保存', { detail: 'compose 内容不能为空' })
+    return
+  }
+  const ok = await confirm.open({
+    title: `保存并重部署 Stack ${d.name}?`,
+    body: `将把编辑后的 compose 写回 ${d.configFiles} 并执行 docker compose up -d(就地升级,有变化的服务会被重建)。`,
+    confirmLabel: '保存并重部署',
+    variant: 'danger',
+  })
+  if (!ok) return
+  savingStack.value = true
+  try {
+    const res = await saveStackCompose(props.group.serverId, d.name, compose, d.configFiles)
+    if (res.ok) {
+      toast.success('已保存并重部署', { detail: d.name })
+      void loadStacks()
+      emit('changed')
+    } else {
+      toast.error('保存失败', { detail: res.error || '远端命令以非零状态退出' })
+    }
+  } catch (err) {
+    toast.error('保存失败', {
+      detail: err instanceof HttpError ? (err.apiError?.message ?? `请求失败(${err.status})`) : '网络错误',
+    })
+  } finally {
+    savingStack.value = false
   }
 }
 
@@ -795,24 +864,79 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
         <p v-else-if="stackState === 'loading' && stacks.length === 0" class="panel__hint">正在加载 Stacks…</p>
         <p v-else-if="stacks.length === 0" class="panel__hint">该服务器暂无 compose 项目。点「+ 部署 Stack」贴 yaml 部署一个。</p>
         <ul v-else class="ilist" role="list">
-          <li v-for="s in stacks" :key="s.name" class="srow" :class="{ 'irow--busy': busyStack === s.name }">
-            <div class="srow__main">
-              <div class="srow__name">{{ s.name }}</div>
-              <div class="srow__cfg mono" :title="s.configFiles">{{ s.configFiles || '—' }}</div>
-            </div>
-            <div class="srow__status mono">{{ s.status }}</div>
-            <div class="srow__act">
+          <li
+            v-for="s in stacks"
+            :key="s.name"
+            class="srow srow--stack"
+            :class="{ 'irow--busy': busyStack === s.name, 'srow--open': detailName === s.name }"
+          >
+            <div class="srow__head">
               <button
-                v-for="a in STACK_ACTIONS"
-                :key="a.action"
-                class="op"
-                :class="{ 'op--default': a.action === 'update' }"
-                :disabled="busyStack === s.name"
-                :title="a.title"
-                @click="doStackAction(s, a.action, a.label, a.danger)"
+                class="srow__toggle"
+                :title="detailName === s.name ? '收起详情' : '查看里面的服务 / compose'"
+                @click="toggleDetail(s)"
               >
-                {{ a.label }}
+                <span class="srow__caret" :class="{ 'srow__caret--open': detailName === s.name }">▸</span>
+                <span class="srow__name">{{ s.name }}</span>
               </button>
+              <div class="srow__status mono">{{ s.status }}</div>
+              <div class="srow__act">
+                <button
+                  v-for="a in STACK_ACTIONS"
+                  :key="a.action"
+                  class="op"
+                  :class="{ 'op--default': a.action === 'update' }"
+                  :disabled="busyStack === s.name"
+                  :title="a.title"
+                  @click="doStackAction(s, a.action, a.label, a.danger)"
+                >
+                  {{ a.label }}
+                </button>
+              </div>
+            </div>
+
+            <!-- 展开:服务/容器 + compose -->
+            <div v-if="detailName === s.name" class="sdetail">
+              <p v-if="detailState === 'loading'" class="panel__hint">正在加载详情…</p>
+              <p v-else-if="detailState === 'error'" class="panel__hint panel__hint--down">⚠ {{ detailError }}</p>
+              <template v-else-if="detailState === 'loaded' && stackDetail">
+                <div class="sdetail__sub">服务 / 容器 · {{ stackDetail.running }}/{{ stackDetail.total }} 运行</div>
+                <ul class="svc" role="list">
+                  <li v-for="svc in stackDetail.services" :key="svc.name" class="svc__row">
+                    <span class="svc__dot" :class="`svc__dot--${svc.state}`" :title="svc.state" />
+                    <span class="svc__name mono">{{ svc.service || svc.name }}</span>
+                    <span class="svc__img mono" :title="svc.image">{{ svc.image }}</span>
+                    <span class="svc__ports mono" :title="svc.ports">{{ svc.ports || '—' }}</span>
+                    <span class="svc__status mono">{{ svc.status }}</span>
+                  </li>
+                </ul>
+
+                <div class="sdetail__sub sdetail__sub--gap">
+                  compose 文件
+                  <span v-if="stackDetail.composeSource === 'file'" class="sdetail__path mono" :title="stackDetail.configFiles">
+                    · {{ stackDetail.configFiles }}
+                  </span>
+                </div>
+                <template v-if="stackDetail.composeSource === 'file'">
+                  <textarea v-model="editCompose" class="deploy__yaml mono" rows="12" spellcheck="false" />
+                  <div class="deploy__act">
+                    <span class="deploy__hint">
+                      {{ stackDetail.editable ? '保存将写回原文件并 docker compose up -d(就地升级)' : '多文件 compose,只读不可在线保存' }}
+                    </span>
+                    <button
+                      v-if="stackDetail.editable"
+                      class="pull__btn"
+                      :disabled="savingStack || !editCompose.trim()"
+                      @click="doSaveStack"
+                    >
+                      {{ savingStack ? '保存中…' : '保存并重部署' }}
+                    </button>
+                  </div>
+                </template>
+                <p v-else class="panel__hint">
+                  该 Stack 为外部部署、未记录 compose 路径,无法在线读取/编辑。可用上方「+ 部署 Stack」以同项目名「{{ stackDetail.name }}」粘贴 compose 接管。
+                </p>
+              </template>
             </div>
           </li>
         </ul>
@@ -1283,6 +1407,8 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
   color: var(--color-text);
 }
 .deploy__yaml {
+  width: 100%;
+  box-sizing: border-box;
   font-size: var(--text-mono);
   line-height: 1.5;
   padding: 10px 12px;
@@ -1341,6 +1467,88 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
   gap: 6px;
   justify-content: flex-end;
   flex-wrap: wrap;
+}
+
+/* Stack 行:可展开,head 是原来的三列网格,展开内容垂直堆在下方 */
+.srow--stack {
+  display: block;
+  padding: 0;
+}
+.srow--stack:hover { background: transparent; }
+.srow--open { background: var(--color-card-2); }
+.srow__head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px auto;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 18px;
+}
+.srow__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.srow__caret {
+  color: var(--color-faint);
+  font-size: 11px;
+  transition: transform var(--duration-fast) var(--ease-out-expo);
+}
+.srow__caret--open { transform: rotate(90deg); color: var(--color-accent); }
+.srow__toggle:hover .srow__name { color: var(--color-accent); }
+
+.sdetail {
+  padding: 4px 18px 16px 38px;
+  border-top: 1px dashed var(--color-border);
+}
+.sdetail__sub {
+  font-size: var(--text-micro);
+  font-weight: 600;
+  color: var(--color-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 10px 0 8px;
+}
+.sdetail__sub--gap { margin-top: 18px; }
+.sdetail__path {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--color-faint);
+}
+.svc { display: flex; flex-direction: column; gap: 2px; }
+.svc__row {
+  display: grid;
+  grid-template-columns: 14px minmax(80px, 1.1fr) minmax(0, 1.4fr) minmax(0, 1.2fr) minmax(0, 1.3fr);
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: var(--text-micro);
+}
+.svc__row:hover { background: var(--color-card); }
+.svc__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-faint);
+}
+.svc__dot--running { background: #16a34a; }
+.svc__dot--exited, .svc__dot--dead { background: #9ca3af; }
+.svc__dot--paused { background: #d97706; }
+.svc__dot--restarting { background: #2563eb; }
+.svc__dot--created { background: #6366f1; }
+.svc__name { font-weight: 600; color: var(--color-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.svc__img, .svc__ports, .svc__status {
+  color: var(--color-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 网络展开:连接的容器 */

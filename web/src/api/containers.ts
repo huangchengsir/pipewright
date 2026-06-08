@@ -196,6 +196,50 @@ export async function getServerStacks(id: string): Promise<ServerStacks> {
   return http.get<ServerStacks>(`/api/servers/${id}/stacks`)
 }
 
+/** One service/container inside a compose project. */
+export interface StackService {
+  service: string
+  name: string
+  image: string
+  state: string
+  status: string
+  ports: string
+}
+
+/** Drill-in detail for one compose project: its services + (when locatable) the compose file. */
+export interface StackDetail {
+  serverId: string
+  name: string
+  reachable: boolean
+  runtime: string
+  error: string
+  services: StackService[]
+  running: number
+  total: number
+  configFiles: string
+  compose: string
+  /** `file` = compose 原文已读出;`none` = 无法定位(外部部署、老 v1 无标签)。 */
+  composeSource: 'file' | 'none'
+  /** 单一绝对路径 → 可在线编辑保存重部署。 */
+  editable: boolean
+  collectedAt: string
+}
+
+/** Drill into one compose project (services + compose file when available). */
+export async function getStackDetail(id: string, name: string): Promise<StackDetail> {
+  return http.get<StackDetail>(`/api/servers/${id}/stacks/${encodeURIComponent(name)}`)
+}
+
+/** Save edited compose back to its original path and redeploy (docker compose up -d). */
+export async function saveStackCompose(
+  id: string,
+  name: string,
+  compose: string,
+  configFile: string,
+): Promise<StackActionResult> {
+  return http.post<StackActionResult>(`/api/servers/${id}/stacks/save`, { name, compose, configFile })
+}
+
 // ─── AI 诊断 / 看日志 ─────────────────────────────────────────────────────────
 
 export interface DiagnosisEvidence {

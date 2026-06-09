@@ -235,11 +235,10 @@ func main() {
 	//   - 缺省 auto:探测到 docker/nerdctl/podman 用 real,否则回退桩(优雅降级,NFR-10)。
 	// 真实 Builder 经构造函数注入 projectSvc/pipelineSettingsSvc/credVault;真实日志/产物/失败日志
 	// 经同一 run.StepSink 喂出,复用既有持久化/SSE/脱敏(下方 WithLogMaskerFunc 对真实日志同样生效)。
-	// PIPEWRIGHT_RUNNER=dag 时启用 DAG 调度执行器(Epic 8 · 8-1↔8-3):按阶段 needs 构 DAG 调度
-	// (无依赖阶段并行、失败阻断下游),阶段编排经既有 StepSink 持久化。**默认关闭**(不破存量):
-	// 缺省/其它值仍走 PIPEWRIGHT_BUILDER 选出的真实 Builder / 桩 runner。
-	// ⚠ 当前阶段执行体为占位 stub(仅打日志即成功);真实「阶段内并行 job → job 内有序 step
-	// 在隔离容器构建/部署」= Story 8-2 尚未接入,故 dag 模式现仅用于验证编排,不做真实构建。
+	// 运行执行器默认 DAG 调度执行器(Epic 8 · 8-1↔8-3):按阶段 needs 构 DAG 调度
+	// (无依赖阶段并行、失败阻断下游),真按 UI 可视化流水线 stages/script job/deploy_ssh/notify
+	// 执行,阶段编排经既有 StepSink 持久化。**默认启用**(下方据 PIPEWRIGHT_RUNNER 选择):
+	// 仅 PIPEWRIGHT_RUNNER=legacy 才回退 PIPEWRIGHT_BUILDER 选出的旧版固定流程 Builder / 桩 runner。
 	// 目标服务器(SSH 执行层)+ 远程构建 runner 配置(FR-8-14 续):项目可指定一台 server 作远程构建机,
 	// 配置后该项目构建下沉到远程执行(控制机本地克隆 → 经 SSH 传工作区 → 远程容器跑;token 只在控制机)。
 	targetSvc := target.New(st.DB, credVault, nil)
@@ -315,8 +314,16 @@ func main() {
 	// 部署服务(提前到 dag 装配前构造,供 deploy_ssh 流水线节点注入)。Story 4.6 诊断钩子复用 7-2。
 	deploySvc := deploy.New(targetSvc, runSvc, deploy.WithDiagnoseHook(httpapi.NewDiagnoseHook(runSvc, aiSvc, secretSrc)), deploy.WithArtifactStore(artStore))
 
+	// 运行执行器选择(Epic 8):**默认走 DAG 调度执行器**——它是唯一真正按 UI 配置的
+	// stages/script job/deploy_ssh/notify 编排执行的运行器。只有显式 PIPEWRIGHT_RUNNER=legacy
+	// 才回退旧版固定流程(clone→对仓库根 docker build→deploy,无视可视化流水线)。
+	// PIPEWRIGHT_RUNNER=dag 仍受支持(向后兼容);未设或任意非 legacy 值一律 = dag。
+	// DAG 模式探测不到容器 CLI(docker)时优雅回退 stub(现有逻辑,NFR-10)。
 	var runnerOpts []run.PoolOption
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("PIPEWRIGHT_RUNNER")), "dag") {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("PIPEWRIGHT_RUNNER")), "legacy") {
+		runnerOpts = buildRunnerOption(projectSvc, pipelineSettingsSvc, credVault, artStore, repoCache)
+		log.Printf("[run] PIPEWRIGHT_RUNNER=legacy:旧版固定流程运行器已启用(clone→对仓库根 docker build→deploy,⚠ 不执行 UI 可视化流水线 stages;如需真按流水线跑请去掉该 env)")
+	} else {
 		// 阶段执行体(Story 8-2):探测到容器 CLI → 注入真实阶段执行器(script 类型 job 在隔离
 		// 容器内真实跑命令,复用 Builder 的 cloner+driver);否则回退 stub(优雅降级,NFR-10)。
 		var dagOpts []dagrun.Option
@@ -326,9 +333,9 @@ func main() {
 			// runSvc 作测试报告持久层注入(Story 8-6 / FR-8-6):script 步骤产报告 → 解析 →
 			// 落库 → 质量门禁裁决(不过则阶段失败,阻断下游部署)。
 			dagOpts = append(dagOpts, dagrun.WithStageExecutor(build.NewStageExecutorWithRunner(b, runSvc, runnerSvc, targetSvc)))
-			log.Printf("[run] PIPEWRIGHT_RUNNER=dag:DAG 调度执行器已启用(阶段按 needs 编排;script 类型 job 在隔离容器真实执行,CLI=%s;build_image/push_image/deploy_ssh 真实化=后续)", b.DriverBinary())
+			log.Printf("[run] DAG 调度执行器已启用(默认;阶段按 needs 编排,真按 UI 可视化流水线 stages 执行;script 类型 job 在隔离容器真实执行,CLI=%s;PIPEWRIGHT_RUNNER=legacy 可回退旧版固定流程)", b.DriverBinary())
 		} else {
-			log.Printf("[run] PIPEWRIGHT_RUNNER=dag:DAG 调度执行器已启用(阶段按 needs 编排;⚠ 未探测到容器 CLI,阶段执行体回退 stub:%v)", berr)
+			log.Printf("[run] DAG 调度执行器已启用(默认;阶段按 needs 编排,真按 UI 可视化流水线 stages 执行;⚠ 未探测到容器 CLI,阶段执行体回退 stub:%v;PIPEWRIGHT_RUNNER=legacy 可回退旧版固定流程)", berr)
 		}
 		// 「流水线即代码」运行时覆盖(FR-8-12):PIPEWRIGHT_PAC_RUNTIME=1 时,用装饰器包住库内
 		// loader——运行时若项目仓库根含合法 `.pipewright.yml` 即用它驱动本次运行,否则一律回退库内
@@ -346,8 +353,6 @@ func main() {
 			log.Printf("[pac] 运行时 .pipewright.yml 覆盖已启用(PIPEWRIGHT_PAC_RUNTIME=1;按本次运行分支拉取,空分支退化默认分支;任何问题回退库内配置)")
 		}
 		runnerOpts = []run.PoolOption{run.WithRunner(dagrun.New(specLoader, dagOpts...))}
-	} else {
-		runnerOpts = buildRunnerOption(projectSvc, pipelineSettingsSvc, credVault, artStore, repoCache)
 	}
 
 	// 终态钩子:通知(Story 5.2);PIPEWRIGHT_PR_STATUS=1 时再叠加「PR 状态回写」(Story 8-9 / FR-8-9):

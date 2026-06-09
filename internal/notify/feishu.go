@@ -19,22 +19,62 @@ import (
 // 飞书自定义机器人投递。
 //
 // 与通用 webhook 渠道的关键区别(也是后者发不进飞书的根因):
-//   - 报文形状:飞书要 {"msg_type":"text","content":{"text":...}},而非通用 webhook 的
-//     {title,body,fields};发错形状飞书返回 HTTP 200 但 body 内 code=19002「params error」。
+//   - 报文形状:飞书要自家形状(本实现发 {"msg_type":"interactive","card":{...}} 交互卡片),
+//     而非通用 webhook 的 {title,body,fields};发错形状飞书返回 HTTP 200 但 body 内
+//     code=19002「params error」。
 //   - 成功判定:飞书**即便参数错误也回 HTTP 200**,故绝不能只看 HTTP 状态码,必须解析返回
 //     JSON 的 code 字段(0=成功,非 0=失败,人读 msg 透出)。
 //
+// 卡片形态(对标钉钉 ActionCard / 企微 markdown):彩色头部(成功绿/失败红/回滚橙/中性蓝)+
+// 标题 + lark_md 正文 + 字段双列(项目/分支/提交/状态/耗时…)。颜色据运行结果(event/status)推断。
+//
 // 可选签名:机器人若开启「签名校验」,配置时填密钥(走 vault 加密)。投递按飞书规范算
-// timestamp + sign 注入 body;未配密钥则不带签名(与机器人未开校验一致)。
+// timestamp + sign 注入 body 顶层;未配密钥则不带签名(与机器人未开校验一致)。
 
-// feishuTextBody 是飞书文本消息体(开启签名时另带 timestamp/sign)。
-type feishuTextBody struct {
-	Timestamp string `json:"timestamp,omitempty"`
-	Sign      string `json:"sign,omitempty"`
-	MsgType   string `json:"msg_type"`
-	Content   struct {
-		Text string `json:"text"`
-	} `json:"content"`
+// ─── 交互卡片报文结构(飞书 message card v1) ─────────────────────────────────────
+
+// feishuCardBody 是飞书交互卡片消息体(开启签名时另带顶层 timestamp/sign)。
+type feishuCardBody struct {
+	Timestamp string     `json:"timestamp,omitempty"`
+	Sign      string     `json:"sign,omitempty"`
+	MsgType   string     `json:"msg_type"` // 恒 "interactive"
+	Card      feishuCard `json:"card"`
+}
+
+// feishuCard 卡片本体:config + 彩色 header + elements。
+type feishuCard struct {
+	Config   feishuCardConfig `json:"config"`
+	Header   feishuCardHeader `json:"header"`
+	Elements []feishuCardElem `json:"elements"`
+}
+
+type feishuCardConfig struct {
+	WideScreenMode bool `json:"wide_screen_mode"`
+}
+
+// feishuCardHeader 彩色头部:template 是飞书内置主题色(green/red/orange/blue…)。
+type feishuCardHeader struct {
+	Template string         `json:"template"`
+	Title    feishuCardText `json:"title"`
+}
+
+// feishuCardElem 是卡片元素(本实现用 div):text(整段正文)或 fields(双列字段),二者择一。
+type feishuCardElem struct {
+	Tag    string            `json:"tag"`              // 恒 "div"
+	Text   *feishuCardText   `json:"text,omitempty"`   // 正文段(lark_md)
+	Fields []feishuCardField `json:"fields,omitempty"` // 字段双列(lark_md)
+}
+
+// feishuCardField 双列字段格:is_short=true 即半宽,两两并排成双列。
+type feishuCardField struct {
+	IsShort bool           `json:"is_short"`
+	Text    feishuCardText `json:"text"`
+}
+
+// feishuCardText 飞书卡片文本:tag=plain_text(标题)或 lark_md(正文/字段,支持简易 md)。
+type feishuCardText struct {
+	Tag     string `json:"tag"`
+	Content string `json:"content"`
 }
 
 // feishuResp 是飞书机器人返回体(只取判定/人读所需字段)。
@@ -56,9 +96,10 @@ func (s *service) sendFeishu(ctx context.Context, ch *Channel, sealed []byte, pa
 		return fmt.Errorf("飞书 webhook 地址不被允许:仅 http/https,且不可指向云元数据/链路本地地址")
 	}
 
-	var body feishuTextBody
-	body.MsgType = "text"
-	body.Content.Text = feishuText(payload)
+	body := feishuCardBody{
+		MsgType: "interactive",
+		Card:    feishuCardFor(payload),
+	}
 
 	// 可选签名:机器人开启「签名校验」时,配置里存了密钥(密文)。
 	if len(sealed) > 0 {
@@ -127,38 +168,130 @@ func (s *service) sendFeishu(ctx context.Context, ch *Channel, sealed []byte, pa
 	return nil
 }
 
-// feishuText 把通知载荷拼成飞书文本消息正文(标题 + 正文 + 结构化字段)。
-func feishuText(p Payload) string {
-	var b strings.Builder
-	if t := strings.TrimSpace(p.Title); t != "" {
-		b.WriteString(t)
+// feishuFieldOrder 字段在卡片里的展示顺序(业务可读优先,而非字母序);未列出的 key 追加在后、按字母序。
+var feishuFieldOrder = []string{"project", "branch", "commit", "status", "duration", "event"}
+
+// feishuFieldLabel 字段 key → 中文标签(卡片里展示更友好)。未知 key 原样用 key。
+func feishuFieldLabel(key string) string {
+	switch key {
+	case "project":
+		return "项目"
+	case "branch":
+		return "分支"
+	case "commit":
+		return "提交"
+	case "status":
+		return "状态"
+	case "duration":
+		return "耗时"
+	case "event":
+		return "事件"
+	case "source":
+		return "来源"
+	case "kind":
+		return "类型"
+	default:
+		return key
 	}
+}
+
+// feishuCardFor 把通知载荷拼成飞书交互卡片:彩色头部 + lark_md 正文 + 字段双列。
+func feishuCardFor(p Payload) feishuCard {
+	title := strings.TrimSpace(p.Title)
+	if title == "" {
+		title = "Pipewright 通知"
+	}
+
+	card := feishuCard{
+		Config: feishuCardConfig{WideScreenMode: true},
+		Header: feishuCardHeader{
+			Template: feishuHeaderColor(p),
+			Title:    feishuCardText{Tag: "plain_text", Content: title},
+		},
+	}
+
+	// 正文段(lark_md)。空则省略(飞书允许卡片无正文段,只要 elements 非空)。
 	if body := strings.TrimSpace(p.Body); body != "" {
-		if b.Len() > 0 {
-			b.WriteString("\n\n")
-		}
-		b.WriteString(body)
+		card.Elements = append(card.Elements, feishuCardElem{
+			Tag:  "div",
+			Text: &feishuCardText{Tag: "lark_md", Content: body},
+		})
 	}
-	if len(p.Fields) > 0 {
-		keys := make([]string, 0, len(p.Fields))
-		for k := range p.Fields {
+
+	// 字段双列(lark_md,每格 **标签**\n值)。按业务顺序排,稳定不抖动。
+	if fields := feishuOrderedFields(p.Fields); len(fields) > 0 {
+		card.Elements = append(card.Elements, feishuCardElem{
+			Tag:    "div",
+			Fields: fields,
+		})
+	}
+
+	// 兜底:正文与字段都空时,放一个占位段(飞书卡片 elements 不可为空)。
+	if len(card.Elements) == 0 {
+		card.Elements = append(card.Elements, feishuCardElem{
+			Tag:  "div",
+			Text: &feishuCardText{Tag: "lark_md", Content: "(空通知)"},
+		})
+	}
+	return card
+}
+
+// feishuOrderedFields 把 Payload.Fields 渲染成双列卡片字段格(业务顺序优先,稳定)。
+func feishuOrderedFields(fields map[string]string) []feishuCardField {
+	if len(fields) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(fields))
+	keys := make([]string, 0, len(fields))
+	// 1. 先按预定义业务顺序
+	for _, k := range feishuFieldOrder {
+		if _, ok := fields[k]; ok {
 			keys = append(keys, k)
-		}
-		sort.Strings(keys) // 稳定顺序(map 迭代无序,避免投递文案抖动)
-		if b.Len() > 0 {
-			b.WriteString("\n")
-		}
-		for _, k := range keys {
-			b.WriteString("\n")
-			b.WriteString(k)
-			b.WriteString(": ")
-			b.WriteString(p.Fields[k])
+			seen[k] = true
 		}
 	}
-	if b.Len() == 0 {
-		return "(空通知)" // 飞书 text 不可为空
+	// 2. 其余 key 按字母序追加(稳定,避免 map 迭代乱序)
+	rest := make([]string, 0)
+	for k := range fields {
+		if !seen[k] {
+			rest = append(rest, k)
+		}
 	}
-	return b.String()
+	sort.Strings(rest)
+	keys = append(keys, rest...)
+
+	out := make([]feishuCardField, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, feishuCardField{
+			IsShort: true, // 半宽 → 两两并排成双列
+			Text: feishuCardText{
+				Tag:     "lark_md",
+				Content: "**" + feishuFieldLabel(k) + "**\n" + fields[k],
+			},
+		})
+	}
+	return out
+}
+
+// feishuHeaderColor 据运行结果推断卡片头部主题色(飞书内置 template):
+// 成功绿 / 失败红 / 回滚橙 / 其余中性蓝。优先看 event(语义最准),回退 status。
+func feishuHeaderColor(p Payload) string {
+	event := strings.ToLower(strings.TrimSpace(p.Fields["event"]))
+	status := strings.ToLower(strings.TrimSpace(p.Fields["status"]))
+
+	// 回滚单独橙色(既非成功也非纯失败)。
+	if strings.Contains(event, "rollback") || strings.Contains(status, "rolled_back") || strings.Contains(status, "rollback") {
+		return "orange"
+	}
+	// 失败:event 含 failed,或 status 含 fail(failed / partial_failed)。
+	if strings.Contains(event, "fail") || strings.Contains(status, "fail") {
+		return "red"
+	}
+	// 成功:event 含 succeeded,或 status==success。
+	if strings.Contains(event, "succeed") || status == "success" || strings.Contains(status, "success") {
+		return "green"
+	}
+	return "blue"
 }
 
 // feishuSign 按飞书规范算签名:stringToSign = "{timestamp}\n{secret}",

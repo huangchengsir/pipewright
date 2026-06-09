@@ -45,15 +45,18 @@ func TestFeishuSendSuccess(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	var sent feishuTextBody
+	var sent feishuCardBody
 	if err := json.Unmarshal(gotBody, &sent); err != nil {
 		t.Fatalf("POST 体应为合法 JSON: %s", gotBody)
 	}
-	if sent.MsgType != "text" {
-		t.Fatalf("msg_type 应为 text,得 %q", sent.MsgType)
+	if sent.MsgType != "interactive" {
+		t.Fatalf("msg_type 应为 interactive(交互卡片),得 %q", sent.MsgType)
 	}
-	if !strings.Contains(sent.Content.Text, "测试通知") {
-		t.Fatalf("content.text 应含测试标题: %q", sent.Content.Text)
+	if sent.Card.Header.Title.Content != "Pipewright 测试通知" {
+		t.Fatalf("卡片头部标题应为测试标题: %q", sent.Card.Header.Title.Content)
+	}
+	if len(sent.Card.Elements) == 0 {
+		t.Fatalf("卡片 elements 不应为空")
 	}
 	if sent.Sign != "" || sent.Timestamp != "" {
 		t.Fatalf("未配密钥不应带签名: %+v", sent)
@@ -137,9 +140,12 @@ func TestFeishuSignsWhenSecretConfigured(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	var sent feishuTextBody
+	var sent feishuCardBody
 	if err := json.Unmarshal(gotBody, &sent); err != nil {
 		t.Fatalf("POST 体非法: %s", gotBody)
+	}
+	if sent.MsgType != "interactive" {
+		t.Fatalf("msg_type 应为 interactive,得 %q", sent.MsgType)
 	}
 	if sent.Timestamp == "" || sent.Sign == "" {
 		t.Fatalf("配密钥应带 timestamp+sign: %+v", sent)
@@ -150,23 +156,91 @@ func TestFeishuSignsWhenSecretConfigured(t *testing.T) {
 	}
 }
 
-// 文本拼装:标题 + 正文 + 字段(字段按 key 稳定排序)。
-func TestFeishuText(t *testing.T) {
-	got := feishuText(Payload{
+// 卡片拼装:彩色头部 + 标题 + lark_md 正文 + 字段双列(业务顺序稳定、中文标签)。
+func TestFeishuCard(t *testing.T) {
+	card := feishuCardFor(Payload{
 		Title:  "部署成功",
 		Body:   "aireboot @ staging",
-		Fields: map[string]string{"status": "success", "branch": "main"},
+		Fields: map[string]string{"status": "success", "branch": "main", "event": "deploy_succeeded"},
 	})
-	for _, want := range []string{"部署成功", "aireboot @ staging", "branch: main", "status: success"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("文本应含 %q,得:\n%s", want, got)
+
+	// 头部:标题 + 成功绿。
+	if card.Header.Title.Content != "部署成功" {
+		t.Fatalf("头部标题应为 %q,得 %q", "部署成功", card.Header.Title.Content)
+	}
+	if card.Header.Template != "green" {
+		t.Fatalf("部署成功事件头部应为 green,得 %q", card.Header.Template)
+	}
+
+	// 正文段(lark_md)。
+	var bodyContent string
+	var fieldElem *feishuCardElem
+	for i := range card.Elements {
+		e := &card.Elements[i]
+		if e.Text != nil && e.Text.Content == "aireboot @ staging" {
+			bodyContent = e.Text.Content
+			if e.Text.Tag != "lark_md" {
+				t.Fatalf("正文应为 lark_md,得 %q", e.Text.Tag)
+			}
+		}
+		if len(e.Fields) > 0 {
+			fieldElem = e
 		}
 	}
-	// 稳定排序:branch 在 status 前。
-	if strings.Index(got, "branch:") > strings.Index(got, "status:") {
-		t.Fatalf("字段应按 key 排序: %s", got)
+	if bodyContent == "" {
+		t.Fatalf("应含正文段 aireboot @ staging: %+v", card.Elements)
 	}
-	if feishuText(Payload{}) != "(空通知)" {
-		t.Fatalf("空载荷应回占位文本")
+	if fieldElem == nil {
+		t.Fatalf("应含字段双列 div: %+v", card.Elements)
+	}
+
+	// 字段:中文标签 + 值,is_short(双列),业务顺序 branch 在 status 在 event 前。
+	joined := ""
+	for _, f := range fieldElem.Fields {
+		if !f.IsShort {
+			t.Fatalf("字段格应 is_short=true(双列): %+v", f)
+		}
+		joined += f.Text.Content + "|"
+	}
+	for _, want := range []string{"**分支**\nmain", "**状态**\nsuccess", "**事件**\ndeploy_succeeded"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("字段应含 %q,得:\n%s", want, joined)
+		}
+	}
+	if strings.Index(joined, "**分支**") > strings.Index(joined, "**状态**") {
+		t.Fatalf("业务顺序:分支应在状态前: %s", joined)
+	}
+	if strings.Index(joined, "**状态**") > strings.Index(joined, "**事件**") {
+		t.Fatalf("业务顺序:状态应在事件前: %s", joined)
+	}
+
+	// 空载荷:仍产合法卡片(默认标题 + 占位段),elements 非空。
+	empty := feishuCardFor(Payload{})
+	if empty.Header.Title.Content == "" || len(empty.Elements) == 0 {
+		t.Fatalf("空载荷应产默认标题 + 占位段: %+v", empty)
+	}
+}
+
+// 头部配色:失败红 / 回滚橙 / 成功绿 / 中性蓝,event 优先、回退 status。
+func TestFeishuHeaderColor(t *testing.T) {
+	cases := []struct {
+		name   string
+		fields map[string]string
+		want   string
+	}{
+		{"构建失败事件→红", map[string]string{"event": "build_failed"}, "red"},
+		{"部署失败 status→红", map[string]string{"status": "partial_failed"}, "red"},
+		{"回滚事件→橙", map[string]string{"event": "rollback"}, "orange"},
+		{"回滚 status→橙", map[string]string{"status": "rolled_back"}, "orange"},
+		{"构建成功事件→绿", map[string]string{"event": "build_succeeded"}, "green"},
+		{"成功 status→绿", map[string]string{"status": "success"}, "green"},
+		{"未知→中性蓝", map[string]string{"kind": "test"}, "blue"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := feishuHeaderColor(Payload{Fields: c.fields}); got != c.want {
+				t.Fatalf("want %q got %q (fields=%v)", c.want, got, c.fields)
+			}
+		})
 	}
 }

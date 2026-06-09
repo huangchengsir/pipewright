@@ -165,6 +165,49 @@ describe('buildRunStages', () => {
     expect(unmatched.steps).toHaveLength(1)
     expect(unmatched.status).toBe('failed')
   })
+
+  it('零 step 阶段默认不标 blocked(不传 runStatus,向后兼容)', () => {
+    const steps = [mkStep('step-1', 'Build', 'success')]
+    const stages = [mkStage('stg-a', 'Build'), mkStage('stg-b', 'Deploy', ['stg-a'])]
+    const result = buildRunStages(steps, stages)
+    const deploy = result.find((r) => r.id === 'stg-b')!
+    expect(deploy.steps).toHaveLength(0)
+    expect(deploy.blocked).toBe(false)
+  })
+
+  it('运行进行中:零 step 阶段不标 blocked(还在跑,不是没机会跑)', () => {
+    const steps = [mkStep('step-1', 'Build', 'success')]
+    const stages = [mkStage('stg-a', 'Build'), mkStage('stg-b', 'Deploy', ['stg-a'])]
+    const result = buildRunStages(steps, stages, 'running')
+    const deploy = result.find((r) => r.id === 'stg-b')!
+    expect(deploy.blocked).toBe(false)
+  })
+
+  it('运行终态失败:零 step 阶段标 blocked(被上游失败卡住,未执行)', () => {
+    // 源码克隆失败:失败 step 进 _unmatched;配置的 Build/Deploy 阶段零 step。
+    const steps = [{ ...mkStep('s0', '拉取源码', 'failed') }]
+    const stages = [mkStage('stg-a', 'Build'), mkStage('stg-b', 'Deploy', ['stg-a'])]
+    const result = buildRunStages(steps, stages, 'failed')
+    const build = result.find((r) => r.id === 'stg-a')!
+    const deploy = result.find((r) => r.id === 'stg-b')!
+    expect(build.steps).toHaveLength(0)
+    expect(build.blocked).toBe(true)
+    expect(deploy.blocked).toBe(true)
+    // 失败的克隆 step 落 _unmatched,该合成阶段聚合状态为 failed(已展示失败)。
+    const unmatched = result.find((r) => r.id === '_unmatched')!
+    expect(unmatched.status).toBe('failed')
+    expect(unmatched.blocked).toBe(false)
+  })
+
+  it('运行终态失败:有 step 的阶段不标 blocked(它真跑过)', () => {
+    const steps = [mkStep('s1', 'Build', 'failed')]
+    const stages = [mkStage('stg-a', 'Build')]
+    const result = buildRunStages(steps, stages, 'failed')
+    const build = result.find((r) => r.id === 'stg-a')!
+    expect(build.steps).toHaveLength(1)
+    expect(build.blocked).toBe(false)
+    expect(build.status).toBe('failed')
+  })
 })
 
 // ─── buildDagEdges ────────────────────────────────────────────────────────────
@@ -172,9 +215,9 @@ describe('buildRunStages', () => {
 describe('buildDagEdges', () => {
   it('uses explicit needs when any stage has them', () => {
     const stages = [
-      { id: 'a', name: 'A', needs: [], steps: [], status: 'pending' as const, gate: false },
-      { id: 'b', name: 'B', needs: ['a'], steps: [], status: 'pending' as const, gate: false },
-      { id: 'c', name: 'C', needs: ['a'], steps: [], status: 'pending' as const, gate: false },
+      { id: 'a', name: 'A', needs: [], steps: [], status: 'pending' as const, gate: false, blocked: false },
+      { id: 'b', name: 'B', needs: ['a'], steps: [], status: 'pending' as const, gate: false, blocked: false },
+      { id: 'c', name: 'C', needs: ['a'], steps: [], status: 'pending' as const, gate: false, blocked: false },
     ]
     const edges = buildDagEdges(stages)
     expect(edges).toHaveLength(2)
@@ -184,9 +227,9 @@ describe('buildDagEdges', () => {
 
   it('falls back to linear chain when no needs declared', () => {
     const stages = [
-      { id: 'a', name: 'A', needs: [], steps: [], status: 'pending' as const, gate: false },
-      { id: 'b', name: 'B', needs: [], steps: [], status: 'pending' as const, gate: false },
-      { id: 'c', name: 'C', needs: [], steps: [], status: 'pending' as const, gate: false },
+      { id: 'a', name: 'A', needs: [], steps: [], status: 'pending' as const, gate: false, blocked: false },
+      { id: 'b', name: 'B', needs: [], steps: [], status: 'pending' as const, gate: false, blocked: false },
+      { id: 'c', name: 'C', needs: [], steps: [], status: 'pending' as const, gate: false, blocked: false },
     ]
     const edges = buildDagEdges(stages)
     expect(edges).toHaveLength(2)
@@ -196,7 +239,7 @@ describe('buildDagEdges', () => {
 
   it('returns empty edges for single stage', () => {
     const stages = [
-      { id: 'a', name: 'A', needs: [], steps: [], status: 'pending' as const, gate: false },
+      { id: 'a', name: 'A', needs: [], steps: [], status: 'pending' as const, gate: false, blocked: false },
     ]
     expect(buildDagEdges(stages)).toHaveLength(0)
   })
@@ -207,9 +250,9 @@ describe('buildDagEdges', () => {
 describe('topoSort', () => {
   it('sorts linear chain correctly', () => {
     const stages = [
-      { id: 'c', name: 'C', needs: ['b'], steps: [], status: 'pending' as const, gate: false },
-      { id: 'a', name: 'A', needs: [], steps: [], status: 'pending' as const, gate: false },
-      { id: 'b', name: 'B', needs: ['a'], steps: [], status: 'pending' as const, gate: false },
+      { id: 'c', name: 'C', needs: ['b'], steps: [], status: 'pending' as const, gate: false, blocked: false },
+      { id: 'a', name: 'A', needs: [], steps: [], status: 'pending' as const, gate: false, blocked: false },
+      { id: 'b', name: 'B', needs: ['a'], steps: [], status: 'pending' as const, gate: false, blocked: false },
     ]
     const sorted = topoSort(stages)
     const ids = sorted.map((s) => s.id)
@@ -220,10 +263,10 @@ describe('topoSort', () => {
   it('handles diamond DAG', () => {
     // a → b, a → c, b → d, c → d
     const stages = [
-      { id: 'a', name: 'A', needs: [], steps: [], status: 'pending' as const, gate: false },
-      { id: 'b', name: 'B', needs: ['a'], steps: [], status: 'pending' as const, gate: false },
-      { id: 'c', name: 'C', needs: ['a'], steps: [], status: 'pending' as const, gate: false },
-      { id: 'd', name: 'D', needs: ['b', 'c'], steps: [], status: 'pending' as const, gate: false },
+      { id: 'a', name: 'A', needs: [], steps: [], status: 'pending' as const, gate: false, blocked: false },
+      { id: 'b', name: 'B', needs: ['a'], steps: [], status: 'pending' as const, gate: false, blocked: false },
+      { id: 'c', name: 'C', needs: ['a'], steps: [], status: 'pending' as const, gate: false, blocked: false },
+      { id: 'd', name: 'D', needs: ['b', 'c'], steps: [], status: 'pending' as const, gate: false, blocked: false },
     ]
     const sorted = topoSort(stages)
     const ids = sorted.map((s) => s.id)

@@ -131,6 +131,7 @@ make build          # 前端构建 → go:embed → 单个静态二进制 ./pipe
 | `PIPEWRIGHT_MASTER_KEY` | 凭据保险库主密钥(base64 的 32 字节);或用 `_FILE` 指文件 | 未配则保险库禁用 |
 | `PIPEWRIGHT_ADMIN_USERNAME` | 首次启动管理员用户名 | `admin` |
 | `PIPEWRIGHT_ADMIN_PASSWORD` | 首次启动管理员口令 | 无(须设置) |
+| `PIPEWRIGHT_RUNNER` | 运行执行器:默认 DAG（真按 UI 可视化流水线 stages/script job/deploy_ssh/notify 编排执行）；设 `legacy` 回退旧版固定流程（clone→对仓库根 docker build→deploy，不执行可视化流水线） | `dag`（默认） |
 
 ## 技术栈
 

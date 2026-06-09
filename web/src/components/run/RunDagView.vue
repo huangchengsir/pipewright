@@ -76,7 +76,7 @@ onMounted(() => { void loadSpec() })
 
 const dagStages = computed<RunStage[]>(() => {
   if (specLoading.value) return []
-  return topoSort(buildRunStages(props.steps, pipelineStages.value))
+  return topoSort(buildRunStages(props.steps, pipelineStages.value, props.runStatus))
 })
 
 const dagEdges = computed(() => buildDagEdges(dagStages.value))
@@ -197,6 +197,17 @@ function stageVis(status: StepStatus): StatusVis {
   }
 }
 
+/**
+ * 阶段视觉:零 step 但因整轮失败被卡住(blocked)的阶段单独呈现「未执行」(红色失败语义),
+ * 不再当成「等待」(误导成还在跑)。其余照常按聚合状态。
+ */
+function stageVisFor(stage: RunStage): StatusVis {
+  if (stage.blocked) {
+    return { dotColor: 'var(--color-red)', label: '未执行', cardClass: 'card--blocked', pulse: false }
+  }
+  return stageVis(stage.status)
+}
+
 function stepVis(status: StepStatus): { color: string; icon: 'check' | 'spinner' | 'x' | 'skip' | 'dot' } {
   switch (status) {
     case 'success': return { color: 'var(--color-green)', icon: 'check'   }
@@ -272,22 +283,30 @@ function edgeClass(status: string): string {
             v-for="stage in dagStages"
             :key="stage.id"
             class="dag-stage-card"
-            :class="stageVis(stage.status).cardClass"
+            :class="stageVisFor(stage).cardClass"
             role="listitem"
-            :aria-label="`阶段 ${stage.name}: ${stageVis(stage.status).label}`"
+            :aria-label="`阶段 ${stage.name}: ${stageVisFor(stage).label}`"
           >
             <!-- Stage header -->
             <header class="stage-head">
               <!-- Status dot -->
               <span
                 class="stage-dot"
-                :class="{ 'dot--pulse': stageVis(stage.status).pulse }"
-                :style="{ background: stageVis(stage.status).dotColor }"
+                :class="{ 'dot--pulse': stageVisFor(stage).pulse }"
+                :style="{ background: stageVisFor(stage).dotColor }"
                 aria-hidden="true"
               />
 
               <!-- Stage name -->
               <span class="stage-name">{{ stage.name }}</span>
+
+              <!-- Status badge:据 stage 聚合状态(含 blocked=未执行)显式给文字 + 配色,
+                   收起态也一眼看出失败/未执行,不再只靠小圆点。pending 不冗余展示。 -->
+              <span
+                v-if="stageVisFor(stage).cardClass !== 'card--pending'"
+                class="stage-status-badge"
+                :class="`badge--${stageVisFor(stage).cardClass.replace('card--', '')}`"
+              >{{ stageVisFor(stage).label }}</span>
 
               <!-- Gate badge -->
               <span v-if="stage.gate" class="stage-gate" aria-label="需要人工审批">
@@ -322,12 +341,16 @@ function edgeClass(status: string): string {
 
             <!-- Step count summary (always visible) -->
             <div class="stage-summary">
-              <span class="stage-step-count">
-                {{ stage.steps.length }} 步骤
-              </span>
-              <span v-if="stage.steps.some(s => s.status === 'failed')" class="stage-fail-count">
-                · {{ stage.steps.filter(s => s.status === 'failed').length }} 失败
-              </span>
+              <!-- blocked(整轮失败,本阶段零 step → 没机会跑)不展示「0 步骤」,直接给未执行语义。 -->
+              <span v-if="stage.blocked" class="stage-blocked-note">未执行(上游失败)</span>
+              <template v-else>
+                <span class="stage-step-count">
+                  {{ stage.steps.length }} 步骤
+                </span>
+                <span v-if="stage.steps.some(s => s.status === 'failed')" class="stage-fail-count">
+                  · {{ stage.steps.filter(s => s.status === 'failed').length }} 失败
+                </span>
+              </template>
             </div>
 
             <!-- Expanded step list -->
@@ -378,8 +401,12 @@ function edgeClass(status: string): string {
               </li>
             </ul>
 
-            <!-- Empty stage placeholder -->
-            <div v-if="stage.steps.length === 0" class="stage-empty">
+            <!-- Empty stage placeholder:仅在「尚未开始」时显示;blocked(整轮已失败)给失败语义,
+                 不再显示「尚无步骤」(误导成还没跑 / 还在跑)。 -->
+            <div v-if="stage.steps.length === 0 && stage.blocked" class="stage-empty stage-empty--blocked">
+              因上游失败未执行
+            </div>
+            <div v-else-if="stage.steps.length === 0" class="stage-empty">
               尚无步骤
             </div>
           </article>
@@ -542,6 +569,12 @@ function edgeClass(status: string): string {
   border-color: var(--color-border);
   opacity: 0.75;
 }
+/* blocked:整轮失败、本阶段零 step 没机会执行 —— 红色虚线边,与「失败」同色系但虚化区分。 */
+.card--blocked {
+  border-color: var(--color-red-line);
+  border-style: dashed;
+  opacity: 0.85;
+}
 
 @keyframes card-running-glow {
   from { box-shadow: 0 0 0 1px var(--color-amber-soft), var(--shadow); }
@@ -670,6 +703,28 @@ function edgeClass(status: string): string {
   font-weight: 600;
 }
 
+/* blocked 阶段摘要:红色「未执行(上游失败)」。 */
+.stage-blocked-note {
+  color: var(--color-red);
+  font-weight: 600;
+}
+
+/* 阶段头部状态徽标:小药丸,文字 + 配色随聚合状态(失败/未执行红、成功绿、进行中琥珀)。 */
+.stage-status-badge {
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 999px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.stage-status-badge.badge--success { color: var(--color-green); background: var(--color-green-soft); }
+.stage-status-badge.badge--running { color: var(--color-amber); background: var(--color-amber-soft); }
+.stage-status-badge.badge--failed,
+.stage-status-badge.badge--blocked  { color: var(--color-red);   background: var(--color-red-soft); }
+.stage-status-badge.badge--skipped  { color: var(--color-dim);   background: var(--color-card-2); }
+
 /* ─── step list ────────────────────────────────────────────────────────────── */
 .stage-steps {
   list-style: none;
@@ -755,5 +810,9 @@ function edgeClass(status: string): string {
   font-size: 0.74rem;
   color: var(--color-faint);
   text-align: center;
+}
+.stage-empty--blocked {
+  color: var(--color-red);
+  opacity: 0.85;
 }
 </style>

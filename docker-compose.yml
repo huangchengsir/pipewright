@@ -23,6 +23,9 @@ services:
       # 默认 sqlite,库落 /data/pipewright.db(WORKDIR=/data)。切 MySQL 见下方 env + 注释。
       PIPEWRIGHT_DB_DRIVER: ${PIPEWRIGHT_DB_DRIVER:-sqlite}
       PIPEWRIGHT_DB_DSN: ${PIPEWRIGHT_DB_DSN:-}
+      # 运行执行器:默认 DAG(真按 UI 可视化流水线 stages 执行)。仅需回退旧版固定流程时
+      # 显式设 PIPEWRIGHT_RUNNER=legacy(clone→对仓库根 docker build→deploy,不跑可视化流水线)。
+      PIPEWRIGHT_RUNNER: ${PIPEWRIGHT_RUNNER:-}
     volumes:
       - pipewright-data:/data
       # 隔离构建 / 镜像部署需要 Docker:取消下一行挂宿主 docker.sock(注意:等同授予宿主 root 级权限,

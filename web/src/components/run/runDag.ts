@@ -28,6 +28,12 @@ export interface RunStage {
   status: StepStatus
   /** Gate flag from pipeline spec. */
   gate: boolean
+  /**
+   * 阶段从未执行(无任何 step)却因整轮运行已终态失败而被卡住——典型:更早的阶段
+   * (如源码克隆)失败,下游阶段根本没机会跑。此时不应显示「尚无步骤 / 等待」(误导成
+   * 还没开始 / 还在跑),而要明确标为「未执行」(失败语义)。仅在运行终态失败时才置真。
+   */
+  blocked: boolean
 }
 
 /** An edge in the DAG (upstream → downstream). */
@@ -104,14 +110,27 @@ export function findStageForStep(
 // ─── Build DAG stages ────────────────────────────────────────────────────────
 
 /**
+ * 整轮运行是否已**终态失败**——据此把零 step 的阶段从「等待」纠正为「未执行(blocked)」。
+ * partial_failed/rolled_back 也视为失败终态(运行没全绿,零 step 阶段确实没正常跑完)。
+ */
+function isRunFailed(runStatus?: string): boolean {
+  return runStatus === 'failed' || runStatus === 'partial_failed' || runStatus === 'rolled_back'
+}
+
+/**
  * Build RunStage[] from a flat step list + pipeline spec stages.
  * When no pipeline spec is available (empty array), falls back to one synthetic
  * "stage" per step (linear DAG).
+ *
+ * `runStatus`(可选):整轮运行状态。终态失败时,零 step 的阶段标 `blocked`(未执行),
+ * 避免显示「尚无步骤」误导成还在跑。不传 = 不做该纠正(向后兼容)。
  */
 export function buildRunStages(
   steps: ReadonlyArray<RunStep>,
   pipelineStages: ReadonlyArray<PipelineStage>,
+  runStatus?: string,
 ): RunStage[] {
+  const runFailed = isRunFailed(runStatus)
   if (pipelineStages.length === 0) {
     // No pipeline spec: treat each step as its own stage (pure linear)
     return steps.map((step) => ({
@@ -121,6 +140,7 @@ export function buildRunStages(
       steps: [step],
       status: step.status,
       gate: false,
+      blocked: false,
     }))
   }
 
@@ -154,6 +174,8 @@ export function buildRunStages(
         steps: stageSteps,
         status: deriveStageStatus(stageSteps),
         gate: stage.gate ?? false,
+        // 运行已终态失败且本阶段无任何 step → 它根本没机会执行(被上游失败卡住),标 blocked。
+        blocked: runFailed && stageSteps.length === 0,
       }
     })
 
@@ -166,6 +188,7 @@ export function buildRunStages(
       steps: unmatched,
       status: deriveStageStatus(unmatched),
       gate: false,
+      blocked: false,
     })
   }
 

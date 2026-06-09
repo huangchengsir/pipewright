@@ -501,6 +501,15 @@ function shortCommit(commit: string): string {
   return commit.length > 7 ? commit.slice(0, 7) : commit
 }
 
+// Commit 区显示文案:有 commit 取短 hash;空时——运行已失败(典型源码克隆失败,
+// 还没解析到 commit 就挂了)给失败语义「未取到」而非纯空白(误导成还在跑),
+// 其余(进行中尚未解析)用占位符 —。
+function commitDisplay(commit: string, status: RunStatus): string {
+  if (commit) return shortCommit(commit)
+  if (status === 'failed' || status === 'partial_failed' || status === 'rolled_back') return '未取到'
+  return '—'
+}
+
 function formatDuration(ms: number | null): string {
   if (ms === null) return '—'
   const s = Math.floor(ms / 1000)
@@ -675,7 +684,10 @@ function nodeClass(status: StepStatus): string {
           </div>
           <div class="meta-item">
             <span class="meta-key">Commit</span>
-            <span class="meta-val mono">{{ shortCommit(run.trigger.commit) }}</span>
+            <span
+              class="meta-val mono"
+              :class="{ 'meta-val--failed': !run.trigger.commit && (run.status === 'failed' || run.status === 'partial_failed' || run.status === 'rolled_back') }"
+            >{{ commitDisplay(run.trigger.commit, run.status) }}</span>
           </div>
           <div class="meta-item">
             <span class="meta-key">触发</span>
@@ -1427,6 +1439,10 @@ function nodeClass(status: StepStatus): string {
 .meta-val {
   font-size: 0.83rem;
   color: var(--color-dim);
+}
+/* 失败且未取到 commit:用失败色,不留纯空白(误导成还在跑)。 */
+.meta-val--failed {
+  color: var(--color-red);
 }
 
 .mono { font-family: var(--font-mono); }

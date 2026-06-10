@@ -137,10 +137,14 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 
 		sink := &reporterSink{rep: rep}
 		hasPost := len(stage.Post) > 0
-		// 阶段内 job 级 DAG:任一 job 声明 needs → 按 job DAG 并发调度(无依赖 job 并行,各 job
-		// 独立克隆工作区以保并发安全);整阶段无 job needs → 沿用既有「按类型分组串行 + 单一阶段工作区」
-		// (零行为变化,守护存量流水线)。
-		hasJobDAG := stageHasJobNeeds(stage.Jobs)
+		// 阶段内 job 级 DAG:多 job(且都带 ID)或任一 job 声明 needs → 按 job 级 DAG 并发调度
+		// (无依赖 job 并行,对齐画布「并行节点(无 needs)」语义;有 needs 的 job 等其全部上游成功后
+		// 再跑;各 job 独立克隆工作区以保并发安全)。单 job 阶段沿用既有路径(零额外克隆)。
+		// 要求都带 ID:DAG 需唯一节点 ID 建图(生产侧保存流水线时 job 必有 ID);无 ID(测试/异常数据)
+		// 退回既有类型分组路径以防建图失败。
+		// 注:无 needs 的同阶段 job 现按「并行」跑(各自独立工作区);若需「串行 + 共享 env/产物」,应给
+		// 下游 job 显式声明 needs(画布「串行节点」),与 UI 的串/并语义一致。
+		hasJobDAG := stageHasJobNeeds(stage.Jobs) || (len(stage.Jobs) > 1 && allJobsHaveIDs(stage.Jobs))
 
 		// 工作区:
 		//  - 非 DAG 路径:有 script/build_image **或** 有 post 步骤时克隆一份阶段工作区(沿用既有语义)。
@@ -320,6 +324,17 @@ func stageHasJobNeeds(jobs []pipeline.Job) bool {
 		}
 	}
 	return false
+}
+
+// allJobsHaveIDs 报告阶段内每个 job 都有非空 ID。job 级 DAG 调度需唯一节点 ID 建图;生产侧保存
+// 流水线时 job 必有 ID,无 ID(仅测试/异常数据)时调用方退回既有类型分组路径以防 dag 建图失败。
+func allJobsHaveIDs(jobs []pipeline.Job) bool {
+	for _, jb := range jobs {
+		if strings.TrimSpace(jb.ID) == "" {
+			return false
+		}
+	}
+	return true
 }
 
 // runStageJobsDAG 按「阶段内 job 级 DAG」并发执行该阶段的所有 job:无依赖的 job 并行跑、有 needs

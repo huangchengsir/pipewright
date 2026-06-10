@@ -676,3 +676,54 @@ func TestStageExecutorJobDAGFailureSkipsDependents(t *testing.T) {
 		t.Errorf("B 与 A 无依赖,应仍执行;order=%v", drv.order)
 	}
 }
+
+// countingCloner 记录 Clone 调用次数:旧版类型分组路径全阶段共享一次克隆;job 级 DAG 路径每个需
+// 工作区的 job 各克隆一次。用克隆次数确定性判定走了哪条路(不依赖并发时序)。
+type countingCloner struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (c *countingCloner) Clone(_ context.Context, _, _, _, _, destDir string) (*CloneResolved, error) {
+	c.mu.Lock()
+	c.n++
+	c.mu.Unlock()
+	return &CloneResolved{CommitShort: "abc1234"}, nil
+}
+
+// TestSameStageNoNeedsJobsRunParallel:同阶段两个【无 needs】但都带 ID 的 job(=画布「并行节点」),
+// 应走 job 级 DAG 并行路径(各自独立克隆工作区),而非旧版串行单工作区。回归 fix(parallel-jobs-same-stage)。
+func TestSameStageNoNeedsJobsRunParallel(t *testing.T) {
+	drv := &orderDriver{codes: map[string]int{}}
+	cl := &countingCloner{}
+	b := newDAGTestBuilder(drv, cl)
+	exec := NewStageExecutor(b, nil)
+	stage := pipeline.Stage{ID: "s1", Name: "构建", Kind: pipeline.KindBuild, Jobs: []pipeline.Job{
+		scriptJobID("fe", "imgFE"),
+		scriptJobID("be", "imgBE"),
+	}}
+	if err := exec(context.Background(), &run.Run{ProjectID: "p1"}, stage, &fakeReporter{}); err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	if len(drv.order) != 2 {
+		t.Fatalf("两个 job 都应执行, got order=%v", drv.order)
+	}
+	if cl.n != 2 {
+		t.Fatalf("无 needs 的两 job 应各自独立克隆工作区(DAG 并行路径);clone 次数=%d, want 2(=1 则退回了旧版串行单工作区)", cl.n)
+	}
+}
+
+// TestSameStageSingleJobUsesLegacyPath:单 job 阶段仍走既有路径(共享单工作区,仅 1 次克隆),
+// 不因多 job 并行改动引入额外克隆。
+func TestSameStageSingleJobUsesLegacyPath(t *testing.T) {
+	drv := &orderDriver{codes: map[string]int{}}
+	cl := &countingCloner{}
+	b := newDAGTestBuilder(drv, cl)
+	exec := NewStageExecutor(b, nil)
+	if err := exec(context.Background(), &run.Run{ProjectID: "p1"}, scriptStage(scriptJobID("only", "img1")), &fakeReporter{}); err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	if cl.n != 1 {
+		t.Fatalf("单 job 阶段应共享单一克隆;clone 次数=%d, want 1", cl.n)
+	}
+}

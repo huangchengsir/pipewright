@@ -393,11 +393,30 @@ async function loadRun(): Promise<void> {
   }
 }
 
+// Silent full-snapshot refresh — re-fetch RunDetail WITHOUT toggling loadState
+// (no spinner flicker). The SSE `step` event only carries flat status metadata
+// and never the resolved commit, so while a run is in-progress the commit field
+// and per-stage step grouping would otherwise stay stale until the terminal
+// reload. A periodic silent refresh keeps commit + steps (with stage) + status
+// current during execution; SSE still drives live log tailing.
+async function silentRefresh(): Promise<void> {
+  try {
+    const fresh = await getRun(runId.value)
+    run.value = fresh
+    if (fresh.status === 'waiting_approval') void loadApprovals()
+  } catch {
+    // Transient fetch failure — next tick retries; never surfaced to the UI.
+  }
+}
+
 // ─── SSE subscription ─────────────────────────────────────────────────────────
 // Subscribes when run is in-progress (running/queued).
 // Cleans up on terminal states or component unmount.
 
 let cleanupSse: (() => void) | null = null
+// Periodic in-progress snapshot refresh; lives exactly as long as the SSE
+// subscription (started/stopped alongside it).
+let refreshTimer: ReturnType<typeof setInterval> | null = null
 
 function startSse(): void {
   if (cleanupSse) return
@@ -422,12 +441,19 @@ function startSse(): void {
     },
     // onError is intentionally omitted — subscribeRunEvents falls back to polling
   })
+  if (refreshTimer === null) {
+    refreshTimer = setInterval(() => { void silentRefresh() }, 4000)
+  }
 }
 
 function stopSse(): void {
   if (cleanupSse) {
     cleanupSse()
     cleanupSse = null
+  }
+  if (refreshTimer !== null) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
   }
 }
 

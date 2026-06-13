@@ -25,7 +25,10 @@
  */
 
 import { onMounted, ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { getRunDiff, type RunDiffDTO, type RunDiffFile } from '../../api/runs'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   runId: string
@@ -90,16 +93,20 @@ const statusGlyph: Record<RunDiffFile['status'], string> = {
   renamed: 'R',
 }
 
-const statusLabel: Record<RunDiffFile['status'], string> = {
-  added: '新增',
-  modified: '修改',
-  deleted: '删除',
-  renamed: '重命名',
+const STATUS_LABEL_KEY: Record<RunDiffFile['status'], string> = {
+  added: 'run.fileStatusAdded',
+  modified: 'run.fileStatusModified',
+  deleted: 'run.fileStatusDeleted',
+  renamed: 'run.fileStatusRenamed',
+}
+
+function statusLabel(status: RunDiffFile['status']): string {
+  return t(STATUS_LABEL_KEY[status])
 }
 </script>
 
 <template>
-  <section class="sfd" aria-label="成功失败差异对比">
+  <section class="sfd" :aria-label="t('run.diffRegion')">
     <!-- ─── Header ──────────────────────────────────────────────────── -->
     <div class="sfd-head">
       <div class="sfd-head-left">
@@ -108,13 +115,13 @@ const statusLabel: Record<RunDiffFile['status'], string> = {
             <line x1="6" y1="3" x2="6" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" />
           </svg>
         </span>
-        <span class="sfd-title">代码差异</span>
-        <span class="sfd-subtitle">对比上一次成功运行</span>
+        <span class="sfd-title">{{ t('run.codeDiff') }}</span>
+        <span class="sfd-subtitle">{{ t('run.diffSubtitle') }}</span>
       </div>
       <span
         v-if="diff?.available && totals.count > 0"
         class="sfd-totals mono"
-        :aria-label="`共 ${totals.count} 个文件改动，新增 ${totals.add} 行，删除 ${totals.del} 行`"
+        :aria-label="t('run.diffTotalsAria', { count: totals.count, add: totals.add, del: totals.del })"
       >
         <span class="sfd-totals-add">+{{ totals.add }}</span>
         <span class="sfd-totals-del">−{{ totals.del }}</span>
@@ -124,12 +131,12 @@ const statusLabel: Record<RunDiffFile['status'], string> = {
     <!-- ─── STATE: loading ──────────────────────────────────────────── -->
     <div v-if="loading" class="sfd-body sfd-body--loading" aria-busy="true">
       <span class="sfd-spinner" aria-hidden="true" />
-      <span class="sfd-loading-text">正在计算与上一次成功运行的差异…</span>
+      <span class="sfd-loading-text">{{ t('run.computingDiff') }}</span>
     </div>
 
     <!-- ─── STATE: transport error ──────────────────────────────────── -->
     <div v-else-if="loadError" class="sfd-body sfd-body--muted">
-      <p class="sfd-muted-text">暂时无法加载差异,请稍后重试。</p>
+      <p class="sfd-muted-text">{{ t('run.diffLoadFailed') }}</p>
     </div>
 
     <!-- ─── STATE: available=false (graceful) ───────────────────────── -->
@@ -137,22 +144,22 @@ const statusLabel: Record<RunDiffFile['status'], string> = {
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true" class="sfd-muted-icon">
         <circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" />
       </svg>
-      <p class="sfd-muted-text">{{ diff?.reason || '无可对比的成功基线' }}</p>
-      <p class="sfd-muted-hint">当此前出现过一次成功运行后,这里会显示「改了什么」。</p>
+      <p class="sfd-muted-text">{{ diff?.reason || t('run.noBaseline') }}</p>
+      <p class="sfd-muted-hint">{{ t('run.diffEmptyHint') }}</p>
     </div>
 
     <!-- ─── STATE: available — diff list ────────────────────────────── -->
     <div v-else class="sfd-body">
       <!-- commit range -->
-      <div class="sfd-range" role="group" aria-label="对比的提交范围">
+      <div class="sfd-range" role="group" :aria-label="t('run.commitRangeAria')">
         <span class="sfd-commit sfd-commit--base mono" :title="diff.baselineCommit">
-          <span class="sfd-commit-tag">基线</span>{{ shortCommit(diff.baselineCommit) }}
+          <span class="sfd-commit-tag">{{ t('run.baselineTag') }}</span>{{ shortCommit(diff.baselineCommit) }}
         </span>
         <svg class="sfd-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" />
         </svg>
         <span class="sfd-commit sfd-commit--cur mono" :title="diff.currentCommit">
-          <span class="sfd-commit-tag sfd-commit-tag--cur">本次</span>{{ shortCommit(diff.currentCommit) }}
+          <span class="sfd-commit-tag sfd-commit-tag--cur">{{ t('run.currentTag') }}</span>{{ shortCommit(diff.currentCommit) }}
         </span>
       </div>
 
@@ -161,7 +168,7 @@ const statusLabel: Record<RunDiffFile['status'], string> = {
 
       <!-- empty (commits differ but no file delta) -->
       <p v-if="diff.files.length === 0" class="sfd-muted-text sfd-empty">
-        两次提交之间无文件差异。
+        {{ t('run.noFileDelta') }}
       </p>
 
       <!-- file list -->
@@ -172,7 +179,7 @@ const statusLabel: Record<RunDiffFile['status'], string> = {
           class="sfd-file"
           :class="statusClass(f.status)"
         >
-          <span class="sfd-file-status" :aria-label="statusLabel[f.status]">{{ statusGlyph[f.status] }}</span>
+          <span class="sfd-file-status" :aria-label="statusLabel(f.status)">{{ statusGlyph[f.status] }}</span>
           <span class="sfd-file-path mono" :title="f.path">{{ f.path }}</span>
           <span class="sfd-file-counts mono" aria-hidden="true">
             <span v-if="f.additions" class="sfd-c-add">+{{ f.additions }}</span>
@@ -187,7 +194,7 @@ const statusLabel: Record<RunDiffFile['status'], string> = {
 
       <!-- truncated notice -->
       <p v-if="diff.truncated" class="sfd-trunc" role="note">
-        差异过大,仅展示前 {{ diff.files.length }} 个文件。
+        {{ t('run.diffTruncated', { n: diff.files.length }) }}
       </p>
     </div>
   </section>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import {
   listProjects,
   createProject,
@@ -19,6 +20,24 @@ import RunParamsEditor from '../components/RunParamsEditor.vue'
 import TypedRunParams from '../components/TypedRunParams.vue'
 import { getParameters, validateParamValues, type ParamDef } from '../api/parameters'
 import { HttpError } from '../api/http'
+
+// ─── i18n ─────────────────────────────────────────────────────────────────────
+
+const { t } = useI18n()
+
+// Map the Chinese-keyed project RunStatus to the shared `runStatus.*` i18n keys.
+const RUN_STATUS_KEY: Record<RunStatus, string> = {
+  '成功': 'success',
+  '失败': 'failed',
+  '进行中': 'running',
+  '部分失败': 'partial_failed',
+  '已回滚': 'rolled_back',
+  '排队中': 'queued',
+}
+
+function runStatusLabel(s: RunStatus): string {
+  return t(`runStatus.${RUN_STATUS_KEY[s]}`)
+}
 
 // ─── router ───────────────────────────────────────────────────────────────────
 
@@ -46,15 +65,15 @@ const projects = ref<Project[]>([])
 const searchQuery = ref('')
 const statusFilter = ref<RunStatus | 'all'>('all')
 
-const STATUS_OPTIONS: Array<{ value: RunStatus | 'all'; label: string }> = [
-  { value: 'all',   label: '全部状态' },
-  { value: '成功',   label: '成功' },
-  { value: '失败',   label: '失败' },
-  { value: '进行中', label: '进行中' },
-  { value: '部分失败', label: '部分失败' },
-  { value: '已回滚', label: '已回滚' },
-  { value: '排队中', label: '排队中' },
-]
+const STATUS_OPTIONS = computed<Array<{ value: RunStatus | 'all'; label: string }>>(() => [
+  { value: 'all',     label: t('projects.statusAll') },
+  { value: '成功',     label: runStatusLabel('成功') },
+  { value: '失败',     label: runStatusLabel('失败') },
+  { value: '进行中',   label: runStatusLabel('进行中') },
+  { value: '部分失败', label: runStatusLabel('部分失败') },
+  { value: '已回滚',   label: runStatusLabel('已回滚') },
+  { value: '排队中',   label: runStatusLabel('排队中') },
+])
 
 const filteredProjects = computed(() => {
   let list = projects.value
@@ -104,12 +123,12 @@ async function loadProjects(): Promise<void> {
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
-        loadError.value = '无法连接到服务器,请检查后端是否运行后重试'
+        loadError.value = t('projects.errLoadNetwork')
       } else {
-        loadError.value = err.apiError?.message ?? `加载项目失败(${err.status})`
+        loadError.value = err.apiError?.message ?? t('projects.errLoadStatus', { status: err.status })
       }
     } else {
-      loadError.value = '加载项目失败,请稍后重试'
+      loadError.value = t('projects.errLoadRetry')
     }
     loadState.value = 'error'
   }
@@ -168,21 +187,21 @@ function validateCreateForm(): boolean {
   clearCreateErrors()
   let ok = true
   if (!createForm.value.name.trim()) {
-    createErrors.value.name = '请输入项目名称'
+    createErrors.value.name = t('projects.errNameRequired')
     ok = false
   }
   if (!createForm.value.repoUrl.trim()) {
-    createErrors.value.repoUrl = '请输入仓库地址'
+    createErrors.value.repoUrl = t('projects.errRepoRequired')
     ok = false
   } else if (
     !createForm.value.repoUrl.trim().startsWith('http') &&
     !createForm.value.repoUrl.trim().startsWith('git@')
   ) {
-    createErrors.value.repoUrl = '仓库地址格式不正确,请以 https:// 或 git@ 开头'
+    createErrors.value.repoUrl = t('projects.errRepoFormat')
     ok = false
   }
   if (!createForm.value.credentialId) {
-    createErrors.value.credentialId = '请选择仓库凭据'
+    createErrors.value.credentialId = t('projects.errCredRequired')
     ok = false
   }
   return ok
@@ -192,11 +211,11 @@ async function handleTestClone(): Promise<void> {
   // Validate url + credential only
   let ok = true
   if (!createForm.value.repoUrl.trim()) {
-    createErrors.value.repoUrl = '请先输入仓库地址'
+    createErrors.value.repoUrl = t('projects.errRepoFirst')
     ok = false
   }
   if (!createForm.value.credentialId) {
-    createErrors.value.credentialId = '请先选择仓库凭据'
+    createErrors.value.credentialId = t('projects.errCredFirst')
     ok = false
   }
   if (!ok) return
@@ -221,18 +240,18 @@ async function handleTestClone(): Promise<void> {
     if (err instanceof HttpError) {
       const code = err.apiError?.code
       if (code === 'credential_error') {
-        testError.value = '凭据错误:请检查 Gitee 访问令牌是否有效,前往凭据保险库更新。'
+        testError.value = t('projects.testErrCredential')
       } else if (code === 'repo_unreachable') {
-        testError.value = '仓库不可达:请确认仓库地址正确,且仓库存在且可访问。'
+        testError.value = t('projects.testErrUnreachable')
       } else if (code === 'vault_unconfigured') {
-        testError.value = '保险库未配置 master key,无法读取凭据。'
+        testError.value = t('projects.testErrVault')
       } else if (err.status === 0) {
-        testError.value = '无法连接到服务器,请检查后端是否运行后重试。'
+        testError.value = t('projects.errNetwork')
       } else {
-        testError.value = err.apiError?.message ?? `连接测试失败(${err.status})`
+        testError.value = err.apiError?.message ?? t('projects.testErrStatus', { status: err.status })
       }
     } else {
-      testError.value = '连接测试失败,请稍后重试。'
+      testError.value = t('projects.testErrRetry')
     }
   }
 }
@@ -259,20 +278,20 @@ async function handleCreateSubmit(): Promise<void> {
     if (err instanceof HttpError) {
       const code = err.apiError?.code
       if (code === 'credential_error') {
-        createErrors.value.credentialId = '凭据错误:请检查访问令牌是否有效'
-        createBanner.value = '凭据验证失败,请更换凭据或前往凭据保险库更新。'
+        createErrors.value.credentialId = t('projects.createErrCredField')
+        createBanner.value = t('projects.createErrCredBanner')
       } else if (code === 'repo_unreachable') {
-        createErrors.value.repoUrl = '仓库不可达:请确认地址正确且可访问'
-        createBanner.value = '仓库地址不可达,创建失败。'
+        createErrors.value.repoUrl = t('projects.createErrRepoField')
+        createBanner.value = t('projects.createErrRepoBanner')
       } else if (code === 'vault_unconfigured') {
-        createBanner.value = '保险库未配置 master key,无法保存项目。'
+        createBanner.value = t('projects.createErrVault')
       } else if (err.status === 0) {
-        createBanner.value = '无法连接到服务器,请检查后端是否运行后重试。'
+        createBanner.value = t('projects.errNetwork')
       } else {
-        createBanner.value = err.apiError?.message ?? `创建失败(${err.status})`
+        createBanner.value = err.apiError?.message ?? t('projects.createErrStatus', { status: err.status })
       }
     } else {
-      createBanner.value = '创建失败,请稍后重试。'
+      createBanner.value = t('projects.createErrRetry')
     }
   } finally {
     createSubmitting.value = false
@@ -304,7 +323,7 @@ function closeRenameModal(): void {
 
 async function handleRenameSubmit(): Promise<void> {
   if (!renameValue.value.trim()) {
-    renameError.value = '项目名称不能为空'
+    renameError.value = t('projects.errNameEmpty')
     return
   }
   if (!renamingProject.value) return
@@ -321,12 +340,12 @@ async function handleRenameSubmit(): Promise<void> {
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
-        renameBanner.value = '无法连接到服务器,请稍后重试。'
+        renameBanner.value = t('projects.errNetworkRetry')
       } else {
-        renameBanner.value = err.apiError?.message ?? `重命名失败(${err.status})`
+        renameBanner.value = err.apiError?.message ?? t('projects.renameErrStatus', { status: err.status })
       }
     } else {
-      renameBanner.value = '重命名失败,请稍后重试。'
+      renameBanner.value = t('projects.renameErrRetry')
     }
   } finally {
     renameSubmitting.value = false
@@ -366,12 +385,12 @@ async function confirmDelete(): Promise<void> {
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
-        deleteBanner.value = '无法连接到服务器,请稍后重试。'
+        deleteBanner.value = t('projects.errNetworkRetry')
       } else {
-        deleteBanner.value = err.apiError?.message ?? `删除失败(${err.status})`
+        deleteBanner.value = err.apiError?.message ?? t('projects.deleteErrStatus', { status: err.status })
       }
     } else {
-      deleteBanner.value = '删除失败,请稍后重试。'
+      deleteBanner.value = t('projects.deleteErrRetry')
     }
   } finally {
     deleteSubmitting.value = false
@@ -483,14 +502,14 @@ async function handleTriggerSubmit(): Promise<void> {
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
-        triggerBanner.value = '无法连接到服务器,请检查后端是否运行后重试。'
+        triggerBanner.value = t('projects.errNetwork')
       } else if (err.status === 404) {
-        triggerBanner.value = '项目不存在,请刷新后重试。'
+        triggerBanner.value = t('projects.triggerErrNotFound')
       } else {
-        triggerBanner.value = err.apiError?.message ?? `触发失败(${err.status})`
+        triggerBanner.value = err.apiError?.message ?? t('projects.triggerErrStatus', { status: err.status })
       }
     } else {
-      triggerBanner.value = '触发失败,请稍后重试。'
+      triggerBanner.value = t('projects.triggerErrRetry')
     }
   } finally {
     triggerSubmitting.value = false
@@ -502,13 +521,13 @@ async function handleTriggerSubmit(): Promise<void> {
 function relativeTime(isoStr: string): string {
   const diff = Date.now() - new Date(isoStr).getTime()
   const s = Math.floor(diff / 1000)
-  if (s < 60) return '刚刚'
+  if (s < 60) return t('time.justNow')
   const m = Math.floor(s / 60)
-  if (m < 60) return `${m} 分钟前`
+  if (m < 60) return t('time.minAgo', { n: m })
   const h = Math.floor(m / 60)
-  if (h < 24) return `${h} 小时前`
+  if (h < 24) return t('time.hourAgo', { n: h })
   const d = Math.floor(h / 24)
-  return `${d} 天前`
+  return t('time.dayAgo', { n: d })
 }
 
 function credentialLabel(c: Credential): string {
@@ -533,8 +552,8 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
     <!-- ─── Page header ─────────────────────────────────────────────────── -->
     <header class="page-header">
       <div class="page-header-text">
-        <h1 class="page-title">项目</h1>
-        <p class="page-sub">纳管的 Gitee 仓库,每个项目对应一套流水线配置与部署目标</p>
+        <h1 class="page-title">{{ t('projects.title') }}</h1>
+        <p class="page-sub">{{ t('projects.subtitle') }}</p>
       </div>
       <button
         class="btn-primary"
@@ -544,7 +563,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
           <path d="M12 5v14M5 12h14"/>
         </svg>
-        新建项目
+        {{ t('projects.newProject') }}
       </button>
     </header>
 
@@ -558,7 +577,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
         <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
       </svg>
       <span>{{ loadError }}</span>
-      <button class="banner-retry" @click="loadProjects">↻ 重试</button>
+      <button class="banner-retry" @click="loadProjects">↻ {{ t('projects.retry') }}</button>
     </div>
 
     <!-- ─── Search + Filter toolbar ─────────────────────────────────────── -->
@@ -566,7 +585,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
       v-if="loadState === 'idle' && projects.length > 0"
       class="toolbar"
       role="search"
-      aria-label="项目搜索与筛选"
+      :aria-label="t('projects.searchFilterAria')"
     >
       <!-- Search box -->
       <div class="search-wrap">
@@ -577,13 +596,13 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
           v-model="searchQuery"
           type="search"
           class="search-input"
-          placeholder="搜索项目名、仓库地址、分支…"
-          aria-label="搜索项目"
+          :placeholder="t('projects.searchPlaceholder')"
+          :aria-label="t('projects.searchAria')"
         />
       </div>
 
       <!-- Status filter -->
-      <div class="filter-tabs" role="group" aria-label="状态筛选">
+      <div class="filter-tabs" role="group" :aria-label="t('projects.statusFilterAria')">
         <button
           v-for="opt in STATUS_OPTIONS"
           :key="opt.value"
@@ -599,7 +618,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
 
     <!-- ─── Loading skeleton ─────────────────────────────────────────────── -->
     <template v-if="loadState === 'loading'">
-      <div class="project-grid" aria-busy="true" aria-label="加载中">
+      <div class="project-grid" aria-busy="true" :aria-label="t('projects.loading')">
         <div
           v-for="i in 6"
           :key="i"
@@ -623,13 +642,13 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
             <path d="M10 14a5 5 0 1 1-7 4.6"/>
           </svg>
         </div>
-        <p class="empty-label">还没有项目</p>
-        <p class="empty-hint">接入第一个 Gitee 仓库,后续可配置流水线并部署到目标服务器。</p>
+        <p class="empty-label">{{ t('projects.emptyTitle') }}</p>
+        <p class="empty-hint">{{ t('projects.emptyHint') }}</p>
         <button class="btn-primary" @click="openCreateModal">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
             <path d="M12 5v14M5 12h14"/>
           </svg>
-          新建项目
+          {{ t('projects.newProject') }}
         </button>
       </div>
     </template>
@@ -642,21 +661,21 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
             <circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/>
           </svg>
         </div>
-        <p class="empty-label">没有匹配的项目</p>
-        <p class="empty-hint">调整搜索词或状态筛选条件后重试。</p>
+        <p class="empty-label">{{ t('projects.noMatchTitle') }}</p>
+        <p class="empty-hint">{{ t('projects.noMatchHint') }}</p>
         <button
           class="btn-secondary"
           @click="searchQuery = ''; statusFilter = 'all'"
-        >清除筛选</button>
+        >{{ t('projects.clearFilter') }}</button>
       </div>
     </template>
 
     <!-- ─── Project grid ─────────────────────────────────────────────────── -->
     <template v-else-if="loadState === 'idle'">
       <p class="result-count" aria-live="polite">
-        {{ filteredProjects.length }} 个项目
+        {{ t('projects.resultCount', { n: filteredProjects.length }) }}
         <template v-if="searchQuery || statusFilter !== 'all'">
-          (共 {{ projects.length }} 个)
+          {{ t('projects.resultCountTotal', { total: projects.length }) }}
         </template>
       </p>
 
@@ -685,7 +704,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
                 border: `1px solid ${STATUS_CONFIG[project.lastRunStatus].border}`,
                 color: STATUS_CONFIG[project.lastRunStatus].text,
               }"
-              :aria-label="`运行状态:${project.lastRunStatus}`"
+              :aria-label="t('projects.runStatusAria', { status: runStatusLabel(project.lastRunStatus) })"
             >
               <span
                 class="status-dot"
@@ -693,7 +712,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
                 :style="{ background: STATUS_CONFIG[project.lastRunStatus].dot }"
                 aria-hidden="true"
               />
-              {{ project.lastRunStatus }}
+              {{ runStatusLabel(project.lastRunStatus) }}
             </div>
           </div>
 
@@ -724,25 +743,25 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
 
           <!-- Last run: empty placeholder or status -->
           <div class="card-meta-row">
-            <span class="meta-label">上次运行</span>
+            <span class="meta-label">{{ t('projects.lastRun') }}</span>
             <span
               v-if="!project.lastRunStatus"
               class="meta-empty"
-            >尚无运行</span>
+            >{{ t('projects.noRun') }}</span>
             <span
               v-else
               class="meta-value"
               :style="{ color: STATUS_CONFIG[project.lastRunStatus].text }"
-            >{{ project.lastRunStatus }}</span>
+            >{{ runStatusLabel(project.lastRunStatus) }}</span>
           </div>
 
           <!-- Target servers: empty placeholder or list -->
           <div class="card-meta-row">
-            <span class="meta-label">目标服务器</span>
+            <span class="meta-label">{{ t('projects.targetServers') }}</span>
             <span
               v-if="!project.targetServers || project.targetServers.length === 0"
               class="meta-empty"
-            >未绑定</span>
+            >{{ t('projects.notBound') }}</span>
             <span v-else class="meta-value">
               {{ project.targetServers.join(', ') }}
             </span>
@@ -750,8 +769,8 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
 
           <!-- Credential reference: display name + masked, never plaintext -->
           <div class="card-meta-row">
-            <span class="meta-label">仓库凭据</span>
-            <span class="meta-value meta-value--mono" :title="'凭据引用(非明文)'">
+            <span class="meta-label">{{ t('projects.credential') }}</span>
+            <span class="meta-value meta-value--mono" :title="t('projects.credentialRefTitle')">
               {{ project.credentialName || '—' }}
             </span>
           </div>
@@ -759,15 +778,15 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
           <!-- Card footer: updatedAt + actions -->
           <div class="card-footer">
             <span class="card-time" :title="project.updatedAt">
-              更新于 {{ relativeTime(project.updatedAt) }}
+              {{ t('projects.updatedAt', { time: relativeTime(project.updatedAt) }) }}
             </span>
 
             <div class="card-actions">
               <!-- Manual trigger / Run -->
               <button
                 class="action-btn action-btn--run"
-                :title="`手动触发运行 · ${project.name}`"
-                :aria-label="`手动触发项目 ${project.name} 的流水线运行`"
+                :title="t('projects.actionRunTitle', { name: project.name })"
+                :aria-label="t('projects.actionRunAria', { name: project.name })"
                 @click.stop="openTriggerModal(project)"
               >
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -778,8 +797,8 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
               <!-- Rename -->
               <button
                 class="action-btn"
-                :title="`重命名 ${project.name}`"
-                :aria-label="`重命名项目 ${project.name}`"
+                :title="t('projects.actionRenameTitle', { name: project.name })"
+                :aria-label="t('projects.actionRenameAria', { name: project.name })"
                 @click="openRenameModal(project)"
               >
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
@@ -791,8 +810,8 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
               <!-- Code browse (Story 7-4: read-only source viewer, FR-4) -->
               <button
                 class="action-btn"
-                :title="`代码浏览 · ${project.name}`"
-                :aria-label="`浏览项目 ${project.name} 的代码`"
+                :title="t('projects.actionCodeTitle', { name: project.name })"
+                :aria-label="t('projects.actionCodeAria', { name: project.name })"
                 @click="goToCode(project.id)"
               >
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -804,8 +823,8 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
               <!-- Configure → triggers page (Story 2.3; will be extended to 4-tab editor in 2-2) -->
               <button
                 class="action-btn"
-                :title="`流水线配置 · ${project.name}`"
-                :aria-label="`配置项目 ${project.name} 的流水线`"
+                :title="t('projects.actionPipelineTitle', { name: project.name })"
+                :aria-label="t('projects.actionPipelineAria', { name: project.name })"
                 @click="goToPipeline(project.id)"
               >
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
@@ -818,8 +837,8 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
               <!-- Delete -->
               <button
                 class="action-btn action-btn--danger"
-                :title="`删除 ${project.name}`"
-                :aria-label="`删除项目 ${project.name}`"
+                :title="t('projects.actionDeleteTitle', { name: project.name })"
+                :aria-label="t('projects.actionDeleteAria', { name: project.name })"
                 @click="openDeleteModal(project)"
               >
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
@@ -842,7 +861,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
       v-if="triggerModalOpen && triggerProject"
       class="modal-scrim"
       role="dialog"
-      :aria-label="`手动触发 · ${triggerProject.name}`"
+      :aria-label="t('projects.triggerDialogAria', { name: triggerProject.name })"
       aria-modal="true"
       @keydown.esc="closeTriggerModal"
       @click.self="closeTriggerModal"
@@ -856,12 +875,12 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
             </svg>
           </div>
           <div>
-            <h3 class="modal-title">手动触发运行</h3>
-            <p class="modal-sub">{{ triggerProject.name }} · 指定分支并立即创建一次流水线运行</p>
+            <h3 class="modal-title">{{ t('projects.triggerTitle') }}</h3>
+            <p class="modal-sub">{{ t('projects.triggerSub', { name: triggerProject.name }) }}</p>
           </div>
           <button
             class="modal-close"
-            aria-label="关闭对话框"
+            :aria-label="t('projects.closeDialog')"
             :disabled="triggerSubmitting"
             @click="closeTriggerModal"
           >
@@ -891,8 +910,8 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
           <!-- Branch -->
           <div class="field">
             <label class="field-label" for="trigger-branch">
-              分支
-              <span class="field-hint-inline">（可选,留空用项目默认分支）</span>
+              {{ t('projects.branch') }}
+              <span class="field-hint-inline">{{ t('projects.branchHint') }}</span>
             </label>
             <input
               id="trigger-branch"
@@ -923,15 +942,15 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
           <!-- Commit (optional) -->
           <div class="field">
             <label class="field-label" for="trigger-commit">
-              Commit
-              <span class="field-hint-inline">（可选,留空使用分支 HEAD）</span>
+              {{ t('projects.commit') }}
+              <span class="field-hint-inline">{{ t('projects.commitHint') }}</span>
             </label>
             <input
               id="trigger-commit"
               v-model="triggerForm.commit"
               class="field-input field-input--mono"
               type="text"
-              placeholder="例:a3f1c2d"
+              :placeholder="t('projects.commitPlaceholder')"
               autocomplete="off"
               list="trigger-commit-options"
               :disabled="triggerSubmitting"
@@ -945,8 +964,8 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
           <!-- Parameters · 有类型化定义(P0)→ 渲染类型化控件;无 → 自由 KV(Story 8-11) -->
           <div class="field">
             <label class="field-label">
-              参数
-              <span class="field-hint-inline">{{ triggerDefs.length ? '（按定义填写,注入流水线为环境变量）' : '（可选,注入流水线为环境变量）' }}</span>
+              {{ t('projects.params') }}
+              <span class="field-hint-inline">{{ triggerDefs.length ? t('projects.paramsHintTyped') : t('projects.paramsHintFree') }}</span>
             </label>
             <TypedRunParams
               v-if="triggerDefs.length"
@@ -969,7 +988,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
               class="btn-secondary"
               :disabled="triggerSubmitting"
               @click="closeTriggerModal"
-            >取消</button>
+            >{{ t('projects.cancel') }}</button>
             <button
               type="submit"
               class="btn-run"
@@ -980,7 +999,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
               <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/>
               </svg>
-              {{ triggerSubmitting ? '触发中…' : '立即运行' }}
+              {{ triggerSubmitting ? t('projects.triggering') : t('projects.runNow') }}
             </button>
           </div>
         </form>
@@ -996,7 +1015,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
       v-if="createModalOpen"
       class="modal-scrim"
       role="dialog"
-      aria-label="新建项目"
+      :aria-label="t('projects.newProject')"
       aria-modal="true"
       @keydown.esc="closeCreateModal"
       @click.self="closeCreateModal"
@@ -1011,12 +1030,12 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
             </svg>
           </div>
           <div>
-            <h3 class="modal-title">新建项目</h3>
-            <p class="modal-sub">接入 Gitee 仓库并绑定仓库凭据</p>
+            <h3 class="modal-title">{{ t('projects.newProject') }}</h3>
+            <p class="modal-sub">{{ t('projects.createSub') }}</p>
           </div>
           <button
             class="modal-close"
-            aria-label="关闭对话框"
+            :aria-label="t('projects.closeDialog')"
             :disabled="createSubmitting"
             @click="closeCreateModal"
           >
@@ -1045,14 +1064,14 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
         >
           <!-- Project name -->
           <div class="field">
-            <label class="field-label" for="proj-name">项目名称</label>
+            <label class="field-label" for="proj-name">{{ t('projects.fieldName') }}</label>
             <input
               id="proj-name"
               v-model="createForm.name"
               class="field-input"
               :class="{ 'field-input--error': createErrors.name }"
               type="text"
-              placeholder="例:acme-web"
+              :placeholder="t('projects.fieldNamePlaceholder')"
               autocomplete="off"
               :disabled="createSubmitting"
               :aria-invalid="createErrors.name ? 'true' : undefined"
@@ -1064,7 +1083,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
 
           <!-- Repo URL -->
           <div class="field">
-            <label class="field-label" for="proj-repo">仓库地址</label>
+            <label class="field-label" for="proj-repo">{{ t('projects.fieldRepo') }}</label>
             <input
               id="proj-repo"
               v-model="createForm.repoUrl"
@@ -1084,8 +1103,8 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
           <!-- Credential dropdown — git_token only, masked display -->
           <div class="field">
             <label class="field-label" for="proj-cred">
-              仓库凭据
-              <span class="field-hint-inline">（仅显示 Git 令牌类型，不含明文）</span>
+              {{ t('projects.credential') }}
+              <span class="field-hint-inline">{{ t('projects.fieldCredHint') }}</span>
             </label>
             <div class="select-wrap">
               <select
@@ -1099,7 +1118,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
                 @change="createErrors.credentialId = ''; testState = 'idle'"
               >
                 <option value="" disabled>
-                  {{ credentialsLoading ? '加载凭据中…' : '选择 Git 令牌凭据' }}
+                  {{ credentialsLoading ? t('projects.credLoading') : t('projects.credSelect') }}
                 </option>
                 <option
                   v-for="cred in gitCredentials"
@@ -1116,17 +1135,17 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
               v-if="!credentialsLoading && gitCredentials.length === 0"
               class="field-hint"
             >
-              尚无 Git 令牌凭据,请先前往
-              <a href="/settings/vault" class="link">凭据保险库</a>
-              添加。
+              {{ t('projects.credEmptyPre') }}
+              <a href="/settings/vault" class="link">{{ t('projects.credVaultLink') }}</a>
+              {{ t('projects.credEmptyPost') }}
             </span>
           </div>
 
           <!-- Default branch (optional) -->
           <div class="field">
             <label class="field-label" for="proj-branch">
-              默认分支
-              <span class="field-hint-inline">（可选,留空由测试连接自动探测）</span>
+              {{ t('projects.fieldDefaultBranch') }}
+              <span class="field-hint-inline">{{ t('projects.fieldDefaultBranchHint') }}</span>
             </label>
             <input
               id="proj-branch"
@@ -1155,7 +1174,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
                 <path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>
                 <circle cx="12" cy="20" r="1" fill="currentColor"/>
               </svg>
-              {{ testState === 'testing' ? '测试中…' : '测试连接' }}
+              {{ testState === 'testing' ? t('projects.testing') : t('projects.testConnection') }}
             </button>
 
             <!-- Test result inline -->
@@ -1168,8 +1187,8 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
                 <path d="M20 6 9 17l-5-5"/>
               </svg>
-              连接成功
-              <span v-if="testDetectedBranch" class="test-branch mono">· 默认分支 {{ testDetectedBranch }}</span>
+              {{ t('projects.testOk') }}
+              <span v-if="testDetectedBranch" class="test-branch mono">{{ t('projects.testDetectedBranch', { branch: testDetectedBranch }) }}</span>
             </div>
 
             <div
@@ -1192,7 +1211,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
               class="btn-secondary"
               :disabled="createSubmitting"
               @click="closeCreateModal"
-            >取消</button>
+            >{{ t('projects.cancel') }}</button>
             <button
               type="submit"
               class="btn-primary"
@@ -1200,7 +1219,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
               :aria-busy="createSubmitting"
             >
               <span v-if="createSubmitting" class="spinner" aria-hidden="true" />
-              {{ createSubmitting ? '创建中…' : '创建项目' }}
+              {{ createSubmitting ? t('projects.creating') : t('projects.createSubmit') }}
             </button>
           </div>
         </form>
@@ -1216,7 +1235,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
       v-if="renameModalOpen && renamingProject"
       class="modal-scrim"
       role="dialog"
-      aria-label="重命名项目"
+      :aria-label="t('projects.renameTitle')"
       aria-modal="true"
       @keydown.esc="closeRenameModal"
       @click.self="closeRenameModal"
@@ -1230,12 +1249,12 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
             </svg>
           </div>
           <div>
-            <h3 class="modal-title">重命名项目</h3>
-            <p class="modal-sub">修改项目的显示名称</p>
+            <h3 class="modal-title">{{ t('projects.renameTitle') }}</h3>
+            <p class="modal-sub">{{ t('projects.renameSub') }}</p>
           </div>
           <button
             class="modal-close"
-            aria-label="关闭对话框"
+            :aria-label="t('projects.closeDialog')"
             :disabled="renameSubmitting"
             @click="closeRenameModal"
           >
@@ -1262,7 +1281,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
           @submit.prevent="handleRenameSubmit"
         >
           <div class="field">
-            <label class="field-label" for="rename-input">项目名称</label>
+            <label class="field-label" for="rename-input">{{ t('projects.fieldName') }}</label>
             <input
               id="rename-input"
               v-model="renameValue"
@@ -1284,7 +1303,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
               class="btn-secondary"
               :disabled="renameSubmitting"
               @click="closeRenameModal"
-            >取消</button>
+            >{{ t('projects.cancel') }}</button>
             <button
               type="submit"
               class="btn-primary"
@@ -1292,7 +1311,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
               :aria-busy="renameSubmitting"
             >
               <span v-if="renameSubmitting" class="spinner" aria-hidden="true" />
-              {{ renameSubmitting ? '保存中…' : '保存' }}
+              {{ renameSubmitting ? t('projects.saving') : t('projects.save') }}
             </button>
           </div>
         </form>
@@ -1308,7 +1327,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
       v-if="deleteModalOpen && deletingProject"
       class="modal-scrim"
       role="dialog"
-      aria-label="确认删除项目"
+      :aria-label="t('projects.deleteDialogAria')"
       aria-modal="true"
       @keydown.esc="closeDeleteModal"
       @click.self="closeDeleteModal"
@@ -1322,12 +1341,12 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
             </svg>
           </div>
           <div>
-            <h3 class="modal-title">删除项目</h3>
-            <p class="modal-sub">此操作不可撤销</p>
+            <h3 class="modal-title">{{ t('projects.deleteTitle') }}</h3>
+            <p class="modal-sub">{{ t('projects.deleteSub') }}</p>
           </div>
           <button
             class="modal-close"
-            aria-label="关闭对话框"
+            :aria-label="t('projects.closeDialog')"
             :disabled="deleteSubmitting"
             @click="closeDeleteModal"
           >
@@ -1339,9 +1358,9 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
 
         <div class="modal-body">
           <p class="delete-confirm-text">
-            确定要永久删除项目
+            {{ t('projects.deleteConfirmPre') }}
             <strong class="delete-name">{{ deletingProject.name }}</strong>
-            吗?其流水线配置、运行历史及凭据引用关系将一并清理。
+            {{ t('projects.deleteConfirmPost') }}
           </p>
 
           <div
@@ -1362,7 +1381,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
             class="btn-secondary"
             :disabled="deleteSubmitting"
             @click="closeDeleteModal"
-          >取消</button>
+          >{{ t('projects.cancel') }}</button>
           <button
             type="button"
             class="btn-danger"
@@ -1371,7 +1390,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
             @click="confirmDelete"
           >
             <span v-if="deleteSubmitting" class="spinner spinner--red" aria-hidden="true" />
-            {{ deleteSubmitting ? '删除中…' : '确认删除' }}
+            {{ deleteSubmitting ? t('projects.deleting') : t('projects.confirmDelete') }}
           </button>
         </div>
       </div>

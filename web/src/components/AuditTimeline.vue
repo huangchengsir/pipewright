@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { listAudit } from '../api/audit'
 import type { AuditEntry } from '../api/audit'
 import { HttpError } from '../api/http'
+
+const { t } = useI18n()
 
 // ─── state ──────────────────────────────────────────────────────────────────
 
@@ -26,21 +29,26 @@ interface ActionMeta {
   noun: string
 }
 
-// Maps each audit action to a verb/noun + a dot category that drives semantic
-// coloring (green=create, red=delete, primary=run, cyan=config change).
+// Maps each audit action to a verb/noun i18n key + a dot category that drives
+// semantic coloring (green=create, red=delete, primary=run, cyan=config change).
+// verb/noun hold i18n keys (under misc.audit.*); meta() resolves them via t().
 const ACTION_META: Record<string, ActionMeta> = {
-  credential_create: { dot: 'add', verb: '新增', noun: '凭据' },
-  credential_update: { dot: 'cfg', verb: '修改', noun: '凭据' },
-  credential_delete: { dot: 'del', verb: '删除', noun: '凭据' },
-  trigger_secret_reset: { dot: 'cfg', verb: '重置', noun: 'webhook 签名密钥' },
-  project_create: { dot: 'add', verb: '接入', noun: '项目' },
-  project_update: { dot: 'cfg', verb: '修改', noun: '项目' },
-  project_delete: { dot: 'del', verb: '删除', noun: '项目' },
-  run_trigger_manual: { dot: 'use', verb: '手动触发', noun: '运行' },
+  credential_create: { dot: 'add', verb: 'verbCreate', noun: 'nounCredential' },
+  credential_update: { dot: 'cfg', verb: 'verbUpdate', noun: 'nounCredential' },
+  credential_delete: { dot: 'del', verb: 'verbDelete', noun: 'nounCredential' },
+  trigger_secret_reset: { dot: 'cfg', verb: 'verbReset', noun: 'nounWebhookSecret' },
+  project_create: { dot: 'add', verb: 'verbAdd', noun: 'nounProject' },
+  project_update: { dot: 'cfg', verb: 'verbUpdate', noun: 'nounProject' },
+  project_delete: { dot: 'del', verb: 'verbDelete', noun: 'nounProject' },
+  run_trigger_manual: { dot: 'use', verb: 'verbTrigger', noun: 'nounRun' },
 }
 
+// Returns the dot category plus localized verb/noun for an action. Unknown
+// actions fall back to a generic verb and surface the raw action id as the noun.
 function meta(action: string): ActionMeta {
-  return ACTION_META[action] ?? { dot: 'cfg', verb: '操作', noun: action }
+  const m = ACTION_META[action]
+  if (m) return { dot: m.dot, verb: t(`misc.audit.${m.verb}`), noun: t(`misc.audit.${m.noun}`) }
+  return { dot: 'cfg', verb: t('misc.audit.verbDefault'), noun: action }
 }
 
 // Best-effort human label for the affected object: prefer detail.name, then
@@ -55,7 +63,7 @@ function objectLabel(e: AuditEntry): string {
 }
 
 function actorLabel(actor: string): string {
-  return actor === 'admin' ? '你' : actor
+  return actor === 'admin' ? t('misc.audit.actorYou') : actor
 }
 
 // ─── relative time ────────────────────────────────────────────────────────────
@@ -63,14 +71,13 @@ function actorLabel(actor: string): string {
 function relativeTime(isoStr: string): string {
   const diff = Date.now() - new Date(isoStr).getTime()
   const s = Math.floor(diff / 1000)
-  if (s < 5) return '刚刚'
-  if (s < 60) return `${s} 秒前`
+  if (s < 60) return t('time.justNow')
   const m = Math.floor(s / 60)
-  if (m < 60) return `${m} 分钟前`
+  if (m < 60) return t('time.minAgo', { n: m })
   const h = Math.floor(m / 60)
-  if (h < 24) return `${h} 小时前`
+  if (h < 24) return t('time.hourAgo', { n: h })
   const day = Math.floor(h / 24)
-  if (day < 30) return `${day} 天前`
+  if (day < 30) return t('time.dayAgo', { n: day })
   return new Date(isoStr).toLocaleDateString()
 }
 
@@ -78,10 +85,10 @@ function relativeTime(isoStr: string): string {
 
 function describeError(err: unknown): string {
   if (err instanceof HttpError) {
-    if (err.status === 0) return '无法连接到服务器,请检查后端是否运行后重试'
-    return err.apiError?.message ?? `加载审计日志失败(${err.status})`
+    if (err.status === 0) return t('misc.audit.errConnect')
+    return err.apiError?.message ?? t('misc.audit.errLoad', { status: err.status })
   }
-  return '加载审计日志失败,请稍后重试'
+  return t('misc.audit.errLoadRetry')
 }
 
 async function loadFirst(): Promise<void> {
@@ -121,14 +128,14 @@ onMounted(loadFirst)
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true">
         <path d="M12 8v4l3 2" /><circle cx="12" cy="12" r="9" />
       </svg>
-      审计日志
-      <span class="panel-sub">谁 · 何时 · 对什么</span>
+      {{ t('misc.audit.title') }}
+      <span class="panel-sub">{{ t('misc.audit.sub') }}</span>
     </div>
 
     <!-- Error -->
     <div v-if="loadState === 'error' && entries.length === 0" class="audit-error" role="alert">
       <span>{{ loadError }}</span>
-      <button class="audit-retry" @click="loadFirst">↻ 重试</button>
+      <button class="audit-retry" @click="loadFirst">↻ {{ t('misc.error.retry') }}</button>
     </div>
 
     <!-- Loading skeleton -->
@@ -143,17 +150,14 @@ onMounted(loadFirst)
     <!-- Empty -->
     <template v-else-if="loadState === 'idle' && entries.length === 0">
       <div class="audit-empty">
-        <p class="audit-empty-label">还没有审计记录</p>
-        <p class="audit-empty-hint">
-          创建、修改、删除凭据或项目,重置 webhook 密钥,手动触发运行等敏感操作都会在此留痕,
-          记录不可篡改。
-        </p>
+        <p class="audit-empty-label">{{ t('misc.audit.emptyLabel') }}</p>
+        <p class="audit-empty-hint">{{ t('misc.audit.emptyHint') }}</p>
       </div>
     </template>
 
     <!-- Timeline -->
     <template v-else>
-      <ol class="audit" aria-label="审计时间线">
+      <ol class="audit" :aria-label="t('misc.audit.treeAria')">
         <li v-for="e in entries" :key="e.id" class="aev">
           <span class="adot" :class="`adot--${meta(e.action).dot}`" aria-hidden="true">
             <!-- add -->
@@ -173,7 +177,7 @@ onMounted(loadFirst)
               <span class="obj">{{ objectLabel(e) }}</span>
             </span>
             <span class="who">
-              {{ actorLabel(e.actor) }} · Web 控制台<template v-if="e.ip"> · <span class="ip">{{ e.ip }}</span></template>
+              {{ actorLabel(e.actor) }} · {{ t('misc.audit.via') }}<template v-if="e.ip"> · <span class="ip">{{ e.ip }}</span></template>
             </span>
           </div>
 
@@ -188,7 +192,7 @@ onMounted(loadFirst)
         @click="loadMore"
       >
         <span v-if="loadingMore" class="spinner" aria-hidden="true" />
-        {{ loadingMore ? '加载中…' : '加载更多审计记录 →' }}
+        {{ loadingMore ? t('misc.loadingShort') : t('misc.audit.loadMore') }}
       </button>
     </template>
   </div>

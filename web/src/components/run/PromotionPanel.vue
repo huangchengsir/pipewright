@@ -21,6 +21,7 @@
  *   promotion-pending — when a gated promotion is submitted (409 status=pending)
  */
 import { ref, computed, onMounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   getEnvironments,
   promoteRun,
@@ -45,6 +46,8 @@ const emit = defineEmits<{
   /** The parent should refresh its approval gate list. */
   (e: 'promotion-pending'): void
 }>()
+
+const { t } = useI18n()
 
 // ─── Environment chain ────────────────────────────────────────────────────────
 
@@ -76,7 +79,7 @@ async function loadHistory(): Promise<void> {
     promotions.value = res.items
   } catch (err) {
     if (err instanceof HttpError && err.status !== 404) {
-      historyError.value = err.apiError?.message ?? `加载历史失败(${err.status})`
+      historyError.value = err.apiError?.message ?? t('run.loadHistoryFailed', { status: err.status })
     }
     promotions.value = []
   } finally {
@@ -147,8 +150,8 @@ async function decidePromotion(approve: boolean): Promise<void> {
   } catch (err) {
     promotionError.value =
       err instanceof HttpError
-        ? (err.apiError?.message ?? `审批失败(${err.status})`)
-        : '审批失败,请稍后重试'
+        ? (err.apiError?.message ?? t('run.approveFailed', { status: err.status }))
+        : t('run.approveFailedRetry')
   } finally {
     deciding.value = false
   }
@@ -175,23 +178,23 @@ function cancelConfirm(): void {
 
 /** 把晋级请求错误映射为展示文案;gate_rejected 是审批拒绝/超时的正常终态,返回空串(不作错误横幅)。 */
 function mapPromoteError(err: unknown): string {
-  if (!(err instanceof HttpError)) return '晋级请求失败,请稍后重试。'
+  if (!(err instanceof HttpError)) return t('run.promoteRequestFailed')
   const code = err.apiError?.code ?? ''
   switch (code) {
     case 'chain_not_configured':
-      return '项目尚未配置环境链,请在「触发设置」中添加环境链后再晋级。'
+      return t('run.promoteErrChainNotConfigured')
     case 'run_not_successful':
-      return '仅成功完成的运行可晋级。'
+      return t('run.promoteErrRunNotSuccessful')
     case 'already_promoted':
-      return '该运行已晋级到此环境。'
+      return t('run.promoteErrAlreadyPromoted')
     case 'already_at_top':
-      return '已到达链尾,无更高环境可晋级。'
+      return t('run.promoteErrAlreadyAtTop')
     case 'skip_env':
-      return '只能按顺序逐级晋级,不可跳级。'
+      return t('run.promoteErrSkipEnv')
     case 'gate_rejected':
       return '' // 审批拒绝/超时是正常终态,历史已反映 rejected,不弹错误横幅
     default:
-      return err.apiError?.message ?? `晋级失败(${err.status})`
+      return err.apiError?.message ?? t('run.promoteFailed', { status: err.status })
   }
 }
 
@@ -275,8 +278,8 @@ onMounted(init)
             <path d="M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
           </svg>
         </div>
-        <h3 id="promo-heading" class="promo-title">环境晋级</h3>
-        <span v-if="chain.length > 0" class="promo-chain-badge" aria-label="环境链">
+        <h3 id="promo-heading" class="promo-title">{{ t('run.promotionEnv') }}</h3>
+        <span v-if="chain.length > 0" class="promo-chain-badge" :aria-label="t('run.envChainAria')">
           {{ chain.map(e => e.name).join(' → ') }}
         </span>
       </div>
@@ -286,7 +289,7 @@ onMounted(init)
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
         </svg>
-        <span>尚未配置环境链。请前往「触发设置 → 环境链」配置后再晋级。</span>
+        <span>{{ t('run.chainNotConfigured') }}</span>
       </div>
 
       <!-- Pending gated promotion: 审批门批准/拒绝就在这里(优先于「已到链尾」,因 pending 也算到顶) -->
@@ -295,7 +298,7 @@ onMounted(init)
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
             <rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
           </svg>
-          晋级到「{{ pendingPromotion.targetEnvironment }}」等待人工审批
+          {{ t('run.promotePendingApproval', { env: pendingPromotion.targetEnvironment }) }}
         </div>
         <div v-if="promotionError" class="promo-banner promo-banner--error" role="alert" aria-live="assertive">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -311,10 +314,10 @@ onMounted(init)
             @click="decidePromotion(true)"
           >
             <span v-if="deciding" class="promo-spinner" aria-hidden="true" />
-            {{ deciding ? '处理中…' : `批准晋级到「${pendingPromotion.targetEnvironment}」` }}
+            {{ deciding ? t('run.processing') : t('run.approvePromoteTo', { env: pendingPromotion.targetEnvironment }) }}
           </button>
           <button class="promo-btn promo-btn--cancel" :disabled="deciding" @click="decidePromotion(false)">
-            拒绝
+            {{ t('run.reject') }}
           </button>
         </div>
       </div>
@@ -327,7 +330,7 @@ onMounted(init)
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
           <path d="M20 6 9 17l-5-5"/>
         </svg>
-        <span>已晋级到链尾环境「{{ chain[chain.length - 1]?.name }}」,无更高级别。</span>
+        <span>{{ t('run.atTopEnv', { env: chain[chain.length - 1]?.name }) }}</span>
       </div>
 
       <!-- Promote button -->
@@ -337,7 +340,7 @@ onMounted(init)
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
             <path d="M20 6 9 17l-5-5"/>
           </svg>
-          已成功晋级到「{{ promotions[0]?.targetEnvironment }}」
+          {{ t('run.promoteSuccess', { env: promotions[0]?.targetEnvironment }) }}
         </div>
 
         <!-- Pending gate banner -->
@@ -350,7 +353,7 @@ onMounted(init)
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
             <rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
           </svg>
-          晋级到「{{ promotions[0]?.targetEnvironment }}」等待审批 · 请在审批门中批准
+          {{ t('run.promotePendingGate', { env: promotions[0]?.targetEnvironment }) }}
         </div>
 
         <!-- Error banner -->
@@ -370,17 +373,17 @@ onMounted(init)
           </div>
           <div class="promo-confirm-body">
             <p id="promo-confirm-title" class="promo-confirm-title">
-              晋级到「{{ nextEnv?.name }}」需要人工审批
+              {{ t('run.promoteGatedConfirmTitle', { env: nextEnv?.name }) }}
             </p>
             <p class="promo-confirm-sub">
-              提交后晋级进入等待状态,须由有权限的用户批准后方可继续。
+              {{ t('run.promoteGatedConfirmSub') }}
             </p>
           </div>
           <div class="promo-confirm-actions">
-            <button class="promo-btn promo-btn--cancel" @click="cancelConfirm">取消</button>
+            <button class="promo-btn promo-btn--cancel" @click="cancelConfirm">{{ t('run.cancel') }}</button>
             <button class="promo-btn promo-btn--gate" :disabled="promoting" :aria-busy="promoting" @click="doPromote">
               <span v-if="promoting" class="promo-spinner" aria-hidden="true" />
-              {{ promoting ? '提交中…' : '提交晋级申请' }}
+              {{ promoting ? t('run.submitting') : t('run.submitPromoteRequest') }}
             </button>
           </div>
         </div>
@@ -399,28 +402,28 @@ onMounted(init)
             <span v-if="promoting" class="promo-spinner" aria-hidden="true" />
             {{
               promoting
-                ? '晋级中…'
+                ? t('run.promoting')
                 : isNextGated
-                  ? `申请晋级到「${nextEnv?.name}」(需审批)`
-                  : `晋级到「${nextEnv?.name}」`
+                  ? t('run.applyPromoteGated', { env: nextEnv?.name })
+                  : t('run.promoteTo', { env: nextEnv?.name })
             }}
           </button>
           <span v-if="isNextGated" class="promo-gated-hint">
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
             </svg>
-            审批门 · 需人工批准
+            {{ t('run.gateNeedsApproval') }}
           </span>
         </div>
       </div>
 
       <!-- Run not successful -->
       <div v-else-if="props.runStatus !== 'success'" class="promo-empty">
-        <span>仅成功完成的运行可晋级</span>
+        <span>{{ t('run.onlySuccessfulPromote') }}</span>
       </div>
 
       <!-- Loading -->
-      <div v-else-if="!chainLoaded" class="promo-loading" aria-busy="true" aria-label="加载环境链">
+      <div v-else-if="!chainLoaded" class="promo-loading" aria-busy="true" :aria-label="t('run.loadingChainAria')">
         <div class="promo-skel promo-skel--btn" aria-hidden="true" />
       </div>
     </div>
@@ -431,11 +434,11 @@ onMounted(init)
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <circle cx="12" cy="12" r="9"/><path d="M12 6v6l4 2"/>
         </svg>
-        <h4 id="promo-hist-heading" class="promo-history-title">晋级历史</h4>
+        <h4 id="promo-hist-heading" class="promo-history-title">{{ t('run.promotionHistory') }}</h4>
         <span class="promo-hist-count">{{ promotions.length }}</span>
       </div>
 
-      <div v-if="historyLoading" class="promo-hist-body promo-hist-loading" aria-busy="true" aria-label="加载历史">
+      <div v-if="historyLoading" class="promo-hist-body promo-hist-loading" aria-busy="true" :aria-label="t('run.loadingHistoryAria')">
         <div class="promo-skel promo-skel--row" aria-hidden="true" />
         <div class="promo-skel promo-skel--row" aria-hidden="true" />
       </div>
@@ -445,15 +448,15 @@ onMounted(init)
       </div>
 
       <div v-else-if="promotions.length === 0" class="promo-hist-body promo-hist-empty">
-        <span>暂无晋级记录</span>
+        <span>{{ t('run.noPromotionRecords') }}</span>
       </div>
 
-      <ol v-else class="promo-hist-list" aria-label="晋级历史列表">
+      <ol v-else class="promo-hist-list" :aria-label="t('run.historyListAria')">
         <li
           v-for="p in promotions"
           :key="p.id"
           class="promo-hist-item"
-          :aria-label="`晋级到 ${p.targetEnvironment}・${statusCfg(p.status).label}・${fmtDate(p.createdAt)}`"
+          :aria-label="t('run.historyItemAria', { env: p.targetEnvironment, status: statusCfg(p.status).label, date: fmtDate(p.createdAt) })"
         >
           <!-- Status dot -->
           <span

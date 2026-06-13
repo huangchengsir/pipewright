@@ -6,6 +6,7 @@
  * 结构化 v-model 回传 PipelinePostStep[](空数组回传 undefined)。
  */
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { PipelinePostStep } from '../../api/pipeline'
 import { POST_CONDITIONS, POST_CONDITION_LABELS, type PostCondition } from './stageSettings'
 
@@ -17,6 +18,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'update', steps: PipelinePostStep[] | undefined): void
 }>()
+
+const { t } = useI18n()
 
 const rows = computed<PipelinePostStep[]>(() => props.steps ?? [])
 
@@ -47,7 +50,7 @@ function setCommands(i: number, text: string): void {
         <select
           class="settings-input post-cond"
           :value="step.condition"
-          :aria-label="`触发条件 ${i + 1}`"
+          :aria-label="t('pipelineCanvas.postCondAria', { n: i + 1 })"
           @change="patch(i, { condition: ($event.target as HTMLSelectElement).value as PostCondition })"
         >
           <option v-for="c in POST_CONDITIONS" :key="c" :value="c">{{ POST_CONDITION_LABELS[c] }}</option>
@@ -57,21 +60,21 @@ function setCommands(i: number, text: string): void {
           type="text"
           :value="step.image"
           placeholder="busybox"
-          :aria-label="`后置步骤镜像 ${i + 1}`"
+          :aria-label="t('pipelineCanvas.postImageAria', { n: i + 1 })"
           @change="patch(i, { image: ($event.target as HTMLInputElement).value.trim() })"
         />
-        <button class="post-del" :aria-label="`删除后置步骤 ${i + 1}`" @click="removeRow(i)">✕</button>
+        <button class="post-del" :aria-label="t('pipelineCanvas.postDelAria', { n: i + 1 })" @click="removeRow(i)">✕</button>
       </div>
       <textarea
         class="settings-input settings-textarea post-cmds"
         rows="2"
         :value="commandsText(step)"
-        placeholder="清理/通知命令(每行一条)&#10;如 curl -fsS $WEBHOOK"
-        :aria-label="`后置步骤命令 ${i + 1}`"
+        :placeholder="t('pipelineCanvas.postCmdsPlaceholder')"
+        :aria-label="t('pipelineCanvas.postCmdsAria', { n: i + 1 })"
         @change="setCommands(i, ($event.target as HTMLTextAreaElement).value)"
       ></textarea>
     </div>
-    <button class="settings-add-link" @click="addRow">+ 添加后置步骤</button>
+    <button class="settings-add-link" @click="addRow">{{ t('pipelineCanvas.addPost') }}</button>
   </div>
 </template>
 

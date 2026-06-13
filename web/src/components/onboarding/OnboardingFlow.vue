@@ -13,6 +13,7 @@
  * Skip writes localStorage(onboarding_dismissed); re-openable from 设置.
  */
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import AppButton from '../ui/AppButton.vue'
 import type { OnboardingStatus } from '../../composables/useOnboarding'
@@ -26,6 +27,7 @@ const emit = defineEmits<{
 }>()
 
 const router = useRouter()
+const { t } = useI18n()
 
 type StepState = 'done' | 'now' | 'soon'
 
@@ -48,31 +50,31 @@ const steps = computed<StepView[]>(() => {
     {
       key: 'ai',
       num: '1',
-      title: '连接 AI 提供商',
-      badge: '诊断王牌',
-      desc: '接入你自己的 LLM(Claude / OpenAI / 本地 Ollama),密钥存入加密保险库。',
+      title: t('onboardingFlow.step1Title'),
+      badge: t('onboardingFlow.step1Badge'),
+      desc: t('onboardingFlow.step1Desc'),
       state: 'soon',
-      ctaLabel: '前往配置 →',
+      ctaLabel: t('onboardingFlow.configCta'),
       to: '/settings/ai',
     },
     {
       key: 'server',
       num: '2',
-      title: '添加第一台服务器',
-      desc: '填 host + 选 SSH 凭据,平台校验 SSH + Docker 连通性。agentless,无需在目标机装任何东西。',
+      title: t('onboardingFlow.step2Title'),
+      desc: t('onboardingFlow.step2Desc'),
       state: 'soon',
-      ctaLabel: '前往配置 →',
+      ctaLabel: t('onboardingFlow.configCta'),
       to: '/servers',
     },
     {
       key: 'project',
       num: '3',
-      title: '创建第一个项目',
-      desc: '接入 Gitee 仓库,AI 分析代码自动生成流水线配置。',
+      title: t('onboardingFlow.step3Title'),
+      desc: t('onboardingFlow.step3Desc'),
       state: props.status.hasProject ? 'done' : 'now',
-      ctaLabel: '创建项目 →',
+      ctaLabel: t('onboardingFlow.createProjectCta'),
       to: '/projects',
-      doneLabel: '已创建项目',
+      doneLabel: t('onboardingFlow.projectDoneLabel'),
     },
   ]
 })
@@ -100,44 +102,44 @@ function skip(): void {
     <header class="ob-hero">
       <div class="ob-mark mono" aria-hidden="true">p&gt;</div>
       <div>
-        <h1 class="ob-title">欢迎使用 Pipewright</h1>
+        <h1 class="ob-title">{{ t('onboardingFlow.heroTitle') }}</h1>
         <p class="ob-lede">
-          把 <b>CI + 部署编排 + 服务器管理</b> 收进一个 <b>≤100MB</b> 的二进制,并把 AI 做进失败诊断。三步即可让第一个服务跑起来。
+          {{ t('onboardingFlow.ledeBefore') }}<b>{{ t('onboardingFlow.ledeBold1') }}</b>{{ t('onboardingFlow.ledeMid1') }}<b>{{ t('onboardingFlow.ledeBold2') }}</b>{{ t('onboardingFlow.ledeAfter') }}
         </p>
       </div>
     </header>
 
     <!-- Value props -->
-    <section class="ob-props" aria-label="平台价值">
+    <section class="ob-props" :aria-label="t('onboardingFlow.propsAria')">
       <article class="ob-prop ob-prop--green">
         <div class="ob-prop__i" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M13 2 3 14h7l-1 8 10-12h-7z" /></svg>
         </div>
-        <b class="ob-prop__h">轻量 <span class="ob-prop__u">≤100MB</span></b>
-        <span class="ob-prop__d">单二进制,Docker 或原生直跑,远低于 Jenkins 500MB+。</span>
+        <b class="ob-prop__h">{{ t('onboardingFlow.prop1Head') }} <span class="ob-prop__u">{{ t('onboardingFlow.prop1Unit') }}</span></b>
+        <span class="ob-prop__d">{{ t('onboardingFlow.prop1Desc') }}</span>
       </article>
       <article class="ob-prop">
         <div class="ob-prop__i" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>
         </div>
-        <b class="ob-prop__h">一个工具替三件套</b>
-        <span class="ob-prop__d">CI + Ansible/Kamal + Portainer,从 push 到多机部署一站搞定。</span>
+        <b class="ob-prop__h">{{ t('onboardingFlow.prop2Head') }}</b>
+        <span class="ob-prop__d">{{ t('onboardingFlow.prop2Desc') }}</span>
       </article>
       <article class="ob-prop ob-prop--cyan">
         <div class="ob-prop__i" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h3.5l2.2-6 3.6 12 2.4-7 1.3 1h4.5" /></svg>
         </div>
-        <b class="ob-prop__h">AI 失败诊断</b>
-        <span class="ob-prop__d">构建/部署失败时直接给根因假说 + 证据 + 修复建议。</span>
+        <b class="ob-prop__h">{{ t('onboardingFlow.prop3Head') }}</b>
+        <span class="ob-prop__d">{{ t('onboardingFlow.prop3Desc') }}</span>
       </article>
     </section>
 
     <!-- Setup checklist -->
-    <section class="ob-setup" aria-label="开始设置">
+    <section class="ob-setup" :aria-label="t('onboardingFlow.setupAria')">
       <div class="ob-setup__h">
         <div class="ob-setup__t">
-          开始设置
-          <span>完成后即可触发第一次部署</span>
+          {{ t('onboardingFlow.setupTitle') }}
+          <span>{{ t('onboardingFlow.setupSubtitle') }}</span>
         </div>
         <div class="ob-setup__prog">
           <span class="ob-setup__n mono">{{ doneCount }} / {{ realStepCount }}</span>
@@ -159,7 +161,7 @@ function skip(): void {
           <b class="ob-step__title">
             {{ step.title }}
             <span v-if="step.badge" class="ob-step__badge">{{ step.badge }}</span>
-            <span v-if="step.state === 'soon'" class="ob-step__soon">即将可用</span>
+            <span v-if="step.state === 'soon'" class="ob-step__soon">{{ t('onboardingFlow.soonBadge') }}</span>
           </b>
           <span class="ob-step__desc">{{ step.desc }}</span>
         </div>
@@ -186,9 +188,9 @@ function skip(): void {
     </section>
 
     <p class="ob-skip">
-      也可以
-      <button type="button" class="ob-skip__link" @click="skip">跳过引导,直接进入控制台</button>
-      · 引导项随时可在设置中重新打开
+      {{ t('onboardingFlow.skipBefore') }}
+      <button type="button" class="ob-skip__link" @click="skip">{{ t('onboardingFlow.skipLink') }}</button>
+      {{ t('onboardingFlow.skipAfter') }}
     </p>
   </div>
 </template>

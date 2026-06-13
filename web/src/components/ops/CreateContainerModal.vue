@@ -5,6 +5,7 @@
   端口/env/卷用多行文本框(一行一条),空行忽略。后端严格白名单校验,绝不拼 shell。
 */
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { createContainer, type CreateContainerInput, type RestartPolicy } from '../../api/containers'
 import { suggestCommand } from '../../api/aiOps'
 import { parseDockerRun } from '../../lib/dockerRun'
@@ -18,6 +19,7 @@ interface ServerOption {
 const props = defineProps<{ servers: ServerOption[] }>()
 const emit = defineEmits<{ (e: 'close'): void; (e: 'created', serverId: string): void }>()
 
+const { t } = useI18n()
 const toast = useToast()
 
 const serverId = ref(props.servers[0]?.id ?? '')
@@ -43,14 +45,14 @@ async function aiGenerate(): Promise<void> {
   aiNote.value = ''
   banner.value = ''
   try {
-    const res = await suggestCommand(nl, { os: 'linux', shell: '/bin/sh', container: '(docker 主机)' })
+    const res = await suggestCommand(nl, { os: 'linux', shell: '/bin/sh', container: t('opsContainer.create.dockerHost') })
     if (!res.available) {
-      aiNote.value = 'AI 未配置:请到「设置 › AI」配置模型后再用生成。'
+      aiNote.value = t('opsContainer.create.aiNotConfigured')
       return
     }
     const parsed = parseDockerRun(res.command)
     if (!parsed) {
-      aiNote.value = `AI 给的不是可解析的 docker run,已显示原文供参考:${res.command}`
+      aiNote.value = t('opsContainer.create.aiNotParsable', { command: res.command })
       return
     }
     // 填表(只覆盖 AI 给出的部分;空的保持)。
@@ -61,21 +63,24 @@ async function aiGenerate(): Promise<void> {
     if (parsed.volumes.length) volumesText.value = parsed.volumes.join('\n')
     if (parsed.restart) restart.value = parsed.restart
     if (parsed.command) command.value = parsed.command
-    aiNote.value = `已按 AI 建议填表 · 原命令:${res.command}`
-    toast.success('AI 已生成配置', { detail: '请核对后再创建' })
+    aiNote.value = t('opsContainer.create.aiFilled', { command: res.command })
+    toast.success(t('opsContainer.create.aiGenerated'), { detail: t('opsContainer.create.aiGeneratedDetail') })
   } catch (err) {
-    aiNote.value = err instanceof HttpError ? (err.apiError?.message ?? `生成失败(${err.status})`) : '生成请求失败'
+    aiNote.value =
+      err instanceof HttpError
+        ? (err.apiError?.message ?? t('opsContainer.create.genFailedStatus', { status: err.status }))
+        : t('opsContainer.create.genFailed')
   } finally {
     aiBusy.value = false
   }
 }
 
-const RESTART_OPTIONS: { value: RestartPolicy; label: string }[] = [
-  { value: 'no', label: '不自动重启 (no)' },
-  { value: 'unless-stopped', label: '除非手动停止 (unless-stopped)' },
-  { value: 'always', label: '总是重启 (always)' },
-  { value: 'on-failure', label: '失败时重启 (on-failure)' },
-]
+const RESTART_OPTIONS = computed<{ value: RestartPolicy; label: string }[]>(() => [
+  { value: 'no', label: t('opsContainer.create.restartNo') },
+  { value: 'unless-stopped', label: t('opsContainer.create.restartUnlessStopped') },
+  { value: 'always', label: t('opsContainer.create.restartAlways') },
+  { value: 'on-failure', label: t('opsContainer.create.restartOnFailure') },
+])
 
 const canSubmit = computed(() => serverId.value !== '' && image.value.trim() !== '' && !submitting.value)
 
@@ -103,15 +108,17 @@ async function submit(): Promise<void> {
   try {
     const res = await createContainer(serverId.value, input)
     if (res.ok) {
-      toast.success('容器已创建', { detail: `${name.value || image.value} · ${res.containerId.slice(0, 12)}` })
+      toast.success(t('opsContainer.create.created'), { detail: `${name.value || image.value} · ${res.containerId.slice(0, 12)}` })
       emit('created', serverId.value)
       emit('close')
     } else {
-      banner.value = res.error || 'docker run 失败'
+      banner.value = res.error || t('opsContainer.create.dockerRunFailed')
     }
   } catch (err) {
     banner.value =
-      err instanceof HttpError ? (err.apiError?.message ?? `创建失败(${err.status})`) : '创建请求失败'
+      err instanceof HttpError
+        ? (err.apiError?.message ?? t('opsContainer.create.createFailedStatus', { status: err.status }))
+        : t('opsContainer.create.createFailed')
   } finally {
     submitting.value = false
   }
@@ -120,10 +127,10 @@ async function submit(): Promise<void> {
 
 <template>
   <div class="modal-scrim" @click.self="emit('close')">
-    <div class="modal" role="dialog" aria-label="新增容器">
+    <div class="modal" role="dialog" :aria-label="t('opsContainer.create.title')">
       <header class="modal__head">
-        <h3 class="modal__title">新增容器</h3>
-        <button class="modal__close" aria-label="关闭" @click="emit('close')">✕</button>
+        <h3 class="modal__title">{{ t('opsContainer.create.title') }}</h3>
+        <button class="modal__close" :aria-label="t('opsContainer.close')" @click="emit('close')">✕</button>
       </header>
 
       <div class="modal__body">
@@ -135,24 +142,24 @@ async function submit(): Promise<void> {
           <input
             v-model="aiNl"
             class="ai-gen__in"
-            placeholder="用中文描述,如:起个 nginx 映射 8080,挂载 /data/web,自动重启"
+            :placeholder="t('opsContainer.create.aiPlaceholder')"
             @keyup.enter="aiGenerate"
           />
           <button class="ai-gen__btn" :disabled="aiBusy || !aiNl.trim()" @click="aiGenerate">
-            {{ aiBusy ? '生成中…' : 'AI 生成' }}
+            {{ aiBusy ? t('opsContainer.create.generating') : t('opsContainer.create.aiGenerate') }}
           </button>
         </div>
         <p v-if="aiNote" class="ai-gen__note">{{ aiNote }}</p>
 
         <div class="grid2">
           <label class="field">
-            <span class="field__k">目标服务器</span>
+            <span class="field__k">{{ t('opsContainer.create.targetServer') }}</span>
             <select v-model="serverId" class="field__in">
               <option v-for="s in props.servers" :key="s.id" :value="s.id">{{ s.name }}</option>
             </select>
           </label>
           <label class="field">
-            <span class="field__k">重启策略</span>
+            <span class="field__k">{{ t('opsContainer.create.restartPolicy') }}</span>
             <select v-model="restart" class="field__in">
               <option v-for="o in RESTART_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
             </select>
@@ -161,42 +168,42 @@ async function submit(): Promise<void> {
 
         <div class="grid2">
           <label class="field">
-            <span class="field__k">镜像 <em>*</em></span>
-            <input v-model="image" class="field__in mono" placeholder="例:nginx:latest" />
+            <span class="field__k">{{ t('opsContainer.create.image') }} <em>*</em></span>
+            <input v-model="image" class="field__in mono" :placeholder="t('opsContainer.create.imagePlaceholder')" />
           </label>
           <label class="field">
-            <span class="field__k">容器名(可选)</span>
-            <input v-model="name" class="field__in mono" placeholder="例:my-web" />
+            <span class="field__k">{{ t('opsContainer.create.name') }}</span>
+            <input v-model="name" class="field__in mono" :placeholder="t('opsContainer.create.namePlaceholder')" />
           </label>
         </div>
 
         <label class="field">
-          <span class="field__k">端口映射 <span class="field__hint">一行一条,host:container</span></span>
+          <span class="field__k">{{ t('opsContainer.create.ports') }} <span class="field__hint">{{ t('opsContainer.create.portsHint') }}</span></span>
           <textarea v-model="portsText" class="field__in mono" rows="2" placeholder="8080:80&#10;127.0.0.1:9090:90/tcp" />
         </label>
 
         <label class="field">
-          <span class="field__k">环境变量 <span class="field__hint">一行一条,KEY=VALUE</span></span>
+          <span class="field__k">{{ t('opsContainer.create.env') }} <span class="field__hint">{{ t('opsContainer.create.envHint') }}</span></span>
           <textarea v-model="envText" class="field__in mono" rows="2" placeholder="TZ=Asia/Shanghai&#10;FOO=bar" />
         </label>
 
         <label class="field">
-          <span class="field__k">数据卷 <span class="field__hint">一行一条,host:container[:ro]</span></span>
+          <span class="field__k">{{ t('opsContainer.create.volumes') }} <span class="field__hint">{{ t('opsContainer.create.volumesHint') }}</span></span>
           <textarea v-model="volumesText" class="field__in mono" rows="2" placeholder="/data/web:/usr/share/nginx/html:ro&#10;myvol:/cache" />
         </label>
 
         <label class="field">
-          <span class="field__k">启动命令(可选)</span>
-          <input v-model="command" class="field__in mono" placeholder="覆盖镜像默认 CMD,按空格拆参数" />
+          <span class="field__k">{{ t('opsContainer.create.command') }}</span>
+          <input v-model="command" class="field__in mono" :placeholder="t('opsContainer.create.commandPlaceholder')" />
         </label>
       </div>
 
       <footer class="modal__foot">
-        <span class="foot-hint">将在所选服务器执行 docker run -d</span>
+        <span class="foot-hint">{{ t('opsContainer.create.footHint') }}</span>
         <span class="grow" />
-        <button class="btn btn--ghost" :disabled="submitting" @click="emit('close')">取消</button>
+        <button class="btn btn--ghost" :disabled="submitting" @click="emit('close')">{{ t('opsContainer.cancel') }}</button>
         <button class="btn btn--primary" :disabled="!canSubmit" @click="submit">
-          {{ submitting ? '创建中…' : '创建并运行' }}
+          {{ submitting ? t('opsContainer.create.creating') : t('opsContainer.create.createRun') }}
         </button>
       </footer>
     </div>

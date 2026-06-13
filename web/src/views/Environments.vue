@@ -12,6 +12,7 @@
 -->
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import {
   listEnvironmentDeployments,
@@ -35,6 +36,7 @@ const route = useRoute()
 const router = useRouter()
 const confirm = useConfirm()
 const toast = useToast()
+const { t } = useI18n()
 
 const loadState = ref<LoadState>('idle')
 const loadError = ref('')
@@ -81,10 +83,10 @@ async function load(): Promise<void> {
     if (err instanceof HttpError) {
       loadError.value =
         err.status === 0
-          ? '无法连接到服务器,请检查后端是否运行后重试'
-          : (err.apiError?.message ?? `加载环境部署历史失败(${err.status})`)
+          ? t('environments.errNetwork')
+          : (err.apiError?.message ?? t('environments.errLoad', { status: err.status }))
     } else {
-      loadError.value = '加载环境部署历史失败,请稍后重试'
+      loadError.value = t('environments.errLoadRetry')
     }
     loadState.value = 'error'
   }
@@ -108,9 +110,12 @@ async function onRollback(tl: EnvironmentTimeline): Promise<void> {
   const prev = previousSuccess(tl)
   if (!prev) return
   const ok = await confirm.open({
-    title: `回滚环境「${tl.environment}」`,
-    body: `将把该环境回滚到上一次成功部署(运行 ${shortCommit(prev.commit)} · ${formatWhen(prev.deployedAt)}),即把那次的产物重新部署到原目标机。此操作会触发一次真实部署。`,
-    confirmLabel: '确认回滚',
+    title: t('environments.rollbackTitle', { env: tl.environment }),
+    body: t('environments.rollbackBody', {
+      commit: shortCommit(prev.commit),
+      when: formatWhen(prev.deployedAt),
+    }),
+    confirmLabel: t('environments.rollbackConfirm'),
     variant: 'danger',
   })
   if (!ok) return
@@ -118,17 +123,23 @@ async function onRollback(tl: EnvironmentTimeline): Promise<void> {
   rollingBack.value = tl.environment
   try {
     const res = await rollbackEnvironment(projectId.value, tl.environment)
-    const failed = res.targets.filter((t) => t.status === 'failed' || t.status === 'rolled_back').length
+    const failed = res.targets.filter((tg) => tg.status === 'failed' || tg.status === 'rolled_back').length
     if (failed === 0) {
-      toast.success(`环境「${tl.environment}」已回滚`, { detail: `重发产物到 ${res.targets.length} 台目标机` })
+      toast.success(t('environments.toastRolledBack', { env: tl.environment }), {
+        detail: t('environments.toastRolledBackDetail', { n: res.targets.length }),
+      })
     } else {
-      toast.error(`环境「${tl.environment}」回滚部分失败`, { detail: `${failed}/${res.targets.length} 台目标机失败` })
+      toast.error(t('environments.toastRollbackPartial', { env: tl.environment }), {
+        detail: t('environments.toastRollbackPartialDetail', { failed, total: res.targets.length }),
+      })
     }
     await load()
   } catch (err) {
     const msg =
-      err instanceof HttpError ? (err.apiError?.message ?? `回滚失败(${err.status})`) : '回滚失败,请稍后重试'
-    toast.error(`环境「${tl.environment}」回滚失败`, { detail: msg })
+      err instanceof HttpError
+        ? (err.apiError?.message ?? t('environments.rollbackFailedStatus', { status: err.status }))
+        : t('environments.rollbackFailedRetry')
+    toast.error(t('environments.toastRollbackFailed', { env: tl.environment }), { detail: msg })
   } finally {
     rollingBack.value = ''
   }
@@ -147,20 +158,20 @@ onMounted(() => {
   <div class="env-view">
     <header class="view-header">
       <div class="view-header__text">
-        <h1 class="view-title">环境</h1>
+        <h1 class="view-title">{{ t('environments.title') }}</h1>
         <p class="view-sub">
-          按环境聚合的部署历史与当前活跃版本 · 一键回滚到上一次成功部署
+          {{ t('environments.subtitle') }}
         </p>
       </div>
-      <AppButton variant="default" :loading="loadState === 'loading'" @click="load">刷新</AppButton>
+      <AppButton variant="default" :loading="loadState === 'loading'" @click="load">{{ t('common.refresh') }}</AppButton>
     </header>
 
     <!-- Project filter -->
     <div class="env-controls">
       <label class="env-controls__field">
-        <span class="env-controls__label">项目</span>
-        <select class="select" :value="projectId" @change="onProjectChange" aria-label="按项目筛选">
-          <option value="" disabled>请选择项目</option>
+        <span class="env-controls__label">{{ t('environments.project') }}</span>
+        <select class="select" :value="projectId" @change="onProjectChange" :aria-label="t('environments.filterByProject')">
+          <option value="" disabled>{{ t('environments.selectProject') }}</option>
           <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
         </select>
       </label>
@@ -169,14 +180,14 @@ onMounted(() => {
     <!-- No project selected -->
     <EmptyState
       v-if="!projectId"
-      title="请选择一个项目"
-      description="环境部署历史按项目聚合,先在上方选择项目。"
+      :title="t('environments.emptySelectTitle')"
+      :description="t('environments.emptySelectDesc')"
     />
 
     <!-- Error -->
     <ErrorState
       v-else-if="loadState === 'error'"
-      title="加载环境部署历史失败"
+      :title="t('environments.errLoadTitle')"
       :description="loadError"
       @retry="load"
     />
@@ -194,8 +205,8 @@ onMounted(() => {
     <!-- Empty -->
     <EmptyState
       v-else-if="timelines.length === 0"
-      title="该项目暂无环境部署历史"
-      description="向某环境执行过部署后(webhook 分支映射解析出环境名并完成部署),这里会按环境聚合展示时间线。"
+      :title="t('environments.emptyTitle')"
+      :description="t('environments.emptyDesc')"
     />
 
     <!-- Content -->
@@ -205,8 +216,8 @@ onMounted(() => {
         <div class="env-card__head">
           <div class="env-card__name-row">
             <h2 class="env-card__name">{{ tl.environment }}</h2>
-            <span v-if="tl.active" class="env-card__live" title="当前活跃版本">● 活跃</span>
-            <span v-else class="env-card__stale" title="尚无全成功部署">无活跃版本</span>
+            <span v-if="tl.active" class="env-card__live" :title="t('environments.activeVersionTitle')">● {{ t('environments.active') }}</span>
+            <span v-else class="env-card__stale" :title="t('environments.noFullSuccessTitle')">{{ t('environments.noActiveVersion') }}</span>
           </div>
 
           <div v-if="tl.active" class="env-card__active">
@@ -220,7 +231,7 @@ onMounted(() => {
               <span class="env-card__dot" aria-hidden="true">·</span>
               <span>{{ tl.active.triggeredBy || '—' }}</span>
               <span class="env-card__dot" aria-hidden="true">·</span>
-              <span>{{ tl.active.targets.length }} 台目标机</span>
+              <span>{{ t('environments.targetCount', { n: tl.active.targets.length }) }}</span>
             </div>
           </div>
 
@@ -228,15 +239,15 @@ onMounted(() => {
             variant="default"
             :disabled="!canRollback(tl) || rollingBack === tl.environment"
             :loading="rollingBack === tl.environment"
-            :title="canRollback(tl) ? '回滚到上一次成功部署' : '无可回滚的上一次成功部署'"
+            :title="canRollback(tl) ? t('environments.rollbackEnabledTitle') : t('environments.rollbackDisabledTitle')"
             @click="onRollback(tl)"
           >
-            回滚
+            {{ t('environments.rollback') }}
           </AppButton>
         </div>
 
         <!-- Deployment timeline rail -->
-        <ol class="env-timeline" :aria-label="`${tl.environment} 部署历史`">
+        <ol class="env-timeline" :aria-label="t('environments.timelineAria', { env: tl.environment })">
           <li
             v-for="dep in tl.deployments"
             :key="dep.runId"
@@ -252,7 +263,7 @@ onMounted(() => {
               <div class="env-timeline__line1">
                 <code class="env-timeline__commit">{{ shortCommit(dep.commit) }}</code>
                 <StatusBadge :status="toBadgeStatus(dep.status)" />
-                <span v-if="dep.active" class="env-timeline__tag">活跃</span>
+                <span v-if="dep.active" class="env-timeline__tag">{{ t('environments.active') }}</span>
               </div>
               <div class="env-timeline__line2">
                 <span>{{ formatWhen(dep.deployedAt) }}</span>

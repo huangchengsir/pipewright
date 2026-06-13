@@ -18,6 +18,7 @@
 -->
 <script setup lang="ts">
 import { ref, shallowRef, computed, watch, onUnmounted, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { getSourceBlob, type SourceBlob } from '../../api/source'
 import { HttpError } from '../../api/http'
 import { languageForPath } from './monacoLang'
@@ -34,6 +35,7 @@ const props = defineProps<{
   path: string | null
 }>()
 
+const { t } = useI18n()
 const themeStore = useThemeStore()
 
 type ViewState =
@@ -151,11 +153,11 @@ async function loadBlob(filePath: string): Promise<void> {
     errorMsg.value =
       err instanceof HttpError
         ? err.status === 0
-          ? '无法连接到服务器'
+          ? t('misc.code.errConnect')
           : err.status === 404
-            ? '文件不存在'
-            : err.apiError?.message ?? `加载失败(${err.status})`
-        : '加载失败'
+            ? t('misc.code.errNotFound')
+            : err.apiError?.message ?? t('misc.code.errLoad', { status: err.status })
+        : t('misc.code.errLoadGeneric')
     viewState.value = 'error'
   }
 }
@@ -204,7 +206,7 @@ function formatBytes(n: number): string {
 </script>
 
 <template>
-  <section class="code-view" aria-label="代码查看">
+  <section class="code-view" :aria-label="t('misc.code.viewAria')">
     <!-- header: file path + meta -->
     <header class="code-view-head">
       <div class="code-view-path mono" :title="path ?? ''">
@@ -223,11 +225,11 @@ function formatBytes(n: number): string {
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
           <path d="M14 2v6h6" />
         </svg>
-        <span class="code-view-path-text">{{ path ?? '未选择文件' }}</span>
+        <span class="code-view-path-text">{{ path ?? t('misc.code.noFileSelected') }}</span>
       </div>
       <div v-if="blob && (viewState === 'ready' || viewState === 'fallback' || viewState === 'binary')" class="code-view-meta mono">
         <span>{{ formatBytes(fileSize) }}</span>
-        <span v-if="blob.truncated" class="code-view-trunc" title="文件过大,仅显示前缀部分">已截断</span>
+        <span v-if="blob.truncated" class="code-view-trunc" :title="t('misc.code.truncatedTitle')">{{ t('misc.code.truncated') }}</span>
       </div>
     </header>
 
@@ -238,14 +240,14 @@ function formatBytes(n: number): string {
         <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M16 18l6-6-6-6M8 6l-6 6 6 6" />
         </svg>
-        <p class="code-view-state-title">从左侧选择文件查看</p>
-        <p class="code-view-state-sub">只读浏览仓库源码,语法高亮,无法编辑或提交。</p>
+        <p class="code-view-state-title">{{ t('misc.code.idleTitle') }}</p>
+        <p class="code-view-state-sub">{{ t('misc.code.idleSub') }}</p>
       </div>
 
       <!-- loading -->
       <div v-else-if="viewState === 'loading'" class="code-view-state">
         <span class="code-view-spin" aria-hidden="true" />
-        <p class="code-view-state-title mono">加载中…</p>
+        <p class="code-view-state-title mono">{{ t('misc.loadingShort') }}</p>
       </div>
 
       <!-- binary -->
@@ -254,7 +256,7 @@ function formatBytes(n: number): string {
           <rect x="3" y="3" width="18" height="18" rx="2" />
           <path d="M3 9h18M9 21V9" />
         </svg>
-        <p class="code-view-state-title">二进制文件,不可预览</p>
+        <p class="code-view-state-title">{{ t('misc.code.binaryTitle') }}</p>
         <p class="code-view-state-sub mono">{{ fileName }} · {{ formatBytes(fileSize) }}</p>
       </div>
 
@@ -264,9 +266,9 @@ function formatBytes(n: number): string {
           <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
           <path d="M12 9v4M12 17h.01" />
         </svg>
-        <p class="code-view-state-title">源码暂不可读</p>
-        <p class="code-view-state-sub">仓库克隆失败或当前环境无法访问。请稍后重试或检查项目仓库配置。</p>
-        <button type="button" class="code-view-retry" @click="retry">↻ 重试</button>
+        <p class="code-view-state-title">{{ t('misc.code.degradedTitle') }}</p>
+        <p class="code-view-state-sub">{{ t('misc.code.degradedSub') }}</p>
+        <button type="button" class="code-view-retry" @click="retry">↻ {{ t('misc.error.retry') }}</button>
       </div>
 
       <!-- error -->
@@ -275,13 +277,13 @@ function formatBytes(n: number): string {
           <circle cx="12" cy="12" r="9" />
           <path d="M12 8v4M12 16h.01" />
         </svg>
-        <p class="code-view-state-title">{{ errorMsg || '文件加载失败' }}</p>
-        <button type="button" class="code-view-retry" @click="retry">↻ 重试</button>
+        <p class="code-view-state-title">{{ errorMsg || t('misc.code.errTitle') }}</p>
+        <button type="button" class="code-view-retry" @click="retry">↻ {{ t('misc.error.retry') }}</button>
       </div>
 
       <!-- fallback: 纯 <pre> + 行号(Monaco 加载失败时退化,仍可读) -->
-      <div v-else-if="viewState === 'fallback'" class="code-fallback" role="region" aria-label="代码内容(纯文本降级)">
-        <p class="code-fallback-note mono">语法高亮组件加载失败,已降级为纯文本视图。</p>
+      <div v-else-if="viewState === 'fallback'" class="code-fallback" role="region" :aria-label="t('misc.code.fallbackRegionAria')">
+        <p class="code-fallback-note mono">{{ t('misc.code.fallbackNote') }}</p>
         <ol class="code-fallback-lines">
           <li v-for="(line, i) in fallbackLines" :key="i" class="code-fallback-line">
             <span class="code-fallback-ln mono" aria-hidden="true">{{ i + 1 }}</span>
@@ -295,7 +297,7 @@ function formatBytes(n: number): string {
         v-show="viewState === 'ready'"
         ref="editorHost"
         class="code-monaco"
-        aria-label="代码编辑器(只读)"
+        :aria-label="t('misc.code.editorAria')"
       />
     </div>
   </section>

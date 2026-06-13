@@ -4,6 +4,7 @@
  * 跨项目聚合每个环境的当前激活部署(最近一次全成功),显示项目·环境·commit·分支·时间。
  */
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import type { EnvDeployment } from '../../api/environments'
 
@@ -20,32 +21,33 @@ const props = defineProps<{
 }>()
 
 const router = useRouter()
+const { t } = useI18n()
 
 const rows = computed(() => props.entries.slice(0, 8))
 
 function fmtAgo(rfc: string): string {
-  const t = new Date(rfc).getTime()
-  if (Number.isNaN(t)) return ''
-  const m = Math.floor(Math.max(0, Date.now() - t) / 60000)
-  if (m < 60) return `${m}m前`
+  const ts = new Date(rfc).getTime()
+  if (Number.isNaN(ts)) return ''
+  const m = Math.floor(Math.max(0, Date.now() - ts) / 60000)
+  if (m < 60) return t('timeShort.min', { n: m })
   const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h前`
-  return `${Math.floor(h / 24)}d前`
+  if (h < 24) return t('timeShort.hour', { n: h })
+  return t('timeShort.day', { n: Math.floor(h / 24) })
 }
 </script>
 
 <template>
   <section class="card env" aria-labelledby="dash-env-h">
     <header class="card-head">
-      <h2 id="dash-env-h" class="card-title">环境部署态</h2>
-      <button class="card-link" type="button" @click="router.push('/environments')">全部 →</button>
+      <h2 id="dash-env-h" class="card-title">{{ t('dash.environments') }}</h2>
+      <button class="card-link" type="button" @click="router.push('/environments')">{{ t('common.allArrow') }}</button>
     </header>
 
     <div v-if="loading" class="env-skeleton" aria-busy="true">
       <span v-for="i in 4" :key="i" class="sk-row" />
     </div>
 
-    <p v-else-if="!rows.length" class="card-empty">尚无环境部署。配置「分支→环境」映射并完成部署后,各环境当前版本会显示在此。</p>
+    <p v-else-if="!rows.length" class="card-empty">{{ t('dash.envEmpty') }}</p>
 
     <ul v-else class="env-list" role="list">
       <li v-for="e in rows" :key="e.projectId + e.environment" class="env-row">
@@ -57,9 +59,9 @@ function fmtAgo(rfc: string): string {
           <code class="env-commit">{{ e.active.commit.slice(0, 7) }}</code>
           <span class="env-branch">{{ e.active.branch }}</span>
           <span class="env-time">{{ fmtAgo(e.active.deployedAt) }}</span>
-          <span class="env-pill ok">已部署</span>
+          <span class="env-pill ok">{{ t('dash.deployed') }}</span>
         </template>
-        <span v-else class="env-pill none">未部署</span>
+        <span v-else class="env-pill none">{{ t('dash.notDeployed') }}</span>
       </li>
     </ul>
   </section>

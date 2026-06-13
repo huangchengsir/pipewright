@@ -6,8 +6,11 @@
 -->
 <script setup lang="ts">
 import { computed, inject } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { SourceEntry } from '../../api/source'
 import { CODE_TREE_CTX } from './codeTreeContext'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   entry: SourceEntry
@@ -101,9 +104,9 @@ function onClick(): void {
 
     <!-- children (lazy) -->
     <ul v-if="isDir && isOpen" class="tree-children" role="group">
-      <li v-if="dir.loading" class="tree-state" role="none">加载中…</li>
+      <li v-if="dir.loading" class="tree-state" role="none">{{ t('misc.loadingShort') }}</li>
       <li v-else-if="dir.error" class="tree-state tree-state--err" role="none">{{ dir.error }}</li>
-      <li v-else-if="dir.loaded && dir.entries.length === 0" class="tree-state" role="none">空目录</li>
+      <li v-else-if="dir.loaded && dir.entries.length === 0" class="tree-state" role="none">{{ t('misc.tree.emptyDir') }}</li>
       <CodeTreeNode
         v-for="child in dir.entries"
         :key="child.path"

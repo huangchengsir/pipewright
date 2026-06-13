@@ -6,6 +6,7 @@
  * (空数组回传 undefined 表示无服务)。端口映射较少用 → 仍可经 .pipewright.yml 配,此处不暴露。
  */
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { PipelineServiceSpec } from '../../api/pipeline'
 import { envToText, parseEnvText } from './stageSettings'
 
@@ -17,6 +18,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'update', services: PipelineServiceSpec[] | undefined): void
 }>()
+
+const { t } = useI18n()
 
 const rows = computed<PipelineServiceSpec[]>(() => props.services ?? [])
 
@@ -47,7 +50,7 @@ function setEnv(i: number, text: string): void {
           type="text"
           :value="svc.name"
           placeholder="testdb"
-          :aria-label="`服务名 ${i + 1}`"
+          :aria-label="t('pipelineCanvas.svcNameAria', { n: i + 1 })"
           @change="patch(i, { name: ($event.target as HTMLInputElement).value.trim() })"
         />
         <span class="svc-colon">:</span>
@@ -56,21 +59,21 @@ function setEnv(i: number, text: string): void {
           type="text"
           :value="svc.image"
           placeholder="postgres:16"
-          :aria-label="`服务镜像 ${i + 1}`"
+          :aria-label="t('pipelineCanvas.svcImageAria', { n: i + 1 })"
           @change="patch(i, { image: ($event.target as HTMLInputElement).value.trim() })"
         />
-        <button class="svc-del" :aria-label="`删除服务 ${i + 1}`" @click="removeRow(i)">✕</button>
+        <button class="svc-del" :aria-label="t('pipelineCanvas.svcDelAria', { n: i + 1 })" @click="removeRow(i)">✕</button>
       </div>
       <input
         class="settings-input svc-env"
         type="text"
         :value="envToText(svc.env)"
-        placeholder="环境变量(可选):POSTGRES_PASSWORD=x, POSTGRES_DB=app"
-        :aria-label="`服务环境变量 ${i + 1}`"
+        :placeholder="t('pipelineCanvas.svcEnvPlaceholder')"
+        :aria-label="t('pipelineCanvas.svcEnvAria', { n: i + 1 })"
         @change="setEnv(i, ($event.target as HTMLInputElement).value)"
       />
     </div>
-    <button class="settings-add-link" @click="addRow">+ 添加服务</button>
+    <button class="settings-add-link" @click="addRow">{{ t('pipelineCanvas.addSvc') }}</button>
   </div>
 </template>
 

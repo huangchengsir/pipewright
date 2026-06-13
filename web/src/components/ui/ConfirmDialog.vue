@@ -14,7 +14,10 @@
  * Mount once in App.vue / AppShell and wire to useConfirm().
  */
 import { ref, computed, watch, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useConfirm } from '../../composables/useConfirm'
+
+const { t } = useI18n()
 
 const confirm = useConfirm()
 
@@ -129,7 +132,7 @@ function doConfirm() {
           <!-- Type-to-confirm input -->
           <div v-if="opts.confirmText" class="cfm-dialog__type-field">
             <label :for="`cfm-input`" class="cfm-dialog__type-label">
-              输入 <code class="mono">{{ opts.confirmText }}</code> 确认
+              {{ t('misc.confirm.typeLabelPrefix') }} <code class="mono">{{ opts.confirmText }}</code> {{ t('misc.confirm.typeLabelSuffix') }}
             </label>
             <input
               id="cfm-input"
@@ -138,11 +141,11 @@ function doConfirm() {
               class="cfm-dialog__type-input"
               :class="{ 'cfm-dialog__type-input--match': typeMatch && typeInput.length > 0 }"
               type="text"
-              :placeholder="`输入 ${opts.confirmText}…`"
+              :placeholder="t('misc.confirm.typePlaceholder', { text: opts.confirmText })"
               autocomplete="off"
               autocorrect="off"
               spellcheck="false"
-              :aria-label="`输入 ${opts.confirmText} 确认操作`"
+              :aria-label="t('misc.confirm.typeAria', { text: opts.confirmText })"
             />
           </div>
         </div>
@@ -154,7 +157,7 @@ function doConfirm() {
             class="cfm-dialog__cancel"
             type="button"
             @click="cancel"
-          >取消</button>
+          >{{ t('misc.confirm.cancel') }}</button>
           <button
             class="cfm-dialog__confirm"
             :class="{ 'cfm-dialog__confirm--disabled': !typeMatch }"
@@ -162,7 +165,7 @@ function doConfirm() {
             :disabled="!typeMatch"
             @click="doConfirm"
           >
-            {{ opts.confirmLabel ?? '确认' }}
+            {{ opts.confirmLabel ?? t('misc.confirm.confirm') }}
           </button>
         </div>
       </div>

@@ -16,6 +16,7 @@
  * leave the input; the server returns only config.hasPassword.
  */
 import { ref, computed, onMounted, reactive } from 'vue'
+import { useI18n } from 'vue-i18n'
 import FormField from '../../components/ui/FormField.vue'
 import AppButton from '../../components/ui/AppButton.vue'
 import { useToast } from '../../composables/useToast'
@@ -57,40 +58,41 @@ interface TypeMeta {
   implemented: boolean
 }
 
-const TYPES: TypeMeta[] = [
+const { t } = useI18n()
+const toast = useToast()
+
+const TYPES = computed<TypeMeta[]>(() => [
   {
     id: 'webhook',
     label: 'Webhook',
-    desc: '自定义 HTTP POST',
+    desc: t('settingsNotifications.typeWebhookDesc'),
     glyph: '{ }',
     glyphStyle: 'background:var(--color-primary-soft);color:var(--color-primary)',
     implemented: true,
   },
   {
     id: 'email',
-    label: '邮件',
-    desc: 'SMTP 发信',
+    label: t('settingsNotifications.typeEmailLabel'),
+    desc: t('settingsNotifications.typeEmailDesc'),
     glyph: '@',
     glyphStyle: 'background:oklch(70% 0.14 250 / 0.16);color:oklch(62% 0.16 250)',
     implemented: true,
   },
   {
     id: 'feishu',
-    label: '飞书',
-    desc: '自定义机器人',
+    label: t('settingsNotifications.typeFeishuLabel'),
+    desc: t('settingsNotifications.typeFeishuDesc'),
     glyph: '飞',
     glyphStyle: 'background:oklch(72% 0.15 200 / 0.16);color:oklch(56% 0.13 220)',
     implemented: true,
   },
-  { id: 'wecom', label: '企业微信', desc: '即将支持', glyph: '企', glyphStyle: 'background:var(--color-inset);color:var(--color-faint)', implemented: false },
-  { id: 'dingtalk', label: '钉钉', desc: '即将支持', glyph: '钉', glyphStyle: 'background:var(--color-inset);color:var(--color-faint)', implemented: false },
-]
+  { id: 'wecom', label: t('settingsNotifications.typeWecomLabel'), desc: t('settingsNotifications.comingSoon'), glyph: '企', glyphStyle: 'background:var(--color-inset);color:var(--color-faint)', implemented: false },
+  { id: 'dingtalk', label: t('settingsNotifications.typeDingtalkLabel'), desc: t('settingsNotifications.comingSoon'), glyph: '钉', glyphStyle: 'background:var(--color-inset);color:var(--color-faint)', implemented: false },
+])
 
-function typeMeta(t: ChannelType): TypeMeta {
-  return TYPES.find((m) => m.id === t) ?? TYPES[0]
+function typeMeta(ty: ChannelType): TypeMeta {
+  return TYPES.value.find((m) => m.id === ty) ?? TYPES.value[0]
 }
-
-const toast = useToast()
 
 // ─── list state ──────────────────────────────────────────────────────────────
 
@@ -105,7 +107,7 @@ async function loadChannels(): Promise<void> {
     channels.value = await listChannels()
     loadState.value = 'ready'
   } catch (err) {
-    loadError.value = httpMessage(err, '加载通知渠道失败,请稍后重试')
+    loadError.value = httpMessage(err, t('settingsNotifications.errLoadChannels'))
     loadState.value = 'error'
   }
 }
@@ -216,35 +218,35 @@ function validate(): boolean {
   clearFieldErrors()
   let ok = true
   if (!form.name.trim()) {
-    fieldErrors.name = '请填写渠道名称'
+    fieldErrors.name = t('settingsNotifications.valNameRequired')
     ok = false
   }
   if (isWebhook.value) {
     if (!form.url.trim()) {
-      fieldErrors.url = '请填写 Webhook 地址'
+      fieldErrors.url = t('settingsNotifications.valWebhookUrlRequired')
       ok = false
     }
   } else if (isFeishu.value) {
     if (!form.url.trim()) {
-      fieldErrors.url = '请填写飞书机器人 Webhook 地址'
+      fieldErrors.url = t('settingsNotifications.valFeishuUrlRequired')
       ok = false
     }
   } else if (isEmail.value) {
     if (!form.smtpHost.trim()) {
-      fieldErrors.smtpHost = '请填写 SMTP 主机'
+      fieldErrors.smtpHost = t('settingsNotifications.valSmtpHostRequired')
       ok = false
     }
     const port = Number(form.smtpPort)
     if (!form.smtpPort.trim() || Number.isNaN(port) || port <= 0) {
-      fieldErrors.smtpPort = '请填写有效端口'
+      fieldErrors.smtpPort = t('settingsNotifications.valPortInvalid')
       ok = false
     }
     if (!form.from.trim()) {
-      fieldErrors.from = '请填写发件人'
+      fieldErrors.from = t('settingsNotifications.valFromRequired')
       ok = false
     }
     if (!form.to.trim()) {
-      fieldErrors.to = '请填写收件人'
+      fieldErrors.to = t('settingsNotifications.valToRequired')
       ok = false
     }
   }
@@ -289,7 +291,7 @@ async function handleSave(): Promise<void> {
         enabled: form.enabled,
         config,
       })
-      toast.success('渠道已更新')
+      toast.success(t('settingsNotifications.toastChannelUpdated'))
     } else {
       await createChannel({
         name: form.name.trim(),
@@ -297,7 +299,7 @@ async function handleSave(): Promise<void> {
         enabled: form.enabled,
         config,
       })
-      toast.success('渠道已创建')
+      toast.success(t('settingsNotifications.toastChannelCreated'))
     }
     closeEditor()
     await loadChannels()
@@ -305,7 +307,7 @@ async function handleSave(): Promise<void> {
     if (err instanceof HttpError && err.status === 422 && err.apiError) {
       mapValidationError(err.apiError.code, err.apiError.message)
     } else {
-      toast.error('保存失败', { detail: httpMessage(err, '请稍后重试') })
+      toast.error(t('settingsNotifications.toastSaveFailed'), { detail: httpMessage(err, t('settingsNotifications.retryLater')) })
     }
   } finally {
     saving.value = false
@@ -315,16 +317,16 @@ async function handleSave(): Promise<void> {
 function mapValidationError(code: string, message: string): void {
   switch (code) {
     case 'invalid_channel':
-      fieldErrors.name = '渠道名称不能为空'
+      fieldErrors.name = t('settingsNotifications.errInvalidChannel')
       break
     case 'url_not_allowed':
-      fieldErrors.url = 'Webhook 地址不被允许:不可指向云元数据或链路本地地址'
+      fieldErrors.url = t('settingsNotifications.errUrlNotAllowed')
       break
     case 'invalid_config':
-      toast.error('保存失败', { detail: '渠道配置不完整或非法' })
+      toast.error(t('settingsNotifications.toastSaveFailed'), { detail: t('settingsNotifications.errInvalidConfig') })
       break
     default:
-      toast.error('保存失败', { detail: message })
+      toast.error(t('settingsNotifications.toastSaveFailed'), { detail: message })
   }
 }
 
@@ -333,15 +335,15 @@ function mapValidationError(code: string, message: string): void {
 const deletingId = ref<string | null>(null)
 
 async function handleDelete(ch: NotificationChannel): Promise<void> {
-  if (!window.confirm(`确定删除渠道「${ch.name}」?此操作不可撤销。`)) return
+  if (!window.confirm(t('settingsNotifications.confirmDeleteChannel', { name: ch.name }))) return
   deletingId.value = ch.id
   try {
     await deleteChannel(ch.id)
-    toast.success('渠道已删除')
+    toast.success(t('settingsNotifications.toastChannelDeleted'))
     if (editingId.value === ch.id) closeEditor()
     await loadChannels()
   } catch (err) {
-    toast.error('删除失败', { detail: httpMessage(err, '请稍后重试') })
+    toast.error(t('settingsNotifications.toastDeleteFailed'), { detail: httpMessage(err, t('settingsNotifications.retryLater')) })
   } finally {
     deletingId.value = null
   }
@@ -362,7 +364,7 @@ async function handleTest(ch: NotificationChannel): Promise<void> {
       ok: false,
       latencyMs: 0,
       detail: '',
-      error: httpMessage(err, '测试发送失败'),
+      error: httpMessage(err, t('settingsNotifications.errTestFailed')),
     }
   } finally {
     testingId.value = null
@@ -378,14 +380,14 @@ interface EventMeta {
   desc: string
 }
 
-const EVENTS: EventMeta[] = [
-  { id: 'build_succeeded', label: '构建成功', desc: '运行成功完成' },
-  { id: 'build_failed', label: '构建失败', desc: '运行失败' },
-  { id: 'deploy_succeeded', label: '部署成功', desc: '部署完成' },
-  { id: 'deploy_failed', label: '部署失败', desc: '部分目标失败' },
-  { id: 'rollback', label: '回滚', desc: '已回滚到上一版本' },
-  { id: 'health_check_failed', label: '健康检查失败', desc: '部署后健康检查未通过' },
-]
+const EVENTS = computed<EventMeta[]>(() => [
+  { id: 'build_succeeded', label: t('settingsNotifications.evBuildSucceeded'), desc: t('settingsNotifications.evBuildSucceededDesc') },
+  { id: 'build_failed', label: t('settingsNotifications.evBuildFailed'), desc: t('settingsNotifications.evBuildFailedDesc') },
+  { id: 'deploy_succeeded', label: t('settingsNotifications.evDeploySucceeded'), desc: t('settingsNotifications.evDeploySucceededDesc') },
+  { id: 'deploy_failed', label: t('settingsNotifications.evDeployFailed'), desc: t('settingsNotifications.evDeployFailedDesc') },
+  { id: 'rollback', label: t('settingsNotifications.evRollback'), desc: t('settingsNotifications.evRollbackDesc') },
+  { id: 'health_check_failed', label: t('settingsNotifications.evHealthCheckFailed'), desc: t('settingsNotifications.evHealthCheckFailedDesc') },
+])
 
 const routesLoadState = ref<LoadState>('loading')
 const routesLoadError = ref('')
@@ -398,7 +400,7 @@ async function loadRoutes(): Promise<void> {
     routes.value = await listRoutes()
     routesLoadState.value = 'ready'
   } catch (err) {
-    routesLoadError.value = httpMessage(err, '加载事件路由失败,请稍后重试')
+    routesLoadError.value = httpMessage(err, t('settingsNotifications.errLoadRoutes'))
     routesLoadState.value = 'error'
   }
 }
@@ -406,7 +408,7 @@ async function loadRoutes(): Promise<void> {
 /** Routes grouped by event id (preserves server order within each group). */
 const routesByEvent = computed<Record<string, NotificationRoute[]>>(() => {
   const map: Record<string, NotificationRoute[]> = {}
-  for (const e of EVENTS) map[e.id] = []
+  for (const e of EVENTS.value) map[e.id] = []
   for (const r of routes.value) {
     if (!map[r.event]) map[r.event] = []
     map[r.event].push(r)
@@ -416,7 +418,7 @@ const routesByEvent = computed<Record<string, NotificationRoute[]>>(() => {
 
 /** Channel name lookup for rendering route rows. */
 function channelName(channelId: string): string {
-  return channels.value.find((c) => c.id === channelId)?.name ?? '(已删除渠道)'
+  return channels.value.find((c) => c.id === channelId)?.name ?? t('settingsNotifications.deletedChannel')
 }
 
 // Add-route form state, keyed per event so each event row has its own picker.
@@ -442,14 +444,14 @@ async function handleAddRoute(): Promise<void> {
   savingRoute.value = true
   try {
     await createRoute({ event: addingEvent.value, channelId: addChannelId.value, enabled: true })
-    toast.success('已添加事件路由')
+    toast.success(t('settingsNotifications.toastRouteAdded'))
     cancelAddRoute()
     await loadRoutes()
   } catch (err) {
     if (err instanceof HttpError && err.status === 422 && err.apiError) {
-      toast.error('添加失败', { detail: err.apiError.message })
+      toast.error(t('settingsNotifications.toastAddFailed'), { detail: err.apiError.message })
     } else {
-      toast.error('添加失败', { detail: httpMessage(err, '请稍后重试') })
+      toast.error(t('settingsNotifications.toastAddFailed'), { detail: httpMessage(err, t('settingsNotifications.retryLater')) })
     }
   } finally {
     savingRoute.value = false
@@ -462,10 +464,10 @@ async function handleDeleteRoute(route: NotificationRoute): Promise<void> {
   deletingRouteId.value = route.id
   try {
     await deleteRoute(route.id)
-    toast.success('已移除事件路由')
+    toast.success(t('settingsNotifications.toastRouteRemoved'))
     await loadRoutes()
   } catch (err) {
-    toast.error('移除失败', { detail: httpMessage(err, '请稍后重试') })
+    toast.error(t('settingsNotifications.toastRemoveFailed'), { detail: httpMessage(err, t('settingsNotifications.retryLater')) })
   } finally {
     deletingRouteId.value = null
   }
@@ -489,7 +491,7 @@ async function loadProjects(): Promise<void> {
     projects.value = await listProjects()
     projectsLoadState.value = 'ready'
   } catch (err) {
-    projectsLoadError.value = httpMessage(err, '加载项目列表失败,请稍后重试')
+    projectsLoadError.value = httpMessage(err, t('settingsNotifications.errLoadProjects'))
     projectsLoadState.value = 'error'
   }
 }
@@ -526,7 +528,7 @@ async function loadProjectRoutes(): Promise<void> {
     projectRoutes.value = await listRoutes(selectedProjectId.value)
     projectRoutesLoadState.value = 'ready'
   } catch (err) {
-    projectRoutesLoadError.value = httpMessage(err, '加载项目路由失败,请稍后重试')
+    projectRoutesLoadError.value = httpMessage(err, t('settingsNotifications.errLoadProjectRoutes'))
     projectRoutesLoadState.value = 'error'
   }
 }
@@ -540,7 +542,7 @@ function onSelectProject(id: string): void {
 /** Project routes grouped by event id (preserves server order within each group). */
 const projectRoutesByEvent = computed<Record<string, NotificationRoute[]>>(() => {
   const map: Record<string, NotificationRoute[]> = {}
-  for (const e of EVENTS) map[e.id] = []
+  for (const e of EVENTS.value) map[e.id] = []
   for (const r of projectRoutes.value) {
     if (!map[r.event]) map[r.event] = []
     map[r.event].push(r)
@@ -575,14 +577,14 @@ async function handleAddProjectRoute(): Promise<void> {
       channelId: addProjectChannelId.value,
       enabled: true,
     })
-    toast.success('已添加项目级路由')
+    toast.success(t('settingsNotifications.toastProjectRouteAdded'))
     cancelAddProjectRoute()
     await loadProjectRoutes()
   } catch (err) {
     if (err instanceof HttpError && err.status === 422 && err.apiError) {
-      toast.error('添加失败', { detail: err.apiError.message })
+      toast.error(t('settingsNotifications.toastAddFailed'), { detail: err.apiError.message })
     } else {
-      toast.error('添加失败', { detail: httpMessage(err, '请稍后重试') })
+      toast.error(t('settingsNotifications.toastAddFailed'), { detail: httpMessage(err, t('settingsNotifications.retryLater')) })
     }
   } finally {
     savingProjectRoute.value = false
@@ -595,10 +597,10 @@ async function handleDeleteProjectRoute(route: NotificationRoute): Promise<void>
   deletingProjectRouteId.value = route.id
   try {
     await deleteRoute(route.id)
-    toast.success('已移除项目级路由')
+    toast.success(t('settingsNotifications.toastProjectRouteRemoved'))
     await loadProjectRoutes()
   } catch (err) {
-    toast.error('移除失败', { detail: httpMessage(err, '请稍后重试') })
+    toast.error(t('settingsNotifications.toastRemoveFailed'), { detail: httpMessage(err, t('settingsNotifications.retryLater')) })
   } finally {
     deletingProjectRouteId.value = null
   }
@@ -621,20 +623,20 @@ async function loadTemplates(): Promise<void> {
     templates.value = await listTemplates()
     templatesLoadState.value = 'ready'
   } catch (err) {
-    templatesLoadError.value = httpMessage(err, '加载通知模板失败,请稍后重试')
+    templatesLoadError.value = httpMessage(err, t('settingsNotifications.errLoadTemplates'))
     templatesLoadState.value = 'error'
   }
 }
 
 /** Event label lookup for rendering template rows. */
 function eventLabel(event: string): string {
-  return EVENTS.find((e) => e.id === event)?.label ?? event
+  return EVENTS.value.find((e) => e.id === event)?.label ?? event
 }
 
 /** A template's channel scope label: empty channelId = 该事件通用. */
-function templateScope(t: NotificationTemplate): string {
-  if (!t.channelId) return '该事件所有渠道'
-  return channelName(t.channelId)
+function templateScope(tpl: NotificationTemplate): string {
+  if (!tpl.channelId) return t('settingsNotifications.scopeAllChannels')
+  return channelName(tpl.channelId)
 }
 
 // Add/edit template form. A single inline form (create or edit) shared across rows.
@@ -662,7 +664,7 @@ const availableVariables = TEMPLATE_VARIABLES
 
 // Literal {{x}} strings rendered in the template (kept out of the template to avoid
 // Vue's interpolation parser choking on nested {{ }}).
-const placeholderSyntax = '{{变量}}'
+const placeholderSyntax = computed(() => `{{${t('settingsNotifications.placeholderVar')}}}`)
 function placeholderToken(name: string): string {
   return `{{${name}}}`
 }
@@ -672,13 +674,13 @@ function openCreateTemplate(): void {
   templateFormOpen.value = true
 }
 
-function openEditTemplate(t: NotificationTemplate): void {
+function openEditTemplate(tpl: NotificationTemplate): void {
   Object.assign(templateForm, {
-    id: t.id,
-    event: t.event,
-    channelId: t.channelId ?? '',
-    titleTemplate: t.titleTemplate,
-    bodyTemplate: t.bodyTemplate,
+    id: tpl.id,
+    event: tpl.event,
+    channelId: tpl.channelId ?? '',
+    titleTemplate: tpl.titleTemplate,
+    bodyTemplate: tpl.bodyTemplate,
   })
   templateFormOpen.value = true
 }
@@ -699,18 +701,18 @@ async function handleSaveTemplate(): Promise<void> {
     }
     if (templateForm.id) {
       await updateTemplate(templateForm.id, payload)
-      toast.success('已更新通知模板')
+      toast.success(t('settingsNotifications.toastTemplateUpdated'))
     } else {
       await createTemplate(payload)
-      toast.success('已添加通知模板')
+      toast.success(t('settingsNotifications.toastTemplateAdded'))
     }
     cancelTemplateForm()
     await loadTemplates()
   } catch (err) {
     if (err instanceof HttpError && err.status === 422 && err.apiError) {
-      toast.error('保存失败', { detail: err.apiError.message })
+      toast.error(t('settingsNotifications.toastSaveFailed'), { detail: err.apiError.message })
     } else {
-      toast.error('保存失败', { detail: httpMessage(err, '请稍后重试') })
+      toast.error(t('settingsNotifications.toastSaveFailed'), { detail: httpMessage(err, t('settingsNotifications.retryLater')) })
     }
   } finally {
     savingTemplate.value = false
@@ -719,14 +721,14 @@ async function handleSaveTemplate(): Promise<void> {
 
 const deletingTemplateId = ref<string | null>(null)
 
-async function handleDeleteTemplate(t: NotificationTemplate): Promise<void> {
-  deletingTemplateId.value = t.id
+async function handleDeleteTemplate(tpl: NotificationTemplate): Promise<void> {
+  deletingTemplateId.value = tpl.id
   try {
-    await deleteTemplate(t.id)
-    toast.success('已移除通知模板')
+    await deleteTemplate(tpl.id)
+    toast.success(t('settingsNotifications.toastTemplateRemoved'))
     await loadTemplates()
   } catch (err) {
-    toast.error('移除失败', { detail: httpMessage(err, '请稍后重试') })
+    toast.error(t('settingsNotifications.toastRemoveFailed'), { detail: httpMessage(err, t('settingsNotifications.retryLater')) })
   } finally {
     deletingTemplateId.value = null
   }
@@ -738,8 +740,8 @@ onMounted(loadTemplates)
 
 function httpMessage(err: unknown, fallback: string): string {
   if (err instanceof HttpError) {
-    if (err.status === 0) return '无法连接到服务器,请检查后端是否运行'
-    return err.apiError?.message ?? `请求失败(${err.status})`
+    if (err.status === 0) return t('settingsNotifications.errNoConnection')
+    return err.apiError?.message ?? t('settingsNotifications.errRequestFailed', { status: err.status })
   }
   return err instanceof Error ? err.message : fallback
 }
@@ -750,7 +752,7 @@ function configSummary(ch: NotificationChannel): string {
     const port = ch.config.smtpPort ? `:${ch.config.smtpPort}` : ''
     return `${ch.config.smtpHost ?? ''}${port} → ${ch.config.to ?? ''}`
   }
-  return '即将支持'
+  return t('settingsNotifications.comingSoon')
 }
 </script>
 
@@ -759,9 +761,9 @@ function configSummary(ch: NotificationChannel): string {
     <!-- ─── section header ──────────────────────────────────────────────────── -->
     <div class="section-head">
       <div class="section-head-text">
-        <h2 class="section-title">通知渠道</h2>
+        <h2 class="section-title">{{ t('settingsNotifications.channelsTitle') }}</h2>
         <p class="section-desc">
-          配置 Webhook 与邮件等渠道,构建/部署事件将经这些渠道通知你。敏感字段(如 SMTP 密码)仅以密文存于本实例的加密保险库,绝不回显。
+          {{ t('settingsNotifications.channelsDesc') }}
         </p>
       </div>
       <AppButton
@@ -773,7 +775,7 @@ function configSummary(ch: NotificationChannel): string {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
           <path d="M12 5v14M5 12h14" />
         </svg>
-        新增渠道
+        {{ t('settingsNotifications.addChannel') }}
       </AppButton>
     </div>
 
@@ -783,7 +785,7 @@ function configSummary(ch: NotificationChannel): string {
         <circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" />
       </svg>
       <span>{{ loadError }}</span>
-      <button class="banner-retry" @click="loadChannels">↻ 重试</button>
+      <button class="banner-retry" @click="loadChannels">↻ {{ t('settingsNotifications.retry') }}</button>
     </div>
 
     <!-- ─── loading skeleton ────────────────────────────────────────────────── -->
@@ -805,8 +807,8 @@ function configSummary(ch: NotificationChannel): string {
             <div class="ph-glyph" :style="selectedTypeMeta.glyphStyle" aria-hidden="true">
               {{ selectedTypeMeta.glyph }}
             </div>
-            {{ editorMode === 'edit' ? '编辑渠道' : '新增渠道' }}
-            <button class="editor-close" type="button" aria-label="关闭" @click="closeEditor">
+            {{ editorMode === 'edit' ? t('settingsNotifications.editChannel') : t('settingsNotifications.addChannel') }}
+            <button class="editor-close" type="button" :aria-label="t('settingsNotifications.close')" @click="closeEditor">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                 <path d="M18 6 6 18M6 6l12 12" />
               </svg>
@@ -817,8 +819,8 @@ function configSummary(ch: NotificationChannel): string {
 
               <!-- Type selector (locked when editing — type is immutable) -->
               <div class="config-row">
-                <span class="field-label">渠道类型</span>
-                <div class="type-grid" role="radiogroup" aria-label="渠道类型">
+                <span class="field-label">{{ t('settingsNotifications.channelType') }}</span>
+                <div class="type-grid" role="radiogroup" :aria-label="t('settingsNotifications.channelType')">
                   <button
                     v-for="m in TYPES"
                     :key="m.id"
@@ -832,14 +834,14 @@ function configSummary(ch: NotificationChannel): string {
                     <span class="type-glyph" :style="m.glyphStyle" aria-hidden="true">{{ m.glyph }}</span>
                     <span class="type-name">{{ m.label }}</span>
                     <span class="type-desc">{{ m.desc }}</span>
-                    <span v-if="!m.implemented" class="type-soon">未实现发送</span>
+                    <span v-if="!m.implemented" class="type-soon">{{ t('settingsNotifications.notImplemented') }}</span>
                   </button>
                 </div>
               </div>
 
               <!-- Name -->
               <div class="config-row">
-                <FormField label="渠道名称" field-id="nt-name" :error="fieldErrors.name" required>
+                <FormField :label="t('settingsNotifications.channelName')" field-id="nt-name" :error="fieldErrors.name" required>
                   <template #default="{ fieldId, ariaDescribedby }">
                     <input
                       :id="fieldId"
@@ -847,7 +849,7 @@ function configSummary(ch: NotificationChannel): string {
                       type="text"
                       class="field-input"
                       :class="{ 'field-input--error': fieldErrors.name }"
-                      placeholder="如:运维群 webhook"
+                      :placeholder="t('settingsNotifications.channelNamePlaceholder')"
                       :aria-describedby="ariaDescribedby"
                       :disabled="saving"
                       @input="fieldErrors.name = ''"
@@ -859,10 +861,10 @@ function configSummary(ch: NotificationChannel): string {
               <!-- Webhook fields -->
               <div v-if="isWebhook" class="config-row">
                 <FormField
-                  label="Webhook 地址"
+                  :label="t('settingsNotifications.webhookUrl')"
                   field-id="nt-url"
                   :error="fieldErrors.url"
-                  hint="POST JSON 到该地址;不可指向云元数据/链路本地,允许私网自托管"
+                  :hint="t('settingsNotifications.webhookUrlHint')"
                   required
                 >
                   <template #default="{ fieldId, ariaDescribedby }">
@@ -885,10 +887,10 @@ function configSummary(ch: NotificationChannel): string {
               <template v-else-if="isFeishu">
                 <div class="config-row">
                   <FormField
-                    label="飞书机器人 Webhook 地址"
+                    :label="t('settingsNotifications.feishuUrl')"
                     field-id="nt-fs-url"
                     :error="fieldErrors.url"
-                    hint="飞书群「设置 → 群机器人 → 自定义机器人」的 Webhook 地址(open.feishu.cn/open-apis/bot/v2/hook/…)"
+                    :hint="t('settingsNotifications.feishuUrlHint')"
                     required
                   >
                     <template #default="{ fieldId, ariaDescribedby }">
@@ -908,9 +910,9 @@ function configSummary(ch: NotificationChannel): string {
                 </div>
                 <div class="config-row">
                   <FormField
-                    label="签名密钥(可选)"
+                    :label="t('settingsNotifications.signSecret')"
                     field-id="nt-fs-secret"
-                    :hint="hasStoredPassword ? '已配置 ••••(留空则保留)' : '仅当机器人开启「签名校验」时填写;写入后绝不回显'"
+                    :hint="hasStoredPassword ? t('settingsNotifications.secretStoredHint') : t('settingsNotifications.signSecretHint')"
                   >
                     <template #default="{ fieldId, ariaDescribedby }">
                       <input
@@ -918,7 +920,7 @@ function configSummary(ch: NotificationChannel): string {
                         v-model="form.password"
                         type="password"
                         class="field-input field-input--mono"
-                        :placeholder="hasStoredPassword ? '已配置 ••••(留空不变)' : '机器人未开启签名校验则留空'"
+                        :placeholder="hasStoredPassword ? t('settingsNotifications.secretStoredPlaceholder') : t('settingsNotifications.signSecretPlaceholder')"
                         autocomplete="new-password"
                         :aria-describedby="ariaDescribedby"
                         :disabled="saving"
@@ -931,7 +933,7 @@ function configSummary(ch: NotificationChannel): string {
               <!-- Email fields -->
               <template v-else-if="isEmail">
                 <div class="config-grid">
-                  <FormField label="SMTP 主机" field-id="nt-host" :error="fieldErrors.smtpHost" required>
+                  <FormField :label="t('settingsNotifications.smtpHost')" field-id="nt-host" :error="fieldErrors.smtpHost" required>
                     <template #default="{ fieldId, ariaDescribedby }">
                       <input
                         :id="fieldId"
@@ -946,7 +948,7 @@ function configSummary(ch: NotificationChannel): string {
                       />
                     </template>
                   </FormField>
-                  <FormField label="端口" field-id="nt-port" :error="fieldErrors.smtpPort" required>
+                  <FormField :label="t('settingsNotifications.port')" field-id="nt-port" :error="fieldErrors.smtpPort" required>
                     <template #default="{ fieldId, ariaDescribedby }">
                       <input
                         :id="fieldId"
@@ -964,7 +966,7 @@ function configSummary(ch: NotificationChannel): string {
                   </FormField>
                 </div>
                 <div class="config-grid">
-                  <FormField label="发件人" field-id="nt-from" :error="fieldErrors.from" required>
+                  <FormField :label="t('settingsNotifications.fromAddr')" field-id="nt-from" :error="fieldErrors.from" required>
                     <template #default="{ fieldId, ariaDescribedby }">
                       <input
                         :id="fieldId"
@@ -979,7 +981,7 @@ function configSummary(ch: NotificationChannel): string {
                       />
                     </template>
                   </FormField>
-                  <FormField label="收件人" field-id="nt-to" :error="fieldErrors.to" hint="多个用逗号分隔" required>
+                  <FormField :label="t('settingsNotifications.toAddr')" field-id="nt-to" :error="fieldErrors.to" :hint="t('settingsNotifications.toAddrHint')" required>
                     <template #default="{ fieldId, ariaDescribedby }">
                       <input
                         :id="fieldId"
@@ -996,14 +998,14 @@ function configSummary(ch: NotificationChannel): string {
                   </FormField>
                 </div>
                 <div class="config-grid">
-                  <FormField label="用户名" field-id="nt-user" hint="留空默认用发件人地址">
+                  <FormField :label="t('settingsNotifications.username')" field-id="nt-user" :hint="t('settingsNotifications.usernameHint')">
                     <template #default="{ fieldId, ariaDescribedby }">
                       <input
                         :id="fieldId"
                         v-model="form.username"
                         type="text"
                         class="field-input field-input--mono"
-                        placeholder="同发件人"
+                        :placeholder="t('settingsNotifications.usernamePlaceholder')"
                         autocomplete="off"
                         :aria-describedby="ariaDescribedby"
                         :disabled="saving"
@@ -1011,9 +1013,9 @@ function configSummary(ch: NotificationChannel): string {
                     </template>
                   </FormField>
                   <FormField
-                    label="SMTP 密码"
+                    :label="t('settingsNotifications.smtpPassword')"
                     field-id="nt-pw"
-                    :hint="hasStoredPassword ? '已配置 ••••(留空则保留)' : '写入后仅显示掩码,绝不回显'"
+                    :hint="hasStoredPassword ? t('settingsNotifications.secretStoredHint') : t('settingsNotifications.smtpPasswordHint')"
                   >
                     <template #default="{ fieldId, ariaDescribedby }">
                       <input
@@ -1021,7 +1023,7 @@ function configSummary(ch: NotificationChannel): string {
                         v-model="form.password"
                         type="password"
                         class="field-input field-input--mono"
-                        :placeholder="hasStoredPassword ? '已配置 ••••(留空不变)' : '粘贴 SMTP 密码…'"
+                        :placeholder="hasStoredPassword ? t('settingsNotifications.secretStoredPlaceholder') : t('settingsNotifications.smtpPasswordPlaceholder')"
                         autocomplete="new-password"
                         :aria-describedby="ariaDescribedby"
                         :disabled="saving"
@@ -1036,7 +1038,7 @@ function configSummary(ch: NotificationChannel): string {
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                   <circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" />
                 </svg>
-                该渠道类型本期可保存配置,但发送功能尚未实现(测试将返回 not_implemented),敬请后续版本支持。
+                {{ t('settingsNotifications.placeholderTypeHint') }}
               </div>
 
               <!-- Enabled toggle -->
@@ -1047,23 +1049,23 @@ function configSummary(ch: NotificationChannel): string {
                   :class="{ 'toggle-track--on': form.enabled }"
                   role="switch"
                   :aria-checked="form.enabled"
-                  aria-label="启用该渠道"
+                  :aria-label="t('settingsNotifications.enableChannelAria')"
                   :disabled="saving"
                   @click="form.enabled = !form.enabled"
                 >
                   <span class="toggle-thumb" />
                 </button>
                 <div class="toggle-label">
-                  <strong>启用渠道</strong>
-                  <span>停用后该渠道不发送,但配置保留</span>
+                  <strong>{{ t('settingsNotifications.enableChannel') }}</strong>
+                  <span>{{ t('settingsNotifications.enableChannelDesc') }}</span>
                 </div>
               </div>
 
               <!-- Save bar -->
               <div class="editor-actions">
-                <AppButton variant="ghost" type="button" :disabled="saving" @click="closeEditor">取消</AppButton>
+                <AppButton variant="ghost" type="button" :disabled="saving" @click="closeEditor">{{ t('settingsNotifications.cancel') }}</AppButton>
                 <AppButton variant="primary" type="submit" :loading="saving">
-                  {{ editorMode === 'edit' ? '保存更改' : '创建渠道' }}
+                  {{ editorMode === 'edit' ? t('settingsNotifications.saveChanges') : t('settingsNotifications.createChannel') }}
                 </AppButton>
               </div>
             </form>
@@ -1078,9 +1080,9 @@ function configSummary(ch: NotificationChannel): string {
             <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0" />
           </svg>
         </div>
-        <strong>尚未配置通知渠道</strong>
-        <p>新增一个 Webhook 或邮件渠道,构建/部署事件即可经它通知你。</p>
-        <AppButton variant="primary" type="button" @click="openCreate">新增渠道</AppButton>
+        <strong>{{ t('settingsNotifications.emptyTitle') }}</strong>
+        <p>{{ t('settingsNotifications.emptyDesc') }}</p>
+        <AppButton variant="primary" type="button" @click="openCreate">{{ t('settingsNotifications.addChannel') }}</AppButton>
       </div>
 
       <!-- Channel list -->
@@ -1099,7 +1101,7 @@ function configSummary(ch: NotificationChannel): string {
                   :class="ch.enabled ? 'ch-status--on' : 'ch-status--off'"
                 >
                   <span class="ch-dot" :class="{ 'ch-dot--on': ch.enabled }" aria-hidden="true" />
-                  {{ ch.enabled ? '已启用' : '已停用' }}
+                  {{ ch.enabled ? t('settingsNotifications.statusEnabled') : t('settingsNotifications.statusDisabled') }}
                 </span>
               </div>
               <div class="ch-summary mono">{{ configSummary(ch) }}</div>
@@ -1116,14 +1118,14 @@ function configSummary(ch: NotificationChannel): string {
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" aria-hidden="true">
                       <path d="m5 13 4 4 10-11" />
                     </svg>
-                    发送成功 · {{ testResults[ch.id].latencyMs }}ms
+                    {{ t('settingsNotifications.testOk', { ms: testResults[ch.id].latencyMs }) }}
                     <span v-if="testResults[ch.id].detail" class="test-detail">· {{ testResults[ch.id].detail }}</span>
                   </template>
                   <template v-else>
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
                       <circle cx="12" cy="12" r="9" /><path d="M15 9l-6 6M9 9l6 6" />
                     </svg>
-                    {{ testResults[ch.id].error ?? '发送失败' }}
+                    {{ testResults[ch.id].error ?? t('settingsNotifications.testFail') }}
                   </template>
                 </div>
               </Transition>
@@ -1136,9 +1138,9 @@ function configSummary(ch: NotificationChannel): string {
               :loading="testingId === ch.id"
               @click="handleTest(ch)"
             >
-              测试发送
+              {{ t('settingsNotifications.testSend') }}
             </AppButton>
-            <button class="icon-btn" type="button" aria-label="编辑" @click="openEdit(ch)">
+            <button class="icon-btn" type="button" :aria-label="t('settingsNotifications.edit')" @click="openEdit(ch)">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                 <path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
               </svg>
@@ -1146,7 +1148,7 @@ function configSummary(ch: NotificationChannel): string {
             <button
               class="icon-btn icon-btn--danger"
               type="button"
-              aria-label="删除"
+              :aria-label="t('settingsNotifications.delete')"
               :disabled="deletingId === ch.id"
               @click="handleDelete(ch)"
             >
@@ -1164,9 +1166,9 @@ function configSummary(ch: NotificationChannel): string {
     <section class="routes-section" aria-labelledby="routes-heading">
       <div class="section-head">
         <div class="section-head-text">
-          <h2 id="routes-heading" class="section-title">事件路由</h2>
+          <h2 id="routes-heading" class="section-title">{{ t('settingsNotifications.routesTitle') }}</h2>
           <p class="section-desc">
-            配置「哪些事件经哪些渠道通知」。<strong>未配置路由的事件不会发送任何通知</strong>,你只在关心的事件上被打扰。一个事件可路由到多个渠道。
+            {{ t('settingsNotifications.routesDescPre') }}<strong>{{ t('settingsNotifications.routesDescStrong') }}</strong>{{ t('settingsNotifications.routesDescPost') }}
           </p>
         </div>
       </div>
@@ -1177,7 +1179,7 @@ function configSummary(ch: NotificationChannel): string {
           <circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" />
         </svg>
         <span>{{ routesLoadError }}</span>
-        <button class="banner-retry" @click="loadRoutes">↻ 重试</button>
+        <button class="banner-retry" @click="loadRoutes">↻ {{ t('settingsNotifications.retry') }}</button>
       </div>
 
       <!-- routes loading -->
@@ -1192,7 +1194,7 @@ function configSummary(ch: NotificationChannel): string {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" />
         </svg>
-        先在上方新增至少一个通知渠道,才能为事件配置路由。
+        {{ t('settingsNotifications.routesNoChannels') }}
       </div>
 
       <!-- event → channel mapping table -->
@@ -1213,7 +1215,7 @@ function configSummary(ch: NotificationChannel): string {
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
                 <path d="M12 5v14M5 12h14" />
               </svg>
-              添加渠道
+              {{ t('settingsNotifications.addChannelShort') }}
             </AppButton>
           </div>
 
@@ -1225,7 +1227,7 @@ function configSummary(ch: NotificationChannel): string {
               <button
                 class="route-chip-x"
                 type="button"
-                :aria-label="`移除 ${channelName(r.channelId)}`"
+                :aria-label="t('settingsNotifications.removeChannelAria', { name: channelName(r.channelId) })"
                 :disabled="deletingRouteId === r.id"
                 @click="handleDeleteRoute(r)"
               >
@@ -1235,19 +1237,19 @@ function configSummary(ch: NotificationChannel): string {
               </button>
             </span>
           </div>
-          <div v-else-if="addingEvent !== ev.id" class="route-empty">未配置 · 该事件不通知</div>
+          <div v-else-if="addingEvent !== ev.id" class="route-empty">{{ t('settingsNotifications.routeEmpty') }}</div>
 
           <!-- add-route inline picker -->
           <div v-if="addingEvent === ev.id" class="route-add">
-            <select v-model="addChannelId" class="route-select" :disabled="savingRoute" aria-label="选择渠道">
+            <select v-model="addChannelId" class="route-select" :disabled="savingRoute" :aria-label="t('settingsNotifications.selectChannel')">
               <option v-for="c in channels" :key="c.id" :value="c.id">
-                {{ c.name }}{{ c.enabled ? '' : '(已停用)' }}
+                {{ c.name }}{{ c.enabled ? '' : t('settingsNotifications.disabledSuffix') }}
               </option>
             </select>
             <AppButton variant="primary" type="button" :loading="savingRoute" :disabled="!addChannelId" @click="handleAddRoute">
-              添加
+              {{ t('settingsNotifications.add') }}
             </AppButton>
-            <AppButton variant="ghost" type="button" :disabled="savingRoute" @click="cancelAddRoute">取消</AppButton>
+            <AppButton variant="ghost" type="button" :disabled="savingRoute" @click="cancelAddRoute">{{ t('settingsNotifications.cancel') }}</AppButton>
           </div>
         </li>
       </ul>
@@ -1257,9 +1259,9 @@ function configSummary(ch: NotificationChannel): string {
     <section class="override-section" aria-labelledby="override-heading">
       <div class="section-head">
         <div class="section-head-text">
-          <h2 id="override-heading" class="section-title">按项目覆盖</h2>
+          <h2 id="override-heading" class="section-title">{{ t('settingsNotifications.overrideTitle') }}</h2>
           <p class="section-desc">
-            为特定项目配置<strong>专属事件路由</strong>,覆盖上方全局默认。<strong>整体覆盖</strong>:某项目一旦为某事件配了任一项目级路由,该事件该项目就<strong>只</strong>走项目级渠道(不与全局叠加);未配则继承全局。
+            {{ t('settingsNotifications.overrideDescA') }}<strong>{{ t('settingsNotifications.overrideDescStrong1') }}</strong>{{ t('settingsNotifications.overrideDescB') }}<strong>{{ t('settingsNotifications.overrideDescStrong2') }}</strong>{{ t('settingsNotifications.overrideDescC') }}<strong>{{ t('settingsNotifications.overrideDescStrong3') }}</strong>{{ t('settingsNotifications.overrideDescD') }}
           </p>
         </div>
       </div>
@@ -1270,7 +1272,7 @@ function configSummary(ch: NotificationChannel): string {
           <circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" />
         </svg>
         <span>{{ projectsLoadError }}</span>
-        <button class="banner-retry" @click="loadProjects">↻ 重试</button>
+        <button class="banner-retry" @click="loadProjects">↻ {{ t('settingsNotifications.retry') }}</button>
       </div>
 
       <!-- projects loading -->
@@ -1285,7 +1287,7 @@ function configSummary(ch: NotificationChannel): string {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" />
         </svg>
-        先在上方新增至少一个通知渠道,才能为项目配置覆盖路由。
+        {{ t('settingsNotifications.overrideNoChannels') }}
       </div>
 
       <!-- no projects -->
@@ -1293,23 +1295,23 @@ function configSummary(ch: NotificationChannel): string {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" />
         </svg>
-        暂无项目。创建项目后可在此为其配置专属通知路由。
+        {{ t('settingsNotifications.overrideNoProjects') }}
       </div>
 
       <template v-else>
         <!-- project picker -->
         <div class="override-picker">
-          <FormField label="选择项目" field-id="override-project" hint="选一个项目查看并覆盖其事件路由">
+          <FormField :label="t('settingsNotifications.selectProject')" field-id="override-project" :hint="t('settingsNotifications.selectProjectHint')">
             <template #default="{ fieldId, ariaDescribedby }">
               <select
                 :id="fieldId"
                 class="route-select"
                 :value="selectedProjectId"
                 :aria-describedby="ariaDescribedby"
-                aria-label="选择要覆盖路由的项目"
+                :aria-label="t('settingsNotifications.selectProjectAria')"
                 @change="onSelectProject(($event.target as HTMLSelectElement).value)"
               >
-                <option value="">— 请选择项目 —</option>
+                <option value="">{{ t('settingsNotifications.selectProjectPlaceholder') }}</option>
                 <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
               </select>
             </template>
@@ -1324,7 +1326,7 @@ function configSummary(ch: NotificationChannel): string {
               <path d="M12 2v6m0 0 3-3m-3 3L9 5M5 12H2m20 0h-3M12 22v-6m0 0 3 3m-3-3-3 3" />
             </svg>
             <span>
-              <strong>{{ selectedProject?.name }}</strong> 当前<strong>继承全局默认</strong>路由。在下方任一事件添加项目级渠道即可自定义——一旦该事件有项目级路由,它就<strong>只</strong>走项目级(整体切换),不再叠加全局。
+              <strong>{{ selectedProject?.name }}</strong>{{ t('settingsNotifications.inheritBannerA') }}<strong>{{ t('settingsNotifications.inheritBannerStrong1') }}</strong>{{ t('settingsNotifications.inheritBannerB') }}<strong>{{ t('settingsNotifications.inheritBannerStrong2') }}</strong>{{ t('settingsNotifications.inheritBannerC') }}
             </span>
           </div>
           <div v-else-if="hasAnyOverride" class="custom-banner" role="note">
@@ -1332,7 +1334,7 @@ function configSummary(ch: NotificationChannel): string {
               <path d="M12 2 2 7l10 5 10-5-10-5ZM2 17l10 5 10-5M2 12l10 5 10-5" />
             </svg>
             <span>
-              <strong>{{ selectedProject?.name }}</strong> 已自定义路由。<strong>有项目级路由的事件只走项目级渠道</strong>;无项目级路由的事件仍继承全局。移除某事件的全部项目级路由即回退继承。
+              <strong>{{ selectedProject?.name }}</strong>{{ t('settingsNotifications.customBannerA') }}<strong>{{ t('settingsNotifications.customBannerStrong') }}</strong>{{ t('settingsNotifications.customBannerB') }}
             </span>
           </div>
 
@@ -1342,7 +1344,7 @@ function configSummary(ch: NotificationChannel): string {
               <circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" />
             </svg>
             <span>{{ projectRoutesLoadError }}</span>
-            <button class="banner-retry" @click="loadProjectRoutes">↻ 重试</button>
+            <button class="banner-retry" @click="loadProjectRoutes">↻ {{ t('settingsNotifications.retry') }}</button>
           </div>
 
           <!-- project routes loading -->
@@ -1362,8 +1364,8 @@ function configSummary(ch: NotificationChannel): string {
                   <span
                     v-if="overriddenEventIds.has(ev.id)"
                     class="scope-tag scope-tag--project"
-                  >项目级</span>
-                  <span v-else class="scope-tag scope-tag--inherit">继承全局</span>
+                  >{{ t('settingsNotifications.scopeProject') }}</span>
+                  <span v-else class="scope-tag scope-tag--inherit">{{ t('settingsNotifications.scopeInherit') }}</span>
                 </div>
                 <AppButton
                   v-if="addingProjectEvent !== ev.id"
@@ -1374,7 +1376,7 @@ function configSummary(ch: NotificationChannel): string {
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
                     <path d="M12 5v14M5 12h14" />
                   </svg>
-                  添加渠道
+                  {{ t('settingsNotifications.addChannelShort') }}
                 </AppButton>
               </div>
 
@@ -1389,7 +1391,7 @@ function configSummary(ch: NotificationChannel): string {
                   <button
                     class="route-chip-x"
                     type="button"
-                    :aria-label="`移除 ${channelName(r.channelId)}`"
+                    :aria-label="t('settingsNotifications.removeChannelAria', { name: channelName(r.channelId) })"
                     :disabled="deletingProjectRouteId === r.id"
                     @click="handleDeleteProjectRoute(r)"
                   >
@@ -1400,20 +1402,20 @@ function configSummary(ch: NotificationChannel): string {
                 </span>
               </div>
               <div v-else-if="addingProjectEvent !== ev.id" class="route-empty">
-                继承全局 · 未覆盖
+                {{ t('settingsNotifications.projectRouteEmpty') }}
               </div>
 
               <!-- add-project-route inline picker -->
               <div v-if="addingProjectEvent === ev.id" class="route-add">
-                <select v-model="addProjectChannelId" class="route-select" :disabled="savingProjectRoute" aria-label="选择渠道">
+                <select v-model="addProjectChannelId" class="route-select" :disabled="savingProjectRoute" :aria-label="t('settingsNotifications.selectChannel')">
                   <option v-for="c in channels" :key="c.id" :value="c.id">
-                    {{ c.name }}{{ c.enabled ? '' : '(已停用)' }}
+                    {{ c.name }}{{ c.enabled ? '' : t('settingsNotifications.disabledSuffix') }}
                   </option>
                 </select>
                 <AppButton variant="primary" type="button" :loading="savingProjectRoute" :disabled="!addProjectChannelId" @click="handleAddProjectRoute">
-                  添加
+                  {{ t('settingsNotifications.add') }}
                 </AppButton>
-                <AppButton variant="ghost" type="button" :disabled="savingProjectRoute" @click="cancelAddProjectRoute">取消</AppButton>
+                <AppButton variant="ghost" type="button" :disabled="savingProjectRoute" @click="cancelAddProjectRoute">{{ t('settingsNotifications.cancel') }}</AppButton>
               </div>
             </li>
           </ul>
@@ -1425,9 +1427,9 @@ function configSummary(ch: NotificationChannel): string {
     <section class="templates-section" aria-labelledby="templates-heading">
       <div class="section-head">
         <div class="section-head-text">
-          <h2 id="templates-heading" class="section-title">通知模板</h2>
+          <h2 id="templates-heading" class="section-title">{{ t('settingsNotifications.templatesTitle') }}</h2>
           <p class="section-desc">
-            自定义通知的<strong>标题与正文</strong>,用 <code class="mono">{{ placeholderSyntax }}</code> 占位插入项目、分支、耗时等真实值。<strong>未配置模板的事件使用平台默认文案</strong>,行为不变。可按事件配置,也可仅对某个渠道生效。
+            {{ t('settingsNotifications.templatesDescA') }}<strong>{{ t('settingsNotifications.templatesDescStrong1') }}</strong>{{ t('settingsNotifications.templatesDescB') }}<code class="mono">{{ placeholderSyntax }}</code>{{ t('settingsNotifications.templatesDescC') }}<strong>{{ t('settingsNotifications.templatesDescStrong2') }}</strong>{{ t('settingsNotifications.templatesDescD') }}
           </p>
         </div>
         <AppButton
@@ -1439,13 +1441,13 @@ function configSummary(ch: NotificationChannel): string {
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
             <path d="M12 5v14M5 12h14" />
           </svg>
-          新增模板
+          {{ t('settingsNotifications.addTemplate') }}
         </AppButton>
       </div>
 
       <!-- available variables hint -->
       <div class="tpl-vars" role="note">
-        <span class="tpl-vars-label">可用变量</span>
+        <span class="tpl-vars-label">{{ t('settingsNotifications.availableVars') }}</span>
         <code v-for="v in availableVariables" :key="v" class="tpl-var mono">{{ placeholderToken(v) }}</code>
       </div>
 
@@ -1455,7 +1457,7 @@ function configSummary(ch: NotificationChannel): string {
           <circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" />
         </svg>
         <span>{{ templatesLoadError }}</span>
-        <button class="banner-retry" @click="loadTemplates">↻ 重试</button>
+        <button class="banner-retry" @click="loadTemplates">↻ {{ t('settingsNotifications.retry') }}</button>
       </div>
 
       <!-- templates loading -->
@@ -1469,24 +1471,24 @@ function configSummary(ch: NotificationChannel): string {
         <!-- add/edit template form -->
         <form v-if="templateFormOpen" class="tpl-form panel--anim" @submit.prevent="handleSaveTemplate">
           <div class="tpl-form-row">
-            <FormField label="事件" field-id="tpl-event" required>
+            <FormField :label="t('settingsNotifications.tplEvent')" field-id="tpl-event" required>
               <template #default="{ fieldId, ariaDescribedby }">
                 <select :id="fieldId" v-model="templateForm.event" class="route-select" :aria-describedby="ariaDescribedby" :disabled="savingTemplate">
                   <option v-for="ev in EVENTS" :key="ev.id" :value="ev.id">{{ ev.label }}({{ ev.id }})</option>
                 </select>
               </template>
             </FormField>
-            <FormField label="渠道(可选)" field-id="tpl-channel" hint="留空 = 该事件所有渠道通用;指定 = 仅该渠道">
+            <FormField :label="t('settingsNotifications.tplChannel')" field-id="tpl-channel" :hint="t('settingsNotifications.tplChannelHint')">
               <template #default="{ fieldId, ariaDescribedby }">
                 <select :id="fieldId" v-model="templateForm.channelId" class="route-select" :aria-describedby="ariaDescribedby" :disabled="savingTemplate">
-                  <option value="">该事件所有渠道(通用)</option>
-                  <option v-for="c in channels" :key="c.id" :value="c.id">{{ c.name }}{{ c.enabled ? '' : '(已停用)' }}</option>
+                  <option value="">{{ t('settingsNotifications.tplChannelAll') }}</option>
+                  <option v-for="c in channels" :key="c.id" :value="c.id">{{ c.name }}{{ c.enabled ? '' : t('settingsNotifications.disabledSuffix') }}</option>
                 </select>
               </template>
             </FormField>
           </div>
 
-          <FormField label="标题模板" field-id="tpl-title" hint="留空时回退平台默认标题">
+          <FormField :label="t('settingsNotifications.tplTitle')" field-id="tpl-title" :hint="t('settingsNotifications.tplTitleHint')">
             <template #default="{ fieldId, ariaDescribedby }">
               <input
                 :id="fieldId"
@@ -1495,12 +1497,12 @@ function configSummary(ch: NotificationChannel): string {
                 type="text"
                 :aria-describedby="ariaDescribedby"
                 :disabled="savingTemplate"
-                placeholder="构建失败:{{project}}"
+                :placeholder="t('settingsNotifications.tplTitlePlaceholder')"
               />
             </template>
           </FormField>
 
-          <FormField label="正文模板" field-id="tpl-body">
+          <FormField :label="t('settingsNotifications.tplBody')" field-id="tpl-body">
             <template #default="{ fieldId, ariaDescribedby }">
               <textarea
                 :id="fieldId"
@@ -1509,16 +1511,16 @@ function configSummary(ch: NotificationChannel): string {
                 rows="4"
                 :aria-describedby="ariaDescribedby"
                 :disabled="savingTemplate"
-                placeholder="{{branch}}@{{commit}} 失败,耗时 {{durationMs}}ms&#10;{{errorSummary}}"
+                :placeholder="t('settingsNotifications.tplBodyPlaceholder')"
               />
             </template>
           </FormField>
 
           <div class="tpl-form-actions">
             <AppButton variant="primary" type="submit" :loading="savingTemplate">
-              {{ templateForm.id ? '保存修改' : '创建模板' }}
+              {{ templateForm.id ? t('settingsNotifications.saveEdit') : t('settingsNotifications.createTemplate') }}
             </AppButton>
-            <AppButton variant="ghost" type="button" :disabled="savingTemplate" @click="cancelTemplateForm">取消</AppButton>
+            <AppButton variant="ghost" type="button" :disabled="savingTemplate" @click="cancelTemplateForm">{{ t('settingsNotifications.cancel') }}</AppButton>
           </div>
         </form>
 
@@ -1527,20 +1529,20 @@ function configSummary(ch: NotificationChannel): string {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
             <circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" />
           </svg>
-          暂无自定义模板,所有事件使用平台默认文案。点击「新增模板」可自定义通知内容。
+          {{ t('settingsNotifications.tplEmpty') }}
         </div>
 
         <!-- template list -->
         <ul v-if="templates.length > 0" class="tpl-list">
-          <li v-for="t in templates" :key="t.id" class="tpl-card panel--anim">
+          <li v-for="tpl in templates" :key="tpl.id" class="tpl-card panel--anim">
             <div class="tpl-card-head">
               <div class="tpl-card-meta">
-                <span class="event-name">{{ eventLabel(t.event) }}</span>
-                <span class="event-code mono">{{ t.event }}</span>
-                <span class="tpl-scope">{{ templateScope(t) }}</span>
+                <span class="event-name">{{ eventLabel(tpl.event) }}</span>
+                <span class="event-code mono">{{ tpl.event }}</span>
+                <span class="tpl-scope">{{ templateScope(tpl) }}</span>
               </div>
               <div class="tpl-card-actions">
-                <button class="tpl-icon-btn" type="button" :aria-label="`编辑 ${eventLabel(t.event)} 模板`" @click="openEditTemplate(t)">
+                <button class="tpl-icon-btn" type="button" :aria-label="t('settingsNotifications.editTemplateAria', { event: eventLabel(tpl.event) })" @click="openEditTemplate(tpl)">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                     <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
                   </svg>
@@ -1548,9 +1550,9 @@ function configSummary(ch: NotificationChannel): string {
                 <button
                   class="tpl-icon-btn tpl-icon-btn--danger"
                   type="button"
-                  :aria-label="`删除 ${eventLabel(t.event)} 模板`"
-                  :disabled="deletingTemplateId === t.id"
-                  @click="handleDeleteTemplate(t)"
+                  :aria-label="t('settingsNotifications.deleteTemplateAria', { event: eventLabel(tpl.event) })"
+                  :disabled="deletingTemplateId === tpl.id"
+                  @click="handleDeleteTemplate(tpl)"
                 >
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                     <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
@@ -1559,13 +1561,13 @@ function configSummary(ch: NotificationChannel): string {
               </div>
             </div>
             <div class="tpl-card-body">
-              <div v-if="t.titleTemplate" class="tpl-line">
-                <span class="tpl-line-label">标题</span>
-                <code class="mono">{{ t.titleTemplate }}</code>
+              <div v-if="tpl.titleTemplate" class="tpl-line">
+                <span class="tpl-line-label">{{ t('settingsNotifications.tplLineTitle') }}</span>
+                <code class="mono">{{ tpl.titleTemplate }}</code>
               </div>
-              <div v-if="t.bodyTemplate" class="tpl-line">
-                <span class="tpl-line-label">正文</span>
-                <code class="mono tpl-body-code">{{ t.bodyTemplate }}</code>
+              <div v-if="tpl.bodyTemplate" class="tpl-line">
+                <span class="tpl-line-label">{{ t('settingsNotifications.tplLineBody') }}</span>
+                <code class="mono tpl-body-code">{{ tpl.bodyTemplate }}</code>
               </div>
             </div>
           </li>

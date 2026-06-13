@@ -18,6 +18,7 @@
  * No new UI libraries. Animation: transform/opacity + prefers-reduced-motion.
  */
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import FormField from '../../components/ui/FormField.vue'
 import AppButton from '../../components/ui/AppButton.vue'
 import { useToast } from '../../composables/useToast'
@@ -45,6 +46,10 @@ interface ProviderMeta {
   tagStyle?: string
 }
 
+// ─── i18n ─────────────────────────────────────────────────────────────────────
+
+const { t } = useI18n()
+
 // ─── provider metadata ───────────────────────────────────────────────────────
 
 const PROVIDERS: ProviderMeta[] = [
@@ -54,7 +59,7 @@ const PROVIDERS: ProviderMeta[] = [
     desc: 'Anthropic',
     logoText: 'A',
     logoStyle: 'background:#D97757;color:#fff',
-    tag: '诊断推荐',
+    tag: t('settingsAI.providerClaudeTag'),
     tagStyle: 'color:var(--color-primary);background:var(--color-primary-soft)',
   },
   {
@@ -67,10 +72,10 @@ const PROVIDERS: ProviderMeta[] = [
   {
     id: 'ollama',
     label: 'Ollama',
-    desc: '本地 / 自托管',
+    desc: t('settingsAI.providerOllamaDesc'),
     logoText: 'Ll',
     logoStyle: 'background:var(--color-inset);color:var(--color-dim);font-size:0.72rem',
-    tag: '零外发',
+    tag: t('settingsAI.providerOllamaTag'),
     tagStyle: 'color:var(--color-green);background:var(--color-green-soft)',
   },
 ]
@@ -152,14 +157,14 @@ async function loadSettings(): Promise<void> {
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
-        loadError.value = '无法连接到服务器,请检查后端是否运行后重试'
+        loadError.value = t('settingsAI.errServerUnreachable')
       } else if (err.apiError?.code === 'vault_unconfigured') {
-        loadError.value = '保险库未配置 master key,请设置 PIPEWRIGHT_MASTER_KEY 环境变量'
+        loadError.value = t('settingsAI.errVaultUnconfigured')
       } else {
-        loadError.value = err.apiError?.message ?? `加载失败(${err.status})`
+        loadError.value = err.apiError?.message ?? t('settingsAI.errLoadFailed', { status: err.status })
       }
     } else {
-      loadError.value = '加载 AI 配置失败,请稍后重试'
+      loadError.value = t('settingsAI.errLoadGeneric')
     }
     loadState.value = 'error'
   }
@@ -216,10 +221,10 @@ async function handleTest(): Promise<void> {
       latencyMs: 0,
       detail: '',
       error: err instanceof HttpError
-        ? (err.apiError?.message ?? `请求失败(${err.status})`)
+        ? (err.apiError?.message ?? t('settingsAI.errRequestFailed', { status: err.status }))
         : err instanceof Error
           ? err.message
-          : '未知错误',
+          : t('settingsAI.errUnknown'),
     }
   }
 }
@@ -238,7 +243,7 @@ async function handleSave(): Promise<void> {
     const parsed = limit === '' ? null : Number(limit)
     if (limit !== '' && (Number.isNaN(parsed) || (parsed !== null && parsed < 0))) {
       saving.value = false
-      toast.error('保存失败', { detail: '月 token 上限须为正整数或留空' })
+      toast.error(t('settingsAI.toastSaveFailed'), { detail: t('settingsAI.errBudgetInvalid') })
       return
     }
 
@@ -253,29 +258,29 @@ async function handleSave(): Promise<void> {
 
     const updated = await saveAISettings(payload)
     applySettings(updated)
-    toast.success('AI 配置已保存')
+    toast.success(t('settingsAI.toastSaveSuccess'))
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 422 && err.apiError) {
         const code = err.apiError.code
         if (code === 'invalid_provider') {
-          errors.value.provider = '请选择有效的提供商'
+          errors.value.provider = t('settingsAI.errProviderInvalid')
         } else if (code === 'base_url_required') {
-          errors.value.baseUrl = '请填写接入地址'
+          errors.value.baseUrl = t('settingsAI.errBaseUrlRequired')
         } else if (code === 'api_key_required') {
-          errors.value.apiKey = 'API Key 不可为空(非 Ollama 必填)'
+          errors.value.apiKey = t('settingsAI.errApiKeyRequired')
         } else {
-          toast.error('保存失败', { detail: err.apiError.message })
+          toast.error(t('settingsAI.toastSaveFailed'), { detail: err.apiError.message })
         }
         return
       }
       if (err.status === 0) {
-        toast.error('保存失败', { detail: '无法连接到服务器' })
+        toast.error(t('settingsAI.toastSaveFailed'), { detail: t('settingsAI.errServerUnreachableShort') })
       } else {
-        toast.error('保存失败', { detail: err.apiError?.message ?? `HTTP ${err.status}` })
+        toast.error(t('settingsAI.toastSaveFailed'), { detail: err.apiError?.message ?? `HTTP ${err.status}` })
       }
     } else {
-      toast.error('保存失败', { detail: err instanceof Error ? err.message : '未知错误' })
+      toast.error(t('settingsAI.toastSaveFailed'), { detail: err instanceof Error ? err.message : t('settingsAI.errUnknown') })
     }
   } finally {
     saving.value = false
@@ -299,12 +304,12 @@ function relativeTime(iso: string | null): string {
   if (!iso) return ''
   const diff = Date.now() - new Date(iso).getTime()
   const s = Math.floor(diff / 1000)
-  if (s < 60) return '刚刚'
+  if (s < 60) return t('time.justNow')
   const m = Math.floor(s / 60)
-  if (m < 60) return `${m} 分钟前`
+  if (m < 60) return t('time.minAgo', { n: m })
   const h = Math.floor(m / 60)
-  if (h < 24) return `${h} 小时前`
-  return `${Math.floor(h / 24)} 天前`
+  if (h < 24) return t('time.hourAgo', { n: h })
+  return t('time.dayAgo', { n: Math.floor(h / 24) })
 }
 </script>
 
@@ -313,19 +318,19 @@ function relativeTime(iso: string | null): string {
     <!-- ─── section header ──────────────────────────────────────────────────── -->
     <div class="section-head">
       <div class="section-head-text">
-        <h2 class="section-title">AI 提供商</h2>
+        <h2 class="section-title">{{ t('settingsAI.title') }}</h2>
         <p class="section-desc">
-          Pipewright 不自训模型 —— 接入你自己的 LLM 用于失败诊断与配置生成。密钥仅存于本实例的加密保险库,绝不外泄。
+          {{ t('settingsAI.subtitle') }}
         </p>
       </div>
       <!-- Connection status badge -->
       <div v-if="loadState === 'ready' && savedSettings?.configured" class="status-chip status-chip--ok">
         <span class="status-dot status-dot--ok" aria-hidden="true" />
-        已配置
+        {{ t('settingsAI.statusConfigured') }}
       </div>
       <div v-else-if="loadState === 'ready' && !savedSettings?.configured" class="status-chip status-chip--idle">
         <span class="status-dot" aria-hidden="true" />
-        未配置
+        {{ t('settingsAI.statusUnconfigured') }}
       </div>
     </div>
 
@@ -335,7 +340,7 @@ function relativeTime(iso: string | null): string {
         <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
       </svg>
       <span>{{ loadError }}</span>
-      <button class="banner-retry" @click="loadSettings">↻ 重试</button>
+      <button class="banner-retry" @click="loadSettings">↻ {{ t('settingsAI.retry') }}</button>
     </div>
 
     <!-- ─── loading skeleton ────────────────────────────────────────────────── -->
@@ -362,7 +367,7 @@ function relativeTime(iso: string | null): string {
         v-if="!savedSettings?.configured && selectedProvider === ''"
         class="guidance-banner"
         role="note"
-        aria-label="AI 配置引导"
+        :aria-label="t('settingsAI.guidanceAria')"
       >
         <div class="guidance-icon" aria-hidden="true">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
@@ -371,8 +376,8 @@ function relativeTime(iso: string | null): string {
           </svg>
         </div>
         <div class="guidance-text">
-          <strong>配置 LLM 以解锁 AI 诊断</strong>
-          <p>接入 Claude、OpenAI 或本地 Ollama 后,流水线失败时 Pipewright 将自动生成根因假说与修复建议,无需手动排查日志。</p>
+          <strong>{{ t('settingsAI.guidanceTitle') }}</strong>
+          <p>{{ t('settingsAI.guidanceBody') }}</p>
         </div>
       </div>
 
@@ -382,11 +387,11 @@ function relativeTime(iso: string | null): string {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
             <circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/>
           </svg>
-          选择提供商
+          {{ t('settingsAI.selectProvider') }}
           <span v-if="errors.provider" class="panel-head-error">{{ errors.provider }}</span>
         </div>
         <div class="panel-body">
-          <div class="prov-grid" role="radiogroup" aria-label="AI 提供商选择">
+          <div class="prov-grid" role="radiogroup" :aria-label="t('settingsAI.providerRadioAria')">
             <button
               v-for="prov in PROVIDERS"
               :key="prov.id"
@@ -394,7 +399,7 @@ function relativeTime(iso: string | null): string {
               class="prov-card"
               :class="{ 'prov-card--active': selectedProvider === prov.id }"
               :aria-pressed="selectedProvider === prov.id"
-              :aria-label="`选择 ${prov.label}`"
+              :aria-label="t('settingsAI.selectProviderAria', { name: prov.label })"
               @click="selectProvider(prov.id)"
             >
               <span v-if="selectedProvider === prov.id" class="prov-check" aria-hidden="true">
@@ -423,9 +428,9 @@ function relativeTime(iso: string | null): string {
             >
               {{ PROVIDERS.find(p => p.id === selectedProvider)?.logoText }}
             </div>
-            {{ PROVIDERS.find(p => p.id === selectedProvider)?.label }} 配置
+            {{ t('settingsAI.providerConfig', { name: PROVIDERS.find(p => p.id === selectedProvider)?.label ?? '' }) }}
             <span v-if="savedSettings?.updatedAt" class="panel-updated">
-              上次保存 {{ relativeTime(savedSettings.updatedAt) }}
+              {{ t('settingsAI.lastSaved', { time: relativeTime(savedSettings.updatedAt) }) }}
             </span>
           </div>
           <div class="panel-body">
@@ -437,7 +442,7 @@ function relativeTime(iso: string | null): string {
                   label="API Key"
                   field-id="ai-apikey"
                   :error="errors.apiKey"
-                  hint="写入后仅显示掩码;留空则保留已存密钥"
+                  :hint="t('settingsAI.apiKeyHint')"
                   :required="!hasExistingKey"
                 >
                   <template #default="{ fieldId, ariaDescribedby }">
@@ -449,8 +454,8 @@ function relativeTime(iso: string | null): string {
                         class="field-input field-input--mono"
                         :class="{ 'field-input--error': errors.apiKey }"
                         :placeholder="hasExistingKey
-                          ? (isRotatingKey ? '正在替换…' : '已配置 ••••(留空不变)')
-                          : '粘贴 API Key…'"
+                          ? (isRotatingKey ? t('settingsAI.apiKeyReplacing') : t('settingsAI.apiKeyConfigured'))
+                          : t('settingsAI.apiKeyPaste')"
                         autocomplete="new-password"
                         :aria-invalid="!!errors.apiKey || undefined"
                         :aria-describedby="ariaDescribedby"
@@ -460,7 +465,7 @@ function relativeTime(iso: string | null): string {
                       <span
                         v-if="hasExistingKey && !isRotatingKey"
                         class="key-masked"
-                        aria-label="`已配置掩码: ${savedSettings?.apiKeyMasked}`"
+                        :aria-label="t('settingsAI.apiKeyMaskedAria', { masked: savedSettings?.apiKeyMasked })"
                       >
                         <span class="mono dim">{{ savedSettings?.apiKeyMasked }}</span>
                       </span>
@@ -474,16 +479,16 @@ function relativeTime(iso: string | null): string {
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                   <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 4v4m0 4h.01"/>
                 </svg>
-                本地 Ollama 无需 API Key —— 确保 Ollama 服务已在指定地址运行即可。
+                {{ t('settingsAI.ollamaHint') }}
               </div>
 
               <!-- Base URL -->
               <div class="config-row">
                 <FormField
-                  label="接入地址 (Base URL)"
+                  :label="t('settingsAI.baseUrlLabel')"
                   field-id="ai-baseurl"
                   :error="errors.baseUrl"
-                  :hint="`默认: ${DEFAULT_BASE_URLS[selectedProvider] ?? ''}`"
+                  :hint="t('settingsAI.baseUrlHint', { url: DEFAULT_BASE_URLS[selectedProvider] ?? '' })"
                   required
                 >
                   <template #default="{ fieldId, ariaDescribedby }">
@@ -507,9 +512,9 @@ function relativeTime(iso: string | null): string {
               <!-- Model -->
               <div class="config-row">
                 <FormField
-                  label="模型"
+                  :label="t('settingsAI.modelLabel')"
                   field-id="ai-model"
-                  hint="用于诊断的主模型,如 claude-opus-4-7 / gpt-4o / llama3"
+                  :hint="t('settingsAI.modelHint')"
                 >
                   <template #default="{ fieldId, ariaDescribedby }">
                     <input
@@ -542,7 +547,7 @@ function relativeTime(iso: string | null): string {
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
                     <path d="M3 12h3.5l2.2-6 3.6 12 2.4-7 1.3 1h4.5"/>
                   </svg>
-                  测试连接
+                  {{ t('settingsAI.testConnection') }}
                 </AppButton>
 
                 <!-- Test result -->
@@ -555,7 +560,7 @@ function relativeTime(iso: string | null): string {
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" aria-hidden="true">
                       <path d="m5 13 4 4 10-11"/>
                     </svg>
-                    连接正常 · 延迟 {{ testResult.latencyMs }}ms
+                    {{ t('settingsAI.testOk', { ms: testResult.latencyMs }) }}
                     <span v-if="testResult.detail" class="test-detail">· {{ testResult.detail }}</span>
                   </div>
                   <div
@@ -566,7 +571,7 @@ function relativeTime(iso: string | null): string {
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
                       <circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/>
                     </svg>
-                    {{ testResult.error ?? '连接失败' }}
+                    {{ testResult.error ?? t('settingsAI.testFail') }}
                     <span v-if="testResult.detail" class="test-detail">· {{ testResult.detail }}</span>
                   </div>
                 </Transition>
@@ -578,9 +583,9 @@ function relativeTime(iso: string | null): string {
               <!-- Budget -->
               <div class="config-row">
                 <FormField
-                  label="月 Token 上限"
+                  :label="t('settingsAI.budgetLabel')"
                   field-id="ai-budget"
-                  hint="超出后暂停 AI 诊断(留空=不限制;本期仅声明,下一 Epic 强制执行)"
+                  :hint="t('settingsAI.budgetHint')"
                 >
                   <template #default="{ fieldId, ariaDescribedby }">
                     <div class="budget-row">
@@ -590,7 +595,7 @@ function relativeTime(iso: string | null): string {
                         type="number"
                         min="0"
                         class="field-input budget-input"
-                        placeholder="如 500000,留空不限制"
+                        :placeholder="t('settingsAI.budgetPlaceholder')"
                         :aria-describedby="ariaDescribedby"
                         :disabled="saving"
                       />
@@ -607,15 +612,15 @@ function relativeTime(iso: string | null): string {
                   :class="{ 'toggle-track--on': enabled }"
                   role="switch"
                   :aria-checked="enabled"
-                  aria-label="启用 AI 功能"
+                  :aria-label="t('settingsAI.enableAi')"
                   :disabled="saving"
                   @click="enabled = !enabled"
                 >
                   <span class="toggle-thumb" />
                 </button>
                 <div class="toggle-label">
-                  <strong>启用 AI 功能</strong>
-                  <span>关闭时 AI 诊断静默跳过,核心 CI/CD 流水线不受影响</span>
+                  <strong>{{ t('settingsAI.enableAi') }}</strong>
+                  <span>{{ t('settingsAI.enableAiDesc') }}</span>
                 </div>
               </div>
 
@@ -628,7 +633,7 @@ function relativeTime(iso: string | null): string {
       <Transition name="fade">
         <div v-if="isDirty || selectedProvider !== ''" class="save-bar">
           <span class="save-bar-note" :class="{ 'save-bar-note--warn': isDirty }">
-            {{ isDirty ? '有未保存的改动' : '暂无改动' }}
+            {{ isDirty ? t('settingsAI.dirtyNote') : t('settingsAI.cleanNote') }}
           </span>
           <div class="save-bar-actions">
             <AppButton
@@ -637,7 +642,7 @@ function relativeTime(iso: string | null): string {
               :disabled="saving || !isDirty"
               @click="handleDiscard"
             >
-              放弃
+              {{ t('settingsAI.discard') }}
             </AppButton>
             <AppButton
               variant="primary"
@@ -646,7 +651,7 @@ function relativeTime(iso: string | null): string {
               :disabled="!isDirty"
               @click="handleSave"
             >
-              保存更改
+              {{ t('settingsAI.saveChanges') }}
             </AppButton>
           </div>
         </div>

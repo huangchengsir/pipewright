@@ -9,10 +9,13 @@
  */
 
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { getVersion, checkUpdate, applyUpdate } from '../../api/version'
 import type { VersionInfo, UpdateInfo } from '../../api/version'
 import { HttpError } from '../../api/http'
 import AppButton from '../../components/ui/AppButton.vue'
+
+const { t } = useI18n()
 
 const version = ref<VersionInfo | null>(null)
 const versionError = ref('')
@@ -40,24 +43,24 @@ const hasUpdate = computed(() => checkState.value === 'done' && !!update.value?.
 /** hero 右上状态药丸:label + 色调(随检查状态变化)。 */
 type Tone = 'neutral' | 'checking' | 'ok' | 'update' | 'dev' | 'err'
 const pill = computed<{ label: string; tone: Tone }>(() => {
-  if (checkState.value === 'checking') return { label: '检查中…', tone: 'checking' }
-  if (checkState.value === 'error') return { label: '检查失败', tone: 'err' }
+  if (checkState.value === 'checking') return { label: t('settingsSystem.pillChecking'), tone: 'checking' }
+  if (checkState.value === 'error') return { label: t('settingsSystem.pillCheckFailed'), tone: 'err' }
   if (checkState.value === 'done') {
-    if (hasUpdate.value) return { label: '有新版可用', tone: 'update' }
-    if (isDev.value) return { label: '开发构建', tone: 'dev' }
-    return { label: '已是最新', tone: 'ok' }
+    if (hasUpdate.value) return { label: t('settingsSystem.pillUpdateAvailable'), tone: 'update' }
+    if (isDev.value) return { label: t('settingsSystem.pillDevBuild'), tone: 'dev' }
+    return { label: t('settingsSystem.pillUpToDate'), tone: 'ok' }
   }
-  return { label: isDev.value ? '开发构建' : '未检查', tone: isDev.value ? 'dev' : 'neutral' }
+  return { label: isDev.value ? t('settingsSystem.pillDevBuild') : t('settingsSystem.pillNotChecked'), tone: isDev.value ? 'dev' : 'neutral' }
 })
 
 const meta = computed(() => {
   const v = version.value
   if (!v) return []
   return [
-    { label: 'Commit', value: v.commit, mono: true },
-    { label: '构建时间', value: fmtDate(v.date) },
-    { label: '平台', value: v.platform, mono: true },
-    { label: 'Go 版本', value: v.goVersion, mono: true },
+    { label: t('settingsSystem.metaCommit'), value: v.commit, mono: true },
+    { label: t('settingsSystem.metaBuildTime'), value: fmtDate(v.date) },
+    { label: t('settingsSystem.metaPlatform'), value: v.platform, mono: true },
+    { label: t('settingsSystem.metaGoVersion'), value: v.goVersion, mono: true },
   ].filter((m) => m.value && m.value !== 'none' && m.value !== 'unknown')
 })
 
@@ -72,7 +75,7 @@ async function loadVersion(): Promise<void> {
   try {
     version.value = await getVersion()
   } catch {
-    versionError.value = '无法读取版本信息'
+    versionError.value = t('settingsSystem.errReadVersion')
   }
 }
 
@@ -91,7 +94,7 @@ async function runCheck(): Promise<void> {
     update.value = info
     checkState.value = 'done'
   } catch (err) {
-    checkError.value = err instanceof HttpError ? (err.apiError?.message ?? `检查失败(${err.status})`) : '检查失败,请稍后重试'
+    checkError.value = err instanceof HttpError ? (err.apiError?.message ?? t('settingsSystem.errCheckStatus', { status: err.status })) : t('settingsSystem.errCheckRetry')
     checkState.value = 'error'
   }
 }
@@ -109,7 +112,7 @@ async function runUpdate(): Promise<void> {
     const res = await applyUpdate()
     if (res.status === 'restarting') {
       updatePhase.value = 'restarting'
-      updateMsg.value = res.message || '正在重启到新版本…'
+      updateMsg.value = res.message || t('settingsSystem.restartingToNew')
       pollUntilRestarted(from)
     } else if (res.status === 'manual' && res.mode === 'docker') {
       updatePhase.value = 'manual'
@@ -117,18 +120,18 @@ async function runUpdate(): Promise<void> {
       updateMsg.value = res.message || ''
     } else if (res.status === 'manual') {
       updatePhase.value = 'manual'
-      updateMsg.value = res.message || '请手动升级。'
+      updateMsg.value = res.message || t('settingsSystem.manualUpgrade')
     } else if (res.status === 'uptodate') {
       updatePhase.value = 'idle'
       void runCheck()
     } else {
       updatePhase.value = 'error'
-      updateMsg.value = res.message || '更新失败'
+      updateMsg.value = res.message || t('settingsSystem.updateFailed')
     }
   } catch (err) {
     updatePhase.value = 'error'
     updateMsg.value =
-      err instanceof HttpError ? (err.apiError?.message ?? `更新失败(${err.status})`) : '更新失败,请稍后重试'
+      err instanceof HttpError ? (err.apiError?.message ?? t('settingsSystem.errUpdateStatus', { status: err.status })) : t('settingsSystem.errUpdateRetry')
   }
 }
 
@@ -151,7 +154,7 @@ function pollUntilRestarted(from: string): void {
       // ~60s 仍未起来:停止轮询,提示手动刷新(更新已就位,可能需手动重启)。
       window.clearInterval(timer)
       updatePhase.value = 'error'
-      updateMsg.value = '重启超时。新版本已就位,请手动重启进程或刷新页面。'
+      updateMsg.value = t('settingsSystem.restartTimeout')
     }
   }, 1500)
 }
@@ -172,8 +175,8 @@ onMounted(loadVersion)
 <template>
   <section class="sys" aria-labelledby="sys-heading">
     <header class="sys-head">
-      <h2 id="sys-heading" class="sys-title">系统</h2>
-      <p class="sys-sub">当前版本与更新检查</p>
+      <h2 id="sys-heading" class="sys-title">{{ t('settingsSystem.title') }}</h2>
+      <p class="sys-sub">{{ t('settingsSystem.subtitle') }}</p>
     </header>
 
     <!-- 版本面板 -->
@@ -186,7 +189,7 @@ onMounted(loadVersion)
           <span class="sys-glyph mono" aria-hidden="true">p&gt;</span>
           <span class="sys-brand-text">
             <span class="sys-brand-name">Pipewright</span>
-            <span class="sys-brand-tag">自托管 CI/CD · 单二进制</span>
+            <span class="sys-brand-tag">{{ t('settingsSystem.brandTag') }}</span>
           </span>
         </div>
         <span class="sys-pill" :class="`sys-pill--${pill.tone}`">
@@ -198,19 +201,19 @@ onMounted(loadVersion)
       <!-- 版本号 + 操作 -->
       <div class="sys-version-row">
         <div class="sys-version-block">
-          <span class="sys-version-cap">当前版本</span>
+          <span class="sys-version-cap">{{ t('settingsSystem.currentVersion') }}</span>
           <strong class="sys-version-num" :class="{ 'is-dev': isDev }">{{ version?.version ?? '…' }}</strong>
         </div>
         <AppButton variant="primary" :loading="checkState === 'checking'" @click="runCheck">
           <svg v-if="checkState !== 'checking'" class="sys-btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M1 4v6h6M23 20v-6h-6" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
           </svg>
-          {{ checkState === 'checking' ? '检查中…' : '检查更新' }}
+          {{ checkState === 'checking' ? t('settingsSystem.pillChecking') : t('settingsSystem.checkUpdate') }}
         </AppButton>
       </div>
 
       <p v-if="versionError" class="sys-inline-err" role="alert">{{ versionError }}</p>
-      <p v-else-if="checkState === 'error'" class="sys-inline-err" role="alert">检查失败:{{ checkError }}</p>
+      <p v-else-if="checkState === 'error'" class="sys-inline-err" role="alert">{{ t('settingsSystem.checkFailedPrefix', { msg: checkError }) }}</p>
 
       <!-- 构建元数据 -->
       <dl v-if="meta.length" class="sys-meta">
@@ -229,12 +232,12 @@ onMounted(loadVersion)
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
           </span>
           <div class="sys-upgrade-meta">
-            <h3 class="sys-upgrade-title">有新版本可用</h3>
+            <h3 class="sys-upgrade-title">{{ t('settingsSystem.upgradeTitle') }}</h3>
             <div class="sys-vjump">
               <span class="sys-vtag sys-vtag--cur">{{ update?.current }}</span>
               <span class="sys-varrow" aria-hidden="true">→</span>
               <span class="sys-vtag sys-vtag--new">{{ update?.latest }}</span>
-              <span v-if="update?.publishedAt" class="sys-pubdate">· 发布于 {{ fmtDate(update.publishedAt) }}</span>
+              <span v-if="update?.publishedAt" class="sys-pubdate">{{ t('settingsSystem.publishedAt', { date: fmtDate(update.publishedAt) }) }}</span>
             </div>
           </div>
           <div class="sys-upgrade-actions">
@@ -244,10 +247,10 @@ onMounted(loadVersion)
               :disabled="updatePhase === 'restarting'"
               @click="runUpdate"
             >
-              {{ updatePhase === 'applying' ? '准备中…' : updatePhase === 'restarting' ? '重启中…' : '立即更新' }}
+              {{ updatePhase === 'applying' ? t('settingsSystem.preparing') : updatePhase === 'restarting' ? t('settingsSystem.restarting') : t('settingsSystem.updateNow') }}
             </AppButton>
             <a v-if="update?.releaseUrl" class="sys-cta-ghost" :href="update.releaseUrl" target="_blank" rel="noopener noreferrer">
-              查看发布
+              {{ t('settingsSystem.viewRelease') }}
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17L17 7M7 7h10v10" /></svg>
             </a>
           </div>
@@ -257,24 +260,24 @@ onMounted(loadVersion)
         <transition name="sys-rise">
           <div v-if="updatePhase === 'restarting'" class="sys-update-state sys-update-state--busy" role="status">
             <span class="sys-spinner-dark" aria-hidden="true" />
-            <span>{{ updateMsg }} 正在重连新版本,稍候将自动刷新…</span>
+            <span>{{ t('settingsSystem.reconnecting', { msg: updateMsg }) }}</span>
           </div>
           <div v-else-if="updatePhase === 'manual'" class="sys-update-state sys-update-state--manual">
             <p class="sys-update-state-msg">{{ updateMsg }}</p>
             <div v-if="dockerCommand" class="sys-cmd">
               <code>{{ dockerCommand }}</code>
-              <button type="button" class="sys-cmd-copy" @click="copyCommand">{{ copied ? '已复制 ✓' : '复制' }}</button>
+              <button type="button" class="sys-cmd-copy" @click="copyCommand">{{ copied ? t('settingsSystem.copied') : t('settingsSystem.copy') }}</button>
             </div>
           </div>
           <div v-else-if="updatePhase === 'error'" class="sys-update-state sys-update-state--err" role="alert">
-            更新失败:{{ updateMsg }}
+            {{ t('settingsSystem.updateFailedPrefix', { msg: updateMsg }) }}
           </div>
         </transition>
 
         <div v-if="update?.notes" class="sys-notes-wrap">
           <button class="sys-notes-toggle" :aria-expanded="showNotes" @click="showNotes = !showNotes">
             <svg class="sys-chevron" :class="{ open: showNotes }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6" /></svg>
-            {{ showNotes ? '收起更新说明' : '查看更新说明' }}
+            {{ showNotes ? t('settingsSystem.hideNotes') : t('settingsSystem.showNotes') }}
           </button>
           <transition name="sys-rise">
             <pre v-if="showNotes" class="sys-notes">{{ update.notes }}</pre>

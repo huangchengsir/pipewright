@@ -9,6 +9,7 @@
  * 经 update-* 事件回传 PipelineCanvas → updateStage 落库。
  */
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { PipelineStage, StageWhen, PipelinePostStep, PipelineServiceSpec } from '../../api/pipeline'
 import StagePostEditor from './StagePostEditor.vue'
 import StageServicesEditor from './StageServicesEditor.vue'
@@ -41,6 +42,8 @@ const emit = defineEmits<{
   (e: 'update-services', services: PipelineServiceSpec[] | undefined): void
 }>()
 
+const { t } = useI18n()
+
 const branchText = computed<string>(() => branchesToText(props.stage.when?.branches))
 const currentEvents = computed<string[]>(() => props.stage.when?.events ?? [])
 
@@ -61,7 +64,7 @@ function commitMatrix(text: string): void {
 </script>
 
 <template>
-  <aside class="job-drawer" aria-label="阶段设置">
+  <aside class="job-drawer" :aria-label="t('pipelineCanvas.stageSettingsAria')">
     <!-- Head — 与 JobDrawer 同骨架 -->
     <div class="drawer-head">
       <span class="drawer-icon" aria-hidden="true">
@@ -72,9 +75,9 @@ function commitMatrix(text: string): void {
       </span>
       <div class="drawer-title">
         {{ stage.name }}
-        <small class="drawer-subtitle">阶段设置 · 第 {{ stageIndex }} 阶段</small>
+        <small class="drawer-subtitle">{{ t('pipelineCanvas.stageSettingsSub', { n: stageIndex }) }}</small>
       </div>
-      <button class="drawer-close" aria-label="关闭设置" @click="emit('close')">
+      <button class="drawer-close" :aria-label="t('pipelineCanvas.closeSettings')" @click="emit('close')">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <path d="M18 6 6 18M6 6l12 12"/>
         </svg>
@@ -83,20 +86,20 @@ function commitMatrix(text: string): void {
 
     <!-- 条件执行(WHEN) -->
     <div class="drawer-section">
-      <div class="drawer-section-label">条件执行 · when</div>
+      <div class="drawer-section-label">{{ t('pipelineCanvas.whenSectionLabel') }}</div>
       <div class="drawer-field">
-        <div class="drawer-field-label">分支(glob,空格/逗号分隔)</div>
+        <div class="drawer-field-label">{{ t('pipelineCanvas.branchesLabel') }}</div>
         <input
           class="drawer-input"
           type="text"
           :value="branchText"
-          placeholder="如 main release/*"
-          aria-label="分支条件"
+          :placeholder="t('pipelineCanvas.branchesPlaceholder')"
+          :aria-label="t('pipelineCanvas.branchesAria')"
           @change="commitBranches(($event.target as HTMLInputElement).value)"
         />
       </div>
       <div class="drawer-field">
-        <div class="drawer-field-label">触发事件</div>
+        <div class="drawer-field-label">{{ t('pipelineCanvas.eventsLabel') }}</div>
         <div class="drawer-events">
           <label v-for="ev in WHEN_EVENTS" :key="ev" class="drawer-event">
             <input type="checkbox" :checked="currentEvents.includes(ev)" @change="toggleEvent(ev)" />
@@ -104,64 +107,76 @@ function commitMatrix(text: string): void {
           </label>
         </div>
       </div>
-      <p class="drawer-hint">两者都留空 = 始终执行;不满足时本阶段及下游跳过(不计失败)</p>
+      <p class="drawer-hint">{{ t('pipelineCanvas.whenHint') }}</p>
     </div>
 
     <!-- 审批门(GATE) -->
     <div class="drawer-section">
-      <div class="drawer-section-label">审批门 · gate</div>
+      <div class="drawer-section-label">{{ t('pipelineCanvas.gateSectionLabel') }}</div>
       <label class="drawer-toggle">
         <input
           type="checkbox"
           :checked="stage.gate === true"
           @change="emit('update-gate', ($event.target as HTMLInputElement).checked)"
         />
-        <span>进入本阶段前需人工审批</span>
+        <span>{{ t('pipelineCanvas.gateToggle') }}</span>
       </label>
-      <p class="drawer-hint">开启后运行将暂停在此,等待批准/拒绝</p>
+      <p class="drawer-hint">{{ t('pipelineCanvas.gateHint') }}</p>
     </div>
 
     <!-- 矩阵构建(MATRIX) -->
     <div class="drawer-section">
       <div class="drawer-section-head">
-        <div class="drawer-section-label">矩阵构建 · matrix</div>
+        <div class="drawer-section-label">{{ t('pipelineCanvas.matrixSectionLabel') }}</div>
         <span v-if="matrixChip" class="drawer-section-badge">{{ matrixChip }}</span>
       </div>
       <div class="drawer-field">
-        <div class="drawer-field-label">轴(每行一个:<code>名称: 值1, 值2</code>)</div>
+        <div class="drawer-field-label">
+          <i18n-t keypath="pipelineCanvas.matrixAxisLabel" tag="span" scope="global">
+            <template #code><code>{{ t('pipelineCanvas.matrixAxisCode') }}</code></template>
+          </i18n-t>
+        </div>
         <textarea
           class="drawer-input drawer-textarea is-mono"
           rows="3"
           :value="matrixText"
           placeholder="go: 1.21, 1.22&#10;os: linux"
-          aria-label="矩阵轴"
+          :aria-label="t('pipelineCanvas.matrixAria')"
           @change="commitMatrix(($event.target as HTMLTextAreaElement).value)"
         ></textarea>
       </div>
       <p v-if="matrixWarn" class="drawer-warn" role="alert">{{ matrixWarn }}</p>
-      <p class="drawer-hint">展开成并行 cell(笛卡尔积),各注入 <code>MATRIX_&lt;轴名&gt;</code> 环境变量;空 = 不展开</p>
+      <p class="drawer-hint">
+        <i18n-t keypath="pipelineCanvas.matrixHint" tag="span" scope="global">
+          <template #code><code>{{ t('pipelineCanvas.matrixHintCode') }}</code></template>
+        </i18n-t>
+      </p>
     </div>
 
     <!-- 旁挂服务(SERVICES) -->
     <div class="drawer-section">
-      <div class="drawer-section-label">旁挂服务 · services</div>
+      <div class="drawer-section-label">{{ t('pipelineCanvas.servicesSectionLabel') }}</div>
       <StageServicesEditor
         :services="stage.services"
         :stage-id="stage.id"
         @update="emit('update-services', $event)"
       />
-      <p class="drawer-hint">测试旁挂 DB/redis:与脚本容器同网,脚本里按服务名互访(如 <code>psql -h testdb</code>)</p>
+      <p class="drawer-hint">
+        <i18n-t keypath="pipelineCanvas.servicesHint" tag="span" scope="global">
+          <template #code><code>psql -h testdb</code></template>
+        </i18n-t>
+      </p>
     </div>
 
     <!-- 后置步骤(POST) -->
     <div class="drawer-section">
-      <div class="drawer-section-label">后置步骤 · post</div>
+      <div class="drawer-section-label">{{ t('pipelineCanvas.postSectionLabel') }}</div>
       <StagePostEditor
         :steps="stage.post"
         :stage-id="stage.id"
         @update="emit('update-post', $event)"
       />
-      <p class="drawer-hint">阶段 job 跑完后按条件执行(同工作区),用于清理/通知/归档;空 = 无</p>
+      <p class="drawer-hint">{{ t('pipelineCanvas.postHint') }}</p>
     </div>
   </aside>
 </template>

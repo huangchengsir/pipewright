@@ -14,6 +14,7 @@
 
 import type { RunStep, StepStatus } from '../../api/runs'
 import type { PipelineStage } from '../../api/pipeline'
+import { t } from '../../i18n'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -183,7 +184,7 @@ export function buildRunStages(
   if (unmatched.length > 0) {
     result.push({
       id: '_unmatched',
-      name: '其他步骤',
+      name: t('run.otherSteps'),
       needs: [],
       steps: unmatched,
       status: deriveStageStatus(unmatched),

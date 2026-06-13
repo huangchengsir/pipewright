@@ -12,6 +12,7 @@
  * entered, stored, or shown here; only the server-computed mask appears.
  */
 import { ref, computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type {
   BuildConfig,
   BuildVar,
@@ -26,6 +27,8 @@ interface Props {
   disabled?: boolean
 }
 const props = defineProps<Props>()
+
+const { t } = useI18n()
 
 const emit = defineEmits<{
   update: [build: BuildConfig]
@@ -161,12 +164,12 @@ function maskFor(row: VarRow): string {
         <span class="card-ic" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M4 7h16M4 12h10M4 17h7"/></svg>
         </span>
-        构建变量
-        <span class="card-sub">构建期注入 · secret 从保险库引用,绝不落日志</span>
+        {{ t('pipelinePanels.vcBuildVars') }}
+        <span class="card-sub">{{ t('pipelinePanels.vcBuildVarsSub') }}</span>
       </header>
 
       <div v-if="vars.length" class="vhd" aria-hidden="true">
-        <span>键</span><span>值 / 引用</span><span>来源</span><span/>
+        <span>{{ t('pipelinePanels.vcColKey') }}</span><span>{{ t('pipelinePanels.vcColValueRef') }}</span><span>{{ t('pipelinePanels.vcColSource') }}</span><span/>
       </div>
 
       <div
@@ -179,7 +182,7 @@ function maskFor(row: VarRow): string {
           class="vk mono"
           type="text"
           placeholder="KEY"
-          aria-label="变量键"
+          :aria-label="t('pipelinePanels.vcVarKeyAria')"
           :disabled="disabled"
         >
 
@@ -187,10 +190,10 @@ function maskFor(row: VarRow): string {
           <select
             v-model="row.credentialId"
             class="vsel"
-            aria-label="保险库凭据"
+            :aria-label="t('pipelinePanels.vcVaultCredAria')"
             :disabled="disabled"
           >
-            <option value="" disabled>选择保险库凭据…</option>
+            <option value="" disabled>{{ t('pipelinePanels.vcSelectVaultCred') }}</option>
             <option v-for="c in credOptions" :key="c.id" :value="c.id">
               {{ c.name }} · {{ c.maskedValue }}
             </option>
@@ -201,8 +204,8 @@ function maskFor(row: VarRow): string {
           v-model="row.value"
           class="vv mono"
           type="text"
-          placeholder="明文值"
-          aria-label="变量值"
+          :placeholder="t('pipelinePanels.vcVarValuePlaceholder')"
+          :aria-label="t('pipelinePanels.vcVarValueAria')"
           :disabled="disabled"
         >
 
@@ -211,18 +214,18 @@ function maskFor(row: VarRow): string {
           class="vfrom"
           :class="row.secret ? 'vfrom--vault' : 'vfrom--plain'"
           :disabled="disabled"
-          :aria-label="row.secret ? '切换为明文' : '切换为保险库引用'"
-          :title="row.secret ? '点击切换为明文' : '点击切换为保险库引用'"
+          :aria-label="row.secret ? t('pipelinePanels.vcSwitchToPlainAria') : t('pipelinePanels.vcSwitchToVaultAria')"
+          :title="row.secret ? t('pipelinePanels.vcSwitchToPlainTitle') : t('pipelinePanels.vcSwitchToVaultTitle')"
           @click="toggleSecret(row)"
         >
-          <template v-if="row.secret">保险库 <span class="mask mono">{{ maskFor(row) }}</span></template>
-          <template v-else>明文</template>
+          <template v-if="row.secret">{{ t('pipelinePanels.vcVault') }} <span class="mask mono">{{ maskFor(row) }}</span></template>
+          <template v-else>{{ t('pipelinePanels.vcPlain') }}</template>
         </button>
 
         <button
           type="button"
           class="vdel"
-          aria-label="删除变量"
+          :aria-label="t('pipelinePanels.vcDelVarAria')"
           :disabled="disabled"
           @click="removeVar(row._key)"
         >
@@ -230,16 +233,16 @@ function maskFor(row: VarRow): string {
         </button>
       </div>
 
-      <p v-if="!vars.length" class="vempty">尚无构建变量。</p>
+      <p v-if="!vars.length" class="vempty">{{ t('pipelinePanels.vcEmpty') }}</p>
 
       <div class="addrow">
         <button type="button" class="addbtn" :disabled="disabled" @click="addVar(false)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-          添加明文变量
+          {{ t('pipelinePanels.vcAddPlainVar') }}
         </button>
         <button type="button" class="addbtn addbtn--vault" :disabled="disabled" @click="addVar(true)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
-          从保险库引用 secret
+          {{ t('pipelinePanels.vcAddVaultSecret') }}
         </button>
       </div>
     </section>
@@ -250,8 +253,8 @@ function maskFor(row: VarRow): string {
         <span class="card-ic" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
         </span>
-        依赖缓存
-        <span class="card-sub">跨构建复用,加速隔离构建</span>
+        {{ t('pipelinePanels.vcDepCache') }}
+        <span class="card-sub">{{ t('pipelinePanels.vcDepCacheSub') }}</span>
       </header>
 
       <div class="cache-toggle">
@@ -261,18 +264,18 @@ function maskFor(row: VarRow): string {
           :class="{ 'sw--off': !cacheEnabled }"
           role="switch"
           :aria-checked="cacheEnabled"
-          aria-label="启用依赖缓存"
+          :aria-label="t('pipelinePanels.vcEnableCacheAria')"
           :disabled="disabled"
           @click="cacheEnabled = !cacheEnabled"
         ><span class="sw-knob" aria-hidden="true"/></button>
         <div class="cache-tx">
-          <b>启用依赖缓存</b>
-          <span>命中后跳过重复下载,显著加速构建</span>
+          <b>{{ t('pipelinePanels.vcEnableCache') }}</b>
+          <span>{{ t('pipelinePanels.vcEnableCacheDesc') }}</span>
         </div>
       </div>
 
       <div class="cache-paths" :class="{ 'cache-paths--off': !cacheEnabled }">
-        <label class="md-label" for="cache-paths">缓存路径(每行一条)</label>
+        <label class="md-label" for="cache-paths">{{ t('pipelinePanels.vcCachePaths') }}</label>
         <textarea
           id="cache-paths"
           v-model="cachePaths"

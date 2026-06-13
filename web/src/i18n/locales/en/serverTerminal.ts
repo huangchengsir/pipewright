@@ -1,0 +1,57 @@
+export default {
+  serverFallback: 'Server',
+  titleConnecting: 'Connecting · ',
+  titleDisconnected: '⚠ Disconnected · ',
+  titleSuffix: 'Ops Terminal',
+  hostMachine: '(host)',
+
+  kindContainer: 'Container',
+  kindHost: 'Host',
+  containerLabel: 'Container {label}',
+  hostShell: 'host shell',
+
+  connecting: 'Connecting…',
+  connectFailed: 'Connection failed',
+  connect: 'Connect',
+  reconnect: 'Reconnect',
+  disconnect: 'Disconnect',
+  close: 'Close',
+
+  enteringContainer: 'Entering container {name} ({host})…',
+  connectingHost: 'Connecting to host {host} …',
+  connectFailedDetail: 'Connection failed. Check your login status, server reachability, or whether the container exists.',
+  sessionEnded: 'Terminal session ended',
+  sessionEndedShort: 'Session ended',
+
+  terminalAria: 'Server interactive terminal',
+  hintContainer: 'Click "Connect" to enter container {name} (docker exec).',
+  hintHost: 'Click "Connect" to enter the host shell.',
+
+  latency: 'Latency',
+  copy: 'Copy',
+  paste: 'Paste',
+  interrupt: 'Interrupt',
+  contextMenu: 'Right-click menu',
+  selectAll: 'Select all',
+  clearScreen: 'Clear screen',
+  clipboardSecureWarn: 'Clipboard requires https/localhost',
+
+  completeDisableTitle: 'Disable AI completion',
+  completeEnableTitle: 'Enable AI completion',
+  aiComplete: 'AI completion',
+  on: 'on',
+  off: 'off',
+
+  aiLauncherTitle: 'Expand AI ops assistant',
+  aiAssistant: 'AI assistant',
+
+  charCount: '{n} chars',
+  toastCopied: 'Copied',
+  toastPasted: 'Pasted',
+  toastSigintMsg: 'SIGINT sent',
+  toastSigintSub: 'Interrupt the current command',
+  toastClipboardUnavailable: 'Cannot read clipboard',
+  toastClipboardSecureCtx: 'Requires an https / localhost secure context',
+  toastClipboardDenied: 'Clipboard read denied',
+  toastClipboardAllow: 'Please grant clipboard permission in the browser',
+}

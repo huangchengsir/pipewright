@@ -1,0 +1,48 @@
+export default {
+  // ─── Kopfleiste / Brotkrumen ────────────────────────────────────
+  breadcrumbAria: 'Brotkrumen-Navigation',
+  breadcrumbProjects: 'Projekte',
+  title: 'Pipeline-Konfiguration',
+
+  // ─── Tabs ───────────────────────────────────────────────────────
+  tabCanvas: 'Pipeline-Leinwand',
+  tabVars: 'Variablen & Cache',
+  tabTriggers: 'Auslöser-Einstellungen',
+  tabEnvs: 'Umgebungen & Anmeldedaten',
+  tabStripAria: 'Tabs der Pipeline-Konfiguration',
+
+  // ─── Symbolleisten-Schaltflächen ────────────────────────────────
+  aiGenerate: 'Pipeline per KI generieren',
+  importYaml: 'Aus YAML importieren',
+  templates: 'Vorlagen',
+  validate: 'Konfiguration validieren',
+  closeValidationPanel: 'Validierungsbereich schließen',
+  badgeReady: 'Bereit',
+  badgeErrors: '{n} Fehler',
+  saving: 'Wird gespeichert…',
+  saveDraft: 'Entwurf speichern',
+
+  // ─── Banner / Status ────────────────────────────────────────────
+  dismiss: 'Schließen',
+  draftSaved: 'Pipeline-Entwurf gespeichert',
+  retry: 'Erneut versuchen',
+  loading: 'Wird geladen',
+
+  // ─── Ladefehler ─────────────────────────────────────────────────
+  errNoServer: 'Server nicht erreichbar. Prüfen Sie, ob das Backend läuft, und versuchen Sie es erneut.',
+  errProjectNotFound: 'Projekt nicht gefunden. Bitte überprüfen Sie die Projekt-ID.',
+  errLoadFailedStatus: 'Pipeline konnte nicht geladen werden ({status})',
+  errLoadFailedRetry: 'Pipeline konnte nicht geladen werden. Bitte versuchen Sie es später erneut.',
+
+  // ─── Speicherfehler ─────────────────────────────────────────────
+  errSaveFailedRetry: 'Speichern fehlgeschlagen. Bitte versuchen Sie es später erneut.',
+  errSaveFailedStatus: 'Speichern fehlgeschlagen ({status})',
+  errInvalidStage: 'Der Phasenname darf nicht leer sein und kind muss ein zulässiger Wert sein. Bitte prüfen und erneut versuchen.',
+  errInvalidJob: 'Job-Name oder -Typ dürfen nicht leer sein. Bitte ergänzen und erneut versuchen.',
+  errDuplicateId: 'Doppelte Phasen- oder Job-ID. Bitte entfernen Sie Duplikate und versuchen Sie es erneut.',
+  errInvalidBuild: 'Das Build-Modell muss dockerfile/toolchain sein und der Artefakttyp muss image/jar/dist sein.',
+  errInvalidVar: 'Der Variablenschlüssel darf nicht leer sein und muss innerhalb seines Geltungsbereichs eindeutig sein; secret-Variablen erfordern eine Vault-Anmeldedaten.',
+  errInvalidEnvironment: 'Der Umgebungsname darf nicht leer sein und der Image-Registry-Typ muss harbor/acr/dockerhub/custom sein.',
+  errCredentialNotFound: 'Die referenzierte Vault-Anmeldedaten existiert nicht. Bitte erneut auswählen und versuchen.',
+  errVaultUnconfigured: 'Im Vault ist kein Master Key konfiguriert, daher können secret-Anmeldedaten nicht referenziert werden.',
+}

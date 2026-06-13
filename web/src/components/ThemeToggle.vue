@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useThemeStore } from '../stores/theme'
 
 const themeStore = useThemeStore()
+const { t } = useI18n()
 
 const label = computed(() =>
-  themeStore.current === 'dark' ? '切换到浅色' : '切换到深色',
+  themeStore.current === 'dark' ? t('shell.toThemeLight') : t('shell.toThemeDark'),
 )
 
 const displayText = computed(() =>
-  themeStore.current === 'dark' ? '◐ 浅色' : '◑ 深色',
+  themeStore.current === 'dark' ? t('shell.themeLight') : t('shell.themeDark'),
 )
 </script>
 

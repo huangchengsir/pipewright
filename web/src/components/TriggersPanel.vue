@@ -9,6 +9,7 @@
  *   - ProjectPipeline.vue  (embedded in the "触发设置" tab)
  */
 import { ref, computed, onMounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   getTrigger,
   saveTrigger,
@@ -30,6 +31,8 @@ import RunnerPanel from './RunnerPanel.vue'
 const props = defineProps<{
   projectId: string
 }>()
+
+const { t } = useI18n()
 
 // ─── Load state ───────────────────────────────────────────────────────────────
 
@@ -154,14 +157,14 @@ async function confirmReset(): Promise<void> {
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
-        resetBanner.value = '无法连接到服务器,请稍后重试。'
+        resetBanner.value = t('projectPanels.triggers.errConnect')
       } else if (err.apiError?.code === 'vault_unconfigured') {
-        resetBanner.value = '保险库未配置 master key,无法重置签名密钥。'
+        resetBanner.value = t('projectPanels.triggers.errVaultUnconfigured')
       } else {
-        resetBanner.value = err.apiError?.message ?? `重置失败(${err.status})`
+        resetBanner.value = err.apiError?.message ?? t('projectPanels.triggers.errResetFailed', { status: err.status })
       }
     } else {
-      resetBanner.value = '重置失败,请稍后重试。'
+      resetBanner.value = t('projectPanels.triggers.errResetGeneric')
     }
   } finally {
     resetSubmitting.value = false
@@ -172,10 +175,10 @@ async function confirmReset(): Promise<void> {
 
 function validatePattern(pattern: string): string {
   const p = pattern.trim()
-  if (!p) return '分支模式不能为空'
-  if (p.startsWith('/') || p.endsWith('/')) return '分支模式不能以 / 开头或结尾'
-  if (p.includes('//')) return '分支模式中不能出现连续的 /'
-  if (!/^[\w\-./*?[\]]+$/.test(p)) return '包含非法字符,只允许字母、数字、/ - _ . * ? [ ]'
+  if (!p) return t('projectPanels.triggers.patternEmpty')
+  if (p.startsWith('/') || p.endsWith('/')) return t('projectPanels.triggers.patternSlash')
+  if (p.includes('//')) return t('projectPanels.triggers.patternDoubleSlash')
+  if (!/^[\w\-./*?[\]]+$/.test(p)) return t('projectPanels.triggers.patternIllegal')
   return ''
 }
 
@@ -232,14 +235,14 @@ async function handleSave(): Promise<void> {
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
-        saveBanner.value = '无法连接到服务器,请检查后端是否运行后重试。'
+        saveBanner.value = t('projectPanels.triggers.errSaveConnect')
       } else if (err.status === 400 || err.status === 422) {
-        saveBanner.value = err.apiError?.message ?? `保存失败(${err.status}):配置数据不合法`
+        saveBanner.value = err.apiError?.message ?? t('projectPanels.triggers.errSaveInvalid', { status: err.status })
       } else {
-        saveBanner.value = err.apiError?.message ?? `保存失败(${err.status})`
+        saveBanner.value = err.apiError?.message ?? t('projectPanels.triggers.errSaveFailed', { status: err.status })
       }
     } else {
-      saveBanner.value = '保存失败,请稍后重试。'
+      saveBanner.value = t('projectPanels.triggers.errSaveGeneric')
     }
   } finally {
     saveSubmitting.value = false
@@ -279,14 +282,14 @@ async function loadTrigger(): Promise<void> {
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
-        loadError.value = '无法连接到服务器,请检查后端是否运行后重试。'
+        loadError.value = t('projectPanels.triggers.errSaveConnect')
       } else if (err.status === 404) {
-        loadError.value = '项目不存在,请确认项目 ID 正确。'
+        loadError.value = t('projectPanels.triggers.errLoadNotFound')
       } else {
-        loadError.value = err.apiError?.message ?? `加载触发配置失败(${err.status})`
+        loadError.value = err.apiError?.message ?? t('projectPanels.triggers.errLoadFailed', { status: err.status })
       }
     } else {
-      loadError.value = '加载触发配置失败,请稍后重试。'
+      loadError.value = t('projectPanels.triggers.errLoadGeneric')
     }
     loadState.value = 'error'
   }
@@ -313,12 +316,12 @@ const displayWebhookUrl = computed(() => {
         <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
       </svg>
       <span>{{ loadError }}</span>
-      <button class="banner-retry" @click="loadTrigger">↻ 重试</button>
+      <button class="banner-retry" @click="loadTrigger">{{ t('projectPanels.triggers.retry') }}</button>
     </div>
 
     <!-- ─── Loading skeleton ─────────────────────────────────────────────── -->
     <template v-if="loadState === 'loading'">
-      <div class="skel-stack" aria-busy="true" aria-label="加载中">
+      <div class="skel-stack" aria-busy="true" :aria-label="t('projectPanels.triggers.loading')">
         <div class="skel-card" aria-hidden="true">
           <div class="skel skel--title"/><div class="skel skel--row"/><div class="skel skel--row"/>
         </div>
@@ -343,7 +346,7 @@ const displayWebhookUrl = computed(() => {
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
           <path d="M20 6 9 17l-5-5"/>
         </svg>
-        <span>触发配置已保存</span>
+        <span>{{ t('projectPanels.triggers.savedToast') }}</span>
       </div>
 
       <!-- ═══ Section 1: Webhook ═══════════════════════════════════════════ -->
@@ -354,63 +357,63 @@ const displayWebhookUrl = computed(() => {
               <path d="M18 2a3 3 0 0 0-3 3c0 .8.3 1.5.9 2L13 12M6.5 12a3 3 0 1 0 3 3M12 20a3 3 0 1 0 0-6"/>
             </svg>
           </span>
-          <h2 id="tp-webhook-heading" class="card-title">Webhook 接入</h2>
-          <span class="card-sub">代码平台 · Gitee</span>
+          <h2 id="tp-webhook-heading" class="card-title">{{ t('projectPanels.triggers.webhookTitle') }}</h2>
+          <span class="card-sub">{{ t('projectPanels.triggers.webhookSub') }}</span>
         </div>
         <div class="card-body">
           <div class="webhook-row">
-            <span class="wk-label">接收端点</span>
+            <span class="wk-label">{{ t('projectPanels.triggers.endpointLabel') }}</span>
             <div class="url-box">
               <span class="url-text mono" :title="displayWebhookUrl">{{ displayWebhookUrl }}</span>
               <button
                 class="url-action-btn"
                 :class="{ 'url-action-btn--copied': copiedTarget === 'url' }"
-                :aria-label="copiedTarget === 'url' ? '已复制' : '复制 Webhook URL'"
+                :aria-label="copiedTarget === 'url' ? t('projectPanels.triggers.copied') : t('projectPanels.triggers.copyUrlAria')"
                 @click="copyWebhookUrl"
               >
                 <template v-if="copiedTarget === 'url'">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
-                  已复制
+                  {{ t('projectPanels.triggers.copied') }}
                 </template>
                 <template v-else>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                  复制
+                  {{ t('projectPanels.triggers.copy') }}
                 </template>
               </button>
             </div>
           </div>
           <div class="webhook-row">
-            <span class="wk-label">签名密钥</span>
+            <span class="wk-label">{{ t('projectPanels.triggers.secretLabel') }}</span>
             <div class="secret-wrap">
-              <span class="secret-masked mono" aria-label="签名密钥(已掩码)">{{ webhookSecretMasked }}</span>
-              <div v-if="revealedSecret" class="secret-reveal" role="status" aria-live="polite" aria-label="新签名密钥(仅此一次)">
-                <span class="secret-reveal-label">新密钥(仅此一次)</span>
+              <span class="secret-masked mono" :aria-label="t('projectPanels.triggers.secretMaskedAria')">{{ webhookSecretMasked }}</span>
+              <div v-if="revealedSecret" class="secret-reveal" role="status" aria-live="polite" :aria-label="t('projectPanels.triggers.secretRevealAria')">
+                <span class="secret-reveal-label">{{ t('projectPanels.triggers.secretNewLabel') }}</span>
                 <span class="secret-reveal-value mono">{{ revealedSecret }}</span>
                 <button
                   class="btn-mini"
                   :class="{ 'btn-mini--copied': copiedTarget === 'secret' }"
-                  :aria-label="copiedTarget === 'secret' ? '已复制' : '复制新密钥'"
+                  :aria-label="copiedTarget === 'secret' ? t('projectPanels.triggers.copied') : t('projectPanels.triggers.copyNewSecretAria')"
                   @click="copySecret"
                 >
                   <template v-if="copiedTarget === 'secret'">
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>已复制
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>{{ t('projectPanels.triggers.copied') }}
                   </template>
                   <template v-else>
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>复制密钥
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>{{ t('projectPanels.triggers.copySecret') }}
                   </template>
                 </button>
               </div>
-              <button class="btn-mini" :disabled="resetSubmitting" aria-label="重置签名密钥" @click="openResetModal">
+              <button class="btn-mini" :disabled="resetSubmitting" :aria-label="t('projectPanels.triggers.resetSecretAria')" @click="openResetModal">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                   <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>
                 </svg>
-                重置
+                {{ t('projectPanels.triggers.reset') }}
               </button>
             </div>
           </div>
           <div class="webhook-row">
-            <span class="wk-label">推送配置</span>
-            <p class="wk-hint">在 Gitee 仓库 → 管理 → WebHooks 粘贴以上地址与密钥,事件勾选 Push / Tag Push / Release / Pull Request。</p>
+            <span class="wk-label">{{ t('projectPanels.triggers.pushConfigLabel') }}</span>
+            <p class="wk-hint">{{ t('projectPanels.triggers.pushConfigHint') }}</p>
           </div>
         </div>
       </section>
@@ -423,44 +426,44 @@ const displayWebhookUrl = computed(() => {
               <path d="M13 2 3 14h7l-1 8 10-12h-7z"/>
             </svg>
           </span>
-          <h2 id="tp-events-heading" class="card-title">触发事件</h2>
-          <span class="card-sub">勾选哪些事件创建流水线运行</span>
+          <h2 id="tp-events-heading" class="card-title">{{ t('projectPanels.triggers.eventsTitle') }}</h2>
+          <span class="card-sub">{{ t('projectPanels.triggers.eventsSub') }}</span>
         </div>
         <div class="card-body">
           <div class="event-row">
-            <button class="ev-toggle" :class="{ 'ev-toggle--on': eventPush }" role="switch" :aria-checked="eventPush" aria-label="Push 事件触发" @click="eventPush = !eventPush">
+            <button class="ev-toggle" :class="{ 'ev-toggle--on': eventPush }" role="switch" :aria-checked="eventPush" :aria-label="t('projectPanels.triggers.pushAria')" @click="eventPush = !eventPush">
               <span class="ev-toggle-knob" aria-hidden="true"/>
             </button>
-            <div class="ev-text"><span class="ev-name">Push</span><span class="ev-desc">匹配分支收到 push 即触发</span></div>
+            <div class="ev-text"><span class="ev-name">Push</span><span class="ev-desc">{{ t('projectPanels.triggers.pushDesc') }}</span></div>
             <span class="ev-code mono">push</span>
           </div>
           <div class="event-row">
-            <button class="ev-toggle" :class="{ 'ev-toggle--on': eventTag }" role="switch" :aria-checked="eventTag" aria-label="Tag 事件触发" @click="eventTag = !eventTag">
+            <button class="ev-toggle" :class="{ 'ev-toggle--on': eventTag }" role="switch" :aria-checked="eventTag" :aria-label="t('projectPanels.triggers.tagAria')" @click="eventTag = !eventTag">
               <span class="ev-toggle-knob" aria-hidden="true"/>
             </button>
-            <div class="ev-text"><span class="ev-name">Tag</span><span class="ev-desc">打 tag 触发(常用于 release 分支发版)</span></div>
+            <div class="ev-text"><span class="ev-name">Tag</span><span class="ev-desc">{{ t('projectPanels.triggers.tagDesc') }}</span></div>
             <span class="ev-code mono">tag</span>
           </div>
           <div class="event-row">
-            <button class="ev-toggle" :class="{ 'ev-toggle--on': eventRelease }" role="switch" :aria-checked="eventRelease" aria-label="Release 事件触发" @click="eventRelease = !eventRelease">
+            <button class="ev-toggle" :class="{ 'ev-toggle--on': eventRelease }" role="switch" :aria-checked="eventRelease" :aria-label="t('projectPanels.triggers.releaseAria')" @click="eventRelease = !eventRelease">
               <span class="ev-toggle-knob" aria-hidden="true"/>
             </button>
-            <div class="ev-text"><span class="ev-name">Release</span><span class="ev-desc">发布 Release 触发(按 tag 名匹配分支映射)</span></div>
+            <div class="ev-text"><span class="ev-name">Release</span><span class="ev-desc">{{ t('projectPanels.triggers.releaseDesc') }}</span></div>
             <span class="ev-code mono">release</span>
           </div>
           <div class="event-row">
-            <button class="ev-toggle" :class="{ 'ev-toggle--on': eventPullRequest }" role="switch" :aria-checked="eventPullRequest" aria-label="Pull Request 事件触发" @click="eventPullRequest = !eventPullRequest">
+            <button class="ev-toggle" :class="{ 'ev-toggle--on': eventPullRequest }" role="switch" :aria-checked="eventPullRequest" :aria-label="t('projectPanels.triggers.prAria')" @click="eventPullRequest = !eventPullRequest">
               <span class="ev-toggle-knob" aria-hidden="true"/>
             </button>
-            <div class="ev-text"><span class="ev-name">Pull Request / Merge Request</span><span class="ev-desc">开启后 PR 触发构建校验</span></div>
+            <div class="ev-text"><span class="ev-name">{{ t('projectPanels.triggers.prName') }}</span><span class="ev-desc">{{ t('projectPanels.triggers.prDesc') }}</span></div>
             <span class="ev-code mono">pull_request</span>
           </div>
           <div class="event-row event-row--always-on">
-            <button class="ev-toggle ev-toggle--always-on" role="switch" aria-checked="true" aria-label="手动触发(始终开启)" disabled>
+            <button class="ev-toggle ev-toggle--always-on" role="switch" aria-checked="true" :aria-label="t('projectPanels.triggers.manualAria')" disabled>
               <span class="ev-toggle-knob" aria-hidden="true"/>
             </button>
-            <div class="ev-text"><span class="ev-name">手动触发</span><span class="ev-desc">始终可用 · 在运行列表点「手动触发」指定分支/commit</span></div>
-            <span class="ev-code mono ev-code--always">always on</span>
+            <div class="ev-text"><span class="ev-name">{{ t('projectPanels.triggers.manualName') }}</span><span class="ev-desc">{{ t('projectPanels.triggers.manualDesc') }}</span></div>
+            <span class="ev-code mono ev-code--always">{{ t('projectPanels.triggers.alwaysOn') }}</span>
           </div>
         </div>
       </section>
@@ -474,11 +477,11 @@ const displayWebhookUrl = computed(() => {
               <path d="M18 9a9 9 0 0 1-9 9"/>
             </svg>
           </span>
-          <h2 id="tp-mappings-heading" class="card-title">分支 → 环境 / 目标服务器</h2>
-          <span class="card-sub">支持通配 · 一个分支可映射多台</span>
+          <h2 id="tp-mappings-heading" class="card-title">{{ t('projectPanels.triggers.mappingsTitle') }}</h2>
+          <span class="card-sub">{{ t('projectPanels.triggers.mappingsSub') }}</span>
         </div>
         <div class="map-header" aria-hidden="true">
-          <span>分支(支持通配)</span><span>环境</span><span>目标服务器</span><span></span>
+          <span>{{ t('projectPanels.triggers.colBranch') }}</span><span>{{ t('projectPanels.triggers.colEnvironment') }}</span><span>{{ t('projectPanels.triggers.colTargetServers') }}</span><span></span>
         </div>
         <div v-for="row in mappings" :key="row._key" class="map-row">
           <div class="map-cell map-cell--pattern">
@@ -486,31 +489,31 @@ const displayWebhookUrl = computed(() => {
               <svg class="pattern-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                 <line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>
               </svg>
-              <input v-model="row.branchPattern" type="text" class="map-input map-input--mono" :class="{ 'map-input--error': row.patternError }" placeholder="main 或 release/*" :aria-label="`分支模式(行 ${row._key})`" :aria-invalid="row.patternError ? 'true' : undefined" @input="onPatternInput(row)" @blur="row.patternError = validatePattern(row.branchPattern)"/>
+              <input v-model="row.branchPattern" type="text" class="map-input map-input--mono" :class="{ 'map-input--error': row.patternError }" :placeholder="t('projectPanels.triggers.patternPlaceholder')" :aria-label="t('projectPanels.triggers.patternAria', { key: row._key })" :aria-invalid="row.patternError ? 'true' : undefined" @input="onPatternInput(row)" @blur="row.patternError = validatePattern(row.branchPattern)"/>
             </div>
             <span v-if="row.patternError" class="map-field-error" role="alert">{{ row.patternError }}</span>
           </div>
           <div class="map-cell">
-            <input v-model="row.environment" type="text" class="map-input" placeholder="生产" :aria-label="`环境名称(行 ${row._key})`"/>
+            <input v-model="row.environment" type="text" class="map-input" :placeholder="t('projectPanels.triggers.envPlaceholder')" :aria-label="t('projectPanels.triggers.envNameAria', { key: row._key })"/>
           </div>
           <div class="map-cell map-cell--servers">
-            <div class="servers-placeholder" aria-label="目标服务器(暂未启用)">
+            <div class="servers-placeholder" :aria-label="t('projectPanels.triggers.serversPlaceholderAria')">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="1.6"/><rect x="3" y="14" width="18" height="6" rx="1.6"/><path d="M7 7h.01M7 17h.01"/></svg>
-              <span class="servers-placeholder-text">目标服务器将在 Story 4-1 后启用</span>
+              <span class="servers-placeholder-text">{{ t('projectPanels.triggers.serversPlaceholderText') }}</span>
             </div>
           </div>
           <div class="map-cell map-cell--actions">
-            <button class="row-del-btn" :aria-label="`删除分支映射行 ${row.branchPattern || '(空)'}`" @click="removeRow(row._key)">
+            <button class="row-del-btn" :aria-label="t('projectPanels.triggers.deleteRowAria', { pattern: row.branchPattern || t('projectPanels.triggers.emptyPattern') })" @click="removeRow(row._key)">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true"><path d="M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/></svg>
             </button>
           </div>
         </div>
-        <div v-if="mappings.length === 0" class="map-empty"><span>尚无映射规则</span></div>
+        <div v-if="mappings.length === 0" class="map-empty"><span>{{ t('projectPanels.triggers.noMappings') }}</span></div>
         <button class="add-row-btn" @click="addRow">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-          添加分支映射
+          {{ t('projectPanels.triggers.addMapping') }}
         </button>
-        <p class="map-note">通配符示例:<code class="mono">release/*</code> 匹配 release/1.2、release/hotfix;未匹配任何规则的分支按下方「未匹配策略」处理。</p>
+        <p class="map-note">{{ t('projectPanels.triggers.mappingNotePrefix') }}<code class="mono">release/*</code> {{ t('projectPanels.triggers.mappingNoteSuffix') }}</p>
       </section>
 
       <!-- ═══ Section 4: Unmatched policy ══════════════════════════════════ -->
@@ -521,23 +524,23 @@ const displayWebhookUrl = computed(() => {
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
             </svg>
           </span>
-          <h2 id="tp-policy-heading" class="card-title">未匹配策略</h2>
-          <span class="card-sub">推送未匹配任何分支映射时的处理方式</span>
+          <h2 id="tp-policy-heading" class="card-title">{{ t('projectPanels.triggers.policyTitle') }}</h2>
+          <span class="card-sub">{{ t('projectPanels.triggers.policySub') }}</span>
         </div>
         <div class="card-body card-body--pad">
-          <div class="segmented" role="group" aria-label="未匹配策略">
+          <div class="segmented" role="group" :aria-label="t('projectPanels.triggers.policyGroupAria')">
             <button class="seg-btn" :class="{ 'seg-btn--active': unmatchedPolicy === 'record' }" role="radio" :aria-checked="unmatchedPolicy === 'record'" @click="unmatchedPolicy = 'record'">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-              记录但不部署
+              {{ t('projectPanels.triggers.policyRecord') }}
             </button>
             <button class="seg-btn" :class="{ 'seg-btn--active': unmatchedPolicy === 'ignore' }" role="radio" :aria-checked="unmatchedPolicy === 'ignore'" @click="unmatchedPolicy = 'ignore'">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
-              忽略
+              {{ t('projectPanels.triggers.policyIgnore') }}
             </button>
           </div>
           <p class="policy-desc">
-            <template v-if="unmatchedPolicy === 'record'">未匹配分支的推送事件将被记录为一条运行记录(状态:跳过),不触发构建或部署。</template>
-            <template v-else>未匹配分支的推送事件将被完全忽略,不产生任何运行记录。</template>
+            <template v-if="unmatchedPolicy === 'record'">{{ t('projectPanels.triggers.policyDescRecord') }}</template>
+            <template v-else>{{ t('projectPanels.triggers.policyDescIgnore') }}</template>
           </p>
         </div>
       </section>
@@ -550,8 +553,8 @@ const displayWebhookUrl = computed(() => {
               <path d="M3 7l3-3h5l2 2h8v12a2 2 0 0 1-2 2H3z"/>
             </svg>
           </span>
-          <h2 id="tp-paths-heading" class="card-title">路径过滤(monorepo)</h2>
-          <span class="card-sub">仅当本次推送改动的文件匹配以下任一 glob 才触发</span>
+          <h2 id="tp-paths-heading" class="card-title">{{ t('projectPanels.triggers.pathsTitle') }}</h2>
+          <span class="card-sub">{{ t('projectPanels.triggers.pathsSub') }}</span>
         </div>
         <div class="card-body card-body--pad">
           <textarea
@@ -559,11 +562,10 @@ const displayWebhookUrl = computed(() => {
             class="map-input map-input--mono path-filters-input"
             rows="4"
             placeholder="backend/**&#10;shared/**&#10;*.go"
-            aria-label="路径过滤 glob(每行一条)"
+            :aria-label="t('projectPanels.triggers.pathsAria')"
           ></textarea>
           <p class="policy-desc">
-            每行一条 glob:<code>**</code> 跨目录、<code>*</code> 单层(如 <code>backend/**</code>、<code>**/*.go</code>)。
-            留空 = 不启用(任意改动都触发)。匹配不中的推送将被忽略;无法获取改动文件列表时放行不拦。
+            {{ t('projectPanels.triggers.pathsHint', { doubleStar: '**', star: '*', egDir: 'backend/**', egGo: '**/*.go' }) }}
           </p>
         </div>
       </section>
@@ -590,7 +592,7 @@ const displayWebhookUrl = computed(() => {
       <div class="save-bar">
         <button class="btn-primary" :disabled="saveSubmitting" :aria-busy="saveSubmitting" @click="handleSave">
           <span v-if="saveSubmitting" class="spinner" aria-hidden="true"/>
-          {{ saveSubmitting ? '保存中…' : '保存触发配置' }}
+          {{ saveSubmitting ? t('projectPanels.triggers.saving') : t('projectPanels.triggers.saveTriggers') }}
         </button>
       </div>
     </template>
@@ -598,33 +600,33 @@ const displayWebhookUrl = computed(() => {
 
   <!-- ═══ Reset secret modal ══════════════════════════════════════════════════ -->
   <Teleport to="body">
-    <div v-if="resetModalOpen" class="modal-scrim" role="dialog" aria-label="确认重置签名密钥" aria-modal="true" @keydown.esc="closeResetModal" @click.self="closeResetModal">
+    <div v-if="resetModalOpen" class="modal-scrim" role="dialog" :aria-label="t('projectPanels.triggers.resetModalAria')" aria-modal="true" @keydown.esc="closeResetModal" @click.self="closeResetModal">
       <div class="modal">
         <div class="modal-head">
           <div class="modal-icon modal-icon--warn" aria-hidden="true">
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
           </div>
           <div>
-            <h3 class="modal-title">重置签名密钥</h3>
-            <p class="modal-sub">重置后旧密钥立即失效,新密钥只在本次响应中回显一次</p>
+            <h3 class="modal-title">{{ t('projectPanels.triggers.resetModalTitle') }}</h3>
+            <p class="modal-sub">{{ t('projectPanels.triggers.resetModalSub') }}</p>
           </div>
-          <button class="modal-close" aria-label="关闭对话框" :disabled="resetSubmitting" @click="closeResetModal">
+          <button class="modal-close" :aria-label="t('projectPanels.triggers.closeDialogAria')" :disabled="resetSubmitting" @click="closeResetModal">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
           </button>
         </div>
         <div class="modal-body">
-          <p class="modal-warn-text">重置后需要在 Gitee 仓库 WebHooks 配置中更新为新密钥,否则验签失败将导致 webhook 推送被拒绝。</p>
-          <p class="modal-warn-secondary">新密钥将在重置完成后一次性展示,请立即复制并妥善保存。</p>
+          <p class="modal-warn-text">{{ t('projectPanels.triggers.resetWarnText') }}</p>
+          <p class="modal-warn-secondary">{{ t('projectPanels.triggers.resetWarnSecondary') }}</p>
           <div v-if="resetBanner" class="banner banner--error modal-banner" role="alert">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>
             {{ resetBanner }}
           </div>
         </div>
         <div class="modal-footer">
-          <button type="button" class="btn-secondary" :disabled="resetSubmitting" @click="closeResetModal">取消</button>
+          <button type="button" class="btn-secondary" :disabled="resetSubmitting" @click="closeResetModal">{{ t('projectPanels.triggers.cancel') }}</button>
           <button type="button" class="btn-danger" :disabled="resetSubmitting" :aria-busy="resetSubmitting" @click="confirmReset">
             <span v-if="resetSubmitting" class="spinner spinner--red" aria-hidden="true"/>
-            {{ resetSubmitting ? '重置中…' : '确认重置密钥' }}
+            {{ resetSubmitting ? t('projectPanels.triggers.resetting') : t('projectPanels.triggers.confirmReset') }}
           </button>
         </div>
       </div>

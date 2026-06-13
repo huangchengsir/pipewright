@@ -10,6 +10,7 @@
  * 把 commands + artifactPath 这两个键回传。
  */
 import { ref, watch, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   type StepBlock,
   type StepKind,
@@ -18,6 +19,8 @@ import {
   parseSteps,
   compileSteps,
 } from './stepCompile'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   /** 当前节点的完整 config(用于初始反解析) */
@@ -71,13 +74,13 @@ function flush(): void {
 
 const addMenuOpen = ref(false)
 
-const addOptions: ReadonlyArray<{ kind: StepKind; label: string; desc: string }> = [
-  { kind: 'command', label: STEP_KIND_META.command.label, desc: 'shell 命令(可多行)' },
-  { kind: 'env', label: STEP_KIND_META.env.label, desc: 'KEY=VALUE 注入环境' },
-  { kind: 'workDir', label: STEP_KIND_META.workDir.label, desc: '切换后续命令工作目录' },
-  { kind: 'condition', label: STEP_KIND_META.condition.label, desc: '不成立则跳过后续步骤' },
-  { kind: 'artifact', label: STEP_KIND_META.artifact.label, desc: 'glob 归档产物' },
-]
+const addOptions = computed<ReadonlyArray<{ kind: StepKind; label: string; desc: string }>>(() => [
+  { kind: 'command', label: STEP_KIND_META.command.label, desc: t('pipelineJob.sbAddCommandDesc') },
+  { kind: 'env', label: STEP_KIND_META.env.label, desc: t('pipelineJob.sbAddEnvDesc') },
+  { kind: 'workDir', label: STEP_KIND_META.workDir.label, desc: t('pipelineJob.sbAddWorkDirDesc') },
+  { kind: 'condition', label: STEP_KIND_META.condition.label, desc: t('pipelineJob.sbAddConditionDesc') },
+  { kind: 'artifact', label: STEP_KIND_META.artifact.label, desc: t('pipelineJob.sbAddArtifactDesc') },
+])
 
 function addStep(kind: StepKind): void {
   steps.value = [...steps.value, blank(kind)]
@@ -141,8 +144,8 @@ const stepCount = computed(() => steps.value.length)
 <template>
   <div class="step-builder">
     <div class="sb-head">
-      <span class="sb-head-label">可视化步骤</span>
-      <span class="sb-count" aria-label="步骤数量">{{ stepCount }}</span>
+      <span class="sb-head-label">{{ t('pipelineJob.sbVisualSteps') }}</span>
+      <span class="sb-count" :aria-label="t('pipelineJob.sbStepCount')">{{ stepCount }}</span>
     </div>
 
     <ol class="sb-list">
@@ -161,7 +164,7 @@ const stepCount = computed(() => steps.value.length)
         @dragend="onDragEnd"
       >
         <div class="sb-step-bar">
-          <span class="sb-grip" aria-hidden="true" title="拖拽排序">
+          <span class="sb-grip" aria-hidden="true" :title="t('pipelineJob.sbDragSort')">
             <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor">
               <circle cx="2.5" cy="2" r="1.3" /><circle cx="7.5" cy="2" r="1.3" />
               <circle cx="2.5" cy="7" r="1.3" /><circle cx="7.5" cy="7" r="1.3" />
@@ -174,7 +177,7 @@ const stepCount = computed(() => steps.value.length)
             <button
               class="sb-move"
               :disabled="index === 0"
-              :aria-label="`上移步骤 ${index + 1}`"
+              :aria-label="t('pipelineJob.sbMoveUp', { n: index + 1 })"
               @click="move(index, -1)"
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M18 15l-6-6-6 6" /></svg>
@@ -182,14 +185,14 @@ const stepCount = computed(() => steps.value.length)
             <button
               class="sb-move"
               :disabled="index === steps.length - 1"
-              :aria-label="`下移步骤 ${index + 1}`"
+              :aria-label="t('pipelineJob.sbMoveDown', { n: index + 1 })"
               @click="move(index, 1)"
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
             </button>
             <button
               class="sb-del"
-              :aria-label="`删除步骤 ${index + 1}`"
+              :aria-label="t('pipelineJob.sbDelStep', { n: index + 1 })"
               @click="removeStep(step.id)"
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
@@ -204,7 +207,7 @@ const stepCount = computed(() => steps.value.length)
           class="sb-input sb-textarea is-mono"
           rows="2"
           placeholder="npm ci&#10;npm run build"
-          :aria-label="`命令 ${index + 1}`"
+          :aria-label="t('pipelineJob.sbCommandAria', { n: index + 1 })"
           @input="patchStep(step.id, { command: ($event.target as HTMLTextAreaElement).value })"
           @blur="flush"
         ></textarea>
@@ -216,7 +219,7 @@ const stepCount = computed(() => steps.value.length)
             class="sb-input is-mono"
             type="text"
             placeholder="KEY"
-            :aria-label="`环境变量名 ${index + 1}`"
+            :aria-label="t('pipelineJob.sbEnvKeyAria', { n: index + 1 })"
             @input="patchStep(step.id, { envKey: ($event.target as HTMLInputElement).value })"
             @blur="flush"
           />
@@ -226,7 +229,7 @@ const stepCount = computed(() => steps.value.length)
             class="sb-input is-mono"
             type="text"
             placeholder="value"
-            :aria-label="`环境变量值 ${index + 1}`"
+            :aria-label="t('pipelineJob.sbEnvValueAria', { n: index + 1 })"
             @input="patchStep(step.id, { envValue: ($event.target as HTMLInputElement).value })"
             @blur="flush"
           />
@@ -239,7 +242,7 @@ const stepCount = computed(() => steps.value.length)
           class="sb-input is-mono"
           type="text"
           placeholder="frontend"
-          :aria-label="`目录 ${index + 1}`"
+          :aria-label="t('pipelineJob.sbDirAria', { n: index + 1 })"
           @input="patchStep(step.id, { dir: ($event.target as HTMLInputElement).value })"
           @blur="flush"
         />
@@ -251,12 +254,12 @@ const stepCount = computed(() => steps.value.length)
             class="sb-input is-mono"
             type="text"
             placeholder='[ "$BRANCH" = "main" ]'
-            :aria-label="`条件 ${index + 1}`"
+            :aria-label="t('pipelineJob.sbCondAria', { n: index + 1 })"
             @input="patchStep(step.id, { condition: ($event.target as HTMLInputElement).value })"
             @blur="flush"
           />
           <p class="sb-cond-hint">
-            shell 条件,不成立则<strong>跳过后续所有步骤</strong>(成功结束)。如
+            {{ t('pipelineJob.sbCondHintPre') }}<strong>{{ t('pipelineJob.sbCondHintStrong') }}</strong>{{ t('pipelineJob.sbCondHintPost') }}
             <code>[ -f package.json ]</code>
           </p>
         </div>
@@ -268,14 +271,14 @@ const stepCount = computed(() => steps.value.length)
           class="sb-input is-mono"
           type="text"
           placeholder="frontend/dist"
-          :aria-label="`产物路径 ${index + 1}`"
+          :aria-label="t('pipelineJob.sbArtifactAria', { n: index + 1 })"
           @input="patchStep(step.id, { artifact: ($event.target as HTMLInputElement).value })"
           @blur="flush"
         />
       </li>
     </ol>
 
-    <div v-if="steps.length === 0" class="sb-empty">还没有步骤,点下方「加步骤」开始</div>
+    <div v-if="steps.length === 0" class="sb-empty">{{ t('pipelineJob.sbEmpty') }}</div>
 
     <div class="sb-add">
       <button
@@ -285,7 +288,7 @@ const stepCount = computed(() => steps.value.length)
         @click="addMenuOpen = !addMenuOpen"
       >
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
-        加步骤
+        {{ t('pipelineJob.sbAddStep') }}
       </button>
       <div v-if="addMenuOpen" class="sb-add-menu" role="menu">
         <button

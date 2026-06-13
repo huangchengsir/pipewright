@@ -12,12 +12,15 @@
  * Validation errors (422) are shown inline with the server's human-readable, secret-free message.
  */
 import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { importPipeline, type PipelineDTO } from '../../api/pipeline'
 import { HttpError } from '../../api/http'
 
 const props = defineProps<{
   projectId: string
 }>()
+
+const { t } = useI18n()
 
 const emit = defineEmits<{
   (e: 'close'): void
@@ -55,22 +58,22 @@ function mapError(err: HttpError): string {
   const code = err.apiError?.code
   const msg = err.apiError?.message
   switch (code) {
-    case 'invalid_yaml':  return msg ?? '无法解析 .pipewright.yml,请检查 YAML 语法与结构。'
-    case 'invalid_stage': return msg ?? '阶段配置不合法(名称 / kind / needs / 须恰有一个 source 阶段)。'
-    case 'invalid_job':   return msg ?? '任务名称或类型不能为空。'
-    case 'duplicate_id':  return msg ?? '阶段或任务 ID 重复。'
-    case 'project_not_found': return '项目不存在。'
-    default:              return msg ?? `导入失败(${err.status})`
+    case 'invalid_yaml':  return msg ?? t('pipelinePanels.yiInvalidYaml')
+    case 'invalid_stage': return msg ?? t('pipelinePanels.yiInvalidStage')
+    case 'invalid_job':   return msg ?? t('pipelinePanels.yiInvalidJob')
+    case 'duplicate_id':  return msg ?? t('pipelinePanels.yiDuplicateId')
+    case 'project_not_found': return t('pipelinePanels.yiProjectNotFound')
+    default:              return msg ?? t('pipelinePanels.yiImportFailed', { status: err.status })
   }
 }
 
 function handleError(err: unknown): void {
   if (err instanceof HttpError) {
     errorMsg.value = err.status === 0
-      ? '无法连接到服务器,请检查后端是否运行后重试。'
+      ? t('pipelinePanels.yiConnFailed')
       : mapError(err)
   } else {
-    errorMsg.value = '导入失败,请稍后重试。'
+    errorMsg.value = t('pipelinePanels.yiImportFailedRetry')
   }
 }
 
@@ -134,18 +137,18 @@ function onBackdrop(e: MouseEvent): void {
     <div class="yi-modal">
       <header class="yi-head">
         <div>
-          <h2 id="yi-title" class="yi-title">从 YAML 导入流水线</h2>
-          <p class="yi-sub">粘贴 <code>.pipewright.yml</code> 内容,先「预览」校验,再导入到画布或直接保存。</p>
+          <h2 id="yi-title" class="yi-title">{{ t('pipelinePanels.yiTitle') }}</h2>
+          <p class="yi-sub">{{ t('pipelinePanels.yiSub') }}</p>
         </div>
-        <button class="yi-close" aria-label="关闭" @click="emit('close')">
+        <button class="yi-close" :aria-label="t('pipelinePanels.yiCloseAria')" @click="emit('close')">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
         </button>
       </header>
 
       <div class="yi-body">
         <div class="yi-editor-head">
-          <label for="yi-yaml" class="yi-label">YAML 文档</label>
-          <button class="yi-starter" type="button" @click="loadStarter">填入示例模板</button>
+          <label for="yi-yaml" class="yi-label">{{ t('pipelinePanels.yiYamlLabel') }}</label>
+          <button class="yi-starter" type="button" @click="loadStarter">{{ t('pipelinePanels.yiLoadStarter') }}</button>
         </div>
         <textarea
           id="yi-yaml"
@@ -163,20 +166,20 @@ function onBackdrop(e: MouseEvent): void {
         </div>
         <div v-else-if="previewedStageCount !== null" class="yi-banner yi-banner--ok" role="status">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
-          <span>校验通过:解析出 {{ previewedStageCount }} 个阶段,已回灌到画布预览(尚未保存)。</span>
+          <span>{{ t('pipelinePanels.yiOkBanner', { count: previewedStageCount }) }}</span>
         </div>
       </div>
 
       <footer class="yi-foot">
         <button class="yi-btn" :disabled="busy !== null || !yamlText.trim()" @click="onPreview">
           <span v-if="busy === 'preview'" class="yi-spin" aria-hidden="true"/>
-          预览校验
+          {{ t('pipelinePanels.yiPreview') }}
         </button>
         <div class="yi-foot-right">
-          <button class="yi-btn" :disabled="busy !== null || !yamlText.trim()" @click="onApplyToCanvas">导入到画布</button>
+          <button class="yi-btn" :disabled="busy !== null || !yamlText.trim()" @click="onApplyToCanvas">{{ t('pipelinePanels.yiImportToCanvas') }}</button>
           <button class="yi-btn yi-btn--primary" :disabled="busy !== null || !yamlText.trim()" @click="onImportAndSave">
             <span v-if="busy === 'save'" class="yi-spin" aria-hidden="true"/>
-            导入并保存
+            {{ t('pipelinePanels.yiImportAndSave') }}
           </button>
         </div>
       </footer>

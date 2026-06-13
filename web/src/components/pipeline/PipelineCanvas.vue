@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { PipelineStage, PipelineJob, StageKind } from '../../api/pipeline'
 import type { Credential } from '../../api/credentials'
 import type { Server } from '../../api/servers'
@@ -26,6 +27,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'update', stages: PipelineStage[]): void
 }>()
+
+const { t } = useI18n()
 
 // ─── Unique ID helpers ────────────────────────────────────────────────────────
 
@@ -248,11 +251,15 @@ function addStage(): void {
   const nextKind: StageKind = KIND_SEQ.find((k) => !existing.includes(k)) ?? 'custom'
   const nextNum = props.stages.filter((s) => s.kind !== 'source').length + 1
   const KIND_LABELS: Partial<Record<StageKind, string>> = {
-    build: '构建', deploy: '部署', notify: '通知',
+    build: t('pipelineCanvas.stageBuild'),
+    deploy: t('pipelineCanvas.stageDeploy'),
+    notify: t('pipelineCanvas.stageNotify'),
   }
   const newStage: PipelineStage = {
     id:   `stg_${uid()}`,
-    name: nextKind === 'custom' ? `自定义 ${nextNum}` : (KIND_LABELS[nextKind] ?? `阶段 ${nextNum}`),
+    name: nextKind === 'custom'
+      ? t('pipelineCanvas.stageCustomN', { n: nextNum })
+      : (KIND_LABELS[nextKind] ?? t('pipelineCanvas.stageDefaultN', { n: nextNum })),
     kind: nextKind,
     jobs: [],
   }
@@ -329,7 +336,7 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
   <div class="canvas-body">
     <!-- ─── Scrollable canvas ────────────────────────────────────────────── -->
     <div class="pipeline-canvas">
-      <div ref="flowRef" class="pipeline-flow pipeline-flow--dag" role="list" aria-label="流水线阶段">
+      <div ref="flowRef" class="pipeline-flow pipeline-flow--dag" role="list" :aria-label="t('pipelineCanvas.flowAriaLabel')">
 
         <!-- DAG edge overlay (drawn from declared needs; decorative) -->
         <svg
@@ -368,9 +375,9 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
         <!-- Add stage button (dashed) -->
         <button
           class="add-stage-btn"
-          aria-label="添加新阶段"
+          :aria-label="t('pipelineCanvas.addStageAria')"
           @click="addStage"
-        >+ 添加阶段</button>
+        >{{ t('pipelineCanvas.addStage') }}</button>
       </div>
 
       <!-- YAML preview (collapsible, read-only) -->
@@ -385,7 +392,7 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
             <path d="M9 18l6-6-6-6"/>
           </svg>
-          查看 YAML 源码
+          {{ t('pipelineCanvas.viewYaml') }}
         </button>
         <div v-if="yamlOpen" id="yaml-block" class="yaml-block">
           <pre class="yaml-code">{{ yaml }}</pre>
@@ -422,7 +429,7 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
     <JobTypePicker
       :open="picker.open"
       :current="picker.mode === 'change' ? picker.current : ''"
-      :title="picker.mode === 'change' ? '更换任务类型' : '添加任务'"
+      :title="picker.mode === 'change' ? t('pipelineCanvas.pickerTitleChange') : t('pipelineCanvas.pickerTitleAdd')"
       @select="onPickerSelect"
       @select-custom="onPickerSelectCustom"
       @close="closePicker"

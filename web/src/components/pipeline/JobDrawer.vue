@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { PipelineJob, PipelineStage } from '../../api/pipeline'
 import type { Credential } from '../../api/credentials'
 import type { Server } from '../../api/servers'
@@ -37,6 +38,8 @@ const emit = defineEmits<{
   (e: 'update', patch: Partial<PipelineJob>): void
   (e: 'change-type'): void
 }>()
+
+const { t } = useI18n()
 
 // ─── Local editable copy ──────────────────────────────────────────────────────
 
@@ -199,10 +202,10 @@ function credentialOptions(field: JobField): Credential[] {
 
 const CHANNEL_TYPE_LABELS: Record<string, string> = {
   webhook: 'Webhook',
-  email: '邮件',
-  feishu: '飞书',
-  wecom: '企业微信',
-  dingtalk: '钉钉',
+  email: t('pipelineJob.channelTypeEmail'),
+  feishu: t('pipelineJob.channelTypeFeishu'),
+  wecom: t('pipelineJob.channelTypeWecom'),
+  dingtalk: t('pipelineJob.channelTypeDingtalk'),
 }
 
 function channelTypeLabel(type: string): string {
@@ -294,7 +297,7 @@ function cancelSave(): void {
 async function confirmSave(): Promise<void> {
   const name = saveName.value.trim()
   if (!name) {
-    saveError.value = '请填写节点名称'
+    saveError.value = t('pipelineJob.saveErrEmptyName')
     return
   }
   saving.value = true
@@ -311,7 +314,7 @@ async function confirmSave(): Promise<void> {
     savePanelOpen.value = false
   } catch (err) {
     saveError.value =
-      err instanceof Error && err.message ? err.message : '保存失败,请重试(可能重名)'
+      err instanceof Error && err.message ? err.message : t('pipelineJob.saveErrFailed')
   } finally {
     saving.value = false
   }
@@ -319,7 +322,7 @@ async function confirmSave(): Promise<void> {
 </script>
 
 <template>
-  <aside class="job-drawer" aria-label="任务配置">
+  <aside class="job-drawer" :aria-label="t('pipelineJob.drawerAria')">
     <!-- Head -->
     <div class="drawer-head">
       <span class="drawer-icon" aria-hidden="true">
@@ -329,12 +332,12 @@ async function confirmSave(): Promise<void> {
         </svg>
       </span>
       <div class="drawer-title">
-        {{ localName || '(未命名任务)' }}
-        <small class="drawer-subtitle">{{ stage.name }} · 本流水线</small>
+        {{ localName || t('pipelineJob.unnamedJob') }}
+        <small class="drawer-subtitle">{{ stage.name }} · {{ t('pipelineJob.thisPipeline') }}</small>
       </div>
       <button
         class="drawer-close"
-        aria-label="关闭抽屉"
+        :aria-label="t('pipelineJob.closeDrawer')"
         @click="emit('close')"
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -345,26 +348,26 @@ async function confirmSave(): Promise<void> {
 
     <!-- Basic info section -->
     <div class="drawer-section">
-      <div class="drawer-section-label">基本信息</div>
+      <div class="drawer-section-label">{{ t('pipelineJob.basicInfo') }}</div>
 
       <div class="drawer-field">
-        <div class="drawer-field-label">任务名称</div>
+        <div class="drawer-field-label">{{ t('pipelineJob.jobNameLabel') }}</div>
         <input
           v-model="localName"
           class="drawer-input"
           type="text"
-          placeholder="例:隔离构建"
-          aria-label="任务名称"
+          :placeholder="t('pipelineJob.jobNamePlaceholder')"
+          :aria-label="t('pipelineJob.jobNameLabel')"
           @blur="flush"
         />
       </div>
 
       <div class="drawer-field">
-        <div class="drawer-field-label">任务类型</div>
+        <div class="drawer-field-label">{{ t('pipelineJob.jobTypeLabel') }}</div>
         <button
           type="button"
           class="type-trigger"
-          aria-label="更换任务类型"
+          :aria-label="t('pipelineJob.changeType')"
           @click="emit('change-type')"
         >
           <JobTypeIcon :type="localType" :size="32" />
@@ -372,18 +375,18 @@ async function confirmSave(): Promise<void> {
             <span class="type-trigger-name">{{ jobTypeLabel(localType) }}</span>
             <span class="type-trigger-desc">{{ spec ? spec.description : localType }}</span>
           </span>
-          <span class="type-trigger-action">更换</span>
+          <span class="type-trigger-action">{{ t('pipelineJob.change') }}</span>
         </button>
       </div>
 
       <div class="drawer-field">
-        <div class="drawer-field-label">摘要描述</div>
+        <div class="drawer-field-label">{{ t('pipelineJob.summaryLabel') }}</div>
         <input
           v-model="localSummary"
           class="drawer-input"
           type="text"
-          placeholder="卡片副标题(可选)"
-          aria-label="摘要描述"
+          :placeholder="t('pipelineJob.summaryPlaceholder')"
+          :aria-label="t('pipelineJob.summaryLabel')"
           @blur="flush"
         />
       </div>
@@ -391,9 +394,9 @@ async function confirmSave(): Promise<void> {
 
     <!-- 工作室节点「实例参数短清单」:只展示作者提升的参数,类型化控件,default 预填。 -->
     <div v-if="showShortlist" class="drawer-section">
-      <div class="drawer-section-label">实例参数</div>
+      <div class="drawer-section-label">{{ t('pipelineJob.instanceParams') }}</div>
       <p class="shortlist-hint">
-        该自定义节点提升了以下参数;按需调整,其余命令模板已由节点作者固定。
+        {{ t('pipelineJob.instanceParamsHint') }}
       </p>
       <StudioInstanceParams
         :params="promotedParams"
@@ -413,15 +416,15 @@ async function confirmSave(): Promise<void> {
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
           <path d="M9 18l6-6-6-6"/>
         </svg>
-        高级 · 查看/编辑原始参数
+        {{ t('pipelineJob.advancedRawToggle') }}
       </button>
     </div>
 
     <!-- Typed config section (per-type form) -->
     <div v-if="spec && (!showShortlist || showStudioRaw)" class="drawer-section">
       <div class="drawer-section-head">
-        <div class="drawer-section-label">{{ spec.label }}配置</div>
-        <div v-if="canUseStepBuilder && !showShortlist" class="view-switch" role="tablist" aria-label="配置视图">
+        <div class="drawer-section-label">{{ spec.label }}{{ t('pipelineJob.configSuffix') }}</div>
+        <div v-if="canUseStepBuilder && !showShortlist" class="view-switch" role="tablist" :aria-label="t('pipelineJob.configView')">
           <button
             class="view-tab"
             :class="{ 'view-tab--active': viewMode === 'steps' }"
@@ -429,7 +432,7 @@ async function confirmSave(): Promise<void> {
             :aria-selected="viewMode === 'steps'"
             @click="viewMode = 'steps'"
           >
-            可视化步骤
+            {{ t('pipelineJob.visualSteps') }}
           </button>
           <button
             class="view-tab"
@@ -438,7 +441,7 @@ async function confirmSave(): Promise<void> {
             :aria-selected="viewMode === 'raw'"
             @click="viewMode = 'raw'"
           >
-            原始参数
+            {{ t('pipelineJob.rawParams') }}
           </button>
         </div>
       </div>
@@ -456,7 +459,7 @@ async function confirmSave(): Promise<void> {
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
             <path d="M9 18l6-6-6-6"/>
           </svg>
-          高级 · 超时 / 重试 / 资源 / 缓存
+          {{ t('pipelineJob.execAdvancedToggle') }}
         </button>
       <div
         v-show="!ADVANCED_FIELD_KEYS.has(field.key) || showExecAdvanced"
@@ -498,7 +501,7 @@ async function confirmSave(): Promise<void> {
           :aria-label="field.label"
           @change="setField(field.key, ($event.target as HTMLSelectElement).value)"
         >
-          <option value="">— 未选择 —</option>
+          <option value="">{{ t('pipelineJob.credUnselected') }}</option>
           <option v-for="c in credentialOptions(field)" :key="c.id" :value="c.id">
             {{ c.name }} ({{ c.maskedValue }})
           </option>
@@ -512,7 +515,7 @@ async function confirmSave(): Promise<void> {
           :aria-label="field.label"
           @change="setField(field.key, ($event.target as HTMLSelectElement).value)"
         >
-          <option value="">— 未选择 —</option>
+          <option value="">{{ t('pipelineJob.credUnselected') }}</option>
           <option v-for="srv in (servers ?? [])" :key="srv.id" :value="srv.id">
             {{ srv.name }} · {{ srv.host }}
           </option>
@@ -526,9 +529,9 @@ async function confirmSave(): Promise<void> {
           :aria-label="field.label"
           @change="setField(field.key, ($event.target as HTMLSelectElement).value)"
         >
-          <option value="">— 选择渠道 —</option>
+          <option value="">{{ t('pipelineJob.channelUnselected') }}</option>
           <option v-for="ch in (channels ?? [])" :key="ch.id" :value="ch.id">
-            {{ ch.name }} · {{ channelTypeLabel(ch.type) }}{{ ch.enabled ? '' : '(已停用)' }}
+            {{ ch.name }} · {{ channelTypeLabel(ch.type) }}{{ ch.enabled ? '' : t('pipelineJob.channelDisabled') }}
           </option>
         </select>
 
@@ -540,7 +543,7 @@ async function confirmSave(): Promise<void> {
             :aria-label="field.label"
             @change="setField(field.key, ($event.target as HTMLInputElement).checked ? 'true' : 'false')"
           />
-          <span>{{ field.hint || '启用' }}</span>
+          <span>{{ field.hint || t('pipelineJob.toggleEnable') }}</span>
         </label>
 
         <!-- number / text -->
@@ -564,7 +567,7 @@ async function confirmSave(): Promise<void> {
       <div v-if="canUseStepBuilder && viewMode === 'steps'" class="drawer-field step-builder-field">
         <StepBuilder :config="typedConfig" @update="onStepsUpdate" />
         <p class="field-hint">
-          步骤会编译成多行命令在隔离容器内执行;切目录 / 设环境变量对后续命令生效。可随时切「原始参数」查看。
+          {{ t('pipelineJob.stepBuilderHint') }}
         </p>
       </div>
     </div>
@@ -580,12 +583,12 @@ async function confirmSave(): Promise<void> {
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
           <path d="M9 18l6-6-6-6"/>
         </svg>
-        高级 · 原始参数<span v-if="extraRows.length" class="advanced-count">{{ extraRows.length }}</span>
+        {{ t('pipelineJob.advancedRawParams') }}<span v-if="extraRows.length" class="advanced-count">{{ extraRows.length }}</span>
       </button>
 
       <div v-if="showAdvanced" class="advanced-body">
         <div v-if="extraRows.length === 0" class="kv-empty">
-          {{ spec ? '该类型的参数已在上方表单;此处可加自定义键值' : '为该类型添加自定义键值参数' }}
+          {{ spec ? t('pipelineJob.kvEmptyWithSpec') : t('pipelineJob.kvEmptyNoSpec') }}
         </div>
 
         <div
@@ -597,21 +600,21 @@ async function confirmSave(): Promise<void> {
             v-model="row.k"
             class="kv-input"
             type="text"
-            placeholder="key"
-            :aria-label="`配置键 ${row._key}`"
+            :placeholder="t('pipelineJob.kvKeyPlaceholder')"
+            :aria-label="t('pipelineJob.kvKeyAria', { n: row._key })"
             @blur="flush"
           />
           <input
             v-model="row.v"
             class="kv-input"
             type="text"
-            placeholder="value"
-            :aria-label="`配置值 ${row._key}`"
+            :placeholder="t('pipelineJob.kvValuePlaceholder')"
+            :aria-label="t('pipelineJob.kvValueAria', { n: row._key })"
             @blur="flush"
           />
           <button
             class="kv-del"
-            :aria-label="`删除配置项 ${row.k || row._key}`"
+            :aria-label="t('pipelineJob.kvDelAria', { label: row.k || row._key })"
             @click="removeExtra(row._key)"
           >
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -624,7 +627,7 @@ async function confirmSave(): Promise<void> {
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
             <path d="M12 5v14M5 12h14"/>
           </svg>
-          添加参数
+          {{ t('pipelineJob.addParam') }}
         </button>
       </div>
     </div>
@@ -637,34 +640,34 @@ async function confirmSave(): Promise<void> {
             <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
             <path d="M17 21v-8H7v8M7 3v5h8"/>
           </svg>
-          存为自定义节点
+          {{ t('pipelineJob.saveAsCustomNode') }}
         </button>
-        <span v-if="saveOk" class="reuse-ok" role="status">✓ 已存入复用库</span>
+        <span v-if="saveOk" class="reuse-ok" role="status">{{ t('pipelineJob.savedToLibrary') }}</span>
       </div>
 
       <div v-else class="reuse-panel">
-        <div class="reuse-panel-title">存为自定义节点</div>
-        <p class="reuse-panel-hint">把当前节点的类型与参数快照存入复用库,之后可在任意流水线挑选复用。</p>
+        <div class="reuse-panel-title">{{ t('pipelineJob.saveAsCustomNode') }}</div>
+        <p class="reuse-panel-hint">{{ t('pipelineJob.savePanelHint') }}</p>
         <input
           v-model="saveName"
           class="drawer-input"
           type="text"
-          placeholder="节点名称(库内唯一)"
-          aria-label="自定义节点名称"
+          :placeholder="t('pipelineJob.saveNamePlaceholder')"
+          :aria-label="t('pipelineJob.saveNameAria')"
           @keydown.enter.prevent="confirmSave"
         />
         <input
           v-model="saveDesc"
           class="drawer-input"
           type="text"
-          placeholder="说明(可选)"
-          aria-label="自定义节点说明"
+          :placeholder="t('pipelineJob.saveDescPlaceholder')"
+          :aria-label="t('pipelineJob.saveDescAria')"
         />
         <p v-if="saveError" class="reuse-error" role="alert">{{ saveError }}</p>
         <div class="reuse-actions">
-          <button class="reuse-cancel" :disabled="saving" @click="cancelSave">取消</button>
+          <button class="reuse-cancel" :disabled="saving" @click="cancelSave">{{ t('pipelineJob.cancel') }}</button>
           <button class="reuse-confirm" :disabled="saving" @click="confirmSave">
-            {{ saving ? '保存中…' : '保存' }}
+            {{ saving ? t('pipelineJob.saving') : t('pipelineJob.save') }}
           </button>
         </div>
       </div>

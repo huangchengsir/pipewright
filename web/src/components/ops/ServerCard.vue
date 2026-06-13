@@ -5,6 +5,7 @@
   镜像 tab:列表 + 拉取 + 删除。生命周期/镜像写操作完成后 emit('changed') 让父刷新聚合。
 */
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   getServerContainerStats,
   getServerImages,
@@ -77,6 +78,7 @@ const emit = defineEmits<{
 
 const toast = useToast()
 const confirm = useConfirm()
+const { t } = useI18n()
 
 type TabKey = 'containers' | 'images' | 'stacks' | 'volumes' | 'networks'
 const tab = ref<TabKey>('containers')
@@ -114,9 +116,11 @@ const visibleContainers = computed(() => {
 const emptyContainersHint = computed(() => {
   const hasSearch = props.search.trim().length > 0
   const hasFilter = props.stateFilter !== 'all'
-  if (hasSearch && hasFilter) return `无匹配「${props.search.trim()}」且符合当前状态筛选的容器(共 ${props.group.total} 个)。`
-  if (hasSearch) return `无匹配「${props.search.trim()}」的容器(共 ${props.group.total} 个)。`
-  return `无匹配当前筛选的容器(共 ${props.group.total} 个)。`
+  const q = props.search.trim()
+  const total = props.group.total
+  if (hasSearch && hasFilter) return t('opsServer.card.emptySearchFilter', { q, total })
+  if (hasSearch) return t('opsServer.card.emptySearch', { q, total })
+  return t('opsServer.card.emptyFilter', { total })
 })
 
 // 批量:该容器是否已被选中(key 带本机 serverId)。
@@ -128,8 +132,8 @@ async function runAction(c: ContainerInfo, spec: ActionSpec): Promise<void> {
   if (spec.danger) {
     const copy = DANGER_COPY[spec.action]
     const ok = await confirm.open({
-      title: copy?.title(c.names) ?? `对 ${c.names} 执行 ${spec.label}?`,
-      body: copy?.body ?? '该操作会影响容器运行状态。',
+      title: copy?.title(c.names) ?? t('opsServer.card.actionConfirmTitle', { name: c.names, label: spec.label }),
+      body: copy?.body ?? t('opsServer.card.actionConfirmBody'),
       confirmLabel: copy?.confirmLabel ?? spec.label,
       variant: 'danger',
     })
@@ -139,11 +143,11 @@ async function runAction(c: ContainerInfo, spec: ActionSpec): Promise<void> {
   busy.value = new Set(busy.value).add(key)
   try {
     const res = await serviceAction(props.group.serverId, { type: 'docker', target: c.names, action: spec.action })
-    if (res.ok) toast.success(`${spec.label}成功`, { detail: `${c.names} · ${props.name}` })
-    else toast.error(`${spec.label}失败`, { detail: res.error || '远端命令以非零状态退出' })
+    if (res.ok) toast.success(t('opsServer.card.actionSuccess', { label: spec.label }), { detail: `${c.names} · ${props.name}` })
+    else toast.error(t('opsServer.card.actionFail', { label: spec.label }), { detail: res.error || t('opsServer.card.errNonZeroExit') })
   } catch (err) {
-    toast.error(`${spec.label}失败`, {
-      detail: err instanceof HttpError ? (err.apiError?.message ?? `请求失败(${err.status})`) : '网络错误',
+    toast.error(t('opsServer.card.actionFail', { label: spec.label }), {
+      detail: err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errReqFail', { status: err.status })) : t('opsServer.card.errNetwork'),
     })
   } finally {
     const next = new Set(busy.value)
@@ -212,7 +216,7 @@ async function loadImages(): Promise<void> {
     const res = await getServerImages(props.group.serverId)
     if (!res.reachable || !res.runtime) {
       imgState.value = 'error'
-      imgError.value = res.error || '该服务器不可达或无容器运行时'
+      imgError.value = res.error || t('opsServer.card.errUnreachableOrNoRuntime')
       return
     }
     images.value = res.images
@@ -220,17 +224,17 @@ async function loadImages(): Promise<void> {
   } catch (err) {
     imgState.value = 'error'
     imgError.value =
-      err instanceof HttpError ? (err.apiError?.message ?? `加载镜像失败(${err.status})`) : '加载镜像失败'
+      err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errLoadImages', { status: err.status })) : t('opsServer.card.errLoadImagesPlain')
   }
 }
 
-function switchTab(t: TabKey): void {
-  tab.value = t
-  if (t === 'containers') void loadStats()
-  if (t === 'images' && imgState.value === 'idle') void loadImages()
-  if (t === 'stacks' && stackState.value === 'idle') void loadStacks()
-  if (t === 'volumes' && volState.value === 'idle') void loadVolumes()
-  if (t === 'networks' && netState.value === 'idle') void loadNetworks()
+function switchTab(tabKey: TabKey): void {
+  tab.value = tabKey
+  if (tabKey === 'containers') void loadStats()
+  if (tabKey === 'images' && imgState.value === 'idle') void loadImages()
+  if (tabKey === 'stacks' && stackState.value === 'idle') void loadStacks()
+  if (tabKey === 'volumes' && volState.value === 'idle') void loadVolumes()
+  if (tabKey === 'networks' && netState.value === 'idle') void loadNetworks()
 }
 
 // ─── 数据卷(懒加载) ──────────────────────────────────────────────────────────
@@ -247,14 +251,14 @@ async function loadVolumes(): Promise<void> {
     const res = await getServerVolumes(props.group.serverId)
     if (!res.reachable || !res.runtime) {
       volState.value = 'error'
-      volError.value = res.error || '该服务器不可达或无容器运行时'
+      volError.value = res.error || t('opsServer.card.errUnreachableOrNoRuntime')
       return
     }
     volumes.value = res.volumes
     volState.value = 'loaded'
   } catch (err) {
     volState.value = 'error'
-    volError.value = err instanceof HttpError ? (err.apiError?.message ?? `加载卷失败(${err.status})`) : '加载卷失败'
+    volError.value = err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errLoadVol', { status: err.status })) : t('opsServer.card.errLoadVolPlain')
   }
 }
 async function doCreateVol(): Promise<void> {
@@ -264,19 +268,19 @@ async function doCreateVol(): Promise<void> {
   try {
     const res = await createVolume(props.group.serverId, name)
     if (res.ok) {
-      toast.success('数据卷已创建', { detail: name })
+      toast.success(t('opsServer.card.volCreated'), { detail: name })
       newVol.value = ''
       void loadVolumes()
-    } else toast.error('创建失败', { detail: res.error })
+    } else toast.error(t('opsServer.card.createFail'), { detail: res.error })
   } finally {
     busyVol.value = ''
   }
 }
 async function doRemoveVol(v: VolumeInfo): Promise<void> {
   const ok = await confirm.open({
-    title: `删除数据卷 ${v.name}?`,
-    body: '将执行 docker volume rm。若有容器在用会删除失败。卷内数据随之删除,不可恢复。',
-    confirmLabel: '删除卷',
+    title: t('opsServer.card.removeVolTitle', { name: v.name }),
+    body: t('opsServer.card.removeVolBody'),
+    confirmLabel: t('opsServer.card.removeVolConfirm'),
     variant: 'danger',
   })
   if (!ok) return
@@ -284,9 +288,9 @@ async function doRemoveVol(v: VolumeInfo): Promise<void> {
   try {
     const res = await removeVolume(props.group.serverId, v.name)
     if (res.ok) {
-      toast.success('数据卷已删除', { detail: v.name })
+      toast.success(t('opsServer.card.volRemoved'), { detail: v.name })
       void loadVolumes()
-    } else toast.error('删除失败', { detail: res.error || '卷可能正被容器使用' })
+    } else toast.error(t('opsServer.card.removeFail'), { detail: res.error || t('opsServer.card.volInUse') })
   } finally {
     busyVol.value = ''
   }
@@ -306,14 +310,14 @@ async function loadNetworks(): Promise<void> {
     const res = await getServerNetworks(props.group.serverId)
     if (!res.reachable || !res.runtime) {
       netState.value = 'error'
-      netError.value = res.error || '该服务器不可达或无容器运行时'
+      netError.value = res.error || t('opsServer.card.errUnreachableOrNoRuntime')
       return
     }
     networks.value = res.networks
     netState.value = 'loaded'
   } catch (err) {
     netState.value = 'error'
-    netError.value = err instanceof HttpError ? (err.apiError?.message ?? `加载网络失败(${err.status})`) : '加载网络失败'
+    netError.value = err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errLoadNet', { status: err.status })) : t('opsServer.card.errLoadNetPlain')
   }
 }
 async function doCreateNet(): Promise<void> {
@@ -323,19 +327,19 @@ async function doCreateNet(): Promise<void> {
   try {
     const res = await createNetwork(props.group.serverId, name)
     if (res.ok) {
-      toast.success('网络已创建', { detail: name })
+      toast.success(t('opsServer.card.netCreated'), { detail: name })
       newNet.value = ''
       void loadNetworks()
-    } else toast.error('创建失败', { detail: res.error })
+    } else toast.error(t('opsServer.card.createFail'), { detail: res.error })
   } finally {
     busyNet.value = ''
   }
 }
 async function doRemoveNet(n: NetworkInfo): Promise<void> {
   const ok = await confirm.open({
-    title: `删除网络 ${n.name}?`,
-    body: '将执行 docker network rm。若有容器连接在该网络上会删除失败。',
-    confirmLabel: '删除网络',
+    title: t('opsServer.card.removeNetConfirmTitle', { name: n.name }),
+    body: t('opsServer.card.removeNetBody'),
+    confirmLabel: t('opsServer.card.removeNetConfirm'),
     variant: 'danger',
   })
   if (!ok) return
@@ -343,9 +347,9 @@ async function doRemoveNet(n: NetworkInfo): Promise<void> {
   try {
     const res = await removeNetwork(props.group.serverId, n.name)
     if (res.ok) {
-      toast.success('网络已删除', { detail: n.name })
+      toast.success(t('opsServer.card.netRemoved'), { detail: n.name })
       void loadNetworks()
-    } else toast.error('删除失败', { detail: res.error || '网络可能有容器连接' })
+    } else toast.error(t('opsServer.card.removeFail'), { detail: res.error || t('opsServer.card.netInUse') })
   } finally {
     busyNet.value = ''
   }
@@ -374,14 +378,14 @@ async function toggleNetDetail(n: NetworkInfo): Promise<void> {
     const res = await getNetworkContainers(props.group.serverId, n.name)
     if (!res.reachable) {
       netConnState.value = 'error'
-      netConnError.value = res.error || '读取失败'
+      netConnError.value = res.error || t('opsServer.card.errReadFail')
       return
     }
     netConns.value = res.containers
     netConnState.value = 'loaded'
   } catch (err) {
     netConnState.value = 'error'
-    netConnError.value = err instanceof HttpError ? (err.apiError?.message ?? '读取失败') : '读取失败'
+    netConnError.value = err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errReadFail')) : t('opsServer.card.errReadFail')
   }
 }
 
@@ -394,15 +398,15 @@ async function doConnect(network: string): Promise<void> {
   try {
     const res = await connectNetwork(props.group.serverId, network, name)
     if (res.ok) {
-      toast.success('已连接', { detail: `${name} ⇢ ${network}` })
+      toast.success(t('opsServer.card.connected'), { detail: `${name} ⇢ ${network}` })
       connectName.value = ''
       // 刷新该网络的连接列表。
       const r = await getNetworkContainers(props.group.serverId, network)
       if (r.reachable) netConns.value = r.containers
-    } else toast.error('连接失败', { detail: res.error })
+    } else toast.error(t('opsServer.card.connectFail'), { detail: res.error })
   } catch (err) {
-    toast.error('连接失败', {
-      detail: err instanceof HttpError ? (err.apiError?.message ?? '请求失败') : '网络错误',
+    toast.error(t('opsServer.card.connectFail'), {
+      detail: err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errReqFailPlain')) : t('opsServer.card.errNetwork'),
     })
   } finally {
     busyConn.value = ''
@@ -417,9 +421,9 @@ function attachableContainers(): string[] {
 
 async function doDisconnect(network: string, c: NetworkContainer): Promise<void> {
   const ok = await confirm.open({
-    title: `把容器 ${c.name} 从网络 ${network} 断开?`,
-    body: '将执行 docker network disconnect。容器会失去该网络的连接(可能影响服务互通)。',
-    confirmLabel: '断开',
+    title: t('opsServer.card.disconnectConfirmTitle', { name: c.name, network }),
+    body: t('opsServer.card.disconnectBody'),
+    confirmLabel: t('opsServer.card.disconnectConfirm'),
     variant: 'danger',
   })
   if (!ok) return
@@ -427,9 +431,9 @@ async function doDisconnect(network: string, c: NetworkContainer): Promise<void>
   try {
     const res = await disconnectNetwork(props.group.serverId, network, c.name)
     if (res.ok) {
-      toast.success('已断开', { detail: `${c.name} ⇠ ${network}` })
+      toast.success(t('opsServer.card.disconnected'), { detail: `${c.name} ⇠ ${network}` })
       netConns.value = netConns.value.filter((x) => x.id !== c.id)
-    } else toast.error('断开失败', { detail: res.error })
+    } else toast.error(t('opsServer.card.disconnectFail'), { detail: res.error })
   } finally {
     busyConn.value = ''
   }
@@ -452,7 +456,7 @@ async function loadStacks(): Promise<void> {
     const res = await getServerStacks(props.group.serverId)
     if (!res.reachable || !res.runtime) {
       stackState.value = 'error'
-      stackError.value = res.error || '该服务器不可达或无 docker compose'
+      stackError.value = res.error || t('opsServer.card.errUnreachableOrNoCompose')
       return
     }
     stacks.value = res.stacks
@@ -460,30 +464,30 @@ async function loadStacks(): Promise<void> {
   } catch (err) {
     stackState.value = 'error'
     stackError.value =
-      err instanceof HttpError ? (err.apiError?.message ?? `加载 Stacks 失败(${err.status})`) : '加载 Stacks 失败'
+      err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errLoadStacks', { status: err.status })) : t('opsServer.card.errLoadStacksPlain')
   }
 }
 
-const STACK_ACTIONS: { action: StackAction; label: string; danger?: boolean; title?: string }[] = [
-  { action: 'update', label: '更新', danger: true, title: 'docker compose up -d --pull always:拉取新镜像 + 重建有变化的服务(升级到最新)' },
-  { action: 'start', label: '启动' },
-  { action: 'restart', label: '重启', danger: true },
-  { action: 'stop', label: '停止', danger: true },
-  { action: 'down', label: '销毁', danger: true },
-]
+const STACK_ACTIONS = computed<{ action: StackAction; label: string; danger?: boolean; title?: string }[]>(() => [
+  { action: 'update', label: t('opsServer.card.actUpdate'), danger: true, title: t('opsServer.card.actUpdateTitle') },
+  { action: 'start', label: t('opsServer.card.actStart') },
+  { action: 'restart', label: t('opsServer.card.actRestart'), danger: true },
+  { action: 'stop', label: t('opsServer.card.actStop'), danger: true },
+  { action: 'down', label: t('opsServer.card.actDown'), danger: true },
+])
 
 async function doStackAction(s: StackInfo, action: StackAction, label: string, danger?: boolean): Promise<void> {
   // 「更新」不再据列表 configFiles 预拦:老 compose v1 标签恒空,后端会三级解析(受管目录/探测)
   // 兜底找 compose 文件,真定位不到才返回清晰错误。预拦会误伤可探测到文件的存量 stack。
   if (danger) {
     const ok = await confirm.open({
-      title: `对 Stack ${s.name} 执行${label}?`,
+      title: t('opsServer.card.stackActionConfirmTitle', { name: s.name, label }),
       body:
         action === 'down'
-          ? '将销毁该 compose 项目的所有容器与网络(数据卷默认保留)。'
+          ? t('opsServer.card.stackDownBody')
           : action === 'update'
-            ? '将按现有 compose 文件拉取新镜像并重建有变化的服务(docker compose up -d --pull always),实现升级。'
-            : `将对该 compose 项目的所有服务执行${label}。`,
+            ? t('opsServer.card.stackUpdateBody')
+            : t('opsServer.card.stackGenericBody', { label }),
       confirmLabel: label,
       variant: 'danger',
     })
@@ -493,15 +497,15 @@ async function doStackAction(s: StackInfo, action: StackAction, label: string, d
   try {
     const res = await stackAction(props.group.serverId, s.name, action, s.configFiles)
     if (res.ok) {
-      toast.success(`Stack ${label}成功`, { detail: s.name })
+      toast.success(t('opsServer.card.stackActionSuccess', { label }), { detail: s.name })
       void loadStacks()
       emit('changed')
     } else {
-      toast.error(`Stack ${label}失败`, { detail: res.error || '远端命令以非零状态退出' })
+      toast.error(t('opsServer.card.stackActionFail', { label }), { detail: res.error || t('opsServer.card.errNonZeroExit') })
     }
   } catch (err) {
-    toast.error(`Stack ${label}失败`, {
-      detail: err instanceof HttpError ? (err.apiError?.message ?? `请求失败(${err.status})`) : '网络错误',
+    toast.error(t('opsServer.card.stackActionFail', { label }), {
+      detail: err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errReqFail', { status: err.status })) : t('opsServer.card.errNetwork'),
     })
   } finally {
     busyStack.value = ''
@@ -529,7 +533,7 @@ async function toggleDetail(s: StackInfo): Promise<void> {
     const res = await getStackDetail(props.group.serverId, s.name)
     if (!res.reachable || !res.runtime) {
       detailState.value = 'error'
-      detailError.value = res.error || '该服务器不可达'
+      detailError.value = res.error || t('opsServer.card.errUnreachable')
       return
     }
     stackDetail.value = res
@@ -538,7 +542,7 @@ async function toggleDetail(s: StackInfo): Promise<void> {
   } catch (err) {
     detailState.value = 'error'
     detailError.value =
-      err instanceof HttpError ? (err.apiError?.message ?? `加载详情失败(${err.status})`) : '加载详情失败'
+      err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errLoadDetail', { status: err.status })) : t('opsServer.card.errLoadDetailPlain')
   }
 }
 
@@ -547,13 +551,13 @@ async function doSaveStack(): Promise<void> {
   if (!d || !d.editable || savingStack.value) return
   const compose = editCompose.value.trim()
   if (!compose) {
-    toast.error('无法保存', { detail: 'compose 内容不能为空' })
+    toast.error(t('opsServer.card.cannotSave'), { detail: t('opsServer.card.composeEmpty') })
     return
   }
   const ok = await confirm.open({
-    title: `保存并重部署 Stack ${d.name}?`,
-    body: `将把编辑后的 compose 写回 ${d.configFiles} 并执行 docker compose up -d(就地升级,有变化的服务会被重建)。`,
-    confirmLabel: '保存并重部署',
+    title: t('opsServer.card.saveStackTitle', { name: d.name }),
+    body: t('opsServer.card.saveStackBody', { path: d.configFiles }),
+    confirmLabel: t('opsServer.card.saveStackConfirm'),
     variant: 'danger',
   })
   if (!ok) return
@@ -561,15 +565,15 @@ async function doSaveStack(): Promise<void> {
   try {
     const res = await saveStackCompose(props.group.serverId, d.name, compose, d.configFiles)
     if (res.ok) {
-      toast.success('已保存并重部署', { detail: d.name })
+      toast.success(t('opsServer.card.savedRedeployed'), { detail: d.name })
       void loadStacks()
       emit('changed')
     } else {
-      toast.error('保存失败', { detail: res.error || '远端命令以非零状态退出' })
+      toast.error(t('opsServer.card.saveFail'), { detail: res.error || t('opsServer.card.errNonZeroExit') })
     }
   } catch (err) {
-    toast.error('保存失败', {
-      detail: err instanceof HttpError ? (err.apiError?.message ?? `请求失败(${err.status})`) : '网络错误',
+    toast.error(t('opsServer.card.saveFail'), {
+      detail: err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errReqFail', { status: err.status })) : t('opsServer.card.errNetwork'),
     })
   } finally {
     savingStack.value = false
@@ -586,19 +590,19 @@ async function aiGenCompose(): Promise<void> {
   try {
     const res = await generateCompose(nl)
     if (!res.available) {
-      toast.error('AI 未配置', { detail: '请到「设置 › AI」配置模型' })
+      toast.error(t('opsServer.card.aiNotConfigured'), { detail: t('opsServer.card.aiConfigHint') })
       return
     }
     if (res.yaml) {
       deployCompose.value = res.yaml
       if (!deployName.value.trim()) deployName.value = 'ai-stack'
-      toast.success('AI 已生成 compose', { detail: '请核对后再部署' })
+      toast.success(t('opsServer.card.aiComposeGenerated'), { detail: t('opsServer.card.aiComposeVerify') })
     } else {
-      toast.error('生成失败', { detail: res.reason || '模型未产出 compose' })
+      toast.error(t('opsServer.card.genFail'), { detail: res.reason || t('opsServer.card.modelNoCompose') })
     }
   } catch (err) {
-    toast.error('生成失败', {
-      detail: err instanceof HttpError ? (err.apiError?.message ?? '请求失败') : '网络错误',
+    toast.error(t('opsServer.card.genFail'), {
+      detail: err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errReqFailPlain')) : t('opsServer.card.errNetwork'),
     })
   } finally {
     aiComposeBusy.value = false
@@ -613,18 +617,18 @@ async function doDeploy(): Promise<void> {
   try {
     const res = await deployStack(props.group.serverId, name, compose)
     if (res.ok) {
-      toast.success('Stack 已部署', { detail: name })
+      toast.success(t('opsServer.card.stackDeployed'), { detail: name })
       showDeploy.value = false
       deployName.value = ''
       deployCompose.value = ''
       void loadStacks()
       emit('changed')
     } else {
-      toast.error('部署失败', { detail: res.error || 'docker compose up 失败' })
+      toast.error(t('opsServer.card.deployFail'), { detail: res.error || t('opsServer.card.composeUpFail') })
     }
   } catch (err) {
-    toast.error('部署失败', {
-      detail: err instanceof HttpError ? (err.apiError?.message ?? `请求失败(${err.status})`) : '网络错误',
+    toast.error(t('opsServer.card.deployFail'), {
+      detail: err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errReqFail', { status: err.status })) : t('opsServer.card.errNetwork'),
     })
   } finally {
     deploying.value = false
@@ -638,15 +642,15 @@ async function doPull(): Promise<void> {
   try {
     const res = await pullImage(props.group.serverId, ref)
     if (res.ok) {
-      toast.success('镜像已拉取', { detail: ref })
+      toast.success(t('opsServer.card.imagePulled'), { detail: ref })
       pullRef.value = ''
       void loadImages()
     } else {
-      toast.error('拉取失败', { detail: res.error || '请检查镜像名与网络' })
+      toast.error(t('opsServer.card.pullFail'), { detail: res.error || t('opsServer.card.pullCheck') })
     }
   } catch (err) {
-    toast.error('拉取失败', {
-      detail: err instanceof HttpError ? (err.apiError?.message ?? `请求失败(${err.status})`) : '网络错误',
+    toast.error(t('opsServer.card.pullFail'), {
+      detail: err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errReqFail', { status: err.status })) : t('opsServer.card.errNetwork'),
     })
   } finally {
     pulling.value = false
@@ -656,9 +660,9 @@ async function doPull(): Promise<void> {
 async function doRemoveImage(img: ImageInfo): Promise<void> {
   const tagStr = repoTag(img)
   const ok = await confirm.open({
-    title: `删除镜像 ${tagStr}?`,
-    body: '将执行 docker rmi 删除该镜像。若有容器正在使用会删除失败。',
-    confirmLabel: '删除镜像',
+    title: t('opsServer.card.removeImageConfirmTitle', { tag: tagStr }),
+    body: t('opsServer.card.removeImageBody'),
+    confirmLabel: t('opsServer.card.removeImageConfirm'),
     variant: 'danger',
   })
   if (!ok) return
@@ -666,14 +670,14 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
   try {
     const res = await removeImage(props.group.serverId, img.id, false)
     if (res.ok) {
-      toast.success('镜像已删除', { detail: tagStr })
+      toast.success(t('opsServer.card.imageRemoved'), { detail: tagStr })
       void loadImages()
     } else {
-      toast.error('删除失败', { detail: res.error || '镜像可能正被容器使用' })
+      toast.error(t('opsServer.card.removeFail'), { detail: res.error || t('opsServer.card.imageInUse') })
     }
   } catch (err) {
-    toast.error('删除失败', {
-      detail: err instanceof HttpError ? (err.apiError?.message ?? `请求失败(${err.status})`) : '网络错误',
+    toast.error(t('opsServer.card.removeFail'), {
+      detail: err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errReqFail', { status: err.status })) : t('opsServer.card.errNetwork'),
     })
   } finally {
     busyImage.value = ''
@@ -701,10 +705,10 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
             <BrandDocker v-if="group.reachable && group.runtime" />
             <AlertTriangle v-else />
           </NIcon>
-          {{ !group.reachable ? '不可达' : group.runtime ? runtimeLabel : '无容器运行时' }}
+          {{ !group.reachable ? t('opsServer.card.unreachable') : group.runtime ? runtimeLabel : t('opsServer.card.noRuntime') }}
         </span>
         <span v-if="group.reachable && group.runtime" class="panel__count mono">
-          {{ group.running }}/{{ group.total }} 运行
+          {{ t('opsServer.card.runningCount', { running: group.running, total: group.total }) }}
         </span>
       </div>
     </header>
@@ -717,31 +721,31 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
       <!-- 卡片内 tab:容器 / 镜像 -->
       <div class="card-tabs" role="tablist">
         <button class="ctab" :class="{ 'ctab--active': tab === 'containers' }" role="tab" @click="switchTab('containers')">
-          容器 <span class="ctab__n">{{ group.total }}</span>
+          {{ t('opsServer.card.tabContainers') }} <span class="ctab__n">{{ group.total }}</span>
         </button>
         <button class="ctab" :class="{ 'ctab--active': tab === 'images' }" role="tab" @click="switchTab('images')">
-          镜像 <span v-if="imgState === 'loaded'" class="ctab__n">{{ images.length }}</span>
+          {{ t('opsServer.card.tabImages') }} <span v-if="imgState === 'loaded'" class="ctab__n">{{ images.length }}</span>
         </button>
         <button class="ctab" :class="{ 'ctab--active': tab === 'stacks' }" role="tab" @click="switchTab('stacks')">
-          Stacks <span v-if="stackState === 'loaded'" class="ctab__n">{{ stacks.length }}</span>
+          {{ t('opsServer.card.tabStacks') }} <span v-if="stackState === 'loaded'" class="ctab__n">{{ stacks.length }}</span>
         </button>
         <button class="ctab" :class="{ 'ctab--active': tab === 'volumes' }" role="tab" @click="switchTab('volumes')">
-          卷 <span v-if="volState === 'loaded'" class="ctab__n">{{ volumes.length }}</span>
+          {{ t('opsServer.card.tabVolumes') }} <span v-if="volState === 'loaded'" class="ctab__n">{{ volumes.length }}</span>
         </button>
         <button class="ctab" :class="{ 'ctab--active': tab === 'networks' }" role="tab" @click="switchTab('networks')">
-          网络 <span v-if="netState === 'loaded'" class="ctab__n">{{ networks.length }}</span>
+          {{ t('opsServer.card.tabNetworks') }} <span v-if="netState === 'loaded'" class="ctab__n">{{ networks.length }}</span>
         </button>
       </div>
 
       <!-- 容器 tab -->
       <template v-if="tab === 'containers'">
         <div v-if="group.total > 0" class="cstats-bar">
-          <span class="cstats-bar__label">实时资源(docker stats)</span>
-          <button class="op op--ghost" :disabled="statsLoading" :title="'刷新实时资源采样'" @click="loadStats">
-            {{ statsLoading ? '采样中…' : '刷新' }}
+          <span class="cstats-bar__label">{{ t('opsServer.card.realtimeStats') }}</span>
+          <button class="op op--ghost" :disabled="statsLoading" :title="t('opsServer.card.refreshStatsTitle')" @click="loadStats">
+            {{ statsLoading ? t('opsServer.card.sampling') : t('common.refresh') }}
           </button>
         </div>
-        <p v-if="group.total === 0" class="panel__hint">该服务器暂无容器。</p>
+        <p v-if="group.total === 0" class="panel__hint">{{ t('opsServer.card.noContainers') }}</p>
         <p v-else-if="visibleContainers.length === 0" class="panel__hint">{{ emptyContainersHint }}</p>
         <ul v-else class="clist" role="list">
           <li v-for="c in visibleContainers" :key="c.id" class="crow" :class="{ 'crow--busy': rowBusy(c.id), 'crow--bulk': bulkMode }">
@@ -749,7 +753,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
               <input
                 type="checkbox"
                 :checked="isSelected(c.names)"
-                :aria-label="`选择容器 ${c.names}`"
+                :aria-label="t('opsServer.card.selectContainerAria', { name: c.names })"
                 @change="emit('toggle-select', c.names)"
               />
             </label>
@@ -767,9 +771,9 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
               <div
                 v-if="c.state === 'running' && statFor(c.names)"
                 class="crow__stats mono"
-                :title="`网络 ${statFor(c.names)!.netIO} · 块 ${statFor(c.names)!.blockIO}`"
+                :title="t('opsServer.card.statTitle', { net: statFor(c.names)!.netIO, block: statFor(c.names)!.blockIO })"
               >
-                CPU {{ statFor(c.names)!.cpuPerc }} · 内存 {{ statFor(c.names)!.memUsage }} ({{ statFor(c.names)!.memPerc }})
+                {{ t('opsServer.card.statLine', { cpu: statFor(c.names)!.cpuPerc, mem: statFor(c.names)!.memUsage, memPerc: statFor(c.names)!.memPerc }) }}
               </div>
             </div>
             <div class="crow__actions">
@@ -784,10 +788,10 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
               >
                 {{ a.label }}
               </button>
-              <button class="op op--ghost" title="容器详情(docker inspect)" @click="emit('inspect', c)">详情</button>
-              <button class="op op--ai" title="AI 诊断:取日志 → 根因 + 修复建议" @click="emit('diagnose', c)">✦ AI</button>
-              <button class="op op--ghost" title="查看容器日志(docker logs)" @click="emit('logs', c)">日志</button>
-              <button class="op op--ghost" :disabled="rowBusy(c.id)" title="进入容器终端(docker exec -it)" @click="emit('terminal', c)">终端</button>
+              <button class="op op--ghost" :title="t('opsServer.card.inspectTitle')" @click="emit('inspect', c)">{{ t('opsServer.card.detail') }}</button>
+              <button class="op op--ai" :title="t('opsServer.card.aiDiagnoseTitle')" @click="emit('diagnose', c)">{{ t('opsServer.card.ai') }}</button>
+              <button class="op op--ghost" :title="t('opsServer.card.logsTitle')" @click="emit('logs', c)">{{ t('opsServer.card.logs') }}</button>
+              <button class="op op--ghost" :disabled="rowBusy(c.id)" :title="t('opsServer.card.terminalTitle')" @click="emit('terminal', c)">{{ t('opsServer.card.terminal') }}</button>
             </div>
           </li>
         </ul>
@@ -797,17 +801,17 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
       <template v-else-if="tab === 'images'">
         <div class="img-toolbar">
           <div class="pull">
-            <input v-model="pullRef" class="pull__in mono" placeholder="拉取镜像,例:nginx:latest" @keyup.enter="doPull" />
+            <input v-model="pullRef" class="pull__in mono" :placeholder="t('opsServer.card.pullPlaceholder')" @keyup.enter="doPull" />
             <button class="pull__btn" :disabled="pulling || !pullRef.trim()" @click="doPull">
-              {{ pulling ? '拉取中…' : '拉取' }}
+              {{ pulling ? t('opsServer.card.pulling') : t('opsServer.card.pull') }}
             </button>
           </div>
           <span class="grow" />
-          <button class="refresh" :disabled="imgState === 'loading'" @click="loadImages">↻ 刷新</button>
+          <button class="refresh" :disabled="imgState === 'loading'" @click="loadImages">{{ t('opsServer.card.refresh') }}</button>
         </div>
         <p v-if="imgState === 'error'" class="panel__hint panel__hint--down">⚠ {{ imgError }}</p>
-        <p v-else-if="imgState === 'loading' && images.length === 0" class="panel__hint">正在加载镜像…</p>
-        <p v-else-if="images.length === 0" class="panel__hint">该服务器暂无镜像。</p>
+        <p v-else-if="imgState === 'loading' && images.length === 0" class="panel__hint">{{ t('opsServer.card.loadingImages') }}</p>
+        <p v-else-if="images.length === 0" class="panel__hint">{{ t('opsServer.card.noImages') }}</p>
         <ul v-else class="ilist" role="list">
           <li v-for="img in images" :key="img.id + repoTag(img)" class="irow" :class="{ 'irow--busy': busyImage === img.id }">
             <div class="irow__main">
@@ -817,7 +821,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
             <div class="irow__size mono">{{ img.size }}</div>
             <div class="irow__age">{{ img.createdSince }}</div>
             <div class="irow__act">
-              <button class="op op--ghost" :disabled="busyImage === img.id" title="删除镜像(docker rmi)" @click="doRemoveImage(img)">删除</button>
+              <button class="op op--ghost" :disabled="busyImage === img.id" :title="t('opsServer.card.removeImageTitle')" @click="doRemoveImage(img)">{{ t('opsServer.card.remove') }}</button>
             </div>
           </li>
         </ul>
@@ -826,9 +830,9 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
       <!-- Stacks tab -->
       <template v-else-if="tab === 'stacks'">
         <div class="img-toolbar">
-          <button class="pull__btn" @click="showDeploy = !showDeploy">{{ showDeploy ? '收起部署' : '+ 部署 Stack' }}</button>
+          <button class="pull__btn" @click="showDeploy = !showDeploy">{{ showDeploy ? t('opsServer.card.collapseDeploy') : t('opsServer.card.deployStack') }}</button>
           <span class="grow" />
-          <button class="refresh" :disabled="stackState === 'loading'" @click="loadStacks">↻ 刷新</button>
+          <button class="refresh" :disabled="stackState === 'loading'" @click="loadStacks">{{ t('opsServer.card.refresh') }}</button>
         </div>
 
         <!-- 部署表单(贴 compose yaml) -->
@@ -838,31 +842,31 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
             <input
               v-model="aiComposeNl"
               class="deploy__ainl mono"
-              placeholder="用中文描述,如:nginx + redis,nginx 映射 8080,redis 持久化"
+              :placeholder="t('opsServer.card.aiComposePlaceholder')"
               @keyup.enter="aiGenCompose"
             />
             <button class="pull__btn" :disabled="aiComposeBusy || !aiComposeNl.trim()" @click="aiGenCompose">
-              {{ aiComposeBusy ? '生成中…' : 'AI 生成' }}
+              {{ aiComposeBusy ? t('opsServer.card.aiGenerating') : t('opsServer.card.aiGenerate') }}
             </button>
           </div>
-          <input v-model="deployName" class="deploy__name mono" placeholder="项目名,例:my-stack" />
+          <input v-model="deployName" class="deploy__name mono" :placeholder="t('opsServer.card.deployNamePlaceholder')" />
           <textarea
             v-model="deployCompose"
             class="deploy__yaml mono"
             rows="8"
-            placeholder="粘贴 docker-compose.yml 内容…&#10;services:&#10;  web:&#10;    image: nginx:latest&#10;    ports: [&quot;8088:80&quot;]"
+            :placeholder="t('opsServer.card.deployYamlPlaceholder')"
           />
           <div class="deploy__act">
-            <span class="deploy__hint">将写入主机受管目录并 docker compose up -d</span>
+            <span class="deploy__hint">{{ t('opsServer.card.deployHint') }}</span>
             <button class="pull__btn" :disabled="deploying || !deployName.trim() || !deployCompose.trim()" @click="doDeploy">
-              {{ deploying ? '部署中…' : '部署' }}
+              {{ deploying ? t('opsServer.card.deploying') : t('opsServer.card.deploy') }}
             </button>
           </div>
         </div>
 
         <p v-if="stackState === 'error'" class="panel__hint panel__hint--down">⚠ {{ stackError }}</p>
-        <p v-else-if="stackState === 'loading' && stacks.length === 0" class="panel__hint">正在加载 Stacks…</p>
-        <p v-else-if="stacks.length === 0" class="panel__hint">该服务器暂无 compose 项目。点「+ 部署 Stack」贴 yaml 部署一个。</p>
+        <p v-else-if="stackState === 'loading' && stacks.length === 0" class="panel__hint">{{ t('opsServer.card.loadingStacks') }}</p>
+        <p v-else-if="stacks.length === 0" class="panel__hint">{{ t('opsServer.card.noStacks') }}</p>
         <ul v-else class="ilist" role="list">
           <li
             v-for="s in stacks"
@@ -873,7 +877,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
             <div class="srow__head">
               <button
                 class="srow__toggle"
-                :title="detailName === s.name ? '收起详情' : '查看里面的服务 / compose'"
+                :title="detailName === s.name ? t('opsServer.card.collapseDetailTitle') : t('opsServer.card.viewServicesTitle')"
                 @click="toggleDetail(s)"
               >
                 <span class="srow__caret" :class="{ 'srow__caret--open': detailName === s.name }">▸</span>
@@ -897,10 +901,10 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
 
             <!-- 展开:服务/容器 + compose -->
             <div v-if="detailName === s.name" class="sdetail">
-              <p v-if="detailState === 'loading'" class="panel__hint">正在加载详情…</p>
+              <p v-if="detailState === 'loading'" class="panel__hint">{{ t('opsServer.card.loadingDetail') }}</p>
               <p v-else-if="detailState === 'error'" class="panel__hint panel__hint--down">⚠ {{ detailError }}</p>
               <template v-else-if="detailState === 'loaded' && stackDetail">
-                <div class="sdetail__sub">服务 / 容器 · {{ stackDetail.running }}/{{ stackDetail.total }} 运行</div>
+                <div class="sdetail__sub">{{ t('opsServer.card.servicesSub', { running: stackDetail.running, total: stackDetail.total }) }}</div>
                 <ul class="svc" role="list">
                   <li v-for="svc in stackDetail.services" :key="svc.name" class="svc__row">
                     <span class="svc__dot" :class="`svc__dot--${svc.state}`" :title="svc.state" />
@@ -912,7 +916,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
                 </ul>
 
                 <div class="sdetail__sub sdetail__sub--gap">
-                  compose 文件
+                  {{ t('opsServer.card.composeFile') }}
                   <span v-if="stackDetail.composeSource === 'file'" class="sdetail__path mono" :title="stackDetail.configFiles">
                     · {{ stackDetail.configFiles }}
                   </span>
@@ -921,7 +925,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
                   <textarea v-model="editCompose" class="deploy__yaml mono" rows="12" spellcheck="false" />
                   <div class="deploy__act">
                     <span class="deploy__hint">
-                      {{ stackDetail.editable ? '保存将写回原文件并 docker compose up -d(就地升级)' : '多文件 compose,只读不可在线保存' }}
+                      {{ stackDetail.editable ? t('opsServer.card.saveWritebackHint') : t('opsServer.card.multiFileReadonlyHint') }}
                     </span>
                     <button
                       v-if="stackDetail.editable"
@@ -929,12 +933,12 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
                       :disabled="savingStack || !editCompose.trim()"
                       @click="doSaveStack"
                     >
-                      {{ savingStack ? '保存中…' : '保存并重部署' }}
+                      {{ savingStack ? t('opsServer.card.saving') : t('opsServer.card.saveRedeploy') }}
                     </button>
                   </div>
                 </template>
                 <p v-else class="panel__hint">
-                  该 Stack 为外部部署、未记录 compose 路径,无法在线读取/编辑。可用上方「+ 部署 Stack」以同项目名「{{ stackDetail.name }}」粘贴 compose 接管。
+                  {{ t('opsServer.card.externalStackHint', { name: stackDetail.name }) }}
                 </p>
               </template>
             </div>
@@ -946,15 +950,15 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
       <template v-else-if="tab === 'volumes'">
         <div class="img-toolbar">
           <div class="pull">
-            <input v-model="newVol" class="pull__in mono" placeholder="新建数据卷名" @keyup.enter="doCreateVol" />
-            <button class="pull__btn" :disabled="busyVol === '@create' || !newVol.trim()" @click="doCreateVol">创建</button>
+            <input v-model="newVol" class="pull__in mono" :placeholder="t('opsServer.card.newVolPlaceholder')" @keyup.enter="doCreateVol" />
+            <button class="pull__btn" :disabled="busyVol === '@create' || !newVol.trim()" @click="doCreateVol">{{ t('opsServer.card.create') }}</button>
           </div>
           <span class="grow" />
-          <button class="refresh" :disabled="volState === 'loading'" @click="loadVolumes">↻ 刷新</button>
+          <button class="refresh" :disabled="volState === 'loading'" @click="loadVolumes">{{ t('opsServer.card.refresh') }}</button>
         </div>
         <p v-if="volState === 'error'" class="panel__hint panel__hint--down">⚠ {{ volError }}</p>
-        <p v-else-if="volState === 'loading' && volumes.length === 0" class="panel__hint">正在加载数据卷…</p>
-        <p v-else-if="volumes.length === 0" class="panel__hint">该服务器暂无数据卷。</p>
+        <p v-else-if="volState === 'loading' && volumes.length === 0" class="panel__hint">{{ t('opsServer.card.loadingVolumes') }}</p>
+        <p v-else-if="volumes.length === 0" class="panel__hint">{{ t('opsServer.card.noVolumes') }}</p>
         <ul v-else class="ilist" role="list">
           <li v-for="v in volumes" :key="v.name" class="srow" :class="{ 'irow--busy': busyVol === v.name }">
             <div class="srow__main">
@@ -962,7 +966,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
             </div>
             <div class="srow__status mono">{{ v.driver }}</div>
             <div class="srow__act">
-              <button class="op op--ghost" :disabled="busyVol === v.name" @click="doRemoveVol(v)">删除</button>
+              <button class="op op--ghost" :disabled="busyVol === v.name" @click="doRemoveVol(v)">{{ t('opsServer.card.remove') }}</button>
             </div>
           </li>
         </ul>
@@ -972,15 +976,15 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
       <template v-else>
         <div class="img-toolbar">
           <div class="pull">
-            <input v-model="newNet" class="pull__in mono" placeholder="新建网络名(默认 bridge 驱动)" @keyup.enter="doCreateNet" />
-            <button class="pull__btn" :disabled="busyNet === '@create' || !newNet.trim()" @click="doCreateNet">创建</button>
+            <input v-model="newNet" class="pull__in mono" :placeholder="t('opsServer.card.newNetPlaceholder')" @keyup.enter="doCreateNet" />
+            <button class="pull__btn" :disabled="busyNet === '@create' || !newNet.trim()" @click="doCreateNet">{{ t('opsServer.card.create') }}</button>
           </div>
           <span class="grow" />
-          <button class="refresh" :disabled="netState === 'loading'" @click="loadNetworks">↻ 刷新</button>
+          <button class="refresh" :disabled="netState === 'loading'" @click="loadNetworks">{{ t('opsServer.card.refresh') }}</button>
         </div>
         <p v-if="netState === 'error'" class="panel__hint panel__hint--down">⚠ {{ netError }}</p>
-        <p v-else-if="netState === 'loading' && networks.length === 0" class="panel__hint">正在加载网络…</p>
-        <p v-else-if="networks.length === 0" class="panel__hint">该服务器暂无网络。</p>
+        <p v-else-if="netState === 'loading' && networks.length === 0" class="panel__hint">{{ t('opsServer.card.loadingNetworks') }}</p>
+        <p v-else-if="networks.length === 0" class="panel__hint">{{ t('opsServer.card.noNetworks') }}</p>
         <ul v-else class="ilist" role="list">
           <li v-for="n in networks" :key="n.id">
             <div class="srow" :class="{ 'irow--busy': busyNet === n.id }">
@@ -996,33 +1000,33 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
                 <button
                   class="op op--ghost"
                   :disabled="busyNet === n.id || BUILTIN_NETWORKS.has(n.name)"
-                  :title="BUILTIN_NETWORKS.has(n.name) ? '内置网络不可删除' : '删除网络(docker network rm)'"
+                  :title="BUILTIN_NETWORKS.has(n.name) ? t('opsServer.card.builtinNetUndeletable') : t('opsServer.card.removeNetTitle')"
                   @click="doRemoveNet(n)"
                 >
-                  删除
+                  {{ t('opsServer.card.remove') }}
                 </button>
               </div>
             </div>
             <!-- 展开:该网络上连着的容器 -->
             <div v-if="expandedNet === n.name" class="netdetail">
-              <p v-if="netConnState === 'loading'" class="netdetail__hint">正在读取连接的容器…</p>
+              <p v-if="netConnState === 'loading'" class="netdetail__hint">{{ t('opsServer.card.loadingConns') }}</p>
               <p v-else-if="netConnState === 'error'" class="netdetail__hint netdetail__hint--err">⚠ {{ netConnError }}</p>
-              <p v-else-if="netConns.length === 0" class="netdetail__hint">该网络上暂无容器连接。</p>
+              <p v-else-if="netConns.length === 0" class="netdetail__hint">{{ t('opsServer.card.noConns') }}</p>
               <ul v-else class="connlist" role="list">
                 <li v-for="c in netConns" :key="c.id" class="connrow" :class="{ 'irow--busy': busyConn === c.id }">
                   <span class="connrow__name">{{ c.name }}</span>
                   <span class="connrow__ip mono">{{ c.ipv4 || '—' }}</span>
-                  <button class="op op--ghost" :disabled="busyConn === c.id" @click="doDisconnect(n.name, c)">断开</button>
+                  <button class="op op--ghost" :disabled="busyConn === c.id" @click="doDisconnect(n.name, c)">{{ t('opsServer.card.disconnect') }}</button>
                 </li>
               </ul>
               <!-- 连接容器到该网络 -->
               <div v-if="netConnState === 'loaded'" class="connadd">
                 <select v-model="connectName" class="connadd__sel" :disabled="attachableContainers().length === 0">
-                  <option value="">{{ attachableContainers().length ? '选择要连接的容器…' : '无可连接的容器' }}</option>
+                  <option value="">{{ attachableContainers().length ? t('opsServer.card.selectAttachable') : t('opsServer.card.noAttachable') }}</option>
                   <option v-for="name in attachableContainers()" :key="name" :value="name">{{ name }}</option>
                 </select>
                 <button class="op op--default" :disabled="!connectName || busyConn === '@connect'" @click="doConnect(n.name)">
-                  连接
+                  {{ t('opsServer.card.connect') }}
                 </button>
               </div>
             </div>

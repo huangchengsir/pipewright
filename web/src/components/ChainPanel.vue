@@ -10,6 +10,7 @@
  * Embedded inside TriggersPanel after ConcurrencyPanel.
  */
 import { ref, computed, onMounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { getChain, saveChain, type ChainTarget } from '../api/chain'
 import { listProjects, type Project } from '../api/projects'
 import { HttpError } from '../api/http'
@@ -17,6 +18,8 @@ import { HttpError } from '../api/http'
 const props = defineProps<{
   projectId: string
 }>()
+
+const { t } = useI18n()
 
 type LoadState = 'idle' | 'loading' | 'error'
 
@@ -88,7 +91,7 @@ function removeRow(key: number): void {
 function onProjectChange(row: ChainRow): void {
   saveBanner.value = ''
   saveSuccess.value = false
-  row.projectError = row.downstreamProjectId ? '' : '请选择下游项目'
+  row.projectError = row.downstreamProjectId ? '' : t('projectPanels.chain.errSelectDownstream')
 }
 
 // ─── Load ──────────────────────────────────────────────────────────────────────
@@ -107,7 +110,7 @@ async function load(): Promise<void> {
     loadState.value = 'idle'
   } catch (err) {
     loadState.value = 'error'
-    loadError.value = err instanceof HttpError ? err.message : '加载串联配置失败'
+    loadError.value = err instanceof HttpError ? err.message : t('projectPanels.chain.errLoad')
   }
 }
 
@@ -118,7 +121,7 @@ async function handleSave(): Promise<void> {
   let hasError = false
   for (const row of rows.value) {
     if (!row.downstreamProjectId) {
-      row.projectError = '请选择下游项目'
+      row.projectError = t('projectPanels.chain.errSelectDownstream')
       hasError = true
     }
   }
@@ -138,24 +141,24 @@ async function handleSave(): Promise<void> {
       }),
     )
     saveSuccess.value = true
-    saveBanner.value = '串联配置已保存'
+    saveBanner.value = t('projectPanels.chain.savedOk')
   } catch (err) {
     saveSuccess.value = false
     if (err instanceof HttpError) {
       const code = err.apiError?.code
       if (code === 'self_chain') {
-        saveBanner.value = '下游目标不能是本项目自身'
+        saveBanner.value = t('projectPanels.chain.errSelfChain')
       } else if (code === 'downstream_not_found') {
-        saveBanner.value = '所选下游项目不存在,请刷新后重试'
+        saveBanner.value = t('projectPanels.chain.errDownstreamNotFound')
       } else if (code === 'too_many_targets') {
-        saveBanner.value = '下游目标数量超过上限'
+        saveBanner.value = t('projectPanels.chain.errTooManyTargets')
       } else if (code === 'duplicate_target') {
-        saveBanner.value = '同一下游项目 + 分支不可重复配置'
+        saveBanner.value = t('projectPanels.chain.errDuplicateTarget')
       } else {
-        saveBanner.value = err.apiError?.message ?? `保存失败(${err.status})`
+        saveBanner.value = err.apiError?.message ?? t('projectPanels.chain.errSaveFailed', { status: err.status })
       }
     } else {
-      saveBanner.value = '保存失败,请重试'
+      saveBanner.value = t('projectPanels.chain.errSaveRetry')
     }
   } finally {
     saveSubmitting.value = false
@@ -176,13 +179,13 @@ watch(() => props.projectId, load)
           <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
         </svg>
       </span>
-      <h2 id="chain-heading" class="card-title">流水线串联</h2>
-      <span class="card-sub">本流水线成功后自动触发下游项目</span>
+      <h2 id="chain-heading" class="card-title">{{ t('projectPanels.chain.title') }}</h2>
+      <span class="card-sub">{{ t('projectPanels.chain.sub') }}</span>
     </div>
 
     <div class="card-body">
       <!-- Loading -->
-      <p v-if="loadState === 'loading'" class="chain-loading">加载中…</p>
+      <p v-if="loadState === 'loading'" class="chain-loading">{{ t('projectPanels.chain.loading') }}</p>
 
       <!-- Load error -->
       <p v-else-if="loadState === 'error'" class="chain-error" role="alert">{{ loadError }}</p>
@@ -190,9 +193,9 @@ watch(() => props.projectId, load)
       <template v-else>
         <!-- Column header (only shown when rows exist) -->
         <div v-if="rows.length > 0" class="chain-header" aria-hidden="true">
-          <span>下游项目</span>
-          <span>触发分支</span>
-          <span>启用</span>
+          <span>{{ t('projectPanels.chain.colDownstream') }}</span>
+          <span>{{ t('projectPanels.chain.colTriggerBranch') }}</span>
+          <span>{{ t('projectPanels.chain.colEnabled') }}</span>
           <span></span>
         </div>
 
@@ -209,12 +212,12 @@ watch(() => props.projectId, load)
               v-model="row.downstreamProjectId"
               class="chain-select"
               :class="{ 'chain-select--error': row.projectError }"
-              :aria-label="`下游项目(行 ${row._key})`"
+              :aria-label="t('projectPanels.chain.downstreamAria', { key: row._key })"
               :aria-invalid="row.projectError ? 'true' : undefined"
               :disabled="saveSubmitting"
               @change="onProjectChange(row)"
             >
-              <option value="" disabled>选择项目…</option>
+              <option value="" disabled>{{ t('projectPanels.chain.selectProject') }}</option>
               <option
                 v-for="proj in availableProjects"
                 :key="proj.id"
@@ -237,9 +240,9 @@ watch(() => props.projectId, load)
                 v-model="row.branch"
                 type="text"
                 class="chain-input chain-input--mono"
-                placeholder="默认分支"
+                :placeholder="t('projectPanels.chain.branchPlaceholder')"
                 autocomplete="off"
-                :aria-label="`触发分支(行 ${row._key})`"
+                :aria-label="t('projectPanels.chain.triggerBranchAria', { key: row._key })"
                 :disabled="saveSubmitting"
               />
             </div>
@@ -253,13 +256,13 @@ watch(() => props.projectId, load)
               :class="{ 'chain-toggle--on': row.enabled }"
               role="switch"
               :aria-checked="row.enabled"
-              :aria-label="`启用下游触发 ${row.downstreamProjectId ? projectName(row.downstreamProjectId) : '(未选择)'}`"
+              :aria-label="t('projectPanels.chain.enableDownstreamAria', { name: row.downstreamProjectId ? projectName(row.downstreamProjectId) : t('projectPanels.chain.unselected') })"
               :disabled="saveSubmitting"
               @click="row.enabled = !row.enabled"
             >
               <span class="chain-toggle-knob" aria-hidden="true" />
             </button>
-            <span class="chain-toggle-label">{{ row.enabled ? '启用' : '停用' }}</span>
+            <span class="chain-toggle-label">{{ row.enabled ? t('projectPanels.chain.enable') : t('projectPanels.chain.disable') }}</span>
           </div>
 
           <!-- Remove row -->
@@ -267,7 +270,7 @@ watch(() => props.projectId, load)
             <button
               type="button"
               class="row-del-btn"
-              :aria-label="`删除下游 ${row.downstreamProjectId ? projectName(row.downstreamProjectId) : '(未选择)'}`"
+              :aria-label="t('projectPanels.chain.deleteDownstreamAria', { name: row.downstreamProjectId ? projectName(row.downstreamProjectId) : t('projectPanels.chain.unselected') })"
               :disabled="saveSubmitting"
               @click="removeRow(row._key)"
             >
@@ -285,7 +288,7 @@ watch(() => props.projectId, load)
             <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
             <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
           </svg>
-          <span>暂无下游串联 — 点击「添加下游」配置成功后自动触发的项目</span>
+          <span>{{ t('projectPanels.chain.empty') }}</span>
         </div>
 
         <!-- Add row -->
@@ -293,7 +296,7 @@ watch(() => props.projectId, load)
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
             <path d="M12 5v14M5 12h14"/>
           </svg>
-          添加下游
+          {{ t('projectPanels.chain.addDownstream') }}
         </button>
 
         <!-- Contextual note -->
@@ -301,7 +304,7 @@ watch(() => props.projectId, load)
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
             <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
           </svg>
-          串联触发仅在本流水线<strong>运行成功</strong>后发起;下游使用其自身凭据和默认分支(可在此覆盖)。分支留空则使用下游项目默认分支。
+          {{ t('projectPanels.chain.notePrefix') }}<strong>{{ t('projectPanels.chain.noteRunSuccess') }}</strong>{{ t('projectPanels.chain.noteSuffix') }}
         </p>
 
         <!-- Save banner -->
@@ -321,7 +324,7 @@ watch(() => props.projectId, load)
             @click="handleSave"
           >
             <span v-if="saveSubmitting" class="spinner" aria-hidden="true" />
-            {{ saveSubmitting ? '保存中…' : '保存串联配置' }}
+            {{ saveSubmitting ? t('projectPanels.chain.saving') : t('projectPanels.chain.save') }}
           </button>
         </div>
       </template>

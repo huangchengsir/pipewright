@@ -78,7 +78,7 @@ const label = computed(() => bandLabel(props.band))
     <header class="dora-card__head">
       <div class="dora-card__titles">
         <h2 class="dora-card__title">{{ title }}</h2>
-        <p class="dora-card__subtitle">{{ subtitle }}</p>
+        <p v-if="subtitle" class="dora-card__subtitle">{{ subtitle }}</p>
       </div>
       <span class="dora-card__band" :data-band="band">{{ label }}</span>
     </header>

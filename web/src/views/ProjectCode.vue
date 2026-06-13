@@ -11,6 +11,7 @@
  */
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { listProjects, type Project } from '../api/projects'
 import { HttpError } from '../api/http'
 import type { SourceEntry } from '../api/source'
@@ -19,6 +20,7 @@ import CodeViewer from '../components/code/CodeViewer.vue'
 
 const route = useRoute()
 const router = useRouter()
+const { t } = useI18n()
 
 const projectId = computed(() => String(route.params.id))
 
@@ -37,14 +39,14 @@ async function loadProject(): Promise<void> {
   try {
     const all = await listProjects()
     project.value = all.find((p) => p.id === projectId.value) ?? null
-    if (!project.value) projectError.value = '项目不存在,请确认项目 ID 正确。'
+    if (!project.value) projectError.value = t('projectCode.projectNotFound')
   } catch (err) {
     projectError.value =
       err instanceof HttpError
         ? err.status === 0
-          ? '无法连接到服务器,请检查后端是否运行后重试。'
-          : err.apiError?.message ?? `加载项目失败(${err.status})`
-        : '加载项目失败'
+          ? t('projectCode.connectFailed')
+          : err.apiError?.message ?? t('projectCode.loadFailedStatus', { status: err.status })
+        : t('projectCode.loadFailed')
   } finally {
     projectLoading.value = false
   }
@@ -93,13 +95,13 @@ function retryProject(): void {
   <div class="code-page">
     <!-- header -->
     <header class="code-top">
-      <nav class="breadcrumb" aria-label="面包屑导航">
-        <router-link to="/projects" class="crumb-link">项目</router-link>
+      <nav class="breadcrumb" :aria-label="t('projectCode.breadcrumbAria')">
+        <router-link to="/projects" class="crumb-link">{{ t('projectCode.breadcrumbProjects') }}</router-link>
         <span class="crumb-sep" aria-hidden="true">/</span>
         <span class="crumb-cur">{{ projectName }}</span>
       </nav>
       <div class="code-top-row">
-        <h1 class="code-title">代码浏览</h1>
+        <h1 class="code-title">{{ t('projectCode.title') }}</h1>
         <span v-if="treeRef" class="code-ref mono" :title="`ref: ${treeRef}`">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <line x1="6" y1="3" x2="6" y2="15" />
@@ -109,20 +111,20 @@ function retryProject(): void {
           </svg>
           {{ treeRef }}
         </span>
-        <span class="code-readonly-tag">只读</span>
+        <span class="code-readonly-tag">{{ t('projectCode.readonly') }}</span>
       </div>
     </header>
 
     <!-- project load error -->
     <div v-if="projectError" class="code-page-error" role="alert">
       <strong>{{ projectError }}</strong>
-      <button type="button" class="code-page-retry" @click="retryProject">↻ 重试</button>
+      <button type="button" class="code-page-retry" @click="retryProject">↻ {{ t('projectCode.retry') }}</button>
     </div>
 
     <!-- project loading skeleton -->
     <div v-else-if="projectLoading" class="code-page-loading">
       <span class="code-page-spin" aria-hidden="true" />
-      <span class="mono">加载项目…</span>
+      <span class="mono">{{ t('projectCode.loadingProject') }}</span>
     </div>
 
     <!-- degraded: 源码暂不可读(整页友好态,不白屏) -->
@@ -133,9 +135,9 @@ function retryProject(): void {
           <path d="M12 9v4M12 17h.01" />
         </svg>
       </div>
-      <strong class="code-degraded-title">源码暂不可读</strong>
+      <strong class="code-degraded-title">{{ t('projectCode.degradedTitle') }}</strong>
       <p class="code-degraded-sub">
-        {{ rootDegradedReason || '仓库克隆失败或当前环境无法访问该仓库。请稍后重试,或确认项目仓库地址与凭据配置正确。' }}
+        {{ rootDegradedReason || t('projectCode.degradedDefault') }}
       </p>
     </div>
 

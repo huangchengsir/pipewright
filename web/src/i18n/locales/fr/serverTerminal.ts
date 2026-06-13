@@ -1,0 +1,57 @@
+export default {
+  serverFallback: 'Serveur',
+  titleConnecting: 'Connexion · ',
+  titleDisconnected: '⚠ Déconnecté · ',
+  titleSuffix: 'Terminal d’exploitation',
+  hostMachine: '(hôte)',
+
+  kindContainer: 'Conteneur',
+  kindHost: 'Hôte',
+  containerLabel: 'Conteneur {label}',
+  hostShell: 'shell de l’hôte',
+
+  connecting: 'Connexion…',
+  connectFailed: 'Échec de la connexion',
+  connect: 'Connecter',
+  reconnect: 'Reconnecter',
+  disconnect: 'Déconnecter',
+  close: 'Fermer',
+
+  enteringContainer: 'Accès au conteneur {name} ({host})…',
+  connectingHost: 'Connexion à l’hôte {host} …',
+  connectFailedDetail: 'Échec de la connexion. Vérifiez votre état de session, l’accessibilité du serveur ou l’existence du conteneur.',
+  sessionEnded: 'La session du terminal est terminée',
+  sessionEndedShort: 'Session terminée',
+
+  terminalAria: 'Terminal interactif du serveur',
+  hintContainer: 'Cliquez sur « Connecter » pour accéder au conteneur {name} (docker exec).',
+  hintHost: 'Cliquez sur « Connecter » pour accéder au shell de l’hôte.',
+
+  latency: 'Latence',
+  copy: 'Copier',
+  paste: 'Coller',
+  interrupt: 'Interrompre',
+  contextMenu: 'Menu contextuel',
+  selectAll: 'Tout sélectionner',
+  clearScreen: 'Effacer l’écran',
+  clipboardSecureWarn: 'Le presse-papiers nécessite https/localhost',
+
+  completeDisableTitle: 'Désactiver la complétion IA',
+  completeEnableTitle: 'Activer la complétion IA',
+  aiComplete: 'Complétion IA',
+  on: 'act.',
+  off: 'désact.',
+
+  aiLauncherTitle: 'Déployer l’assistant d’exploitation IA',
+  aiAssistant: 'Assistant IA',
+
+  charCount: '{n} caractères',
+  toastCopied: 'Copié',
+  toastPasted: 'Collé',
+  toastSigintMsg: 'SIGINT envoyé',
+  toastSigintSub: 'Interrompre la commande en cours',
+  toastClipboardUnavailable: 'Impossible de lire le presse-papiers',
+  toastClipboardSecureCtx: 'Nécessite un contexte sécurisé https / localhost',
+  toastClipboardDenied: 'Lecture du presse-papiers refusée',
+  toastClipboardAllow: 'Veuillez autoriser l’accès au presse-papiers dans le navigateur',
+}

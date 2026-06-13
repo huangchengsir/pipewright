@@ -17,6 +17,7 @@
  * Animation: transform/opacity + prefers-reduced-motion.
  */
 import { reactive, ref, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import AppButton from '../../components/ui/AppButton.vue'
 import { useToast } from '../../composables/useToast'
 import { HttpError } from '../../api/http'
@@ -56,11 +57,12 @@ interface CardState {
 
 // ─── provider metadata ───────────────────────────────────────────────────────
 
+// `label` / `desc` are resolved via i18n at render time (see labelFor / descFor).
 const PROVIDERS: ProviderMeta[] = [
   {
     id: 'gitee',
     label: 'Gitee',
-    desc: '码云',
+    desc: '',
     logoText: 'G',
     logoStyle: 'background:#c71d23;color:#fff',
     hasBaseUrl: false,
@@ -83,17 +85,30 @@ const PROVIDERS: ProviderMeta[] = [
   },
   {
     id: 'custom',
-    label: '自建',
-    desc: '自托管 GitLab / Gitea 等',
+    label: '',
+    desc: '',
     logoText: '⚙',
     logoStyle: 'background:var(--color-inset);color:var(--color-dim)',
     hasBaseUrl: true,
   },
 ]
 
-// ─── toast ────────────────────────────────────────────────────────────────────
+// ─── i18n + toast ──────────────────────────────────────────────────────────────
 
+const { t } = useI18n()
 const toast = useToast()
+
+/** Provider display label — brand names kept verbatim, `custom` localized. */
+function labelFor(id: OAuthProvider): string {
+  return id === 'custom' ? t('settingsOAuth.providerCustomLabel') : cards[id].meta.label
+}
+
+/** Provider sub-description — `gitee` / `custom` localized, others verbatim. */
+function descFor(id: OAuthProvider): string {
+  if (id === 'gitee') return t('settingsOAuth.providerGiteeDesc')
+  if (id === 'custom') return t('settingsOAuth.providerCustomDesc')
+  return cards[id].meta.desc
+}
 
 // ─── load state ───────────────────────────────────────────────────────────────
 
@@ -137,14 +152,14 @@ async function loadApps(): Promise<void> {
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
-        loadError.value = '无法连接到服务器,请检查后端是否运行后重试'
+        loadError.value = t('settingsOAuth.errNoServer')
       } else if (err.apiError?.code === 'vault_unconfigured') {
-        loadError.value = '保险库未配置 master key,请设置 PIPEWRIGHT_MASTER_KEY 环境变量'
+        loadError.value = t('settingsOAuth.errVaultUnconfigured')
       } else {
-        loadError.value = err.apiError?.message ?? `加载失败(${err.status})`
+        loadError.value = err.apiError?.message ?? t('settingsOAuth.errLoadStatus', { status: err.status })
       }
     } else {
-      loadError.value = '加载 OAuth 应用失败,请稍后重试'
+      loadError.value = t('settingsOAuth.errLoadGeneric')
     }
     loadState.value = 'error'
   }
@@ -174,16 +189,16 @@ async function handleSave(provider: OAuthProvider): Promise<void> {
   const hasExistingSecret = !!card.saved?.maskedSecret
 
   if (card.enabled && !clientId) {
-    card.errors.clientId = '启用时 Client ID 必填'
+    card.errors.clientId = t('settingsOAuth.errClientIdRequiredEnabled')
     return
   }
   if (card.enabled && !card.clientSecret && !hasExistingSecret) {
     card.errors.clientId = card.errors.clientId || ''
-    toast.error('保存失败', { detail: '启用时需提供 Client Secret' })
+    toast.error(t('settingsOAuth.toastSaveFailed'), { detail: t('settingsOAuth.errSecretRequiredEnabled') })
     return
   }
   if (card.meta.hasBaseUrl && card.enabled && !baseUrl) {
-    card.errors.baseUrl = '自建实例需填写 Base URL'
+    card.errors.baseUrl = t('settingsOAuth.errBaseUrlRequiredCustom')
     return
   }
 
@@ -197,27 +212,27 @@ async function handleSave(provider: OAuthProvider): Promise<void> {
     }
     const updated = await saveOAuthApp(provider, payload)
     applyApp(card, updated)
-    toast.success('OAuth 应用已保存', { detail: card.meta.label })
+    toast.success(t('settingsOAuth.toastSaved'), { detail: labelFor(provider) })
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 422 && err.apiError) {
         const code = err.apiError.code
         if (code === 'client_id_required') {
-          card.errors.clientId = '请填写 Client ID'
+          card.errors.clientId = t('settingsOAuth.errClientIdRequired')
         } else if (code === 'base_url_required') {
-          card.errors.baseUrl = '请填写 Base URL'
+          card.errors.baseUrl = t('settingsOAuth.errBaseUrlRequired')
         } else {
-          toast.error('保存失败', { detail: err.apiError.message })
+          toast.error(t('settingsOAuth.toastSaveFailed'), { detail: err.apiError.message })
         }
         return
       }
       if (err.status === 0) {
-        toast.error('保存失败', { detail: '无法连接到服务器' })
+        toast.error(t('settingsOAuth.toastSaveFailed'), { detail: t('settingsOAuth.errNoServerShort') })
       } else {
-        toast.error('保存失败', { detail: err.apiError?.message ?? `HTTP ${err.status}` })
+        toast.error(t('settingsOAuth.toastSaveFailed'), { detail: err.apiError?.message ?? `HTTP ${err.status}` })
       }
     } else {
-      toast.error('保存失败', { detail: err instanceof Error ? err.message : '未知错误' })
+      toast.error(t('settingsOAuth.toastSaveFailed'), { detail: err instanceof Error ? err.message : t('settingsOAuth.unknownError') })
     }
   } finally {
     card.saving = false
@@ -230,12 +245,12 @@ function relativeTime(iso: string | null): string {
   if (!iso) return ''
   const diff = Date.now() - new Date(iso).getTime()
   const s = Math.floor(diff / 1000)
-  if (s < 60) return '刚刚'
+  if (s < 60) return t('settingsOAuth.justNow')
   const m = Math.floor(s / 60)
-  if (m < 60) return `${m} 分钟前`
+  if (m < 60) return t('settingsOAuth.minutesAgo', { n: m })
   const h = Math.floor(m / 60)
-  if (h < 24) return `${h} 小时前`
-  return `${Math.floor(h / 24)} 天前`
+  if (h < 24) return t('settingsOAuth.hoursAgo', { n: h })
+  return t('settingsOAuth.daysAgo', { n: Math.floor(h / 24) })
 }
 </script>
 
@@ -244,9 +259,9 @@ function relativeTime(iso: string | null): string {
     <!-- ─── section header ──────────────────────────────────────────────────── -->
     <div class="section-head">
       <div class="section-head-text">
-        <h2 class="section-title">OAuth 应用</h2>
+        <h2 class="section-title">{{ t('settingsOAuth.title') }}</h2>
         <p class="section-desc">
-          为每个 git 平台登记 OAuth 应用(Client ID / Secret),用户即可在凭据保险库一键「连接」账号自动换取令牌,无需手动粘贴 PAT。Secret 落库即掩码,写入后不可读出。
+          {{ t('settingsOAuth.sectionDesc') }}
         </p>
       </div>
     </div>
@@ -257,7 +272,7 @@ function relativeTime(iso: string | null): string {
         <circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" />
       </svg>
       <span>{{ loadError }}</span>
-      <button class="banner-retry" @click="loadApps">↻ 重试</button>
+      <button class="banner-retry" @click="loadApps">↻ {{ t('settingsOAuth.retry') }}</button>
     </div>
 
     <!-- ─── loading skeleton ────────────────────────────────────────────────── -->
@@ -285,8 +300,8 @@ function relativeTime(iso: string | null): string {
           <div class="ph-logo" :style="cards[pid].meta.logoStyle" aria-hidden="true">
             {{ cards[pid].meta.logoText }}
           </div>
-          <span class="ph-label">{{ cards[pid].meta.label }}</span>
-          <span class="ph-desc">{{ cards[pid].meta.desc }}</span>
+          <span class="ph-label">{{ labelFor(pid) }}</span>
+          <span class="ph-desc">{{ descFor(pid) }}</span>
 
           <span
             v-if="cards[pid].saved?.configured"
@@ -298,11 +313,11 @@ function relativeTime(iso: string | null): string {
               :class="{ 'status-dot--ok': cards[pid].enabled }"
               aria-hidden="true"
             />
-            {{ cards[pid].enabled ? '已启用' : '已配置·未启用' }}
+            {{ cards[pid].enabled ? t('settingsOAuth.statusEnabled') : t('settingsOAuth.statusConfiguredIdle') }}
           </span>
           <span v-else class="status-chip status-chip--idle">
             <span class="status-dot" aria-hidden="true" />
-            未配置
+            {{ t('settingsOAuth.statusUnconfigured') }}
           </span>
         </div>
 
@@ -317,7 +332,7 @@ function relativeTime(iso: string | null): string {
                 type="text"
                 class="field-input field-input--mono"
                 :class="{ 'field-input--error': cards[pid].errors.clientId }"
-                placeholder="在 git 平台 OAuth 应用页获取"
+                :placeholder="t('settingsOAuth.clientIdPlaceholder')"
                 autocomplete="off"
                 :aria-invalid="!!cards[pid].errors.clientId || undefined"
                 :disabled="cards[pid].saving"
@@ -332,7 +347,7 @@ function relativeTime(iso: string | null): string {
             <div class="field">
               <label class="field-label" :for="`oauth-secret-${pid}`">
                 Client Secret
-                <span class="field-optional">（写入后仅显示掩码）</span>
+                <span class="field-optional">{{ t('settingsOAuth.secretOptional') }}</span>
               </label>
               <input
                 :id="`oauth-secret-${pid}`"
@@ -340,15 +355,15 @@ function relativeTime(iso: string | null): string {
                 type="password"
                 class="field-input field-input--mono"
                 :placeholder="cards[pid].saved?.maskedSecret
-                  ? '留空保留已存 Secret'
-                  : '粘贴 Client Secret…'"
+                  ? t('settingsOAuth.secretPlaceholderKeep')
+                  : t('settingsOAuth.secretPlaceholderNew')"
                 autocomplete="new-password"
                 :disabled="cards[pid].saving"
               />
               <span
                 v-if="cards[pid].saved?.maskedSecret && !cards[pid].clientSecret"
                 class="field-hint mono"
-              >已存:{{ cards[pid].saved?.maskedSecret }}</span>
+              >{{ t('settingsOAuth.secretStored', { masked: cards[pid].saved?.maskedSecret }) }}</span>
             </div>
 
             <!-- Base URL — self-hosted only -->
@@ -380,28 +395,28 @@ function relativeTime(iso: string | null): string {
                   :class="{ 'toggle-track--on': cards[pid].enabled }"
                   role="switch"
                   :aria-checked="cards[pid].enabled"
-                  :aria-label="`启用 ${cards[pid].meta.label} OAuth`"
+                  :aria-label="t('settingsOAuth.toggleAria', { provider: labelFor(pid) })"
                   :disabled="cards[pid].saving"
                   @click="cards[pid].enabled = !cards[pid].enabled"
                 >
                   <span class="toggle-thumb" />
                 </button>
                 <div class="toggle-label">
-                  <strong>启用连接</strong>
-                  <span>启用后此平台的「连接」按钮出现在凭据保险库</span>
+                  <strong>{{ t('settingsOAuth.toggleTitle') }}</strong>
+                  <span>{{ t('settingsOAuth.toggleDesc') }}</span>
                 </div>
               </div>
 
               <div class="card-actions">
                 <span v-if="cards[pid].saved?.updatedAt" class="updated-note">
-                  上次保存 {{ relativeTime(cards[pid].saved?.updatedAt ?? null) }}
+                  {{ t('settingsOAuth.lastSaved', { time: relativeTime(cards[pid].saved?.updatedAt ?? null) }) }}
                 </span>
                 <AppButton
                   variant="primary"
                   type="submit"
                   :loading="cards[pid].saving"
                 >
-                  保存
+                  {{ t('settingsOAuth.saveBtn') }}
                 </AppButton>
               </div>
             </div>

@@ -15,6 +15,7 @@
  */
 
 import { http } from './http'
+import { t } from '../i18n'
 
 export interface Server {
   id: string
@@ -438,7 +439,7 @@ function openTerminalWS(path: string, handlers: TerminalHandlers): TerminalConne
   ws.onclose = (ev: CloseEvent) => {
     if (closed) return
     closed = true
-    handlers.onClose?.(ev.reason || '终端会话已结束')
+    handlers.onClose?.(ev.reason || t('labels.terminalSessionEnded'))
   }
   ws.onerror = () => {
     // The browser fires a generic error before close; defer the human message to onclose.

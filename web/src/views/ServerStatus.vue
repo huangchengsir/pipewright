@@ -11,6 +11,7 @@
 -->
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { getAllServerMetrics, listServers, type ServerMetrics, type Server } from '../api/servers'
 import { HttpError } from '../api/http'
 import ServerMetricsCard from '../components/ops/ServerMetricsCard.vue'
@@ -20,6 +21,8 @@ import ErrorState from '../components/ui/ErrorState.vue'
 import SkeletonBlock from '../components/ui/SkeletonBlock.vue'
 
 type LoadState = 'idle' | 'loading' | 'error'
+
+const { t } = useI18n()
 
 const loadState = ref<LoadState>('idle')
 const loadError = ref('')
@@ -55,10 +58,10 @@ async function load(): Promise<void> {
     if (err instanceof HttpError) {
       loadError.value =
         err.status === 0
-          ? '无法连接到服务器,请检查后端是否运行后重试'
-          : (err.apiError?.message ?? `加载服务器状态失败(${err.status})`)
+          ? t('serverStatus.errConnect')
+          : (err.apiError?.message ?? t('serverStatus.errLoadStatus', { status: err.status }))
     } else {
-      loadError.value = '加载服务器状态失败,请稍后重试'
+      loadError.value = t('serverStatus.errLoadRetry')
     }
     loadState.value = 'error'
   } finally {
@@ -119,17 +122,17 @@ onUnmounted(() => {
   <div class="server-status">
     <header class="view-header">
       <div class="view-header__text">
-        <h1 class="view-title">服务器状态</h1>
+        <h1 class="view-title">{{ t('serverStatus.title') }}</h1>
         <p class="view-sub">
-          所有已登记服务器的 CPU 负载、内存与磁盘使用,经 SSH 实时采集
+          {{ t('serverStatus.subtitle') }}
           <span v-if="totalCount > 0" class="view-sub__count">
-            · {{ reachableCount }}/{{ totalCount }} 可达
+            · {{ t('serverStatus.reachableSummary', { reachable: reachableCount, total: totalCount }) }}
           </span>
-          <span class="view-sub__count">· 每 12 秒自动刷新</span>
+          <span class="view-sub__count">· {{ t('serverStatus.autoRefresh', { n: 12 }) }}</span>
         </p>
       </div>
       <AppButton variant="default" :loading="loadState === 'loading'" @click="load">
-        刷新
+        {{ t('common.refresh') }}
       </AppButton>
     </header>
 
@@ -138,7 +141,7 @@ onUnmounted(() => {
       v-if="loadState === 'loading' && metrics.length === 0"
       class="metrics-grid"
       aria-busy="true"
-      aria-label="正在加载服务器状态"
+      :aria-label="t('serverStatus.loadingAria')"
     >
       <div v-for="n in 3" :key="n" class="skeleton-card">
         <SkeletonBlock :height="20" width="50%" />
@@ -150,7 +153,7 @@ onUnmounted(() => {
     <!-- Load error (whole-page; metrics endpoint unreachable / 5xx) -->
     <ErrorState
       v-else-if="loadState === 'error'"
-      title="加载服务器状态失败"
+      :title="t('serverStatus.errTitle')"
       :description="loadError"
       @retry="load"
     />
@@ -158,8 +161,8 @@ onUnmounted(() => {
     <!-- Empty: no registered servers -->
     <EmptyState
       v-else-if="metrics.length === 0"
-      title="尚无已登记服务器"
-      description="先在「设置 › 服务器」登记目标服务器,这里就会显示它们的资源指标。"
+      :title="t('serverStatus.emptyTitle')"
+      :description="t('serverStatus.emptyDesc')"
     />
 
     <!-- Metrics grid (per-host cards) -->

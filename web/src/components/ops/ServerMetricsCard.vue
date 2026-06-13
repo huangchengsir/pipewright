@@ -13,8 +13,11 @@
 -->
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import ProgressBar, { type ProgressVariant } from '../ui/ProgressBar.vue'
 import type { ServerMetrics } from '../../api/servers'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   /** 展示用服务器名(列表 join 而来)。 */
@@ -93,10 +96,15 @@ const loadVariant = computed<ProgressVariant>(() => {
   return 'default'
 })
 
+const loadAvailable = computed(() => {
+  const cpu = props.metrics.cpu
+  return !(!cpu || cpu.loadavg1 === null)
+})
+
 const loadText = computed(() => {
   const cpu = props.metrics.cpu
-  if (!cpu || cpu.loadavg1 === null) return '不可用'
-  const coresText = cpu.cores !== null ? ` / ${cpu.cores} 核` : ''
+  if (!cpu || cpu.loadavg1 === null) return t('opsServer.metrics.unavailable')
+  const coresText = cpu.cores !== null ? t('opsServer.metrics.cores', { n: cpu.cores }) : ''
   return `${cpu.loadavg1.toFixed(2)}${coresText}`
 })
 </script>
@@ -105,7 +113,7 @@ const loadText = computed(() => {
   <article
     class="metrics-card"
     :class="{ 'metrics-card--unreachable': !metrics.reachable }"
-    :aria-label="`服务器 ${name} 指标`"
+    :aria-label="t('opsServer.metrics.cardAria', { name })"
   >
     <header class="metrics-card__head">
       <h3 class="metrics-card__name" :title="name">{{ name }}</h3>
@@ -115,27 +123,27 @@ const loadText = computed(() => {
         role="status"
       >
         <span class="reach-badge__dot" aria-hidden="true" />
-        {{ metrics.reachable ? '可达' : '不可达' }}
+        {{ metrics.reachable ? t('opsServer.metrics.reachable') : t('opsServer.metrics.unreachable') }}
       </span>
     </header>
 
     <!-- Unreachable: human error, no metrics rows -->
     <p v-if="!metrics.reachable" class="metrics-card__error" role="alert">
-      {{ metrics.error || '无法采集指标' }}
+      {{ metrics.error || t('opsServer.metrics.collectFailed') }}
     </p>
 
     <!-- Reachable: metric rows (each independently degradable) -->
     <dl v-else class="metrics-card__body">
       <!-- CPU -->
       <div class="metric-row">
-        <dt class="metric-row__label">CPU 负载</dt>
+        <dt class="metric-row__label">{{ t('opsServer.metrics.cpuLoad') }}</dt>
         <dd class="metric-row__value">
           <span
             class="metric-num"
             :class="{
               'metric-num--warn': loadVariant === 'warn',
               'metric-num--error': loadVariant === 'error',
-              'metric-num--na': loadText === '不可用',
+              'metric-num--na': !loadAvailable,
             }"
             >{{ loadText }}</span
           >
@@ -144,13 +152,13 @@ const loadText = computed(() => {
 
       <!-- Memory -->
       <div class="metric-row">
-        <dt class="metric-row__label">内存</dt>
+        <dt class="metric-row__label">{{ t('opsServer.metrics.memory') }}</dt>
         <dd class="metric-row__value">
           <template v-if="metrics.memory && memPercent !== null">
             <ProgressBar
               :value="memPercent"
               :variant="usageVariant(memPercent)"
-              :label="`内存使用 ${memPercent.toFixed(0)}%`"
+              :label="t('opsServer.metrics.memUsageLabel', { n: memPercent.toFixed(0) })"
             />
             <span class="metric-sub">
               {{ humanBytes(metrics.memory.usedBytes) }} / {{ humanBytes(metrics.memory.totalBytes) }}
@@ -159,26 +167,26 @@ const loadText = computed(() => {
             <span
               v-if="memCachePercent !== null && memCacheTotal !== null"
               class="metric-sub metric-sub--cache"
-              title="含页缓存口径(total − free)/ 总量:页缓存计入已用,与 cgroup / 宿主面板(如 PVE)的「已用」一致。总量优先取物理/分配内存,取不到则用内核可用总量。"
+              :title="t('opsServer.metrics.cacheTooltip')"
             >
-              含缓存 {{ humanBytes(metrics.memory.usedWithCacheBytes) }} /
+              {{ t('opsServer.metrics.withCache') }} {{ humanBytes(metrics.memory.usedWithCacheBytes) }} /
               {{ humanBytes(memCacheTotal) }}
               <span class="metric-pct">({{ memCachePercent.toFixed(0) }}%)</span>
-              <span v-if="metrics.memory.physicalTotalBytes > 0" class="metric-tag">物理</span>
+              <span v-if="metrics.memory.physicalTotalBytes > 0" class="metric-tag">{{ t('opsServer.metrics.physical') }}</span>
             </span>
           </template>
-          <span v-else class="metric-num metric-num--na">不可用</span>
+          <span v-else class="metric-num metric-num--na">{{ t('opsServer.metrics.unavailable') }}</span>
         </dd>
       </div>
 
       <!-- Swap(仅在配置了 swap 时显示) -->
       <div v-if="swapPercent !== null && metrics.memory" class="metric-row">
-        <dt class="metric-row__label">交换</dt>
+        <dt class="metric-row__label">{{ t('opsServer.metrics.swap') }}</dt>
         <dd class="metric-row__value">
           <ProgressBar
             :value="swapPercent"
             :variant="usageVariant(swapPercent)"
-            :label="`交换使用 ${swapPercent.toFixed(0)}%`"
+            :label="t('opsServer.metrics.swapUsageLabel', { n: swapPercent.toFixed(0) })"
           />
           <span class="metric-sub">
             {{ humanBytes(metrics.memory.swapUsedBytes) }} /
@@ -190,26 +198,26 @@ const loadText = computed(() => {
 
       <!-- Disk -->
       <div class="metric-row">
-        <dt class="metric-row__label">磁盘 {{ metrics.disk?.path ?? '/' }}</dt>
+        <dt class="metric-row__label">{{ t('opsServer.metrics.disk', { path: metrics.disk?.path ?? '/' }) }}</dt>
         <dd class="metric-row__value">
           <template v-if="metrics.disk && diskPercent !== null">
             <ProgressBar
               :value="diskPercent"
               :variant="usageVariant(diskPercent)"
-              :label="`磁盘使用 ${diskPercent.toFixed(0)}%`"
+              :label="t('opsServer.metrics.diskUsageLabel', { n: diskPercent.toFixed(0) })"
             />
             <span class="metric-sub">
               {{ humanBytes(metrics.disk.usedBytes) }} / {{ humanBytes(metrics.disk.totalBytes) }}
               <span class="metric-pct">({{ diskPercent.toFixed(0) }}%)</span>
             </span>
           </template>
-          <span v-else class="metric-num metric-num--na">不可用</span>
+          <span v-else class="metric-num metric-num--na">{{ t('opsServer.metrics.unavailable') }}</span>
         </dd>
       </div>
     </dl>
 
     <footer v-if="metrics.reachable" class="metrics-card__foot">
-      采集于 {{ new Date(metrics.collectedAt).toLocaleTimeString() }}
+      {{ t('opsServer.metrics.collectedAt', { time: new Date(metrics.collectedAt).toLocaleTimeString() }) }}
     </footer>
   </article>
 </template>

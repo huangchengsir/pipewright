@@ -8,6 +8,7 @@
 -->
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   listAnomalyRules,
   createAnomalyRule,
@@ -28,6 +29,8 @@ import ErrorState from '../components/ui/ErrorState.vue'
 import SkeletonBlock from '../components/ui/SkeletonBlock.vue'
 
 type LoadState = 'idle' | 'loading' | 'error'
+
+const { t } = useI18n()
 
 const loadState = ref<LoadState>('idle')
 const loadError = ref('')
@@ -59,26 +62,23 @@ const checking = ref(false)
 const checkBanner = ref('')
 const deletingId = ref<string | null>(null)
 
-const METRIC_LABELS: Record<AnomalyMetric, string> = {
-  cpu: 'CPU 使用率',
-  memory: '内存使用率',
-  disk: '磁盘使用率',
-}
-const OPERATOR_LABELS: Record<AnomalyOperator, string> = {
-  gt: '大于',
-  lt: '小于',
+const METRIC_KEYS: Record<AnomalyMetric, string> = {
+  cpu: 'anomaly.metricCpu',
+  memory: 'anomaly.metricMemory',
+  disk: 'anomaly.metricDisk',
 }
 
 function metricLabel(m: AnomalyMetric): string {
-  return METRIC_LABELS[m] ?? m
+  const key = METRIC_KEYS[m]
+  return key ? t(key) : m
 }
 function operatorSymbol(op: AnomalyOperator): string {
   return op === 'gt' ? '>' : '<'
 }
 function serverName(id: string | null): string {
-  if (!id) return '全部服务器'
+  if (!id) return t('anomaly.scopeAllServers')
   const s = servers.value.find((x) => x.id === id)
-  return s ? s.name : '(服务器已删除)'
+  return s ? s.name : t('anomaly.serverDeleted')
 }
 
 /**
@@ -110,17 +110,17 @@ async function load(): Promise<void> {
     alerts.value = a
     loadState.value = 'idle'
   } catch (err) {
-    loadError.value = humanError(err, '加载异常检测配置失败')
+    loadError.value = humanError(err, t('anomaly.errLoad'))
     loadState.value = 'error'
   }
 }
 
 function humanError(err: unknown, fallback: string): string {
   if (err instanceof HttpError) {
-    if (err.status === 0) return '无法连接到服务器,请检查后端是否运行后重试'
-    return err.apiError?.message ?? `${fallback}(${err.status})`
+    if (err.status === 0) return t('anomaly.errConnect')
+    return err.apiError?.message ?? t('anomaly.errStatus', { fallback, status: err.status })
   }
-  return `${fallback},请稍后重试`
+  return t('anomaly.errRetry', { fallback })
 }
 
 // ─── create rule ───────────────────────────────────────────────────────────────
@@ -128,7 +128,7 @@ function humanError(err: unknown, fallback: string): string {
 async function submitRule(): Promise<void> {
   formError.value = ''
   if (!Number.isFinite(form.value.threshold)) {
-    formError.value = '阈值必须是数字'
+    formError.value = t('anomaly.errThresholdNumber')
     return
   }
   creating.value = true
@@ -144,7 +144,7 @@ async function submitRule(): Promise<void> {
     // Reset threshold/scope but keep metric/operator for fast multi-add.
     form.value.serverId = ''
   } catch (err) {
-    formError.value = humanError(err, '创建规则失败')
+    formError.value = humanError(err, t('anomaly.errCreateRule'))
   } finally {
     creating.value = false
   }
@@ -158,7 +158,7 @@ async function removeRule(rule: AnomalyRule): Promise<void> {
     await deleteAnomalyRule(rule.id)
     rules.value = rules.value.filter((r) => r.id !== rule.id)
   } catch (err) {
-    checkBanner.value = humanError(err, '删除规则失败')
+    checkBanner.value = humanError(err, t('anomaly.errDeleteRule'))
   } finally {
     deletingId.value = null
   }
@@ -175,10 +175,10 @@ async function runCheck(): Promise<void> {
     alerts.value = await listAnomalyAlerts({ limit: 50 })
     checkBanner.value =
       fresh.length === 0
-        ? '检测完成:本次未命中任何规则'
-        : `检测完成:本次新增 ${fresh.length} 条告警`
+        ? t('anomaly.checkDoneNone')
+        : t('anomaly.checkDoneNew', { n: fresh.length })
   } catch (err) {
-    checkBanner.value = humanError(err, '执行检测失败')
+    checkBanner.value = humanError(err, t('anomaly.errCheck'))
   } finally {
     checking.value = false
   }
@@ -196,19 +196,19 @@ onMounted(load)
   <div class="anomaly">
     <header class="view-header">
       <div class="view-header__text">
-        <h1 class="view-title">异常检测</h1>
+        <h1 class="view-title">{{ t('anomaly.title') }}</h1>
         <p class="view-sub">
-          配置阈值规则,对服务器 CPU / 内存 / 磁盘指标做检测,命中即产告警
+          {{ t('anomaly.subtitle') }}
         </p>
       </div>
       <AppButton variant="primary" :loading="checking" @click="runCheck">
-        立即检测
+        {{ t('anomaly.checkNow') }}
       </AppButton>
     </header>
 
     <ErrorState
       v-if="loadState === 'error'"
-      title="加载失败"
+      :title="t('anomaly.errLoadTitle')"
       :description="loadError"
       @retry="load"
     />
@@ -218,25 +218,25 @@ onMounted(load)
 
       <!-- ── Rule configuration ──────────────────────────────────────────── -->
       <section class="panel" aria-labelledby="rules-heading">
-        <h2 id="rules-heading" class="panel-title">检测规则</h2>
+        <h2 id="rules-heading" class="panel-title">{{ t('anomaly.rulesHeading') }}</h2>
 
         <form class="rule-form" @submit.prevent="submitRule">
-          <FormField label="指标" field-id="rule-metric" class="rule-form__field">
+          <FormField :label="t('anomaly.fieldMetric')" field-id="rule-metric" class="rule-form__field">
             <select id="rule-metric" v-model="form.metric" class="select">
-              <option value="cpu">CPU 使用率</option>
-              <option value="memory">内存使用率</option>
-              <option value="disk">磁盘使用率</option>
+              <option value="cpu">{{ t('anomaly.metricCpu') }}</option>
+              <option value="memory">{{ t('anomaly.metricMemory') }}</option>
+              <option value="disk">{{ t('anomaly.metricDisk') }}</option>
             </select>
           </FormField>
 
-          <FormField label="条件" field-id="rule-operator" class="rule-form__field">
+          <FormField :label="t('anomaly.fieldOperator')" field-id="rule-operator" class="rule-form__field">
             <select id="rule-operator" v-model="form.operator" class="select">
-              <option value="gt">大于</option>
-              <option value="lt">小于</option>
+              <option value="gt">{{ t('anomaly.operatorGt') }}</option>
+              <option value="lt">{{ t('anomaly.operatorLt') }}</option>
             </select>
           </FormField>
 
-          <FormField label="阈值 (%)" field-id="rule-threshold" class="rule-form__field">
+          <FormField :label="t('anomaly.fieldThreshold')" field-id="rule-threshold" class="rule-form__field">
             <input
               id="rule-threshold"
               v-model.number="form.threshold"
@@ -246,22 +246,22 @@ onMounted(load)
             />
           </FormField>
 
-          <FormField label="作用范围" field-id="rule-server" class="rule-form__field rule-form__field--wide">
+          <FormField :label="t('anomaly.fieldScope')" field-id="rule-server" class="rule-form__field rule-form__field--wide">
             <select id="rule-server" v-model="form.serverId" class="select">
-              <option value="">全部服务器(全局)</option>
+              <option value="">{{ t('anomaly.scopeAllGlobal') }}</option>
               <option v-for="s in servers" :key="s.id" :value="s.id">{{ s.name }}</option>
             </select>
           </FormField>
 
           <div class="rule-form__submit">
             <AppButton type="submit" variant="default" :loading="creating">
-              添加规则
+              {{ t('anomaly.addRule') }}
             </AppButton>
           </div>
         </form>
         <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
         <p v-if="!hasServers" class="hint">
-          尚无已登记服务器。规则仍可保存,但需先在「设置 › 服务器」登记目标后检测才有数据。
+          {{ t('anomaly.noServersHint') }}
         </p>
 
         <!-- Rule list -->
@@ -270,8 +270,8 @@ onMounted(load)
         </div>
         <EmptyState
           v-else-if="rules.length === 0"
-          title="尚无检测规则"
-          description="添加一条规则(如 CPU 大于 90%)即可开始检测。"
+          :title="t('anomaly.rulesEmptyTitle')"
+          :description="t('anomaly.rulesEmptyDesc')"
         />
         <ul v-else class="rule-list">
           <li v-for="rule in rules" :key="rule.id" class="rule-item">
@@ -281,14 +281,14 @@ onMounted(load)
                 {{ operatorSymbol(rule.operator) }} {{ rule.threshold }}%
               </span>
               <span class="rule-item__scope">{{ serverName(rule.serverId) }}</span>
-              <span v-if="!rule.enabled" class="rule-item__disabled">已停用</span>
+              <span v-if="!rule.enabled" class="rule-item__disabled">{{ t('anomaly.disabled') }}</span>
             </div>
             <AppButton
               variant="ghost"
               :loading="deletingId === rule.id"
               @click="removeRule(rule)"
             >
-              删除
+              {{ t('anomaly.delete') }}
             </AppButton>
           </li>
         </ul>
@@ -296,15 +296,15 @@ onMounted(load)
 
       <!-- ── Alerts ──────────────────────────────────────────────────────── -->
       <section class="panel" aria-labelledby="alerts-heading">
-        <h2 id="alerts-heading" class="panel-title">最近告警</h2>
+        <h2 id="alerts-heading" class="panel-title">{{ t('anomaly.alertsHeading') }}</h2>
 
         <div v-if="loadState === 'loading' && alerts.length === 0" class="rule-skeletons" aria-busy="true">
           <SkeletonBlock v-for="n in 3" :key="n" :height="52" width="100%" />
         </div>
         <EmptyState
           v-else-if="alerts.length === 0"
-          title="暂无告警"
-          description="运行「立即检测」后,命中规则的告警会显示在这里。"
+          :title="t('anomaly.alertsEmptyTitle')"
+          :description="t('anomaly.alertsEmptyDesc')"
         />
         <ul v-else class="alert-list">
           <li
@@ -319,7 +319,7 @@ onMounted(load)
               <p class="alert-item__meta">
                 {{ a.serverName }} · {{ metricLabel(a.metric) }}
                 {{ operatorSymbol(a.operator) }} {{ a.threshold }}%
-                · 实际 {{ a.value.toFixed(1) }}%
+                · {{ t('anomaly.actual', { n: a.value.toFixed(1) }) }}
                 · {{ formatAt(a.at) }}
               </p>
             </div>

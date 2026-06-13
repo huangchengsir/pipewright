@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { PipelineStage, PipelineJob } from '../../api/pipeline'
 import JobCard from './JobCard.vue'
 import { eligibleNeeds, toggleNeed } from './stageDeps'
@@ -40,8 +41,10 @@ const emit = defineEmits<{
   (e: 'open-settings'): void
 }>()
 
+const { t } = useI18n()
+
 function stageLabel(index: number): string {
-  if (props.stage.kind === 'source') return '源'
+  if (props.stage.kind === 'source') return t('pipelineCanvas.sourceLabel')
   return String(index)
 }
 
@@ -224,43 +227,43 @@ function resetDrag(): void {
         v-if="stage.kind !== 'source'"
         class="stage-deps-btn"
         :class="{ 'stage-deps-btn--active': depsOpen || currentNeeds.length > 0 }"
-        :aria-label="`编辑阶段 ${stage.name} 的依赖`"
+        :aria-label="t('pipelineCanvas.editDepsAria', { name: stage.name })"
         :aria-expanded="depsOpen"
-        title="编辑依赖(DAG)"
+        :title="t('pipelineCanvas.editDepsTitle')"
         @click="depsOpen = !depsOpen"
       >
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/>
           <path d="M8 6.6c5 0 3 5.4 8 5.4M8 17.4c5 0 3-5.4 8-5.4"/>
         </svg>
-        依赖<span v-if="currentNeeds.length" class="stage-deps-count">{{ currentNeeds.length }}</span>
+        {{ t('pipelineCanvas.deps') }}<span v-if="currentNeeds.length" class="stage-deps-count">{{ currentNeeds.length }}</span>
       </button>
       <button
         v-if="stage.kind !== 'source'"
         class="stage-deps-btn"
         :class="{ 'stage-deps-btn--active': settingsActive || hasStageRules }"
-        :aria-label="`编辑阶段 ${stage.name} 的设置(条件/审批门/矩阵/服务/后置)`"
+        :aria-label="t('pipelineCanvas.editSettingsAria', { name: stage.name })"
         :aria-expanded="settingsActive"
-        title="阶段设置:条件 / 审批门 / 矩阵 / 服务 / 后置"
+        :title="t('pipelineCanvas.settingsTitle')"
         @click="emit('open-settings')"
       >
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <circle cx="12" cy="12" r="3"/>
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
         </svg>
-        条件<span v-if="hasStageRules" class="stage-deps-count stage-deps-count--dot" aria-hidden="true"></span>
+        {{ t('pipelineCanvas.condition') }}<span v-if="hasStageRules" class="stage-deps-count stage-deps-count--dot" aria-hidden="true"></span>
       </button>
       <button
         v-if="stage.kind !== 'source'"
         class="stage-add-job"
-        :aria-label="`在阶段 ${stage.name} 中添加任务`"
+        :aria-label="t('pipelineCanvas.addJobAria', { name: stage.name })"
         @click="addPlain"
-      >+ 任务</button>
+      >{{ t('pipelineCanvas.addJob') }}</button>
       <button
         v-if="stage.kind !== 'source'"
         class="stage-del"
-        :aria-label="`删除阶段 ${stage.name}`"
-        title="删除此阶段"
+        :aria-label="t('pipelineCanvas.deleteStageAria', { name: stage.name })"
+        :title="t('pipelineCanvas.deleteStageTitle')"
         @click="emit('delete-stage')"
       >
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -271,39 +274,39 @@ function resetDrag(): void {
     </div>
 
     <!-- Dependency chips (declared needs) -->
-    <div v-if="currentNeeds.length" class="stage-needs-chips" aria-label="上游依赖">
+    <div v-if="currentNeeds.length" class="stage-needs-chips" :aria-label="t('pipelineCanvas.upstreamDepsAria')">
       <span class="stage-needs-arrow" aria-hidden="true">⤳</span>
       <span v-for="label in needLabels" :key="label" class="stage-need-chip">{{ label }}</span>
     </div>
 
     <!-- Condition / gate chips (when · 8-5 / gate · 8-4) -->
-    <div v-if="hasStageRules" class="stage-rule-chips" aria-label="阶段条件与审批门">
-      <span v-if="whenChip" class="stage-rule-chip stage-rule-chip--when" title="仅满足条件时执行">
+    <div v-if="hasStageRules" class="stage-rule-chips" :aria-label="t('pipelineCanvas.stageRulesAria')">
+      <span v-if="whenChip" class="stage-rule-chip stage-rule-chip--when" :title="t('pipelineCanvas.whenChipTitle')">
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>
         {{ whenChip }}
       </span>
-      <span v-if="stage.gate" class="stage-rule-chip stage-rule-chip--gate" title="进入前需人工审批">
+      <span v-if="stage.gate" class="stage-rule-chip stage-rule-chip--gate" :title="t('pipelineCanvas.gateChipTitle')">
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-        审批门
+        {{ t('pipelineCanvas.gateChip') }}
       </span>
-      <span v-if="matrixChip" class="stage-rule-chip stage-rule-chip--matrix" title="矩阵展开:并行多个 cell">
+      <span v-if="matrixChip" class="stage-rule-chip stage-rule-chip--matrix" :title="t('pipelineCanvas.matrixChipTitle')">
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
         {{ matrixChip }}
       </span>
-      <span v-if="servicesChip" class="stage-rule-chip stage-rule-chip--svc" title="旁挂服务(同网按服务名互访)">
+      <span v-if="servicesChip" class="stage-rule-chip stage-rule-chip--svc" :title="t('pipelineCanvas.svcChipTitle')">
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
         {{ servicesChip }}
       </span>
-      <span v-if="postChip" class="stage-rule-chip stage-rule-chip--post" title="后置步骤(无论成败按条件跑)">
+      <span v-if="postChip" class="stage-rule-chip stage-rule-chip--post" :title="t('pipelineCanvas.postChipTitle')">
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.5"/><path d="M21 3v6h-6"/></svg>
         {{ postChip }}
       </span>
     </div>
 
     <!-- Stage dependency editor popover -->
-    <div v-if="depsOpen && stage.kind !== 'source'" class="deps-popover" role="group" aria-label="阶段依赖编辑">
-      <div class="deps-popover-title">依赖的上游阶段</div>
-      <p v-if="depChoices.length === 0" class="deps-empty">没有可选的上游阶段</p>
+    <div v-if="depsOpen && stage.kind !== 'source'" class="deps-popover" role="group" :aria-label="t('pipelineCanvas.depsEditAria')">
+      <div class="deps-popover-title">{{ t('pipelineCanvas.depsUpstreamTitle') }}</div>
+      <p v-if="depChoices.length === 0" class="deps-empty">{{ t('pipelineCanvas.noUpstream') }}</p>
       <label v-for="opt in depChoices" :key="opt.id" class="deps-option">
         <input
           type="checkbox"
@@ -319,15 +322,15 @@ function resetDrag(): void {
           :checked="stage.allowFailure === true"
           @change="emit('update-allow-failure', ($event.target as HTMLInputElement).checked)"
         />
-        <span>失败不阻断下游(allowFailure)</span>
+        <span>{{ t('pipelineCanvas.allowFailure') }}</span>
       </label>
-      <p class="deps-hint">留空 = 无显式依赖;全流水线无依赖时按从左到右线性执行</p>
+      <p class="deps-hint">{{ t('pipelineCanvas.depsHint') }}</p>
     </div>
 
     <!-- Per-job dependency editor popover (横串竖并) -->
-    <div v-if="jobDepsJob" class="deps-popover deps-popover--job" role="group" :aria-label="`任务 ${jobDepsJob.name} 的依赖`">
-      <div class="deps-popover-title">「{{ jobDepsJob.name }}」依赖的上游任务</div>
-      <p v-if="jobDepChoices.length === 0" class="deps-empty">本阶段没有其他可选任务</p>
+    <div v-if="jobDepsJob" class="deps-popover deps-popover--job" role="group" :aria-label="t('pipelineCanvas.jobDepsAria', { name: jobDepsJob.name })">
+      <div class="deps-popover-title">{{ t('pipelineCanvas.jobDepsTitle', { name: jobDepsJob.name }) }}</div>
+      <p v-if="jobDepChoices.length === 0" class="deps-empty">{{ t('pipelineCanvas.noOtherJobs') }}</p>
       <label v-for="opt in jobDepChoices" :key="opt.id" class="deps-option">
         <input
           type="checkbox"
@@ -336,8 +339,8 @@ function resetDrag(): void {
         />
         <span>{{ opt.name }}</span>
       </label>
-      <p class="deps-hint">勾选 = 串行(本任务排在其后);不勾任何项 = 与其并行</p>
-      <button class="deps-done" @click="jobDepsForId = null">完成</button>
+      <p class="deps-hint">{{ t('pipelineCanvas.jobDepsHint') }}</p>
+      <button class="deps-done" @click="jobDepsForId = null">{{ t('pipelineCanvas.done') }}</button>
     </div>
 
     <!-- Job cards — 2-D DAG (横串竖并) when this stage declares any job needs -->
@@ -346,7 +349,7 @@ function resetDrag(): void {
       ref="dagRef"
       class="job-dag"
       :style="{ '--ranks': layout.ranks }"
-      aria-label="阶段内任务依赖图"
+      :aria-label="t('pipelineCanvas.jobDagAria')"
     >
       <svg
         v-if="dagPaths.length"
@@ -405,16 +408,16 @@ function resetDrag(): void {
     <div v-if="stage.kind !== 'source'" class="add-job-row">
       <button
         class="add-job-btn add-job-btn--serial"
-        :aria-label="`在阶段 ${stage.name} 加一个串行任务(依赖上一个)`"
-        title="串行节点:排在锚点任务之后(横向连线)"
+        :aria-label="t('pipelineCanvas.addSerialAria', { name: stage.name })"
+        :title="t('pipelineCanvas.addSerialTitle')"
         @click="addSerial"
-      >+ 串行节点</button>
+      >{{ t('pipelineCanvas.addSerial') }}</button>
       <button
         class="add-job-btn add-job-btn--parallel"
-        :aria-label="`在阶段 ${stage.name} 加一个并行任务`"
-        title="并行节点:与锚点任务并行(纵向并排)"
+        :aria-label="t('pipelineCanvas.addParallelAria', { name: stage.name })"
+        :title="t('pipelineCanvas.addParallelTitle')"
         @click="addParallel"
-      >+ 并行节点</button>
+      >{{ t('pipelineCanvas.addParallel') }}</button>
     </div>
   </div>
 </template>

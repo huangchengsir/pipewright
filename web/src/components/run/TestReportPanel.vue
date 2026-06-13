@@ -10,9 +10,12 @@
 -->
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { getRunTestReport } from '../../api/runs'
 import type { TestReportDTO, GateVerdict, RunTestReportResponse } from '../../api/runs'
 import { HttpError } from '../../api/http'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   runId: string
@@ -36,7 +39,7 @@ async function load(id: string): Promise<void> {
       reports.value = []
       gate.value = { enabled: false, passed: true, reasons: [] }
     } else {
-      error.value = '测试报告加载失败'
+      error.value = t('run.testReportLoadFailed')
     }
   } finally {
     loaded.value = true
@@ -79,24 +82,24 @@ function passRate(r: { passed: number; total: number }): number {
     class="test-report"
     :class="{ 'test-report--blocked': gate.enabled && !gate.passed }"
     role="region"
-    aria-label="测试报告与质量门禁"
+    :aria-label="t('run.testReportRegion')"
   >
     <header class="tr-head">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
         <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
       </svg>
-      <h3 class="tr-title">测试报告</h3>
+      <h3 class="tr-title">{{ t('run.testReport') }}</h3>
 
       <!-- 门禁裁决徽标 -->
       <span
         v-if="gate.enabled"
         class="gate-badge"
         :class="gate.passed ? 'gate-badge--pass' : 'gate-badge--block'"
-        :aria-label="gate.passed ? '质量门禁通过' : '质量门禁阻断'"
+        :aria-label="gate.passed ? t('run.gatePassAria') : t('run.gateBlockAria')"
       >
         <svg v-if="gate.passed" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
         <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
-        {{ gate.passed ? '门禁通过' : '门禁阻断' }}
+        {{ gate.passed ? t('run.gatePass') : t('run.gateBlock') }}
       </span>
     </header>
 
@@ -105,7 +108,7 @@ function passRate(r: { passed: number; total: number }): number {
     <template v-else>
       <!-- 门禁阻断原因(醒目) -->
       <div v-if="gate.enabled && !gate.passed" class="gate-reasons" role="alert">
-        <strong class="gate-reasons-title">质量门禁未通过,已阻断后续部署:</strong>
+        <strong class="gate-reasons-title">{{ t('run.gateBlockedTitle') }}</strong>
         <ul class="gate-reasons-list">
           <li v-for="(reason, i) in gate.reasons" :key="i">{{ reason }}</li>
         </ul>
@@ -115,26 +118,26 @@ function passRate(r: { passed: number; total: number }): number {
       <div class="tr-summary">
         <div class="stat stat--pass">
           <span class="stat-num">{{ totals.passed }}</span>
-          <span class="stat-label">通过</span>
+          <span class="stat-label">{{ t('run.statPass') }}</span>
         </div>
         <div class="stat stat--fail" :class="{ 'stat--zero': totals.failed === 0 }">
           <span class="stat-num">{{ totals.failed }}</span>
-          <span class="stat-label">失败</span>
+          <span class="stat-label">{{ t('run.statFail') }}</span>
         </div>
         <div class="stat stat--skip" :class="{ 'stat--zero': totals.skipped === 0 }">
           <span class="stat-num">{{ totals.skipped }}</span>
-          <span class="stat-label">跳过</span>
+          <span class="stat-label">{{ t('run.statSkip') }}</span>
         </div>
         <div class="stat stat--total">
           <span class="stat-num">{{ totals.total }}</span>
-          <span class="stat-label">总用例</span>
+          <span class="stat-label">{{ t('run.statTotal') }}</span>
         </div>
       </div>
 
       <!-- 覆盖率条(总览取各阶段最低) -->
       <div v-if="totals.coverage >= 0" class="coverage">
         <div class="coverage-head">
-          <span class="coverage-label">行覆盖率</span>
+          <span class="coverage-label">{{ t('run.lineCoverage') }}</span>
           <span class="coverage-val mono">{{ coverageText(totals.coverage) }}</span>
         </div>
         <div class="coverage-track" role="meter" :aria-valuenow="Math.round(totals.coverage)" aria-valuemin="0" aria-valuemax="100">
@@ -149,7 +152,7 @@ function passRate(r: { passed: number; total: number }): number {
       <!-- 各阶段明细(多阶段时) -->
       <ul v-if="reports.length > 1" class="stage-list" role="list">
         <li v-for="r in reports" :key="r.id" class="stage-row">
-          <span class="stage-name">{{ r.stageName || '阶段' }}</span>
+          <span class="stage-name">{{ r.stageName || t('run.stageFallbackName') }}</span>
           <span class="stage-counts mono">
             <span class="sc-pass">{{ r.passed }}✓</span>
             <span v-if="r.failed > 0" class="sc-fail">{{ r.failed }}✗</span>
@@ -162,7 +165,7 @@ function passRate(r: { passed: number; total: number }): number {
             class="stage-gate"
             :class="r.gatePassed ? 'stage-gate--pass' : 'stage-gate--block'"
             :title="r.gateReason"
-          >{{ r.gatePassed ? '门禁✓' : '门禁✗' }}</span>
+          >{{ r.gatePassed ? t('run.gatePassShort') : t('run.gateBlockShort') }}</span>
         </li>
       </ul>
     </template>

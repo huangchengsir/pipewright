@@ -9,6 +9,7 @@
  * Controlled by the parent via `open`; emits `select(type)` and `close`.
  */
 import { ref, watch, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { groupedJobTypes } from './jobConfigSchema'
 import { listCustomNodes, type CustomNode } from '../../api/customNodes'
 import JobTypeIcon from './JobTypeIcon.vue'
@@ -26,6 +27,8 @@ const emit = defineEmits<{
   (e: 'select-custom', node: CustomNode): void
   (e: 'close'): void
 }>()
+
+const { t } = useI18n()
 
 const groups = groupedJobTypes()
 const dialogRef = ref<HTMLElement | null>(null)
@@ -95,9 +98,9 @@ watch(
           aria-labelledby="jtp-title"
         >
           <header class="jtp-head">
-            <h2 id="jtp-title" class="jtp-title">{{ title || '选择任务类型' }}</h2>
-            <p class="jtp-sub">挑选一个任务类型,每类有自己的配置参数</p>
-            <button class="jtp-close" aria-label="关闭" @click="emit('close')">
+            <h2 id="jtp-title" class="jtp-title">{{ title || t('pipelineCanvas.pickerDefaultTitle') }}</h2>
+            <p class="jtp-sub">{{ t('pipelineCanvas.pickerSub') }}</p>
+            <button class="jtp-close" :aria-label="t('pipelineCanvas.pickerClose')" @click="emit('close')">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                 <path d="M18 6 6 18M6 6l12 12"/>
               </svg>
@@ -107,8 +110,8 @@ watch(
           <div class="jtp-body">
             <!-- 复用库 Tier 2:我的自定义节点(已保存的单节点,选中即预填 config) -->
             <section v-if="customLoading || customNodes.length" class="jtp-group">
-              <h3 class="jtp-group-label">我的自定义节点</h3>
-              <p v-if="customLoading" class="jtp-custom-hint">加载中…</p>
+              <h3 class="jtp-group-label">{{ t('pipelineCanvas.myCustomNodes') }}</h3>
+              <p v-if="customLoading" class="jtp-custom-hint">{{ t('pipelineCanvas.loading') }}</p>
               <div v-else class="jtp-grid">
                 <button
                   v-for="node in customNodes"
@@ -120,9 +123,9 @@ watch(
                   <span class="type-card-body">
                     <span class="type-card-name">
                       {{ node.name }}
-                      <span class="type-card-badge type-card-badge--custom">自定义</span>
+                      <span class="type-card-badge type-card-badge--custom">{{ t('pipelineCanvas.customBadge') }}</span>
                     </span>
-                    <span class="type-card-desc">{{ node.description || node.summary || '已保存的自定义节点' }}</span>
+                    <span class="type-card-desc">{{ node.description || node.summary || t('pipelineCanvas.savedCustomNode') }}</span>
                     <code class="type-card-token">{{ node.nodeType }}</code>
                   </span>
                 </button>
@@ -143,7 +146,7 @@ watch(
                   <span class="type-card-body">
                     <span class="type-card-name">
                       {{ spec.label }}
-                      <span v-if="spec.type === current" class="type-card-badge">当前</span>
+                      <span v-if="spec.type === current" class="type-card-badge">{{ t('pipelineCanvas.currentBadge') }}</span>
                     </span>
                     <span class="type-card-desc">{{ spec.description }}</span>
                     <code class="type-card-token">{{ spec.type }}</code>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter, useRoute } from 'vue-router'
 import { login } from '../api/auth'
 import { HttpError } from '../api/http'
@@ -10,6 +11,7 @@ import { useSessionStore } from '../stores/session'
 const router = useRouter()
 const route = useRoute()
 const sessionStore = useSessionStore()
+const { t } = useI18n()
 
 const username = ref('')
 const password = ref('')
@@ -37,11 +39,11 @@ function validate(): boolean {
   clearErrors()
   let ok = true
   if (!username.value.trim()) {
-    usernameError.value = '请输入用户名'
+    usernameError.value = t('login.errUsername')
     ok = false
   }
   if (!password.value) {
-    passwordError.value = '请输入密码'
+    passwordError.value = t('login.errPassword')
     ok = false
   }
   return ok
@@ -89,20 +91,18 @@ async function handleSubmit(): Promise<void> {
     if (err instanceof HttpError) {
       if (err.status === 429) {
         isLockedOut.value = true
-        bannerError.value =
-          err.apiError?.message ?? '登录失败次数过多,请稍后重试'
+        bannerError.value = err.apiError?.message ?? t('login.errLockout')
       } else if (err.status === 401) {
-        bannerError.value =
-          err.apiError?.message ?? '用户名或口令错误'
-        passwordError.value = '请检查用户名与密码'
+        bannerError.value = err.apiError?.message ?? t('login.errCredentials')
+        passwordError.value = t('login.errCheckCredentials')
       } else if (err.status === 0) {
         // Network error — backend may not be up
-        bannerError.value = '无法连接到服务器,请检查后端是否运行后重试'
+        bannerError.value = t('login.errNetwork')
       } else {
-        bannerError.value = err.apiError?.message ?? `登录失败(${err.status})`
+        bannerError.value = err.apiError?.message ?? t('login.errGeneric', { status: err.status })
       }
     } else {
-      bannerError.value = '未知错误,请重试'
+      bannerError.value = t('login.errUnknown')
     }
   } finally {
     loading.value = false
@@ -231,13 +231,14 @@ onBeforeUnmount(() => {
           <div class="card__pool" aria-hidden="true" />
           <div class="card__sheen" aria-hidden="true" />
 
-          <span class="eyebrow"><span class="eyebrow__dot" aria-hidden="true" />实例在线</span>
+          <span class="eyebrow"><span class="eyebrow__dot" aria-hidden="true" />{{ t('login.eyebrow') }}</span>
           <h1 class="headline">
-            欢迎回来,<br />进入你的 <span class="headline__grad">控制台</span>。
+            {{ t('login.headlineWelcome') }}<br />{{ t('login.headlineEnter') }}
+            <span class="headline__grad">{{ t('login.headlineWord') }}</span>{{ t('login.headlinePunct') }}
           </h1>
-          <p class="lede">自托管的 CI/CD 与部署编排,构建失败 AI 秒级定位。</p>
+          <p class="lede">{{ t('login.lede') }}</p>
 
-          <form class="login-form" novalidate aria-label="登录表单" @submit.prevent="handleSubmit">
+          <form class="login-form" novalidate :aria-label="t('login.formAria')" @submit.prevent="handleSubmit">
             <!-- Banner error (401 / 429 / network) -->
             <div
               v-if="bannerError"
@@ -252,7 +253,7 @@ onBeforeUnmount(() => {
 
             <!-- Username field -->
             <div class="field">
-              <label class="field__label" for="username">账号</label>
+              <label class="field__label" for="username">{{ t('login.account') }}</label>
               <div class="inwrap" :class="{ 'inwrap--error': usernameError }">
                 <span class="inwrap__ic" aria-hidden="true">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
@@ -283,7 +284,7 @@ onBeforeUnmount(() => {
 
             <!-- Password field -->
             <div class="field">
-              <label class="field__label" for="password">密码</label>
+              <label class="field__label" for="password">{{ t('login.password') }}</label>
               <div class="inwrap" :class="{ 'inwrap--error': passwordError }">
                 <span class="inwrap__ic" aria-hidden="true">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
@@ -306,7 +307,7 @@ onBeforeUnmount(() => {
                 <button
                   type="button"
                   class="reveal"
-                  :aria-label="showPassword ? '隐藏密码' : '显示密码'"
+                  :aria-label="showPassword ? t('login.hidePassword') : t('login.showPassword')"
                   @click="showPassword = !showPassword"
                 >
                   <svg
@@ -338,7 +339,7 @@ onBeforeUnmount(() => {
             >
               <span class="submit__shine" aria-hidden="true" />
               <span v-if="loading" class="spinner" aria-hidden="true" />
-              <span>{{ loading ? '正在连接…' : '进入控制台' }}</span>
+              <span>{{ loading ? t('login.connecting') : t('login.enter') }}</span>
               <svg
                 v-if="!loading"
                 class="submit__arrow"
@@ -359,9 +360,9 @@ onBeforeUnmount(() => {
 
     <!-- bottom trust bar -->
     <div class="trust" aria-hidden="true">
-      <span>100% 自托管</span><span class="trust__s">·</span>
-      <span>数据不出网</span><span class="trust__s">·</span>
-      <span>单二进制</span>
+      <span>{{ t('login.trustSelfHosted') }}</span><span class="trust__s">·</span>
+      <span>{{ t('login.trustNoEgress') }}</span><span class="trust__s">·</span>
+      <span>{{ t('login.trustSingleBinary') }}</span>
     </div>
   </div>
 </template>

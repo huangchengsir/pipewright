@@ -6,6 +6,13 @@
  * 真实断言仍由各 spec 自行 mock 所需 API(如 fetch / localStorage)。
  */
 import { vi } from 'vitest'
+import { config } from '@vue/test-utils'
+import { i18n, setLocale } from '../i18n'
+
+// 组件普遍使用 useI18n() → 全局为所有 mount 安装 i18n 插件,避免每个 spec 重复配置。
+// locale 钉到 zh-CN(产品默认),让既有「断言中文文案」的组件测试保持确定性。
+setLocale('zh-CN')
+config.global.plugins = [...(config.global.plugins ?? []), i18n]
 
 // Node 25 ships a native global `localStorage` stub (the `--localstorage-file`
 // experiment) that shadows jsdom's implementation but lacks getItem/clear/etc.

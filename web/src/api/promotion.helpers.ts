@@ -3,6 +3,7 @@
  */
 
 import type { PromotionStatus } from './promotion'
+import { t } from '../i18n'
 
 // ─── Status display ───────────────────────────────────────────────────────────
 
@@ -20,21 +21,21 @@ export function promotionStatusConfig(status: PromotionStatus): PromotionStatusC
   switch (status) {
     case 'promoted':
       return {
-        label: '已晋级',
+        label: t('labels.promotionPromoted'),
         color: 'var(--color-green)',
         bg: 'var(--color-green-soft)',
         border: 'var(--color-green-line)',
       }
     case 'pending':
       return {
-        label: '待审批',
+        label: t('labels.promotionPending'),
         color: 'var(--color-amber)',
         bg: 'var(--color-amber-soft)',
         border: 'var(--color-amber-line)',
       }
     case 'rejected':
       return {
-        label: '已拒绝',
+        label: t('labels.promotionRejected'),
         color: 'var(--color-red)',
         bg: 'var(--color-red-soft)',
         border: 'var(--color-red-line)',
@@ -69,9 +70,9 @@ export function formatPromotionDate(iso: string | null | undefined): string {
  */
 export function validateEnvName(name: string): string {
   const n = name.trim()
-  if (!n) return '环境名不能为空'
-  if (!/^[\w-]+$/.test(n)) return '环境名只能含字母、数字、连字符、下划线'
-  if (n.length > 64) return '环境名不能超过 64 个字符'
+  if (!n) return t('labels.envNameEmpty')
+  if (!/^[\w-]+$/.test(n)) return t('labels.envNameInvalid')
+  if (n.length > 64) return t('labels.envNameTooLong')
   return ''
 }
 

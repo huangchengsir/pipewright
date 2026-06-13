@@ -11,7 +11,10 @@
 -->
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { DeployTarget, TargetStatus } from '../../api/runs'
+
+const { t } = useI18n()
 
 const props = withDefaults(
   defineProps<{
@@ -30,7 +33,7 @@ const emit = defineEmits<{ retry: [] }>()
 
 // 当前有几台 failed/rolled_back 目标可重试(rolled_back 亦计入:健康失败已回滚,可再试)。
 const failedCount = computed(
-  () => props.targets.filter((t) => t.status === 'failed' || t.status === 'rolled_back').length,
+  () => props.targets.filter((tg) => tg.status === 'failed' || tg.status === 'rolled_back').length,
 )
 
 // ─── Status badge config (semantic color per fixed five-word set) ────────────
@@ -45,11 +48,11 @@ interface StatusConfig {
 }
 
 const STATUS_CONFIG: Record<TargetStatus, StatusConfig> = {
-  pending:     { label: '待部署', fg: 'var(--color-faint)', bg: 'var(--color-card-2)',     line: 'var(--color-border-strong)', icon: 'dot',     pulse: false },
-  deploying:   { label: '部署中', fg: 'var(--color-amber)', bg: 'var(--color-amber-soft)', line: 'var(--color-amber-line)',    icon: 'spinner', pulse: true  },
-  success:     { label: '成功',   fg: 'var(--color-green)', bg: 'var(--color-green-soft)', line: 'var(--color-green-line)',    icon: 'check',   pulse: false },
-  failed:      { label: '失败',   fg: 'var(--color-red)',   bg: 'var(--color-red-soft)',   line: 'var(--color-red-line)',      icon: 'x',       pulse: false },
-  rolled_back: { label: '已回滚', fg: 'var(--color-amber)', bg: 'var(--color-amber-soft)', line: 'var(--color-amber-line)',    icon: 'undo',    pulse: false },
+  pending:     { label: t('run.targetStatusPending'),    fg: 'var(--color-faint)', bg: 'var(--color-card-2)',     line: 'var(--color-border-strong)', icon: 'dot',     pulse: false },
+  deploying:   { label: t('run.targetStatusDeploying'),  fg: 'var(--color-amber)', bg: 'var(--color-amber-soft)', line: 'var(--color-amber-line)',    icon: 'spinner', pulse: true  },
+  success:     { label: t('run.targetStatusSuccess'),    fg: 'var(--color-green)', bg: 'var(--color-green-soft)', line: 'var(--color-green-line)',    icon: 'check',   pulse: false },
+  failed:      { label: t('run.targetStatusFailed'),     fg: 'var(--color-red)',   bg: 'var(--color-red-soft)',   line: 'var(--color-red-line)',      icon: 'x',       pulse: false },
+  rolled_back: { label: t('run.targetStatusRolledBack'), fg: 'var(--color-amber)', bg: 'var(--color-amber-soft)', line: 'var(--color-amber-line)',    icon: 'undo',    pulse: false },
 }
 
 function statusConfig(status: string): StatusConfig {
@@ -60,9 +63,9 @@ function statusConfig(status: string): StatusConfig {
 
 // ─── duration / time helpers ──────────────────────────────────────────────────
 
-function durationText(t: DeployTarget): string {
-  if (!t.finishedAt) return '进行中'
-  const ms = new Date(t.finishedAt).getTime() - new Date(t.startedAt).getTime()
+function durationText(tg: DeployTarget): string {
+  if (!tg.finishedAt) return t('run.durationInProgress')
+  const ms = new Date(tg.finishedAt).getTime() - new Date(tg.startedAt).getTime()
   if (!Number.isFinite(ms) || ms < 0) return '—'
   const s = Math.round(ms / 1000)
   if (s < 1) return '<1s'
@@ -99,7 +102,7 @@ function counts(targets: DeployTarget[]): { ok: number; bad: number; rolledBack:
     v-if="targets.length > 0"
     class="deploy-targets"
     role="region"
-    aria-label="部署目标结果"
+    :aria-label="t('run.deployTargetsRegion')"
   >
     <header class="dt-head">
       <div class="dt-head-title">
@@ -108,49 +111,49 @@ function counts(targets: DeployTarget[]): { ok: number; bad: number; rolledBack:
           <rect x="2" y="15" width="20" height="6" rx="1" />
           <path d="M6 6h.01M6 18h.01" />
         </svg>
-        <span class="dt-title">部署目标</span>
-        <span class="dt-count">{{ targets.length }} 台</span>
+        <span class="dt-title">{{ t('run.deployTargets') }}</span>
+        <span class="dt-count">{{ t('run.hostCount', { n: targets.length }) }}</span>
       </div>
       <div class="dt-head-stats">
-        <span v-if="counts(targets).ok > 0" class="dt-stat dt-stat--ok">{{ counts(targets).ok }} 成功</span>
-        <span v-if="counts(targets).rolledBack > 0" class="dt-stat dt-stat--rollback">{{ counts(targets).rolledBack }} 已回滚</span>
-        <span v-if="counts(targets).bad > 0" class="dt-stat dt-stat--bad">{{ counts(targets).bad }} 失败</span>
+        <span v-if="counts(targets).ok > 0" class="dt-stat dt-stat--ok">{{ t('run.countOk', { n: counts(targets).ok }) }}</span>
+        <span v-if="counts(targets).rolledBack > 0" class="dt-stat dt-stat--rollback">{{ t('run.countRolledBack', { n: counts(targets).rolledBack }) }}</span>
+        <span v-if="counts(targets).bad > 0" class="dt-stat dt-stat--bad">{{ t('run.countBad', { n: counts(targets).bad }) }}</span>
       </div>
     </header>
 
     <ul class="dt-list" role="list">
       <li
-        v-for="t in targets"
-        :key="t.serverId + t.startedAt"
+        v-for="tg in targets"
+        :key="tg.serverId + tg.startedAt"
         class="dt-card"
-        :style="{ borderColor: statusConfig(t.status).line }"
+        :style="{ borderColor: statusConfig(tg.status).line }"
         role="listitem"
       >
         <div class="dt-card-top">
           <span
             class="dt-badge"
-            :style="{ background: statusConfig(t.status).bg, color: statusConfig(t.status).fg }"
-            :aria-label="`部署状态:${statusConfig(t.status).label}`"
+            :style="{ background: statusConfig(tg.status).bg, color: statusConfig(tg.status).fg }"
+            :aria-label="t('run.deployStatusAria', { label: statusConfig(tg.status).label })"
           >
             <span
               class="dt-badge-dot"
-              :class="{ 'dt-badge-dot--pulse': statusConfig(t.status).pulse }"
-              :style="{ background: statusConfig(t.status).fg }"
+              :class="{ 'dt-badge-dot--pulse': statusConfig(tg.status).pulse }"
+              :style="{ background: statusConfig(tg.status).fg }"
               aria-hidden="true"
             />
-            {{ statusConfig(t.status).label }}
+            {{ statusConfig(tg.status).label }}
           </span>
-          <span class="dt-server" :title="t.serverName">{{ t.serverName }}</span>
-          <span class="dt-duration mono" :aria-label="`耗时 ${durationText(t)}`">{{ durationText(t) }}</span>
+          <span class="dt-server" :title="tg.serverName">{{ tg.serverName }}</span>
+          <span class="dt-duration mono" :aria-label="t('run.durationAria', { dur: durationText(tg) })">{{ durationText(tg) }}</span>
         </div>
 
         <p
-          v-if="t.message"
+          v-if="tg.message"
           class="dt-message"
-          :class="{ 'dt-message--rollback': t.status === 'rolled_back' }"
+          :class="{ 'dt-message--rollback': tg.status === 'rolled_back' }"
         >
           <svg
-            v-if="t.status === 'rolled_back'"
+            v-if="tg.status === 'rolled_back'"
             class="dt-message-icon"
             width="13" height="13" viewBox="0 0 24 24" fill="none"
             stroke="currentColor" stroke-width="2" aria-hidden="true"
@@ -158,17 +161,17 @@ function counts(targets: DeployTarget[]): { ok: number; bad: number; rolledBack:
             <path d="M3 7v6h6" />
             <path d="M3 13a9 9 0 1 0 3-7.7L3 8" />
           </svg>
-          <span>{{ t.message }}</span>
+          <span>{{ tg.message }}</span>
         </p>
 
         <div class="dt-times">
           <span class="dt-time">
-            <span class="dt-time-key">开始</span>
-            <span class="dt-time-val mono">{{ formatTime(t.startedAt) }}</span>
+            <span class="dt-time-key">{{ t('run.timeStart') }}</span>
+            <span class="dt-time-val mono">{{ formatTime(tg.startedAt) }}</span>
           </span>
           <span class="dt-time">
-            <span class="dt-time-key">结束</span>
-            <span class="dt-time-val mono">{{ formatTime(t.finishedAt) }}</span>
+            <span class="dt-time-key">{{ t('run.timeEnd') }}</span>
+            <span class="dt-time-val mono">{{ formatTime(tg.finishedAt) }}</span>
           </span>
         </div>
       </li>
@@ -197,7 +200,7 @@ function counts(targets: DeployTarget[]): { ok: number; bad: number; rolledBack:
           <path d="M3 7v6h6" />
           <path d="M3 13a9 9 0 1 0 3-7.7L3 8" />
         </svg>
-        {{ retrying ? '重试中…' : `重试失败目标（${failedCount}）` }}
+        {{ retrying ? t('run.retrying') : t('run.retryFailedTargets', { n: failedCount }) }}
       </button>
     </footer>
   </section>

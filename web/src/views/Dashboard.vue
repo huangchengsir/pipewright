@@ -7,6 +7,7 @@
  * 无数据各 widget 自行降级到空状态(自托管首启即可用,不白屏)。
  */
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 
 import { listRuns, type RunListItem } from '../api/runs'
@@ -25,6 +26,7 @@ import DoraMetricCard from '../components/metrics/DoraMetricCard.vue'
 import '../components/dashboard/dashboard.css'
 
 const router = useRouter()
+const { t } = useI18n()
 
 const loading = ref(true)
 const refreshing = ref(false)
@@ -109,18 +111,18 @@ const successRate = computed<number | null>(() => {
 const serversOnline = computed(() => serverMetrics.value.filter((m) => m.reachable).length)
 
 const kpis = computed(() => [
-  { label: '项目', value: String(projects.value.length), to: '/projects', accent: 'primary' },
-  { label: '运行总数', value: String(runsTotal.value), to: '/runs', accent: 'neutral' },
+  { label: t('dashboard.kpiProjects'), value: String(projects.value.length), to: '/projects', accent: 'primary' },
+  { label: t('dashboard.kpiRuns'), value: String(runsTotal.value), to: '/runs', accent: 'neutral' },
   {
-    label: '近期成功率',
+    label: t('dashboard.kpiSuccess'),
     value: successRate.value === null ? '—' : `${successRate.value}%`,
-    suffix: successRate.value === null ? '' : '近 12 次',
+    suffix: successRate.value === null ? '' : t('dashboard.kpiSuccessSuffix'),
     to: '/runs',
     accent: successRate.value === null ? 'neutral' : successRate.value >= 90 ? 'ok' : successRate.value >= 70 ? 'warn' : 'err',
   },
-  { label: '进行中', value: String(runningTotal.value), to: '/runs', accent: runningTotal.value > 0 ? 'run' : 'neutral' },
+  { label: t('dashboard.kpiRunning'), value: String(runningTotal.value), to: '/runs', accent: runningTotal.value > 0 ? 'run' : 'neutral' },
   {
-    label: '服务器在线',
+    label: t('dashboard.kpiServers'),
     value: servers.value.length ? `${serversOnline.value}/${servers.value.length}` : '0',
     to: '/server-status',
     accent: servers.value.length && serversOnline.value < servers.value.length ? 'warn' : 'ok',
@@ -139,22 +141,22 @@ onMounted(load)
   <div class="dashboard">
     <header class="dash-header">
       <div>
-        <h1 class="dash-title">概览</h1>
-        <p class="dash-sub">CI/CD · 部署 · 运维 全局态</p>
+        <h1 class="dash-title">{{ t('dashboard.title') }}</h1>
+        <p class="dash-sub">{{ t('dashboard.subtitle') }}</p>
       </div>
       <div class="dash-actions">
         <button class="dash-ghost" type="button" :disabled="refreshing" @click="load(true)">
           <svg class="dash-refresh-icon" :class="{ spin: refreshing }" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M1 4v6h6M23 20v-6h-6" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
           </svg>
-          刷新
+          {{ t('common.refresh') }}
         </button>
-        <button class="dash-primary" type="button" @click="router.push('/projects')">＋ 新建项目</button>
+        <button class="dash-primary" type="button" @click="router.push('/projects')">{{ t('dashboard.newProject') }}</button>
       </div>
     </header>
 
     <!-- KPI 行 -->
-    <section class="kpi-row" aria-label="关键指标">
+    <section class="kpi-row" :aria-label="t('dashboard.kpiAria')">
       <button v-for="k in kpis" :key="k.label" class="kpi" :class="`kpi--${k.accent}`" type="button" @click="router.push(k.to)">
         <span class="kpi-label">{{ k.label }}</span>
         <strong class="kpi-value">{{ k.value }}</strong>
@@ -171,37 +173,37 @@ onMounted(load)
 
       <section class="card bento-dora" aria-labelledby="dash-dora-h">
         <header class="card-head">
-          <h2 id="dash-dora-h" class="card-title">DORA 指标 <span class="dora-window">{{ dora?.window ?? '30d' }}</span></h2>
-          <button class="card-link" type="button" @click="router.push('/metrics/dora')">详情 →</button>
+          <h2 id="dash-dora-h" class="card-title">{{ t('dashboard.doraTitle') }} <span class="dora-window">{{ dora?.window ?? '30d' }}</span></h2>
+          <button class="card-link" type="button" @click="router.push('/metrics/dora')">{{ t('common.detailArrow') }}</button>
         </header>
         <div v-if="loading" class="dora-skeleton"><span v-for="i in 4" :key="i" /></div>
         <div v-else-if="dora" class="dora-grid">
           <DoraMetricCard
-            title="部署频率" subtitle="Deployment Frequency"
+            :title="t('dashboard.doraDeployFreq')" :subtitle="t('dashboard.subDeployFreq')"
             :display="dora.metrics.deploymentFrequency.sampleCount ? formatFrequency(dora.deploymentFrequency) : '—'"
-            :caption="`${dora.windowDays} 天内 ${dora.totalDeployments} 次部署`"
+            :caption="t('dashboard.capDeployments', { days: dora.windowDays, count: dora.totalDeployments })"
             :band="dora.metrics.deploymentFrequency.band" :sampleCount="dora.metrics.deploymentFrequency.sampleCount" :trend="deployTrend"
           />
           <DoraMetricCard
-            title="变更前置时长" subtitle="Lead Time"
+            :title="t('dashboard.doraLeadTime')" :subtitle="t('dashboard.subLeadTime')"
             :display="dora.metrics.leadTime.sampleCount ? formatDuration(dora.leadTimeSeconds) : '—'"
-            caption="提交到部署的中位时长"
+            :caption="t('dashboard.capLeadTime')"
             :band="dora.metrics.leadTime.band" :sampleCount="dora.metrics.leadTime.sampleCount" :trend="deployTrend"
           />
           <DoraMetricCard
-            title="变更失败率" subtitle="Change Failure Rate"
+            :title="t('dashboard.doraCfr')" :subtitle="t('dashboard.subCfr')"
             :display="dora.metrics.changeFailureRate.sampleCount ? formatPercent(dora.changeFailureRate) : '—'"
-            :caption="`${dora.failedDeployments}/${dora.totalDeployments} 次部署失败`"
+            :caption="t('dashboard.capCfr', { failed: dora.failedDeployments, total: dora.totalDeployments })"
             :band="dora.metrics.changeFailureRate.band" :sampleCount="dora.metrics.changeFailureRate.sampleCount" :trend="cfrTrend"
           />
           <DoraMetricCard
-            title="平均恢复时长" subtitle="MTTR"
+            :title="t('dashboard.doraMttr')" :subtitle="t('dashboard.subMttr')"
             :display="dora.metrics.mttr.sampleCount ? formatDuration(dora.mttrSeconds) : '—'"
-            caption="失败到恢复的中位时长"
+            :caption="t('dashboard.capMttr')"
             :band="dora.metrics.mttr.band" :sampleCount="dora.metrics.mttr.sampleCount" :trend="cfrTrend"
           />
         </div>
-        <p v-else class="card-empty">暂无 DORA 数据。完成若干次部署后,四项工程效能指标会在此汇总。</p>
+        <p v-else class="card-empty">{{ t('dashboard.doraEmpty') }}</p>
       </section>
     </div>
   </div>

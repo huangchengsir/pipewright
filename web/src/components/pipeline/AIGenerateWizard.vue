@@ -14,6 +14,7 @@
  */
 
 import { ref, computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   aiGenerate,
   aiApply,
@@ -37,6 +38,8 @@ const emit = defineEmits<{
   close: []
   applied: []
 }>()
+
+const { t } = useI18n()
 
 // ─── State machine ────────────────────────────────────────────────────────────
 
@@ -126,9 +129,9 @@ async function generate(): Promise<void> {
     phase.value = 'result'
   } catch (err) {
     if (err instanceof HttpError) {
-      generateError.value = err.apiError?.message ?? `请求失败(${err.status})`
+      generateError.value = err.apiError?.message ?? t('pipelinePanels.wizRequestFailed', { status: err.status })
     } else {
-      generateError.value = '网络错误,请稍后重试。'
+      generateError.value = t('pipelinePanels.wizNetworkError')
     }
     phase.value = 'idle'
   }
@@ -156,9 +159,9 @@ async function apply(): Promise<void> {
     setTimeout(() => { emit('close') }, 1200)
   } catch (err) {
     if (err instanceof HttpError) {
-      applyError.value = err.apiError?.message ?? `应用失败(${err.status})`
+      applyError.value = err.apiError?.message ?? t('pipelinePanels.wizApplyFailed', { status: err.status })
     } else {
-      applyError.value = '网络错误,请稍后重试。'
+      applyError.value = t('pipelinePanels.wizNetworkError')
     }
     phase.value = 'result'
   }
@@ -188,11 +191,11 @@ const isApplying = computed<boolean>(() => phase.value === 'applying')
 
 function kindLabel(kind: string): string {
   const map: Record<string, string> = {
-    source:  '源阶段',
-    build:   '构建阶段',
-    deploy:  '部署阶段',
-    notify:  '通知阶段',
-    custom:  '自定义',
+    source:  t('pipelinePanels.wizKindSource'),
+    build:   t('pipelinePanels.wizKindBuild'),
+    deploy:  t('pipelinePanels.wizKindDeploy'),
+    notify:  t('pipelinePanels.wizKindNotify'),
+    custom:  t('pipelinePanels.wizKindCustom'),
   }
   return map[kind] ?? kind
 }
@@ -214,7 +217,7 @@ watch(() => props.projectId, () => {
     class="wiz-backdrop"
     aria-modal="true"
     role="dialog"
-    aria-label="AI 生成流水线向导"
+    :aria-label="t('pipelinePanels.wizDialogAria')"
     @click.self="emit('close')"
   >
     <!-- ─── Panel ──────────────────────────────────────────────────────────── -->
@@ -228,12 +231,12 @@ watch(() => props.projectId, () => {
           </svg>
         </div>
         <div class="wiz-header-text">
-          <h2 class="wiz-title">AI 生成流水线</h2>
-          <p class="wiz-subtitle">分析仓库技术栈,智能推荐配置</p>
+          <h2 class="wiz-title">{{ t('pipelinePanels.wizTitle') }}</h2>
+          <p class="wiz-subtitle">{{ t('pipelinePanels.wizSubtitle') }}</p>
         </div>
         <button
           class="wiz-close"
-          aria-label="关闭向导"
+          :aria-label="t('pipelinePanels.wizCloseAria')"
           @click="emit('close')"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -252,11 +255,11 @@ watch(() => props.projectId, () => {
               <path d="M20 6 9 17l-5-5"/>
             </svg>
           </div>
-          <p class="success-text">已成功应用,画布即将刷新…</p>
+          <p class="success-text">{{ t('pipelinePanels.wizSuccessText') }}</p>
         </div>
 
         <!-- ─── Generating skeleton ──────────────────────────────────────── -->
-        <div v-else-if="phase === 'generating'" class="wiz-skeleton" aria-busy="true" aria-label="AI 分析中">
+        <div v-else-if="phase === 'generating'" class="wiz-skeleton" aria-busy="true" :aria-label="t('pipelinePanels.wizAnalyzingAria')">
           <div class="skel-section">
             <SkeletonBlock :width="120" :height="13" />
             <div class="skel-row">
@@ -272,7 +275,7 @@ watch(() => props.projectId, () => {
           </div>
           <div class="skel-generating-label" aria-hidden="true">
             <span class="skel-dot" /><span class="skel-dot" /><span class="skel-dot" />
-            <span>AI 正在分析仓库…</span>
+            <span>{{ t('pipelinePanels.wizAnalyzingRepo') }}</span>
           </div>
         </div>
 
@@ -287,21 +290,21 @@ watch(() => props.projectId, () => {
                 <path d="M12 8v5M12 16h.01"/>
               </svg>
             </div>
-            <h3 class="unavail-title">AI 提供商未配置</h3>
-            <p class="unavail-desc">{{ response?.reason || 'AI 提供商未配置,可在设置中启用后再尝试智能生成。' }}</p>
+            <h3 class="unavail-title">{{ t('pipelinePanels.wizUnavailTitle') }}</h3>
+            <p class="unavail-desc">{{ response?.reason || t('pipelinePanels.wizUnavailDescDefault') }}</p>
             <div class="unavail-actions">
               <router-link
                 to="/settings/ai"
                 class="unavail-link"
                 @click="emit('close')"
               >
-                前往设置 · AI 提供商
+                {{ t('pipelinePanels.wizGotoSettings') }}
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
                   <path d="M7 17 17 7M7 7h10v10"/>
                 </svg>
               </router-link>
               <AppButton variant="ghost" @click="emit('close')">
-                手动配置流水线
+                {{ t('pipelinePanels.wizManualConfig') }}
               </AppButton>
             </div>
           </div>
@@ -311,7 +314,7 @@ watch(() => props.projectId, () => {
 
             <!-- Clone degraded banner -->
             <AppBanner v-if="showDegradedClone" variant="warn" class="wiz-inner-banner">
-              未能拉取仓库代码,基于仓库地址和补充描述进行推断,配置仅供参考。
+              {{ t('pipelinePanels.wizDegradedClone') }}
             </AppBanner>
 
             <!-- LLM failure warning banner -->
@@ -320,43 +323,43 @@ watch(() => props.projectId, () => {
             </AppBanner>
 
             <!-- Analysis card -->
-            <section class="analysis-card" aria-label="仓库技术栈分析">
+            <section class="analysis-card" :aria-label="t('pipelinePanels.wizAnalysisAria')">
               <div class="analysis-card-head">
                 <span class="analysis-card-icon" aria-hidden="true">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/>
                   </svg>
                 </span>
-                <span class="analysis-card-label">仓库分析</span>
+                <span class="analysis-card-label">{{ t('pipelinePanels.wizRepoAnalysis') }}</span>
                 <span
                   class="analysis-clone-badge"
                   :class="response.analysis.cloned ? 'badge--ok' : 'badge--warn'"
                 >
-                  {{ response.analysis.cloned ? '已克隆' : '降级推断' }}
+                  {{ response.analysis.cloned ? t('pipelinePanels.wizCloned') : t('pipelinePanels.wizDegradedInfer') }}
                 </span>
               </div>
 
               <div class="analysis-grid">
                 <div class="analysis-item">
-                  <span class="analysis-item-key">语言</span>
-                  <span class="analysis-item-val">{{ response.analysis.language || '未识别' }}</span>
+                  <span class="analysis-item-key">{{ t('pipelinePanels.wizLanguage') }}</span>
+                  <span class="analysis-item-val">{{ response.analysis.language || t('pipelinePanels.wizLanguageUnknown') }}</span>
                 </div>
                 <div class="analysis-item">
-                  <span class="analysis-item-key">版本</span>
+                  <span class="analysis-item-key">{{ t('pipelinePanels.wizVersion') }}</span>
                   <span class="analysis-item-val">{{ response.analysis.languageVersion || '—' }}</span>
                 </div>
                 <div class="analysis-item">
-                  <span class="analysis-item-key">构建工具</span>
+                  <span class="analysis-item-key">{{ t('pipelinePanels.wizBuildTool') }}</span>
                   <span class="analysis-item-val">{{ response.analysis.buildTool || '—' }}</span>
                 </div>
                 <div class="analysis-item">
-                  <span class="analysis-item-key">Dockerfile</span>
-                  <span class="analysis-item-val">{{ response.analysis.hasDockerfile ? '已检测' : '无' }}</span>
+                  <span class="analysis-item-key">{{ t('pipelinePanels.wizDockerfile') }}</span>
+                  <span class="analysis-item-val">{{ response.analysis.hasDockerfile ? t('pipelinePanels.wizDockerfileDetected') : t('pipelinePanels.wizDockerfileNone') }}</span>
                 </div>
               </div>
 
               <div v-if="response.analysis.signals.length" class="analysis-signals">
-                <span class="analysis-signals-label">检测到</span>
+                <span class="analysis-signals-label">{{ t('pipelinePanels.wizDetected') }}</span>
                 <span
                   v-for="sig in response.analysis.signals"
                   :key="sig"
@@ -378,23 +381,23 @@ watch(() => props.projectId, () => {
             </div>
 
             <!-- Proposal preview -->
-            <section class="proposal-section" aria-label="流水线提案">
+            <section class="proposal-section" :aria-label="t('pipelinePanels.wizProposalAria')">
               <div class="proposal-header">
-                <span class="proposal-header-title">提案预览</span>
+                <span class="proposal-header-title">{{ t('pipelinePanels.wizProposalPreview') }}</span>
                 <div class="proposal-header-actions">
                   <button
                     class="sel-btn"
                     :class="{ 'sel-btn--active': allSelected }"
                     @click="allSelected ? deselectAll() : selectAll()"
                   >
-                    {{ allSelected ? '全部取消' : '全部选择' }}
+                    {{ allSelected ? t('pipelinePanels.wizDeselectAll') : t('pipelinePanels.wizSelectAll') }}
                   </button>
                 </div>
               </div>
 
               <!-- Stages -->
               <div class="proposal-group">
-                <div class="proposal-group-label">流水线阶段</div>
+                <div class="proposal-group-label">{{ t('pipelinePanels.wizPipelineStages') }}</div>
                 <div
                   v-for="stage in response.proposal.stages"
                   :key="stage.id"
@@ -406,7 +409,7 @@ watch(() => props.projectId, () => {
                       type="checkbox"
                       class="prop-checkbox"
                       :checked="selectedStageIds.has(stage.id)"
-                      :aria-label="`选择阶段:${stage.name}`"
+                      :aria-label="t('pipelinePanels.wizSelectStage', { name: stage.name })"
                       @change="toggleStage(stage.id)"
                     />
                     <span class="prop-checkbox-visual" aria-hidden="true" />
@@ -434,11 +437,11 @@ watch(() => props.projectId, () => {
                         <!-- 串/并:有 needs → 串行(显示依赖);无 needs → 与同阶段其它节点并行 -->
                         <div v-if="job.needs && job.needs.length" class="job-needs">
                           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
-                          <span>串行 · 依赖 {{ job.needs.join('、') }}</span>
+                          <span>{{ t('pipelinePanels.wizSerialDeps', { needs: job.needs.join('、') }) }}</span>
                         </div>
                         <div v-else class="job-needs job-needs--parallel">
                           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M8 6v12M16 6v12"/></svg>
-                          <span>并行</span>
+                          <span>{{ t('pipelinePanels.wizParallel') }}</span>
                         </div>
                       </div>
                     </div>
@@ -448,7 +451,7 @@ watch(() => props.projectId, () => {
 
               <!-- Build config -->
               <div class="proposal-group">
-                <div class="proposal-group-label">构建配置</div>
+                <div class="proposal-group-label">{{ t('pipelinePanels.wizBuildConfig') }}</div>
                 <div
                   class="proposal-item"
                   :class="{ 'proposal-item--selected': buildSelected }"
@@ -458,14 +461,14 @@ watch(() => props.projectId, () => {
                       type="checkbox"
                       class="prop-checkbox"
                       :checked="buildSelected"
-                      aria-label="选择构建配置"
+                      :aria-label="t('pipelinePanels.wizSelectBuildConfig')"
                       @change="buildSelected = !buildSelected"
                     />
                     <span class="prop-checkbox-visual" aria-hidden="true" />
                   </label>
                   <div class="proposal-item-content">
                     <div class="proposal-item-head">
-                      <span class="proposal-item-name">{{ response.proposal.build.model === 'toolchain' ? '工具链构建' : 'Dockerfile 构建' }}</span>
+                      <span class="proposal-item-name">{{ response.proposal.build.model === 'toolchain' ? t('pipelinePanels.wizToolchainBuild') : t('pipelinePanels.wizDockerfileBuild') }}</span>
                       <span class="proposal-kind-badge">build</span>
                     </div>
                     <div class="proposal-build-meta">
@@ -475,7 +478,7 @@ watch(() => props.projectId, () => {
                       <template v-else-if="response.proposal.build.dockerfilePath">
                         <span class="build-meta-chip">{{ response.proposal.build.dockerfilePath }}</span>
                       </template>
-                      <span class="build-meta-chip">产物: {{ response.proposal.build.artifactType }}</span>
+                      <span class="build-meta-chip">{{ t('pipelinePanels.wizArtifact', { type: response.proposal.build.artifactType }) }}</span>
                     </div>
                   </div>
                 </div>
@@ -483,7 +486,7 @@ watch(() => props.projectId, () => {
 
               <!-- Branch mappings -->
               <div v-if="response.proposal.branchMappings.length" class="proposal-group">
-                <div class="proposal-group-label">分支映射</div>
+                <div class="proposal-group-label">{{ t('pipelinePanels.wizBranchMappings') }}</div>
                 <div
                   v-for="mapping in response.proposal.branchMappings"
                   :key="mapping.id"
@@ -495,7 +498,7 @@ watch(() => props.projectId, () => {
                       type="checkbox"
                       class="prop-checkbox"
                       :checked="selectedMappingIds.has(mapping.id)"
-                      :aria-label="`选择分支映射:${mapping.branchPattern} → ${mapping.environment}`"
+                      :aria-label="t('pipelinePanels.wizSelectBranchMapping', { pattern: mapping.branchPattern, env: mapping.environment })"
                       @change="toggleMapping(mapping.id)"
                     />
                     <span class="prop-checkbox-visual" aria-hidden="true" />
@@ -530,22 +533,22 @@ watch(() => props.projectId, () => {
             <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="idle-hint-icon" aria-hidden="true">
               <path d="M3 12h3.5l2.2-6 3.6 12 2.4-7 1.3 1h4.5"/>
             </svg>
-            <p class="idle-hint-text">AI 将分析项目仓库的技术栈与结构,为你生成一份合理的流水线配置提案。你可以逐项勾选接受。</p>
+            <p class="idle-hint-text">{{ t('pipelinePanels.wizIdleHint') }}</p>
           </div>
 
           <div class="nl-field">
-            <label for="wiz-nl-input" class="nl-label">补充说明（可选）</label>
+            <label for="wiz-nl-input" class="nl-label">{{ t('pipelinePanels.wizSupplementLabel') }}</label>
             <textarea
               id="wiz-nl-input"
               v-model="nlSupplement"
               class="nl-textarea"
               rows="3"
-              placeholder="例:push main 分支部署到生产,develop 分支部署到测试环境"
-              aria-label="自然语言补充说明"
+              :placeholder="t('pipelinePanels.wizSupplementPlaceholder')"
+              :aria-label="t('pipelinePanels.wizSupplementAria')"
               @keydown.ctrl.enter="generate"
               @keydown.meta.enter="generate"
             />
-            <p class="nl-hint">Ctrl+Enter / ⌘+Enter 快速生成</p>
+            <p class="nl-hint">{{ t('pipelinePanels.wizQuickGenHint') }}</p>
           </div>
 
           <AppBanner v-if="generateError" variant="error" class="wiz-inner-banner">
@@ -560,7 +563,7 @@ watch(() => props.projectId, () => {
 
         <!-- Idle footer -->
         <template v-if="phase === 'idle'">
-          <AppButton variant="ghost" @click="emit('close')">取消</AppButton>
+          <AppButton variant="ghost" @click="emit('close')">{{ t('pipelinePanels.wizCancel') }}</AppButton>
           <AppButton
             variant="ai"
             :loading="false"
@@ -569,21 +572,21 @@ watch(() => props.projectId, () => {
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M3 12h3.5l2.2-6 3.6 12 2.4-7 1.3 1h4.5"/>
             </svg>
-            生成配置
+            {{ t('pipelinePanels.wizGenerateConfig') }}
           </AppButton>
         </template>
 
         <!-- Generating footer -->
         <template v-else-if="phase === 'generating'">
-          <AppButton variant="ghost" disabled>取消</AppButton>
-          <AppButton variant="ai" :loading="true">AI 分析中…</AppButton>
+          <AppButton variant="ghost" disabled>{{ t('pipelinePanels.wizCancel') }}</AppButton>
+          <AppButton variant="ai" :loading="true">{{ t('pipelinePanels.wizAnalyzing') }}</AppButton>
         </template>
 
         <!-- Result footer -->
         <template v-else-if="phase === 'result' || phase === 'applying'">
           <!-- Unavailable: only close button -->
           <template v-if="showUnavailable">
-            <AppButton variant="ghost" @click="emit('close')">关闭</AppButton>
+            <AppButton variant="ghost" @click="emit('close')">{{ t('pipelinePanels.wizClose') }}</AppButton>
           </template>
 
           <!-- Available result footer -->
@@ -592,7 +595,7 @@ watch(() => props.projectId, () => {
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
                 <path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10M23 14l-4.64 4.36A9 9 0 0 1 3.51 15"/>
               </svg>
-              重新生成
+              {{ t('pipelinePanels.wizRegenerate') }}
             </AppButton>
 
             <!-- 应用按钮仅在有提案时显示;LLM 失败降级(proposal=null)时只能重新生成/关闭。 -->
@@ -603,7 +606,7 @@ watch(() => props.projectId, () => {
                 :loading="isApplying"
                 @click="apply"
               >
-                应用所选
+                {{ t('pipelinePanels.wizApplySelected') }}
               </AppButton>
               <AppButton
                 variant="primary"
@@ -611,10 +614,10 @@ watch(() => props.projectId, () => {
                 :loading="isApplying"
                 @click="selectAll(); apply()"
               >
-                全部接受
+                {{ t('pipelinePanels.wizAcceptAll') }}
               </AppButton>
             </div>
-            <AppButton v-else variant="ghost" @click="emit('close')">关闭</AppButton>
+            <AppButton v-else variant="ghost" @click="emit('close')">{{ t('pipelinePanels.wizClose') }}</AppButton>
           </template>
         </template>
 

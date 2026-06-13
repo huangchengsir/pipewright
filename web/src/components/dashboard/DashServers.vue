@@ -4,6 +4,7 @@
  * 每台机一张紧凑卡:可达性 + 内存/磁盘使用率条 + CPU 负载。不可达显错误态。
  */
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import type { Server, ServerMetrics } from '../../api/servers'
 
@@ -14,6 +15,7 @@ const props = defineProps<{
 }>()
 
 const router = useRouter()
+const { t } = useI18n()
 
 interface Row {
   id: string
@@ -65,15 +67,15 @@ function tone(pct: number | null): string {
 <template>
   <section class="card srv" aria-labelledby="dash-srv-h">
     <header class="card-head">
-      <h2 id="dash-srv-h" class="card-title">服务器健康</h2>
-      <button class="card-link" type="button" @click="router.push('/server-status')">全部 →</button>
+      <h2 id="dash-srv-h" class="card-title">{{ t('dash.servers') }}</h2>
+      <button class="card-link" type="button" @click="router.push('/server-status')">{{ t('common.allArrow') }}</button>
     </header>
 
     <div v-if="loading" class="srv-grid">
       <span v-for="i in 2" :key="i" class="sk-card" />
     </div>
 
-    <p v-else-if="!rows.length" class="card-empty">尚未登记服务器。在「服务器」页添加目标机后,这里显示实时 CPU/内存/磁盘。</p>
+    <p v-else-if="!rows.length" class="card-empty">{{ t('dash.serversEmpty') }}</p>
 
     <div v-else class="srv-grid">
       <article v-for="r in rows" :key="r.id" class="srv-card" :class="{ down: !r.reachable }">
@@ -81,25 +83,25 @@ function tone(pct: number | null): string {
           <span class="srv-name">{{ r.name }}</span>
           <span class="srv-state" :class="r.reachable ? 'up' : 'down'">
             <span class="srv-dot" aria-hidden="true" />
-            {{ r.reachable ? '在线' : '离线' }}
+            {{ r.reachable ? t('dash.online') : t('dash.offline') }}
           </span>
         </div>
         <div class="srv-host">{{ r.host }}</div>
 
         <template v-if="r.reachable">
           <div class="srv-metric">
-            <div class="srv-metric-head"><span>内存</span><span class="srv-metric-val">{{ r.memPct ?? '—' }}%</span></div>
+            <div class="srv-metric-head"><span>{{ t('dash.memory') }}</span><span class="srv-metric-val">{{ r.memPct ?? '—' }}%</span></div>
             <div class="srv-bar"><span class="srv-fill" :class="tone(r.memPct)" :style="{ width: (r.memPct ?? 0) + '%' }" /></div>
             <div class="srv-metric-sub">{{ r.memText }}</div>
           </div>
           <div class="srv-metric">
-            <div class="srv-metric-head"><span>磁盘</span><span class="srv-metric-val">{{ r.diskPct ?? '—' }}%</span></div>
+            <div class="srv-metric-head"><span>{{ t('dash.disk') }}</span><span class="srv-metric-val">{{ r.diskPct ?? '—' }}%</span></div>
             <div class="srv-bar"><span class="srv-fill" :class="tone(r.diskPct)" :style="{ width: (r.diskPct ?? 0) + '%' }" /></div>
             <div class="srv-metric-sub">{{ r.diskText }}</div>
           </div>
-          <div class="srv-load">负载 <strong>{{ r.load }}</strong></div>
+          <div class="srv-load">{{ t('dash.load') }} <strong>{{ r.load }}</strong></div>
         </template>
-        <p v-else class="srv-err">{{ r.error || '无法连接' }}</p>
+        <p v-else class="srv-err">{{ r.error || t('dash.unreachable') }}</p>
       </article>
     </div>
   </section>

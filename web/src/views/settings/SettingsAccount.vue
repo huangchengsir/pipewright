@@ -11,6 +11,7 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import FormField from '../../components/ui/FormField.vue'
 import AppButton from '../../components/ui/AppButton.vue'
 import EmptyState from '../../components/ui/EmptyState.vue'
@@ -27,6 +28,7 @@ import {
   type Session,
 } from '../../api/account'
 
+const { t } = useI18n()
 const toast = useToast()
 const confirm = useConfirm()
 const router = useRouter()
@@ -53,15 +55,15 @@ function validatePassword(): boolean {
   clearPwErrors()
   let ok = true
   if (!currentPassword.value) {
-    currentError.value = '请输入当前口令'
+    currentError.value = t('settingsAccount.errCurrentRequired')
     ok = false
   }
   if (newPassword.value.length < 8) {
-    newError.value = '新口令至少 8 位'
+    newError.value = t('settingsAccount.errNewTooShort')
     ok = false
   }
   if (confirmPassword.value !== newPassword.value) {
-    confirmError.value = '两次输入的新口令不一致'
+    confirmError.value = t('settingsAccount.errConfirmMismatch')
     ok = false
   }
   return ok
@@ -79,22 +81,22 @@ async function onSubmitPassword(): Promise<void> {
     newPassword.value = ''
     confirmPassword.value = ''
     clearPwErrors()
-    toast.success('口令已更新', { detail: '其它会话已被注销,当前会话保持登录' })
+    toast.success(t('settingsAccount.toastPwUpdated'), { detail: t('settingsAccount.toastPwUpdatedDetail') })
     // The server revoked other sessions; refresh the visible list.
     await loadSessions()
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.apiError?.code === 'invalid_current_password') {
-        currentError.value = '当前口令错误'
+        currentError.value = t('settingsAccount.errCurrentWrong')
         return
       }
       if (err.apiError?.code === 'weak_password') {
-        newError.value = '新口令至少 8 位'
+        newError.value = t('settingsAccount.errNewTooShort')
         return
       }
     }
-    toast.error('口令更新失败', {
-      detail: err instanceof Error ? err.message : '未知错误',
+    toast.error(t('settingsAccount.toastPwFailed'), {
+      detail: err instanceof Error ? err.message : t('settingsAccount.unknownError'),
     })
   } finally {
     submitting.value = false
@@ -112,7 +114,7 @@ async function loadSessions(): Promise<void> {
   try {
     sessions.value = await listSessions()
   } catch (err) {
-    sessionsError.value = err instanceof Error ? err.message : '无法加载会话'
+    sessionsError.value = err instanceof Error ? err.message : t('settingsAccount.errLoadSessions')
   } finally {
     sessionsLoading.value = false
   }
@@ -120,11 +122,11 @@ async function loadSessions(): Promise<void> {
 
 async function onRevoke(s: Session): Promise<void> {
   const ok = await confirm.open({
-    title: s.current ? '注销当前会话?' : '注销该会话?',
+    title: s.current ? t('settingsAccount.revokeCurrentTitle') : t('settingsAccount.revokeTitle'),
     body: s.current
-      ? '注销当前会话后你将被登出,需要重新登录。'
-      : '该设备/浏览器将被立即登出,需重新登录才能再次访问。',
-    confirmLabel: '注销会话',
+      ? t('settingsAccount.revokeCurrentBody')
+      : t('settingsAccount.revokeBody'),
+    confirmLabel: t('settingsAccount.revokeConfirm'),
     variant: 'danger',
   })
   if (!ok) return
@@ -132,16 +134,16 @@ async function onRevoke(s: Session): Promise<void> {
     await revokeSession(s.id)
     if (s.current) {
       // Revoking the current session — backend 204; next call will 401 → login.
-      toast.info('当前会话已注销', { detail: '即将跳转登录' })
+      toast.info(t('settingsAccount.toastCurrentRevoked'), { detail: t('settingsAccount.toastCurrentRevokedDetail') })
       sessionStore.clearSession()
       router.push('/login')
       return
     }
-    toast.success('会话已注销')
+    toast.success(t('settingsAccount.toastSessionRevoked'))
     await loadSessions()
   } catch (err) {
-    toast.error('注销会话失败', {
-      detail: err instanceof Error ? err.message : '未知错误',
+    toast.error(t('settingsAccount.toastRevokeFailed'), {
+      detail: err instanceof Error ? err.message : t('settingsAccount.unknownError'),
     })
   }
 }
@@ -161,7 +163,7 @@ function formatTime(iso: string): string {
 // ——— re-run onboarding ———
 function onReopenOnboarding(): void {
   resetOnboarding()
-  toast.info('已重置引导', { detail: '正在打开首次使用引导' })
+  toast.info(t('settingsAccount.toastOnboardingReset'), { detail: t('settingsAccount.toastOnboardingResetDetail') })
   router.push('/onboarding')
 }
 
@@ -173,14 +175,14 @@ onMounted(loadSessions)
     <!-- Identity -->
     <section class="acct-card" aria-labelledby="acct-identity-h">
       <header class="acct-card__h">
-        <h2 id="acct-identity-h" class="acct-card__title">身份</h2>
-        <p class="acct-card__sub">单管理员实例(多用户与 RBAC 为后续版本)。</p>
+        <h2 id="acct-identity-h" class="acct-card__title">{{ t('settingsAccount.identityTitle') }}</h2>
+        <p class="acct-card__sub">{{ t('settingsAccount.identitySub') }}</p>
       </header>
       <div class="acct-identity">
         <div class="acct-avatar mono" aria-hidden="true">{{ username.slice(0, 1).toUpperCase() }}</div>
         <div>
           <div class="acct-identity__name">{{ username }}</div>
-          <div class="acct-identity__role">管理员</div>
+          <div class="acct-identity__role">{{ t('settingsAccount.roleAdmin') }}</div>
         </div>
       </div>
     </section>
@@ -188,11 +190,11 @@ onMounted(loadSessions)
     <!-- Change password -->
     <section class="acct-card" aria-labelledby="acct-pw-h">
       <header class="acct-card__h">
-        <h2 id="acct-pw-h" class="acct-card__title">修改口令</h2>
-        <p class="acct-card__sub">更新后其它会话将被注销,当前会话保持登录。</p>
+        <h2 id="acct-pw-h" class="acct-card__title">{{ t('settingsAccount.changePwTitle') }}</h2>
+        <p class="acct-card__sub">{{ t('settingsAccount.changePwSub') }}</p>
       </header>
       <form class="acct-form" @submit.prevent="onSubmitPassword">
-        <FormField label="当前口令" field-id="acct-current" :error="currentError" required>
+        <FormField :label="t('settingsAccount.currentPwLabel')" field-id="acct-current" :error="currentError" required>
           <template #default="{ fieldId, ariaDescribedby }">
             <input
               :id="fieldId"
@@ -208,10 +210,10 @@ onMounted(loadSessions)
         </FormField>
 
         <FormField
-          label="新口令"
+          :label="t('settingsAccount.newPwLabel')"
           field-id="acct-new"
           :error="newError"
-          hint="至少 8 位"
+          :hint="t('settingsAccount.newPwHint')"
           required
         >
           <template #default="{ fieldId, ariaDescribedby }">
@@ -228,7 +230,7 @@ onMounted(loadSessions)
           </template>
         </FormField>
 
-        <FormField label="确认新口令" field-id="acct-confirm" :error="confirmError" required>
+        <FormField :label="t('settingsAccount.confirmPwLabel')" field-id="acct-confirm" :error="confirmError" required>
           <template #default="{ fieldId, ariaDescribedby }">
             <input
               :id="fieldId"
@@ -245,7 +247,7 @@ onMounted(loadSessions)
 
         <div class="acct-form__actions">
           <AppButton variant="primary" type="submit" :loading="submitting">
-            更新口令
+            {{ t('settingsAccount.changePwBtn') }}
           </AppButton>
         </div>
       </form>
@@ -254,8 +256,8 @@ onMounted(loadSessions)
     <!-- Active sessions -->
     <section class="acct-card" aria-labelledby="acct-sessions-h">
       <header class="acct-card__h">
-        <h2 id="acct-sessions-h" class="acct-card__title">活跃会话</h2>
-        <p class="acct-card__sub">服务端会话(7 天滑动过期)。可注销任意会话立即登出对应设备。</p>
+        <h2 id="acct-sessions-h" class="acct-card__title">{{ t('settingsAccount.sessionsTitle') }}</h2>
+        <p class="acct-card__sub">{{ t('settingsAccount.sessionsSub') }}</p>
       </header>
 
       <div v-if="sessionsLoading" class="acct-sessions__loading" aria-busy="true">
@@ -265,13 +267,13 @@ onMounted(loadSessions)
 
       <p v-else-if="sessionsError" class="acct-sessions__error" role="alert">
         {{ sessionsError }}
-        <button type="button" class="acct-link" @click="loadSessions">重试</button>
+        <button type="button" class="acct-link" @click="loadSessions">{{ t('settingsAccount.retry') }}</button>
       </p>
 
       <EmptyState
         v-else-if="sessions.length === 0"
-        title="暂无活跃会话"
-        description="登录后会话将显示在这里。"
+        :title="t('settingsAccount.emptyTitle')"
+        :description="t('settingsAccount.emptyDesc')"
       />
 
       <ul v-else class="acct-sessions">
@@ -285,14 +287,14 @@ onMounted(loadSessions)
           <div class="acct-session__bd">
             <div class="acct-session__top">
               <span class="acct-session__id mono">{{ s.id }}</span>
-              <span v-if="s.current" class="acct-session__current">当前会话</span>
+              <span v-if="s.current" class="acct-session__current">{{ t('settingsAccount.currentSession') }}</span>
             </div>
             <div class="acct-session__meta">
-              登录于 {{ formatTime(s.createdAt) }} · 最近活跃 {{ formatTime(s.lastSeenAt) }}
+              {{ t('settingsAccount.sessionMeta', { created: formatTime(s.createdAt), lastSeen: formatTime(s.lastSeenAt) }) }}
             </div>
           </div>
           <div class="acct-session__act">
-            <AppButton variant="danger" @click="onRevoke(s)">注销</AppButton>
+            <AppButton variant="danger" @click="onRevoke(s)">{{ t('settingsAccount.revokeBtn') }}</AppButton>
           </div>
         </li>
       </ul>
@@ -301,11 +303,11 @@ onMounted(loadSessions)
     <!-- Re-run onboarding -->
     <section class="acct-card" aria-labelledby="acct-onboarding-h">
       <header class="acct-card__h">
-        <h2 id="acct-onboarding-h" class="acct-card__title">首次使用引导</h2>
-        <p class="acct-card__sub">随时重新打开「连 AI → 加服务器 → 建项目」三步引导。</p>
+        <h2 id="acct-onboarding-h" class="acct-card__title">{{ t('settingsAccount.onboardingTitle') }}</h2>
+        <p class="acct-card__sub">{{ t('settingsAccount.onboardingSub') }}</p>
       </header>
       <div class="acct-form__actions">
-        <AppButton variant="default" @click="onReopenOnboarding">重新引导</AppButton>
+        <AppButton variant="default" @click="onReopenOnboarding">{{ t('settingsAccount.onboardingBtn') }}</AppButton>
       </div>
     </section>
   </div>

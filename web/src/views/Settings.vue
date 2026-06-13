@@ -1,24 +1,27 @@
 <script setup lang="ts">
 // Settings shell with secondary nav — business logic in Story 1.6+
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 </script>
 
 <template>
   <div class="settings-view">
     <header class="view-header">
-      <h1 class="view-title">设置</h1>
-      <p class="view-sub">系统配置与管理</p>
+      <h1 class="view-title">{{ t('settingsHub.title') }}</h1>
+      <p class="view-sub">{{ t('settingsHub.subtitle') }}</p>
     </header>
 
     <!-- Secondary nav -->
-    <nav class="settings-nav" aria-label="设置二级导航">
-      <router-link to="/settings/ai" class="settings-nav-item">AI 提供商</router-link>
-      <router-link to="/settings/oauth" class="settings-nav-item">OAuth 应用</router-link>
-      <router-link to="/settings/notifications" class="settings-nav-item">通知</router-link>
-      <router-link to="/settings/vault" class="settings-nav-item">凭据保险库</router-link>
-      <router-link to="/settings/account" class="settings-nav-item">账户</router-link>
-      <router-link to="/settings/servers" class="settings-nav-item">服务器</router-link>
-      <router-link to="/settings/diagnosis-stats" class="settings-nav-item">诊断反馈</router-link>
-      <router-link to="/settings/system" class="settings-nav-item">系统</router-link>
+    <nav class="settings-nav" :aria-label="t('settingsHub.navAria')">
+      <router-link to="/settings/ai" class="settings-nav-item">{{ t('settingsHub.navAi') }}</router-link>
+      <router-link to="/settings/oauth" class="settings-nav-item">{{ t('settingsHub.navOauth') }}</router-link>
+      <router-link to="/settings/notifications" class="settings-nav-item">{{ t('settingsHub.navNotifications') }}</router-link>
+      <router-link to="/settings/vault" class="settings-nav-item">{{ t('settingsHub.navVault') }}</router-link>
+      <router-link to="/settings/account" class="settings-nav-item">{{ t('settingsHub.navAccount') }}</router-link>
+      <router-link to="/settings/servers" class="settings-nav-item">{{ t('settingsHub.navServers') }}</router-link>
+      <router-link to="/settings/diagnosis-stats" class="settings-nav-item">{{ t('settingsHub.navDiagnosisStats') }}</router-link>
+      <router-link to="/settings/system" class="settings-nav-item">{{ t('settingsHub.navSystem') }}</router-link>
     </nav>
 
     <div class="settings-content">

@@ -1,0 +1,57 @@
+export default {
+  serverFallback: '서버',
+  titleConnecting: '연결 중 · ',
+  titleDisconnected: '⚠ 연결 끊김 · ',
+  titleSuffix: '운영 터미널',
+  hostMachine: '(호스트)',
+
+  kindContainer: '컨테이너',
+  kindHost: '호스트',
+  containerLabel: '컨테이너 {label}',
+  hostShell: '호스트 셸',
+
+  connecting: '연결 중…',
+  connectFailed: '연결 실패',
+  connect: '연결',
+  reconnect: '재연결',
+  disconnect: '연결 해제',
+  close: '닫기',
+
+  enteringContainer: '컨테이너 {name}({host})에 진입하는 중…',
+  connectingHost: '호스트 {host}에 연결하는 중 …',
+  connectFailedDetail: '연결에 실패했습니다. 로그인 상태, 서버 도달 가능 여부 또는 컨테이너 존재 여부를 확인하세요.',
+  sessionEnded: '터미널 세션이 종료되었습니다',
+  sessionEndedShort: '세션 종료',
+
+  terminalAria: '서버 대화형 터미널',
+  hintContainer: '"연결"을 클릭하여 컨테이너 {name}에 진입합니다(docker exec).',
+  hintHost: '"연결"을 클릭하여 호스트 셸에 진입합니다.',
+
+  latency: '지연',
+  copy: '복사',
+  paste: '붙여넣기',
+  interrupt: '중단',
+  contextMenu: '마우스 오른쪽 메뉴',
+  selectAll: '전체 선택',
+  clearScreen: '화면 지우기',
+  clipboardSecureWarn: '클립보드에는 https/localhost가 필요합니다',
+
+  completeDisableTitle: 'AI 자동완성 끄기',
+  completeEnableTitle: 'AI 자동완성 켜기',
+  aiComplete: 'AI 자동완성',
+  on: '켬',
+  off: '끔',
+
+  aiLauncherTitle: 'AI 운영 어시스턴트 펼치기',
+  aiAssistant: 'AI 어시스턴트',
+
+  charCount: '{n}자',
+  toastCopied: '복사됨',
+  toastPasted: '붙여넣음',
+  toastSigintMsg: 'SIGINT 전송됨',
+  toastSigintSub: '현재 명령 중단',
+  toastClipboardUnavailable: '클립보드를 읽을 수 없습니다',
+  toastClipboardSecureCtx: 'https / localhost 보안 컨텍스트가 필요합니다',
+  toastClipboardDenied: '클립보드 읽기가 거부되었습니다',
+  toastClipboardAllow: '브라우저에서 클립보드 권한을 허용하세요',
+}

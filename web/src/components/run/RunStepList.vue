@@ -5,7 +5,10 @@
 -->
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { RunStep, StepStatus } from '../../api/runs'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   steps: RunStep[]
@@ -67,7 +70,7 @@ function formatDuration(ms: number | null): string {
 
 <template>
   <div class="step-list">
-    <h3 class="subsection-title">步骤详情<span class="step-hint">点击查看单步日志</span></h3>
+    <h3 class="subsection-title">{{ t('run.stepDetails') }}<span class="step-hint">{{ t('run.stepHint') }}</span></h3>
     <ul class="steps" role="list">
       <li>
         <button
@@ -77,7 +80,7 @@ function formatDuration(ms: number | null): string {
           @click="emit('select', null)"
         >
           <div class="step-icon"><span class="all-dot" aria-hidden="true" /></div>
-          <div class="step-info"><span class="step-name">全部日志</span></div>
+          <div class="step-info"><span class="step-name">{{ t('run.allLogs') }}</span></div>
         </button>
       </li>
 
@@ -86,7 +89,7 @@ function formatDuration(ms: number | null): string {
         <li v-if="grouped && g.stage" class="stage-head" :class="`stage-head--${g.status}`">
           <span class="stage-dot" :aria-label="g.status" />
           <span class="stage-head-name">{{ g.stage }}</span>
-          <span class="stage-head-count">{{ g.nodes.length }} 节点</span>
+          <span class="stage-head-count">{{ t('run.nodeCount', { n: g.nodes.length }) }}</span>
         </li>
 
         <li v-for="n in g.nodes" :key="n.step.id">

@@ -10,6 +10,7 @@
  */
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { localizeName } from '../../lib/pipelineLabels'
 import type { PipelineStage, StageWhen, PipelinePostStep, PipelineServiceSpec } from '../../api/pipeline'
 import StagePostEditor from './StagePostEditor.vue'
 import StageServicesEditor from './StageServicesEditor.vue'
@@ -74,7 +75,7 @@ function commitMatrix(text: string): void {
         </svg>
       </span>
       <div class="drawer-title">
-        {{ stage.name }}
+        {{ localizeName(stage.name) }}
         <small class="drawer-subtitle">{{ t('pipelineCanvas.stageSettingsSub', { n: stageIndex }) }}</small>
       </div>
       <button class="drawer-close" :aria-label="t('pipelineCanvas.closeSettings')" @click="emit('close')">

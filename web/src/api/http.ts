@@ -7,6 +7,8 @@
  * - Parses the canonical error envelope { error: { code, message } }.
  */
 
+import { currentLocale } from '../i18n'
+
 export interface ApiError {
   code: string
   message: string
@@ -43,6 +45,12 @@ async function request<T>(
 
   if (!headers.has('Content-Type') && !(options.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json')
+  }
+
+  // Tell the backend which UI language to localize error messages into.
+  // (The app's chosen locale, not the browser's Accept-Language default.)
+  if (!headers.has('X-Pipewright-Locale')) {
+    headers.set('X-Pipewright-Locale', currentLocale())
   }
 
   if (WRITE_METHODS.has(method)) {

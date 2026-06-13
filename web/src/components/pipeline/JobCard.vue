@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
+import { localizeName } from '../../lib/pipelineLabels'
 import type { PipelineJob, StageKind } from '../../api/pipeline'
 import { jobTypeLabel } from './jobConfigSchema'
 import JobTypeIcon from './JobTypeIcon.vue'
@@ -63,7 +64,7 @@ function handleEditDeps(e: MouseEvent): void {
   >
     <div class="job-card-top">
       <JobTypeIcon :type="job.type" :size="24" />
-      <span class="job-name">{{ job.name }}</span>
+      <span class="job-name">{{ localizeName(job.name) }}</span>
       <button
         v-if="inDag"
         class="job-card-del job-card-deps"

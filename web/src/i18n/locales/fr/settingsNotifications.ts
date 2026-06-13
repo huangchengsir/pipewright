@@ -9,7 +9,9 @@ export default {
   typeFeishuLabel: 'Lark',
   typeFeishuDesc: 'Bot personnalisé',
   typeWecomLabel: 'WeCom',
+  typeWecomDesc: 'Bot de groupe',
   typeDingtalkLabel: 'DingTalk',
+  typeDingtalkDesc: 'Bot de groupe',
   comingSoon: 'Bientôt disponible',
   notImplemented: 'Envoi non implémenté',
 
@@ -38,6 +40,18 @@ export default {
   signSecret: 'Clé de signature (facultatif)',
   signSecretHint: 'À renseigner uniquement si le bot a activé la « vérification de signature » ; jamais réaffichée après enregistrement',
   signSecretPlaceholder: 'Laissez vide si le bot n’a pas activé la vérification de signature',
+
+  wecomUrl: 'URL du Webhook du bot WeCom',
+  wecomUrlHint:
+    'URL du Webhook du groupe WeCom dans « Paramètres du groupe → Bots de groupe → Ajouter un bot » (qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…)',
+
+  dingtalkUrl: 'URL du Webhook du bot DingTalk',
+  dingtalkUrlHint:
+    'URL du Webhook du groupe DingTalk dans « Paramètres du groupe → Assistant de groupe → Ajouter un bot → Personnalisé » (oapi.dingtalk.com/robot/send?access_token=…)',
+  dingtalkSignSecret: 'Clé de signature (facultatif)',
+  dingtalkSignSecretHint: 'À renseigner uniquement si les « paramètres de sécurité » du bot utilisent « Signé » ; jamais réaffichée après enregistrement',
+  dingtalkSignSecretPlaceholder: 'Laissez vide si le bot n’utilise pas « Signé »',
+
   secretStoredHint: 'Configurée ••••(laisser vide pour conserver)',
   secretStoredPlaceholder: 'Configurée ••••(vide = inchangée)',
 
@@ -74,6 +88,8 @@ export default {
   valNameRequired: 'Veuillez saisir un nom de canal',
   valWebhookUrlRequired: 'Veuillez saisir l’URL du Webhook',
   valFeishuUrlRequired: 'Veuillez saisir l’URL du Webhook du bot Lark',
+  valWecomUrlRequired: 'Veuillez saisir l’URL du Webhook du bot WeCom',
+  valDingtalkUrlRequired: 'Veuillez saisir l’URL du Webhook du bot DingTalk',
   valSmtpHostRequired: 'Veuillez saisir l’hôte SMTP',
   valPortInvalid: 'Veuillez saisir un port valide',
   valFromRequired: 'Veuillez saisir l’expéditeur',

@@ -56,6 +56,13 @@ func toChannelDTO(c *notify.Channel) channelDTO {
 		// 飞书:回显 webhook 地址 + 是否已配签名密钥(密钥本身绝不回显)。
 		cfg.URL = c.Config.URL
 		cfg.HasPassword = c.HasSecret
+	case notify.TypeWecom:
+		// 企业微信群机器人:仅回显 webhook 地址(无密钥)。
+		cfg.URL = c.Config.URL
+	case notify.TypeDingtalk:
+		// 钉钉群机器人:回显 webhook 地址 + 是否已配加签密钥(密钥本身绝不回显)。
+		cfg.URL = c.Config.URL
+		cfg.HasPassword = c.HasSecret
 	case notify.TypeEmail:
 		cfg.SMTPHost = c.Config.SMTPHost
 		cfg.SMTPPort = c.Config.SMTPPort

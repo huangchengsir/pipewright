@@ -9,7 +9,9 @@ export default {
   typeFeishuLabel: 'Lark',
   typeFeishuDesc: 'Bot personalizado',
   typeWecomLabel: 'WeCom',
+  typeWecomDesc: 'Bot de grupo',
   typeDingtalkLabel: 'DingTalk',
+  typeDingtalkDesc: 'Bot de grupo',
   comingSoon: 'Próximamente',
   notImplemented: 'Envío no implementado',
 
@@ -38,6 +40,18 @@ export default {
   signSecret: 'Clave de firma (opcional)',
   signSecretHint: 'Rellénala solo si el bot tiene activada la «verificación de firma»; nunca se vuelve a mostrar tras guardarla',
   signSecretPlaceholder: 'Déjalo en blanco si el bot no tiene la verificación de firma activada',
+
+  wecomUrl: 'URL del Webhook del bot de WeCom',
+  wecomUrlHint:
+    'URL del Webhook del grupo de WeCom en «Configuración del grupo → Bots del grupo → Añadir bot» (qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…)',
+
+  dingtalkUrl: 'URL del Webhook del bot de DingTalk',
+  dingtalkUrlHint:
+    'URL del Webhook del grupo de DingTalk en «Configuración del grupo → Asistente del grupo → Añadir bot → Personalizado» (oapi.dingtalk.com/robot/send?access_token=…)',
+  dingtalkSignSecret: 'Clave de firma (opcional)',
+  dingtalkSignSecretHint: 'Rellénala solo si en la «configuración de seguridad» del bot se eligió «Firmado»; nunca se vuelve a mostrar tras guardarla',
+  dingtalkSignSecretPlaceholder: 'Déjalo en blanco si el bot no usa «Firmado»',
+
   secretStoredHint: 'Configurada ••••(deja en blanco para mantener)',
   secretStoredPlaceholder: 'Configurada ••••(en blanco = sin cambios)',
 
@@ -74,6 +88,8 @@ export default {
   valNameRequired: 'Introduce un nombre de canal',
   valWebhookUrlRequired: 'Introduce la URL del Webhook',
   valFeishuUrlRequired: 'Introduce la URL del Webhook del bot de Lark',
+  valWecomUrlRequired: 'Introduce la URL del Webhook del bot de WeCom',
+  valDingtalkUrlRequired: 'Introduce la URL del Webhook del bot de DingTalk',
   valSmtpHostRequired: 'Introduce el host SMTP',
   valPortInvalid: 'Introduce un puerto válido',
   valFromRequired: 'Introduce el remitente',

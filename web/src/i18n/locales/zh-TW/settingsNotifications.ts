@@ -9,7 +9,9 @@ export default {
   typeFeishuLabel: 'Lark',
   typeFeishuDesc: '自訂機器人',
   typeWecomLabel: 'WeCom',
+  typeWecomDesc: '群組機器人',
   typeDingtalkLabel: 'DingTalk',
+  typeDingtalkDesc: '群組機器人',
   comingSoon: '即將支援',
   notImplemented: '尚未實作傳送',
 
@@ -37,6 +39,18 @@ export default {
   signSecret: '簽章密鑰(選填)',
   signSecretHint: '僅當機器人開啟「簽章驗證」時填寫;寫入後絕不回顯',
   signSecretPlaceholder: '機器人未開啟簽章驗證則留空',
+
+  wecomUrl: 'WeCom 機器人 Webhook 位址',
+  wecomUrlHint:
+    'WeCom 群組「群組設定 → 群組機器人 → 新增機器人」的 Webhook 位址(qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…)',
+
+  dingtalkUrl: 'DingTalk 機器人 Webhook 位址',
+  dingtalkUrlHint:
+    'DingTalk 群組「群組設定 → 智慧群助手 → 新增機器人 → 自訂」的 Webhook 位址(oapi.dingtalk.com/robot/send?access_token=…)',
+  dingtalkSignSecret: '加簽密鑰(選填)',
+  dingtalkSignSecretHint: '僅當機器人「安全設定」選「加簽」時填寫;寫入後絕不回顯',
+  dingtalkSignSecretPlaceholder: '機器人未選「加簽」則留空',
+
   secretStoredHint: '已設定 ••••(留空則保留)',
   secretStoredPlaceholder: '已設定 ••••(留空不變)',
 
@@ -73,6 +87,8 @@ export default {
   valNameRequired: '請填寫管道名稱',
   valWebhookUrlRequired: '請填寫 Webhook 位址',
   valFeishuUrlRequired: '請填寫 Lark 機器人 Webhook 位址',
+  valWecomUrlRequired: '請填寫 WeCom 機器人 Webhook 位址',
+  valDingtalkUrlRequired: '請填寫 DingTalk 機器人 Webhook 位址',
   valSmtpHostRequired: '請填寫 SMTP 主機',
   valPortInvalid: '請填寫有效連接埠',
   valFromRequired: '請填寫寄件人',

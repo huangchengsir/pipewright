@@ -39,11 +39,11 @@ const (
 	TypeWebhook = "webhook"
 	// TypeEmail 邮件:经 SMTP 发信(密码 write-only,vault 加密)。
 	TypeEmail = "email"
-	// TypeWecom 企业微信(本期占位:保存合法,Send 返回 not_implemented)。
+	// TypeWecom 企业微信群机器人:POST markdown 到 URL(群机器人无需签名密钥)。
 	TypeWecom = "wecom"
-	// TypeDingtalk 钉钉(本期占位)。
+	// TypeDingtalk 钉钉自定义群机器人:POST markdown 到 URL(可选加签密钥 write-only,vault 加密)。
 	TypeDingtalk = "dingtalk"
-	// TypeFeishu 飞书(本期占位)。
+	// TypeFeishu 飞书自定义机器人:POST 交互卡片到 URL(可选签名密钥 write-only,vault 加密)。
 	TypeFeishu = "feishu"
 )
 
@@ -455,8 +455,12 @@ func (s *service) deliver(ctx context.Context, ch *Channel, sealed []byte, paylo
 		return s.sendEmail(ctx, ch, sealed, payload)
 	case TypeFeishu:
 		return s.sendFeishu(ctx, ch, sealed, payload)
+	case TypeWecom:
+		return s.sendWecom(ctx, ch, payload)
+	case TypeDingtalk:
+		return s.sendDingtalk(ctx, ch, sealed, payload)
 	default:
-		// wecom / dingtalk:本期占位,人读提示(绝不 panic)。
+		// 未知 type(理论不可达,validType 已收口);人读提示(绝不 panic)。
 		return fmt.Errorf("该渠道类型(%s)暂未实现发送(not_implemented),敬请后续版本支持", ch.Type)
 	}
 }
@@ -559,8 +563,9 @@ func normalizeConfig(t string, c Config) Config {
 			To:       strings.TrimSpace(c.To),
 			Username: strings.TrimSpace(c.Username),
 		}
-	case TypeFeishu:
-		// 飞书自定义机器人:复用 URL 字段存 webhook hook 地址(签名密钥走 vault Secret)。
+	case TypeFeishu, TypeWecom, TypeDingtalk:
+		// 飞书 / 企业微信 / 钉钉群机器人:复用 URL 字段存 webhook hook 地址。
+		// 飞书/钉钉的(可选)签名密钥走 vault Secret;企微群机器人无需密钥。
 		return Config{URL: strings.TrimSpace(c.URL)}
 	default:
 		return Config{}
@@ -583,8 +588,8 @@ func validateConfig(t string, c Config) error {
 			return ErrInvalidConfig
 		}
 		return nil
-	case TypeFeishu:
-		// 飞书机器人 webhook 地址必填,且过同一套 SSRF 收口(拒云元数据/链路本地)。
+	case TypeFeishu, TypeWecom, TypeDingtalk:
+		// 飞书 / 企业微信 / 钉钉机器人 webhook 地址必填,且过同一套 SSRF 收口(拒云元数据/链路本地)。
 		if c.URL == "" {
 			return ErrInvalidConfig
 		}
@@ -593,7 +598,7 @@ func validateConfig(t string, c Config) error {
 		}
 		return nil
 	default:
-		// wecom/dingtalk:本期占位,不强制 config(保存合法)。
+		// 未知 type(理论不可达,validType 已收口);不强制 config。
 		return nil
 	}
 }

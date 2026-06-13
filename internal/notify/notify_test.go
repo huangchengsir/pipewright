@@ -270,25 +270,6 @@ func TestEmailNoPasswordNoAuth(t *testing.T) {
 	}
 }
 
-// ── not_implemented 占位 type 保存合法、Send 人读 ────────────────────────────
-
-func TestPlaceholderTypesSaveButSendNotImplemented(t *testing.T) {
-	s, _, _ := newSvc(t, http.DefaultClient)
-	for _, ty := range []string{TypeWecom, TypeDingtalk} {
-		ch, err := s.Create(ctx(), CreateInput{Name: ty, Type: ty, Enabled: true})
-		if err != nil {
-			t.Fatalf("占位 type %s 应保存合法: %v", ty, err)
-		}
-		res, err := s.Test(ctx(), ch.ID)
-		if err != nil {
-			t.Fatalf("Test %s: %v", ty, err)
-		}
-		if res.OK || !strings.Contains(res.Error, "not_implemented") {
-			t.Fatalf("%s 应回 not_implemented 人读: %+v", ty, res)
-		}
-	}
-}
-
 func TestInvalidTypeRejected(t *testing.T) {
 	s, _, _ := newSvc(t, http.DefaultClient)
 	if _, err := s.Create(ctx(), CreateInput{Name: "x", Type: "slack"}); err != ErrInvalidType {

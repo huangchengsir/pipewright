@@ -18,6 +18,7 @@
  *  11 — ProgressBar (determinate + indeterminate)
  */
 import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useThemeStore } from '../stores/theme'
 import { useToast } from '../composables/useToast'
 import { useConfirm } from '../composables/useConfirm'
@@ -31,6 +32,7 @@ import FormField     from '../components/ui/FormField.vue'
 import AppTooltip   from '../components/ui/AppTooltip.vue'
 import ProgressBar   from '../components/ui/ProgressBar.vue'
 
+const { t } = useI18n()
 const themeStore = useThemeStore()
 const toast = useToast()
 const confirm = useConfirm()
@@ -44,51 +46,51 @@ function demoLoadPrimary() {
 
 // ——— Section 03: Toast demos ———
 function fireSuccessToast() {
-  toast.success('部署成功', { detail: 'acme-web #127 已上线 生产-1' })
+  toast.success(t('statesShowcase.toastSuccessTitle'), { detail: t('statesShowcase.toastSuccessDetail') })
 }
 function fireErrorToast() {
-  toast.error('部署失败', {
-    detail: '#128 健康检查超时,已回滚',
-    action: { label: '查看 AI 诊断', onClick: () => console.log('AI diag') },
+  toast.error(t('statesShowcase.toastErrorTitle'), {
+    detail: t('statesShowcase.toastErrorDetail'),
+    action: { label: t('statesShowcase.toastErrorAction'), onClick: () => console.log('AI diag') },
   })
 }
 function fireWarnToast() {
-  toast.warn('磁盘偏高', { detail: '生产-1 磁盘 91%' })
+  toast.warn(t('statesShowcase.toastWarnTitle'), { detail: t('statesShowcase.toastWarnDetail') })
 }
 function fireInfoToast() {
-  toast.info('AI 诊断已生成', {
-    detail: '#128 根因:DB_PASSWORD 未注入',
-    action: { label: '查看', onClick: () => console.log('view') },
+  toast.info(t('statesShowcase.toastInfoTitle'), {
+    detail: t('statesShowcase.toastInfoDetail'),
+    action: { label: t('statesShowcase.toastInfoAction'), onClick: () => console.log('view') },
   })
 }
 
 // ——— Section 08: Confirm demos ———
 async function demoConfirmSimple() {
   const ok = await confirm.open({
-    title: '回滚到 #126?',
-    body: '将把 生产-1 的 acme-web 切回上一稳定版本 #126,当前 #128 实例会被停止。',
-    confirmLabel: '确认回滚',
+    title: t('statesShowcase.confirmRollbackTitle'),
+    body: t('statesShowcase.confirmRollbackBody'),
+    confirmLabel: t('statesShowcase.confirmRollbackLabel'),
     variant: 'danger',
   })
-  toast[ok ? 'success' : 'info'](ok ? '已确认回滚' : '已取消')
+  toast[ok ? 'success' : 'info'](ok ? t('statesShowcase.confirmRollbackOk') : t('statesShowcase.confirmCancelled'))
 }
 
 async function demoConfirmTypeToConfirm() {
   const ok = await confirm.open({
-    title: '重置实例',
-    body: '将销毁所有项目、服务器与凭据保险库,不可恢复。',
+    title: t('statesShowcase.confirmResetTitle'),
+    body: t('statesShowcase.confirmResetBody'),
     confirmText: 'acme',
-    confirmLabel: '永久重置',
+    confirmLabel: t('statesShowcase.confirmResetLabel'),
     variant: 'danger',
   })
-  toast[ok ? 'success' : 'info'](ok ? '已确认重置' : '已取消')
+  toast[ok ? 'success' : 'info'](ok ? t('statesShowcase.confirmResetOk') : t('statesShowcase.confirmCancelled'))
 }
 
 // ——— Section 09: Form fields ———
 const fieldDefault = ref('')
 const fieldError   = ref('non-valid-url')
 const fieldHint    = ref('')
-const fieldDisabled = ref('不可编辑')
+const fieldDisabled = ref(t('statesShowcase.formDisabledValue'))
 
 // ——— Section 11: Progress ———
 const progressVal = ref(55)
@@ -99,13 +101,13 @@ const progressVal = ref(55)
     <!-- Page header -->
     <header class="showcase-head">
       <div class="showcase-head__kk">
-        <h1 class="showcase-head__title">组件与状态规范</h1>
-        <span class="showcase-head__tag">前端交接 · UI States</span>
+        <h1 class="showcase-head__title">{{ t('statesShowcase.pageTitle') }}</h1>
+        <span class="showcase-head__tag">{{ t('statesShowcase.pageTag') }}</span>
       </div>
       <p class="showcase-head__desc">
-        所有界面通用的状态与组件,统一在此定义。
-        <strong>颜色一律走 DESIGN.md 令牌</strong>(绿=成功、红=失败、琥珀=进行中/警告、青=AI/信息、蓝=主操作),
-        动效仅用 <code class="mono">transform/opacity</code> 并遵守 <code class="mono">prefers-reduced-motion</code>。
+        {{ t('statesShowcase.pageDescLead') }}
+        <strong>{{ t('statesShowcase.pageDescTokens') }}</strong>{{ t('statesShowcase.pageDescTokensNote') }}
+        {{ t('statesShowcase.pageDescMotionPre') }} <code class="mono">transform/opacity</code> {{ t('statesShowcase.pageDescMotionMid') }} <code class="mono">prefers-reduced-motion</code>{{ t('statesShowcase.pageDescMotionEnd') }}
       </p>
     </header>
 
@@ -117,8 +119,8 @@ const progressVal = ref(55)
       <section class="sec">
         <div class="sec__head">
           <span class="sec__no">01</span>
-          <h2 class="sec__title">状态徽标(运行/服务/项目通用词汇)</h2>
-          <span class="sec__spec">语义固定,勿换词 · 进行中脉冲 · 色+圆点+文字三维度区分</span>
+          <h2 class="sec__title">{{ t('statesShowcase.sec01Title') }}</h2>
+          <span class="sec__spec">{{ t('statesShowcase.sec01Spec') }}</span>
         </div>
         <div class="sec__body">
           <div class="demos">
@@ -156,49 +158,49 @@ const progressVal = ref(55)
       <section class="sec">
         <div class="sec__head">
           <span class="sec__no">02</span>
-          <h2 class="sec__title">按钮 · 层级与交互态</h2>
-          <span class="sec__spec">主按钮带 --primary-soft 阴影 · hover 上浮 1px · loading 时禁点并显 spinner</span>
+          <h2 class="sec__title">{{ t('statesShowcase.sec02Title') }}</h2>
+          <span class="sec__spec">{{ t('statesShowcase.sec02Spec') }}</span>
         </div>
         <div class="sec__body">
-          <p class="subt">层级</p>
+          <p class="subt">{{ t('statesShowcase.sec02SubHierarchy') }}</p>
           <div class="demos">
             <div class="dcell">
               <span class="vlab">primary</span>
-              <AppButton variant="primary">重新部署</AppButton>
+              <AppButton variant="primary">{{ t('statesShowcase.btnRedeploy') }}</AppButton>
             </div>
             <div class="dcell">
               <span class="vlab">default</span>
-              <AppButton variant="default">查看日志</AppButton>
+              <AppButton variant="default">{{ t('statesShowcase.btnViewLogs') }}</AppButton>
             </div>
             <div class="dcell">
               <span class="vlab">ghost</span>
-              <AppButton variant="ghost">取消</AppButton>
+              <AppButton variant="ghost">{{ t('statesShowcase.btnCancel') }}</AppButton>
             </div>
             <div class="dcell">
               <span class="vlab">danger</span>
-              <AppButton variant="danger">回滚到 #126</AppButton>
+              <AppButton variant="danger">{{ t('statesShowcase.btnRollback126') }}</AppButton>
             </div>
             <div class="dcell">
               <span class="vlab">ai</span>
-              <AppButton variant="ai">AI 诊断</AppButton>
+              <AppButton variant="ai">{{ t('statesShowcase.btnAiDiagnosis') }}</AppButton>
             </div>
           </div>
 
-          <p class="subt" style="margin-top:18px">primary 各态</p>
+          <p class="subt" style="margin-top:18px">{{ t('statesShowcase.sec02SubPrimaryStates') }}</p>
           <div class="demos">
             <div class="dcell">
               <span class="vlab">default</span>
-              <AppButton variant="primary">默认</AppButton>
+              <AppButton variant="primary">{{ t('statesShowcase.btnDefault') }}</AppButton>
             </div>
             <div class="dcell">
               <span class="vlab">loading</span>
               <AppButton variant="primary" :loading="loadingPrimary" @click="demoLoadPrimary">
-                {{ loadingPrimary ? '提交中…' : '点击加载' }}
+                {{ loadingPrimary ? t('statesShowcase.btnSubmitting') : t('statesShowcase.btnClickToLoad') }}
               </AppButton>
             </div>
             <div class="dcell">
               <span class="vlab">disabled</span>
-              <AppButton variant="primary" disabled>禁用</AppButton>
+              <AppButton variant="primary" disabled>{{ t('statesShowcase.btnDisabled') }}</AppButton>
             </div>
           </div>
         </div>
@@ -210,29 +212,29 @@ const progressVal = ref(55)
       <section class="sec">
         <div class="sec__head">
           <span class="sec__no">03</span>
-          <h2 class="sec__title">Toast 通知</h2>
-          <span class="sec__spec">右下角堆叠 · 成功/信息 4s 自动消 · 错误手动关 · 可带行动按钮</span>
+          <h2 class="sec__title">{{ t('statesShowcase.sec03Title') }}</h2>
+          <span class="sec__spec">{{ t('statesShowcase.sec03Spec') }}</span>
         </div>
         <div class="sec__body">
           <div class="demos">
             <div class="dcell">
-              <span class="vlab">success (4s)</span>
-              <AppButton variant="default" @click="fireSuccessToast">触发 success</AppButton>
+              <span class="vlab">{{ t('statesShowcase.toastLabelSuccess') }}</span>
+              <AppButton variant="default" @click="fireSuccessToast">{{ t('statesShowcase.toastTriggerSuccess') }}</AppButton>
             </div>
             <div class="dcell">
-              <span class="vlab">error (手动关)</span>
-              <AppButton variant="danger" @click="fireErrorToast">触发 error</AppButton>
+              <span class="vlab">{{ t('statesShowcase.toastLabelError') }}</span>
+              <AppButton variant="danger" @click="fireErrorToast">{{ t('statesShowcase.toastTriggerError') }}</AppButton>
             </div>
             <div class="dcell">
-              <span class="vlab">warn (6s)</span>
-              <AppButton variant="default" @click="fireWarnToast">触发 warn</AppButton>
+              <span class="vlab">{{ t('statesShowcase.toastLabelWarn') }}</span>
+              <AppButton variant="default" @click="fireWarnToast">{{ t('statesShowcase.toastTriggerWarn') }}</AppButton>
             </div>
             <div class="dcell">
-              <span class="vlab">info + action (4s)</span>
-              <AppButton variant="ai" @click="fireInfoToast">触发 info</AppButton>
+              <span class="vlab">{{ t('statesShowcase.toastLabelInfo') }}</span>
+              <AppButton variant="ai" @click="fireInfoToast">{{ t('statesShowcase.toastTriggerInfo') }}</AppButton>
             </div>
           </div>
-          <p class="demo-hint">Toast 显示在右下角,可堆叠。点击上方按钮逐一触发。</p>
+          <p class="demo-hint">{{ t('statesShowcase.toastHint') }}</p>
         </div>
       </section>
 
@@ -242,30 +244,30 @@ const progressVal = ref(55)
       <section class="sec">
         <div class="sec__head">
           <span class="sec__no">04</span>
-          <h2 class="sec__title">内联提示 Banner</h2>
-          <span class="sec__spec">页面/卡片内常驻提示,不自动消失 · 用对应语义 *-soft 底 + *-line 边</span>
+          <h2 class="sec__title">{{ t('statesShowcase.sec04Title') }}</h2>
+          <span class="sec__spec">{{ t('statesShowcase.sec04Spec') }}</span>
         </div>
         <div class="sec__body" style="display:flex;flex-direction:column;gap:10px;">
           <AppBanner variant="info">
-            首次部署无可对比基线,差异视图暂不可用。
-            <template #action>了解 diff →</template>
+            {{ t('statesShowcase.bannerInfoBody') }}
+            <template #action>{{ t('statesShowcase.bannerInfoAction') }}</template>
           </AppBanner>
 
-          <AppBanner variant="warn" title="未配置健康检查">
-            容器启动成功即视为部署成功。
+          <AppBanner variant="warn" :title="t('statesShowcase.bannerWarnTitle')">
+            {{ t('statesShowcase.bannerWarnBody') }}
           </AppBanner>
 
-          <AppBanner variant="error" title="凭据错误">
-            拉取仓库失败,请检查 Gitee 访问令牌。
-            <template #action>前往凭据 →</template>
+          <AppBanner variant="error" :title="t('statesShowcase.bannerErrorTitle')">
+            {{ t('statesShowcase.bannerErrorBody') }}
+            <template #action>{{ t('statesShowcase.bannerErrorAction') }}</template>
           </AppBanner>
 
           <AppBanner variant="success">
-            配置校验通过,可保存并触发运行。
+            {{ t('statesShowcase.bannerSuccessBody') }}
           </AppBanner>
 
-          <AppBanner variant="ai" title="AI 功能">
-            当前使用 Claude claude-sonnet-4-6 模型 · 诊断速度高。
+          <AppBanner variant="ai" :title="t('statesShowcase.bannerAiTitle')">
+            {{ t('statesShowcase.bannerAiBody') }}
           </AppBanner>
         </div>
       </section>
@@ -278,8 +280,8 @@ const progressVal = ref(55)
         <section class="sec">
           <div class="sec__head">
             <span class="sec__no">05</span>
-            <h2 class="sec__title">加载骨架</h2>
-            <span class="sec__spec">数据加载用骨架,不用转圈遮罩 · shimmer 1.4s</span>
+            <h2 class="sec__title">{{ t('statesShowcase.sec05Title') }}</h2>
+            <span class="sec__spec">{{ t('statesShowcase.sec05Spec') }}</span>
           </div>
           <div class="sec__body">
             <div class="sk-demo-card">
@@ -303,16 +305,16 @@ const progressVal = ref(55)
         <section class="sec">
           <div class="sec__head">
             <span class="sec__no">06</span>
-            <h2 class="sec__title">空状态</h2>
-            <span class="sec__spec">图标 + 一句说明 + 明确 CTA</span>
+            <h2 class="sec__title">{{ t('statesShowcase.sec06Title') }}</h2>
+            <span class="sec__spec">{{ t('statesShowcase.sec06Spec') }}</span>
           </div>
           <div class="sec__body">
             <EmptyState
-              title="还没有项目"
-              description="接入第一个 Gitee 仓库,AI 会分析代码帮你生成流水线配置。"
+              :title="t('statesShowcase.emptyTitle')"
+              :description="t('statesShowcase.emptyDescription')"
             >
               <template #cta>
-                <AppButton variant="primary">+ 新建项目</AppButton>
+                <AppButton variant="primary">{{ t('statesShowcase.emptyCta') }}</AppButton>
               </template>
             </EmptyState>
           </div>
@@ -325,24 +327,24 @@ const progressVal = ref(55)
       <section class="sec">
         <div class="sec__head">
           <span class="sec__no">07</span>
-          <h2 class="sec__title">错误态</h2>
-          <span class="sec__spec">字段内联红 + 整页加载失败可重试 + AI 不可用优雅降级(不阻断 CI/CD)</span>
+          <h2 class="sec__title">{{ t('statesShowcase.sec07Title') }}</h2>
+          <span class="sec__spec">{{ t('statesShowcase.sec07Spec') }}</span>
         </div>
         <div class="sec__body">
           <div class="grid2">
             <div>
-              <p class="subt">整页加载失败</p>
+              <p class="subt">{{ t('statesShowcase.errPageSub') }}</p>
               <ErrorState
-                title="加载运行记录失败"
-                description="无法连接到 生产-1(SSH 超时)"
-                @retry="toast.info('重试中…')"
+                :title="t('statesShowcase.errPageTitle')"
+                :description="t('statesShowcase.errPageDescription')"
+                @retry="toast.info(t('statesShowcase.errRetrying'))"
               />
             </div>
             <div>
-              <p class="subt">AI 诊断降级</p>
+              <p class="subt">{{ t('statesShowcase.errAiSub') }}</p>
               <ErrorState
                 variant="ai"
-                title="AI 失败诊断"
+                :title="t('statesShowcase.errAiTitle')"
                 :confidence="88"
               />
             </div>
@@ -356,21 +358,21 @@ const progressVal = ref(55)
       <section class="sec">
         <div class="sec__head">
           <span class="sec__no">08</span>
-          <h2 class="sec__title">二次确认(破坏性操作)</h2>
-          <span class="sec__spec">回滚/删除/重启需确认 · 高危(重置/删服务器)要求输入名称确认 · Esc 关 · 焦点陷阱</span>
+          <h2 class="sec__title">{{ t('statesShowcase.sec08Title') }}</h2>
+          <span class="sec__spec">{{ t('statesShowcase.sec08Spec') }}</span>
         </div>
         <div class="sec__body">
           <div class="demos">
             <div class="dcell">
-              <span class="vlab">普通确认</span>
-              <AppButton variant="danger" @click="demoConfirmSimple">回滚到 #126</AppButton>
+              <span class="vlab">{{ t('statesShowcase.confirmLabelSimple') }}</span>
+              <AppButton variant="danger" @click="demoConfirmSimple">{{ t('statesShowcase.btnRollback126') }}</AppButton>
             </div>
             <div class="dcell">
               <span class="vlab">type-to-confirm</span>
-              <AppButton variant="danger" @click="demoConfirmTypeToConfirm">重置实例</AppButton>
+              <AppButton variant="danger" @click="demoConfirmTypeToConfirm">{{ t('statesShowcase.confirmResetTitle') }}</AppButton>
             </div>
           </div>
-          <p class="demo-hint">点击按钮打开对话框 · Esc 关 · type-to-confirm 版需输入 <code class="mono">acme</code> 才可确认</p>
+          <p class="demo-hint">{{ t('statesShowcase.confirmHintPre') }} <code class="mono">acme</code> {{ t('statesShowcase.confirmHintPost') }}</p>
         </div>
       </section>
 
@@ -380,27 +382,27 @@ const progressVal = ref(55)
       <section class="sec">
         <div class="sec__head">
           <span class="sec__no">09</span>
-          <h2 class="sec__title">表单控件 · 各态</h2>
-          <span class="sec__spec">focus = --primary 边 + 3px soft 光环 · 错误 aria-describedby 关联</span>
+          <h2 class="sec__title">{{ t('statesShowcase.sec09Title') }}</h2>
+          <span class="sec__spec">{{ t('statesShowcase.sec09Spec') }}</span>
         </div>
         <div class="sec__body">
           <div class="form-demos">
-            <FormField label="默认输入" field-id="ff-default">
+            <FormField :label="t('statesShowcase.formDefaultLabel')" field-id="ff-default">
               <template #default="{ fieldId }">
                 <input
                   :id="fieldId"
                   v-model="fieldDefault"
                   class="ui-demo-input"
                   type="text"
-                  placeholder="占位文本"
+                  :placeholder="t('statesShowcase.formDefaultPlaceholder')"
                 />
               </template>
             </FormField>
 
             <FormField
-              label="错误态"
+              :label="t('statesShowcase.formErrorLabel')"
               field-id="ff-error"
-              error="Webhook 地址格式不正确"
+              :error="t('statesShowcase.formErrorMessage')"
             >
               <template #default="{ fieldId }">
                 <input
@@ -415,9 +417,9 @@ const progressVal = ref(55)
             </FormField>
 
             <FormField
-              label="带提示"
+              :label="t('statesShowcase.formHintLabel')"
               field-id="ff-hint"
-              hint="填写后将用于 AI 分析"
+              :hint="t('statesShowcase.formHintHint')"
             >
               <template #default="{ fieldId }">
                 <input
@@ -425,12 +427,12 @@ const progressVal = ref(55)
                   v-model="fieldHint"
                   class="ui-demo-input"
                   type="text"
-                  placeholder="例:生产环境"
+                  :placeholder="t('statesShowcase.formHintPlaceholder')"
                 />
               </template>
             </FormField>
 
-            <FormField label="禁用态" field-id="ff-disabled" :disabled="true">
+            <FormField :label="t('statesShowcase.formDisabledLabel')" field-id="ff-disabled" :disabled="true">
               <template #default="{ fieldId }">
                 <input
                   :id="fieldId"
@@ -442,13 +444,13 @@ const progressVal = ref(55)
               </template>
             </FormField>
 
-            <FormField label="必填" field-id="ff-required" :required="true">
+            <FormField :label="t('statesShowcase.formRequiredLabel')" field-id="ff-required" :required="true">
               <template #default="{ fieldId }">
                 <input
                   :id="fieldId"
                   class="ui-demo-input"
                   type="text"
-                  placeholder="必填字段"
+                  :placeholder="t('statesShowcase.formRequiredPlaceholder')"
                 />
               </template>
             </FormField>
@@ -464,19 +466,19 @@ const progressVal = ref(55)
         <section class="sec">
           <div class="sec__head">
             <span class="sec__no">10</span>
-            <h2 class="sec__title">Tooltip</h2>
-            <span class="sec__spec">暗底 · 出现在元素上方 · 仅放简短补充 · 键盘可达</span>
+            <h2 class="sec__title">{{ t('statesShowcase.sec10Title') }}</h2>
+            <span class="sec__spec">{{ t('statesShowcase.sec10Spec') }}</span>
           </div>
           <div class="sec__body">
             <div style="padding-top:40px;display:flex;gap:16px;flex-wrap:wrap;">
-              <AppTooltip content="经 SSH → docker exec,操作纳入审计">
-                <AppButton variant="default">›_ 进入容器终端</AppButton>
+              <AppTooltip :content="t('statesShowcase.tooltipTerminalContent')">
+                <AppButton variant="default">{{ t('statesShowcase.tooltipTerminalBtn') }}</AppButton>
               </AppTooltip>
-              <AppTooltip content="将在所有选中环境同步执行" placement="top">
-                <AppButton variant="primary">批量部署</AppButton>
+              <AppTooltip :content="t('statesShowcase.tooltipBatchContent')" placement="top">
+                <AppButton variant="primary">{{ t('statesShowcase.tooltipBatchBtn') }}</AppButton>
               </AppTooltip>
-              <AppTooltip content="底部 tooltip" placement="bottom">
-                <AppButton variant="ghost">底部示例</AppButton>
+              <AppTooltip :content="t('statesShowcase.tooltipBottomContent')" placement="bottom">
+                <AppButton variant="ghost">{{ t('statesShowcase.tooltipBottomBtn') }}</AppButton>
               </AppTooltip>
             </div>
           </div>
@@ -486,33 +488,33 @@ const progressVal = ref(55)
         <section class="sec">
           <div class="sec__head">
             <span class="sec__no">11</span>
-            <h2 class="sec__title">进度 / Spinner</h2>
-            <span class="sec__spec">确定进度用条 · 不确定用流光 · 颜色走语义 token</span>
+            <h2 class="sec__title">{{ t('statesShowcase.sec11Title') }}</h2>
+            <span class="sec__spec">{{ t('statesShowcase.sec11Spec') }}</span>
           </div>
           <div class="sec__body" style="display:flex;flex-direction:column;gap:16px;">
             <div>
-              <span class="vlab">确定 · {{ progressVal }}%</span>
-              <ProgressBar :value="progressVal" style="margin-top:6px;width:240px" label="部署进度" />
+              <span class="vlab">{{ t('statesShowcase.progressDeterminate', { n: progressVal }) }}</span>
+              <ProgressBar :value="progressVal" style="margin-top:6px;width:240px" :label="t('statesShowcase.progressDeployLabel')" />
               <input
                 v-model.number="progressVal"
                 type="range"
                 min="0"
                 max="100"
                 style="margin-top:8px;width:240px;accent-color:var(--color-primary)"
-                aria-label="调节进度值"
+                :aria-label="t('statesShowcase.progressAdjustAria')"
               />
             </div>
             <div>
-              <span class="vlab">不确定(运行中) — warn</span>
-              <ProgressBar variant="warn" style="margin-top:6px;width:240px" label="运行中" />
+              <span class="vlab">{{ t('statesShowcase.progressIndeterminate') }}</span>
+              <ProgressBar variant="warn" style="margin-top:6px;width:240px" :label="t('statesShowcase.progressRunningLabel')" />
             </div>
             <div>
-              <span class="vlab">成功</span>
-              <ProgressBar :value="100" variant="success" style="margin-top:6px;width:240px" label="已完成" />
+              <span class="vlab">{{ t('statesShowcase.progressSuccess') }}</span>
+              <ProgressBar :value="100" variant="success" style="margin-top:6px;width:240px" :label="t('statesShowcase.progressDoneLabel')" />
             </div>
             <div>
-              <span class="vlab">错误</span>
-              <ProgressBar :value="38" variant="error" style="margin-top:6px;width:240px" label="失败进度" />
+              <span class="vlab">{{ t('statesShowcase.progressError') }}</span>
+              <ProgressBar :value="38" variant="error" style="margin-top:6px;width:240px" :label="t('statesShowcase.progressFailLabel')" />
             </div>
           </div>
         </section>
@@ -527,10 +529,10 @@ const progressVal = ref(55)
     <button
       class="showcase-theme-btn"
       type="button"
-      :aria-label="themeStore.current === 'dark' ? '切换到浅色' : '切换到深色'"
+      :aria-label="themeStore.current === 'dark' ? t('statesShowcase.themeToLight') : t('statesShowcase.themeToDark')"
       @click="themeStore.toggle()"
     >
-      {{ themeStore.current === 'dark' ? '◐ 浅色' : '◑ 深色' }}
+      {{ themeStore.current === 'dark' ? t('statesShowcase.themeLightLabel') : t('statesShowcase.themeDarkLabel') }}
     </button>
   </div>
 </template>

@@ -13,11 +13,14 @@
  */
 
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { getDiagnosisStats } from '../../api/settings'
 import type { DiagnosisStats } from '../../api/settings'
 import { HttpError } from '../../api/http'
 
 type LoadState = 'loading' | 'ready' | 'error'
+
+const { t, locale } = useI18n()
 
 const loadState = ref<LoadState>('loading')
 const loadError = ref('')
@@ -42,7 +45,7 @@ function fmtTime(rfc: string): string {
   if (!rfc) return ''
   const d = new Date(rfc)
   if (Number.isNaN(d.getTime())) return rfc
-  return d.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleString(locale.value, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
 async function load(): Promise<void> {
@@ -53,9 +56,9 @@ async function load(): Promise<void> {
     loadState.value = 'ready'
   } catch (err) {
     if (err instanceof HttpError) {
-      loadError.value = err.apiError?.message ?? `加载失败(${err.status})`
+      loadError.value = err.apiError?.message ?? t('settingsDiagnosisStats.errLoadFailed', { status: err.status })
     } else {
-      loadError.value = '加载诊断统计失败,请稍后重试'
+      loadError.value = t('settingsDiagnosisStats.errLoadGeneric')
     }
     loadState.value = 'error'
   }
@@ -68,27 +71,27 @@ onMounted(load)
   <section class="ds" aria-labelledby="ds-heading">
     <header class="ds-head">
       <div>
-        <h2 id="ds-heading" class="ds-title">诊断反馈闭环</h2>
-        <p class="ds-sub">AI 诊断质量度量 — 反馈越多,诊断越准,错误案例沉淀为知识库种子</p>
+        <h2 id="ds-heading" class="ds-title">{{ t('settingsDiagnosisStats.title') }}</h2>
+        <p class="ds-sub">{{ t('settingsDiagnosisStats.subtitle') }}</p>
       </div>
       <button class="ds-refresh" :disabled="loadState === 'loading'" @click="load">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M1 4v6h6M23 20v-6h-6" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
         </svg>
-        刷新
+        {{ t('common.refresh') }}
       </button>
     </header>
 
     <!-- loading -->
     <div v-if="loadState === 'loading'" class="ds-state" aria-busy="true">
       <span class="ds-spinner" aria-hidden="true" />
-      <span>加载中…</span>
+      <span>{{ t('settingsDiagnosisStats.loading') }}</span>
     </div>
 
     <!-- error -->
     <div v-else-if="loadState === 'error'" class="ds-state ds-state--error" role="alert">
       <p>{{ loadError }}</p>
-      <button class="ds-retry" @click="load">重试</button>
+      <button class="ds-retry" @click="load">{{ t('settingsDiagnosisStats.retry') }}</button>
     </div>
 
     <!-- ready -->
@@ -98,8 +101,8 @@ onMounted(load)
         <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
           <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3" />
         </svg>
-        <p class="ds-empty-title">暂无诊断反馈</p>
-        <p class="ds-empty-hint">在失败运行的 AI 诊断面板点 👍/👎,统计将在此汇总</p>
+        <p class="ds-empty-title">{{ t('settingsDiagnosisStats.emptyTitle') }}</p>
+        <p class="ds-empty-hint">{{ t('settingsDiagnosisStats.emptyHint') }}</p>
       </div>
 
       <template v-else>
@@ -108,7 +111,7 @@ onMounted(load)
           <!-- accuracy ring -->
           <div class="ds-ring-card">
             <div class="ds-ring-wrap">
-              <svg viewBox="0 0 120 120" class="ds-ring" role="img" :aria-label="`准确率 ${accuracyPct}%`">
+              <svg viewBox="0 0 120 120" class="ds-ring" role="img" :aria-label="t('settingsDiagnosisStats.accuracyAria', { pct: accuracyPct })">
                 <circle class="ds-ring-track" cx="60" cy="60" r="52" />
                 <circle
                   class="ds-ring-fill"
@@ -119,7 +122,7 @@ onMounted(load)
               </svg>
               <div class="ds-ring-center">
                 <span class="ds-ring-val">{{ stats.accuracy === null ? '—' : `${accuracyPct}%` }}</span>
-                <span class="ds-ring-label">准确率</span>
+                <span class="ds-ring-label">{{ t('settingsDiagnosisStats.accuracy') }}</span>
               </div>
             </div>
           </div>
@@ -128,22 +131,22 @@ onMounted(load)
           <div class="ds-counts">
             <div class="ds-count">
               <span class="ds-count-val">{{ stats.totalFeedback }}</span>
-              <span class="ds-count-label">反馈总数</span>
+              <span class="ds-count-label">{{ t('settingsDiagnosisStats.countTotal') }}</span>
             </div>
             <div class="ds-count ds-count--up">
               <span class="ds-count-val">{{ stats.thumbsUp }}</span>
-              <span class="ds-count-label">👍 有用</span>
+              <span class="ds-count-label">{{ t('settingsDiagnosisStats.countUp') }}</span>
             </div>
             <div class="ds-count ds-count--down">
               <span class="ds-count-val">{{ stats.thumbsDown }}</span>
-              <span class="ds-count-label">👎 需改进</span>
+              <span class="ds-count-label">{{ t('settingsDiagnosisStats.countDown') }}</span>
             </div>
           </div>
         </div>
 
         <!-- trend -->
         <div v-if="stats.recentTrend.length > 0" class="ds-trend">
-          <h3 class="ds-section-title">最近趋势</h3>
+          <h3 class="ds-section-title">{{ t('settingsDiagnosisStats.trendTitle') }}</h3>
           <div class="ds-trend-bars">
             <div
               v-for="(b, i) in stats.recentTrend"
@@ -154,25 +157,25 @@ onMounted(load)
                 <div
                   class="ds-trend-bar-fill"
                   :style="{ height: `${Math.round(b.accuracy * 100)}%` }"
-                  :title="`${Math.round(b.accuracy * 100)}% · ${b.count} 条`"
+                  :title="t('settingsDiagnosisStats.trendBarTitle', { pct: Math.round(b.accuracy * 100), count: b.count })"
                 />
               </div>
               <span class="ds-trend-pct">{{ Math.round(b.accuracy * 100) }}%</span>
-              <span class="ds-trend-n">{{ b.count }} 条</span>
+              <span class="ds-trend-n">{{ t('settingsDiagnosisStats.countUnit', { count: b.count }) }}</span>
             </div>
           </div>
         </div>
 
         <!-- corrections -->
         <div class="ds-corrections">
-          <h3 class="ds-section-title">最近修正(知识库种子)</h3>
+          <h3 class="ds-section-title">{{ t('settingsDiagnosisStats.correctionsTitle') }}</h3>
           <p v-if="stats.recentCorrections.length === 0" class="ds-corr-empty">
-            暂无 👎 附带的正确根因。
+            {{ t('settingsDiagnosisStats.correctionsEmpty') }}
           </p>
           <ul v-else class="ds-corr-list" role="list">
             <li v-for="(c, i) in stats.recentCorrections" :key="i" class="ds-corr-item">
               <div class="ds-corr-head">
-                <router-link :to="`/runs/${c.runId}`" class="ds-corr-run">运行 {{ c.runId.slice(0, 8) }}</router-link>
+                <router-link :to="`/runs/${c.runId}`" class="ds-corr-run">{{ t('settingsDiagnosisStats.runLabel', { id: c.runId.slice(0, 8) }) }}</router-link>
                 <span class="ds-corr-at">{{ fmtTime(c.at) }}</span>
               </div>
               <p class="ds-corr-text">{{ c.correctRootCause }}</p>

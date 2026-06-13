@@ -51,13 +51,15 @@ func TestSignerTamperedPayload(t *testing.T) {
 func TestSignerTamperedSig(t *testing.T) {
 	s := NewSigner(testKey())
 	tok := s.Sign("run-1", "stage-1", time.Now().Add(time.Hour))
-	// 翻转签名段最后一个字符。
-	last := tok[len(tok)-1]
+	// 翻转签名段**首字符**:base64 首字符编码首字节高 6 位,翻转必改解码字节。
+	// (末字符含非有效尾比特,翻转可能解出同字节 → 与原签名等价、不可靠;曾致 CI 偶发假失败。)
+	dot := strings.IndexByte(tok, '.')
+	sigFirst := tok[dot+1]
 	repl := byte('A')
-	if last == 'A' {
+	if sigFirst == 'A' {
 		repl = 'B'
 	}
-	forged := tok[:len(tok)-1] + string(repl)
+	forged := tok[:dot+1] + string(repl) + tok[dot+2:]
 	if _, _, ok := s.Verify(forged); ok {
 		t.Fatal("Verify accepted a token with tampered signature")
 	}

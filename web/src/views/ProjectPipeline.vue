@@ -31,6 +31,7 @@ import AIGenerateWizard from '../components/pipeline/AIGenerateWizard.vue'
 import RiskAnnotationPanel from '../components/pipeline/RiskAnnotationPanel.vue'
 import YamlImportModal from '../components/pipeline/YamlImportModal.vue'
 import TemplatePickerModal from '../components/pipeline/TemplatePickerModal.vue'
+import PacPreviewModal from '../components/pipeline/PacPreviewModal.vue'
 
 // ─── Route ────────────────────────────────────────────────────────────────────
 
@@ -382,6 +383,11 @@ const pacEnabled = computed(() => project.value?.pacEnabled ?? false)
 const pacToggling = ref(false)
 const pacError = ref('')
 
+// 预览仓库配置:按 ref 拉取并校验仓库 .pipewright.yml(只读;依赖它驱动运行前先看清/捕错)。
+const pacPreviewOpen = ref(false)
+const pacHasRepo = computed(() => !!project.value?.repoUrl?.trim())
+const pacDefaultBranch = computed(() => project.value?.defaultBranch ?? '')
+
 async function togglePac(next: boolean): Promise<void> {
   if (!project.value || pacToggling.value) return
   pacToggling.value = true
@@ -526,18 +532,31 @@ async function togglePac(next: boolean): Promise<void> {
         </span>
         <span v-if="pacError" class="pac-bar-err" role="alert">{{ pacError }}</span>
       </div>
-      <button
-        type="button"
-        class="pac-switch"
+      <div class="pac-bar-actions">
+        <button
+          v-if="pacHasRepo"
+          type="button"
+          class="pac-preview-btn"
+          @click="pacPreviewOpen = true"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>
+          </svg>
+          {{ t('projectPipeline.pacPreviewBtn') }}
+        </button>
+        <button
+          type="button"
+          class="pac-switch"
         :class="{ 'pac-switch--on': pacEnabled }"
         role="switch"
         :aria-checked="pacEnabled"
         :aria-label="t('projectPipeline.pacTitle')"
         :disabled="pacToggling || !project"
-        @click="togglePac(!pacEnabled)"
-      >
-        <span class="pac-switch-knob" aria-hidden="true"/>
-      </button>
+          @click="togglePac(!pacEnabled)"
+        >
+          <span class="pac-switch-knob" aria-hidden="true"/>
+        </button>
+      </div>
     </div>
 
     <!-- ─── Tab body: panels + optional validation side-drawer ─────────────── -->
@@ -685,6 +704,14 @@ async function togglePac(next: boolean): Promise<void> {
       :stages="editStages"
       @close="templateModalOpen = false"
       @applied="handleTemplateApplied"
+    />
+
+    <!-- ─── Preview repo .pipewright.yml at a ref (GitOps Slice 3) ───────── -->
+    <PacPreviewModal
+      v-if="pacPreviewOpen"
+      :project-id="projectId"
+      :default-branch="pacDefaultBranch"
+      @close="pacPreviewOpen = false"
     />
 
   </div>
@@ -952,6 +979,34 @@ async function togglePac(next: boolean): Promise<void> {
 }
 .pac-bar-desc { font-size: 0.78rem; color: var(--color-faint); }
 .pac-bar-err { font-size: 0.78rem; color: var(--color-danger, #e5484d); }
+
+.pac-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: none;
+}
+
+.pac-preview-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  font-family: var(--font-sans);
+  color: var(--color-text);
+  background: var(--color-card-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--rounded);
+  cursor: pointer;
+  transition: border-color var(--duration-fast), background-color var(--duration-fast);
+}
+
+.pac-preview-btn:hover { border-color: var(--color-faint); }
+.pac-preview-btn:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.pac-preview-btn svg { flex: none; color: var(--color-faint); }
 
 .pac-switch {
   position: relative;

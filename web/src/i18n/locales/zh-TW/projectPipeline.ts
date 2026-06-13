@@ -17,6 +17,22 @@ export default {
   pacOffHint: '開啟後,每次執行依執行分支讀取倉庫根 .pipewright.yml 驅動(缺失或非法則回退此處設定)。',
   pacToggleFailed: '切換失敗,請重試。',
 
+  // ─── 預覽倉庫設定(GitOps · 按 ref 拉取並校驗 .pipewright.yml)────────
+  pacPreviewBtn: '預覽倉庫設定',
+  pacPreviewTitle: '預覽倉庫設定',
+  pacPreviewSub: '按分支/標籤/提交拉取並校驗倉庫中的',
+  pacPreviewCloseAria: '關閉預覽',
+  pacPreviewCloseBtn: '關閉',
+  pacPreviewRefLabel: '分支 / 標籤 / 提交',
+  pacPreviewFetch: '拉取並校驗',
+  pacPreviewNotFound: '在 {ref} 未找到 .pipewright.yml,執行時將回退到此處庫內設定。',
+  pacPreviewInvalid: '{ref} 的 .pipewright.yml 校驗失敗,執行時將靜默回退到此處庫內設定:',
+  pacPreviewValid: '{ref} 的 .pipewright.yml 校驗通過,共 {count} 個階段;執行時將用它驅動。',
+  pacPreviewJobCount: '{count} 個任務',
+  pacPreviewConnFailed: '連線失敗,請檢查網路後重試。',
+  pacPreviewFailed: '預覽失敗({status}),請重試。',
+  pacPreviewFailedRetry: '預覽失敗,請重試。',
+
   // ─── 工具列按鈕 ─────────────────────────────────────────────────
   aiGenerate: 'AI 生成流水線',
   importYaml: '從 YAML 匯入',

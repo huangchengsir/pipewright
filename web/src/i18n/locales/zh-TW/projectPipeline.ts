@@ -11,6 +11,12 @@ export default {
   tabEnvs: '環境與憑證',
   tabStripAria: '流水線設定標籤頁',
 
+  // ─── 流水線即程式碼(GitOps · FR-8-12)─────────────────────────────
+  pacTitle: '流水線即程式碼',
+  pacOnHint: '執行時將依執行分支讀取倉庫 .pipewright.yml 驅動(檔案缺失或非法時回退至此處設定)。',
+  pacOffHint: '開啟後,每次執行依執行分支讀取倉庫根 .pipewright.yml 驅動(缺失或非法則回退此處設定)。',
+  pacToggleFailed: '切換失敗,請重試。',
+
   // ─── 工具列按鈕 ─────────────────────────────────────────────────
   aiGenerate: 'AI 生成流水線',
   importYaml: '從 YAML 匯入',

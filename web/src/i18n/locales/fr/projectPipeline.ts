@@ -11,6 +11,12 @@ export default {
   tabEnvs: 'Environnements et identifiants',
   tabStripAria: 'Onglets de configuration du pipeline',
 
+  // ─── Pipeline en tant que code (GitOps · FR-8-12) ───────────────
+  pacTitle: 'Pipeline en tant que code',
+  pacOnHint: "Les exécutions lisent .pipewright.yml depuis la branche d'exécution du dépôt (repli sur cette configuration si le fichier est absent ou invalide).",
+  pacOffHint: "Une fois activé, chaque exécution lit .pipewright.yml à la racine du dépôt sur la branche d'exécution (repli sur cette configuration si absent ou invalide).",
+  pacToggleFailed: 'Échec du basculement. Veuillez réessayer.',
+
   // ─── boutons de la barre d'outils ───────────────────────────────
   aiGenerate: 'Générer le pipeline par IA',
   importYaml: 'Importer depuis YAML',

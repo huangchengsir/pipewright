@@ -41,6 +41,9 @@ type ProjectInfo struct {
 	RepoURL       string
 	CredentialID  string
 	DefaultBranch string
+	// PacEnabled 是该项目的「流水线即代码」开关:false 时装饰器不尝试覆盖,直接回退库内配置
+	// (除非构造时 globalOverride=true 全局强开,见 New)。
+	PacEnabled bool
 }
 
 // ProjectLookup 按 projectID 取仓库地址/凭据/默认分支(由 project.Service 适配)。
@@ -62,16 +65,19 @@ type BlobFetcher interface {
 
 // Loader 是 PAC 运行时覆盖装饰器:实现 dagrun.SpecLoader。
 type Loader struct {
-	inner    SpecLoader
-	projects ProjectLookup
-	tokens   TokenRevealer
-	blobs    BlobFetcher
+	inner          SpecLoader
+	projects       ProjectLookup
+	tokens         TokenRevealer
+	blobs          BlobFetcher
+	globalOverride bool
 }
 
 // New 构造装饰器。inner 必填(回退目标);projects/blobs 任一为 nil 时退化为纯透传(仅回退)。
 // tokens 可为 nil(无保险库时按公开仓库以空 token 尝试)。
-func New(inner SpecLoader, projects ProjectLookup, tokens TokenRevealer, blobs BlobFetcher) *Loader {
-	return &Loader{inner: inner, projects: projects, tokens: tokens, blobs: blobs}
+// globalOverride=true 时无视每项目 PacEnabled,对所有项目尝试覆盖(供 PIPEWRIGHT_PAC_RUNTIME=1
+// 全局强开的历史行为兼容);常规路径传 false,由每项目开关(ProjectInfo.PacEnabled)决定。
+func New(inner SpecLoader, projects ProjectLookup, tokens TokenRevealer, blobs BlobFetcher, globalOverride bool) *Loader {
+	return &Loader{inner: inner, projects: projects, tokens: tokens, blobs: blobs, globalOverride: globalOverride}
 }
 
 // Get 实现 dagrun.SpecLoader:尝试用**运行分支**的 `.pipewright.yml` 覆盖(分支为空时退化为
@@ -93,6 +99,10 @@ func (l *Loader) tryOverride(ctx context.Context, projectID, branch string) (*pi
 	info, err := l.projects.Lookup(ctx, projectID)
 	if err != nil {
 		debugf("项目 %s 查询失败,回退库内配置", projectID)
+		return nil, false
+	}
+	// 每项目开关:未开启「流水线即代码」且非全局强开 → 不覆盖,用库内配置。
+	if !info.PacEnabled && !l.globalOverride {
 		return nil, false
 	}
 	if strings.TrimSpace(info.RepoURL) == "" {

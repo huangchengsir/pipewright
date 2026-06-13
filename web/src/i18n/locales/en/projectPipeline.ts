@@ -11,6 +11,12 @@ export default {
   tabEnvs: 'Environments & Credentials',
   tabStripAria: 'Pipeline configuration tabs',
 
+  // ─── Pipeline as code (GitOps · FR-8-12) ────────────────────────
+  pacTitle: 'Pipeline as code',
+  pacOnHint: 'Runs read .pipewright.yml from the run branch in the repo (falling back to this config if the file is missing or invalid).',
+  pacOffHint: 'When on, each run reads .pipewright.yml from the repo root on the run branch (falling back to this config if missing or invalid).',
+  pacToggleFailed: 'Failed to toggle. Please try again.',
+
   // ─── toolbar buttons ────────────────────────────────────────────
   aiGenerate: 'AI Generate Pipeline',
   importYaml: 'Import from YAML',

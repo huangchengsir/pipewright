@@ -1,54 +1,72 @@
 <script setup lang="ts">
 /**
- * 语言切换器。固定在右下角(主题切换左侧),全局可见。
- * 只有两种语言时点击即在两者间切换;>2 种时循环到下一种。当前语言显示在按钮上。
+ * 语言选择器。固定在右上角的「Change Language」下拉:地球图标 + 当前语言母语名,
+ * 点开列出全部受支持语言(当前项打勾)。全局挂载(App.vue),登录页也可切换。
  */
-import { computed } from 'vue'
+import { computed, h } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { NDropdown, NIcon } from 'naive-ui'
+import { Language, Check } from '@vicons/tabler'
 import { SUPPORTED_LOCALES, setLocale, type LocaleCode } from '../i18n'
 
 const { t, locale } = useI18n({ useScope: 'global' })
 
-// 短标:中文显「中文」、英文显「EN」(按钮窄,用紧凑形式)。
-const SHORT: Record<LocaleCode, string> = { 'zh-CN': '中文', en: 'EN' }
+const currentLabel = computed(
+  () => SUPPORTED_LOCALES.find((l) => l.code === locale.value)?.label ?? locale.value,
+)
 
-const displayText = computed(() => `🌐 ${SHORT[locale.value as LocaleCode] ?? locale.value}`)
-const ariaLabel = computed(() => t('locale.label'))
+const options = computed(() =>
+  SUPPORTED_LOCALES.map((l) => ({
+    key: l.code,
+    label: l.label,
+    // 当前语言左侧打勾,其余留白对齐。
+    icon:
+      l.code === locale.value
+        ? () => h(NIcon, { component: Check, color: 'var(--color-primary)' })
+        : () => h('span', { style: 'display:inline-block;width:14px' }),
+  })),
+)
 
-function cycle(): void {
-  const codes = SUPPORTED_LOCALES.map((l) => l.code)
-  const idx = codes.indexOf(locale.value as LocaleCode)
-  const next = codes[(idx + 1) % codes.length]
-  setLocale(next)
+function onSelect(key: string): void {
+  setLocale(key as LocaleCode)
 }
 </script>
 
 <template>
-  <button
-    class="locale-switcher"
-    type="button"
-    :aria-label="ariaLabel"
-    :title="ariaLabel"
-    @click="cycle"
+  <n-dropdown
+    trigger="click"
+    :options="options"
+    :show-arrow="true"
+    placement="bottom-end"
+    @select="onSelect"
   >
-    {{ displayText }}
-  </button>
+    <button class="locale-switcher" type="button" :aria-label="t('locale.label')" :title="t('locale.label')">
+      <n-icon class="locale-switcher__globe" :component="Language" :size="17" />
+      <span class="locale-switcher__label">{{ currentLabel }}</span>
+      <svg class="locale-switcher__chev" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M6 9l6 6 6-6" />
+      </svg>
+    </button>
+  </n-dropdown>
 </template>
 
 <style scoped>
 .locale-switcher {
   position: fixed;
-  right: 112px;
-  bottom: 18px;
+  top: 16px;
+  right: 20px;
+  z-index: 300;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-family: var(--font-sans);
-  font-size: 0.74rem;
+  font-size: 0.78rem;
   color: var(--color-dim);
   border: 1px solid var(--color-border);
   background: var(--color-card);
   border-radius: var(--rounded);
-  padding: 7px 13px;
+  padding: 6px 11px;
   cursor: pointer;
-  z-index: 200;
   transition:
     color var(--duration-fast),
     border-color var(--duration-fast),
@@ -64,5 +82,18 @@ function cycle(): void {
 .locale-switcher:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
+}
+
+.locale-switcher__globe {
+  display: inline-flex;
+}
+
+.locale-switcher__label {
+  font-weight: 600;
+  line-height: 1;
+}
+
+.locale-switcher__chev {
+  opacity: 0.6;
 }
 </style>

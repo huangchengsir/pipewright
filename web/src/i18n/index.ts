@@ -8,13 +8,26 @@
  */
 import { createI18n } from 'vue-i18n'
 import zhCN from './locales/zh-CN'
+import zhTW from './locales/zh-TW'
 import en from './locales/en'
+import ja from './locales/ja'
+import ko from './locales/ko'
+import es from './locales/es'
+import fr from './locales/fr'
+import de from './locales/de'
 
-export type LocaleCode = 'zh-CN' | 'en'
+export type LocaleCode = 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko' | 'es' | 'fr' | 'de'
 
+/** 选择器里展示的语言列表(label 用各语言的母语名)。 */
 export const SUPPORTED_LOCALES: ReadonlyArray<{ code: LocaleCode; label: string }> = [
   { code: 'zh-CN', label: '简体中文' },
+  { code: 'zh-TW', label: '繁體中文' },
   { code: 'en', label: 'English' },
+  { code: 'ja', label: '日本語' },
+  { code: 'ko', label: '한국어' },
+  { code: 'es', label: 'Español' },
+  { code: 'fr', label: 'Français' },
+  { code: 'de', label: 'Deutsch' },
 ]
 
 const STORAGE_KEY = 'pipewright-locale'
@@ -24,11 +37,20 @@ function isSupported(code: string): code is LocaleCode {
   return SUPPORTED_LOCALES.some((l) => l.code === code)
 }
 
-/** 把任意 BCP-47 标签粗匹配到受支持语言(zh* → zh-CN,en* → en)。 */
+/** 把任意 BCP-47 标签粗匹配到受支持语言。 */
 function matchLocale(tag: string): LocaleCode | null {
   const lower = tag.toLowerCase()
-  if (lower.startsWith('zh')) return 'zh-CN'
+  if (lower.startsWith('zh')) {
+    // 繁体:zh-Hant / zh-TW / zh-HK / zh-MO;其余 zh* 视作简体。
+    if (/hant|tw|hk|mo/.test(lower)) return 'zh-TW'
+    return 'zh-CN'
+  }
   if (lower.startsWith('en')) return 'en'
+  if (lower.startsWith('ja')) return 'ja'
+  if (lower.startsWith('ko')) return 'ko'
+  if (lower.startsWith('es')) return 'es'
+  if (lower.startsWith('fr')) return 'fr'
+  if (lower.startsWith('de')) return 'de'
   return null
 }
 
@@ -55,7 +77,7 @@ export const i18n = createI18n({
   legacy: false,
   locale: detectLocale(),
   fallbackLocale: DEFAULT_LOCALE,
-  messages: { 'zh-CN': zhCN, en },
+  messages: { 'zh-CN': zhCN, 'zh-TW': zhTW, en, ja, ko, es, fr, de },
 })
 
 function applyDocumentLang(code: LocaleCode): void {

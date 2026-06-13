@@ -20,7 +20,6 @@ import {
 } from '@vicons/tabler'
 import { NIcon } from 'naive-ui'
 import ThemeToggle from '../components/ThemeToggle.vue'
-import LocaleSwitcher from '../components/LocaleSwitcher.vue'
 import { logout } from '../api/auth'
 import { useSessionStore } from '../stores/session'
 import { useConfirm } from '../composables/useConfirm'
@@ -185,8 +184,7 @@ function toggleExpanded(): void {
       </div>
     </main>
 
-    <!-- Locale + theme toggles (bottom-right, always visible) -->
-    <LocaleSwitcher />
+    <!-- Theme toggle (bottom-right, always visible) -->
     <ThemeToggle />
   </div>
 </template>

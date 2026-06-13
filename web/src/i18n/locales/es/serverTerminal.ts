@@ -1,0 +1,57 @@
+export default {
+  serverFallback: 'Servidor',
+  titleConnecting: 'Conectando · ',
+  titleDisconnected: '⚠ Desconectado · ',
+  titleSuffix: 'Terminal de operaciones',
+  hostMachine: '(host)',
+
+  kindContainer: 'Contenedor',
+  kindHost: 'Host',
+  containerLabel: 'Contenedor {label}',
+  hostShell: 'shell del host',
+
+  connecting: 'Conectando…',
+  connectFailed: 'Error de conexión',
+  connect: 'Conectar',
+  reconnect: 'Reconectar',
+  disconnect: 'Desconectar',
+  close: 'Cerrar',
+
+  enteringContainer: 'Entrando en el contenedor {name} ({host})…',
+  connectingHost: 'Conectando al host {host} …',
+  connectFailedDetail: 'Error de conexión. Comprueba tu estado de sesión, la accesibilidad del servidor o si el contenedor existe.',
+  sessionEnded: 'La sesión de terminal ha finalizado',
+  sessionEndedShort: 'Sesión finalizada',
+
+  terminalAria: 'Terminal interactiva del servidor',
+  hintContainer: 'Haz clic en «Conectar» para entrar en el contenedor {name} (docker exec).',
+  hintHost: 'Haz clic en «Conectar» para entrar en el shell del host.',
+
+  latency: 'Latencia',
+  copy: 'Copiar',
+  paste: 'Pegar',
+  interrupt: 'Interrumpir',
+  contextMenu: 'Menú contextual',
+  selectAll: 'Seleccionar todo',
+  clearScreen: 'Limpiar pantalla',
+  clipboardSecureWarn: 'El portapapeles requiere https/localhost',
+
+  completeDisableTitle: 'Desactivar autocompletado de IA',
+  completeEnableTitle: 'Activar autocompletado de IA',
+  aiComplete: 'Autocompletado de IA',
+  on: 'act.',
+  off: 'desact.',
+
+  aiLauncherTitle: 'Desplegar el asistente de operaciones IA',
+  aiAssistant: 'Asistente IA',
+
+  charCount: '{n} caracteres',
+  toastCopied: 'Copiado',
+  toastPasted: 'Pegado',
+  toastSigintMsg: 'SIGINT enviado',
+  toastSigintSub: 'Interrumpir el comando actual',
+  toastClipboardUnavailable: 'No se puede leer el portapapeles',
+  toastClipboardSecureCtx: 'Requiere un contexto seguro https / localhost',
+  toastClipboardDenied: 'Lectura del portapapeles denegada',
+  toastClipboardAllow: 'Concede permiso de portapapeles en el navegador',
+}

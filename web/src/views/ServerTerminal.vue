@@ -12,6 +12,7 @@
 -->
 <script setup lang="ts">
 import { ref, shallowRef, computed, watch, onMounted, onBeforeUnmount, nextTick, reactive } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { setDocumentTitle } from '../router'
 import {
@@ -29,6 +30,7 @@ import { completeCommand } from '../api/aiOps'
 import type { Terminal as XTerm } from '@xterm/xterm'
 import type { FitAddon as XFitAddon } from '@xterm/addon-fit'
 
+const { t: tg } = useI18n()
 const route = useRoute()
 const router = useRouter()
 
@@ -61,7 +63,7 @@ const latencyMs = ref<number | null>(null)
 const hostLabel = computed(() =>
   server.value ? `${server.value.user}@${server.value.host}:${server.value.port}` : serverId.value,
 )
-const serverName = computed(() => server.value?.name ?? '服务器')
+const serverName = computed(() => server.value?.name ?? tg('serverTerminal.serverFallback'))
 
 // 标签页标题随服务器名 + 连接状态细化(终端常在新标签页打开:多开时一眼区分是哪台机,
 // 且后台挂着的 tab 掉线时标题前缀能直接看出来,不用切过去)。router 的 afterEach 先兜底
@@ -69,9 +71,9 @@ const serverName = computed(() => server.value?.name ?? '服务器')
 watch(
   [serverName, connState],
   ([name, st]) => {
-    const prefix = st === 'connected' ? '' : st === 'connecting' ? '连接中 · ' : '⚠ 已断开 · '
+    const prefix = st === 'connected' ? '' : st === 'connecting' ? tg('serverTerminal.titleConnecting') : tg('serverTerminal.titleDisconnected')
     const scope = isContainer.value ? `${containerName.value} · ` : ''
-    setDocumentTitle(`${prefix}${scope}${name} · 运维终端`)
+    setDocumentTitle(`${prefix}${scope}${name} · ${tg('serverTerminal.titleSuffix')}`)
   },
   { immediate: true },
 )
@@ -79,7 +81,7 @@ watch(
 const aiContext = computed(() => ({
   os: 'linux',
   shell: shell.value,
-  container: isContainer.value ? containerName.value : '(宿主机)',
+  container: isContainer.value ? containerName.value : tg('serverTerminal.hostMachine'),
 }))
 
 // ─── AI 助手折叠态 ────────────────────────────────────────────────────────────────
@@ -336,7 +338,7 @@ async function ensureTerm(): Promise<XTerm> {
       }
       // 无选区:仅 Ctrl(非 Cmd)透传 ^C(SIGINT);Cmd+C 无选区什么也不做。
       if (e.ctrlKey && !e.metaKey) {
-        flashToast('sig', '已发送 SIGINT', '中断当前命令')
+        flashToast('sig', tg('serverTerminal.toastSigintMsg'), tg('serverTerminal.toastSigintSub'))
         return true
       }
       return false
@@ -440,8 +442,8 @@ async function connect(): Promise<void> {
   t.focus()
   connState.value = 'connecting'
   statusMsg.value = isContainer.value
-    ? `正在进入容器 ${containerName.value}(${hostLabel.value})…`
-    : `正在连接主机 ${hostLabel.value} …`
+    ? tg('serverTerminal.enteringContainer', { name: containerName.value, host: hostLabel.value })
+    : tg('serverTerminal.connectingHost', { host: hostLabel.value })
   const startedAt = performance.now()
 
   const handlers: TerminalHandlers = {
@@ -460,12 +462,12 @@ async function connect(): Promise<void> {
       onClose(reason) {
         if (connState.value === 'connecting') {
           connState.value = 'error'
-          statusMsg.value = reason || '连接失败,请检查登录状态、服务器可达性或容器是否存在'
+          statusMsg.value = reason || tg('serverTerminal.connectFailedDetail')
         } else {
           connState.value = 'closed'
-          statusMsg.value = reason || '终端会话已结束'
+          statusMsg.value = reason || tg('serverTerminal.sessionEnded')
         }
-        t.write('\r\n\x1b[2m── ' + (statusMsg.value || '会话结束') + ' ──\x1b[0m\r\n')
+        t.write('\r\n\x1b[2m── ' + (statusMsg.value || tg('serverTerminal.sessionEndedShort')) + ' ──\x1b[0m\r\n')
       },
   }
 
@@ -508,26 +510,26 @@ async function copySelection(): Promise<void> {
       /* 用户可能拒绝权限;静默降级 */
     }
   }
-  flashToast('copy', '已复制', `${sel.length} 字符`)
+  flashToast('copy', tg('serverTerminal.toastCopied'), tg('serverTerminal.charCount', { n: sel.length }))
 }
 
 async function pasteFromClipboard(): Promise<void> {
   if (!clipboardOK) {
-    flashToast('paste', '无法读取剪贴板', '需 https / localhost 安全上下文')
+    flashToast('paste', tg('serverTerminal.toastClipboardUnavailable'), tg('serverTerminal.toastClipboardSecureCtx'))
     return
   }
   let text = ''
   try {
     text = await navigator.clipboard.readText()
   } catch {
-    flashToast('paste', '剪贴板读取被拒', '请在浏览器允许剪贴板权限')
+    flashToast('paste', tg('serverTerminal.toastClipboardDenied'), tg('serverTerminal.toastClipboardAllow'))
     return
   }
   if (!text) return
   conn.value?.send(text)
   if (!text.includes('\n')) lineBuffer += text
   clearSuggestion()
-  flashToast('paste', '已粘贴', `${text.length} 字符`)
+  flashToast('paste', tg('serverTerminal.toastPasted'), tg('serverTerminal.charCount', { n: text.length }))
 }
 
 // copyOnSelect:在终端里选完(mouseup)即复制当前选区。
@@ -633,12 +635,12 @@ onBeforeUnmount(() => {
     <!-- 顶栏:驾驶舱状态条 -->
     <header class="top">
       <div class="brand"><span class="logo">p&gt;</span> Pipewright</div>
-      <span class="crumb">运维终端 · <b>{{ serverName }}</b></span>
+      <span class="crumb">{{ tg('serverTerminal.titleSuffix') }} · <b>{{ serverName }}</b></span>
       <span class="grow" />
 
       <div class="seg">
         <div class="cell">
-          <span class="k">{{ isContainer ? '容器' : '主机' }}</span>
+          <span class="k">{{ isContainer ? tg('serverTerminal.kindContainer') : tg('serverTerminal.kindHost') }}</span>
           <span class="v">{{ isContainer ? `${containerLabel} @ ${hostLabel}` : hostLabel }}</span>
         </div>
         <div class="cell">
@@ -650,14 +652,14 @@ onBeforeUnmount(() => {
       </div>
 
       <span v-if="connState === 'connected'" class="live"><span class="dot" /> LIVE</span>
-      <span v-else-if="connState === 'connecting'" class="conn-state">连接中…</span>
-      <span v-else-if="connState === 'error'" class="conn-state err">连接失败</span>
+      <span v-else-if="connState === 'connecting'" class="conn-state">{{ tg('serverTerminal.connecting') }}</span>
+      <span v-else-if="connState === 'error'" class="conn-state err">{{ tg('serverTerminal.connectFailed') }}</span>
 
       <button class="tbtn" type="button" :disabled="connState === 'connecting'" @click="connect">
-        {{ connState === 'connected' ? '重连' : '连接' }}
+        {{ connState === 'connected' ? tg('serverTerminal.reconnect') : tg('serverTerminal.connect') }}
       </button>
-      <button class="tbtn danger" type="button" :disabled="connState !== 'connected'" @click="disconnect">断开</button>
-      <button class="tbtn" type="button" @click="closePage">关闭</button>
+      <button class="tbtn danger" type="button" :disabled="connState !== 'connected'" @click="disconnect">{{ tg('serverTerminal.disconnect') }}</button>
+      <button class="tbtn" type="button" @click="closePage">{{ tg('serverTerminal.close') }}</button>
     </header>
 
     <div class="main" :class="{ 'ai-open': aiOpen }">
@@ -665,40 +667,40 @@ onBeforeUnmount(() => {
       <section class="term-wrap">
         <div class="term-bar">
           <span class="tdot r" /><span class="tdot y" /><span class="tdot g" />
-          <span class="name">{{ serverName }} · <b>{{ isContainer ? `容器 ${containerLabel}` : '主机 shell' }}</b></span>
+          <span class="name">{{ serverName }} · <b>{{ isContainer ? tg('serverTerminal.containerLabel', { label: containerLabel }) : tg('serverTerminal.hostShell') }}</b></span>
         </div>
 
         <div
           ref="termHost"
           class="term-host"
           tabindex="0"
-          aria-label="服务器交互终端"
+          :aria-label="tg('serverTerminal.terminalAria')"
           @mouseup="onTermMouseUp"
           @contextmenu="onTermContextMenu"
         />
 
         <div v-if="connState === 'idle'" class="term-hint">
-          点「连接」{{ isContainer ? `进入容器 ${containerName}（docker exec）。` : '进入主机 shell。' }}
+          {{ isContainer ? tg('serverTerminal.hintContainer', { name: containerName }) : tg('serverTerminal.hintHost') }}
         </div>
         <div v-else-if="statusMsg && connState !== 'connected'" class="term-hint err">{{ statusMsg }}</div>
 
         <!-- 终端状态行 -->
         <div class="term-status">
-          <span class="s">⟢ <b>{{ isContainer ? `容器 ${containerLabel}` : serverName }}</b></span>
-          <span v-if="latencyMs !== null && connState === 'connected'" class="s">延迟 <b>{{ latencyMs }}ms</b></span>
-          <span class="s"><kbd>⌘C</kbd> 复制</span>
-          <span class="s"><kbd>⌘V</kbd> 粘贴</span>
-          <span class="s"><kbd>^C</kbd> 中断</span>
-          <span class="s">右键菜单</span>
-          <span v-if="!clipboardOK" class="s warn">剪贴板需 https/localhost</span>
+          <span class="s">⟢ <b>{{ isContainer ? tg('serverTerminal.containerLabel', { label: containerLabel }) : serverName }}</b></span>
+          <span v-if="latencyMs !== null && connState === 'connected'" class="s">{{ tg('serverTerminal.latency') }} <b>{{ latencyMs }}ms</b></span>
+          <span class="s"><kbd>⌘C</kbd> {{ tg('serverTerminal.copy') }}</span>
+          <span class="s"><kbd>⌘V</kbd> {{ tg('serverTerminal.paste') }}</span>
+          <span class="s"><kbd>^C</kbd> {{ tg('serverTerminal.interrupt') }}</span>
+          <span class="s">{{ tg('serverTerminal.contextMenu') }}</span>
+          <span v-if="!clipboardOK" class="s warn">{{ tg('serverTerminal.clipboardSecureWarn') }}</span>
           <button
             class="ai-toggle"
             :class="{ on: completeEnabled }"
             type="button"
-            :title="completeEnabled ? '关闭 AI 补全' : '开启 AI 补全'"
+            :title="completeEnabled ? tg('serverTerminal.completeDisableTitle') : tg('serverTerminal.completeEnableTitle')"
             @click="toggleComplete"
           >
-            <span class="d" aria-hidden="true" /> AI 补全 {{ completeEnabled ? '开' : '关' }}
+            <span class="d" aria-hidden="true" /> {{ tg('serverTerminal.aiComplete') }} {{ completeEnabled ? tg('serverTerminal.on') : tg('serverTerminal.off') }}
           </button>
         </div>
       </section>
@@ -714,9 +716,9 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- 收起态:右侧边缘「✦ AI 助手」唤起 tab(终端占满,需要时一键滑出) -->
-    <button v-if="!aiOpen" class="ai-launcher" type="button" title="展开 AI 运维助手" @click="toggleAi">
+    <button v-if="!aiOpen" class="ai-launcher" type="button" :title="tg('serverTerminal.aiLauncherTitle')" @click="toggleAi">
       <span class="ai-launcher-spark" aria-hidden="true">✦</span>
-      <span class="ai-launcher-label">AI 助手</span>
+      <span class="ai-launcher-label">{{ tg('serverTerminal.aiAssistant') }}</span>
     </button>
 
     <!-- 光标处内联补全 ghost(像 IDE / zsh:接着你打的字补灰字,Tab 接受) -->
@@ -737,11 +739,11 @@ onBeforeUnmount(() => {
       :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }"
       @click.stop
     >
-      <button type="button" :disabled="!ctxMenu.hasSelection" @click="ctxCopy">复制<span class="kbd">⌘C</span></button>
-      <button type="button" @click="ctxPaste">粘贴<span class="kbd">⌘V</span></button>
-      <button type="button" @click="ctxSelectAll">全选<span class="kbd">⌘A</span></button>
+      <button type="button" :disabled="!ctxMenu.hasSelection" @click="ctxCopy">{{ tg('serverTerminal.copy') }}<span class="kbd">⌘C</span></button>
+      <button type="button" @click="ctxPaste">{{ tg('serverTerminal.paste') }}<span class="kbd">⌘V</span></button>
+      <button type="button" @click="ctxSelectAll">{{ tg('serverTerminal.selectAll') }}<span class="kbd">⌘A</span></button>
       <div class="div" />
-      <button type="button" @click="ctxClear">清屏</button>
+      <button type="button" @click="ctxClear">{{ tg('serverTerminal.clearScreen') }}</button>
     </div>
 
     <!-- toasts -->

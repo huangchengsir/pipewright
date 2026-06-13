@@ -1,0 +1,57 @@
+export default {
+  serverFallback: '伺服器',
+  titleConnecting: '連線中 · ',
+  titleDisconnected: '⚠ 已中斷 · ',
+  titleSuffix: '維運終端',
+  hostMachine: '（主機）',
+
+  kindContainer: '容器',
+  kindHost: '主機',
+  containerLabel: '容器 {label}',
+  hostShell: '主機 shell',
+
+  connecting: '連線中…',
+  connectFailed: '連線失敗',
+  connect: '連線',
+  reconnect: '重連',
+  disconnect: '中斷',
+  close: '關閉',
+
+  enteringContainer: '正在進入容器 {name}（{host}）…',
+  connectingHost: '正在連線主機 {host} …',
+  connectFailedDetail: '連線失敗，請檢查登入狀態、伺服器可達性或容器是否存在',
+  sessionEnded: '終端工作階段已結束',
+  sessionEndedShort: '工作階段結束',
+
+  terminalAria: '伺服器互動終端',
+  hintContainer: '點「連線」進入容器 {name}（docker exec）。',
+  hintHost: '點「連線」進入主機 shell。',
+
+  latency: '延遲',
+  copy: '複製',
+  paste: '貼上',
+  interrupt: '中斷',
+  contextMenu: '右鍵選單',
+  selectAll: '全選',
+  clearScreen: '清除畫面',
+  clipboardSecureWarn: '剪貼簿需 https/localhost',
+
+  completeDisableTitle: '關閉 AI 補全',
+  completeEnableTitle: '開啟 AI 補全',
+  aiComplete: 'AI 補全',
+  on: '開',
+  off: '關',
+
+  aiLauncherTitle: '展開 AI 維運助手',
+  aiAssistant: 'AI 助手',
+
+  charCount: '{n} 個字元',
+  toastCopied: '已複製',
+  toastPasted: '已貼上',
+  toastSigintMsg: '已傳送 SIGINT',
+  toastSigintSub: '中斷目前命令',
+  toastClipboardUnavailable: '無法讀取剪貼簿',
+  toastClipboardSecureCtx: '需 https / localhost 安全內容',
+  toastClipboardDenied: '剪貼簿讀取被拒',
+  toastClipboardAllow: '請在瀏覽器允許剪貼簿權限',
+}

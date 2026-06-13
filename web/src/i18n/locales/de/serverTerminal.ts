@@ -1,0 +1,57 @@
+export default {
+  serverFallback: 'Server',
+  titleConnecting: 'Verbinden · ',
+  titleDisconnected: '⚠ Getrennt · ',
+  titleSuffix: 'Ops-Terminal',
+  hostMachine: '(Host)',
+
+  kindContainer: 'Container',
+  kindHost: 'Host',
+  containerLabel: 'Container {label}',
+  hostShell: 'Host-Shell',
+
+  connecting: 'Verbinden…',
+  connectFailed: 'Verbindung fehlgeschlagen',
+  connect: 'Verbinden',
+  reconnect: 'Neu verbinden',
+  disconnect: 'Trennen',
+  close: 'Schließen',
+
+  enteringContainer: 'Container {name} ({host}) wird betreten…',
+  connectingHost: 'Verbindung zum Host {host} wird hergestellt …',
+  connectFailedDetail: 'Verbindung fehlgeschlagen. Prüfe deinen Anmeldestatus, die Erreichbarkeit des Servers oder ob der Container existiert.',
+  sessionEnded: 'Terminalsitzung beendet',
+  sessionEndedShort: 'Sitzung beendet',
+
+  terminalAria: 'Interaktives Server-Terminal',
+  hintContainer: 'Klicke auf „Verbinden“, um Container {name} zu betreten (docker exec).',
+  hintHost: 'Klicke auf „Verbinden“, um die Host-Shell zu betreten.',
+
+  latency: 'Latenz',
+  copy: 'Kopieren',
+  paste: 'Einfügen',
+  interrupt: 'Abbrechen',
+  contextMenu: 'Kontextmenü',
+  selectAll: 'Alles auswählen',
+  clearScreen: 'Bildschirm löschen',
+  clipboardSecureWarn: 'Zwischenablage erfordert https/localhost',
+
+  completeDisableTitle: 'KI-Vervollständigung deaktivieren',
+  completeEnableTitle: 'KI-Vervollständigung aktivieren',
+  aiComplete: 'KI-Vervollständigung',
+  on: 'an',
+  off: 'aus',
+
+  aiLauncherTitle: 'KI-Ops-Assistent ausklappen',
+  aiAssistant: 'KI-Assistent',
+
+  charCount: '{n} Zeichen',
+  toastCopied: 'Kopiert',
+  toastPasted: 'Eingefügt',
+  toastSigintMsg: 'SIGINT gesendet',
+  toastSigintSub: 'Aktuellen Befehl abbrechen',
+  toastClipboardUnavailable: 'Zwischenablage kann nicht gelesen werden',
+  toastClipboardSecureCtx: 'Erfordert einen sicheren https-/localhost-Kontext',
+  toastClipboardDenied: 'Lesen der Zwischenablage verweigert',
+  toastClipboardAllow: 'Bitte erlaube den Zugriff auf die Zwischenablage im Browser',
+}

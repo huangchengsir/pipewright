@@ -20,6 +20,10 @@ type StepSink interface {
 	// SetFailureLog 报告本次运行的失败日志原文(脱敏前;持久化到 run.failure_log,
 	// 供后续 AI 诊断消费)。Runner 在失败路径调用;best-effort,失败不应阻断 run 终态。
 	SetFailureLog(ctx context.Context, log string) error
+	// SetSpecSource 报告驱动本次运行的流水线配置来源(仓库 `.pipewright.yml` / 库内网页配置;
+	// 持久化到 pipeline_runs,供运行详情展示「配置来源」)。Runner 在加载 spec 后调用;
+	// best-effort,失败不应阻断运行。
+	SetSpecSource(ctx context.Context, src SpecSource) error
 	// Log 报告一行运行日志(Story 3.6)。worker 侧实现负责**先脱敏**→落 run_logs(分配
 	// run 内单调 seq)→ 经事件总线发 EventLog。stream ∈ stdout|stderr;stepOrdinal 关联
 	// 步骤(-1 表示运行级);line 为单行文本(无尾换行)。3-3 真实构建只经此接口喂行、不改形状。

@@ -17,6 +17,22 @@ export default {
   pacOffHint: 'Cuando está activo, cada ejecución lee .pipewright.yml desde la raíz del repositorio en la rama de ejecución (con reserva a esta configuración si falta o no es válido).',
   pacToggleFailed: 'No se pudo cambiar. Inténtalo de nuevo.',
 
+  // ─── Previsualizar configuración del repositorio (GitOps · obtener y validar .pipewright.yml en un ref) ──
+  pacPreviewBtn: 'Previsualizar config del repo',
+  pacPreviewTitle: 'Previsualizar configuración del repositorio',
+  pacPreviewSub: 'Obtén y valida el archivo del repositorio en una rama/etiqueta/commit:',
+  pacPreviewCloseAria: 'Cerrar la previsualización',
+  pacPreviewCloseBtn: 'Cerrar',
+  pacPreviewRefLabel: 'Rama / etiqueta / commit',
+  pacPreviewFetch: 'Obtener y validar',
+  pacPreviewNotFound: 'No se encontró .pipewright.yml en {ref}; las ejecuciones recurrirán al pipeline configurado aquí.',
+  pacPreviewInvalid: 'El .pipewright.yml en {ref} no superó la validación; las ejecuciones recurrirán silenciosamente al pipeline configurado aquí:',
+  pacPreviewValid: 'El .pipewright.yml en {ref} es válido con {count} etapa(s); las ejecuciones lo usarán.',
+  pacPreviewJobCount: '{count} trabajo(s)',
+  pacPreviewConnFailed: 'Error de conexión. Revisa tu red e inténtalo de nuevo.',
+  pacPreviewFailed: 'Error en la previsualización ({status}). Inténtalo de nuevo.',
+  pacPreviewFailedRetry: 'Error en la previsualización. Inténtalo de nuevo.',
+
   // ─── botones de la barra de herramientas ────────────────────────
   aiGenerate: 'Generar pipeline con IA',
   importYaml: 'Importar desde YAML',

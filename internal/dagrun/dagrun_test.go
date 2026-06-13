@@ -16,14 +16,15 @@ import (
 
 type fakeLoader struct {
 	cfg        *pipeline.Config
+	src        SpecSource // 默认零值 = FromRepo:false(库内配置),按需覆盖以测来源透传
 	gotBranch  string
 	gotProject string
 }
 
-func (f *fakeLoader) Get(_ context.Context, projectID string, branch string) (*pipeline.Config, error) {
+func (f *fakeLoader) Get(_ context.Context, projectID string, branch string) (*pipeline.Config, SpecSource, error) {
 	f.gotProject = projectID
 	f.gotBranch = branch
-	return f.cfg, nil
+	return f.cfg, f.src, nil
 }
 
 // fakeSink 记录 StepSink 调用(dagrun 已串行化调用,这里再加锁防御)。
@@ -33,6 +34,7 @@ type fakeSink struct {
 	running []int
 	done    map[int]string
 	logs    []string
+	specSrc *run.SpecSource // 捕获 SetSpecSource 入参(nil = 未调用)
 }
 
 func newFakeSink() *fakeSink { return &fakeSink{done: map[int]string{}} }
@@ -59,6 +61,13 @@ func (s *fakeSink) StepDone(_ context.Context, ord int, status string) error {
 	return nil
 }
 func (s *fakeSink) SetFailureLog(_ context.Context, _ string) error { return nil }
+func (s *fakeSink) SetSpecSource(_ context.Context, src run.SpecSource) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := src
+	s.specSrc = &cp
+	return nil
+}
 func (s *fakeSink) Log(_ context.Context, _ string, _ int, line string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -69,6 +78,37 @@ func (s *fakeSink) EmitArtifact(_ context.Context, _ run.Artifact) error { retur
 
 func cfgWith(stages ...pipeline.Stage) *pipeline.Config {
 	return &pipeline.Config{Spec: pipeline.Spec{Stages: stages}}
+}
+
+// TestRunnerForwardsSpecSourceToSink 验证 Runner.Run 把 loader 返回的配置来源(Slice 2)
+// 经 SetSpecSource 透传给 sink:FromRepo → run.SpecSourceRepo + ref/file;回退 → stored + 原因。
+func TestRunnerForwardsSpecSourceToSink(t *testing.T) {
+	cfg := cfgWith(pipeline.Stage{ID: "src", Name: "源"})
+
+	// 仓库来源:loader 返回 FromRepo → sink 应收到 Source=repo + ref/file。
+	sink := newFakeSink()
+	repoLoader := &fakeLoader{cfg: cfg, src: SpecSource{FromRepo: true, Ref: "feature/x", File: ".pipewright.yml"}}
+	if err := New(repoLoader).Run(context.Background(),
+		&run.Run{ProjectID: "p", Trigger: run.Trigger{Type: "manual", Branch: "feature/x"}}, sink); err != nil {
+		t.Fatalf("Run 失败: %v", err)
+	}
+	if sink.specSrc == nil {
+		t.Fatal("Runner 未调用 SetSpecSource")
+	}
+	if sink.specSrc.Source != run.SpecSourceRepo || sink.specSrc.Ref != "feature/x" || sink.specSrc.File != ".pipewright.yml" {
+		t.Fatalf("仓库来源透传错误: %+v", *sink.specSrc)
+	}
+
+	// 库内回退:loader 返回 FromRepo=false + 原因 → sink 应收到 Source=stored + Fallback。
+	sink2 := newFakeSink()
+	storedLoader := &fakeLoader{cfg: cfg, src: SpecSource{FallbackReason: "invalid_yaml"}}
+	if err := New(storedLoader).Run(context.Background(),
+		&run.Run{ProjectID: "p", Trigger: run.Trigger{Type: "manual", Branch: "main"}}, sink2); err != nil {
+		t.Fatalf("Run 失败: %v", err)
+	}
+	if sink2.specSrc == nil || sink2.specSrc.Source != run.SpecSourceStored || sink2.specSrc.Fallback != "invalid_yaml" {
+		t.Fatalf("库内回退来源透传错误: %+v", sink2.specSrc)
+	}
 }
 
 func TestRunnerWhenSkipsStageAndDownstreamWithoutFailing(t *testing.T) {
@@ -268,12 +308,15 @@ func TestSpecLoaderFuncIgnoresBranchAndDelegates(t *testing.T) {
 		gotProject = projectID
 		return cfg, nil
 	})
-	got, err := adapter.Get(context.Background(), "proj-y", "any-branch")
+	got, src, err := adapter.Get(context.Background(), "proj-y", "any-branch")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	if got != cfg {
 		t.Errorf("应委托底层返回同一 cfg")
+	}
+	if src.FromRepo {
+		t.Errorf("SpecLoaderFunc 来源应为库内配置(FromRepo=false),实际 %+v", src)
 	}
 	if gotProject != "proj-y" {
 		t.Errorf("应透传 projectID=proj-y,实际 %q", gotProject)

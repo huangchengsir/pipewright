@@ -31,8 +31,22 @@ import (
 // branch 是本次运行的目标分支(run.Trigger.Branch),供「流水线即代码」按运行分支取
 // `.pipewright.yml`(FR-8-12);库内 loader(pipeline.Service,分支无关)可经 SpecLoaderFunc
 // 包成此契约并忽略 branch。branch 为空(如无分支的手动运行)时,实现应退化为既有默认分支行为。
+//
+// 返回值除 spec 外还报告其来源(SpecSource):本次运行由仓库 `.pipewright.yml` 还是库内
+// (网页)配置驱动,供运行详情如实展示「配置来源」(Slice 2)。
 type SpecLoader interface {
-	Get(ctx context.Context, projectID, branch string) (*pipeline.Config, error)
+	Get(ctx context.Context, projectID, branch string) (*pipeline.Config, SpecSource, error)
+}
+
+// SpecSource 描述「本次运行的流水线 spec 来自哪里」(配置来源可见性):
+//   - FromRepo=true:由仓库根 `.pipewright.yml` 驱动(GitOps),Ref=取用分支/ref、File=文件名。
+//   - FromRepo=false:由库内(网页编辑)配置驱动;若是「本想用仓库但回退了」,FallbackReason
+//     记回退原因(disabled|no_file|invalid_yaml|degraded|empty|lookup_failed),否则为空。
+type SpecSource struct {
+	FromRepo       bool
+	Ref            string
+	File           string
+	FallbackReason string
 }
 
 // SpecLoaderFunc 把任意「按 projectID 取配置」的库内 loader(如 pipeline.Service.Get,分支无关)
@@ -40,9 +54,10 @@ type SpecLoader interface {
 // 接进 branch 感知的 dagrun 内核,而不改动其公有 2 参签名(其它调用方不受影响)。
 type SpecLoaderFunc func(ctx context.Context, projectID string) (*pipeline.Config, error)
 
-// Get 实现 SpecLoader:忽略 branch,委托底层分支无关的 loader。
-func (f SpecLoaderFunc) Get(ctx context.Context, projectID, _ string) (*pipeline.Config, error) {
-	return f(ctx, projectID)
+// Get 实现 SpecLoader:忽略 branch,委托底层分支无关的 loader。来源恒为库内配置(FromRepo=false)。
+func (f SpecLoaderFunc) Get(ctx context.Context, projectID, _ string) (*pipeline.Config, SpecSource, error) {
+	cfg, err := f(ctx, projectID)
+	return cfg, SpecSource{FromRepo: false}, err
 }
 
 // StageReporter 给 StageExecutor 上报「本阶段」的日志/产物(自动关联到该阶段的 run_steps 序号)。
@@ -140,10 +155,13 @@ func New(loader SpecLoader, opts ...Option) *Runner {
 // StepSink 非并发安全约定:本 Runner 用单一 mutex 串行化所有 sink 调用,即便阶段并行执行,
 // 对 sink 的 Plan/StepRunning/StepDone/Log/EmitArtifact 也互斥,安全复用既有持久化管道。
 func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error {
-	cfg, err := r.loader.Get(ctx, rn.ProjectID, rn.Trigger.Branch)
+	cfg, src, err := r.loader.Get(ctx, rn.ProjectID, rn.Trigger.Branch)
 	if err != nil {
 		return fmt.Errorf("dagrun: load pipeline spec: %w", err)
 	}
+	// 配置来源可见性(Slice 2):本次运行由仓库 `.pipewright.yml` 还是库内(网页)配置驱动,
+	// 经 sink 持久化到运行记录,供运行详情如实展示。best-effort:落库失败仅忽略,不阻断运行。
+	_ = sink.SetSpecSource(ctx, toSinkSpecSource(src))
 	// 矩阵展开(P1):把声明了 Matrix 的阶段在纯调度层展开成笛卡尔积的并行 cell 子阶段,
 	// 并重映射 needs(下游等所有 cell)。无 matrix 阶段时原样返回。展开后阶段集作为后续
 	// 建图 / stageByID / 上报 / 执行的权威集——不改 dag 的并发与失败语义。
@@ -400,6 +418,15 @@ func (j *jobReporter) JobDone(ctx context.Context, _, status string) error {
 }
 
 func (j *jobReporter) JobReporter(string) StageReporter { return j }
+
+// toSinkSpecSource 把 dagrun.SpecSource 映射为 run.SpecSource(领域层搬运形状,经 sink 落库)。
+// FromRepo → "repo";否则 "stored"(并带回退原因)。
+func toSinkSpecSource(s SpecSource) run.SpecSource {
+	if s.FromRepo {
+		return run.SpecSource{Source: run.SpecSourceRepo, Ref: s.Ref, File: s.File}
+	}
+	return run.SpecSource{Source: run.SpecSourceStored, Fallback: s.FallbackReason}
+}
 
 // summarize 汇总各终态计数(用于失败错误信息,不含敏感内容)。
 func summarize(res dag.Result) map[dag.Status]int { return res.Counts() }

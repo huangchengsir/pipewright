@@ -34,6 +34,12 @@ export default {
   triggerManual: 'Manual',
   commitUnresolved: 'No obtenido',
 
+  // Insignia de origen de configuración (GitOps · Slice 2)
+  metaSpecSource: 'Origen de configuración',
+  specSourceRepo: 'Repositorio {ref} · {file}',
+  specSourceStored: 'Configuración web',
+  specSourceFallbackHint: 'El archivo del repositorio falta o no es válido; se recurrió a la configuración web',
+
   pipelineProgress: 'Progreso del pipeline',
   pipelineComplete: 'Pipeline completado',
   pipelineFailed: 'Pipeline fallido',

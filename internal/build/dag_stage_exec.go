@@ -969,10 +969,11 @@ type reporterSink struct {
 	rep dagrun.StageReporter
 }
 
-func (s *reporterSink) Plan(context.Context, []run.StepDecl) error  { return nil }
-func (s *reporterSink) StepRunning(context.Context, int) error      { return nil }
-func (s *reporterSink) StepDone(context.Context, int, string) error { return nil }
-func (s *reporterSink) SetFailureLog(context.Context, string) error { return nil }
+func (s *reporterSink) Plan(context.Context, []run.StepDecl) error          { return nil }
+func (s *reporterSink) StepRunning(context.Context, int) error              { return nil }
+func (s *reporterSink) StepDone(context.Context, int, string) error         { return nil }
+func (s *reporterSink) SetFailureLog(context.Context, string) error         { return nil }
+func (s *reporterSink) SetSpecSource(context.Context, run.SpecSource) error { return nil }
 func (s *reporterSink) Log(ctx context.Context, stream string, _ int, line string) error {
 	return s.rep.Log(ctx, stream, line)
 }

@@ -346,13 +346,13 @@ func main() {
 		// 装饰器始终挂载(每项目开关默认关 → 老项目行为不变,无需服务端 env)。历史全局开关
 		// PIPEWRIGHT_PAC_RUNTIME=1 保留为**全局强开**:无视每项目开关,对所有项目尝试覆盖。
 		pacGlobalOverride := strings.EqualFold(strings.TrimSpace(os.Getenv("PIPEWRIGHT_PAC_RUNTIME")), "1")
-		var specLoader dagrun.SpecLoader = pacloader.New(
+		var specLoader dagrun.SpecLoader = pacSpecLoader{pacloader.New(
 			pipelineSvc,
 			pacProjectLookup{projectSvc},
 			credVault, // vault.Vault 满足 TokenRevealer(Reveal)
 			pacBlobFetcher{httpapi.NewSourceReader()},
 			pacGlobalOverride,
-		)
+		)}
 		if pacGlobalOverride {
 			log.Printf("[pac] 全局强开:.pipewright.yml 覆盖对所有项目生效(PIPEWRIGHT_PAC_RUNTIME=1;无视每项目开关)")
 		}
@@ -523,6 +523,20 @@ func (b pacBlobFetcher) FetchBlob(ctx context.Context, repoURL, token, ref, file
 		return "", false, err
 	}
 	return blob.Content, blob.Degraded, nil
+}
+
+// pacSpecLoader 把 *pacloader.Loader 适配为 dagrun.SpecLoader:转换其同形的 SpecSource
+// (配置来源可见性 · Slice 2)。pacloader 不反向 import dagrun(避免环),故来源结构在 main 处转换。
+type pacSpecLoader struct{ inner *pacloader.Loader }
+
+func (l pacSpecLoader) Get(ctx context.Context, projectID, branch string) (*pipeline.Config, dagrun.SpecSource, error) {
+	cfg, src, err := l.inner.Get(ctx, projectID, branch)
+	return cfg, dagrun.SpecSource{
+		FromRepo:       src.FromRepo,
+		Ref:            src.Ref,
+		File:           src.File,
+		FallbackReason: src.FallbackReason,
+	}, err
 }
 
 // buildRunnerOption 按 PIPEWRIGHT_BUILDER 开关返回注入 pool 的运行执行器选项(Story 3-3/3-5)。

@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/i18n"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
@@ -80,6 +81,38 @@ type Payload struct {
 	Title  string
 	Body   string
 	Fields map[string]string
+	// Lang 是渲染该通知默认文案/字段标签用的语言(notify_config.language)。
+	// 空 = deliver 时按配置解析;渲染器(feishu/email)据此本地化标签与标题。
+	Lang string
+}
+
+// ErrInvalidLanguage 表示设置的通知语言不是受支持的 locale 码。
+var ErrInvalidLanguage = errors.New("notify: invalid language")
+
+// notifyLanguage 读取通知语言配置(notify_config 单行);缺失/出错回退默认。
+func (s *service) notifyLanguage(ctx context.Context) string {
+	var lang string
+	err := s.db.QueryRowContext(ctx, `SELECT language FROM notify_config WHERE id = 1`).Scan(&lang)
+	if err != nil || i18n.Normalize(lang) == "" {
+		return i18n.Default
+	}
+	return lang
+}
+
+// NotifyLanguage 暴露当前通知语言(供 HTTP 层 GET)。
+func (s *service) NotifyLanguage(ctx context.Context) string {
+	return s.notifyLanguage(ctx)
+}
+
+// SetNotifyLanguage 持久化通知语言;要求精确的受支持 locale 码(如 zh-CN/en/ja)。
+func (s *service) SetNotifyLanguage(ctx context.Context, lang string) error {
+	if i18n.Normalize(lang) != lang {
+		return ErrInvalidLanguage
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE notify_config SET language = ?, updated_at = ? WHERE id = 1`,
+		lang, time.Now().UTC().Format(time.RFC3339))
+	return err
 }
 
 // Channel 是对外可见的渠道视图:含非敏感 per-type 配置 + HasSecret 布尔,绝无敏感字段明文/密文。
@@ -159,6 +192,11 @@ type Service interface {
 	// 渠道不存在 → ErrNotFound;**未启用 → 优雅跳过(返回 nil,不发不报错)**;
 	// 投递失败 → 人读错误。
 	SendVia(ctx context.Context, channelID string, payload Payload) error
+
+	// NotifyLanguage 返回外发通知默认文案语言(notify_config;缺失回退默认)。
+	NotifyLanguage(ctx context.Context) string
+	// SetNotifyLanguage 设置外发通知默认文案语言;非受支持 locale → ErrInvalidLanguage。
+	SetNotifyLanguage(ctx context.Context, lang string) error
 
 	// RouteService 嵌入事件路由 CRUD + 引擎(Story 5.2;FR-20)。
 	RouteService
@@ -387,7 +425,7 @@ func (s *service) Test(ctx context.Context, id string) (*TestResult, error) {
 	return &TestResult{
 		OK:        true,
 		LatencyMs: time.Since(start).Milliseconds(),
-		Detail:    "测试通知已发送",
+		Detail:    i18n.T(s.notifyLanguage(ctx), "测试通知已发送"),
 	}, nil
 }
 
@@ -406,6 +444,10 @@ func (s *service) SendVia(ctx context.Context, channelID string, payload Payload
 // deliver 按 type 分派投递(webhook/email 实现;其余 not_implemented 人读)。
 // 返回人读错误(绝无敏感字段明文)。需 sealed(敏感字段密文)时在各 notifier 内解密、用完即弃。
 func (s *service) deliver(ctx context.Context, ch *Channel, sealed []byte, payload Payload) error {
+	// 确保渲染语言已定(直接投递的预构造 payload 可能未设)——飞书/邮件据此本地化标签。
+	if payload.Lang == "" {
+		payload.Lang = s.notifyLanguage(ctx)
+	}
 	switch ch.Type {
 	case TypeWebhook:
 		return s.sendWebhook(ctx, ch, payload)

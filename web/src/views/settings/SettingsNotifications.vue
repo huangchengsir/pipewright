@@ -34,6 +34,8 @@ import {
   createTemplate,
   updateTemplate,
   deleteTemplate,
+  getNotifyConfig,
+  setNotifyConfig,
   TEMPLATE_VARIABLES,
   type ChannelType,
   type NotificationChannel,
@@ -44,6 +46,7 @@ import {
   type NotificationTemplate,
 } from '../../api/notifications'
 import { listProjects, type Project } from '../../api/projects'
+import { SUPPORTED_LOCALES } from '../../i18n'
 
 // ─── types / metadata ──────────────────────────────────────────────────────────
 
@@ -60,6 +63,27 @@ interface TypeMeta {
 
 const { t } = useI18n()
 const toast = useToast()
+
+// 通知语言:外发通知(飞书/邮件)默认文案的语言,与界面语言解耦。
+const notifyLang = ref('zh-CN')
+const localeOptions = SUPPORTED_LOCALES
+async function loadNotifyConfig(): Promise<void> {
+  try {
+    const cfg = await getNotifyConfig()
+    if (cfg.language) notifyLang.value = cfg.language
+  } catch {
+    // 非致命:保持默认,不打断渠道页加载。
+  }
+}
+async function onNotifyLangChange(): Promise<void> {
+  try {
+    await setNotifyConfig(notifyLang.value)
+    toast.success(t('settingsNotifications.langSaved'))
+  } catch (err) {
+    toast.error(err instanceof HttpError ? err.message : t('settingsNotifications.langSaveFailed'))
+  }
+}
+onMounted(loadNotifyConfig)
 
 const TYPES = computed<TypeMeta[]>(() => [
   {
@@ -777,6 +801,22 @@ function configSummary(ch: NotificationChannel): string {
         </svg>
         {{ t('settingsNotifications.addChannel') }}
       </AppButton>
+    </div>
+
+    <!-- ─── 通知语言(外发文案语言,与界面语言解耦)─────────────────────────── -->
+    <div class="nt-lang">
+      <div class="nt-lang-text">
+        <span class="nt-lang-title">{{ t('settingsNotifications.langTitle') }}</span>
+        <span class="nt-lang-desc">{{ t('settingsNotifications.langDesc') }}</span>
+      </div>
+      <select
+        v-model="notifyLang"
+        class="nt-lang-select"
+        :aria-label="t('settingsNotifications.langTitle')"
+        @change="onNotifyLangChange"
+      >
+        <option v-for="l in localeOptions" :key="l.code" :value="l.code">{{ l.label }}</option>
+      </select>
     </div>
 
     <!-- ─── load error ──────────────────────────────────────────────────────── -->
@@ -1582,6 +1622,46 @@ function configSummary(ch: NotificationChannel): string {
   display: flex;
   flex-direction: column;
   gap: var(--card-gap);
+}
+
+/* ─── notification language ───────────────────────────────────────────────── */
+.nt-lang {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-card);
+}
+.nt-lang-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.nt-lang-title {
+  font-weight: 600;
+  color: var(--color-text);
+}
+.nt-lang-desc {
+  font-size: var(--text-caption);
+  color: var(--color-dim);
+}
+.nt-lang-select {
+  flex-shrink: 0;
+  padding: 7px 11px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  cursor: pointer;
+}
+.nt-lang-select:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
 }
 
 /* ─── section header ──────────────────────────────────────────────────────── */

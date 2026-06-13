@@ -103,7 +103,7 @@ func TestRenderPayloadFallsBackToDefault(t *testing.T) {
 	vars := TemplateVars{Project: "demo", Branch: "main", Status: "failed", Event: EventBuildFailed, DurationMs: "1500"}
 
 	got := s.RenderPayload(ctx(), EventBuildFailed, "", vars)
-	want := EventPayload(EventBuildFailed, "demo", "main", "", "failed", 1500)
+	want := EventPayload("zh-CN", EventBuildFailed, "demo", "main", "", "failed", 1500)
 	if got.Title != want.Title || got.Body != want.Body {
 		t.Fatalf("default fallback mismatch:\n got=%+v\nwant=%+v", got, want)
 	}

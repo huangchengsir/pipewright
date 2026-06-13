@@ -257,7 +257,7 @@ func (s *service) RenderPayload(ctx context.Context, event, channelID string, va
 	tpl := s.matchTemplate(ctx, event, channelID)
 	if tpl == nil {
 		// 无匹配模板:回平台默认(行为向后兼容 5-2)。
-		return s.defaultPayload(event, vars)
+		return s.defaultPayload(ctx, event, vars)
 	}
 
 	m := vars.asMap()
@@ -266,20 +266,21 @@ func (s *service) RenderPayload(ctx context.Context, event, channelID string, va
 
 	// 标题为空时回退到默认标题(避免空主题);保持 Fields 一致供 webhook/email 透出。
 	if strings.TrimSpace(title) == "" {
-		title = s.defaultPayload(event, vars).Title
+		title = s.defaultPayload(ctx, event, vars).Title
 	}
-	return Payload{Title: title, Body: body, Fields: varsFields(vars)}
+	// 自定义模板正文是用户文本(不翻译),但 Lang 仍要带上,供飞书/邮件本地化字段标签与标题。
+	return Payload{Title: title, Body: body, Fields: varsFields(vars), Lang: s.notifyLanguage(ctx)}
 }
 
-// defaultPayload 用 TemplateVars 还原 EventPayload 入参,产出平台默认 Payload。
-func (s *service) defaultPayload(event string, vars TemplateVars) Payload {
+// defaultPayload 用 TemplateVars 还原 EventPayload 入参,产出平台默认 Payload(按通知语言本地化)。
+func (s *service) defaultPayload(ctx context.Context, event string, vars TemplateVars) Payload {
 	var durationMs int64
 	if vars.DurationMs != "" {
 		if d, err := strconv.ParseInt(vars.DurationMs, 10, 64); err == nil {
 			durationMs = d
 		}
 	}
-	return EventPayload(event, vars.Project, vars.Branch, vars.Commit, vars.Status, durationMs)
+	return EventPayload(s.notifyLanguage(ctx), event, vars.Project, vars.Branch, vars.Commit, vars.Status, durationMs)
 }
 
 // varsFields 把 TemplateVars 展开为 Payload.Fields(仅非空项),供 webhook/email 透出结构化键值。

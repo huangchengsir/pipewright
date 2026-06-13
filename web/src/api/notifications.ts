@@ -248,3 +248,16 @@ export async function updateTemplate(
 export async function deleteTemplate(id: string): Promise<void> {
   await http.delete<void>(`/api/notifications/templates/${id}`)
 }
+
+/** Global notification config — currently just the outbound-content language. */
+export interface NotifyConfig {
+  language: string
+}
+
+export async function getNotifyConfig(): Promise<NotifyConfig> {
+  return http.get<NotifyConfig>('/api/notifications/config')
+}
+
+export async function setNotifyConfig(language: string): Promise<NotifyConfig> {
+  return http.put<NotifyConfig>('/api/notifications/config', { language })
+}

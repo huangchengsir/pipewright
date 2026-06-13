@@ -1,4 +1,8 @@
 export default {
+  langTitle: 'Notification language',
+  langDesc: 'Language for outbound notification default content (Lark/email), independent of the UI language.',
+  langSaved: 'Notification language saved',
+  langSaveFailed: 'Failed to save notification language',
   typeWebhookDesc: 'Custom HTTP POST',
   typeEmailLabel: 'Email',
   typeEmailDesc: 'SMTP delivery',

@@ -11,6 +11,12 @@ export default {
   tabEnvs: 'Umgebungen & Anmeldedaten',
   tabStripAria: 'Tabs der Pipeline-Konfiguration',
 
+  // ─── Pipeline as Code (GitOps · FR-8-12) ────────────────────────
+  pacTitle: 'Pipeline as Code',
+  pacOnHint: 'Läufe lesen .pipewright.yml aus dem Lauf-Branch im Repository (Rückfall auf diese Konfiguration, wenn die Datei fehlt oder ungültig ist).',
+  pacOffHint: 'Wenn aktiviert, liest jeder Lauf .pipewright.yml aus dem Repository-Stamm im Lauf-Branch (Rückfall auf diese Konfiguration, wenn fehlend oder ungültig).',
+  pacToggleFailed: 'Umschalten fehlgeschlagen. Bitte erneut versuchen.',
+
   // ─── Symbolleisten-Schaltflächen ────────────────────────────────
   aiGenerate: 'Pipeline per KI generieren',
   importYaml: 'Aus YAML importieren',

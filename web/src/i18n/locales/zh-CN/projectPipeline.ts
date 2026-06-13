@@ -11,6 +11,12 @@ export default {
   tabEnvs: '环境与凭据',
   tabStripAria: '流水线配置标签页',
 
+  // ─── 流水线即代码(GitOps · FR-8-12)──────────────────────────────
+  pacTitle: '流水线即代码',
+  pacOnHint: '运行将按运行分支读取仓库 .pipewright.yml 驱动(文件缺失或非法时回退到此处配置)。',
+  pacOffHint: '开启后,每次运行按运行分支读取仓库根 .pipewright.yml 驱动(缺失或非法则回退此处配置)。',
+  pacToggleFailed: '切换失败,请重试。',
+
   // ─── 工具栏按钮 ─────────────────────────────────────────────────
   aiGenerate: 'AI 生成流水线',
   importYaml: '从 YAML 导入',

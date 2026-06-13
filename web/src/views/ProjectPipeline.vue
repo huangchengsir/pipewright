@@ -17,7 +17,7 @@ import {
   type SaveSettingsInput,
 } from '../api/pipelineSettings'
 import { listCredentials, type Credential } from '../api/credentials'
-import { listProjects, type Project } from '../api/projects'
+import { listProjects, updateProject, type Project } from '../api/projects'
 import { listServers, type Server } from '../api/servers'
 import { listChannels, type NotificationChannel } from '../api/notifications'
 import { getValidation, type ValidationDTO, type IssueScope } from '../api/pipelineValidation'
@@ -375,6 +375,29 @@ async function loadProject(): Promise<void> {
     project.value = null // 面包屑回退显示 ID,不阻断编辑器
   }
 }
+
+// ─── Pipeline-as-code (GitOps) toggle (FR-8-12) ───────────────────────────────
+// 开启后运行时按运行分支读仓库根 .pipewright.yml 驱动该 run(缺失/非法回退此处库内配置)。
+const pacEnabled = computed(() => project.value?.pacEnabled ?? false)
+const pacToggling = ref(false)
+const pacError = ref('')
+
+async function togglePac(next: boolean): Promise<void> {
+  if (!project.value || pacToggling.value) return
+  pacToggling.value = true
+  pacError.value = ''
+  const prev = project.value.pacEnabled
+  project.value = { ...project.value, pacEnabled: next } // optimistic
+  try {
+    const updated = await updateProject(projectId.value, { pacEnabled: next })
+    project.value = updated
+  } catch {
+    project.value = { ...project.value, pacEnabled: prev } // rollback
+    pacError.value = t('projectPipeline.pacToggleFailed')
+  } finally {
+    pacToggling.value = false
+  }
+}
 </script>
 
 <template>
@@ -487,6 +510,35 @@ async function loadProject(): Promise<void> {
         @click="setTab(tab.key)"
       >{{ tab.label }}</button>
     </nav>
+
+    <!-- ─── Pipeline-as-code (GitOps) toggle (FR-8-12) ─────────────────────── -->
+    <div class="pac-bar" :class="{ 'pac-bar--on': pacEnabled }">
+      <div class="pac-bar-text">
+        <span class="pac-bar-title">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>
+          </svg>
+          {{ t('projectPipeline.pacTitle') }}
+          <code class="pac-bar-file">.pipewright.yml</code>
+        </span>
+        <span class="pac-bar-desc">
+          {{ pacEnabled ? t('projectPipeline.pacOnHint') : t('projectPipeline.pacOffHint') }}
+        </span>
+        <span v-if="pacError" class="pac-bar-err" role="alert">{{ pacError }}</span>
+      </div>
+      <button
+        type="button"
+        class="pac-switch"
+        :class="{ 'pac-switch--on': pacEnabled }"
+        role="switch"
+        :aria-checked="pacEnabled"
+        :aria-label="t('projectPipeline.pacTitle')"
+        :disabled="pacToggling || !project"
+        @click="togglePac(!pacEnabled)"
+      >
+        <span class="pac-switch-knob" aria-hidden="true"/>
+      </button>
+    </div>
 
     <!-- ─── Tab body: panels + optional validation side-drawer ─────────────── -->
     <!--
@@ -867,6 +919,65 @@ async function loadProject(): Promise<void> {
   font-weight: 500;
   border-bottom-color: var(--color-primary);
 }
+
+/* ─── Pipeline-as-code (GitOps) toggle bar ───────────────────────────────── */
+.pac-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 28px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-2, var(--color-surface));
+  flex: none;
+}
+.pac-bar--on { background: color-mix(in oklab, var(--color-primary) 8%, transparent); }
+.pac-bar-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pac-bar-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.86rem;
+  font-weight: 500;
+  color: var(--color-text);
+}
+.pac-bar-title svg { color: var(--color-primary); flex: none; }
+.pac-bar-file {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.76rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--color-bg-soft, rgba(127,127,127,0.12));
+  color: var(--color-dim);
+}
+.pac-bar-desc { font-size: 0.78rem; color: var(--color-faint); }
+.pac-bar-err { font-size: 0.78rem; color: var(--color-danger, #e5484d); }
+
+.pac-switch {
+  position: relative;
+  flex: none;
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  border: none;
+  cursor: pointer;
+  background: var(--color-border);
+  transition: background var(--duration-fast);
+}
+.pac-switch--on { background: var(--color-primary); }
+.pac-switch:disabled { opacity: 0.55; cursor: default; }
+.pac-switch:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.pac-switch-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform var(--duration-fast);
+}
+.pac-switch--on .pac-switch-knob { transform: translateX(18px); }
 
 /* ─── Tab panels ─────────────────────────────────────────────────────────── */
 /*

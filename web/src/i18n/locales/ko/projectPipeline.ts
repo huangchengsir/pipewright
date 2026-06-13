@@ -11,6 +11,12 @@ export default {
   tabEnvs: '환경 및 자격 증명',
   tabStripAria: '파이프라인 설정 탭',
 
+  // ─── 코드형 파이프라인 (GitOps · FR-8-12) ───────────────────────
+  pacTitle: '코드형 파이프라인',
+  pacOnHint: '실행 시 실행 브랜치의 저장소 .pipewright.yml을 읽어 구동합니다(파일이 없거나 유효하지 않으면 이 설정으로 폴백).',
+  pacOffHint: '켜면 각 실행이 실행 브랜치의 저장소 루트 .pipewright.yml을 읽어 구동합니다(없거나 유효하지 않으면 이 설정으로 폴백).',
+  pacToggleFailed: '전환에 실패했습니다. 다시 시도하세요.',
+
   // ─── 툴바 버튼 ──────────────────────────────────────────────────
   aiGenerate: 'AI 파이프라인 생성',
   importYaml: 'YAML에서 가져오기',

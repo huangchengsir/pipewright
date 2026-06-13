@@ -100,11 +100,12 @@ stages:
 `
 
 func newLoader(stored *storedLoader, p ProjectLookup, t TokenRevealer, b BlobFetcher) *Loader {
-	return New(stored, p, t, b)
+	// 常规路径(每项目开关决定);defaultInfo() 默认 PacEnabled=true,故既有用例走覆盖路径。
+	return New(stored, p, t, b, false)
 }
 
 func defaultInfo() ProjectInfo {
-	return ProjectInfo{RepoURL: "https://git.example.com/acme/app.git", CredentialID: "cred-1", DefaultBranch: "main"}
+	return ProjectInfo{RepoURL: "https://git.example.com/acme/app.git", CredentialID: "cred-1", DefaultBranch: "main", PacEnabled: true}
 }
 
 // ─── (a) 合法 .pipewright.yml → 用其 spec ───────────────────────────────────────
@@ -268,7 +269,7 @@ func TestGet_EmptyContent_FallsBack(t *testing.T) {
 
 func TestGet_NilDeps_PurePassthrough(t *testing.T) {
 	stored := &storedLoader{cfg: storedCfg()}
-	l := New(stored, nil, nil, nil)
+	l := New(stored, nil, nil, nil, false)
 
 	cfg, err := l.Get(context.Background(), "proj-1", "")
 	if err != nil {
@@ -276,6 +277,38 @@ func TestGet_NilDeps_PurePassthrough(t *testing.T) {
 	}
 	if firstStage(cfg) != "stored-pipeline" || stored.called != 1 {
 		t.Fatalf("缺依赖应纯透传库内 loader,name=%q called=%d", firstStage(cfg), stored.called)
+	}
+}
+
+// 每项目开关关闭(PacEnabled=false)且非全局强开 → 即便仓库有合法 .pipewright.yml,也回退库内配置。
+func TestGet_PacDisabled_FallsBackToStored(t *testing.T) {
+	stored := &storedLoader{cfg: storedCfg()}
+	info := defaultInfo()
+	info.PacEnabled = false
+	l := New(stored, fakeProjects{info: info}, &fakeTokens{token: "t"}, &fakeBlobs{content: validYAML}, false)
+
+	cfg, err := l.Get(context.Background(), "proj-1", "main")
+	if err != nil {
+		t.Fatalf("意外错误: %v", err)
+	}
+	if firstStage(cfg) != "stored-pipeline" || stored.called != 1 {
+		t.Fatalf("开关关闭应回退库内,不读仓库;name=%q called=%d", firstStage(cfg), stored.called)
+	}
+}
+
+// 全局强开(globalOverride=true)→ 无视每项目开关,对 PacEnabled=false 的项目也尝试覆盖。
+func TestGet_GlobalOverride_IgnoresPerProjectFlag(t *testing.T) {
+	stored := &storedLoader{cfg: storedCfg()}
+	info := defaultInfo()
+	info.PacEnabled = false
+	l := New(stored, fakeProjects{info: info}, &fakeTokens{token: "t"}, &fakeBlobs{content: validYAML}, true)
+
+	cfg, err := l.Get(context.Background(), "proj-1", "main")
+	if err != nil {
+		t.Fatalf("意外错误: %v", err)
+	}
+	if firstStage(cfg) != "from-repo" {
+		t.Fatalf("全局强开应用仓库 YAML 驱动(name=from-repo),实际 name=%q", firstStage(cfg))
 	}
 }
 

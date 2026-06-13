@@ -1,14 +1,14 @@
 /**
  * Credentials API — aligns to frozen 1.3 contract.
  *
- * GET    /api/credentials           → Credential[]
- * POST   /api/credentials           → Credential  (needs CSRF)
- * PATCH  /api/credentials/:id       → Credential  (needs CSRF)
- * DELETE /api/credentials/:id       → 204          (needs CSRF)
+ * GET    /api/credentials            → Credential[]
+ * POST   /api/credentials            → Credential  (needs CSRF)
+ * PATCH  /api/credentials/:id        → Credential  (needs CSRF)
+ * DELETE /api/credentials/:id        → 204          (needs CSRF)
+ * POST   /api/credentials/:id/reveal → { secret }   (needs CSRF; audited)
  *
- * The API never returns plaintext secrets; only maskedValue is exposed.
- * "Copying a credential" means copying the id or name (the reference handle),
- * never the secret.
+ * List/get never return plaintext — only maskedValue is exposed. Plaintext is
+ * returned solely by the explicit, audited reveal endpoint.
  */
 
 import { http } from './http'
@@ -58,4 +58,13 @@ export async function updateCredential(
 
 export async function deleteCredential(id: string): Promise<void> {
   return http.delete<void>(`/api/credentials/${id}`)
+}
+
+/**
+ * Reveal the plaintext secret on explicit demand (POST + CSRF; audited server-side
+ * as `credential_reveal`). The only endpoint that returns plaintext — use sparingly.
+ */
+export async function revealCredential(id: string): Promise<string> {
+  const res = await http.post<{ secret: string }>(`/api/credentials/${id}/reveal`, {})
+  return res.secret
 }

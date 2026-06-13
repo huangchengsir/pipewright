@@ -40,7 +40,7 @@ export default {
   fieldCacheKeyLabel: '缓存 Key(可选)',
   fieldCacheKeyPlaceholder: '留空=按分支+lockfile 自动',
   fieldCacheKeyHint:
-    '可选缓存键模板。留空则自动按「分支 + 工作区内 lockfile(package-lock/pom.xml/go.sum 等)内容」推导:依赖变则自动冷构建。支持 {{参数}}',
+    '可选缓存键模板。留空则自动按「分支 + 工作区内 lockfile(package-lock/pom.xml/go.sum 等)内容」推导:依赖变则自动冷构建。支持 {\'{{参数}}\'}',
 
   // ─── jobConfigSchema · deploy ssh fields ───────────────────────────────
   fieldServerIdLabel: '目标服务器',
@@ -94,7 +94,7 @@ export default {
   fieldRegistryLabel: '镜像仓库地址',
   fieldImageNameLabel: '镜像名',
   fieldTagLabel: '标签',
-  fieldTagHint: '可用变量:${COMMIT_SHA} ${BRANCH} ${BUILD_NUMBER}',
+  fieldTagHint: '可用变量:{\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
   fieldRegistryCredentialLabel: '仓库凭据',
   fieldRegistryCredentialHint: '引用镜像仓库登录凭据',
 
@@ -118,11 +118,11 @@ export default {
   fieldChannelLabel: '通知渠道',
   fieldChannelHint: '从「通知」设置里已配置的渠道中选择;没有就先去设置里加一个',
   fieldTitleTemplateLabel: '标题模板(可选)',
-  fieldTitleTemplatePlaceholder: '部署成功:{{project}}',
-  fieldTitleTemplateHint: '留空用默认文案;支持占位 {{project}} {{branch}} {{commit}} {{status}} {{runId}}',
+  fieldTitleTemplatePlaceholder: '部署成功:{\'{{project}}\'}',
+  fieldTitleTemplateHint: '留空用默认文案;支持占位 {\'{{project}}\'} {\'{{branch}}\'} {\'{{commit}}\'} {\'{{status}}\'} {\'{{runId}}\'}',
   fieldBodyTemplateLabel: '正文模板(可选)',
-  fieldBodyTemplatePlaceholder: '分支 {{branch}} @ {{commit}} 已执行到通知节点。',
-  fieldBodyTemplateHint: '留空用默认文案;同样支持 {{占位}},未知占位渲染为空',
+  fieldBodyTemplatePlaceholder: '分支 {\'{{branch}}\'} {\'@\'} {\'{{commit}}\'} 已执行到通知节点。',
+  fieldBodyTemplateHint: '留空用默认文案;同样支持 {\'{{占位}}\'},未知占位渲染为空',
 
   // ─── jobConfigSchema · template nodes ──────────────────────────────────
   typeBuildFrontendLabel: '前端构建',
@@ -132,17 +132,17 @@ export default {
   typeDeployFrontendLabel: '前端推送部署',
   typeDeployFrontendDesc: '把前端 dist 经 SSH 零停机部署到服务器',
   typeTemplatedLabel: '自定义节点',
-  typeTemplatedDesc: '自己定义参数 + 命令模板({{参数}}),配参数即用',
+  typeTemplatedDesc: '自己定义参数 + 命令模板({\'{{参数}}\'}),配参数即用',
   fieldParamsLabel: '参数表',
-  fieldParamsHint: '每行一条 key=value,完全自由;命令模板/产物路径里用 {{key}} 引用',
+  fieldParamsHint: '每行一条 key=value,完全自由;命令模板/产物路径里用 {\'{{key}}\'} 引用',
   fieldCommandTemplateLabel: '命令模板',
-  fieldCommandTemplateHint: '多行;{{参数}} 会被参数表的值替换,$ENV 仍交给容器内 shell',
-  fieldTemplatedArtifactPathHint: '可选,每行一条,支持 {{参数}} 与通配;目录→dist、*.jar→jar、其它→archive',
+  fieldCommandTemplateHint: '多行;{\'{{参数}}\'} 会被参数表的值替换,$ENV 仍交给容器内 shell',
+  fieldTemplatedArtifactPathHint: '可选,每行一条,支持 {\'{{参数}}\'} 与通配;目录→dist、*.jar→jar、其它→archive',
   fieldTemplatedWorkDirHint: '可选,相对克隆工作区根',
   fieldTemplatedCachePathsHint:
-    '可选,每行一条,相对工作区根,支持 {{参数}}。配了才启用缓存:构建前恢复、构建后保存,跨运行复用依赖。缓存问题绝不影响构建结果',
+    '可选,每行一条,相对工作区根,支持 {\'{{参数}}\'}。配了才启用缓存:构建前恢复、构建后保存,跨运行复用依赖。缓存问题绝不影响构建结果',
   fieldTemplatedCacheKeyHint:
-    '可选缓存键模板,支持 {{参数}}。留空则自动按分支 + lockfile 内容推导(依赖变则自动冷构建)',
+    '可选缓存键模板,支持 {\'{{参数}}\'}。留空则自动按分支 + lockfile 内容推导(依赖变则自动冷构建)',
   typeScriptLabel: '自定义脚本',
   typeScriptDesc: '在隔离容器内执行任意命令',
 

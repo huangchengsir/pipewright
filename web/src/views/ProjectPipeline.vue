@@ -1101,6 +1101,9 @@ async function togglePrStatus(next: boolean): Promise<void> {
 .tab-panel--canvas {
   display: flex;
   flex-direction: column;
+  /* 画布有 min-height 下限(见 PipelineCanvas .canvas-body);视口不够高时整个画布 tab
+     纵向滚动,而不是裁掉下方「AI 脚本风险标注」面板或把画布压扁。 */
+  overflow: auto;
 }
 
 /* Non-canvas panels: scrollable with standard padding */

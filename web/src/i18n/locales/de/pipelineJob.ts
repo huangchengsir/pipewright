@@ -40,7 +40,7 @@ export default {
   fieldCacheKeyLabel: 'Cache-Key (optional)',
   fieldCacheKeyPlaceholder: 'Leer = automatisch nach Branch + Lockfile',
   fieldCacheKeyHint:
-    'Optionale Cache-Key-Vorlage. Wenn leer, automatisch aus „Branch + Lockfile-Inhalt im Workspace (package-lock/pom.xml/go.sum usw.)“ abgeleitet: Änderungen an Abhängigkeiten lösen automatisch einen Cold-Build aus. Unterstützt {{Parameter}}',
+    'Optionale Cache-Key-Vorlage. Wenn leer, automatisch aus „Branch + Lockfile-Inhalt im Workspace (package-lock/pom.xml/go.sum usw.)“ abgeleitet: Änderungen an Abhängigkeiten lösen automatisch einen Cold-Build aus. Unterstützt {\'{{Parameter}}\'}',
 
   // ─── jobConfigSchema · deploy ssh fields ───────────────────────────────
   fieldServerIdLabel: 'Zielserver',
@@ -94,7 +94,7 @@ export default {
   fieldRegistryLabel: 'Image-Registry-URL',
   fieldImageNameLabel: 'Image-Name',
   fieldTagLabel: 'Tag',
-  fieldTagHint: 'Verfügbare Variablen: ${COMMIT_SHA} ${BRANCH} ${BUILD_NUMBER}',
+  fieldTagHint: 'Verfügbare Variablen: {\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
   fieldRegistryCredentialLabel: 'Registry-Anmeldedaten',
   fieldRegistryCredentialHint: 'Referenziert die Login-Anmeldedaten der Image-Registry',
 
@@ -118,11 +118,11 @@ export default {
   fieldChannelLabel: 'Benachrichtigungskanal',
   fieldChannelHint: 'Wähle einen bereits unter „Benachrichtigungen“ konfigurierten Kanal; falls keiner vorhanden ist, füge zuerst einen in den Einstellungen hinzu',
   fieldTitleTemplateLabel: 'Titelvorlage (optional)',
-  fieldTitleTemplatePlaceholder: 'Bereitstellung erfolgreich: {{project}}',
-  fieldTitleTemplateHint: 'Leer = Standardtext; unterstützt Platzhalter {{project}} {{branch}} {{commit}} {{status}} {{runId}}',
+  fieldTitleTemplatePlaceholder: 'Bereitstellung erfolgreich: {\'{{project}}\'}',
+  fieldTitleTemplateHint: 'Leer = Standardtext; unterstützt Platzhalter {\'{{project}}\'} {\'{{branch}}\'} {\'{{commit}}\'} {\'{{status}}\'} {\'{{runId}}\'}',
   fieldBodyTemplateLabel: 'Textvorlage (optional)',
-  fieldBodyTemplatePlaceholder: 'Branch {{branch}} @ {{commit}} hat den Benachrichtigungsknoten erreicht.',
-  fieldBodyTemplateHint: 'Leer = Standardtext; unterstützt ebenfalls {{Platzhalter}}, unbekannte werden leer gerendert',
+  fieldBodyTemplatePlaceholder: 'Branch {\'{{branch}}\'} {\'@\'} {\'{{commit}}\'} hat den Benachrichtigungsknoten erreicht.',
+  fieldBodyTemplateHint: 'Leer = Standardtext; unterstützt ebenfalls {\'{{Platzhalter}}\'}, unbekannte werden leer gerendert',
 
   // ─── jobConfigSchema · template nodes ──────────────────────────────────
   typeBuildFrontendLabel: 'Frontend-Build',
@@ -132,17 +132,17 @@ export default {
   typeDeployFrontendLabel: 'Frontend-Push-Bereitstellung',
   typeDeployFrontendDesc: 'Stellt das Frontend-dist per SSH ohne Ausfallzeit auf einem Server bereit',
   typeTemplatedLabel: 'Benutzerdefinierter Knoten',
-  typeTemplatedDesc: 'Definiere eigene Parameter + Befehlsvorlage ({{Parameter}}), durch Setzen der Parameter sofort nutzbar',
+  typeTemplatedDesc: 'Definiere eigene Parameter + Befehlsvorlage ({\'{{Parameter}}\'}), durch Setzen der Parameter sofort nutzbar',
   fieldParamsLabel: 'Parametertabelle',
-  fieldParamsHint: 'Ein key=value pro Zeile, völlig frei; in der Befehlsvorlage / den Artefaktpfaden mit {{key}} referenzieren',
+  fieldParamsHint: 'Ein key=value pro Zeile, völlig frei; in der Befehlsvorlage / den Artefaktpfaden mit {\'{{key}}\'} referenzieren',
   fieldCommandTemplateLabel: 'Befehlsvorlage',
-  fieldCommandTemplateHint: 'Mehrzeilig; {{Parameter}} wird durch den Wert der Parametertabelle ersetzt, $ENV wird weiterhin von der Shell im Container verarbeitet',
-  fieldTemplatedArtifactPathHint: 'Optional, einer pro Zeile, unterstützt {{Parameter}} und Wildcards; Verzeichnis→dist, *.jar→jar, andere→archive',
+  fieldCommandTemplateHint: 'Mehrzeilig; {\'{{Parameter}}\'} wird durch den Wert der Parametertabelle ersetzt, $ENV wird weiterhin von der Shell im Container verarbeitet',
+  fieldTemplatedArtifactPathHint: 'Optional, einer pro Zeile, unterstützt {\'{{Parameter}}\'} und Wildcards; Verzeichnis→dist, *.jar→jar, andere→archive',
   fieldTemplatedWorkDirHint: 'Optional, relativ zur Wurzel des geklonten Workspaces',
   fieldTemplatedCachePathsHint:
-    'Optional, eines pro Zeile, relativ zur Workspace-Wurzel, unterstützt {{Parameter}}. Nur wenn gesetzt, wird das Caching aktiviert: vor dem Build wiederhergestellt, danach gespeichert, Abhängigkeiten werden über Läufe hinweg wiederverwendet. Cache-Probleme beeinflussen das Build-Ergebnis niemals',
+    'Optional, eines pro Zeile, relativ zur Workspace-Wurzel, unterstützt {\'{{Parameter}}\'}. Nur wenn gesetzt, wird das Caching aktiviert: vor dem Build wiederhergestellt, danach gespeichert, Abhängigkeiten werden über Läufe hinweg wiederverwendet. Cache-Probleme beeinflussen das Build-Ergebnis niemals',
   fieldTemplatedCacheKeyHint:
-    'Optionale Cache-Key-Vorlage, unterstützt {{Parameter}}. Wenn leer, automatisch aus Branch + Lockfile-Inhalt abgeleitet (Änderungen an Abhängigkeiten lösen einen Cold-Build aus)',
+    'Optionale Cache-Key-Vorlage, unterstützt {\'{{Parameter}}\'}. Wenn leer, automatisch aus Branch + Lockfile-Inhalt abgeleitet (Änderungen an Abhängigkeiten lösen einen Cold-Build aus)',
   typeScriptLabel: 'Benutzerdefiniertes Skript',
   typeScriptDesc: 'Führt beliebige Befehle in einem isolierten Container aus',
 

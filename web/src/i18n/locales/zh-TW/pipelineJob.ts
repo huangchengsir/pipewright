@@ -40,7 +40,7 @@ export default {
   fieldCacheKeyLabel: '快取 Key(可選)',
   fieldCacheKeyPlaceholder: '留空=按分支+lockfile 自動',
   fieldCacheKeyHint:
-    '可選快取鍵範本。留空則自動按「分支 + 工作區內 lockfile(package-lock/pom.xml/go.sum 等)內容」推導:相依變則自動冷建置。支援 {{參數}}',
+    '可選快取鍵範本。留空則自動按「分支 + 工作區內 lockfile(package-lock/pom.xml/go.sum 等)內容」推導:相依變則自動冷建置。支援 {\'{{參數}}\'}',
 
   // ─── jobConfigSchema · deploy ssh fields ───────────────────────────────
   fieldServerIdLabel: '目標伺服器',
@@ -94,7 +94,7 @@ export default {
   fieldRegistryLabel: '映像倉庫位址',
   fieldImageNameLabel: '映像名',
   fieldTagLabel: '標籤',
-  fieldTagHint: '可用變數:${COMMIT_SHA} ${BRANCH} ${BUILD_NUMBER}',
+  fieldTagHint: '可用變數:{\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
   fieldRegistryCredentialLabel: '倉庫憑證',
   fieldRegistryCredentialHint: '引用映像倉庫登入憑證',
 
@@ -118,11 +118,11 @@ export default {
   fieldChannelLabel: '通知管道',
   fieldChannelHint: '從「通知」設定裡已設定的管道中選擇;沒有就先去設定裡加一個',
   fieldTitleTemplateLabel: '標題範本(可選)',
-  fieldTitleTemplatePlaceholder: '部署成功:{{project}}',
-  fieldTitleTemplateHint: '留空用預設文案;支援佔位 {{project}} {{branch}} {{commit}} {{status}} {{runId}}',
+  fieldTitleTemplatePlaceholder: '部署成功:{\'{{project}}\'}',
+  fieldTitleTemplateHint: '留空用預設文案;支援佔位 {\'{{project}}\'} {\'{{branch}}\'} {\'{{commit}}\'} {\'{{status}}\'} {\'{{runId}}\'}',
   fieldBodyTemplateLabel: '內文範本(可選)',
-  fieldBodyTemplatePlaceholder: '分支 {{branch}} @ {{commit}} 已執行到通知節點。',
-  fieldBodyTemplateHint: '留空用預設文案;同樣支援 {{佔位}},未知佔位算繪為空',
+  fieldBodyTemplatePlaceholder: '分支 {\'{{branch}}\'} {\'@\'} {\'{{commit}}\'} 已執行到通知節點。',
+  fieldBodyTemplateHint: '留空用預設文案;同樣支援 {\'{{佔位}}\'},未知佔位算繪為空',
 
   // ─── jobConfigSchema · template nodes ──────────────────────────────────
   typeBuildFrontendLabel: '前端建置',
@@ -132,17 +132,17 @@ export default {
   typeDeployFrontendLabel: '前端推送部署',
   typeDeployFrontendDesc: '把前端 dist 經 SSH 零停機部署到伺服器',
   typeTemplatedLabel: '自訂節點',
-  typeTemplatedDesc: '自己定義參數 + 命令範本({{參數}}),配參數即用',
+  typeTemplatedDesc: '自己定義參數 + 命令範本({\'{{參數}}\'}),配參數即用',
   fieldParamsLabel: '參數表',
-  fieldParamsHint: '每行一條 key=value,完全自由;命令範本/產物路徑裡用 {{key}} 引用',
+  fieldParamsHint: '每行一條 key=value,完全自由;命令範本/產物路徑裡用 {\'{{key}}\'} 引用',
   fieldCommandTemplateLabel: '命令範本',
-  fieldCommandTemplateHint: '多行;{{參數}} 會被參數表的值取代,$ENV 仍交給容器內 shell',
-  fieldTemplatedArtifactPathHint: '可選,每行一條,支援 {{參數}} 與萬用字元;目錄→dist、*.jar→jar、其它→archive',
+  fieldCommandTemplateHint: '多行;{\'{{參數}}\'} 會被參數表的值取代,$ENV 仍交給容器內 shell',
+  fieldTemplatedArtifactPathHint: '可選,每行一條,支援 {\'{{參數}}\'} 與萬用字元;目錄→dist、*.jar→jar、其它→archive',
   fieldTemplatedWorkDirHint: '可選,相對複製工作區根',
   fieldTemplatedCachePathsHint:
-    '可選,每行一條,相對工作區根,支援 {{參數}}。配了才啟用快取:建置前還原、建置後儲存,跨執行複用相依。快取問題絕不影響建置結果',
+    '可選,每行一條,相對工作區根,支援 {\'{{參數}}\'}。配了才啟用快取:建置前還原、建置後儲存,跨執行複用相依。快取問題絕不影響建置結果',
   fieldTemplatedCacheKeyHint:
-    '可選快取鍵範本,支援 {{參數}}。留空則自動按分支 + lockfile 內容推導(相依變則自動冷建置)',
+    '可選快取鍵範本,支援 {\'{{參數}}\'}。留空則自動按分支 + lockfile 內容推導(相依變則自動冷建置)',
   typeScriptLabel: '自訂腳本',
   typeScriptDesc: '在隔離容器內執行任意命令',
 

@@ -106,7 +106,7 @@ export default {
   errLoadRetry: 'Laden der Projekte fehlgeschlagen, bitte später erneut versuchen',
   errNameRequired: 'Bitte gib einen Projektnamen ein',
   errRepoRequired: 'Bitte gib eine Repository-URL ein',
-  errRepoFormat: 'Ungültiges Repository-URL-Format. Sie muss mit https:// oder git@ beginnen',
+  errRepoFormat: 'Ungültiges Repository-URL-Format. Sie muss mit https:// oder git{\'@\'} beginnen',
   errCredRequired: 'Bitte wähle Repository-Anmeldedaten aus',
   errRepoFirst: 'Bitte gib zuerst eine Repository-URL ein',
   errCredFirst: 'Bitte wähle zuerst Repository-Anmeldedaten aus',

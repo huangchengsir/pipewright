@@ -40,7 +40,7 @@ export default {
   fieldCacheKeyLabel: 'Cache key (optional)',
   fieldCacheKeyPlaceholder: 'Empty = auto by branch + lockfile',
   fieldCacheKeyHint:
-    'Optional cache key template. If empty, derived automatically from “branch + lockfile content in the workspace (package-lock/pom.xml/go.sum etc.)”: dependency changes trigger an automatic cold build. Supports {{param}}',
+    'Optional cache key template. If empty, derived automatically from “branch + lockfile content in the workspace (package-lock/pom.xml/go.sum etc.)”: dependency changes trigger an automatic cold build. Supports {\'{{param}}\'}',
 
   // ─── jobConfigSchema · deploy ssh fields ───────────────────────────────
   fieldServerIdLabel: 'Target server',
@@ -94,7 +94,7 @@ export default {
   fieldRegistryLabel: 'Image registry URL',
   fieldImageNameLabel: 'Image name',
   fieldTagLabel: 'Tag',
-  fieldTagHint: 'Available variables: ${COMMIT_SHA} ${BRANCH} ${BUILD_NUMBER}',
+  fieldTagHint: 'Available variables: {\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
   fieldRegistryCredentialLabel: 'Registry credential',
   fieldRegistryCredentialHint: 'Reference the image registry login credential',
 
@@ -118,11 +118,11 @@ export default {
   fieldChannelLabel: 'Notification channel',
   fieldChannelHint: 'Pick a channel already configured under “Notifications” settings; if none, add one in settings first',
   fieldTitleTemplateLabel: 'Title template (optional)',
-  fieldTitleTemplatePlaceholder: 'Deploy succeeded: {{project}}',
-  fieldTitleTemplateHint: 'Empty = default copy; supports placeholders {{project}} {{branch}} {{commit}} {{status}} {{runId}}',
+  fieldTitleTemplatePlaceholder: 'Deploy succeeded: {\'{{project}}\'}',
+  fieldTitleTemplateHint: 'Empty = default copy; supports placeholders {\'{{project}}\'} {\'{{branch}}\'} {\'{{commit}}\'} {\'{{status}}\'} {\'{{runId}}\'}',
   fieldBodyTemplateLabel: 'Body template (optional)',
-  fieldBodyTemplatePlaceholder: 'Branch {{branch}} @ {{commit}} has reached the notify node.',
-  fieldBodyTemplateHint: 'Empty = default copy; also supports {{placeholders}}, unknown ones render empty',
+  fieldBodyTemplatePlaceholder: 'Branch {\'{{branch}}\'} {\'@\'} {\'{{commit}}\'} has reached the notify node.',
+  fieldBodyTemplateHint: 'Empty = default copy; also supports {\'{{placeholders}}\'}, unknown ones render empty',
 
   // ─── jobConfigSchema · template nodes ──────────────────────────────────
   typeBuildFrontendLabel: 'Frontend build',
@@ -132,17 +132,17 @@ export default {
   typeDeployFrontendLabel: 'Frontend push deploy',
   typeDeployFrontendDesc: 'Deploy the frontend dist to a server over SSH with zero downtime',
   typeTemplatedLabel: 'Custom node',
-  typeTemplatedDesc: 'Define your own params + command template ({{param}}), use by setting params',
+  typeTemplatedDesc: 'Define your own params + command template ({\'{{param}}\'}), use by setting params',
   fieldParamsLabel: 'Param table',
-  fieldParamsHint: 'One key=value per line, fully free-form; reference with {{key}} in the command template / artifact paths',
+  fieldParamsHint: 'One key=value per line, fully free-form; reference with {\'{{key}}\'} in the command template / artifact paths',
   fieldCommandTemplateLabel: 'Command template',
-  fieldCommandTemplateHint: 'Multi-line; {{param}} is replaced with the param table value, $ENV is still handled by the in-container shell',
-  fieldTemplatedArtifactPathHint: 'Optional, one per line, supports {{param}} and globs; directory→dist, *.jar→jar, other→archive',
+  fieldCommandTemplateHint: 'Multi-line; {\'{{param}}\'} is replaced with the param table value, $ENV is still handled by the in-container shell',
+  fieldTemplatedArtifactPathHint: 'Optional, one per line, supports {\'{{param}}\'} and globs; directory→dist, *.jar→jar, other→archive',
   fieldTemplatedWorkDirHint: 'Optional, relative to the cloned workspace root',
   fieldTemplatedCachePathsHint:
-    'Optional, one per line, relative to the workspace root, supports {{param}}. Only when set is caching enabled: restored before the build, saved after, reusing deps across runs. Cache problems never affect build results',
+    'Optional, one per line, relative to the workspace root, supports {\'{{param}}\'}. Only when set is caching enabled: restored before the build, saved after, reusing deps across runs. Cache problems never affect build results',
   fieldTemplatedCacheKeyHint:
-    'Optional cache key template, supports {{param}}. If empty, derived automatically from branch + lockfile content (dependency changes trigger a cold build)',
+    'Optional cache key template, supports {\'{{param}}\'}. If empty, derived automatically from branch + lockfile content (dependency changes trigger a cold build)',
   typeScriptLabel: 'Custom script',
   typeScriptDesc: 'Run arbitrary commands inside an isolated container',
 

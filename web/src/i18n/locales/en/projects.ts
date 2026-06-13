@@ -106,7 +106,7 @@ export default {
   errLoadRetry: 'Failed to load projects, please try again later',
   errNameRequired: 'Please enter a project name',
   errRepoRequired: 'Please enter a repository URL',
-  errRepoFormat: 'Invalid repository URL format. It must start with https:// or git@',
+  errRepoFormat: 'Invalid repository URL format. It must start with https:// or git{\'@\'}',
   errCredRequired: 'Please select a repository credential',
   errRepoFirst: 'Please enter a repository URL first',
   errCredFirst: 'Please select a repository credential first',

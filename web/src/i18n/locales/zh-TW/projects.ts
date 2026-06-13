@@ -106,7 +106,7 @@ export default {
   errLoadRetry: '載入專案失敗,請稍後重試',
   errNameRequired: '請輸入專案名稱',
   errRepoRequired: '請輸入倉庫位址',
-  errRepoFormat: '倉庫位址格式不正確,請以 https:// 或 git@ 開頭',
+  errRepoFormat: '倉庫位址格式不正確,請以 https:// 或 git{\'@\'} 開頭',
   errCredRequired: '請選擇倉庫憑證',
   errRepoFirst: '請先輸入倉庫位址',
   errCredFirst: '請先選擇倉庫憑證',

@@ -106,7 +106,7 @@ export default {
   errLoadRetry: '加载项目失败,请稍后重试',
   errNameRequired: '请输入项目名称',
   errRepoRequired: '请输入仓库地址',
-  errRepoFormat: '仓库地址格式不正确,请以 https:// 或 git@ 开头',
+  errRepoFormat: '仓库地址格式不正确,请以 https:// 或 git{\'@\'} 开头',
   errCredRequired: '请选择仓库凭据',
   errRepoFirst: '请先输入仓库地址',
   errCredFirst: '请先选择仓库凭据',

@@ -106,7 +106,7 @@ export default {
   errLoadRetry: 'Error al cargar los proyectos, inténtalo de nuevo más tarde',
   errNameRequired: 'Introduce un nombre de proyecto',
   errRepoRequired: 'Introduce una URL del repositorio',
-  errRepoFormat: 'Formato de URL del repositorio no válido. Debe empezar por https:// o git@',
+  errRepoFormat: 'Formato de URL del repositorio no válido. Debe empezar por https:// o git{\'@\'}',
   errCredRequired: 'Selecciona una credencial del repositorio',
   errRepoFirst: 'Introduce primero una URL del repositorio',
   errCredFirst: 'Selecciona primero una credencial del repositorio',

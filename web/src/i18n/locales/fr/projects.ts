@@ -106,7 +106,7 @@ export default {
   errLoadRetry: 'Échec du chargement des projets, veuillez réessayer plus tard',
   errNameRequired: 'Veuillez saisir un nom de projet',
   errRepoRequired: 'Veuillez saisir une URL de dépôt',
-  errRepoFormat: 'Format d’URL de dépôt invalide. Elle doit commencer par https:// ou git@',
+  errRepoFormat: 'Format d’URL de dépôt invalide. Elle doit commencer par https:// ou git{\'@\'}',
   errCredRequired: 'Veuillez sélectionner un identifiant de dépôt',
   errRepoFirst: 'Veuillez d’abord saisir une URL de dépôt',
   errCredFirst: 'Veuillez d’abord sélectionner un identifiant de dépôt',

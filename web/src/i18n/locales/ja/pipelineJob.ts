@@ -40,7 +40,7 @@ export default {
   fieldCacheKeyLabel: 'キャッシュ Key(任意)',
   fieldCacheKeyPlaceholder: '空 = ブランチ + lockfile で自動',
   fieldCacheKeyHint:
-    '任意のキャッシュキーテンプレート。空の場合は「ブランチ + ワークスペース内の lockfile(package-lock/pom.xml/go.sum など)の内容」から自動導出:依存が変わると自動でコールドビルド。{{パラメータ}} に対応',
+    '任意のキャッシュキーテンプレート。空の場合は「ブランチ + ワークスペース内の lockfile(package-lock/pom.xml/go.sum など)の内容」から自動導出:依存が変わると自動でコールドビルド。{\'{{パラメータ}}\'} に対応',
 
   // ─── jobConfigSchema · deploy ssh fields ───────────────────────────────
   fieldServerIdLabel: 'ターゲットサーバー',
@@ -94,7 +94,7 @@ export default {
   fieldRegistryLabel: 'イメージレジストリ URL',
   fieldImageNameLabel: 'イメージ名',
   fieldTagLabel: 'タグ',
-  fieldTagHint: '使用可能な変数:${COMMIT_SHA} ${BRANCH} ${BUILD_NUMBER}',
+  fieldTagHint: '使用可能な変数:{\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
   fieldRegistryCredentialLabel: 'レジストリ認証情報',
   fieldRegistryCredentialHint: 'イメージレジストリのログイン認証情報を参照',
 
@@ -118,11 +118,11 @@ export default {
   fieldChannelLabel: '通知チャネル',
   fieldChannelHint: '「通知」設定で構成済みのチャネルから選択。無ければ先に設定で追加',
   fieldTitleTemplateLabel: 'タイトルテンプレート(任意)',
-  fieldTitleTemplatePlaceholder: 'デプロイ成功:{{project}}',
-  fieldTitleTemplateHint: '空 = デフォルト文言。プレースホルダ {{project}} {{branch}} {{commit}} {{status}} {{runId}} に対応',
+  fieldTitleTemplatePlaceholder: 'デプロイ成功:{\'{{project}}\'}',
+  fieldTitleTemplateHint: '空 = デフォルト文言。プレースホルダ {\'{{project}}\'} {\'{{branch}}\'} {\'{{commit}}\'} {\'{{status}}\'} {\'{{runId}}\'} に対応',
   fieldBodyTemplateLabel: '本文テンプレート(任意)',
-  fieldBodyTemplatePlaceholder: 'ブランチ {{branch}} @ {{commit}} が通知ノードまで実行されました。',
-  fieldBodyTemplateHint: '空 = デフォルト文言。同様に {{プレースホルダ}} に対応、未知のものは空で描画',
+  fieldBodyTemplatePlaceholder: 'ブランチ {\'{{branch}}\'} {\'@\'} {\'{{commit}}\'} が通知ノードまで実行されました。',
+  fieldBodyTemplateHint: '空 = デフォルト文言。同様に {\'{{プレースホルダ}}\'} に対応、未知のものは空で描画',
 
   // ─── jobConfigSchema · template nodes ──────────────────────────────────
   typeBuildFrontendLabel: 'フロントエンドビルド',
@@ -132,17 +132,17 @@ export default {
   typeDeployFrontendLabel: 'フロントエンドプッシュデプロイ',
   typeDeployFrontendDesc: 'フロントエンドの dist を SSH 経由でゼロダウンタイムでサーバーにデプロイ',
   typeTemplatedLabel: 'カスタムノード',
-  typeTemplatedDesc: '自分でパラメータ + コマンドテンプレート({{パラメータ}})を定義、パラメータを設定すればすぐ使える',
+  typeTemplatedDesc: '自分でパラメータ + コマンドテンプレート({\'{{パラメータ}}\'})を定義、パラメータを設定すればすぐ使える',
   fieldParamsLabel: 'パラメータ表',
-  fieldParamsHint: '1 行 1 件の key=value、完全に自由。コマンドテンプレート/成果物パスで {{key}} で参照',
+  fieldParamsHint: '1 行 1 件の key=value、完全に自由。コマンドテンプレート/成果物パスで {\'{{key}}\'} で参照',
   fieldCommandTemplateLabel: 'コマンドテンプレート',
-  fieldCommandTemplateHint: '複数行。{{パラメータ}} はパラメータ表の値に置換、$ENV はコンテナ内 shell に任せる',
-  fieldTemplatedArtifactPathHint: '任意、1 行 1 件、{{パラメータ}} とワイルドカードに対応。ディレクトリ→dist、*.jar→jar、その他→archive',
+  fieldCommandTemplateHint: '複数行。{\'{{パラメータ}}\'} はパラメータ表の値に置換、$ENV はコンテナ内 shell に任せる',
+  fieldTemplatedArtifactPathHint: '任意、1 行 1 件、{\'{{パラメータ}}\'} とワイルドカードに対応。ディレクトリ→dist、*.jar→jar、その他→archive',
   fieldTemplatedWorkDirHint: '任意、クローンしたワークスペースのルートからの相対',
   fieldTemplatedCachePathsHint:
-    '任意、1 行 1 件、ワークスペースのルートからの相対、{{パラメータ}} に対応。設定した場合のみキャッシュ有効:ビルド前に復元、ビルド後に保存、実行をまたいで依存を再利用。キャッシュの問題はビルド結果に影響しない',
+    '任意、1 行 1 件、ワークスペースのルートからの相対、{\'{{パラメータ}}\'} に対応。設定した場合のみキャッシュ有効:ビルド前に復元、ビルド後に保存、実行をまたいで依存を再利用。キャッシュの問題はビルド結果に影響しない',
   fieldTemplatedCacheKeyHint:
-    '任意のキャッシュキーテンプレート、{{パラメータ}} に対応。空の場合はブランチ + lockfile の内容から自動導出(依存が変わると自動でコールドビルド)',
+    '任意のキャッシュキーテンプレート、{\'{{パラメータ}}\'} に対応。空の場合はブランチ + lockfile の内容から自動導出(依存が変わると自動でコールドビルド)',
   typeScriptLabel: 'カスタムスクリプト',
   typeScriptDesc: '隔離コンテナ内で任意のコマンドを実行',
 

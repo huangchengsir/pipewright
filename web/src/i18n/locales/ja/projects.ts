@@ -106,7 +106,7 @@ export default {
   errLoadRetry: 'プロジェクトの読み込みに失敗しました。しばらくしてから再試行してください',
   errNameRequired: 'プロジェクト名を入力してください',
   errRepoRequired: 'リポジトリ URL を入力してください',
-  errRepoFormat: 'リポジトリ URL の形式が正しくありません。https:// または git@ で始めてください',
+  errRepoFormat: 'リポジトリ URL の形式が正しくありません。https:// または git{\'@\'} で始めてください',
   errCredRequired: 'リポジトリ認証情報を選択してください',
   errRepoFirst: '先にリポジトリ URL を入力してください',
   errCredFirst: '先にリポジトリ認証情報を選択してください',

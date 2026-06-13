@@ -16,6 +16,17 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
+)
+
+// userAgent 是回写请求的 User-Agent(GitHub API 要求带 UA;显式标识本服务)。
+const userAgent = "Pipewright"
+
+// 默认重试参数:提交状态回写是 best-effort,瞬时失败(网络抖动 / 5xx / 429 / 偶发 422)
+// 重试几次显著提升落地率;非瞬时(4xx 鉴权/校验,如 401/404)不重试,快速失败。
+const (
+	defaultMaxAttempts = 3
+	defaultBackoff     = 500 * time.Millisecond
 )
 
 // Platform 是受支持的代码平台。
@@ -85,6 +96,8 @@ type Reporter struct {
 	client        *http.Client
 	githubAPIBase string
 	giteeAPIBase  string
+	maxAttempts   int
+	backoff       time.Duration
 }
 
 // NewReporter 构造 Reporter。client 为 nil 用默认;API base 缺省指向真实平台,测试可经 With* 覆盖。
@@ -96,7 +109,25 @@ func NewReporter(client *http.Client) *Reporter {
 		client:        client,
 		githubAPIBase: "https://api.github.com",
 		giteeAPIBase:  "https://gitee.com/api/v5",
+		maxAttempts:   defaultMaxAttempts,
+		backoff:       defaultBackoff,
 	}
+}
+
+// WithRetry 覆盖重试次数与退避间隔(attempts<1 归一为 1;测试常用 backoff=0 免等待)。
+func (r *Reporter) WithRetry(attempts int, backoff time.Duration) *Reporter {
+	if attempts < 1 {
+		attempts = 1
+	}
+	r.maxAttempts = attempts
+	r.backoff = backoff
+	return r
+}
+
+// isTransient 判定 HTTP 状态码是否值得重试:429(限流)、5xx(服务端)、422(经验上 GitHub
+// 偶发瞬时校验失败,见真机测试)。401/403/404 等非瞬时 → 不重试,快速失败。
+func isTransient(code int) bool {
+	return code == http.StatusTooManyRequests || code >= 500 || code == http.StatusUnprocessableEntity
 }
 
 // WithBaseURLs 覆盖平台 API base(测试注入 stub server)。
@@ -142,25 +173,52 @@ func (r *Reporter) Report(ctx context.Context, t Target, sha, state, description
 	if err != nil {
 		return fmt.Errorf("prstatus: marshal: %w", err)
 	}
-	req, err = http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(buf))
-	if err != nil {
-		return fmt.Errorf("prstatus: new request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "token "+token)
-	if t.Platform == GitHub {
-		req.Header.Set("Accept", "application/vnd.github+json")
-	}
 
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("prstatus: post status: %w", err)
+	// best-effort 重试:瞬时失败(网络/429/5xx/422)退避后重试,提升偶发抖动下的落地率;
+	// 非瞬时失败(鉴权/校验)立即返回。每次都用新 reader 重建请求(body 可重读)。
+	attempts := r.maxAttempts
+	if attempts < 1 {
+		attempts = 1
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("prstatus: %s status post got HTTP %d", t.Platform, resp.StatusCode)
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(buf))
+		if err != nil {
+			return fmt.Errorf("prstatus: new request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "token "+token)
+		req.Header.Set("User-Agent", userAgent)
+		if t.Platform == GitHub {
+			req.Header.Set("Accept", "application/vnd.github+json")
+		}
+
+		resp, derr := r.client.Do(req)
+		if derr != nil {
+			lastErr = fmt.Errorf("prstatus: post status: %w", derr) // 网络错误:可重试
+		} else {
+			code := resp.StatusCode
+			_ = resp.Body.Close()
+			if code >= 200 && code < 300 {
+				return nil
+			}
+			lastErr = fmt.Errorf("prstatus: %s status post got HTTP %d", t.Platform, code)
+			if !isTransient(code) {
+				return lastErr // 非瞬时:快速失败,不重试
+			}
+		}
+		// 瞬时失败且仍有重试次数 → 退避后再试(响应 ctx 取消)。
+		if attempt < attempts {
+			if r.backoff > 0 {
+				select {
+				case <-time.After(r.backoff):
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+		}
 	}
-	return nil
+	return lastErr
 }
 
 // StateForRunStatus 把运行终态映射为提交状态(success→success,其余终态→failure)。

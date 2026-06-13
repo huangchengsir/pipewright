@@ -9,7 +9,9 @@ export default {
   typeFeishuLabel: 'Lark',
   typeFeishuDesc: '사용자 지정 봇',
   typeWecomLabel: 'WeCom',
+  typeWecomDesc: '그룹 봇',
   typeDingtalkLabel: 'DingTalk',
+  typeDingtalkDesc: '그룹 봇',
   comingSoon: '곧 지원',
   notImplemented: '발송 미구현',
 
@@ -38,6 +40,18 @@ export default {
   signSecret: '서명 키(선택)',
   signSecretHint: '봇에서 "서명 검증"을 켠 경우에만 입력하세요. 저장 후에는 다시 표시되지 않습니다',
   signSecretPlaceholder: '봇에서 서명 검증을 켜지 않았다면 비워 두세요',
+
+  wecomUrl: 'WeCom 봇 Webhook 주소',
+  wecomUrlHint:
+    'WeCom 그룹의 "그룹 설정 → 그룹 봇 → 봇 추가"의 Webhook 주소(qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…)',
+
+  dingtalkUrl: 'DingTalk 봇 Webhook 주소',
+  dingtalkUrlHint:
+    'DingTalk 그룹의 "그룹 설정 → 그룹 도우미 → 봇 추가 → 사용자 지정"의 Webhook 주소(oapi.dingtalk.com/robot/send?access_token=…)',
+  dingtalkSignSecret: '서명 키(선택)',
+  dingtalkSignSecretHint: '봇의 "보안 설정"에서 "서명 추가"를 선택한 경우에만 입력하세요. 저장 후에는 다시 표시되지 않습니다',
+  dingtalkSignSecretPlaceholder: '봇에서 "서명 추가"를 선택하지 않았다면 비워 두세요',
+
   secretStoredHint: '설정됨 ••••(비워 두면 유지)',
   secretStoredPlaceholder: '설정됨 ••••(비워 두면 변경 없음)',
 
@@ -74,6 +88,8 @@ export default {
   valNameRequired: '채널 이름을 입력하세요',
   valWebhookUrlRequired: 'Webhook 주소를 입력하세요',
   valFeishuUrlRequired: 'Lark 봇 Webhook 주소를 입력하세요',
+  valWecomUrlRequired: 'WeCom 봇 Webhook 주소를 입력하세요',
+  valDingtalkUrlRequired: 'DingTalk 봇 Webhook 주소를 입력하세요',
   valSmtpHostRequired: 'SMTP 호스트를 입력하세요',
   valPortInvalid: '유효한 포트를 입력하세요',
   valFromRequired: '보내는 사람을 입력하세요',

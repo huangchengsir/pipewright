@@ -199,11 +199,23 @@ func TestTestChannelRealWebhookPOST(t *testing.T) {
 	}
 }
 
-func TestTestPlaceholderTypeNotImplemented(t *testing.T) {
-	srv, client, csrf := setupNotifyServer(t, nil)
+// 企业微信群机器人:经 HTTP API 创建 + test 应真发并成功(end-to-end,经 deliver 分派)。
+func TestWecomChannelTestSendsEndToEnd(t *testing.T) {
+	var hit int
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hit++
+		_, _ = w.Write([]byte(`{"errcode":0,"errmsg":"ok"}`))
+	}))
+	defer stub.Close()
+
+	srv, client, csrf := setupNotifyServer(t, stub.Client())
 	base := srv.URL + "/api/notifications/channels"
 	resp := doJSON(t, client, http.MethodPost, base, csrf,
-		`{"name":"wc","type":"wecom","enabled":true,"config":{}}`)
+		`{"name":"wc","type":"wecom","enabled":true,"config":{"url":"`+stub.URL+`/cgi-bin/webhook/send?key=k"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("create status = %d (%s)", resp.StatusCode, raw)
+	}
 	created := decodeMap(t, resp)
 	resp.Body.Close()
 	id, _ := created["id"].(string)
@@ -214,12 +226,25 @@ func TestTestPlaceholderTypeNotImplemented(t *testing.T) {
 	}
 	m := decodeMap(t, resp)
 	resp.Body.Close()
-	if m["ok"] != false {
-		t.Fatalf("占位 type test 应 ok=false: %v", m)
+	if m["ok"] != true {
+		t.Fatalf("企微 test 应 ok=true: %v", m)
 	}
-	errStr, _ := m["error"].(string)
-	if !strings.Contains(errStr, "not_implemented") {
-		t.Fatalf("应人读 not_implemented: %v", m)
+	if hit != 1 {
+		t.Fatalf("企微机器人应收到 1 次 POST,得 %d", hit)
+	}
+}
+
+// 缺 URL 的 wecom/dingtalk 创建应被拒(配置校验:URL 必填)。
+func TestWecomDingtalkRequireURLViaAPI(t *testing.T) {
+	srv, client, csrf := setupNotifyServer(t, nil)
+	base := srv.URL + "/api/notifications/channels"
+	for _, ty := range []string{"wecom", "dingtalk"} {
+		resp := doJSON(t, client, http.MethodPost, base, csrf,
+			`{"name":"x","type":"`+ty+`","enabled":true,"config":{}}`)
+		if resp.StatusCode == http.StatusCreated {
+			t.Fatalf("%s 缺 URL 不应创建成功(应 4xx)", ty)
+		}
+		resp.Body.Close()
 	}
 }
 

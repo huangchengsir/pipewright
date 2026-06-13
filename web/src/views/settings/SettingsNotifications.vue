@@ -8,8 +8,9 @@
  *   - email SMTP password: WRITE-ONLY — never echoed; masked placeholder when stored
  *   - Test send with ok/latency/error result
  *   - Delete with confirm
- *   - feishu: custom-bot webhook (url + optional sign secret); sends {msg_type,content}
- *   - wecom/dingtalk shown as "soon" placeholders (saveable, test=not_implemented)
+ *   - feishu: custom-bot webhook (url + optional sign secret); sends interactive card
+ *   - wecom: group-robot webhook (url only); sends markdown
+ *   - dingtalk: group-robot webhook (url + optional sign secret); sends markdown
  *
  * Reuses: FormField / AppButton tokens from 1-6. No new UI libraries.
  * Animation: transform/opacity + prefers-reduced-motion. Sensitive fields never
@@ -110,8 +111,22 @@ const TYPES = computed<TypeMeta[]>(() => [
     glyphStyle: 'background:oklch(72% 0.15 200 / 0.16);color:oklch(56% 0.13 220)',
     implemented: true,
   },
-  { id: 'wecom', label: t('settingsNotifications.typeWecomLabel'), desc: t('settingsNotifications.comingSoon'), glyph: '企', glyphStyle: 'background:var(--color-inset);color:var(--color-faint)', implemented: false },
-  { id: 'dingtalk', label: t('settingsNotifications.typeDingtalkLabel'), desc: t('settingsNotifications.comingSoon'), glyph: '钉', glyphStyle: 'background:var(--color-inset);color:var(--color-faint)', implemented: false },
+  {
+    id: 'wecom',
+    label: t('settingsNotifications.typeWecomLabel'),
+    desc: t('settingsNotifications.typeWecomDesc'),
+    glyph: '企',
+    glyphStyle: 'background:oklch(72% 0.16 145 / 0.16);color:oklch(52% 0.15 150)',
+    implemented: true,
+  },
+  {
+    id: 'dingtalk',
+    label: t('settingsNotifications.typeDingtalkLabel'),
+    desc: t('settingsNotifications.typeDingtalkDesc'),
+    glyph: '钉',
+    glyphStyle: 'background:oklch(70% 0.15 250 / 0.16);color:oklch(54% 0.16 255)',
+    implemented: true,
+  },
 ])
 
 function typeMeta(ty: ChannelType): TypeMeta {
@@ -176,6 +191,8 @@ const saving = ref(false)
 const isEmail = computed(() => form.type === 'email')
 const isWebhook = computed(() => form.type === 'webhook')
 const isFeishu = computed(() => form.type === 'feishu')
+const isWecom = computed(() => form.type === 'wecom')
+const isDingtalk = computed(() => form.type === 'dingtalk')
 const selectedTypeMeta = computed(() => typeMeta(form.type))
 
 function resetForm(): void {
@@ -255,6 +272,16 @@ function validate(): boolean {
       fieldErrors.url = t('settingsNotifications.valFeishuUrlRequired')
       ok = false
     }
+  } else if (isWecom.value) {
+    if (!form.url.trim()) {
+      fieldErrors.url = t('settingsNotifications.valWecomUrlRequired')
+      ok = false
+    }
+  } else if (isDingtalk.value) {
+    if (!form.url.trim()) {
+      fieldErrors.url = t('settingsNotifications.valDingtalkUrlRequired')
+      ok = false
+    }
   } else if (isEmail.value) {
     if (!form.smtpHost.trim()) {
       fieldErrors.smtpHost = t('settingsNotifications.valSmtpHostRequired')
@@ -283,6 +310,16 @@ function buildConfig(): ChannelConfigInput {
   }
   if (isFeishu.value) {
     // 飞书:url=机器人 webhook 地址;password=可选签名密钥(机器人开启「签名校验」时填)。
+    const cfg: ChannelConfigInput = { url: form.url.trim() }
+    if (form.password) cfg.password = form.password
+    return cfg
+  }
+  if (isWecom.value) {
+    // 企业微信群机器人:仅 url(群机器人无需签名密钥)。
+    return { url: form.url.trim() }
+  }
+  if (isDingtalk.value) {
+    // 钉钉群机器人:url=机器人 webhook 地址;password=可选加签密钥(安全设置选「加签」时填)。
     const cfg: ChannelConfigInput = { url: form.url.trim() }
     if (form.password) cfg.password = form.password
     return cfg
@@ -771,7 +808,9 @@ function httpMessage(err: unknown, fallback: string): string {
 }
 
 function configSummary(ch: NotificationChannel): string {
-  if (ch.type === 'webhook') return ch.config.url ?? ''
+  if (ch.type === 'webhook' || ch.type === 'feishu' || ch.type === 'wecom' || ch.type === 'dingtalk') {
+    return ch.config.url ?? ''
+  }
   if (ch.type === 'email') {
     const port = ch.config.smtpPort ? `:${ch.config.smtpPort}` : ''
     return `${ch.config.smtpHost ?? ''}${port} → ${ch.config.to ?? ''}`
@@ -961,6 +1000,78 @@ function configSummary(ch: NotificationChannel): string {
                         type="password"
                         class="field-input field-input--mono"
                         :placeholder="hasStoredPassword ? t('settingsNotifications.secretStoredPlaceholder') : t('settingsNotifications.signSecretPlaceholder')"
+                        autocomplete="new-password"
+                        :aria-describedby="ariaDescribedby"
+                        :disabled="saving"
+                      />
+                    </template>
+                  </FormField>
+                </div>
+              </template>
+
+              <!-- Wecom (企业微信群机器人) fields -->
+              <div v-else-if="isWecom" class="config-row">
+                <FormField
+                  :label="t('settingsNotifications.wecomUrl')"
+                  field-id="nt-wc-url"
+                  :error="fieldErrors.url"
+                  :hint="t('settingsNotifications.wecomUrlHint')"
+                  required
+                >
+                  <template #default="{ fieldId, ariaDescribedby }">
+                    <input
+                      :id="fieldId"
+                      v-model="form.url"
+                      type="url"
+                      class="field-input field-input--mono"
+                      :class="{ 'field-input--error': fieldErrors.url }"
+                      placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…"
+                      :aria-describedby="ariaDescribedby"
+                      :disabled="saving"
+                      @input="fieldErrors.url = ''"
+                    />
+                  </template>
+                </FormField>
+              </div>
+
+              <!-- Dingtalk (钉钉群机器人) fields -->
+              <template v-else-if="isDingtalk">
+                <div class="config-row">
+                  <FormField
+                    :label="t('settingsNotifications.dingtalkUrl')"
+                    field-id="nt-dt-url"
+                    :error="fieldErrors.url"
+                    :hint="t('settingsNotifications.dingtalkUrlHint')"
+                    required
+                  >
+                    <template #default="{ fieldId, ariaDescribedby }">
+                      <input
+                        :id="fieldId"
+                        v-model="form.url"
+                        type="url"
+                        class="field-input field-input--mono"
+                        :class="{ 'field-input--error': fieldErrors.url }"
+                        placeholder="https://oapi.dingtalk.com/robot/send?access_token=…"
+                        :aria-describedby="ariaDescribedby"
+                        :disabled="saving"
+                        @input="fieldErrors.url = ''"
+                      />
+                    </template>
+                  </FormField>
+                </div>
+                <div class="config-row">
+                  <FormField
+                    :label="t('settingsNotifications.dingtalkSignSecret')"
+                    field-id="nt-dt-secret"
+                    :hint="hasStoredPassword ? t('settingsNotifications.secretStoredHint') : t('settingsNotifications.dingtalkSignSecretHint')"
+                  >
+                    <template #default="{ fieldId, ariaDescribedby }">
+                      <input
+                        :id="fieldId"
+                        v-model="form.password"
+                        type="password"
+                        class="field-input field-input--mono"
+                        :placeholder="hasStoredPassword ? t('settingsNotifications.secretStoredPlaceholder') : t('settingsNotifications.dingtalkSignSecretPlaceholder')"
                         autocomplete="new-password"
                         :aria-describedby="ariaDescribedby"
                         :disabled="saving"

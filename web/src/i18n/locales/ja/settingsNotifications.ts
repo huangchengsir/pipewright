@@ -9,7 +9,9 @@ export default {
   typeFeishuLabel: 'Lark',
   typeFeishuDesc: 'カスタムボット',
   typeWecomLabel: 'WeCom',
+  typeWecomDesc: 'グループボット',
   typeDingtalkLabel: 'DingTalk',
+  typeDingtalkDesc: 'グループボット',
   comingSoon: '近日対応',
   notImplemented: '送信は未実装',
 
@@ -38,6 +40,18 @@ export default {
   signSecret: '署名シークレット（任意）',
   signSecretHint: 'ボットで「署名検証」を有効にした場合のみ入力。保存後は再表示されません',
   signSecretPlaceholder: 'ボットで署名検証が無効なら空のまま',
+
+  wecomUrl: 'WeCom ボット Webhook URL',
+  wecomUrlHint:
+    'WeCom グループの「グループ設定 → グループボット → ボットを追加」の Webhook URL（qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…）',
+
+  dingtalkUrl: 'DingTalk ボット Webhook URL',
+  dingtalkUrlHint:
+    'DingTalk グループの「グループ設定 → グループアシスタント → ボットを追加 → カスタム」の Webhook URL（oapi.dingtalk.com/robot/send?access_token=…）',
+  dingtalkSignSecret: '署名シークレット（任意）',
+  dingtalkSignSecretHint: 'ボットの「セキュリティ設定」で「署名」を選んだ場合のみ入力。保存後は再表示されません',
+  dingtalkSignSecretPlaceholder: 'ボットで「署名」を選んでいなければ空のまま',
+
   secretStoredHint: '設定済み ••••（空欄で保持）',
   secretStoredPlaceholder: '設定済み ••••（空欄で変更なし）',
 
@@ -74,6 +88,8 @@ export default {
   valNameRequired: 'チャンネル名を入力してください',
   valWebhookUrlRequired: 'Webhook URL を入力してください',
   valFeishuUrlRequired: 'Lark ボットの Webhook URL を入力してください',
+  valWecomUrlRequired: 'WeCom ボットの Webhook URL を入力してください',
+  valDingtalkUrlRequired: 'DingTalk ボットの Webhook URL を入力してください',
   valSmtpHostRequired: 'SMTP ホストを入力してください',
   valPortInvalid: '有効なポートを入力してください',
   valFromRequired: '送信元を入力してください',

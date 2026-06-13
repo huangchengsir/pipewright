@@ -9,7 +9,9 @@ export default {
   typeFeishuLabel: 'Lark',
   typeFeishuDesc: 'Benutzerdefinierter Bot',
   typeWecomLabel: 'WeCom',
+  typeWecomDesc: 'Gruppen-Bot',
   typeDingtalkLabel: 'DingTalk',
+  typeDingtalkDesc: 'Gruppen-Bot',
   comingSoon: 'Demnächst verfügbar',
   notImplemented: 'Versand nicht implementiert',
 
@@ -38,6 +40,18 @@ export default {
   signSecret: 'Signaturschlüssel (optional)',
   signSecretHint: 'Nur ausfüllen, wenn beim Bot die „Signaturprüfung“ aktiviert ist; wird nach dem Speichern nie erneut angezeigt',
   signSecretPlaceholder: 'Leer lassen, wenn beim Bot die Signaturprüfung nicht aktiviert ist',
+
+  wecomUrl: 'Webhook-URL des WeCom-Bots',
+  wecomUrlHint:
+    'Webhook-URL der WeCom-Gruppe unter „Gruppeneinstellungen → Gruppen-Bots → Bot hinzufügen“ (qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…)',
+
+  dingtalkUrl: 'Webhook-URL des DingTalk-Bots',
+  dingtalkUrlHint:
+    'Webhook-URL der DingTalk-Gruppe unter „Gruppeneinstellungen → Gruppenassistent → Bot hinzufügen → Benutzerdefiniert“ (oapi.dingtalk.com/robot/send?access_token=…)',
+  dingtalkSignSecret: 'Signaturschlüssel (optional)',
+  dingtalkSignSecretHint: 'Nur ausfüllen, wenn in den „Sicherheitseinstellungen“ des Bots „Signiert“ gewählt ist; wird nach dem Speichern nie erneut angezeigt',
+  dingtalkSignSecretPlaceholder: 'Leer lassen, wenn der Bot „Signiert“ nicht verwendet',
+
   secretStoredHint: 'Konfiguriert ••••(leer lassen zum Beibehalten)',
   secretStoredPlaceholder: 'Konfiguriert ••••(leer = unverändert)',
 
@@ -74,6 +88,8 @@ export default {
   valNameRequired: 'Bitte geben Sie einen Kanalnamen ein',
   valWebhookUrlRequired: 'Bitte geben Sie die Webhook-URL ein',
   valFeishuUrlRequired: 'Bitte geben Sie die Webhook-URL des Lark-Bots ein',
+  valWecomUrlRequired: 'Bitte geben Sie die Webhook-URL des WeCom-Bots ein',
+  valDingtalkUrlRequired: 'Bitte geben Sie die Webhook-URL des DingTalk-Bots ein',
   valSmtpHostRequired: 'Bitte geben Sie den SMTP-Host ein',
   valPortInvalid: 'Bitte geben Sie einen gültigen Port ein',
   valFromRequired: 'Bitte geben Sie den Absender ein',

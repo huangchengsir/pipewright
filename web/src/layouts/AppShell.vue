@@ -435,7 +435,9 @@ function toggleExpanded(): void {
 .main-inner {
   max-width: var(--content-max);
   margin: 0 auto;
-  padding: var(--main-pad-top) var(--main-pad) var(--main-pad-bottom);
+  /* 顶部多留一条 ~38px 的带:全局语言切换器(固定右上角)占这一带,页面头部
+     的右侧操作按钮(如概览的「新建项目」)下移到带下方,避免被切换器压住。 */
+  padding: calc(var(--main-pad-top) + 38px) var(--main-pad) var(--main-pad-bottom);
   min-height: 100vh;
 }
 </style>

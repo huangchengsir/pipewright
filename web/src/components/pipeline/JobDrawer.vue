@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { localizeName } from '../../lib/pipelineLabels'
 import type { PipelineJob, PipelineStage } from '../../api/pipeline'
 import type { Credential } from '../../api/credentials'
 import type { Server } from '../../api/servers'
@@ -333,7 +334,7 @@ async function confirmSave(): Promise<void> {
       </span>
       <div class="drawer-title">
         {{ localName || t('pipelineJob.unnamedJob') }}
-        <small class="drawer-subtitle">{{ stage.name }} · {{ t('pipelineJob.thisPipeline') }}</small>
+        <small class="drawer-subtitle">{{ localizeName(stage.name) }} · {{ t('pipelineJob.thisPipeline') }}</small>
       </div>
       <button
         class="drawer-close"

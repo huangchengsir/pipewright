@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { localizeName } from '../../lib/pipelineLabels'
 import type { PipelineStage, PipelineJob } from '../../api/pipeline'
 import JobCard from './JobCard.vue'
 import { eligibleNeeds, toggleNeed } from './stageDeps'
@@ -222,7 +223,7 @@ function resetDrag(): void {
     <!-- Stage header -->
     <div class="stage-header">
       <span class="stage-index" aria-hidden="true">{{ stageLabel(stageIndex) }}</span>
-      <span class="stage-name-text">{{ stage.name }}</span>
+      <span class="stage-name-text">{{ localizeName(stage.name) }}</span>
       <button
         v-if="stage.kind !== 'source'"
         class="stage-deps-btn"

@@ -4,6 +4,7 @@
  * 上:最近资源异常告警(磁盘/内存/CPU 越阈)。下:AI 失败诊断闭环准确率。
  */
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import type { AnomalyAlert } from '../../api/anomaly'
 import type { DiagnosisStats } from '../../api/settings'
@@ -15,6 +16,7 @@ const props = defineProps<{
 }>()
 
 const router = useRouter()
+const { t } = useI18n()
 
 const recent = computed(() => props.alerts.slice(0, 4))
 
@@ -24,21 +26,21 @@ const accuracyPct = computed(() => {
 })
 
 function fmtAgo(rfc: string): string {
-  const t = new Date(rfc).getTime()
-  if (Number.isNaN(t)) return ''
-  const m = Math.floor(Math.max(0, Date.now() - t) / 60000)
-  if (m < 60) return `${m}m前`
+  const ts = new Date(rfc).getTime()
+  if (Number.isNaN(ts)) return ''
+  const m = Math.floor(Math.max(0, Date.now() - ts) / 60000)
+  if (m < 60) return t('timeShort.min', { n: m })
   const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h前`
-  return `${Math.floor(h / 24)}d前`
+  if (h < 24) return t('timeShort.hour', { n: h })
+  return t('timeShort.day', { n: Math.floor(h / 24) })
 }
 </script>
 
 <template>
   <section class="card alerts" aria-labelledby="dash-alerts-h">
     <header class="card-head">
-      <h2 id="dash-alerts-h" class="card-title">告警与 AI 诊断</h2>
-      <button class="card-link" type="button" @click="router.push('/anomaly')">异常检测 →</button>
+      <h2 id="dash-alerts-h" class="card-title">{{ t('dash.alertsTitle') }}</h2>
+      <button class="card-link" type="button" @click="router.push('/anomaly')">{{ t('dash.anomalyLink') }}</button>
     </header>
 
     <div v-if="loading" class="al-skeleton" aria-busy="true">
@@ -48,8 +50,8 @@ function fmtAgo(rfc: string): string {
     <template v-else>
       <!-- 异常告警 -->
       <div class="al-block">
-        <div class="al-sub">资源异常</div>
-        <p v-if="!recent.length" class="al-none">无异常 · 各机资源均在阈值内 ✓</p>
+        <div class="al-sub">{{ t('dash.resourceAnomalies') }}</div>
+        <p v-if="!recent.length" class="al-none">{{ t('dash.noAnomalies') }}</p>
         <ul v-else class="al-list" role="list">
           <li v-for="a in recent" :key="a.id" class="al-row">
             <span class="al-icon" :class="a.metric" aria-hidden="true" />
@@ -62,19 +64,19 @@ function fmtAgo(rfc: string): string {
 
       <!-- AI 诊断准确率 -->
       <div class="al-block diag">
-        <div class="al-sub">AI 失败诊断闭环</div>
-        <div v-if="(diagnosis?.totalFeedback ?? 0) === 0" class="al-none">暂无诊断反馈 · 对失败诊断点 👍/👎 后,准确率会沉淀于此。</div>
+        <div class="al-sub">{{ t('dash.aiDiagLoop') }}</div>
+        <div v-if="(diagnosis?.totalFeedback ?? 0) === 0" class="al-none">{{ t('dash.noDiagFeedback') }}</div>
         <div v-else class="diag-row">
           <div class="diag-acc">
             <span class="diag-acc-val">{{ accuracyPct ?? '—' }}<span class="diag-acc-unit">%</span></span>
-            <span class="diag-acc-label">准确率</span>
+            <span class="diag-acc-label">{{ t('dash.accuracy') }}</span>
           </div>
           <div class="diag-counts">
             <span class="diag-up">👍 {{ diagnosis?.thumbsUp ?? 0 }}</span>
             <span class="diag-down">👎 {{ diagnosis?.thumbsDown ?? 0 }}</span>
-            <span class="diag-total">共 {{ diagnosis?.totalFeedback ?? 0 }} 次反馈</span>
+            <span class="diag-total">{{ t('dash.feedbackTotal', { n: diagnosis?.totalFeedback ?? 0 }) }}</span>
           </div>
-          <button class="card-link" type="button" @click="router.push('/settings/diagnosis-stats')">详情 →</button>
+          <button class="card-link" type="button" @click="router.push('/settings/diagnosis-stats')">{{ t('common.detailArrow') }}</button>
         </div>
       </div>
     </template>

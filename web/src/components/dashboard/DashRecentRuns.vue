@@ -5,6 +5,7 @@
  * 整卡点击进运行列表;单条点击进该 run 详情。
  */
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import type { RunListItem, RunStatus } from '../../api/runs'
 
@@ -14,16 +15,17 @@ const props = defineProps<{
 }>()
 
 const router = useRouter()
+const { t } = useI18n()
 
-// RunStatus → { label, tone };tone 映射到语义色(成功/失败/进行/等待/回滚)。
-const STATUS: Record<RunStatus, { label: string; tone: string }> = {
-  queued: { label: '排队', tone: 'idle' },
-  running: { label: '进行中', tone: 'run' },
-  waiting_approval: { label: '待审批', tone: 'wait' },
-  success: { label: '成功', tone: 'ok' },
-  failed: { label: '失败', tone: 'err' },
-  partial_failed: { label: '部分失败', tone: 'warn' },
-  rolled_back: { label: '已回滚', tone: 'roll' },
+// RunStatus → 语义色调(成功/失败/进行/等待/回滚);文案走 i18n `runStatus.*`。
+const STATUS_TONE: Record<RunStatus, string> = {
+  queued: 'idle',
+  running: 'run',
+  waiting_approval: 'wait',
+  success: 'ok',
+  failed: 'err',
+  partial_failed: 'warn',
+  rolled_back: 'roll',
 }
 
 const items = computed(() => props.runs.slice(0, 10))
@@ -38,37 +40,37 @@ function fmtDuration(ms: number | null): string {
 }
 
 function fmtAgo(rfc: string): string {
-  const t = new Date(rfc).getTime()
-  if (Number.isNaN(t)) return ''
-  const diff = Math.max(0, Date.now() - t)
+  const ts = new Date(rfc).getTime()
+  if (Number.isNaN(ts)) return ''
+  const diff = Math.max(0, Date.now() - ts)
   const m = Math.floor(diff / 60000)
-  if (m < 1) return '刚刚'
-  if (m < 60) return `${m} 分钟前`
+  if (m < 1) return t('time.justNow')
+  if (m < 60) return t('time.minAgo', { n: m })
   const h = Math.floor(m / 60)
-  if (h < 24) return `${h} 小时前`
-  return `${Math.floor(h / 24)} 天前`
+  if (h < 24) return t('time.hourAgo', { n: h })
+  return t('time.dayAgo', { n: Math.floor(h / 24) })
 }
 </script>
 
 <template>
   <section class="card runs" aria-labelledby="dash-runs-h">
     <header class="card-head">
-      <h2 id="dash-runs-h" class="card-title">最近运行</h2>
-      <button class="card-link" type="button" @click="router.push('/runs')">全部 →</button>
+      <h2 id="dash-runs-h" class="card-title">{{ t('dash.recentRuns') }}</h2>
+      <button class="card-link" type="button" @click="router.push('/runs')">{{ t('common.allArrow') }}</button>
     </header>
 
     <div v-if="loading" class="runs-skeleton" aria-busy="true">
       <span v-for="i in 5" :key="i" class="sk-row" />
     </div>
 
-    <p v-else-if="!items.length" class="card-empty">暂无运行记录。接入项目并触发流水线后,这里会显示最近的构建/部署。</p>
+    <p v-else-if="!items.length" class="card-empty">{{ t('dash.recentRunsEmpty') }}</p>
 
     <ul v-else class="runs-list" role="list">
       <li v-for="r in items" :key="r.id">
         <button class="run-row" type="button" @click="router.push(`/runs/${r.id}`)">
-          <span class="run-badge" :class="`t-${STATUS[r.status].tone}`">
+          <span class="run-badge" :class="`t-${STATUS_TONE[r.status]}`">
             <span class="run-dot" aria-hidden="true" />
-            {{ STATUS[r.status].label }}
+            {{ t(`runStatus.${r.status}`) }}
           </span>
           <span class="run-project">{{ r.projectName }}</span>
           <span class="run-trigger">{{ r.trigger?.branch ?? '' }}</span>

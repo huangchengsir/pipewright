@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
 import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Dashboard,
@@ -19,6 +20,7 @@ import {
 } from '@vicons/tabler'
 import { NIcon } from 'naive-ui'
 import ThemeToggle from '../components/ThemeToggle.vue'
+import LocaleSwitcher from '../components/LocaleSwitcher.vue'
 import { logout } from '../api/auth'
 import { useSessionStore } from '../stores/session'
 import { useConfirm } from '../composables/useConfirm'
@@ -29,6 +31,7 @@ const router = useRouter()
 const sessionStore = useSessionStore()
 const confirm = useConfirm()
 const toast = useToast()
+const { t } = useI18n()
 
 // 退出登录:确认 → POST /api/auth/logout(吊销当前会话)→ 清本地会话缓存 → 回登录页。
 // 即便后端请求失败也照样清缓存跳转(本地一定登出),避免卡在"看似已登录但实际无效"。
@@ -36,9 +39,9 @@ const loggingOut = ref(false)
 async function handleLogout(): Promise<void> {
   if (loggingOut.value) return
   const ok = await confirm.open({
-    title: '退出登录?',
-    body: '退出后需重新输入账号口令才能再次进入控制台。',
-    confirmLabel: '退出登录',
+    title: t('shell.logoutTitle'),
+    body: t('shell.logoutBody'),
+    confirmLabel: t('nav.logout'),
     variant: 'danger',
   })
   if (!ok) return
@@ -47,7 +50,7 @@ async function handleLogout(): Promise<void> {
     await logout()
   } catch {
     // 后端不可达也要本地登出 —— 失败不阻塞跳转。
-    toast.info('已在本地退出', { detail: '服务器未响应,但本地会话已清除' })
+    toast.info(t('shell.logoutLocalTitle'), { detail: t('shell.logoutLocalDetail') })
   } finally {
     sessionStore.clearSession()
     loggingOut.value = false
@@ -59,35 +62,37 @@ interface NavItem {
   name: string
   to: string
   icon: Component
-  label: string
-  ariaLabel: string
+  /** i18n key under `nav.*` for the visible label. */
+  labelKey: string
+  /** i18n key under `nav.*` for the accessible name. */
+  ariaKey: string
 }
 
 const navItems: NavItem[] = [
-  { name: 'dashboard',     to: '/dashboard',     icon: Dashboard, label: '概览',  ariaLabel: '概览' },
-  { name: 'projects',      to: '/projects',      icon: GitBranch,  label: '项目',  ariaLabel: '项目' },
-  { name: 'runs',          to: '/runs',          icon: GitFork,    label: '运行',  ariaLabel: '运行' },
+  { name: 'dashboard',     to: '/dashboard',     icon: Dashboard, labelKey: 'nav.dashboard',     ariaKey: 'nav.dashboard' },
+  { name: 'projects',      to: '/projects',      icon: GitBranch,  labelKey: 'nav.projects',      ariaKey: 'nav.projects' },
+  { name: 'runs',          to: '/runs',          icon: GitFork,    labelKey: 'nav.runs',          ariaKey: 'nav.runs' },
   // FR-8-13: 复用库(流水线模板 + 变量组)。
-  { name: 'library',       to: '/library',       icon: Stack2,     label: '复用库', ariaLabel: '复用库' },
+  { name: 'library',       to: '/library',       icon: Stack2,     labelKey: 'nav.library',       ariaKey: 'nav.library' },
   // 环境一等公民:按环境聚合的部署历史 + 一键回滚(对标 GitLab environments)。
-  { name: 'environments',  to: '/environments',  icon: Rocket,     label: '环境',  ariaLabel: '环境部署历史' },
+  { name: 'environments',  to: '/environments',  icon: Rocket,     labelKey: 'nav.environments',  ariaKey: 'nav.ariaEnvironments' },
   // FR-8-15: DORA 四指标仪表盘(交付效能;只读聚合)。
-  { name: 'dora',          to: '/metrics/dora',  icon: ChartBar,   label: 'DORA 指标', ariaLabel: 'DORA 指标' },
+  { name: 'dora',          to: '/metrics/dora',  icon: ChartBar,   labelKey: 'nav.dora',          ariaKey: 'nav.dora' },
   // Story 6-1: 多机状态总览(服务器层指标 FR-15);登记在 设置 → 服务器。
-  { name: 'server-status', to: '/server-status', icon: Server,     label: '服务器', ariaLabel: '服务器' },
+  { name: 'server-status', to: '/server-status', icon: Server,     labelKey: 'nav.serverStatus',  ariaKey: 'nav.serverStatus' },
   // 容器管理:跨服务器聚合容器总览 + 行内生命周期操作(docker over SSH)。
-  { name: 'containers',    to: '/containers',    icon: Box,        label: '容器',  ariaLabel: '容器' },
+  { name: 'containers',    to: '/containers',    icon: Box,        labelKey: 'nav.containers',    ariaKey: 'nav.containers' },
   // Story 6-5: configurable anomaly detection & alerts (FR-23)
-  { name: 'anomaly',       to: '/anomaly',       icon: AlertTriangle, label: '异常检测', ariaLabel: '异常检测' },
-  { name: 'notifications', to: '/settings/notifications', icon: Bell, label: '通知',  ariaLabel: '通知' },
+  { name: 'anomaly',       to: '/anomaly',       icon: AlertTriangle, labelKey: 'nav.anomaly',    ariaKey: 'nav.anomaly' },
+  { name: 'notifications', to: '/settings/notifications', icon: Bell, labelKey: 'nav.notifications', ariaKey: 'nav.notifications' },
 ]
 
 const settingsItem: NavItem = {
   name: 'settings',
   to: '/settings',
   icon: Settings,
-  label: '设置',
-  ariaLabel: '设置',
+  labelKey: 'nav.settings',
+  ariaKey: 'nav.settings',
 }
 
 function isActive(item: NavItem): boolean {
@@ -109,10 +114,10 @@ function toggleExpanded(): void {
 <template>
   <div class="app-shell" :class="{ 'is-expanded': expanded }">
     <!-- Left rail navigation -->
-    <nav class="rail" aria-label="主导航">
+    <nav class="rail" :aria-label="t('nav.ariaMain')">
       <!-- 顶部:品牌 -->
       <div class="rail-head">
-        <router-link to="/" class="brand" aria-label="Pipewright 主页">
+        <router-link to="/" class="brand" :aria-label="t('nav.ariaBrandHome')">
           <span class="brand-mark mono">p&gt;</span>
           <span class="brand-name">Pipewright</span>
         </router-link>
@@ -125,11 +130,11 @@ function toggleExpanded(): void {
             :to="item.to"
             class="nav-item"
             :class="{ 'nav-item--active': isActive(item) }"
-            :aria-label="item.ariaLabel"
+            :aria-label="t(item.ariaKey)"
             :aria-current="isActive(item) ? 'page' : undefined"
           >
             <n-icon class="nav-icon" :component="item.icon" :size="20" />
-            <span class="nav-label">{{ item.label }}</span>
+            <span class="nav-label">{{ t(item.labelKey) }}</span>
           </router-link>
         </li>
       </ul>
@@ -142,11 +147,11 @@ function toggleExpanded(): void {
         :to="settingsItem.to"
         class="nav-item"
         :class="{ 'nav-item--active': isActive(settingsItem) }"
-        :aria-label="settingsItem.ariaLabel"
+        :aria-label="t(settingsItem.ariaKey)"
         :aria-current="isActive(settingsItem) ? 'page' : undefined"
       >
         <n-icon class="nav-icon" :component="settingsItem.icon" :size="20" />
-        <span class="nav-label">{{ settingsItem.label }}</span>
+        <span class="nav-label">{{ t(settingsItem.labelKey) }}</span>
       </router-link>
 
       <!-- Logout (bottom-most) -->
@@ -154,11 +159,11 @@ function toggleExpanded(): void {
         type="button"
         class="nav-item nav-item--logout"
         :disabled="loggingOut"
-        aria-label="退出登录"
+        :aria-label="t('nav.logout')"
         @click="handleLogout"
       >
         <n-icon class="nav-icon" :component="Logout" :size="20" />
-        <span class="nav-label">退出登录</span>
+        <span class="nav-label">{{ t('nav.logout') }}</span>
       </button>
     </nav>
 
@@ -166,7 +171,7 @@ function toggleExpanded(): void {
     <button
       class="rail-edge-toggle"
       type="button"
-      :aria-label="expanded ? '收起侧栏' : '展开侧栏'"
+      :aria-label="expanded ? t('nav.collapse') : t('nav.expand')"
       :aria-pressed="expanded"
       @click="toggleExpanded"
     >
@@ -180,7 +185,8 @@ function toggleExpanded(): void {
       </div>
     </main>
 
-    <!-- Theme toggle (bottom-right, always visible) -->
+    <!-- Locale + theme toggles (bottom-right, always visible) -->
+    <LocaleSwitcher />
     <ThemeToggle />
   </div>
 </template>

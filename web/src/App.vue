@@ -2,16 +2,20 @@
 import { NConfigProvider, NMessageProvider } from 'naive-ui'
 import { RouterView } from 'vue-router'
 import { useNaiveTheme } from './composables/useNaiveTheme'
+import { useNaiveLocale } from './composables/useNaiveLocale'
 import ConfirmDialog from './components/ui/ConfirmDialog.vue'
 import ToastHost from './components/ui/ToastHost.vue'
 
 const { naiveTheme, naiveThemeOverrides } = useNaiveTheme()
+const { naiveLocale, naiveDateLocale } = useNaiveLocale()
 </script>
 
 <template>
   <n-config-provider
     :theme="naiveTheme"
     :theme-overrides="naiveThemeOverrides"
+    :locale="naiveLocale"
+    :date-locale="naiveDateLocale"
     :inline-theme-disabled="false"
   >
     <n-message-provider>

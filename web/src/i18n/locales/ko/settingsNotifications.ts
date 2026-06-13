@@ -129,6 +129,8 @@ export default {
   evRollbackDesc: '이전 버전으로 롤백됨',
   evHealthCheckFailed: '상태 점검 실패',
   evHealthCheckFailedDesc: '배포 후 상태 점검을 통과하지 못함',
+  evApprovalRequired: '승인 필요',
+  evApprovalRequiredDesc: '실행이 수동 승인 게이트에 도달하여 승인 또는 거부를 기다리는 중',
 
   routesTitle: '이벤트 라우트',
   routesDescPre: '"어떤 이벤트를 어떤 채널로 알릴지"를 구성합니다. ',

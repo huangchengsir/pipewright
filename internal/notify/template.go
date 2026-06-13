@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/i18n"
 )
 
 // 模板领域错误。
@@ -67,6 +68,9 @@ type TemplateVars struct {
 	DurationMs   string
 	RunID        string
 	ErrorSummary string
+	// ActionURL 是一次性操作链接(目前用于 approval_required 事件的签名审批链接);
+	// 空 = 该事件无操作链接。渲染时占位名 {{actionUrl}};并透出到 Payload.Fields["审批链接"]/正文。
+	ActionURL string
 }
 
 // asMap 把 TemplateVars 展开为占位名 → 值的映射(冻结占位名)。
@@ -80,6 +84,7 @@ func (v TemplateVars) asMap() map[string]string {
 		"durationMs":   v.DurationMs,
 		"runId":        v.RunID,
 		"errorSummary": v.ErrorSummary,
+		"actionUrl":    v.ActionURL,
 	}
 }
 
@@ -273,6 +278,8 @@ func (s *service) RenderPayload(ctx context.Context, event, channelID string, va
 }
 
 // defaultPayload 用 TemplateVars 还原 EventPayload 入参,产出平台默认 Payload(按通知语言本地化)。
+// 若 vars 携带 ActionURL(如 approval_required 的签名审批链接),则透出到 Payload.Fields[操作链接键]
+// 与正文(供各渠道渲染为可点击链接)。
 func (s *service) defaultPayload(ctx context.Context, event string, vars TemplateVars) Payload {
 	var durationMs int64
 	if vars.DurationMs != "" {
@@ -280,8 +287,22 @@ func (s *service) defaultPayload(ctx context.Context, event string, vars Templat
 			durationMs = d
 		}
 	}
-	return EventPayload(s.notifyLanguage(ctx), event, vars.Project, vars.Branch, vars.Commit, vars.Status, durationMs)
+	lang := s.notifyLanguage(ctx)
+	p := EventPayload(lang, event, vars.Project, vars.Branch, vars.Commit, vars.Status, durationMs)
+	if url := strings.TrimSpace(vars.ActionURL); url != "" {
+		if p.Fields == nil {
+			p.Fields = map[string]string{}
+		}
+		p.Fields[fieldActionURL] = url
+		// 正文追加一行可点击提示(飞书 lark_md / 纯文本均可读)。
+		label := i18n.T(lang, "审批链接")
+		p.Body = strings.TrimRight(p.Body, "。.") + bodySeparator(lang) + label + bodySeparator(lang) + url
+	}
+	return p
 }
+
+// fieldActionURL 是 Payload.Fields 里承载操作链接的键(各渠道据此渲染为可点击链接)。
+const fieldActionURL = "actionUrl"
 
 // varsFields 把 TemplateVars 展开为 Payload.Fields(仅非空项),供 webhook/email 透出结构化键值。
 func varsFields(vars TemplateVars) map[string]string {

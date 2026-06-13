@@ -29,6 +29,8 @@ const (
 	EventRollback = "rollback"
 	// EventHealthCheckFailed 健康检查失败(Epic 4 细化)。
 	EventHealthCheckFailed = "health_check_failed"
+	// EventApprovalRequired 需要人工审批(run 进入 waiting_approval 时发,携带签名审批链接)。
+	EventApprovalRequired = "approval_required"
 )
 
 // 路由领域错误。
@@ -45,7 +47,7 @@ var (
 func validEvent(e string) bool {
 	switch e {
 	case EventBuildSucceeded, EventBuildFailed, EventDeploySucceeded,
-		EventDeployFailed, EventRollback, EventHealthCheckFailed:
+		EventDeployFailed, EventRollback, EventHealthCheckFailed, EventApprovalRequired:
 		return true
 	default:
 		return false
@@ -58,6 +60,7 @@ func Events() []string {
 		EventBuildSucceeded, EventBuildFailed,
 		EventDeploySucceeded, EventDeployFailed,
 		EventRollback, EventHealthCheckFailed,
+		EventApprovalRequired,
 	}
 }
 
@@ -477,6 +480,8 @@ func eventLabel(event, lang string) string {
 		return i18n.T(lang, "已回滚")
 	case EventHealthCheckFailed:
 		return i18n.T(lang, "健康检查失败")
+	case EventApprovalRequired:
+		return i18n.T(lang, "需要审批")
 	default:
 		return event
 	}

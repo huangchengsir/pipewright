@@ -129,6 +129,8 @@ export default {
   evRollbackDesc: 'Rolled back to the previous version',
   evHealthCheckFailed: 'Health Check Failed',
   evHealthCheckFailedDesc: 'Post-deploy health check did not pass',
+  evApprovalRequired: 'Approval Required',
+  evApprovalRequiredDesc: 'A run reached a manual approval gate and awaits approve or reject',
 
   routesTitle: 'Event Routes',
   routesDescPre: 'Configure which events notify which channels. ',

@@ -25,8 +25,15 @@ import (
 // 审批人节奏可较慢,故取较长值;运行亦可经取消端点立即释放。
 const defaultGateTimeout = 24 * time.Hour
 
+// ApprovalNotifier 是审批门进入等待态后的 best-effort 通知钩子(供 main 注入)。
+// runID/stageID 用于签发签名链接;projectID 用于按项目维度路由通知。
+// 实现绝不阻塞 / 不返回错误冒泡(内部 best-effort、自带超时);nil 表示不发通知。
+type ApprovalNotifier func(ctx context.Context, projectID, projectName, runID, stageID string)
+
 // NewApprovalGate 构造注入 dagrun 的审批门 hook(供 main 装配)。
-func NewApprovalGate(runs run.Service, coord *approval.Coordinator, store *approval.Store) dagrun.GateFunc {
+// notifier 非 nil 时,在 run 进入 waiting_approval 后被 best-effort 调用(发「需要审批」通知 +
+// 签名审批链接);为 nil(或签名/PUBLIC_URL 未配)则不发通知,门行为不变。
+func NewApprovalGate(runs run.Service, coord *approval.Coordinator, store *approval.Store, notifier ApprovalNotifier) dagrun.GateFunc {
 	return func(ctx context.Context, r *run.Run, stage pipeline.Stage) (bool, error) {
 		key := approval.Key(r.ID, stage.ID)
 		_ = store.CreatePending(ctx, r.ID, stage.ID, stage.Name)
@@ -37,6 +44,11 @@ func NewApprovalGate(runs run.Service, coord *approval.Coordinator, store *appro
 		if err := runs.MarkWaitingApproval(ctx, r.ID); err != nil {
 			// 已终态/被取消:无法进入等待,退化失败让 worker 收尾。
 			return false, err
+		}
+
+		// best-effort 通知:进入等待态后发「需要审批」+ 签名链接。绝不阻塞门、绝不冒泡错误。
+		if notifier != nil {
+			notifier(ctx, r.ProjectID, r.ProjectName, r.ID, stage.ID)
 		}
 
 		var (

@@ -129,6 +129,8 @@ export default {
   evRollbackDesc: '前のバージョンにロールバック済み',
   evHealthCheckFailed: 'ヘルスチェック失敗',
   evHealthCheckFailedDesc: 'デプロイ後のヘルスチェックが通過しませんでした',
+  evApprovalRequired: '承認が必要です',
+  evApprovalRequiredDesc: '実行が手動承認ゲートに到達し、承認または却下を待っています',
 
   routesTitle: 'イベントルート',
   routesDescPre: '「どのイベントをどのチャンネルで通知するか」を設定します。',

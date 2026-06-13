@@ -129,6 +129,8 @@ export default {
   evRollbackDesc: 'Revertido a la versión anterior',
   evHealthCheckFailed: 'Comprobación de estado fallida',
   evHealthCheckFailedDesc: 'La comprobación de estado posterior al despliegue no pasó',
+  evApprovalRequired: 'Se requiere aprobación',
+  evApprovalRequiredDesc: 'Una ejecución llegó a una puerta de aprobación manual y espera aprobación o rechazo',
 
   routesTitle: 'Rutas de eventos',
   routesDescPre: 'Configura qué eventos notifican por qué canales. ',

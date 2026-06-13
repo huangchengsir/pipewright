@@ -17,6 +17,12 @@ export default {
   pacOffHint: 'When on, each run reads .pipewright.yml from the repo root on the run branch (falling back to this config if missing or invalid).',
   pacToggleFailed: 'Failed to toggle. Please try again.',
 
+  // ─── PR status checks (commit status writeback · Story 8-9 / FR-8-9) ─
+  prStatusTitle: 'PR status checks',
+  prStatusOnHint: 'When a run finishes, Pipewright detects the repo platform (GitHub/Gitee) and writes the commit success/failure back as a PR check using the project credential (best-effort; failures never affect the run).',
+  prStatusOffHint: 'When on, finishing a run detects the repo platform (GitHub/Gitee) and writes the commit status back as a PR check using the project credential (best-effort).',
+  prStatusToggleFailed: 'Failed to toggle. Please try again.',
+
   // ─── Preview repo config (GitOps · fetch & validate .pipewright.yml at a ref) ───
   pacPreviewBtn: 'Preview repo config',
   pacPreviewTitle: 'Preview repo config',

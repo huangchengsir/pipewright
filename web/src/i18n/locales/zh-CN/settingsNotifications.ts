@@ -10,7 +10,9 @@ export default {
   typeFeishuLabel: '飞书',
   typeFeishuDesc: '自定义机器人',
   typeWecomLabel: '企业微信',
+  typeWecomDesc: '群机器人',
   typeDingtalkLabel: '钉钉',
+  typeDingtalkDesc: '群机器人',
   comingSoon: '即将支持',
   notImplemented: '未实现发送',
 
@@ -39,6 +41,18 @@ export default {
   signSecret: '签名密钥(可选)',
   signSecretHint: '仅当机器人开启「签名校验」时填写;写入后绝不回显',
   signSecretPlaceholder: '机器人未开启签名校验则留空',
+
+  wecomUrl: '企业微信机器人 Webhook 地址',
+  wecomUrlHint:
+    '企业微信群「群设置 → 群机器人 → 添加机器人」的 Webhook 地址(qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…)',
+
+  dingtalkUrl: '钉钉机器人 Webhook 地址',
+  dingtalkUrlHint:
+    '钉钉群「群设置 → 智能群助手 → 添加机器人 → 自定义」的 Webhook 地址(oapi.dingtalk.com/robot/send?access_token=…)',
+  dingtalkSignSecret: '加签密钥(可选)',
+  dingtalkSignSecretHint: '仅当机器人「安全设置」选「加签」时填写;写入后绝不回显',
+  dingtalkSignSecretPlaceholder: '机器人未选「加签」则留空',
+
   secretStoredHint: '已配置 ••••(留空则保留)',
   secretStoredPlaceholder: '已配置 ••••(留空不变)',
 
@@ -76,6 +90,8 @@ export default {
   valNameRequired: '请填写渠道名称',
   valWebhookUrlRequired: '请填写 Webhook 地址',
   valFeishuUrlRequired: '请填写飞书机器人 Webhook 地址',
+  valWecomUrlRequired: '请填写企业微信机器人 Webhook 地址',
+  valDingtalkUrlRequired: '请填写钉钉机器人 Webhook 地址',
   valSmtpHostRequired: '请填写 SMTP 主机',
   valPortInvalid: '请填写有效端口',
   valFromRequired: '请填写发件人',

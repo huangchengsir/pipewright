@@ -15,33 +15,35 @@ import (
 // projectDTO 是项目对外响应体(冻结契约;camelCase;无明文/无密文)。
 // lastRunStatus / targetServers 本期为占位(null / []),数据由后续 story 填。
 type projectDTO struct {
-	ID             string   `json:"id"`
-	Name           string   `json:"name"`
-	RepoURL        string   `json:"repoUrl"`
-	DefaultBranch  string   `json:"defaultBranch"`
-	CredentialID   string   `json:"credentialId"`
-	CredentialName string   `json:"credentialName"`
-	PacEnabled     bool     `json:"pacEnabled"`
-	LastRunStatus  *string  `json:"lastRunStatus"`
-	TargetServers  []string `json:"targetServers"`
-	CreatedAt      string   `json:"createdAt"`
-	UpdatedAt      string   `json:"updatedAt"`
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	RepoURL         string   `json:"repoUrl"`
+	DefaultBranch   string   `json:"defaultBranch"`
+	CredentialID    string   `json:"credentialId"`
+	CredentialName  string   `json:"credentialName"`
+	PacEnabled      bool     `json:"pacEnabled"`
+	PRStatusEnabled bool     `json:"prStatusEnabled"`
+	LastRunStatus   *string  `json:"lastRunStatus"`
+	TargetServers   []string `json:"targetServers"`
+	CreatedAt       string   `json:"createdAt"`
+	UpdatedAt       string   `json:"updatedAt"`
 }
 
 // toProjectDTO 把领域 Project 转为契约 DTO。
 func toProjectDTO(p *project.Project) projectDTO {
 	return projectDTO{
-		ID:             p.ID,
-		Name:           p.Name,
-		RepoURL:        p.RepoURL,
-		DefaultBranch:  p.DefaultBranch,
-		CredentialID:   p.CredentialID,
-		CredentialName: p.CredentialName,
-		PacEnabled:     p.PacEnabled,
-		LastRunStatus:  nil,        // 本期占位:尚无运行
-		TargetServers:  []string{}, // 本期占位:空集合
-		CreatedAt:      p.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:      p.UpdatedAt.UTC().Format(time.RFC3339),
+		ID:              p.ID,
+		Name:            p.Name,
+		RepoURL:         p.RepoURL,
+		DefaultBranch:   p.DefaultBranch,
+		CredentialID:    p.CredentialID,
+		CredentialName:  p.CredentialName,
+		PacEnabled:      p.PacEnabled,
+		PRStatusEnabled: p.PRStatusEnabled,
+		LastRunStatus:   nil,        // 本期占位:尚无运行
+		TargetServers:   []string{}, // 本期占位:空集合
+		CreatedAt:       p.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:       p.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 }
 
@@ -162,20 +164,22 @@ func makeUpdateProjectHandler(svc project.Service, aud audit.Recorder) http.Hand
 		id := chi.URLParam(r, "id")
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
 		var req struct {
-			Name          *string `json:"name"`
-			DefaultBranch *string `json:"defaultBranch"`
-			CredentialID  *string `json:"credentialId"`
-			PacEnabled    *bool   `json:"pacEnabled"`
+			Name            *string `json:"name"`
+			DefaultBranch   *string `json:"defaultBranch"`
+			CredentialID    *string `json:"credentialId"`
+			PacEnabled      *bool   `json:"pacEnabled"`
+			PRStatusEnabled *bool   `json:"prStatusEnabled"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
 			return
 		}
 		p, err := svc.Update(r.Context(), id, project.UpdateInput{
-			Name:          req.Name,
-			DefaultBranch: req.DefaultBranch,
-			CredentialID:  req.CredentialID,
-			PacEnabled:    req.PacEnabled,
+			Name:            req.Name,
+			DefaultBranch:   req.DefaultBranch,
+			CredentialID:    req.CredentialID,
+			PacEnabled:      req.PacEnabled,
+			PRStatusEnabled: req.PRStatusEnabled,
 		})
 		if err != nil {
 			writeProjectError(w, err)

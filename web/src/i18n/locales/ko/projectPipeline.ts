@@ -17,6 +17,12 @@ export default {
   pacOffHint: '켜면 각 실행이 실행 브랜치의 저장소 루트 .pipewright.yml을 읽어 구동합니다(없거나 유효하지 않으면 이 설정으로 폴백).',
   pacToggleFailed: '전환에 실패했습니다. 다시 시도하세요.',
 
+  // ─── PR 상태 검사(커밋 상태 회신 · Story 8-9 / FR-8-9)──────────────
+  prStatusTitle: 'PR 상태 검사',
+  prStatusOnHint: '실행이 끝나면 프로젝트 저장소에서 GitHub/Gitee를 식별하고, 프로젝트 자격 증명으로 해당 커밋의 성공/실패 상태를 PR 검사로 회신합니다(최선 노력. 실패해도 실행에는 영향 없음).',
+  prStatusOffHint: '켜면 실행이 끝날 때 저장소에서 GitHub/Gitee를 식별하고, 프로젝트 자격 증명으로 커밋 상태를 PR 검사로 회신합니다(최선 노력).',
+  prStatusToggleFailed: '전환에 실패했습니다. 다시 시도하세요.',
+
   // ─── 저장소 구성 미리보기 (GitOps · ref 지정해 .pipewright.yml 가져와 검증) ──
   pacPreviewBtn: '저장소 구성 미리보기',
   pacPreviewTitle: '저장소 구성 미리보기',

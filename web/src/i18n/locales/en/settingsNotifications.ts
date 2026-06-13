@@ -9,7 +9,9 @@ export default {
   typeFeishuLabel: 'Lark',
   typeFeishuDesc: 'Custom bot',
   typeWecomLabel: 'WeCom',
+  typeWecomDesc: 'Group bot',
   typeDingtalkLabel: 'DingTalk',
+  typeDingtalkDesc: 'Group bot',
   comingSoon: 'Coming soon',
   notImplemented: 'Sending not implemented',
 
@@ -38,6 +40,18 @@ export default {
   signSecret: 'Sign Secret (optional)',
   signSecretHint: 'Fill in only when the bot has “signature verification” enabled; never echoed once saved',
   signSecretPlaceholder: 'Leave blank if signature verification is off',
+
+  wecomUrl: 'WeCom Bot Webhook URL',
+  wecomUrlHint:
+    'Webhook URL from the WeCom group “Group settings → Group bots → Add bot” (qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…)',
+
+  dingtalkUrl: 'DingTalk Bot Webhook URL',
+  dingtalkUrlHint:
+    'Webhook URL from the DingTalk group “Group settings → Group assistant → Add bot → Custom” (oapi.dingtalk.com/robot/send?access_token=…)',
+  dingtalkSignSecret: 'Sign Secret (optional)',
+  dingtalkSignSecretHint: 'Fill in only when the bot’s “Security settings” use “Signed”; never echoed once saved',
+  dingtalkSignSecretPlaceholder: 'Leave blank if the bot does not use “Signed”',
+
   secretStoredHint: 'Stored ••••(leave blank to keep)',
   secretStoredPlaceholder: 'Stored ••••(blank = unchanged)',
 
@@ -74,6 +88,8 @@ export default {
   valNameRequired: 'Please enter a channel name',
   valWebhookUrlRequired: 'Please enter the Webhook URL',
   valFeishuUrlRequired: 'Please enter the Lark bot Webhook URL',
+  valWecomUrlRequired: 'Please enter the WeCom bot Webhook URL',
+  valDingtalkUrlRequired: 'Please enter the DingTalk bot Webhook URL',
   valSmtpHostRequired: 'Please enter the SMTP host',
   valPortInvalid: 'Please enter a valid port',
   valFromRequired: 'Please enter the From address',

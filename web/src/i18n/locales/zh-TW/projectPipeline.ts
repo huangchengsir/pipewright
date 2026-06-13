@@ -17,6 +17,12 @@ export default {
   pacOffHint: '開啟後,每次執行依執行分支讀取倉庫根 .pipewright.yml 驅動(缺失或非法則回退此處設定)。',
   pacToggleFailed: '切換失敗,請重試。',
 
+  // ─── PR 狀態檢查(提交狀態回寫 · Story 8-9 / FR-8-9)────────────────
+  prStatusTitle: 'PR 狀態檢查',
+  prStatusOnHint: '執行結束時依專案倉庫識別 GitHub/Gitee,經專案憑證將該 commit 的成功/失敗狀態回寫為 PR 檢查(盡力而為,失敗不影響執行)。',
+  prStatusOffHint: '開啟後,執行結束時依專案倉庫識別 GitHub/Gitee,經專案憑證將該 commit 的狀態回寫為 PR 檢查(盡力而為)。',
+  prStatusToggleFailed: '切換失敗,請重試。',
+
   // ─── 預覽倉庫設定(GitOps · 按 ref 拉取並校驗 .pipewright.yml)────────
   pacPreviewBtn: '預覽倉庫設定',
   pacPreviewTitle: '預覽倉庫設定',

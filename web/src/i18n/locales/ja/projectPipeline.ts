@@ -17,6 +17,12 @@ export default {
   pacOffHint: '有効にすると、各実行は実行ブランチのリポジトリルートの .pipewright.yml を読み込んで駆動します(ない/不正な場合はこの設定にフォールバック)。',
   pacToggleFailed: '切り替えに失敗しました。再試行してください。',
 
+  // ─── PR ステータスチェック(コミットステータス書き戻し · Story 8-9 / FR-8-9)─
+  prStatusTitle: 'PR ステータスチェック',
+  prStatusOnHint: '実行終了時にプロジェクトのリポジトリから GitHub/Gitee を識別し、プロジェクトの認証情報でそのコミットの成功/失敗ステータスを PR チェックとして書き戻します(ベストエフォート。失敗しても実行には影響しません)。',
+  prStatusOffHint: '有効にすると、実行終了時にリポジトリから GitHub/Gitee を識別し、プロジェクトの認証情報でコミットステータスを PR チェックとして書き戻します(ベストエフォート)。',
+  prStatusToggleFailed: '切り替えに失敗しました。再試行してください。',
+
   // ─── リポジトリ設定のプレビュー(GitOps · ref を指定して .pipewright.yml を取得・検証)──
   pacPreviewBtn: 'リポジトリ設定をプレビュー',
   pacPreviewTitle: 'リポジトリ設定のプレビュー',

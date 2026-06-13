@@ -1,6 +1,6 @@
 export default {
   title: 'Bóveda de credenciales',
-  desc: 'Todos los secretos se cifran con NaCl secretbox y se almacenan en esta instancia. Se enmascaran al guardarse y nunca pueden volver a leerse. Las canalizaciones los referencian por ámbito y nunca llegan a los registros ni al contexto de diagnóstico.',
+  desc: 'Todos los secretos se cifran con NaCl secretbox y se almacenan en esta instancia, enmascarados en reposo. Mostrar el texto plano es una acción explícita y auditada aquí. Las canalizaciones los referencian por ámbito y nunca llegan a los registros ni al contexto de diagnóstico.',
   addCredential: 'Añadir credencial',
 
   providerCustom: 'Propio',
@@ -36,16 +36,16 @@ export default {
   typeSshPassword: 'Contraseña SSH',
   typeRegistry: 'Registro',
 
-  maskTitle: 'Valor enmascarado (el texto plano no puede revelarse)',
+  maskTitle: 'Valor enmascarado (puedes verlo al editar)',
   maskAria: 'Enmascarado: {value}',
   allProjects: 'Todos los proyectos',
   never: 'Nunca',
   neverUsed: 'Nunca usada',
   idleTag: 'Inactiva',
 
-  copiedReference: 'Referencia copiada',
-  copyReferenceTitle: 'Copiar referencia de la credencial (ID, no texto plano)',
-  copyReferenceAria: 'Copiar la referencia de la credencial {name}',
+  revealCurrent: 'Mostrar actual',
+  hideCurrent: 'Ocultar',
+  revealFailed: 'No se pudo mostrar el secreto',
   editTitle: 'Editar {name}',
   editAria: 'Editar la credencial {name}',
   deleteTitle: 'Eliminar {name}',

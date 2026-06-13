@@ -1,6 +1,6 @@
 export default {
   title: 'Anmeldedaten-Tresor',
-  desc: 'Alle Geheimnisse werden mit NaCl secretbox verschlüsselt und auf dieser Instanz gespeichert. Sie werden beim Schreiben maskiert und können nie wieder ausgelesen werden. Pipelines referenzieren sie über den Geltungsbereich, und sie gelangen nie in Protokolle oder den Diagnosekontext.',
+  desc: 'Alle Geheimnisse werden mit NaCl secretbox verschlüsselt und auf dieser Instanz gespeichert, im Ruhezustand maskiert. Das Anzeigen von Klartext ist hier eine explizite, auditierte Aktion. Pipelines referenzieren sie über den Geltungsbereich, und sie gelangen nie in Protokolle oder den Diagnosekontext.',
   addCredential: 'Anmeldedaten hinzufügen',
 
   providerCustom: 'Eigene',
@@ -36,16 +36,16 @@ export default {
   typeSshPassword: 'SSH-Passwort',
   typeRegistry: 'Registry',
 
-  maskTitle: 'Maskierter Wert (Klartext kann nicht aufgedeckt werden)',
+  maskTitle: 'Maskierter Wert (im Bearbeiten anzeigbar)',
   maskAria: 'Maskiert: {value}',
   allProjects: 'Alle Projekte',
   never: 'Nie',
   neverUsed: 'Nie verwendet',
   idleTag: 'Inaktiv',
 
-  copiedReference: 'Referenz kopiert',
-  copyReferenceTitle: 'Anmeldedaten-Referenz kopieren (ID, kein Klartext)',
-  copyReferenceAria: 'Referenz der Anmeldedaten {name} kopieren',
+  revealCurrent: 'Aktuelles anzeigen',
+  hideCurrent: 'Verbergen',
+  revealFailed: 'Geheimnis konnte nicht angezeigt werden',
   editTitle: '{name} bearbeiten',
   editAria: 'Anmeldedaten {name} bearbeiten',
   deleteTitle: '{name} löschen',

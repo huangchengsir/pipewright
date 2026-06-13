@@ -32,6 +32,7 @@ const (
 	ActionCredentialCreate   = "credential_create"
 	ActionCredentialUpdate   = "credential_update"
 	ActionCredentialDelete   = "credential_delete"
+	ActionCredentialReveal   = "credential_reveal"
 	ActionTriggerSecretReset = "trigger_secret_reset"
 	ActionProjectCreate      = "project_create"
 	ActionProjectUpdate      = "project_update"

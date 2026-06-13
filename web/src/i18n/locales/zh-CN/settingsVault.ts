@@ -1,6 +1,6 @@
 export default {
   title: '凭据保险库',
-  desc: '所有密钥经 NaCl secretbox 加密后存于本实例,落库即掩码、写入后不可读出。流水线按作用域引用,绝不进日志或诊断上下文。',
+  desc: '所有密钥经 NaCl secretbox 加密后存于本实例,落库即掩码;查看明文需在此页显式操作并留审计。流水线按作用域引用,绝不进日志或诊断上下文。',
   addCredential: '添加凭据',
 
   providerCustom: '自建',
@@ -36,16 +36,16 @@ export default {
   typeSshPassword: 'SSH 密码',
   typeRegistry: '镜像仓库',
 
-  maskTitle: '掩码值（不可展开明文）',
+  maskTitle: '掩码值（编辑中可查看明文）',
   maskAria: '掩码: {value}',
   allProjects: '全部项目',
   never: '从未',
   neverUsed: '从未使用',
   idleTag: '闲置',
 
-  copiedReference: '已复制引用',
-  copyReferenceTitle: '复制凭据引用（ID，非明文）',
-  copyReferenceAria: '复制凭据 {name} 的引用',
+  revealCurrent: '查看当前明文',
+  hideCurrent: '隐藏明文',
+  revealFailed: '查看明文失败',
   editTitle: '编辑 {name}',
   editAria: '编辑凭据 {name}',
   deleteTitle: '删除 {name}',

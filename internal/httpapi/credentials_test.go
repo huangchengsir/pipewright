@@ -183,6 +183,49 @@ func TestPatchAndDelete(t *testing.T) {
 	assertErrCode(t, delAgain, "credential_not_found")
 }
 
+// TestRevealCredential 验证 POST /credentials/{id}/reveal 回传明文、要 CSRF、不存在 → 404。
+func TestRevealCredential(t *testing.T) {
+	srv, client, csrf := setupVaultServer(t)
+	const secret = "ghp_revealme_9876"
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/credentials", csrf,
+		`{"name":"tok","type":"git_token","scope":"s","secret":"`+secret+`"}`)
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	var created map[string]any
+	_ = json.Unmarshal(raw, &created)
+	id, _ := created["id"].(string)
+	if id == "" {
+		t.Fatalf("no id in create response: %s", raw)
+	}
+
+	// 无 CSRF → 403(写方法)。
+	noCSRF := doJSON(t, client, http.MethodPost, srv.URL+"/api/credentials/"+id+"/reveal", "", "")
+	noCSRF.Body.Close()
+	if noCSRF.StatusCode != http.StatusForbidden {
+		t.Fatalf("reveal without CSRF status = %d, want 403", noCSRF.StatusCode)
+	}
+
+	// 正常查看 → 200 + 明文。
+	revealResp := doJSON(t, client, http.MethodPost, srv.URL+"/api/credentials/"+id+"/reveal", csrf, "")
+	defer revealResp.Body.Close()
+	if revealResp.StatusCode != http.StatusOK {
+		t.Fatalf("reveal status = %d, want 200", revealResp.StatusCode)
+	}
+	var body map[string]string
+	_ = json.NewDecoder(revealResp.Body).Decode(&body)
+	if body["secret"] != secret {
+		t.Fatalf("reveal secret = %q, want %q", body["secret"], secret)
+	}
+
+	// 不存在 → 404。
+	missing := doJSON(t, client, http.MethodPost, srv.URL+"/api/credentials/nope/reveal", csrf, "")
+	defer missing.Body.Close()
+	if missing.StatusCode != http.StatusNotFound {
+		t.Fatalf("reveal missing status = %d, want 404", missing.StatusCode)
+	}
+	assertErrCode(t, missing, "credential_not_found")
+}
+
 // TestVaultUnconfiguredEndpoint 验证未配置 master key 时端点返回 503 vault_unconfigured。
 func TestVaultUnconfiguredEndpoint(t *testing.T) {
 	st := testStoreAuth(t)

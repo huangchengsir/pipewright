@@ -33,6 +33,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/promotion"
+	"github.com/huangchengsir/pipewright/internal/retention"
 	"github.com/huangchengsir/pipewright/internal/run"
 	"github.com/huangchengsir/pipewright/internal/runner"
 	"github.com/huangchengsir/pipewright/internal/target"
@@ -92,6 +93,7 @@ type options struct {
 	varGroups        library.VarGroupService
 	customNodes      library.CustomNodeService
 	artifactStore    *artifactstore.Store
+	retention        *retention.Service
 }
 
 // WithArtifactStore 注入制品库(Story 8-16):挂载产物下载端点
@@ -305,6 +307,12 @@ func WithDeploy(s deploy.Service) Option {
 // hasPassword。不传则相关端点返回 503(服务未初始化)。
 func WithNotifications(s notify.Service) Option {
 	return func(o *options) { o.notifications = s }
+}
+
+// WithRetention 注入运行数据保留服务,挂载 /api/retention/config 路由(GET auth;PUT auth + CSRF)。
+// 不传则相关端点返回 503。
+func WithRetention(s *retention.Service) Option {
+	return func(o *options) { o.retention = s }
 }
 
 // WithAnomaly 注入可配置异常检测服务(Story 6.5;FR-23),挂载 /api/anomaly/* 路由
@@ -694,6 +702,10 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 通知全局配置(外发通知默认文案语言)。
 		ar.Get("/notifications/config", makeGetNotifyConfigHandler(nf))
 		ar.Put("/notifications/config", makeSetNotifyConfigHandler(nf))
+
+		// 运行数据保留策略(全局)。GET 过 auth;PUT 写方法过 auth + CSRF。
+		ar.Get("/retention/config", makeGetRetentionConfigHandler(o.retention))
+		ar.Put("/retention/config", makeSetRetentionConfigHandler(o.retention))
 
 		ar.Get("/notifications/channels", makeListChannelsHandler(nf))
 		ar.Post("/notifications/channels", makeCreateChannelHandler(nf))

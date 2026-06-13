@@ -154,6 +154,9 @@ func New(db *sql.DB) Service {
 func (s *service) Get(ctx context.Context, projectID string) (*Config, error) {
 	cfg, err := s.load(ctx, projectID)
 	if err == nil {
+		// 给 git_source 任务预填项目绑定的仓库/分支/凭据(字段留空时)+ 卡片摘要,
+		// 使画布源节点直接展示项目源码信息(经 YAML 导入/手编保存的 source 任务常为空)。
+		s.fillSourceDefaults(ctx, projectID, &cfg.Spec)
 		return cfg, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -161,6 +164,56 @@ func (s *service) Get(ctx context.Context, projectID string) (*Config, error) {
 	}
 	// 首次访问无配置:惰性生成默认种子。
 	return s.createDefault(ctx, projectID)
+}
+
+// fillSourceDefaults 为 git_source 任务预填项目绑定的仓库/分支/凭据(仅当对应字段为空,
+// 不覆盖用户显式覆盖)并补上「仓库 · 分支」卡片摘要。展示层补全:让源节点直观显示项目源码;
+// 项目信息读取失败则静默跳过,不阻断流水线返回。
+func (s *service) fillSourceDefaults(ctx context.Context, projectID string, spec *Spec) {
+	var repoURL, branch, credID string
+	loaded := false
+	load := func() {
+		if loaded {
+			return
+		}
+		loaded = true
+		_ = s.db.QueryRowContext(ctx,
+			`SELECT repo_url, default_branch, credential_id FROM projects WHERE id = ?`, projectID,
+		).Scan(&repoURL, &branch, &credID)
+	}
+	asStr := func(v any) string { s, _ := v.(string); return strings.TrimSpace(s) }
+	for i := range spec.Stages {
+		for j := range spec.Stages[i].Jobs {
+			job := &spec.Stages[i].Jobs[j]
+			if job.Type != "git_source" {
+				continue
+			}
+			load()
+			if job.Config == nil {
+				job.Config = map[string]any{}
+			}
+			if repoURL != "" && asStr(job.Config["repoUrl"]) == "" {
+				job.Config["repoUrl"] = repoURL
+			}
+			if branch != "" && asStr(job.Config["branch"]) == "" {
+				job.Config["branch"] = branch
+			}
+			if credID != "" && asStr(job.Config["credentialId"]) == "" {
+				job.Config["credentialId"] = credID
+			}
+			if strings.TrimSpace(job.Summary) == "" {
+				b := branch
+				if b == "" {
+					b = "main"
+				}
+				if repoURL != "" {
+					job.Summary = repoURL + " · " + b
+				} else {
+					job.Summary = b + " · push/tag/PR"
+				}
+			}
+		}
+	}
 }
 
 func (s *service) Save(ctx context.Context, projectID string, spec Spec) (*Config, error) {

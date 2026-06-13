@@ -92,9 +92,6 @@ const anchorJob = computed<PipelineJob | null>(() => {
   return props.stage.jobs.length ? props.stage.jobs[props.stage.jobs.length - 1] : null
 })
 
-function addPlain(): void {
-  emit('add-job', [])
-}
 /** 串行节点:依赖锚点 job(出现在其右侧,串行其后)。 */
 function addSerial(): void {
   emit('add-job', anchorJob.value ? [anchorJob.value.id] : [])
@@ -254,12 +251,6 @@ function resetDrag(): void {
         </svg>
         {{ t('pipelineCanvas.condition') }}<span v-if="hasStageRules" class="stage-deps-count stage-deps-count--dot" aria-hidden="true"></span>
       </button>
-      <button
-        v-if="stage.kind !== 'source'"
-        class="stage-add-job"
-        :aria-label="t('pipelineCanvas.addJobAria', { name: stage.name })"
-        @click="addPlain"
-      >{{ t('pipelineCanvas.addJob') }}</button>
       <button
         v-if="stage.kind !== 'source'"
         class="stage-del"

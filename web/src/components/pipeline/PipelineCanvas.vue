@@ -441,10 +441,7 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
 .canvas-body {
   flex: 1;
   display: flex;
-  /* min-height 下限:画布上方还堆着 GitOps/PR 两条开关 bar + 下方风险面板,flex:1
-     分到的高度常被挤到只剩一两排节点高(用户反馈「画布太矮」)。给个可用下限,
-     不够时由 .tab-panel--canvas(overflow:auto)整体滚动,既不裁右侧抽屉也不裁风险面板。 */
-  min-height: 460px;
+  min-height: 0;
   overflow: hidden;
 }
 

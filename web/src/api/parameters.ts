@@ -10,6 +10,7 @@
  */
 
 import { http } from './http'
+import { t } from '../i18n'
 
 export type ParamType = 'string' | 'choice' | 'boolean' | 'number'
 
@@ -36,12 +37,17 @@ export async function saveParameters(projectId: string, parameters: ParamDef[]):
   return res.parameters ?? []
 }
 
-export const PARAM_TYPE_OPTIONS: ReadonlyArray<{ value: ParamType; label: string }> = [
-  { value: 'string', label: '文本' },
-  { value: 'choice', label: '枚举' },
-  { value: 'boolean', label: '布尔' },
-  { value: 'number', label: '数字' },
-]
+/**
+ * 参数类型下拉选项。label 经 t() 解析 → 用函数形式,使翻译在调用时求值(随语言切换更新)。
+ */
+export function paramTypeOptions(): ReadonlyArray<{ value: ParamType; label: string }> {
+  return [
+    { value: 'string', label: t('labels.paramTypeString') },
+    { value: 'choice', label: t('labels.paramTypeChoice') },
+    { value: 'boolean', label: t('labels.paramTypeBoolean') },
+    { value: 'number', label: t('labels.paramTypeNumber') },
+  ]
+}
 
 /**
  * 客户端校验「触发时填的值」是否满足定义(与后端 ResolveParams 同规则),返回首个错误信息或 ''。
@@ -52,12 +58,12 @@ export function validateParamValues(defs: readonly ParamDef[], values: Record<st
     const raw = values[d.key]
     const v = (raw ?? '').trim() !== '' ? raw : d.default
     if ((v ?? '').trim() === '') {
-      if (d.required) return `参数「${d.label}」为必填`
+      if (d.required) return t('labels.paramRequired', { label: d.label })
       continue
     }
-    if (d.type === 'number' && Number.isNaN(Number(v))) return `参数「${d.label}」须为数字`
-    if (d.type === 'boolean' && v !== 'true' && v !== 'false') return `参数「${d.label}」须为 true/false`
-    if (d.type === 'choice' && !(d.options ?? []).includes(v)) return `参数「${d.label}」不在可选项中`
+    if (d.type === 'number' && Number.isNaN(Number(v))) return t('labels.paramNotNumber', { label: d.label })
+    if (d.type === 'boolean' && v !== 'true' && v !== 'false') return t('labels.paramNotBoolean', { label: d.label })
+    if (d.type === 'choice' && !(d.options ?? []).includes(v)) return t('labels.paramNotInChoice', { label: d.label })
   }
   return ''
 }

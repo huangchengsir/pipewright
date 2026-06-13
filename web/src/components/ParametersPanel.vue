@@ -6,12 +6,12 @@
  * (key/label/type/default/options/required);手动触发弹窗据此渲染类型化控件并校验。
  * 无定义 = 触发回退自由 KV(向后兼容)。嵌于 TriggersPanel(ConcurrencyPanel 之后)。
  */
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   getParameters,
   saveParameters,
-  PARAM_TYPE_OPTIONS,
+  paramTypeOptions,
   type ParamDef,
   type ParamType,
 } from '../api/parameters'
@@ -21,7 +21,13 @@ const props = defineProps<{
   projectId: string
 }>()
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
+
+// 经组件内 locale 触发重算 → 语言切换时下拉 label 实时更新。
+const typeOptions = computed(() => {
+  void locale.value
+  return paramTypeOptions()
+})
 
 interface Row extends ParamDef {
   rid: number
@@ -147,7 +153,7 @@ watch(() => props.projectId, load)
             <label class="def-fld def-fld--type">
               <span class="def-lbl">{{ t('projectPanels.parameters.typeLabel') }}</span>
               <select v-model="row.type" class="def-input" @change="onTypeChange(row)">
-                <option v-for="opt in PARAM_TYPE_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                <option v-for="opt in typeOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
               </select>
             </label>
           </div>

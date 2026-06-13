@@ -13,6 +13,7 @@
 -->
 <script setup lang="ts">
 import { computed, ref, watch, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import {
   getDoraMetrics,
@@ -30,6 +31,7 @@ import SkeletonBlock from '../components/ui/SkeletonBlock.vue'
 
 type LoadState = 'idle' | 'loading' | 'error'
 
+const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 
@@ -38,12 +40,12 @@ const loadError = ref('')
 const data = ref<DoraMetrics | null>(null)
 const projects = ref<Project[]>([])
 
-/** 窗口选项(label 即发给后端的 window 值)。 */
-const windowOptions = [
-  { value: '7d', label: '近 7 天' },
-  { value: '30d', label: '近 30 天' },
-  { value: '90d', label: '近 90 天' },
-] as const
+/** 窗口选项(value 即发给后端的 window 值;label 为本地化展示)。 */
+const windowOptions = computed(() => [
+  { value: '7d', label: t('doraDashboard.window7d') },
+  { value: '30d', label: t('doraDashboard.window30d') },
+  { value: '90d', label: t('doraDashboard.window90d') },
+])
 
 // ─── URL as state ───────────────────────────────────────────────────────────
 
@@ -53,7 +55,7 @@ const projectId = computed<string>(() => {
 })
 const windowSel = computed<string>(() => {
   const w = route.query.window
-  return typeof w === 'string' && windowOptions.some((o) => o.value === w) ? w : '30d'
+  return typeof w === 'string' && windowOptions.value.some((o) => o.value === w) ? w : '30d'
 })
 
 function setQuery(patch: Record<string, string | undefined>): void {
@@ -98,10 +100,10 @@ async function load(): Promise<void> {
     if (err instanceof HttpError) {
       loadError.value =
         err.status === 0
-          ? '无法连接到服务器,请检查后端是否运行后重试'
-          : (err.apiError?.message ?? `加载 DORA 指标失败(${err.status})`)
+          ? t('doraDashboard.errOffline')
+          : (err.apiError?.message ?? t('doraDashboard.errLoadStatus', { status: err.status }))
     } else {
-      loadError.value = '加载 DORA 指标失败,请稍后重试'
+      loadError.value = t('doraDashboard.errLoadRetry')
     }
     loadState.value = 'error'
   }
@@ -129,26 +131,26 @@ onMounted(() => {
   <div class="dora-view">
     <header class="view-header">
       <div class="view-header__text">
-        <h1 class="view-title">DORA 指标</h1>
+        <h1 class="view-title">{{ t('doraDashboard.title') }}</h1>
         <p class="view-sub">
-          基于既有运行数据聚合的交付效能视图 · 部署频率 / 前置时长 / 变更失败率 / 故障恢复
-          <span v-if="generatedAtLabel" class="view-sub__count">· 数据截至 {{ generatedAtLabel }}</span>
+          {{ t('doraDashboard.subtitle') }}
+          <span v-if="generatedAtLabel" class="view-sub__count">{{ t('doraDashboard.generatedAt', { time: generatedAtLabel }) }}</span>
         </p>
       </div>
-      <AppButton variant="default" :loading="loadState === 'loading'" @click="load">刷新</AppButton>
+      <AppButton variant="default" :loading="loadState === 'loading'" @click="load">{{ t('common.refresh') }}</AppButton>
     </header>
 
     <!-- Controls: project filter + window segmented -->
     <div class="dora-controls">
       <label class="dora-controls__field">
-        <span class="dora-controls__label">项目</span>
-        <select class="select" :value="projectId" @change="onProjectChange" aria-label="按项目筛选">
-          <option value="">全部项目</option>
+        <span class="dora-controls__label">{{ t('doraDashboard.projectLabel') }}</span>
+        <select class="select" :value="projectId" @change="onProjectChange" :aria-label="t('doraDashboard.projectFilterAria')">
+          <option value="">{{ t('doraDashboard.allProjects') }}</option>
           <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
         </select>
       </label>
 
-      <div class="dora-segmented" role="group" aria-label="时间窗口">
+      <div class="dora-segmented" role="group" :aria-label="t('doraDashboard.windowAria')">
         <button
           v-for="opt in windowOptions"
           :key="opt.value"
@@ -166,7 +168,7 @@ onMounted(() => {
     <!-- Error -->
     <ErrorState
       v-if="loadState === 'error'"
-      title="加载 DORA 指标失败"
+      :title="t('doraDashboard.errTitle')"
       :description="loadError"
       @retry="load"
     />
@@ -186,60 +188,60 @@ onMounted(() => {
       <div class="dora-summary">
         <div class="dora-summary__stat">
           <span class="dora-summary__num">{{ data.totalDeployments }}</span>
-          <span class="dora-summary__lbl">{{ windowDaysLabel }} 天内部署</span>
+          <span class="dora-summary__lbl">{{ t('doraDashboard.summaryDeployments', { days: windowDaysLabel }) }}</span>
         </div>
         <div class="dora-summary__divider" aria-hidden="true" />
         <div class="dora-summary__stat">
           <span class="dora-summary__num dora-summary__num--ok">{{ data.successfulDeployments }}</span>
-          <span class="dora-summary__lbl">成功</span>
+          <span class="dora-summary__lbl">{{ t('doraDashboard.summarySuccess') }}</span>
         </div>
         <div class="dora-summary__stat">
           <span class="dora-summary__num dora-summary__num--bad">{{ data.failedDeployments }}</span>
-          <span class="dora-summary__lbl">失败</span>
+          <span class="dora-summary__lbl">{{ t('doraDashboard.summaryFailed') }}</span>
         </div>
       </div>
 
       <!-- 4 metric cards (bento-ish 2×2; wide screens 4-up) -->
       <div class="dora-grid">
         <DoraMetricCard
-          title="部署频率"
+          :title="t('doraDashboard.metricDeployFreq')"
           subtitle="Deployment Frequency"
           :display="formatFrequency(data.metrics.deploymentFrequency.value)"
-          :caption="`${windowDaysLabel} 天内 ${data.successfulDeployments} 次成功部署`"
+          :caption="t('doraDashboard.capDeployFreq', { days: windowDaysLabel, count: data.successfulDeployments })"
           :band="data.metrics.deploymentFrequency.band"
           :sample-count="data.metrics.deploymentFrequency.sampleCount"
           :trend="successTrend"
         />
         <DoraMetricCard
-          title="变更前置时长"
+          :title="t('doraDashboard.metricLeadTime')"
           subtitle="Lead Time for Changes"
           :display="formatDuration(data.metrics.leadTime.value)"
           :caption="
             data.metrics.leadTime.sampleCount > 0
-              ? `${data.metrics.leadTime.sampleCount} 次成功部署的中位提交→投产时长`
-              : '尚无成功部署可统计前置时长'
+              ? t('doraDashboard.capLeadTime', { count: data.metrics.leadTime.sampleCount })
+              : t('doraDashboard.capLeadTimeEmpty')
           "
           :band="data.metrics.leadTime.band"
           :sample-count="data.metrics.leadTime.sampleCount"
           :trend="deployTrend"
         />
         <DoraMetricCard
-          title="变更失败率"
+          :title="t('doraDashboard.metricCfr')"
           subtitle="Change Failure Rate"
           :display="formatPercent(data.metrics.changeFailureRate.value)"
-          :caption="`${data.failedDeployments} / ${data.totalDeployments} 次部署失败`"
+          :caption="t('doraDashboard.capCfr', { failed: data.failedDeployments, total: data.totalDeployments })"
           :band="data.metrics.changeFailureRate.band"
           :sample-count="data.metrics.changeFailureRate.sampleCount"
           :trend="cfrTrend"
         />
         <DoraMetricCard
-          title="故障恢复时长"
+          :title="t('doraDashboard.metricMttr')"
           subtitle="Time to Restore (MTTR)"
           :display="formatDuration(data.metrics.mttr.value)"
           :caption="
             data.metrics.mttr.sampleCount > 0
-              ? `${data.metrics.mttr.sampleCount} 段「失败→恢复」的中位时长`
-              : '窗口内无「失败后恢复」配对'
+              ? t('doraDashboard.capMttr', { count: data.metrics.mttr.sampleCount })
+              : t('doraDashboard.capMttrEmpty')
           "
           :band="data.metrics.mttr.band"
           :sample-count="data.metrics.mttr.sampleCount"
@@ -248,8 +250,7 @@ onMounted(() => {
       </div>
 
       <p class="dora-note">
-        口径说明:一次「部署」= 一条进入终态的运行;前置时长在缺少提交时间时以入队时刻近似。
-        DORA 指标基于 CI 运行数据为<strong>近似</strong>参考,不作 SLA 依据。
+        {{ t('doraDashboard.noteLead') }}<strong>{{ t('doraDashboard.noteEmphasis') }}</strong>{{ t('doraDashboard.noteTrail') }}
       </p>
     </template>
   </div>

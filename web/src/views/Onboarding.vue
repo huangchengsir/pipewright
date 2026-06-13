@@ -6,11 +6,13 @@
  * Skipping persists localStorage(onboarding_dismissed) and falls to /overview.
  */
 import { onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import OnboardingFlow from '../components/onboarding/OnboardingFlow.vue'
 import SkeletonBlock from '../components/ui/SkeletonBlock.vue'
 import ErrorState from '../components/ui/ErrorState.vue'
 import { useOnboardingStatus, dismissOnboarding } from '../composables/useOnboarding'
 
+const { t } = useI18n()
 const { status, loading, error, refresh } = useOnboardingStatus()
 
 onMounted(refresh)
@@ -29,7 +31,7 @@ function onSkip(): void {
     </div>
     <ErrorState
       v-else-if="error"
-      title="无法加载引导"
+      :title="t('onboarding.errorTitle')"
       :description="error"
       @retry="refresh"
     />

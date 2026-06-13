@@ -5,6 +5,7 @@
   新增容器走弹窗。每 12s 自动刷新聚合(stale-while-revalidate)。
 */
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { getAllContainers, type ServerContainers, type ContainerInfo } from '../api/containers'
 import { listServers, serviceAction, type Server, type ServiceAction } from '../api/servers'
@@ -27,6 +28,7 @@ import SystemPruneModal from '../components/ops/SystemPruneModal.vue'
 type LoadState = 'idle' | 'loading' | 'error'
 type StateFilter = 'all' | StateBucket
 
+const { t } = useI18n()
 const router = useRouter()
 const toast = useToast()
 const confirm = useConfirm()
@@ -74,13 +76,13 @@ const bucketCounts = computed(() => {
 
 interface FilterOption {
   key: StateFilter
-  label: string
+  labelKey: string
 }
 const FILTER_OPTIONS: FilterOption[] = [
-  { key: 'all', label: '全部' },
-  { key: 'running', label: '运行中' },
-  { key: 'stopped', label: '已停止' },
-  { key: 'paused', label: '已暂停' },
+  { key: 'all', labelKey: 'containers.filterAll' },
+  { key: 'running', labelKey: 'containers.filterRunning' },
+  { key: 'stopped', labelKey: 'containers.filterStopped' },
+  { key: 'paused', labelKey: 'containers.filterPaused' },
 ]
 function filterCount(key: StateFilter): number {
   return bucketCounts.value[key]
@@ -117,30 +119,32 @@ function toggleBulkMode(): void {
 
 interface BulkAction {
   action: ServiceAction
-  label: string
+  labelKey: string
   danger: boolean
 }
 const BULK_ACTIONS: BulkAction[] = [
-  { action: 'start', label: '启动', danger: false },
-  { action: 'stop', label: '停止', danger: true },
-  { action: 'restart', label: '重启', danger: true },
-  { action: 'rm', label: '删除', danger: true },
+  { action: 'start', labelKey: 'containers.actionStart', danger: false },
+  { action: 'stop', labelKey: 'containers.actionStop', danger: true },
+  { action: 'restart', labelKey: 'containers.actionRestart', danger: true },
+  { action: 'rm', labelKey: 'containers.actionDelete', danger: true },
 ]
 
-async function runBulk({ action, label, danger }: BulkAction): Promise<void> {
+async function runBulk({ action, labelKey, danger }: BulkAction): Promise<void> {
   if (selected.value.size === 0 || bulkBusy.value) return
+  const label = t(labelKey)
   const targets = [...selected.value].map((key) => {
     const i = key.indexOf('::')
     return { serverId: key.slice(0, i), name: key.slice(i + 2) }
   })
+  const n = targets.length
   if (danger) {
     const ok = await confirm.open({
-      title: `批量${label} ${targets.length} 个容器?`,
+      title: t('containers.confirmTitle', { label, n }),
       body:
         action === 'rm'
-          ? '将对所选容器执行删除(docker rm)。运行中的容器需先停止,否则会删除失败(计入失败数)。'
-          : `将对所选 ${targets.length} 个容器执行${label}操作,期间相关服务可能短暂中断。`,
-      confirmLabel: `${label} ${targets.length} 个`,
+          ? t('containers.confirmBodyRm')
+          : t('containers.confirmBodyAction', { label, n }),
+      confirmLabel: t('containers.confirmLabel', { label, n }),
       variant: 'danger',
     })
     if (!ok) return
@@ -148,7 +152,7 @@ async function runBulk({ action, label, danger }: BulkAction): Promise<void> {
   bulkBusy.value = true
   try {
     const results = await Promise.allSettled(
-      targets.map((t) => serviceAction(t.serverId, { type: 'docker', target: t.name, action })),
+      targets.map((tg) => serviceAction(tg.serverId, { type: 'docker', target: tg.name, action })),
     )
     let okCount = 0
     let failCount = 0
@@ -156,9 +160,18 @@ async function runBulk({ action, label, danger }: BulkAction): Promise<void> {
       if (r.status === 'fulfilled' && r.value.ok) okCount++
       else failCount++
     }
-    if (failCount === 0) toast.success(`批量${label}完成`, { detail: `成功 ${okCount} 个` })
-    else if (okCount === 0) toast.error(`批量${label}失败`, { detail: `失败 ${failCount} 个` })
-    else toast.warn(`批量${label}部分完成`, { detail: `成功 ${okCount} · 失败 ${failCount}` })
+    if (failCount === 0)
+      toast.success(t('containers.toastDone', { label }), {
+        detail: t('containers.toastDoneDetail', { n: okCount }),
+      })
+    else if (okCount === 0)
+      toast.error(t('containers.toastFail', { label }), {
+        detail: t('containers.toastFailDetail', { n: failCount }),
+      })
+    else
+      toast.warn(t('containers.toastPartial', { label }), {
+        detail: t('containers.toastPartialDetail', { ok: okCount, fail: failCount }),
+      })
     clearSelection()
     await load()
   } finally {
@@ -193,7 +206,7 @@ function openTerminal(serverId: string, c: ContainerInfo): void {
 
 // AI 助手抽屉。
 const showAi = ref(false)
-const aiContext = { os: 'linux', shell: '/bin/sh', container: '(docker 主机)' }
+const aiContext = { os: 'linux', shell: '/bin/sh', container: t('containers.aiContextContainer') }
 
 // AI 诊断弹窗。
 const diagnoseTarget = ref<{ serverId: string; name: string } | null>(null)
@@ -227,10 +240,10 @@ async function load(): Promise<void> {
     if (err instanceof HttpError) {
       loadError.value =
         err.status === 0
-          ? '无法连接到服务器,请检查后端是否运行后重试'
-          : (err.apiError?.message ?? `加载容器列表失败(${err.status})`)
+          ? t('containers.errConnect')
+          : (err.apiError?.message ?? t('containers.errLoadStatus', { status: err.status }))
     } else {
-      loadError.value = '加载容器列表失败,请稍后重试'
+      loadError.value = t('containers.errLoadRetry')
     }
     loadState.value = 'error'
   } finally {
@@ -251,34 +264,34 @@ onUnmounted(() => {
   <div class="containers-view">
     <header class="view-header">
       <div class="view-header__text">
-        <h1 class="view-title">容器</h1>
+        <h1 class="view-title">{{ t('containers.title') }}</h1>
         <p class="view-sub">
-          跨所有已登记服务器,按主机管理容器与镜像
+          {{ t('containers.subtitle') }}
           <span v-if="totalContainers > 0" class="view-sub__count">
-            · 共 {{ totalContainers }} 个容器 · {{ runningContainers }} 运行中
+            {{ t('containers.countSummary', { total: totalContainers, running: runningContainers }) }}
           </span>
-          <span class="view-sub__count">· 每 12 秒自动刷新</span>
+          <span class="view-sub__count">{{ t('containers.autoRefresh', { n: POLL_MS / 1000 }) }}</span>
         </p>
       </div>
       <div class="header-actions">
-        <AppButton variant="ai" @click="showAi = true">✦ AI 助手</AppButton>
+        <AppButton variant="ai" @click="showAi = true">{{ t('containers.aiAssistant') }}</AppButton>
         <AppButton variant="default" :disabled="creatableServers.length === 0" @click="showPrune = true">
-          🧹 清理
+          {{ t('containers.prune') }}
         </AppButton>
         <AppButton :variant="bulkMode ? 'primary' : 'default'" @click="toggleBulkMode">
-          {{ bulkMode ? '退出批量' : '批量' }}
+          {{ bulkMode ? t('containers.bulkExit') : t('containers.bulkEnter') }}
         </AppButton>
         <AppButton variant="primary" :disabled="creatableServers.length === 0" @click="showCreate = true">
-          + 新增容器
+          {{ t('containers.create') }}
         </AppButton>
         <AppButton variant="default" :loading="loadState === 'loading' && groups.length === 0" @click="load">
-          刷新
+          {{ t('common.refresh') }}
         </AppButton>
       </div>
     </header>
 
     <!-- 首屏骨架 -->
-    <div v-if="loadState === 'loading' && groups.length === 0" class="skeletons" aria-busy="true" aria-label="正在加载容器列表">
+    <div v-if="loadState === 'loading' && groups.length === 0" class="skeletons" aria-busy="true" :aria-label="t('containers.loadingAria')">
       <div v-for="n in 2" :key="n" class="skeleton-panel">
         <SkeletonBlock :height="20" width="40%" />
         <SkeletonBlock :height="48" width="100%" />
@@ -288,41 +301,41 @@ onUnmounted(() => {
 
     <ErrorState
       v-else-if="loadState === 'error' && groups.length === 0"
-      title="加载容器列表失败"
+      :title="t('containers.errTitle')"
       :description="loadError"
       @retry="load"
     />
 
     <EmptyState
       v-else-if="groups.length === 0"
-      title="尚无已登记服务器"
-      description="先在「设置 › 服务器」登记目标服务器,这里就会汇总它们上面的容器与镜像。"
+      :title="t('containers.emptyTitle')"
+      :description="t('containers.emptyDesc')"
     />
 
     <template v-else>
       <!-- 聚合 KPI 条 -->
-      <section class="kpi-strip" aria-label="容器聚合统计">
+      <section class="kpi-strip" :aria-label="t('containers.kpiStripAria')">
         <div class="kpi kpi--total">
           <span class="kpi__num">{{ totalContainers }}</span>
-          <span class="kpi__label">容器总数</span>
+          <span class="kpi__label">{{ t('containers.kpiTotal') }}</span>
         </div>
         <div class="kpi kpi--running">
           <span class="kpi__num">{{ runningContainers }}</span>
-          <span class="kpi__label">运行中</span>
+          <span class="kpi__label">{{ t('containers.kpiRunning') }}</span>
         </div>
         <div class="kpi kpi--stopped">
           <span class="kpi__num">{{ stoppedContainers }}</span>
-          <span class="kpi__label">已停止</span>
+          <span class="kpi__label">{{ t('containers.kpiStopped') }}</span>
         </div>
         <div class="kpi kpi--hosts">
           <span class="kpi__num">{{ coveredServers }}<span class="kpi__den">/{{ groups.length }}</span></span>
-          <span class="kpi__label">有容器的服务器</span>
+          <span class="kpi__label">{{ t('containers.kpiHosts') }}</span>
         </div>
       </section>
 
       <!-- 状态筛选段 + 文本搜索(均作用于各卡片的容器 tab) -->
       <div class="controls-row">
-        <div class="filter-bar" role="group" aria-label="按状态筛选容器">
+        <div class="filter-bar" role="group" :aria-label="t('containers.filterAria')">
           <button
             v-for="f in FILTER_OPTIONS"
             :key="f.key"
@@ -331,7 +344,7 @@ onUnmounted(() => {
             :aria-pressed="stateFilter === f.key"
             @click="stateFilter = f.key"
           >
-            {{ f.label }}
+            {{ t(f.labelKey) }}
             <span class="filter-chip__count">{{ filterCount(f.key) }}</span>
           </button>
         </div>
@@ -340,16 +353,16 @@ onUnmounted(() => {
             v-model="searchText"
             type="search"
             class="search-box__input"
-            placeholder="按名字 / 镜像搜索容器"
-            aria-label="按名字或镜像搜索容器"
+            :placeholder="t('containers.searchPlaceholder')"
+            :aria-label="t('containers.searchAria')"
           />
-          <button v-if="searchText" class="search-box__clear" title="清除搜索" @click="searchText = ''">✕</button>
+          <button v-if="searchText" class="search-box__clear" :title="t('containers.searchClear')" @click="searchText = ''">✕</button>
         </div>
       </div>
 
       <!-- 批量操作条 -->
-      <div v-if="bulkMode" class="bulk-bar" role="group" aria-label="批量操作">
-        <span class="bulk-bar__count">已选 <strong>{{ selectedCount }}</strong> 个</span>
+      <div v-if="bulkMode" class="bulk-bar" role="group" :aria-label="t('containers.bulkAria')">
+        <span class="bulk-bar__count">{{ t('containers.bulkSelected') }} <strong>{{ selectedCount }}</strong> {{ t('containers.bulkSelectedUnit') }}</span>
         <div class="bulk-bar__actions">
           <button
             v-for="a in BULK_ACTIONS"
@@ -359,16 +372,16 @@ onUnmounted(() => {
             :disabled="selectedCount === 0 || bulkBusy"
             @click="runBulk(a)"
           >
-            {{ a.label }}
+            {{ t(a.labelKey) }}
           </button>
           <button class="bulk-btn bulk-btn--ghost" :disabled="selectedCount === 0 || bulkBusy" @click="clearSelection">
-            清空所选
+            {{ t('containers.bulkClear') }}
           </button>
         </div>
       </div>
 
       <!-- 逐台卡片(卡片内自带 容器/镜像 tab) -->
-      <section class="cards" :aria-busy="refreshing || undefined">
+      <section class="cards" :aria-label="t('containers.cardsAria')" :aria-busy="refreshing || undefined">
         <ServerCard
           v-for="g in groups"
           :key="g.serverId"

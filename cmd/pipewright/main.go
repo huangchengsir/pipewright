@@ -337,20 +337,24 @@ func main() {
 		} else {
 			log.Printf("[run] DAG 调度执行器已启用(默认;阶段按 needs 编排,真按 UI 可视化流水线 stages 执行;⚠ 未探测到容器 CLI,阶段执行体回退 stub:%v;PIPEWRIGHT_RUNNER=legacy 可回退旧版固定流程)", berr)
 		}
-		// 「流水线即代码」运行时覆盖(FR-8-12):PIPEWRIGHT_PAC_RUNTIME=1 时,用装饰器包住库内
-		// loader——运行时若项目仓库根含合法 `.pipewright.yml` 即用它驱动本次运行,否则一律回退库内
-		// 配置(任何 YAML/拉取问题都不中断运行)。SpecLoader 现已带运行分支,故按**本次运行分支**
-		// 拉取(空分支退化默认分支);库内 pipeline.Service(分支无关)经 dagrun.SpecLoaderFunc
-		// 适配进 branch 感知契约,其 2 参公有签名不变(其它调用方不受影响)。
-		var specLoader dagrun.SpecLoader = dagrun.SpecLoaderFunc(pipelineSvc.Get)
-		if strings.EqualFold(strings.TrimSpace(os.Getenv("PIPEWRIGHT_PAC_RUNTIME")), "1") {
-			specLoader = pacloader.New(
-				pipelineSvc,
-				pacProjectLookup{projectSvc},
-				credVault, // vault.Vault 满足 TokenRevealer(Reveal)
-				pacBlobFetcher{httpapi.NewSourceReader()},
-			)
-			log.Printf("[pac] 运行时 .pipewright.yml 覆盖已启用(PIPEWRIGHT_PAC_RUNTIME=1;按本次运行分支拉取,空分支退化默认分支;任何问题回退库内配置)")
+		// 「流水线即代码」运行时覆盖(FR-8-12):装饰器包住库内 loader——运行时若项目**开启了
+		// 流水线即代码**(每项目开关 projects.pac_enabled)且仓库根含合法 `.pipewright.yml`,即用它
+		// 驱动本次运行,否则一律回退库内配置(任何 YAML/拉取问题都不中断运行)。SpecLoader 现已带运行
+		// 分支,故按**本次运行分支**拉取(空分支退化默认分支);库内 pipeline.Service(分支无关)经
+		// dagrun.SpecLoaderFunc 适配进 branch 感知契约,其 2 参公有签名不变(其它调用方不受影响)。
+		//
+		// 装饰器始终挂载(每项目开关默认关 → 老项目行为不变,无需服务端 env)。历史全局开关
+		// PIPEWRIGHT_PAC_RUNTIME=1 保留为**全局强开**:无视每项目开关,对所有项目尝试覆盖。
+		pacGlobalOverride := strings.EqualFold(strings.TrimSpace(os.Getenv("PIPEWRIGHT_PAC_RUNTIME")), "1")
+		var specLoader dagrun.SpecLoader = pacloader.New(
+			pipelineSvc,
+			pacProjectLookup{projectSvc},
+			credVault, // vault.Vault 满足 TokenRevealer(Reveal)
+			pacBlobFetcher{httpapi.NewSourceReader()},
+			pacGlobalOverride,
+		)
+		if pacGlobalOverride {
+			log.Printf("[pac] 全局强开:.pipewright.yml 覆盖对所有项目生效(PIPEWRIGHT_PAC_RUNTIME=1;无视每项目开关)")
 		}
 		runnerOpts = []run.PoolOption{run.WithRunner(dagrun.New(specLoader, dagOpts...))}
 	}
@@ -506,6 +510,7 @@ func (p pacProjectLookup) Lookup(ctx context.Context, projectID string) (pacload
 		RepoURL:       proj.RepoURL,
 		CredentialID:  proj.CredentialID,
 		DefaultBranch: proj.DefaultBranch,
+		PacEnabled:    proj.PacEnabled,
 	}, nil
 }
 

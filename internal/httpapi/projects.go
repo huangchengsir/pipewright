@@ -21,6 +21,7 @@ type projectDTO struct {
 	DefaultBranch  string   `json:"defaultBranch"`
 	CredentialID   string   `json:"credentialId"`
 	CredentialName string   `json:"credentialName"`
+	PacEnabled     bool     `json:"pacEnabled"`
 	LastRunStatus  *string  `json:"lastRunStatus"`
 	TargetServers  []string `json:"targetServers"`
 	CreatedAt      string   `json:"createdAt"`
@@ -36,6 +37,7 @@ func toProjectDTO(p *project.Project) projectDTO {
 		DefaultBranch:  p.DefaultBranch,
 		CredentialID:   p.CredentialID,
 		CredentialName: p.CredentialName,
+		PacEnabled:     p.PacEnabled,
 		LastRunStatus:  nil,        // 本期占位:尚无运行
 		TargetServers:  []string{}, // 本期占位:空集合
 		CreatedAt:      p.CreatedAt.UTC().Format(time.RFC3339),
@@ -163,6 +165,7 @@ func makeUpdateProjectHandler(svc project.Service, aud audit.Recorder) http.Hand
 			Name          *string `json:"name"`
 			DefaultBranch *string `json:"defaultBranch"`
 			CredentialID  *string `json:"credentialId"`
+			PacEnabled    *bool   `json:"pacEnabled"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
@@ -172,6 +175,7 @@ func makeUpdateProjectHandler(svc project.Service, aud audit.Recorder) http.Hand
 			Name:          req.Name,
 			DefaultBranch: req.DefaultBranch,
 			CredentialID:  req.CredentialID,
+			PacEnabled:    req.PacEnabled,
 		})
 		if err != nil {
 			writeProjectError(w, err)

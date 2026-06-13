@@ -30,6 +30,12 @@ export interface Project {
   credentialId: string
   /** Masked display name from the vault — never plaintext. */
   credentialName: string
+  /**
+   * Pipeline-as-code (GitOps) toggle. When true, each run reads `.pipewright.yml`
+   * from the run's branch in the repo and uses it to drive the run (falling back
+   * to the stored UI pipeline if the file is missing or invalid). FR-8-12.
+   */
+  pacEnabled: boolean
   /** null until pipeline runs exist (Story 2.x). */
   lastRunStatus: RunStatus | null
   /** Empty until servers are bound (Story 2.x). */
@@ -50,6 +56,8 @@ export interface UpdateProjectInput {
   name?: string
   defaultBranch?: string
   credentialId?: string
+  /** Toggle pipeline-as-code (GitOps) for this project. */
+  pacEnabled?: boolean
 }
 
 export interface TestCloneResult {

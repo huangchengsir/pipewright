@@ -1,0 +1,17 @@
+package i18n
+
+// Terminal WS close-reason strings. These are sent as WebSocket close frames
+// (not via writeError), so they can't go through the locale middleware; the WS
+// handler resolves the locale from the `?locale=` query param (the browser can't
+// set custom headers on a WS upgrade) with Accept-Language as fallback, then
+// translates here. Authored in zh-CN at the call site (humanTerminalError).
+func init() {
+	register(map[string]map[string]string{
+		"SSH 认证失败:密钥或口令无效,或无登录权限":      {"zh-TW": "SSH 認證失敗:金鑰或密碼無效,或無登入權限", "en": "SSH authentication failed: invalid key or password, or no login permission", "ja": "SSH 認証に失敗しました:鍵またはパスワードが無効か、ログイン権限がありません", "ko": "SSH 인증 실패: 키 또는 비밀번호가 잘못되었거나 로그인 권한이 없습니다", "es": "Error de autenticación SSH: clave o contraseña no válida, o sin permiso de inicio de sesión", "fr": "Échec de l'authentification SSH : clé ou mot de passe non valide, ou aucune autorisation de connexion", "de": "SSH-Authentifizierung fehlgeschlagen: Schlüssel oder Passwort ungültig oder keine Anmeldeberechtigung"},
+		"无法连接服务器:端口未开放、主机不可达或超时":       {"zh-TW": "無法連接伺服器:連接埠未開放、主機不可達或逾時", "en": "Cannot connect to server: port closed, host unreachable, or timed out", "ja": "サーバーに接続できません:ポートが開いていない、ホストに到達できない、またはタイムアウトしました", "ko": "서버에 연결할 수 없습니다: 포트가 닫혀 있거나 호스트에 도달할 수 없거나 시간이 초과되었습니다", "es": "No se puede conectar al servidor: puerto cerrado, host inalcanzable o tiempo de espera agotado", "fr": "Impossible de se connecter au serveur : port fermé, hôte injoignable ou délai dépassé", "de": "Verbindung zum Server nicht möglich: Port geschlossen, Host nicht erreichbar oder Zeitüberschreitung"},
+		"凭据不是可用的 SSH 私钥或口令":            {"zh-TW": "憑據不是可用的 SSH 私鑰或密碼", "en": "Credential is not a usable SSH private key or password", "ja": "認証情報が有効な SSH 秘密鍵またはパスワードではありません", "ko": "자격 증명이 사용 가능한 SSH 개인 키 또는 비밀번호가 아닙니다", "es": "La credencial no es una clave privada SSH ni una contraseña utilizable", "fr": "L'identifiant n'est pas une clé privée SSH ou un mot de passe utilisable", "de": "Anmeldedaten sind kein verwendbarer privater SSH-Schlüssel oder Passwort"},
+		"保险库未配置 master key,无法取 SSH 凭据": {"zh-TW": "保險庫未配置 master key,無法取 SSH 憑據", "en": "Vault has no master key configured; cannot retrieve SSH credential", "ja": "Vault に master key が設定されていないため、SSH 認証情報を取得できません", "ko": "Vault에 master key가 구성되지 않아 SSH 자격 증명을 가져올 수 없습니다", "es": "El almacén no tiene una master key configurada; no se puede obtener la credencial SSH", "fr": "Le coffre-fort n'a pas de master key configurée ; impossible de récupérer l'identifiant SSH", "de": "Im Tresor ist kein Master Key konfiguriert; SSH-Anmeldedaten können nicht abgerufen werden"},
+		"引用的 SSH 凭据不存在":                {"zh-TW": "引用的 SSH 憑據不存在", "en": "The referenced SSH credential does not exist", "ja": "参照された SSH 認証情報が存在しません", "ko": "참조된 SSH 자격 증명이 존재하지 않습니다", "es": "La credencial SSH referenciada no existe", "fr": "L'identifiant SSH référencé n'existe pas", "de": "Die referenzierten SSH-Anmeldedaten existieren nicht"},
+		"打开容器终端失败:连接或命令执行错误":           {"zh-TW": "開啟容器終端失敗:連接或命令執行錯誤", "en": "Failed to open the terminal: connection or command execution error", "ja": "ターミナルを開けませんでした:接続またはコマンド実行のエラーです", "ko": "터미널을 열지 못했습니다: 연결 또는 명령 실행 오류", "es": "No se pudo abrir la terminal: error de conexión o de ejecución del comando", "fr": "Impossible d'ouvrir le terminal : erreur de connexion ou d'exécution de commande", "de": "Terminal konnte nicht geöffnet werden: Verbindungs- oder Befehlsausführungsfehler"},
+	})
+}

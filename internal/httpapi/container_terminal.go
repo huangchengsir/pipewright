@@ -13,6 +13,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
 	"github.com/huangchengsir/pipewright/internal/audit"
+	"github.com/huangchengsir/pipewright/internal/i18n"
 	"github.com/huangchengsir/pipewright/internal/target"
 )
 
@@ -126,7 +127,7 @@ func makeContainerTerminalHandler(svc target.Service, aud audit.Recorder) http.H
 
 		sess, err := svc.ExecInteractive(sessCtx, id, cmd)
 		if err != nil {
-			_ = conn.Close(websocket.StatusInternalError, truncateWSReason(humanTerminalError(err)))
+			_ = conn.Close(websocket.StatusInternalError, truncateWSReason(humanTerminalError(terminalLocale(r), err)))
 			return
 		}
 		defer func() { _ = sess.Close() }()
@@ -192,7 +193,7 @@ func makeServerTerminalHandler(svc target.Service, aud audit.Recorder) http.Hand
 		// 主机 shell:cmd 仅为 [shell](array,无拼接)。
 		sess, err := svc.ExecInteractive(sessCtx, id, []string{shell})
 		if err != nil {
-			_ = conn.Close(websocket.StatusInternalError, truncateWSReason(humanTerminalError(err)))
+			_ = conn.Close(websocket.StatusInternalError, truncateWSReason(humanTerminalError(terminalLocale(r), err)))
 			return
 		}
 		defer func() { _ = sess.Close() }()
@@ -289,22 +290,35 @@ func parseResize(data []byte) (cols, rows int, ok bool) {
 	return m.Cols, m.Rows, true
 }
 
+// terminalLocale 解析 WS 终端的语言:浏览器无法在 WS 升级请求上设自定义头
+// (X-Pipewright-Locale),故前端以 `?locale=` 查询参数携带当前界面语言;缺省时
+// 回退到 Accept-Language(WS 升级仍带此头),再回退到默认语言。
+func terminalLocale(r *http.Request) string {
+	if loc := i18n.Normalize(r.URL.Query().Get("locale")); loc != "" {
+		return loc
+	}
+	return i18n.FromHeaders("", r.Header.Get("Accept-Language"))
+}
+
 // humanTerminalError 把领域错误映射为人读 WS 关闭原因(绝不含凭据明文/内部栈)。
-func humanTerminalError(err error) string {
+// 源串以 zh-CN 书写,按 lang 经 i18n 目录翻译(目录未命中则原样返回)。
+func humanTerminalError(lang string, err error) string {
+	var msg string
 	switch {
 	case errors.Is(err, target.ErrAuth):
-		return "SSH 认证失败:密钥或口令无效,或无登录权限"
+		msg = "SSH 认证失败:密钥或口令无效,或无登录权限"
 	case errors.Is(err, target.ErrUnreachable):
-		return "无法连接服务器:端口未开放、主机不可达或超时"
+		msg = "无法连接服务器:端口未开放、主机不可达或超时"
 	case errors.Is(err, target.ErrInvalidCredential):
-		return "凭据不是可用的 SSH 私钥或口令"
+		msg = "凭据不是可用的 SSH 私钥或口令"
 	case errors.Is(err, target.ErrVaultUnconfigured):
-		return "保险库未配置 master key,无法取 SSH 凭据"
+		msg = "保险库未配置 master key,无法取 SSH 凭据"
 	case errors.Is(err, target.ErrCredentialNotFound):
-		return "引用的 SSH 凭据不存在"
+		msg = "引用的 SSH 凭据不存在"
 	default:
-		return "打开容器终端失败:连接或命令执行错误"
+		msg = "打开容器终端失败:连接或命令执行错误"
 	}
+	return i18n.T(lang, msg)
 }
 
 // originPatterns 计算同源放行清单:仅放行请求自身的 Host(同源)。

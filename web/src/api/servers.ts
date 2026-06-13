@@ -15,7 +15,7 @@
  */
 
 import { http } from './http'
-import { t } from '../i18n'
+import { t, currentLocale } from '../i18n'
 
 export interface Server {
   id: string
@@ -395,11 +395,24 @@ export function openContainerTerminal(
   handlers: TerminalHandlers,
   shell?: TerminalShell,
 ): TerminalConnection {
-  const qs = shell ? `?shell=${encodeURIComponent(shell)}` : ''
+  const qs = terminalQuery(shell)
   return openTerminalWS(
     `/api/servers/${serverId}/containers/${encodeURIComponent(containerId)}/terminal${qs}`,
     handlers,
   )
+}
+
+/**
+ * Build the terminal WS query string. Carries the active UI locale so the server
+ * can localize WS close-reason messages — the browser can't set custom headers on
+ * a WS upgrade, so locale travels as a query param (Accept-Language is the
+ * server-side fallback).
+ */
+function terminalQuery(shell?: TerminalShell): string {
+  const qs = new URLSearchParams()
+  if (shell) qs.set('shell', shell)
+  qs.set('locale', currentLocale())
+  return `?${qs.toString()}`
 }
 
 /**
@@ -413,7 +426,7 @@ export function openServerTerminal(
   handlers: TerminalHandlers,
   shell?: TerminalShell,
 ): TerminalConnection {
-  const qs = shell ? `?shell=${encodeURIComponent(shell)}` : ''
+  const qs = terminalQuery(shell)
   return openTerminalWS(`/api/servers/${serverId}/terminal${qs}`, handlers)
 }
 

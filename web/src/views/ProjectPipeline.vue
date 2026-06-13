@@ -781,9 +781,16 @@ async function togglePrStatus(next: boolean): Promise<void> {
    * overflow:auto/hidden 的滚动真正生效。
    *
    * 底部只留一小段呼吸位(而非整段 --main-pad-bottom):编辑器是全幅工作面板,把原本
-   * ~90px 的底部留白还给画布,缓解「画布高度太窄」。顶部仍减 --main-pad-top 对齐父内边距。
+   * ~90px 的底部留白还给画布,缓解「画布高度太窄」。
+   *
+   * ⚠ 两处必须对齐父内边距,否则编辑器比视口高、整页滚动、底部风险面板划不到/被截:
+   *  ① 顶部减 .main-inner 的**完整** padding-top = calc(--main-pad-top + 38px)(见 AppShell);
+   *     原来只减了 --main-pad-top,漏掉 38px。
+   *  ② 用负 margin-bottom 收掉 .main-inner 的 padding-bottom(--main-pad-bottom,默认 90px,
+   *     是给普通页准备的),只留 20px 呼吸位 —— 否则那 90px 叠在定高面板下方又把文档顶出视口。
    */
-  height: calc(100vh - var(--main-pad-top) - 20px);
+  height: calc(100vh - var(--main-pad-top) - 38px - 20px);
+  margin-bottom: calc(20px - var(--main-pad-bottom));
   min-height: 0;
   gap: 0;
 }
@@ -1101,9 +1108,6 @@ async function togglePrStatus(next: boolean): Promise<void> {
 .tab-panel--canvas {
   display: flex;
   flex-direction: column;
-  /* 画布有 min-height 下限(见 PipelineCanvas .canvas-body);视口不够高时整个画布 tab
-     纵向滚动,而不是裁掉下方「AI 脚本风险标注」面板或把画布压扁。 */
-  overflow: auto;
 }
 
 /* Non-canvas panels: scrollable with standard padding */

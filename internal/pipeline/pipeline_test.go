@@ -355,3 +355,66 @@ func TestRenderYAMLDeterministic(t *testing.T) {
 		t.Fatalf("yaml 渲染应确定性:\n%q\nvs\n%q", a, b)
 	}
 }
+
+// TestGetFillsSourceDefaults 验证:git_source 任务 config 为空时,Get 用项目绑定的
+// 仓库/分支/凭据预填(展示用),并补「仓库 · 分支」摘要(修复源节点不显示源码信息)。
+func TestGetFillsSourceDefaults(t *testing.T) {
+	svc, db, projID := newSvc(t)
+	var credID string
+	if err := db.QueryRow(`SELECT credential_id FROM projects WHERE id = ?`, projID).Scan(&credID); err != nil {
+		t.Fatalf("read project cred: %v", err)
+	}
+	// 存一条 source 任务 config/summary 全空的流水线。
+	spec := Spec{Stages: []Stage{
+		{Name: "源码", Kind: KindSource, Jobs: []Job{
+			{Name: "拉取", Type: "git_source", Config: map[string]any{}},
+		}},
+	}}
+	if _, err := svc.Save(context.Background(), projID, spec); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	cfg, err := svc.Get(context.Background(), projID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	job := cfg.Spec.Stages[0].Jobs[0]
+	if got, _ := job.Config["repoUrl"].(string); got != "https://gitee.com/acme/shop.git" {
+		t.Fatalf("repoUrl 未预填项目仓库, got %q", got)
+	}
+	if got, _ := job.Config["branch"].(string); got != "main" {
+		t.Fatalf("branch 未预填项目默认分支, got %q", got)
+	}
+	if got, _ := job.Config["credentialId"].(string); got != credID {
+		t.Fatalf("credentialId 未预填项目凭据, got %q want %q", got, credID)
+	}
+	if !strings.Contains(job.Summary, "gitee.com/acme/shop.git") || !strings.Contains(job.Summary, "main") {
+		t.Fatalf("summary 应含仓库 · 分支, got %q", job.Summary)
+	}
+}
+
+// TestGetDoesNotOverrideExplicitSource 验证:用户显式填了仓库/分支时,Get 不覆盖。
+func TestGetDoesNotOverrideExplicitSource(t *testing.T) {
+	svc, _, projID := newSvc(t)
+	spec := Spec{Stages: []Stage{
+		{Name: "源码", Kind: KindSource, Jobs: []Job{
+			{Name: "拉取", Type: "git_source", Config: map[string]any{
+				"repoUrl": "https://gitee.com/other/repo.git",
+				"branch":  "dev",
+			}},
+		}},
+	}}
+	if _, err := svc.Save(context.Background(), projID, spec); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	cfg, err := svc.Get(context.Background(), projID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	job := cfg.Spec.Stages[0].Jobs[0]
+	if got, _ := job.Config["repoUrl"].(string); got != "https://gitee.com/other/repo.git" {
+		t.Fatalf("显式 repoUrl 被覆盖, got %q", got)
+	}
+	if got, _ := job.Config["branch"].(string); got != "dev" {
+		t.Fatalf("显式 branch 被覆盖, got %q", got)
+	}
+}

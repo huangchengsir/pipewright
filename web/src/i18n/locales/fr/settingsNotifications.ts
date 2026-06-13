@@ -1,4 +1,8 @@
 export default {
+  langTitle: 'Langue des notifications',
+  langDesc: 'Langue du contenu par défaut des notifications sortantes (Lark/e-mail), indépendante de la langue de l’interface.',
+  langSaved: 'Langue des notifications enregistrée',
+  langSaveFailed: 'Échec de l’enregistrement de la langue des notifications',
   typeWebhookDesc: 'HTTP POST personnalisé',
   typeEmailLabel: 'E-mail',
   typeEmailDesc: 'Envoi SMTP',

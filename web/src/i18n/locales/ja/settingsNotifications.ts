@@ -1,4 +1,8 @@
 export default {
+  langTitle: '通知の言語',
+  langDesc: '送信通知(Lark/メールなど)の既定文面の言語。UI 言語とは独立しています。',
+  langSaved: '通知の言語を保存しました',
+  langSaveFailed: '通知の言語の保存に失敗しました',
   typeWebhookDesc: 'カスタム HTTP POST',
   typeEmailLabel: 'メール',
   typeEmailDesc: 'SMTP 送信',

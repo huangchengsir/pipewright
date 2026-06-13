@@ -686,6 +686,10 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// GET(列表/详情)过 auth;POST/PUT/DELETE/test 为写方法,过 auth + CSRF。
 		// 敏感字段(SMTP 密码)加密入库、响应仅 hasPassword。test 须在 {id} 路由内单独注册。
 		nf := o.notifications
+		// 通知全局配置(外发通知默认文案语言)。
+		ar.Get("/notifications/config", makeGetNotifyConfigHandler(nf))
+		ar.Put("/notifications/config", makeSetNotifyConfigHandler(nf))
+
 		ar.Get("/notifications/channels", makeListChannelsHandler(nf))
 		ar.Post("/notifications/channels", makeCreateChannelHandler(nf))
 		ar.Get("/notifications/channels/{id}", makeGetChannelHandler(nf))

@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/huangchengsir/pipewright/internal/i18n"
 )
 
 // 飞书自定义机器人投递。
@@ -172,24 +174,24 @@ func (s *service) sendFeishu(ctx context.Context, ch *Channel, sealed []byte, pa
 var feishuFieldOrder = []string{"project", "branch", "commit", "status", "duration", "event"}
 
 // feishuFieldLabel 字段 key → 中文标签(卡片里展示更友好)。未知 key 原样用 key。
-func feishuFieldLabel(key string) string {
+func feishuFieldLabel(key, lang string) string {
 	switch key {
 	case "project":
-		return "项目"
+		return i18n.T(lang, "项目")
 	case "branch":
-		return "分支"
+		return i18n.T(lang, "分支")
 	case "commit":
-		return "提交"
+		return i18n.T(lang, "提交")
 	case "status":
-		return "状态"
+		return i18n.T(lang, "状态")
 	case "duration":
-		return "耗时"
+		return i18n.T(lang, "耗时")
 	case "event":
-		return "事件"
+		return i18n.T(lang, "事件")
 	case "source":
-		return "来源"
+		return i18n.T(lang, "来源")
 	case "kind":
-		return "类型"
+		return i18n.T(lang, "类型")
 	default:
 		return key
 	}
@@ -199,7 +201,7 @@ func feishuFieldLabel(key string) string {
 func feishuCardFor(p Payload) feishuCard {
 	title := strings.TrimSpace(p.Title)
 	if title == "" {
-		title = "Pipewright 通知"
+		title = i18n.T(p.Lang, "Pipewright 通知")
 	}
 
 	card := feishuCard{
@@ -219,7 +221,7 @@ func feishuCardFor(p Payload) feishuCard {
 	}
 
 	// 字段双列(lark_md,每格 **标签**\n值)。按业务顺序排,稳定不抖动。
-	if fields := feishuOrderedFields(p.Fields); len(fields) > 0 {
+	if fields := feishuOrderedFields(p.Fields, p.Lang); len(fields) > 0 {
 		card.Elements = append(card.Elements, feishuCardElem{
 			Tag:    "div",
 			Fields: fields,
@@ -230,14 +232,14 @@ func feishuCardFor(p Payload) feishuCard {
 	if len(card.Elements) == 0 {
 		card.Elements = append(card.Elements, feishuCardElem{
 			Tag:  "div",
-			Text: &feishuCardText{Tag: "lark_md", Content: "(空通知)"},
+			Text: &feishuCardText{Tag: "lark_md", Content: i18n.T(p.Lang, "(空通知)")},
 		})
 	}
 	return card
 }
 
 // feishuOrderedFields 把 Payload.Fields 渲染成双列卡片字段格(业务顺序优先,稳定)。
-func feishuOrderedFields(fields map[string]string) []feishuCardField {
+func feishuOrderedFields(fields map[string]string, lang string) []feishuCardField {
 	if len(fields) == 0 {
 		return nil
 	}
@@ -266,7 +268,7 @@ func feishuOrderedFields(fields map[string]string) []feishuCardField {
 			IsShort: true, // 半宽 → 两两并排成双列
 			Text: feishuCardText{
 				Tag:     "lark_md",
-				Content: "**" + feishuFieldLabel(k) + "**\n" + fields[k],
+				Content: "**" + feishuFieldLabel(k, lang) + "**\n" + fields[k],
 			},
 		})
 	}

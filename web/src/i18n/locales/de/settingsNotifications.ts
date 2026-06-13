@@ -129,6 +129,8 @@ export default {
   evRollbackDesc: 'Auf die vorherige Version zurückgesetzt',
   evHealthCheckFailed: 'Health-Check fehlgeschlagen',
   evHealthCheckFailedDesc: 'Der Health-Check nach dem Deployment ist nicht bestanden',
+  evApprovalRequired: 'Genehmigung erforderlich',
+  evApprovalRequiredDesc: 'Ein Lauf hat ein manuelles Genehmigungs-Gate erreicht und wartet auf Genehmigung oder Ablehnung',
 
   routesTitle: 'Ereignisrouten',
   routesDescPre: 'Konfigurieren Sie, welche Ereignisse über welche Kanäle benachrichtigen. ',

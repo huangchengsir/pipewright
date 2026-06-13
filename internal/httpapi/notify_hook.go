@@ -3,9 +3,12 @@ package httpapi
 import (
 	"context"
 	"log"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/huangchengsir/pipewright/internal/approval"
 	"github.com/huangchengsir/pipewright/internal/notify"
 	"github.com/huangchengsir/pipewright/internal/run"
 )
@@ -77,6 +80,50 @@ func NewNotifyHook(runs run.Service, notifySvc notify.Service, secretSrc *RunSec
 		if err := notifySvc.RouteEventForProject(hookCtx, projectID, event, vars); err != nil {
 			log.Printf("[notify] run %s: 事件 %s 路由 best-effort 失败:%v", runID, event, err)
 		}
+	}
+}
+
+// approvalLinkTTL 是签名审批链接的有效期(审批人节奏可较慢,与门兜底超时一致)。
+const approvalLinkTTL = 24 * time.Hour
+
+// NewApprovalNotifier 构造审批门「需要审批」通知钩子(供 main 注入 NewApprovalGate)。
+//
+// run 进入 waiting_approval 后,本钩子 best-effort 地:签发签名审批链接(signer + publicURL)→
+// 构 TemplateVars(含 ActionURL)→ notifySvc.RouteEventForProject(EventApprovalRequired)。
+//   - signer 禁用(无 master key)/ publicURL 为空 / notifySvc 为 nil → 跳过(不发链接、不发通知),
+//     绝不阻塞门。
+//   - 自带超时(防慢渠道挂死 goroutine);RouteEventForProject 内部已 best-effort(未配路由不发)。
+//   - 链接、token 绝不写日志。
+func NewApprovalNotifier(notifySvc notify.Service, signer *approval.Signer, publicURL string) ApprovalNotifier {
+	base := strings.TrimRight(strings.TrimSpace(publicURL), "/")
+	if notifySvc == nil || signer == nil || !signer.Enabled() || base == "" {
+		// 依赖不全:返回 nil,门据此跳过通知(功能优雅关闭)。
+		return nil
+	}
+	return func(ctx context.Context, projectID, projectName, runID, stageID string) {
+		token := signer.Sign(runID, stageID, time.Now().Add(approvalLinkTTL))
+		if token == "" {
+			return // 签名器禁用(防御);不发链接。
+		}
+		link := base + "/approvals?token=" + url.QueryEscape(token)
+
+		vars := notify.TemplateVars{
+			Project:   projectName,
+			Status:    "waiting_approval",
+			Event:     notify.EventApprovalRequired,
+			RunID:     runID,
+			ActionURL: link,
+		}
+
+		// 异步发:门随后阻塞在 coord.Wait 上等待决定,通知不应拖慢进入等待。脱离父 ctx
+		// (run 取消不应中断已发起的通知)+ 自带 30s 超时(防慢渠道挂死 goroutine)。best-effort,绝不冒泡。
+		go func() {
+			hookCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			if err := notifySvc.RouteEventForProject(hookCtx, projectID, notify.EventApprovalRequired, vars); err != nil {
+				log.Printf("[notify] run %s: 审批通知路由 best-effort 失败:%v", runID, err)
+			}
+		}()
 	}
 }
 

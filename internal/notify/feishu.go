@@ -171,7 +171,8 @@ func (s *service) sendFeishu(ctx context.Context, ch *Channel, sealed []byte, pa
 }
 
 // feishuFieldOrder 字段在卡片里的展示顺序(业务可读优先,而非字母序);未列出的 key 追加在后、按字母序。
-var feishuFieldOrder = []string{"project", "branch", "commit", "status", "duration", "event"}
+// actionUrl(操作/审批链接)排在最后,作为卡片底部的行动入口。
+var feishuFieldOrder = []string{"project", "branch", "commit", "status", "duration", "event", fieldActionURL}
 
 // feishuFieldLabel 字段 key → 中文标签(卡片里展示更友好)。未知 key 原样用 key。
 func feishuFieldLabel(key, lang string) string {
@@ -192,6 +193,8 @@ func feishuFieldLabel(key, lang string) string {
 		return i18n.T(lang, "来源")
 	case "kind":
 		return i18n.T(lang, "类型")
+	case fieldActionURL:
+		return i18n.T(lang, "审批链接")
 	default:
 		return key
 	}
@@ -264,11 +267,18 @@ func feishuOrderedFields(fields map[string]string, lang string) []feishuCardFiel
 
 	out := make([]feishuCardField, 0, len(keys))
 	for _, k := range keys {
+		content := "**" + feishuFieldLabel(k, lang) + "**\n" + fields[k]
+		isShort := true
+		if k == fieldActionURL && strings.TrimSpace(fields[k]) != "" {
+			// 操作链接渲染为可点击 lark_md 链接(整行宽,作为卡片底部行动入口)。
+			content = "**" + feishuFieldLabel(k, lang) + "**\n[" + i18n.T(lang, "点击前往审批") + "](" + fields[k] + ")"
+			isShort = false
+		}
 		out = append(out, feishuCardField{
-			IsShort: true, // 半宽 → 两两并排成双列
+			IsShort: isShort, // 半宽 → 两两并排成双列;操作链接整行宽
 			Text: feishuCardText{
 				Tag:     "lark_md",
-				Content: "**" + feishuFieldLabel(k, lang) + "**\n" + fields[k],
+				Content: content,
 			},
 		})
 	}

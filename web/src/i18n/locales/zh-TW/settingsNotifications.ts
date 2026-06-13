@@ -128,6 +128,8 @@ export default {
   evRollbackDesc: '已回滾到上一版本',
   evHealthCheckFailed: '健康檢查失敗',
   evHealthCheckFailedDesc: '部署後健康檢查未通過',
+  evApprovalRequired: '需要審批',
+  evApprovalRequiredDesc: '執行進入人工審批門,等待批准或拒絕',
 
   routesTitle: '事件路由',
   routesDescPre: '設定「哪些事件經哪些管道通知」。',

@@ -86,6 +86,7 @@ type options struct {
 	oauth            oauth.Service
 	approvalCoord    *approval.Coordinator
 	approvalStore    *approval.Store
+	approvalSigner   *approval.Signer
 	promotionStore   *promotion.Store
 	environments     *environments.Service
 	doraMetrics      run.MetricsService
@@ -109,6 +110,13 @@ func WithApprovals(coord *approval.Coordinator, store *approval.Store) Option {
 		o.approvalCoord = coord
 		o.approvalStore = store
 	}
+}
+
+// WithApprovalLinks 注入审批链接签名器(「从通知直接审批」),挂载**公开**端点(豁免 requireAuth +
+// CSRF,token 即认证):GET /approvals(确认页,无副作用)+ POST /approvals/act(解析门)。
+// signer 为 nil / 禁用(无 master key)时,公开页提示「链接不可用」、不解析任何门。
+func WithApprovalLinks(signer *approval.Signer) Option {
+	return func(o *options) { o.approvalSigner = signer }
 }
 
 // WithPromotion 注入环境晋级流持久层(Story 8-7),挂载环境链配置 / 晋级触发 / 晋级历史路由。
@@ -376,6 +384,12 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 	// Webhook 接收(公开入口,Story 3.2):豁免 requireAuth + CSRF,靠签名校验。
 	// 必须在受保护 /api 组之外注册;限请求体大小在 handler 内(MaxBytesReader)。
 	r.Post("/api/webhooks/{token}", makeWebhookHandler(o.receiver))
+
+	// 从通知直接审批(公开入口,SECURITY-SENSITIVE):豁免 requireAuth + CSRF——token(HMAC+过期+
+	// 常量时间比较)即认证。GET 仅渲染确认页(无副作用,防 IM 预取自动放行);POST 才解析门。
+	// signer 为 nil/禁用时页面提示不可用、不解析任何门。
+	r.Get("/approvals", makeApprovalPageHandler(o.approvalSigner, o.approvalCoord))
+	r.Post("/approvals/act", makeApprovalActHandler(o.approvalSigner, o.approvalCoord, o.audit))
 
 	// 受保护 API 端点(除 /api/auth 与 /api/webhooks 外):requireAuth + 写方法 requireCSRF。
 	r.Route("/api", func(ar chi.Router) {

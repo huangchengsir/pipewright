@@ -53,7 +53,7 @@ func TestRouteEventDeliversToConfiguredChannel(t *testing.T) {
 		t.Fatalf("create route: %v", err)
 	}
 
-	payload := EventPayload(EventBuildFailed, "demo", "main", "abcdef1234", "failed", 1500)
+	payload := EventPayload("zh-CN", EventBuildFailed, "demo", "main", "abcdef1234", "failed", 1500)
 	if err := s.RouteEvent(ctx(), EventBuildFailed, payload); err != nil {
 		t.Fatalf("route event: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestDeleteChannelCascadesRoutes(t *testing.T) {
 }
 
 func TestEventPayloadShape(t *testing.T) {
-	p := EventPayload(EventBuildSucceeded, "proj", "main", "deadbeefcafe", "success", 2500)
+	p := EventPayload("zh-CN", EventBuildSucceeded, "proj", "main", "deadbeefcafe", "success", 2500)
 	if p.Title == "" || p.Body == "" {
 		t.Fatalf("empty payload: %+v", p)
 	}

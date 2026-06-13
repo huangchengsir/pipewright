@@ -7,6 +7,8 @@ import (
 	"net/smtp"
 	"sort"
 	"strings"
+
+	"github.com/huangchengsir/pipewright/internal/i18n"
 )
 
 // emailSender 抽象 SMTP 发信(默认 net/smtp;单测注入 stub,无需真起 SMTP server)。
@@ -83,7 +85,7 @@ func sanitizeHeader(s string) string {
 func buildMessage(from string, to []string, payload Payload) []byte {
 	subject := payload.Title
 	if subject == "" {
-		subject = "Pipewright 通知"
+		subject = i18n.T(payload.Lang, "Pipewright 通知")
 	}
 	subject = sanitizeHeader(subject)
 	safeFrom := sanitizeHeader(from)

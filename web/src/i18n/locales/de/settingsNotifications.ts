@@ -1,4 +1,8 @@
 export default {
+  langTitle: 'Benachrichtigungssprache',
+  langDesc: 'Sprache der Standardinhalte für ausgehende Benachrichtigungen (Lark/E-Mail), unabhängig von der UI-Sprache.',
+  langSaved: 'Benachrichtigungssprache gespeichert',
+  langSaveFailed: 'Speichern der Benachrichtigungssprache fehlgeschlagen',
   typeWebhookDesc: 'Benutzerdefiniertes HTTP POST',
   typeEmailLabel: 'E-Mail',
   typeEmailDesc: 'SMTP-Versand',

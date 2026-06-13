@@ -1,4 +1,8 @@
 export default {
+  langTitle: '알림 언어',
+  langDesc: '발신 알림(Lark/이메일 등) 기본 문구의 언어로, UI 언어와 독립적입니다.',
+  langSaved: '알림 언어를 저장했습니다',
+  langSaveFailed: '알림 언어 저장에 실패했습니다',
   typeWebhookDesc: '사용자 지정 HTTP POST',
   typeEmailLabel: '이메일',
   typeEmailDesc: 'SMTP 발송',

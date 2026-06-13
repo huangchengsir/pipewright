@@ -1,4 +1,8 @@
 export default {
+  langTitle: '通知语言',
+  langDesc: '外发通知(飞书/邮件等)默认文案的语言,与界面语言相互独立。',
+  langSaved: '通知语言已保存',
+  langSaveFailed: '保存通知语言失败',
   // 渠道类型
   typeWebhookDesc: '自定义 HTTP POST',
   typeEmailLabel: '邮件',

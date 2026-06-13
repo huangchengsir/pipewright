@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/i18n"
 )
 
 // 通知事件枚举(冻结契约;DB 存小写串;JSON 同名)。run 终态 → 事件由 main 装配的 NotifyHook
@@ -388,8 +389,11 @@ func scanRoute(sc scanner) (*Route, error) {
 //
 // 入参为运行的展示元数据(项目名 / 分支 / commit / 状态 / 耗时);任一为空则在文案中省略。
 // 形状对齐冻结 Payload(Title/Body/Fields),5-3 仅替换文案生成方式、不改形状。
-func EventPayload(event, projectName, branch, commit, status string, durationMs int64) Payload {
-	title := eventTitle(event, projectName)
+func EventPayload(lang, event, projectName, branch, commit, status string, durationMs int64) Payload {
+	if lang == "" {
+		lang = i18n.Default
+	}
+	title := eventTitle(event, projectName, lang)
 
 	fields := map[string]string{
 		"event": event,
@@ -410,56 +414,77 @@ func EventPayload(event, projectName, branch, commit, status string, durationMs 
 		fields["duration"] = humanDuration(durationMs)
 	}
 
-	var b strings.Builder
-	b.WriteString(eventLabel(event))
+	// 正文:事件标签 + 「字段标签 值」列表(本地化标签),分隔/收尾随语言。
+	parts := make([]string, 0, 5)
 	if projectName != "" {
-		b.WriteString(":项目 ")
-		b.WriteString(projectName)
+		parts = append(parts, i18n.T(lang, "项目")+" "+projectName)
 	}
 	if branch != "" {
-		b.WriteString(",分支 ")
-		b.WriteString(branch)
+		parts = append(parts, i18n.T(lang, "分支")+" "+branch)
 	}
 	if commit != "" {
-		b.WriteString(",commit ")
-		b.WriteString(shortCommit(commit))
+		parts = append(parts, i18n.T(lang, "提交")+" "+shortCommit(commit))
 	}
 	if status != "" {
-		b.WriteString(",状态 ")
-		b.WriteString(status)
+		parts = append(parts, i18n.T(lang, "状态")+" "+status)
 	}
 	if durationMs > 0 {
-		b.WriteString(",耗时 ")
-		b.WriteString(humanDuration(durationMs))
+		parts = append(parts, i18n.T(lang, "耗时")+" "+humanDuration(durationMs))
 	}
-	b.WriteString("。")
+	var b strings.Builder
+	b.WriteString(eventLabel(event, lang))
+	if len(parts) > 0 {
+		b.WriteString(bodySeparator(lang))
+		b.WriteString(strings.Join(parts, bodyComma(lang)))
+	}
+	b.WriteString(bodyPeriod(lang))
 
-	return Payload{Title: title, Body: b.String(), Fields: fields}
+	return Payload{Title: title, Body: b.String(), Fields: fields, Lang: lang}
 }
 
-// eventLabel 返回事件的中文标签(默认文案)。
-func eventLabel(event string) string {
+// 正文标点随语言:中文/日文用全角,其余用半角。
+func bodySeparator(lang string) string {
+	if lang == "zh-CN" || lang == "zh-TW" || lang == "ja" {
+		return ":"
+	}
+	return ": "
+}
+func bodyComma(lang string) string {
+	if lang == "zh-CN" || lang == "zh-TW" || lang == "ja" {
+		return ","
+	}
+	return ", "
+}
+func bodyPeriod(lang string) string {
+	if lang == "zh-CN" || lang == "zh-TW" || lang == "ja" {
+		return "。"
+	}
+	return "."
+}
+
+// eventLabel 返回事件标签(默认文案,按 lang 本地化)。
+func eventLabel(event, lang string) string {
 	switch event {
 	case EventBuildSucceeded:
-		return "构建成功"
+		return i18n.T(lang, "构建成功")
 	case EventBuildFailed:
-		return "构建失败"
+		return i18n.T(lang, "构建失败")
 	case EventDeploySucceeded:
-		return "部署成功"
+		return i18n.T(lang, "部署成功")
 	case EventDeployFailed:
-		return "部署失败"
+		return i18n.T(lang, "部署失败")
 	case EventRollback:
-		return "已回滚"
+		return i18n.T(lang, "已回滚")
 	case EventHealthCheckFailed:
-		return "健康检查失败"
+		return i18n.T(lang, "健康检查失败")
 	default:
 		return event
 	}
 }
 
 // eventTitle 组合通知标题。
-func eventTitle(event, projectName string) string {
-	label := eventLabel(event)
+func eventTitle(event, projectName, lang string) string {
+	label := eventLabel(event, lang)
 	if projectName != "" {
 		return fmt.Sprintf("[%s] %s", projectName, label)
 	}

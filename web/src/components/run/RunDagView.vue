@@ -25,6 +25,7 @@ import {
   nextTick,
 } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { localizeName } from '../../lib/pipelineLabels'
 import type { RunStep, StepStatus } from '../../api/runs'
 import type { PipelineStage } from '../../api/pipeline'
 import { getPipeline } from '../../api/pipeline'
@@ -301,7 +302,7 @@ function edgeClass(status: string): string {
               />
 
               <!-- Stage name -->
-              <span class="stage-name">{{ stage.name }}</span>
+              <span class="stage-name">{{ localizeName(stage.name) }}</span>
 
               <!-- Status badge:据 stage 聚合状态(含 blocked=未执行)显式给文字 + 配色,
                    收起态也一眼看出失败/未执行,不再只靠小圆点。pending 不冗余展示。 -->

@@ -219,6 +219,31 @@ const healthCheckValid = computed(() => {
 // 是否已部署过(run.targets 非空 → 已有部署结果)。
 const hasDeployed = computed(() => !!run.value?.targets && run.value.targets.length > 0)
 
+// 配置来源徽标(GitOps 配置来源可见性 · Slice 2):本次运行由仓库 .pipewright.yml 还是网页配置驱动。
+// specSource 为空(老运行 / 桩 runner 未上报)→ null,不展示徽标。
+const specSourceBadge = computed(() => {
+  const src = run.value?.specSource
+  if (src === 'repo') {
+    return {
+      kind: 'repo' as const,
+      label: t('runDetail.specSourceRepo', {
+        ref: run.value?.specSourceRef || '',
+        file: run.value?.specSourceFile || '.pipewright.yml',
+      }),
+      hint: '',
+    }
+  }
+  if (src === 'stored') {
+    return {
+      kind: 'stored' as const,
+      label: t('runDetail.specSourceStored'),
+      // 回退原因非空 → 「本想用仓库但回退」的轻提示(tooltip)。
+      hint: run.value?.specSourceFallback ? t('runDetail.specSourceFallbackHint') : '',
+    }
+  }
+  return null
+})
+
 async function ensureDeployServers(): Promise<void> {
   if (deployServersLoaded.value) return
   try {
@@ -724,6 +749,18 @@ function nodeClass(status: StepStatus): string {
           <div class="meta-item">
             <span class="meta-key">{{ t('runDetail.metaTrigger') }}</span>
             <span class="meta-val">{{ run.trigger.type === 'webhook' ? 'Webhook' : t('runDetail.triggerManual') }} · {{ run.trigger.actor }}</span>
+          </div>
+          <div v-if="specSourceBadge" class="meta-item">
+            <span class="meta-key">{{ t('runDetail.metaSpecSource') }}</span>
+            <span
+              class="spec-source-badge"
+              :class="`spec-source-badge--${specSourceBadge.kind}`"
+              :title="specSourceBadge.hint || undefined"
+            >
+              <span class="spec-source-badge-dot" aria-hidden="true" />
+              {{ specSourceBadge.label }}
+              <span v-if="specSourceBadge.hint" class="spec-source-badge-hint" aria-hidden="true">⚠</span>
+            </span>
           </div>
           <div class="meta-item">
             <span class="meta-key">{{ t('runDetail.metaStarted') }}</span>
@@ -1478,6 +1515,43 @@ function nodeClass(status: StepStatus): string {
 }
 
 .mono { font-family: var(--font-mono); }
+
+/* ─── spec-source badge (GitOps config-source visibility · Slice 2) ───────── */
+.spec-source-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.5;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.spec-source-badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+/* repo: GitOps 来源,蓝色强调(来源可信、可追溯)。 */
+.spec-source-badge--repo {
+  color: var(--color-accent, #2563eb);
+  background: color-mix(in oklab, var(--color-accent, #2563eb) 12%, transparent);
+  border-color: color-mix(in oklab, var(--color-accent, #2563eb) 28%, transparent);
+}
+/* stored: 网页配置来源,中性色。 */
+.spec-source-badge--stored {
+  color: var(--color-dim);
+  background: color-mix(in oklab, var(--color-dim) 12%, transparent);
+  border-color: color-mix(in oklab, var(--color-dim) 24%, transparent);
+}
+.spec-source-badge-hint {
+  font-size: 0.72rem;
+  cursor: help;
+}
 
 /* ─── state section wrapper ──────────────────────────────────────────────── */
 .state-section {

@@ -17,6 +17,22 @@ export default {
   pacOffHint: '有効にすると、各実行は実行ブランチのリポジトリルートの .pipewright.yml を読み込んで駆動します(ない/不正な場合はこの設定にフォールバック)。',
   pacToggleFailed: '切り替えに失敗しました。再試行してください。',
 
+  // ─── リポジトリ設定のプレビュー(GitOps · ref を指定して .pipewright.yml を取得・検証)──
+  pacPreviewBtn: 'リポジトリ設定をプレビュー',
+  pacPreviewTitle: 'リポジトリ設定のプレビュー',
+  pacPreviewSub: 'ブランチ/タグ/コミットを指定してリポジトリのファイルを取得・検証します:',
+  pacPreviewCloseAria: 'プレビューを閉じる',
+  pacPreviewCloseBtn: '閉じる',
+  pacPreviewRefLabel: 'ブランチ / タグ / コミット',
+  pacPreviewFetch: '取得して検証',
+  pacPreviewNotFound: '{ref} に .pipewright.yml が見つかりません。実行時はここで設定したパイプラインにフォールバックします。',
+  pacPreviewInvalid: '{ref} の .pipewright.yml は検証に失敗しました。実行時はここで設定したパイプラインに静かにフォールバックします:',
+  pacPreviewValid: '{ref} の .pipewright.yml は検証に成功しました(ステージ数 {count})。実行時はこれが使用されます。',
+  pacPreviewJobCount: 'ジョブ {count} 件',
+  pacPreviewConnFailed: '接続に失敗しました。ネットワークを確認して再試行してください。',
+  pacPreviewFailed: 'プレビューに失敗しました({status})。再試行してください。',
+  pacPreviewFailedRetry: 'プレビューに失敗しました。再試行してください。',
+
   // ─── ツールバーボタン ───────────────────────────────────────────
   aiGenerate: 'AI でパイプライン生成',
   importYaml: 'YAML からインポート',

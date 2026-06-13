@@ -17,6 +17,22 @@ export default {
   pacOffHint: "Une fois activé, chaque exécution lit .pipewright.yml à la racine du dépôt sur la branche d'exécution (repli sur cette configuration si absent ou invalide).",
   pacToggleFailed: 'Échec du basculement. Veuillez réessayer.',
 
+  // ─── Aperçu de la config du dépôt (GitOps · récupérer et valider .pipewright.yml à une réf) ──
+  pacPreviewBtn: 'Aperçu de la config du dépôt',
+  pacPreviewTitle: 'Aperçu de la configuration du dépôt',
+  pacPreviewSub: 'Récupérez et validez le fichier du dépôt à une branche/un tag/un commit :',
+  pacPreviewCloseAria: "Fermer l'aperçu",
+  pacPreviewCloseBtn: 'Fermer',
+  pacPreviewRefLabel: 'Branche / tag / commit',
+  pacPreviewFetch: 'Récupérer et valider',
+  pacPreviewNotFound: "Aucun .pipewright.yml trouvé à {ref} ; les exécutions se rabattront sur le pipeline configuré ici.",
+  pacPreviewInvalid: "Le .pipewright.yml à {ref} a échoué à la validation ; les exécutions se rabattront silencieusement sur le pipeline configuré ici :",
+  pacPreviewValid: 'Le .pipewright.yml à {ref} est valide avec {count} étape(s) ; les exécutions l\'utiliseront.',
+  pacPreviewJobCount: '{count} tâche(s)',
+  pacPreviewConnFailed: 'Échec de la connexion. Vérifiez votre réseau et réessayez.',
+  pacPreviewFailed: "Échec de l'aperçu ({status}). Veuillez réessayer.",
+  pacPreviewFailedRetry: "Échec de l'aperçu. Veuillez réessayer.",
+
   // ─── boutons de la barre d'outils ───────────────────────────────
   aiGenerate: 'Générer le pipeline par IA',
   importYaml: 'Importer depuis YAML',

@@ -34,6 +34,12 @@ export default {
   triggerManual: 'Manuel',
   commitUnresolved: 'Non récupéré',
 
+  // Badge de source de configuration (GitOps · Slice 2)
+  metaSpecSource: 'Source de configuration',
+  specSourceRepo: 'Dépôt {ref} · {file}',
+  specSourceStored: 'Configuration web',
+  specSourceFallbackHint: 'Fichier du dépôt manquant ou invalide ; repli sur la configuration web',
+
   pipelineProgress: 'Progression du pipeline',
   pipelineComplete: 'Pipeline terminé',
   pipelineFailed: 'Pipeline en échec',

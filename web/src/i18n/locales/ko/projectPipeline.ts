@@ -17,6 +17,22 @@ export default {
   pacOffHint: '켜면 각 실행이 실행 브랜치의 저장소 루트 .pipewright.yml을 읽어 구동합니다(없거나 유효하지 않으면 이 설정으로 폴백).',
   pacToggleFailed: '전환에 실패했습니다. 다시 시도하세요.',
 
+  // ─── 저장소 구성 미리보기 (GitOps · ref 지정해 .pipewright.yml 가져와 검증) ──
+  pacPreviewBtn: '저장소 구성 미리보기',
+  pacPreviewTitle: '저장소 구성 미리보기',
+  pacPreviewSub: '브랜치/태그/커밋을 지정해 저장소의 파일을 가져와 검증합니다:',
+  pacPreviewCloseAria: '미리보기 닫기',
+  pacPreviewCloseBtn: '닫기',
+  pacPreviewRefLabel: '브랜치 / 태그 / 커밋',
+  pacPreviewFetch: '가져와 검증',
+  pacPreviewNotFound: '{ref}에서 .pipewright.yml을 찾을 수 없습니다. 실행 시 여기서 구성한 파이프라인으로 폴백합니다.',
+  pacPreviewInvalid: '{ref}의 .pipewright.yml 검증에 실패했습니다. 실행 시 여기서 구성한 파이프라인으로 조용히 폴백합니다:',
+  pacPreviewValid: '{ref}의 .pipewright.yml 검증에 성공했습니다(스테이지 {count}개). 실행 시 이를 사용합니다.',
+  pacPreviewJobCount: '작업 {count}개',
+  pacPreviewConnFailed: '연결에 실패했습니다. 네트워크를 확인하고 다시 시도하세요.',
+  pacPreviewFailed: '미리보기에 실패했습니다({status}). 다시 시도하세요.',
+  pacPreviewFailedRetry: '미리보기에 실패했습니다. 다시 시도하세요.',
+
   // ─── 툴바 버튼 ──────────────────────────────────────────────────
   aiGenerate: 'AI 파이프라인 생성',
   importYaml: 'YAML에서 가져오기',

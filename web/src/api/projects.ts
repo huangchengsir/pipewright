@@ -89,3 +89,36 @@ export async function updateProject(id: string, input: UpdateProjectInput): Prom
 export async function deleteProject(id: string): Promise<void> {
   return http.delete<void>(`/api/projects/${id}`)
 }
+
+/** One stage's summary from a previewed `.pipewright.yml` (no secrets). */
+export interface PacStageSummary {
+  name: string
+  kind: string
+  jobCount: number
+}
+
+/**
+ * Result of previewing/validating the repo's `.pipewright.yml` at a chosen ref.
+ * - found=false: the file does not exist at that ref (or repo unreadable) — runs fall back to the UI pipeline.
+ * - found=true, valid=false: the file exists but failed to parse/validate; `error` carries the
+ *   server's human-readable, secret-free message; `stages` is empty.
+ * - found=true, valid=true: `stages`/`stageCount` summarize what the runtime would use.
+ */
+export interface PacPreviewResult {
+  found: boolean
+  valid: boolean
+  ref: string
+  file: string
+  error: string
+  stageCount: number
+  stages: PacStageSummary[]
+}
+
+/**
+ * Fetch & validate the repo's `.pipewright.yml` at `ref` (defaults to the project's default
+ * branch when omitted). Read-only; never returns secrets or the repo URL credentials.
+ */
+export async function previewPacConfig(id: string, ref?: string): Promise<PacPreviewResult> {
+  const qs = ref && ref.trim() ? `?ref=${encodeURIComponent(ref.trim())}` : ''
+  return http.get<PacPreviewResult>(`/api/projects/${id}/pac/preview${qs}`)
+}

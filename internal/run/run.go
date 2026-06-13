@@ -160,7 +160,32 @@ type Run struct {
 	// Diagnosis 是已持久化的 AI 诊断(失败且已诊断时非 nil;否则 nil → run-detail diagnosis=null)。
 	// 领域层只搬运形状(由 ai 层生成、httpapi 层落库),run 包不 import ai(经 hook 解耦)。
 	Diagnosis *Diagnosis
+
+	// SpecSource 是驱动本次运行的流水线配置来源(GitOps 配置来源可见性):
+	// 仓库 `.pipewright.yml`(repo)或库内网页配置(stored)。由 Runner 在加载 spec 时经
+	// StepSink.SetSpecSource 持久化,经 Get 回读供运行详情展示。
+	SpecSource SpecSource
 }
+
+// SpecSource 记录「本次运行的流水线 spec 来自哪里」(配置来源可见性)。
+//   - Source="repo":由仓库根 `.pipewright.yml` 驱动;Ref=取用分支/ref、File=文件名。
+//   - Source="stored":由库内(网页编辑)配置驱动;Fallback 非空表示「本想用仓库但回退了」,
+//     其值为回退原因(disabled|no_file|invalid_yaml|degraded|empty|lookup_failed)。
+//   - Source="":未记录(老运行 / 桩 runner 未上报),前端按未知处理(不展示徽标)。
+type SpecSource struct {
+	Source   string // "" | repo | stored
+	Ref      string
+	File     string
+	Fallback string
+}
+
+// 配置来源枚举(DB 存小写串)。
+const (
+	// SpecSourceRepo 表示由仓库 `.pipewright.yml` 驱动(GitOps)。
+	SpecSourceRepo = "repo"
+	// SpecSourceStored 表示由库内(网页编辑)配置驱动。
+	SpecSourceStored = "stored"
+)
 
 // 诊断状态枚举(对齐冻结 run-detail diagnosis 子 DTO 的 status)。
 const (

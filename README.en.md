@@ -145,6 +145,56 @@ Open **Settings → System** and click "Check for updates" to query the latest r
 | `PIPEWRIGHT_ADMIN_PASSWORD` | Admin password on first launch | none (must be set) |
 | `PIPEWRIGHT_RUNNER` | Run executor: default DAG (orchestrates stages/script/deploy_ssh/notify per the canvas); set `legacy` to fall back to the old fixed flow | `dag` |
 
+## Pipeline as code (GitOps)
+
+Commit your pipeline structure to `.pipewright.yml` in the repo — **same source of truth as your code, reviewable in a PR, evolving per branch** — instead of relying on implicit drift in the canvas.
+
+- **Enable**: flip the "Pipeline as code" toggle on the project's pipeline page (per project).
+- **How it works**: once enabled, every run reads `.pipewright.yml` from the **repo root** on the **branch being built** (falling back to the project default branch when the branch is empty), and the pipeline spec in that file drives the run. Different branches can carry different `.pipewright.yml`. The file is fetched with the project's bound repo credential (ephemeral; no new exposure).
+- **Never breaks a run**: if the file is **missing** → falls back to the pipeline configured in the canvas (UI); if it exists but is **invalid YAML** → also falls back to the stored canvas config.
+- **Scope**: the YAML controls **pipeline structure only** (stages / jobs / `needs` / DAG layout). **Variables & cache, environments & credentials, and trigger rules** still come from the canvas (UI) settings — they are **not** in the YAML.
+- **Schema** is the same one used by the platform's "Import from YAML" (`version` + `stages` → `jobs`; a job uses a nested `script:` block for `image`/`commands`/`env`/`workdir`).
+
+```yaml
+version: 1
+stages:
+  - id: stg_src             # needs references stages by id, so cross-stage deps need an explicit id
+    name: Source
+    kind: source
+    jobs:
+      - name: Gitee source
+        type: git_source
+  - id: stg_build
+    name: Build
+    kind: build
+    needs: [stg_src]
+    jobs:
+      - name: Run tests
+        type: script
+        script:
+          image: golang:1.23
+          commands:
+            - go vet ./...
+            - go test ./...
+          env:
+            CGO_ENABLED: "0"
+          workdir: src/app
+  - id: stg_deploy
+    name: Deploy
+    kind: deploy
+    needs: [stg_build]
+    gate: true              # manual approval gate
+    when:
+      branches: [main, release/*]
+    jobs:
+      - name: SSH deploy
+        type: deploy_ssh
+        config:
+          targetEnv: prod
+```
+
+> You can also force pipeline-as-code on for **all projects** (ignoring the per-project toggle) via the global env var `PIPEWRIGHT_PAC_RUNTIME=1`, for back-compat / power users.
+
 ## Tech Stack
 
 - **Backend**: Go · Chi (routing) · modernc/sqlite (pure Go, no CGO) · go-git · NaCl secretbox (vault) · argon2id · golang.org/x/crypto/ssh (agentless deployment)

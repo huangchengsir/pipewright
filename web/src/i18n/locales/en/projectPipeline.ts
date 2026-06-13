@@ -17,6 +17,22 @@ export default {
   pacOffHint: 'When on, each run reads .pipewright.yml from the repo root on the run branch (falling back to this config if missing or invalid).',
   pacToggleFailed: 'Failed to toggle. Please try again.',
 
+  // ─── Preview repo config (GitOps · fetch & validate .pipewright.yml at a ref) ───
+  pacPreviewBtn: 'Preview repo config',
+  pacPreviewTitle: 'Preview repo config',
+  pacPreviewSub: 'Fetch and validate the repo file at a branch/tag/commit:',
+  pacPreviewCloseAria: 'Close preview',
+  pacPreviewCloseBtn: 'Close',
+  pacPreviewRefLabel: 'Branch / tag / commit',
+  pacPreviewFetch: 'Fetch & validate',
+  pacPreviewNotFound: 'No .pipewright.yml found at {ref}; runs will fall back to the pipeline configured here.',
+  pacPreviewInvalid: 'The .pipewright.yml at {ref} failed validation; runs will silently fall back to the pipeline configured here:',
+  pacPreviewValid: 'The .pipewright.yml at {ref} is valid with {count} stage(s); runs will use it.',
+  pacPreviewJobCount: '{count} job(s)',
+  pacPreviewConnFailed: 'Connection failed. Check your network and retry.',
+  pacPreviewFailed: 'Preview failed ({status}). Please try again.',
+  pacPreviewFailedRetry: 'Preview failed. Please try again.',
+
   // ─── toolbar buttons ────────────────────────────────────────────
   aiGenerate: 'AI Generate Pipeline',
   importYaml: 'Import from YAML',

@@ -592,6 +592,11 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Get("/projects/{id}/source/tree", makeSourceTreeHandler(srcDeps))
 		ar.Get("/projects/{id}/source/blob", makeSourceBlobHandler(srcDeps))
 
+		// 「流水线即代码」预览/校验(GitOps Slice 3):按 ref 拉取仓库 .pipewright.yml 并校验,
+		// 让用户在依赖它驱动运行之前看清运行时会用到的配置摘要、显式捕获 YAML 错误(运行时静默回退)。
+		// 复用 srcDeps(projects + vault + SourceReader);/pac/preview 比 /projects/{id} 多两段,不会被吞;GET 过 auth。
+		ar.Get("/projects/{id}/pac/preview", makePacPreviewHandler(srcDeps))
+
 		// 列仓库分支/tag(代码管理区 · Story 8-18):供前端触发时分支/commit 下拉。o.refsLister 为 nil → 503。
 		ar.Get("/projects/{id}/refs", makeListRefsHandler(p, v, o.refsLister))
 		ar.Get("/projects/{id}/commits", makeListCommitsHandler(p, v, o.refsLister))

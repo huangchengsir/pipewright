@@ -117,7 +117,7 @@ func TestGet_ValidRepoYAML_UsesRepoSpec(t *testing.T) {
 	l := newLoader(stored, fakeProjects{info: defaultInfo()}, tokens, blobs)
 
 	// 空运行分支 → 退化为默认分支 main(与历史行为一致)。
-	cfg, err := l.Get(context.Background(), "proj-1", "")
+	cfg, src, err := l.Get(context.Background(), "proj-1", "")
 	if err != nil {
 		t.Fatalf("意外错误: %v", err)
 	}
@@ -126,6 +126,10 @@ func TestGet_ValidRepoYAML_UsesRepoSpec(t *testing.T) {
 	}
 	if stored.called != 0 {
 		t.Fatalf("命中仓库 YAML 时不应回退库内 loader,called=%d", stored.called)
+	}
+	// 来源应为仓库:FromRepo=true、Ref=默认分支 main、File=.pipewright.yml。
+	if !src.FromRepo || src.Ref != "main" || src.File != DefaultFile {
+		t.Errorf("来源应为仓库(FromRepo=true,Ref=main,File=%s),实际 %+v", DefaultFile, src)
 	}
 	// 空分支 → 默认分支拉取正确文件,并把凭据明文透传给拉取器。
 	if blobs.gotRef != "main" {
@@ -151,7 +155,7 @@ func TestGet_RunBranch_FetchesFromRunBranchNotDefault(t *testing.T) {
 	// 默认分支是 main;本次运行在 feature/awesome 上。
 	l := newLoader(stored, fakeProjects{info: defaultInfo()}, &fakeTokens{token: "tk"}, blobs)
 
-	cfg, err := l.Get(context.Background(), "proj-1", "feature/awesome")
+	cfg, src, err := l.Get(context.Background(), "proj-1", "feature/awesome")
 	if err != nil {
 		t.Fatalf("意外错误: %v", err)
 	}
@@ -164,6 +168,10 @@ func TestGet_RunBranch_FetchesFromRunBranchNotDefault(t *testing.T) {
 	if blobs.gotRef == "main" {
 		t.Errorf("绝不应回落到默认分支 main(运行分支非空)")
 	}
+	// 来源应为仓库,Ref=运行分支 feature/awesome。
+	if !src.FromRepo || src.Ref != "feature/awesome" {
+		t.Errorf("来源应为仓库且 Ref=feature/awesome,实际 %+v", src)
+	}
 }
 
 // ─── (b) 文件不存在 → 用库内配置 ────────────────────────────────────────────────
@@ -174,7 +182,7 @@ func TestGet_FileMissing_FallsBackToStored(t *testing.T) {
 	blobs := &fakeBlobs{err: errors.New("source: path not found")}
 	l := newLoader(stored, fakeProjects{info: defaultInfo()}, &fakeTokens{}, blobs)
 
-	cfg, err := l.Get(context.Background(), "proj-1", "")
+	cfg, src, err := l.Get(context.Background(), "proj-1", "")
 	if err != nil {
 		t.Fatalf("文件缺失不应报错(应回退): %v", err)
 	}
@@ -183,6 +191,10 @@ func TestGet_FileMissing_FallsBackToStored(t *testing.T) {
 	}
 	if stored.called != 1 {
 		t.Fatalf("应恰好回退一次库内 loader,called=%d", stored.called)
+	}
+	// 来源应为库内配置,回退原因 no_file。
+	if src.FromRepo || src.FallbackReason != fallbackNoFile {
+		t.Errorf("来源应为库内且回退原因 %s,实际 %+v", fallbackNoFile, src)
 	}
 }
 
@@ -193,7 +205,7 @@ func TestGet_FetchError_FallsBackNoError(t *testing.T) {
 	blobs := &fakeBlobs{err: errors.New("source: clone failed")}
 	l := newLoader(stored, fakeProjects{info: defaultInfo()}, &fakeTokens{}, blobs)
 
-	cfg, err := l.Get(context.Background(), "proj-1", "")
+	cfg, _, err := l.Get(context.Background(), "proj-1", "")
 	if err != nil {
 		t.Fatalf("拉取失败绝不应冒泡给调用方: %v", err)
 	}
@@ -208,7 +220,7 @@ func TestGet_DegradedClone_FallsBack(t *testing.T) {
 	blobs := &fakeBlobs{content: "", degraded: true}
 	l := newLoader(stored, fakeProjects{info: defaultInfo()}, &fakeTokens{}, blobs)
 
-	cfg, err := l.Get(context.Background(), "proj-1", "")
+	cfg, _, err := l.Get(context.Background(), "proj-1", "")
 	if err != nil {
 		t.Fatalf("降级不应报错: %v", err)
 	}
@@ -224,7 +236,7 @@ func TestGet_InvalidYAML_FallsBackToStored(t *testing.T) {
 	blobs := &fakeBlobs{content: "this: : is not valid pipewright yaml\n  - broken"}
 	l := newLoader(stored, fakeProjects{info: defaultInfo()}, &fakeTokens{}, blobs)
 
-	cfg, err := l.Get(context.Background(), "proj-1", "")
+	cfg, _, err := l.Get(context.Background(), "proj-1", "")
 	if err != nil {
 		t.Fatalf("非法 YAML 绝不应中断运行: %v", err)
 	}
@@ -239,7 +251,7 @@ func TestGet_ProjectLookupError_FallsBack(t *testing.T) {
 	stored := &storedLoader{cfg: storedCfg()}
 	l := newLoader(stored, fakeProjects{err: errors.New("not found")}, &fakeTokens{}, &fakeBlobs{content: validYAML})
 
-	cfg, _ := l.Get(context.Background(), "proj-1", "")
+	cfg, _, _ := l.Get(context.Background(), "proj-1", "")
 	if firstStage(cfg) != "stored-pipeline" {
 		t.Fatalf("项目查询失败应回退库内,实际 name=%q", firstStage(cfg))
 	}
@@ -251,7 +263,7 @@ func TestGet_EmptyRepoURL_FallsBack(t *testing.T) {
 	info.RepoURL = "  "
 	l := newLoader(stored, fakeProjects{info: info}, &fakeTokens{}, &fakeBlobs{content: validYAML})
 
-	cfg, _ := l.Get(context.Background(), "proj-1", "")
+	cfg, _, _ := l.Get(context.Background(), "proj-1", "")
 	if firstStage(cfg) != "stored-pipeline" {
 		t.Fatalf("空仓库地址应回退库内,实际 name=%q", firstStage(cfg))
 	}
@@ -261,7 +273,7 @@ func TestGet_EmptyContent_FallsBack(t *testing.T) {
 	stored := &storedLoader{cfg: storedCfg()}
 	l := newLoader(stored, fakeProjects{info: defaultInfo()}, &fakeTokens{}, &fakeBlobs{content: "   \n"})
 
-	cfg, _ := l.Get(context.Background(), "proj-1", "")
+	cfg, _, _ := l.Get(context.Background(), "proj-1", "")
 	if firstStage(cfg) != "stored-pipeline" {
 		t.Fatalf("空文件应回退库内,实际 name=%q", firstStage(cfg))
 	}
@@ -271,7 +283,7 @@ func TestGet_NilDeps_PurePassthrough(t *testing.T) {
 	stored := &storedLoader{cfg: storedCfg()}
 	l := New(stored, nil, nil, nil, false)
 
-	cfg, err := l.Get(context.Background(), "proj-1", "")
+	cfg, _, err := l.Get(context.Background(), "proj-1", "")
 	if err != nil {
 		t.Fatalf("意外错误: %v", err)
 	}
@@ -287,12 +299,16 @@ func TestGet_PacDisabled_FallsBackToStored(t *testing.T) {
 	info.PacEnabled = false
 	l := New(stored, fakeProjects{info: info}, &fakeTokens{token: "t"}, &fakeBlobs{content: validYAML}, false)
 
-	cfg, err := l.Get(context.Background(), "proj-1", "main")
+	cfg, src, err := l.Get(context.Background(), "proj-1", "main")
 	if err != nil {
 		t.Fatalf("意外错误: %v", err)
 	}
 	if firstStage(cfg) != "stored-pipeline" || stored.called != 1 {
 		t.Fatalf("开关关闭应回退库内,不读仓库;name=%q called=%d", firstStage(cfg), stored.called)
+	}
+	// 来源应为库内配置,回退原因 disabled(开关关闭)。
+	if src.FromRepo || src.FallbackReason != fallbackDisabled {
+		t.Errorf("来源应为库内且回退原因 %s,实际 %+v", fallbackDisabled, src)
 	}
 }
 
@@ -303,12 +319,15 @@ func TestGet_GlobalOverride_IgnoresPerProjectFlag(t *testing.T) {
 	info.PacEnabled = false
 	l := New(stored, fakeProjects{info: info}, &fakeTokens{token: "t"}, &fakeBlobs{content: validYAML}, true)
 
-	cfg, err := l.Get(context.Background(), "proj-1", "main")
+	cfg, src, err := l.Get(context.Background(), "proj-1", "main")
 	if err != nil {
 		t.Fatalf("意外错误: %v", err)
 	}
 	if firstStage(cfg) != "from-repo" {
 		t.Fatalf("全局强开应用仓库 YAML 驱动(name=from-repo),实际 name=%q", firstStage(cfg))
+	}
+	if !src.FromRepo {
+		t.Errorf("全局强开命中仓库时来源应为仓库(FromRepo=true),实际 %+v", src)
 	}
 }
 
@@ -319,7 +338,7 @@ func TestGet_TokenRevealError_TriesPublicWithEmptyToken(t *testing.T) {
 	blobs := &fakeBlobs{content: validYAML}
 	l := newLoader(stored, fakeProjects{info: defaultInfo()}, tokens, blobs)
 
-	cfg, err := l.Get(context.Background(), "proj-1", "")
+	cfg, _, err := l.Get(context.Background(), "proj-1", "")
 	if err != nil {
 		t.Fatalf("意外错误: %v", err)
 	}

@@ -17,6 +17,22 @@ export default {
   pacOffHint: 'Wenn aktiviert, liest jeder Lauf .pipewright.yml aus dem Repository-Stamm im Lauf-Branch (Rückfall auf diese Konfiguration, wenn fehlend oder ungültig).',
   pacToggleFailed: 'Umschalten fehlgeschlagen. Bitte erneut versuchen.',
 
+  // ─── Repository-Konfiguration vorschauen (GitOps · .pipewright.yml an einer Ref abrufen & prüfen) ──
+  pacPreviewBtn: 'Repo-Konfig vorschauen',
+  pacPreviewTitle: 'Repository-Konfiguration vorschauen',
+  pacPreviewSub: 'Datei des Repositorys an einem Branch/Tag/Commit abrufen und prüfen:',
+  pacPreviewCloseAria: 'Vorschau schließen',
+  pacPreviewCloseBtn: 'Schließen',
+  pacPreviewRefLabel: 'Branch / Tag / Commit',
+  pacPreviewFetch: 'Abrufen & prüfen',
+  pacPreviewNotFound: 'Keine .pipewright.yml unter {ref} gefunden; Läufe greifen auf die hier konfigurierte Pipeline zurück.',
+  pacPreviewInvalid: 'Die .pipewright.yml unter {ref} hat die Prüfung nicht bestanden; Läufe greifen stillschweigend auf die hier konfigurierte Pipeline zurück:',
+  pacPreviewValid: 'Die .pipewright.yml unter {ref} ist gültig mit {count} Stufe(n); Läufe verwenden sie.',
+  pacPreviewJobCount: '{count} Job(s)',
+  pacPreviewConnFailed: 'Verbindung fehlgeschlagen. Netzwerk prüfen und erneut versuchen.',
+  pacPreviewFailed: 'Vorschau fehlgeschlagen ({status}). Bitte erneut versuchen.',
+  pacPreviewFailedRetry: 'Vorschau fehlgeschlagen. Bitte erneut versuchen.',
+
   // ─── Symbolleisten-Schaltflächen ────────────────────────────────
   aiGenerate: 'Pipeline per KI generieren',
   importYaml: 'Aus YAML importieren',

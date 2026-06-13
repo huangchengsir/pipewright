@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { listRuns, triggerManual, type RunListItem, type RunStatus, type RunDetail, type ListRunsParams, type TriggerManualInput } from '../api/runs'
 import RunParamsEditor from '../components/RunParamsEditor.vue'
@@ -7,6 +8,8 @@ import TypedRunParams from '../components/TypedRunParams.vue'
 import { getParameters, validateParamValues, type ParamDef } from '../api/parameters'
 import { listProjects, type Project } from '../api/projects'
 import { HttpError } from '../api/http'
+
+const { t } = useI18n()
 
 // ─── router ───────────────────────────────────────────────────────────────────
 
@@ -29,15 +32,20 @@ const totalRuns = ref(0)
 
 const statusFilter = ref<RunStatus | 'all'>('all')
 
-const STATUS_FILTER_OPTIONS: Array<{ value: RunStatus | 'all'; label: string }> = [
-  { value: 'all',           label: '全部' },
-  { value: 'running',       label: '进行中' },
-  { value: 'success',       label: '成功' },
-  { value: 'failed',        label: '失败' },
-  { value: 'partial_failed',label: '部分失败' },
-  { value: 'rolled_back',   label: '已回滚' },
-  { value: 'queued',        label: '排队中' },
+const STATUS_FILTER_OPTIONS: Array<RunStatus | 'all'> = [
+  'all',
+  'running',
+  'success',
+  'failed',
+  'partial_failed',
+  'rolled_back',
+  'queued',
 ]
+
+// 筛选标签:'all' 用本页 key;其余复用全局 runStatus.* 状态文案。
+function filterLabel(value: RunStatus | 'all'): string {
+  return value === 'all' ? t('runs.filterAll') : t(`runStatus.${value}`)
+}
 
 // ─── data loading ─────────────────────────────────────────────────────────────
 
@@ -54,10 +62,10 @@ async function loadRuns(): Promise<void> {
   } catch (err) {
     if (err instanceof HttpError) {
       loadError.value = err.status === 0
-        ? '无法连接到服务器,请检查后端是否运行后重试'
-        : (err.apiError?.message ?? `加载运行列表失败(${err.status})`)
+        ? t('runs.errNoServer')
+        : (err.apiError?.message ?? t('runs.errLoadFailedCode', { n: err.status }))
     } else {
-      loadError.value = '加载运行列表失败,请稍后重试'
+      loadError.value = t('runs.errLoadFailedRetry')
     }
     loadState.value = 'error'
   }
@@ -142,12 +150,12 @@ async function handleTriggerSubmit(): Promise<void> {
 
   let ok = true
   if (!triggerForm.value.projectId) {
-    triggerProjectError.value = '请选择目标项目'
+    triggerProjectError.value = t('runs.errSelectProject')
     ok = false
   }
   const branch = triggerForm.value.branch.trim()
   if (!branch) {
-    triggerBranchError.value = '请输入目标分支'
+    triggerBranchError.value = t('runs.errEnterBranch')
     ok = false
   }
   if (!ok) return
@@ -173,14 +181,14 @@ async function handleTriggerSubmit(): Promise<void> {
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
-        triggerBanner.value = '无法连接到服务器,请检查后端是否运行后重试。'
+        triggerBanner.value = t('runs.errNoServerDot')
       } else if (err.status === 404) {
-        triggerBanner.value = '项目不存在,请刷新后重试。'
+        triggerBanner.value = t('runs.errProjectNotFound')
       } else {
-        triggerBanner.value = err.apiError?.message ?? `触发失败(${err.status})`
+        triggerBanner.value = err.apiError?.message ?? t('runs.errTriggerFailedCode', { n: err.status })
       }
     } else {
-      triggerBanner.value = '触发失败,请稍后重试。'
+      triggerBanner.value = t('runs.errTriggerFailedRetry')
     }
   } finally {
     triggerSubmitting.value = false
@@ -215,8 +223,8 @@ function formatDateGroup(d: Date): string {
     a.getMonth() === b.getMonth() &&
     a.getDate() === b.getDate()
 
-  if (sameDay(d, today)) return '今天'
-  if (sameDay(d, yesterday)) return '昨天'
+  if (sameDay(d, today)) return t('runs.today')
+  if (sameDay(d, yesterday)) return t('runs.yesterday')
 
   return d.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })
 }
@@ -224,7 +232,6 @@ function formatDateGroup(d: Date): string {
 // ─── Status pill config (fixed six-word set) ──────────────────────────────────
 
 interface StatusConfig {
-  label: string
   dot: string
   bg: string
   border: string
@@ -232,14 +239,15 @@ interface StatusConfig {
   pulse: boolean
 }
 
+// 文案统一走全局 runStatus.*;此处只配语义色调与脉冲。
 const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
-  queued:        { label: '排队中',   dot: 'var(--color-faint)',  bg: 'var(--color-card-2)',     border: 'var(--color-border-strong)', text: 'var(--color-dim)',   pulse: false },
-  running:       { label: '进行中',   dot: 'var(--color-amber)',  bg: 'var(--color-amber-soft)', border: 'transparent',               text: 'var(--color-amber)', pulse: true  },
-  waiting_approval:{ label: '等待审批', dot: 'var(--color-amber)', bg: 'var(--color-amber-soft)', border: 'var(--color-amber-line)',   text: 'var(--color-amber)', pulse: true  },
-  success:       { label: '成功',     dot: 'var(--color-green)',  bg: 'var(--color-green-soft)', border: 'transparent',               text: 'var(--color-green)', pulse: false },
-  failed:        { label: '失败',     dot: 'var(--color-red)',    bg: 'var(--color-red-soft)',   border: 'var(--color-red-line)',     text: 'var(--color-red)',   pulse: false },
-  partial_failed:{ label: '部分失败', dot: 'var(--color-red)',    bg: 'var(--color-red-soft)',   border: 'var(--color-red-line)',     text: 'var(--color-red)',   pulse: false },
-  rolled_back:   { label: '已回滚',   dot: 'var(--color-amber)',  bg: 'var(--color-amber-soft)', border: 'var(--color-amber-line)',   text: 'var(--color-amber)', pulse: false },
+  queued:        { dot: 'var(--color-faint)',  bg: 'var(--color-card-2)',     border: 'var(--color-border-strong)', text: 'var(--color-dim)',   pulse: false },
+  running:       { dot: 'var(--color-amber)',  bg: 'var(--color-amber-soft)', border: 'transparent',               text: 'var(--color-amber)', pulse: true  },
+  waiting_approval:{ dot: 'var(--color-amber)', bg: 'var(--color-amber-soft)', border: 'var(--color-amber-line)',   text: 'var(--color-amber)', pulse: true  },
+  success:       { dot: 'var(--color-green)',  bg: 'var(--color-green-soft)', border: 'transparent',               text: 'var(--color-green)', pulse: false },
+  failed:        { dot: 'var(--color-red)',    bg: 'var(--color-red-soft)',   border: 'var(--color-red-line)',     text: 'var(--color-red)',   pulse: false },
+  partial_failed:{ dot: 'var(--color-red)',    bg: 'var(--color-red-soft)',   border: 'var(--color-red-line)',     text: 'var(--color-red)',   pulse: false },
+  rolled_back:   { dot: 'var(--color-amber)',  bg: 'var(--color-amber-soft)', border: 'var(--color-amber-line)',   text: 'var(--color-amber)', pulse: false },
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -268,7 +276,7 @@ function formatTime(iso: string): string {
 }
 
 function triggerTypeLabel(type: 'webhook' | 'manual'): string {
-  return type === 'webhook' ? 'Webhook' : '手动'
+  return type === 'webhook' ? 'Webhook' : t('runs.triggerManual')
 }
 
 function isFailedStatus(status: RunStatus): boolean {
@@ -281,8 +289,8 @@ function isFailedStatus(status: RunStatus): boolean {
     <!-- ─── Page header ─────────────────────────────────────────────────── -->
     <header class="page-header">
       <div class="page-header-text">
-        <h1 class="page-title">运行</h1>
-        <p class="page-sub">全局流水线运行历史 · 点击行查看详情</p>
+        <h1 class="page-title">{{ t('runs.title') }}</h1>
+        <p class="page-sub">{{ t('runs.subtitle') }}</p>
       </div>
       <button
         class="btn-run"
@@ -292,7 +300,7 @@ function isFailedStatus(status: RunStatus): boolean {
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/>
         </svg>
-        手动触发
+        {{ t('runs.manualTrigger') }}
       </button>
     </header>
 
@@ -306,24 +314,24 @@ function isFailedStatus(status: RunStatus): boolean {
         <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
       </svg>
       <span>{{ loadError }}</span>
-      <button class="banner-retry" @click="loadRuns">↻ 重试</button>
+      <button class="banner-retry" @click="loadRuns">↻ {{ t('runs.retry') }}</button>
     </div>
 
     <!-- ─── Filter bar ───────────────────────────────────────────────────── -->
-    <div class="filter-bar" role="group" aria-label="运行状态筛选">
+    <div class="filter-bar" role="group" :aria-label="t('runs.filterAriaLabel')">
       <button
         v-for="opt in STATUS_FILTER_OPTIONS"
-        :key="opt.value"
+        :key="opt"
         type="button"
         class="filter-tab"
-        :class="{ 'filter-tab--active': statusFilter === opt.value }"
-        @click="statusFilter = opt.value; onFilterChange()"
-      >{{ opt.label }}</button>
+        :class="{ 'filter-tab--active': statusFilter === opt }"
+        @click="statusFilter = opt; onFilterChange()"
+      >{{ filterLabel(opt) }}</button>
     </div>
 
     <!-- ─── Loading skeleton ─────────────────────────────────────────────── -->
     <template v-if="loadState === 'loading'">
-      <div class="table-wrap" aria-busy="true" aria-label="加载中">
+      <div class="table-wrap" aria-busy="true" :aria-label="t('runs.loading')">
         <div class="skel-group-label skel" />
         <div
           v-for="i in 5"
@@ -364,34 +372,34 @@ function isFailedStatus(status: RunStatus): boolean {
             <path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.64 5.64l2.12 2.12m8.48 8.48 2.12 2.12M5.64 18.36l2.12-2.12m8.48-8.48 2.12-2.12"/>
           </svg>
         </div>
-        <p class="empty-label">暂无运行记录</p>
+        <p class="empty-label">{{ t('runs.empty') }}</p>
         <p class="empty-hint">
-          <template v-if="statusFilter !== 'all'">没有符合当前筛选条件的运行。</template>
-          <template v-else>流水线触发后运行将出现在此处。</template>
+          <template v-if="statusFilter !== 'all'">{{ t('runs.emptyFiltered') }}</template>
+          <template v-else>{{ t('runs.emptyHint') }}</template>
         </p>
         <button
           v-if="statusFilter !== 'all'"
           class="btn-secondary"
           @click="statusFilter = 'all'; onFilterChange()"
-        >清除筛选</button>
+        >{{ t('runs.clearFilter') }}</button>
       </div>
     </template>
 
     <!-- ─── Runs table (grouped by date) ────────────────────────────────── -->
     <template v-else-if="loadState === 'idle'">
       <p class="result-count" aria-live="polite">
-        共 {{ totalRuns }} 条记录
+        {{ t('runs.resultCount', { n: totalRuns }) }}
       </p>
 
       <div class="table-wrap">
         <!-- Table header -->
-        <div class="table-head" role="row" aria-label="运行列表表头">
-          <span class="th">状态</span>
-          <span class="th">项目</span>
-          <span class="th">分支 / Commit</span>
-          <span class="th">触发方式</span>
-          <span class="th">耗时</span>
-          <span class="th">时间</span>
+        <div class="table-head" role="row" :aria-label="t('runs.tableHeaderAria')">
+          <span class="th">{{ t('runs.colStatus') }}</span>
+          <span class="th">{{ t('runs.colProject') }}</span>
+          <span class="th">{{ t('runs.colBranchCommit') }}</span>
+          <span class="th">{{ t('runs.colTrigger') }}</span>
+          <span class="th">{{ t('runs.colDuration') }}</span>
+          <span class="th">{{ t('runs.colTime') }}</span>
           <span class="th th--action" />
         </div>
 
@@ -400,7 +408,7 @@ function isFailedStatus(status: RunStatus): boolean {
           <!-- Group header -->
           <div class="group-label" role="rowgroup">
             <span class="group-label-text">{{ group.label }}</span>
-            <span class="group-label-count">{{ group.items.length }} 条</span>
+            <span class="group-label-count">{{ t('runs.groupCount', { n: group.items.length }) }}</span>
           </div>
 
           <!-- Run rows -->
@@ -414,7 +422,7 @@ function isFailedStatus(status: RunStatus): boolean {
             }"
             role="row"
             tabindex="0"
-            :aria-label="`运行 ${shortId(run.id)}，${STATUS_CONFIG[run.status].label}，点击查看详情`"
+            :aria-label="t('runs.rowAria', { id: shortId(run.id), status: t(`runStatus.${run.status}`) })"
             @click="goToDetail(run.id)"
             @keydown.enter="goToDetail(run.id)"
             @keydown.space.prevent="goToDetail(run.id)"
@@ -428,7 +436,7 @@ function isFailedStatus(status: RunStatus): boolean {
                   border: `1px solid ${STATUS_CONFIG[run.status].border}`,
                   color: STATUS_CONFIG[run.status].text,
                 }"
-                :aria-label="`状态:${STATUS_CONFIG[run.status].label}`"
+                :aria-label="t('runs.statusAria', { status: t(`runStatus.${run.status}`) })"
               >
                 <span
                   class="status-dot"
@@ -436,7 +444,7 @@ function isFailedStatus(status: RunStatus): boolean {
                   :style="{ background: STATUS_CONFIG[run.status].dot }"
                   aria-hidden="true"
                 />
-                {{ STATUS_CONFIG[run.status].label }}
+                {{ t(`runStatus.${run.status}`) }}
               </span>
             </div>
 
@@ -474,7 +482,7 @@ function isFailedStatus(status: RunStatus): boolean {
                 v-if="isFailedStatus(run.status)"
                 class="diag-link"
                 aria-hidden="true"
-              >查看诊断 →</span>
+              >{{ t('runs.viewDiagnosis') }} →</span>
             </div>
 
             <!-- Running row: mini pulse bar -->
@@ -488,8 +496,8 @@ function isFailedStatus(status: RunStatus): boolean {
       </div>
 
       <!-- Pagination placeholder (Story 3.1 scope) -->
-      <div class="pagination-placeholder" aria-label="分页(后续版本实现)">
-        <span class="pagination-hint">分页 · 当前显示全部 {{ totalRuns }} 条</span>
+      <div class="pagination-placeholder" :aria-label="t('runs.paginationAria')">
+        <span class="pagination-hint">{{ t('runs.paginationHint', { n: totalRuns }) }}</span>
       </div>
     </template>
   </div>
@@ -502,7 +510,7 @@ function isFailedStatus(status: RunStatus): boolean {
       v-if="triggerModalOpen"
       class="modal-scrim"
       role="dialog"
-      aria-label="手动触发流水线运行"
+      :aria-label="t('runs.modalAria')"
       aria-modal="true"
       @keydown.esc="closeTriggerModal"
       @click.self="closeTriggerModal"
@@ -516,12 +524,12 @@ function isFailedStatus(status: RunStatus): boolean {
             </svg>
           </div>
           <div>
-            <h3 class="modal-title">手动触发运行</h3>
-            <p class="modal-sub">选择项目和分支,立即创建一次流水线运行</p>
+            <h3 class="modal-title">{{ t('runs.modalTitle') }}</h3>
+            <p class="modal-sub">{{ t('runs.modalSub') }}</p>
           </div>
           <button
             class="modal-close"
-            aria-label="关闭对话框"
+            :aria-label="t('runs.closeDialog')"
             :disabled="triggerSubmitting"
             @click="closeTriggerModal"
           >
@@ -550,7 +558,7 @@ function isFailedStatus(status: RunStatus): boolean {
         >
           <!-- Project dropdown -->
           <div class="field">
-            <label class="field-label" for="trigger-project">项目</label>
+            <label class="field-label" for="trigger-project">{{ t('runs.fieldProject') }}</label>
             <div class="select-wrap">
               <select
                 id="trigger-project"
@@ -563,7 +571,7 @@ function isFailedStatus(status: RunStatus): boolean {
                 @change="onProjectSelect"
               >
                 <option value="" disabled>
-                  {{ projectsLoading ? '加载项目中…' : '选择目标项目' }}
+                  {{ projectsLoading ? t('runs.loadingProjects') : t('runs.selectProject') }}
                 </option>
                 <option
                   v-for="proj in projects"
@@ -586,8 +594,8 @@ function isFailedStatus(status: RunStatus): boolean {
           <!-- Branch -->
           <div class="field">
             <label class="field-label" for="trigger-branch">
-              分支
-              <span class="field-hint-inline">（必填）</span>
+              {{ t('runs.fieldBranch') }}
+              <span class="field-hint-inline">{{ t('runs.fieldBranchHint') }}</span>
             </label>
             <input
               id="trigger-branch"
@@ -613,15 +621,15 @@ function isFailedStatus(status: RunStatus): boolean {
           <!-- Commit (optional) -->
           <div class="field">
             <label class="field-label" for="trigger-commit">
-              Commit
-              <span class="field-hint-inline">（可选,留空使用分支 HEAD）</span>
+              {{ t('runs.fieldCommit') }}
+              <span class="field-hint-inline">{{ t('runs.fieldCommitHint') }}</span>
             </label>
             <input
               id="trigger-commit"
               v-model="triggerForm.commit"
               class="field-input field-input--mono"
               type="text"
-              placeholder="例:a3f1c2d"
+              :placeholder="t('runs.commitPlaceholder')"
               autocomplete="off"
               :disabled="triggerSubmitting"
             />
@@ -630,8 +638,8 @@ function isFailedStatus(status: RunStatus): boolean {
           <!-- Parameters · 有类型化定义(P0)→ 类型化控件;无 → 自由 KV(Story 8-11) -->
           <div class="field">
             <label class="field-label">
-              参数
-              <span class="field-hint-inline">{{ triggerDefs.length ? '（按定义填写,注入流水线为环境变量）' : '（可选,注入流水线为环境变量）' }}</span>
+              {{ t('runs.fieldParams') }}
+              <span class="field-hint-inline">{{ triggerDefs.length ? t('runs.fieldParamsHintTyped') : t('runs.fieldParamsHintFree') }}</span>
             </label>
             <TypedRunParams
               v-if="triggerDefs.length"
@@ -649,7 +657,7 @@ function isFailedStatus(status: RunStatus): boolean {
               class="btn-secondary"
               :disabled="triggerSubmitting"
               @click="closeTriggerModal"
-            >取消</button>
+            >{{ t('runs.cancel') }}</button>
             <button
               type="submit"
               class="btn-run"
@@ -660,7 +668,7 @@ function isFailedStatus(status: RunStatus): boolean {
               <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/>
               </svg>
-              {{ triggerSubmitting ? '触发中…' : '立即运行' }}
+              {{ triggerSubmitting ? t('runs.triggering') : t('runs.runNow') }}
             </button>
           </div>
         </form>

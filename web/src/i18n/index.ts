@@ -73,11 +73,28 @@ export function detectLocale(): LocaleCode {
   return DEFAULT_LOCALE
 }
 
+// 基础词条(阶段一:外壳/登录/概览/公共)。每种语言一个文件;具体类型由此推断。
+const messages = { 'zh-CN': zhCN, 'zh-TW': zhTW, en, ja, ko, es, fr, de }
+
+// 按页面拆分的命名空间:`locales/<lang>/<page>.ts` 自动并入,文件名即顶层命名空间。
+// 阶段二起每个页面在此各放 8 个语言文件,互不触碰基础文件 → 可并行扩展、零冲突。
+const pageModules = import.meta.glob<{ default: Record<string, unknown> }>('./locales/*/*.ts', {
+  eager: true,
+})
+const bag = messages as Record<string, Record<string, unknown>>
+for (const [path, mod] of Object.entries(pageModules)) {
+  const m = path.match(/\.\/locales\/([^/]+)\/([^/]+)\.ts$/)
+  if (!m) continue
+  const [, lang, ns] = m
+  if (!isSupported(lang)) continue
+  bag[lang][ns] = mod.default
+}
+
 export const i18n = createI18n({
   legacy: false,
   locale: detectLocale(),
   fallbackLocale: DEFAULT_LOCALE,
-  messages: { 'zh-CN': zhCN, 'zh-TW': zhTW, en, ja, ko, es, fr, de },
+  messages,
 })
 
 function applyDocumentLang(code: LocaleCode): void {

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -126,6 +127,73 @@ func TestReportNon2xxErrors(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "bad") {
 		t.Error("错误信息不应含 token")
+	}
+}
+
+func TestReportRetriesTransientThenSucceeds(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if atomic.AddInt32(&hits, 1) < 3 { // 前两次瞬时 5xx,第三次成功
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+	rep := NewReporter(srv.Client()).WithBaseURLs(srv.URL, "").WithRetry(3, 0)
+	if err := rep.Report(context.Background(), Target{Platform: GitHub, Owner: "o", Repo: "r"}, "sha", StateSuccess, "", "", "tok"); err != nil {
+		t.Fatalf("瞬时失败后应重试成功, got %v", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 3 {
+		t.Fatalf("应重试到第 3 次成功, hits=%d", got)
+	}
+}
+
+func TestReportRetriesExhaustOn422(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(http.StatusUnprocessableEntity)
+	}))
+	defer srv.Close()
+	rep := NewReporter(srv.Client()).WithBaseURLs(srv.URL, "").WithRetry(3, 0)
+	if err := rep.Report(context.Background(), Target{Platform: GitHub, Owner: "o", Repo: "r"}, "sha", StateSuccess, "", "", "tok"); err == nil {
+		t.Fatal("持续 422 应最终返回错误")
+	}
+	if got := atomic.LoadInt32(&hits); got != 3 {
+		t.Fatalf("422 瞬时类应重试满 3 次, hits=%d", got)
+	}
+}
+
+func TestReportNoRetryOnAuthError(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	rep := NewReporter(srv.Client()).WithBaseURLs(srv.URL, "").WithRetry(3, 0)
+	if err := rep.Report(context.Background(), Target{Platform: GitHub, Owner: "o", Repo: "r"}, "sha", StateSuccess, "", "", "tok"); err == nil {
+		t.Fatal("401 应返回错误")
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Fatalf("401 非瞬时不应重试, hits=%d", got)
+	}
+}
+
+func TestReportSendsUserAgent(t *testing.T) {
+	var gotUA string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		gotUA = req.Header.Get("User-Agent")
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+	rep := NewReporter(srv.Client()).WithBaseURLs(srv.URL, "")
+	if err := rep.Report(context.Background(), Target{Platform: GitHub, Owner: "o", Repo: "r"}, "sha", StateSuccess, "", "", "tok"); err != nil {
+		t.Fatalf("Report: %v", err)
+	}
+	if gotUA != "Pipewright" {
+		t.Fatalf("User-Agent = %q, want Pipewright", gotUA)
 	}
 }
 

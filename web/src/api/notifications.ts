@@ -133,6 +133,7 @@ export type NotificationEvent =
   | 'deploy_failed'
   | 'rollback'
   | 'health_check_failed'
+  | 'approval_required'
 
 /** GET response item — an event→channel mapping. */
 export interface NotificationRoute {

@@ -133,6 +133,8 @@ export default {
   evRollbackDesc: '已回滚到上一版本',
   evHealthCheckFailed: '健康检查失败',
   evHealthCheckFailedDesc: '部署后健康检查未通过',
+  evApprovalRequired: '需要审批',
+  evApprovalRequiredDesc: '运行进入人工审批门,等待批准或拒绝',
 
   // 事件路由区
   routesTitle: '事件路由',

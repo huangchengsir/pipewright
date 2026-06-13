@@ -129,6 +129,8 @@ export default {
   evRollbackDesc: 'Restauré à la version précédente',
   evHealthCheckFailed: 'Échec du contrôle de santé',
   evHealthCheckFailedDesc: 'Le contrôle de santé après déploiement n’a pas réussi',
+  evApprovalRequired: 'Approbation requise',
+  evApprovalRequiredDesc: 'Une exécution a atteint une porte d’approbation manuelle et attend approbation ou refus',
 
   routesTitle: 'Routes d’événements',
   routesDescPre: 'Configurez quels événements notifient quels canaux. ',

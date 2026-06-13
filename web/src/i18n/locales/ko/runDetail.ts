@@ -34,6 +34,12 @@ export default {
   triggerManual: '수동',
   commitUnresolved: '가져오지 못함',
 
+  // 구성 소스 배지(GitOps · Slice 2)
+  metaSpecSource: '구성 소스',
+  specSourceRepo: '저장소 {ref} · {file}',
+  specSourceStored: '웹 구성',
+  specSourceFallbackHint: '저장소 파일이 없거나 유효하지 않아 웹 구성으로 폴백했습니다',
+
   pipelineProgress: '파이프라인 진행',
   pipelineComplete: '파이프라인 완료',
   pipelineFailed: '파이프라인 실패',

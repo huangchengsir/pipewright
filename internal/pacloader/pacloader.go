@@ -31,9 +31,28 @@ import (
 // DefaultFile 是仓库根「流水线即代码」文件名。
 const DefaultFile = ".pipewright.yml"
 
-// SpecLoader 是被装饰的库内加载器契约(与 dagrun.SpecLoader 同形,避免反向 import dagrun)。
+// 回退原因枚举(配置来源可见性 · Slice 2):tryOverride 未命中覆盖时,据此分类「为何回退库内配置」。
+const (
+	fallbackDisabled = "disabled"      // 每项目开关关闭且非全局强开
+	fallbackNoFile   = "no_file"       // 仓库无 .pipewright.yml / 拉取报错(多数项目的正常路径)
+	fallbackInvalid  = "invalid_yaml"  // YAML 解析/校验失败
+	fallbackDegraded = "degraded"      // 克隆降级,无法读文件
+	fallbackEmpty    = "empty"         // 文件存在但内容为空
+	fallbackLookup   = "lookup_failed" // 项目查询失败 / 缺仓库地址 / 缺依赖
+)
+
+// SpecLoader 是被装饰的库内加载器契约(与 dagrun.SpecLoader 的库内 2 参形态同形,避免反向 import dagrun)。
 type SpecLoader interface {
 	Get(ctx context.Context, projectID string) (*pipeline.Config, error)
+}
+
+// SpecSource 描述本次运行 spec 的来源(与 dagrun.SpecSource 同形,避免反向 import dagrun)。
+// FromRepo=true:仓库 `.pipewright.yml` 驱动(Ref/File 有值);否则库内配置(FallbackReason 记回退原因)。
+type SpecSource struct {
+	FromRepo       bool
+	Ref            string
+	File           string
+	FallbackReason string
 }
 
 // ProjectInfo 是覆盖装饰器拉取 `.pipewright.yml` 所需的项目最小视图。
@@ -82,31 +101,34 @@ func New(inner SpecLoader, projects ProjectLookup, tokens TokenRevealer, blobs B
 
 // Get 实现 dagrun.SpecLoader:尝试用**运行分支**的 `.pipewright.yml` 覆盖(分支为空时退化为
 // 默认分支);任何问题都回退到 inner(库内配置)。绝不把 YAML 问题冒泡给调用方。
-func (l *Loader) Get(ctx context.Context, projectID, branch string) (*pipeline.Config, error) {
-	if cfg, ok := l.tryOverride(ctx, projectID, branch); ok {
-		return cfg, nil
+func (l *Loader) Get(ctx context.Context, projectID, branch string) (*pipeline.Config, SpecSource, error) {
+	cfg, refOrReason, ok := l.tryOverride(ctx, projectID, branch)
+	if ok {
+		return cfg, SpecSource{FromRepo: true, Ref: refOrReason, File: DefaultFile}, nil
 	}
-	return l.inner.Get(ctx, projectID)
+	inner, err := l.inner.Get(ctx, projectID)
+	return inner, SpecSource{FromRepo: false, FallbackReason: refOrReason}, err
 }
 
-// tryOverride 尝试从运行分支(空则默认分支)拉取并解析 `.pipewright.yml`;成功返回 (cfg,true)。
-// 任何环节失败返回 (nil,false)(调用方回退)。失败只记 debug 原因(无密钥)。
-func (l *Loader) tryOverride(ctx context.Context, projectID, branch string) (*pipeline.Config, bool) {
+// tryOverride 尝试从运行分支(空则默认分支)拉取并解析 `.pipewright.yml`;成功返回 (cfg,ref,true)。
+// 任何环节失败返回 (nil,reason,false):reason 为回退原因枚举(配置来源可见性 · Slice 2),
+// 调用方据此填 SpecSource.FallbackReason。失败只记 debug 原因(无密钥)。
+func (l *Loader) tryOverride(ctx context.Context, projectID, branch string) (cfg *pipeline.Config, refOrReason string, ok bool) {
 	if l.projects == nil || l.blobs == nil {
-		return nil, false
+		return nil, fallbackLookup, false
 	}
 
 	info, err := l.projects.Lookup(ctx, projectID)
 	if err != nil {
 		debugf("项目 %s 查询失败,回退库内配置", projectID)
-		return nil, false
+		return nil, fallbackLookup, false
 	}
 	// 每项目开关:未开启「流水线即代码」且非全局强开 → 不覆盖,用库内配置。
 	if !info.PacEnabled && !l.globalOverride {
-		return nil, false
+		return nil, fallbackDisabled, false
 	}
 	if strings.TrimSpace(info.RepoURL) == "" {
-		return nil, false
+		return nil, fallbackLookup, false
 	}
 
 	// 取仓库凭据明文(进程内取用即弃;取不到不致命 → 空 token 尝试公开仓库)。
@@ -127,24 +149,24 @@ func (l *Loader) tryOverride(ctx context.Context, projectID, branch string) (*pi
 	if ferr != nil {
 		// 文件不存在 / 克隆失败 → 回退(正常路径:多数项目没有 .pipewright.yml)。
 		debugf("项目 %s 未读到 %s(回退库内配置)", projectID, DefaultFile)
-		return nil, false
+		return nil, fallbackNoFile, false
 	}
 	if degraded {
 		debugf("项目 %s 仓库克隆降级,无法读 %s(回退库内配置)", projectID, DefaultFile)
-		return nil, false
+		return nil, fallbackDegraded, false
 	}
 	if strings.TrimSpace(content) == "" {
-		return nil, false
+		return nil, fallbackEmpty, false
 	}
 
-	cfg, perr := pipelineyaml.Parse([]byte(content))
+	parsed, perr := pipelineyaml.Parse([]byte(content))
 	if perr != nil {
 		// YAML 非法 → 回退(绝不让坏 YAML 中断运行)。错误不含密钥但仍只记 debug。
 		debugf("项目 %s 的 %s 解析/校验失败,回退库内配置", projectID, DefaultFile)
-		return nil, false
+		return nil, fallbackInvalid, false
 	}
 	debugf("项目 %s 命中仓库 %s(分支 %s),用其驱动本次运行", projectID, DefaultFile, ref)
-	return &cfg, true
+	return &parsed, ref, true
 }
 
 // debugf 记录回退原因(诊断用)。绝不打印 token / 仓库 URL 凭据。

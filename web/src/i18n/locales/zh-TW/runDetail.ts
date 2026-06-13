@@ -34,6 +34,12 @@ export default {
   triggerManual: '手動',
   commitUnresolved: '未取到',
 
+  // 設定來源徽章(GitOps · Slice 2)
+  metaSpecSource: '設定來源',
+  specSourceRepo: '倉庫 {ref} · {file}',
+  specSourceStored: '網頁設定',
+  specSourceFallbackHint: '倉庫檔案缺失或無效,已回退到網頁設定',
+
   pipelineProgress: '流水線進度',
   pipelineComplete: '流水線完成',
   pipelineFailed: '流水線失敗',

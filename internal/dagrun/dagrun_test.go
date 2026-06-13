@@ -20,10 +20,10 @@ type fakeLoader struct {
 	gotProject string
 }
 
-func (f *fakeLoader) Get(_ context.Context, projectID string, branch string) (*pipeline.Config, error) {
+func (f *fakeLoader) Get(_ context.Context, projectID string, branch string) (*pipeline.Config, SpecSource, error) {
 	f.gotProject = projectID
 	f.gotBranch = branch
-	return f.cfg, nil
+	return f.cfg, SpecSource{FromRepo: false}, nil
 }
 
 // fakeSink 记录 StepSink 调用(dagrun 已串行化调用,这里再加锁防御)。
@@ -58,7 +58,8 @@ func (s *fakeSink) StepDone(_ context.Context, ord int, status string) error {
 	s.done[ord] = status
 	return nil
 }
-func (s *fakeSink) SetFailureLog(_ context.Context, _ string) error { return nil }
+func (s *fakeSink) SetFailureLog(_ context.Context, _ string) error         { return nil }
+func (s *fakeSink) SetSpecSource(_ context.Context, _ run.SpecSource) error { return nil }
 func (s *fakeSink) Log(_ context.Context, _ string, _ int, line string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -268,12 +269,15 @@ func TestSpecLoaderFuncIgnoresBranchAndDelegates(t *testing.T) {
 		gotProject = projectID
 		return cfg, nil
 	})
-	got, err := adapter.Get(context.Background(), "proj-y", "any-branch")
+	got, src, err := adapter.Get(context.Background(), "proj-y", "any-branch")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	if got != cfg {
 		t.Errorf("应委托底层返回同一 cfg")
+	}
+	if src.FromRepo {
+		t.Errorf("SpecLoaderFunc 来源应为库内配置(FromRepo=false),实际 %+v", src)
 	}
 	if gotProject != "proj-y" {
 		t.Errorf("应透传 projectID=proj-y,实际 %q", gotProject)

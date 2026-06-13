@@ -291,7 +291,8 @@ func (s *service) Get(ctx context.Context, id string) (*Run, error) {
 		        pr.created_at, pr.started_at, pr.finished_at,
 		        pr.failure_log, pr.diagnosis_json, pr.params_json,
 		        pr.chain_source_run_id, pr.chain_depth,
-		        pr.resolved_environment, pr.resolved_target_server_ids
+		        pr.resolved_environment, pr.resolved_target_server_ids,
+		        pr.spec_source, pr.spec_source_ref, pr.spec_source_file, pr.spec_source_fallback
 		 FROM pipeline_runs pr
 		 LEFT JOIN projects p ON p.id = pr.project_id
 		 WHERE pr.id = ?`, id,
@@ -300,7 +301,8 @@ func (s *service) Get(ctx context.Context, id string) (*Run, error) {
 		&createdStr, &startedStr, &finishStr,
 		&failureLog, &diagnosisJSON, &paramsJSON,
 		&r.Trigger.ChainSourceRunID, &r.Trigger.ChainDepth,
-		&r.Trigger.ResolvedEnvironment, &targetIDsJSON)
+		&r.Trigger.ResolvedEnvironment, &targetIDsJSON,
+		&r.SpecSource.Source, &r.SpecSource.Ref, &r.SpecSource.File, &r.SpecSource.Fallback)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound

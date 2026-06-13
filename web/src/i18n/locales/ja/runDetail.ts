@@ -34,6 +34,12 @@ export default {
   triggerManual: '手動',
   commitUnresolved: '取得できず',
 
+  // 設定ソースのバッジ(GitOps · Slice 2)
+  metaSpecSource: '設定ソース',
+  specSourceRepo: 'リポジトリ {ref} · {file}',
+  specSourceStored: 'Web 設定',
+  specSourceFallbackHint: 'リポジトリのファイルが見つからないか無効なため、Web 設定にフォールバックしました',
+
   pipelineProgress: 'パイプラインの進行',
   pipelineComplete: 'パイプライン完了',
   pipelineFailed: 'パイプライン失敗',

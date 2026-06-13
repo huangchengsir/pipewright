@@ -38,6 +38,13 @@ type runDetailDTO struct {
 	StartedAt   *string     `json:"startedAt"`
 	FinishedAt  *string     `json:"finishedAt"`
 	DurationMs  *int64      `json:"durationMs"`
+	// 配置来源(GitOps 配置来源可见性 · Slice 2):本次运行由仓库 `.pipewright.yml`("repo")还是
+	// 库内网页配置("stored")驱动;""=未记录(老运行)。SpecSourceRef/File 在 repo 来源时有值;
+	// SpecSourceFallback 在 stored 来源且「本想用仓库但回退」时记原因(no_file|invalid_yaml|…)。
+	SpecSource         string `json:"specSource"`
+	SpecSourceRef      string `json:"specSourceRef"`
+	SpecSourceFile     string `json:"specSourceFile"`
+	SpecSourceFallback string `json:"specSourceFallback"`
 	// artifacts:Story 3.4 填(构建产物契约 / FR-6);成功/有产物时为数组,否则 []。形状冻结。
 	Artifacts []artifactDTO `json:"artifacts"`
 	// targets:Epic 4(Story 4.2)填(SSH 部署执行 / FR-10)。部署过 → 数组;否则 null。
@@ -144,9 +151,15 @@ func toRunDetailDTO(r *run.Run, artifacts []run.Artifact, targets []run.DeployTa
 		StartedAt:   rfc3339Ptr(r.StartedAt),
 		FinishedAt:  rfc3339Ptr(r.FinishedAt),
 		DurationMs:  durationMs(r.StartedAt, r.FinishedAt),
-		Artifacts:   toArtifactDTOs(artifacts), // Story 3.4 填(FR-6);无产物 → []
-		Targets:     targetsSlot,               // Story 4.2 填(部署过 → 数组;否则 null);形状冻结
-		Diagnosis:   diagnosis,                 // Story 7.2 填(无诊断 → nil);形状冻结
+
+		SpecSource:         r.SpecSource.Source, // Slice 2:配置来源可见性("repo"/"stored"/"")
+		SpecSourceRef:      r.SpecSource.Ref,
+		SpecSourceFile:     r.SpecSource.File,
+		SpecSourceFallback: r.SpecSource.Fallback,
+
+		Artifacts: toArtifactDTOs(artifacts), // Story 3.4 填(FR-6);无产物 → []
+		Targets:   targetsSlot,               // Story 4.2 填(部署过 → 数组;否则 null);形状冻结
+		Diagnosis: diagnosis,                 // Story 7.2 填(无诊断 → nil);形状冻结
 	}
 }
 

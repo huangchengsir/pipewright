@@ -96,6 +96,7 @@ func (s *fakeSink) SetFailureLog(_ context.Context, log string) error {
 	s.failureLog = log
 	return nil
 }
+func (s *fakeSink) SetSpecSource(_ context.Context, _ run.SpecSource) error { return nil }
 func (s *fakeSink) Log(_ context.Context, stream string, ordinal int, line string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -596,6 +596,20 @@ func (d *dbStepSink) SetFailureLog(_ context.Context, logText string) error {
 	return nil
 }
 
+// SetSpecSource 持久化驱动本次运行的流水线配置来源(GitOps 配置来源可见性)到 pipeline_runs。
+// 用后台 ctx 落库;参数化 SQL。best-effort:落库失败返回 error 由调用方忽略,不阻断运行。
+func (d *dbStepSink) SetSpecSource(_ context.Context, src SpecSource) error {
+	_, err := d.svc.db.ExecContext(context.Background(),
+		`UPDATE pipeline_runs
+		   SET spec_source = ?, spec_source_ref = ?, spec_source_file = ?, spec_source_fallback = ?
+		 WHERE id = ?`,
+		src.Source, src.Ref, src.File, src.Fallback, d.runID)
+	if err != nil {
+		return fmt.Errorf("run: set spec source: %w", err)
+	}
+	return nil
+}
+
 // Log 实现 StepSink.Log(Story 3.6):**先脱敏**(注入的 mask.Masker)→ 落 run_logs(分配
 // run 内单调 seq)→ 经事件总线发 EventLog(text 已脱敏)。AC-SEC-04:落库/出网前一律 Scrub,
 // 桩假 secret 在 run_logs 表/SSE 中一律 [MASKED]、绝无明文。

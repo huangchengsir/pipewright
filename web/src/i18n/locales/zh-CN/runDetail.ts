@@ -38,6 +38,12 @@ export default {
   triggerManual: '手动',
   commitUnresolved: '未取到',
 
+  // 配置来源徽标(GitOps · Slice 2)
+  metaSpecSource: '配置来源',
+  specSourceRepo: '仓库 {ref} · {file}',
+  specSourceStored: '网页配置',
+  specSourceFallbackHint: '仓库文件缺失或无效,已回退到网页配置',
+
   // 区块标题
   pipelineProgress: '流水线进度',
   pipelineComplete: '流水线完成',

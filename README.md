@@ -145,6 +145,56 @@ make build          # 前端构建 → go:embed → 单个静态二进制 ./pipe
 | `PIPEWRIGHT_ADMIN_PASSWORD` | 首次启动管理员口令 | 无(须设置) |
 | `PIPEWRIGHT_RUNNER` | 运行执行器:默认 DAG(按画布 stages/script/deploy_ssh/notify 编排执行);设 `legacy` 回退旧版固定流程 | `dag` |
 
+## 流水线即代码(GitOps)
+
+把流水线结构写进仓库的 `.pipewright.yml`,**跟代码同源、走 PR 评审、按分支演进**——不再依赖画布配置的隐式漂移。
+
+- **开启**:在项目的流水线页打开「流水线即代码 / Pipeline as code」开关(按项目维度)。
+- **生效方式**:开启后,每次运行都从**本次构建分支**的**仓库根**读取 `.pipewright.yml`(分支为空时回退项目默认分支),用其中的流水线 spec 驱动本次运行;不同分支可携带各自的 `.pipewright.yml`。文件用项目绑定的仓库凭据临时拉取,无新增暴露面。
+- **永不卡住运行的回退**:文件**缺失** → 回退到画布(UI)里已配置的流水线;文件存在但 **YAML 非法** → 同样回退到已存的画布配置。
+- **作用范围**:YAML 只管**流水线结构**(阶段 / 任务 / `needs` / DAG 编排);**变量与缓存、环境与凭据、触发规则**仍来自画布(UI)设置,**不写在 YAML 里**。
+- **schema** 与平台「从 YAML 导入」用的是同一套(`version` + `stages` → `jobs`,job 用嵌套 `script:` 块写 `image`/`commands`/`env`/`workdir`)。
+
+```yaml
+version: 1
+stages:
+  - id: stg_src              # needs 按阶段 id 引用,故跨阶段依赖须显式写 id
+    name: 流水线源
+    kind: source
+    jobs:
+      - name: Gitee 源
+        type: git_source
+  - id: stg_build
+    name: 构建
+    kind: build
+    needs: [stg_src]
+    jobs:
+      - name: 运行测试
+        type: script
+        script:
+          image: golang:1.23
+          commands:
+            - go vet ./...
+            - go test ./...
+          env:
+            CGO_ENABLED: "0"
+          workdir: src/app
+  - id: stg_deploy
+    name: 部署
+    kind: deploy
+    needs: [stg_build]
+    gate: true               # 人工审批门
+    when:
+      branches: [main, release/*]
+    jobs:
+      - name: SSH 部署
+        type: deploy_ssh
+        config:
+          targetEnv: prod
+```
+
+> 也可用全局环境变量 `PIPEWRIGHT_PAC_RUNTIME=1` 对**所有项目**强制开启流水线即代码(无视各项目开关),供向后兼容 / 高级用户使用。
+
 ## 技术栈
 
 - **后端**:Go · Chi(路由)· modernc/sqlite(纯 Go,无 CGO)· go-git · NaCl secretbox(保险库)· argon2id · golang.org/x/crypto/ssh(免 Agent 部署)

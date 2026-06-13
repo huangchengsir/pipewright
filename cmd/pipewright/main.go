@@ -359,23 +359,28 @@ func main() {
 		runnerOpts = []run.PoolOption{run.WithRunner(dagrun.New(specLoader, dagOpts...))}
 	}
 
-	// 终态钩子:通知(Story 5.2);PIPEWRIGHT_PR_STATUS=1 时再叠加「PR 状态回写」(Story 8-9 / FR-8-9):
-	// run 终态 → 据项目仓库识别 GitHub/Gitee → 经项目凭据回写该 commit 的提交状态(PR 检查)。
-	// **默认关闭**(避免意外往用户真实仓库回写);开启时 best-effort,失败仅记日志不阻断 run 终态。
+	// 终态钩子:通知(Story 5.2)+「PR 状态回写」(Story 8-9 / FR-8-9):run 终态 → 据项目仓库
+	// 识别 GitHub/Gitee → 经项目凭据回写该 commit 的提交状态(PR 检查)。
+	//
+	// PR 回写钩子**始终挂载**,但仅对**开启了 PR 状态检查**的项目(每项目开关 projects.pr_status_enabled)
+	// 生效——老项目默认关 → 行为不变(不会意外往真实仓库回写),且无需服务端 env 即可逐项目启用。
+	// 历史全局开关 PIPEWRIGHT_PR_STATUS=1 保留为**全局强开**:无视每项目开关,对所有项目回写(向后兼容)。
+	// API base 可经 env 覆盖(GitHub/Gitee 企业版自托管;空则用公有云默认),无论是否全局强开均生效。
+	// best-effort:失败仅记日志,不阻断 run 终态。
 	terminalHook := httpapi.NewNotifyHook(runSvc, notifySvc, secretSrc)
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("PIPEWRIGHT_PR_STATUS")), "1") {
-		// API base 可经 env 覆盖(GitHub/Gitee 企业版自托管;空则用公有云默认)。
-		reporter := prstatus.NewReporter(&http.Client{Timeout: 10 * time.Second}).WithBaseURLs(
-			strings.TrimSpace(os.Getenv("PIPEWRIGHT_PR_STATUS_GITHUB_BASE")),
-			strings.TrimSpace(os.Getenv("PIPEWRIGHT_PR_STATUS_GITEE_BASE")))
-		prHook := httpapi.NewPRStatusHook(runSvc, projectSvc, credVault, reporter,
-			strings.TrimSpace(os.Getenv("PIPEWRIGHT_PUBLIC_URL")))
-		notify := terminalHook
-		terminalHook = func(ctx context.Context, runID, finalStatus string) {
-			notify(ctx, runID, finalStatus)
-			prHook(ctx, runID, finalStatus)
-		}
-		log.Printf("[prstatus] PR 状态回写已启用(PIPEWRIGHT_PR_STATUS=1;GitHub/Gitee,经项目凭据,best-effort)")
+	prStatusGlobalOverride := strings.EqualFold(strings.TrimSpace(os.Getenv("PIPEWRIGHT_PR_STATUS")), "1")
+	reporter := prstatus.NewReporter(&http.Client{Timeout: 10 * time.Second}).WithBaseURLs(
+		strings.TrimSpace(os.Getenv("PIPEWRIGHT_PR_STATUS_GITHUB_BASE")),
+		strings.TrimSpace(os.Getenv("PIPEWRIGHT_PR_STATUS_GITEE_BASE")))
+	prHook := httpapi.NewPRStatusHook(runSvc, projectSvc, credVault, reporter,
+		strings.TrimSpace(os.Getenv("PIPEWRIGHT_PUBLIC_URL")), prStatusGlobalOverride)
+	notify := terminalHook
+	terminalHook = func(ctx context.Context, runID, finalStatus string) {
+		notify(ctx, runID, finalStatus)
+		prHook(ctx, runID, finalStatus)
+	}
+	if prStatusGlobalOverride {
+		log.Printf("[prstatus] 全局强开:PR 状态回写对所有项目生效(PIPEWRIGHT_PR_STATUS=1;无视每项目开关)")
 	}
 
 	// 流水线串联终态钩子(FR-8-11):复用同一终态槽,叠加到 terminalHook 之上。

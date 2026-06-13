@@ -17,6 +17,12 @@ export default {
   pacOffHint: "Une fois activé, chaque exécution lit .pipewright.yml à la racine du dépôt sur la branche d'exécution (repli sur cette configuration si absent ou invalide).",
   pacToggleFailed: 'Échec du basculement. Veuillez réessayer.',
 
+  // ─── Vérifications de statut de PR (réécriture du statut de commit · Story 8-9 / FR-8-9) ─
+  prStatusTitle: 'Vérifications de statut de PR',
+  prStatusOnHint: "À la fin d'une exécution, Pipewright détecte la plateforme du dépôt (GitHub/Gitee) et réécrit le statut de réussite/échec du commit en tant que vérification de PR à l'aide de l'identifiant du projet (au mieux ; les échecs n'affectent jamais l'exécution).",
+  prStatusOffHint: "Une fois activé, la fin d'une exécution détecte la plateforme du dépôt (GitHub/Gitee) et réécrit le statut du commit en tant que vérification de PR à l'aide de l'identifiant du projet (au mieux).",
+  prStatusToggleFailed: 'Échec du basculement. Veuillez réessayer.',
+
   // ─── Aperçu de la config du dépôt (GitOps · récupérer et valider .pipewright.yml à une réf) ──
   pacPreviewBtn: 'Aperçu de la config du dépôt',
   pacPreviewTitle: 'Aperçu de la configuration du dépôt',

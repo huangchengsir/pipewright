@@ -19,12 +19,17 @@ import (
 
 // NewPRStatusHook 构造 PR 状态回写终态钩子。publicBaseURL 为平台对外访问地址(用于 target_url;
 // 空则不带链接)。token 经 vault 即取即用,绝不进 URL/日志。
+//
+// 钩子始终挂载,但仅在该 run 的项目**开启了 PR 状态检查**(projects.pr_status_enabled)时才回写;
+// globalOverride=true(历史全局 env PIPEWRIGHT_PR_STATUS=1)则无视每项目开关,对所有项目回写。
+// 默认(开关关 + 无全局强开)→ 不回写,行为与历史 env 未设时一致。
 func NewPRStatusHook(
 	runs run.Service,
 	projects project.Service,
 	v vault.Vault,
 	reporter *prstatus.Reporter,
 	publicBaseURL string,
+	globalOverride bool,
 ) func(ctx context.Context, runID, finalStatus string) {
 	publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
 	return func(ctx context.Context, runID, finalStatus string) {
@@ -38,6 +43,10 @@ func NewPRStatusHook(
 		}
 		proj, err := projects.Get(ctx, r.ProjectID)
 		if err != nil {
+			return
+		}
+		// 每项目开关门控:未开启且无全局强开 → 静默跳过(老项目默认行为)。
+		if !globalOverride && !proj.PRStatusEnabled {
 			return
 		}
 		target, ok := prstatus.Detect(proj.RepoURL)

@@ -17,6 +17,12 @@ export default {
   pacOffHint: '开启后,每次运行按运行分支读取仓库根 .pipewright.yml 驱动(缺失或非法则回退此处配置)。',
   pacToggleFailed: '切换失败,请重试。',
 
+  // ─── PR 状态检查(提交状态回写 · Story 8-9 / FR-8-9)────────────────
+  prStatusTitle: 'PR 状态检查',
+  prStatusOnHint: '运行结束时据项目仓库识别 GitHub/Gitee,经项目凭据把该 commit 的成功/失败状态回写为 PR 检查(尽力而为,失败不影响运行)。',
+  prStatusOffHint: '开启后,运行结束时据项目仓库识别 GitHub/Gitee,经项目凭据将该 commit 的状态回写为 PR 检查(尽力而为)。',
+  prStatusToggleFailed: '切换失败,请重试。',
+
   // ─── 预览仓库配置(GitOps · 按 ref 拉取并校验 .pipewright.yml)────────
   pacPreviewBtn: '预览仓库配置',
   pacPreviewTitle: '预览仓库配置',

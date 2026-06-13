@@ -194,6 +194,60 @@ func TestUpdateRename(t *testing.T) {
 	}
 }
 
+// TestUpdatePRStatusEnabledRoundTrip 断言 pr_status_enabled 经 Update 设置后能从 Get 读回,
+// 且默认 false、可关回、与无关字段更新互不串扰。
+func TestUpdatePRStatusEnabledRoundTrip(t *testing.T) {
+	db := testDB(t)
+	v := vault.New(db, testMasterKey())
+	svc := New(db, v, &stubProber{branch: "main"})
+	credID := newCred(t, v, "tok")
+	p, err := svc.Create(context.Background(), CreateInput{Name: "x", RepoURL: "https://gitee.com/a/b.git", CredentialID: credID})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// 默认应为 false。
+	if p.PRStatusEnabled {
+		t.Fatalf("新建项目 PRStatusEnabled 应默认 false, got true")
+	}
+
+	// 开启 → Get 读回应为 true。
+	on := true
+	updated, err := svc.Update(context.Background(), p.ID, UpdateInput{PRStatusEnabled: &on})
+	if err != nil {
+		t.Fatalf("Update on: %v", err)
+	}
+	if !updated.PRStatusEnabled {
+		t.Fatalf("Update 后返回的 PRStatusEnabled 应为 true")
+	}
+	got, err := svc.Get(context.Background(), p.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !got.PRStatusEnabled {
+		t.Fatalf("Get 读回的 PRStatusEnabled 应为 true(持久化失败)")
+	}
+
+	// 更新无关字段(改名)不应影响已开启的 PR 状态开关。
+	newName := "renamed"
+	updated, err = svc.Update(context.Background(), p.ID, UpdateInput{Name: &newName})
+	if err != nil {
+		t.Fatalf("Update rename: %v", err)
+	}
+	if !updated.PRStatusEnabled {
+		t.Fatalf("更新无关字段不应清除 PRStatusEnabled,got false")
+	}
+
+	// 关回 → false。
+	off := false
+	updated, err = svc.Update(context.Background(), p.ID, UpdateInput{PRStatusEnabled: &off})
+	if err != nil {
+		t.Fatalf("Update off: %v", err)
+	}
+	if updated.PRStatusEnabled {
+		t.Fatalf("关闭后 PRStatusEnabled 应为 false")
+	}
+}
+
 func TestUpdateRebindCredentialReprobes(t *testing.T) {
 	db := testDB(t)
 	v := vault.New(db, testMasterKey())

@@ -17,6 +17,12 @@ export default {
   pacOffHint: 'Wenn aktiviert, liest jeder Lauf .pipewright.yml aus dem Repository-Stamm im Lauf-Branch (Rückfall auf diese Konfiguration, wenn fehlend oder ungültig).',
   pacToggleFailed: 'Umschalten fehlgeschlagen. Bitte erneut versuchen.',
 
+  // ─── PR-Statusprüfungen (Commit-Status-Rückschreibung · Story 8-9 / FR-8-9) ─
+  prStatusTitle: 'PR-Statusprüfungen',
+  prStatusOnHint: 'Wenn ein Lauf endet, erkennt Pipewright die Repository-Plattform (GitHub/Gitee) und schreibt den Erfolgs-/Fehlerstatus des Commits mit den Projektanmeldedaten als PR-Prüfung zurück (nach bestem Bemühen; Fehler beeinflussen den Lauf nie).',
+  prStatusOffHint: 'Wenn aktiviert, erkennt das Ende eines Laufs die Repository-Plattform (GitHub/Gitee) und schreibt den Commit-Status mit den Projektanmeldedaten als PR-Prüfung zurück (nach bestem Bemühen).',
+  prStatusToggleFailed: 'Umschalten fehlgeschlagen. Bitte erneut versuchen.',
+
   // ─── Repository-Konfiguration vorschauen (GitOps · .pipewright.yml an einer Ref abrufen & prüfen) ──
   pacPreviewBtn: 'Repo-Konfig vorschauen',
   pacPreviewTitle: 'Repository-Konfiguration vorschauen',

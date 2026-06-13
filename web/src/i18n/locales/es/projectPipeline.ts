@@ -17,6 +17,12 @@ export default {
   pacOffHint: 'Cuando está activo, cada ejecución lee .pipewright.yml desde la raíz del repositorio en la rama de ejecución (con reserva a esta configuración si falta o no es válido).',
   pacToggleFailed: 'No se pudo cambiar. Inténtalo de nuevo.',
 
+  // ─── Comprobaciones de estado de PR (escritura de estado de commit · Story 8-9 / FR-8-9) ─
+  prStatusTitle: 'Comprobaciones de estado de PR',
+  prStatusOnHint: 'Al terminar una ejecución, Pipewright detecta la plataforma del repositorio (GitHub/Gitee) y escribe el estado de éxito/fallo del commit como comprobación de PR usando la credencial del proyecto (con el mejor esfuerzo; los fallos nunca afectan a la ejecución).',
+  prStatusOffHint: 'Cuando está activo, al terminar una ejecución se detecta la plataforma del repositorio (GitHub/Gitee) y se escribe el estado del commit como comprobación de PR usando la credencial del proyecto (con el mejor esfuerzo).',
+  prStatusToggleFailed: 'No se pudo cambiar. Inténtalo de nuevo.',
+
   // ─── Previsualizar configuración del repositorio (GitOps · obtener y validar .pipewright.yml en un ref) ──
   pacPreviewBtn: 'Previsualizar config del repo',
   pacPreviewTitle: 'Previsualizar configuración del repositorio',

@@ -63,8 +63,11 @@ type Project struct {
 	// PacEnabled 是「流水线即代码」开关(GitOps · FR-8-12):开启后运行时按运行分支读仓库根
 	// .pipewright.yml 驱动该 run(缺失/非法回退库内配置)。默认 false。
 	PacEnabled bool
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	// PRStatusEnabled 是「PR 状态检查」开关(Story 8-9 / FR-8-9):开启后 run 终态据项目仓库识别
+	// GitHub/Gitee,经项目凭据回写该 commit 的提交状态(PR 检查)。默认 false。
+	PRStatusEnabled bool
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // CreateInput 是创建项目的入参。
@@ -82,6 +85,8 @@ type UpdateInput struct {
 	CredentialID  *string
 	// PacEnabled 切换「流水线即代码」开关;nil 表示不修改。
 	PacEnabled *bool
+	// PRStatusEnabled 切换「PR 状态检查」开关;nil 表示不修改。
+	PRStatusEnabled *bool
 }
 
 // TestCloneResult 是测试连接的结果(成功时携探测到的默认分支)。
@@ -251,7 +256,7 @@ func (s *service) ListPaged(ctx context.Context, page, pageSize int) (*ListResul
 	offset := (page - 1) * pageSize
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT p.id, p.name, p.repo_url, p.default_branch, p.credential_id,
-		        COALESCE(c.name, ''), p.pac_enabled, p.created_at, p.updated_at
+		        COALESCE(c.name, ''), p.pac_enabled, p.pr_status_enabled, p.created_at, p.updated_at
 		 FROM projects p
 		 LEFT JOIN credentials c ON c.id = p.credential_id
 		 ORDER BY p.created_at DESC, p.id
@@ -280,7 +285,7 @@ func (s *service) ListPaged(ctx context.Context, page, pageSize int) (*ListResul
 func (s *service) Get(ctx context.Context, id string) (*Project, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT p.id, p.name, p.repo_url, p.default_branch, p.credential_id,
-		        COALESCE(c.name, ''), p.pac_enabled, p.created_at, p.updated_at
+		        COALESCE(c.name, ''), p.pac_enabled, p.pr_status_enabled, p.created_at, p.updated_at
 		 FROM projects p
 		 LEFT JOIN credentials c ON c.id = p.credential_id
 		 WHERE p.id = ?`, id,
@@ -298,10 +303,10 @@ func (s *service) Get(ctx context.Context, id string) (*Project, error) {
 func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Project, error) {
 	// 先取当前行(需 repo_url + credential_id 以便在改绑凭据时重做校验)。
 	var name, repoURL, defaultBranch, credentialID string
-	var pacInt int
+	var pacInt, prStatusInt int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT name, repo_url, default_branch, credential_id, pac_enabled FROM projects WHERE id = ?`, id,
-	).Scan(&name, &repoURL, &defaultBranch, &credentialID, &pacInt)
+		`SELECT name, repo_url, default_branch, credential_id, pac_enabled, pr_status_enabled FROM projects WHERE id = ?`, id,
+	).Scan(&name, &repoURL, &defaultBranch, &credentialID, &pacInt, &prStatusInt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -309,6 +314,7 @@ func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Proje
 		return nil, fmt.Errorf("project: load: %w", err)
 	}
 	pacEnabled := pacInt != 0
+	prStatusEnabled := prStatusInt != 0
 
 	if in.Name != nil {
 		if *in.Name == "" {
@@ -332,15 +338,22 @@ func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Proje
 	if in.PacEnabled != nil {
 		pacEnabled = *in.PacEnabled
 	}
+	if in.PRStatusEnabled != nil {
+		prStatusEnabled = *in.PRStatusEnabled
+	}
 
 	pacInt = 0
 	if pacEnabled {
 		pacInt = 1
 	}
+	prStatusInt = 0
+	if prStatusEnabled {
+		prStatusInt = 1
+	}
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 	_, err = s.db.ExecContext(ctx,
-		`UPDATE projects SET name = ?, default_branch = ?, credential_id = ?, pac_enabled = ?, updated_at = ? WHERE id = ?`,
-		name, defaultBranch, credentialID, pacInt, nowStr, id,
+		`UPDATE projects SET name = ?, default_branch = ?, credential_id = ?, pac_enabled = ?, pr_status_enabled = ?, updated_at = ? WHERE id = ?`,
+		name, defaultBranch, credentialID, pacInt, prStatusInt, nowStr, id,
 	)
 	if err != nil {
 		if isForeignKeyErr(err) {
@@ -398,14 +411,15 @@ type scanner interface {
 func scanProject(sc scanner) (*Project, error) {
 	var p Project
 	var createdStr, updatedStr string
-	var pacInt int
+	var pacInt, prStatusInt int
 	if err := sc.Scan(
 		&p.ID, &p.Name, &p.RepoURL, &p.DefaultBranch, &p.CredentialID,
-		&p.CredentialName, &pacInt, &createdStr, &updatedStr,
+		&p.CredentialName, &pacInt, &prStatusInt, &createdStr, &updatedStr,
 	); err != nil {
 		return nil, err
 	}
 	p.PacEnabled = pacInt != 0
+	p.PRStatusEnabled = prStatusInt != 0
 	created, err := time.Parse(time.RFC3339, createdStr)
 	if err != nil {
 		return nil, fmt.Errorf("project: parse created_at: %w", err)

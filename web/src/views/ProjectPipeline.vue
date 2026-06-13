@@ -404,6 +404,29 @@ async function togglePac(next: boolean): Promise<void> {
     pacToggling.value = false
   }
 }
+
+// ─── PR status checks toggle (Story 8-9 / FR-8-9) ─────────────────────────────
+// 开启后 run 终态据项目仓库识别 GitHub/Gitee,经项目凭据回写该 commit 的提交状态(PR 检查)。
+const prStatusEnabled = computed(() => project.value?.prStatusEnabled ?? false)
+const prStatusToggling = ref(false)
+const prStatusError = ref('')
+
+async function togglePrStatus(next: boolean): Promise<void> {
+  if (!project.value || prStatusToggling.value) return
+  prStatusToggling.value = true
+  prStatusError.value = ''
+  const prev = project.value.prStatusEnabled
+  project.value = { ...project.value, prStatusEnabled: next } // optimistic
+  try {
+    const updated = await updateProject(projectId.value, { prStatusEnabled: next })
+    project.value = updated
+  } catch {
+    project.value = { ...project.value, prStatusEnabled: prev } // rollback
+    prStatusError.value = t('projectPipeline.prStatusToggleFailed')
+  } finally {
+    prStatusToggling.value = false
+  }
+}
 </script>
 
 <template>
@@ -557,6 +580,34 @@ async function togglePac(next: boolean): Promise<void> {
           <span class="pac-switch-knob" aria-hidden="true"/>
         </button>
       </div>
+    </div>
+
+    <!-- ─── PR status checks (commit status writeback · Story 8-9 / FR-8-9) ── -->
+    <div class="pac-bar" :class="{ 'pac-bar--on': prStatusEnabled }">
+      <div class="pac-bar-text">
+        <span class="pac-bar-title">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="9"/>
+          </svg>
+          {{ t('projectPipeline.prStatusTitle') }}
+        </span>
+        <span class="pac-bar-desc">
+          {{ prStatusEnabled ? t('projectPipeline.prStatusOnHint') : t('projectPipeline.prStatusOffHint') }}
+        </span>
+        <span v-if="prStatusError" class="pac-bar-err" role="alert">{{ prStatusError }}</span>
+      </div>
+      <button
+        type="button"
+        class="pac-switch"
+        :class="{ 'pac-switch--on': prStatusEnabled }"
+        role="switch"
+        :aria-checked="prStatusEnabled"
+        :aria-label="t('projectPipeline.prStatusTitle')"
+        :disabled="prStatusToggling || !project"
+        @click="togglePrStatus(!prStatusEnabled)"
+      >
+        <span class="pac-switch-knob" aria-hidden="true"/>
+      </button>
     </div>
 
     <!-- ─── Tab body: panels + optional validation side-drawer ─────────────── -->

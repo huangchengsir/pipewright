@@ -36,6 +36,12 @@ export interface Project {
    * to the stored UI pipeline if the file is missing or invalid). FR-8-12.
    */
   pacEnabled: boolean
+  /**
+   * PR status checks toggle (Story 8-9 / FR-8-9). When true, on a run reaching a
+   * terminal status Pipewright detects the repo platform (GitHub/Gitee) and writes
+   * back the commit status (PR check) using the project credential. Best-effort.
+   */
+  prStatusEnabled: boolean
   /** null until pipeline runs exist (Story 2.x). */
   lastRunStatus: RunStatus | null
   /** Empty until servers are bound (Story 2.x). */
@@ -58,6 +64,8 @@ export interface UpdateProjectInput {
   credentialId?: string
   /** Toggle pipeline-as-code (GitOps) for this project. */
   pacEnabled?: boolean
+  /** Toggle PR status checks (commit status writeback) for this project. */
+  prStatusEnabled?: boolean
 }
 
 export interface TestCloneResult {

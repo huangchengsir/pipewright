@@ -40,7 +40,7 @@ export default {
   fieldCacheKeyLabel: 'Clé de cache (optionnel)',
   fieldCacheKeyPlaceholder: 'Vide = auto par branche + lockfile',
   fieldCacheKeyHint:
-    'Modèle de clé de cache optionnel. Si vide, dérivé automatiquement de « branche + contenu du lockfile dans l’espace de travail (package-lock/pom.xml/go.sum, etc.) » : un changement de dépendances déclenche un build à froid automatique. Prend en charge {{paramètre}}',
+    'Modèle de clé de cache optionnel. Si vide, dérivé automatiquement de « branche + contenu du lockfile dans l’espace de travail (package-lock/pom.xml/go.sum, etc.) » : un changement de dépendances déclenche un build à froid automatique. Prend en charge {\'{{paramètre}}\'}',
 
   // ─── jobConfigSchema · deploy ssh fields ───────────────────────────────
   fieldServerIdLabel: 'Serveur cible',
@@ -94,7 +94,7 @@ export default {
   fieldRegistryLabel: 'URL du registre d’images',
   fieldImageNameLabel: 'Nom de l’image',
   fieldTagLabel: 'Tag',
-  fieldTagHint: 'Variables disponibles : ${COMMIT_SHA} ${BRANCH} ${BUILD_NUMBER}',
+  fieldTagHint: 'Variables disponibles : {\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
   fieldRegistryCredentialLabel: 'Identifiant du registre',
   fieldRegistryCredentialHint: 'Référence l’identifiant de connexion au registre d’images',
 
@@ -118,11 +118,11 @@ export default {
   fieldChannelLabel: 'Canal de notification',
   fieldChannelHint: 'Sélectionnez un canal déjà configuré dans les paramètres « Notifications » ; s’il n’y en a aucun, ajoutez-en un d’abord dans les paramètres',
   fieldTitleTemplateLabel: 'Modèle de titre (optionnel)',
-  fieldTitleTemplatePlaceholder: 'Déploiement réussi : {{project}}',
-  fieldTitleTemplateHint: 'Vide = texte par défaut ; prend en charge les espaces réservés {{project}} {{branch}} {{commit}} {{status}} {{runId}}',
+  fieldTitleTemplatePlaceholder: 'Déploiement réussi : {\'{{project}}\'}',
+  fieldTitleTemplateHint: 'Vide = texte par défaut ; prend en charge les espaces réservés {\'{{project}}\'} {\'{{branch}}\'} {\'{{commit}}\'} {\'{{status}}\'} {\'{{runId}}\'}',
   fieldBodyTemplateLabel: 'Modèle de corps (optionnel)',
-  fieldBodyTemplatePlaceholder: 'La branche {{branch}} @ {{commit}} a atteint le nœud de notification.',
-  fieldBodyTemplateHint: 'Vide = texte par défaut ; prend aussi en charge {{espaces réservés}}, les inconnus sont rendus vides',
+  fieldBodyTemplatePlaceholder: 'La branche {\'{{branch}}\'} {\'@\'} {\'{{commit}}\'} a atteint le nœud de notification.',
+  fieldBodyTemplateHint: 'Vide = texte par défaut ; prend aussi en charge {\'{{espaces réservés}}\'}, les inconnus sont rendus vides',
 
   // ─── jobConfigSchema · template nodes ──────────────────────────────────
   typeBuildFrontendLabel: 'Build frontend',
@@ -132,17 +132,17 @@ export default {
   typeDeployFrontendLabel: 'Déploiement push frontend',
   typeDeployFrontendDesc: 'Déploie le dist frontend sur un serveur via SSH sans interruption',
   typeTemplatedLabel: 'Nœud personnalisé',
-  typeTemplatedDesc: 'Définissez vos propres paramètres + modèle de commande ({{paramètre}}), utilisez-le en configurant les paramètres',
+  typeTemplatedDesc: 'Définissez vos propres paramètres + modèle de commande ({\'{{paramètre}}\'}), utilisez-le en configurant les paramètres',
   fieldParamsLabel: 'Table des paramètres',
-  fieldParamsHint: 'Un key=value par ligne, totalement libre ; référencez avec {{key}} dans le modèle de commande / les chemins d’artefacts',
+  fieldParamsHint: 'Un key=value par ligne, totalement libre ; référencez avec {\'{{key}}\'} dans le modèle de commande / les chemins d’artefacts',
   fieldCommandTemplateLabel: 'Modèle de commande',
-  fieldCommandTemplateHint: 'Multiligne ; {{paramètre}} est remplacé par la valeur de la table des paramètres, $ENV reste géré par le shell du conteneur',
-  fieldTemplatedArtifactPathHint: 'Optionnel, un par ligne, prend en charge {{paramètre}} et les jokers ; répertoire→dist, *.jar→jar, autre→archive',
+  fieldCommandTemplateHint: 'Multiligne ; {\'{{paramètre}}\'} est remplacé par la valeur de la table des paramètres, $ENV reste géré par le shell du conteneur',
+  fieldTemplatedArtifactPathHint: 'Optionnel, un par ligne, prend en charge {\'{{paramètre}}\'} et les jokers ; répertoire→dist, *.jar→jar, autre→archive',
   fieldTemplatedWorkDirHint: 'Optionnel, relatif à la racine de l’espace de travail cloné',
   fieldTemplatedCachePathsHint:
-    'Optionnel, un par ligne, relatif à la racine de l’espace de travail, prend en charge {{paramètre}}. Ce n’est qu’une fois définis que le cache est activé : restauré avant le build, sauvegardé après, réutilisant les dépendances entre exécutions. Les problèmes de cache n’affectent jamais le résultat du build',
+    'Optionnel, un par ligne, relatif à la racine de l’espace de travail, prend en charge {\'{{paramètre}}\'}. Ce n’est qu’une fois définis que le cache est activé : restauré avant le build, sauvegardé après, réutilisant les dépendances entre exécutions. Les problèmes de cache n’affectent jamais le résultat du build',
   fieldTemplatedCacheKeyHint:
-    'Modèle de clé de cache optionnel, prend en charge {{paramètre}}. Si vide, dérivé automatiquement de la branche + contenu du lockfile (un changement de dépendances déclenche un build à froid)',
+    'Modèle de clé de cache optionnel, prend en charge {\'{{paramètre}}\'}. Si vide, dérivé automatiquement de la branche + contenu du lockfile (un changement de dépendances déclenche un build à froid)',
   typeScriptLabel: 'Script personnalisé',
   typeScriptDesc: 'Exécute des commandes arbitraires dans un conteneur isolé',
 

@@ -106,7 +106,7 @@ export default {
   errLoadRetry: '프로젝트를 불러오지 못했습니다. 잠시 후 다시 시도하세요',
   errNameRequired: '프로젝트 이름을 입력하세요',
   errRepoRequired: '저장소 URL을 입력하세요',
-  errRepoFormat: '저장소 URL 형식이 올바르지 않습니다. https:// 또는 git@ 로 시작해야 합니다',
+  errRepoFormat: '저장소 URL 형식이 올바르지 않습니다. https:// 또는 git{\'@\'} 로 시작해야 합니다',
   errCredRequired: '저장소 자격 증명을 선택하세요',
   errRepoFirst: '먼저 저장소 URL을 입력하세요',
   errCredFirst: '먼저 저장소 자격 증명을 선택하세요',

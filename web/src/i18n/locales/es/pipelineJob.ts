@@ -40,7 +40,7 @@ export default {
   fieldCacheKeyLabel: 'Clave de caché (opcional)',
   fieldCacheKeyPlaceholder: 'Vacío = automático por rama + lockfile',
   fieldCacheKeyHint:
-    'Plantilla de clave de caché opcional. Si está vacía, se deriva automáticamente de «rama + contenido del lockfile en el espacio de trabajo (package-lock/pom.xml/go.sum, etc.)»: los cambios de dependencias provocan un build en frío automático. Admite {{parámetro}}',
+    'Plantilla de clave de caché opcional. Si está vacía, se deriva automáticamente de «rama + contenido del lockfile en el espacio de trabajo (package-lock/pom.xml/go.sum, etc.)»: los cambios de dependencias provocan un build en frío automático. Admite {\'{{parámetro}}\'}',
 
   // ─── jobConfigSchema · deploy ssh fields ───────────────────────────────
   fieldServerIdLabel: 'Servidor de destino',
@@ -94,7 +94,7 @@ export default {
   fieldRegistryLabel: 'URL del registro de imágenes',
   fieldImageNameLabel: 'Nombre de la imagen',
   fieldTagLabel: 'Etiqueta',
-  fieldTagHint: 'Variables disponibles: ${COMMIT_SHA} ${BRANCH} ${BUILD_NUMBER}',
+  fieldTagHint: 'Variables disponibles: {\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
   fieldRegistryCredentialLabel: 'Credencial del registro',
   fieldRegistryCredentialHint: 'Referencia la credencial de login del registro de imágenes',
 
@@ -118,11 +118,11 @@ export default {
   fieldChannelLabel: 'Canal de notificación',
   fieldChannelHint: 'Selecciona un canal ya configurado en los ajustes de «Notificaciones»; si no hay ninguno, añade uno primero en los ajustes',
   fieldTitleTemplateLabel: 'Plantilla de título (opcional)',
-  fieldTitleTemplatePlaceholder: 'Despliegue exitoso: {{project}}',
-  fieldTitleTemplateHint: 'Vacío = texto predeterminado; admite los marcadores {{project}} {{branch}} {{commit}} {{status}} {{runId}}',
+  fieldTitleTemplatePlaceholder: 'Despliegue exitoso: {\'{{project}}\'}',
+  fieldTitleTemplateHint: 'Vacío = texto predeterminado; admite los marcadores {\'{{project}}\'} {\'{{branch}}\'} {\'{{commit}}\'} {\'{{status}}\'} {\'{{runId}}\'}',
   fieldBodyTemplateLabel: 'Plantilla de cuerpo (opcional)',
-  fieldBodyTemplatePlaceholder: 'La rama {{branch}} @ {{commit}} ha llegado al nodo de notificación.',
-  fieldBodyTemplateHint: 'Vacío = texto predeterminado; también admite {{marcadores}}, los desconocidos se renderizan vacíos',
+  fieldBodyTemplatePlaceholder: 'La rama {\'{{branch}}\'} {\'@\'} {\'{{commit}}\'} ha llegado al nodo de notificación.',
+  fieldBodyTemplateHint: 'Vacío = texto predeterminado; también admite {\'{{marcadores}}\'}, los desconocidos se renderizan vacíos',
 
   // ─── jobConfigSchema · template nodes ──────────────────────────────────
   typeBuildFrontendLabel: 'Build de frontend',
@@ -132,17 +132,17 @@ export default {
   typeDeployFrontendLabel: 'Despliegue push de frontend',
   typeDeployFrontendDesc: 'Despliega el dist del frontend en un servidor por SSH sin tiempo de inactividad',
   typeTemplatedLabel: 'Nodo personalizado',
-  typeTemplatedDesc: 'Define tus propios parámetros + plantilla de comandos ({{parámetro}}), úsalo configurando los parámetros',
+  typeTemplatedDesc: 'Define tus propios parámetros + plantilla de comandos ({\'{{parámetro}}\'}), úsalo configurando los parámetros',
   fieldParamsLabel: 'Tabla de parámetros',
-  fieldParamsHint: 'Un key=value por línea, totalmente libre; referéncialo con {{key}} en la plantilla de comandos / rutas de artefactos',
+  fieldParamsHint: 'Un key=value por línea, totalmente libre; referéncialo con {\'{{key}}\'} en la plantilla de comandos / rutas de artefactos',
   fieldCommandTemplateLabel: 'Plantilla de comandos',
-  fieldCommandTemplateHint: 'Multilínea; {{parámetro}} se reemplaza por el valor de la tabla de parámetros, $ENV lo sigue gestionando el shell del contenedor',
-  fieldTemplatedArtifactPathHint: 'Opcional, uno por línea, admite {{parámetro}} y comodines; directorio→dist, *.jar→jar, otros→archive',
+  fieldCommandTemplateHint: 'Multilínea; {\'{{parámetro}}\'} se reemplaza por el valor de la tabla de parámetros, $ENV lo sigue gestionando el shell del contenedor',
+  fieldTemplatedArtifactPathHint: 'Opcional, uno por línea, admite {\'{{parámetro}}\'} y comodines; directorio→dist, *.jar→jar, otros→archive',
   fieldTemplatedWorkDirHint: 'Opcional, relativo a la raíz del espacio de trabajo clonado',
   fieldTemplatedCachePathsHint:
-    'Opcional, uno por línea, relativo a la raíz del espacio de trabajo, admite {{parámetro}}. Solo al definirlos se activa la caché: se restaura antes del build, se guarda después, reutilizando dependencias entre ejecuciones. Los problemas de caché nunca afectan al resultado del build',
+    'Opcional, uno por línea, relativo a la raíz del espacio de trabajo, admite {\'{{parámetro}}\'}. Solo al definirlos se activa la caché: se restaura antes del build, se guarda después, reutilizando dependencias entre ejecuciones. Los problemas de caché nunca afectan al resultado del build',
   fieldTemplatedCacheKeyHint:
-    'Plantilla de clave de caché opcional, admite {{parámetro}}. Si está vacía, se deriva automáticamente de la rama + contenido del lockfile (los cambios de dependencias provocan un build en frío)',
+    'Plantilla de clave de caché opcional, admite {\'{{parámetro}}\'}. Si está vacía, se deriva automáticamente de la rama + contenido del lockfile (los cambios de dependencias provocan un build en frío)',
   typeScriptLabel: 'Script personalizado',
   typeScriptDesc: 'Ejecuta comandos arbitrarios dentro de un contenedor aislado',
 

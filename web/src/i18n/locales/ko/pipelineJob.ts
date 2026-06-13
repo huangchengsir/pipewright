@@ -40,7 +40,7 @@ export default {
   fieldCacheKeyLabel: '캐시 Key(선택)',
   fieldCacheKeyPlaceholder: '비움 = 브랜치 + lockfile 로 자동',
   fieldCacheKeyHint:
-    '선택적 캐시 키 템플릿. 비우면 「브랜치 + 작업 공간 내 lockfile(package-lock/pom.xml/go.sum 등) 내용」으로 자동 도출: 의존성이 바뀌면 자동 콜드 빌드. {{매개변수}} 지원',
+    '선택적 캐시 키 템플릿. 비우면 「브랜치 + 작업 공간 내 lockfile(package-lock/pom.xml/go.sum 등) 내용」으로 자동 도출: 의존성이 바뀌면 자동 콜드 빌드. {\'{{매개변수}}\'} 지원',
 
   // ─── jobConfigSchema · deploy ssh fields ───────────────────────────────
   fieldServerIdLabel: '대상 서버',
@@ -94,7 +94,7 @@ export default {
   fieldRegistryLabel: '이미지 레지스트리 URL',
   fieldImageNameLabel: '이미지 이름',
   fieldTagLabel: '태그',
-  fieldTagHint: '사용 가능한 변수: ${COMMIT_SHA} ${BRANCH} ${BUILD_NUMBER}',
+  fieldTagHint: '사용 가능한 변수: {\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
   fieldRegistryCredentialLabel: '레지스트리 자격 증명',
   fieldRegistryCredentialHint: '이미지 레지스트리 로그인 자격 증명 참조',
 
@@ -118,11 +118,11 @@ export default {
   fieldChannelLabel: '알림 채널',
   fieldChannelHint: '「알림」 설정에서 이미 구성한 채널 중 선택. 없으면 먼저 설정에서 추가',
   fieldTitleTemplateLabel: '제목 템플릿(선택)',
-  fieldTitleTemplatePlaceholder: '배포 성공: {{project}}',
-  fieldTitleTemplateHint: '비움 = 기본 문구. 자리표시자 {{project}} {{branch}} {{commit}} {{status}} {{runId}} 지원',
+  fieldTitleTemplatePlaceholder: '배포 성공: {\'{{project}}\'}',
+  fieldTitleTemplateHint: '비움 = 기본 문구. 자리표시자 {\'{{project}}\'} {\'{{branch}}\'} {\'{{commit}}\'} {\'{{status}}\'} {\'{{runId}}\'} 지원',
   fieldBodyTemplateLabel: '본문 템플릿(선택)',
-  fieldBodyTemplatePlaceholder: '브랜치 {{branch}} @ {{commit}} 가 알림 노드까지 실행되었습니다.',
-  fieldBodyTemplateHint: '비움 = 기본 문구. 마찬가지로 {{자리표시자}} 지원, 알 수 없는 것은 빈 값으로 렌더링',
+  fieldBodyTemplatePlaceholder: '브랜치 {\'{{branch}}\'} {\'@\'} {\'{{commit}}\'} 가 알림 노드까지 실행되었습니다.',
+  fieldBodyTemplateHint: '비움 = 기본 문구. 마찬가지로 {\'{{자리표시자}}\'} 지원, 알 수 없는 것은 빈 값으로 렌더링',
 
   // ─── jobConfigSchema · template nodes ──────────────────────────────────
   typeBuildFrontendLabel: '프런트엔드 빌드',
@@ -132,17 +132,17 @@ export default {
   typeDeployFrontendLabel: '프런트엔드 푸시 배포',
   typeDeployFrontendDesc: '프런트엔드 dist 를 SSH 를 통해 무중단으로 서버에 배포',
   typeTemplatedLabel: '사용자 지정 노드',
-  typeTemplatedDesc: '직접 매개변수 + 명령 템플릿({{매개변수}})을 정의, 매개변수만 설정하면 사용',
+  typeTemplatedDesc: '직접 매개변수 + 명령 템플릿({\'{{매개변수}}\'})을 정의, 매개변수만 설정하면 사용',
   fieldParamsLabel: '매개변수 표',
-  fieldParamsHint: '한 줄에 하나의 key=value, 완전 자유. 명령 템플릿/아티팩트 경로에서 {{key}} 로 참조',
+  fieldParamsHint: '한 줄에 하나의 key=value, 완전 자유. 명령 템플릿/아티팩트 경로에서 {\'{{key}}\'} 로 참조',
   fieldCommandTemplateLabel: '명령 템플릿',
-  fieldCommandTemplateHint: '여러 줄. {{매개변수}} 는 매개변수 표의 값으로 치환, $ENV 는 컨테이너 내 shell 에 위임',
-  fieldTemplatedArtifactPathHint: '선택, 한 줄에 하나, {{매개변수}} 와 와일드카드 지원. 디렉터리→dist, *.jar→jar, 그 외→archive',
+  fieldCommandTemplateHint: '여러 줄. {\'{{매개변수}}\'} 는 매개변수 표의 값으로 치환, $ENV 는 컨테이너 내 shell 에 위임',
+  fieldTemplatedArtifactPathHint: '선택, 한 줄에 하나, {\'{{매개변수}}\'} 와 와일드카드 지원. 디렉터리→dist, *.jar→jar, 그 외→archive',
   fieldTemplatedWorkDirHint: '선택, 복제한 작업 공간 루트 기준 상대',
   fieldTemplatedCachePathsHint:
-    '선택, 한 줄에 하나, 작업 공간 루트 기준 상대, {{매개변수}} 지원. 설정해야만 캐시 활성화: 빌드 전 복원, 빌드 후 저장, 실행에 걸쳐 의존성 재사용. 캐시 문제는 빌드 결과에 절대 영향을 주지 않음',
+    '선택, 한 줄에 하나, 작업 공간 루트 기준 상대, {\'{{매개변수}}\'} 지원. 설정해야만 캐시 활성화: 빌드 전 복원, 빌드 후 저장, 실행에 걸쳐 의존성 재사용. 캐시 문제는 빌드 결과에 절대 영향을 주지 않음',
   fieldTemplatedCacheKeyHint:
-    '선택적 캐시 키 템플릿, {{매개변수}} 지원. 비우면 브랜치 + lockfile 내용으로 자동 도출(의존성이 바뀌면 자동 콜드 빌드)',
+    '선택적 캐시 키 템플릿, {\'{{매개변수}}\'} 지원. 비우면 브랜치 + lockfile 내용으로 자동 도출(의존성이 바뀌면 자동 콜드 빌드)',
   typeScriptLabel: '사용자 지정 스크립트',
   typeScriptDesc: '격리 컨테이너 안에서 임의의 명령 실행',
 

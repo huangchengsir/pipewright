@@ -28,6 +28,8 @@
 
 // ─── 步骤模型 ──────────────────────────────────────────────────────────────────
 
+import { t } from '../../i18n'
+
 export type StepKind = 'command' | 'env' | 'workDir' | 'artifact' | 'condition'
 
 export interface StepBlock {
@@ -229,9 +231,9 @@ export function configUsesTemplate(config: Record<string, string>): boolean {
 
 /** 步骤类型的展示元信息(标签 + accent token 名),供 UI 复用。 */
 export const STEP_KIND_META: Record<StepKind, { label: string; accent: string }> = {
-  command: { label: '运行命令', accent: 'primary' },
-  env: { label: '设环境变量', accent: 'cyan' },
-  workDir: { label: '切目录', accent: 'amber' },
-  artifact: { label: '上传产物', accent: 'green' },
-  condition: { label: '条件守卫', accent: 'red' },
+  command: { get label() { return t('pipelineJob.stepCommandLabel') }, accent: 'primary' },
+  env: { get label() { return t('pipelineJob.stepEnvLabel') }, accent: 'cyan' },
+  workDir: { get label() { return t('pipelineJob.stepWorkDirLabel') }, accent: 'amber' },
+  artifact: { get label() { return t('pipelineJob.stepArtifactLabel') }, accent: 'green' },
+  condition: { get label() { return t('pipelineJob.stepConditionLabel') }, accent: 'red' },
 }

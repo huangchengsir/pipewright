@@ -13,6 +13,7 @@
  *   - Potentially the pipeline settings tab
  */
 import { ref, onMounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   getEnvironments,
   saveEnvironments,
@@ -27,6 +28,8 @@ import { HttpError } from '../api/http'
 const props = defineProps<{
   projectId: string
 }>()
+
+const { t } = useI18n()
 
 // ─── Load state ───────────────────────────────────────────────────────────────
 
@@ -166,7 +169,7 @@ async function handleSave(): Promise<void> {
   // Check for duplicates
   const dup = findDuplicateEnvName(envRows.value.map((r) => r.name))
   if (dup) {
-    saveBanner.value = `环境名重复:「${dup}」`
+    saveBanner.value = t('projectPanels.environments.errDuplicateName', { name: dup })
     return
   }
 
@@ -207,14 +210,14 @@ async function handleSave(): Promise<void> {
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
-        saveBanner.value = '无法连接到服务器,请稍后重试。'
+        saveBanner.value = t('projectPanels.environments.errConnect')
       } else if (err.status === 422 || err.status === 400) {
-        saveBanner.value = err.apiError?.message ?? `保存失败(${err.status}):配置数据不合法`
+        saveBanner.value = err.apiError?.message ?? t('projectPanels.environments.errSaveInvalid', { status: err.status })
       } else {
-        saveBanner.value = err.apiError?.message ?? `保存失败(${err.status})`
+        saveBanner.value = err.apiError?.message ?? t('projectPanels.environments.errSaveFailed', { status: err.status })
       }
     } else {
-      saveBanner.value = '保存失败,请稍后重试。'
+      saveBanner.value = t('projectPanels.environments.errSaveGeneric')
     }
   } finally {
     saveSubmitting.value = false
@@ -246,14 +249,14 @@ async function loadEnvironments(): Promise<void> {
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
-        loadError.value = '无法连接到服务器,请检查后端是否运行后重试。'
+        loadError.value = t('projectPanels.environments.errLoadConnect')
       } else if (err.status === 404) {
-        loadError.value = '项目不存在,请确认项目 ID 正确。'
+        loadError.value = t('projectPanels.environments.errLoadNotFound')
       } else {
-        loadError.value = err.apiError?.message ?? `加载环境配置失败(${err.status})`
+        loadError.value = err.apiError?.message ?? t('projectPanels.environments.errLoadFailed', { status: err.status })
       }
     } else {
-      loadError.value = '加载环境配置失败,请稍后重试。'
+      loadError.value = t('projectPanels.environments.errLoadGeneric')
     }
     loadState.value = 'error'
   }
@@ -272,12 +275,12 @@ onMounted(loadEnvironments)
         <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
       </svg>
       <span>{{ loadError }}</span>
-      <button class="ep-banner-retry" @click="loadEnvironments">↻ 重试</button>
+      <button class="ep-banner-retry" @click="loadEnvironments">{{ t('projectPanels.environments.retry') }}</button>
     </div>
 
     <!-- ─── Loading skeleton ────────────────────────────────────────────── -->
     <template v-if="loadState === 'loading'">
-      <div class="ep-skel-card" aria-busy="true" aria-label="加载中">
+      <div class="ep-skel-card" aria-busy="true" :aria-label="t('projectPanels.environments.loading')">
         <div class="ep-skel ep-skel--title" aria-hidden="true" />
         <div class="ep-skel ep-skel--row" aria-hidden="true" />
         <div class="ep-skel ep-skel--row" aria-hidden="true" />
@@ -298,7 +301,7 @@ onMounted(loadEnvironments)
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
           <path d="M20 6 9 17l-5-5"/>
         </svg>
-        <span>环境链已保存</span>
+        <span>{{ t('projectPanels.environments.savedToast') }}</span>
       </div>
 
       <!-- ═══ Environment chain card ══════════════════════════════════════ -->
@@ -309,17 +312,17 @@ onMounted(loadEnvironments)
               <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/>
             </svg>
           </span>
-          <h2 id="ep-chain-heading" class="card-title">环境晋级链</h2>
-          <span class="card-sub">定义有序的晋级路径 · 可选审批门</span>
+          <h2 id="ep-chain-heading" class="card-title">{{ t('projectPanels.environments.chainTitle') }}</h2>
+          <span class="card-sub">{{ t('projectPanels.environments.chainSub') }}</span>
         </div>
 
         <!-- Chain flow diagram (read-only visual) -->
-        <div v-if="envRows.length > 0" class="chain-flow" aria-label="环境链顺序预览" role="img">
+        <div v-if="envRows.length > 0" class="chain-flow" :aria-label="t('projectPanels.environments.chainPreviewAria')" role="img">
           <template v-for="(row, idx) in envRows" :key="row._key">
             <div
               class="chain-node"
               :class="{ 'chain-node--gated': row.gated }"
-              :aria-label="`环境 ${row.name || '(未命名)'}${row.gated ? ' · 需审批' : ''}`"
+              :aria-label="`${row.name || t('projectPanels.environments.unnamed')}${row.gated ? t('projectPanels.environments.needsApprovalNode') : ''}`"
             >
               <span class="chain-node-name">{{ row.name || '…' }}</span>
               <span v-if="row.gated" class="chain-node-gate" aria-hidden="true">
@@ -336,16 +339,16 @@ onMounted(loadEnvironments)
           </template>
         </div>
         <div v-else class="chain-flow chain-flow--empty">
-          <span class="chain-empty-text">尚未定义环境链，请在下方添加</span>
+          <span class="chain-empty-text">{{ t('projectPanels.environments.chainEmptyText') }}</span>
         </div>
 
         <!-- Chain rows (editable) -->
         <div class="chain-table-head" aria-hidden="true">
-          <span>序号</span><span>环境名</span><span>审批门</span><span>变量</span><span>排序</span><span></span>
+          <span>{{ t('projectPanels.environments.colSeq') }}</span><span>{{ t('projectPanels.environments.colEnvName') }}</span><span>{{ t('projectPanels.environments.colGate') }}</span><span>{{ t('projectPanels.environments.colVars') }}</span><span>{{ t('projectPanels.environments.colOrder') }}</span><span></span>
         </div>
 
         <div v-if="envRows.length === 0" class="chain-empty-rows">
-          <span>暂无环境,点下方「添加环境」开始配置</span>
+          <span>{{ t('projectPanels.environments.emptyRows') }}</span>
         </div>
 
         <div
@@ -369,7 +372,7 @@ onMounted(loadEnvironments)
                 class="chain-input"
                 :class="{ 'chain-input--error': row.nameError }"
                 :placeholder="`env-${idx + 1}`"
-                :aria-label="`环境名称(第 ${idx + 1} 行)`"
+                :aria-label="t('projectPanels.environments.envNameAria', { n: idx + 1 })"
                 :aria-invalid="row.nameError ? 'true' : undefined"
                 maxlength="64"
                 @input="onNameInput(row)"
@@ -385,12 +388,12 @@ onMounted(loadEnvironments)
                 :class="{ 'gate-toggle--on': row.gated }"
                 role="switch"
                 :aria-checked="row.gated"
-                :aria-label="`${row.name || '该环境'}审批门:${row.gated ? '已开启' : '已关闭'}`"
+                :aria-label="t('projectPanels.environments.gateAria', { name: row.name || t('projectPanels.environments.thisEnv'), state: row.gated ? t('projectPanels.environments.gateOn') : t('projectPanels.environments.gateOff') })"
                 @click="row.gated = !row.gated"
               >
                 <span class="gate-toggle-knob" aria-hidden="true" />
               </button>
-              <span class="gate-label">{{ row.gated ? '需审批' : '直通' }}</span>
+              <span class="gate-label">{{ row.gated ? t('projectPanels.environments.needsApproval') : t('projectPanels.environments.passthrough') }}</span>
             </div>
 
             <!-- Variables toggle -->
@@ -399,7 +402,7 @@ onMounted(loadEnvironments)
                 class="vars-btn"
                 :class="{ 'vars-btn--active': expandedEnv === row.name }"
                 :aria-expanded="expandedEnv === row.name"
-                :aria-label="`${row.name || '该环境'}变量 · ${(variablesByEnv[row.name] ?? []).length} 条`"
+                :aria-label="t('projectPanels.environments.varsAria', { name: row.name || t('projectPanels.environments.thisEnv'), n: (variablesByEnv[row.name] ?? []).length })"
                 @click="expandVars(row.name)"
               >
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -414,7 +417,7 @@ onMounted(loadEnvironments)
               <button
                 class="order-btn"
                 :disabled="idx === 0"
-                :aria-label="`将 ${row.name || '该环境'} 上移`"
+                :aria-label="t('projectPanels.environments.moveUpAria', { name: row.name || t('projectPanels.environments.thisEnv') })"
                 @click="moveUp(idx)"
               >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
@@ -424,7 +427,7 @@ onMounted(loadEnvironments)
               <button
                 class="order-btn"
                 :disabled="idx === envRows.length - 1"
-                :aria-label="`将 ${row.name || '该环境'} 下移`"
+                :aria-label="t('projectPanels.environments.moveDownAria', { name: row.name || t('projectPanels.environments.thisEnv') })"
                 @click="moveDown(idx)"
               >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
@@ -437,7 +440,7 @@ onMounted(loadEnvironments)
             <div class="chain-cell chain-cell--del">
               <button
                 class="del-btn"
-                :aria-label="`删除环境「${row.name || '(未命名)'}」`"
+                :aria-label="t('projectPanels.environments.deleteEnvAria', { name: row.name || t('projectPanels.environments.unnamed') })"
                 @click="removeEnvRow(row._key)"
               >
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true">
@@ -448,7 +451,7 @@ onMounted(loadEnvironments)
           </div>
 
           <!-- Expanded variables panel -->
-          <div v-if="expandedEnv === row.name" class="vars-panel" role="region" :aria-label="`${row.name} 变量`">
+          <div v-if="expandedEnv === row.name" class="vars-panel" role="region" :aria-label="t('projectPanels.environments.varsRegionAria', { name: row.name })">
             <!-- Secret vars (read-only display) -->
             <div
               v-for="sv in (variablesByEnv[row.name] ?? []).filter(v => v.secret)"
@@ -460,9 +463,9 @@ onMounted(loadEnvironments)
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                   <rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
                 </svg>
-                密钥 · 引用 vault 凭据
+                {{ t('projectPanels.environments.secretVarText') }}
               </span>
-              <span class="var-secret-badge">Secret</span>
+              <span class="var-secret-badge">{{ t('projectPanels.environments.secretBadge') }}</span>
             </div>
 
             <!-- Plain var drafts (editable) -->
@@ -472,7 +475,7 @@ onMounted(loadEnvironments)
                 type="text"
                 class="var-input var-input--key mono"
                 placeholder="KEY"
-                :aria-label="`变量键(第 ${dIdx + 1} 行)`"
+                :aria-label="t('projectPanels.environments.varKeyAria', { n: dIdx + 1 })"
               />
               <span class="var-eq" aria-hidden="true">=</span>
               <input
@@ -480,11 +483,11 @@ onMounted(loadEnvironments)
                 type="text"
                 class="var-input var-input--val"
                 placeholder="VALUE"
-                :aria-label="`变量值(第 ${dIdx + 1} 行)`"
+                :aria-label="t('projectPanels.environments.varValAria', { n: dIdx + 1 })"
               />
               <button
                 class="var-del-btn"
-                :aria-label="`删除变量行 ${dIdx + 1}`"
+                :aria-label="t('projectPanels.environments.deleteVarRowAria', { n: dIdx + 1 })"
                 @click="removeVarRow(dIdx)"
               >
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -497,9 +500,9 @@ onMounted(loadEnvironments)
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
                 <path d="M12 5v14M5 12h14"/>
               </svg>
-              添加变量
+              {{ t('projectPanels.environments.addVar') }}
             </button>
-            <p class="vars-hint">Secret 变量须在保险库中创建凭据后引用;此处只可编辑明文变量。</p>
+            <p class="vars-hint">{{ t('projectPanels.environments.varsHint') }}</p>
           </div>
         </div>
 
@@ -507,12 +510,11 @@ onMounted(loadEnvironments)
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
             <path d="M12 5v14M5 12h14"/>
           </svg>
-          添加环境
+          {{ t('projectPanels.environments.addEnv') }}
         </button>
 
         <p class="chain-note">
-          链上顺序即晋级顺序;开启审批门的环境在晋级时须有人批准后方可继续。
-          变量仅注入到对应环境的运行,互不透传。
+          {{ t('projectPanels.environments.chainNote') }}
         </p>
       </section>
 
@@ -525,7 +527,7 @@ onMounted(loadEnvironments)
           @click="handleSave"
         >
           <span v-if="saveSubmitting" class="ep-spinner" aria-hidden="true" />
-          {{ saveSubmitting ? '保存中…' : '保存环境配置' }}
+          {{ saveSubmitting ? t('projectPanels.environments.saving') : t('projectPanels.environments.save') }}
         </button>
       </div>
 

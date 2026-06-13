@@ -6,11 +6,14 @@
  * 工作区 → 远程容器跑;token 只在控制机)。「本地构建」= 不下沉(默认)。自包含 load/save。
  */
 import { ref, onMounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { getRunner, saveRunner } from '../api/runner'
 import { listServers, type Server } from '../api/servers'
 import { HttpError } from '../api/http'
 
 const props = defineProps<{ projectId: string }>()
+
+const { t } = useI18n()
 
 type LoadState = 'idle' | 'loading' | 'error'
 const loadState = ref<LoadState>('idle')
@@ -32,7 +35,7 @@ async function load(): Promise<void> {
     loadState.value = 'idle'
   } catch (err) {
     loadState.value = 'error'
-    loadError.value = err instanceof HttpError ? err.message : '加载 runner 配置失败'
+    loadError.value = err instanceof HttpError ? err.message : t('projectPanels.runner.errLoad')
   }
 }
 
@@ -44,11 +47,11 @@ async function handleSave(): Promise<void> {
     const cfg = await saveRunner(props.projectId, selected.value)
     selected.value = cfg.runnerServerId
     saveSuccess.value = true
-    saveBanner.value = selected.value ? '已设为远程构建' : '已设为本地构建'
+    saveBanner.value = selected.value ? t('projectPanels.runner.setRemote') : t('projectPanels.runner.setLocal')
   } catch (err) {
     saveSuccess.value = false
     saveBanner.value =
-      err instanceof HttpError ? (err.apiError?.message ?? '保存失败') : '保存失败,请重试'
+      err instanceof HttpError ? (err.apiError?.message ?? t('projectPanels.runner.errSaveFailed')) : t('projectPanels.runner.errSaveRetry')
   } finally {
     saveSubmitting.value = false
   }
@@ -67,21 +70,20 @@ watch(() => props.projectId, load)
           <path d="M6 7h.01M6 17h.01" />
         </svg>
       </span>
-      <h2 id="runner-heading" class="card-title">构建 runner</h2>
-      <span class="card-sub">把构建下沉到远程构建机执行(代码经 SSH 传输,token 只在中控机)</span>
+      <h2 id="runner-heading" class="card-title">{{ t('projectPanels.runner.title') }}</h2>
+      <span class="card-sub">{{ t('projectPanels.runner.sub') }}</span>
     </div>
     <div class="card-body card-body--pad">
-      <p v-if="loadState === 'loading'" class="runner-loading">加载中…</p>
+      <p v-if="loadState === 'loading'" class="runner-loading">{{ t('projectPanels.runner.loading') }}</p>
       <p v-else-if="loadState === 'error'" class="runner-error" role="alert">{{ loadError }}</p>
       <template v-else>
-        <label class="runner-field-label" for="runner-select">构建在哪执行</label>
+        <label class="runner-field-label" for="runner-select">{{ t('projectPanels.runner.whereLabel') }}</label>
         <select id="runner-select" v-model="selected" class="runner-select" @change="saveSuccess = false">
-          <option value="">本地构建(中控机)</option>
-          <option v-for="s in servers" :key="s.id" :value="s.id">远程:{{ s.name }}({{ s.host }})</option>
+          <option value="">{{ t('projectPanels.runner.optionLocal') }}</option>
+          <option v-for="s in servers" :key="s.id" :value="s.id">{{ t('projectPanels.runner.optionRemote', { name: s.name, host: s.host }) }}</option>
         </select>
         <p class="runner-hint">
-          远程构建需该机装有容器运行时(docker/nerdctl/podman)。仅 script 类型 job 在远程执行;
-          测试报告/质量门禁在远程模式暂不回采(后续增量)。
+          {{ t('projectPanels.runner.hint') }}
         </p>
         <p
           v-if="saveBanner"
@@ -92,7 +94,7 @@ watch(() => props.projectId, load)
         <div class="runner-save">
           <button class="btn-primary" :disabled="saveSubmitting" :aria-busy="saveSubmitting" @click="handleSave">
             <span v-if="saveSubmitting" class="spinner" aria-hidden="true" />
-            {{ saveSubmitting ? '保存中…' : '保存 runner 配置' }}
+            {{ saveSubmitting ? t('projectPanels.runner.saving') : t('projectPanels.runner.save') }}
           </button>
         </div>
       </template>

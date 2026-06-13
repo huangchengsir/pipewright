@@ -7,7 +7,10 @@
  * 当项目无参数定义时,调用方改用 RunParamsEditor(自由 KV);本组件只在有定义时渲染。
  */
 import { ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { ParamDef } from '../api/parameters'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   defs: ParamDef[]
@@ -58,7 +61,7 @@ function toggleBool(key: string): void {
     <div v-for="d in defs" :key="d.key" class="tp-field">
       <label class="tp-label" :for="`tp-${d.key}`">
         {{ d.label }}
-        <span v-if="d.required" class="tp-req" aria-label="必填">*</span>
+        <span v-if="d.required" class="tp-req" :aria-label="t('projectPanels.typedParams.requiredAria')">*</span>
         <code class="tp-key">{{ d.key }}</code>
       </label>
 

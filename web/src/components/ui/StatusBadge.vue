@@ -7,26 +7,32 @@
  * Animation: pulse only on transform/opacity, reduced-motion degrades in global.css.
  */
 
+import { useI18n } from 'vue-i18n'
+
 export type BadgeStatus = 'success' | 'failed' | 'running' | 'partial' | 'rolledback' | 'queued'
 
 const props = defineProps<{
   status: BadgeStatus
 }>()
 
-const labelMap: Record<BadgeStatus, string> = {
-  success:    '成功',
-  failed:     '失败',
-  running:    '进行中',
-  partial:    '部分失败',
-  rolledback: '已回滚',
-  queued:     '排队',
+const { t } = useI18n()
+
+// Reuse the frozen run-status vocabulary (runStatus.*) so badge labels stay in
+// lock-step with the rest of the product instead of duplicating the strings.
+const labelKeyMap: Record<BadgeStatus, string> = {
+  success:    'runStatus.success',
+  failed:     'runStatus.failed',
+  running:    'runStatus.running',
+  partial:    'runStatus.partial_failed',
+  rolledback: 'runStatus.rolled_back',
+  queued:     'runStatus.queued',
 }
 </script>
 
 <template>
   <span class="badge" :class="`badge--${props.status}`">
     <span class="badge__dot" aria-hidden="true" />
-    <span class="badge__label">{{ labelMap[props.status] }}</span>
+    <span class="badge__label">{{ t(labelKeyMap[props.status]) }}</span>
   </span>
 </template>
 

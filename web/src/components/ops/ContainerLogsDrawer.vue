@@ -5,6 +5,7 @@
   右侧滑入,顶栏显示容器名/短 ID,可切 tail 行数、开/停实时跟随、复制、清屏。
 */
 import { ref, watch, nextTick, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { getServerLogs, subscribeServerLogs } from '../../api/servers'
 import { HttpError } from '../../api/http'
 import { useToast } from '../../composables/useToast'
@@ -16,6 +17,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
 
+const { t } = useI18n()
 const toast = useToast()
 
 type ViewState = 'idle' | 'loading' | 'loaded' | 'streaming' | 'error'
@@ -64,7 +66,9 @@ async function loadHistory(): Promise<void> {
   } catch (err) {
     viewState.value = 'error'
     errorMsg.value =
-      err instanceof HttpError ? (err.apiError?.message ?? `加载日志失败(${err.status})`) : '加载日志失败'
+      err instanceof HttpError
+        ? (err.apiError?.message ?? t('opsContainer.logs.loadFailedStatus', { status: err.status }))
+        : t('opsContainer.logs.loadFailed')
   }
 }
 
@@ -104,9 +108,9 @@ function toggleFollow(): void {
 async function copyAll(): Promise<void> {
   try {
     await navigator.clipboard.writeText(lines.value.join('\n'))
-    toast.success('日志已复制', { detail: `${lines.value.length} 行` })
+    toast.success(t('opsContainer.logs.copied'), { detail: t('opsContainer.logs.lineCount', { n: lines.value.length }) })
   } catch {
-    toast.error('复制失败', { detail: '浏览器不支持或无剪贴板权限(需 https/localhost)' })
+    toast.error(t('opsContainer.copyFailed'), { detail: t('opsContainer.logs.copyFailedDetail') })
   }
 }
 
@@ -124,45 +128,45 @@ onBeforeUnmount(stopStream)
 
 <template>
   <div class="drawer-scrim" @click.self="emit('close')">
-    <aside class="drawer" role="dialog" aria-label="容器日志">
+    <aside class="drawer" role="dialog" :aria-label="t('opsContainer.logs.dialogAria')">
       <header class="drawer__head">
         <div class="drawer__title">
           <span class="drawer__name">{{ containerName }}</span>
           <span v-if="containerId" class="drawer__cid mono">{{ containerId }}</span>
           <span class="drawer__src">docker logs</span>
         </div>
-        <button class="drawer__close" aria-label="关闭日志" @click="emit('close')">✕</button>
+        <button class="drawer__close" :aria-label="t('opsContainer.logs.closeAria')" @click="emit('close')">✕</button>
       </header>
 
       <div class="drawer__toolbar">
         <label class="tool">
-          <span class="tool__k">行数</span>
-          <select v-model.number="tailN" class="tool__sel" aria-label="日志行数">
+          <span class="tool__k">{{ t('opsContainer.logs.lines') }}</span>
+          <select v-model.number="tailN" class="tool__sel" :aria-label="t('opsContainer.logs.linesAria')">
             <option v-for="n in TAIL_OPTIONS" :key="n" :value="n">{{ n }}</option>
           </select>
         </label>
-        <button class="tool-btn" :disabled="viewState === 'loading'" @click="loadHistory">↻ 刷新</button>
+        <button class="tool-btn" :disabled="viewState === 'loading'" @click="loadHistory">↻ {{ t('common.refresh') }}</button>
         <button class="tool-btn" :class="{ 'tool-btn--on': following }" @click="toggleFollow">
-          {{ following ? '⏸ 停止实时' : '▶ 实时跟随' }}
+          {{ following ? `⏸ ${t('opsContainer.logs.stopLive')}` : `▶ ${t('opsContainer.logs.follow')}` }}
         </button>
         <span class="grow" />
-        <button class="tool-btn" :disabled="lines.length === 0" @click="copyAll">复制</button>
-        <button class="tool-btn" :disabled="lines.length === 0" @click="clearView">清屏</button>
+        <button class="tool-btn" :disabled="lines.length === 0" @click="copyAll">{{ t('opsContainer.copy') }}</button>
+        <button class="tool-btn" :disabled="lines.length === 0" @click="clearView">{{ t('opsContainer.logs.clear') }}</button>
       </div>
 
       <div ref="bodyEl" class="drawer__body" :class="{ 'is-live': following }">
-        <div v-if="viewState === 'loading'" class="drawer__hint">正在拉取日志…</div>
+        <div v-if="viewState === 'loading'" class="drawer__hint">{{ t('opsContainer.logs.fetching') }}</div>
         <div v-else-if="viewState === 'error'" class="drawer__hint drawer__hint--err">⚠ {{ errorMsg }}</div>
-        <div v-else-if="lines.length === 0" class="drawer__hint">暂无日志输出。</div>
+        <div v-else-if="lines.length === 0" class="drawer__hint">{{ t('opsContainer.logs.empty') }}</div>
         <pre v-else class="drawer__pre mono"><span v-for="(l, i) in lines" :key="i" class="logline">{{ l }}
 </span></pre>
       </div>
 
       <footer class="drawer__foot">
-        <span class="foot__s">{{ lines.length }} 行</span>
-        <span v-if="following" class="foot__live"><span class="foot__dot" /> 实时</span>
+        <span class="foot__s">{{ t('opsContainer.logs.lineCount', { n: lines.length }) }}</span>
+        <span v-if="following" class="foot__live"><span class="foot__dot" /> {{ t('opsContainer.logs.live') }}</span>
         <span class="grow" />
-        <span class="foot__hint">经 SSH 跑 docker logs · 历史 + 实时 tail</span>
+        <span class="foot__hint">{{ t('opsContainer.logs.footHint') }}</span>
       </footer>
     </aside>
   </div>

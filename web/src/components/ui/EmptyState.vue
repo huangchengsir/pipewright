@@ -4,14 +4,21 @@
  * icon slot: SVG path string passed via prop, or override entire icon via #icon slot.
  * title + description props; CTA via #cta slot.
  */
+import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
+
 const props = withDefaults(defineProps<{
   title?: string
   description?: string
   iconPath?: string
 }>(), {
-  title: '暂无数据',
   iconPath: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
 })
+
+const { t } = useI18n()
+
+// Fall back to the localized default title when none is passed.
+const titleText = computed(() => props.title ?? t('misc.empty.defaultTitle'))
 </script>
 
 <template>
@@ -26,7 +33,7 @@ const props = withDefaults(defineProps<{
     </div>
 
     <!-- Text -->
-    <strong class="empty-state__title">{{ title }}</strong>
+    <strong class="empty-state__title">{{ titleText }}</strong>
     <p v-if="description" class="empty-state__desc">{{ description }}</p>
     <slot name="description" />
 

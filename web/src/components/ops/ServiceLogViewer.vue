@@ -15,12 +15,15 @@
 -->
 <script setup lang="ts">
 import { ref, computed, shallowRef, onUnmounted, nextTick, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   getServerLogs,
   subscribeServerLogs,
   type LogSource,
 } from '../../api/servers'
 import { HttpError } from '../../api/http'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   serverId: string
@@ -38,11 +41,11 @@ const live = ref(false)
 const sourcePlaceholder = computed(() => {
   switch (source.value) {
     case 'file':
-      return '/var/log/app.log(绝对路径,无 .. 无 shell 元字符)'
+      return t('opsServer.log.placeholderFile')
     case 'journald':
-      return 'nginx.service(unit 名)'
+      return t('opsServer.log.placeholderJournald')
     case 'docker':
-      return 'my-container(容器名)'
+      return t('opsServer.log.placeholderDocker')
     default:
       return ''
   }
@@ -69,8 +72,8 @@ function resetLines(): void {
 function appendLines(texts: string[]): void {
   if (texts.length === 0) return
   const next = lines.value.slice()
-  for (const t of texts) {
-    next.push({ seq: seqCounter++, text: t })
+  for (const ts of texts) {
+    next.push({ seq: seqCounter++, text: ts })
   }
   lines.value = next
   scheduleAutoScroll()
@@ -94,7 +97,7 @@ function stopStream(): void {
 /** 历史拉取(一次性最近 N 行)。 */
 async function fetchHistory(): Promise<void> {
   if (!targetValid.value) {
-    errorMsg.value = '请填写日志目标(unit 名 / 绝对路径 / 容器名)'
+    errorMsg.value = t('opsServer.log.errTargetRequired')
     viewState.value = 'error'
     return
   }
@@ -133,7 +136,7 @@ function toggleLive(): void {
     return
   }
   if (!targetValid.value) {
-    errorMsg.value = '请填写日志目标后再开启实时'
+    errorMsg.value = t('opsServer.log.errTargetRequiredLive')
     viewState.value = 'error'
     return
   }
@@ -159,7 +162,7 @@ function toggleLive(): void {
       onTransportError() {
         // 连接掉线:EventSource 会自动重连;此处仅提示。不视为致命。
         if (!live.value) return
-        errorMsg.value = '实时连接中断,正在尝试重连…'
+        errorMsg.value = t('opsServer.log.errReconnecting')
       },
     },
   )
@@ -184,17 +187,17 @@ onUnmounted(stopStream)
 
 function humanError(err: unknown): string {
   if (err instanceof HttpError) {
-    if (err.status === 0) return '无法连接到后端,请检查服务是否运行'
+    if (err.status === 0) return t('opsServer.log.errBackendUnreachable')
     if (err.apiError?.code === 'invalid_log_target') {
-      return err.apiError.message ?? '日志目标非法(已被安全校验拦截)'
+      return err.apiError.message ?? t('opsServer.log.errInvalidTarget')
     }
-    if (err.apiError?.code === 'server_not_found') return '服务器不存在'
+    if (err.apiError?.code === 'server_not_found') return t('opsServer.log.errServerNotFound')
     if (err.apiError?.code === 'vault_unconfigured') {
-      return '保险库未配置 master key,无法取 SSH 凭据'
+      return t('opsServer.log.errVaultUnconfigured')
     }
-    return err.apiError?.message ?? `取日志失败(${err.status})`
+    return err.apiError?.message ?? t('opsServer.log.errFetchStatus', { status: err.status })
   }
-  return '取日志失败,请稍后重试'
+  return t('opsServer.log.errFetchRetry')
 }
 
 // ─── auto-scroll(贴底,用户上滚则暂停) ──────────────────────────────────────
@@ -236,16 +239,16 @@ const showFollowButton = computed(() => !stickToBottom.value && hasLines.value)
     <!-- controls -->
     <div class="lv-controls">
       <label class="lv-field">
-        <span class="lv-label">日志源</span>
-        <select v-model="source" class="lv-input lv-select" aria-label="日志源">
-          <option value="file">文件 (tail)</option>
-          <option value="journald">journald (unit)</option>
-          <option value="docker">docker 容器</option>
+        <span class="lv-label">{{ t('opsServer.log.sourceLabel') }}</span>
+        <select v-model="source" class="lv-input lv-select" :aria-label="t('opsServer.log.sourceLabel')">
+          <option value="file">{{ t('opsServer.log.sourceFile') }}</option>
+          <option value="journald">{{ t('opsServer.log.sourceJournald') }}</option>
+          <option value="docker">{{ t('opsServer.log.sourceDocker') }}</option>
         </select>
       </label>
 
       <label class="lv-field lv-field--grow">
-        <span class="lv-label">目标</span>
+        <span class="lv-label">{{ t('opsServer.log.targetLabel') }}</span>
         <input
           v-model="targetInput"
           class="lv-input mono"
@@ -258,7 +261,7 @@ const showFollowButton = computed(() => !stickToBottom.value && hasLines.value)
       </label>
 
       <label class="lv-field lv-field--lines">
-        <span class="lv-label">行数</span>
+        <span class="lv-label">{{ t('opsServer.log.linesLabel') }}</span>
         <input v-model.number="linesInput" class="lv-input" type="number" min="1" max="2000" />
       </label>
 
@@ -269,7 +272,7 @@ const showFollowButton = computed(() => !stickToBottom.value && hasLines.value)
           :disabled="!targetValid || viewState === 'loading'"
           @click="fetchHistory"
         >
-          {{ viewState === 'loading' ? '加载中…' : '查看历史' }}
+          {{ viewState === 'loading' ? t('opsServer.log.loading') : t('opsServer.log.viewHistory') }}
         </button>
         <button
           class="lv-btn"
@@ -278,28 +281,28 @@ const showFollowButton = computed(() => !stickToBottom.value && hasLines.value)
           :disabled="!targetValid"
           @click="toggleLive"
         >
-          {{ live ? '■ 停止实时' : '▶ 实时 tail' }}
+          {{ live ? t('opsServer.log.stopLive') : t('opsServer.log.liveTail') }}
         </button>
         <button class="lv-btn lv-btn--ghost" type="button" :disabled="!hasLines" @click="clearLogs">
-          清屏
+          {{ t('opsServer.log.clear') }}
         </button>
       </div>
     </div>
 
     <!-- terminal -->
-    <div class="term" role="region" :aria-label="`${serverName ?? '服务器'} 日志终端`">
+    <div class="term" role="region" :aria-label="t('opsServer.log.termAria', { name: serverName ?? t('opsServer.log.serverFallback') })">
       <div class="term-bar">
         <span class="term-dots" aria-hidden="true">
           <span class="term-dot term-dot--r" />
           <span class="term-dot term-dot--y" />
           <span class="term-dot term-dot--g" />
         </span>
-        <span class="term-label mono">{{ serverName ?? '日志' }}</span>
-        <span v-if="live && viewState === 'streaming'" class="term-live" aria-label="实时">
+        <span class="term-label mono">{{ serverName ?? t('opsServer.log.logFallback') }}</span>
+        <span v-if="live && viewState === 'streaming'" class="term-live" :aria-label="t('opsServer.log.liveAria')">
           <span class="term-live-dot" aria-hidden="true" />
           LIVE
         </span>
-        <span v-if="hasLines" class="term-count mono">{{ lines.length }} 行</span>
+        <span v-if="hasLines" class="term-count mono">{{ t('opsServer.log.lineCount', { n: lines.length }) }}</span>
       </div>
 
       <div
@@ -311,18 +314,18 @@ const showFollowButton = computed(() => !stickToBottom.value && hasLines.value)
         aria-relevant="additions"
         @scroll.passive="onScroll"
       >
-        <div v-if="viewState === 'loading'" class="term-state mono">正在取日志…</div>
+        <div v-if="viewState === 'loading'" class="term-state mono">{{ t('opsServer.log.fetching') }}</div>
 
         <div v-else-if="viewState === 'error'" class="term-state term-state--err mono">
-          {{ errorMsg || '取日志失败' }}
+          {{ errorMsg || t('opsServer.log.fetchFail') }}
         </div>
 
         <div v-else-if="!hasLines" class="term-state mono">
-          <template v-if="live">等待日志输出…</template>
-          <template v-else>选择日志源 + 填写目标,点「查看历史」或「实时 tail」。</template>
+          <template v-if="live">{{ t('opsServer.log.waitingOutput') }}</template>
+          <template v-else>{{ t('opsServer.log.emptyHint') }}</template>
         </div>
 
-        <ol v-else class="term-lines" :aria-label="`共 ${lines.length} 行日志`">
+        <ol v-else class="term-lines" :aria-label="t('opsServer.log.linesAria', { n: lines.length })">
           <li v-for="line in lines" :key="line.seq" class="term-line">
             <span class="term-ln mono" aria-hidden="true">{{ line.seq + 1 }}</span>
             <span class="term-text mono">{{ line.text }}</span>
@@ -335,12 +338,12 @@ const showFollowButton = computed(() => !stickToBottom.value && hasLines.value)
         class="term-follow"
         type="button"
         @click="jumpToBottom"
-        aria-label="跳到最新日志"
+        :aria-label="t('opsServer.log.jumpLatestAria')"
       >
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
           <path d="M12 5v14M19 12l-7 7-7-7" />
         </svg>
-        跳到底部
+        {{ t('opsServer.log.jumpToBottom') }}
       </button>
     </div>
   </div>

@@ -14,6 +14,7 @@
 -->
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   serviceAction,
   type ServiceType,
@@ -21,6 +22,8 @@ import {
   type ServiceActionResult,
 } from '../../api/servers'
 import { HttpError } from '../../api/http'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   serverId: string
@@ -34,7 +37,7 @@ const type = ref<ServiceType>('systemd')
 const targetInput = ref('')
 
 const targetPlaceholder = computed(() =>
-  type.value === 'systemd' ? 'nginx.service(unit 名)' : 'my-container(容器名)',
+  type.value === 'systemd' ? t('opsServer.ops.placeholderSystemd') : t('opsServer.ops.placeholderDocker'),
 )
 
 const targetValid = computed(() => targetInput.value.trim().length > 0)
@@ -47,11 +50,11 @@ const submitting = ref(false)
 
 // 本面板仅提供 restart/stop/start 三个动作(systemd/docker 通用);ServiceAction 联合类型
 // 另含容器专用的 pause/unpause/kill/rm(由「容器」页驱动),此处用 Partial 只列用到的键。
-const actionLabel: Partial<Record<ServiceAction, string>> = {
-  restart: '重启',
-  stop: '停止',
-  start: '启动',
-}
+const actionLabel = computed<Partial<Record<ServiceAction, string>>>(() => ({
+  restart: t('opsServer.ops.restart'),
+  stop: t('opsServer.ops.stop'),
+  start: t('opsServer.ops.start'),
+}))
 
 function isDestructive(a: ServiceAction): boolean {
   return a === 'restart' || a === 'stop'
@@ -96,9 +99,9 @@ async function runAction(a: ServiceAction): Promise<void> {
   } catch (e) {
     if (e instanceof HttpError) {
       // 400 invalid_service_target / 404 / 503 等:呈现后端人读 message,绝不拼 shell。
-      banner.value = e.message || '服务操作请求失败'
+      banner.value = e.message || t('opsServer.ops.reqFail')
     } else {
-      banner.value = '服务操作请求失败'
+      banner.value = t('opsServer.ops.reqFail')
     }
   } finally {
     submitting.value = false
@@ -110,7 +113,7 @@ async function runAction(a: ServiceAction): Promise<void> {
   <div class="ops-panel">
     <div class="ops-controls">
       <label class="ops-field">
-        <span class="ops-field-label">类型</span>
+        <span class="ops-field-label">{{ t('opsServer.ops.typeLabel') }}</span>
         <select v-model="type" class="ops-input" :disabled="submitting">
           <option value="systemd">systemd</option>
           <option value="docker">docker</option>
@@ -118,7 +121,7 @@ async function runAction(a: ServiceAction): Promise<void> {
       </label>
 
       <label class="ops-field ops-field-grow">
-        <span class="ops-field-label">目标</span>
+        <span class="ops-field-label">{{ t('opsServer.ops.targetLabel') }}</span>
         <input
           v-model="targetInput"
           class="ops-input mono"
@@ -133,7 +136,9 @@ async function runAction(a: ServiceAction): Promise<void> {
     </div>
 
     <p class="ops-hint">
-      目标名由服务端严格白名单校验(首字符非 <code>-</code>、无 shell 元字符);非法将被拒绝。
+      <i18n-t keypath="opsServer.ops.hint">
+        <template #dash><code>-</code></template>
+      </i18n-t>
     </p>
 
     <div class="ops-actions">
@@ -143,7 +148,7 @@ async function runAction(a: ServiceAction): Promise<void> {
         :disabled="!targetValid || submitting"
         @click="requestAction('restart')"
       >
-        重启
+        {{ t('opsServer.ops.restart') }}
       </button>
       <button
         type="button"
@@ -151,7 +156,7 @@ async function runAction(a: ServiceAction): Promise<void> {
         :disabled="!targetValid || submitting"
         @click="requestAction('stop')"
       >
-        停止
+        {{ t('opsServer.ops.stop') }}
       </button>
       <button
         type="button"
@@ -159,9 +164,9 @@ async function runAction(a: ServiceAction): Promise<void> {
         :disabled="!targetValid || submitting"
         @click="requestAction('start')"
       >
-        启动
+        {{ t('opsServer.ops.start') }}
       </button>
-      <span v-if="submitting" class="ops-busy">执行中…</span>
+      <span v-if="submitting" class="ops-busy">{{ t('opsServer.ops.running') }}</span>
     </div>
 
     <!-- 校验/请求层错误(如 400 invalid_service_target) -->
@@ -175,7 +180,7 @@ async function runAction(a: ServiceAction): Promise<void> {
       role="status"
     >
       <div class="ops-result-head">
-        <span class="ops-result-badge">{{ result.ok ? '成功' : '失败' }}</span>
+        <span class="ops-result-badge">{{ result.ok ? t('opsServer.ops.success') : t('opsServer.ops.fail') }}</span>
         <span class="mono"
           >{{ result.type }} · {{ actionLabel[result.action] }} · {{ result.target }}</span
         >
@@ -192,23 +197,23 @@ async function runAction(a: ServiceAction): Promise<void> {
         aria-modal="true"
         aria-labelledby="ops-confirm-title"
       >
-        <h4 id="ops-confirm-title" class="ops-confirm-title">确认{{ actionLabel[pendingAction] }}服务?</h4>
+        <h4 id="ops-confirm-title" class="ops-confirm-title">{{ t('opsServer.ops.confirmTitle', { label: actionLabel[pendingAction] }) }}</h4>
         <p class="ops-confirm-body">
-          即将对
+          {{ t('opsServer.ops.confirmBodyPrefix') }}
           <strong v-if="serverName">{{ serverName }}</strong>
-          上的 <code class="mono">{{ type }}</code> 目标
+          {{ t('opsServer.ops.confirmBodyMid') }} <code class="mono">{{ type }}</code> {{ t('opsServer.ops.confirmBodyTarget') }}
           <code class="mono">{{ targetInput.trim() }}</code>
-          执行<strong>{{ actionLabel[pendingAction] }}</strong>。此操作会影响线上服务可用性。
+          {{ t('opsServer.ops.confirmBodyExec') }}<strong>{{ actionLabel[pendingAction] }}</strong>{{ t('opsServer.ops.confirmBodySuffix') }}
         </p>
         <div class="ops-confirm-actions">
-          <button type="button" class="ops-btn" @click="cancelConfirm">取消</button>
+          <button type="button" class="ops-btn" @click="cancelConfirm">{{ t('opsServer.ops.cancel') }}</button>
           <button
             type="button"
             class="ops-btn"
             :class="pendingAction === 'stop' ? 'ops-btn--danger' : 'ops-btn--warn'"
             @click="confirmPending"
           >
-            确认{{ actionLabel[pendingAction] }}
+            {{ t('opsServer.ops.confirmAction', { label: actionLabel[pendingAction] }) }}
           </button>
         </div>
       </div>

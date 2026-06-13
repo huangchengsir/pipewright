@@ -10,6 +10,7 @@
 -->
 <script setup lang="ts">
 import { ref, reactive, watch, onMounted, provide } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { getSourceTree, type SourceEntry } from '../../api/source'
 import { HttpError } from '../../api/http'
 import CodeTreeNode from './CodeTreeNode.vue'
@@ -32,6 +33,8 @@ const emit = defineEmits<{
   rootLoaded: [payload: { degraded: boolean; degradedReason: string; empty: boolean }]
   rootError: [message: string]
 }>()
+
+const { t } = useI18n()
 
 // ─── per-directory node state(懒展开缓存;key = 目录 path,"" 为根) ──────────
 const dirs = reactive(new Map<string, DirState>())
@@ -69,11 +72,11 @@ async function loadDir(path: string): Promise<void> {
     const msg =
       err instanceof HttpError
         ? err.status === 0
-          ? '无法连接到服务器'
+          ? t('misc.tree.errConnect')
           : err.status === 404
-            ? '路径不存在'
-            : err.apiError?.message ?? `加载失败(${err.status})`
-        : '加载失败'
+            ? t('misc.tree.errNotFound')
+            : err.apiError?.message ?? t('misc.tree.errLoad', { status: err.status })
+        : t('misc.tree.errLoadGeneric')
     d.error = msg
     if (path === '') {
       rootError.value = msg
@@ -139,20 +142,20 @@ function rootDir(): DirState {
 </script>
 
 <template>
-  <nav class="code-tree" aria-label="代码目录树">
+  <nav class="code-tree" :aria-label="t('misc.tree.aria')">
     <div class="code-tree-head">
-      <span class="code-tree-title">文件</span>
-      <span v-if="treeRef" class="code-tree-ref mono" :title="`当前 ref: ${treeRef}`">{{ treeRef }}</span>
+      <span class="code-tree-title">{{ t('misc.tree.title') }}</span>
+      <span v-if="treeRef" class="code-tree-ref mono" :title="t('misc.tree.refTitle', { ref: treeRef })">{{ treeRef }}</span>
     </div>
 
-    <div class="code-tree-body" role="tree" aria-label="仓库文件树">
+    <div class="code-tree-body" role="tree" :aria-label="t('misc.tree.fileAria')">
       <!-- root loading -->
-      <div v-if="rootLoading" class="code-tree-state mono">加载目录…</div>
+      <div v-if="rootLoading" class="code-tree-state mono">{{ t('misc.tree.loadingDir') }}</div>
 
       <!-- root error (网络/服务错误;degraded 由父级整页接管) -->
       <div v-else-if="rootError" class="code-tree-state code-tree-state--err">
         <span class="mono">{{ rootError }}</span>
-        <button type="button" class="code-tree-retry" @click="retryRoot">↻ 重试</button>
+        <button type="button" class="code-tree-retry" @click="retryRoot">↻ {{ t('misc.error.retry') }}</button>
       </div>
 
       <!-- empty root -->
@@ -160,7 +163,7 @@ function rootDir(): DirState {
         v-else-if="rootDir().loaded && rootDir().entries.length === 0"
         class="code-tree-state mono"
       >
-        空仓库 / 源码暂不可读
+        {{ t('misc.tree.emptyRepo') }}
       </div>
 
       <!-- root entries -->

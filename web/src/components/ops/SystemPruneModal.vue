@@ -9,6 +9,7 @@
  * 安全:scope 走后端枚举白名单;命令服务端 array 化、不拼 shell;all 不加 --volumes(不误删卷)。
  */
 import { ref, computed, watch, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   getSystemDf,
   systemPrune,
@@ -27,6 +28,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{ (e: 'close'): void }>()
 
+const { t } = useI18n()
 const toast = useToast()
 const confirm = useConfirm()
 
@@ -50,36 +52,35 @@ interface PruneAction {
   danger?: boolean
 }
 
-const actions: PruneAction[] = [
+const actions = computed<PruneAction[]>(() => [
   {
     scope: 'containers',
-    label: '停止的容器',
-    confirmBody: '将删除该主机上所有「已停止」的容器(运行中的不受影响)。此操作不可撤销。',
+    label: t('opsContainer.prune.containersLabel'),
+    confirmBody: t('opsContainer.prune.containersBody'),
   },
   {
     scope: 'images',
-    label: '悬空镜像',
-    confirmBody: '将删除「悬空(dangling)」镜像 —— 没有标签且未被任何容器引用的镜像层。被使用的镜像不受影响。',
+    label: t('opsContainer.prune.imagesLabel'),
+    confirmBody: t('opsContainer.prune.imagesBody'),
   },
   {
     scope: 'volumes',
-    label: '无用卷',
-    confirmBody: '将删除「未被任何容器引用」的数据卷。卷里的数据会一并永久删除,请确认这些卷确实不再需要。',
+    label: t('opsContainer.prune.volumesLabel'),
+    confirmBody: t('opsContainer.prune.volumesBody'),
     danger: true,
   },
   {
     scope: 'builder',
-    label: '构建缓存',
-    confirmBody: '将清理 Docker 构建缓存(build cache)。下次构建会重新拉取/编译相关层,首次会更慢。',
+    label: t('opsContainer.prune.builderLabel'),
+    confirmBody: t('opsContainer.prune.builderBody'),
   },
   {
     scope: 'all',
-    label: '全部',
-    confirmBody:
-      '将一次性清理:已停止的容器、悬空镜像、未使用的网络、构建缓存。\n\n注意:此操作「不含」数据卷(named volumes),你的卷数据是安全的。',
+    label: t('opsContainer.prune.allLabel'),
+    confirmBody: t('opsContainer.prune.allBody'),
     danger: true,
   },
-]
+])
 
 async function loadDf(): Promise<void> {
   if (!selectedId.value) return
@@ -92,9 +93,9 @@ async function loadDf(): Promise<void> {
     loadError.value =
       err instanceof HttpError
         ? err.status === 0
-          ? '无法连接到服务器,请稍后重试'
-          : err.apiError?.message ?? `读取磁盘占用失败(${err.status})`
-        : '读取磁盘占用失败,请稍后重试'
+          ? t('opsContainer.prune.errConnect')
+          : err.apiError?.message ?? t('opsContainer.prune.dfFailedStatus', { status: err.status })
+        : t('opsContainer.prune.dfFailedRetry')
   } finally {
     loading.value = false
   }
@@ -103,9 +104,9 @@ async function loadDf(): Promise<void> {
 async function runPrune(action: PruneAction): Promise<void> {
   if (!selectedId.value || busyScope.value) return
   const ok = await confirm.open({
-    title: `清理「${action.label}」 · ${selectedName.value}`,
+    title: t('opsContainer.prune.confirmTitle', { label: action.label, server: selectedName.value }),
     body: action.confirmBody,
-    confirmLabel: `清理${action.label}`,
+    confirmLabel: t('opsContainer.prune.confirmLabel', { label: action.label }),
     variant: action.danger ? 'danger' : 'primary',
   })
   if (!ok) return
@@ -115,18 +116,18 @@ async function runPrune(action: PruneAction): Promise<void> {
     const res = await systemPrune(selectedId.value, action.scope)
     if (res.ok) {
       const summary = res.output.trim()
-      toast.success(`已清理「${action.label}」`, {
-        detail: summary || '没有可清理的内容',
+      toast.success(t('opsContainer.prune.cleaned', { label: action.label }), {
+        detail: summary || t('opsContainer.prune.nothingToClean'),
       })
     } else {
-      toast.error(`清理「${action.label}」失败`, { detail: res.error || '远端命令执行失败' })
+      toast.error(t('opsContainer.prune.cleanFailed', { label: action.label }), { detail: res.error || t('opsContainer.prune.remoteCmdFailed') })
     }
   } catch (err: unknown) {
     const msg =
       err instanceof HttpError
-        ? err.apiError?.message ?? `请求失败(${err.status})`
-        : '请求失败,请稍后重试'
-    toast.error(`清理「${action.label}」失败`, { detail: msg })
+        ? err.apiError?.message ?? t('opsContainer.prune.reqFailedStatus', { status: err.status })
+        : t('opsContainer.prune.reqFailedRetry')
+    toast.error(t('opsContainer.prune.cleanFailed', { label: action.label }), { detail: msg })
   } finally {
     busyScope.value = ''
     // 清理后刷新占用(无论成功失败,占用都可能变了)。
@@ -140,48 +141,48 @@ onMounted(() => void loadDf())
 
 <template>
   <div class="scrim" @click.self="emit('close')">
-    <div class="modal" role="dialog" aria-modal="true" aria-label="一键清理 Docker 磁盘">
+    <div class="modal" role="dialog" aria-modal="true" :aria-label="t('opsContainer.prune.dialogAria')">
       <header class="head">
         <div>
-          <h2 class="title">一键清理 · Docker 磁盘</h2>
-          <p class="sub">查看并清理目标主机上的 Docker 占用,免逐台 SSH。</p>
+          <h2 class="title">{{ t('opsContainer.prune.title') }}</h2>
+          <p class="sub">{{ t('opsContainer.prune.subtitle') }}</p>
         </div>
-        <button class="close" aria-label="关闭" @click="emit('close')">✕</button>
+        <button class="close" :aria-label="t('opsContainer.close')" @click="emit('close')">✕</button>
       </header>
 
       <!-- Server picker -->
       <div v-if="servers.length === 0" class="empty">
-        没有可清理的主机。请先在「设置 › 服务器」登记并确保服务器可达且已安装 Docker。
+        {{ t('opsContainer.prune.empty') }}
       </div>
       <template v-else>
         <div class="field">
-          <label class="label" for="prune-server">目标主机</label>
+          <label class="label" for="prune-server">{{ t('opsContainer.prune.targetHost') }}</label>
           <select id="prune-server" v-model="selectedId" class="select">
             <option v-for="s in servers" :key="s.id" :value="s.id">{{ s.name }}</option>
           </select>
         </div>
 
         <!-- Disk usage table -->
-        <section class="usage" aria-label="Docker 磁盘占用">
+        <section class="usage" :aria-label="t('opsContainer.prune.diskUsageAria')">
           <div class="usage-head">
-            <span>磁盘占用</span>
+            <span>{{ t('opsContainer.prune.diskUsage') }}</span>
             <button class="link" :disabled="loading" @click="loadDf">
-              {{ loading ? '刷新中…' : '刷新' }}
+              {{ loading ? t('opsContainer.prune.refreshing') : t('common.refresh') }}
             </button>
           </div>
 
           <p v-if="loadError" class="err">{{ loadError }}</p>
-          <p v-else-if="loading && !df" class="hint">读取中…</p>
-          <p v-else-if="df && !df.reachable" class="err">主机不可达:{{ df.error }}</p>
+          <p v-else-if="loading && !df" class="hint">{{ t('opsContainer.prune.reading') }}</p>
+          <p v-else-if="df && !df.reachable" class="err">{{ t('opsContainer.prune.hostUnreachable') }}{{ df.error }}</p>
           <p v-else-if="df && !df.dockerAvailable" class="err">{{ df.error }}</p>
           <table v-else-if="df && df.entries.length > 0" class="df">
             <thead>
               <tr>
-                <th>类型</th>
-                <th class="num">数量</th>
-                <th class="num">活跃</th>
-                <th class="num">大小</th>
-                <th class="num">可回收</th>
+                <th>{{ t('opsContainer.prune.colType') }}</th>
+                <th class="num">{{ t('opsContainer.prune.colCount') }}</th>
+                <th class="num">{{ t('opsContainer.prune.colActive') }}</th>
+                <th class="num">{{ t('opsContainer.prune.colSize') }}</th>
+                <th class="num">{{ t('opsContainer.prune.colReclaimable') }}</th>
               </tr>
             </thead>
             <tbody>
@@ -194,12 +195,12 @@ onMounted(() => void loadDf())
               </tr>
             </tbody>
           </table>
-          <p v-else class="hint">无占用数据。</p>
+          <p v-else class="hint">{{ t('opsContainer.prune.noUsageData') }}</p>
         </section>
 
         <!-- Cleanup actions -->
-        <section class="actions" aria-label="清理操作">
-          <p class="actions-title">清理</p>
+        <section class="actions" :aria-label="t('opsContainer.prune.actionsAria')">
+          <p class="actions-title">{{ t('opsContainer.prune.cleanup') }}</p>
           <div class="action-grid">
             <AppButton
               v-for="a in actions"
@@ -212,12 +213,12 @@ onMounted(() => void loadDf())
               {{ a.label }}
             </AppButton>
           </div>
-          <p class="note">「全部」清理已停止容器 / 悬空镜像 / 未用网络 / 构建缓存,<strong>不含数据卷</strong>。</p>
+          <p class="note">{{ t('opsContainer.prune.noteHead') }}<strong>{{ t('opsContainer.prune.noteStrong') }}</strong>{{ t('opsContainer.prune.noteTail') }}</p>
         </section>
       </template>
 
       <footer class="foot">
-        <button class="btn-secondary" @click="emit('close')">关闭</button>
+        <button class="btn-secondary" @click="emit('close')">{{ t('opsContainer.close') }}</button>
       </footer>
     </div>
   </div>

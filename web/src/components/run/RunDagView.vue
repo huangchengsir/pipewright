@@ -24,6 +24,7 @@ import {
   watch,
   nextTick,
 } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { RunStep, StepStatus } from '../../api/runs'
 import type { PipelineStage } from '../../api/pipeline'
 import { getPipeline } from '../../api/pipeline'
@@ -34,6 +35,8 @@ import {
   topoSort,
   type RunStage,
 } from './runDag'
+
+const { t } = useI18n()
 
 // ─── Props ───────────────────────────────────────────────────────────────────
 
@@ -189,11 +192,11 @@ interface StatusVis {
 
 function stageVis(status: StepStatus): StatusVis {
   switch (status) {
-    case 'success': return { dotColor: 'var(--color-green)', label: '成功',  cardClass: 'card--success', pulse: false }
-    case 'running': return { dotColor: 'var(--color-amber)', label: '进行中', cardClass: 'card--running', pulse: true  }
-    case 'failed':  return { dotColor: 'var(--color-red)',   label: '失败',  cardClass: 'card--failed',  pulse: false }
-    case 'skipped': return { dotColor: 'var(--color-faint)', label: '跳过',  cardClass: 'card--skipped', pulse: false }
-    default:        return { dotColor: 'var(--color-faint)', label: '等待',  cardClass: 'card--pending', pulse: false }
+    case 'success': return { dotColor: 'var(--color-green)', label: t('run.stageStatusSuccess'), cardClass: 'card--success', pulse: false }
+    case 'running': return { dotColor: 'var(--color-amber)', label: t('run.stageStatusRunning'), cardClass: 'card--running', pulse: true  }
+    case 'failed':  return { dotColor: 'var(--color-red)',   label: t('run.stageStatusFailed'),  cardClass: 'card--failed',  pulse: false }
+    case 'skipped': return { dotColor: 'var(--color-faint)', label: t('run.stageStatusSkipped'), cardClass: 'card--skipped', pulse: false }
+    default:        return { dotColor: 'var(--color-faint)', label: t('run.stageStatusPending'), cardClass: 'card--pending', pulse: false }
   }
 }
 
@@ -203,7 +206,7 @@ function stageVis(status: StepStatus): StatusVis {
  */
 function stageVisFor(stage: RunStage): StatusVis {
   if (stage.blocked) {
-    return { dotColor: 'var(--color-red)', label: '未执行', cardClass: 'card--blocked', pulse: false }
+    return { dotColor: 'var(--color-red)', label: t('run.stageStatusBlocked'), cardClass: 'card--blocked', pulse: false }
   }
   return stageVis(stage.status)
 }
@@ -229,7 +232,7 @@ function edgeClass(status: string): string {
 </script>
 
 <template>
-  <section class="dag-root" aria-label="流水线 DAG 拓扑视图">
+  <section class="dag-root" :aria-label="t('run.dagRegion')">
 
     <!-- Loading: spec fetch in progress -->
     <div v-if="specLoading" class="dag-loading" aria-busy="true">
@@ -247,11 +250,11 @@ function edgeClass(status: string): string {
           <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
           <path d="M12 9v4M12 17h.01"/>
         </svg>
-        流水线配置加载失败,按步骤顺序展示
+        {{ t('run.specLoadFailed') }}
       </div>
 
       <!-- DAG canvas: horizontally scrollable -->
-      <div class="dag-canvas" role="region" aria-label="阶段图">
+      <div class="dag-canvas" role="region" :aria-label="t('run.stageGraphAria')">
         <!-- Edge overlay SVG -->
         <svg
           v-if="edgePaths.length > 0"
@@ -278,14 +281,14 @@ function edgeClass(status: string): string {
         </svg>
 
         <!-- Stage columns -->
-        <div ref="flowRef" class="dag-flow" role="list" aria-label="流水线阶段列表">
+        <div ref="flowRef" class="dag-flow" role="list" :aria-label="t('run.stageListAria')">
           <article
             v-for="stage in dagStages"
             :key="stage.id"
             class="dag-stage-card"
             :class="stageVisFor(stage).cardClass"
             role="listitem"
-            :aria-label="`阶段 ${stage.name}: ${stageVisFor(stage).label}`"
+            :aria-label="t('run.stageAria', { name: stage.name, status: stageVisFor(stage).label })"
           >
             <!-- Stage header -->
             <header class="stage-head">
@@ -309,11 +312,11 @@ function edgeClass(status: string): string {
               >{{ stageVisFor(stage).label }}</span>
 
               <!-- Gate badge -->
-              <span v-if="stage.gate" class="stage-gate" aria-label="需要人工审批">
+              <span v-if="stage.gate" class="stage-gate" :aria-label="t('run.gateNeedApprovalAria')">
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
                   <rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
                 </svg>
-                门控
+                {{ t('run.gate') }}
               </span>
 
               <!-- Duration -->
@@ -325,7 +328,7 @@ function edgeClass(status: string): string {
                 class="stage-toggle"
                 :aria-expanded="isExpanded(stage.id)"
                 :aria-controls="`steps-${stage.id}`"
-                :aria-label="isExpanded(stage.id) ? `收起阶段 ${stage.name} 步骤` : `展开阶段 ${stage.name} 步骤`"
+                :aria-label="isExpanded(stage.id) ? t('run.collapseStage', { name: stage.name }) : t('run.expandStage', { name: stage.name })"
                 @click="toggleExpand(stage.id)"
               >
                 <svg
@@ -342,13 +345,13 @@ function edgeClass(status: string): string {
             <!-- Step count summary (always visible) -->
             <div class="stage-summary">
               <!-- blocked(整轮失败,本阶段零 step → 没机会跑)不展示「0 步骤」,直接给未执行语义。 -->
-              <span v-if="stage.blocked" class="stage-blocked-note">未执行(上游失败)</span>
+              <span v-if="stage.blocked" class="stage-blocked-note">{{ t('run.blockedNote') }}</span>
               <template v-else>
                 <span class="stage-step-count">
-                  {{ stage.steps.length }} 步骤
+                  {{ t('run.stepCount', { n: stage.steps.length }) }}
                 </span>
                 <span v-if="stage.steps.some(s => s.status === 'failed')" class="stage-fail-count">
-                  · {{ stage.steps.filter(s => s.status === 'failed').length }} 失败
+                  {{ t('run.failCount', { n: stage.steps.filter(s => s.status === 'failed').length }) }}
                 </span>
               </template>
             </div>
@@ -404,10 +407,10 @@ function edgeClass(status: string): string {
             <!-- Empty stage placeholder:仅在「尚未开始」时显示;blocked(整轮已失败)给失败语义,
                  不再显示「尚无步骤」(误导成还没跑 / 还在跑)。 -->
             <div v-if="stage.steps.length === 0 && stage.blocked" class="stage-empty stage-empty--blocked">
-              因上游失败未执行
+              {{ t('run.blockedEmpty') }}
             </div>
             <div v-else-if="stage.steps.length === 0" class="stage-empty">
-              尚无步骤
+              {{ t('run.noSteps') }}
             </div>
           </article>
         </div>

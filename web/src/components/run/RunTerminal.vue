@@ -19,11 +19,14 @@
 -->
 <script setup lang="ts">
 import { ref, computed, shallowRef, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   getRunLogs,
   subscribeRunEvents,
   type RunLogLine,
 } from '../../api/runs'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   runId: string
@@ -110,7 +113,7 @@ async function bootstrap(): Promise<void> {
       loadState.value = 'done'
       scheduleAutoScroll()
     } catch (err) {
-      loadError.value = err instanceof Error ? err.message : '日志加载失败'
+      loadError.value = err instanceof Error ? err.message : t('run.logLoadFailed')
       loadState.value = 'error'
     }
   }
@@ -207,7 +210,7 @@ function lineKey(line: RunLogLine): number {
 </script>
 
 <template>
-  <div class="term" :class="{ 'term--live': props.live }" role="region" aria-label="运行日志终端">
+  <div class="term" :class="{ 'term--live': props.live }" role="region" :aria-label="t('run.terminalRegion')">
     <!-- Terminal chrome bar -->
     <div class="term-bar">
       <span class="term-dots" aria-hidden="true">
@@ -215,16 +218,16 @@ function lineKey(line: RunLogLine): number {
         <span class="term-dot term-dot--y" />
         <span class="term-dot term-dot--g" />
       </span>
-      <span class="term-label">运行日志</span>
+      <span class="term-label">{{ t('run.runLog') }}</span>
       <span
         v-if="props.live && loadState === 'streaming'"
         class="term-live"
-        aria-label="实时"
+        :aria-label="t('run.liveAria')"
       >
         <span class="term-live-dot" aria-hidden="true" />
         LIVE
       </span>
-      <span class="term-count mono" v-if="hasLines">{{ visibleLines.length }} 行</span>
+      <span class="term-count mono" v-if="hasLines">{{ t('run.lineCount', { n: visibleLines.length }) }}</span>
     </div>
 
     <!-- Log surface — 封顶 56vh,框内纵向滚动;实时 tail 框内贴底跟随 -->
@@ -239,12 +242,12 @@ function lineKey(line: RunLogLine): number {
     >
       <!-- Loading -->
       <div v-if="loadState === 'loading'" class="term-state mono">
-        正在加载日志…
+        {{ t('run.loadingLog') }}
       </div>
 
       <!-- Error (terminal-mode fetch failure) -->
       <div v-else-if="loadState === 'error'" class="term-state term-state--err mono">
-        {{ loadError || '日志加载失败' }}
+        {{ loadError || t('run.logLoadFailed') }}
       </div>
 
       <!-- Empty -->
@@ -252,12 +255,12 @@ function lineKey(line: RunLogLine): number {
         v-else-if="!hasLines"
         class="term-state mono"
       >
-        <template v-if="props.live">等待日志输出…</template>
-        <template v-else>该运行没有日志记录。</template>
+        <template v-if="props.live">{{ t('run.waitingLog') }}</template>
+        <template v-else>{{ t('run.noLogRecords') }}</template>
       </div>
 
       <!-- Lines -->
-      <ol v-else class="term-lines" :aria-label="`共 ${visibleLines.length} 行日志`">
+      <ol v-else class="term-lines" :aria-label="t('run.totalLinesAria', { n: visibleLines.length })">
         <li
           v-for="line in visibleLines"
           :key="lineKey(line)"
@@ -267,7 +270,7 @@ function lineKey(line: RunLogLine): number {
           <span class="term-ln mono" aria-hidden="true">{{ line.seq }}</span>
           <span class="term-text mono">
             <template v-for="(seg, i) in segments(line.text)" :key="i">
-              <span v-if="seg.masked" class="term-masked" title="敏感信息已脱敏">{{ seg.text }}</span>
+              <span v-if="seg.masked" class="term-masked" :title="t('run.maskedTitle')">{{ seg.text }}</span>
               <template v-else>{{ seg.text }}</template>
             </template>
           </span>
@@ -281,12 +284,12 @@ function lineKey(line: RunLogLine): number {
       class="term-follow"
       type="button"
       @click="jumpToBottom"
-      aria-label="跳到最新日志"
+      :aria-label="t('run.jumpToLatest')"
     >
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
         <path d="M12 5v14M19 12l-7 7-7-7" />
       </svg>
-      跳到底部
+      {{ t('run.jumpToBottom') }}
     </button>
   </div>
 </template>

@@ -4,6 +4,7 @@
   展示根因假说 + 置信度 + 修复建议 + 可粘贴修复脚本 + 证据行。AI 未配/失败优雅降级。
 */
 import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { diagnoseContainer, type ContainerDiagnosis } from '../../api/containers'
 import { HttpError } from '../../api/http'
 import { useToast } from '../../composables/useToast'
@@ -11,12 +12,18 @@ import { useToast } from '../../composables/useToast'
 const props = defineProps<{ serverId: string; containerName: string }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
 
+const { t } = useI18n()
 const toast = useToast()
 const state = ref<'loading' | 'done' | 'error'>('loading')
 const errorMsg = ref('')
 const diag = ref<ContainerDiagnosis | null>(null)
 
-const CONFIDENCE_LABEL: Record<string, string> = { high: '高', medium: '中', low: '低', '': '' }
+const CONFIDENCE_LABEL: Record<string, () => string> = {
+  high: () => t('opsContainer.diag.confHigh'),
+  medium: () => t('opsContainer.diag.confMedium'),
+  low: () => t('opsContainer.diag.confLow'),
+  '': () => '',
+}
 
 async function run(): Promise<void> {
   state.value = 'loading'
@@ -27,7 +34,9 @@ async function run(): Promise<void> {
   } catch (err) {
     state.value = 'error'
     errorMsg.value =
-      err instanceof HttpError ? (err.apiError?.message ?? `诊断失败(${err.status})`) : '诊断请求失败'
+      err instanceof HttpError
+        ? (err.apiError?.message ?? t('opsContainer.diag.errStatus', { status: err.status }))
+        : t('opsContainer.diag.errRequest')
   }
 }
 
@@ -35,9 +44,9 @@ async function copyScript(): Promise<void> {
   if (!diag.value?.fixScript) return
   try {
     await navigator.clipboard.writeText(diag.value.fixScript)
-    toast.success('修复脚本已复制')
+    toast.success(t('opsContainer.diag.scriptCopied'))
   } catch {
-    toast.error('复制失败', { detail: '需 https/localhost' })
+    toast.error(t('opsContainer.copyFailed'), { detail: t('opsContainer.needHttps') })
   }
 }
 
@@ -46,18 +55,18 @@ void run()
 
 <template>
   <div class="modal-scrim" @click.self="emit('close')">
-    <div class="modal" role="dialog" aria-label="AI 容器诊断">
+    <div class="modal" role="dialog" :aria-label="t('opsContainer.diag.dialogAria')">
       <header class="modal__head">
         <h3 class="modal__title">
-          <span class="ai-spark">✦</span> AI 诊断 · <span class="mono">{{ containerName }}</span>
+          <span class="ai-spark">✦</span> {{ t('opsContainer.diag.title') }} · <span class="mono">{{ containerName }}</span>
         </h3>
-        <button class="modal__close" aria-label="关闭" @click="emit('close')">✕</button>
+        <button class="modal__close" :aria-label="t('opsContainer.close')" @click="emit('close')">✕</button>
       </header>
 
       <div class="modal__body">
         <!-- 加载中 -->
         <div v-if="state === 'loading'" class="center">
-          <span class="spinner" /> 正在取日志并让 AI 分析…
+          <span class="spinner" /> {{ t('opsContainer.diag.analyzing') }}
         </div>
 
         <!-- 请求错误 -->
@@ -65,7 +74,7 @@ void run()
 
         <!-- AI 未配 / 不可用 -->
         <div v-else-if="diag && diag.status !== 'ready'" class="unavail">
-          <p class="unavail__t">诊断暂不可用</p>
+          <p class="unavail__t">{{ t('opsContainer.diag.unavailable') }}</p>
           <p class="unavail__r">{{ diag.reason }}</p>
         </div>
 
@@ -73,16 +82,16 @@ void run()
         <template v-else-if="diag">
           <section class="block">
             <div class="block__h">
-              根因假说
+              {{ t('opsContainer.diag.rootCause') }}
               <span v-if="diag.confidence" class="conf" :class="`conf--${diag.confidence}`">
-                置信度 {{ CONFIDENCE_LABEL[diag.confidence] }}
+                {{ t('opsContainer.diag.confidence') }} {{ CONFIDENCE_LABEL[diag.confidence]?.() }}
               </span>
             </div>
             <p class="hyp">{{ diag.hypothesis }}</p>
           </section>
 
           <section v-if="diag.fixSuggestions.length" class="block">
-            <div class="block__h">修复建议</div>
+            <div class="block__h">{{ t('opsContainer.diag.fixSuggestions') }}</div>
             <ul class="fixlist">
               <li v-for="(f, i) in diag.fixSuggestions" :key="i">{{ f }}</li>
             </ul>
@@ -90,21 +99,21 @@ void run()
 
           <section v-if="diag.fixScript" class="block">
             <div class="block__h">
-              修复脚本
-              <button class="copy" @click="copyScript">复制</button>
+              {{ t('opsContainer.diag.fixScript') }}
+              <button class="copy" @click="copyScript">{{ t('opsContainer.copy') }}</button>
             </div>
             <pre class="script mono">{{ diag.fixScript }}</pre>
           </section>
 
           <section v-if="diag.alternateCauses.length" class="block">
-            <div class="block__h">其它可能原因</div>
+            <div class="block__h">{{ t('opsContainer.diag.alternateCauses') }}</div>
             <ul class="fixlist fixlist--dim">
               <li v-for="(c, i) in diag.alternateCauses" :key="i">{{ c }}</li>
             </ul>
           </section>
 
           <section v-if="diag.evidence.length" class="block">
-            <div class="block__h">日志证据</div>
+            <div class="block__h">{{ t('opsContainer.diag.logEvidence') }}</div>
             <pre class="evidence mono"><span
               v-for="(e, i) in diag.evidence"
               :key="i"
@@ -117,10 +126,10 @@ void run()
       </div>
 
       <footer class="modal__foot">
-        <span class="foot-hint">日志出网前已脱敏 · AI 仅供参考</span>
+        <span class="foot-hint">{{ t('opsContainer.diag.footHint') }}</span>
         <span class="grow" />
-        <button class="btn btn--ghost" @click="run">重新诊断</button>
-        <button class="btn btn--primary" @click="emit('close')">关闭</button>
+        <button class="btn btn--ghost" @click="run">{{ t('opsContainer.diag.rerun') }}</button>
+        <button class="btn btn--primary" @click="emit('close')">{{ t('opsContainer.close') }}</button>
       </footer>
     </div>
   </div>

@@ -25,6 +25,7 @@
  */
 
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { ValidationIssue, IssueScope } from '../../api/pipelineValidation'
 
 const props = defineProps<{
@@ -37,6 +38,16 @@ const emit = defineEmits<{
   locate: [scope: IssueScope]
   close: []
 }>()
+
+const { t } = useI18n()
+
+function severityLabel(severity: 'error' | 'warning' | 'info'): string {
+  return severity === 'error'
+    ? t('pipelinePanels.vpGroupError')
+    : severity === 'warning'
+      ? t('pipelinePanels.vpGroupWarning')
+      : t('pipelinePanels.vpGroupInfo')
+}
 
 // ─── Derived counts ───────────────────────────────────────────────────────────
 
@@ -60,12 +71,12 @@ const groups = computed<SeverityGroup[]>(() => {
 
 // ─── Scope → tab label map ────────────────────────────────────────────────────
 
-const scopeLabel: Record<IssueScope, string> = {
-  canvas:   '流水线编排',
-  vars:     '变量与缓存',
-  triggers: '触发设置',
-  envs:     '环境与凭据',
-}
+const scopeLabel = computed<Record<IssueScope, string>>(() => ({
+  canvas:   t('pipelinePanels.vpScopeCanvas'),
+  vars:     t('pipelinePanels.vpScopeVars'),
+  triggers: t('pipelinePanels.vpScopeTriggers'),
+  envs:     t('pipelinePanels.vpScopeEnvs'),
+}))
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -75,7 +86,7 @@ function handleLocate(scope: IssueScope): void {
 </script>
 
 <template>
-  <aside class="vp" aria-label="流水线配置校验">
+  <aside class="vp" :aria-label="t('pipelinePanels.vpAside')">
 
     <!-- ─── Header ─────────────────────────────────────────────────────────── -->
     <div class="vp-head">
@@ -89,25 +100,25 @@ function handleLocate(scope: IssueScope): void {
         >
           <!-- ok dot -->
           <span class="vp-ready-dot" aria-hidden="true" />
-          <span v-if="ready">配置就绪</span>
-          <span v-else>{{ errorCount }} 项需修复</span>
+          <span v-if="ready">{{ t('pipelinePanels.vpReady') }}</span>
+          <span v-else>{{ t('pipelinePanels.vpNeedFix', { count: errorCount }) }}</span>
         </span>
 
         <!-- Loading skeleton for badge -->
         <span v-else class="vp-skel vp-skel--badge" aria-hidden="true" />
 
-        <span class="vp-head-title">配置校验</span>
+        <span class="vp-head-title">{{ t('pipelinePanels.vpTitle') }}</span>
       </div>
 
       <!-- Summary chips (only when not loading and has issues) -->
       <div v-if="!loading && issues.length > 0" class="vp-chips" aria-hidden="true">
-        <span v-if="errorCount > 0"   class="vp-chip vp-chip--error">{{ errorCount }} 错误</span>
-        <span v-if="warningCount > 0" class="vp-chip vp-chip--warn">{{ warningCount }} 警告</span>
-        <span v-if="infoCount > 0"    class="vp-chip vp-chip--info">{{ infoCount }} 提示</span>
+        <span v-if="errorCount > 0"   class="vp-chip vp-chip--error">{{ t('pipelinePanels.vpErrorChip', { count: errorCount }) }}</span>
+        <span v-if="warningCount > 0" class="vp-chip vp-chip--warn">{{ t('pipelinePanels.vpWarnChip', { count: warningCount }) }}</span>
+        <span v-if="infoCount > 0"    class="vp-chip vp-chip--info">{{ t('pipelinePanels.vpInfoChip', { count: infoCount }) }}</span>
       </div>
 
       <!-- Close button -->
-      <button class="vp-close" aria-label="关闭校验面板" @click="emit('close')">
+      <button class="vp-close" :aria-label="t('pipelinePanels.vpCloseAria')" @click="emit('close')">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M18 6 6 18M6 6l12 12"/>
         </svg>
@@ -115,7 +126,7 @@ function handleLocate(scope: IssueScope): void {
     </div>
 
     <!-- ─── Loading skeleton ───────────────────────────────────────────────── -->
-    <div v-if="loading" class="vp-body" aria-busy="true" aria-label="校验结果加载中">
+    <div v-if="loading" class="vp-body" aria-busy="true" :aria-label="t('pipelinePanels.vpLoadingAria')">
       <div class="vp-skel-list">
         <div v-for="i in 3" :key="i" class="vp-skel-row" aria-hidden="true">
           <span class="vp-skel vp-skel--dot" />
@@ -131,7 +142,7 @@ function handleLocate(scope: IssueScope): void {
           <path d="M20 6 9 17l-5-5"/>
         </svg>
       </span>
-      <span class="vp-empty-text">所有检查通过，配置合法</span>
+      <span class="vp-empty-text">{{ t('pipelinePanels.vpAllPassed') }}</span>
     </div>
 
     <!-- ─── Issue groups ───────────────────────────────────────────────────── -->
@@ -140,7 +151,7 @@ function handleLocate(scope: IssueScope): void {
         v-for="group in groups"
         :key="group.severity"
         class="vp-group"
-        :aria-label="`${group.severity === 'error' ? '错误' : group.severity === 'warning' ? '警告' : '提示'}项`"
+        :aria-label="t('pipelinePanels.vpGroupAria', { label: severityLabel(group.severity) })"
       >
         <!-- Group heading -->
         <div class="vp-group-head">
@@ -159,7 +170,7 @@ function handleLocate(scope: IssueScope): void {
             </svg>
           </span>
           <span class="vp-group-label" :class="`vp-group-label--${group.severity}`">
-            {{ group.severity === 'error' ? '错误' : group.severity === 'warning' ? '警告' : '提示' }}
+            {{ severityLabel(group.severity) }}
             <span class="vp-group-count">{{ group.items.length }}</span>
           </span>
         </div>
@@ -173,7 +184,7 @@ function handleLocate(scope: IssueScope): void {
             :class="`vp-issue--${issue.severity}`"
             role="button"
             tabindex="0"
-            :aria-label="`${issue.message}。定位到${scopeLabel[issue.scope]}标签页`"
+            :aria-label="t('pipelinePanels.vpLocateAria', { message: issue.message, scope: scopeLabel[issue.scope] })"
             @click="handleLocate(issue.scope)"
             @keydown.enter.prevent="handleLocate(issue.scope)"
             @keydown.space.prevent="handleLocate(issue.scope)"

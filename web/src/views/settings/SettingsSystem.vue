@@ -12,6 +12,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getVersion, checkUpdate, applyUpdate } from '../../api/version'
 import type { VersionInfo, UpdateInfo } from '../../api/version'
+import { getRetentionConfig, setRetentionConfig, type RetentionConfig } from '../../api/retention'
 import { HttpError } from '../../api/http'
 import AppButton from '../../components/ui/AppButton.vue'
 
@@ -169,7 +170,47 @@ async function copyCommand(): Promise<void> {
   }
 }
 
-onMounted(loadVersion)
+// ─── 运行数据保留策略 ─────────────────────────────────────────────────────────
+const rt = ref<RetentionConfig>({ enabled: false, keepPerProject: 0, maxAgeDays: 0 })
+const rtLoading = ref(true)
+const rtSaving = ref(false)
+const rtSaved = ref(false)
+const rtError = ref('')
+
+async function loadRetention(): Promise<void> {
+  rtLoading.value = true
+  try {
+    rt.value = await getRetentionConfig()
+  } catch {
+    // 读失败保持默认(关),不阻断页面
+  } finally {
+    rtLoading.value = false
+  }
+}
+
+async function saveRetention(): Promise<void> {
+  rtSaving.value = true
+  rtSaved.value = false
+  rtError.value = ''
+  try {
+    rt.value = await setRetentionConfig({
+      enabled: rt.value.enabled,
+      keepPerProject: Math.max(0, Math.floor(Number(rt.value.keepPerProject) || 0)),
+      maxAgeDays: Math.max(0, Math.floor(Number(rt.value.maxAgeDays) || 0)),
+    })
+    rtSaved.value = true
+    setTimeout(() => { rtSaved.value = false }, 2000)
+  } catch {
+    rtError.value = t('settingsSystem.retentionSaveFailed')
+  } finally {
+    rtSaving.value = false
+  }
+}
+
+onMounted(() => {
+  void loadVersion()
+  void loadRetention()
+})
 </script>
 
 <template>
@@ -285,6 +326,52 @@ onMounted(loadVersion)
         </div>
       </article>
     </transition>
+
+    <!-- 运行数据保留 / 清理 -->
+    <article class="sys-panel">
+      <span class="sys-accent" aria-hidden="true" />
+      <div class="rt-head">
+        <div class="rt-head-text">
+          <h3 class="rt-title">{{ t('settingsSystem.retentionTitle') }}</h3>
+          <p class="rt-sub">{{ t('settingsSystem.retentionSub') }}</p>
+        </div>
+        <button
+          type="button"
+          class="rt-switch"
+          :class="{ 'rt-switch--on': rt.enabled }"
+          role="switch"
+          :aria-checked="rt.enabled"
+          :aria-label="t('settingsSystem.retentionTitle')"
+          :disabled="rtLoading"
+          @click="rt.enabled = !rt.enabled"
+        >
+          <span class="rt-switch-knob" aria-hidden="true" />
+        </button>
+      </div>
+
+      <div class="rt-fields" :class="{ 'rt-fields--off': !rt.enabled }">
+        <label class="rt-field">
+          <span class="rt-label">{{ t('settingsSystem.retentionKeep') }}</span>
+          <input class="rt-input mono" type="number" min="0" step="1" v-model.number="rt.keepPerProject" :disabled="!rt.enabled || rtLoading" />
+          <span class="rt-hint">{{ t('settingsSystem.retentionKeepHint') }}</span>
+        </label>
+        <label class="rt-field">
+          <span class="rt-label">{{ t('settingsSystem.retentionAge') }}</span>
+          <input class="rt-input mono" type="number" min="0" step="1" v-model.number="rt.maxAgeDays" :disabled="!rt.enabled || rtLoading" />
+          <span class="rt-hint">{{ t('settingsSystem.retentionAgeHint') }}</span>
+        </label>
+      </div>
+
+      <p class="rt-warn">{{ t('settingsSystem.retentionWarn') }}</p>
+
+      <div class="rt-actions">
+        <span v-if="rtSaved" class="rt-saved" role="status">{{ t('settingsSystem.retentionSaved') }}</span>
+        <span v-if="rtError" class="rt-err" role="alert">{{ rtError }}</span>
+        <AppButton variant="primary" :loading="rtSaving" :disabled="rtLoading" @click="saveRetention">
+          {{ t('settingsSystem.retentionSave') }}
+        </AppButton>
+      </div>
+    </article>
   </section>
 </template>
 
@@ -764,4 +851,100 @@ onMounted(loadVersion)
     animation: none;
   }
 }
+
+/* ─── 运行数据保留 ───────────────────────────────────────────────────────────── */
+.rt-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.rt-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0 0 4px;
+}
+.rt-sub {
+  font-size: 0.82rem;
+  color: var(--color-faint);
+  margin: 0;
+  max-width: 52ch;
+}
+.rt-switch {
+  position: relative;
+  flex: none;
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  border: none;
+  cursor: pointer;
+  background: var(--color-border);
+  transition: background var(--duration-fast);
+}
+.rt-switch--on { background: var(--color-primary); }
+.rt-switch:disabled { opacity: 0.55; cursor: default; }
+.rt-switch:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.rt-switch-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform var(--duration-fast);
+}
+.rt-switch--on .rt-switch-knob { transform: translateX(18px); }
+
+.rt-fields {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+  transition: opacity var(--duration-fast);
+}
+.rt-fields--off { opacity: 0.5; }
+.rt-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 180px;
+}
+.rt-label {
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--color-dim);
+}
+.rt-input {
+  width: 120px;
+  padding: 7px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.9rem;
+}
+.rt-input:focus { outline: 2px solid var(--color-primary); outline-offset: -1px; }
+.rt-input:disabled { opacity: 0.6; }
+.rt-hint {
+  font-size: 0.74rem;
+  color: var(--color-faint);
+}
+.rt-warn {
+  margin: 16px 0 0;
+  font-size: 0.78rem;
+  color: var(--color-faint);
+  border-left: 2px solid var(--color-border);
+  padding-left: 10px;
+}
+.rt-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 18px;
+}
+.rt-saved { font-size: 0.82rem; color: var(--color-ok, #18a058); }
+.rt-err { font-size: 0.82rem; color: var(--color-danger, #e5484d); }
 </style>

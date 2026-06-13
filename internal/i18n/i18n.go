@@ -21,6 +21,28 @@ import "strings"
 // Default is the source/fallback language; zh-CN strings are authored inline.
 const Default = "zh-CN"
 
+// catalog maps a zh-CN source message → {locale: translation}. Populated
+// additively by per-area files via register()/registerPrefix() in their init().
+var catalog = map[string]map[string]string{}
+
+// prefixCatalog holds messages built by concatenation ("<prefix>" + detail);
+// T does a longest-prefix match and preserves the appended detail.
+var prefixCatalog = map[string]map[string]string{}
+
+// register merges exact-match entries into the catalog (call from init()).
+func register(m map[string]map[string]string) {
+	for k, v := range m {
+		catalog[k] = v
+	}
+}
+
+// registerPrefix merges concatenation-prefix entries (call from init()).
+func registerPrefix(m map[string]map[string]string) {
+	for k, v := range m {
+		prefixCatalog[k] = v
+	}
+}
+
 // Supported lists every locale the catalog (and the web UI) cover.
 var Supported = []string{"zh-CN", "zh-TW", "en", "ja", "ko", "es", "fr", "de"}
 

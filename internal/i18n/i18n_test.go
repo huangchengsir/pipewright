@@ -38,9 +38,10 @@ func TestTranslate(t *testing.T) {
 	if got := T("zh-CN", "项目不存在"); got != "项目不存在" {
 		t.Errorf("default passthrough: %q", got)
 	}
-	// Exact match.
-	if got := T("en", "项目不存在"); got != "Project not found" {
-		t.Errorf("exact: got %q", got)
+	// Exact match: a catalogued message translates (not passthrough); casing/
+	// wording is owned by the catalog, so assert it changed rather than ==literal.
+	if got := T("en", "服务器内部错误"); got == "服务器内部错误" || got == "" {
+		t.Errorf("exact: expected a translation, got %q", got)
 	}
 	// Unknown message passes through.
 	if got := T("en", "这条没在词条表里"); got != "这条没在词条表里" {

@@ -26,6 +26,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/cron"
 	"github.com/huangchengsir/pipewright/internal/deploy"
 	"github.com/huangchengsir/pipewright/internal/environments"
+	"github.com/huangchengsir/pipewright/internal/i18n"
 	"github.com/huangchengsir/pipewright/internal/library"
 	"github.com/huangchengsir/pipewright/internal/notify"
 	"github.com/huangchengsir/pipewright/internal/oauth"
@@ -344,6 +345,9 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
+	// 解析请求 locale 并包装 writer,使 writeError 能按 UI 语言本地化错误消息
+	// (包装器转发 Flush/Hijack/Unwrap,不影响 SSE 日志流与 WS 终端)。
+	r.Use(localeMiddleware)
 
 	r.Get("/healthz", handleHealthz)
 	// /version 公开只读:暴露构建版本元数据,供升级检查与运维探针使用(非敏感)。
@@ -1042,6 +1046,8 @@ type errDetail struct {
 }
 
 // writeError 输出统一错误响应:{ "error": { "code": "...", "message": "..." } }
+// msg 以 zh-CN 源串写在调用点;此处按请求 locale(localeMiddleware 解析)本地化。
 func writeError(w http.ResponseWriter, code int, errCode, msg string) {
+	msg = i18n.T(localeOf(w), msg)
 	writeJSON(w, code, errBody{Error: errDetail{Code: errCode, Message: msg}})
 }

@@ -5,6 +5,7 @@ import {
   createCredential,
   updateCredential,
   deleteCredential,
+  revealCredential,
 } from '../../api/credentials'
 import type { Credential, CredentialType, CreateCredentialInput, UpdateCredentialInput } from '../../api/credentials'
 import { HttpError } from '../../api/http'
@@ -57,9 +58,11 @@ const deletingCredential = ref<Credential | null>(null)
 const deleteSubmitting = ref(false)
 const deleteBanner = ref('')
 
-// ─── copy feedback ──────────────────────────────────────────────────────────
+// ─── reveal current plaintext inside the edit modal (on-demand, audited) ──────
 
-const copiedId = ref<string | null>(null)
+// Current plaintext while shown in the edit modal; null = hidden. Cleared on close.
+const editRevealed = ref<string | null>(null)
+const editRevealing = ref(false)
 
 // ─── OAuth connect (enabled providers only) ──────────────────────────────────
 
@@ -218,6 +221,7 @@ function openEditModal(c: Credential): void {
   editingId.value = c.id
   // secret is intentionally blank — user must re-enter to rotate
   form.value = { name: c.name, type: c.type, scope: c.scope, secret: '' }
+  editRevealed.value = null
   clearFormErrors()
   formBanner.value = ''
   modalOpen.value = true
@@ -226,8 +230,9 @@ function openEditModal(c: Credential): void {
 function closeModal(): void {
   if (formSubmitting.value) return
   modalOpen.value = false
-  // Clear secret immediately when modal closes
+  // Clear secret + any revealed plaintext immediately when modal closes
   form.value.secret = ''
+  editRevealed.value = null
 }
 
 // ─── form validation ─────────────────────────────────────────────────────────
@@ -343,18 +348,22 @@ async function confirmDelete(): Promise<void> {
   }
 }
 
-// ─── copy reference (id — not plaintext) ───────────────────────────────────
+// ─── reveal / hide current plaintext in the edit modal (audited server-side) ──
 
-async function copyReference(c: Credential): Promise<void> {
+async function toggleEditReveal(): Promise<void> {
+  // Already shown → hide and drop the plaintext from memory.
+  if (editRevealed.value !== null) {
+    editRevealed.value = null
+    return
+  }
+  if (!editingId.value || editRevealing.value) return
+  editRevealing.value = true
   try {
-    // Copy the credential ID as the reference handle — never the secret
-    await navigator.clipboard.writeText(c.id)
-    copiedId.value = c.id
-    setTimeout(() => {
-      if (copiedId.value === c.id) copiedId.value = null
-    }, 1800)
-  } catch {
-    // clipboard API not available — silently ignore
+    editRevealed.value = await revealCredential(editingId.value)
+  } catch (err) {
+    toast.error(err instanceof HttpError ? err.message : t('settingsVault.revealFailed'))
+  } finally {
+    editRevealing.value = false
   }
 }
 </script>
@@ -507,10 +516,9 @@ async function copyReference(c: Credential): Promise<void> {
             </svg>
           </span>
 
-          <!-- Name + masked value -->
+          <!-- Name + masked value — never plaintext in the list -->
           <div class="cred-name">
             <strong class="cred-label">{{ cred.name }}</strong>
-            <!-- maskedValue in JetBrains Mono — never plaintext, not interactive -->
             <span class="cred-mask mono" :title="t('settingsVault.maskTitle')" :aria-label="t('settingsVault.maskAria', { value: cred.maskedValue })">{{ cred.maskedValue }}</span>
           </div>
 
@@ -539,22 +547,6 @@ async function copyReference(c: Credential): Promise<void> {
 
           <!-- Actions -->
           <span class="cred-ops">
-            <!-- Copy reference (id, not secret) -->
-            <button
-              class="op-btn"
-              :class="{ 'op-btn--copied': copiedId === cred.id }"
-              :title="copiedId === cred.id ? t('settingsVault.copiedReference') : t('settingsVault.copyReferenceTitle')"
-              :aria-label="t('settingsVault.copyReferenceAria', { name: cred.name })"
-              @click="copyReference(cred)"
-            >
-              <svg v-if="copiedId !== cred.id" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
-                <rect x="9" y="9" width="13" height="13" rx="2"/>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-              </svg>
-              <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-                <path d="M20 6 9 17l-5-5"/>
-              </svg>
-            </button>
             <!-- Edit -->
             <button
               class="op-btn"
@@ -703,10 +695,34 @@ async function copyReference(c: Credential): Promise<void> {
 
           <!-- Secret — password type, never echoed back -->
           <div class="field">
-            <label class="field-label" for="cred-secret">
-              {{ modalMode === 'add' ? t('settingsVault.fieldSecret') : t('settingsVault.fieldSecretNew') }}
-              <span v-if="modalMode === 'edit'" class="field-optional">{{ t('settingsVault.secretOptionalEdit') }}</span>
-            </label>
+            <div class="field-label-row">
+              <label class="field-label" for="cred-secret">
+                {{ modalMode === 'add' ? t('settingsVault.fieldSecret') : t('settingsVault.fieldSecretNew') }}
+                <span v-if="modalMode === 'edit'" class="field-optional">{{ t('settingsVault.secretOptionalEdit') }}</span>
+              </label>
+              <!-- Reveal current plaintext (edit only; audited server-side) -->
+              <button
+                v-if="modalMode === 'edit'"
+                type="button"
+                class="reveal-current-btn"
+                :class="{ 'reveal-current-btn--active': editRevealed !== null }"
+                :disabled="editRevealing"
+                @click="toggleEditReveal"
+              >
+                <svg v-if="editRevealed !== null" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+                  <path d="M1 1l22 22"/>
+                </svg>
+                <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                  <circle cx="12" cy="12" r="3"/>
+                </svg>
+                {{ editRevealed !== null ? t('settingsVault.hideCurrent') : t('settingsVault.revealCurrent') }}
+              </button>
+            </div>
+
+            <!-- Current plaintext, read-only — shown only while explicitly revealed -->
+            <div v-if="modalMode === 'edit' && editRevealed !== null" class="current-secret mono">{{ editRevealed }}</div>
 <!-- SSH 私钥是多行 PEM/OpenSSH 文本:必须用 textarea,单行 <input> 会按 HTML 规范清除换行
                  → 私钥结构破坏、ssh.ParsePrivateKey 失败「凭据不是可用的 SSH 私钥」。令牌/镜像仓库仍用
                  password input(单行密文 + 掩码输入)。 -->
@@ -822,7 +838,7 @@ async function copyReference(c: Credential): Promise<void> {
           </div>
         </div>
 
-        <div class="modal-footer">
+        <div class="modal-footer modal-footer--standalone">
           <button
             type="button"
             class="btn-secondary"
@@ -1279,11 +1295,6 @@ async function copyReference(c: Credential): Promise<void> {
   outline-offset: 2px;
 }
 
-.op-btn--copied {
-  color: var(--color-green);
-  border-color: var(--color-green-line);
-}
-
 .op-btn--danger:hover {
   color: var(--color-red);
   border-color: var(--color-red-line);
@@ -1562,6 +1573,12 @@ async function copyReference(c: Credential): Promise<void> {
   padding-top: 4px;
 }
 
+/* Footer as a direct child of .modal (no padded wrapper) — give it surround padding
+   so the buttons don't hug the modal's bottom/right edge. */
+.modal-footer--standalone {
+  padding: 4px 20px 20px;
+}
+
 /* ─── form fields ─────────────────────────────────────────────────────────── */
 .field {
   display: flex;
@@ -1578,6 +1595,67 @@ async function copyReference(c: Credential): Promise<void> {
 .field-optional {
   font-weight: 400;
   color: var(--color-faint);
+}
+
+/* Secret label row: label on the left, reveal-current toggle pushed right. */
+.field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.reveal-current-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--color-dim);
+  background: var(--color-inset);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast),
+    border-color var(--duration-fast),
+    background-color var(--duration-fast);
+}
+
+.reveal-current-btn:hover {
+  color: var(--color-text);
+  border-color: var(--color-faint);
+}
+
+.reveal-current-btn--active {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.reveal-current-btn:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+.reveal-current-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Read-only current plaintext shown while revealed; selectable for manual copy. */
+.current-secret {
+  font-size: 0.74rem;
+  color: var(--color-text);
+  background: var(--color-inset);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--rounded);
+  padding: 8px 12px;
+  word-break: break-all;
+  white-space: pre-wrap;
+  user-select: text;
+  max-height: 160px;
+  overflow: auto;
 }
 
 .field-input {

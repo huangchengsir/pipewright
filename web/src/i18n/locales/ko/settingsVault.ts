@@ -1,6 +1,6 @@
 export default {
   title: '자격 증명 볼트',
-  desc: '모든 시크릿은 NaCl secretbox로 암호화되어 이 인스턴스에 저장됩니다. 저장 시 마스킹되며 기록 후에는 다시 읽을 수 없습니다. 파이프라인은 범위로 참조하며, 로그나 진단 컨텍스트에 절대 포함되지 않습니다.',
+  desc: '모든 시크릿은 NaCl secretbox로 암호화되어 이 인스턴스에 저장되며 저장 시 마스킹됩니다. 평문 보기는 이 페이지에서의 명시적 작업이며 감사 로그에 기록됩니다. 파이프라인은 범위로 참조하며, 로그나 진단 컨텍스트에 절대 포함되지 않습니다.',
   addCredential: '자격 증명 추가',
 
   providerCustom: '직접 구축',
@@ -36,16 +36,16 @@ export default {
   typeSshPassword: 'SSH 비밀번호',
   typeRegistry: '레지스트리',
 
-  maskTitle: '마스킹 값(평문으로 펼칠 수 없음)',
+  maskTitle: '마스킹 값(편집에서 평문 보기 가능)',
   maskAria: '마스킹: {value}',
   allProjects: '모든 프로젝트',
   never: '없음',
   neverUsed: '사용한 적 없음',
   idleTag: '유휴',
 
-  copiedReference: '참조 복사됨',
-  copyReferenceTitle: '자격 증명 참조(ID, 평문 아님) 복사',
-  copyReferenceAria: '자격 증명 {name}의 참조 복사',
+  revealCurrent: '현재 평문 보기',
+  hideCurrent: '숨기기',
+  revealFailed: '평문 보기에 실패했습니다',
   editTitle: '{name} 편집',
   editAria: '자격 증명 {name} 편집',
   deleteTitle: '{name} 삭제',

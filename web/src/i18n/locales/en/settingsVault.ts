@@ -1,6 +1,6 @@
 export default {
   title: 'Credential Vault',
-  desc: 'All secrets are encrypted with NaCl secretbox and stored on this instance. They are masked on write and can never be read back. Pipelines reference them by scope, and they never reach logs or diagnostic context.',
+  desc: 'All secrets are encrypted with NaCl secretbox and stored on this instance, masked at rest. Revealing plaintext is an explicit, audited action here. Pipelines reference them by scope, and they never reach logs or diagnostic context.',
   addCredential: 'Add credential',
 
   providerCustom: 'Custom',
@@ -36,16 +36,16 @@ export default {
   typeSshPassword: 'SSH password',
   typeRegistry: 'Registry',
 
-  maskTitle: 'Masked value (plaintext cannot be revealed)',
+  maskTitle: 'Masked value (reveal it in Edit)',
   maskAria: 'Masked: {value}',
   allProjects: 'All projects',
   never: 'Never',
   neverUsed: 'Never used',
   idleTag: 'Idle',
 
-  copiedReference: 'Reference copied',
-  copyReferenceTitle: 'Copy credential reference (ID, not plaintext)',
-  copyReferenceAria: 'Copy the reference for credential {name}',
+  revealCurrent: 'Reveal current',
+  hideCurrent: 'Hide',
+  revealFailed: 'Failed to reveal secret',
   editTitle: 'Edit {name}',
   editAria: 'Edit credential {name}',
   deleteTitle: 'Delete {name}',

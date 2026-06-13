@@ -1,6 +1,6 @@
 export default {
   title: 'Coffre d’identifiants',
-  desc: 'Tous les secrets sont chiffrés avec NaCl secretbox et stockés sur cette instance. Ils sont masqués à l’écriture et ne peuvent jamais être relus. Les pipelines les référencent par portée et ils n’apparaissent jamais dans les journaux ni le contexte de diagnostic.',
+  desc: 'Tous les secrets sont chiffrés avec NaCl secretbox et stockés sur cette instance, masqués au repos. Afficher le texte en clair est une action explicite et auditée ici. Les pipelines les référencent par portée et ils n’apparaissent jamais dans les journaux ni le contexte de diagnostic.',
   addCredential: 'Ajouter un identifiant',
 
   providerCustom: 'Personnalisé',
@@ -36,16 +36,16 @@ export default {
   typeSshPassword: 'Mot de passe SSH',
   typeRegistry: 'Registre',
 
-  maskTitle: 'Valeur masquée (le texte en clair ne peut pas être révélé)',
+  maskTitle: 'Valeur masquée (affichable dans Modifier)',
   maskAria: 'Masqué : {value}',
   allProjects: 'Tous les projets',
   never: 'Jamais',
   neverUsed: 'Jamais utilisé',
   idleTag: 'Inactif',
 
-  copiedReference: 'Référence copiée',
-  copyReferenceTitle: 'Copier la référence de l’identifiant (ID, pas le texte en clair)',
-  copyReferenceAria: 'Copier la référence de l’identifiant {name}',
+  revealCurrent: 'Afficher l’actuel',
+  hideCurrent: 'Masquer',
+  revealFailed: 'Échec de l’affichage du secret',
   editTitle: 'Modifier {name}',
   editAria: 'Modifier l’identifiant {name}',
   deleteTitle: 'Supprimer {name}',

@@ -418,6 +418,8 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Post("/credentials", makeCreateCredentialHandler(v, aud))
 		ar.Patch("/credentials/{id}", makeUpdateCredentialHandler(v, aud))
 		ar.Delete("/credentials/{id}", makeDeleteCredentialHandler(v, aud))
+		// 查看明文(POST + auth + CSRF;每次留 credential_reveal 审计)。
+		ar.Post("/credentials/{id}/reveal", makeRevealCredentialHandler(v, aud))
 
 		// 项目接入与列表(Story 2.1)。p 为 nil 时 handler 返回 503。
 		// test-clone 须在 {id} 路由之前注册,否则被 /projects/{id} 吞掉。

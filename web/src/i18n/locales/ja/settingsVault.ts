@@ -1,6 +1,6 @@
 export default {
   title: '認証情報の保管庫',
-  desc: 'すべてのシークレットは NaCl secretbox で暗号化され、本インスタンスに保存されます。保存時にマスクされ、書き込み後は読み出せません。パイプラインはスコープで参照し、ログや診断コンテキストには一切含まれません。',
+  desc: 'すべてのシークレットは NaCl secretbox で暗号化され、本インスタンスに保存され、保存時にマスクされます。平文の表示はこのページでの明示的な操作で、監査に記録されます。パイプラインはスコープで参照し、ログや診断コンテキストには一切含まれません。',
   addCredential: '認証情報を追加',
 
   providerCustom: '自前',
@@ -36,16 +36,16 @@ export default {
   typeSshPassword: 'SSH パスワード',
   typeRegistry: 'レジストリ',
 
-  maskTitle: 'マスク値（平文は展開できません）',
+  maskTitle: 'マスク値（編集画面で平文を表示できます）',
   maskAria: 'マスク: {value}',
   allProjects: 'すべてのプロジェクト',
   never: 'なし',
   neverUsed: '未使用',
   idleTag: '休眠',
 
-  copiedReference: '参照をコピーしました',
-  copyReferenceTitle: '認証情報の参照（ID、平文ではない）をコピー',
-  copyReferenceAria: '認証情報 {name} の参照をコピー',
+  revealCurrent: '現在の平文を表示',
+  hideCurrent: '隠す',
+  revealFailed: '平文の表示に失敗しました',
   editTitle: '{name} を編集',
   editAria: '認証情報 {name} を編集',
   deleteTitle: '{name} を削除',

@@ -1,6 +1,6 @@
 export default {
   title: '憑證保險庫',
-  desc: '所有密鑰經 NaCl secretbox 加密後存於本實例,落庫即遮罩、寫入後不可讀出。流水線依作用域引用,絕不進入日誌或診斷上下文。',
+  desc: '所有密鑰經 NaCl secretbox 加密後存於本實例,落庫即遮罩;檢視明文需在此頁顯式操作並留審計。流水線依作用域引用,絕不進入日誌或診斷上下文。',
   addCredential: '新增憑證',
 
   providerCustom: '自建',
@@ -36,16 +36,16 @@ export default {
   typeSshPassword: 'SSH 密碼',
   typeRegistry: '映像倉庫',
 
-  maskTitle: '遮罩值（不可展開明文）',
+  maskTitle: '遮罩值（編輯中可檢視明文）',
   maskAria: '遮罩: {value}',
   allProjects: '全部專案',
   never: '從未',
   neverUsed: '從未使用',
   idleTag: '閒置',
 
-  copiedReference: '已複製引用',
-  copyReferenceTitle: '複製憑證引用（ID,非明文）',
-  copyReferenceAria: '複製憑證 {name} 的引用',
+  revealCurrent: '檢視目前明文',
+  hideCurrent: '隱藏明文',
+  revealFailed: '檢視明文失敗',
   editTitle: '編輯 {name}',
   editAria: '編輯憑證 {name}',
   deleteTitle: '刪除 {name}',

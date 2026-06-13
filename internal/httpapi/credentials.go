@@ -162,6 +162,33 @@ func makeUpdateCredentialHandler(v vault.Vault, aud audit.Recorder) http.Handler
 	}
 }
 
+// makeRevealCredentialHandler 返回 POST /api/credentials/{id}/reveal handler。
+// 解密并回传明文(仅此一处对外暴露明文);每次查看追加 credential_reveal 审计,
+// 谁在何时看过哪条凭据均留痕。POST + 登录态 + CSRF(写方法路由),不做成可预取的 GET。
+func makeRevealCredentialHandler(v vault.Vault, aud audit.Recorder) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if v == nil {
+			writeError(w, http.StatusServiceUnavailable, "vault_unconfigured", "保险库未配置 master key")
+			return
+		}
+		id := chi.URLParam(r, "id")
+		secret, err := v.Reveal(id)
+		if err != nil {
+			writeVaultError(w, err)
+			return
+		}
+		recordAudit(r.Context(), aud, audit.Entry{
+			Actor:      auditActor,
+			Action:     audit.ActionCredentialReveal,
+			TargetType: audit.TargetCredential,
+			TargetID:   id,
+			IP:         clientIP(r),
+		})
+		// 仅回传明文,绝不进日志/诊断;detail 不含 secret。
+		writeJSON(w, http.StatusOK, map[string]string{"secret": secret})
+	}
+}
+
 // makeDeleteCredentialHandler 返回 DELETE /api/credentials/{id} handler。
 // 删除成功后追加 credential_delete 审计。
 func makeDeleteCredentialHandler(v vault.Vault, aud audit.Recorder) http.HandlerFunc {

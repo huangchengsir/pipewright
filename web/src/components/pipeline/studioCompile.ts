@@ -17,6 +17,8 @@
  * 提升参数的 key/default 仍以 `params` 文本为唯一真源,避免双源漂移。
  */
 
+import { t } from '../../i18n'
+
 export type PromotedParamType = 'text' | 'select' | 'number' | 'toggle'
 
 export interface PromotedParam {
@@ -75,48 +77,48 @@ export interface CatalogItem {
 /** 积木目录(按分组),决定左侧调色板的排布与配色。 */
 export const STEP_CATALOG: ReadonlyArray<{ group: string; items: ReadonlyArray<CatalogItem> }> = [
   {
-    group: '基础',
+    get group() { return t('pipelineJob.studioGroupBasic') },
     items: [
-      { kind: 'command', label: '运行命令', color: '#2f9e44' },
-      { kind: 'install', label: '安装依赖', color: '#2f9e44' },
-      { kind: 'echo', label: '回显日志', color: '#2f9e44' },
+      { kind: 'command', get label() { return t('pipelineJob.studioStepCommand') }, color: '#2f9e44' },
+      { kind: 'install', get label() { return t('pipelineJob.studioStepInstall') }, color: '#2f9e44' },
+      { kind: 'echo', get label() { return t('pipelineJob.studioStepEcho') }, color: '#2f9e44' },
     ],
   },
   {
-    group: '环境与目录',
+    get group() { return t('pipelineJob.studioGroupEnvDir') },
     items: [
-      { kind: 'env', label: '设环境变量', color: '#b8860b' },
-      { kind: 'workDir', label: '切目录', color: '#1098ad' },
-      { kind: 'path', label: '加 PATH', color: '#1098ad' },
+      { kind: 'env', get label() { return t('pipelineJob.studioStepEnv') }, color: '#b8860b' },
+      { kind: 'workDir', get label() { return t('pipelineJob.studioStepWorkDir') }, color: '#1098ad' },
+      { kind: 'path', get label() { return t('pipelineJob.studioStepPath') }, color: '#1098ad' },
     ],
   },
   {
-    group: '质量门禁',
+    get group() { return t('pipelineJob.studioGroupQuality') },
     items: [
-      { kind: 'test', label: '运行测试 + 报告', color: '#e8590c' },
-      { kind: 'healthcheck', label: '健康检查', color: '#e8590c' },
+      { kind: 'test', get label() { return t('pipelineJob.studioStepTest') }, color: '#e8590c' },
+      { kind: 'healthcheck', get label() { return t('pipelineJob.studioStepHealthcheck') }, color: '#e8590c' },
     ],
   },
   {
-    group: '产物',
+    get group() { return t('pipelineJob.studioGroupArtifact') },
     items: [
-      { kind: 'artifact', label: '上传产物', color: '#7048e8' },
-      { kind: 'download', label: '下载文件', color: '#7048e8' },
-      { kind: 'extract', label: '解压归档', color: '#7048e8' },
+      { kind: 'artifact', get label() { return t('pipelineJob.studioStepArtifact') }, color: '#7048e8' },
+      { kind: 'download', get label() { return t('pipelineJob.studioStepDownload') }, color: '#7048e8' },
+      { kind: 'extract', get label() { return t('pipelineJob.studioStepExtract') }, color: '#7048e8' },
     ],
   },
   {
-    group: '控制流',
+    get group() { return t('pipelineJob.studioGroupControl') },
     items: [
-      { kind: 'condition', label: '条件守卫', color: '#e03131' },
-      { kind: 'retry', label: '重试包裹', color: '#e03131' },
-      { kind: 'timeout', label: '超时限制', color: '#e03131' },
-      { kind: 'sleep', label: '等待延时', color: '#e03131' },
+      { kind: 'condition', get label() { return t('pipelineJob.studioStepCondition') }, color: '#e03131' },
+      { kind: 'retry', get label() { return t('pipelineJob.studioStepRetry') }, color: '#e03131' },
+      { kind: 'timeout', get label() { return t('pipelineJob.studioStepTimeout') }, color: '#e03131' },
+      { kind: 'sleep', get label() { return t('pipelineJob.studioStepSleep') }, color: '#e03131' },
     ],
   },
   {
-    group: '文档',
-    items: [{ kind: 'note', label: '备注说明', color: '#868e96' }],
+    get group() { return t('pipelineJob.studioGroupDoc') },
+    items: [{ kind: 'note', get label() { return t('pipelineJob.studioStepNote') }, color: '#868e96' }],
   },
 ]
 
@@ -455,7 +457,13 @@ export function applyPromotedValues(
   )
 }
 
-const DEFAULT_META: NodeMeta = { icon: '🔧', category: '自定义', summary: '' }
+const DEFAULT_META: NodeMeta = {
+  icon: '🔧',
+  get category() {
+    return t('pipelineJob.studioDefaultCategory')
+  },
+  summary: '',
+}
 
 /** 反解析 templated 节点 config → 工作室模型。优先用 __studio 里的结构化步骤;缺失则把脚本兜成单命令步骤。 */
 export function parseStudioConfig(config: Record<string, unknown>): StudioModel {

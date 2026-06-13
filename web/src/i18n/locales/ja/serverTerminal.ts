@@ -1,0 +1,57 @@
+export default {
+  serverFallback: 'サーバー',
+  titleConnecting: '接続中 · ',
+  titleDisconnected: '⚠ 切断 · ',
+  titleSuffix: '運用ターミナル',
+  hostMachine: '(ホスト)',
+
+  kindContainer: 'コンテナ',
+  kindHost: 'ホスト',
+  containerLabel: 'コンテナ {label}',
+  hostShell: 'ホストシェル',
+
+  connecting: '接続中…',
+  connectFailed: '接続に失敗しました',
+  connect: '接続',
+  reconnect: '再接続',
+  disconnect: '切断',
+  close: '閉じる',
+
+  enteringContainer: 'コンテナ {name}（{host}）に接続しています…',
+  connectingHost: 'ホスト {host} に接続しています …',
+  connectFailedDetail: '接続に失敗しました。ログイン状態、サーバーの到達性、またはコンテナの存在を確認してください。',
+  sessionEnded: 'ターミナルセッションが終了しました',
+  sessionEndedShort: 'セッション終了',
+
+  terminalAria: 'サーバー対話ターミナル',
+  hintContainer: '「接続」をクリックしてコンテナ {name} に入ります（docker exec）。',
+  hintHost: '「接続」をクリックしてホストシェルに入ります。',
+
+  latency: 'レイテンシ',
+  copy: 'コピー',
+  paste: '貼り付け',
+  interrupt: '中断',
+  contextMenu: '右クリックメニュー',
+  selectAll: 'すべて選択',
+  clearScreen: '画面クリア',
+  clipboardSecureWarn: 'クリップボードには https/localhost が必要です',
+
+  completeDisableTitle: 'AI 補完を無効化',
+  completeEnableTitle: 'AI 補完を有効化',
+  aiComplete: 'AI 補完',
+  on: 'オン',
+  off: 'オフ',
+
+  aiLauncherTitle: 'AI 運用アシスタントを展開',
+  aiAssistant: 'AI アシスタント',
+
+  charCount: '{n} 文字',
+  toastCopied: 'コピーしました',
+  toastPasted: '貼り付けました',
+  toastSigintMsg: 'SIGINT を送信しました',
+  toastSigintSub: '現在のコマンドを中断',
+  toastClipboardUnavailable: 'クリップボードを読み取れません',
+  toastClipboardSecureCtx: 'https / localhost のセキュアコンテキストが必要です',
+  toastClipboardDenied: 'クリップボードの読み取りが拒否されました',
+  toastClipboardAllow: 'ブラウザでクリップボードの権限を許可してください',
+}

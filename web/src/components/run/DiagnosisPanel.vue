@@ -25,7 +25,10 @@
  */
 
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { DiagnosisDTO, FeedbackVerdict } from '../../api/runs'
+
+const { t } = useI18n()
 import { diagnoseRun, submitDiagnosisFeedback } from '../../api/runs'
 import { HttpError } from '../../api/http'
 import AppButton from '../ui/AppButton.vue'
@@ -56,9 +59,9 @@ async function handleDiagnose(): Promise<void> {
     emit('diagnosed', result)
   } catch (err) {
     if (err instanceof HttpError) {
-      diagnoseError.value = err.apiError?.message ?? `诊断请求失败(${err.status})`
+      diagnoseError.value = err.apiError?.message ?? t('run.diagnoseRequestFailed', { status: err.status })
     } else {
-      diagnoseError.value = '诊断请求失败,请稍后重试'
+      diagnoseError.value = t('run.diagnoseRequestFailedRetry')
     }
   } finally {
     diagnosing.value = false
@@ -102,9 +105,9 @@ async function sendFeedback(verdict: FeedbackVerdict): Promise<void> {
     feedbackState.value = 'done'
   } catch (err) {
     if (err instanceof HttpError) {
-      feedbackError.value = err.apiError?.message ?? `反馈提交失败(${err.status})`
+      feedbackError.value = err.apiError?.message ?? t('run.feedbackSubmitFailed', { status: err.status })
     } else {
-      feedbackError.value = '反馈提交失败,请稍后重试'
+      feedbackError.value = t('run.feedbackSubmitFailedRetry')
     }
     // Re-open the prior state so the user can retry.
     feedbackState.value = verdict === 'down' ? 'down-open' : 'idle'
@@ -134,15 +137,15 @@ type ConfLabel = { text: string; cls: string }
 
 function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
   switch (level) {
-    case 'high':   return { text: '置信度·高',  cls: 'conf-badge--high'   }
-    case 'medium': return { text: '置信度·中',  cls: 'conf-badge--medium' }
-    case 'low':    return { text: '置信度·低',  cls: 'conf-badge--low'    }
+    case 'high':   return { text: t('run.confidenceHigh'),   cls: 'conf-badge--high'   }
+    case 'medium': return { text: t('run.confidenceMedium'), cls: 'conf-badge--medium' }
+    case 'low':    return { text: t('run.confidenceLow'),    cls: 'conf-badge--low'    }
   }
 }
 </script>
 
 <template>
-  <section class="dp" aria-label="AI 失败诊断">
+  <section class="dp" :aria-label="t('run.diagnosisRegion')">
 
     <!-- ─── Panel header ──────────────────────────────────────────────── -->
     <div class="dp-head">
@@ -153,8 +156,8 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
             <polyline points="2 12 6 12 8 4 10 20 12 10 14 15 16 12 22 12"/>
           </svg>
         </span>
-        <span class="dp-title">AI 失败诊断</span>
-        <span class="dp-subtitle">假说,非结论</span>
+        <span class="dp-title">{{ t('run.diagnosisTitle') }}</span>
+        <span class="dp-subtitle">{{ t('run.diagnosisSubtitle') }}</span>
       </div>
 
       <!-- Confidence badge (only when ready) -->
@@ -162,7 +165,7 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
         v-if="diagnosis?.status === 'ready'"
         class="conf-badge"
         :class="confidenceLabel(diagnosis.confidence).cls"
-        :aria-label="`置信度: ${diagnosis.confidence}`"
+        :aria-label="t('run.confidenceAria', { level: diagnosis.confidence })"
       >
         {{ confidenceLabel(diagnosis.confidence).text }}
         <!-- Visual bar -->
@@ -186,8 +189,8 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true" class="dp-trigger-icon">
             <polyline points="2 12 6 12 8 4 10 20 12 10 14 15 16 12 22 12"/>
           </svg>
-          <p class="dp-trigger-text">尚未生成 AI 诊断</p>
-          <p class="dp-trigger-hint">点击「分析失败原因」，AI 将从日志中提取根因假说与修复建议</p>
+          <p class="dp-trigger-text">{{ t('run.noDiagnosisYet') }}</p>
+          <p class="dp-trigger-hint">{{ t('run.triggerHint') }}</p>
           <AppButton
             variant="ai"
             :loading="diagnosing"
@@ -196,7 +199,7 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
             <svg v-if="!diagnosing" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
               <polyline points="2 12 6 12 8 4 10 20 12 10 14 15 16 12 22 12"/>
             </svg>
-            {{ diagnosing ? 'AI 分析中…' : '分析失败原因' }}
+            {{ diagnosing ? t('run.analyzing') : t('run.analyzeFailure') }}
           </AppButton>
           <p v-if="diagnoseError" class="dp-error" role="alert">{{ diagnoseError }}</p>
         </div>
@@ -205,10 +208,10 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
 
     <!-- ─── STATE: pending ───────────────────────────────────────────── -->
     <template v-else-if="diagnosis.status === 'pending'">
-      <div class="dp-body dp-body--pending" aria-busy="true" aria-label="AI 分析中">
+      <div class="dp-body dp-body--pending" aria-busy="true" :aria-label="t('run.analyzingRegion')">
         <div class="dp-pending-row">
           <span class="dp-spinner" aria-hidden="true" />
-          <span class="dp-pending-text">AI 分析中，正在提取根因假说…</span>
+          <span class="dp-pending-text">{{ t('run.analyzingExtracting') }}</span>
         </div>
         <!-- Skeleton rows -->
         <div class="dp-skel-group">
@@ -226,7 +229,7 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true" class="dp-unavail-icon">
             <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
           </svg>
-          <p class="dp-unavail-title">诊断不可用</p>
+          <p class="dp-unavail-title">{{ t('run.diagnosisUnavailable') }}</p>
           <p v-if="diagnosis.reason" class="dp-unavail-reason">{{ diagnosis.reason }}</p>
           <AppButton
             variant="ai"
@@ -236,7 +239,7 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
             <svg v-if="!diagnosing" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
               <path d="M1 4v6h6M23 20v-6h-6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
             </svg>
-            {{ diagnosing ? 'AI 分析中…' : '重新诊断' }}
+            {{ diagnosing ? t('run.analyzing') : t('run.rediagnose') }}
           </AppButton>
           <p v-if="diagnoseError" class="dp-error" role="alert">{{ diagnoseError }}</p>
         </div>
@@ -248,18 +251,18 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
       <div class="dp-body dp-body--ready">
 
         <!-- ── Left column: AI认为 ─────────────────────────────────── -->
-        <div class="dp-col dp-col--ai" role="region" aria-label="AI 认为">
+        <div class="dp-col dp-col--ai" role="region" :aria-label="t('run.aiThinks')">
           <!-- Column label -->
           <div class="dp-col-label dp-col-label--ai" aria-hidden="true">
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
               <polyline points="2 12 6 12 8 4 10 20 12 10 14 15 16 12 22 12"/>
             </svg>
-            AI 认为
+            {{ t('run.aiThinks') }}
           </div>
 
           <!-- Hypothesis: large, prominent -->
           <div class="dp-hypothesis">
-            <p class="dp-hypothesis-intro">最可能的根因是</p>
+            <p class="dp-hypothesis-intro">{{ t('run.mostLikelyRootCause') }}</p>
             <p class="dp-hypothesis-text">{{ diagnosis.hypothesis }}</p>
           </div>
 
@@ -269,7 +272,7 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
                 <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
               </svg>
-              修复建议
+              {{ t('run.fixSuggestions') }}
             </div>
             <ul class="dp-fix-list" role="list">
               <li
@@ -290,7 +293,7 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
                   <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
                 </svg>
-                一键修复脚本
+                {{ t('run.oneClickFixScript') }}
               </div>
               <button
                 class="dp-fixscript-copy"
@@ -304,7 +307,7 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
                 <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <polyline points="20 6 9 17 4 12"/>
                 </svg>
-                {{ fixScriptCopied ? '已复制' : '复制' }}
+                {{ fixScriptCopied ? t('run.copied') : t('run.copy') }}
               </button>
             </div>
             <pre class="dp-fixscript-code"><code>{{ diagnosis.fixScript }}</code></pre>
@@ -330,7 +333,7 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
               >
                 <path d="M9 18l6-6-6-6"/>
               </svg>
-              存在其它可能根因 ({{ diagnosis.alternateCauses.length }})
+              {{ t('run.alternateCauses', { n: diagnosis.alternateCauses.length }) }}
             </button>
             <ul v-if="altCausesExpanded" class="dp-alt-list" role="list">
               <li
@@ -346,22 +349,22 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
 
           <!-- Generated timestamp -->
           <p v-if="diagnosis.generatedAt" class="dp-generated-at">
-            诊断生成于 {{ new Date(diagnosis.generatedAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }}
+            {{ t('run.diagnosisGeneratedAt', { time: new Date(diagnosis.generatedAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }) }}
           </p>
         </div>
 
         <!-- ── Right column: 原始日志证据 ─────────────────────────── -->
-        <div class="dp-col dp-col--evidence" role="region" aria-label="原始日志证据">
+        <div class="dp-col dp-col--evidence" role="region" :aria-label="t('run.rawLogEvidence')">
           <!-- Column label -->
           <div class="dp-col-label dp-col-label--evidence" aria-hidden="true">
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
               <rect x="2" y="3" width="20" height="18" rx="3"/><path d="M7 8l4 4-4 4M13 16h4"/>
             </svg>
-            原始日志证据
+            {{ t('run.rawLogEvidence') }}
           </div>
 
           <!-- Evidence terminal block -->
-          <div class="dp-term" role="region" aria-label="日志证据行">
+          <div class="dp-term" role="region" :aria-label="t('run.logEvidenceLines')">
             <!-- Mac-style title bar -->
             <div class="dp-term-bar" aria-hidden="true">
               <span class="dp-term-dot dp-term-dot--red" />
@@ -382,7 +385,7 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
                 class="dp-term-line"
                 :class="{ 'dp-term-line--hit': ev.highlight }"
                 role="listitem"
-                :aria-label="ev.highlight ? `命中行 ${ev.line}: ${ev.text}` : `行 ${ev.line}: ${ev.text}`"
+                :aria-label="ev.highlight ? t('run.evidenceHitLine', { line: ev.line, text: ev.text }) : t('run.evidenceLine', { line: ev.line, text: ev.text })"
               >
                 <span class="dp-term-ln" aria-hidden="true">{{ ev.line }}</span>
                 <span class="dp-term-code">{{ ev.text }}</span>
@@ -391,7 +394,7 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
 
             <!-- Empty evidence -->
             <div v-else class="dp-term-empty">
-              <span>无证据行</span>
+              <span>{{ t('run.noEvidenceLines') }}</span>
             </div>
           </div>
         </div>
@@ -407,7 +410,7 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
               <polyline points="20 6 9 17 4 12" />
             </svg>
             <span>
-              已记录你的反馈<template v-if="submittedVerdict === 'down'">,正确根因将作为知识库种子</template>。谢谢!
+              {{ t('run.feedbackRecorded') }}<template v-if="submittedVerdict === 'down'">{{ t('run.feedbackRecordedDown') }}</template>{{ t('run.feedbackThanks') }}
             </span>
           </div>
         </template>
@@ -415,31 +418,31 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
         <!-- idle / down-open state -->
         <template v-else>
           <div class="dp-fb-row">
-            <span class="dp-fb-prompt">这条诊断有帮助吗?</span>
+            <span class="dp-fb-prompt">{{ t('run.feedbackPrompt') }}</span>
             <div class="dp-fb-btns">
               <button
                 class="dp-fb-btn dp-fb-btn--up"
                 :disabled="feedbackState === 'submitting'"
-                aria-label="诊断有帮助"
+                :aria-label="t('run.feedbackHelpfulAria')"
                 @click="sendFeedback('up')"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M7 10v12" /><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z" />
                 </svg>
-                有用
+                {{ t('run.feedbackHelpful') }}
               </button>
               <button
                 class="dp-fb-btn dp-fb-btn--down"
                 :class="{ 'dp-fb-btn--active': feedbackState === 'down-open' }"
                 :disabled="feedbackState === 'submitting'"
                 :aria-expanded="feedbackState === 'down-open'"
-                aria-label="诊断无帮助,可附正确根因"
+                :aria-label="t('run.feedbackNotHelpfulAria')"
                 @click="openDownForm"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M17 14V2" /><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z" />
                 </svg>
-                需改进
+                {{ t('run.feedbackNeedsImprove') }}
               </button>
             </div>
           </div>
@@ -447,7 +450,7 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
           <!-- down: optional correct-root-cause input -->
           <div v-if="feedbackState === 'down-open'" class="dp-fb-correct">
             <label class="dp-fb-label" for="dp-correct-input">
-              正确的根因是什么?(可选 — 将作为知识库种子帮助 AI 越用越准)
+              {{ t('run.correctRootCauseLabel') }}
             </label>
             <textarea
               id="dp-correct-input"
@@ -455,11 +458,11 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
               class="dp-fb-textarea"
               rows="3"
               :maxlength="MAX_ROOT_CAUSE"
-              placeholder="例如:实际是构建机磁盘写满,与依赖无关…"
+              :placeholder="t('run.correctRootCausePlaceholder')"
             />
             <div class="dp-fb-actions">
               <AppButton variant="ai" :loading="feedbackSubmitting" @click="sendFeedback('down')">
-                提交反馈
+                {{ t('run.submitFeedback') }}
               </AppButton>
             </div>
           </div>

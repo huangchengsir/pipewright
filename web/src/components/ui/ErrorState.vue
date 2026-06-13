@@ -4,6 +4,9 @@
  * variant: 'error' (page-level load failure, retryable) | 'ai' (AI unavailable, non-blocking).
  * Emits 'retry' when user clicks retry button.
  */
+import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
+
 export type ErrorStateVariant = 'error' | 'ai'
 
 const props = withDefaults(defineProps<{
@@ -14,18 +17,30 @@ const props = withDefaults(defineProps<{
   showRetry?: boolean
 }>(), {
   variant: 'error',
-  title: '加载失败',
   showRetry: true,
 })
 
 const emit = defineEmits<{
   retry: []
 }>()
+
+const { t } = useI18n()
+
+// Localized default title when the page-level variant gets no explicit title.
+const titleText = computed(() => props.title ?? t('misc.error.defaultTitle'))
+
+// AI-variant confidence band label (high / medium / low).
+const confidenceLevel = computed(() => {
+  const c = props.confidence ?? 0
+  if (c >= 80) return t('misc.error.confidenceHigh')
+  if (c >= 50) return t('misc.error.confidenceMedium')
+  return t('misc.error.confidenceLow')
+})
 </script>
 
 <template>
   <!-- AI Degraded variant -->
-  <div v-if="variant === 'ai'" class="error-ai" role="note" aria-label="AI 功能暂不可用">
+  <div v-if="variant === 'ai'" class="error-ai" role="note" :aria-label="t('misc.error.aiUnavailableAria')">
     <div class="error-ai__header">
       <span class="error-ai__icon" aria-hidden="true">
         <!-- AI / waveform icon -->
@@ -33,16 +48,16 @@ const emit = defineEmits<{
           <path d="M3 12h3.5l2.2-6 3.6 12 2.4-7 1.3 1h4.5" />
         </svg>
       </span>
-      <span class="error-ai__title">{{ title ?? 'AI 失败诊断' }}</span>
-      <span class="error-ai__tag">暂不可用</span>
+      <span class="error-ai__title">{{ title ?? t('misc.error.aiTitle') }}</span>
+      <span class="error-ai__tag">{{ t('misc.error.aiTag') }}</span>
     </div>
     <p class="error-ai__desc">
-      {{ description ?? 'LLM 提供商无响应,本次未生成诊断。运行结果与日志照常记录,核心 CI/CD 不受影响。' }}
+      {{ description ?? t('misc.error.aiDesc') }}
     </p>
 
     <!-- Confidence meter slot -->
     <div v-if="confidence !== undefined" class="error-ai__confidence">
-      <span class="error-ai__conf-label">置信度 {{ confidence }}% · {{ confidence >= 80 ? '高' : confidence >= 50 ? '中' : '低' }}</span>
+      <span class="error-ai__conf-label">{{ t('misc.error.confidenceLabel', { n: confidence, level: confidenceLevel }) }}</span>
       <span class="error-ai__conf-bar">
         <span class="error-ai__conf-fill" :style="{ width: `${confidence}%` }" />
       </span>
@@ -61,7 +76,7 @@ const emit = defineEmits<{
       </svg>
     </div>
 
-    <strong class="error-state__title">{{ title }}</strong>
+    <strong class="error-state__title">{{ titleText }}</strong>
     <p v-if="description" class="error-state__desc">{{ description }}</p>
     <slot name="description" />
 
@@ -72,7 +87,7 @@ const emit = defineEmits<{
         type="button"
         @click="emit('retry')"
       >
-        ↻ 重试
+        ↻ {{ t('misc.error.retry') }}
       </button>
       <slot name="actions" />
     </div>

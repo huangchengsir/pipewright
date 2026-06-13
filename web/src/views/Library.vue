@@ -9,6 +9,7 @@
  * secret 变量绝无明文:仅存/回 credentialId + maskedValue。HttpError 形状 err.apiError?.code/.message/.status。
  */
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import { HttpError } from '../api/http'
@@ -38,6 +39,7 @@ import { isStudioNode } from '../components/pipeline/studioCompile'
 type Tab = 'templates' | 'variableGroups' | 'customNodes'
 type LoadState = 'idle' | 'loading' | 'error'
 
+const { t } = useI18n()
 const message = useMessage()
 const route = useRoute()
 const router = useRouter()
@@ -57,19 +59,19 @@ async function loadTemplates(): Promise<void> {
   } catch (err: unknown) {
     tplState.value = 'error'
     tplError.value = err instanceof HttpError
-      ? err.apiError?.message ?? `加载模板失败(${err.status})`
-      : '加载模板失败'
+      ? err.apiError?.message ?? t('library.loadTemplatesFailedStatus', { status: err.status })
+      : t('library.loadTemplatesFailed')
   }
 }
 
-async function removeTemplate(t: TemplateSummary): Promise<void> {
-  if (!window.confirm(`删除模板「${t.name}」?此操作不可撤销。`)) return
+async function removeTemplate(ts: TemplateSummary): Promise<void> {
+  if (!window.confirm(t('library.confirmDeleteTemplate', { name: ts.name }))) return
   try {
-    await deleteTemplate(t.id)
-    message.success(`已删除模板「${t.name}」`)
+    await deleteTemplate(ts.id)
+    message.success(t('library.deletedTemplate', { name: ts.name }))
     await loadTemplates()
   } catch (err: unknown) {
-    message.error(err instanceof HttpError ? err.apiError?.message ?? '删除失败' : '删除失败')
+    message.error(err instanceof HttpError ? err.apiError?.message ?? t('library.deleteFailed') : t('library.deleteFailed'))
   }
 }
 
@@ -90,8 +92,8 @@ async function loadVariableGroups(): Promise<void> {
   } catch (err: unknown) {
     vgState.value = 'error'
     vgError.value = err instanceof HttpError
-      ? err.apiError?.message ?? `加载变量组失败(${err.status})`
-      : '加载变量组失败'
+      ? err.apiError?.message ?? t('library.loadGroupsFailedStatus', { status: err.status })
+      : t('library.loadGroupsFailed')
   }
 }
 
@@ -171,13 +173,13 @@ function toggleSecret(v: EditorVar): void {
   }
 }
 
-const editorTitle = computed(() => (editorMode.value === 'create' ? '新建变量组' : '编辑变量组'))
+const editorTitle = computed(() => (editorMode.value === 'create' ? t('library.createGroup') : t('library.editGroup')))
 
 async function saveGroup(): Promise<void> {
   editorBanner.value = ''
   const name = editorName.value.trim()
   if (!name) {
-    editorBanner.value = '变量组名称不能为空'
+    editorBanner.value = t('library.groupNameRequired')
     return
   }
   // 仅提交 key 非空的变量;secret 项只传 credentialId(不传明文)。
@@ -194,30 +196,30 @@ async function saveGroup(): Promise<void> {
     const payload = { name, description: editorDescription.value.trim(), vars }
     if (editorMode.value === 'create') {
       await createVariableGroup(payload)
-      message.success(`已创建变量组「${name}」`)
+      message.success(t('library.createdGroup', { name }))
     } else if (editingId.value) {
       await updateVariableGroup(editingId.value, payload)
-      message.success(`已更新变量组「${name}」`)
+      message.success(t('library.updatedGroup', { name }))
     }
     editorOpen.value = false
     await loadVariableGroups()
   } catch (err: unknown) {
     editorBanner.value = err instanceof HttpError
-      ? err.apiError?.message ?? `保存失败(${err.status})`
-      : '保存失败'
+      ? err.apiError?.message ?? t('library.saveFailedStatus', { status: err.status })
+      : t('library.saveFailed')
   } finally {
     editorSaving.value = false
   }
 }
 
 async function removeGroup(g: VariableGroup): Promise<void> {
-  if (!window.confirm(`删除变量组「${g.name}」?此操作不可撤销。`)) return
+  if (!window.confirm(t('library.confirmDeleteGroup', { name: g.name }))) return
   try {
     await deleteVariableGroup(g.id)
-    message.success(`已删除变量组「${g.name}」`)
+    message.success(t('library.deletedGroup', { name: g.name }))
     await loadVariableGroups()
   } catch (err: unknown) {
-    message.error(err instanceof HttpError ? err.apiError?.message ?? '删除失败' : '删除失败')
+    message.error(err instanceof HttpError ? err.apiError?.message ?? t('library.deleteFailed') : t('library.deleteFailed'))
   }
 }
 
@@ -235,19 +237,19 @@ async function loadCustomNodes(): Promise<void> {
   } catch (err: unknown) {
     cnState.value = 'error'
     cnError.value = err instanceof HttpError
-      ? err.apiError?.message ?? `加载自定义节点失败(${err.status})`
-      : '加载自定义节点失败'
+      ? err.apiError?.message ?? t('library.loadNodesFailedStatus', { status: err.status })
+      : t('library.loadNodesFailed')
   }
 }
 
 async function removeCustomNode(n: CustomNode): Promise<void> {
-  if (!window.confirm(`删除自定义节点「${n.name}」?此操作不可撤销。`)) return
+  if (!window.confirm(t('library.confirmDeleteNode', { name: n.name }))) return
   try {
     await deleteCustomNode(n.id)
-    message.success(`已删除自定义节点「${n.name}」`)
+    message.success(t('library.deletedNode', { name: n.name }))
     await loadCustomNodes()
   } catch (err: unknown) {
-    message.error(err instanceof HttpError ? err.apiError?.message ?? '删除失败' : '删除失败')
+    message.error(err instanceof HttpError ? err.apiError?.message ?? t('library.deleteFailed') : t('library.deleteFailed'))
   }
 }
 
@@ -336,7 +338,7 @@ async function saveCustomNode(): Promise<void> {
   cnEditorBanner.value = ''
   const name = cnEditorName.value.trim()
   if (!name) {
-    cnEditorBanner.value = '自定义节点名称不能为空'
+    cnEditorBanner.value = t('library.nodeNameRequired')
     return
   }
   if (!cnEditingId.value) return
@@ -358,23 +360,23 @@ async function saveCustomNode(): Promise<void> {
       summary: cnEditorSummary.value.trim(),
       config,
     })
-    message.success(`已更新自定义节点「${name}」`)
+    message.success(t('library.updatedNode', { name }))
     cnEditorOpen.value = false
     await loadCustomNodes()
   } catch (err: unknown) {
     cnEditorBanner.value = err instanceof HttpError
-      ? err.apiError?.message ?? `保存失败(${err.status})`
-      : '保存失败'
+      ? err.apiError?.message ?? t('library.saveFailedStatus', { status: err.status })
+      : t('library.saveFailed')
   } finally {
     cnEditorSaving.value = false
   }
 }
 
-function switchTab(t: Tab): void {
-  tab.value = t
-  if (t === 'templates' && templates.value.length === 0 && tplState.value !== 'error') loadTemplates()
-  if (t === 'variableGroups' && variableGroups.value.length === 0 && vgState.value !== 'error') loadVariableGroups()
-  if (t === 'customNodes' && customNodes.value.length === 0 && cnState.value !== 'error') loadCustomNodes()
+function switchTab(next: Tab): void {
+  tab.value = next
+  if (next === 'templates' && templates.value.length === 0 && tplState.value !== 'error') loadTemplates()
+  if (next === 'variableGroups' && variableGroups.value.length === 0 && vgState.value !== 'error') loadVariableGroups()
+  if (next === 'customNodes' && customNodes.value.length === 0 && cnState.value !== 'error') loadCustomNodes()
 }
 
 onMounted(() => {
@@ -388,27 +390,27 @@ onMounted(() => {
   <section class="library">
     <header class="page-header">
       <div>
-        <h1 class="page-title">复用库</h1>
-        <p class="page-sub">跨项目共享的流水线模板、变量组与自定义节点 · 一处定义,处处复用</p>
+        <h1 class="page-title">{{ t('library.title') }}</h1>
+        <p class="page-sub">{{ t('library.subtitle') }}</p>
       </div>
       <button
         v-if="tab === 'variableGroups'"
         class="btn-primary"
         @click="openCreateGroup"
       >
-        + 新建变量组
+        {{ t('library.newGroup') }}
       </button>
       <button
         v-if="tab === 'customNodes'"
         class="btn-primary"
         @click="openCreateStudio"
       >
-        + 新建工作室节点
+        {{ t('library.newStudioNode') }}
       </button>
     </header>
 
     <!-- Segmented tab switch -->
-    <div class="seg" role="tablist" aria-label="复用库分类">
+    <div class="seg" role="tablist" :aria-label="t('library.segAria')">
       <button
         class="seg-item"
         role="tab"
@@ -416,7 +418,7 @@ onMounted(() => {
         :class="{ 'seg-item--active': tab === 'templates' }"
         @click="switchTab('templates')"
       >
-        流水线模板
+        {{ t('library.tabTemplates') }}
         <span class="seg-count">{{ templates.length }}</span>
       </button>
       <button
@@ -426,7 +428,7 @@ onMounted(() => {
         :class="{ 'seg-item--active': tab === 'variableGroups' }"
         @click="switchTab('variableGroups')"
       >
-        变量组
+        {{ t('library.tabVariableGroups') }}
         <span class="seg-count">{{ variableGroups.length }}</span>
       </button>
       <button
@@ -436,7 +438,7 @@ onMounted(() => {
         :class="{ 'seg-item--active': tab === 'customNodes' }"
         @click="switchTab('customNodes')"
       >
-        自定义节点
+        {{ t('library.tabCustomNodes') }}
         <span class="seg-count">{{ customNodes.length }}</span>
       </button>
     </div>
@@ -445,7 +447,7 @@ onMounted(() => {
     <div v-show="tab === 'templates'" class="panel">
       <div v-if="tplState === 'error'" class="banner banner--error">
         <span>{{ tplError }}</span>
-        <button class="banner-retry" @click="loadTemplates">↻ 重试</button>
+        <button class="banner-retry" @click="loadTemplates">↻ {{ t('library.retry') }}</button>
       </div>
 
       <div v-if="tplState === 'loading'" class="skeleton-grid">
@@ -457,23 +459,20 @@ onMounted(() => {
         class="empty-state"
       >
         <div class="empty-icon">▦</div>
-        <p class="empty-label">还没有流水线模板</p>
-        <p class="empty-hint">
-          模板让你把一份流水线定义沉淀下来,在任意项目的流水线编辑器里一键应用。
-          在项目流水线编辑器中可把当前流水线另存为模板。
-        </p>
+        <p class="empty-label">{{ t('library.emptyTemplatesTitle') }}</p>
+        <p class="empty-hint">{{ t('library.emptyTemplatesHint') }}</p>
       </div>
 
       <ul v-else class="card-grid" role="list">
-        <li v-for="t in templates" :key="t.id" class="tpl-card">
+        <li v-for="tpl in templates" :key="tpl.id" class="tpl-card">
           <div class="tpl-card-head">
-            <h3 class="tpl-name">{{ t.name }}</h3>
-            <span class="tpl-stage-pill">{{ t.stageCount }} 阶段</span>
+            <h3 class="tpl-name">{{ tpl.name }}</h3>
+            <span class="tpl-stage-pill">{{ t('library.stageCount', { n: tpl.stageCount }) }}</span>
           </div>
-          <p class="tpl-desc">{{ t.description || '无说明' }}</p>
+          <p class="tpl-desc">{{ tpl.description || t('library.noDescription') }}</p>
           <div class="tpl-card-foot">
-            <span class="tpl-time">更新于 {{ new Date(t.updatedAt).toLocaleDateString() }}</span>
-            <button class="link-danger" @click="removeTemplate(t)">删除</button>
+            <span class="tpl-time">{{ t('library.updatedAt', { time: new Date(tpl.updatedAt).toLocaleDateString() }) }}</span>
+            <button class="link-danger" @click="removeTemplate(tpl)">{{ t('library.delete') }}</button>
           </div>
         </li>
       </ul>
@@ -483,7 +482,7 @@ onMounted(() => {
     <div v-show="tab === 'variableGroups'" class="panel">
       <div v-if="vgState === 'error'" class="banner banner--error">
         <span>{{ vgError }}</span>
-        <button class="banner-retry" @click="loadVariableGroups">↻ 重试</button>
+        <button class="banner-retry" @click="loadVariableGroups">↻ {{ t('library.retry') }}</button>
       </div>
 
       <div v-if="vgState === 'loading'" class="skeleton-grid">
@@ -495,37 +494,34 @@ onMounted(() => {
         class="empty-state"
       >
         <div class="empty-icon">{ }</div>
-        <p class="empty-label">还没有变量组</p>
-        <p class="empty-hint">
-          把一组共享变量(如同一套环境地址、令牌引用)定义为变量组,在多条流水线间复用。
-          secret 变量只保存保险库引用,绝不存明文。
-        </p>
-        <button class="btn-primary" @click="openCreateGroup">+ 新建变量组</button>
+        <p class="empty-label">{{ t('library.emptyGroupsTitle') }}</p>
+        <p class="empty-hint">{{ t('library.emptyGroupsHint') }}</p>
+        <button class="btn-primary" @click="openCreateGroup">{{ t('library.newGroup') }}</button>
       </div>
 
       <ul v-else class="card-grid" role="list">
         <li v-for="g in variableGroups" :key="g.id" class="vg-card">
           <div class="vg-card-head">
             <h3 class="vg-name">{{ g.name }}</h3>
-            <span class="vg-count-pill">{{ g.vars.length }} 变量</span>
+            <span class="vg-count-pill">{{ t('library.varCount', { n: g.vars.length }) }}</span>
           </div>
-          <p class="vg-desc">{{ g.description || '无说明' }}</p>
+          <p class="vg-desc">{{ g.description || t('library.noDescription') }}</p>
           <ul class="vg-var-list" role="list">
             <li v-for="v in g.vars.slice(0, 5)" :key="v.id" class="vg-var">
               <code class="vg-var-key">{{ v.key }}</code>
-              <span v-if="v.secret" class="vg-var-secret" title="保险库引用,明文不可见">
+              <span v-if="v.secret" class="vg-var-secret" :title="t('library.secretRefTitle')">
                 🔒 {{ v.maskedValue || '••••' }}
               </span>
-              <span v-else class="vg-var-value">{{ v.value || '空' }}</span>
+              <span v-else class="vg-var-value">{{ v.value || t('library.emptyValue') }}</span>
             </li>
             <li v-if="g.vars.length > 5" class="vg-var vg-var--more">
-              +{{ g.vars.length - 5 }} 个变量…
+              {{ t('library.moreVars', { n: g.vars.length - 5 }) }}
             </li>
-            <li v-if="g.vars.length === 0" class="vg-var vg-var--more">无变量</li>
+            <li v-if="g.vars.length === 0" class="vg-var vg-var--more">{{ t('library.noVars') }}</li>
           </ul>
           <div class="vg-card-foot">
-            <button class="btn-secondary btn-sm" @click="openEditGroup(g)">编辑</button>
-            <button class="link-danger" @click="removeGroup(g)">删除</button>
+            <button class="btn-secondary btn-sm" @click="openEditGroup(g)">{{ t('library.edit') }}</button>
+            <button class="link-danger" @click="removeGroup(g)">{{ t('library.delete') }}</button>
           </div>
         </li>
       </ul>
@@ -535,7 +531,7 @@ onMounted(() => {
     <div v-show="tab === 'customNodes'" class="panel">
       <div v-if="cnState === 'error'" class="banner banner--error">
         <span>{{ cnError }}</span>
-        <button class="banner-retry" @click="loadCustomNodes">↻ 重试</button>
+        <button class="banner-retry" @click="loadCustomNodes">↻ {{ t('library.retry') }}</button>
       </div>
 
       <div v-if="cnState === 'loading'" class="skeleton-grid">
@@ -547,12 +543,9 @@ onMounted(() => {
         class="empty-state"
       >
         <div class="empty-icon">◇</div>
-        <p class="empty-label">还没有自定义节点</p>
-        <p class="empty-hint">
-          点右上「新建工作室节点」用低代码方式组合步骤 + 提升参数,沉淀成可复用节点;
-          或在流水线编辑器里把任意节点配好参数后点「存为自定义节点」。之后在任意流水线的节点选择器一键复用。
-        </p>
-        <button class="btn-primary" @click="openCreateStudio">+ 新建工作室节点</button>
+        <p class="empty-label">{{ t('library.emptyNodesTitle') }}</p>
+        <p class="empty-hint">{{ t('library.emptyNodesHint') }}</p>
+        <button class="btn-primary" @click="openCreateStudio">{{ t('library.newStudioNode') }}</button>
       </div>
 
       <ul v-else class="card-grid" role="list">
@@ -561,22 +554,22 @@ onMounted(() => {
             <h3 class="cn-name">{{ n.name }}</h3>
             <span class="cn-type-pill">{{ jobTypeLabel(n.nodeType) }}</span>
           </div>
-          <p class="cn-desc">{{ n.description || n.summary || '无说明' }}</p>
+          <p class="cn-desc">{{ n.description || n.summary || t('library.noDescription') }}</p>
           <ul class="cn-cfg-list" role="list">
             <li v-for="item in configPreview(n)" :key="item.k" class="cn-cfg">
               <code class="cn-cfg-key">{{ item.k }}</code>
-              <span class="cn-cfg-val">{{ item.v || '空' }}</span>
+              <span class="cn-cfg-val">{{ item.v || t('library.emptyValue') }}</span>
             </li>
             <li v-if="Object.keys(n.config ?? {}).length > 4" class="cn-cfg cn-cfg--more">
-              +{{ Object.keys(n.config).length - 4 }} 个参数…
+              {{ t('library.moreParams', { n: Object.keys(n.config).length - 4 }) }}
             </li>
-            <li v-if="Object.keys(n.config ?? {}).length === 0" class="cn-cfg cn-cfg--more">无参数</li>
+            <li v-if="Object.keys(n.config ?? {}).length === 0" class="cn-cfg cn-cfg--more">{{ t('library.noParams') }}</li>
           </ul>
           <div class="cn-card-foot">
-            <span class="cn-time">更新于 {{ new Date(n.updatedAt).toLocaleDateString() }}</span>
+            <span class="cn-time">{{ t('library.updatedAt', { time: new Date(n.updatedAt).toLocaleDateString() }) }}</span>
             <div class="cn-card-actions">
-              <button class="btn-secondary btn-sm" @click="openEditCustomNode(n)">编辑</button>
-              <button class="link-danger" @click="removeCustomNode(n)">删除</button>
+              <button class="btn-secondary btn-sm" @click="openEditCustomNode(n)">{{ t('library.edit') }}</button>
+              <button class="link-danger" @click="removeCustomNode(n)">{{ t('library.delete') }}</button>
             </div>
           </div>
         </li>
@@ -588,36 +581,36 @@ onMounted(() => {
       <div class="modal" role="dialog" aria-modal="true" :aria-label="editorTitle">
         <header class="modal-head">
           <h2 class="modal-title">{{ editorTitle }}</h2>
-          <button class="modal-close" aria-label="关闭" @click="editorOpen = false">✕</button>
+          <button class="modal-close" :aria-label="t('library.close')" @click="editorOpen = false">✕</button>
         </header>
 
         <div v-if="editorBanner" class="banner banner--error">{{ editorBanner }}</div>
 
         <div class="field">
-          <label class="field-label" for="vg-name">名称</label>
+          <label class="field-label" for="vg-name">{{ t('library.fieldName') }}</label>
           <input
             id="vg-name"
             v-model="editorName"
             class="input"
-            placeholder="如 prod-shared-env"
+            :placeholder="t('library.groupNamePlaceholder')"
             autocomplete="off"
           />
         </div>
         <div class="field">
-          <label class="field-label" for="vg-desc">说明(可选)</label>
+          <label class="field-label" for="vg-desc">{{ t('library.fieldDescriptionOptional') }}</label>
           <input
             id="vg-desc"
             v-model="editorDescription"
             class="input"
-            placeholder="这组变量的用途"
+            :placeholder="t('library.groupDescPlaceholder')"
             autocomplete="off"
           />
         </div>
 
         <div class="field">
           <div class="field-label-row">
-            <span class="field-label">变量</span>
-            <button class="link-add" @click="addEditorVar">+ 添加变量</button>
+            <span class="field-label">{{ t('library.fieldVariables') }}</span>
+            <button class="link-add" @click="addEditorVar">{{ t('library.addVariable') }}</button>
           </div>
           <div class="var-rows">
             <div v-for="(v, idx) in editorVars" :key="idx" class="var-row">
@@ -629,7 +622,7 @@ onMounted(() => {
               />
               <template v-if="v.secret">
                 <select v-model="v.credentialId" class="input input--cred">
-                  <option value="">选择凭据…</option>
+                  <option value="">{{ t('library.selectCredential') }}</option>
                   <option v-for="c in credentials" :key="c.id" :value="c.id">
                     {{ c.name }} ({{ c.maskedValue }})
                   </option>
@@ -646,22 +639,22 @@ onMounted(() => {
               <button
                 class="var-secret-toggle"
                 :class="{ 'var-secret-toggle--on': v.secret }"
-                :title="v.secret ? '保险库 secret(点击切回明文)' : '明文(点击切为 secret)'"
+                :title="v.secret ? t('library.secretToggleOn') : t('library.secretToggleOff')"
                 @click="toggleSecret(v)"
               >
                 {{ v.secret ? '🔒' : '🔓' }}
               </button>
-              <button class="var-remove" title="移除" @click="removeEditorVar(idx)">✕</button>
+              <button class="var-remove" :title="t('library.remove')" @click="removeEditorVar(idx)">✕</button>
             </div>
           </div>
         </div>
 
         <footer class="modal-foot">
           <button class="btn-secondary" :disabled="editorSaving" @click="editorOpen = false">
-            取消
+            {{ t('library.cancel') }}
           </button>
           <button class="btn-primary" :disabled="editorSaving" @click="saveGroup">
-            {{ editorSaving ? '保存中…' : '保存' }}
+            {{ editorSaving ? t('library.saving') : t('library.save') }}
           </button>
         </footer>
       </div>
@@ -669,56 +662,56 @@ onMounted(() => {
 
     <!-- ─── Custom-node editor modal ─── -->
     <div v-if="cnEditorOpen" class="modal-scrim" @click.self="cnEditorOpen = false">
-      <div class="modal" role="dialog" aria-modal="true" aria-label="编辑自定义节点">
+      <div class="modal" role="dialog" aria-modal="true" :aria-label="t('library.editNode')">
         <header class="modal-head">
-          <h2 class="modal-title">编辑自定义节点</h2>
-          <button class="modal-close" aria-label="关闭" @click="cnEditorOpen = false">✕</button>
+          <h2 class="modal-title">{{ t('library.editNode') }}</h2>
+          <button class="modal-close" :aria-label="t('library.close')" @click="cnEditorOpen = false">✕</button>
         </header>
 
         <div v-if="cnEditorBanner" class="banner banner--error">{{ cnEditorBanner }}</div>
 
         <div class="field">
-          <label class="field-label" for="cn-name">名称</label>
+          <label class="field-label" for="cn-name">{{ t('library.fieldName') }}</label>
           <input
             id="cn-name"
             v-model="cnEditorName"
             class="input"
-            placeholder="如 build-and-push"
+            :placeholder="t('library.nodeNamePlaceholder')"
             autocomplete="off"
           />
         </div>
         <div class="field">
-          <label class="field-label" for="cn-desc">说明(可选)</label>
+          <label class="field-label" for="cn-desc">{{ t('library.fieldDescriptionOptional') }}</label>
           <input
             id="cn-desc"
             v-model="cnEditorDescription"
             class="input"
-            placeholder="这个节点的用途"
+            :placeholder="t('library.nodeDescPlaceholder')"
             autocomplete="off"
           />
         </div>
         <div class="field">
-          <label class="field-label" for="cn-summary">摘要(可选)</label>
+          <label class="field-label" for="cn-summary">{{ t('library.fieldSummaryOptional') }}</label>
           <input
             id="cn-summary"
             v-model="cnEditorSummary"
             class="input"
-            placeholder="一句话摘要,展示在卡片上"
+            :placeholder="t('library.nodeSummaryPlaceholder')"
             autocomplete="off"
           />
         </div>
         <div class="field">
-          <span class="field-label">底层类型</span>
+          <span class="field-label">{{ t('library.fieldUnderlyingType') }}</span>
           <div class="cn-type-readonly">
             <span class="cn-type-pill">{{ cnEditorTypeLabel }}</span>
-            <span class="cn-type-hint">底层任务类型不可更改</span>
+            <span class="cn-type-hint">{{ t('library.underlyingTypeHint') }}</span>
           </div>
         </div>
 
         <div class="field">
           <div class="field-label-row">
-            <span class="field-label">参数</span>
-            <button class="link-add" @click="addCnRow">+ 添加参数</button>
+            <span class="field-label">{{ t('library.fieldParams') }}</span>
+            <button class="link-add" @click="addCnRow">{{ t('library.addParam') }}</button>
           </div>
           <div class="var-rows">
             <div v-for="(row, idx) in cnEditorRows" :key="idx" class="var-row">
@@ -734,20 +727,20 @@ onMounted(() => {
                 placeholder="value"
                 autocomplete="off"
               />
-              <button class="var-remove" title="移除" @click="removeCnRow(idx)">✕</button>
+              <button class="var-remove" :title="t('library.remove')" @click="removeCnRow(idx)">✕</button>
             </div>
             <p v-if="cnEditorRows.length === 0" class="cn-rows-empty">
-              暂无参数,点「+ 添加参数」新增。
+              {{ t('library.noParamsHint') }}
             </p>
           </div>
         </div>
 
         <footer class="modal-foot">
           <button class="btn-secondary" :disabled="cnEditorSaving" @click="cnEditorOpen = false">
-            取消
+            {{ t('library.cancel') }}
           </button>
           <button class="btn-primary" :disabled="cnEditorSaving" @click="saveCustomNode">
-            {{ cnEditorSaving ? '保存中…' : '保存' }}
+            {{ cnEditorSaving ? t('library.saving') : t('library.save') }}
           </button>
         </footer>
       </div>

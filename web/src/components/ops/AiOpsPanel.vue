@@ -10,6 +10,7 @@
 -->
 <script setup lang="ts">
 import { ref, computed, nextTick, useTemplateRef } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import {
   suggestCommand,
@@ -17,6 +18,8 @@ import {
   type CommandContext,
   type CommandRisk,
 } from '../../api/aiOps'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   /** 终端会话上下文(container/shell/os),随命令一起发给 AI。 */
@@ -65,20 +68,20 @@ async function scrollToEnd(): Promise<void> {
   if (el) el.scrollTop = el.scrollHeight
 }
 
-const DEFAULT_CHIPS = [
-  '磁盘占用 top 10',
-  '8080 端口被谁占',
-  '实时跟踪应用日志',
-  '看 CPU 飙升原因',
-  '清理 7 天前的日志',
-]
-const CHIPS = computed(() => (props.chips && props.chips.length ? props.chips : DEFAULT_CHIPS))
+const DEFAULT_CHIPS = computed(() => [
+  t('opsServer.ai.chipDisk'),
+  t('opsServer.ai.chipPort'),
+  t('opsServer.ai.chipLogs'),
+  t('opsServer.ai.chipCpu'),
+  t('opsServer.ai.chipClean'),
+])
+const CHIPS = computed(() => (props.chips && props.chips.length ? props.chips : DEFAULT_CHIPS.value))
 
-const riskLabel: Record<CommandRisk, string> = {
-  safe: '● 只读 · 安全',
-  write: '◆ 写操作 · 谨慎',
-  danger: '⚠ 高危 · 破坏性',
-}
+const riskLabel = computed<Record<CommandRisk, string>>(() => ({
+  safe: t('opsServer.ai.riskSafe'),
+  write: t('opsServer.ai.riskWrite'),
+  danger: t('opsServer.ai.riskDanger'),
+}))
 
 // ─── 发送 → 命令卡 ────────────────────────────────────────────────────────────────
 async function send(text?: string): Promise<void> {
@@ -100,10 +103,10 @@ async function send(text?: string): Promise<void> {
         id: nextId(),
         kind: 'note',
         tone: 'degraded',
-        text: res.reason || '尚未配置 AI 提供商,去「设置 · AI」配置后即可用中文生成命令。',
+        text: res.reason || t('opsServer.ai.noteDegraded'),
       })
     } else if (!res.command) {
-      feed.value.push({ id: nextId(), kind: 'note', tone: 'error', text: res.reason || 'AI 未能给出命令,换个说法再试。' })
+      feed.value.push({ id: nextId(), kind: 'note', tone: 'error', text: res.reason || t('opsServer.ai.noteNoCommand') })
     } else {
       feed.value.push({
         id: nextId(),
@@ -118,7 +121,7 @@ async function send(text?: string): Promise<void> {
     }
   } catch {
     removeItem(typingId)
-    feed.value.push({ id: nextId(), kind: 'note', tone: 'error', text: '请求失败,请检查网络或登录状态后重试。' })
+    feed.value.push({ id: nextId(), kind: 'note', tone: 'error', text: t('opsServer.ai.noteReqFail') })
   } finally {
     sending.value = false
     await scrollToEnd()
@@ -165,7 +168,7 @@ function toSafePreview(cmd: string): string {
     return cmd.replace(/^\s*rm\s+(-[a-zA-Z]*\s+)*/, 'ls -la ')
   }
   // 未知破坏性命令:注释掉让用户审阅,不直接可执行。
-  return `# 先确认再执行:${cmd}`
+  return `${t('opsServer.ai.safeConfirmPrefix')}${cmd}`
 }
 
 async function onExplain(card: Extract<FeedItem, { kind: 'card' }>): Promise<void> {
@@ -173,9 +176,9 @@ async function onExplain(card: Extract<FeedItem, { kind: 'card' }>): Promise<voi
   card.explaining = true
   try {
     const res = await explainCommand(card.command, props.context)
-    card.explanation = res.available ? res.explanation : res.reason || '未能解释,请稍后再试。'
+    card.explanation = res.available ? res.explanation : res.reason || t('opsServer.ai.explainNone')
   } catch {
-    card.explanation = '解释请求失败,请重试。'
+    card.explanation = t('opsServer.ai.explainFail')
   } finally {
     card.explaining = false
     await scrollToEnd()
@@ -208,16 +211,16 @@ function goSettings(): void {
     <header class="ai-head">
       <span class="spark" aria-hidden="true">✦</span>
       <div class="ai-head-text">
-        <h2>AI 运维助手</h2>
-        <p>用中文直接说 · 生成命令 · 解释 · 拦截危险操作</p>
+        <h2>{{ t('opsServer.ai.title') }}</h2>
+        <p>{{ t('opsServer.ai.subtitle') }}</p>
       </div>
-      <button class="ai-collapse" type="button" title="收起" aria-label="收起 AI 助手" @click="emit('collapse')">›</button>
+      <button class="ai-collapse" type="button" :title="t('opsServer.ai.collapse')" :aria-label="t('opsServer.ai.collapseAria')" @click="emit('collapse')">›</button>
     </header>
 
     <div ref="feedHost" class="feed">
       <div v-if="feed.length === 0" class="empty">
-        <p class="empty-title">说说你想做什么</p>
-        <p class="empty-sub">例如「看占内存最多的进程」「8080 端口被谁占」「清理 7 天前的日志」。AI 会生成命令,危险操作自动拦截二次确认。</p>
+        <p class="empty-title">{{ t('opsServer.ai.emptyTitle') }}</p>
+        <p class="empty-sub">{{ t('opsServer.ai.emptySub') }}</p>
       </div>
 
       <template v-for="item in feed" :key="item.id">
@@ -228,14 +231,14 @@ function goSettings(): void {
 
         <!-- 思考中 -->
         <div v-else-if="item.kind === 'typing'" class="msg a">
-          <div class="typing" aria-label="AI 思考中"><i /><i /><i /></div>
+          <div class="typing" :aria-label="t('opsServer.ai.typingAria')"><i /><i /><i /></div>
         </div>
 
         <!-- 降级 / 错误提示 -->
         <div v-else-if="item.kind === 'note'" class="msg a">
           <div class="note" :class="`note--${item.tone}`">
             <span>{{ item.text }}</span>
-            <button v-if="item.tone === 'degraded'" class="note-cta" type="button" @click="goSettings">去设置配 AI →</button>
+            <button v-if="item.tone === 'degraded'" class="note-cta" type="button" @click="goSettings">{{ t('opsServer.ai.goSettings') }}</button>
           </div>
         </div>
 
@@ -249,24 +252,24 @@ function goSettings(): void {
               <span class="badge" :class="item.risk">{{ riskLabel[item.risk] }}</span>
               <span class="acts">
                 <template v-if="item.confirming">
-                  <button class="mini" type="button" @click="cancelDanger(item)">取消</button>
-                  <button class="mini danger" type="button" @click="confirmDanger(item)">确认执行</button>
+                  <button class="mini" type="button" @click="cancelDanger(item)">{{ t('opsServer.ai.cancel') }}</button>
+                  <button class="mini danger" type="button" @click="confirmDanger(item)">{{ t('opsServer.ai.confirmExec') }}</button>
                 </template>
                 <template v-else>
                   <button class="mini" type="button" :disabled="item.explaining" @click="onExplain(item)">
-                    {{ item.explaining ? '解释中…' : '解释' }}
+                    {{ item.explaining ? t('opsServer.ai.explaining') : t('opsServer.ai.explain') }}
                   </button>
-                  <button v-if="item.risk === 'danger'" class="mini" type="button" @click="safePreview(item)">改安全预览</button>
-                  <button class="mini" type="button" @click="onInsert(item)">插入</button>
+                  <button v-if="item.risk === 'danger'" class="mini" type="button" @click="safePreview(item)">{{ t('opsServer.ai.safePreview') }}</button>
+                  <button class="mini" type="button" @click="onInsert(item)">{{ t('opsServer.ai.insert') }}</button>
                   <button class="mini run" :class="{ danger: item.risk === 'danger' }" type="button" @click="onExecute(item)">
-                    执行
+                    {{ t('opsServer.ai.execute') }}
                   </button>
                 </template>
               </span>
             </div>
           </div>
           <div v-if="item.risk === 'danger'" class="intercept">
-            <span class="shield" aria-hidden="true">🛡</span> 已拦截直接执行,需二次确认 ——「危险命令护城河」
+            <span class="shield" aria-hidden="true">🛡</span> {{ t('opsServer.ai.intercept') }}
           </div>
         </div>
       </template>
@@ -282,11 +285,11 @@ function goSettings(): void {
           ref="inputEl"
           v-model="input"
           rows="1"
-          placeholder="用中文描述你想做的,如:重启服务 / 看磁盘占用 / 解释命令…"
+          :placeholder="t('opsServer.ai.inputPlaceholder')"
           @input="resizeInput"
           @keydown="onKeydown"
         />
-        <button class="send" type="button" title="发送（Enter）" :disabled="sending || !input.trim()" @click="send()">➤</button>
+        <button class="send" type="button" :title="t('opsServer.ai.sendTitle')" :disabled="sending || !input.trim()" @click="send()">➤</button>
       </div>
     </div>
   </aside>

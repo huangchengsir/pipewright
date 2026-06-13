@@ -9,6 +9,7 @@
  * Embedded inside TriggersPanel after CronPanel and EnvironmentsPanel.
  */
 import { ref, onMounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { getConcurrency, saveConcurrency } from '../api/concurrency'
 import { validateConcurrency, CONCURRENCY_MAX } from '../api/concurrency.helpers'
 import { HttpError } from '../api/http'
@@ -16,6 +17,8 @@ import { HttpError } from '../api/http'
 const props = defineProps<{
   projectId: string
 }>()
+
+const { t } = useI18n()
 
 type LoadState = 'idle' | 'loading' | 'error'
 
@@ -45,7 +48,7 @@ async function load(): Promise<void> {
     loadState.value = 'idle'
   } catch (err) {
     loadState.value = 'error'
-    loadError.value = err instanceof HttpError ? err.message : '加载并发配置失败'
+    loadError.value = err instanceof HttpError ? err.message : t('projectPanels.concurrency.errLoad')
   }
 }
 
@@ -85,16 +88,16 @@ async function handleSave(): Promise<void> {
       await saveConcurrency(props.projectId, { maxConcurrent: maxConcurrent.value }),
     )
     saveSuccess.value = true
-    saveBanner.value = '并发配置已保存'
+    saveBanner.value = t('projectPanels.concurrency.savedOk')
   } catch (err) {
     saveSuccess.value = false
     if (err instanceof HttpError) {
       saveBanner.value =
         err.apiError?.code === 'invalid_concurrency'
-          ? '并发上限非法(须为 0..64 的整数;0 表示不限)'
-          : (err.apiError?.message ?? `保存失败(${err.status})`)
+          ? t('projectPanels.concurrency.errInvalid')
+          : (err.apiError?.message ?? t('projectPanels.concurrency.errSaveFailed', { status: err.status }))
     } else {
-      saveBanner.value = '保存失败,请重试'
+      saveBanner.value = t('projectPanels.concurrency.errSaveRetry')
     }
   } finally {
     saveSubmitting.value = false
@@ -116,26 +119,26 @@ watch(() => props.projectId, load)
           <rect x="14" y="14" width="7" height="7" rx="1.5" />
         </svg>
       </span>
-      <h2 id="conc-heading" class="card-title">并发上限</h2>
-      <span class="card-sub">本流水线同时运行数量的上限;超限运行进入队列等待</span>
+      <h2 id="conc-heading" class="card-title">{{ t('projectPanels.concurrency.title') }}</h2>
+      <span class="card-sub">{{ t('projectPanels.concurrency.sub') }}</span>
     </div>
 
     <div class="card-body card-body--pad">
-      <p v-if="loadState === 'loading'" class="conc-loading">加载中…</p>
+      <p v-if="loadState === 'loading'" class="conc-loading">{{ t('projectPanels.concurrency.loading') }}</p>
       <p v-else-if="loadState === 'error'" class="conc-error" role="alert">{{ loadError }}</p>
 
       <template v-else>
         <!-- Stepper -->
         <div class="conc-field">
           <label class="conc-label" for="conc-input">
-            最大同时运行数
-            <span class="conc-hint-inline">0 = 不限项目级;1..{{ CONCURRENCY_MAX }} 为硬上限</span>
+            {{ t('projectPanels.concurrency.maxLabel') }}
+            <span class="conc-hint-inline">{{ t('projectPanels.concurrency.maxHint', { max: CONCURRENCY_MAX }) }}</span>
           </label>
-          <div class="stepper" role="group" aria-label="并发上限调节">
+          <div class="stepper" role="group" :aria-label="t('projectPanels.concurrency.stepperAria')">
             <button
               type="button"
               class="stepper-btn stepper-btn--dec"
-              aria-label="减少"
+              :aria-label="t('projectPanels.concurrency.decrease')"
               :disabled="maxConcurrent <= 0 || saveSubmitting"
               @click="stepDown"
             >
@@ -159,7 +162,7 @@ watch(() => props.projectId, load)
             <button
               type="button"
               class="stepper-btn stepper-btn--inc"
-              aria-label="增加"
+              :aria-label="t('projectPanels.concurrency.increase')"
               :disabled="maxConcurrent >= CONCURRENCY_MAX || saveSubmitting"
               @click="stepUp"
             >
@@ -181,10 +184,10 @@ watch(() => props.projectId, load)
             <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
           </svg>
           <template v-if="maxConcurrent === 0">
-            当前为<strong>不限</strong>模式 — 仅受全局 <code>PIPEWRIGHT_MAX_CONCURRENT</code> 约束
+            {{ t('projectPanels.concurrency.hintUnlimited') }}<strong>{{ t('projectPanels.concurrency.hintUnlimitedWord') }}</strong>{{ t('projectPanels.concurrency.hintUnlimitedSuffix', { var: 'PIPEWRIGHT_MAX_CONCURRENT' }) }}
           </template>
           <template v-else>
-            最多同时运行 <strong>{{ maxConcurrent }}</strong> 条;第 {{ maxConcurrent + 1 }} 条及后续进入队列排队
+            {{ t('projectPanels.concurrency.hintLimitedPrefix') }}<strong>{{ maxConcurrent }}</strong>{{ t('projectPanels.concurrency.hintLimitedSuffix', { next: maxConcurrent + 1 }) }}
           </template>
         </p>
 
@@ -204,7 +207,7 @@ watch(() => props.projectId, load)
             @click="handleSave"
           >
             <span v-if="saveSubmitting" class="spinner" aria-hidden="true" />
-            {{ saveSubmitting ? '保存中…' : '保存并发配置' }}
+            {{ saveSubmitting ? t('projectPanels.concurrency.saving') : t('projectPanels.concurrency.save') }}
           </button>
         </div>
       </template>

@@ -5,6 +5,7 @@
  * URL state: ?tab=canvas|vars|triggers|envs  (shareable)
  */
 import { ref, computed, onMounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { getPipeline, savePipeline, type PipelineDTO, type PipelineStage } from '../api/pipeline'
 import {
@@ -33,6 +34,8 @@ import TemplatePickerModal from '../components/pipeline/TemplatePickerModal.vue'
 
 // ─── Route ────────────────────────────────────────────────────────────────────
 
+const { t } = useI18n()
+
 const route  = useRoute()
 const router = useRouter()
 
@@ -42,12 +45,12 @@ const projectId = computed(() => route.params.id as string)
 
 type TabKey = 'canvas' | 'vars' | 'triggers' | 'envs'
 
-const TABS: Array<{ key: TabKey; label: string }> = [
-  { key: 'canvas',   label: '流水线编排' },
-  { key: 'vars',     label: '变量与缓存' },
-  { key: 'triggers', label: '触发设置' },
-  { key: 'envs',     label: '环境与凭据' },
-]
+const TABS = computed<Array<{ key: TabKey; label: string }>>(() => [
+  { key: 'canvas',   label: t('projectPipeline.tabCanvas') },
+  { key: 'vars',     label: t('projectPipeline.tabVars') },
+  { key: 'triggers', label: t('projectPipeline.tabTriggers') },
+  { key: 'envs',     label: t('projectPipeline.tabEnvs') },
+])
 
 const activeTab = computed<TabKey>(() => {
   const q = route.query.tab
@@ -88,14 +91,14 @@ async function loadPipeline(): Promise<void> {
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
-        loadError.value = '无法连接到服务器,请检查后端是否运行后重试。'
+        loadError.value = t('projectPipeline.errNoServer')
       } else if (err.status === 404) {
-        loadError.value = '项目不存在,请确认项目 ID 正确。'
+        loadError.value = t('projectPipeline.errProjectNotFound')
       } else {
-        loadError.value = err.apiError?.message ?? `加载流水线失败(${err.status})`
+        loadError.value = err.apiError?.message ?? t('projectPipeline.errLoadFailedStatus', { status: err.status })
       }
     } else {
-      loadError.value = '加载流水线失败,请稍后重试。'
+      loadError.value = t('projectPipeline.errLoadFailedRetry')
     }
     loadState.value = 'error'
   }
@@ -168,15 +171,15 @@ function showSaveSuccess(): void {
 function mapSaveError(err: HttpError): string {
   const code = err.apiError?.code
   switch (code) {
-    case 'invalid_stage':        return '阶段名不能为空或 kind 不在允许值内,请检查后重试。'
-    case 'invalid_job':          return '任务名称或类型不能为空,请补充后重试。'
-    case 'duplicate_id':         return '阶段或任务 ID 重复,请删除重复项后重试。'
-    case 'invalid_build':        return '构建模型须为 dockerfile/toolchain,产物类型须为 image/jar/dist。'
-    case 'invalid_var':          return '变量键不能为空且同作用域内不可重复;secret 变量须选择保险库凭据。'
-    case 'invalid_environment':  return '环境名不能为空,镜像仓库类型须为 harbor/acr/dockerhub/custom。'
-    case 'credential_not_found': return '引用的保险库凭据不存在,请重新选择后重试。'
-    case 'vault_unconfigured':   return '保险库未配置 master key,无法引用 secret 凭据。'
-    default:                     return err.apiError?.message ?? `保存失败(${err.status})`
+    case 'invalid_stage':        return t('projectPipeline.errInvalidStage')
+    case 'invalid_job':          return t('projectPipeline.errInvalidJob')
+    case 'duplicate_id':         return t('projectPipeline.errDuplicateId')
+    case 'invalid_build':        return t('projectPipeline.errInvalidBuild')
+    case 'invalid_var':          return t('projectPipeline.errInvalidVar')
+    case 'invalid_environment':  return t('projectPipeline.errInvalidEnvironment')
+    case 'credential_not_found': return t('projectPipeline.errCredentialNotFound')
+    case 'vault_unconfigured':   return t('projectPipeline.errVaultUnconfigured')
+    default:                     return err.apiError?.message ?? t('projectPipeline.errSaveFailedStatus', { status: err.status })
   }
 }
 
@@ -244,10 +247,10 @@ async function handleSave(): Promise<void> {
   } catch (err) {
     if (err instanceof HttpError) {
       saveBanner.value = err.status === 0
-        ? '无法连接到服务器,请检查后端是否运行后重试。'
+        ? t('projectPipeline.errNoServer')
         : mapSaveError(err)
     } else {
-      saveBanner.value = '保存失败,请稍后重试。'
+      saveBanner.value = t('projectPipeline.errSaveFailedRetry')
     }
   } finally {
     saveSubmitting.value = false
@@ -380,13 +383,13 @@ async function loadProject(): Promise<void> {
     <!-- ─── Top bar ────────────────────────────────────────────────────────── -->
     <header class="pipeline-top">
       <div class="pipeline-top-left">
-        <nav class="breadcrumb" aria-label="面包屑导航">
-          <router-link to="/projects" class="crumb-link">项目</router-link>
+        <nav class="breadcrumb" :aria-label="t('projectPipeline.breadcrumbAria')">
+          <router-link to="/projects" class="crumb-link">{{ t('projectPipeline.breadcrumbProjects') }}</router-link>
           <span class="crumb-sep" aria-hidden="true">/</span>
           <span class="crumb-cur">{{ projectName }}</span>
         </nav>
         <h1 class="pipeline-title">
-          流水线配置
+          {{ t('projectPipeline.title') }}
           <span class="pipeline-tag">{{ pipeline?.status ?? 'draft' }}</span>
         </h1>
       </div>
@@ -396,21 +399,21 @@ async function loadProject(): Promise<void> {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M3 12h3.5l2.2-6 3.6 12 2.4-7 1.3 1h4.5"/>
           </svg>
-          AI 生成流水线
+          {{ t('projectPipeline.aiGenerate') }}
         </button>
 
         <button class="top-btn" :disabled="saveSubmitting" @click="handleImport">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>
           </svg>
-          从 YAML 导入
+          {{ t('projectPipeline.importYaml') }}
         </button>
 
         <button class="top-btn" :disabled="saveSubmitting" @click="handleTemplates">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M12 3l9 4.5-9 4.5-9-4.5z"/><path d="M3 12l9 4.5 9-4.5"/><path d="M3 16.5l9 4.5 9-4.5"/>
           </svg>
-          模板
+          {{ t('projectPipeline.templates') }}
         </button>
 
         <!-- ─── Validation button + ready badge (Story 2-6) ─────────────── -->
@@ -418,13 +421,13 @@ async function loadProject(): Promise<void> {
           class="top-btn top-btn--validate"
           :class="{ 'top-btn--validate-active': validationOpen }"
           :aria-pressed="validationOpen"
-          :aria-label="validationOpen ? '关闭校验面板' : '校验配置'"
+          :aria-label="validationOpen ? t('projectPipeline.closeValidationPanel') : t('projectPipeline.validate')"
           @click="validationOpen ? handleValidationClose() : handleValidateClick()"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
           </svg>
-          校验配置
+          {{ t('projectPipeline.validate') }}
           <!-- inline ready badge when data is available -->
           <span
             v-if="validationData !== null && !validationLoading"
@@ -432,7 +435,7 @@ async function loadProject(): Promise<void> {
             :class="validationData.ready ? 'top-btn-badge--ok' : 'top-btn-badge--err'"
             aria-hidden="true"
           >
-            {{ validationData.ready ? '就绪' : validationData.issues.filter(i => i.severity === 'error').length + ' 错误' }}
+            {{ validationData.ready ? t('projectPipeline.badgeReady') : t('projectPipeline.badgeErrors', { n: validationData.issues.filter(i => i.severity === 'error').length }) }}
           </span>
         </button>
 
@@ -443,7 +446,7 @@ async function loadProject(): Promise<void> {
           @click="handleSave"
         >
           <span v-if="saveSubmitting" class="spinner" aria-hidden="true"/>
-          {{ saveSubmitting ? '保存中…' : '保存草稿' }}
+          {{ saveSubmitting ? t('projectPipeline.saving') : t('projectPipeline.saveDraft') }}
         </button>
       </div>
     </header>
@@ -459,7 +462,7 @@ async function loadProject(): Promise<void> {
         <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
       </svg>
       <span>{{ saveBanner }}</span>
-      <button class="banner-dismiss" aria-label="关闭提示" @click="saveBanner = ''">
+      <button class="banner-dismiss" :aria-label="t('projectPipeline.dismiss')" @click="saveBanner = ''">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
       </button>
     </div>
@@ -468,11 +471,11 @@ async function loadProject(): Promise<void> {
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
         <path d="M20 6 9 17l-5-5"/>
       </svg>
-      <span>流水线草稿已保存</span>
+      <span>{{ t('projectPipeline.draftSaved') }}</span>
     </div>
 
     <!-- ─── Tab strip ──────────────────────────────────────────────────────── -->
-    <nav class="tab-strip" aria-label="流水线配置标签页" role="tablist">
+    <nav class="tab-strip" :aria-label="t('projectPipeline.tabStripAria')" role="tablist">
       <button
         v-for="tab in TABS"
         :key="tab.key"
@@ -511,11 +514,11 @@ async function loadProject(): Promise<void> {
               <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
             </svg>
             <span>{{ loadError }}</span>
-            <button class="banner-retry" @click="loadPipeline">↻ 重试</button>
+            <button class="banner-retry" @click="loadPipeline">↻ {{ t('projectPipeline.retry') }}</button>
           </div>
 
           <!-- Loading skeleton -->
-          <div v-else-if="loadState === 'loading'" class="canvas-skeleton" aria-busy="true" aria-label="加载中">
+          <div v-else-if="loadState === 'loading'" class="canvas-skeleton" aria-busy="true" :aria-label="t('projectPipeline.loading')">
             <div class="skel-flow">
               <div v-for="i in 4" :key="i" class="skel-stage" aria-hidden="true">
                 <div class="skel skel--stage-head"/>

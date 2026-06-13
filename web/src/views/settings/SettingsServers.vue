@@ -17,10 +17,12 @@ import { listCredentials } from '../../api/credentials'
 import type { Credential } from '../../api/credentials'
 import { HttpError } from '../../api/http'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import ServiceLogViewer from '../../components/ops/ServiceLogViewer.vue'
 import ServiceOpsPanel from '../../components/ops/ServiceOpsPanel.vue'
 
 const router = useRouter()
+const { t } = useI18n()
 
 // ─── state ──────────────────────────────────────────────────────────────────
 
@@ -115,7 +117,7 @@ const hasSSHCredentials = computed(() => sshCredentials.value.length > 0)
 
 function credentialLabel(id: string): string {
   const c = sshCredentials.value.find((c) => c.id === id)
-  return c ? c.name : '(凭据已删除)'
+  return c ? c.name : t('settingsServers.credentialDeleted')
 }
 
 // ─── data loading ────────────────────────────────────────────────────────────
@@ -131,14 +133,14 @@ async function loadServers(): Promise<void> {
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
-        loadError.value = '无法连接到服务器,请检查后端是否运行后重试'
+        loadError.value = t('settingsServers.errLoadConn')
       } else if (err.apiError?.code === 'vault_unconfigured') {
-        loadError.value = '保险库未配置 master key,请联系管理员设置 PIPEWRIGHT_MASTER_KEY 环境变量'
+        loadError.value = t('settingsServers.errVaultUnconfigured')
       } else {
-        loadError.value = err.apiError?.message ?? `加载服务器失败(${err.status})`
+        loadError.value = err.apiError?.message ?? t('settingsServers.errLoadStatus', { status: err.status })
       }
     } else {
-      loadError.value = '加载服务器失败,请稍后重试'
+      loadError.value = t('settingsServers.errLoadRetry')
     }
     loadState.value = 'error'
   }
@@ -193,23 +195,23 @@ function validateForm(): boolean {
   clearFormErrors()
   let ok = true
   if (!form.value.name.trim()) {
-    formErrors.value.name = '请输入服务器名称'
+    formErrors.value.name = t('settingsServers.errNameRequired')
     ok = false
   }
   if (!form.value.host.trim()) {
-    formErrors.value.host = '请输入主机地址'
+    formErrors.value.host = t('settingsServers.errHostRequired')
     ok = false
   }
   if (!form.value.user.trim()) {
-    formErrors.value.user = '请输入登录用户'
+    formErrors.value.user = t('settingsServers.errUserRequired')
     ok = false
   }
   if (!Number.isInteger(form.value.port) || form.value.port < 1 || form.value.port > 65535) {
-    formErrors.value.port = '端口必须在 1..65535 之间'
+    formErrors.value.port = t('settingsServers.errPortRange')
     ok = false
   }
   if (!form.value.credentialId) {
-    formErrors.value.credentialId = '请选择 SSH 凭据'
+    formErrors.value.credentialId = t('settingsServers.errCredentialRequired')
     ok = false
   }
   return ok
@@ -248,12 +250,12 @@ async function handleFormSubmit(): Promise<void> {
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
-        formBanner.value = '无法连接到服务器,请稍后重试'
+        formBanner.value = t('settingsServers.errConnRetry')
       } else {
-        formBanner.value = err.apiError?.message ?? `保存失败(${err.status})`
+        formBanner.value = err.apiError?.message ?? t('settingsServers.errSaveStatus', { status: err.status })
       }
     } else {
-      formBanner.value = '保存失败,请稍后重试'
+      formBanner.value = t('settingsServers.errSaveRetry')
     }
   } finally {
     formSubmitting.value = false
@@ -288,12 +290,12 @@ async function confirmDelete(): Promise<void> {
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
-        deleteBanner.value = '无法连接到服务器,请稍后重试'
+        deleteBanner.value = t('settingsServers.errConnRetry')
       } else {
-        deleteBanner.value = err.apiError?.message ?? `删除失败(${err.status})`
+        deleteBanner.value = err.apiError?.message ?? t('settingsServers.errDeleteStatus', { status: err.status })
       }
     } else {
-      deleteBanner.value = '删除失败,请稍后重试'
+      deleteBanner.value = t('settingsServers.errDeleteRetry')
     }
   } finally {
     deleteSubmitting.value = false
@@ -308,9 +310,9 @@ async function handleTest(s: Server): Promise<void> {
     const result = await testServer(s.id)
     testResults.value = { ...testResults.value, [s.id]: result }
   } catch (err) {
-    let message = '测试连接失败,请稍后重试'
+    let message = t('settingsServers.errTestRetry')
     if (err instanceof HttpError) {
-      message = err.apiError?.message ?? `测试连接失败(${err.status})`
+      message = err.apiError?.message ?? t('settingsServers.errTestStatus', { status: err.status })
     }
     testResults.value = {
       ...testResults.value,
@@ -327,28 +329,27 @@ async function handleTest(s: Server): Promise<void> {
     <!-- ─── section header ──────────────────────────────────────────────────── -->
     <div class="section-head">
       <div class="section-head-text">
-        <h2 class="section-title">服务器</h2>
+        <h2 class="section-title">{{ t('settingsServers.title') }}</h2>
         <p class="section-desc">
-          登记目标服务器(host / port / user + SSH 凭据),测试连通性。SSH 密钥仅按引用绑定,
-          经保险库密文存取,绝不入库或回显明文。部署与运维都经此共享 SSH 层执行命令。
+          {{ t('settingsServers.desc') }}
         </p>
       </div>
       <button
         class="btn-primary"
         :disabled="loadState === 'loading' || !hasSSHCredentials"
-        :title="!hasSSHCredentials ? '请先在凭据保险库添加一条 SSH 私钥凭据' : ''"
+        :title="!hasSSHCredentials ? t('settingsServers.addDisabledHint') : ''"
         @click="openAddModal"
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
           <path d="M12 5v14M5 12h14" />
         </svg>
-        登记服务器
+        {{ t('settingsServers.addServer') }}
       </button>
     </div>
 
     <!-- ─── no-credential hint ────────────────────────────────────────────────── -->
     <div v-if="loadState === 'idle' && !hasSSHCredentials" class="banner banner--warn" role="status">
-      <span>尚无 SSH 凭据。请先到「凭据保险库」添加一条「SSH 私钥」或「SSH 密码」凭据,再登记服务器。</span>
+      <span>{{ t('settingsServers.noCredentialHint') }}</span>
     </div>
 
     <!-- ─── load error banner ─────────────────────────────────────────────────── -->
@@ -357,14 +358,14 @@ async function handleTest(s: Server): Promise<void> {
         <circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" />
       </svg>
       <span>{{ loadError }}</span>
-      <button class="banner-retry" @click="loadServers">↻ 重试</button>
+      <button class="banner-retry" @click="loadServers">↻ {{ t('settingsServers.retry') }}</button>
     </div>
 
     <!-- ─── servers panel ─────────────────────────────────────────────────────── -->
     <div class="panel" :class="{ 'panel--loading': loadState === 'loading' }">
       <div class="panel-head">
-        <span>已登记服务器</span>
-        <span class="panel-meta" v-if="loadState === 'idle'">{{ servers.length }} 台</span>
+        <span>{{ t('settingsServers.registeredServers') }}</span>
+        <span class="panel-meta" v-if="loadState === 'idle'">{{ t('settingsServers.serverCount', { n: servers.length }) }}</span>
       </div>
 
       <template v-if="loadState === 'loading'">
@@ -374,7 +375,7 @@ async function handleTest(s: Server): Promise<void> {
       </template>
 
       <template v-else-if="loadState === 'idle' && servers.length === 0">
-        <div class="empty-row" role="status">还没有登记任何服务器。</div>
+        <div class="empty-row" role="status">{{ t('settingsServers.emptyList') }}</div>
       </template>
 
       <ul v-else class="server-list">
@@ -393,7 +394,7 @@ async function handleTest(s: Server): Promise<void> {
               role="status"
             >
               <template v-if="testResults[s.id].ok">
-                ✓ 连接成功 · {{ testResults[s.id].latencyMs }}ms
+                ✓ {{ t('settingsServers.testOk', { ms: testResults[s.id].latencyMs }) }}
                 <span class="mono uname">{{ testResults[s.id].output }}</span>
               </template>
               <template v-else>
@@ -403,13 +404,13 @@ async function handleTest(s: Server): Promise<void> {
           </div>
           <div class="server-actions">
             <button class="btn-ghost" :disabled="testingId === s.id" @click="handleTest(s)">
-              {{ testingId === s.id ? '测试中…' : '测试连接' }}
+              {{ testingId === s.id ? t('settingsServers.testing') : t('settingsServers.testConnection') }}
             </button>
-            <button class="btn-ghost" @click="openLogsModal(s)">日志</button>
-            <button class="btn-ghost" @click="openTerminal(s)">终端</button>
-            <button class="btn-ghost" @click="openOpsModal(s)">服务操作</button>
-            <button class="btn-ghost" @click="openEditModal(s)">编辑</button>
-            <button class="btn-ghost btn-danger" @click="openDeleteModal(s)">删除</button>
+            <button class="btn-ghost" @click="openLogsModal(s)">{{ t('settingsServers.logs') }}</button>
+            <button class="btn-ghost" @click="openTerminal(s)">{{ t('settingsServers.terminal') }}</button>
+            <button class="btn-ghost" @click="openOpsModal(s)">{{ t('settingsServers.serviceOps') }}</button>
+            <button class="btn-ghost" @click="openEditModal(s)">{{ t('settingsServers.edit') }}</button>
+            <button class="btn-ghost btn-danger" @click="openDeleteModal(s)">{{ t('settingsServers.delete') }}</button>
           </div>
         </li>
       </ul>
@@ -419,50 +420,50 @@ async function handleTest(s: Server): Promise<void> {
     <div v-if="modalOpen" class="modal-backdrop" @click.self="closeModal">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="server-modal-title">
         <h3 id="server-modal-title" class="modal-title">
-          {{ modalMode === 'add' ? '登记服务器' : '编辑服务器' }}
+          {{ modalMode === 'add' ? t('settingsServers.addServer') : t('settingsServers.editServer') }}
         </h3>
 
         <div v-if="formBanner" class="banner banner--error" role="alert">{{ formBanner }}</div>
 
         <form @submit.prevent="handleFormSubmit">
           <label class="field">
-            <span class="field-label">名称</span>
+            <span class="field-label">{{ t('settingsServers.fieldName') }}</span>
             <input v-model="form.name" class="field-input" type="text" placeholder="web-prod-1" autocomplete="off" />
             <span v-if="formErrors.name" class="field-error">{{ formErrors.name }}</span>
           </label>
 
           <div class="field-row">
             <label class="field field-grow">
-              <span class="field-label">主机 / IP</span>
+              <span class="field-label">{{ t('settingsServers.fieldHost') }}</span>
               <input v-model="form.host" class="field-input" type="text" placeholder="10.0.0.5" autocomplete="off" />
               <span v-if="formErrors.host" class="field-error">{{ formErrors.host }}</span>
             </label>
             <label class="field field-port">
-              <span class="field-label">端口</span>
+              <span class="field-label">{{ t('settingsServers.fieldPort') }}</span>
               <input v-model.number="form.port" class="field-input" type="number" min="1" max="65535" />
               <span v-if="formErrors.port" class="field-error">{{ formErrors.port }}</span>
             </label>
           </div>
 
           <label class="field">
-            <span class="field-label">登录用户</span>
+            <span class="field-label">{{ t('settingsServers.fieldUser') }}</span>
             <input v-model="form.user" class="field-input" type="text" placeholder="deploy" autocomplete="off" />
             <span v-if="formErrors.user" class="field-error">{{ formErrors.user }}</span>
           </label>
 
           <label class="field">
-            <span class="field-label">SSH 凭据</span>
+            <span class="field-label">{{ t('settingsServers.fieldCredential') }}</span>
             <select v-model="form.credentialId" class="field-input">
-              <option value="" disabled>请选择 SSH 凭据</option>
+              <option value="" disabled>{{ t('settingsServers.selectCredential') }}</option>
               <option v-for="c in sshCredentials" :key="c.id" :value="c.id">{{ c.name }}</option>
             </select>
             <span v-if="formErrors.credentialId" class="field-error">{{ formErrors.credentialId }}</span>
           </label>
 
           <div class="modal-actions">
-            <button type="button" class="btn-ghost" :disabled="formSubmitting" @click="closeModal">取消</button>
+            <button type="button" class="btn-ghost" :disabled="formSubmitting" @click="closeModal">{{ t('settingsServers.cancel') }}</button>
             <button type="submit" class="btn-primary" :disabled="formSubmitting">
-              {{ formSubmitting ? '保存中…' : '保存' }}
+              {{ formSubmitting ? t('settingsServers.saving') : t('settingsServers.save') }}
             </button>
           </div>
         </form>
@@ -472,15 +473,17 @@ async function handleTest(s: Server): Promise<void> {
     <!-- ─── delete confirm modal ──────────────────────────────────────────────── -->
     <div v-if="deleteModalOpen" class="modal-backdrop" @click.self="closeDeleteModal">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="server-del-title">
-        <h3 id="server-del-title" class="modal-title">删除服务器</h3>
+        <h3 id="server-del-title" class="modal-title">{{ t('settingsServers.deleteServer') }}</h3>
         <div v-if="deleteBanner" class="banner banner--error" role="alert">{{ deleteBanner }}</div>
         <p class="modal-text">
-          确定删除服务器 <strong>{{ deletingServer?.name }}</strong>?此操作不可撤销。
+          <i18n-t keypath="settingsServers.deleteConfirm" tag="span">
+            <template #name><strong>{{ deletingServer?.name }}</strong></template>
+          </i18n-t>
         </p>
         <div class="modal-actions">
-          <button type="button" class="btn-ghost" :disabled="deleteSubmitting" @click="closeDeleteModal">取消</button>
+          <button type="button" class="btn-ghost" :disabled="deleteSubmitting" @click="closeDeleteModal">{{ t('settingsServers.cancel') }}</button>
           <button type="button" class="btn-primary btn-danger" :disabled="deleteSubmitting" @click="confirmDelete">
-            {{ deleteSubmitting ? '删除中…' : '确认删除' }}
+            {{ deleteSubmitting ? t('settingsServers.deleting') : t('settingsServers.confirmDelete') }}
           </button>
         </div>
       </div>
@@ -491,9 +494,9 @@ async function handleTest(s: Server): Promise<void> {
       <div class="modal modal--wide" role="dialog" aria-modal="true" aria-labelledby="server-logs-title">
         <div class="logs-modal-head">
           <h3 id="server-logs-title" class="modal-title">
-            服务日志 · {{ logsServer?.name }}
+            {{ t('settingsServers.serviceLogsTitle', { name: logsServer?.name }) }}
           </h3>
-          <button type="button" class="btn-ghost" aria-label="关闭" @click="closeLogsModal">关闭</button>
+          <button type="button" class="btn-ghost" :aria-label="t('settingsServers.close')" @click="closeLogsModal">{{ t('settingsServers.close') }}</button>
         </div>
         <p class="logs-modal-sub mono">
           {{ logsServer?.user }}@{{ logsServer?.host }}:{{ logsServer?.port }}
@@ -511,9 +514,9 @@ async function handleTest(s: Server): Promise<void> {
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="server-ops-title">
         <div class="logs-modal-head">
           <h3 id="server-ops-title" class="modal-title">
-            服务操作 · {{ opsServer?.name }}
+            {{ t('settingsServers.serviceOpsTitle', { name: opsServer?.name }) }}
           </h3>
-          <button type="button" class="btn-ghost" aria-label="关闭" @click="closeOpsModal">关闭</button>
+          <button type="button" class="btn-ghost" :aria-label="t('settingsServers.close')" @click="closeOpsModal">{{ t('settingsServers.close') }}</button>
         </div>
         <p class="logs-modal-sub mono">
           {{ opsServer?.user }}@{{ opsServer?.host }}:{{ opsServer?.port }}

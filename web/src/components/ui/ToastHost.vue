@@ -6,7 +6,10 @@
  * Accessibility: region role=status + aria-live=polite for the container.
  * Enter/leave uses transform + opacity only.
  */
+import { useI18n } from 'vue-i18n'
 import { useToast } from '../../composables/useToast'
+
+const { t } = useI18n()
 
 const toast = useToast()
 
@@ -24,7 +27,7 @@ const icons: Record<string, string> = {
     class="toast-host"
     role="status"
     aria-live="polite"
-    aria-label="通知"
+    :aria-label="t('misc.toast.hostAria')"
     aria-atomic="false"
     aria-relevant="additions"
   >
@@ -34,7 +37,7 @@ const icons: Record<string, string> = {
         :key="item.id"
         class="toast-item"
         :class="`toast-item--${item.type}`"
-        :aria-label="`${item.type} 通知: ${item.title}`"
+        :aria-label="t('misc.toast.itemAria', { type: item.type, title: item.title })"
       >
         <!-- Accent edge -->
         <span class="toast-item__edge" aria-hidden="true" />
@@ -70,7 +73,7 @@ const icons: Record<string, string> = {
         <button
           class="toast-item__close"
           type="button"
-          :aria-label="`关闭通知: ${item.title}`"
+          :aria-label="t('misc.toast.closeAria', { title: item.title })"
           @click="toast.dismiss(item.id)"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">

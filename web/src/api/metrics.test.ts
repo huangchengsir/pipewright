@@ -1,5 +1,12 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { bandLabel, formatDuration, formatFrequency, formatPercent } from './metrics'
+import { setLocale } from '../i18n'
+
+// These helpers emit localized copy via the global i18n `t`. Pin the locale to
+// zh-CN (the product default) so assertions are deterministic regardless of the
+// jsdom navigator language.
+beforeAll(() => setLocale('zh-CN'))
+afterAll(() => setLocale('zh-CN'))
 
 describe('bandLabel', () => {
   it('maps each band to Chinese copy', () => {
@@ -8,6 +15,12 @@ describe('bandLabel', () => {
     expect(bandLabel('medium')).toBe('中等')
     expect(bandLabel('low')).toBe('待改进')
     expect(bandLabel('none')).toBe('暂无数据')
+  })
+  it('switches with the active locale', () => {
+    setLocale('en')
+    expect(bandLabel('elite')).toBe('Elite')
+    expect(bandLabel('none')).toBe('No data')
+    setLocale('zh-CN')
   })
 })
 

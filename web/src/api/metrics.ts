@@ -16,6 +16,7 @@
  */
 
 import { http } from './http'
+import { t } from '../i18n'
 
 /** DORA performance band (Elite/High/Medium/Low; `none` when sample is too small). */
 export type DoraBand = 'elite' | 'high' | 'medium' | 'low' | 'none'
@@ -88,45 +89,45 @@ export async function getDoraMetrics(params: GetDoraMetricsParams = {}): Promise
 
 // ─── Presentation helpers (pure; unit-tested) ────────────────────────────────
 
-/** Human-readable label for a DORA band (Chinese, matches product copy). */
+/** Human-readable label for a DORA band (localized; matches product copy). */
 export function bandLabel(band: DoraBand): string {
   switch (band) {
     case 'elite':
-      return '精英'
+      return t('metrics.band.elite')
     case 'high':
-      return '高效'
+      return t('metrics.band.high')
     case 'medium':
-      return '中等'
+      return t('metrics.band.medium')
     case 'low':
-      return '待改进'
+      return t('metrics.band.low')
     default:
-      return '暂无数据'
+      return t('metrics.band.none')
   }
 }
 
 /**
- * Format a duration in seconds to a compact human string (秒/分/时/天).
+ * Format a duration in seconds to a compact human string (s/min/h/d).
  * Returns "—" for non-finite / negative inputs (callers also gate on sampleCount).
  */
 export function formatDuration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '—'
-  if (seconds < 60) return `${Math.round(seconds)} 秒`
+  if (seconds < 60) return t('metrics.duration.seconds', { n: Math.round(seconds) })
   const mins = seconds / 60
-  if (mins < 60) return `${round1(mins)} 分钟`
+  if (mins < 60) return t('metrics.duration.minutes', { n: round1(mins) })
   const hours = mins / 60
-  if (hours < 24) return `${round1(hours)} 小时`
+  if (hours < 24) return t('metrics.duration.hours', { n: round1(hours) })
   const days = hours / 24
-  return `${round1(days)} 天`
+  return t('metrics.duration.days', { n: round1(days) })
 }
 
 /** Format deployment frequency (deploys/day) to an intuitive cadence string. */
 export function formatFrequency(perDay: number): string {
   if (!Number.isFinite(perDay) || perDay <= 0) return '—'
-  if (perDay >= 1) return `${round1(perDay)} 次/天`
+  if (perDay >= 1) return t('metrics.freq.perDay', { n: round1(perDay) })
   const perWeek = perDay * 7
-  if (perWeek >= 1) return `${round1(perWeek)} 次/周`
+  if (perWeek >= 1) return t('metrics.freq.perWeek', { n: round1(perWeek) })
   const perMonth = perDay * 30
-  return `${round1(perMonth)} 次/月`
+  return t('metrics.freq.perMonth', { n: round1(perMonth) })
 }
 
 /** Format a [0,1] ratio as a percentage string. */

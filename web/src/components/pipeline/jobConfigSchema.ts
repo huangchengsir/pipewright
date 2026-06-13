@@ -15,6 +15,7 @@
  */
 
 import type { CredentialType } from '../../api/credentials'
+import { t } from '../../i18n'
 
 // ─── Field model ──────────────────────────────────────────────────────────────
 
@@ -76,14 +77,14 @@ export interface JobTypeSpec {
 // ─── Shared option sets ─────────────────────────────────────────────────────────
 
 const ARTIFACT_OPTIONS: SelectOption[] = [
-  { value: 'image', label: '容器镜像 (image)' },
-  { value: 'jar', label: 'JAR 包 (jar)' },
-  { value: 'dist', label: '静态资源 (dist)' },
+  { value: 'image', get label() { return t('pipelineJob.artifactImage') } },
+  { value: 'jar', get label() { return t('pipelineJob.artifactJar') } },
+  { value: 'dist', get label() { return t('pipelineJob.artifactDist') } },
 ]
 
 const BUILD_MODEL_OPTIONS: SelectOption[] = [
-  { value: 'dockerfile', label: '自带 Dockerfile' },
-  { value: 'toolchain', label: '平台工具链' },
+  { value: 'dockerfile', get label() { return t('pipelineJob.buildModelDockerfile') } },
+  { value: 'toolchain', get label() { return t('pipelineJob.buildModelToolchain') } },
 ]
 
 const TOOLCHAIN_OPTIONS: SelectOption[] = [
@@ -91,28 +92,28 @@ const TOOLCHAIN_OPTIONS: SelectOption[] = [
   { value: 'java', label: 'Java / Maven' },
   { value: 'go', label: 'Go' },
   { value: 'python', label: 'Python' },
-  { value: 'custom', label: '自定义' },
+  { value: 'custom', get label() { return t('pipelineJob.toolchainCustom') } },
 ]
 
 const DEPLOY_STRATEGY_OPTIONS: SelectOption[] = [
-  { value: 'rolling', label: '滚动更新(零停机)' },
-  { value: 'recreate', label: '先停后起 (recreate)' },
-  { value: 'blue-green', label: '蓝绿部署' },
+  { value: 'rolling', get label() { return t('pipelineJob.deployStrategyRolling') } },
+  { value: 'recreate', get label() { return t('pipelineJob.deployStrategyRecreate') } },
+  { value: 'blue-green', get label() { return t('pipelineJob.deployStrategyBlueGreen') } },
 ]
 
 const PROBE_MODE_OPTIONS: SelectOption[] = [
-  { value: 'http', label: 'HTTP 探测' },
-  { value: 'command', label: '命令探测' },
+  { value: 'http', get label() { return t('pipelineJob.probeModeHttp') } },
+  { value: 'command', get label() { return t('pipelineJob.probeModeCommand') } },
 ]
 
 // 部署节点的产物类型偏好(本 run 同时产出镜像与文件产物时,挑哪件部署)。
 // 留空 = 自动:优先文件产物(dist/jar/archive),没有文件产物才用镜像。
 const DEPLOY_ARTIFACT_OPTIONS: SelectOption[] = [
-  { value: '', label: '自动(优先文件产物,无则用镜像)' },
-  { value: 'image', label: '容器镜像 (image)' },
-  { value: 'dist', label: '静态资源 (dist)' },
-  { value: 'jar', label: 'JAR 包 (jar)' },
-  { value: 'archive', label: '归档包 (archive)' },
+  { value: '', get label() { return t('pipelineJob.deployArtifactAuto') } },
+  { value: 'image', get label() { return t('pipelineJob.artifactImage') } },
+  { value: 'dist', get label() { return t('pipelineJob.artifactDist') } },
+  { value: 'jar', get label() { return t('pipelineJob.artifactJar') } },
+  { value: 'archive', get label() { return t('pipelineJob.deployArtifactArchive') } },
 ]
 
 // `when` helpers
@@ -128,85 +129,85 @@ const probeIs = (v: string) => (c: Record<string, string>) =>
 const EXEC_OPTION_FIELDS: JobField[] = [
   {
     key: 'timeoutSeconds',
-    label: '超时(秒)',
+    get label() { return t('pipelineJob.fieldTimeoutLabel') },
     kind: 'number',
     placeholder: '0',
-    hint: '本步执行超时;超时即终止容器并判失败。留空 / 0 = 不限',
+    get hint() { return t('pipelineJob.fieldTimeoutHint') },
   },
   {
     key: 'retries',
-    label: '失败重试次数',
+    get label() { return t('pipelineJob.fieldRetriesLabel') },
     kind: 'number',
     placeholder: '0',
-    hint: '非零退出时重跑,达上限才判失败;用户取消不重试。留空 / 0 = 不重试',
+    get hint() { return t('pipelineJob.fieldRetriesHint') },
   },
   {
     key: 'cpu',
-    label: 'CPU 限额',
+    get label() { return t('pipelineJob.fieldCpuLabel') },
     kind: 'text',
     monospace: true,
     placeholder: '1',
-    hint: '透传 docker --cpus(如 1、0.5);留空 = 不限。远程 runner 视其 docker 支持而定',
+    get hint() { return t('pipelineJob.fieldCpuHint') },
   },
   {
     key: 'memory',
-    label: '内存限额',
+    get label() { return t('pipelineJob.fieldMemoryLabel') },
     kind: 'text',
     monospace: true,
     placeholder: '512m',
-    hint: '透传 docker --memory(如 512m、2g);留空 = 不限',
+    get hint() { return t('pipelineJob.fieldMemoryHint') },
   },
 ]
 
 const SCRIPT_FIELDS: JobField[] = [
   {
     key: 'image',
-    label: '运行镜像',
+    get label() { return t('pipelineJob.fieldImageLabel') },
     kind: 'text',
     monospace: true,
     placeholder: 'node:20',
-    hint: '在该隔离容器内执行命令(对标 Jenkins agent / 云效构建镜像)',
+    get hint() { return t('pipelineJob.fieldImageHint') },
   },
   {
     key: 'commands',
-    label: '执行命令',
+    get label() { return t('pipelineJob.fieldCommandsLabel') },
     kind: 'textarea',
     monospace: true,
     placeholder: 'npm ci\nnpm run build',
-    hint: '每行一条命令,按顺序执行',
+    get hint() { return t('pipelineJob.fieldCommandsHint') },
   },
   {
     key: 'workDir',
-    label: '工作目录',
+    get label() { return t('pipelineJob.fieldWorkDirLabel') },
     kind: 'text',
     monospace: true,
     placeholder: '.',
-    hint: '相对克隆工作区根;留空为工作区根',
+    get hint() { return t('pipelineJob.fieldWorkDirHint') },
   },
   {
     key: 'artifactPath',
-    label: '产物路径',
+    get label() { return t('pipelineJob.fieldArtifactPathLabel') },
     kind: 'textarea',
     monospace: true,
     placeholder: 'frontend/dist\nbackend/target/app.jar',
-    hint: '可选,每行一条。相对工作区根:目录→dist、*.jar→jar、其它文件→archive。一个节点可出多件;填了才归档进制品库并在运行详情可下载/部署。镜像产物请用「构建」节点(build_image),不在这里',
+    get hint() { return t('pipelineJob.fieldArtifactPathHint') },
   },
   ...EXEC_OPTION_FIELDS,
   {
     key: 'cachePaths',
-    label: '依赖缓存目录',
+    get label() { return t('pipelineJob.fieldCachePathsLabel') },
     kind: 'textarea',
     monospace: true,
     placeholder: 'node_modules\n.m2/repository',
-    hint: '可选,每行一条,相对工作区根。配了才启用缓存:构建前恢复、构建后保存,跨多次运行复用依赖(免重复拉 node_modules/.m2/.gradle 等)。缓存问题绝不影响构建结果',
+    get hint() { return t('pipelineJob.fieldCachePathsHint') },
   },
   {
     key: 'cacheKey',
-    label: '缓存 Key(可选)',
+    get label() { return t('pipelineJob.fieldCacheKeyLabel') },
     kind: 'text',
     monospace: true,
-    placeholder: '留空=按分支+lockfile 自动',
-    hint: '可选缓存键模板。留空则自动按「分支 + 工作区内 lockfile(package-lock/pom.xml/go.sum 等)内容」推导:依赖变则自动冷构建。支持 {{参数}}',
+    get placeholder() { return t('pipelineJob.fieldCacheKeyPlaceholder') },
+    get hint() { return t('pipelineJob.fieldCacheKeyHint') },
   },
 ]
 
@@ -214,66 +215,66 @@ const SCRIPT_FIELDS: JobField[] = [
 const DEPLOY_SSH_FIELDS: JobField[] = [
   {
     key: 'serverId',
-    label: '目标服务器',
+    get label() { return t('pipelineJob.fieldServerIdLabel') },
     kind: 'server',
-    hint: '选择已登记的服务器(凭据按引用绑定)',
+    get hint() { return t('pipelineJob.fieldServerIdHint') },
   },
   {
     key: 'artifactType',
-    label: '部署产物类型',
+    get label() { return t('pipelineJob.fieldArtifactTypeLabel') },
     kind: 'select',
     options: DEPLOY_ARTIFACT_OPTIONS,
-    hint: '本 run 同时产出镜像与文件产物时挑哪件;镜像走目标机 docker pull → 起新容器 → 健康检查 → 失败回滚上一镜像',
+    get hint() { return t('pipelineJob.fieldArtifactTypeHint') },
   },
   {
     key: 'deployPath',
-    label: '部署路径',
+    get label() { return t('pipelineJob.fieldDeployPathLabel') },
     kind: 'text',
     monospace: true,
     placeholder: '/opt/app',
-    hint: '文件产物:发布到 <部署路径>/releases/<runId>/,current 软链原子切到本次发布(零停机,旧发布保留供回滚)',
+    get hint() { return t('pipelineJob.fieldDeployPathHint') },
     when: (c) => c.artifactType !== 'image',
   },
   {
     key: 'containerName',
-    label: '容器名',
+    get label() { return t('pipelineJob.fieldContainerNameLabel') },
     kind: 'text',
     monospace: true,
     placeholder: 'app',
-    hint: '镜像部署的目标容器名;留空则用产物名。同名旧容器会被替换并可回滚到上一镜像',
+    get hint() { return t('pipelineJob.fieldContainerNameHint') },
     when: (c) => c.artifactType === 'image',
   },
   {
     key: 'ports',
-    label: '端口映射',
+    get label() { return t('pipelineJob.fieldPortsLabel') },
     kind: 'text',
     monospace: true,
     placeholder: '8080:80, 9000:9000',
-    hint: '镜像部署:逗号 / 空白分隔,每项展开为 docker run -p <map>',
+    get hint() { return t('pipelineJob.fieldPortsHint') },
     when: (c) => c.artifactType === 'image',
   },
   {
     key: 'runArgs',
-    label: 'docker run 参数',
+    get label() { return t('pipelineJob.fieldRunArgsLabel') },
     kind: 'text',
     monospace: true,
     placeholder: '-e KEY=value --restart always',
-    hint: '镜像部署:原样追加到 docker run(参数自由;凭据请用 registry 登录,勿写进此处)',
+    get hint() { return t('pipelineJob.fieldRunArgsHint') },
     when: (c) => c.artifactType === 'image',
   },
   {
     key: 'strategy',
-    label: '部署策略',
+    get label() { return t('pipelineJob.fieldStrategyLabel') },
     kind: 'select',
     options: DEPLOY_STRATEGY_OPTIONS,
   },
   {
     key: 'restartCommand',
-    label: '重启 / 切换命令',
+    get label() { return t('pipelineJob.fieldRestartCommandLabel') },
     kind: 'textarea',
     monospace: true,
     placeholder: 'systemctl restart app\nnginx -s reload',
-    hint: '可选,多行(set -e 逐行执行);部署后在目标机 current 目录下执行,用于重启/重载;失败自动回滚',
+    get hint() { return t('pipelineJob.fieldRestartCommandHint') },
     when: (c) => c.artifactType !== 'image',
   },
 ]
@@ -281,62 +282,62 @@ const DEPLOY_SSH_FIELDS: JobField[] = [
 export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
   git_source: {
     type: 'git_source',
-    label: '拉取源码',
-    description: '克隆 Git 仓库到构建工作区',
+    get label() { return t('pipelineJob.typeGitSourceLabel') },
+    get description() { return t('pipelineJob.typeGitSourceDesc') },
     accent: 'cyan',
     category: 'source',
     fields: [
       {
         key: 'repoUrl',
-        label: '仓库地址',
+        get label() { return t('pipelineJob.fieldRepoUrlLabel') },
         kind: 'text',
         monospace: true,
         placeholder: 'https://gitee.com/org/repo.git',
-        hint: '留空则使用项目绑定的默认仓库',
+        get hint() { return t('pipelineJob.fieldRepoUrlHint') },
       },
       {
         key: 'branch',
-        label: '分支 / Ref',
+        get label() { return t('pipelineJob.fieldBranchLabel') },
         kind: 'text',
         monospace: true,
         placeholder: 'main',
-        hint: '留空则使用触发时的分支或项目默认分支',
+        get hint() { return t('pipelineJob.fieldBranchHint') },
       },
       {
         key: 'credentialId',
-        label: '访问凭据',
+        get label() { return t('pipelineJob.fieldCredentialIdLabel') },
         kind: 'credential',
         credentialType: 'git_token',
-        hint: '私有仓库需引用 Git 令牌凭据',
+        get hint() { return t('pipelineJob.fieldCredentialIdHint') },
       },
       {
         key: 'depth',
-        label: '克隆深度',
+        get label() { return t('pipelineJob.fieldDepthLabel') },
         kind: 'number',
         placeholder: '1',
-        hint: '浅克隆深度;留空为完整历史',
+        get hint() { return t('pipelineJob.fieldDepthHint') },
       },
     ],
   },
 
   build_image: {
     type: 'build_image',
-    label: '构建',
-    description: '构建产物(镜像 / JAR / 静态资源)',
+    get label() { return t('pipelineJob.typeBuildImageLabel') },
+    get description() { return t('pipelineJob.typeBuildImageDesc') },
     accent: 'primary',
     category: 'build',
     fields: [
-      { key: 'artifactType', label: '产物类型', kind: 'select', options: ARTIFACT_OPTIONS },
+      { key: 'artifactType', get label() { return t('pipelineJob.fieldArtifactTypeBuildLabel') }, kind: 'select', options: ARTIFACT_OPTIONS },
       {
         key: 'buildModel',
-        label: '构建方式',
+        get label() { return t('pipelineJob.fieldBuildModelLabel') },
         kind: 'select',
         options: BUILD_MODEL_OPTIONS,
-        hint: '自带 Dockerfile,或由平台按工具链构建',
+        get hint() { return t('pipelineJob.fieldBuildModelHint') },
       },
       {
         key: 'dockerfilePath',
-        label: 'Dockerfile 路径',
+        get label() { return t('pipelineJob.fieldDockerfilePathLabel') },
         kind: 'text',
         monospace: true,
         placeholder: 'Dockerfile',
@@ -344,23 +345,23 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
       },
       {
         key: 'context',
-        label: '构建上下文',
+        get label() { return t('pipelineJob.fieldContextLabel') },
         kind: 'text',
         monospace: true,
         placeholder: '.',
-        hint: '相对仓库根的构建上下文目录',
+        get hint() { return t('pipelineJob.fieldContextHint') },
         when: modelIs('dockerfile'),
       },
       {
         key: 'toolchainLanguage',
-        label: '工具链语言',
+        get label() { return t('pipelineJob.fieldToolchainLanguageLabel') },
         kind: 'select',
         options: TOOLCHAIN_OPTIONS,
         when: modelIs('toolchain'),
       },
       {
         key: 'toolchainVersion',
-        label: '工具链版本',
+        get label() { return t('pipelineJob.fieldToolchainVersionLabel') },
         kind: 'text',
         monospace: true,
         placeholder: '20',
@@ -368,11 +369,11 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
       },
       {
         key: 'buildCommand',
-        label: '构建命令',
+        get label() { return t('pipelineJob.fieldBuildCommandLabel') },
         kind: 'text',
         monospace: true,
         placeholder: 'npm run build',
-        hint: '工具链方式下的构建入口命令',
+        get hint() { return t('pipelineJob.fieldBuildCommandHint') },
         when: modelIs('toolchain'),
       },
     ],
@@ -380,47 +381,47 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
 
   push_image: {
     type: 'push_image',
-    label: '推送镜像',
-    description: '推送镜像到容器仓库',
+    get label() { return t('pipelineJob.typePushImageLabel') },
+    get description() { return t('pipelineJob.typePushImageDesc') },
     accent: 'amber',
     category: 'build',
     fields: [
       {
         key: 'registry',
-        label: '镜像仓库地址',
+        get label() { return t('pipelineJob.fieldRegistryLabel') },
         kind: 'text',
         monospace: true,
         placeholder: 'registry.cn-hangzhou.aliyuncs.com',
       },
       {
         key: 'imageName',
-        label: '镜像名',
+        get label() { return t('pipelineJob.fieldImageNameLabel') },
         kind: 'text',
         monospace: true,
         placeholder: 'org/app',
       },
       {
         key: 'tag',
-        label: '标签',
+        get label() { return t('pipelineJob.fieldTagLabel') },
         kind: 'text',
         monospace: true,
         placeholder: '${COMMIT_SHA}',
-        hint: '可用变量:${COMMIT_SHA} ${BRANCH} ${BUILD_NUMBER}',
+        get hint() { return t('pipelineJob.fieldTagHint') },
       },
       {
         key: 'credentialId',
-        label: '仓库凭据',
+        get label() { return t('pipelineJob.fieldRegistryCredentialLabel') },
         kind: 'credential',
         credentialType: 'registry',
-        hint: '引用镜像仓库登录凭据',
+        get hint() { return t('pipelineJob.fieldRegistryCredentialHint') },
       },
     ],
   },
 
   deploy_ssh: {
     type: 'deploy_ssh',
-    label: 'SSH 部署',
-    description: '通过 SSH 把产物部署到目标服务器',
+    get label() { return t('pipelineJob.typeDeploySshLabel') },
+    get description() { return t('pipelineJob.typeDeploySshDesc') },
     accent: 'green',
     category: 'deploy',
     fields: DEPLOY_SSH_FIELDS,
@@ -428,15 +429,15 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
 
   health_check: {
     type: 'health_check',
-    label: '健康门控',
-    description: '部署后探测健康,失败则回滚',
+    get label() { return t('pipelineJob.typeHealthCheckLabel') },
+    get description() { return t('pipelineJob.typeHealthCheckDesc') },
     accent: 'green',
     category: 'quality',
     fields: [
-      { key: 'probeMode', label: '探测方式', kind: 'select', options: PROBE_MODE_OPTIONS },
+      { key: 'probeMode', get label() { return t('pipelineJob.fieldProbeModeLabel') }, kind: 'select', options: PROBE_MODE_OPTIONS },
       {
         key: 'url',
-        label: '探测 URL',
+        get label() { return t('pipelineJob.fieldUrlLabel') },
         kind: 'text',
         monospace: true,
         placeholder: 'http://localhost:8080/healthz',
@@ -444,50 +445,50 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
       },
       {
         key: 'expectStatus',
-        label: '期望状态码',
+        get label() { return t('pipelineJob.fieldExpectStatusLabel') },
         kind: 'number',
         placeholder: '200',
         when: probeIs('http'),
       },
       {
         key: 'command',
-        label: '探测命令',
+        get label() { return t('pipelineJob.fieldCommandLabel') },
         kind: 'text',
         monospace: true,
         placeholder: 'curl -fsS localhost:8080/healthz',
         when: probeIs('command'),
       },
-      { key: 'retries', label: '重试次数', kind: 'number', placeholder: '3' },
-      { key: 'intervalSeconds', label: '重试间隔(秒)', kind: 'number', placeholder: '5' },
+      { key: 'retries', get label() { return t('pipelineJob.fieldHealthRetriesLabel') }, kind: 'number', placeholder: '3' },
+      { key: 'intervalSeconds', get label() { return t('pipelineJob.fieldIntervalSecondsLabel') }, kind: 'number', placeholder: '5' },
     ],
   },
 
   notify: {
     type: 'notify',
-    label: '通知',
-    description: '运行到此节点时发送通知',
+    get label() { return t('pipelineJob.typeNotifyLabel') },
+    get description() { return t('pipelineJob.typeNotifyDesc') },
     accent: 'cyan',
     category: 'notify',
     fields: [
       {
         key: 'channel',
-        label: '通知渠道',
+        get label() { return t('pipelineJob.fieldChannelLabel') },
         kind: 'channel',
-        hint: '从「通知」设置里已配置的渠道中选择;没有就先去设置里加一个',
+        get hint() { return t('pipelineJob.fieldChannelHint') },
       },
       {
         key: 'titleTemplate',
-        label: '标题模板(可选)',
+        get label() { return t('pipelineJob.fieldTitleTemplateLabel') },
         kind: 'text',
-        placeholder: '部署成功:{{project}}',
-        hint: '留空用默认文案;支持占位 {{project}} {{branch}} {{commit}} {{status}} {{runId}}',
+        get placeholder() { return t('pipelineJob.fieldTitleTemplatePlaceholder') },
+        get hint() { return t('pipelineJob.fieldTitleTemplateHint') },
       },
       {
         key: 'bodyTemplate',
-        label: '正文模板(可选)',
+        get label() { return t('pipelineJob.fieldBodyTemplateLabel') },
         kind: 'textarea',
-        placeholder: '分支 {{branch}} @ {{commit}} 已执行到通知节点。',
-        hint: '留空用默认文案;同样支持 {{占位}},未知占位渲染为空',
+        get placeholder() { return t('pipelineJob.fieldBodyTemplatePlaceholder') },
+        get hint() { return t('pipelineJob.fieldBodyTemplateHint') },
       },
     ],
   },
@@ -495,8 +496,8 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
   // ── 模板节点:预填好常见步骤参数,改改就能用,不必都写自定义脚本 ──
   build_frontend: {
     type: 'build_frontend',
-    label: '前端构建',
-    description: 'Node 容器里装依赖 + 构建,产出 dist',
+    get label() { return t('pipelineJob.typeBuildFrontendLabel') },
+    get description() { return t('pipelineJob.typeBuildFrontendDesc') },
     accent: 'primary',
     category: 'build',
     fields: SCRIPT_FIELDS,
@@ -509,8 +510,8 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
 
   build_backend: {
     type: 'build_backend',
-    label: '后端构建',
-    description: 'Maven/Gradle 容器里打包,产出 jar',
+    get label() { return t('pipelineJob.typeBuildBackendLabel') },
+    get description() { return t('pipelineJob.typeBuildBackendDesc') },
     accent: 'amber',
     category: 'build',
     fields: SCRIPT_FIELDS,
@@ -523,8 +524,8 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
 
   deploy_frontend: {
     type: 'deploy_frontend',
-    label: '前端推送部署',
-    description: '把前端 dist 经 SSH 零停机部署到服务器',
+    get label() { return t('pipelineJob.typeDeployFrontendLabel') },
+    get description() { return t('pipelineJob.typeDeployFrontendDesc') },
     accent: 'green',
     category: 'deploy',
     fields: DEPLOY_SSH_FIELDS,
@@ -533,66 +534,66 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
 
   templated: {
     type: 'templated',
-    label: '自定义节点',
-    description: '自己定义参数 + 命令模板({{参数}}),配参数即用',
+    get label() { return t('pipelineJob.typeTemplatedLabel') },
+    get description() { return t('pipelineJob.typeTemplatedDesc') },
     accent: 'cyan',
     category: 'custom',
     fields: [
       {
         key: 'image',
-        label: '运行镜像',
+        get label() { return t('pipelineJob.fieldImageLabel') },
         kind: 'text',
         monospace: true,
         placeholder: 'node:20',
       },
       {
         key: 'params',
-        label: '参数表',
+        get label() { return t('pipelineJob.fieldParamsLabel') },
         kind: 'textarea',
         monospace: true,
         placeholder: 'dir=frontend\nbuildCmd=npm run build',
-        hint: '每行一条 key=value,完全自由;命令模板/产物路径里用 {{key}} 引用',
+        get hint() { return t('pipelineJob.fieldParamsHint') },
       },
       {
         key: 'commandTemplate',
-        label: '命令模板',
+        get label() { return t('pipelineJob.fieldCommandTemplateLabel') },
         kind: 'textarea',
         monospace: true,
         placeholder: 'cd {{dir}}\nnpm install\n{{buildCmd}}',
-        hint: '多行;{{参数}} 会被参数表的值替换,$ENV 仍交给容器内 shell',
+        get hint() { return t('pipelineJob.fieldCommandTemplateHint') },
       },
       {
         key: 'artifactPath',
-        label: '产物路径',
+        get label() { return t('pipelineJob.fieldArtifactPathLabel') },
         kind: 'textarea',
         monospace: true,
         placeholder: '{{dir}}/dist',
-        hint: '可选,每行一条,支持 {{参数}} 与通配;目录→dist、*.jar→jar、其它→archive',
+        get hint() { return t('pipelineJob.fieldTemplatedArtifactPathHint') },
       },
       {
         key: 'workDir',
-        label: '工作目录',
+        get label() { return t('pipelineJob.fieldWorkDirLabel') },
         kind: 'text',
         monospace: true,
         placeholder: '.',
-        hint: '可选,相对克隆工作区根',
+        get hint() { return t('pipelineJob.fieldTemplatedWorkDirHint') },
       },
       ...EXEC_OPTION_FIELDS,
       {
         key: 'cachePaths',
-        label: '依赖缓存目录',
+        get label() { return t('pipelineJob.fieldCachePathsLabel') },
         kind: 'textarea',
         monospace: true,
         placeholder: '{{dir}}/node_modules',
-        hint: '可选,每行一条,相对工作区根,支持 {{参数}}。配了才启用缓存:构建前恢复、构建后保存,跨运行复用依赖。缓存问题绝不影响构建结果',
+        get hint() { return t('pipelineJob.fieldTemplatedCachePathsHint') },
       },
       {
         key: 'cacheKey',
-        label: '缓存 Key(可选)',
+        get label() { return t('pipelineJob.fieldCacheKeyLabel') },
         kind: 'text',
         monospace: true,
-        placeholder: '留空=按分支+lockfile 自动',
-        hint: '可选缓存键模板,支持 {{参数}}。留空则自动按分支 + lockfile 内容推导(依赖变则自动冷构建)',
+        get placeholder() { return t('pipelineJob.fieldCacheKeyPlaceholder') },
+        get hint() { return t('pipelineJob.fieldTemplatedCacheKeyHint') },
       },
     ],
     defaultConfig: {
@@ -605,8 +606,8 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
 
   script: {
     type: 'script',
-    label: '自定义脚本',
-    description: '在隔离容器内执行任意命令',
+    get label() { return t('pipelineJob.typeScriptLabel') },
+    get description() { return t('pipelineJob.typeScriptDesc') },
     accent: 'primary',
     category: 'custom',
     fields: SCRIPT_FIELDS,
@@ -614,8 +615,8 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
 
   custom: {
     type: 'custom',
-    label: '自定义脚本',
-    description: '在隔离容器内执行任意命令',
+    get label() { return t('pipelineJob.typeScriptLabel') },
+    get description() { return t('pipelineJob.typeScriptDesc') },
     accent: 'primary',
     category: 'custom',
     fields: SCRIPT_FIELDS,
@@ -642,17 +643,19 @@ export const PICKABLE_TYPES: readonly string[] = [
 /** Dropdown options for the job type selector (friendly label + token). */
 export const JOB_TYPE_OPTIONS: SelectOption[] = PICKABLE_TYPES.map((type) => ({
   value: type,
-  label: `${JOB_TYPE_SPECS[type].label} · ${type}`,
+  get label() {
+    return `${JOB_TYPE_SPECS[type].label} · ${type}`
+  },
 }))
 
 /** Picker categories in display order. */
 export const JOB_CATEGORIES: ReadonlyArray<{ id: CategoryId; label: string }> = [
-  { id: 'source', label: '源' },
-  { id: 'build', label: '构建与制品' },
-  { id: 'deploy', label: '部署' },
-  { id: 'quality', label: '质量门禁' },
-  { id: 'notify', label: '通知' },
-  { id: 'custom', label: '自定义' },
+  { id: 'source', get label() { return t('pipelineJob.categorySource') } },
+  { id: 'build', get label() { return t('pipelineJob.categoryBuild') } },
+  { id: 'deploy', get label() { return t('pipelineJob.categoryDeploy') } },
+  { id: 'quality', get label() { return t('pipelineJob.categoryQuality') } },
+  { id: 'notify', get label() { return t('pipelineJob.categoryNotify') } },
+  { id: 'custom', get label() { return t('pipelineJob.categoryCustom') } },
 ]
 
 /** Pickable specs grouped by category, in display order; empty groups omitted. */

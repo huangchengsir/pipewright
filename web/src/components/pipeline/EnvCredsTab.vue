@@ -9,7 +9,8 @@
  * Secret env vars / registry credentials reference a vault credentialId — plaintext is
  * never entered, stored, or shown; only the server-computed mask appears.
  */
-import { ref, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type {
   Environment,
   BuildVar,
@@ -23,6 +24,8 @@ interface Props {
   disabled?: boolean
 }
 const props = defineProps<Props>()
+
+const { t } = useI18n()
 
 const emit = defineEmits<{
   update: [environments: Environment[]]
@@ -67,12 +70,12 @@ watch(
   },
 )
 
-const REGISTRY_TYPES: Array<{ key: RegistryType; label: string }> = [
+const REGISTRY_TYPES = computed<Array<{ key: RegistryType; label: string }>>(() => [
   { key: 'harbor', label: 'Harbor' },
-  { key: 'acr', label: '阿里云 ACR' },
+  { key: 'acr', label: t('pipelinePanels.envRegistryAcr') },
   { key: 'dockerhub', label: 'Docker Hub' },
-  { key: 'custom', label: '自定义' },
-]
+  { key: 'custom', label: t('pipelinePanels.envRegistryCustom') },
+])
 
 // ─── Compose + emit on change ───────────────────────────────────────────────────
 
@@ -188,16 +191,16 @@ function maskFor(row: VarRow): string {
         <span class="card-ic" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
         </span>
-        环境
-        <span class="card-sub">分支映射的落点 · 各环境有自己的服务器与变量</span>
-        <button type="button" class="head-add" :disabled="disabled" @click="addEnv">+ 添加环境</button>
+        {{ t('pipelinePanels.envEnvironments') }}
+        <span class="card-sub">{{ t('pipelinePanels.envCardSub') }}</span>
+        <button type="button" class="head-add" :disabled="disabled" @click="addEnv">{{ t('pipelinePanels.envAddEnv') }}</button>
       </header>
 
       <div v-if="!envs.length" class="env-empty">
-        <p>尚未定义任何环境。</p>
+        <p>{{ t('pipelinePanels.envEmpty') }}</p>
         <button type="button" class="addbtn" :disabled="disabled" @click="addEnv">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-          添加第一个环境
+          {{ t('pipelinePanels.envAddFirst') }}
         </button>
       </div>
 
@@ -207,14 +210,14 @@ function maskFor(row: VarRow): string {
             v-model="env.name"
             class="env-name"
             type="text"
-            placeholder="环境名(如 生产 / 测试)"
-            aria-label="环境名"
+            :placeholder="t('pipelinePanels.envNamePlaceholder')"
+            :aria-label="t('pipelinePanels.envNameAria')"
             :disabled="disabled"
           >
           <button
             type="button"
             class="env-del"
-            aria-label="删除环境"
+            :aria-label="t('pipelinePanels.envDelAria')"
             :disabled="disabled"
             @click="removeEnv(env._key)"
           >
@@ -226,54 +229,54 @@ function maskFor(row: VarRow): string {
           <!-- target servers -->
           <div class="eg">
             <div class="eg-l">
-              目标服务器
-              <span class="badge-soon">4-1 后启用存在性校验</span>
+              {{ t('pipelinePanels.envTargetServers') }}
+              <span class="badge-soon">{{ t('pipelinePanels.envValidateBadge') }}</span>
             </div>
             <input
               v-model="env.targetServersText"
               class="eg-input mono"
               type="text"
-              placeholder="srv-prod-1, srv-prod-2(逗号分隔)"
-              aria-label="目标服务器(逗号分隔)"
+              :placeholder="t('pipelinePanels.envTargetServersPlaceholder')"
+              :aria-label="t('pipelinePanels.envTargetServersAria')"
               :disabled="disabled"
             >
           </div>
 
           <!-- env vars -->
           <div class="eg">
-            <div class="eg-l">环境变量</div>
+            <div class="eg-l">{{ t('pipelinePanels.envEnvVars') }}</div>
             <div class="evar-list">
               <div v-for="row in env.envVars" :key="row._key" class="evar-row">
-                <input v-model="row.key" class="ev-k mono" type="text" placeholder="KEY" aria-label="变量键" :disabled="disabled">
+                <input v-model="row.key" class="ev-k mono" type="text" placeholder="KEY" :aria-label="t('pipelinePanels.envVarKeyAria')" :disabled="disabled">
                 <select
                   v-if="row.secret"
                   v-model="row.credentialId"
                   class="ev-sel"
-                  aria-label="保险库凭据"
+                  :aria-label="t('pipelinePanels.envVaultCredAria')"
                   :disabled="disabled"
                 >
-                  <option value="" disabled>选择保险库凭据…</option>
+                  <option value="" disabled>{{ t('pipelinePanels.envSelectVaultCred') }}</option>
                   <option v-for="c in credentials" :key="c.id" :value="c.id">{{ c.name }} · {{ c.maskedValue }}</option>
                 </select>
-                <input v-else v-model="row.value" class="ev-v mono" type="text" placeholder="明文值" aria-label="变量值" :disabled="disabled">
+                <input v-else v-model="row.value" class="ev-v mono" type="text" :placeholder="t('pipelinePanels.envVarValuePlaceholder')" :aria-label="t('pipelinePanels.envVarValueAria')" :disabled="disabled">
                 <button
                   type="button"
                   class="vfrom"
                   :class="row.secret ? 'vfrom--vault' : 'vfrom--plain'"
                   :disabled="disabled"
-                  :title="row.secret ? '点击切换为明文' : '点击切换为保险库引用'"
+                  :title="row.secret ? t('pipelinePanels.envSwitchToPlain') : t('pipelinePanels.envSwitchToVault')"
                   @click="toggleSecret(row)"
                 >
-                  <template v-if="row.secret">保险库 <span class="mask mono">{{ maskFor(row) }}</span></template>
-                  <template v-else>明文</template>
+                  <template v-if="row.secret">{{ t('pipelinePanels.envVault') }} <span class="mask mono">{{ maskFor(row) }}</span></template>
+                  <template v-else>{{ t('pipelinePanels.envPlain') }}</template>
                 </button>
-                <button type="button" class="ev-del" aria-label="删除变量" :disabled="disabled" @click="removeVar(env, row._key)">
+                <button type="button" class="ev-del" :aria-label="t('pipelinePanels.envDelVarAria')" :disabled="disabled" @click="removeVar(env, row._key)">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
                 </button>
               </div>
               <div class="addrow">
-                <button type="button" class="addbtn addbtn--sm" :disabled="disabled" @click="addVar(env, false)">+ 明文变量</button>
-                <button type="button" class="addbtn addbtn--sm addbtn--vault" :disabled="disabled" @click="addVar(env, true)">+ 保险库 secret</button>
+                <button type="button" class="addbtn addbtn--sm" :disabled="disabled" @click="addVar(env, false)">{{ t('pipelinePanels.envAddPlainVar') }}</button>
+                <button type="button" class="addbtn addbtn--sm addbtn--vault" :disabled="disabled" @click="addVar(env, true)">{{ t('pipelinePanels.envAddVaultSecret') }}</button>
               </div>
             </div>
           </div>
@@ -281,29 +284,29 @@ function maskFor(row: VarRow): string {
           <!-- image registry -->
           <div class="eg">
             <div class="eg-l">
-              镜像仓库
-              <span class="eg-hint">FR-7 · 推送到外部 registry</span>
+              {{ t('pipelinePanels.envImageRegistry') }}
+              <span class="eg-hint">{{ t('pipelinePanels.envRegistryHint') }}</span>
             </div>
             <div class="reg-grid">
-              <select v-model="env.registryType" class="ev-sel" aria-label="镜像仓库类型" :disabled="disabled">
-                <option value="">未绑定</option>
+              <select v-model="env.registryType" class="ev-sel" :aria-label="t('pipelinePanels.envRegistryTypeAria')" :disabled="disabled">
+                <option value="">{{ t('pipelinePanels.envRegistryUnbound') }}</option>
                 <option v-for="r in REGISTRY_TYPES" :key="r.key" :value="r.key">{{ r.label }}</option>
               </select>
               <input
                 v-model="env.registryUrl"
                 class="ev-v mono"
                 type="text"
-                placeholder="harbor.acme.com"
-                aria-label="镜像仓库地址"
+                :placeholder="t('pipelinePanels.envRegistryUrlPlaceholder')"
+                :aria-label="t('pipelinePanels.envRegistryUrlAria')"
                 :disabled="disabled || env.registryType === ''"
               >
               <select
                 v-model="env.registryCredentialId"
                 class="ev-sel"
-                aria-label="镜像仓库凭据"
+                :aria-label="t('pipelinePanels.envRegistryCredAria')"
                 :disabled="disabled || env.registryType === ''"
               >
-                <option value="">凭据(可选)</option>
+                <option value="">{{ t('pipelinePanels.envRegistryCredOptional') }}</option>
                 <option v-for="c in credentials" :key="c.id" :value="c.id">{{ c.name }} · {{ c.maskedValue }}</option>
               </select>
             </div>
@@ -315,7 +318,7 @@ function maskFor(row: VarRow): string {
     <!-- ─── Security note ───────────────────────────────────────────────────── -->
     <p class="sec-note">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
-      凭据在 <b>设置 · 凭据保险库</b> 统一管理,这里只做引用绑定。<b>明文绝不出现在日志或界面</b>(AC-SEC)。
+      {{ t('pipelinePanels.envSecNote') }}
     </p>
   </div>
 </template>

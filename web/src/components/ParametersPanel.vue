@@ -6,11 +6,12 @@
  * (key/label/type/default/options/required);手动触发弹窗据此渲染类型化控件并校验。
  * 无定义 = 触发回退自由 KV(向后兼容)。嵌于 TriggersPanel(ConcurrencyPanel 之后)。
  */
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   getParameters,
   saveParameters,
-  PARAM_TYPE_OPTIONS,
+  paramTypeOptions,
   type ParamDef,
   type ParamType,
 } from '../api/parameters'
@@ -19,6 +20,14 @@ import { HttpError } from '../api/http'
 const props = defineProps<{
   projectId: string
 }>()
+
+const { t, locale } = useI18n()
+
+// 经组件内 locale 触发重算 → 语言切换时下拉 label 实时更新。
+const typeOptions = computed(() => {
+  void locale.value
+  return paramTypeOptions()
+})
 
 interface Row extends ParamDef {
   rid: number
@@ -55,7 +64,7 @@ async function load(): Promise<void> {
     loadState.value = 'idle'
   } catch (err) {
     loadState.value = 'error'
-    loadError.value = err instanceof HttpError ? err.message : '加载参数定义失败'
+    loadError.value = err instanceof HttpError ? err.message : t('projectPanels.parameters.errLoad')
   }
 }
 
@@ -93,13 +102,13 @@ async function handleSave(): Promise<void> {
   try {
     rows.value = (await saveParameters(props.projectId, defs)).map(toRow)
     saveSuccess.value = true
-    saveBanner.value = '参数定义已保存'
+    saveBanner.value = t('projectPanels.parameters.savedOk')
   } catch (err) {
     saveSuccess.value = false
     saveBanner.value =
       err instanceof HttpError
-        ? (err.apiError?.message ?? `保存失败(${err.status})`)
-        : '保存失败,请重试'
+        ? (err.apiError?.message ?? t('projectPanels.parameters.errSaveFailed', { status: err.status }))
+        : t('projectPanels.parameters.errSaveRetry')
   } finally {
     saveSubmitting.value = false
   }
@@ -117,75 +126,75 @@ watch(() => props.projectId, load)
           <path d="M4 7h16M4 12h16M4 17h10" />
         </svg>
       </span>
-      <h2 id="param-heading" class="card-title">运行参数</h2>
-      <span class="card-sub">手动触发时按类型填写的参数;无定义则触发用自由键值对</span>
+      <h2 id="param-heading" class="card-title">{{ t('projectPanels.parameters.title') }}</h2>
+      <span class="card-sub">{{ t('projectPanels.parameters.sub') }}</span>
     </div>
 
     <div class="card-body card-body--pad">
-      <p v-if="loadState === 'loading'" class="muted">加载中…</p>
+      <p v-if="loadState === 'loading'" class="muted">{{ t('projectPanels.parameters.loading') }}</p>
       <p v-else-if="loadState === 'error'" class="err" role="alert">{{ loadError }}</p>
 
       <template v-else>
         <p v-if="rows.length === 0" class="muted empty">
-          还没有定义参数。点下方「+ 添加参数」后,手动触发弹窗会渲染对应的类型化控件(枚举下拉 / 布尔开关 / 数字框)。
+          {{ t('projectPanels.parameters.empty') }}
         </p>
 
         <div v-for="row in rows" :key="row.rid" class="param-def">
-          <button class="def-del" aria-label="移除参数" @click="removeRow(row.rid)">✕</button>
+          <button class="def-del" :aria-label="t('projectPanels.parameters.removeParamAria')" @click="removeRow(row.rid)">✕</button>
           <div class="def-grid">
             <label class="def-fld">
-              <span class="def-lbl">键(KEY)</span>
-              <input v-model="row.key" class="def-input is-mono" placeholder="env" autocomplete="off" @input="clearBanner" />
+              <span class="def-lbl">{{ t('projectPanels.parameters.keyLabel') }}</span>
+              <input v-model="row.key" class="def-input is-mono" :placeholder="t('projectPanels.parameters.keyPlaceholder')" autocomplete="off" @input="clearBanner" />
             </label>
             <label class="def-fld">
-              <span class="def-lbl">显示标签</span>
-              <input v-model="row.label" class="def-input" placeholder="部署环境" autocomplete="off" @input="clearBanner" />
+              <span class="def-lbl">{{ t('projectPanels.parameters.labelLabel') }}</span>
+              <input v-model="row.label" class="def-input" :placeholder="t('projectPanels.parameters.labelPlaceholder')" autocomplete="off" @input="clearBanner" />
             </label>
             <label class="def-fld def-fld--type">
-              <span class="def-lbl">类型</span>
+              <span class="def-lbl">{{ t('projectPanels.parameters.typeLabel') }}</span>
               <select v-model="row.type" class="def-input" @change="onTypeChange(row)">
-                <option v-for="opt in PARAM_TYPE_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                <option v-for="opt in typeOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
               </select>
             </label>
           </div>
           <div class="def-grid">
             <label v-if="row.type === 'boolean'" class="def-fld">
-              <span class="def-lbl">默认值</span>
+              <span class="def-lbl">{{ t('projectPanels.parameters.defaultLabel') }}</span>
               <select v-model="row.default" class="def-input" @change="clearBanner">
                 <option value="false">false</option>
                 <option value="true">true</option>
               </select>
             </label>
             <label v-else class="def-fld">
-              <span class="def-lbl">默认值</span>
+              <span class="def-lbl">{{ t('projectPanels.parameters.defaultLabel') }}</span>
               <input
                 v-model="row.default"
                 class="def-input"
                 :type="row.type === 'number' ? 'number' : 'text'"
-                placeholder="prod"
+                :placeholder="t('projectPanels.parameters.defaultPlaceholder')"
                 autocomplete="off"
                 @input="clearBanner"
               />
             </label>
             <label v-if="row.type === 'choice'" class="def-fld def-fld--grow">
-              <span class="def-lbl">选项(逗号分隔)</span>
-              <input v-model="row.optionsText" class="def-input is-mono" placeholder="prod, staging, dev" autocomplete="off" @input="clearBanner" />
+              <span class="def-lbl">{{ t('projectPanels.parameters.optionsLabel') }}</span>
+              <input v-model="row.optionsText" class="def-input is-mono" :placeholder="t('projectPanels.parameters.optionsPlaceholder')" autocomplete="off" @input="clearBanner" />
             </label>
             <label class="def-req">
               <input v-model="row.required" type="checkbox" @change="clearBanner" />
-              <span>必填</span>
+              <span>{{ t('projectPanels.parameters.required') }}</span>
             </label>
           </div>
         </div>
 
-        <button class="link-add" @click="addRow">+ 添加参数</button>
+        <button class="link-add" @click="addRow">{{ t('projectPanels.parameters.addParam') }}</button>
 
         <p v-if="saveBanner" class="banner" :class="saveSuccess ? 'banner--ok' : 'banner--err'" role="status">{{ saveBanner }}</p>
 
         <div class="save-row">
           <button class="btn-primary" :disabled="saveSubmitting" :aria-busy="saveSubmitting" @click="handleSave">
             <span v-if="saveSubmitting" class="spinner" aria-hidden="true" />
-            {{ saveSubmitting ? '保存中…' : '保存参数定义' }}
+            {{ saveSubmitting ? t('projectPanels.parameters.saving') : t('projectPanels.parameters.save') }}
           </button>
         </div>
       </template>

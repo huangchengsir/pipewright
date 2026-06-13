@@ -11,12 +11,15 @@
  * and the pipeline "触发设置" tab.
  */
 import { ref, computed, onMounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { getCron, saveCron, type CronConfig } from '../api/cron'
 import { HttpError } from '../api/http'
 
 const props = defineProps<{
   projectId: string
 }>()
+
+const { t } = useI18n()
 
 type LoadState = 'idle' | 'loading' | 'error'
 
@@ -33,13 +36,13 @@ const saveBanner = ref('')
 const saveSuccess = ref(false)
 
 // ─── Quick-pick presets (5-field 分 时 日 月 周) ───────────────────────────────
-const presets: ReadonlyArray<{ label: string; expr: string }> = [
-  { label: '每 5 分钟', expr: '*/5 * * * *' },
-  { label: '每小时', expr: '0 * * * *' },
-  { label: '每天 02:00', expr: '0 2 * * *' },
-  { label: '每周一 09:00', expr: '0 9 * * 1' },
-  { label: '每月 1 号 00:00', expr: '0 0 1 * *' },
-]
+const presets = computed<ReadonlyArray<{ label: string; expr: string }>>(() => [
+  { label: t('projectPanels.cron.presetEvery5Min'), expr: '*/5 * * * *' },
+  { label: t('projectPanels.cron.presetHourly'), expr: '0 * * * *' },
+  { label: t('projectPanels.cron.presetDaily0200'), expr: '0 2 * * *' },
+  { label: t('projectPanels.cron.presetWeekdayMon0900'), expr: '0 9 * * 1' },
+  { label: t('projectPanels.cron.presetMonthly1st'), expr: '0 0 1 * *' },
+])
 
 /** Format an RFC3339 nextRun into a local, readable string (empty stays empty). */
 const nextRunLabel = computed<string>(() => {
@@ -64,7 +67,7 @@ async function load(): Promise<void> {
     loadState.value = 'idle'
   } catch (err) {
     loadState.value = 'error'
-    loadError.value = err instanceof HttpError ? err.message : '加载定时配置失败'
+    loadError.value = err instanceof HttpError ? err.message : t('projectPanels.cron.errLoad')
   }
 }
 
@@ -80,7 +83,7 @@ async function handleSave(): Promise<void> {
   saveSuccess.value = false
   // Client guard mirrors backend: enabling requires a non-empty expression.
   if (enabled.value && !expression.value.trim()) {
-    saveBanner.value = '启用定时触发须填写 cron 表达式'
+    saveBanner.value = t('projectPanels.cron.errEnableNeedsExpr')
     return
   }
   saveSubmitting.value = true
@@ -93,16 +96,16 @@ async function handleSave(): Promise<void> {
       }),
     )
     saveSuccess.value = true
-    saveBanner.value = '定时配置已保存'
+    saveBanner.value = t('projectPanels.cron.savedOk')
   } catch (err) {
     saveSuccess.value = false
     if (err instanceof HttpError) {
       saveBanner.value =
         err.apiError?.code === 'invalid_cron'
-          ? 'cron 表达式非法(须为 5 字段:分 时 日 月 周)'
+          ? t('projectPanels.cron.errInvalidCron')
           : err.message
     } else {
-      saveBanner.value = '保存失败,请重试'
+      saveBanner.value = t('projectPanels.cron.errSaveRetry')
     }
   } finally {
     saveSubmitting.value = false
@@ -121,25 +124,25 @@ watch(() => props.projectId, load)
           <circle cx="12" cy="12" r="9" /><polyline points="12 7 12 12 15.5 14" />
         </svg>
       </span>
-      <h2 id="cron-heading" class="card-title">定时触发</h2>
-      <span class="card-sub">按 cron 表达式周期性自动触发流水线</span>
-      <label class="cron-switch" :title="enabled ? '已启用' : '已停用'">
+      <h2 id="cron-heading" class="card-title">{{ t('projectPanels.cron.title') }}</h2>
+      <span class="card-sub">{{ t('projectPanels.cron.sub') }}</span>
+      <label class="cron-switch" :title="enabled ? t('projectPanels.cron.enabledTitle') : t('projectPanels.cron.disabledTitle')">
         <input type="checkbox" v-model="enabled" :disabled="loadState !== 'idle'" />
         <span class="cron-switch-track" aria-hidden="true"><span class="cron-switch-thumb" /></span>
-        <span class="cron-switch-label">{{ enabled ? '启用' : '停用' }}</span>
+        <span class="cron-switch-label">{{ enabled ? t('projectPanels.cron.enable') : t('projectPanels.cron.disable') }}</span>
       </label>
     </div>
 
     <div class="card-body card-body--pad">
-      <p v-if="loadState === 'loading'" class="cron-loading">加载中…</p>
+      <p v-if="loadState === 'loading'" class="cron-loading">{{ t('projectPanels.cron.loading') }}</p>
       <p v-else-if="loadState === 'error'" class="cron-error" role="alert">{{ loadError }}</p>
 
       <template v-else>
         <!-- Expression -->
         <div class="cron-field">
           <label class="cron-label" for="cron-expr">
-            cron 表达式
-            <span class="cron-hint-inline">分 时 日 月 周</span>
+            {{ t('projectPanels.cron.exprLabel') }}
+            <span class="cron-hint-inline">{{ t('projectPanels.cron.exprFields') }}</span>
           </label>
           <input
             id="cron-expr"
@@ -168,8 +171,8 @@ watch(() => props.projectId, load)
         <!-- Branch -->
         <div class="cron-field">
           <label class="cron-label" for="cron-branch">
-            分支
-            <span class="cron-hint-inline">留空用项目默认分支</span>
+            {{ t('projectPanels.cron.branchLabel') }}
+            <span class="cron-hint-inline">{{ t('projectPanels.cron.branchHint') }}</span>
           </label>
           <input
             id="cron-branch"
@@ -187,9 +190,9 @@ watch(() => props.projectId, load)
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
             <circle cx="12" cy="12" r="9" /><polyline points="12 7 12 12 15.5 14" />
           </svg>
-          <template v-if="nextRunLabel">下次触发:<strong>{{ nextRunLabel }}</strong></template>
-          <template v-else-if="enabled">保存后显示下次触发时间</template>
-          <template v-else>定时触发已停用</template>
+          <template v-if="nextRunLabel">{{ t('projectPanels.cron.nextRun') }}<strong>{{ nextRunLabel }}</strong></template>
+          <template v-else-if="enabled">{{ t('projectPanels.cron.nextRunAfterSave') }}</template>
+          <template v-else>{{ t('projectPanels.cron.disabledNext') }}</template>
         </p>
 
         <!-- Save banner -->
@@ -203,7 +206,7 @@ watch(() => props.projectId, load)
         <div class="cron-save">
           <button class="btn-primary" :disabled="saveSubmitting" :aria-busy="saveSubmitting" @click="handleSave">
             <span v-if="saveSubmitting" class="spinner" aria-hidden="true" />
-            {{ saveSubmitting ? '保存中…' : '保存定时配置' }}
+            {{ saveSubmitting ? t('projectPanels.cron.saving') : t('projectPanels.cron.save') }}
           </button>
         </div>
       </template>

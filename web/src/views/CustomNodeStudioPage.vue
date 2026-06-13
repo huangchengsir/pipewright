@@ -10,6 +10,7 @@
  */
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useMessage } from 'naive-ui'
 import { HttpError } from '../api/http'
 import {
@@ -34,6 +35,7 @@ import {
 
 const route = useRoute()
 const router = useRouter()
+const { t } = useI18n()
 const message = useMessage()
 
 // ─── 表单态 ─────────────────────────────────────────────────────────────────────
@@ -44,7 +46,7 @@ const description = ref('')
 const image = ref('')
 const params = ref<PromotedParam[]>([])
 const steps = ref<StudioStep[]>([])
-const meta = ref<NodeMeta>({ icon: '🔧', category: '自定义', summary: '' })
+const meta = ref<NodeMeta>({ icon: '🔧', category: t('studio.defaultCategory'), summary: '' })
 
 const tab = ref<'params' | 'meta'>('params')
 const loading = ref(false)
@@ -52,19 +54,19 @@ const saving = ref(false)
 const banner = ref('')
 
 // 含字面 {{ }} 的示例文案放常量(避免模板里 {{ '{{x}}' }} 触发 vue 解析)。
-const ex = {
-  imgPlaceholder: 'node:20 或 node:{{ver}}',
-  summaryPlaceholder: '用 {{node}} 镜像构建 {{dir}},跑测试并产出 dist',
+const ex = computed(() => ({
+  imgPlaceholder: t('studio.imgPlaceholder'),
+  summaryPlaceholder: t('studio.summaryPlaceholder'),
   braceL: '{{',
   braceR: '}}',
-}
+}))
 
-const PARAM_TYPE_OPTIONS: ReadonlyArray<{ value: PromotedParamType; label: string }> = [
-  { value: 'text', label: '文本' },
-  { value: 'select', label: '枚举' },
-  { value: 'number', label: '数字' },
-  { value: 'toggle', label: '布尔' },
-]
+const PARAM_TYPE_OPTIONS = computed<ReadonlyArray<{ value: PromotedParamType; label: string }>>(() => [
+  { value: 'text', label: t('studio.paramTypeText') },
+  { value: 'select', label: t('studio.paramTypeSelect') },
+  { value: 'number', label: t('studio.paramTypeNumber') },
+  { value: 'toggle', label: t('studio.paramTypeToggle') },
+])
 
 // ─── 步骤字段布局(按种类;每行是并排字段组)──────────────────────────────────────
 interface FieldDef {
@@ -73,24 +75,24 @@ interface FieldDef {
   placeholder?: string
   multiline?: boolean
 }
-const STEP_FIELDS: Record<StudioStepKind, FieldDef[][]> = {
-  command: [[{ field: 'command', label: '命令(可多行)', multiline: true }]],
-  install: [[{ field: 'command', label: '安装命令', placeholder: 'npm ci / pip install -r ...' }]],
-  echo: [[{ field: 'command', label: '回显文本', placeholder: '构建开始…' }]],
-  env: [[{ field: 'envKey', label: '变量名' }, { field: 'envValue', label: '值' }]],
-  workDir: [[{ field: 'dir', label: '目标目录' }]],
-  path: [[{ field: 'dir', label: '追加到 PATH 的目录', placeholder: 'node_modules/.bin' }]],
-  artifact: [[{ field: 'artifact', label: '产物路径 (glob)' }]],
-  download: [[{ field: 'url', label: 'URL', placeholder: 'https://…' }, { field: 'out', label: '另存为' }]],
-  extract: [[{ field: 'file', label: '归档文件', placeholder: 'x.tar.gz' }, { field: 'dir', label: '解到目录' }]],
-  condition: [[{ field: 'condition', label: 'shell 条件(不成立则跳过后续,set -e 安全)', placeholder: 'test -f package.json' }]],
-  retry: [[{ field: 'command', label: '命令', placeholder: 'flaky-cmd' }], [{ field: 'count', label: '次数' }, { field: 'delay', label: '间隔秒' }]],
-  timeout: [[{ field: 'command', label: '命令' }, { field: 'secs', label: '超时秒' }]],
-  sleep: [[{ field: 'secs', label: '等待秒数' }]],
-  healthcheck: [[{ field: 'url', label: '探测 URL', placeholder: 'http://127.0.0.1:8080/health' }, { field: 'delay', label: '间隔秒' }]],
-  note: [[{ field: 'text', label: '备注(编译成 # 注释,不执行)' }]],
-  test: [[{ field: 'command', label: '测试命令' }], [{ field: 'reportPath', label: '报告路径 (JUnit)' }, { field: 'minCov', label: '覆盖率门禁 %' }]],
-}
+const STEP_FIELDS = computed<Record<StudioStepKind, FieldDef[][]>>(() => ({
+  command: [[{ field: 'command', label: t('studio.fieldCommandMultiline'), multiline: true }]],
+  install: [[{ field: 'command', label: t('studio.fieldInstallCommand'), placeholder: 'npm ci / pip install -r ...' }]],
+  echo: [[{ field: 'command', label: t('studio.fieldEchoText'), placeholder: t('studio.phEchoText') }]],
+  env: [[{ field: 'envKey', label: t('studio.fieldEnvKey') }, { field: 'envValue', label: t('studio.fieldEnvValue') }]],
+  workDir: [[{ field: 'dir', label: t('studio.fieldTargetDir') }]],
+  path: [[{ field: 'dir', label: t('studio.fieldPathDir'), placeholder: 'node_modules/.bin' }]],
+  artifact: [[{ field: 'artifact', label: t('studio.fieldArtifactPath') }]],
+  download: [[{ field: 'url', label: 'URL', placeholder: 'https://…' }, { field: 'out', label: t('studio.fieldSaveAs') }]],
+  extract: [[{ field: 'file', label: t('studio.fieldArchiveFile'), placeholder: 'x.tar.gz' }, { field: 'dir', label: t('studio.fieldExtractTo') }]],
+  condition: [[{ field: 'condition', label: t('studio.fieldCondition'), placeholder: 'test -f package.json' }]],
+  retry: [[{ field: 'command', label: t('studio.fieldCommand'), placeholder: 'flaky-cmd' }], [{ field: 'count', label: t('studio.fieldRetryCount') }, { field: 'delay', label: t('studio.fieldDelaySecs') }]],
+  timeout: [[{ field: 'command', label: t('studio.fieldCommand') }, { field: 'secs', label: t('studio.fieldTimeoutSecs') }]],
+  sleep: [[{ field: 'secs', label: t('studio.fieldSleepSecs') }]],
+  healthcheck: [[{ field: 'url', label: t('studio.fieldProbeUrl'), placeholder: 'http://127.0.0.1:8080/health' }, { field: 'delay', label: t('studio.fieldDelaySecs') }]],
+  note: [[{ field: 'text', label: t('studio.fieldNote') }]],
+  test: [[{ field: 'command', label: t('studio.fieldTestCommand') }], [{ field: 'reportPath', label: t('studio.fieldReportPath') }, { field: 'minCov', label: t('studio.fieldMinCoverage') }]],
+}))
 
 // ─── hydrate ───────────────────────────────────────────────────────────────────
 async function hydrate(): Promise<void> {
@@ -117,7 +119,7 @@ async function hydrate(): Promise<void> {
     meta.value = { ...m.meta }
     if (m.meta.summary === '' && node.summary) meta.value.summary = node.summary
   } catch (err: unknown) {
-    banner.value = err instanceof HttpError ? err.apiError?.message ?? `加载失败(${err.status})` : '加载失败'
+    banner.value = err instanceof HttpError ? err.apiError?.message ?? t('studio.loadFailedCode', { code: err.status }) : t('studio.loadFailed')
   } finally {
     loading.value = false
   }
@@ -184,7 +186,7 @@ function onComposeDrop(): void {
 
 // ─── 提升参数 ─────────────────────────────────────────────────────────────────────
 function addParam(): void {
-  params.value = [...params.value, { key: `param${params.value.length + 1}`, label: '新参数', type: 'text', default: '' }]
+  params.value = [...params.value, { key: `param${params.value.length + 1}`, label: t('studio.newParamLabel'), type: 'text', default: '' }]
 }
 function removeParam(idx: number): void {
   params.value = params.value.filter((_, i) => i !== idx)
@@ -213,7 +215,7 @@ const undeclaredRefs = computed<string[]>(() => {
   for (const m of text.matchAll(/\{\{\s*([a-zA-Z_]\w*)\s*\}\}/g)) if (!declared.has(m[1])) refs.add(m[1])
   return [...refs]
 })
-const undeclaredRefsText = computed(() => undeclaredRefs.value.map((r) => `${ex.braceL}${r}${ex.braceR}`).join(' '))
+const undeclaredRefsText = computed(() => undeclaredRefs.value.map((r) => `${ex.value.braceL}${r}${ex.value.braceR}`).join(' '))
 
 function esc(value: string): string {
   return value.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c] ?? c)
@@ -244,11 +246,11 @@ async function onSave(): Promise<void> {
   banner.value = ''
   const trimmed = name.value.trim()
   if (!trimmed) {
-    banner.value = '节点名称不能为空'
+    banner.value = t('studio.errNameRequired')
     return
   }
   if (!compiledSteps.value.commandTemplate.trim()) {
-    banner.value = '至少要有一个会产生命令的步骤'
+    banner.value = t('studio.errNeedCommandStep')
     return
   }
   saving.value = true
@@ -262,14 +264,14 @@ async function onSave(): Promise<void> {
     }
     if (editId.value) {
       await updateCustomNode(editId.value, input)
-      message.success(`已更新自定义节点「${trimmed}」`)
+      message.success(t('studio.updatedToast', { name: trimmed }))
     } else {
       await createCustomNode(input)
-      message.success(`已创建自定义节点「${trimmed}」`)
+      message.success(t('studio.createdToast', { name: trimmed }))
     }
     backToLibrary()
   } catch (err: unknown) {
-    banner.value = err instanceof HttpError ? err.apiError?.message ?? `保存失败(${err.status})` : '保存失败'
+    banner.value = err instanceof HttpError ? err.apiError?.message ?? t('studio.saveFailedCode', { code: err.status }) : t('studio.saveFailed')
   } finally {
     saving.value = false
   }
@@ -282,32 +284,32 @@ async function onSave(): Promise<void> {
       <div class="brand">
         <div class="wrench">🔧</div>
         <div>
-          <h1>Pipewright · 复用库</h1>
-          <p>自定义节点工作室 (Custom Node Studio)</p>
+          <h1>{{ t('studio.brandTitle') }}</h1>
+          <p>{{ t('studio.brandSubtitle') }}</p>
         </div>
       </div>
       <div class="grow" />
-      <input v-model="name" class="node-name" placeholder="给节点起个名字…" aria-label="节点名称" autocomplete="off" />
-      <button class="btn" :disabled="saving" @click="backToLibrary">取消</button>
-      <button class="btn primary" :disabled="saving" @click="onSave">{{ saving ? '保存中…' : '保存到复用库' }}</button>
+      <input v-model="name" class="node-name" :placeholder="t('studio.namePlaceholder')" :aria-label="t('studio.nameAria')" autocomplete="off" />
+      <button class="btn" :disabled="saving" @click="backToLibrary">{{ t('studio.cancel') }}</button>
+      <button class="btn primary" :disabled="saving" @click="onSave">{{ saving ? t('studio.saving') : t('studio.saveToLibrary') }}</button>
     </header>
 
     <div class="hero">
-      <div class="eyebrow">低代码 · 一处定义,处处复用</div>
-      <h2>把一段可参数化的步骤,<em>拖拽</em>组合成可复用节点</h2>
+      <div class="eyebrow">{{ t('studio.heroEyebrow') }}</div>
+      <h2>{{ t('studio.heroTitlePre') }}<em>{{ t('studio.heroTitleEm') }}</em>{{ t('studio.heroTitlePost') }}</h2>
       <p>
-        左侧积木库按分组拖进中间画布、拖动卡片排序;右侧把变量「提升」成节点表面参数。底部实时编译成已有的
-        <code>templated</code> 节点 —— 后端零改,实例只配提升的那几项。
+        {{ t('studio.heroDescPre') }}
+        <code>templated</code> {{ t('studio.heroDescPost') }}
       </p>
     </div>
 
     <div v-if="banner" class="banner">{{ banner }}</div>
-    <div v-if="loading" class="banner banner--info">载入中…</div>
+    <div v-if="loading" class="banner banner--info">{{ t('studio.loadingBanner') }}</div>
 
     <div class="studio">
       <!-- 左:积木库 -->
       <aside class="panel palette">
-        <p class="hint">从下面把积木<strong>拖进</strong>中间画布(或点一下追加到末尾)。</p>
+        <p class="hint">{{ t('studio.paletteHintPre') }}<strong>{{ t('studio.paletteHintStrong') }}</strong>{{ t('studio.paletteHintPost') }}</p>
         <template v-for="g in STEP_CATALOG" :key="g.group">
           <div class="pal-group">{{ g.group }}</div>
           <button
@@ -329,14 +331,14 @@ async function onSave(): Promise<void> {
 
       <!-- 中:步骤画布 -->
       <section class="panel">
-        <h3 class="panel-title">步骤组合 · 拖动卡片可重排</h3>
+        <h3 class="panel-title">{{ t('studio.composeTitle') }}</h3>
         <div
           class="compose"
           :class="{ 'drop-active': drag && steps.length === 0 }"
           @dragover.prevent
           @drop.prevent="onComposeDrop"
         >
-          <div v-if="steps.length === 0" class="empty">把左侧积木拖到这里开始 →</div>
+          <div v-if="steps.length === 0" class="empty">{{ t('studio.composeEmpty') }}</div>
           <template v-for="(s, i) in steps" :key="s.id">
             <div
               class="dropline"
@@ -354,9 +356,9 @@ async function onSave(): Promise<void> {
                 <span class="step-kind">{{ catalogItem(s.kind).label }}</span>
                 <div class="grow" />
                 <div class="step-tools">
-                  <button class="icon-btn" :disabled="i === 0" title="上移" @click="moveStep(s.id, -1)">↑</button>
-                  <button class="icon-btn" :disabled="i === steps.length - 1" title="下移" @click="moveStep(s.id, 1)">↓</button>
-                  <button class="icon-btn" title="删除" @click="removeStep(s.id)">✕</button>
+                  <button class="icon-btn" :disabled="i === 0" :title="t('studio.moveUp')" @click="moveStep(s.id, -1)">↑</button>
+                  <button class="icon-btn" :disabled="i === steps.length - 1" :title="t('studio.moveDown')" @click="moveStep(s.id, 1)">↓</button>
+                  <button class="icon-btn" :title="t('studio.deleteStep')" @click="removeStep(s.id)">✕</button>
                 </div>
               </header>
               <div class="step-body">
@@ -395,15 +397,15 @@ async function onSave(): Promise<void> {
       <!-- 右:提升参数 / 节点表面 -->
       <aside class="panel">
         <div class="tabs">
-          <button class="tab" :class="{ active: tab === 'params' }" @click="tab = 'params'">提升参数</button>
-          <button class="tab" :class="{ active: tab === 'meta' }" @click="tab = 'meta'">节点表面</button>
+          <button class="tab" :class="{ active: tab === 'params' }" @click="tab = 'params'">{{ t('studio.tabParams') }}</button>
+          <button class="tab" :class="{ active: tab === 'meta' }" @click="tab = 'meta'">{{ t('studio.tabMeta') }}</button>
         </div>
 
         <div v-if="tab === 'params'" class="rail-body">
-          <p class="col-hint">步骤里以 <span class="tok">{{ ex.braceL }}key{{ ex.braceR }}</span> 引用;实例复用时只配这几项。</p>
-          <div v-if="params.length === 0" class="param-empty">还没有提升参数。整段脚本写死也行,提升后才可在实例里改。</div>
+          <p class="col-hint">{{ t('studio.paramsHintPre') }} <span class="tok">{{ ex.braceL }}key{{ ex.braceR }}</span> {{ t('studio.paramsHintPost') }}</p>
+          <div v-if="params.length === 0" class="param-empty">{{ t('studio.paramsEmpty') }}</div>
           <div v-for="(p, idx) in params" :key="idx" class="param-row">
-            <button class="param-del" aria-label="移除参数" @click="removeParam(idx)">✕</button>
+            <button class="param-del" :aria-label="t('studio.removeParamAria')" @click="removeParam(idx)">✕</button>
             <div class="pk">{{ ex.braceL }}{{ p.key }}{{ ex.braceR }}</div>
             <input
               :value="p.key"
@@ -414,14 +416,14 @@ async function onSave(): Promise<void> {
             <input
               :value="p.label"
               class="param-input"
-              placeholder="显示标签"
+              :placeholder="t('studio.phDisplayLabel')"
               @input="patchParam(idx, { label: ($event.target as HTMLInputElement).value })"
             />
             <div class="param-two">
               <input
                 :value="p.default"
                 class="param-input is-mono"
-                placeholder="默认值"
+                :placeholder="t('studio.phDefaultValue')"
                 @input="patchParam(idx, { default: ($event.target as HTMLInputElement).value })"
               />
               <select
@@ -436,34 +438,34 @@ async function onSave(): Promise<void> {
               v-if="p.type === 'select'"
               :value="optionsText(p)"
               class="param-input is-mono"
-              placeholder="逗号分隔选项,如 20, 18, 22"
+              :placeholder="t('studio.phOptions')"
               @input="setOptions(idx, ($event.target as HTMLInputElement).value)"
             />
           </div>
-          <button class="add-link" @click="addParam">＋ 提升一个参数</button>
+          <button class="add-link" @click="addParam">{{ t('studio.addParam') }}</button>
         </div>
 
         <div v-else class="rail-body">
           <div class="meta-field">
-            <label class="field-label">运行镜像(可含 {{ ex.braceL }}param{{ ex.braceR }})</label>
+            <label class="field-label">{{ t('studio.metaImagePre') }}{{ ex.braceL }}param{{ ex.braceR }}{{ t('studio.metaImagePost') }}</label>
             <input v-model="image" class="meta-input is-mono" :placeholder="ex.imgPlaceholder" autocomplete="off" />
           </div>
           <div class="meta-field meta-icon-cat">
             <div>
-              <label class="field-label">图标</label>
+              <label class="field-label">{{ t('studio.metaIcon') }}</label>
               <input v-model="meta.icon" class="meta-input meta-icon" />
             </div>
             <div>
-              <label class="field-label">分类</label>
-              <input v-model="meta.category" class="meta-input" placeholder="构建与制品" />
+              <label class="field-label">{{ t('studio.metaCategory') }}</label>
+              <input v-model="meta.category" class="meta-input" :placeholder="t('studio.phCategory')" />
             </div>
           </div>
           <div class="meta-field">
-            <label class="field-label">一句话说明(可含 {{ ex.braceL }}param{{ ex.braceR }})</label>
+            <label class="field-label">{{ t('studio.metaSummaryPre') }}{{ ex.braceL }}param{{ ex.braceR }}{{ t('studio.metaSummaryPost') }}</label>
             <textarea v-model="meta.summary" rows="3" class="meta-input" :placeholder="ex.summaryPlaceholder" />
           </div>
           <p class="col-hint">
-            分类决定它出现在「加节点」选择器的哪一组;说明 + 图标是复用者第一眼看到的卡片。
+            {{ t('studio.metaHint') }}
           </p>
         </div>
       </aside>
@@ -472,24 +474,24 @@ async function onSave(): Promise<void> {
     <!-- 底部:编译产出 + 实例预览 -->
     <div class="bottom">
       <div>
-        <div class="panel panel--code-head"><h3 class="panel-title">编译产出 · templated 节点 config(后端原样跑)</h3></div>
+        <div class="panel panel--code-head"><h3 class="panel-title">{{ t('studio.compiledTitle') }}</h3></div>
         <div v-if="undeclaredRefs.length" class="preview-warn">
-          ⚠ 步骤引用了未提升的参数:{{ undeclaredRefsText }}(将原样保留,实例改不动)
+          {{ t('studio.undeclaredWarn', { refs: undeclaredRefsText }) }}
         </div>
-        <pre class="code"><span class="c"># templated 自定义节点 config —— 后端 renderTemplate({{ ex.braceL }}param{{ ex.braceR }}) 后在容器内跑</span>
+        <pre class="code"><span class="c">{{ t('studio.compiledComment', { open: ex.braceL + 'param' + ex.braceR }) }}</span>
 <template v-for="line in compiledLines" :key="line.key"><span class="k">{{ line.key }}</span><template v-if="line.block">: |
 <span v-html="line.value.split('\n').map((l) => '  ' + highlight(l)).join('\n')" />
 </template><template v-else>: <span v-html="highlight(line.value)" />
-</template></template><span v-if="compiledLines.length === 0" class="c">(还没有任何步骤)</span></pre>
+</template></template><span v-if="compiledLines.length === 0" class="c">{{ t('studio.compiledEmpty') }}</span></pre>
       </div>
 
       <div class="panel preview-card">
-        <h3 class="panel-title">实例预览 · 拖进流水线后只见这些</h3>
+        <h3 class="panel-title">{{ t('studio.previewTitle') }}</h3>
         <div class="pv-nm">
           <span class="pv-ic">{{ meta.icon || '🔧' }}</span>
-          <b>{{ name || '未命名节点' }}</b>
+          <b>{{ name || t('studio.unnamedNode') }}</b>
         </div>
-        <div class="pv-cat">{{ meta.category || '自定义' }} · 自定义</div>
+        <div class="pv-cat">{{ meta.category || t('studio.defaultCategory') }} · {{ t('studio.customLabel') }}</div>
         <div class="pv-sub" v-html="highlight(meta.summary || '')" />
         <div class="inst-params">
           <div v-for="p in params.filter((x) => x.key.trim())" :key="p.key" class="inst-param">
@@ -508,7 +510,7 @@ async function onSave(): Promise<void> {
           </div>
         </div>
         <p class="note">
-          这正是 n8n「promote 参数→实例短清单」/ Node-RED Subflow properties 的范式:复用者不必懂内部脚本,只配暴露出来的参数。
+          {{ t('studio.previewNote') }}
         </p>
       </div>
     </div>

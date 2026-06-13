@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import type { PipelineJob, StageKind } from '../../api/pipeline'
 import { jobTypeLabel } from './jobConfigSchema'
 import JobTypeIcon from './JobTypeIcon.vue'
@@ -25,6 +26,8 @@ const emit = defineEmits<{
   (e: 'drop'): void
 }>()
 
+const { t } = useI18n()
+
 function handleDelete(e: MouseEvent): void {
   e.stopPropagation()
   emit('delete')
@@ -48,7 +51,7 @@ function handleEditDeps(e: MouseEvent): void {
     tabindex="0"
     draggable="true"
     :aria-pressed="selected"
-    :aria-label="`任务: ${job.name}(${jobTypeLabel(job.type)})`"
+    :aria-label="t('pipelineCanvas.jobAria', { name: job.name, type: jobTypeLabel(job.type) })"
     @click="emit('select')"
     @keydown.enter="emit('select')"
     @keydown.space.prevent="emit('select')"
@@ -64,8 +67,8 @@ function handleEditDeps(e: MouseEvent): void {
       <button
         v-if="inDag"
         class="job-card-del job-card-deps"
-        :aria-label="`编辑任务 ${job.name} 的依赖`"
-        title="编辑依赖(决定与哪些任务串行/并行)"
+        :aria-label="t('pipelineCanvas.editJobDepsAria', { name: job.name })"
+        :title="t('pipelineCanvas.editJobDepsTitle')"
         @click="handleEditDeps"
       >
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -75,8 +78,8 @@ function handleEditDeps(e: MouseEvent): void {
       </button>
       <button
         class="job-card-del"
-        :aria-label="`删除任务 ${job.name}`"
-        title="删除此任务"
+        :aria-label="t('pipelineCanvas.deleteJobAria', { name: job.name })"
+        :title="t('pipelineCanvas.deleteJobTitle')"
         @click="handleDelete"
       >
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -86,7 +89,7 @@ function handleEditDeps(e: MouseEvent): void {
     </div>
     <div class="job-card-type">{{ jobTypeLabel(job.type) }}</div>
     <div v-if="job.summary" class="job-summary">{{ job.summary }}</div>
-    <div v-if="upstreamNames && upstreamNames.length" class="job-up-chips" aria-label="上游依赖任务">
+    <div v-if="upstreamNames && upstreamNames.length" class="job-up-chips" :aria-label="t('pipelineCanvas.upstreamJobsAria')">
       <span class="job-up-arrow" aria-hidden="true">⟵</span>
       <span v-for="n in upstreamNames" :key="n" class="job-up-chip">{{ n }}</span>
     </div>

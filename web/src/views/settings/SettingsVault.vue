@@ -10,6 +10,7 @@ import type { Credential, CredentialType, CreateCredentialInput, UpdateCredentia
 import { HttpError } from '../../api/http'
 import AuditTimeline from '../../components/AuditTimeline.vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useToast } from '../../composables/useToast'
 import {
   getOAuthApps,
@@ -62,18 +63,19 @@ const copiedId = ref<string | null>(null)
 
 // ─── OAuth connect (enabled providers only) ──────────────────────────────────
 
+const { t } = useI18n()
 const toast = useToast()
 const route = useRoute()
 const router = useRouter()
 
 const oauthApps = ref<OAuthApp[]>([])
 
-const PROVIDER_LABELS: Record<OAuthProvider, string> = {
+const PROVIDER_LABELS = computed<Record<OAuthProvider, string>>(() => ({
   gitee: 'Gitee',
   github: 'GitHub',
   gitlab: 'GitLab',
-  custom: '自建',
-}
+  custom: t('settingsVault.providerCustom'),
+}))
 
 const PROVIDER_LOGO: Record<OAuthProvider, { text: string; style: string }> = {
   gitee: { text: 'G', style: 'background:#c71d23;color:#fff' },
@@ -112,15 +114,17 @@ function handleOAuthCallback(): void {
 
   if (typeof connected === 'string' && connected) {
     const account = typeof route.query.account === 'string' ? route.query.account : ''
-    const label = PROVIDER_LABELS[connected as OAuthProvider] ?? connected
+    const label = PROVIDER_LABELS.value[connected as OAuthProvider] ?? connected
     toast.success(
-      account ? `已连接 ${label}(${account})` : `已连接 ${label}`,
-      { detail: '凭据已自动写入保险库' },
+      account
+        ? t('settingsVault.toastConnectedAccount', { label, account })
+        : t('settingsVault.toastConnected', { label }),
+      { detail: t('settingsVault.toastConnectedDetail') },
     )
     void loadCredentials()
     clearOAuthQuery()
   } else if (typeof oauthError === 'string' && oauthError) {
-    toast.error('连接失败', { detail: oauthError })
+    toast.error(t('settingsVault.toastConnectError'), { detail: oauthError })
     clearOAuthQuery()
   }
 }
@@ -145,24 +149,24 @@ function idleWarning(c: Credential): boolean {
 }
 
 function relativeTime(isoStr: string | null): string {
-  if (!isoStr) return '从未'
+  if (!isoStr) return t('settingsVault.never')
   const diff = Date.now() - new Date(isoStr).getTime()
   const s = Math.floor(diff / 1000)
-  if (s < 60) return '刚刚'
+  if (s < 60) return t('time.justNow')
   const m = Math.floor(s / 60)
-  if (m < 60) return `${m} 分钟前`
+  if (m < 60) return t('time.minAgo', { n: m })
   const h = Math.floor(m / 60)
-  if (h < 24) return `${h} 小时前`
+  if (h < 24) return t('time.hourAgo', { n: h })
   const d = Math.floor(h / 24)
-  return `${d} 天前`
+  return t('time.dayAgo', { n: d })
 }
 
-const typeLabels: Record<CredentialType, string> = {
-  git_token: 'Git 令牌',
-  ssh_key: 'SSH 私钥',
-  ssh_password: 'SSH 密码',
-  registry: '镜像仓库',
-}
+const typeLabels = computed<Record<CredentialType, string>>(() => ({
+  git_token: t('settingsVault.typeGitToken'),
+  ssh_key: t('settingsVault.typeSshKey'),
+  ssh_password: t('settingsVault.typeSshPassword'),
+  registry: t('settingsVault.typeRegistry'),
+}))
 
 const idleCount = computed(
   () => credentials.value.filter(idleWarning).length,
@@ -179,14 +183,14 @@ async function loadCredentials(): Promise<void> {
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
-        loadError.value = '无法连接到服务器,请检查后端是否运行后重试'
+        loadError.value = t('settingsVault.errNetwork')
       } else if (err.apiError?.code === 'vault_unconfigured') {
-        loadError.value = '保险库未配置 master key,请联系管理员设置 PIPEWRIGHT_MASTER_KEY 环境变量'
+        loadError.value = t('settingsVault.errVaultUnconfigured')
       } else {
-        loadError.value = err.apiError?.message ?? `加载凭据失败(${err.status})`
+        loadError.value = err.apiError?.message ?? t('settingsVault.errLoadStatus', { status: err.status })
       }
     } else {
-      loadError.value = '加载凭据失败,请稍后重试'
+      loadError.value = t('settingsVault.errLoadRetry')
     }
     loadState.value = 'error'
   }
@@ -236,15 +240,15 @@ function validateForm(): boolean {
   clearFormErrors()
   let ok = true
   if (!form.value.name.trim()) {
-    formErrors.value.name = '请输入凭据名称'
+    formErrors.value.name = t('settingsVault.valNameRequired')
     ok = false
   }
   if (!form.value.type) {
-    formErrors.value.type = '请选择凭据类型'
+    formErrors.value.type = t('settingsVault.valTypeRequired')
     ok = false
   }
   if (modalMode.value === 'add' && !form.value.secret) {
-    formErrors.value.secret = '请输入密钥内容'
+    formErrors.value.secret = t('settingsVault.valSecretRequired')
     ok = false
   }
   return ok
@@ -286,14 +290,14 @@ async function handleFormSubmit(): Promise<void> {
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
-        formBanner.value = '无法连接到服务器,请稍后重试'
+        formBanner.value = t('settingsVault.errNetworkRetry')
       } else if (err.apiError?.code === 'vault_unconfigured') {
-        formBanner.value = '保险库未配置 master key,无法保存凭据'
+        formBanner.value = t('settingsVault.errVaultUnconfiguredSave')
       } else {
-        formBanner.value = err.apiError?.message ?? `保存失败(${err.status})`
+        formBanner.value = err.apiError?.message ?? t('settingsVault.errSaveStatus', { status: err.status })
       }
     } else {
-      formBanner.value = '保存失败,请稍后重试'
+      formBanner.value = t('settingsVault.errSaveRetry')
     }
   } finally {
     formSubmitting.value = false
@@ -327,12 +331,12 @@ async function confirmDelete(): Promise<void> {
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
-        deleteBanner.value = '无法连接到服务器,请稍后重试'
+        deleteBanner.value = t('settingsVault.errNetworkRetry')
       } else {
-        deleteBanner.value = err.apiError?.message ?? `删除失败(${err.status})`
+        deleteBanner.value = err.apiError?.message ?? t('settingsVault.errDeleteStatus', { status: err.status })
       }
     } else {
-      deleteBanner.value = '删除失败,请稍后重试'
+      deleteBanner.value = t('settingsVault.errDeleteRetry')
     }
   } finally {
     deleteSubmitting.value = false
@@ -360,10 +364,9 @@ async function copyReference(c: Credential): Promise<void> {
   <div class="vault-root">
     <div class="section-head">
       <div class="section-head-text">
-        <h2 class="section-title">凭据保险库</h2>
+        <h2 class="section-title">{{ t('settingsVault.title') }}</h2>
         <p class="section-desc">
-          所有密钥经 NaCl secretbox 加密后存于本实例,落库即掩码、写入后不可读出。
-          流水线按作用域引用,绝不进日志或诊断上下文。
+          {{ t('settingsVault.desc') }}
         </p>
       </div>
       <button
@@ -374,7 +377,7 @@ async function copyReference(c: Credential): Promise<void> {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
           <path d="M12 5v14M5 12h14"/>
         </svg>
-        添加凭据
+        {{ t('settingsVault.addCredential') }}
       </button>
     </div>
 
@@ -382,10 +385,10 @@ async function copyReference(c: Credential): Promise<void> {
     <div v-if="connectableProviders.length > 0" class="connect-panel">
       <div class="connect-head">
         <div class="connect-head-text">
-          <strong>连接 git 账号</strong>
-          <span>一键授权,自动写入凭据 —— 无需手动粘贴 PAT。</span>
+          <strong>{{ t('settingsVault.connectGitAccount') }}</strong>
+          <span>{{ t('settingsVault.connectGitDesc') }}</span>
         </div>
-        <router-link to="/settings/oauth" class="connect-config-link">管理 OAuth 应用 →</router-link>
+        <router-link to="/settings/oauth" class="connect-config-link">{{ t('settingsVault.manageOAuthApps') }}</router-link>
       </div>
       <div class="connect-grid">
         <button
@@ -393,13 +396,13 @@ async function copyReference(c: Credential): Promise<void> {
           :key="app.provider"
           type="button"
           class="connect-btn"
-          :aria-label="`连接 ${PROVIDER_LABELS[app.provider]}`"
+          :aria-label="t('settingsVault.connectProviderAria', { provider: PROVIDER_LABELS[app.provider] })"
           @click="connectProvider(app.provider)"
         >
           <span class="connect-logo" :style="PROVIDER_LOGO[app.provider].style" aria-hidden="true">
             {{ PROVIDER_LOGO[app.provider].text }}
           </span>
-          连接 {{ PROVIDER_LABELS[app.provider] }}
+          {{ t('settingsVault.connectProvider', { provider: PROVIDER_LABELS[app.provider] }) }}
         </button>
       </div>
     </div>
@@ -414,16 +417,16 @@ async function copyReference(c: Credential): Promise<void> {
         <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
       </svg>
       <span>{{ loadError }}</span>
-      <button class="banner-retry" @click="loadCredentials">↻ 重试</button>
+      <button class="banner-retry" @click="loadCredentials">↻ {{ t('settingsVault.retry') }}</button>
     </div>
 
     <!-- ─── credentials panel ─────────────────────────────────────────────── -->
     <div class="panel" :class="{ 'panel--loading': loadState === 'loading' }">
       <div class="panel-head">
-        <span>凭据</span>
+        <span>{{ t('settingsVault.panelCredentials') }}</span>
         <span class="panel-meta" v-if="loadState === 'idle'">
-          {{ credentials.length }} 条
-          <span v-if="idleCount > 0" class="meta-warn">· {{ idleCount }} 条 {{ 60 }} 天未使用</span>
+          {{ t('settingsVault.countLabel', { n: credentials.length }) }}
+          <span v-if="idleCount > 0" class="meta-warn">· {{ t('settingsVault.idleMeta', { n: idleCount, days: 60 }) }}</span>
         </span>
       </div>
 
@@ -449,9 +452,9 @@ async function copyReference(c: Credential): Promise<void> {
               <circle cx="12" cy="15.5" r="1" fill="currentColor"/>
             </svg>
           </div>
-          <p class="empty-label">还没有凭据</p>
-          <p class="empty-hint">添加 Git 令牌、SSH 私钥或镜像仓库账号,流水线可按引用使用,密钥永不明文出现。</p>
-          <button class="btn-primary" @click="openAddModal">+ 添加第一个凭据</button>
+          <p class="empty-label">{{ t('settingsVault.emptyLabel') }}</p>
+          <p class="empty-hint">{{ t('settingsVault.emptyHint') }}</p>
+          <button class="btn-primary" @click="openAddModal">+ {{ t('settingsVault.addFirstCredential') }}</button>
         </div>
       </template>
 
@@ -460,10 +463,10 @@ async function copyReference(c: Credential): Promise<void> {
         <!-- Table header -->
         <div class="cred-row cred-row--head" aria-hidden="true">
           <span />
-          <span>名称 / 掩码值</span>
-          <span>类型</span>
-          <span>作用域</span>
-          <span>最近使用</span>
+          <span>{{ t('settingsVault.colNameMasked') }}</span>
+          <span>{{ t('settingsVault.colType') }}</span>
+          <span>{{ t('settingsVault.colScope') }}</span>
+          <span>{{ t('settingsVault.colLastUsed') }}</span>
           <span />
         </div>
 
@@ -508,7 +511,7 @@ async function copyReference(c: Credential): Promise<void> {
           <div class="cred-name">
             <strong class="cred-label">{{ cred.name }}</strong>
             <!-- maskedValue in JetBrains Mono — never plaintext, not interactive -->
-            <span class="cred-mask mono" :title="'掩码值（不可展开明文）'" aria-label="`掩码: ${cred.maskedValue}`">{{ cred.maskedValue }}</span>
+            <span class="cred-mask mono" :title="t('settingsVault.maskTitle')" :aria-label="t('settingsVault.maskAria', { value: cred.maskedValue })">{{ cred.maskedValue }}</span>
           </div>
 
           <!-- Type label -->
@@ -520,7 +523,7 @@ async function copyReference(c: Credential): Promise<void> {
               v-if="cred.scope"
               class="scope-tag"
               :class="{ 'scope-tag--all': cred.scope === '*' || cred.scope.toLowerCase() === '全部' }"
-            >{{ cred.scope === '*' ? '全部项目' : cred.scope }}</span>
+            >{{ cred.scope === '*' ? t('settingsVault.allProjects') : cred.scope }}</span>
             <span v-else class="cred-dim">—</span>
           </div>
 
@@ -528,10 +531,10 @@ async function copyReference(c: Credential): Promise<void> {
           <span
             class="cred-time"
             :class="{ 'cred-time--warn': idleWarning(cred) }"
-            :title="cred.lastUsedAt ?? '从未使用'"
+            :title="cred.lastUsedAt ?? t('settingsVault.neverUsed')"
           >
             {{ relativeTime(cred.lastUsedAt) }}
-            <span v-if="idleWarning(cred)" class="idle-tag">闲置</span>
+            <span v-if="idleWarning(cred)" class="idle-tag">{{ t('settingsVault.idleTag') }}</span>
           </span>
 
           <!-- Actions -->
@@ -540,8 +543,8 @@ async function copyReference(c: Credential): Promise<void> {
             <button
               class="op-btn"
               :class="{ 'op-btn--copied': copiedId === cred.id }"
-              :title="copiedId === cred.id ? '已复制引用' : '复制凭据引用（ID，非明文）'"
-              :aria-label="`复制凭据 ${cred.name} 的引用`"
+              :title="copiedId === cred.id ? t('settingsVault.copiedReference') : t('settingsVault.copyReferenceTitle')"
+              :aria-label="t('settingsVault.copyReferenceAria', { name: cred.name })"
               @click="copyReference(cred)"
             >
               <svg v-if="copiedId !== cred.id" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
@@ -555,8 +558,8 @@ async function copyReference(c: Credential): Promise<void> {
             <!-- Edit -->
             <button
               class="op-btn"
-              :title="`编辑 ${cred.name}`"
-              :aria-label="`编辑凭据 ${cred.name}`"
+              :title="t('settingsVault.editTitle', { name: cred.name })"
+              :aria-label="t('settingsVault.editAria', { name: cred.name })"
               @click="openEditModal(cred)"
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
@@ -567,8 +570,8 @@ async function copyReference(c: Credential): Promise<void> {
             <!-- Delete -->
             <button
               class="op-btn op-btn--danger"
-              :title="`删除 ${cred.name}`"
-              :aria-label="`删除凭据 ${cred.name}`"
+              :title="t('settingsVault.deleteTitle', { name: cred.name })"
+              :aria-label="t('settingsVault.deleteAria', { name: cred.name })"
               @click="openDeleteModal(cred)"
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
@@ -593,7 +596,7 @@ async function copyReference(c: Credential): Promise<void> {
       v-if="modalOpen"
       class="modal-scrim"
       role="dialog"
-      :aria-label="modalMode === 'add' ? '添加凭据' : '编辑凭据'"
+      :aria-label="modalMode === 'add' ? t('settingsVault.addCredential') : t('settingsVault.editCredential')"
       aria-modal="true"
       @keydown.esc="closeModal"
       @click.self="closeModal"
@@ -608,16 +611,16 @@ async function copyReference(c: Credential): Promise<void> {
             </svg>
           </div>
           <div>
-            <h3 class="modal-title">{{ modalMode === 'add' ? '添加凭据' : '编辑凭据' }}</h3>
+            <h3 class="modal-title">{{ modalMode === 'add' ? t('settingsVault.addCredential') : t('settingsVault.editCredential') }}</h3>
             <p class="modal-sub">
               {{ modalMode === 'add'
-                ? '密钥写入后不可读出,界面仅展示掩码值'
-                : '修改名称或作用域;如需轮换密钥请重新输入' }}
+                ? t('settingsVault.modalSubAdd')
+                : t('settingsVault.modalSubEdit') }}
             </p>
           </div>
           <button
             class="modal-close"
-            aria-label="关闭对话框"
+            :aria-label="t('settingsVault.closeDialog')"
             :disabled="formSubmitting"
             @click="closeModal"
           >
@@ -647,14 +650,14 @@ async function copyReference(c: Credential): Promise<void> {
         >
           <!-- Name -->
           <div class="field">
-            <label class="field-label" for="cred-name">名称</label>
+            <label class="field-label" for="cred-name">{{ t('settingsVault.fieldName') }}</label>
             <input
               id="cred-name"
               v-model="form.name"
               class="field-input"
               :class="{ 'field-input--error': formErrors.name }"
               type="text"
-              placeholder="例:生产-1 部署密钥"
+              :placeholder="t('settingsVault.namePlaceholder')"
               :disabled="formSubmitting"
               :aria-invalid="formErrors.name ? 'true' : undefined"
               :aria-describedby="formErrors.name ? 'cred-name-err' : undefined"
@@ -666,8 +669,8 @@ async function copyReference(c: Credential): Promise<void> {
 
           <!-- Type -->
           <div class="field">
-            <label class="field-label" for="cred-type">类型</label>
-            <div class="segmented" role="group" aria-label="凭据类型">
+            <label class="field-label" for="cred-type">{{ t('settingsVault.fieldType') }}</label>
+            <div class="segmented" role="group" :aria-label="t('settingsVault.credentialTypeAria')">
               <button
                 v-for="opt in (['git_token', 'ssh_key', 'ssh_password', 'registry'] as CredentialType[])"
                 :key="opt"
@@ -684,15 +687,15 @@ async function copyReference(c: Credential): Promise<void> {
           <!-- Scope -->
           <div class="field">
             <label class="field-label" for="cred-scope">
-              作用域
-              <span class="field-optional">（可选）</span>
+              {{ t('settingsVault.fieldScope') }}
+              <span class="field-optional">{{ t('settingsVault.optional') }}</span>
             </label>
             <input
               id="cred-scope"
               v-model="form.scope"
               class="field-input"
               type="text"
-              placeholder="例:acme-web 或 * 代表全部"
+              :placeholder="t('settingsVault.scopePlaceholder')"
               :disabled="formSubmitting"
               autocomplete="off"
             />
@@ -701,8 +704,8 @@ async function copyReference(c: Credential): Promise<void> {
           <!-- Secret — password type, never echoed back -->
           <div class="field">
             <label class="field-label" for="cred-secret">
-              {{ modalMode === 'add' ? '密钥内容' : '新密钥内容' }}
-              <span v-if="modalMode === 'edit'" class="field-optional">（留空则不轮换）</span>
+              {{ modalMode === 'add' ? t('settingsVault.fieldSecret') : t('settingsVault.fieldSecretNew') }}
+              <span v-if="modalMode === 'edit'" class="field-optional">{{ t('settingsVault.secretOptionalEdit') }}</span>
             </label>
 <!-- SSH 私钥是多行 PEM/OpenSSH 文本:必须用 textarea,单行 <input> 会按 HTML 规范清除换行
                  → 私钥结构破坏、ssh.ParsePrivateKey 失败「凭据不是可用的 SSH 私钥」。令牌/镜像仓库仍用
@@ -714,7 +717,7 @@ async function copyReference(c: Credential): Promise<void> {
               class="field-input field-input--mono"
               :class="{ 'field-input--error': formErrors.secret }"
               rows="8"
-              :placeholder="modalMode === 'add' ? '粘贴完整私钥(含 -----BEGIN/END----- 行)…' : '留空保持当前密钥不变'"
+              :placeholder="modalMode === 'add' ? t('settingsVault.secretPlaceholderSshKey') : t('settingsVault.secretPlaceholderKeep')"
               :disabled="formSubmitting"
               :aria-invalid="formErrors.secret ? 'true' : undefined"
               :aria-describedby="formErrors.secret ? 'cred-secret-err' : undefined"
@@ -729,7 +732,7 @@ async function copyReference(c: Credential): Promise<void> {
               class="field-input field-input--mono"
               :class="{ 'field-input--error': formErrors.secret }"
               type="password"
-              :placeholder="modalMode === 'add' ? (form.type === 'ssh_password' ? '输入 SSH 登录密码…' : '粘贴令牌内容…') : '留空保持当前密钥不变'"
+              :placeholder="modalMode === 'add' ? (form.type === 'ssh_password' ? t('settingsVault.secretPlaceholderSshPassword') : t('settingsVault.secretPlaceholderToken')) : t('settingsVault.secretPlaceholderKeep')"
               :disabled="formSubmitting"
               :aria-invalid="formErrors.secret ? 'true' : undefined"
               :aria-describedby="formErrors.secret ? 'cred-secret-err' : undefined"
@@ -737,8 +740,8 @@ async function copyReference(c: Credential): Promise<void> {
               @input="formErrors.secret = ''"
             />
             <span v-if="formErrors.secret" id="cred-secret-err" class="field-error" role="alert">{{ formErrors.secret }}</span>
-            <span v-if="form.type === 'ssh_password'" class="field-hint">SSH 登录用户名在「登记服务器」时填写;此处仅存密码。写入后不可读出,仅展示掩码。</span>
-            <span v-else class="field-hint">密钥写入后不可读出，界面仅展示掩码值</span>
+            <span v-if="form.type === 'ssh_password'" class="field-hint">{{ t('settingsVault.hintSshPassword') }}</span>
+            <span v-else class="field-hint">{{ t('settingsVault.hintSecret') }}</span>
           </div>
 
           <!-- Footer -->
@@ -748,7 +751,7 @@ async function copyReference(c: Credential): Promise<void> {
               class="btn-secondary"
               :disabled="formSubmitting"
               @click="closeModal"
-            >取消</button>
+            >{{ t('settingsVault.cancel') }}</button>
             <button
               type="submit"
               class="btn-primary"
@@ -756,7 +759,7 @@ async function copyReference(c: Credential): Promise<void> {
               :aria-busy="formSubmitting"
             >
               <span v-if="formSubmitting" class="spinner" aria-hidden="true" />
-              {{ formSubmitting ? '保存中…' : (modalMode === 'add' ? '创建凭据' : '保存修改') }}
+              {{ formSubmitting ? t('settingsVault.saving') : (modalMode === 'add' ? t('settingsVault.createCredential') : t('settingsVault.saveChanges')) }}
             </button>
           </div>
         </form>
@@ -772,7 +775,7 @@ async function copyReference(c: Credential): Promise<void> {
       v-if="deleteModalOpen && deletingCredential"
       class="modal-scrim"
       role="dialog"
-      aria-label="确认删除凭据"
+      :aria-label="t('settingsVault.deleteConfirmAria')"
       aria-modal="true"
       @keydown.esc="closeDeleteModal"
       @click.self="closeDeleteModal"
@@ -786,12 +789,12 @@ async function copyReference(c: Credential): Promise<void> {
             </svg>
           </div>
           <div>
-            <h3 class="modal-title">删除凭据</h3>
-            <p class="modal-sub">此操作不可撤销</p>
+            <h3 class="modal-title">{{ t('settingsVault.deleteCredential') }}</h3>
+            <p class="modal-sub">{{ t('settingsVault.deleteIrreversible') }}</p>
           </div>
           <button
             class="modal-close"
-            aria-label="关闭对话框"
+            :aria-label="t('settingsVault.closeDialog')"
             :disabled="deleteSubmitting"
             @click="closeDeleteModal"
           >
@@ -803,9 +806,9 @@ async function copyReference(c: Credential): Promise<void> {
 
         <div class="modal-body">
           <p class="delete-confirm-text">
-            确定要永久删除凭据
+            {{ t('settingsVault.deleteConfirmPrefix') }}
             <strong class="delete-cred-name">{{ deletingCredential.name }}</strong>
-            吗?引用此凭据的流水线将无法获取密钥。
+            {{ t('settingsVault.deleteConfirmSuffix') }}
           </p>
           <div
             v-if="deleteBanner"
@@ -825,7 +828,7 @@ async function copyReference(c: Credential): Promise<void> {
             class="btn-secondary"
             :disabled="deleteSubmitting"
             @click="closeDeleteModal"
-          >取消</button>
+          >{{ t('settingsVault.cancel') }}</button>
           <button
             type="button"
             class="btn-danger"
@@ -834,7 +837,7 @@ async function copyReference(c: Credential): Promise<void> {
             @click="confirmDelete"
           >
             <span v-if="deleteSubmitting" class="spinner spinner--red" aria-hidden="true" />
-            {{ deleteSubmitting ? '删除中…' : '确认删除' }}
+            {{ deleteSubmitting ? t('settingsVault.deleting') : t('settingsVault.confirmDelete') }}
           </button>
         </div>
       </div>

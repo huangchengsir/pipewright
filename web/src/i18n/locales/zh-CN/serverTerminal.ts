@@ -1,0 +1,57 @@
+export default {
+  serverFallback: '服务器',
+  titleConnecting: '连接中 · ',
+  titleDisconnected: '⚠ 已断开 · ',
+  titleSuffix: '运维终端',
+  hostMachine: '(宿主机)',
+
+  kindContainer: '容器',
+  kindHost: '主机',
+  containerLabel: '容器 {label}',
+  hostShell: '主机 shell',
+
+  connecting: '连接中…',
+  connectFailed: '连接失败',
+  connect: '连接',
+  reconnect: '重连',
+  disconnect: '断开',
+  close: '关闭',
+
+  enteringContainer: '正在进入容器 {name}（{host}）…',
+  connectingHost: '正在连接主机 {host} …',
+  connectFailedDetail: '连接失败，请检查登录状态、服务器可达性或容器是否存在',
+  sessionEnded: '终端会话已结束',
+  sessionEndedShort: '会话结束',
+
+  terminalAria: '服务器交互终端',
+  hintContainer: '点「连接」进入容器 {name}（docker exec）。',
+  hintHost: '点「连接」进入主机 shell。',
+
+  latency: '延迟',
+  copy: '复制',
+  paste: '粘贴',
+  interrupt: '中断',
+  contextMenu: '右键菜单',
+  selectAll: '全选',
+  clearScreen: '清屏',
+  clipboardSecureWarn: '剪贴板需 https/localhost',
+
+  completeDisableTitle: '关闭 AI 补全',
+  completeEnableTitle: '开启 AI 补全',
+  aiComplete: 'AI 补全',
+  on: '开',
+  off: '关',
+
+  aiLauncherTitle: '展开 AI 运维助手',
+  aiAssistant: 'AI 助手',
+
+  charCount: '{n} 字符',
+  toastCopied: '已复制',
+  toastPasted: '已粘贴',
+  toastSigintMsg: '已发送 SIGINT',
+  toastSigintSub: '中断当前命令',
+  toastClipboardUnavailable: '无法读取剪贴板',
+  toastClipboardSecureCtx: '需 https / localhost 安全上下文',
+  toastClipboardDenied: '剪贴板读取被拒',
+  toastClipboardAllow: '请在浏览器允许剪贴板权限',
+}

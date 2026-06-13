@@ -14,6 +14,7 @@
  * opacity only, with prefers-reduced-motion guard.
  */
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { analyzeRisks, type RiskFinding, type RiskLevel } from '../../api/aiRisk'
 import { HttpError } from '../../api/http'
 import AppButton from '../ui/AppButton.vue'
@@ -21,6 +22,8 @@ import AppButton from '../ui/AppButton.vue'
 const props = defineProps<{
   projectId: string
 }>()
+
+const { t } = useI18n()
 
 type RunState = 'idle' | 'running' | 'done' | 'error'
 
@@ -50,9 +53,9 @@ const hasFindings = computed(() => findings.value.length > 0)
 
 function levelLabel(level: RiskLevel): string {
   switch (level) {
-    case 'high':   return '高危'
-    case 'medium': return '中危'
-    case 'low':    return '提示'
+    case 'high':   return t('pipelinePanels.rapHigh')
+    case 'medium': return t('pipelinePanels.rapMedium')
+    case 'low':    return t('pipelinePanels.rapLow')
   }
 }
 
@@ -68,9 +71,9 @@ async function runAnalysis(): Promise<void> {
     state.value = 'done'
   } catch (err) {
     if (err instanceof HttpError) {
-      errorMsg.value = err.apiError?.message ?? `风险标注失败(${err.status})`
+      errorMsg.value = err.apiError?.message ?? t('pipelinePanels.rapFailed', { status: err.status })
     } else {
-      errorMsg.value = '风险标注失败,请稍后重试'
+      errorMsg.value = t('pipelinePanels.rapFailedRetry')
     }
     state.value = 'error'
   }
@@ -78,7 +81,7 @@ async function runAnalysis(): Promise<void> {
 </script>
 
 <template>
-  <section class="rap" aria-label="AI 脚本风险标注">
+  <section class="rap" :aria-label="t('pipelinePanels.rapAria')">
     <!-- Header -->
     <div class="rap-head">
       <div class="rap-head-left">
@@ -88,15 +91,15 @@ async function runAnalysis(): Promise<void> {
             <path d="M12 8v4M12 16h.01" />
           </svg>
         </span>
-        <span class="rap-title">AI 脚本风险标注</span>
-        <span class="rap-subtitle">护城河 · 提交前先体检</span>
+        <span class="rap-title">{{ t('pipelinePanels.rapTitle') }}</span>
+        <span class="rap-subtitle">{{ t('pipelinePanels.rapSubtitle') }}</span>
       </div>
 
       <!-- Severity summary (only after a run) -->
       <div v-if="state === 'done' && hasFindings" class="rap-summary" aria-hidden="true">
-        <span v-if="counts.high" class="rap-chip rap-chip--high">{{ counts.high }} 高危</span>
-        <span v-if="counts.medium" class="rap-chip rap-chip--medium">{{ counts.medium }} 中危</span>
-        <span v-if="counts.low" class="rap-chip rap-chip--low">{{ counts.low }} 提示</span>
+        <span v-if="counts.high" class="rap-chip rap-chip--high">{{ t('pipelinePanels.rapHighChip', { count: counts.high }) }}</span>
+        <span v-if="counts.medium" class="rap-chip rap-chip--medium">{{ t('pipelinePanels.rapMediumChip', { count: counts.medium }) }}</span>
+        <span v-if="counts.low" class="rap-chip rap-chip--low">{{ t('pipelinePanels.rapLowChip', { count: counts.low }) }}</span>
       </div>
     </div>
 
@@ -108,13 +111,13 @@ async function runAnalysis(): Promise<void> {
           <svg v-if="state !== 'running'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
           </svg>
-          {{ state === 'running' ? 'AI 扫描中…' : (state === 'idle' ? '扫描脚本风险' : '重新扫描') }}
+          {{ state === 'running' ? t('pipelinePanels.rapScanning') : (state === 'idle' ? t('pipelinePanels.rapScan') : t('pipelinePanels.rapRescan')) }}
         </AppButton>
         <p v-if="state === 'idle'" class="rap-hint">
-          检测危险命令、明文密钥、未固定镜像与缺健康检查等风险。AI 未配置时仍有确定性规则结果。
+          {{ t('pipelinePanels.rapHint') }}
         </p>
         <span v-else-if="state === 'done'" class="rap-source" :class="{ 'rap-source--ai': aiEnhanced }">
-          {{ aiEnhanced ? 'AI 语义增强已启用' : (aiReason || '仅确定性规则结果') }}
+          {{ aiEnhanced ? t('pipelinePanels.rapAiEnhanced') : (aiReason || t('pipelinePanels.rapRulesOnly')) }}
         </span>
       </div>
 
@@ -126,7 +129,7 @@ async function runAnalysis(): Promise<void> {
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M20 6 9 17l-5-5" />
         </svg>
-        <span>未发现明显风险。继续保持。</span>
+        <span>{{ t('pipelinePanels.rapClean') }}</span>
       </div>
 
       <!-- Findings list -->
@@ -142,9 +145,9 @@ async function runAnalysis(): Promise<void> {
             <div class="rap-item-head">
               <span class="rap-badge" :class="`rap-badge--${f.level}`">{{ levelLabel(f.level) }}</span>
               <span class="rap-item-title">{{ f.title }}</span>
-              <span v-if="f.source === 'ai'" class="rap-tag-ai" title="AI 语义分析">AI</span>
+              <span v-if="f.source === 'ai'" class="rap-tag-ai" :title="t('pipelinePanels.rapAiTitle')">AI</span>
               <span class="rap-loc">
-                {{ f.stepName || '步骤' }}<template v-if="f.line > 0"> · 第 {{ f.line }} 行</template>
+                {{ f.stepName || t('pipelinePanels.rapStep') }}<template v-if="f.line > 0">{{ t('pipelinePanels.rapLine', { line: f.line }) }}</template>
               </span>
             </div>
             <p class="rap-why">{{ f.why }}</p>

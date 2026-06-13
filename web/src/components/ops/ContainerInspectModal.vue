@@ -11,6 +11,7 @@
 -->
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { getContainerInspect, type ContainerInspect } from '../../api/containers'
 import { HttpError } from '../../api/http'
 
@@ -21,6 +22,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{ (e: 'close'): void }>()
 
+const { t } = useI18n()
 const loading = ref(true)
 /** 请求层错误(网络/404/503 等);与后端 reachable:false 区分。 */
 const requestError = ref('')
@@ -34,7 +36,9 @@ async function load(): Promise<void> {
     data.value = await getContainerInspect(props.serverId, props.containerName)
   } catch (e) {
     requestError.value =
-      e instanceof HttpError ? e.message || '加载容器详情失败' : '加载容器详情失败'
+      e instanceof HttpError
+        ? e.message || t('opsContainer.inspect.loadFailed')
+        : t('opsContainer.inspect.loadFailed')
   } finally {
     loading.value = false
   }
@@ -59,7 +63,7 @@ function portLabel(p: ContainerInspect['ports'][number]): string {
     const host = p.hostIp ? `${p.hostIp}:${p.hostPort}` : p.hostPort
     return `${host} → ${p.containerPort}`
   }
-  return `${p.containerPort}(未发布)`
+  return `${p.containerPort}${t('opsContainer.inspect.unpublished')}`
 }
 </script>
 
@@ -68,17 +72,17 @@ function portLabel(p: ContainerInspect['ports'][number]): string {
     <div class="ci-modal" role="dialog" aria-modal="true" aria-labelledby="ci-title">
       <header class="ci-head">
         <div class="ci-head-text">
-          <h3 id="ci-title" class="ci-title">容器详情</h3>
+          <h3 id="ci-title" class="ci-title">{{ t('opsContainer.inspect.title') }}</h3>
           <span class="ci-sub mono">{{ containerName }}</span>
         </div>
-        <button type="button" class="ci-close" aria-label="关闭" @click="emit('close')">×</button>
+        <button type="button" class="ci-close" :aria-label="t('opsContainer.close')" @click="emit('close')">×</button>
       </header>
 
       <div class="ci-body">
         <!-- 加载中 -->
         <div v-if="loading" class="ci-loading">
           <span class="ci-spinner" aria-hidden="true"></span>
-          正在读取容器信息…
+          {{ t('opsContainer.inspect.loading') }}
         </div>
 
         <!-- 请求层错误 -->
@@ -92,28 +96,28 @@ function portLabel(p: ContainerInspect['ports'][number]): string {
           class="ci-banner ci-banner--warn"
           role="alert"
         >
-          {{ data.error || '无法获取容器详情' }}
+          {{ data.error || t('opsContainer.inspect.fetchFailed') }}
         </div>
 
         <!-- 正常详情 -->
         <template v-else-if="data">
           <!-- 基本信息 -->
           <section class="ci-section">
-            <h4 class="ci-section-title">基本信息</h4>
+            <h4 class="ci-section-title">{{ t('opsContainer.inspect.basicInfo') }}</h4>
             <dl class="ci-kv">
-              <dt>镜像</dt>
+              <dt>{{ t('opsContainer.inspect.image') }}</dt>
               <dd class="mono">{{ data.image || '—' }}</dd>
-              <dt>命令</dt>
+              <dt>{{ t('opsContainer.inspect.command') }}</dt>
               <dd class="mono">{{ data.command || '—' }}</dd>
-              <dt>状态</dt>
+              <dt>{{ t('opsContainer.inspect.status') }}</dt>
               <dd>
                 <span class="ci-state" :class="`ci-state--${data.state || 'unknown'}`">{{
-                  data.state || '未知'
+                  data.state || t('opsContainer.inspect.unknown')
                 }}</span>
               </dd>
-              <dt>重启策略</dt>
+              <dt>{{ t('opsContainer.inspect.restartPolicy') }}</dt>
               <dd class="mono">{{ data.restartPolicy || '—' }}</dd>
-              <dt>创建时间</dt>
+              <dt>{{ t('opsContainer.inspect.createdAt') }}</dt>
               <dd class="mono">{{ data.createdAt || '—' }}</dd>
             </dl>
           </section>
@@ -121,19 +125,19 @@ function portLabel(p: ContainerInspect['ports'][number]): string {
           <!-- 环境变量 -->
           <section class="ci-section">
             <h4 class="ci-section-title">
-              环境变量
+              {{ t('opsContainer.inspect.env') }}
               <span class="ci-count">{{ data.env.length }}</span>
             </h4>
             <ul v-if="data.env.length" class="ci-list mono">
               <li v-for="(e, i) in data.env" :key="i" class="ci-list-item">{{ e }}</li>
             </ul>
-            <p v-else class="ci-empty">无环境变量</p>
+            <p v-else class="ci-empty">{{ t('opsContainer.inspect.noEnv') }}</p>
           </section>
 
           <!-- 挂载 -->
           <section class="ci-section">
             <h4 class="ci-section-title">
-              挂载
+              {{ t('opsContainer.inspect.mounts') }}
               <span class="ci-count">{{ data.mounts.length }}</span>
             </h4>
             <ul v-if="data.mounts.length" class="ci-list mono">
@@ -142,40 +146,40 @@ function portLabel(p: ContainerInspect['ports'][number]): string {
                 <span class="ci-tag">{{ m.rw ? 'rw' : 'ro' }}{{ m.mode ? `,${m.mode}` : '' }}</span>
               </li>
             </ul>
-            <p v-else class="ci-empty">无挂载</p>
+            <p v-else class="ci-empty">{{ t('opsContainer.inspect.noMounts') }}</p>
           </section>
 
           <!-- 网络 -->
           <section class="ci-section">
             <h4 class="ci-section-title">
-              网络
+              {{ t('opsContainer.inspect.networks') }}
               <span class="ci-count">{{ data.networks.length }}</span>
             </h4>
             <ul v-if="data.networks.length" class="ci-list mono">
               <li v-for="(n, i) in data.networks" :key="i" class="ci-list-item ci-mount">
                 <span class="ci-mount-path">{{ n.name }}</span>
-                <span class="ci-tag">{{ n.ipAddress || '无 IP' }}</span>
+                <span class="ci-tag">{{ n.ipAddress || t('opsContainer.inspect.noIp') }}</span>
               </li>
             </ul>
-            <p v-else class="ci-empty">无网络</p>
+            <p v-else class="ci-empty">{{ t('opsContainer.inspect.noNetworks') }}</p>
           </section>
 
           <!-- 端口 -->
           <section class="ci-section">
             <h4 class="ci-section-title">
-              端口
+              {{ t('opsContainer.inspect.ports') }}
               <span class="ci-count">{{ data.ports.length }}</span>
             </h4>
             <ul v-if="data.ports.length" class="ci-list mono">
               <li v-for="(p, i) in data.ports" :key="i" class="ci-list-item">{{ portLabel(p) }}</li>
             </ul>
-            <p v-else class="ci-empty">无端口映射</p>
+            <p v-else class="ci-empty">{{ t('opsContainer.inspect.noPorts') }}</p>
           </section>
 
           <!-- 标签 -->
           <section class="ci-section">
             <h4 class="ci-section-title">
-              标签
+              {{ t('opsContainer.inspect.labels') }}
               <span class="ci-count">{{ Object.keys(data.labels).length }}</span>
             </h4>
             <ul v-if="Object.keys(data.labels).length" class="ci-list mono">
@@ -188,7 +192,7 @@ function portLabel(p: ContainerInspect['ports'][number]): string {
                 <span class="ci-tag ci-tag--label">{{ val }}</span>
               </li>
             </ul>
-            <p v-else class="ci-empty">无标签</p>
+            <p v-else class="ci-empty">{{ t('opsContainer.inspect.noLabels') }}</p>
           </section>
         </template>
       </div>

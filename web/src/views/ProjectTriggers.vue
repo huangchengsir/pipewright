@@ -6,9 +6,11 @@
  */
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import TriggersPanel from '../components/TriggersPanel.vue'
 
 const route = useRoute()
+const { t } = useI18n()
 const projectId = computed(() => route.params.id as string)
 </script>
 
@@ -17,13 +19,13 @@ const projectId = computed(() => route.params.id as string)
     <!-- ─── Page header ─────────────────────────────────────────────────── -->
     <header class="page-header">
       <div class="page-header-text">
-        <nav class="breadcrumb" aria-label="面包屑导航">
-          <router-link to="/projects" class="crumb-link">项目</router-link>
+        <nav class="breadcrumb" :aria-label="t('projectTriggers.breadcrumbAria')">
+          <router-link to="/projects" class="crumb-link">{{ t('projectTriggers.breadcrumbProjects') }}</router-link>
           <span class="crumb-sep" aria-hidden="true">/</span>
-          <span class="crumb-cur">触发设置</span>
+          <span class="crumb-cur">{{ t('projectTriggers.title') }}</span>
         </nav>
-        <h1 class="page-title">触发设置</h1>
-        <p class="page-sub">配置 Webhook 接入端点、触发事件及分支 → 环境映射规则</p>
+        <h1 class="page-title">{{ t('projectTriggers.title') }}</h1>
+        <p class="page-sub">{{ t('projectTriggers.subtitle') }}</p>
       </div>
     </header>
 

@@ -10,6 +10,7 @@
  * Templates carry no plaintext secret (credentials remain vault references in 2-4 settings).
  */
 import { ref, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   listTemplates,
   applyTemplate,
@@ -24,6 +25,8 @@ const props = defineProps<{
   /** Current canvas stages — snapshotted when saving as a template. */
   stages: PipelineStage[]
 }>()
+
+const { t } = useI18n()
 
 const emit = defineEmits<{
   (e: 'close'): void
@@ -48,7 +51,7 @@ async function loadTemplates(): Promise<void> {
     templates.value = await listTemplates()
     if (templates.value.length > 0) selectedId.value = templates.value[0].id
   } catch (err: unknown) {
-    errorMsg.value = err instanceof HttpError ? err.apiError?.message ?? '加载模板失败' : '加载模板失败'
+    errorMsg.value = err instanceof HttpError ? err.apiError?.message ?? t('pipelinePanels.tplLoadFailed') : t('pipelinePanels.tplLoadFailed')
   } finally {
     loading.value = false
   }
@@ -56,11 +59,11 @@ async function loadTemplates(): Promise<void> {
 
 async function doApply(): Promise<void> {
   if (!selectedId.value) {
-    errorMsg.value = '请先选择一个模板'
+    errorMsg.value = t('pipelinePanels.tplSelectFirst')
     return
   }
   if (
-    !window.confirm('应用模板会用模板的阶段覆盖当前项目流水线。确认继续?')
+    !window.confirm(t('pipelinePanels.tplConfirmApply'))
   ) {
     return
   }
@@ -71,7 +74,7 @@ async function doApply(): Promise<void> {
     emit('applied', dto)
     emit('close')
   } catch (err: unknown) {
-    errorMsg.value = err instanceof HttpError ? err.apiError?.message ?? '应用模板失败' : '应用模板失败'
+    errorMsg.value = err instanceof HttpError ? err.apiError?.message ?? t('pipelinePanels.tplApplyFailed') : t('pipelinePanels.tplApplyFailed')
   } finally {
     applying.value = false
   }
@@ -86,7 +89,7 @@ const saveDone = ref(false)
 async function doSave(): Promise<void> {
   const name = saveName.value.trim()
   if (!name) {
-    errorMsg.value = '请填写模板名称'
+    errorMsg.value = t('pipelinePanels.tplNameRequired')
     return
   }
   saving.value = true
@@ -116,7 +119,7 @@ async function doSave(): Promise<void> {
     // Refresh the apply list so the new template is pickable immediately.
     await loadTemplates()
   } catch (err: unknown) {
-    errorMsg.value = err instanceof HttpError ? err.apiError?.message ?? '保存模板失败' : '保存模板失败'
+    errorMsg.value = err instanceof HttpError ? err.apiError?.message ?? t('pipelinePanels.tplSaveFailed') : t('pipelinePanels.tplSaveFailed')
   } finally {
     saving.value = false
   }
@@ -133,10 +136,10 @@ onMounted(loadTemplates)
 
 <template>
   <div class="scrim" @click.self="emit('close')">
-    <div class="modal" role="dialog" aria-modal="true" aria-label="流水线模板">
+    <div class="modal" role="dialog" aria-modal="true" :aria-label="t('pipelinePanels.tplAria')">
       <header class="head">
-        <h2 class="title">流水线模板</h2>
-        <button class="close" aria-label="关闭" @click="emit('close')">✕</button>
+        <h2 class="title">{{ t('pipelinePanels.tplTitle') }}</h2>
+        <button class="close" :aria-label="t('pipelinePanels.tplCloseAria')" @click="emit('close')">✕</button>
       </header>
 
       <div class="seg" role="tablist">
@@ -147,7 +150,7 @@ onMounted(loadTemplates)
           :class="{ active: mode === 'apply' }"
           @click="switchMode('apply')"
         >
-          应用模板
+          {{ t('pipelinePanels.tplApplyTab') }}
         </button>
         <button
           class="seg-item"
@@ -156,7 +159,7 @@ onMounted(loadTemplates)
           :class="{ active: mode === 'save' }"
           @click="switchMode('save')"
         >
-          另存为模板
+          {{ t('pipelinePanels.tplSaveTab') }}
         </button>
       </div>
 
@@ -164,69 +167,69 @@ onMounted(loadTemplates)
 
       <!-- Apply -->
       <div v-if="mode === 'apply'" class="body">
-        <p v-if="loading" class="hint">加载模板中…</p>
+        <p v-if="loading" class="hint">{{ t('pipelinePanels.tplLoading') }}</p>
         <p v-else-if="templates.length === 0" class="hint">
-          还没有任何模板。切到「另存为模板」把当前流水线沉淀为可复用模板。
+          {{ t('pipelinePanels.tplNoTemplates') }}
         </p>
         <ul v-else class="tpl-list" role="list">
-          <li v-for="t in templates" :key="t.id">
-            <label class="tpl-opt" :class="{ sel: selectedId === t.id }">
+          <li v-for="tpl in templates" :key="tpl.id">
+            <label class="tpl-opt" :class="{ sel: selectedId === tpl.id }">
               <input
                 type="radio"
                 name="tpl"
-                :value="t.id"
+                :value="tpl.id"
                 v-model="selectedId"
                 class="tpl-radio"
               />
               <span class="tpl-info">
-                <span class="tpl-name">{{ t.name }}</span>
-                <span class="tpl-meta">{{ t.stageCount }} 阶段 · {{ t.description || '无说明' }}</span>
+                <span class="tpl-name">{{ tpl.name }}</span>
+                <span class="tpl-meta">{{ t('pipelinePanels.tplStageCount', { count: tpl.stageCount, desc: tpl.description || t('pipelinePanels.tplNoDesc') }) }}</span>
               </span>
             </label>
           </li>
         </ul>
         <footer class="foot">
-          <button class="btn-secondary" @click="emit('close')">取消</button>
+          <button class="btn-secondary" @click="emit('close')">{{ t('pipelinePanels.tplCancel') }}</button>
           <button
             class="btn-primary"
             :disabled="applying || templates.length === 0"
             @click="doApply"
           >
-            {{ applying ? '应用中…' : '应用到当前流水线' }}
+            {{ applying ? t('pipelinePanels.tplApplying') : t('pipelinePanels.tplApplyToPipeline') }}
           </button>
         </footer>
       </div>
 
       <!-- Save as template -->
       <div v-else class="body">
-        <p v-if="saveDone" class="ok">已保存为模板,可在「复用库」或上方「应用模板」中复用。</p>
+        <p v-if="saveDone" class="ok">{{ t('pipelinePanels.tplSavedOk') }}</p>
         <div class="field">
-          <label class="label" for="tpl-name">模板名称</label>
+          <label class="label" for="tpl-name">{{ t('pipelinePanels.tplName') }}</label>
           <input
             id="tpl-name"
             v-model="saveName"
             class="input"
-            placeholder="如 go-service-standard"
+            :placeholder="t('pipelinePanels.tplNamePlaceholder')"
             autocomplete="off"
           />
         </div>
         <div class="field">
-          <label class="label" for="tpl-desc">说明(可选)</label>
+          <label class="label" for="tpl-desc">{{ t('pipelinePanels.tplDescLabel') }}</label>
           <input
             id="tpl-desc"
             v-model="saveDesc"
             class="input"
-            placeholder="这个模板的用途"
+            :placeholder="t('pipelinePanels.tplDescPlaceholder')"
             autocomplete="off"
           />
         </div>
         <p class="hint">
-          将快照当前画布的 {{ props.stages.length }} 个阶段。模板不含明文 secret(凭据保持保险库引用)。
+          {{ t('pipelinePanels.tplSnapshotHint', { count: props.stages.length }) }}
         </p>
         <footer class="foot">
-          <button class="btn-secondary" @click="emit('close')">关闭</button>
+          <button class="btn-secondary" @click="emit('close')">{{ t('pipelinePanels.tplClose') }}</button>
           <button class="btn-primary" :disabled="saving" @click="doSave">
-            {{ saving ? '保存中…' : '保存为模板' }}
+            {{ saving ? t('pipelinePanels.tplSaving') : t('pipelinePanels.tplSaveAsTemplate') }}
           </button>
         </footer>
       </div>

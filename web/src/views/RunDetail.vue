@@ -14,6 +14,7 @@
 -->
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import {
   getRun,
@@ -50,6 +51,7 @@ import PromotionPanel from '../components/run/PromotionPanel.vue'
 
 // ─── route ────────────────────────────────────────────────────────────────────
 
+const { t, locale } = useI18n()
 const route  = useRoute()
 const router = useRouter()
 const runId  = computed(() => route.params.id as string)
@@ -79,9 +81,9 @@ async function handleCancel(): Promise<void> {
     run.value = updated
   } catch (err) {
     if (err instanceof HttpError) {
-      cancelError.value = err.apiError?.message ?? `取消失败(${err.status})`
+      cancelError.value = err.apiError?.message ?? t('runDetail.cancelFailed', { status: err.status })
     } else {
-      cancelError.value = '取消请求失败,请稍后重试'
+      cancelError.value = t('runDetail.cancelRequestFailed')
     }
   } finally {
     cancelling.value = false
@@ -119,8 +121,8 @@ async function decideApproval(approve: boolean): Promise<void> {
   } catch (err) {
     approvalError.value =
       err instanceof HttpError
-        ? (err.apiError?.message ?? `操作失败(${err.status})`)
-        : '审批请求失败,请稍后重试'
+        ? (err.apiError?.message ?? t('runDetail.actionFailed', { status: err.status }))
+        : t('runDetail.approvalRequestFailed')
   } finally {
     approving.value = false
   }
@@ -162,12 +164,12 @@ const keepReleases = ref(1)
 const deployStrategy = ref<DeployStrategy>('rolling')
 const canaryCount = ref(1)
 
-const deployStrategyOptions: ReadonlyArray<{ value: DeployStrategy; label: string; desc: string }> = [
-  { value: 'rolling', label: '滚动', desc: '全机并行,各自成败' },
-  { value: 'canary', label: '金丝雀', desc: '先发小批,通过再铺' },
-  { value: 'blue_green', label: '蓝绿', desc: '统一切换,失败全退' },
-  { value: 'interactive', label: '交互式分批', desc: '先发首批,暂停等人确认' },
-]
+const deployStrategyOptions = computed<ReadonlyArray<{ value: DeployStrategy; label: string; desc: string }>>(() => [
+  { value: 'rolling', label: t('runDetail.strategyRollingLabel'), desc: t('runDetail.strategyRollingDesc') },
+  { value: 'canary', label: t('runDetail.strategyCanaryLabel'), desc: t('runDetail.strategyCanaryDesc') },
+  { value: 'blue_green', label: t('runDetail.strategyBlueGreenLabel'), desc: t('runDetail.strategyBlueGreenDesc') },
+  { value: 'interactive', label: t('runDetail.strategyInteractiveLabel'), desc: t('runDetail.strategyInteractiveDesc') },
+])
 
 // buildDeployConfig 据高级选项收敛 deployConfig;空字段不传(后端取默认)。
 function buildDeployConfig(): Record<string, string> | undefined {
@@ -270,9 +272,9 @@ async function handleDeploy(): Promise<void> {
     selectedServerIds.value = []
   } catch (err) {
     if (err instanceof HttpError) {
-      deployError.value = err.apiError?.message ?? `部署失败(${err.status})`
+      deployError.value = err.apiError?.message ?? t('runDetail.deployFailed', { status: err.status })
     } else {
-      deployError.value = '部署请求失败,请稍后重试'
+      deployError.value = t('runDetail.deployRequestFailed')
     }
   } finally {
     deploying.value = false
@@ -301,7 +303,7 @@ async function handleRetryFailed(): Promise<void> {
   // 复用产物:优先上次部署选中的;否则回退首个产物(刷新页面后表单态丢失的兜底)。
   const artifactId = selectedArtifactId.value || run.value.artifacts[0]?.id || ''
   if (!artifactId) {
-    retryError.value = '无可用产物,无法重试'
+    retryError.value = t('runDetail.noArtifactRetry')
     return
   }
   retrying.value = true
@@ -316,9 +318,9 @@ async function handleRetryFailed(): Promise<void> {
     run.value = { ...run.value, targets: res.targets, status: deriveStatus(res.targets) }
   } catch (err) {
     if (err instanceof HttpError) {
-      retryError.value = err.apiError?.message ?? `重试失败(${err.status})`
+      retryError.value = err.apiError?.message ?? t('runDetail.retryFailed', { status: err.status })
     } else {
-      retryError.value = '重试请求失败,请稍后重试'
+      retryError.value = t('runDetail.retryRequestFailed')
     }
   } finally {
     retrying.value = false
@@ -339,7 +341,7 @@ async function handleContinueDeploy(): Promise<void> {
   if (!run.value || batchBusy.value) return
   const artifactId = selectedArtifactId.value || run.value.artifacts[0]?.id || ''
   if (!artifactId) {
-    batchError.value = '无可用产物,无法续发'
+    batchError.value = t('runDetail.noArtifactContinue')
     return
   }
   batchBusy.value = true
@@ -352,7 +354,7 @@ async function handleContinueDeploy(): Promise<void> {
     })
     run.value = { ...run.value, targets: res.targets, status: deriveStatus(res.targets) }
   } catch (err) {
-    batchError.value = err instanceof HttpError ? (err.apiError?.message ?? `续发失败(${err.status})`) : '续发请求失败,请稍后重试'
+    batchError.value = err instanceof HttpError ? (err.apiError?.message ?? t('runDetail.continueFailed', { status: err.status })) : t('runDetail.continueRequestFailed')
   } finally {
     batchBusy.value = false
   }
@@ -366,7 +368,7 @@ async function handleAbortDeploy(): Promise<void> {
     const res = await abortDeploy(run.value.id)
     run.value = { ...run.value, targets: res.targets, status: deriveStatus(res.targets) }
   } catch (err) {
-    batchError.value = err instanceof HttpError ? (err.apiError?.message ?? `中止失败(${err.status})`) : '中止请求失败,请稍后重试'
+    batchError.value = err instanceof HttpError ? (err.apiError?.message ?? t('runDetail.abortFailed', { status: err.status })) : t('runDetail.abortRequestFailed')
   } finally {
     batchBusy.value = false
   }
@@ -384,10 +386,10 @@ async function loadRun(): Promise<void> {
   } catch (err) {
     if (err instanceof HttpError) {
       loadError.value = err.status === 404
-        ? `运行 ${runId.value} 不存在`
-        : (err.apiError?.message ?? `加载失败(${err.status})`)
+        ? t('runDetail.runNotFound', { id: runId.value })
+        : (err.apiError?.message ?? t('runDetail.loadFailed', { status: err.status }))
     } else {
-      loadError.value = '加载运行详情失败,请稍后重试'
+      loadError.value = t('runDetail.loadRequestFailed')
     }
     loadState.value = 'error'
   }
@@ -487,7 +489,6 @@ onUnmounted(() => { stopSse() })
 // ─── Status config (fixed six-word set) ──────────────────────────────────────
 
 interface StatusConfig {
-  label: string
   dot: string
   bg: string
   border: string
@@ -496,13 +497,18 @@ interface StatusConfig {
 }
 
 const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
-  queued:        { label: '排队中',   dot: 'var(--color-faint)',  bg: 'var(--color-card-2)',     border: 'var(--color-border-strong)', text: 'var(--color-dim)',   pulse: false },
-  running:       { label: '进行中',   dot: 'var(--color-amber)',  bg: 'var(--color-amber-soft)', border: 'transparent',               text: 'var(--color-amber)', pulse: true  },
-  waiting_approval:{ label: '等待审批', dot: 'var(--color-amber)', bg: 'var(--color-amber-soft)', border: 'var(--color-amber-line)',   text: 'var(--color-amber)', pulse: true  },
-  success:       { label: '成功',     dot: 'var(--color-green)',  bg: 'var(--color-green-soft)', border: 'transparent',               text: 'var(--color-green)', pulse: false },
-  failed:        { label: '失败',     dot: 'var(--color-red)',    bg: 'var(--color-red-soft)',   border: 'var(--color-red-line)',     text: 'var(--color-red)',   pulse: false },
-  partial_failed:{ label: '部分失败', dot: 'var(--color-red)',    bg: 'var(--color-red-soft)',   border: 'var(--color-red-line)',     text: 'var(--color-red)',   pulse: false },
-  rolled_back:   { label: '已回滚',   dot: 'var(--color-amber)',  bg: 'var(--color-amber-soft)', border: 'var(--color-amber-line)',   text: 'var(--color-amber)', pulse: false },
+  queued:        { dot: 'var(--color-faint)',  bg: 'var(--color-card-2)',     border: 'var(--color-border-strong)', text: 'var(--color-dim)',   pulse: false },
+  running:       { dot: 'var(--color-amber)',  bg: 'var(--color-amber-soft)', border: 'transparent',               text: 'var(--color-amber)', pulse: true  },
+  waiting_approval:{ dot: 'var(--color-amber)', bg: 'var(--color-amber-soft)', border: 'var(--color-amber-line)',   text: 'var(--color-amber)', pulse: true  },
+  success:       { dot: 'var(--color-green)',  bg: 'var(--color-green-soft)', border: 'transparent',               text: 'var(--color-green)', pulse: false },
+  failed:        { dot: 'var(--color-red)',    bg: 'var(--color-red-soft)',   border: 'var(--color-red-line)',     text: 'var(--color-red)',   pulse: false },
+  partial_failed:{ dot: 'var(--color-red)',    bg: 'var(--color-red-soft)',   border: 'var(--color-red-line)',     text: 'var(--color-red)',   pulse: false },
+  rolled_back:   { dot: 'var(--color-amber)',  bg: 'var(--color-amber-soft)', border: 'var(--color-amber-line)',   text: 'var(--color-amber)', pulse: false },
+}
+
+// 状态文案复用基础命名空间 runStatus.*(六态徽标 + aria 通用)。
+function statusLabel(status: RunStatus): string {
+  return t(`runStatus.${status}`)
 }
 
 // ─── Step config ─────────────────────────────────────────────────────────────
@@ -532,7 +538,7 @@ function shortCommit(commit: string): string {
 // 其余(进行中尚未解析)用占位符 —。
 function commitDisplay(commit: string, status: RunStatus): string {
   if (commit) return shortCommit(commit)
-  if (status === 'failed' || status === 'partial_failed' || status === 'rolled_back') return '未取到'
+  if (status === 'failed' || status === 'partial_failed' || status === 'rolled_back') return t('runDetail.commitUnresolved')
   return '—'
 }
 
@@ -548,7 +554,7 @@ function formatDuration(ms: number | null): string {
 function formatDateTime(iso: string | null): string {
   if (!iso) return '—'
   const d = new Date(iso)
-  return d.toLocaleString('zh-CN', {
+  return d.toLocaleString(locale.value, {
     month: 'numeric', day: 'numeric',
     hour: '2-digit', minute: '2-digit', second: '2-digit',
   })
@@ -575,22 +581,22 @@ function nodeClass(status: StepStatus): string {
 
     <!-- ─── Back link + breadcrumb ──────────────────────────────────────── -->
     <div class="breadcrumb">
-      <button class="back-btn" @click="goBack" aria-label="返回运行列表">
+      <button class="back-btn" @click="goBack" :aria-label="t('runDetail.backToRunsAria')">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
           <path d="M15 18l-6-6 6-6"/>
         </svg>
-        运行列表
+        {{ t('runDetail.runList') }}
       </button>
       <span class="breadcrumb-sep" aria-hidden="true">/</span>
       <span class="breadcrumb-cur">
-        运行详情
+        {{ t('runDetail.title') }}
         <span v-if="run" class="breadcrumb-id mono">· #{{ shortId(run.id) }}</span>
       </span>
     </div>
 
     <!-- ─── Loading skeleton ─────────────────────────────────────────────── -->
     <template v-if="loadState === 'loading'">
-      <div class="detail-loading" aria-busy="true" aria-label="加载运行详情中">
+      <div class="detail-loading" aria-busy="true" :aria-label="t('runDetail.loadingAria')">
         <div class="skel-head" />
         <div class="skel-body">
           <div class="skel skel--title" />
@@ -608,7 +614,7 @@ function nodeClass(status: StepStatus): string {
           <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
         </svg>
         <p class="error-message">{{ loadError }}</p>
-        <button class="btn-secondary" @click="loadRun">↻ 重试</button>
+        <button class="btn-secondary" @click="loadRun">↻ {{ t('runDetail.retry') }}</button>
       </div>
     </template>
 
@@ -629,7 +635,7 @@ function nodeClass(status: StepStatus): string {
                 border: `1px solid ${STATUS_CONFIG[run.status].border}`,
                 color: STATUS_CONFIG[run.status].text,
               }"
-              :aria-label="`运行状态:${STATUS_CONFIG[run.status].label}`"
+              :aria-label="t('runDetail.statusAria', { status: statusLabel(run.status) })"
               aria-live="polite"
             >
               <span
@@ -638,7 +644,7 @@ function nodeClass(status: StepStatus): string {
                 :style="{ background: STATUS_CONFIG[run.status].dot }"
                 aria-hidden="true"
               />
-              {{ STATUS_CONFIG[run.status].label }}
+              {{ statusLabel(run.status) }}
             </span>
 
             <h1 class="detail-title">
@@ -659,7 +665,7 @@ function nodeClass(status: StepStatus): string {
             <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <circle cx="12" cy="12" r="9"/><path d="m15 9-6 6M9 9l6 6"/>
             </svg>
-            {{ cancelling ? '取消中…' : '取消运行' }}
+            {{ cancelling ? t('runDetail.cancelling') : t('runDetail.cancelRun') }}
           </button>
         </div>
 
@@ -676,7 +682,7 @@ function nodeClass(status: StepStatus): string {
           v-if="run.status === 'waiting_approval' && pendingApproval"
           class="approval-gate"
           role="region"
-          aria-label="等待人工审批"
+          :aria-label="t('runDetail.approvalRegionAria')"
         >
           <div class="approval-gate-icon" aria-hidden="true">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -684,16 +690,16 @@ function nodeClass(status: StepStatus): string {
             </svg>
           </div>
           <div class="approval-gate-body">
-            <div class="approval-gate-title">阶段「{{ pendingApproval.stageName }}」等待人工审批</div>
-            <div class="approval-gate-sub">批准后继续执行,拒绝则该阶段失败、运行终止。</div>
+            <div class="approval-gate-title">{{ t('runDetail.approvalTitle', { stage: pendingApproval.stageName }) }}</div>
+            <div class="approval-gate-sub">{{ t('runDetail.approvalSub') }}</div>
             <div v-if="approvalError" class="approval-gate-error" role="alert">{{ approvalError }}</div>
           </div>
           <div class="approval-gate-actions">
             <button class="approval-btn approval-btn--reject" :disabled="approving" @click="decideApproval(false)">
-              拒绝
+              {{ t('runDetail.reject') }}
             </button>
             <button class="approval-btn approval-btn--approve" :disabled="approving" @click="decideApproval(true)">
-              {{ approving ? '处理中…' : '批准' }}
+              {{ approving ? t('runDetail.approving') : t('runDetail.approve') }}
             </button>
           </div>
         </div>
@@ -701,30 +707,30 @@ function nodeClass(status: StepStatus): string {
         <!-- ── Meta strip: trigger / branch / commit / duration ──────── -->
         <div class="meta-strip">
           <div class="meta-item">
-            <span class="meta-key">项目</span>
+            <span class="meta-key">{{ t('runDetail.metaProject') }}</span>
             <span class="meta-val">{{ run.projectName }}</span>
           </div>
           <div class="meta-item">
-            <span class="meta-key">分支</span>
+            <span class="meta-key">{{ t('runDetail.metaBranch') }}</span>
             <span class="meta-val mono">{{ run.trigger.branch }}</span>
           </div>
           <div class="meta-item">
-            <span class="meta-key">Commit</span>
+            <span class="meta-key">{{ t('runDetail.metaCommit') }}</span>
             <span
               class="meta-val mono"
               :class="{ 'meta-val--failed': !run.trigger.commit && (run.status === 'failed' || run.status === 'partial_failed' || run.status === 'rolled_back') }"
             >{{ commitDisplay(run.trigger.commit, run.status) }}</span>
           </div>
           <div class="meta-item">
-            <span class="meta-key">触发</span>
-            <span class="meta-val">{{ run.trigger.type === 'webhook' ? 'Webhook' : '手动' }} · {{ run.trigger.actor }}</span>
+            <span class="meta-key">{{ t('runDetail.metaTrigger') }}</span>
+            <span class="meta-val">{{ run.trigger.type === 'webhook' ? 'Webhook' : t('runDetail.triggerManual') }} · {{ run.trigger.actor }}</span>
           </div>
           <div class="meta-item">
-            <span class="meta-key">开始</span>
+            <span class="meta-key">{{ t('runDetail.metaStarted') }}</span>
             <span class="meta-val">{{ formatDateTime(run.startedAt) }}</span>
           </div>
           <div class="meta-item">
-            <span class="meta-key">耗时</span>
+            <span class="meta-key">{{ t('runDetail.metaDuration') }}</span>
             <span class="meta-val mono">{{ formatDuration(run.durationMs) }}</span>
           </div>
         </div>
@@ -741,7 +747,7 @@ function nodeClass(status: StepStatus): string {
 
             <!-- DAG topology: stage graph with steps, replaces linear skewer -->
             <div class="dag-section">
-              <h2 class="section-title">流水线进度</h2>
+              <h2 class="section-title">{{ t('runDetail.pipelineProgress') }}</h2>
               <RunDagView
                 :project-id="run.projectId"
                 :steps="run.steps"
@@ -752,7 +758,7 @@ function nodeClass(status: StepStatus): string {
             <!-- Two-column layout: 步骤详情(点击单步看其日志) + 实时日志终端 -->
             <div class="running-body">
               <RunStepList :steps="run.steps" :selected="selectedStepOrdinal" @select="selectedStepOrdinal = $event" />
-              <div class="slot-log-live" role="region" aria-label="实时日志终端">
+              <div class="slot-log-live" role="region" :aria-label="t('runDetail.liveLogAria')">
                 <RunTerminal :run-id="run.id" :live="true" :filter-ordinal="selectedStepOrdinal" />
               </div>
             </div>
@@ -765,7 +771,7 @@ function nodeClass(status: StepStatus): string {
 
             <!-- DAG topology: full-green stage graph -->
             <div class="dag-section">
-              <h2 class="section-title">流水线完成</h2>
+              <h2 class="section-title">{{ t('runDetail.pipelineComplete') }}</h2>
               <RunDagView
                 :project-id="run.projectId"
                 :steps="run.steps"
@@ -776,11 +782,11 @@ function nodeClass(status: StepStatus): string {
             <!-- Duration summary -->
             <div class="success-summary">
               <div class="summary-item">
-                <span class="summary-key">完成时间</span>
+                <span class="summary-key">{{ t('runDetail.finishedTime') }}</span>
                 <span class="summary-val">{{ formatDateTime(run.finishedAt) }}</span>
               </div>
               <div class="summary-item">
-                <span class="summary-key">总耗时</span>
+                <span class="summary-key">{{ t('runDetail.totalDuration') }}</span>
                 <span class="summary-val mono">{{ formatDuration(run.durationMs) }}</span>
               </div>
             </div>
@@ -823,7 +829,7 @@ function nodeClass(status: StepStatus): string {
             <!-- 步骤详情(点击单步看其日志)+ 历史日志回放(2 列;步骤完成后仍可见) -->
             <div class="running-body">
               <RunStepList :steps="run.steps" :selected="selectedStepOrdinal" @select="selectedStepOrdinal = $event" />
-              <div class="log-history" role="region" aria-label="历史运行日志">
+              <div class="log-history" role="region" :aria-label="t('runDetail.historyLogAria')">
                 <RunTerminal :run-id="run.id" :live="false" :filter-ordinal="selectedStepOrdinal" />
               </div>
             </div>
@@ -853,15 +859,15 @@ function nodeClass(status: StepStatus): string {
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                   <rect x="6" y="5" width="4" height="14" rx="1" /><rect x="14" y="5" width="4" height="14" rx="1" />
                 </svg>
-                <span>分批部署已暂停:首批已发布,其余 <strong>{{ pendingCount }}</strong> 台待确认</span>
+                <span>{{ t('runDetail.batchPausedPrefix') }}<strong>{{ pendingCount }}</strong>{{ t('runDetail.batchPausedSuffix') }}</span>
               </div>
               <p v-if="batchError" class="batch-pause-err" role="alert">{{ batchError }}</p>
               <div class="batch-pause-actions">
                 <button class="batch-btn batch-btn--go" :disabled="batchBusy" @click="handleContinueDeploy">
-                  {{ batchBusy ? '处理中…' : '继续部署其余' }}
+                  {{ batchBusy ? t('runDetail.processing') : t('runDetail.continueRest') }}
                 </button>
                 <button class="batch-btn batch-btn--abort" :disabled="batchBusy" @click="handleAbortDeploy">
-                  中止(保留旧版本)
+                  {{ t('runDetail.abortKeepOld') }}
                 </button>
               </div>
             </div>
@@ -876,19 +882,19 @@ function nodeClass(status: StepStatus): string {
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                   <path d="M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
                 </svg>
-                {{ hasDeployed ? '再次部署' : '部署到目标服务器' }}
+                {{ hasDeployed ? t('runDetail.deployAgain') : t('runDetail.deployToServers') }}
               </button>
 
               <!-- 部署配置面板:选产物 + 勾选服务器 + 触发 -->
-              <div v-else class="deploy-panel" role="region" aria-label="部署配置">
+              <div v-else class="deploy-panel" role="region" :aria-label="t('runDetail.deployConfigAria')">
                 <div class="deploy-panel-head">
-                  <span class="deploy-panel-title">部署到目标服务器</span>
-                  <button class="deploy-close" aria-label="收起部署面板" @click="showDeployPanel = false">✕</button>
+                  <span class="deploy-panel-title">{{ t('runDetail.deployToServers') }}</span>
+                  <button class="deploy-close" :aria-label="t('runDetail.deployCloseAria')" @click="showDeployPanel = false">✕</button>
                 </div>
 
                 <!-- 选择产物 -->
                 <div class="deploy-field">
-                  <label class="deploy-label" for="deploy-artifact">部署产物</label>
+                  <label class="deploy-label" for="deploy-artifact">{{ t('runDetail.deployArtifact') }}</label>
                   <select id="deploy-artifact" v-model="selectedArtifactId" class="deploy-select">
                     <option v-for="a in run.artifacts" :key="a.id" :value="a.id">
                       {{ a.name }} · {{ a.type }} · {{ a.reference }}
@@ -898,9 +904,9 @@ function nodeClass(status: StepStatus): string {
 
                 <!-- 选择服务器 -->
                 <div class="deploy-field">
-                  <span class="deploy-label">目标服务器</span>
+                  <span class="deploy-label">{{ t('runDetail.targetServers') }}</span>
                   <p v-if="deployServersLoaded && deployServers.length === 0" class="deploy-empty">
-                    暂无已登记的服务器,请先在「服务器」页登记。
+                    {{ t('runDetail.noServers') }}
                   </p>
                   <div v-else class="deploy-servers">
                     <label
@@ -922,11 +928,11 @@ function nodeClass(status: StepStatus): string {
 
                 <!-- 健康检查(Story 4-3 / FR-12):部署后门控,通过才算该机成功 -->
                 <div class="deploy-field">
-                  <label class="deploy-label" for="deploy-hc-type">健康检查</label>
+                  <label class="deploy-label" for="deploy-hc-type">{{ t('runDetail.healthCheck') }}</label>
                   <select id="deploy-hc-type" v-model="hcType" class="deploy-select">
-                    <option value="none">不检查(命令成功即视为部署成功)</option>
-                    <option value="http">HTTP 探测(curl)</option>
-                    <option value="command">命令探测</option>
+                    <option value="none">{{ t('runDetail.hcNone') }}</option>
+                    <option value="http">{{ t('runDetail.hcHttp') }}</option>
+                    <option value="command">{{ t('runDetail.hcCommand') }}</option>
                   </select>
 
                   <!-- http:探测 url -->
@@ -937,7 +943,7 @@ function nodeClass(status: StepStatus): string {
                     type="url"
                     inputmode="url"
                     placeholder="http://localhost:8080/healthz"
-                    aria-label="健康检查 URL"
+                    :aria-label="t('runDetail.hcUrlAria')"
                   />
 
                   <!-- command:探测命令(空格分词为 array,不拼 shell) -->
@@ -946,34 +952,34 @@ function nodeClass(status: StepStatus): string {
                     v-model="hcCommand"
                     class="deploy-select hc-input mono"
                     type="text"
-                    placeholder="例:systemctl is-active shop"
-                    aria-label="健康检查命令"
+                    :placeholder="t('runDetail.hcCommandPlaceholder')"
+                    :aria-label="t('runDetail.hcCommandAria')"
                   />
 
                   <!-- 重试 / 间隔 / 超时(http + command 通用) -->
                   <div v-if="hcType !== 'none'" class="hc-params">
                     <label class="hc-param">
-                      <span class="hc-param-key">重试次数</span>
+                      <span class="hc-param-key">{{ t('runDetail.hcRetries') }}</span>
                       <input v-model.number="hcRetries" class="hc-num" type="number" min="1" max="20" />
                     </label>
                     <label class="hc-param">
-                      <span class="hc-param-key">间隔(秒)</span>
+                      <span class="hc-param-key">{{ t('runDetail.hcInterval') }}</span>
                       <input v-model.number="hcIntervalSeconds" class="hc-num" type="number" min="0" max="3600" />
                     </label>
                     <label class="hc-param">
-                      <span class="hc-param-key">超时(秒)</span>
+                      <span class="hc-param-key">{{ t('runDetail.hcTimeout') }}</span>
                       <input v-model.number="hcTimeoutSeconds" class="hc-num" type="number" min="1" max="60" />
                     </label>
                   </div>
                   <p v-if="hcType !== 'none' && !healthCheckValid" class="deploy-empty">
-                    {{ hcType === 'http' ? '请填写探测 URL。' : '请填写探测命令。' }}
+                    {{ hcType === 'http' ? t('runDetail.hcUrlRequired') : t('runDetail.hcCommandRequired') }}
                   </p>
                 </div>
 
                 <!-- 部署策略(Story 8-8 / FR-8-8):rolling | canary | blue_green -->
                 <div class="deploy-field">
-                  <span class="deploy-label">发布策略</span>
-                  <div class="strat-seg" role="radiogroup" aria-label="发布策略">
+                  <span class="deploy-label">{{ t('runDetail.releaseStrategy') }}</span>
+                  <div class="strat-seg" role="radiogroup" :aria-label="t('runDetail.releaseStrategy')">
                     <button
                       v-for="opt in deployStrategyOptions"
                       :key="opt.value"
@@ -989,12 +995,12 @@ function nodeClass(status: StepStatus): string {
                     </button>
                   </div>
                   <label v-if="deployStrategy === 'canary'" class="adv-row strat-canary">
-                    <span class="adv-key">金丝雀台数</span>
-                    <input v-model.number="canaryCount" class="hc-num" type="number" min="1" max="100" aria-label="金丝雀台数" />
-                    <span class="adv-hint strat-canary-hint">先发这么多台并健康门控,通过后再铺其余</span>
+                    <span class="adv-key">{{ t('runDetail.canaryCount') }}</span>
+                    <input v-model.number="canaryCount" class="hc-num" type="number" min="1" max="100" :aria-label="t('runDetail.canaryCount')" />
+                    <span class="adv-hint strat-canary-hint">{{ t('runDetail.canaryHint') }}</span>
                   </label>
                   <p v-else-if="deployStrategy === 'blue_green'" class="adv-hint">
-                    全机先就绪发布目录、再统一原子切换;任一机切换失败则整个机群回滚到上一发布(dist / jar)。
+                    {{ t('runDetail.blueGreenHint') }}
                   </p>
                 </div>
 
@@ -1014,26 +1020,26 @@ function nodeClass(status: StepStatus): string {
                     >
                       <path d="M9 18l6-6-6-6" />
                     </svg>
-                    高级:零停机发布选项
+                    {{ t('runDetail.advancedToggle') }}
                   </button>
 
                   <div v-if="showAdvanced" class="adv-body">
                     <label class="adv-row">
-                      <span class="adv-key">发布根目录</span>
+                      <span class="adv-key">{{ t('runDetail.releaseBase') }}</span>
                       <input
                         v-model="releaseBase"
                         class="deploy-select mono"
                         type="text"
-                        placeholder="留空 → 后端从部署路径推导(<base>/releases/<runId> + <base>/current)"
-                        aria-label="发布根目录"
+                        :placeholder="t('runDetail.releaseBasePlaceholder')"
+                        :aria-label="t('runDetail.releaseBase')"
                       />
                     </label>
                     <label class="adv-row">
-                      <span class="adv-key">保留旧发布份数</span>
+                      <span class="adv-key">{{ t('runDetail.keepReleases') }}</span>
                       <input v-model.number="keepReleases" class="hc-num" type="number" min="1" max="50" />
                     </label>
                     <p class="adv-hint">
-                      dist / jar 部署到版本化发布目录并原子切换 current 软链;健康检查失败时自动回滚到上一发布。
+                      {{ t('runDetail.advancedHint') }}
                     </p>
                   </div>
                 </div>
@@ -1050,10 +1056,10 @@ function nodeClass(status: StepStatus): string {
                 <div class="deploy-actions">
                   <button class="btn-deploy" :disabled="!canDeploy" :aria-busy="deploying" @click="handleDeploy">
                     <span v-if="deploying" class="spinner" aria-hidden="true" />
-                    {{ deploying ? '部署中…' : '开始部署' }}
+                    {{ deploying ? t('runDetail.deploying') : t('runDetail.startDeploy') }}
                   </button>
                   <span v-if="selectedServerIds.length > 0" class="deploy-hint">
-                    已选 {{ selectedServerIds.length }} 台
+                    {{ t('runDetail.selectedCount', { n: selectedServerIds.length }) }}
                   </span>
                 </div>
               </div>
@@ -1069,7 +1075,7 @@ function nodeClass(status: StepStatus): string {
 
             <!-- DAG topology: failed stage highlighted -->
             <div class="dag-section">
-              <h2 class="section-title">流水线失败</h2>
+              <h2 class="section-title">{{ t('runDetail.pipelineFailed') }}</h2>
               <RunDagView
                 :project-id="run.projectId"
                 :steps="run.steps"
@@ -1095,7 +1101,7 @@ function nodeClass(status: StepStatus): string {
 
             <!-- 失败日志证据(只读历史回放,Story 3-6)。在 AI 诊断面板之上;
                  不属于 7-2 的 DiagnosisPanel slot,二者共存。 -->
-            <div class="log-history" role="region" aria-label="失败运行日志">
+            <div class="log-history" role="region" :aria-label="t('runDetail.failedLogAria')">
               <RunTerminal :run-id="run.id" :live="false" />
             </div>
 
@@ -1116,7 +1122,7 @@ function nodeClass(status: StepStatus): string {
 
             <!-- 成功/失败差异对比(Story 7-3;FR-25)。作为诊断「证据」补充,挂在 AI 诊断面板之后;
                  独立区块,不属于 7-2 的 DiagnosisPanel slot,二者共存。无 baseline/克隆失败时组件自身降级。 -->
-            <div class="diff-section" role="region" aria-label="成功失败代码差异对比">
+            <div class="diff-section" role="region" :aria-label="t('runDetail.diffAria')">
               <SuccessFailDiff :run-id="run.id" />
             </div>
 
@@ -1129,7 +1135,7 @@ function nodeClass(status: StepStatus): string {
 
             <!-- DAG topology: partial failure view -->
             <div class="dag-section">
-              <h2 class="section-title">部分失败</h2>
+              <h2 class="section-title">{{ t('runStatus.partial_failed') }}</h2>
               <RunDagView
                 :project-id="run.projectId"
                 :steps="run.steps"
@@ -1142,11 +1148,11 @@ function nodeClass(status: StepStatus): string {
                 <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
                 <path d="M12 9v4M12 17h.01"/>
               </svg>
-              部分目标失败,失败台已独立回滚;其余台继续运行,互不连累。
+              {{ t('runDetail.partialInfo') }}
             </div>
 
             <!-- 历史日志回放(只读,Story 3-6) -->
-            <div class="log-history" role="region" aria-label="历史运行日志">
+            <div class="log-history" role="region" :aria-label="t('runDetail.historyLogAria')">
               <RunTerminal :run-id="run.id" :live="false" />
             </div>
 
@@ -1166,7 +1172,7 @@ function nodeClass(status: StepStatus): string {
               @retry="handleRetryFailed"
             />
             <!-- 兜底:partial_failed 但无 targets(理论上不该出现)— 占位提示,不白屏 -->
-            <div v-else class="slot-panel slot-panel--multi" role="region" aria-label="多机目标状态">
+            <div v-else class="slot-panel slot-panel--multi" role="region" :aria-label="t('runDetail.multiTargetAria')">
               <div class="slot-header">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
                   <rect x="2" y="14" width="6" height="6" rx="1"/>
@@ -1174,10 +1180,10 @@ function nodeClass(status: StepStatus): string {
                   <rect x="9" y="2" width="6" height="6" rx="1"/>
                   <path d="M5 14v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 7v4"/>
                 </svg>
-                <span class="slot-title">多机目标扇出</span>
+                <span class="slot-title">{{ t('runDetail.multiTargetFanout') }}</span>
               </div>
               <div class="slot-body">
-                <span class="slot-placeholder-text">暂无多机部署结果</span>
+                <span class="slot-placeholder-text">{{ t('runDetail.noMultiResult') }}</span>
               </div>
             </div>
             <!-- END SLOT: 多机目标扇出 -->
@@ -1199,23 +1205,23 @@ function nodeClass(status: StepStatus): string {
                   color: STATUS_CONFIG[run.status].text,
                 }"
                 role="status"
-                :aria-label="`运行${STATUS_CONFIG[run.status].label}`"
+                :aria-label="t('runDetail.runStatusAria', { status: statusLabel(run.status) })"
               >
                 <span
                   class="status-dot"
                   :style="{ background: STATUS_CONFIG[run.status].dot }"
                   aria-hidden="true"
                 />
-                {{ STATUS_CONFIG[run.status].label }}
+                {{ statusLabel(run.status) }}
               </div>
 
               <div class="terminal-meta">
                 <div v-if="run.finishedAt" class="terminal-meta-item">
-                  <span class="meta-key">结束时间</span>
+                  <span class="meta-key">{{ t('runDetail.endTime') }}</span>
                   <span class="meta-val">{{ formatDateTime(run.finishedAt) }}</span>
                 </div>
                 <div v-if="run.durationMs !== null" class="terminal-meta-item">
-                  <span class="meta-key">总耗时</span>
+                  <span class="meta-key">{{ t('runDetail.totalDuration') }}</span>
                   <span class="meta-val mono">{{ formatDuration(run.durationMs) }}</span>
                 </div>
               </div>
@@ -1223,7 +1229,7 @@ function nodeClass(status: StepStatus): string {
 
             <!-- DAG topology: terminal state step record -->
             <div v-if="run.steps.length > 0" class="dag-section">
-              <h3 class="subsection-title">步骤记录</h3>
+              <h3 class="subsection-title">{{ t('runDetail.stepRecord') }}</h3>
               <RunDagView
                 :project-id="run.projectId"
                 :steps="run.steps"
@@ -1232,7 +1238,7 @@ function nodeClass(status: StepStatus): string {
             </div>
 
             <!-- 历史日志回放(只读,Story 3-6) -->
-            <div class="log-history" role="region" aria-label="历史运行日志">
+            <div class="log-history" role="region" :aria-label="t('runDetail.historyLogAria')">
               <RunTerminal :run-id="run.id" :live="false" />
             </div>
 

@@ -11,6 +11,9 @@
  * a vault reference, never a raw param — surfaced in the hint below.
  */
 import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 interface Row {
   /** Stable client key for v-for (params have no natural id). */
@@ -68,7 +71,7 @@ function removeRow(rid: number): void {
           placeholder="KEY"
           autocomplete="off"
           spellcheck="false"
-          aria-label="参数名"
+          :aria-label="t('projectPanels.runParams.keyAria')"
           :disabled="disabled"
           @input="commit"
         />
@@ -79,14 +82,14 @@ function removeRow(rid: number): void {
           type="text"
           placeholder="value"
           autocomplete="off"
-          aria-label="参数值"
+          :aria-label="t('projectPanels.runParams.valueAria')"
           :disabled="disabled"
           @input="commit"
         />
         <button
           type="button"
           class="params-del"
-          :aria-label="`删除参数 ${row.key || '(空)'}`"
+          :aria-label="t('projectPanels.runParams.deleteParamAria', { key: row.key || t('projectPanels.runParams.emptyKey') })"
           :disabled="disabled"
           @click="removeRow(row.rid)"
         >
@@ -96,15 +99,15 @@ function removeRow(rid: number): void {
         </button>
       </div>
     </div>
-    <p v-else class="params-empty">无参数</p>
+    <p v-else class="params-empty">{{ t('projectPanels.runParams.empty') }}</p>
 
     <button type="button" class="params-add" :disabled="disabled" @click="addRow">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
         <path d="M12 5v14M5 12h14" />
       </svg>
-      添加参数
+      {{ t('projectPanels.runParams.addParam') }}
     </button>
-    <p class="params-hint">运行时注入容器环境变量 <code>PW_&lt;KEY&gt;</code>;敏感值请走凭据引用,勿明文填此处</p>
+    <p class="params-hint">{{ t('projectPanels.runParams.hint', { var: 'PW_<KEY>' }) }}</p>
   </div>
 </template>
 

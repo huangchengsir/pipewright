@@ -10,7 +10,10 @@
 -->
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { ArtifactDTO, ArtifactType } from '../../api/runs'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   artifacts: ArtifactDTO[]
@@ -45,7 +48,7 @@ interface TypeConfig {
 }
 
 const TYPE_CONFIG: Record<ArtifactType, TypeConfig> = {
-  image:   { label: '镜像',    fg: 'var(--color-primary)', bg: 'var(--color-primary-soft)', line: 'var(--color-primary)', icon: 'image'   },
+  image:   { label: t('run.artifactTypeImage'), fg: 'var(--color-primary)', bg: 'var(--color-primary-soft)', line: 'var(--color-primary)', icon: 'image'   },
   jar:     { label: 'JAR',     fg: 'var(--color-amber)',   bg: 'var(--color-amber-soft)',   line: 'var(--color-amber-line)',   icon: 'jar'     },
   dist:    { label: 'dist',    fg: 'var(--color-cyan)',    bg: 'var(--color-cyan-soft)',    line: 'var(--color-cyan-line)',    icon: 'dist'    },
   archive: { label: 'archive', fg: 'var(--color-green)',   bg: 'var(--color-green-soft)',   line: 'var(--color-green-line)',   icon: 'archive' },
@@ -60,7 +63,7 @@ function typeConfig(type: string): TypeConfig {
 // ─── Human-readable size ──────────────────────────────────────────────────────
 
 function humanSize(bytes: number): string {
-  if (!bytes || bytes <= 0) return '未知'
+  if (!bytes || bytes <= 0) return t('run.sizeUnknown')
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
   let v = bytes
   let i = 0
@@ -96,18 +99,18 @@ async function copyReference(a: ArtifactDTO): Promise<void> {
 </script>
 
 <template>
-  <section class="artifact-list" role="region" aria-label="构建产物">
+  <section class="artifact-list" role="region" :aria-label="t('run.artifacts')">
     <header class="al-head">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
         <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
         <path d="M3.27 6.96 12 12.01l8.73-5.05M12 22.08V12"/>
       </svg>
-      <h3 class="al-title">构建产物</h3>
+      <h3 class="al-title">{{ t('run.artifacts') }}</h3>
       <span class="al-count">{{ artifacts.length }}</span>
     </header>
 
     <!-- Empty (success but no artifacts emitted) -->
-    <p v-if="artifacts.length === 0" class="al-empty">本次运行未产出可寻址的构建产物。</p>
+    <p v-if="artifacts.length === 0" class="al-empty">{{ t('run.artifactsEmpty') }}</p>
 
     <ul v-else class="al-items" role="list">
       <li
@@ -120,7 +123,7 @@ async function copyReference(a: ArtifactDTO): Promise<void> {
         <span
           class="type-badge"
           :style="{ color: typeConfig(a.type).fg, background: typeConfig(a.type).bg }"
-          :aria-label="`产物类型:${typeConfig(a.type).label}`"
+          :aria-label="t('run.artifactTypeAria', { label: typeConfig(a.type).label })"
         >
           <!-- image -->
           <svg v-if="typeConfig(a.type).icon === 'image'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true">
@@ -145,19 +148,19 @@ async function copyReference(a: ArtifactDTO): Promise<void> {
         <div class="artifact-main">
           <div class="artifact-name-row">
             <span class="artifact-name">{{ a.name }}</span>
-            <span v-if="sourceLabel(a)" class="source-tag" :title="`产出节点:${sourceLabel(a)}`">
+            <span v-if="sourceLabel(a)" class="source-tag" :title="t('run.sourceNodeTitle', { label: sourceLabel(a) })">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                 <circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M6 8.5v7M18 8a4 4 0 0 1-4 4H8.5"/><circle cx="18" cy="6" r="2.5"/>
               </svg>
               {{ sourceLabel(a) }}
             </span>
-            <span v-if="isStub(a)" class="stub-tag" title="桩产物(无真实构建,3-3 后换真实产物)">桩</span>
+            <span v-if="isStub(a)" class="stub-tag" :title="t('run.stubTitle')">{{ t('run.stubTag') }}</span>
           </div>
           <button
             type="button"
             class="reference-row"
-            :title="`复制寻址引用:${a.reference}`"
-            :aria-label="`复制产物寻址引用 ${a.reference}`"
+            :title="t('run.copyReferenceTitle', { ref: a.reference })"
+            :aria-label="t('run.copyReferenceAria', { ref: a.reference })"
             @click="copyReference(a)"
           >
             <code class="reference mono">{{ a.reference }}</code>
@@ -169,12 +172,12 @@ async function copyReference(a: ArtifactDTO): Promise<void> {
                 <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
               </svg>
             </span>
-            <span v-if="copiedId === a.id" class="copied-hint" role="status">已复制</span>
+            <span v-if="copiedId === a.id" class="copied-hint" role="status">{{ t('run.copied') }}</span>
           </button>
         </div>
 
         <!-- Size -->
-        <span class="artifact-size mono" :aria-label="`大小 ${humanSize(a.sizeBytes)}`">{{ humanSize(a.sizeBytes) }}</span>
+        <span class="artifact-size mono" :aria-label="t('run.sizeAria', { size: humanSize(a.sizeBytes) })">{{ humanSize(a.sizeBytes) }}</span>
 
         <!-- Download (仅已归档真字节可下载) -->
         <a
@@ -182,13 +185,13 @@ async function copyReference(a: ArtifactDTO): Promise<void> {
           class="download-btn"
           :href="downloadUrl(a)"
           download
-          :title="`下载产物 ${a.name}`"
-          :aria-label="`下载产物 ${a.name}`"
+          :title="t('run.downloadTitle', { name: a.name })"
+          :aria-label="t('run.downloadTitle', { name: a.name })"
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
           </svg>
-          下载
+          {{ t('run.download') }}
         </a>
       </li>
     </ul>

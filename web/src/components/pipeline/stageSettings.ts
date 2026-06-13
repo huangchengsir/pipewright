@@ -7,6 +7,7 @@
  */
 
 import type { StageWhen, PipelinePostStep, PipelineServiceSpec } from '../../api/pipeline'
+import { t } from '../../i18n'
 
 /** Trigger event types a stage's `when` can gate on (backend枚举 in stage_when.go). */
 export const WHEN_EVENTS = ['manual', 'webhook', 'schedule'] as const
@@ -14,9 +15,13 @@ export type WhenEvent = (typeof WHEN_EVENTS)[number]
 
 /** Human label for each trigger event (UI display only). */
 export const WHEN_EVENT_LABELS: Record<WhenEvent, string> = {
-  manual: '手动',
+  get manual() {
+    return t('pipelineJob.whenManual')
+  },
   webhook: 'Webhook',
-  schedule: '定时',
+  get schedule() {
+    return t('pipelineJob.whenSchedule')
+  },
 }
 
 /**
@@ -163,18 +168,18 @@ export function matrixError(matrix: Record<string, string[]> | undefined): strin
   const names = Object.keys(matrix!)
   for (const name of names) {
     if (!isValidAxisName(name)) {
-      return `轴名「${name}」非法(须为标识符:字母/下划线起)`
+      return t('pipelineJob.matrixAxisInvalid', { name })
     }
     if (!(matrix![name] ?? []).length) {
-      return `轴「${name}」至少需要一个值`
+      return t('pipelineJob.matrixAxisNeedsValue', { name })
     }
   }
   if (names.length > MATRIX_MAX_AXES) {
-    return `矩阵维度 ${names.length} 超过上限 ${MATRIX_MAX_AXES}`
+    return t('pipelineJob.matrixTooManyAxes', { count: names.length, max: MATRIX_MAX_AXES })
   }
   const cells = matrixCellCount(matrix)
   if (cells > MATRIX_MAX_CELLS) {
-    return `矩阵展开 ${cells} 个 cell,超过上限 ${MATRIX_MAX_CELLS}`
+    return t('pipelineJob.matrixTooManyCells', { cells, max: MATRIX_MAX_CELLS })
   }
   return null
 }
@@ -193,9 +198,15 @@ export const POST_CONDITIONS = ['always', 'on_success', 'on_failure'] as const
 export type PostCondition = (typeof POST_CONDITIONS)[number]
 
 export const POST_CONDITION_LABELS: Record<PostCondition, string> = {
-  always: '总是',
-  on_success: '成功时',
-  on_failure: '失败时',
+  get always() {
+    return t('pipelineJob.postAlways')
+  },
+  get on_success() {
+    return t('pipelineJob.postOnSuccess')
+  },
+  get on_failure() {
+    return t('pipelineJob.postOnFailure')
+  },
 }
 
 export function hasPost(post: PipelinePostStep[] | undefined): boolean {

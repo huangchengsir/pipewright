@@ -103,6 +103,30 @@ const STATUS_LABEL_KEY: Record<RunDiffFile['status'], string> = {
 function statusLabel(status: RunDiffFile['status']): string {
   return t(STATUS_LABEL_KEY[status])
 }
+
+// Expand/collapse each file's redacted +/- patch body (tracked by path).
+const expanded = ref<Set<string>>(new Set())
+function toggle(path: string): void {
+  const next = new Set(expanded.value)
+  if (next.has(path)) next.delete(path)
+  else next.add(path)
+  expanded.value = next
+}
+
+interface PatchLine {
+  sign: '+' | '-'
+  text: string
+}
+// Split the redacted patch body into +/- lines for per-line coloring.
+function patchLines(patch: string): PatchLine[] {
+  const out: PatchLine[] = []
+  for (const raw of patch.split('\n')) {
+    if (!raw) continue
+    const sign: '+' | '-' = raw[0] === '-' ? '-' : '+'
+    out.push({ sign, text: raw.slice(1) })
+  }
+  return out
+}
 </script>
 
 <template>
@@ -176,19 +200,38 @@ function statusLabel(status: RunDiffFile['status']): string {
         <li
           v-for="f in diff.files"
           :key="f.path"
-          class="sfd-file"
+          class="sfd-file-item"
           :class="statusClass(f.status)"
         >
-          <span class="sfd-file-status" :aria-label="statusLabel(f.status)">{{ statusGlyph[f.status] }}</span>
-          <span class="sfd-file-path mono" :title="f.path">{{ f.path }}</span>
-          <span class="sfd-file-counts mono" aria-hidden="true">
-            <span v-if="f.additions" class="sfd-c-add">+{{ f.additions }}</span>
-            <span v-if="f.deletions" class="sfd-c-del">−{{ f.deletions }}</span>
-          </span>
-          <span class="sfd-file-bar" aria-hidden="true">
-            <span class="sfd-bar-add" :style="{ width: barPct(f, 'add') }" />
-            <span class="sfd-bar-del" :style="{ width: barPct(f, 'del') }" />
-          </span>
+          <button
+            type="button"
+            class="sfd-file"
+            :class="{ 'sfd-file--expandable': !!f.patch, 'is-open': expanded.has(f.path) }"
+            :disabled="!f.patch"
+            :aria-expanded="f.patch ? expanded.has(f.path) : undefined"
+            @click="f.patch && toggle(f.path)"
+          >
+            <span class="sfd-file-caret mono" aria-hidden="true">{{ f.patch ? (expanded.has(f.path) ? '▾' : '▸') : '·' }}</span>
+            <span class="sfd-file-status" :aria-label="statusLabel(f.status)">{{ statusGlyph[f.status] }}</span>
+            <span class="sfd-file-path mono" :title="f.path">{{ f.path }}</span>
+            <span class="sfd-file-counts mono" aria-hidden="true">
+              <span v-if="f.additions" class="sfd-c-add">+{{ f.additions }}</span>
+              <span v-if="f.deletions" class="sfd-c-del">−{{ f.deletions }}</span>
+            </span>
+            <span class="sfd-file-bar" aria-hidden="true">
+              <span class="sfd-bar-add" :style="{ width: barPct(f, 'add') }" />
+              <span class="sfd-bar-del" :style="{ width: barPct(f, 'del') }" />
+            </span>
+          </button>
+          <div v-if="f.patch && expanded.has(f.path)" class="sfd-patch">
+            <pre class="sfd-patch-pre" :aria-label="t('run.patchAria', { path: f.path })"><span
+              v-for="(ln, i) in patchLines(f.patch)"
+              :key="i"
+              class="sfd-pl"
+              :class="ln.sign === '+' ? 'sfd-pl--add' : 'sfd-pl--del'"
+            >{{ ln.sign }}{{ ln.text }}</span></pre>
+            <p v-if="f.patchTruncated" class="sfd-patch-trunc" role="note">{{ t('run.patchTruncated') }}</p>
+          </div>
         </li>
       </ul>
 
@@ -338,18 +381,65 @@ function statusLabel(status: RunDiffFile['status']): string {
   border-radius: 9px;
   overflow: hidden;
 }
+.sfd-file-item {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--color-border);
+}
+.sfd-file-item:last-child { border-bottom: none; }
 .sfd-file {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto 72px;
+  grid-template-columns: 16px 22px minmax(0, 1fr) auto 72px;
   align-items: center;
   gap: var(--space-3);
   padding: 7px var(--space-3);
-  border-bottom: 1px solid var(--color-border);
+  border: none;
   background: var(--color-inset);
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: default;
   transition: background var(--duration-fast, 150ms) ease;
 }
-.sfd-file:last-child { border-bottom: none; }
-.sfd-file:hover { background: var(--color-card-2); }
+.sfd-file--expandable { cursor: pointer; }
+.sfd-file--expandable:hover { background: var(--color-card-2); }
+.sfd-file.is-open { background: var(--color-card-2); }
+.sfd-file-caret {
+  color: var(--color-text-soft, var(--color-text-muted, #888));
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+/* ─── Expanded patch body (redacted +/- lines) ─────────────────────── */
+.sfd-patch {
+  border-top: 1px dashed var(--color-border);
+  background: var(--color-inset);
+}
+.sfd-patch-pre {
+  margin: 0;
+  padding: var(--space-2) 0;
+  max-height: 360px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  tab-size: 2;
+}
+.sfd-pl {
+  display: block;
+  padding: 0 var(--space-3);
+  white-space: pre;
+}
+.sfd-pl--add { background: var(--color-green-soft); color: var(--color-green); }
+.sfd-pl--del { background: var(--color-red-soft); color: var(--color-red); }
+.sfd-patch-trunc {
+  margin: 0;
+  padding: 6px var(--space-3);
+  font-size: 0.75rem;
+  color: var(--color-text-muted, #888);
+  border-top: 1px dashed var(--color-border);
+}
 
 .sfd-file-status {
   display: inline-flex;

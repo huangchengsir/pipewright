@@ -13,6 +13,7 @@ import (
 
 	"github.com/huangchengsir/pipewright/internal/dag"
 	"github.com/huangchengsir/pipewright/internal/dagrun"
+	"github.com/huangchengsir/pipewright/internal/deploy"
 	"github.com/huangchengsir/pipewright/internal/notify"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
@@ -126,7 +127,14 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 		if !needsBuild && len(deployJobs) == 0 && len(notifyJobs) == 0 && len(stage.Post) == 0 {
 			for _, jb := range stage.Jobs {
 				_ = rep.JobRunning(ctx, jb.ID)
-				_ = rep.JobReporter(jb.ID).Log(ctx, streamStdout, fmt.Sprintf("· %s(%s)— 真实执行未接入;本阶段放行", jb.Name, jb.Type))
+				jr := rep.JobReporter(jb.ID)
+				if strings.TrimSpace(jb.Type) == "git_source" {
+					for _, line := range gitSourceLogLines(jb, r) {
+						_ = jr.Log(ctx, streamStdout, line)
+					}
+				} else {
+					_ = jr.Log(ctx, streamStdout, fmt.Sprintf("· %s(%s)— 真实执行未接入;本阶段放行", jb.Name, jb.Type))
+				}
 				_ = rep.JobDone(ctx, jb.ID, run.StepSuccess)
 			}
 			if len(stage.Jobs) == 0 {
@@ -595,7 +603,9 @@ func (b *Builder) runDeployJob(ctx context.Context, rep dagrun.StageReporter, jb
 		stratLabel = "rolling(默认)"
 	}
 	_ = rep.Log(ctx, streamStdout, fmt.Sprintf("→ SSH 部署本次产物到服务器 %s(策略 %s)…", serverID, stratLabel))
-	results, err := b.deployer.DeployForStage(ctx, runID, []string{serverID}, cfg, strategy)
+	// 把目标机真实执行的命令 + stdout/stderr 实时回流到本部署步骤日志(脱敏由 sink 侧 Masker 兜底)。
+	dctx := deploy.WithCmdLog(ctx, func(stream, text string) { _ = rep.Log(ctx, stream, text) })
+	results, err := b.deployer.DeployForStage(dctx, runID, []string{serverID}, cfg, strategy)
 	if err != nil {
 		_ = rep.Log(ctx, streamStderr, "部署失败:"+err.Error())
 		return ErrBuildFailed
@@ -945,6 +955,43 @@ func cfgString(cfg map[string]any, key string) string {
 		return strings.TrimSpace(v)
 	}
 	return ""
+}
+
+// gitSourceLogLines 为 git_source 节点拼出可读的源码信息(仓库 / 分支 / 提交 / 凭据)。
+// 注:git_source 是 go-git 库克隆(非 shell 命令),真实检出发生在构建阶段各 job 工作区,
+// 此处展示「本阶段引用的源」让步骤日志不再是空占位。绝不回显凭据值,只标注是否已绑定。
+func gitSourceLogLines(jb pipeline.Job, r *run.Run) []string {
+	repo := cfgString(jb.Config, "repoUrl")
+	branch := cfgString(jb.Config, "branch")
+	if branch == "" {
+		branch = strings.TrimSpace(r.Trigger.Branch)
+	}
+	if branch == "" {
+		branch = "(默认分支)"
+	}
+	commit := strings.TrimSpace(r.Trigger.Commit)
+	lines := []string{}
+	if repo != "" {
+		lines = append(lines, "· 源码仓库:"+repo)
+	}
+	branchLine := "· 分支:" + branch
+	if commit != "" {
+		if len(commit) > 12 {
+			commit = commit[:12]
+		}
+		branchLine += "   · 提交:" + commit
+	} else {
+		branchLine += "   · 提交:构建阶段克隆时解析 HEAD"
+	}
+	lines = append(lines, branchLine)
+	if cfgString(jb.Config, "credentialId") != "" {
+		lines = append(lines, "· 凭据:已绑定(经保险库,绝不回显)")
+	}
+	lines = append(lines, "· 实际克隆在构建阶段各 job 工作区执行(go-git 浅克隆)")
+	if len(lines) == 0 {
+		lines = append(lines, fmt.Sprintf("· %s(git_source)", jb.Name))
+	}
+	return lines
 }
 
 // splitCommands 把多行命令字符串拆成逐行命令(trim 尾随 CR、剔空行)。

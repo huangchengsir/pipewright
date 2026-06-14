@@ -140,7 +140,7 @@ func (hc *HealthCheck) probeCommand() ([]string, error) {
 
 // runHealthCheck 在指定目标机上做健康探测:重试 N 次 + 间隔 + 单次 ctx 超时。
 //
-// 经注入的 s.targets.Exec(同部署链路)执行 array 命令。任一次尝试「无执行错误且退出码为 0」
+// 经注入的 s.exec(同部署链路)执行 array 命令。任一次尝试「无执行错误且退出码为 0」
 // 即判通过,返回 nil;否则间隔后重试;重试耗尽仍失败 → 返回人读错误(绝无明文密钥)。
 // 外层 ctx 取消 / 超时 → 立即停止并返回。
 func (s *service) runHealthCheck(ctx context.Context, serverID string, hc *HealthCheck) error {
@@ -160,7 +160,7 @@ func (s *service) runHealthCheck(ctx context.Context, serverID string, hc *Healt
 		}
 
 		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
-		out, eerr := s.targets.Exec(attemptCtx, serverID, cmd)
+		out, eerr := s.exec(attemptCtx, serverID, cmd)
 		cancel()
 
 		switch {

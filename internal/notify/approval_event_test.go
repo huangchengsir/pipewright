@@ -54,26 +54,39 @@ func TestApprovalRequiredPayloadCarriesActionURL(t *testing.T) {
 	}
 }
 
-// 飞书卡片把 actionUrl 渲染为可点击 lark_md 链接 [text](url)。
-func TestFeishuCardRendersActionURLAsLink(t *testing.T) {
+// 飞书卡片把审批 actionUrl 渲染为底部可点击按钮(action/button,主色 primary,带 url)。
+// 点击按钮即打开 HMAC 审批确认页(回调链路见 approval 确认端点)。
+func TestFeishuCardRendersActionURLAsButton(t *testing.T) {
 	link := "https://ci.example.com/approvals?token=abc.def"
 	card := feishuCardFor(Payload{
 		Title:  "需要审批",
 		Body:   "请确认",
-		Fields: map[string]string{"project": "proj", fieldActionURL: link},
+		Fields: map[string]string{"project": "proj", "event": EventApprovalRequired, fieldActionURL: link},
 		Lang:   "zh-CN",
 	})
-	var joined strings.Builder
+	var btn *feishuActionBtn
 	for _, el := range card.Elements {
-		for _, f := range el.Fields {
-			joined.WriteString(f.Text.Content)
-			joined.WriteString("\n")
+		if el.Tag == "action" && len(el.Actions) > 0 {
+			b := el.Actions[0]
+			btn = &b
 		}
-		if el.Text != nil {
-			joined.WriteString(el.Text.Content)
+		// actionUrl 不应再混进字段双列
+		for _, f := range el.Fields {
+			if strings.Contains(f.Text.Content, link) {
+				t.Fatalf("actionUrl 不应出现在字段双列: %q", f.Text.Content)
+			}
 		}
 	}
-	if !strings.Contains(joined.String(), "]("+link+")") {
-		t.Fatalf("feishu card missing clickable link for actionUrl: %q", joined.String())
+	if btn == nil {
+		t.Fatalf("飞书卡片缺少 actionUrl 的行动按钮: %+v", card.Elements)
+	}
+	if btn.URL != link {
+		t.Fatalf("按钮 url = %q,应为 %q", btn.URL, link)
+	}
+	if btn.Type != "primary" {
+		t.Fatalf("审批按钮应为 primary 主色,得 %q", btn.Type)
+	}
+	if btn.Text.Content != "前往审批" {
+		t.Fatalf("审批按钮文案应为「前往审批」,得 %q", btn.Text.Content)
 	}
 }

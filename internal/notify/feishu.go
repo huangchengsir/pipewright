@@ -60,11 +60,22 @@ type feishuCardHeader struct {
 	Title    feishuCardText `json:"title"`
 }
 
-// feishuCardElem 是卡片元素(本实现用 div):text(整段正文)或 fields(双列字段),二者择一。
+// feishuCardElem 是卡片元素:div(text 正文 / fields 双列)、hr(分隔线)、
+// note(底部小字)、action(按钮组)。按 tag 取用对应字段,其余 omitempty。
 type feishuCardElem struct {
-	Tag    string            `json:"tag"`              // 恒 "div"
-	Text   *feishuCardText   `json:"text,omitempty"`   // 正文段(lark_md)
-	Fields []feishuCardField `json:"fields,omitempty"` // 字段双列(lark_md)
+	Tag      string            `json:"tag"`                // div / hr / note / action
+	Text     *feishuCardText   `json:"text,omitempty"`     // div 正文段(lark_md)
+	Fields   []feishuCardField `json:"fields,omitempty"`   // div 字段双列(lark_md)
+	Elements []feishuCardText  `json:"elements,omitempty"` // note 段的小字元素
+	Actions  []feishuActionBtn `json:"actions,omitempty"`  // action 段的按钮
+}
+
+// feishuActionBtn 是 action 段里的跳转按钮(点击打开 url)。
+type feishuActionBtn struct {
+	Tag  string         `json:"tag"`            // 恒 "button"
+	Text feishuCardText `json:"text"`           // plain_text 按钮文案
+	URL  string         `json:"url,omitempty"`  // 点击跳转地址
+	Type string         `json:"type,omitempty"` // primary / default / danger
 }
 
 // feishuCardField 双列字段格:is_short=true 即半宽,两两并排成双列。
@@ -171,8 +182,8 @@ func (s *service) sendFeishu(ctx context.Context, ch *Channel, sealed []byte, pa
 }
 
 // feishuFieldOrder 字段在卡片里的展示顺序(业务可读优先,而非字母序);未列出的 key 追加在后、按字母序。
-// actionUrl(操作/审批链接)排在最后,作为卡片底部的行动入口。
-var feishuFieldOrder = []string{"project", "branch", "commit", "status", "duration", "event", fieldActionURL}
+// actionUrl 不在此列:它单独渲染成底部行动按钮(见 feishuCardFor)。
+var feishuFieldOrder = []string{"project", "branch", "commit", "status", "duration", "event"}
 
 // feishuFieldLabel 字段 key → 中文标签(卡片里展示更友好)。未知 key 原样用 key。
 func feishuFieldLabel(key, lang string) string {
@@ -200,12 +211,15 @@ func feishuFieldLabel(key, lang string) string {
 	}
 }
 
-// feishuCardFor 把通知载荷拼成飞书交互卡片:彩色头部 + lark_md 正文 + 字段双列。
+// feishuCardFor 把通知载荷拼成飞书交互卡片:状态图标 + 彩色头部 + lark_md 正文 +
+// 分隔线 + 字段双列 + 行动按钮(有 actionUrl 时)+ 底部品牌小字。
 func feishuCardFor(p Payload) feishuCard {
 	title := strings.TrimSpace(p.Title)
 	if title == "" {
 		title = i18n.T(p.Lang, "Pipewright 通知")
 	}
+	// 头部标题前缀状态图标(✅/❌/🔄/🔔/🚀),让群里一眼看出结果。仅作用于飞书卡片。
+	title = feishuTitleIcon(p) + " " + title
 
 	card := feishuCard{
 		Config: feishuCardConfig{WideScreenMode: true},
@@ -215,7 +229,7 @@ func feishuCardFor(p Payload) feishuCard {
 		},
 	}
 
-	// 正文段(lark_md)。空则省略(飞书允许卡片无正文段,只要 elements 非空)。
+	// 正文段(lark_md)。空则省略。
 	if body := strings.TrimSpace(p.Body); body != "" {
 		card.Elements = append(card.Elements, feishuCardElem{
 			Tag:  "div",
@@ -223,22 +237,60 @@ func feishuCardFor(p Payload) feishuCard {
 		})
 	}
 
-	// 字段双列(lark_md,每格 **标签**\n值)。按业务顺序排,稳定不抖动。
+	// 字段双列(lark_md,每格 **标签**\n值)。前置分隔线把正文与字段分区。
 	if fields := feishuOrderedFields(p.Fields, p.Lang); len(fields) > 0 {
+		if len(card.Elements) > 0 {
+			card.Elements = append(card.Elements, feishuCardElem{Tag: "hr"})
+		}
+		card.Elements = append(card.Elements, feishuCardElem{Tag: "div", Fields: fields})
+	}
+
+	// 行动按钮:有 actionUrl 时渲染成可点击按钮(审批用主色 primary,其余用默认色)。
+	if url := strings.TrimSpace(p.Fields[fieldActionURL]); url != "" {
+		label := i18n.T(p.Lang, "查看运行详情")
+		btnType := "default"
+		if strings.Contains(strings.ToLower(p.Fields["event"]), "approval") {
+			label = i18n.T(p.Lang, "前往审批")
+			btnType = "primary"
+		}
 		card.Elements = append(card.Elements, feishuCardElem{
-			Tag:    "div",
-			Fields: fields,
+			Tag: "action",
+			Actions: []feishuActionBtn{{
+				Tag:  "button",
+				Text: feishuCardText{Tag: "plain_text", Content: label},
+				URL:  url,
+				Type: btnType,
+			}},
 		})
 	}
 
-	// 兜底:正文与字段都空时,放一个占位段(飞书卡片 elements 不可为空)。
-	if len(card.Elements) == 0 {
-		card.Elements = append(card.Elements, feishuCardElem{
-			Tag:  "div",
-			Text: &feishuCardText{Tag: "lark_md", Content: i18n.T(p.Lang, "(空通知)")},
-		})
+	// 底部品牌小字(note 段)。始终存在,故 elements 永不为空,无需占位兜底。
+	if len(card.Elements) > 0 {
+		card.Elements = append(card.Elements, feishuCardElem{Tag: "hr"})
 	}
+	card.Elements = append(card.Elements, feishuCardElem{
+		Tag:      "note",
+		Elements: []feishuCardText{{Tag: "lark_md", Content: i18n.T(p.Lang, "🤖 来自 Pipewright · 自动化 CI/CD")}},
+	})
 	return card
+}
+
+// feishuTitleIcon 据运行结果给标题选个状态图标(与 feishuHeaderColor 同源语义)。
+func feishuTitleIcon(p Payload) string {
+	event := strings.ToLower(strings.TrimSpace(p.Fields["event"]))
+	status := strings.ToLower(strings.TrimSpace(p.Fields["status"]))
+	switch {
+	case strings.Contains(event, "approval"):
+		return "🔔"
+	case strings.Contains(event, "rollback") || strings.Contains(status, "rolled_back") || strings.Contains(status, "rollback"):
+		return "🔄"
+	case strings.Contains(event, "fail") || strings.Contains(status, "fail"):
+		return "❌"
+	case strings.Contains(event, "succeed") || status == "success" || strings.Contains(status, "success"):
+		return "✅"
+	default:
+		return "🚀"
+	}
 }
 
 // feishuOrderedFields 把 Payload.Fields 渲染成双列卡片字段格(业务顺序优先,稳定)。
@@ -255,10 +307,10 @@ func feishuOrderedFields(fields map[string]string, lang string) []feishuCardFiel
 			seen[k] = true
 		}
 	}
-	// 2. 其余 key 按字母序追加(稳定,避免 map 迭代乱序)
+	// 2. 其余 key 按字母序追加(稳定,避免 map 迭代乱序);actionUrl 单独走按钮,跳过。
 	rest := make([]string, 0)
 	for k := range fields {
-		if !seen[k] {
+		if !seen[k] && k != fieldActionURL {
 			rest = append(rest, k)
 		}
 	}
@@ -267,22 +319,37 @@ func feishuOrderedFields(fields map[string]string, lang string) []feishuCardFiel
 
 	out := make([]feishuCardField, 0, len(keys))
 	for _, k := range keys {
-		content := "**" + feishuFieldLabel(k, lang) + "**\n" + fields[k]
-		isShort := true
-		if k == fieldActionURL && strings.TrimSpace(fields[k]) != "" {
-			// 操作链接渲染为可点击 lark_md 链接(整行宽,作为卡片底部行动入口)。
-			content = "**" + feishuFieldLabel(k, lang) + "**\n[" + i18n.T(lang, "点击前往审批") + "](" + fields[k] + ")"
-			isShort = false
+		value := fields[k]
+		// 状态字段值前置图标,双列里也一眼可读。
+		if k == "status" {
+			value = feishuStatusIcon(value) + " " + value
 		}
 		out = append(out, feishuCardField{
-			IsShort: isShort, // 半宽 → 两两并排成双列;操作链接整行宽
+			IsShort: true, // 半宽 → 两两并排成双列
 			Text: feishuCardText{
 				Tag:     "lark_md",
-				Content: content,
+				Content: "**" + feishuFieldLabel(k, lang) + "**\n" + value,
 			},
 		})
 	}
 	return out
+}
+
+// feishuStatusIcon 据 status 文本选图标(用于字段双列里的状态值)。
+func feishuStatusIcon(status string) string {
+	s := strings.ToLower(strings.TrimSpace(status))
+	switch {
+	case strings.Contains(s, "rolled_back") || strings.Contains(s, "rollback"):
+		return "🔄"
+	case strings.Contains(s, "fail"):
+		return "❌"
+	case strings.Contains(s, "success"):
+		return "✅"
+	case strings.Contains(s, "running") || strings.Contains(s, "progress"):
+		return "⏳"
+	default:
+		return "•"
+	}
 }
 
 // feishuHeaderColor 据运行结果推断卡片头部主题色(飞书内置 template):

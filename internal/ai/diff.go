@@ -83,6 +83,12 @@ type RunDiffer interface {
 	// 克隆失败 / commit 不可达返回 Available=false 的降级结果(不返回错误,健壮降级)。
 	// token 进程内取用、用完即弃,绝不进结果/日志/错误。
 	Diff(ctx context.Context, repoURL, token, baselineCommit, currentCommit string) RunDiff
+
+	// DiffCommit 算「该 commit 自身」的文件级 diff(= commit 相对其首个父提交;根提交=相对空树,
+	// 即全部新增)。这是「本次提交改了什么」(git show 语义),不依赖任何 baseline 运行,故成功/
+	// 失败运行都恒可展示。返回 (diff, 父提交 SHA);根提交或降级时父 SHA 为空。
+	// 克隆失败 / commit 不可达 → Available=false 降级(不返回错误)。token 用完即弃,绝不出网。
+	DiffCommit(ctx context.Context, repoURL, token, commit string) (RunDiff, string)
 }
 
 // goGitDiffer 是基于 go-git 的 RunDiffer 实现。
@@ -150,6 +156,64 @@ func (d goGitDiffer) Diff(ctx context.Context, repoURL, token, baselineCommit, c
 	}
 
 	return buildRunDiff(cctx, changes)
+}
+
+// DiffCommit 算「该 commit 自身」的文件级 diff(commit 相对其首个父;根提交相对空树=全新增)。
+// 复用 Diff 的克隆 / SSRF 收口 / 降级语义;额外返回父提交 SHA(供上层填 baselineCommit 上下文)。
+func (d goGitDiffer) DiffCommit(ctx context.Context, repoURL, token, commit string) (RunDiff, string) {
+	repoURL = strings.TrimSpace(repoURL)
+	commit = strings.TrimSpace(commit)
+
+	if repoURL == "" {
+		return RunDiff{Available: false, Reason: "仓库地址为空,无法计算差异", Files: []FileDiff{}}, ""
+	}
+	if commit == "" {
+		return RunDiff{Available: false, Reason: "本次运行无提交信息,无可对比的代码差异", Files: []FileDiff{}}, ""
+	}
+	if !d.allowInsecure && !validRepoURL(repoURL) {
+		return RunDiff{Available: false, Reason: "仓库地址不可达或不被允许", Files: []FileDiff{}}, ""
+	}
+
+	cctx, cancel := context.WithTimeout(ctx, diffCloneTimeout)
+	defer cancel()
+
+	storer := memory.NewStorage()
+	auth := gitauth.BasicAuth(repoURL, token)
+	repo, err := gogit.CloneContext(cctx, storer, memfs.New(), &gogit.CloneOptions{
+		URL:  repoURL,
+		Auth: auth,
+		Tags: gogit.NoTags,
+	})
+	if err != nil {
+		return RunDiff{Available: false, Reason: "仓库克隆失败,暂时无法计算差异", Files: []FileDiff{}}, ""
+	}
+
+	curCommit, cerr := repo.CommitObject(plumbing.NewHash(commit))
+	if cerr != nil {
+		return RunDiff{Available: false, Reason: "提交在仓库中不可达,无法计算差异", Files: []FileDiff{}}, ""
+	}
+	curTree, terr := curCommit.Tree()
+	if terr != nil {
+		return RunDiff{Available: false, Reason: "无法解析提交内容,无法计算差异", Files: []FileDiff{}}, ""
+	}
+
+	// 首个父提交;根提交(无父)→ parentTree 为 nil(相对空树=全部新增)。
+	var parentTree *object.Tree
+	var parentSHA string
+	if curCommit.NumParents() > 0 {
+		if p, perr := curCommit.Parent(0); perr == nil {
+			parentSHA = p.Hash.String()
+			if pt, pterr := p.Tree(); pterr == nil {
+				parentTree = pt
+			}
+		}
+	}
+
+	changes, derr := object.DiffTreeContext(cctx, parentTree, curTree)
+	if derr != nil {
+		return RunDiff{Available: false, Reason: "计算差异失败", Files: []FileDiff{}}, parentSHA
+	}
+	return buildRunDiff(cctx, changes), parentSHA
 }
 
 // commitTree 解析 commit sha 并返回其 tree;sha 不可达/解析失败返回错误。

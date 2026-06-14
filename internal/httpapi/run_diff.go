@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"errors"
 	"net/http"
 	"strings"
 
@@ -86,11 +85,12 @@ func degradedDiffDTO(reason, baselineRunID, baselineCommit, currentCommit string
 
 // makeRunDiffHandler 返回 GET /api/runs/{id}/diff handler(认证;只读)。
 //
-// 取本次 run(current commit)→ 查 LastSuccessfulRun(baseline:同项目+同分支+更早+最近成功)
-// → 取项目 repoURL/凭据 → RunDiffer 算文件级 diff → DTO。
+// 取本次 run(current commit)→ 取项目 repoURL/凭据 → RunDiffer.DiffCommit 算「该 commit
+// 自身」文件级 diff(git show 语义:相对首个父提交;根提交=全新增)→ DTO(baselineCommit=父提交)。
+// 不依赖 baseline 运行,故成功/失败运行都恒可展示「本次提交改了什么」。
 //
-// 优雅降级(绝不 500):本次 run 无 commit / 无 baseline 成功运行 / 克隆失败 / commit 不可达
-// → 200 available:false + reason 人读。run 不存在 → 404 run_not_found。
+// 优雅降级(绝不 500):本次 run 无 commit / 克隆失败 / commit 不可达 → 200 available:false +
+// reason 人读。run 不存在 → 404 run_not_found。
 func makeRunDiffHandler(d runDiffDeps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if d.runs == nil || d.projects == nil || d.differ == nil {
@@ -114,32 +114,12 @@ func makeRunDiffHandler(d runDiffDeps) http.HandlerFunc {
 			return
 		}
 
-		// 选取 baseline:同项目 + 同分支 + created_at 早于本次 + 最近一条 success。
-		baseline, berr := d.runs.LastSuccessfulRun(ctx, rn.ProjectID, rn.Trigger.Branch, rn.CreatedAt)
-		if berr != nil {
-			if errors.Is(berr, run.ErrNotFound) {
-				writeJSON(w, http.StatusOK,
-					degradedDiffDTO("无可对比的成功基线(此前无更早的成功运行)", "", "", currentCommit))
-				return
-			}
-			// 查询内部错误:同样降级(绝不 500;不泄漏细节)。
-			writeJSON(w, http.StatusOK,
-				degradedDiffDTO("无法选取可对比的成功基线", "", "", currentCommit))
-			return
-		}
-		baselineCommit := strings.TrimSpace(baseline.Trigger.Commit)
-		if baselineCommit == "" {
-			writeJSON(w, http.StatusOK,
-				degradedDiffDTO("上一次成功运行无提交信息,无可对比的代码差异", baseline.ID, "", currentCommit))
-			return
-		}
-
 		// 取项目 repoURL + 凭据(进程内取用即弃;取不到凭据不致命 → 空 token,私有仓库走克隆失败降级)。
 		proj, perr := d.projects.Get(ctx, rn.ProjectID)
 		if perr != nil {
 			// 项目缺失/读失败:降级(绝不 500;diff 本属诊断辅助信号)。
 			writeJSON(w, http.StatusOK,
-				degradedDiffDTO("无法读取项目仓库信息,暂时无法计算差异", baseline.ID, baselineCommit, currentCommit))
+				degradedDiffDTO("无法读取项目仓库信息,暂时无法计算差异", "", "", currentCommit))
 			return
 		}
 		token := ""
@@ -149,7 +129,9 @@ func makeRunDiffHandler(d runDiffDeps) http.HandlerFunc {
 			}
 		}
 
-		diff := d.differ.Diff(ctx, proj.RepoURL, token, baselineCommit, currentCommit)
-		writeJSON(w, http.StatusOK, toRunDiffDTO(diff, baseline.ID, baselineCommit, currentCommit))
+		// 「本次提交自身」diff(git show 语义:相对首个父提交;根提交=全新增)。不依赖任何 baseline
+		// 运行,故成功/失败运行都恒可展示「这次改了什么」。parentCommit 回填 baselineCommit 作上下文。
+		diff, parentCommit := d.differ.DiffCommit(ctx, proj.RepoURL, token, currentCommit)
+		writeJSON(w, http.StatusOK, toRunDiffDTO(diff, "", parentCommit, currentCommit))
 	}
 }

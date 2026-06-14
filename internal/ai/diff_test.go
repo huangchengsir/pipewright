@@ -131,6 +131,60 @@ func TestRunDiffModifiedAddedDeleted(t *testing.T) {
 	}
 }
 
+// TestDiffCommitSelf 验证 DiffCommit 算「该提交自身」diff(相对首个父提交),并返回父 SHA。
+func TestDiffCommitSelf(t *testing.T) {
+	url, shas := makeMultiCommitRepo(t,
+		commitSpec{"app.txt": "a\nb\nc\n"},
+		commitSpec{"app.txt": "a\nCHANGED\nc\n", "new.txt": "hi\n"},
+	)
+	d := newInsecureRunDiffer()
+	res, parent := d.DiffCommit(context.Background(), url, "", shas[1])
+	if !res.Available {
+		t.Fatalf("expected Available=true, reason=%q", res.Reason)
+	}
+	if parent != shas[0] {
+		t.Fatalf("parent = %q, want %q (首个父提交)", parent, shas[0])
+	}
+	if mod, ok := findFile(res.Files, "app.txt"); !ok || mod.Status != diffStatusModified {
+		t.Fatalf("app.txt missing/wrong: %+v", res.Files)
+	}
+	if added, ok := findFile(res.Files, "new.txt"); !ok || added.Status != diffStatusAdded {
+		t.Fatalf("new.txt missing/wrong: %+v", res.Files)
+	}
+}
+
+// TestDiffCommitRoot 验证根提交(无父)→ 全部文件视为新增,父 SHA 空。
+func TestDiffCommitRoot(t *testing.T) {
+	url, shas := makeMultiCommitRepo(t,
+		commitSpec{"a.txt": "x\n", "b.txt": "y\n"},
+	)
+	d := newInsecureRunDiffer()
+	res, parent := d.DiffCommit(context.Background(), url, "", shas[0])
+	if !res.Available {
+		t.Fatalf("expected Available=true, reason=%q", res.Reason)
+	}
+	if parent != "" {
+		t.Fatalf("root commit parent = %q, want empty", parent)
+	}
+	if len(res.Files) != 2 {
+		t.Fatalf("root files = %d, want 2 (全新增): %+v", len(res.Files), res.Files)
+	}
+	for _, f := range res.Files {
+		if f.Status != diffStatusAdded {
+			t.Fatalf("%s status = %q, want added", f.Path, f.Status)
+		}
+	}
+}
+
+// TestDiffCommitEmpty 验证空 commit → 降级 Available=false(不 panic、不返回父 SHA)。
+func TestDiffCommitEmpty(t *testing.T) {
+	d := newInsecureRunDiffer()
+	res, parent := d.DiffCommit(context.Background(), "file:///whatever", "", "")
+	if res.Available || res.Reason == "" || parent != "" {
+		t.Fatalf("empty commit: want degraded, got available=%v parent=%q reason=%q", res.Available, parent, res.Reason)
+	}
+}
+
 // TestRunDiffDependencyManifestSuspect 验证依赖清单变更被点名为「最可疑」。
 func TestRunDiffDependencyManifestSuspect(t *testing.T) {
 	url, shas := makeMultiCommitRepo(t,

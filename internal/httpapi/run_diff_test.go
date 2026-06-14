@@ -173,24 +173,30 @@ func TestRunDiffFileLevel(t *testing.T) {
 	}
 }
 
-// TestRunDiffNoBaseline 验证无更早成功运行 → available:false(不 500)。
+// TestRunDiffNoBaseline 验证:即使没有更早的成功 baseline 运行,也展示「该提交自身」diff
+// (相对其父提交)——新语义(commit-self / git show)不依赖任何 baseline 运行,成功/失败运行都恒可展示。
 func TestRunDiffNoBaseline(t *testing.T) {
 	repoURL, shas := makeTwoCommitRepo(t)
 	srv, client, csrf, db, projID := setupDiffServer(t, repoURL)
 
 	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	// 仅一条失败运行,无更早成功 baseline。
+	// 仅一条失败运行、无任何 baseline 成功运行。
 	curID := seedDiffRun(t, db, projID, "main", shas[1], run.StatusFailed, base)
 
 	code, body, raw := getJSON(t, client, srv.URL+"/api/runs/"+curID+"/diff", csrf)
 	if code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (degraded, not 500); body=%s", code, raw)
+		t.Fatalf("status = %d, want 200; body=%s", code, raw)
 	}
-	if body["available"] != false {
-		t.Fatalf("available = %v, want false; body=%s", body["available"], raw)
+	if body["available"] != true {
+		t.Fatalf("available = %v, want true(该提交自身 diff,无需 baseline); body=%s", body["available"], raw)
 	}
-	if r, _ := body["reason"].(string); r == "" {
-		t.Fatalf("expected human reason; body=%s", raw)
+	// baselineCommit 应为本提交的父提交(shas[0]),currentCommit 为本提交(shas[1])。
+	if body["baselineCommit"] != shas[0] || body["currentCommit"] != shas[1] {
+		t.Fatalf("commits mismatch(want 父 %s → 本 %s): %s", shas[0], shas[1], raw)
+	}
+	files, _ := body["files"].([]any)
+	if len(files) != 2 {
+		t.Fatalf("files len = %d, want 2; body=%s", len(files), raw)
 	}
 }
 

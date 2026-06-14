@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"sync"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/huangchengsir/pipewright/internal/anomaly"
+	"github.com/huangchengsir/pipewright/internal/notify"
 	"github.com/huangchengsir/pipewright/internal/target"
 )
 
@@ -33,6 +35,38 @@ import (
 // servers 为已装配的 target.Service(4-1);检测时经 collectServerMetrics 逐台采集再归一为百分比快照。
 func NewAnomalyCollector(servers target.Service) anomaly.MetricsCollector {
 	return metricsCollector{servers: servers}
+}
+
+// NewAnomalyNotifier 构造 anomaly.Notifier:每条新告警 → 通知事件 anomaly_detected,经 notify
+// **全局路由**(projectID 空,异常非 run/项目维度)发到各配置渠道。让 anomaly 包不 import notify
+// (仿 NewAnomalyCollector 解耦);未配置任何路由 → RouteEventForProject 内部 best-effort 不发。
+func NewAnomalyNotifier(notifySvc notify.Service) anomaly.Notifier {
+	return anomalyNotifier{notify: notifySvc}
+}
+
+// anomalyNotifier 把 anomaly.Alert 映射为通知事件并经渠道发送。
+type anomalyNotifier struct{ notify notify.Service }
+
+// NotifyAlert 异步发一次告警通知(fire-and-forget):不阻塞检测主流程(手动检测的 HTTP 响应 /
+// 定时检测的 goroutine 都不等慢渠道)。用独立 ctx + 超时,失败仅记日志(best-effort,NFR-10)。
+func (n anomalyNotifier) NotifyAlert(ctx context.Context, a *anomaly.Alert) {
+	if n.notify == nil || a == nil {
+		return
+	}
+	// TemplateVars 复用既有占位:Project=服务器名(标题渲染为「[<服务器>] 异常检测」),
+	// Status=人读告警文案(如「磁盘使用率 92.3% > 1%」,正文/字段透出)。
+	vars := notify.TemplateVars{
+		Project: a.ServerName,
+		Status:  a.Message,
+		Event:   notify.EventAnomalyDetected,
+	}
+	go func() {
+		sendCtx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		defer cancel()
+		if err := n.notify.RouteEventForProject(sendCtx, "", notify.EventAnomalyDetected, vars); err != nil {
+			log.Printf("[anomaly] 告警 %s 通知 best-effort 失败:%v", a.ID, err)
+		}
+	}()
 }
 
 // metricsCollector 是 anomaly.MetricsCollector 的 httpapi 适配:复用 6-1 的 collectServerMetrics

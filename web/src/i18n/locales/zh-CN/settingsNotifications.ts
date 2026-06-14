@@ -135,6 +135,8 @@ export default {
   evHealthCheckFailedDesc: '部署后健康检查未通过',
   evApprovalRequired: '需要审批',
   evApprovalRequiredDesc: '运行进入人工审批门,等待批准或拒绝',
+  evAnomalyDetected: '异常检测',
+  evAnomalyDetectedDesc: '服务器指标(CPU/内存/磁盘)命中阈值规则时告警',
 
   // 事件路由区
   routesTitle: '事件路由',

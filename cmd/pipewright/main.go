@@ -474,7 +474,12 @@ func main() {
 	// 装配可配置异常检测服务(Story 6.5;FR-23):按阈值规则对服务器指标做检测,命中产告警入库。
 	// 检测复用 6-1 指标采集(NewAnomalyCollector 适配 collectServerMetrics);不可达/指标 null 的
 	// 服务器跳过(不误报)。复用已装配的 targetSvc(采集),无新顶层依赖;无 init 副作用/不起轮询。
-	anomalySvc := anomaly.New(st.DB, httpapi.NewAnomalyCollector(targetSvc))
+	// 告警去重窗口(同「服务器×规则条件」最小间隔):env PIPEWRIGHT_ANOMALY_COOLDOWN(秒)覆盖,默认 600s。
+	anomalyCooldown := envDurationSeconds("PIPEWRIGHT_ANOMALY_COOLDOWN", 600*time.Second)
+	anomalySvc := anomaly.New(st.DB, httpapi.NewAnomalyCollector(targetSvc),
+		anomaly.WithNotifier(httpapi.NewAnomalyNotifier(notifySvc)),
+		anomaly.WithCooldown(anomalyCooldown),
+	)
 
 	// 装配多 provider OAuth 凭据接入服务(连接 Gitee/GitHub/GitLab/自建):复用 vault secretbox 加密
 	// OAuth 应用 client_secret(密文入库);OAuth 拿到的 access_token 经 vault.Create 存成 git_token 凭据,
@@ -497,6 +502,27 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// 异常检测定时器(Story 6.5 增强):周期性 Check → 命中产告警 + best-effort 通知(去重已在服务内)。
+	// 间隔 env PIPEWRIGHT_ANOMALY_INTERVAL(秒)覆盖,默认 60s;置 "0" 关闭定时(仍可手动「立即检测」)。
+	// 无 enabled 规则时 Check 提前返回(不采集),故空载零开销。随 ctx 取消(停机)退出。
+	if anomalyInterval := envDurationSeconds("PIPEWRIGHT_ANOMALY_INTERVAL", 60*time.Second); anomalyInterval > 0 {
+		go func() {
+			ticker := time.NewTicker(anomalyInterval)
+			defer ticker.Stop()
+			log.Printf("[anomaly] 定时检测已启用,间隔 %s", anomalyInterval)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if _, err := anomalySvc.Check(ctx); err != nil && ctx.Err() == nil {
+						log.Printf("[anomaly] 定时检测失败(已跳过本轮):%v", err)
+					}
+				}
+			}
+		}()
+	}
+
 	go func() {
 		log.Printf("pipewright listening on %s", cfg.Addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -517,6 +543,24 @@ func main() {
 	retentionSweeper.Stop()
 	pool.Stop(shutdownCtx)
 	log.Printf("[run] worker pool stopped")
+}
+
+// envDurationSeconds 读取 name 环境变量(整数秒)为 time.Duration;未设/非法 → def。
+// 显式 "0"(或负)→ 0(调用方据此关闭对应定时任务)。
+func envDurationSeconds(name string, def time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		log.Printf("[config] %s=%q 非法(应为整数秒),用默认 %s", name, v, def)
+		return def
+	}
+	if n <= 0 {
+		return 0
+	}
+	return time.Duration(n) * time.Second
 }
 
 // ── 「流水线即代码」运行时覆盖适配器(FR-8-12)──────────────────────────────────

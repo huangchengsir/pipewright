@@ -131,6 +131,8 @@ export default {
   evHealthCheckFailedDesc: 'La comprobación de estado posterior al despliegue no pasó',
   evApprovalRequired: 'Se requiere aprobación',
   evApprovalRequiredDesc: 'Una ejecución llegó a una puerta de aprobación manual y espera aprobación o rechazo',
+  evAnomalyDetected: 'Anomalía detectada',
+  evAnomalyDetectedDesc: 'Una métrica del servidor (CPU/memoria/disco) cruzó una regla de umbral',
 
   routesTitle: 'Rutas de eventos',
   routesDescPre: 'Configura qué eventos notifican por qué canales. ',

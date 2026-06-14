@@ -141,6 +141,9 @@ type Service interface {
 	ListRules(ctx context.Context) ([]*Rule, error)
 	// CreateRule 校验枚举后入库;返回规则视图。
 	CreateRule(ctx context.Context, in CreateRuleInput) (*Rule, error)
+	// UpdateRule 校验枚举后整体更新规则(metric/operator/threshold/scope/enabled);
+	// 不存在 → ErrNotFound。返回更新后视图。
+	UpdateRule(ctx context.Context, id string, in CreateRuleInput) (*Rule, error)
 	// DeleteRule 删除规则;不存在 → ErrNotFound。
 	DeleteRule(ctx context.Context, id string) error
 	// Check 对所有 enabled 规则求值:逐服务器逐规则,命中产告警入库,返回**本次新增**告警列表。
@@ -250,6 +253,37 @@ func (s *service) CreateRule(ctx context.Context, in CreateRuleInput) (*Rule, er
 	)
 	if err != nil {
 		return nil, fmt.Errorf("anomaly: insert rule: %w", err)
+	}
+	return s.getRule(ctx, id)
+}
+
+// UpdateRule 整体更新一条规则(校验枚举);不存在 → ErrNotFound。created_at 不变。
+func (s *service) UpdateRule(ctx context.Context, id string, in CreateRuleInput) (*Rule, error) {
+	if !validMetric(in.Metric) {
+		return nil, ErrInvalidMetric
+	}
+	if !validOperator(in.Operator) {
+		return nil, ErrInvalidOperator
+	}
+	var serverID any
+	if in.ServerID != nil && *in.ServerID != "" {
+		serverID = *in.ServerID
+	}
+	enabled := 0
+	if in.Enabled {
+		enabled = 1
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE anomaly_rules SET metric = ?, operator = ?, threshold = ?, server_id = ?, enabled = ?
+		 WHERE id = ?`,
+		in.Metric, in.Operator, in.Threshold, serverID, enabled, id,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("anomaly: update rule: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return nil, ErrNotFound
 	}
 	return s.getRule(ctx, id)
 }

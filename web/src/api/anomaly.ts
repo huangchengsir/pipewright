@@ -71,8 +71,43 @@ export async function createAnomalyRule(input: CreateAnomalyRuleInput): Promise<
   return http.post<AnomalyRule>('/api/anomaly/rules', input)
 }
 
+/** Update a rule in full (metric/operator/threshold/scope/enabled). Needs CSRF. */
+export async function updateAnomalyRule(
+  id: string,
+  input: CreateAnomalyRuleInput,
+): Promise<AnomalyRule> {
+  return http.patch<AnomalyRule>(`/api/anomaly/rules/${id}`, input)
+}
+
 export async function deleteAnomalyRule(id: string): Promise<void> {
   return http.delete<void>(`/api/anomaly/rules/${id}`)
+}
+
+/** Background detection cadence (seconds). intervalSeconds=0 → periodic detection off. */
+export interface AnomalyConfig {
+  intervalSeconds: number
+  cooldownSeconds: number
+}
+
+export async function getAnomalyConfig(): Promise<AnomalyConfig> {
+  return http.get<AnomalyConfig>('/api/anomaly/config')
+}
+
+/** One point on a server metric trend series. null = metric unavailable at that time. */
+export interface MetricPoint {
+  at: string
+  cpu: number | null
+  memory: number | null
+  disk: number | null
+}
+
+/** Server metric history (CPU/memory/disk %) over the last `hours` hours, ascending. */
+export async function getMetricsHistory(serverId: string, hours: number): Promise<MetricPoint[]> {
+  const qs = new URLSearchParams({ serverId, hours: String(hours) })
+  const res = await http.get<{ points: MetricPoint[]; hours: number }>(
+    `/api/metrics/history?${qs.toString()}`,
+  )
+  return res.points
 }
 
 /** Run detection now: evaluate all enabled rules; returns the alerts created this run. */

@@ -7,18 +7,22 @@
     · 这是**新增**入口,不动 6-1 状态页 / 6-2 日志 / 6-3 操作入口。
 -->
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   listAnomalyRules,
   createAnomalyRule,
+  updateAnomalyRule,
   deleteAnomalyRule,
   checkAnomaly,
   listAnomalyAlerts,
+  getAnomalyConfig,
+  getMetricsHistory,
   type AnomalyRule,
   type AnomalyAlert,
   type AnomalyMetric,
   type AnomalyOperator,
+  type MetricPoint,
 } from '../api/anomaly'
 import { listServers, type Server } from '../api/servers'
 import { HttpError } from '../api/http'
@@ -27,6 +31,7 @@ import FormField from '../components/ui/FormField.vue'
 import EmptyState from '../components/ui/EmptyState.vue'
 import ErrorState from '../components/ui/ErrorState.vue'
 import SkeletonBlock from '../components/ui/SkeletonBlock.vue'
+import MetricTrendChart from '../components/metrics/MetricTrendChart.vue'
 
 type LoadState = 'idle' | 'loading' | 'error'
 
@@ -61,6 +66,34 @@ const creating = ref(false)
 const checking = ref(false)
 const checkBanner = ref('')
 const deletingId = ref<string | null>(null)
+
+// ─── detection cadence (visible auto-check rhythm) ──────────────────────────────
+const intervalSeconds = ref(0) // 0 = periodic detection off
+const countdown = ref(0)
+let refreshTimer: ReturnType<typeof setInterval> | null = null
+let countdownTimer: ReturnType<typeof setInterval> | null = null
+
+const cadenceText = computed(() =>
+  intervalSeconds.value > 0
+    ? t('anomaly.autoEvery', { n: intervalSeconds.value })
+    : t('anomaly.autoOff'),
+)
+
+// ─── inline rule editing ────────────────────────────────────────────────────────
+const editingRuleId = ref<string | null>(null)
+const editForm = ref<{ metric: AnomalyMetric; operator: AnomalyOperator; threshold: number; serverId: string }>({
+  metric: 'cpu',
+  operator: 'gt',
+  threshold: 90,
+  serverId: '',
+})
+const savingEdit = ref(false)
+
+// ─── metric trend chart ─────────────────────────────────────────────────────────
+const trendServerId = ref('')
+const trendHours = ref(6)
+const trendPoints = ref<MetricPoint[]>([])
+const trendLoading = ref(false)
 
 const METRIC_KEYS: Record<AnomalyMetric, string> = {
   cpu: 'anomaly.metricCpu',
@@ -189,7 +222,105 @@ function formatAt(at: string): string {
   return Number.isNaN(d.getTime()) ? at : d.toLocaleString()
 }
 
-onMounted(load)
+// ─── inline rule edit ───────────────────────────────────────────────────────────
+
+function startEdit(rule: AnomalyRule): void {
+  editingRuleId.value = rule.id
+  editForm.value = {
+    metric: rule.metric,
+    operator: rule.operator,
+    threshold: rule.threshold,
+    serverId: rule.serverId ?? '',
+  }
+}
+
+function cancelEdit(): void {
+  editingRuleId.value = null
+}
+
+async function saveEdit(rule: AnomalyRule): Promise<void> {
+  if (!Number.isFinite(editForm.value.threshold)) {
+    checkBanner.value = t('anomaly.errThresholdNumber')
+    return
+  }
+  savingEdit.value = true
+  try {
+    const updated = await updateAnomalyRule(rule.id, {
+      metric: editForm.value.metric,
+      operator: editForm.value.operator,
+      threshold: editForm.value.threshold,
+      serverId: editForm.value.serverId || null,
+    })
+    rules.value = rules.value.map((r) => (r.id === updated.id ? updated : r))
+    editingRuleId.value = null
+  } catch (err) {
+    checkBanner.value = humanError(err, t('anomaly.errUpdateRule'))
+  } finally {
+    savingEdit.value = false
+  }
+}
+
+// ─── metric trend ─────────────────────────────────────────────────────────────
+
+async function loadTrend(): Promise<void> {
+  if (!trendServerId.value) {
+    trendPoints.value = []
+    return
+  }
+  trendLoading.value = true
+  try {
+    trendPoints.value = await getMetricsHistory(trendServerId.value, trendHours.value)
+  } catch {
+    trendPoints.value = []
+  } finally {
+    trendLoading.value = false
+  }
+}
+
+watch([trendServerId, trendHours], loadTrend)
+
+// ─── auto-refresh on the detection cadence ──────────────────────────────────────
+
+async function autoRefresh(): Promise<void> {
+  try {
+    alerts.value = await listAnomalyAlerts({ limit: 50 })
+  } catch {
+    /* best-effort background refresh; ignore transient errors */
+  }
+  await loadTrend()
+  countdown.value = intervalSeconds.value
+}
+
+function startTimers(): void {
+  if (intervalSeconds.value <= 0) return
+  countdown.value = intervalSeconds.value
+  refreshTimer = setInterval(autoRefresh, intervalSeconds.value * 1000)
+  countdownTimer = setInterval(() => {
+    countdown.value = countdown.value > 0 ? countdown.value - 1 : intervalSeconds.value
+  }, 1000)
+}
+
+onMounted(async () => {
+  try {
+    const cfg = await getAnomalyConfig()
+    intervalSeconds.value = cfg.intervalSeconds
+  } catch {
+    /* config best-effort; cadence badge just won't show a number */
+  }
+  await load()
+  // default trend to the first server, then load its series + start cadence timers.
+  if (!trendServerId.value && servers.value.length > 0) {
+    trendServerId.value = servers.value[0].id
+  } else {
+    await loadTrend()
+  }
+  startTimers()
+})
+
+onUnmounted(() => {
+  if (refreshTimer) clearInterval(refreshTimer)
+  if (countdownTimer) clearInterval(countdownTimer)
+})
 </script>
 
 <template>
@@ -201,9 +332,16 @@ onMounted(load)
           {{ t('anomaly.subtitle') }}
         </p>
       </div>
-      <AppButton variant="primary" :loading="checking" @click="runCheck">
-        {{ t('anomaly.checkNow') }}
-      </AppButton>
+      <div class="view-header__actions">
+        <span class="cadence" :class="{ 'cadence--off': intervalSeconds <= 0 }" role="status">
+          <span class="cadence__dot" aria-hidden="true" />
+          {{ cadenceText }}
+          <span v-if="intervalSeconds > 0" class="cadence__next">· {{ t('anomaly.nextRefresh', { n: countdown }) }}</span>
+        </span>
+        <AppButton variant="primary" :loading="checking" @click="runCheck">
+          {{ t('anomaly.checkNow') }}
+        </AppButton>
+      </div>
     </header>
 
     <ErrorState
@@ -275,23 +413,76 @@ onMounted(load)
         />
         <ul v-else class="rule-list">
           <li v-for="rule in rules" :key="rule.id" class="rule-item">
-            <div class="rule-item__main">
-              <span class="rule-item__expr">
-                <strong>{{ metricLabel(rule.metric) }}</strong>
-                {{ operatorSymbol(rule.operator) }} {{ rule.threshold }}%
-              </span>
-              <span class="rule-item__scope">{{ serverName(rule.serverId) }}</span>
-              <span v-if="!rule.enabled" class="rule-item__disabled">{{ t('anomaly.disabled') }}</span>
-            </div>
-            <AppButton
-              variant="ghost"
-              :loading="deletingId === rule.id"
-              @click="removeRule(rule)"
-            >
-              {{ t('anomaly.delete') }}
-            </AppButton>
+            <!-- view mode -->
+            <template v-if="editingRuleId !== rule.id">
+              <div class="rule-item__main">
+                <span class="rule-item__expr">
+                  <strong>{{ metricLabel(rule.metric) }}</strong>
+                  {{ operatorSymbol(rule.operator) }} {{ rule.threshold }}%
+                </span>
+                <span class="rule-item__scope">{{ serverName(rule.serverId) }}</span>
+                <span v-if="!rule.enabled" class="rule-item__disabled">{{ t('anomaly.disabled') }}</span>
+              </div>
+              <div class="rule-item__actions">
+                <AppButton variant="ghost" @click="startEdit(rule)">{{ t('anomaly.edit') }}</AppButton>
+                <AppButton variant="ghost" :loading="deletingId === rule.id" @click="removeRule(rule)">
+                  {{ t('anomaly.delete') }}
+                </AppButton>
+              </div>
+            </template>
+
+            <!-- edit mode (inline) -->
+            <form v-else class="rule-edit" @submit.prevent="saveEdit(rule)">
+              <select v-model="editForm.metric" class="select" :aria-label="t('anomaly.fieldMetric')">
+                <option value="cpu">{{ t('anomaly.metricCpu') }}</option>
+                <option value="memory">{{ t('anomaly.metricMemory') }}</option>
+                <option value="disk">{{ t('anomaly.metricDisk') }}</option>
+              </select>
+              <select v-model="editForm.operator" class="select" :aria-label="t('anomaly.fieldOperator')">
+                <option value="gt">{{ t('anomaly.operatorGt') }}</option>
+                <option value="lt">{{ t('anomaly.operatorLt') }}</option>
+              </select>
+              <input
+                v-model.number="editForm.threshold"
+                type="number"
+                step="0.1"
+                class="input rule-edit__threshold"
+                :aria-label="t('anomaly.fieldThreshold')"
+              />
+              <select v-model="editForm.serverId" class="select" :aria-label="t('anomaly.fieldScope')">
+                <option value="">{{ t('anomaly.scopeAllGlobal') }}</option>
+                <option v-for="s in servers" :key="s.id" :value="s.id">{{ s.name }}</option>
+              </select>
+              <div class="rule-edit__actions">
+                <AppButton type="submit" variant="primary" :loading="savingEdit">{{ t('anomaly.save') }}</AppButton>
+                <AppButton type="button" variant="ghost" @click="cancelEdit">{{ t('anomaly.cancel') }}</AppButton>
+              </div>
+            </form>
           </li>
         </ul>
+      </section>
+
+      <!-- ── Metric trends ───────────────────────────────────────────────── -->
+      <section class="panel" aria-labelledby="trend-heading">
+        <div class="trend-head">
+          <h2 id="trend-heading" class="panel-title">{{ t('anomaly.trendHeading') }}</h2>
+          <div class="trend-controls">
+            <select v-model="trendServerId" class="select trend-controls__server" :aria-label="t('anomaly.trendServer')">
+              <option v-for="s in servers" :key="s.id" :value="s.id">{{ s.name }}</option>
+            </select>
+            <div class="trend-range" role="group" :aria-label="t('anomaly.trendRange')">
+              <button
+                v-for="r in [{ h: 1, k: 'range1h' }, { h: 6, k: 'range6h' }, { h: 24, k: 'range24h' }]"
+                :key="r.h"
+                type="button"
+                class="trend-range__btn"
+                :class="{ 'trend-range__btn--active': trendHours === r.h }"
+                @click="trendHours = r.h"
+              >{{ t(`anomaly.${r.k}`) }}</button>
+            </div>
+          </div>
+        </div>
+        <MetricTrendChart :points="trendPoints" />
       </section>
 
       <!-- ── Alerts ──────────────────────────────────────────────────────── -->
@@ -535,5 +726,107 @@ onMounted(load)
   font-size: var(--text-label);
   color: var(--color-dim);
   font-variant-numeric: tabular-nums;
+}
+
+/* ── cadence badge ─────────────────────────────────────────────────────── */
+.view-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.cadence {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-label);
+  color: var(--color-dim);
+  white-space: nowrap;
+}
+.cadence__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--color-success, #16a34a);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-success, #16a34a) 22%, transparent);
+  animation: cadence-pulse 2s ease-in-out infinite;
+}
+.cadence--off .cadence__dot {
+  background: var(--color-faint, var(--color-dim));
+  box-shadow: none;
+  animation: none;
+}
+.cadence__next {
+  color: var(--color-faint, var(--color-dim));
+  font-variant-numeric: tabular-nums;
+}
+@keyframes cadence-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+/* ── inline rule edit ──────────────────────────────────────────────────── */
+.rule-item__actions {
+  display: flex;
+  gap: 8px;
+  flex: none;
+}
+.rule-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.rule-edit .select {
+  width: auto;
+  min-width: 120px;
+}
+.rule-edit__threshold {
+  width: 96px;
+}
+.rule-edit__actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* ── trend section ─────────────────────────────────────────────────────── */
+.trend-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.trend-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.trend-controls__server {
+  width: auto;
+  min-width: 160px;
+}
+.trend-range {
+  display: inline-flex;
+  border: 1px solid var(--color-line, var(--color-border));
+  border-radius: var(--rounded-md, 8px);
+  overflow: hidden;
+}
+.trend-range__btn {
+  padding: 6px 12px;
+  font-size: var(--text-label);
+  color: var(--color-dim);
+  background: var(--color-surface);
+  border: none;
+  border-left: 1px solid var(--color-line, var(--color-border));
+  cursor: pointer;
+}
+.trend-range__btn:first-child {
+  border-left: none;
+}
+.trend-range__btn--active {
+  background: var(--color-accent, #4f7cff);
+  color: #fff;
 }
 </style>

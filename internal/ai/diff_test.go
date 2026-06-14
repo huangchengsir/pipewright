@@ -153,6 +153,27 @@ func TestDiffCommitSelf(t *testing.T) {
 	}
 }
 
+// TestDiffCommitShortSHA 验证用**短 SHA**(生产里 run 存的就是 7 位短 SHA)也能解析出提交并算 diff。
+// 回归守护:go-git CommitObject 只认 40 位全 SHA,必须先 ResolveRevision 解析短 SHA(本功能曾踩此坑)。
+func TestDiffCommitShortSHA(t *testing.T) {
+	url, shas := makeMultiCommitRepo(t,
+		commitSpec{"app.txt": "a\n"},
+		commitSpec{"app.txt": "a\nb\n"},
+	)
+	d := newInsecureRunDiffer()
+	short := shas[1][:7]
+	res, parent := d.DiffCommit(context.Background(), url, "", short)
+	if !res.Available {
+		t.Fatalf("short SHA %q should resolve, got degraded: %s", short, res.Reason)
+	}
+	if parent != shas[0] {
+		t.Fatalf("parent=%q want full parent %q", parent, shas[0])
+	}
+	if _, ok := findFile(res.Files, "app.txt"); !ok {
+		t.Fatalf("app.txt missing: %+v", res.Files)
+	}
+}
+
 // TestDiffCommitRoot 验证根提交(无父)→ 全部文件视为新增,父 SHA 空。
 func TestDiffCommitRoot(t *testing.T) {
 	url, shas := makeMultiCommitRepo(t,

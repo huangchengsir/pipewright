@@ -242,8 +242,12 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 						_ = rep.JobDone(ctx, jb.ID, run.StepFailed)
 						return ErrBuildFailed
 					}
-					// 注入顺序:运行参数 → 上游 job 输出(carriedEnv)→ job 自身 env(后者覆盖同名)→ PIPEWRIGHT_ENV(系统,末位防覆盖)。
+					// 注入顺序:运行参数 → 上游 job 输出(carriedEnv)→ 流水线级变量(「变量与缓存」,
+					// 含 secret,vault 即取即用)→ job 自身 env(后者覆盖同名)→ PIPEWRIGHT_ENV(系统,末位防覆盖)。
 					base := append(runParamsAsEnv(r.Trigger.Params), carriedEnv...)
+					if settings != nil && len(settings.Build.Vars) > 0 {
+						base = append(base, settings.Build.Vars...)
+					}
 					step.Env = append(base, step.Env...)
 					step.Env = append(step.Env, pipewrightEnvVar())
 					// 旁挂服务网络:脚本容器加入,按服务名互访。

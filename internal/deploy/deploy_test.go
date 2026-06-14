@@ -130,6 +130,70 @@ func seedServer(t *testing.T, st *stubTarget, name string) *target.Server {
 
 // ---- 用例 -------------------------------------------------------------------
 
+// TestDeployForStageCommandOnly 验证「命令型」部署(artifactType=command):不取构建产物,
+// 直接在目标机经 sh -c 跑 restartCommand;成功 → TargetSuccess。
+func TestDeployForStageCommandOnly(t *testing.T) {
+	db := testDB(t)
+	rsvc := run.New(db)
+	var gotCmd []string
+	tgt := &stubTarget{execFn: func(_ string, cmd []string) (*target.ExecResult, error) {
+		gotCmd = cmd
+		return &target.ExecResult{ExitCode: 0, Stdout: "configured"}, nil
+	}}
+	srv := seedServer(t, tgt, "frpc-client")
+	// 复用 seed:有产物在库,但命令型分支应**完全不碰产物**(在 ListArtifacts 之前提前返回)。
+	runID, _ := seedSuccessRunWithArtifact(t, db, rsvc, run.ArtifactDist, "dist/unused")
+
+	res, err := svcCmdOnly(tgt, rsvc).DeployForStage(context.Background(), runID, []string{srv.ID},
+		map[string]string{"artifactType": "command", "restartCommand": "echo configuring frp tunnel"}, "")
+	if err != nil {
+		t.Fatalf("command-only DeployForStage: %v", err)
+	}
+	if len(res) != 1 || res[0].Status != run.TargetSuccess {
+		t.Fatalf("want 1 success, got %+v", res)
+	}
+	// 证明走的是命令型分支(sh -c <命令>),而非产物部署(那会跑 readlink/mkdir/tar…)。
+	if len(gotCmd) != 3 || gotCmd[0] != "sh" || gotCmd[1] != "-c" || gotCmd[2] != "echo configuring frp tunnel" {
+		t.Fatalf("command not run as `sh -c <cmd>`: %v", gotCmd)
+	}
+}
+
+// TestDeployForStageCommandOnlyNonZero 验证命令非零退出 → 该机 failed。
+func TestDeployForStageCommandOnlyNonZero(t *testing.T) {
+	db := testDB(t)
+	rsvc := run.New(db)
+	tgt := &stubTarget{execFn: func(_ string, _ []string) (*target.ExecResult, error) {
+		return &target.ExecResult{ExitCode: 2, Stderr: "boom"}, nil
+	}}
+	srv := seedServer(t, tgt, "frpc-client")
+	runID, _ := seedSuccessRunWithArtifact(t, db, rsvc, run.ArtifactDist, "dist/unused")
+	res, err := svcCmdOnly(tgt, rsvc).DeployForStage(context.Background(), runID, []string{srv.ID},
+		map[string]string{"artifactType": "command", "restartCommand": "false"}, "")
+	if err != nil {
+		t.Fatalf("DeployForStage: %v", err)
+	}
+	if res[0].Status != run.TargetFailed {
+		t.Fatalf("want failed, got %+v", res[0])
+	}
+}
+
+// TestDeployForStageCommandOnlyMissingCmd 验证 command 型但缺 restartCommand → 报错。
+func TestDeployForStageCommandOnlyMissingCmd(t *testing.T) {
+	db := testDB(t)
+	rsvc := run.New(db)
+	tgt := &stubTarget{}
+	srv := seedServer(t, tgt, "frpc-client")
+	runID, _ := seedSuccessRunWithArtifact(t, db, rsvc, run.ArtifactDist, "dist/unused")
+	_, err := svcCmdOnly(tgt, rsvc).DeployForStage(context.Background(), runID, []string{srv.ID},
+		map[string]string{"artifactType": "command"}, "")
+	if err == nil {
+		t.Fatalf("want error for missing restartCommand")
+	}
+}
+
+// svcCmdOnly 构造一个 deploy.Service(便于命令型用例复用)。
+func svcCmdOnly(tgt *stubTarget, rsvc run.Service) Service { return New(tgt, rsvc) }
+
 // TestDeployDistSuccess 验证 dist 产物部署:命令 array 化、每机 success、run 终态保持 success。
 func TestDeployDistSuccess(t *testing.T) {
 	db := testDB(t)

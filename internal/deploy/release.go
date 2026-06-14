@@ -301,7 +301,7 @@ func (s *service) rollback(ctx context.Context, srv *target.Server, res TargetRe
 	// 回滚:把 current 软链原子切回上一发布(code-review P2:同样 ln tmp + mv -T,避免回滚窗口)。
 	var rbErr error
 	for _, cmd := range atomicSymlinkCmds(prev, current) {
-		if _, e := s.targets.Exec(ctx, srv.ID, cmd); e != nil {
+		if _, e := s.exec(ctx, srv.ID, cmd); e != nil {
 			rbErr = e
 			break
 		}
@@ -322,7 +322,7 @@ func (s *service) rollback(ctx context.Context, srv *target.Server, res TargetRe
 // readCurrentRelease 经 readlink 读 current 软链指向的发布绝对路径(无软链 / 读失败 → "")。
 // 用于回滚目标探测;首次部署时 current 不存在 → 返回 ""(无可回滚)。
 func (s *service) readCurrentRelease(ctx context.Context, serverID, current string) string {
-	out, err := s.targets.Exec(ctx, serverID, []string{"readlink", current})
+	out, err := s.exec(ctx, serverID, []string{"readlink", current})
 	if err != nil || out == nil || out.ExitCode != 0 {
 		return ""
 	}
@@ -358,7 +358,7 @@ func (s *service) pruneReleases(ctx context.Context, serverID, releasesDir, curR
 		`  n=$((n+1)); ` +
 		`  if [ "$n" -gt "$keep" ]; then rm -rf "$dir/$d"; fi; ` +
 		`done`
-	_, _ = s.targets.Exec(ctx, serverID, []string{
+	_, _ = s.exec(ctx, serverID, []string{
 		"sh", "-c", script, releasesDir, strconv.Itoa(keep), curRunID, prevName,
 	})
 }
@@ -378,7 +378,7 @@ func atomicSymlinkCmds(target, link string) [][]string {
 // 全部成功 → ("", true)。供 deployReleaseOne 的放置 / 切换阶段复用。
 func (s *service) runStep(ctx context.Context, serverID string, cmds [][]string) (string, bool) {
 	for _, cmd := range cmds {
-		out, eerr := s.targets.Exec(ctx, serverID, cmd)
+		out, eerr := s.exec(ctx, serverID, cmd)
 		if eerr != nil {
 			return humanExecError(eerr), false
 		}

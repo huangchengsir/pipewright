@@ -605,7 +605,7 @@ func (s *service) deployOne(ctx context.Context, srv *target.Server, a run.Artif
 	defer cancel()
 
 	for _, cmd := range cmds {
-		out, eerr := s.targets.Exec(execCtx, srv.ID, cmd)
+		out, eerr := s.exec(execCtx, srv.ID, cmd)
 		if eerr != nil {
 			finish := time.Now().UTC()
 			res.Status = run.TargetFailed

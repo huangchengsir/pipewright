@@ -52,8 +52,8 @@ func TestFeishuSendSuccess(t *testing.T) {
 	if sent.MsgType != "interactive" {
 		t.Fatalf("msg_type 应为 interactive(交互卡片),得 %q", sent.MsgType)
 	}
-	if sent.Card.Header.Title.Content != "Pipewright 测试通知" {
-		t.Fatalf("卡片头部标题应为测试标题: %q", sent.Card.Header.Title.Content)
+	if sent.Card.Header.Title.Content != "🚀 Pipewright 测试通知" {
+		t.Fatalf("卡片头部标题应为带图标的测试标题: %q", sent.Card.Header.Title.Content)
 	}
 	if len(sent.Card.Elements) == 0 {
 		t.Fatalf("卡片 elements 不应为空")
@@ -164,9 +164,9 @@ func TestFeishuCard(t *testing.T) {
 		Fields: map[string]string{"status": "success", "branch": "main", "event": "deploy_succeeded"},
 	})
 
-	// 头部:标题 + 成功绿。
-	if card.Header.Title.Content != "部署成功" {
-		t.Fatalf("头部标题应为 %q,得 %q", "部署成功", card.Header.Title.Content)
+	// 头部:状态图标 + 标题 + 成功绿。
+	if card.Header.Title.Content != "✅ 部署成功" {
+		t.Fatalf("头部标题应为 %q,得 %q", "✅ 部署成功", card.Header.Title.Content)
 	}
 	if card.Header.Template != "green" {
 		t.Fatalf("部署成功事件头部应为 green,得 %q", card.Header.Template)
@@ -202,7 +202,7 @@ func TestFeishuCard(t *testing.T) {
 		}
 		joined += f.Text.Content + "|"
 	}
-	for _, want := range []string{"**分支**\nmain", "**状态**\nsuccess", "**事件**\ndeploy_succeeded"} {
+	for _, want := range []string{"**分支**\nmain", "**状态**\n✅ success", "**事件**\ndeploy_succeeded"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("字段应含 %q,得:\n%s", want, joined)
 		}

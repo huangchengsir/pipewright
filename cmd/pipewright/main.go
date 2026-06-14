@@ -35,6 +35,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/httpapi"
 	"github.com/huangchengsir/pipewright/internal/library"
 	"github.com/huangchengsir/pipewright/internal/mask"
+	"github.com/huangchengsir/pipewright/internal/metrics"
 	"github.com/huangchengsir/pipewright/internal/notify"
 	"github.com/huangchengsir/pipewright/internal/oauth"
 	"github.com/huangchengsir/pipewright/internal/pacloader"
@@ -476,10 +477,26 @@ func main() {
 	// 服务器跳过(不误报)。复用已装配的 targetSvc(采集),无新顶层依赖;无 init 副作用/不起轮询。
 	// 告警去重窗口(同「服务器×规则条件」最小间隔):env PIPEWRIGHT_ANOMALY_COOLDOWN(秒)覆盖,默认 600s。
 	anomalyCooldown := envDurationSeconds("PIPEWRIGHT_ANOMALY_COOLDOWN", 600*time.Second)
+	// 定时检测间隔:env PIPEWRIGHT_ANOMALY_INTERVAL(秒)覆盖,默认 60s;置 0 关闭定时(仅手动)。
+	// 在此提前算出(httpapi 经 WithAnomalyConfig 暴露给前端显示节奏 + 下方定时器复用)。
+	anomalyInterval := envDurationSeconds("PIPEWRIGHT_ANOMALY_INTERVAL", 60*time.Second)
 	anomalySvc := anomaly.New(st.DB, httpapi.NewAnomalyCollector(targetSvc),
 		anomaly.WithNotifier(httpapi.NewAnomalyNotifier(notifySvc)),
 		anomaly.WithCooldown(anomalyCooldown),
 	)
+
+	// 服务器指标时序历史(异常检测「看趋势」折线图数据源):后台采样器复用 6-1 采集周期性写样本,
+	// 按保留窗口清理。采样间隔 env PIPEWRIGHT_METRICS_SAMPLE_INTERVAL(秒,默认 60;0 关闭采样),
+	// 保留天数 env PIPEWRIGHT_METRICS_RETENTION_DAYS(默认 7)。
+	metricsHist := metrics.New(st.DB)
+	metricsSampleInterval := envDurationSeconds("PIPEWRIGHT_METRICS_SAMPLE_INTERVAL", 60*time.Second)
+	metricsRetentionDays := 7
+	if v := strings.TrimSpace(os.Getenv("PIPEWRIGHT_METRICS_RETENTION_DAYS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			metricsRetentionDays = n
+		}
+	}
+	metricsSampleCollector := httpapi.NewAnomalyCollector(targetSvc)
 
 	// 装配多 provider OAuth 凭据接入服务(连接 Gitee/GitHub/GitLab/自建):复用 vault secretbox 加密
 	// OAuth 应用 client_secret(密文入库);OAuth 拿到的 access_token 经 vault.Create 存成 git_token 凭据,
@@ -489,7 +506,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc)),
+		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;
@@ -505,7 +522,7 @@ func main() {
 	// 异常检测定时器(Story 6.5 增强):周期性 Check → 命中产告警 + best-effort 通知(去重已在服务内)。
 	// 间隔 env PIPEWRIGHT_ANOMALY_INTERVAL(秒)覆盖,默认 60s;置 "0" 关闭定时(仍可手动「立即检测」)。
 	// 无 enabled 规则时 Check 提前返回(不采集),故空载零开销。随 ctx 取消(停机)退出。
-	if anomalyInterval := envDurationSeconds("PIPEWRIGHT_ANOMALY_INTERVAL", 60*time.Second); anomalyInterval > 0 {
+	if anomalyInterval > 0 {
 		go func() {
 			ticker := time.NewTicker(anomalyInterval)
 			defer ticker.Stop()
@@ -517,6 +534,39 @@ func main() {
 				case <-ticker.C:
 					if _, err := anomalySvc.Check(ctx); err != nil && ctx.Err() == nil {
 						log.Printf("[anomaly] 定时检测失败(已跳过本轮):%v", err)
+					}
+				}
+			}
+		}()
+	}
+
+	// 指标时序采样器(异常检测「看趋势」数据源):每 metricsSampleInterval 采集一次写时序历史,
+	// 并按保留窗口清理旧样本。独立于异常检测(无规则也采样),随 ctx 停机退出。置 0 关闭采样。
+	if metricsSampleInterval > 0 {
+		go func() {
+			ticker := time.NewTicker(metricsSampleInterval)
+			defer ticker.Stop()
+			log.Printf("[metrics] 指标采样已启用,间隔 %s,保留 %d 天", metricsSampleInterval, metricsRetentionDays)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case t := <-ticker.C:
+					snaps, err := metricsSampleCollector.Collect(ctx, nil)
+					if err != nil {
+						if ctx.Err() == nil {
+							log.Printf("[metrics] 采样失败(已跳过本轮):%v", err)
+						}
+						continue
+					}
+					if err := metricsHist.Record(ctx, httpapi.SamplesFromSnapshots(snaps, t.UTC())); err != nil && ctx.Err() == nil {
+						log.Printf("[metrics] 写采样失败:%v", err)
+					}
+					// 顺手清理过期样本(保留窗口外)。
+					if n, err := metricsHist.Sweep(ctx, t.UTC().AddDate(0, 0, -metricsRetentionDays)); err != nil && ctx.Err() == nil {
+						log.Printf("[metrics] 清理过期样本失败:%v", err)
+					} else if n > 0 {
+						log.Printf("[metrics] 清理过期样本 %d 行", n)
 					}
 				}
 			}

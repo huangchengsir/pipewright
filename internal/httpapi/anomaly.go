@@ -280,6 +280,56 @@ func makeCreateAnomalyRuleHandler(svc anomaly.Service) http.HandlerFunc {
 	}
 }
 
+// makeUpdateAnomalyRuleHandler 返回 PATCH /api/anomaly/rules/{id}(auth + CSRF):
+// 整体更新规则(metric/operator/threshold/scope/enabled);不存在 → 404。enabled 省略 → 默认启用。
+func makeUpdateAnomalyRuleHandler(svc anomaly.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "异常检测服务未初始化")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
+		var req struct {
+			Metric    string  `json:"metric"`
+			Operator  string  `json:"operator"`
+			Threshold float64 `json:"threshold"`
+			ServerID  *string `json:"serverId"`
+			Enabled   *bool   `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
+			return
+		}
+		enabled := true
+		if req.Enabled != nil {
+			enabled = *req.Enabled
+		}
+		rule, err := svc.UpdateRule(r.Context(), chi.URLParam(r, "id"), anomaly.CreateRuleInput{
+			Metric:    req.Metric,
+			Operator:  req.Operator,
+			Threshold: req.Threshold,
+			ServerID:  req.ServerID,
+			Enabled:   enabled,
+		})
+		if err != nil {
+			writeAnomalyError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, toRuleDTO(rule))
+	}
+}
+
+// makeAnomalyConfigHandler 返回 GET /api/anomaly/config:暴露后台定时检测间隔 + 去重冷却窗口
+// (秒),供前端显示「每 N 秒自动检测一次」。intervalSeconds=0 表示定时检测已关闭(仅手动)。
+func makeAnomalyConfigHandler(intervalSec, cooldownSec int) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"intervalSeconds": intervalSec,
+			"cooldownSeconds": cooldownSec,
+		})
+	}
+}
+
 // makeDeleteAnomalyRuleHandler 返回 DELETE /api/anomaly/rules/{id}(auth + CSRF)。
 func makeDeleteAnomalyRuleHandler(svc anomaly.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

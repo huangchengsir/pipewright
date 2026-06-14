@@ -28,6 +28,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/environments"
 	"github.com/huangchengsir/pipewright/internal/i18n"
 	"github.com/huangchengsir/pipewright/internal/library"
+	"github.com/huangchengsir/pipewright/internal/metrics"
 	"github.com/huangchengsir/pipewright/internal/notify"
 	"github.com/huangchengsir/pipewright/internal/oauth"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
@@ -83,6 +84,9 @@ type options struct {
 	notifications    notify.Service
 	deployer         deploy.Service
 	anomaly          anomaly.Service
+	anomalyInterval  int // 后台定时检测间隔(秒);0=已关闭。供前端显示节奏。
+	anomalyCooldown  int // 同条件告警去重冷却窗口(秒)。
+	metricsHistory   metrics.Service
 	oauth            oauth.Service
 	approvalCoord    *approval.Coordinator
 	approvalStore    *approval.Store
@@ -329,6 +333,21 @@ func WithRetention(s *retention.Service) Option {
 // 不传则相关端点返回 503(服务未初始化)。
 func WithAnomaly(s anomaly.Service) Option {
 	return func(o *options) { o.anomaly = s }
+}
+
+// WithAnomalyConfig 注入后台定时检测的节奏参数(秒),经 GET /api/anomaly/config 暴露给前端显示
+// 「每 N 秒自动检测一次」。intervalSec=0 表示定时检测已关闭(仅手动)。
+func WithAnomalyConfig(intervalSec, cooldownSec int) Option {
+	return func(o *options) {
+		o.anomalyInterval = intervalSec
+		o.anomalyCooldown = cooldownSec
+	}
+}
+
+// WithMetricsHistory 注入服务器指标时序历史服务,挂载 GET /api/metrics/history(auth):
+// 供异常检测页画 CPU/内存/磁盘随时间走势折线。不传则该端点返回 503。
+func WithMetricsHistory(s metrics.Service) Option {
+	return func(o *options) { o.metricsHistory = s }
 }
 
 // WithOAuth 注入多 provider OAuth 凭据接入服务,挂载 /api/oauth/* 路由:
@@ -751,11 +770,14 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 写方法,过 auth + CSRF。metric/operator 枚举校验;无规则 → 空检测不报错。
 		// /anomaly/rules 字面段优先于 {id},/anomaly/check、/anomaly/alerts 不会被吞。
 		an := o.anomaly
+		ar.Get("/anomaly/config", makeAnomalyConfigHandler(o.anomalyInterval, o.anomalyCooldown))
 		ar.Get("/anomaly/rules", makeListAnomalyRulesHandler(an))
 		ar.Post("/anomaly/rules", makeCreateAnomalyRuleHandler(an))
+		ar.Patch("/anomaly/rules/{id}", makeUpdateAnomalyRuleHandler(an))
 		ar.Delete("/anomaly/rules/{id}", makeDeleteAnomalyRuleHandler(an))
 		ar.Post("/anomaly/check", makeAnomalyCheckHandler(an))
 		ar.Get("/anomaly/alerts", makeListAnomalyAlertsHandler(an))
+		ar.Get("/metrics/history", makeMetricsHistoryHandler(o.metricsHistory))
 
 		// 多 provider OAuth 凭据接入(连接 Gitee/GitHub/GitLab/自建)。oa 为 nil → handler 503。
 		// apps 列表/upsert:GET 过 auth;PUT 写方法过 auth + CSRF(clientSecret 只写、加密入库、响应仅掩码)。

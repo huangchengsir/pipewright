@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/huangchengsir/pipewright/internal/storetest"
 	_ "modernc.org/sqlite"
@@ -209,6 +210,93 @@ func TestListAlertsFilterAndLimit(t *testing.T) {
 	lim, _ := svc.ListAlerts(ctx, "", 1)
 	if len(lim) != 1 {
 		t.Fatalf("limit 1 wrong: %d", len(lim))
+	}
+}
+
+// stubNotifier 记录收到的告警(校验通知触发 + 去重)。
+type stubNotifier struct{ got []*Alert }
+
+func (n *stubNotifier) NotifyAlert(_ context.Context, a *Alert) { n.got = append(n.got, a) }
+
+// TestCheckNotifierInvokedOnNewAlert:命中新告警 → 通知器收到一次(带正确字段)。
+func TestCheckNotifierInvokedOnNewAlert(t *testing.T) {
+	disk := 92.3
+	col := stubCollector{snaps: []ServerMetricsSnapshot{
+		{ServerID: "s1", ServerName: "web-1", Available: true, DiskPercent: &disk},
+	}}
+	nf := &stubNotifier{}
+	svc := New(testDB(t), col, WithNotifier(nf), WithCooldown(time.Hour))
+	ctx := context.Background()
+	_, _ = svc.CreateRule(ctx, CreateRuleInput{Metric: "disk", Operator: "gt", Threshold: 1, Enabled: true})
+	if _, err := svc.Check(ctx); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if len(nf.got) != 1 {
+		t.Fatalf("want notifier called once, got %d", len(nf.got))
+	}
+	if nf.got[0].ServerID != "s1" || nf.got[0].Metric != "disk" {
+		t.Fatalf("notified alert wrong: %+v", nf.got[0])
+	}
+}
+
+// TestCheckCooldownDedup:cooldown 窗口内同「服务器×规则条件」重复命中 → 不再产告警/不再通知。
+func TestCheckCooldownDedup(t *testing.T) {
+	disk := 92.3
+	col := stubCollector{snaps: []ServerMetricsSnapshot{
+		{ServerID: "s1", ServerName: "web-1", Available: true, DiskPercent: &disk},
+	}}
+	nf := &stubNotifier{}
+	svc := New(testDB(t), col, WithNotifier(nf), WithCooldown(time.Hour))
+	ctx := context.Background()
+	_, _ = svc.CreateRule(ctx, CreateRuleInput{Metric: "disk", Operator: "gt", Threshold: 1, Enabled: true})
+
+	first, _ := svc.Check(ctx)
+	second, _ := svc.Check(ctx) // 立即再检测:在 cooldown 内 → 跳过
+
+	if len(first) != 1 {
+		t.Fatalf("first check want 1, got %d", len(first))
+	}
+	if len(second) != 0 {
+		t.Fatalf("second check within cooldown want 0, got %d", len(second))
+	}
+	stored, _ := svc.ListAlerts(ctx, "", 0)
+	if len(stored) != 1 {
+		t.Fatalf("dedup should keep a single alert, got %d", len(stored))
+	}
+	if len(nf.got) != 1 {
+		t.Fatalf("notifier should fire once across cooldown, got %d", len(nf.got))
+	}
+}
+
+// TestCheckRefiresAfterCooldown:窗口外(把已存告警时间改老)→ 再次命中重新产告警 + 通知。
+func TestCheckRefiresAfterCooldown(t *testing.T) {
+	disk := 92.3
+	col := stubCollector{snaps: []ServerMetricsSnapshot{
+		{ServerID: "s1", ServerName: "web-1", Available: true, DiskPercent: &disk},
+	}}
+	nf := &stubNotifier{}
+	db := testDB(t)
+	svc := New(db, col, WithNotifier(nf), WithCooldown(time.Hour))
+	ctx := context.Background()
+	_, _ = svc.CreateRule(ctx, CreateRuleInput{Metric: "disk", Operator: "gt", Threshold: 1, Enabled: true})
+
+	if _, err := svc.Check(ctx); err != nil {
+		t.Fatalf("check1: %v", err)
+	}
+	// 把已存告警的 created_at 改到 2 小时前(> cooldown 窗口),模拟冷却已过。
+	old := time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339)
+	if _, err := db.ExecContext(ctx, `UPDATE anomaly_alerts SET created_at = ?`, old); err != nil {
+		t.Fatalf("age alert: %v", err)
+	}
+	again, err := svc.Check(ctx)
+	if err != nil {
+		t.Fatalf("check2: %v", err)
+	}
+	if len(again) != 1 {
+		t.Fatalf("after cooldown should refire, got %d", len(again))
+	}
+	if len(nf.got) != 2 {
+		t.Fatalf("notifier should fire twice (once per window), got %d", len(nf.got))
 	}
 }
 

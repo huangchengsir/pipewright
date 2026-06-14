@@ -131,6 +131,8 @@ export default {
   evHealthCheckFailedDesc: 'Le contrôle de santé après déploiement n’a pas réussi',
   evApprovalRequired: 'Approbation requise',
   evApprovalRequiredDesc: 'Une exécution a atteint une porte d’approbation manuelle et attend approbation ou refus',
+  evAnomalyDetected: 'Anomalie détectée',
+  evAnomalyDetectedDesc: 'Une métrique serveur (CPU/mémoire/disque) a franchi une règle de seuil',
 
   routesTitle: 'Routes d’événements',
   routesDescPre: 'Configurez quels événements notifient quels canaux. ',

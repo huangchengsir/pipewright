@@ -130,6 +130,8 @@ export default {
   evHealthCheckFailedDesc: '部署後健康檢查未通過',
   evApprovalRequired: '需要審批',
   evApprovalRequiredDesc: '執行進入人工審批門,等待批准或拒絕',
+  evAnomalyDetected: '異常偵測',
+  evAnomalyDetectedDesc: '伺服器指標(CPU/記憶體/磁碟)命中閾值規則時告警',
 
   routesTitle: '事件路由',
   routesDescPre: '設定「哪些事件經哪些管道通知」。',

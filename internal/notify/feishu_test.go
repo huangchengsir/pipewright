@@ -234,6 +234,7 @@ func TestFeishuHeaderColor(t *testing.T) {
 		{"回滚 status→橙", map[string]string{"status": "rolled_back"}, "orange"},
 		{"构建成功事件→绿", map[string]string{"event": "build_succeeded"}, "green"},
 		{"成功 status→绿", map[string]string{"status": "success"}, "green"},
+		{"异常检测事件→红", map[string]string{"event": "anomaly_detected"}, "red"},
 		{"未知→中性蓝", map[string]string{"kind": "test"}, "blue"},
 	}
 	for _, c := range cases {
@@ -242,5 +243,26 @@ func TestFeishuHeaderColor(t *testing.T) {
 				t.Fatalf("want %q got %q (fields=%v)", c.want, got, c.fields)
 			}
 		})
+	}
+}
+
+// TestAnomalyEventWiring:新增「异常检测」事件 = 合法枚举、有本地化标签、飞书标题图标 🚨。
+func TestAnomalyEventWiring(t *testing.T) {
+	if !validEvent(EventAnomalyDetected) {
+		t.Fatalf("anomaly_detected should be a valid event")
+	}
+	if got := eventLabel(EventAnomalyDetected, "zh-CN"); got != "异常检测" {
+		t.Fatalf("zh-CN label want 异常检测, got %q", got)
+	}
+	if got := eventLabel(EventAnomalyDetected, "en"); got != "Anomaly detected" {
+		t.Fatalf("en label want 'Anomaly detected', got %q", got)
+	}
+	if got := feishuTitleIcon(Payload{Fields: map[string]string{"event": EventAnomalyDetected}}); got != "🚨" {
+		t.Fatalf("anomaly title icon want 🚨, got %q", got)
+	}
+	// 标题随服务器名(Project)渲染为「[<服务器>] 异常检测」。
+	p := EventPayload("zh-CN", EventAnomalyDetected, "香港服务器", "", "", "磁盘使用率 92.3% > 1%", 0)
+	if p.Title != "[香港服务器] 异常检测" {
+		t.Fatalf("title want [香港服务器] 异常检测, got %q", p.Title)
 	}
 }

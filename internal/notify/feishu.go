@@ -280,6 +280,8 @@ func feishuTitleIcon(p Payload) string {
 	event := strings.ToLower(strings.TrimSpace(p.Fields["event"]))
 	status := strings.ToLower(strings.TrimSpace(p.Fields["status"]))
 	switch {
+	case strings.Contains(event, "anomaly"):
+		return "🚨"
 	case strings.Contains(event, "approval"):
 		return "🔔"
 	case strings.Contains(event, "rollback") || strings.Contains(status, "rolled_back") || strings.Contains(status, "rollback"):
@@ -358,6 +360,10 @@ func feishuHeaderColor(p Payload) string {
 	event := strings.ToLower(strings.TrimSpace(p.Fields["event"]))
 	status := strings.ToLower(strings.TrimSpace(p.Fields["status"]))
 
+	// 异常检测:警示红(指标越限)。
+	if strings.Contains(event, "anomaly") {
+		return "red"
+	}
 	// 回滚单独橙色(既非成功也非纯失败)。
 	if strings.Contains(event, "rollback") || strings.Contains(status, "rolled_back") || strings.Contains(status, "rollback") {
 		return "orange"

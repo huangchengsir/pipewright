@@ -131,6 +131,8 @@ export default {
   evHealthCheckFailedDesc: 'Post-deploy health check did not pass',
   evApprovalRequired: 'Approval Required',
   evApprovalRequiredDesc: 'A run reached a manual approval gate and awaits approve or reject',
+  evAnomalyDetected: 'Anomaly Detected',
+  evAnomalyDetectedDesc: 'A server metric (CPU/memory/disk) crossed a threshold rule',
 
   routesTitle: 'Event Routes',
   routesDescPre: 'Configure which events notify which channels. ',

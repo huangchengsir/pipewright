@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -71,6 +72,9 @@ type TemplateVars struct {
 	// ActionURL 是一次性操作链接(目前用于 approval_required 事件的签名审批链接);
 	// 空 = 该事件无操作链接。渲染时占位名 {{actionUrl}};并透出到 Payload.Fields["审批链接"]/正文。
 	ActionURL string
+	// Params 是本次运行的参数(如发版审批的 VERSION);非空时透出到 Payload.Fields + 正文,
+	// 让审批卡片展示「要发哪个版本」等汇总信息(审批人据此审核)。键原样、值已是明文非 secret。
+	Params map[string]string
 }
 
 // asMap 把 TemplateVars 展开为占位名 → 值的映射(冻结占位名)。
@@ -289,6 +293,30 @@ func (s *service) defaultPayload(ctx context.Context, event string, vars Templat
 	}
 	lang := s.notifyLanguage(ctx)
 	p := EventPayload(lang, event, vars.Project, vars.Branch, vars.Commit, vars.Status, durationMs)
+	// 运行参数(如发版审批的 VERSION)透出到字段 + 正文,让审批卡片展示「要发什么」的汇总。
+	if len(vars.Params) > 0 {
+		if p.Fields == nil {
+			p.Fields = map[string]string{}
+		}
+		keys := make([]string, 0, len(vars.Params))
+		for k := range vars.Params {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys) // 稳定顺序(字段渲染与正文一致)
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			v := strings.TrimSpace(vars.Params[k])
+			if v == "" {
+				continue
+			}
+			p.Fields[k] = v
+			parts = append(parts, k+"="+v)
+		}
+		if len(parts) > 0 {
+			label := i18n.T(lang, "运行参数")
+			p.Body = strings.TrimRight(p.Body, "。.") + bodySeparator(lang) + label + bodySeparator(lang) + strings.Join(parts, bodyComma(lang))
+		}
+	}
 	if url := strings.TrimSpace(vars.ActionURL); url != "" {
 		if p.Fields == nil {
 			p.Fields = map[string]string{}

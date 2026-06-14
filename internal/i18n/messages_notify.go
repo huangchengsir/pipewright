@@ -14,6 +14,7 @@ func init() {
 		"健康检查失败": {"zh-TW": "健康檢查失敗", "en": "Health check failed", "ja": "ヘルスチェック失敗", "ko": "상태 점검 실패", "es": "Comprobación de estado fallida", "fr": "Échec de la vérification de santé", "de": "Health-Check fehlgeschlagen"},
 		"需要审批":   {"zh-TW": "需要審批", "en": "Approval required", "ja": "承認が必要です", "ko": "승인 필요", "es": "Se requiere aprobación", "fr": "Approbation requise", "de": "Genehmigung erforderlich"},
 		"异常检测":   {"zh-TW": "異常偵測", "en": "Anomaly detected", "ja": "異常を検出", "ko": "이상 감지", "es": "Anomalía detectada", "fr": "Anomalie détectée", "de": "Anomalie erkannt"},
+		"运行参数":   {"zh-TW": "執行參數", "en": "Parameters", "ja": "実行パラメータ", "ko": "실행 매개변수", "es": "Parámetros", "fr": "Paramètres", "de": "Parameter"},
 
 		// Field labels (notification body + feishu card field list).
 		"项目":     {"zh-TW": "專案", "en": "Project", "ja": "プロジェクト", "ko": "프로젝트", "es": "Proyecto", "fr": "Projet", "de": "Projekt"},

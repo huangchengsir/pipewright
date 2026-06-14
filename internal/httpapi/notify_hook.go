@@ -94,7 +94,7 @@ const approvalLinkTTL = 24 * time.Hour
 //     绝不阻塞门。
 //   - 自带超时(防慢渠道挂死 goroutine);RouteEventForProject 内部已 best-effort(未配路由不发)。
 //   - 链接、token 绝不写日志。
-func NewApprovalNotifier(notifySvc notify.Service, signer *approval.Signer, publicURL string) ApprovalNotifier {
+func NewApprovalNotifier(notifySvc notify.Service, signer *approval.Signer, publicURL string, runs run.Service) ApprovalNotifier {
 	base := strings.TrimRight(strings.TrimSpace(publicURL), "/")
 	if notifySvc == nil || signer == nil || !signer.Enabled() || base == "" {
 		// 依赖不全:返回 nil,门据此跳过通知(功能优雅关闭)。
@@ -113,6 +113,17 @@ func NewApprovalNotifier(notifySvc notify.Service, signer *approval.Signer, publ
 			Event:     notify.EventApprovalRequired,
 			RunID:     runID,
 			ActionURL: link,
+		}
+		// 取运行元数据,让审批卡片展示「审什么」:分支 / 提交 / 运行参数(发版的 VERSION 等)。
+		// best-effort:取不到就用基础 vars(仍发审批链接,绝不阻塞门)。
+		if runs != nil {
+			if r, err := runs.Get(ctx, runID); err == nil && r != nil {
+				vars.Branch = r.Trigger.Branch
+				vars.Commit = notify.ShortCommit(r.Trigger.Commit)
+				if len(r.Trigger.Params) > 0 {
+					vars.Params = r.Trigger.Params
+				}
+			}
 		}
 
 		// 异步发:门随后阻塞在 coord.Wait 上等待决定,通知不应拖慢进入等待。脱离父 ctx

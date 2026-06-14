@@ -518,7 +518,6 @@ func (b *Builder) runScriptJobIsolated(
 	upstreamEnv []pipeline.BuildVar,
 	reportSink TestReportSink,
 ) ([]pipeline.BuildVar, error) {
-	_ = settings // 与既有 script 路径签名对齐;script 执行不直接用 settings
 	ws, _, cleanup, err := b.cloneJobWorkspace(ctx, r, proj, rep)
 	if err != nil {
 		return nil, err
@@ -530,7 +529,13 @@ func (b *Builder) runScriptJobIsolated(
 		_ = rep.Log(ctx, streamStderr, fmt.Sprintf("script job「%s」配置无效:%v", jb.Name, verr))
 		return nil, ErrBuildFailed
 	}
+	// 注入顺序:运行参数 → 上游 job 输出 → 流水线级变量(「变量与缓存」,含 secret,vault 即取即用)
+	// → job 自身 env(后者覆盖同名)。此前流水线级变量只注入镜像构建路径、不到 script 步骤(漏),
+	// 导致脚本节点拿不到「变量与缓存」里配的 secret(如发版的 GITHUB_TOKEN)。本修复补齐。
 	base := append(runParamsAsEnv(r.Trigger.Params), upstreamEnv...)
+	if settings != nil && len(settings.Build.Vars) > 0 {
+		base = append(base, settings.Build.Vars...)
+	}
 	step.Env = append(base, step.Env...)
 	step.Env = append(step.Env, pipewrightEnvVar())
 	if svcNetwork != "" {

@@ -170,6 +170,8 @@ export default {
   diffEmptyHint: 'この実行にコミット情報がない、またはリポジトリに一時的にアクセスできない可能性があります。',
   commitRangeAria: '比較対象のコミット範囲',
   baselineTag: '親コミット',
+  patchTruncated: 'このファイルは大きいため、本文は省略されています。',
+  patchAria: '{path} のコード変更本文',
   currentTag: '今回',
   noFileDelta: '2 つのコミット間にファイル差分はありません。',
   fileStatusAdded: '追加',

@@ -170,6 +170,8 @@ export default {
   diffEmptyHint: '可能本次執行無提交資訊,或儲存庫暫時無法存取。',
   commitRangeAria: '對比的提交範圍',
   baselineTag: '父提交',
+  patchTruncated: '此檔案改動較大,正文已截斷顯示。',
+  patchAria: '{path} 的程式碼變更正文',
   currentTag: '本次',
   noFileDelta: '兩次提交之間無檔案差異。',
   fileStatusAdded: '新增',

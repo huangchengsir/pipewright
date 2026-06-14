@@ -257,6 +257,8 @@ export interface RunDiffFile {
   status: RunDiffFileStatus
   additions: number
   deletions: number
+  patch: string            // redacted +/- body; empty for binary / over-budget
+  patchTruncated: boolean  // this file's patch body was capped
 }
 
 export interface RunDiffDTO {

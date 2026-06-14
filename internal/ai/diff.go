@@ -9,8 +9,9 @@
 // 不依赖 httpapi / run 包(避免 import 成环);httpapi 层取 run/baseline/凭据后调用此处。
 //
 // 安全:token 仅作为 BasicAuth.Password 经参数化 API 传入,绝不进 URL / 日志 / 错误 / 结果。
-// 脱敏尽力:本层只输出文件路径 + 行数计数,不回传任何文件内容/diff 正文,故 diff 正文中的明文
-// secret 不会出网。
+// 脱敏:除文件路径 + 行数计数外,回传**脱敏后**的 +/- patch 正文——逐行经 redactSecret 把
+// password/secret/token/key 类赋值的值打码为 ***(防明文 secret 出网);正文另有单文件 + 总量
+// 字节上限防膨胀。仅 Add/Delete 行入正文(不含上下文行)。
 //
 // 健壮性:克隆失败 / commit 不可达绝不报致命错——返回 Available=false 的降级结果(由上层映射
 // 为 available:false degraded,绝不 500)。克隆到内存 storer,用完即随 GC 释放(无落盘、无驻留)。
@@ -19,6 +20,7 @@ package ai
 
 import (
 	"context"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -42,6 +44,13 @@ const maxDiffFiles = 200
 // maxFileDiffLines 是单文件增删行数统计上限(code-review P1;防巨型单文件计数撑爆)。
 const maxFileDiffLines = 50000
 
+// maxFilePatchBytes 是单文件 patch 正文上限(超出截断,PatchTruncated=true;防巨型单文件正文)。
+const maxFilePatchBytes = 16 * 1024
+
+// maxTotalPatchBytes 是一次 diff 全部文件 patch 正文的总预算(超出后续文件只给计数、不内联正文;
+// 防大改动 payload 膨胀 / OOM)。
+const maxTotalPatchBytes = 256 * 1024
+
 // 文件级 diff 状态枚举(冻结契约;与前端/DTO 对齐)。
 const (
 	diffStatusAdded    = "added"
@@ -50,7 +59,8 @@ const (
 	diffStatusRenamed  = "renamed"
 )
 
-// FileDiff 是单个文件的差异(路径 + 状态 + 增删行数)。中性结构,httpapi 层映射为冻结 DTO。
+// FileDiff 是单个文件的差异(路径 + 状态 + 增删行数 + 可选脱敏 patch 正文)。
+// 中性结构,httpapi 层映射为冻结 DTO。
 type FileDiff struct {
 	// Path 是文件路径(重命名时为新路径)。
 	Path string
@@ -60,6 +70,11 @@ type FileDiff struct {
 	Additions int
 	// Deletions 是删除行数(added 时为 0)。
 	Deletions int
+	// Patch 是该文件的 +/- 变更正文(仅 Add/Delete 行,逐行带 +/- 前缀;**已脱敏**:
+	// password/secret/token/key 等赋值的值打码为 ***)。二进制 / 无文本变更 / 超预算时为空。
+	Patch string
+	// PatchTruncated 表示该文件 patch 正文被单文件上限(maxFilePatchBytes)截断。
+	PatchTruncated bool
 }
 
 // RunDiff 是一次「baseline→current」差异计算结果(中性;httpapi 层映射为冻结 DTO)。
@@ -256,12 +271,22 @@ func buildRunDiff(ctx context.Context, changes object.Changes) RunDiff {
 		truncated = true
 	}
 
-	// 阶段二:只对截断后保留的文件算 patch(限内存峰值)。
+	// 阶段二:只对截断后保留的文件算 patch(限内存峰值)。patchBudget 为全部文件 patch 正文总预算;
+	// 耗尽后续文件仅给计数、不内联正文(防 payload 膨胀)。
 	files := make([]FileDiff, 0, len(light))
+	patchBudget := maxTotalPatchBytes
 	for _, lc := range light {
-		fd, ok := fileDiffFromChange(ctx, lc.ch)
+		cap := patchBudget
+		if cap > maxFilePatchBytes {
+			cap = maxFilePatchBytes
+		}
+		fd, ok := fileDiffFromChange(ctx, lc.ch, cap)
 		if !ok {
 			continue
+		}
+		patchBudget -= len(fd.Patch)
+		if patchBudget < 0 {
+			patchBudget = 0
 		}
 		files = append(files, fd)
 	}
@@ -275,8 +300,9 @@ func buildRunDiff(ctx context.Context, changes object.Changes) RunDiff {
 }
 
 // fileDiffFromChange 把单个 go-git Change 折算为 FileDiff:据 From/To 判状态(含重命名),
-// 据 patch chunks 统计增删行数。无法判定(空 change / patch 失败)返回 ok=false 跳过。
-func fileDiffFromChange(ctx context.Context, ch *object.Change) (FileDiff, bool) {
+// 据 patch chunks 统计增删行数,并构建**脱敏**的 +/- patch 正文(上限 patchCap 字节)。
+// 无法判定(空 change / patch 失败)返回 ok=false 跳过。
+func fileDiffFromChange(ctx context.Context, ch *object.Change, patchCap int) (FileDiff, bool) {
 	action, err := ch.Action()
 	if err != nil {
 		return FileDiff{}, false
@@ -302,11 +328,11 @@ func fileDiffFromChange(ctx context.Context, ch *object.Change) (FileDiff, bool)
 	}
 	_ = action
 
-	// 统计增删行数:经 patch 的 file-patch chunks(Add/Delete 类型按行计数)。
-	// 二进制文件 chunks 为空 → 0/0(仍记一条 modified/added/deleted,行数计 0)。
-	// 单文件行数封顶(code-review P1):统计到 maxFileDiffLines 即停,防被改成几百万行的单文件
-	// 的计数撑爆(patch 物化由上游 200 文件截断 + 30s 超时兜底,此处再封单文件计数上限)。
+	// 统计增删行数 + 构建脱敏 patch 正文(仅 Add/Delete 行,每行带 +/- 前缀;值脱敏)。
+	// 二进制文件 chunks 为空 → 0/0、无正文(仍记一条 modified/added/deleted,行数计 0)。
+	// 单文件行数封顶(code-review P1)+ patch 字节封顶(patchCap),防巨型单文件撑爆。
 	if patch, perr := ch.PatchContext(ctx); perr == nil && patch != nil {
+		var pb strings.Builder
 	count:
 		for _, fp := range patch.FilePatches() {
 			if fp.IsBinary() {
@@ -314,19 +340,56 @@ func fileDiffFromChange(ctx context.Context, ch *object.Change) (FileDiff, bool)
 			}
 			for _, chunk := range fp.Chunks() {
 				n := countLines(chunk.Content())
+				var prefix byte
 				switch chunk.Type() {
 				case fdiff.Add:
 					fd.Additions += n
+					prefix = '+'
 				case fdiff.Delete:
 					fd.Deletions += n
+					prefix = '-'
+				default:
+					// 上下文(Equal)行:不计增删、不入正文(只展示真正变更的行)。
+					continue
+				}
+				if patchCap > 0 {
+					appendPatchLines(&pb, prefix, chunk.Content(), patchCap, &fd.PatchTruncated)
 				}
 				if fd.Additions+fd.Deletions >= maxFileDiffLines {
 					break count
 				}
 			}
 		}
+		fd.Patch = pb.String()
 	}
 	return fd, true
+}
+
+// secretAssignRe 匹配「password/secret/token/key 类赋值」并把值部分捕获到 group2(供脱敏)。
+// 故意宽松(子串匹配、无词界)以尽量多命中;宁可对普通代码偶有过度打码,也不放过明文密钥。
+var secretAssignRe = regexp.MustCompile(`(?i)((?:password|passwd|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|client[_-]?secret)["']?\s*[:=]\s*["']?)([^\s"']{3,})`)
+
+// redactSecret 把一行里的密钥赋值值打码为 ***(diff 正文回传前脱敏,防明文 secret 出网)。
+func redactSecret(line string) string {
+	return secretAssignRe.ReplaceAllString(line, "$1***")
+}
+
+// appendPatchLines 把 chunk 内容逐行加 prefix(+/-)、脱敏后写入 buf,直到 buf 触及 cap(置 trunc)。
+// 保留行内空行(仅去掉 chunk 末尾换行产生的尾随空元素)。
+func appendPatchLines(buf *strings.Builder, prefix byte, content string, cap int, trunc *bool) {
+	content = strings.TrimSuffix(content, "\n")
+	if content == "" {
+		return
+	}
+	for _, line := range strings.Split(content, "\n") {
+		if buf.Len() >= cap {
+			*trunc = true
+			return
+		}
+		buf.WriteByte(prefix)
+		buf.WriteString(redactSecret(line))
+		buf.WriteByte('\n')
+	}
 }
 
 // countLines 统计一个 chunk 内容的行数(末尾无换行也算一行;空串算 0)。

@@ -170,6 +170,8 @@ export default {
   diffEmptyHint: 'Puede que esta ejecución no tenga información de confirmación o que el repositorio no esté disponible temporalmente.',
   commitRangeAria: 'Rango de commits comparado',
   baselineTag: 'Padre',
+  patchTruncated: 'Este archivo es grande; el cuerpo del diff está truncado.',
+  patchAria: 'Cuerpo de cambios de código de {path}',
   currentTag: 'Actual',
   noFileDelta: 'No hay diferencias de archivos entre los dos commits.',
   fileStatusAdded: 'Añadido',

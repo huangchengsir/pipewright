@@ -170,6 +170,8 @@ export default {
   diffEmptyHint: 'Cette exécution n’a peut-être pas d’information de commit, ou le dépôt est temporairement inaccessible.',
   commitRangeAria: 'Plage de commits comparée',
   baselineTag: 'Parent',
+  patchTruncated: 'Ce fichier est volumineux ; le corps du diff est tronqué.',
+  patchAria: 'Corps des modifications de code de {path}',
   currentTag: 'Actuelle',
   noFileDelta: 'Aucune différence de fichier entre les deux commits.',
   fileStatusAdded: 'Ajouté',

@@ -185,6 +185,37 @@ func TestDiffCommitEmpty(t *testing.T) {
 	}
 }
 
+// TestRunDiffPatchAndRedaction 验证 patch 正文含 +/- 行,且密钥赋值的值被脱敏为 ***(不外泄明文)。
+func TestRunDiffPatchAndRedaction(t *testing.T) {
+	url, shas := makeMultiCommitRepo(t,
+		commitSpec{"config.yaml": "name: app\n"},
+		commitSpec{"config.yaml": "name: app\npassword: SuperSecret123\napi_key=abcdef123456\n"},
+	)
+	d := newInsecureRunDiffer()
+	res := d.Diff(context.Background(), url, "", shas[0], shas[1])
+	if !res.Available {
+		t.Fatalf("available false: %s", res.Reason)
+	}
+	f, ok := findFile(res.Files, "config.yaml")
+	if !ok {
+		t.Fatalf("config.yaml not in diff: %+v", res.Files)
+	}
+	if f.Patch == "" {
+		t.Fatalf("expected patch content, got empty")
+	}
+	// 含新增行(带 + 前缀)。
+	if !strings.Contains(f.Patch, "+password:") {
+		t.Fatalf("patch missing added password line: %q", f.Patch)
+	}
+	// 明文密钥被脱敏:原值不出现,出现 ***。
+	if strings.Contains(f.Patch, "SuperSecret123") || strings.Contains(f.Patch, "abcdef123456") {
+		t.Fatalf("secret leaked in patch: %q", f.Patch)
+	}
+	if !strings.Contains(f.Patch, "***") {
+		t.Fatalf("expected redaction marker ***: %q", f.Patch)
+	}
+}
+
 // TestRunDiffDependencyManifestSuspect 验证依赖清单变更被点名为「最可疑」。
 func TestRunDiffDependencyManifestSuspect(t *testing.T) {
 	url, shas := makeMultiCommitRepo(t,

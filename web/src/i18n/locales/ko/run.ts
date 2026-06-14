@@ -170,6 +170,8 @@ export default {
   diffEmptyHint: '이 실행에 커밋 정보가 없거나 저장소에 일시적으로 접근할 수 없습니다.',
   commitRangeAria: '비교 대상 커밋 범위',
   baselineTag: '부모 커밋',
+  patchTruncated: '이 파일이 커서 본문이 잘렸습니다.',
+  patchAria: '{path}의 코드 변경 본문',
   currentTag: '이번',
   noFileDelta: '두 커밋 사이에 파일 차이가 없습니다.',
   fileStatusAdded: '추가',

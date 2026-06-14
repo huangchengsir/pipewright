@@ -170,6 +170,8 @@ export default {
   diffEmptyHint: 'Dieser Lauf hat möglicherweise keine Commit-Information, oder das Repository ist vorübergehend nicht erreichbar.',
   commitRangeAria: 'Verglichener Commit-Bereich',
   baselineTag: 'Eltern-Commit',
+  patchTruncated: 'Diese Datei ist groß; der Diff-Text ist abgeschnitten.',
+  patchAria: 'Code-Änderungstext für {path}',
   currentTag: 'Aktuell',
   noFileDelta: 'Keine Dateiunterschiede zwischen den beiden Commits.',
   fileStatusAdded: 'Hinzugefügt',

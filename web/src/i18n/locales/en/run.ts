@@ -170,6 +170,8 @@ export default {
   diffEmptyHint: 'This run may have no commit info, or the repo is temporarily unreachable.',
   commitRangeAria: 'Compared commit range',
   baselineTag: 'Parent',
+  patchTruncated: 'This file is large; the diff body is truncated.',
+  patchAria: 'Code change body for {path}',
   currentTag: 'Current',
   noFileDelta: 'No file differences between the two commits.',
   fileStatusAdded: 'Added',

@@ -23,6 +23,10 @@ type runDiffFileDTO struct {
 	Status    string `json:"status"` // added | modified | deleted | renamed
 	Additions int    `json:"additions"`
 	Deletions int    `json:"deletions"`
+	// Patch 是该文件的 +/- 变更正文(已脱敏:密钥赋值的值打码;二进制/超预算为空)。
+	Patch string `json:"patch"`
+	// PatchTruncated 表示该文件 patch 正文被单文件上限截断。
+	PatchTruncated bool `json:"patchTruncated"`
 }
 
 // runDiffDTO 是 GET /api/runs/{id}/diff 响应体(冻结)。
@@ -51,10 +55,12 @@ func toRunDiffDTO(d ai.RunDiff, baselineRunID, baselineCommit, currentCommit str
 	files := make([]runDiffFileDTO, 0, len(d.Files))
 	for _, f := range d.Files {
 		files = append(files, runDiffFileDTO{
-			Path:      f.Path,
-			Status:    f.Status,
-			Additions: f.Additions,
-			Deletions: f.Deletions,
+			Path:           f.Path,
+			Status:         f.Status,
+			Additions:      f.Additions,
+			Deletions:      f.Deletions,
+			Patch:          f.Patch,
+			PatchTruncated: f.PatchTruncated,
 		})
 	}
 	return runDiffDTO{

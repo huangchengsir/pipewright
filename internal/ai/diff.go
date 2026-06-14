@@ -203,7 +203,7 @@ func (d goGitDiffer) DiffCommit(ctx context.Context, repoURL, token, commit stri
 		return RunDiff{Available: false, Reason: "仓库克隆失败,暂时无法计算差异", Files: []FileDiff{}}, ""
 	}
 
-	curCommit, cerr := repo.CommitObject(plumbing.NewHash(commit))
+	curCommit, cerr := resolveCommit(repo, commit)
 	if cerr != nil {
 		return RunDiff{Available: false, Reason: "提交在仓库中不可达,无法计算差异", Files: []FileDiff{}}, ""
 	}
@@ -231,14 +231,24 @@ func (d goGitDiffer) DiffCommit(ctx context.Context, repoURL, token, commit stri
 	return buildRunDiff(cctx, changes), parentSHA
 }
 
-// commitTree 解析 commit sha 并返回其 tree;sha 不可达/解析失败返回错误。
+// commitTree 解析 commit 引用并返回其 tree;不可达/解析失败返回错误。
 func commitTree(repo *gogit.Repository, sha string) (*object.Tree, error) {
-	hash := plumbing.NewHash(sha)
-	commit, err := repo.CommitObject(hash)
+	commit, err := resolveCommit(repo, sha)
 	if err != nil {
 		return nil, err
 	}
 	return commit.Tree()
+}
+
+// resolveCommit 把 commit 引用解析为提交对象。**关键**:go-git 的 CommitObject 只认 40 位全 SHA,
+// 而生产里 run 存的是**短 SHA**(SetCommit 回写 7 位短 SHA);故先用 ResolveRevision 把短 SHA /
+// 分支名 / tag 等解析成全 hash,再取提交对象。否则短 SHA 一律「提交不可达」降级(本功能曾踩此坑)。
+func resolveCommit(repo *gogit.Repository, rev string) (*object.Commit, error) {
+	h, err := repo.ResolveRevision(plumbing.Revision(rev))
+	if err != nil {
+		return nil, err
+	}
+	return repo.CommitObject(*h)
 }
 
 // buildRunDiff 把 go-git Changes 折算为文件级 RunDiff(状态 + 增删行数 + 截断 + summary)。

@@ -76,6 +76,32 @@ func TestDeleteRule(t *testing.T) {
 	}
 }
 
+// TestUpdateRule:整体更新规则(改阈值/operator/scope/enabled)+ 不存在 → ErrNotFound。
+func TestUpdateRule(t *testing.T) {
+	svc := New(testDB(t), nil)
+	ctx := context.Background()
+	r, _ := svc.CreateRule(ctx, CreateRuleInput{Metric: "cpu", Operator: "gt", Threshold: 90, Enabled: true})
+
+	up, err := svc.UpdateRule(ctx, r.ID, CreateRuleInput{Metric: "disk", Operator: "lt", Threshold: 10, ServerID: ptr("s1"), Enabled: false})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if up.Metric != "disk" || up.Operator != "lt" || up.Threshold != 10 || up.ServerID == nil || *up.ServerID != "s1" || up.Enabled {
+		t.Fatalf("update wrong: %+v", up)
+	}
+	if up.CreatedAt != r.CreatedAt {
+		t.Fatalf("created_at must be preserved: %v vs %v", up.CreatedAt, r.CreatedAt)
+	}
+	// 校验枚举。
+	if _, err := svc.UpdateRule(ctx, r.ID, CreateRuleInput{Metric: "bogus", Operator: "gt", Threshold: 1}); err != ErrInvalidMetric {
+		t.Fatalf("want ErrInvalidMetric, got %v", err)
+	}
+	// 不存在。
+	if _, err := svc.UpdateRule(ctx, "nope", CreateRuleInput{Metric: "cpu", Operator: "gt", Threshold: 1}); err != ErrNotFound {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+}
+
 // TestCheckDiskHitsLowThreshold 对应本机真验:disk gt 1 必命中 → 产 disk 告警(value>threshold)。
 func TestCheckDiskHitsLowThreshold(t *testing.T) {
 	disk := 92.3

@@ -655,10 +655,21 @@ onBeforeUnmount(() => {
       <span v-else-if="connState === 'connecting'" class="conn-state">{{ tg('serverTerminal.connecting') }}</span>
       <span v-else-if="connState === 'error'" class="conn-state err">{{ tg('serverTerminal.connectFailed') }}</span>
 
-      <button class="tbtn" type="button" :disabled="connState === 'connecting'" @click="connect">
-        {{ connState === 'connected' ? tg('serverTerminal.reconnect') : tg('serverTerminal.connect') }}
+      <button
+        v-if="connState === 'connected'"
+        class="tbtn danger"
+        type="button"
+        @click="disconnect"
+      >{{ tg('serverTerminal.disconnect') }}</button>
+      <button
+        v-else
+        class="tbtn"
+        type="button"
+        :disabled="connState === 'connecting'"
+        @click="connect"
+      >
+        {{ connState === 'closed' || connState === 'error' ? tg('serverTerminal.reconnect') : tg('serverTerminal.connect') }}
       </button>
-      <button class="tbtn danger" type="button" :disabled="connState !== 'connected'" @click="disconnect">{{ tg('serverTerminal.disconnect') }}</button>
       <button class="tbtn" type="button" @click="closePage">{{ tg('serverTerminal.close') }}</button>
     </header>
 

@@ -37,6 +37,28 @@ func TestApprovalRequiredEventPayload(t *testing.T) {
 }
 
 // defaultPayload 携带 ActionURL 时,链接透出到 Fields[actionUrl] 与正文。
+// 审批卡片携带运行参数(如发版 VERSION):透出到 Fields + 正文,让审批人看到「要发什么」。
+func TestApprovalRequiredPayloadCarriesParams(t *testing.T) {
+	s, _, _ := newSvc(t, http.DefaultClient)
+	p := s.defaultPayload(ctx(), EventApprovalRequired, TemplateVars{
+		Project: "pipewright-release",
+		Branch:  "master",
+		Commit:  "abc1234",
+		Event:   EventApprovalRequired,
+		RunID:   "run-1",
+		Params:  map[string]string{"VERSION": "v1.3.9"},
+	})
+	if p.Fields["VERSION"] != "v1.3.9" {
+		t.Fatalf("VERSION param not in fields: %+v", p.Fields)
+	}
+	if !strings.Contains(p.Body, "VERSION=v1.3.9") {
+		t.Fatalf("VERSION not summarized in body: %q", p.Body)
+	}
+	if p.Fields["branch"] != "master" || p.Fields["commit"] != "abc1234" {
+		t.Fatalf("branch/commit missing: %+v", p.Fields)
+	}
+}
+
 func TestApprovalRequiredPayloadCarriesActionURL(t *testing.T) {
 	s, _, _ := newSvc(t, http.DefaultClient)
 	link := "https://ci.example.com/approvals?token=abc.def"

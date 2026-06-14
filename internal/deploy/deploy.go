@@ -317,6 +317,12 @@ func (s *service) DeployForStage(ctx context.Context, runID string, serverIDs []
 	if len(serverIDs) == 0 {
 		return nil, ErrNoServers
 	}
+	// 「命令型」部署(artifactType=command):不取构建产物,直接在目标机执行 cfg["restartCommand"]。
+	// 供「配置类」流水线用(如 frp 隧道:就地 upsert frpc.ini + reload)。与产物发布完全隔离——
+	// **真实产物部署(artifactType != command)绝不进此分支**,既有部署/策略/健康检查路径零影响。
+	if strings.TrimSpace(cfg["artifactType"]) == "command" {
+		return s.runCommandOnly(ctx, runID, serverIDs, cfg)
+	}
 	// 取该 run 已产出的可部署产物。dist/jar/archive 走文件发布;image 走容器 pull→停旧起新→
 	// 健康→回滚(复用 image_release.go)。二者都在时按节点 cfg["artifactType"] 选(空 → 默认优先
 	// 文件发布,保持既有行为;显式 image → 选镜像)。选定后由 deployWithStrategy 据产物类型自动路由。
@@ -344,6 +350,53 @@ func (s *service) DeployForStage(ctx context.Context, runID string, serverIDs []
 	results := s.deployWithStrategy(ctx, servers, *artifact, cfg, nil, NormalizeStrategy(strategy))
 
 	// 持久化每机结果(填 run-detail targets slot);**不置 run 终态**(dag 调度器控制)。
+	dts := make([]run.DeployTarget, 0, len(results))
+	for _, r := range results {
+		dts = append(dts, run.DeployTarget{
+			RunID: runID, ServerID: r.ServerID, ServerName: r.ServerName,
+			Status: r.Status, Message: r.Message, StartedAt: r.StartedAt, FinishedAt: r.FinishedAt,
+		})
+	}
+	if err := s.runs.SaveDeployTargets(ctx, runID, dts); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+// runCommandOnly 执行「命令型」部署:在每台目标机直接跑 cfg["restartCommand"](无构建产物)。
+// 命令文本里的 {{param}} 已在 build 层(runDeployJob)用本次运行参数渲染好;此处只逐机执行 +
+// 经 s.exec 把命令/输出实时回流步骤日志(脱敏由 sink Masker 兜底)+ 持久化每机结果。
+func (s *service) runCommandOnly(ctx context.Context, runID string, serverIDs []string, cfg map[string]string) ([]TargetResult, error) {
+	command := strings.TrimSpace(cfg["restartCommand"])
+	if command == "" {
+		return nil, fmt.Errorf("deploy: 命令型部署缺少 restartCommand")
+	}
+	results := make([]TargetResult, 0, len(serverIDs))
+	for _, sid := range serverIDs {
+		srv, gerr := s.targets.Get(ctx, sid)
+		if gerr != nil {
+			if errors.Is(gerr, target.ErrNotFound) {
+				return nil, ErrServerNotFound
+			}
+			return nil, gerr
+		}
+		started := time.Now().UTC()
+		out, err := s.exec(ctx, sid, []string{"sh", "-c", command})
+		fin := time.Now().UTC()
+		tr := TargetResult{ServerID: sid, ServerName: srv.Name, StartedAt: started, FinishedAt: &fin}
+		switch {
+		case err != nil:
+			tr.Status = run.TargetFailed
+			tr.Message = humanExecError(err)
+		case out != nil && out.ExitCode != 0:
+			tr.Status = run.TargetFailed
+			tr.Message = fmt.Sprintf("命令退出码 %d", out.ExitCode)
+		default:
+			tr.Status = run.TargetSuccess
+			tr.Message = "命令执行成功"
+		}
+		results = append(results, tr)
+	}
 	dts := make([]run.DeployTarget, 0, len(results))
 	for _, r := range results {
 		dts = append(dts, run.DeployTarget{

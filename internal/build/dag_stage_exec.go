@@ -290,7 +290,7 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 				}
 				_ = rep.JobRunning(ctx, jb.ID)
 				jrep := rep.JobReporter(jb.ID)
-				if err := b.runDeployJob(ctx, jrep, jb, r.ID); err != nil {
+				if err := b.runDeployJob(ctx, jrep, jb, r.ID, r.Trigger.Params); err != nil {
 					_ = rep.JobDone(ctx, jb.ID, run.StepFailed)
 					return err
 				}
@@ -416,7 +416,7 @@ func (b *Builder) runStageJobsDAG(
 			case isBuildImageJob(jb.Type):
 				return b.runBuildImageJobIsolated(ctx, jsink, jrep, r, jb, stage, proj, settings, hasPushJob)
 			case isDeployJob(jb.Type):
-				return b.runDeployJob(ctx, jrep, jb, r.ID)
+				return b.runDeployJob(ctx, jrep, jb, r.ID, r.Trigger.Params)
 			case strings.TrimSpace(jb.Type) == "push_image":
 				// 推送随构建镜像节点完成(hasPushJob);本节点仅用于在 DAG 中编排顺序/展示。
 				_ = jrep.Log(ctx, streamStdout, fmt.Sprintf("· 推送镜像「%s」:已随构建镜像节点完成推送(本节点用于编排顺序)", jb.Name))
@@ -572,7 +572,7 @@ func (b *Builder) runBuildImageJobIsolated(
 
 // runDeployJob 执行一个 deploy_ssh 节点:把本 run 已产出的产物经 SSH 部署到节点配置的目标机
 // (复用 deploy.Service.DeployForStage 中途部署,不动 run 终态)。任一目标失败 → 阶段失败、阻断下游。
-func (b *Builder) runDeployJob(ctx context.Context, rep dagrun.StageReporter, jb pipeline.Job, runID string) error {
+func (b *Builder) runDeployJob(ctx context.Context, rep dagrun.StageReporter, jb pipeline.Job, runID string, params map[string]string) error {
 	if b.deployer == nil {
 		_ = rep.Log(ctx, streamStdout, "· 部署节点:部署服务未注入,跳过")
 		return nil
@@ -583,10 +583,12 @@ func (b *Builder) runDeployJob(ctx context.Context, rep dagrun.StageReporter, jb
 		return ErrBuildFailed
 	}
 	cfg := map[string]string{}
-	if dp := cfgString(jb.Config, "deployPath"); dp != "" {
+	// deployPath / restartCommand 支持 {{param}} 占位:用本次运行参数渲染(命令型部署据此让
+	// 「本地端口 / 穿透端口」等随运行参数变化;非配置类部署不写占位 → renderTemplate 零开销直返)。
+	if dp := renderTemplate(cfgString(jb.Config, "deployPath"), params); dp != "" {
 		cfg["releaseBase"] = dp
 	}
-	if rc := cfgString(jb.Config, "restartCommand"); rc != "" {
+	if rc := renderTemplate(cfgString(jb.Config, "restartCommand"), params); rc != "" {
 		cfg["restartCommand"] = rc
 	}
 	// 镜像产物部署参数(#51)透传:deploy.DeployForStage 经这些键挑镜像产物并组装

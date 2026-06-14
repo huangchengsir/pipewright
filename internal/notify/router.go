@@ -31,6 +31,8 @@ const (
 	EventHealthCheckFailed = "health_check_failed"
 	// EventApprovalRequired 需要人工审批(run 进入 waiting_approval 时发,携带签名审批链接)。
 	EventApprovalRequired = "approval_required"
+	// EventAnomalyDetected 服务器指标异常(异常检测命中阈值规则;非 run 维度,projectID 空=全局路由)。
+	EventAnomalyDetected = "anomaly_detected"
 )
 
 // 路由领域错误。
@@ -47,7 +49,8 @@ var (
 func validEvent(e string) bool {
 	switch e {
 	case EventBuildSucceeded, EventBuildFailed, EventDeploySucceeded,
-		EventDeployFailed, EventRollback, EventHealthCheckFailed, EventApprovalRequired:
+		EventDeployFailed, EventRollback, EventHealthCheckFailed, EventApprovalRequired,
+		EventAnomalyDetected:
 		return true
 	default:
 		return false
@@ -60,7 +63,7 @@ func Events() []string {
 		EventBuildSucceeded, EventBuildFailed,
 		EventDeploySucceeded, EventDeployFailed,
 		EventRollback, EventHealthCheckFailed,
-		EventApprovalRequired,
+		EventApprovalRequired, EventAnomalyDetected,
 	}
 }
 
@@ -482,6 +485,8 @@ func eventLabel(event, lang string) string {
 		return i18n.T(lang, "健康检查失败")
 	case EventApprovalRequired:
 		return i18n.T(lang, "需要审批")
+	case EventAnomalyDetected:
+		return i18n.T(lang, "异常检测")
 	default:
 		return event
 	}

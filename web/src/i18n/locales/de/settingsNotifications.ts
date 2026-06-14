@@ -131,6 +131,8 @@ export default {
   evHealthCheckFailedDesc: 'Der Health-Check nach dem Deployment ist nicht bestanden',
   evApprovalRequired: 'Genehmigung erforderlich',
   evApprovalRequiredDesc: 'Ein Lauf hat ein manuelles Genehmigungs-Gate erreicht und wartet auf Genehmigung oder Ablehnung',
+  evAnomalyDetected: 'Anomalie erkannt',
+  evAnomalyDetectedDesc: 'Eine Servermetrik (CPU/Speicher/Festplatte) hat eine Schwellenwertregel überschritten',
 
   routesTitle: 'Ereignisrouten',
   routesDescPre: 'Konfigurieren Sie, welche Ereignisse über welche Kanäle benachrichtigen. ',

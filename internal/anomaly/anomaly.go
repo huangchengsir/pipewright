@@ -150,16 +150,50 @@ type Service interface {
 	ListAlerts(ctx context.Context, serverID string, limit int) ([]*Alert, error)
 }
 
+// Notifier 抽象「告警产生时发一次通知」(注入便于测试;nil = 不发)。实现侧 best-effort:
+// 自带超时、失败仅记日志,绝不阻断检测主流程。
+type Notifier interface {
+	NotifyAlert(ctx context.Context, a *Alert)
+}
+
+// defaultCooldown 是同一「服务器 × 规则条件」两次告警之间的最小间隔:窗口内重复命中不再
+// 产告警/发通知,避免「CPU 持续越限 → 每个检测周期刷屏」。
+const defaultCooldown = 10 * time.Minute
+
 // service 是 store + collector 支撑的 Service 实现。
 type service struct {
 	db        *sql.DB
 	collector MetricsCollector
+	notifier  Notifier      // nil = 不发通知(命中仍入库 + 列表可见)
+	cooldown  time.Duration // 同条件去重窗口;<=0 视为 defaultCooldown
+}
+
+// Option 配置可选依赖(通知器 / 去重窗口);默认零依赖、defaultCooldown。
+type Option func(*service)
+
+// WithNotifier 注入告警通知器:每条**新**告警(通过去重窗口后)发一次通知。
+func WithNotifier(n Notifier) Option { return func(s *service) { s.notifier = n } }
+
+// WithCooldown 设置同条件去重窗口;d<=0 回退 defaultCooldown。
+func WithCooldown(d time.Duration) Option {
+	return func(s *service) {
+		if d > 0 {
+			s.cooldown = d
+		}
+	}
 }
 
 // New 构造 Service。collector 复用 6-1 采集(httpapi 适配注入);为 nil 时 Check 返回空结果
 // (无采集源 → 不误报)。不在此做任何重活(无 init 副作用)。
-func New(db *sql.DB, collector MetricsCollector) Service {
-	return &service{db: db, collector: collector}
+func New(db *sql.DB, collector MetricsCollector, opts ...Option) Service {
+	s := &service{db: db, collector: collector, cooldown: defaultCooldown}
+	for _, opt := range opts {
+		opt(s)
+	}
+	if s.cooldown <= 0 {
+		s.cooldown = defaultCooldown
+	}
+	return s
 }
 
 const defaultAlertLimit = 100
@@ -295,14 +329,43 @@ func (s *service) Check(ctx context.Context) ([]*Alert, error) {
 			if !evaluate(rule.Operator, *pv, rule.Threshold) {
 				continue
 			}
+			// 去重:同「服务器 × 规则条件」在 cooldown 窗口内已有告警 → 跳过(不入库、不发通知),
+			// 避免持续越限时每个检测周期刷屏。
+			recent, err := s.hasRecentAlert(ctx, snap.ServerID, rule)
+			if err != nil {
+				return nil, err
+			}
+			if recent {
+				continue
+			}
 			alert, err := s.recordAlert(ctx, rule, snap, *pv)
 			if err != nil {
 				return nil, err
 			}
 			out = append(out, alert)
+			// 命中新告警 → 发一次通知(best-effort,实现侧不阻断;未注入则无操作)。
+			if s.notifier != nil {
+				s.notifier.NotifyAlert(ctx, alert)
+			}
 		}
 	}
 	return out, nil
+}
+
+// hasRecentAlert 报告同「服务器 × 规则条件(metric+operator+threshold)」在 cooldown 窗口内
+// 是否已有告警(去重)。查询/扫描失败 → 返回错误(由 Check 上抛,保持既有错误传播语义)。
+func (s *service) hasRecentAlert(ctx context.Context, serverID string, rule *Rule) (bool, error) {
+	cutoff := time.Now().UTC().Add(-s.cooldown).Format(time.RFC3339)
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(1) FROM anomaly_alerts
+		 WHERE server_id = ? AND metric = ? AND operator = ? AND threshold = ? AND created_at >= ?`,
+		serverID, rule.Metric, rule.Operator, rule.Threshold, cutoff,
+	).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("anomaly: check recent alert: %w", err)
+	}
+	return n > 0, nil
 }
 
 // evaluate 求值 value <op> threshold。

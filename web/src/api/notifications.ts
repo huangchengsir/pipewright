@@ -134,6 +134,7 @@ export type NotificationEvent =
   | 'rollback'
   | 'health_check_failed'
   | 'approval_required'
+  | 'anomaly_detected'
 
 /** GET response item — an event→channel mapping. */
 export interface NotificationRoute {

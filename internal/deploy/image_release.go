@@ -165,7 +165,7 @@ func (s *service) rollbackImage(ctx context.Context, srv *target.Server, res Tar
 		{"docker", "rm", "-f", st.name},
 		dockerRunCmd(st.name, st.runArgs, st.prevImage),
 	} {
-		if _, e := s.targets.Exec(ctx, srv.ID, cmd); e != nil {
+		if _, e := s.exec(ctx, srv.ID, cmd); e != nil {
 			rbErr = e
 			break
 		}
@@ -189,7 +189,7 @@ func (s *service) fleetRollbackImageOne(ctx context.Context, srv *target.Server,
 		{"docker", "rm", "-f", st.name},
 		dockerRunCmd(st.name, st.runArgs, st.prevImage),
 	} {
-		if _, e := s.targets.Exec(execCtx, srv.ID, cmd); e != nil {
+		if _, e := s.exec(execCtx, srv.ID, cmd); e != nil {
 			rbErr = e
 			break
 		}
@@ -206,7 +206,7 @@ func (s *service) fleetRollbackImageOne(ctx context.Context, srv *target.Server,
 
 // readContainerImage 读同名容器当前所用镜像(docker inspect);无容器 / 读失败 → ""。
 func (s *service) readContainerImage(ctx context.Context, serverID, name string) string {
-	out, err := s.targets.Exec(ctx, serverID, []string{"docker", "inspect", "--format", "{{.Config.Image}}", name})
+	out, err := s.exec(ctx, serverID, []string{"docker", "inspect", "--format", "{{.Config.Image}}", name})
 	if err != nil || out == nil || out.ExitCode != 0 {
 		return ""
 	}

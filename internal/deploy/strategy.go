@@ -295,7 +295,7 @@ func (s *service) fleetRollbackOne(ctx context.Context, srv *target.Server, st r
 
 	var rbErr error
 	for _, cmd := range atomicSymlinkCmds(st.prev, st.current) {
-		if _, e := s.targets.Exec(execCtx, srv.ID, cmd); e != nil {
+		if _, e := s.exec(execCtx, srv.ID, cmd); e != nil {
 			rbErr = e
 			break
 		}

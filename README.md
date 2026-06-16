@@ -2,113 +2,113 @@
 
 # Pipewright
 
-**一个轻量、自托管的 CI/CD + 部署 + 运维一体化平台。**
-单个 Go 静态二进制(内嵌前端,运行时零依赖),
-一个工具替掉「CI + Ansible/Kamal + Portainer」三件套。
+**A lightweight, self-hosted CI/CD + deployment + ops platform.**
+A single static Go binary (frontend embedded, zero runtime dependencies) —
+one tool replacing the "CI + Ansible/Kamal + Portainer" trio.
 
 [![Release](https://img.shields.io/github/v/release/huangchengsir/pipewright)](https://github.com/huangchengsir/pipewright/releases)
 [![CI](https://github.com/huangchengsir/pipewright/actions/workflows/ci.yml/badge.svg)](https://github.com/huangchengsir/pipewright/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-简体中文 | [English](README.en.md)
+English | [简体中文](README.zh-CN.md)
 
 </div>
 
 ---
 
-## 为什么是 Pipewright
+## Why Pipewright
 
-主流方案要么重(Jenkins 一堆插件 + JVM),要么是三个工具拼装(Woodpecker/Drone + Ansible/Kamal + Portainer)。Pipewright 把「持续集成、多服务器部署、服务器/容器运维」装进**一个静态二进制**:下载、启动、打开浏览器,就是全部安装过程。
+Mainstream options are either heavy (Jenkins with a pile of plugins + JVM) or a three-tool assembly (Woodpecker/Drone + Ansible/Kamal + Portainer). Pipewright packs "continuous integration, multi-server deployment, and server/container ops" into **one static binary**: download, start, open the browser — that's the entire install.
 
 | | Pipewright | Jenkins | Drone + Ansible + Portainer |
 |---|:---:|:---:|:---:|
-| 单二进制部署 | ✅ | ❌ JVM + 插件 | ❌ 三套拼装 |
-| 可视化流水线编排(DAG) | ✅ 内置画布 | 插件 | YAML 手写 |
-| 隔离构建 | ✅ | ✅ | ✅ |
-| 多服务器部署(SSH,免 Agent) | ✅ 内置 | 插件 | Ansible |
-| 服务器 / 容器运维 | ✅ 内置 | ❌ | Portainer |
-| 零停机 + 失败回滚 | ✅ | 插件 | 自己写 |
-| 一键自更新 | ✅ | ❌ | ❌ |
+| Single-binary deploy | ✅ | ❌ JVM + plugins | ❌ three-tool assembly |
+| Visual pipeline orchestration (DAG) | ✅ built-in canvas | plugin | hand-written YAML |
+| Isolated builds | ✅ | ✅ | ✅ |
+| Multi-server deploy (SSH, agentless) | ✅ built-in | plugin | Ansible |
+| Server / container ops | ✅ built-in | ❌ | Portainer |
+| Zero-downtime + failure rollback | ✅ | plugin | DIY |
+| One-click self-update | ✅ | ❌ | ❌ |
 
-## 界面预览
+## Screenshots
 
-**全局概览** —— 项目、运行成功率、环境部署态、服务器健康、DORA 指标,一屏全局:
+**Global overview** — projects, run success rate, environment deployment status, server health, and DORA metrics, all on one screen:
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
-**可视化流水线编排** —— 阶段/任务两级 DAG 画布:横向连线串行、纵向并排真并行,支持矩阵构建、人工审批门、旁挂服务、阶段后置步骤;画布与 YAML 双向往返:
+**Visual pipeline orchestration** — a two-level (stage/job) DAG canvas: horizontal links for serial, vertical side-by-side for true parallel. Supports matrix builds, manual approval gates, sidecar services, and post-stage steps; the canvas and YAML round-trip both ways:
 
-![流水线编排画布](docs/screenshots/pipeline-canvas.png)
+![Pipeline canvas](docs/screenshots/pipeline-canvas.png)
 
-**运行详情** —— 阶段流转、实时日志(SSE 推送 + 历史回放)、构建产物与镜像引用、逐步骤状态:
+**Run detail** — stage transitions, live logs (SSE push + history replay), build artifacts and image references, and per-step status:
 
-![运行详情](docs/screenshots/run-detail.png)
+![Run detail](docs/screenshots/run-detail.png)
 
-**容器管理** —— 跨主机容器/镜像/Stacks/卷/网络一站管理,生命周期操作、实时 stats、日志、交互终端:
+**Container management** — one-stop management of containers/images/Stacks/volumes/networks across hosts, with lifecycle operations, live stats, logs, and an interactive terminal:
 
-![容器管理](docs/screenshots/containers.png)
+![Container management](docs/screenshots/containers.png)
 
-## 能力总览
+## Feature Overview
 
-- **🔐 安全地基** —— 单管理员认证(argon2id + CSRF)· 凭据加密保险库(NaCl secretbox,掩码呈现,绝无明文)· append-only 审计 · 全链路 secret 脱敏。
-- **🧩 项目与流水线** —— 可视化编排画布(阶段 DAG + 阶段内任务级 DAG)· 矩阵构建 · 人工审批门 · 旁挂服务(测试挂 DB/Redis)· 触发规则 + 分支→环境映射 · 服务端权威合法性校验。
-- **🏗 隔离构建与产物** —— 版本钉死的容器内隔离构建 · 构建依赖缓存 · 多类型产物(镜像/JAR/dist)+ 推送私有镜像仓库 · 实时终端日志(SSE)+ 历史回放 · 只读代码浏览(Monaco)。
-- **🚀 多服务器部署** —— 经 SSH 免 Agent 部署 · 健康门控 · 零停机切换 + 失败回滚 · 多机并行扇出 + 部分失败可见 · 环境部署历史与回滚。
-- **📣 通知** —— 企业微信 / 钉钉 / 飞书 / 邮件 / 自定义 webhook · 事件→渠道细粒度路由 · 模板 + 变量自定义 · 流水线内通知节点。
-- **🖥 服务器与容器运维** —— 多机状态总览(CPU/内存/磁盘)· 容器/镜像/Stacks/卷/网络管理 · 实时 + 历史服务日志 · 容器交互终端 · Web 运维终端(主机 shell,完整复制粘贴/信号支持)· 异常检测告警。
-- **📈 度量** —— DORA 四指标(部署频率/变更前置时长/变更失败率/平均恢复时长)开箱即用。
-- **🔄 检查 + 一键自更新** —— 设置→系统 一键查 GitHub 最新发布并语义比对;二进制部署可页面**一键自动更新**(下载 + 校验和核验 + 原子替换 + 自重启),Docker 部署给出精确升级命令。
+- **🔐 Security foundation** — single-admin auth (argon2id + CSRF) · encrypted credential vault (NaCl secretbox, masked display, never plaintext) · append-only audit · end-to-end secret redaction.
+- **🧩 Projects & pipelines** — visual orchestration canvas (stage DAG + intra-stage job-level DAG) · matrix builds · manual approval gates · sidecar services (attach DB/Redis for tests) · trigger rules + branch→environment mapping · server-authoritative validation.
+- **🏗 Isolated builds & artifacts** — version-pinned isolated builds inside containers · build dependency caching · multiple artifact types (image/JAR/dist) + push to private registries · live terminal logs (SSE) + history replay · read-only code browsing (Monaco).
+- **🚀 Multi-server deployment** — agentless deploy over SSH · health gating · zero-downtime cutover + failure rollback · parallel fan-out across hosts + visible partial failures · environment deployment history and rollback.
+- **📣 Notifications** — WeCom / DingTalk / Lark (Feishu) / email / custom webhook · fine-grained event→channel routing · templates + custom variables · in-pipeline notification nodes.
+- **🖥 Server & container ops** — multi-host status overview (CPU/memory/disk) · container/image/Stacks/volume/network management · live + historical service logs · interactive container terminal · web ops terminal (host shell, full copy-paste/signal support) · anomaly detection alerts.
+- **📈 Metrics** — the four DORA metrics (deployment frequency / lead time for changes / change failure rate / mean time to restore) out of the box.
+- **🔄 Update check + one-click self-update** — Settings → System checks GitHub for the latest release with semantic comparison; binary deployments can **auto-update with one click** from the UI (download + checksum verification + atomic replace + self-restart), while Docker deployments get the exact upgrade command.
 
-> 安全不可妥协:凭据仅以密文存储、命令 array 化防注入、出网 SSRF 收口、日志脱敏。
+> Security is non-negotiable: credentials stored as ciphertext only, commands arrayified against injection, outbound SSRF locked down, logs redacted.
 
-## 安装 / 部署
+## Install / Deploy
 
-三种形态任选,平台本体是单静态二进制、**运行时零依赖**(无需 Go/Node)。
+Pick any of three form factors. The platform itself is a single static binary with **zero runtime dependencies** (no Go/Node required).
 
-> **Docker 前置**:平台本体不依赖 Docker,但**「隔离构建 / 容器部署」需要 Docker**(没有则降级到桩 runner、不做真实构建)。控制台 / SSH 部署 / 通知不需要。一键脚本会**检测 Docker** 并在缺失时提示;Linux 下可 `INSTALL_DOCKER=1` 自动安装(经官方 get.docker.com),macOS 请装 Docker Desktop。
+> **Docker prerequisite**: the platform itself doesn't depend on Docker, but **"isolated builds / container deployment" do require Docker** (without it, it degrades to a stub runner and performs no real builds). The console / SSH deployment / notifications don't need Docker. The one-click script **detects Docker** and prompts if it's missing; on Linux you can set `INSTALL_DOCKER=1` to auto-install it (via the official get.docker.com); on macOS, install Docker Desktop.
 
-### ① 一键脚本(Linux / macOS)
+### ① One-click script (Linux / macOS)
 
-从 GitHub Release 下载对应平台的静态二进制装到 `/usr/local/bin`(含校验和核验 + Docker 检测):
+Downloads the static binary for your platform from GitHub Releases and installs it to `/usr/local/bin` (with checksum verification + Docker detection):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/huangchengsir/pipewright/master/install.sh | sh
 
-# 钉版本 / 自定义目录 / Linux 顺带自动装 Docker:
+# Pin a version / custom dir / auto-install Docker on Linux too:
 VERSION=v1.0.0 INSTALL_DIR=$HOME/.local/bin INSTALL_DOCKER=1 \
   sh -c "$(curl -fsSL https://raw.githubusercontent.com/huangchengsir/pipewright/master/install.sh)"
 
-# 运行(首次启动引导管理员;master key 用于凭据保险库)
+# Run (first launch bootstraps the admin; master key is for the credential vault)
 PIPEWRIGHT_MASTER_KEY=$(openssl rand -base64 32) \
 PIPEWRIGHT_ADMIN_PASSWORD=change-me \
-  pipewright          # 打开 http://localhost:8080,用 admin / change-me 登录
+  pipewright          # open http://localhost:8080, log in with admin / change-me
 ```
 
-**推荐:装为 systemd 服务**(开机自启 + 崩溃重启 + 一键自更新可用;Linux,需 root)。脚本会自动持久化 master key 到 `/etc/pipewright/master.key`、数据落 `/var/lib/pipewright`、配置写 `/etc/pipewright/pipewright.env`:
+**Recommended: install as a systemd service** (auto-start on boot + restart on crash + one-click self-update available; Linux, requires root). The script persists the master key to `/etc/pipewright/master.key`, stores data in `/var/lib/pipewright`, and writes config to `/etc/pipewright/pipewright.env`:
 
 ```bash
 SETUP_SERVICE=1 sh -c "$(curl -fsSL https://raw.githubusercontent.com/huangchengsir/pipewright/master/install.sh)"
-# 状态 / 日志:systemctl status pipewright  ·  journalctl -u pipewright -f
-# 改端口等:编辑 /etc/pipewright/pipewright.env 后 systemctl restart pipewright
+# Status / logs: systemctl status pipewright  ·  journalctl -u pipewright -f
+# Change port etc.: edit /etc/pipewright/pipewright.env then systemctl restart pipewright
 
-# 用 MySQL 而非默认 SQLite(DSN 为 go-sql-driver 格式,parseTime=true 必带):
+# Use MySQL instead of the default SQLite (DSN is go-sql-driver format; parseTime=true is required):
 SETUP_SERVICE=1 PIPEWRIGHT_DB_DRIVER=mysql \
   PIPEWRIGHT_DB_DSN='user:pw@tcp(host:3306)/pipewright?parseTime=true&charset=utf8mb4' \
   sh -c "$(curl -fsSL https://raw.githubusercontent.com/huangchengsir/pipewright/master/install.sh)"
 ```
 
-> Windows 用户:到 [Releases](https://github.com/huangchengsir/pipewright/releases) 下载 `.zip`。
+> Windows users: download the `.zip` from [Releases](https://github.com/huangchengsir/pipewright/releases).
 
-### ② docker compose(推荐自托管)
+### ② docker compose (recommended for self-hosting)
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/huangchengsir/pipewright/master/docker-compose.yml
 curl -fsSLO https://raw.githubusercontent.com/huangchengsir/pipewright/master/.env.example
-cp .env.example .env       # 至少设 PIPEWRIGHT_ADMIN_PASSWORD,并 openssl rand -base64 32 填 MASTER_KEY
-docker compose up -d       # 数据持久化在具名卷 pipewright-data;切 MySQL 见 .env 注释
+cp .env.example .env       # at minimum set PIPEWRIGHT_ADMIN_PASSWORD, and openssl rand -base64 32 for MASTER_KEY
+docker compose up -d       # data persists in the named volume pipewright-data; see .env comments to switch to MySQL
 ```
 
-### ③ docker run(最快试用)
+### ③ docker run (fastest trial)
 
 ```bash
 docker run -d -p 8080:8080 -v pipewright-data:/data \
@@ -117,59 +117,59 @@ docker run -d -p 8080:8080 -v pipewright-data:/data \
   ghcr.io/huangchengsir/pipewright:latest
 ```
 
-### 从源码构建
+### Build from source
 
 ```bash
-make build          # 前端构建 → go:embed → 单个静态二进制 ./pipewright(纯 Go,无 CGO)
+make build          # frontend build → go:embed → single static binary ./pipewright (pure Go, no CGO)
 ./pipewright --version
 ```
 
-### 更新
+### Updating
 
-打开 **设置 → 系统**,点「检查更新」查最新发布;有新版时:
+Open **Settings → System** and click "Check for updates" to query the latest release; when a new version is available:
 
-- **二进制部署**:点「立即更新」即自动下载新版 + 校验和核验 + 替换 + 重启(需对二进制文件有写权限;装在 `$HOME/.local/bin` 免 sudo,或用 `SETUP_SERVICE=1` 装的 root systemd 服务亦满足)。
-- **Docker 部署**:容器不替换自身镜像,按提示在宿主执行 `docker compose pull && docker compose up -d`(数据卷保留)。
+- **Binary deployment**: click "Update now" to auto-download the new version + verify checksum + replace + restart (requires write permission to the binary file; installing to `$HOME/.local/bin` avoids sudo, and a root systemd service installed via `SETUP_SERVICE=1` also satisfies this).
+- **Docker deployment**: the container doesn't replace its own image; follow the prompt to run `docker compose pull && docker compose up -d` on the host (the data volume is preserved).
 
-### 配置(环境变量)
+### Configuration (environment variables)
 
-| 变量 | 说明 | 默认 |
+| Variable | Description | Default |
 |---|---|---|
-| `PIPEWRIGHT_ADDR` | HTTP 监听地址 | `:8080` |
-| `PIPEWRIGHT_RELEASE_REPO` | 检查更新所查的 GitHub 仓库(fork 可改) | `huangchengsir/pipewright` |
-| `PIPEWRIGHT_DB_DRIVER` | 数据库驱动:`sqlite` 或 `mysql` | `sqlite` |
-| `PIPEWRIGHT_DB` | SQLite 数据库路径(driver=sqlite 时) | `pipewright.db` |
-| `PIPEWRIGHT_DB_DSN` | MySQL DSN(driver=mysql 时必填) | 无 |
-| `PIPEWRIGHT_MASTER_KEY` | 凭据保险库主密钥(base64 的 32 字节);或用 `_FILE` 指文件 | 未配则保险库禁用 |
-| `PIPEWRIGHT_ADMIN_USERNAME` | 首次启动管理员用户名 | `admin` |
-| `PIPEWRIGHT_ADMIN_PASSWORD` | 首次启动管理员口令 | 无(须设置) |
-| `PIPEWRIGHT_RUNNER` | 运行执行器:默认 DAG(按画布 stages/script/deploy_ssh/notify 编排执行);设 `legacy` 回退旧版固定流程 | `dag` |
+| `PIPEWRIGHT_ADDR` | HTTP listen address | `:8080` |
+| `PIPEWRIGHT_RELEASE_REPO` | GitHub repo queried for update checks (change it for a fork) | `huangchengsir/pipewright` |
+| `PIPEWRIGHT_DB_DRIVER` | Database driver: `sqlite` or `mysql` | `sqlite` |
+| `PIPEWRIGHT_DB` | SQLite database path (when driver=sqlite) | `pipewright.db` |
+| `PIPEWRIGHT_DB_DSN` | MySQL DSN (required when driver=mysql) | none |
+| `PIPEWRIGHT_MASTER_KEY` | Credential vault master key (base64-encoded 32 bytes); or use `_FILE` to point to a file | vault disabled if unset |
+| `PIPEWRIGHT_ADMIN_USERNAME` | Admin username on first launch | `admin` |
+| `PIPEWRIGHT_ADMIN_PASSWORD` | Admin password on first launch | none (must be set) |
+| `PIPEWRIGHT_RUNNER` | Run executor: default DAG (orchestrates stages/script/deploy_ssh/notify per the canvas); set `legacy` to fall back to the old fixed flow | `dag` |
 
-## 流水线即代码(GitOps)
+## Pipeline as code (GitOps)
 
-把流水线结构写进仓库的 `.pipewright.yml`,**跟代码同源、走 PR 评审、按分支演进**——不再依赖画布配置的隐式漂移。
+Commit your pipeline structure to `.pipewright.yml` in the repo — **same source of truth as your code, reviewable in a PR, evolving per branch** — instead of relying on implicit drift in the canvas.
 
-- **开启**:在项目的流水线页打开「流水线即代码 / Pipeline as code」开关(按项目维度)。
-- **生效方式**:开启后,每次运行都从**本次构建分支**的**仓库根**读取 `.pipewright.yml`(分支为空时回退项目默认分支),用其中的流水线 spec 驱动本次运行;不同分支可携带各自的 `.pipewright.yml`。文件用项目绑定的仓库凭据临时拉取,无新增暴露面。
-- **永不卡住运行的回退**:文件**缺失** → 回退到画布(UI)里已配置的流水线;文件存在但 **YAML 非法** → 同样回退到已存的画布配置。
-- **作用范围**:YAML 只管**流水线结构**(阶段 / 任务 / `needs` / DAG 编排);**变量与缓存、环境与凭据、触发规则**仍来自画布(UI)设置,**不写在 YAML 里**。
-- **schema** 与平台「从 YAML 导入」用的是同一套(`version` + `stages` → `jobs`,job 用嵌套 `script:` 块写 `image`/`commands`/`env`/`workdir`)。
+- **Enable**: flip the "Pipeline as code" toggle on the project's pipeline page (per project).
+- **How it works**: once enabled, every run reads `.pipewright.yml` from the **repo root** on the **branch being built** (falling back to the project default branch when the branch is empty), and the pipeline spec in that file drives the run. Different branches can carry different `.pipewright.yml`. The file is fetched with the project's bound repo credential (ephemeral; no new exposure).
+- **Never breaks a run**: if the file is **missing** → falls back to the pipeline configured in the canvas (UI); if it exists but is **invalid YAML** → also falls back to the stored canvas config.
+- **Scope**: the YAML controls **pipeline structure only** (stages / jobs / `needs` / DAG layout). **Variables & cache, environments & credentials, and trigger rules** still come from the canvas (UI) settings — they are **not** in the YAML.
+- **Schema** is the same one used by the platform's "Import from YAML" (`version` + `stages` → `jobs`; a job uses a nested `script:` block for `image`/`commands`/`env`/`workdir`).
 
 ```yaml
 version: 1
 stages:
-  - id: stg_src              # needs 按阶段 id 引用,故跨阶段依赖须显式写 id
-    name: 流水线源
+  - id: stg_src             # needs references stages by id, so cross-stage deps need an explicit id
+    name: Source
     kind: source
     jobs:
-      - name: Gitee 源
+      - name: Gitee source
         type: git_source
   - id: stg_build
-    name: 构建
+    name: Build
     kind: build
     needs: [stg_src]
     jobs:
-      - name: 运行测试
+      - name: Run tests
         type: script
         script:
           image: golang:1.23
@@ -180,60 +180,60 @@ stages:
             CGO_ENABLED: "0"
           workdir: src/app
   - id: stg_deploy
-    name: 部署
+    name: Deploy
     kind: deploy
     needs: [stg_build]
-    gate: true               # 人工审批门
+    gate: true              # manual approval gate
     when:
       branches: [main, release/*]
     jobs:
-      - name: SSH 部署
+      - name: SSH deploy
         type: deploy_ssh
         config:
           targetEnv: prod
 ```
 
-> 也可用全局环境变量 `PIPEWRIGHT_PAC_RUNTIME=1` 对**所有项目**强制开启流水线即代码(无视各项目开关),供向后兼容 / 高级用户使用。
+> You can also force pipeline-as-code on for **all projects** (ignoring the per-project toggle) via the global env var `PIPEWRIGHT_PAC_RUNTIME=1`, for back-compat / power users.
 
-## 技术栈
+## Tech Stack
 
-- **后端**:Go · Chi(路由)· modernc/sqlite(纯 Go,无 CGO)· go-git · NaCl secretbox(保险库)· argon2id · golang.org/x/crypto/ssh(免 Agent 部署)
-- **前端**:Vue 3 `<script setup>` · Vite · naive-ui · OKLCH 双主题 · Monaco(只读代码浏览)· 经 `go:embed` 内嵌进二进制
+- **Backend**: Go · Chi (routing) · modernc/sqlite (pure Go, no CGO) · go-git · NaCl secretbox (vault) · argon2id · golang.org/x/crypto/ssh (agentless deployment)
+- **Frontend**: Vue 3 `<script setup>` · Vite · naive-ui · OKLCH dual theme · Monaco (read-only code browsing) · embedded into the binary via `go:embed`
 
-## 架构
+## Architecture
 
 ```
-单静态二进制 (cmd/pipewright)
-├── internal/auth        认证 + 会话 + CSRF
-├── internal/vault       凭据加密保险库(secretbox)
-├── internal/audit       append-only 审计 + 脱敏
-├── internal/project     项目接入 + 仓库探测
-├── internal/pipeline    流水线 spec + 构建/部署配置 + 校验
-├── internal/trigger     webhook + 分支映射触发
-├── internal/run         运行模型 + worker pool + 日志 + 产物
-├── internal/dagrun      DAG 调度(阶段级 + 任务级,矩阵展开)
-├── internal/build       隔离构建 + 镜像/产物 + 依赖缓存
-├── internal/target      通用 SSH exec/session 层(部署 + 运维共享)
-├── internal/deploy      SSH 部署执行 + 健康门控 + 回滚
-├── internal/notify      多渠道通知 + 事件路由 + 模板
-├── internal/httpapi     唯一对外 HTTP 面(领域包不碰 HTTP)
-└── web/                 Vue3 前端(go:embed 内嵌)
+single static binary (cmd/pipewright)
+├── internal/auth        auth + sessions + CSRF
+├── internal/vault       encrypted credential vault (secretbox)
+├── internal/audit       append-only audit + redaction
+├── internal/project     project onboarding + repo detection
+├── internal/pipeline    pipeline spec + build/deploy config + validation
+├── internal/trigger     webhook + branch-mapping triggers
+├── internal/run         run model + worker pool + logs + artifacts
+├── internal/dagrun      DAG scheduling (stage-level + job-level, matrix expansion)
+├── internal/build       isolated builds + image/artifacts + dependency caching
+├── internal/target      generic SSH exec/session layer (shared by deploy + ops)
+├── internal/deploy      SSH deploy execution + health gating + rollback
+├── internal/notify      multi-channel notifications + event routing + templates
+├── internal/httpapi     the sole outward HTTP surface (domain packages never touch HTTP)
+└── web/                 Vue 3 frontend (embedded via go:embed)
 ```
 
-## 开发状态
+## Project Status
 
-✅ **已正式发布**,持续迭代中 —— 最新版本见 [Releases](https://github.com/huangchengsir/pipewright/releases)(tag 驱动发版:6 平台二进制 + ghcr 多架构镜像)。已在真实生产环境承载多项目的构建、部署与日常运维。
+✅ **Officially released** and under active iteration — see the latest version in [Releases](https://github.com/huangchengsir/pipewright/releases) (tag-driven releases: 6-platform binaries + ghcr multi-arch images). Already running in real production, carrying builds, deployments, and daily ops for multiple projects.
 
-## 贡献 / Contributing
+## Contributing
 
-欢迎 PR 与 Issue!动手前请读 [CONTRIBUTING.md](CONTRIBUTING.md)(搭环境 / 测试 / 提交规范),并遵守[行为准则](CODE_OF_CONDUCT.md)。安全漏洞请走私密渠道,见 [SECURITY.md](SECURITY.md)。
+PRs and issues welcome! Before you start, please read [CONTRIBUTING.md](CONTRIBUTING.md) (environment setup / testing / commit conventions) and follow the [Code of Conduct](CODE_OF_CONDUCT.md). For security vulnerabilities, please use the private channel described in [SECURITY.md](SECURITY.md).
 
 ## License
 
-MIT — 见 [LICENSE](LICENSE)。
+MIT — see [LICENSE](LICENSE).
 
 ---
 
 <div align="center">
-<sub>Pipewright —— 把 CI、部署与运维装进一个二进制。</sub>
+<sub>Pipewright — CI, deployment, and ops in a single binary.</sub>
 </div>

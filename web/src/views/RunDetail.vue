@@ -1103,6 +1103,13 @@ function nodeClass(status: StepStatus): string {
             </div>
             <!-- END SLOT: SSH 部署执行 -->
 
+            <!-- 代码变更(run-diff;#137)。成功运行恒可见 —— 展示「本次提交自身」相对父提交的
+                 文件级 diff(git show),回答「这次部署改了啥」。后端按 commit-self 语义返回,
+                 不依赖 baseline 运行;无 commit / 克隆失败时组件自身降级。与 failed 分支同一组件。 -->
+            <div class="diff-section" role="region" :aria-label="t('runDetail.diffAria')">
+              <SuccessFailDiff :run-id="run.id" />
+            </div>
+
           </div>
         </template>
 

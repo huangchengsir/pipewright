@@ -237,8 +237,8 @@ func TestRunDiffPatchAndRedaction(t *testing.T) {
 	}
 }
 
-// TestRunDiffDependencyManifestSuspect 验证依赖清单变更被点名为「最可疑」。
-func TestRunDiffDependencyManifestSuspect(t *testing.T) {
+// TestRunDiffDependencyManifestHint 验证依赖清单变更被点名为「重点」提示。
+func TestRunDiffDependencyManifestHint(t *testing.T) {
 	url, shas := makeMultiCommitRepo(t,
 		commitSpec{"package.json": `{"deps":{"a":"1"}}` + "\n"},
 		commitSpec{"package.json": `{"deps":{"a":"2"}}` + "\n"},
@@ -250,6 +250,26 @@ func TestRunDiffDependencyManifestSuspect(t *testing.T) {
 	}
 	if !strings.Contains(res.Summary, "package.json") {
 		t.Fatalf("summary should call out package.json, got %q", res.Summary)
+	}
+}
+
+// TestRunDiffPlainFileNoCallout 验证普通文件(非依赖清单)变更 → summary 不臆测点名,
+// 既无遗留的「最可疑」诊断话术,也无「重点」清单提示(下方文件列表已列全)。
+func TestRunDiffPlainFileNoCallout(t *testing.T) {
+	url, shas := makeMultiCommitRepo(t,
+		commitSpec{"README.md": "hello\n"},
+		commitSpec{"README.md": "hello\nworld\n"},
+	)
+	d := newInsecureRunDiffer()
+	res := d.Diff(context.Background(), url, "", shas[0], shas[1])
+	if !res.Available {
+		t.Fatalf("expected Available=true, reason=%q", res.Reason)
+	}
+	if strings.Contains(res.Summary, "最可疑") {
+		t.Fatalf("summary must not carry stale 最可疑 framing, got %q", res.Summary)
+	}
+	if strings.Contains(res.Summary, "重点") {
+		t.Fatalf("plain file should not get a 重点 callout, got %q", res.Summary)
 	}
 }
 

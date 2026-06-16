@@ -3,7 +3,7 @@
 // RunDiffer 给两个 (repoURL, commit)——baseline(上一次成功运行)与 current(本次失败
 // 运行)——经 go-git 克隆仓库到内存,解析两个 commit 的 tree,算文件级 diff(路径 + 状态
 // added|modified|deleted|renamed + 增删行数),截断(文件数上限防 OOM),并产出一句人读
-// summary(含简单「最可疑」启发式)。
+// summary(文件数 + 增删 + 依赖/构建清单变更「重点」提示)。
 //
 // 复用 2-5/3-6 的克隆能力 + SSRF 收口 + test-only allowInsecure(放行 file:// 夹具)。本文件
 // 不依赖 httpapi / run 包(避免 import 成环);httpapi 层取 run/baseline/凭据后调用此处。
@@ -88,7 +88,7 @@ type RunDiff struct {
 	Files []FileDiff
 	// Truncated 表示文件数超 maxDiffFiles 被截断。
 	Truncated bool
-	// Summary 是一句人读总结(含「最可疑」启发式)。
+	// Summary 是一句人读总结(文件数 + 总增删 + 依赖/构建清单变更「重点」提示)。
 	Summary string
 }
 
@@ -414,8 +414,10 @@ func countLines(content string) int {
 	return n
 }
 
-// summarize 产出一句人读总结:文件数 + 总增删 + 简单「最可疑」启发式。
-// 启发式:优先点名依赖清单(package.json/go.mod/...)变更,否则点名改动最大(增删合计最多)的文件。
+// summarize 产出一句人读总结:文件数 + 总增删 + 依赖/构建清单变更提示。
+// diff 是「本次提交自身」的描述性变更(非失败 baseline 对比),故不作「最可疑」诊断臆测;
+// 仅当改动里含依赖/构建清单(package.json/go.mod/Dockerfile/...)时给一句中性「重点:」提示,
+// 因为这类文件变更常牵动构建/运行,值得一眼看到。普通文件不点名(下方文件列表已列全)。
 func summarize(files []FileDiff, truncated bool) string {
 	if len(files) == 0 {
 		return "两次提交之间无文件差异"
@@ -438,14 +440,14 @@ func summarize(files []FileDiff, truncated bool) string {
 		b.WriteString(",已截断展示")
 	}
 
-	if suspect := mostSuspect(files); suspect != "" {
-		b.WriteString(";最可疑:")
-		b.WriteString(suspect)
+	if hint := manifestHint(files); hint != "" {
+		b.WriteString(";重点:")
+		b.WriteString(hint)
 	}
 	return b.String()
 }
 
-// dependencyManifests 是依赖/构建清单文件名(变更优先视为「最可疑」,常引入构建/运行差异)。
+// dependencyManifests 是依赖/构建清单文件名(变更值得「重点」提示,常引入构建/运行差异)。
 var dependencyManifests = map[string]string{
 	"package.json":      "依赖变更",
 	"package-lock.json": "依赖锁变更",
@@ -460,9 +462,9 @@ var dependencyManifests = map[string]string{
 	"Dockerfile":        "镜像构建变更",
 }
 
-// mostSuspect 据启发式挑「最可疑」文件:优先依赖/构建清单(按 files 顺序首个命中),
-// 否则改动最大(增删合计最多)的文件。返回人读串(如 "package.json 依赖变更");无则空。
-func mostSuspect(files []FileDiff) string {
+// manifestHint 仅挑依赖/构建清单文件(按 files 顺序首个命中)作中性「重点」提示。
+// 返回人读串(如 "package.json 依赖变更");无清单变更则空 —— 不对普通文件作臆测点名。
+func manifestHint(files []FileDiff) string {
 	for _, f := range files {
 		base := f.Path
 		if i := strings.LastIndex(base, "/"); i >= 0 {
@@ -471,19 +473,6 @@ func mostSuspect(files []FileDiff) string {
 		if hint, ok := dependencyManifests[base]; ok {
 			return f.Path + " " + hint
 		}
-	}
-	// 退化:挑改动量最大的文件。
-	best := -1
-	bestIdx := -1
-	for i, f := range files {
-		churn := f.Additions + f.Deletions
-		if churn > best {
-			best = churn
-			bestIdx = i
-		}
-	}
-	if bestIdx >= 0 && best > 0 {
-		return files[bestIdx].Path
 	}
 	return ""
 }

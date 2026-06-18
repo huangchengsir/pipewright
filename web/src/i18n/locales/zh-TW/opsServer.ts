@@ -9,6 +9,7 @@ export default {
     tabStacks: 'Stacks',
     tabVolumes: '卷',
     tabNetworks: '網路',
+    tabDomains: '網域',
     realtimeStats: '即時資源(docker stats)',
     refreshStatsTitle: '重新整理即時資源取樣',
     sampling: '取樣中…',

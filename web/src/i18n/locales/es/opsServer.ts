@@ -9,6 +9,7 @@ export default {
     tabStacks: 'Stacks',
     tabVolumes: 'Volúmenes',
     tabNetworks: 'Redes',
+    tabDomains: 'Dominios',
     realtimeStats: 'Recursos en vivo (docker stats)',
     refreshStatsTitle: 'Actualizar muestreo de recursos en vivo',
     sampling: 'Muestreando…',

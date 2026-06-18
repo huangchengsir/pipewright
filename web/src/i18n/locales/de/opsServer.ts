@@ -9,6 +9,7 @@ export default {
     tabStacks: 'Stacks',
     tabVolumes: 'Volumes',
     tabNetworks: 'Netzwerke',
+    tabDomains: 'Domains',
     realtimeStats: 'Live-Ressourcen (docker stats)',
     refreshStatsTitle: 'Live-Ressourcen-Stichprobe aktualisieren',
     sampling: 'Wird abgetastet…',

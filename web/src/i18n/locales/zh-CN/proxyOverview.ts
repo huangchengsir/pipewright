@@ -1,0 +1,52 @@
+export default {
+  eyebrow: '运维大盘',
+  title: '证书总览',
+  subtitle: '跨主机、跨域名的反代证书集中成一张表 —— 状态、有效期、到期一眼看清。续期由 Caddy 自动完成,这里只为安心确认。',
+  // 摘要卡
+  summaryAria: '证书摘要',
+  cardTotal: '路由总数',
+  cardIssued: '已签发',
+  cardPendingFailed: '申请中 / 失败',
+  cardPendingFailedBreak: '{pending} 申请中 · {failed} 失败',
+  cardSoonest: '最近到期',
+  cardSoonestNone: '暂无到期信息',
+  dayUnit: '天',
+  // 控件
+  sortAria: '排序方式',
+  sortExpiry: '按到期',
+  sortHost: '按主机',
+  expiringSoon: '{n} 个将到期',
+  groupCount: '{n} 条路由',
+  // 表头
+  colDomain: '域名',
+  colHost: '主机',
+  colUpstream: '上游',
+  colStatus: '状态',
+  colCertDetail: '证书详情',
+  colExpiry: '到期',
+  colActions: '操作',
+  // 状态
+  statusIssued: '已签发',
+  statusPending: '申请中',
+  statusFailed: '失败',
+  disabled: '已停用',
+  // 到期文案
+  daysLeft: '{n} 天后',
+  expiresToday: '今天到期',
+  expiredAgo: '已过期 {n} 天',
+  // 行操作
+  refreshRowTitle: '重新校验该证书',
+  gotoHostTitle: '前往该主机',
+  refreshing: '正在重新校验证书…',
+  refreshFail: '刷新失败',
+  // 状态 / 空 / 错误
+  loadingAria: '正在加载证书总览',
+  refreshingAll: '刷新中…',
+  emptyTitle: '还没有任何域名路由',
+  emptyDesc: '到各主机的「域名 / 反代」里绑定第一个域名,绑定后这里会汇总所有主机的证书。',
+  errTitle: '加载证书总览失败',
+  errLoad: '加载失败({status})。',
+  errReq: '请求失败({status})。',
+  errNetwork: '网络错误,请稍后重试。',
+  footNote: '续期由 Caddy 在到期前自动完成,无需手动操作 —— 这张表只是让你随时确认健康状态。',
+}

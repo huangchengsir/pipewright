@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/huangchengsir/pipewright/internal/target"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // tls_mode / cert_status 枚举(DB 存小写字串;JSON 同名)。
@@ -65,6 +66,17 @@ var (
 	ErrUpstreamConnect = errors.New("proxy: 上游容器接入反代网络失败")
 	// ErrApply 表示渲染/下发/reload Caddy 配置失败。
 	ErrApply = errors.New("proxy: 应用反代配置失败")
+
+	// ErrInvalidAlias 表示别名域名格式非法(与主域名同一 FQDN 校验)。
+	ErrInvalidAlias = errors.New("proxy: invalid alias domain")
+	// ErrInvalidCIDR 表示 IP 白名单/黑名单中某项不是合法 CIDR / IP。
+	ErrInvalidCIDR = errors.New("proxy: invalid CIDR in ip allow/deny list")
+	// ErrInvalidRedirect 表示重定向规则非法(路径含危险字符 / 状态码非 301|302|307|308)。
+	ErrInvalidRedirect = errors.New("proxy: invalid redirect rule")
+	// ErrInvalidBasicAuthUser 表示 Basic Auth 用户名含非法字符(防破坏 Caddyfile)。
+	ErrInvalidBasicAuthUser = errors.New("proxy: invalid basic auth user")
+	// ErrBcrypt 表示 Basic Auth 口令哈希失败。
+	ErrBcrypt = errors.New("proxy: hash basic auth password failed")
 )
 
 // Route 是一条反代路由领域模型(冻结契约)。
@@ -78,8 +90,38 @@ type Route struct {
 	Enabled           bool
 	CertStatus        string // "pending" | "issued" | "failed"
 	CertDetail        string
+	Config            RouteConfig // R2:高级配置(别名 / 访问控制 / 头 / 重定向);R1 老路由为零值。
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+}
+
+// Redirect 是一条自定义重定向规则(渲染为 Caddy `redir from to status`)。冻结契约。
+type Redirect struct {
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Status int    `json:"status"` // 301|302|307|308;默认 308
+}
+
+// RouteConfig 是一条路由的「高级配置」(R2;持久化为 config 列 JSON)。冻结契约。
+// 注意:BasicAuthHash 的 JSON tag 为 `-`,绝不出现在 API DTO;但**持久化**到 DB 时必须保留它,
+// 故 store 层用独立的存储表示(storedConfig)序列化,不能直接复用本结构体写库。
+type RouteConfig struct {
+	Aliases         []string   `json:"aliases,omitempty"`       // 同站点块额外服务的 FQDN(如 www)
+	ForceHTTPS      bool       `json:"forceHttps"`              // MVP 文档化 no-op:Caddy 对带域名站点默认即强制 HTTP→HTTPS,故此开关恒为「已强制」语义;字段保留供前端展示/未来 auto_https off 扩展
+	HSTS            bool       `json:"hsts"`                    //
+	SecurityHeaders bool       `json:"securityHeaders"`         //
+	Compression     bool       `json:"compression"`             //
+	BasicAuthUser   string     `json:"basicAuthUser,omitempty"` //
+	BasicAuthHash   string     `json:"-"`                       // bcrypt;绝不序列化给客户端
+	IPAllow         []string   `json:"ipAllow,omitempty"`       // CIDR(仅这些可访问)
+	IPDeny          []string   `json:"ipDeny,omitempty"`        // CIDR(这些被拒)
+	Redirects       []Redirect `json:"redirects,omitempty"`     //
+}
+
+// RouteWithServer 是一条路由 + 其所属目标主机展示名(证书总览大盘用)。
+type RouteWithServer struct {
+	Route
+	ServerName string
 }
 
 // CreateInput 是创建路由的入参。
@@ -88,6 +130,14 @@ type CreateInput struct {
 	Domain            string
 	UpstreamContainer string
 	UpstreamPort      int
+}
+
+// UpdateInput 是更新路由(R2)的入参。冻结契约。
+type UpdateInput struct {
+	UpstreamContainer string      // 空 = 保持不变
+	UpstreamPort      int         // 0 = 保持不变
+	Config            RouteConfig //
+	BasicAuthPassword string      // 明文;非空 → bcrypt 哈希入 Config.BasicAuthHash;若 BasicAuthUser=="" → 清空认证
 }
 
 // Service 定义反代路由领域对外接口(冻结契约;httpapi 消费)。
@@ -102,6 +152,10 @@ type Service interface {
 	SetEnabled(ctx context.Context, id string, on bool) error
 	// RefreshStatus 经 TLS 握手探测域名:443 回写 cert_status + cert_detail。
 	RefreshStatus(ctx context.Context, id string) (*Route, error)
+	// Update 校验入参 → 持久化高级配置(含 bcrypt 口令)→ apply(reload)。
+	Update(ctx context.Context, id string, in UpdateInput) (*Route, error)
+	// Overview 返回全部路由 + 所属主机展示名(跨主机证书总览大盘用)。
+	Overview(ctx context.Context) ([]RouteWithServer, error)
 }
 
 // certProber 抽象「对 域名:443 做 TLS 握手并回报证书状态」的能力(注入便于单测,不触真网络)。
@@ -202,6 +256,94 @@ func (s *service) RefreshStatus(ctx context.Context, id string) (*Route, error) 
 	return s.store.get(ctx, id)
 }
 
+// Update 校验入参 → 归一化 + bcrypt 口令 → 持久化高级配置 → apply(reload)。
+// upstream 容器/端口为空/0 时保持原值;BasicAuthUser=="" 时清空认证(忽略口令)。
+func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Route, error) {
+	r, err := s.store.get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	// 1) upstream 增量更新(空 = 保持)。
+	container := r.UpstreamContainer
+	if c := strings.TrimSpace(in.UpstreamContainer); c != "" {
+		container = c
+	}
+	port := r.UpstreamPort
+	if in.UpstreamPort != 0 {
+		port = in.UpstreamPort
+	}
+
+	// 2) 归一化高级配置(域名小写去空白 / 去重 / 状态码默认)。
+	cfg := normalizeConfig(in.Config)
+
+	// 3) Basic Auth:用户名为空 → 清认证;否则若给了明文口令则 bcrypt 哈希,未给则沿用旧哈希。
+	if cfg.BasicAuthUser == "" {
+		cfg.BasicAuthUser = ""
+		cfg.BasicAuthHash = ""
+	} else if pw := in.BasicAuthPassword; pw != "" {
+		hash, herr := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
+		if herr != nil {
+			return nil, fmt.Errorf("%w:%v", ErrBcrypt, herr)
+		}
+		cfg.BasicAuthHash = string(hash)
+	} else {
+		cfg.BasicAuthHash = r.Config.BasicAuthHash // 沿用旧哈希(仅改其它配置时不强制重设口令)
+	}
+
+	// 4) 严格校验(注入面全在此关闭:别名 FQDN / CIDR / 重定向路径 / basic auth 用户名)。
+	if err := validateConfig(cfg); err != nil {
+		return nil, err
+	}
+	if !containerRe.MatchString(container) {
+		return nil, ErrInvalidContainer
+	}
+	if port < 1 || port > 65535 {
+		return nil, ErrInvalidPort
+	}
+
+	// 5) 持久化(config JSON 含 bcrypt 哈希)。
+	if err := s.store.updateConfig(ctx, id, container, port, cfg); err != nil {
+		return nil, err
+	}
+
+	// 6) 重渲染并下发(只对 enabled 路由生效;停用路由改配置不触网 apply 也无妨,仍持久化)。
+	if r.Enabled {
+		if err := s.apply(ctx, r.ServerID); err != nil {
+			return nil, err
+		}
+	}
+	return s.store.get(ctx, id)
+}
+
+// Overview 列全部路由,并按 server_id 关联主机展示名(主机查不到则回退 server_id)。
+func (s *service) Overview(ctx context.Context) ([]RouteWithServer, error) {
+	routes, err := s.store.list(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	// 取一次主机清单建 id→name 映射(best-effort:取不到则名字回退 server_id,不报错)。
+	names := map[string]string{}
+	if s.tg != nil {
+		if servers, lerr := s.tg.List(ctx); lerr == nil {
+			for _, sv := range servers {
+				if sv != nil {
+					names[sv.ID] = sv.Name
+				}
+			}
+		}
+	}
+	out := make([]RouteWithServer, 0, len(routes))
+	for _, rt := range routes {
+		name := names[rt.ServerID]
+		if name == "" {
+			name = rt.ServerID
+		}
+		out = append(out, RouteWithServer{Route: rt, ServerName: name})
+	}
+	return out, nil
+}
+
 // ensureAndApply 是 Create/启用 路径的编排:保证 Caddy 就绪 → 接入上游 → apply。
 func (s *service) ensureAndApply(ctx context.Context, serverID, container string) error {
 	if err := ensureCaddy(ctx, s.tg, serverID); err != nil {
@@ -258,6 +400,118 @@ func validateCreate(in CreateInput) error {
 		return ErrInvalidPort
 	}
 	return nil
+}
+
+// redirectPathRe 限定重定向 from/to 的字符集:斜杠路径 / 简单 URL,绝无空白、花括号、引号、换行
+// (这些会破坏 Caddyfile 语法或注入指令)。允许字母数字与 URL 常见安全标点。
+var redirectPathRe = regexp.MustCompile(`^[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$`)
+
+// basicAuthUserRe 限定 Basic Auth 用户名字符集(无空白/花括号/引号/换行,防破坏 basic_auth 块)。
+var basicAuthUserRe = regexp.MustCompile(`^[A-Za-z0-9._@-]{1,128}$`)
+
+// normalizeConfig 归一化高级配置:别名小写去空白去重、CIDR/IP 去空白、用户名去空白、重定向状态码默认 308。
+// 不做合法性判定(交 validateConfig);只整形,使渲染稳定、校验可靠。
+func normalizeConfig(in RouteConfig) RouteConfig {
+	out := in
+	out.BasicAuthUser = strings.TrimSpace(in.BasicAuthUser)
+
+	out.Aliases = dedupLower(in.Aliases)
+	out.IPAllow = trimNonEmpty(in.IPAllow)
+	out.IPDeny = trimNonEmpty(in.IPDeny)
+
+	reds := make([]Redirect, 0, len(in.Redirects))
+	for _, rd := range in.Redirects {
+		from := strings.TrimSpace(rd.From)
+		to := strings.TrimSpace(rd.To)
+		if from == "" && to == "" {
+			continue
+		}
+		status := rd.Status
+		if status == 0 {
+			status = 308
+		}
+		reds = append(reds, Redirect{From: from, To: to, Status: status})
+	}
+	if len(reds) == 0 {
+		reds = nil
+	}
+	out.Redirects = reds
+	return out
+}
+
+// validateConfig 严格校验高级配置(关闭一切 Caddyfile 注入面)。
+func validateConfig(cfg RouteConfig) error {
+	for _, a := range cfg.Aliases {
+		if validateDomain(a) != nil {
+			return ErrInvalidAlias
+		}
+	}
+	for _, c := range append(append([]string{}, cfg.IPAllow...), cfg.IPDeny...) {
+		if !validCIDROrIP(c) {
+			return ErrInvalidCIDR
+		}
+	}
+	for _, rd := range cfg.Redirects {
+		if rd.From == "" || rd.To == "" {
+			return ErrInvalidRedirect
+		}
+		if !redirectPathRe.MatchString(rd.From) || !redirectPathRe.MatchString(rd.To) {
+			return ErrInvalidRedirect
+		}
+		switch rd.Status {
+		case 301, 302, 307, 308:
+		default:
+			return ErrInvalidRedirect
+		}
+	}
+	if cfg.BasicAuthUser != "" && !basicAuthUserRe.MatchString(cfg.BasicAuthUser) {
+		return ErrInvalidBasicAuthUser
+	}
+	return nil
+}
+
+// validCIDROrIP 判定 s 是合法 CIDR(net.ParseCIDR)或单个 IP(按 /32、/128 处理)。
+func validCIDROrIP(s string) bool {
+	if _, _, err := net.ParseCIDR(s); err == nil {
+		return true
+	}
+	return net.ParseIP(s) != nil
+}
+
+// dedupLower 把域名小写去空白并去重(保持首次出现顺序);空项丢弃。
+func dedupLower(in []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		v = strings.ToLower(strings.TrimSpace(v))
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// trimNonEmpty 去空白并丢弃空项(不改顺序、不去重)。
+func trimNonEmpty(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // --- 证书探测器 -------------------------------------------------------------

@@ -10,6 +10,7 @@ import {
   ChartBar,
   Server,
   Box,
+  Certificate,
   AlertTriangle,
   Bell,
   Settings,
@@ -81,6 +82,8 @@ const navItems: NavItem[] = [
   { name: 'server-status', to: '/server-status', icon: Server,     labelKey: 'nav.serverStatus',  ariaKey: 'nav.serverStatus' },
   // 容器管理:跨服务器聚合容器总览 + 行内生命周期操作(docker over SSH)。
   { name: 'containers',    to: '/containers',    icon: Box,        labelKey: 'nav.containers',    ariaKey: 'nav.containers' },
+  // R2 / E2.4: 证书总览大盘(跨主机跨域名一张表 + 到期高亮)。
+  { name: 'proxy-overview', to: '/proxy',        icon: Certificate, labelKey: 'nav.proxyOverview', ariaKey: 'nav.proxyOverview' },
   // Story 6-5: configurable anomaly detection & alerts (FR-23)
   { name: 'anomaly',       to: '/anomaly',       icon: AlertTriangle, labelKey: 'nav.anomaly',    ariaKey: 'nav.anomaly' },
   { name: 'notifications', to: '/settings/notifications', icon: Bell, labelKey: 'nav.notifications', ariaKey: 'nav.notifications' },

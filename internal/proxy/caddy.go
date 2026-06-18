@@ -46,14 +46,67 @@ func renderCaddyfile(routes []Route) string {
 		return b.String()
 	}
 	for _, r := range sorted {
-		upstream := r.UpstreamContainer + ":" + strconv.Itoa(r.UpstreamPort)
-		b.WriteString(r.Domain)
-		b.WriteString(" {\n")
-		b.WriteString("    reverse_proxy ")
-		b.WriteString(upstream)
-		b.WriteString("\n}\n")
+		renderSite(&b, r)
 	}
 	return b.String()
+}
+
+// renderSite 渲染单条路由的站点块(R2:多域名别名 + 访问控制 + 安全头 + 压缩 + 重定向)。
+// 站点块头 = 主域名 + 别名,以 ", " 连接;块内指令按确定顺序输出(IP 黑名单 → 白名单 →
+// basic auth → header → encode → redir → reverse_proxy),便于 golden 测试与 reload 幂等。
+// 所有进入文本的值已在领域层(validateConfig)严格校验过,渲染处不再二次防注入。
+func renderSite(b *strings.Builder, r Route) {
+	cfg := r.Config
+
+	// 站点块头:主域名 + 别名。
+	header := r.Domain
+	for _, a := range cfg.Aliases {
+		header += ", " + a
+	}
+	b.WriteString(header)
+	b.WriteString(" {\n")
+
+	// IP 黑名单:命中即 403(优先于白名单,显式拒绝先行)。
+	if len(cfg.IPDeny) > 0 {
+		b.WriteString("    @denied remote_ip " + strings.Join(cfg.IPDeny, " ") + "\n")
+		b.WriteString("    respond @denied 403\n")
+	}
+	// IP 白名单:不在白名单内即 403(只有列出的网段可访问)。
+	if len(cfg.IPAllow) > 0 {
+		b.WriteString("    @notallowed not remote_ip " + strings.Join(cfg.IPAllow, " ") + "\n")
+		b.WriteString("    respond @notallowed 403\n")
+	}
+	// Basic Auth:用户名 + bcrypt 哈希(两者都在才渲染)。
+	if cfg.BasicAuthUser != "" && cfg.BasicAuthHash != "" {
+		b.WriteString("    basic_auth {\n")
+		b.WriteString("        " + cfg.BasicAuthUser + " " + cfg.BasicAuthHash + "\n")
+		b.WriteString("    }\n")
+	}
+	// 安全头 + HSTS(任一开启即渲染 header 块)。
+	if cfg.HSTS || cfg.SecurityHeaders {
+		b.WriteString("    header {\n")
+		if cfg.HSTS {
+			b.WriteString("        Strict-Transport-Security \"max-age=31536000; includeSubDomains\"\n")
+		}
+		if cfg.SecurityHeaders {
+			b.WriteString("        X-Frame-Options \"DENY\"\n")
+			b.WriteString("        X-Content-Type-Options \"nosniff\"\n")
+			b.WriteString("        Referrer-Policy \"strict-origin-when-cross-origin\"\n")
+		}
+		b.WriteString("    }\n")
+	}
+	// 压缩。
+	if cfg.Compression {
+		b.WriteString("    encode gzip zstd\n")
+	}
+	// 自定义重定向(逐条 redir from to status)。
+	for _, rd := range cfg.Redirects {
+		b.WriteString("    redir " + rd.From + " " + rd.To + " " + strconv.Itoa(rd.Status) + "\n")
+	}
+
+	// 反代到上游(始终最后)。
+	b.WriteString("    reverse_proxy " + r.UpstreamContainer + ":" + strconv.Itoa(r.UpstreamPort) + "\n")
+	b.WriteString("}\n")
 }
 
 // ensureCaddy 幂等地在目标主机上保证 Caddy 反代就绪:建共享网络 + 起 Caddy 容器(若缺)。

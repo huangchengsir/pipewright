@@ -53,6 +53,41 @@ export interface PathRule {
 }
 
 /**
+ * One extra upstream behind a route, for load balancing (R4 / E4.2). The route's
+ * primary `upstreamContainer:upstreamPort` is the first upstream; each entry here
+ * is an *additional* backend Caddy spreads traffic across per `lbPolicy`. Two or
+ * more total upstreams enable load balancing + optional active health checks.
+ */
+export interface Upstream {
+  /** Backend container name (resolved on the shared network). */
+  container: string
+  /** Backend port inside the container. */
+  port: number
+}
+
+/**
+ * Load-balancing policy across the route's upstreams (R4 / E4.2). Mirrors Caddy's
+ * `lb_policy`. Only meaningful when ≥2 upstreams exist.
+ */
+export type LbPolicy = 'round_robin' | 'least_conn' | 'random' | 'first'
+
+/**
+ * TCP (L4) passthrough for a route (R4 / E4.3). When set, Caddy's layer-4 app
+ * listens on `listenPort` on the host and forwards raw TCP to
+ * `upstreamContainer:upstreamPort` — bypassing HTTP routing entirely (no TLS
+ * termination, no path rules). Use for databases, message brokers, custom
+ * protocols. Cleared (null/omitted) → HTTP-only route.
+ */
+export interface TcpPassthrough {
+  /** Host port the L4 listener binds. */
+  listenPort: number
+  /** Backend container raw TCP is forwarded to. */
+  upstreamContainer: string
+  /** Backend port inside the container. */
+  upstreamPort: number
+}
+
+/**
  * Per-route advanced config (R2 / FR-6..FR-9). Returned on every route; mutated
  * via `updateProxyRoute`. The Basic-Auth password is **write-only** — it is never
  * returned (only `basicAuthEnabled` reflects whether one is set).
@@ -89,6 +124,31 @@ export interface ProxyRouteConfig {
    * the default / catch-all; each rule diverts a matching path prefix elsewhere.
    */
   pathRules?: PathRule[]
+  /**
+   * R4 / E4.2: additional upstreams behind this route (besides the primary
+   * `upstreamContainer:upstreamPort`). Two or more total upstreams enable load
+   * balancing. Empty / omitted → single upstream, no LB.
+   */
+  upstreams?: Upstream[]
+  /** R4 / E4.2: load-balancing policy across upstreams. Defaults to round_robin. */
+  lbPolicy?: LbPolicy
+  /**
+   * R4 / E4.2: optional active health-check URI (e.g. `/healthz`). When set, Caddy
+   * polls each upstream and routes only to healthy ones. Empty → passive only.
+   */
+  healthUri?: string
+  /** R4 / E4.2: health-check interval (Go duration, e.g. `10s`). Empty → Caddy default. */
+  healthInterval?: string
+  /**
+   * R4 / E4.3: serve the upstream over HTTP/2 cleartext (h2c) — required for plain
+   * gRPC backends. WebSocket needs no flag (Caddy upgrades it automatically).
+   */
+  grpc?: boolean
+  /**
+   * R4 / E4.3: optional L4 TCP passthrough listener. Separate from HTTP routing —
+   * raw TCP on `listenPort` → upstream container:port. null / omitted → HTTP only.
+   */
+  tcpPassthrough?: TcpPassthrough | null
 }
 
 /** One domain → upstream container:port reverse-proxy route on a host. */

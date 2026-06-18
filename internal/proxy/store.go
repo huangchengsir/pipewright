@@ -28,6 +28,13 @@ type storedConfig struct {
 	Redirects       []Redirect `json:"redirects,omitempty"`
 	DNSProviderID   string     `json:"dnsProviderId,omitempty"`
 	PathRules       []PathRule `json:"pathRules,omitempty"`
+	Upstreams       []Upstream `json:"upstreams,omitempty"`
+	LBPolicy        string     `json:"lbPolicy,omitempty"`
+	HealthURI       string     `json:"healthUri,omitempty"`
+	HealthInterval  string     `json:"healthInterval,omitempty"`
+	WebSocket       bool       `json:"websocket,omitempty"`
+	GRPC            bool       `json:"grpc,omitempty"`
+	TCPPassthrough  *TCPConfig `json:"tcpPassthrough,omitempty"`
 }
 
 // marshalConfig 把领域 RouteConfig 序列化为 DB 存储 JSON(含 bcrypt 哈希)。零值配置 → 空串(向后兼容)。
@@ -48,6 +55,13 @@ func marshalConfig(c RouteConfig) (string, error) {
 		Redirects:       c.Redirects,
 		DNSProviderID:   c.DNSProviderID,
 		PathRules:       c.PathRules,
+		Upstreams:       c.Upstreams,
+		LBPolicy:        c.LBPolicy,
+		HealthURI:       c.HealthURI,
+		HealthInterval:  c.HealthInterval,
+		WebSocket:       c.WebSocket,
+		GRPC:            c.GRPC,
+		TCPPassthrough:  c.TCPPassthrough,
 	})
 	if err != nil {
 		return "", fmt.Errorf("proxy: marshal config: %w", err)
@@ -77,6 +91,13 @@ func unmarshalConfig(s string) (RouteConfig, error) {
 		Redirects:       sc.Redirects,
 		DNSProviderID:   sc.DNSProviderID,
 		PathRules:       sc.PathRules,
+		Upstreams:       sc.Upstreams,
+		LBPolicy:        sc.LBPolicy,
+		HealthURI:       sc.HealthURI,
+		HealthInterval:  sc.HealthInterval,
+		WebSocket:       sc.WebSocket,
+		GRPC:            sc.GRPC,
+		TCPPassthrough:  sc.TCPPassthrough,
 	}, nil
 }
 
@@ -85,7 +106,9 @@ func isZeroConfig(c RouteConfig) bool {
 	return len(c.Aliases) == 0 && !c.ForceHTTPS && !c.HSTS && !c.SecurityHeaders &&
 		!c.Compression && c.BasicAuthUser == "" && c.BasicAuthHash == "" &&
 		len(c.IPAllow) == 0 && len(c.IPDeny) == 0 && len(c.Redirects) == 0 &&
-		c.DNSProviderID == "" && len(c.PathRules) == 0
+		c.DNSProviderID == "" && len(c.PathRules) == 0 &&
+		len(c.Upstreams) == 0 && c.LBPolicy == "" && c.HealthURI == "" &&
+		c.HealthInterval == "" && !c.WebSocket && !c.GRPC && c.TCPPassthrough == nil
 }
 
 // Store 持久化反代路由(参数化 SQL,两方言一致)。

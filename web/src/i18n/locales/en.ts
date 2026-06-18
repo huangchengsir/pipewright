@@ -26,6 +26,7 @@ const en: typeof zhCN = {
     serverStatus: 'Servers',
     containers: 'Containers',
     proxyOverview: 'Certificates',
+    previews: 'Previews',
     anomaly: 'Anomaly Detection',
     notifications: 'Notifications',
     settings: 'Settings',

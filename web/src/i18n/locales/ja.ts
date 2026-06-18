@@ -26,6 +26,7 @@ const ja: typeof zhCN = {
     serverStatus: 'サーバー',
     containers: 'コンテナ',
     proxyOverview: '証明書一覧',
+    previews: 'プレビュー環境',
     anomaly: '異常検知',
     notifications: '通知',
     settings: '設定',

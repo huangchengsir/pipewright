@@ -16,6 +16,7 @@ import {
   Settings,
   Stack2,
   Rocket,
+  Browser,
   ChevronRight,
   Logout,
 } from '@vicons/tabler'
@@ -84,6 +85,8 @@ const navItems: NavItem[] = [
   { name: 'containers',    to: '/containers',    icon: Box,        labelKey: 'nav.containers',    ariaKey: 'nav.containers' },
   // R2 / E2.4: 证书总览大盘(跨主机跨域名一张表 + 到期高亮)。
   { name: 'proxy-overview', to: '/proxy',        icon: Certificate, labelKey: 'nav.proxyOverview', ariaKey: 'nav.proxyOverview' },
+  // R4 / E4.1: PR 预览环境大盘(临时环境列表 + 手动回收)。
+  { name: 'previews',      to: '/previews',      icon: Browser,    labelKey: 'nav.previews',      ariaKey: 'nav.previews' },
   // Story 6-5: configurable anomaly detection & alerts (FR-23)
   { name: 'anomaly',       to: '/anomaly',       icon: AlertTriangle, labelKey: 'nav.anomaly',    ariaKey: 'nav.anomaly' },
   { name: 'notifications', to: '/settings/notifications', icon: Bell, labelKey: 'nav.notifications', ariaKey: 'nav.notifications' },

@@ -103,6 +103,7 @@ type options struct {
 	retention        *retention.Service
 	proxy            proxy.Service
 	dnsProviders     dnsprovider.Service
+	previewEnvs      PreviewService
 }
 
 // WithArtifactStore 注入制品库(Story 8-16):挂载产物下载端点
@@ -344,6 +345,13 @@ func WithProxy(s proxy.Service) Option {
 // 不传则相关端点返回 503(服务未初始化)。
 func WithDNSProviders(s dnsprovider.Service) Option {
 	return func(o *options) { o.dnsProviders = s }
+}
+
+// WithPreviewEnvs 注入 Per-PR 预览环境服务(R4 E4.1),挂载 /api/preview-envs* 与
+// /api/projects/{id}/preview-config 路由(GET auth;reclaim/config-PUT auth + CSRF + 审计)。
+// 不传则相关端点返回 503(服务未初始化)。
+func WithPreviewEnvs(s PreviewService) Option {
+	return func(o *options) { o.previewEnvs = s }
 }
 
 // WithAnomaly 注入可配置异常检测服务(Story 6.5;FR-23),挂载 /api/anomaly/* 路由
@@ -789,6 +797,16 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Delete("/dns/providers/{id}", makeDeleteDNSProviderHandler(dp, aud))
 		// 瞬时子域名分配(R3 E3.3 + E3.4):建 A 记录 + 建 DNS-01 反代路由 → 普通 Route DTO。
 		ar.Post("/proxy/subdomains", makeAllocateSubdomainHandler(subdomainDeps{dns: dp, servers: sv, proxy: px}, aud))
+
+		// Per-PR 预览环境(R4 E4.1 · 差异化王牌):列预览环境 / 手动回收 / 项目级预览配置。
+		// pv 为 nil → handler 返回 503。GET 过 auth;reclaim + config-PUT 为写方法,过 auth + CSRF + 审计。
+		// /preview-envs/{id}/reclaim 比 /preview-envs 多两段、/projects/{id}/preview-config 比 /projects/{id}
+		// 多一段,均不会被吞。DNS token 全程走 R3 vault,DTO/审计/日志绝无密钥。
+		pv := o.previewEnvs
+		ar.Get("/preview-envs", makeListPreviewEnvsHandler(pv))
+		ar.Post("/preview-envs/{id}/reclaim", makeReclaimPreviewEnvHandler(pv, aud))
+		ar.Get("/projects/{id}/preview-config", makeGetPreviewConfigHandler(pv))
+		ar.Put("/projects/{id}/preview-config", makeSetPreviewConfigHandler(pv, aud))
 
 		ar.Get("/notifications/channels", makeListChannelsHandler(nf))
 		ar.Post("/notifications/channels", makeCreateChannelHandler(nf))

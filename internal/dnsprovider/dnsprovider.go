@@ -106,6 +106,11 @@ type Service interface {
 	// 指向 hostIP → 创建一条 DNS-01 反代路由(证书即刻可签)。返回新建的反代路由。
 	AllocateSubdomain(ctx context.Context, in AllocateInput) (*RouteRef, error)
 
+	// AllocateFQDN 为一个**指定的** FQDN(in.Subdomain,须落在提供商 base_domain 下)建 A 记录指向
+	// hostIP → 创建一条 DNS-01 反代路由(R4 E4.1 预览环境用:子域名确定而非随机)。返回新建路由引用。
+	// in.Subdomain 缺省/不在 base_domain 下 → ErrAllocate。
+	AllocateFQDN(ctx context.Context, in AllocateInput) (*RouteRef, error)
+
 	// ProviderType 返回某提供商的类型(供 proxy 校验 DNS-01 引用,不取 token)。
 	// 不存在 → ok=false。供 proxy.DNSResolver 适配。
 	ProviderType(ctx context.Context, providerID string) (providerType string, ok bool, err error)
@@ -124,6 +129,9 @@ type AllocateInput struct {
 	UpstreamPort      int
 	// HostIP 是宿主机公网 IP(由调用方/上层据 server 解析得出,非用户自由文本)。写入 A 记录指向它。
 	HostIP string
+	// Subdomain 是 AllocateFQDN 用的**指定** FQDN(如 pr-12-abcd.preview.example.com);
+	// AllocateSubdomain 不用此字段(它随机挑后缀)。须落在提供商 base_domain 下(后缀匹配校验)。
+	Subdomain string
 }
 
 // RouteRef 是 AllocateSubdomain 创建出的反代路由引用(避免本包 import proxy 形成环;

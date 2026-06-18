@@ -54,6 +54,27 @@ type proxyRouteConfigDTO struct {
 	Redirects        []proxyRedirectDTO `json:"redirects"`
 	DNSProviderID    string             `json:"dnsProviderId"`
 	PathRules        []proxyPathRuleDTO `json:"pathRules"`
+	// R4:多上游负载均衡 / 协议(gRPC h2c、WS、TCP 透传)。
+	Upstreams      []proxyUpstreamDTO `json:"upstreams"`
+	LBPolicy       string             `json:"lbPolicy"`
+	HealthURI      string             `json:"healthUri"`
+	HealthInterval string             `json:"healthInterval"`
+	WebSocket      bool               `json:"websocket"`
+	GRPC           bool               `json:"grpc"`
+	TCPPassthrough *proxyTCPDTO       `json:"tcpPassthrough"`
+}
+
+// proxyUpstreamDTO 是额外上游(R4 负载均衡;主上游之外的后端)。
+type proxyUpstreamDTO struct {
+	Container string `json:"container"`
+	Port      int    `json:"port"`
+}
+
+// proxyTCPDTO 是 TCP 透传配置(R4;caddy-l4 layer4)。
+type proxyTCPDTO struct {
+	ListenPort        int    `json:"listenPort"`
+	UpstreamContainer string `json:"upstreamContainer"`
+	UpstreamPort      int    `json:"upstreamPort"`
 }
 
 // proxyRouteDTO 是反代路由对外响应体(冻结契约;camelCase;与前端约定字段名严格一致)。
@@ -82,6 +103,14 @@ func toProxyRouteConfigDTO(c proxy.RouteConfig) proxyRouteConfigDTO {
 	for _, pr := range c.PathRules {
 		prs = append(prs, proxyPathRuleDTO{Path: pr.Path, UpstreamContainer: pr.UpstreamContainer, UpstreamPort: pr.UpstreamPort})
 	}
+	ups := make([]proxyUpstreamDTO, 0, len(c.Upstreams))
+	for _, u := range c.Upstreams {
+		ups = append(ups, proxyUpstreamDTO{Container: u.Container, Port: u.Port})
+	}
+	var tcp *proxyTCPDTO
+	if c.TCPPassthrough != nil {
+		tcp = &proxyTCPDTO{ListenPort: c.TCPPassthrough.ListenPort, UpstreamContainer: c.TCPPassthrough.UpstreamContainer, UpstreamPort: c.TCPPassthrough.UpstreamPort}
+	}
 	return proxyRouteConfigDTO{
 		Aliases:          orEmptySlice(c.Aliases),
 		ForceHTTPS:       c.ForceHTTPS,
@@ -95,6 +124,13 @@ func toProxyRouteConfigDTO(c proxy.RouteConfig) proxyRouteConfigDTO {
 		Redirects:        reds,
 		DNSProviderID:    c.DNSProviderID, // 仅引用 id,绝不外泄 token
 		PathRules:        prs,
+		Upstreams:        ups,
+		LBPolicy:         c.LBPolicy,
+		HealthURI:        c.HealthURI,
+		HealthInterval:   c.HealthInterval,
+		WebSocket:        c.WebSocket,
+		GRPC:             c.GRPC,
+		TCPPassthrough:   tcp,
 	}
 }
 
@@ -336,6 +372,20 @@ type proxyUpdateBody struct {
 			UpstreamContainer string `json:"upstreamContainer"`
 			UpstreamPort      int    `json:"upstreamPort"`
 		} `json:"pathRules"`
+		Upstreams []struct {
+			Container string `json:"container"`
+			Port      int    `json:"port"`
+		} `json:"upstreams"`
+		LBPolicy       string `json:"lbPolicy"`
+		HealthURI      string `json:"healthUri"`
+		HealthInterval string `json:"healthInterval"`
+		WebSocket      bool   `json:"websocket"`
+		GRPC           bool   `json:"grpc"`
+		TCPPassthrough *struct {
+			ListenPort        int    `json:"listenPort"`
+			UpstreamContainer string `json:"upstreamContainer"`
+			UpstreamPort      int    `json:"upstreamPort"`
+		} `json:"tcpPassthrough"`
 	} `json:"config"`
 	BasicAuthPassword string `json:"basicAuthPassword"`
 }
@@ -365,6 +415,14 @@ func makeUpdateProxyRouteHandler(svc proxy.Service, rec audit.Recorder) http.Han
 		for _, pr := range in.Config.PathRules {
 			prs = append(prs, proxy.PathRule{Path: pr.Path, UpstreamContainer: pr.UpstreamContainer, UpstreamPort: pr.UpstreamPort})
 		}
+		ups := make([]proxy.Upstream, 0, len(in.Config.Upstreams))
+		for _, u := range in.Config.Upstreams {
+			ups = append(ups, proxy.Upstream{Container: u.Container, Port: u.Port})
+		}
+		var tcp *proxy.TCPConfig
+		if in.Config.TCPPassthrough != nil {
+			tcp = &proxy.TCPConfig{ListenPort: in.Config.TCPPassthrough.ListenPort, UpstreamContainer: in.Config.TCPPassthrough.UpstreamContainer, UpstreamPort: in.Config.TCPPassthrough.UpstreamPort}
+		}
 		route, err := svc.Update(r.Context(), id, proxy.UpdateInput{
 			UpstreamContainer: in.UpstreamContainer,
 			UpstreamPort:      in.UpstreamPort,
@@ -380,6 +438,13 @@ func makeUpdateProxyRouteHandler(svc proxy.Service, rec audit.Recorder) http.Han
 				Redirects:       reds,
 				DNSProviderID:   in.Config.DNSProviderID,
 				PathRules:       prs,
+				Upstreams:       ups,
+				LBPolicy:        in.Config.LBPolicy,
+				HealthURI:       in.Config.HealthURI,
+				HealthInterval:  in.Config.HealthInterval,
+				WebSocket:       in.Config.WebSocket,
+				GRPC:            in.Config.GRPC,
+				TCPPassthrough:  tcp,
 			},
 			BasicAuthPassword: in.BasicAuthPassword,
 		})

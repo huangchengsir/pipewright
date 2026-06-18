@@ -85,6 +85,17 @@ var (
 	ErrInvalidDNSProvider = errors.New("proxy: invalid dns provider reference")
 	// ErrInvalidPathRule 表示路径路由规则非法(路径未以 / 起 / 含危险字符 / 上游容器/端口非法)。
 	ErrInvalidPathRule = errors.New("proxy: invalid path rule")
+
+	// ErrInvalidUpstream 表示额外上游(负载均衡)条目非法(容器名/端口非法)。
+	ErrInvalidUpstream = errors.New("proxy: invalid additional upstream")
+	// ErrInvalidLBPolicy 表示负载均衡策略非白名单枚举。
+	ErrInvalidLBPolicy = errors.New("proxy: invalid load balancing policy")
+	// ErrInvalidHealthURI 表示健康检查路径非法(未以 / 起 / 含危险字符)。
+	ErrInvalidHealthURI = errors.New("proxy: invalid health_uri")
+	// ErrInvalidHealthInterval 表示健康检查间隔无法被 time.ParseDuration 解析。
+	ErrInvalidHealthInterval = errors.New("proxy: invalid health_interval")
+	// ErrInvalidTCPPassthrough 表示 TCP 透传配置非法(监听/上游端口越界 / 上游容器名非法)。
+	ErrInvalidTCPPassthrough = errors.New("proxy: invalid tcp passthrough config")
 )
 
 // Route 是一条反代路由领域模型(冻结契约)。
@@ -118,6 +129,34 @@ type PathRule struct {
 	UpstreamPort      int    `json:"upstreamPort"`      // 该路径段的上游端口
 }
 
+// Upstream 是一条额外上游(R4 E4.2 负载均衡;渲染为 reverse_proxy 行内追加的 container:port)。冻结契约。
+// 主上游仍是 Route.UpstreamContainer:UpstreamPort;这里列的是「主上游之外」的后端,与主上游一起
+// 进同一个 reverse_proxy(由 LBPolicy 在它们之间分流)。
+type Upstream struct {
+	Container string `json:"container"` // 上游容器名(同主上游容器名校验)
+	Port      int    `json:"port"`      // 上游端口(1..65535)
+}
+
+// 负载均衡策略枚举(白名单;DB 存小写串,渲染进 lb_policy)。
+const (
+	// LBPolicyFirst 表示「按顺序取第一个可用上游」(Caddy 默认;等价不设 lb_policy)。
+	LBPolicyFirst = "first"
+	// LBPolicyRoundRobin 表示轮询。
+	LBPolicyRoundRobin = "round_robin"
+	// LBPolicyLeastConn 表示最少连接。
+	LBPolicyLeastConn = "least_conn"
+	// LBPolicyRandom 表示随机。
+	LBPolicyRandom = "random"
+)
+
+// TCPConfig 是一条 TCP 透传配置(R4 E4.3;经 Caddy 自构建镜像内的 caddy-l4 渲染进 layer4 全局块)。冻结契约。
+// TCP 路由不是 HTTP 站点块:它在 Caddyfile 全局选项里声明一个 layer4 监听端口 → 代理到上游容器:端口。
+type TCPConfig struct {
+	ListenPort        int    `json:"listenPort"`        // Caddy 在反代主机上监听的 TCP 端口(1..65535)
+	UpstreamContainer string `json:"upstreamContainer"` // 上游容器名(同主上游容器名校验)
+	UpstreamPort      int    `json:"upstreamPort"`      // 上游端口(1..65535)
+}
+
 // RouteConfig 是一条路由的「高级配置」(R2;持久化为 config 列 JSON)。冻结契约。
 // 注意:BasicAuthHash 的 JSON tag 为 `-`,绝不出现在 API DTO;但**持久化**到 DB 时必须保留它,
 // 故 store 层用独立的存储表示(storedConfig)序列化,不能直接复用本结构体写库。
@@ -134,6 +173,17 @@ type RouteConfig struct {
 	Redirects       []Redirect `json:"redirects,omitempty"`     //
 	DNSProviderID   string     `json:"dnsProviderId,omitempty"` // R3:绑定的 DNS 提供商(走 DNS-01;通配符必需)。空 = HTTP-01
 	PathRules       []PathRule `json:"pathRules,omitempty"`     // R3 E3.5:路径路由(/api→A、/→B)
+
+	// R4 E4.2:多上游负载均衡 + 健康检查故障转移。
+	Upstreams      []Upstream `json:"upstreams,omitempty"`      // 主上游之外的额外后端(与主上游一起进同一 reverse_proxy)
+	LBPolicy       string     `json:"lbPolicy,omitempty"`       // round_robin|least_conn|random|first;空/first = 不渲染 lb_policy
+	HealthURI      string     `json:"healthUri,omitempty"`      // 主动健康检查路径(如 /healthz);空 = 不启用
+	HealthInterval string     `json:"healthInterval,omitempty"` // 健康检查间隔(time.ParseDuration,如 10s);空 = Caddy 默认
+
+	// R4 E4.3:WS / gRPC / TCP 透传。
+	WebSocket      bool       `json:"websocket,omitempty"`      // WS 在 Caddy reverse_proxy 中天然透传;此 flag 仅为前端确认/文档化(no-op 渲染)
+	GRPC           bool       `json:"grpc,omitempty"`           // gRPC:渲染 reverse_proxy { transport http { versions h2c 2 } }
+	TCPPassthrough *TCPConfig `json:"tcpPassthrough,omitempty"` // TCP 透传(caddy-l4);非 HTTP 站点块,渲染进 layer4 全局块
 }
 
 // RouteWithServer 是一条路由 + 其所属目标主机展示名(证书总览大盘用)。
@@ -469,6 +519,19 @@ var pathRe = regexp.MustCompile(`^/[A-Za-z0-9._~:/?#\[\]@!$&'()+,;=%*-]*$`)
 // containerRe 校验上游容器名(docker 容器名/ID 允许字符;首字符非 `-` 防 flag 注入)。
 var containerRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 
+// healthURIRe 校验健康检查路径(须以 / 起;URL 路径安全字符,无空白/花括号/引号/换行,防破坏 Caddyfile)。
+var healthURIRe = regexp.MustCompile(`^/[A-Za-z0-9._~:/?#\[\]@!$&'()+,;=%*-]*$`)
+
+// validLBPolicy 报告负载均衡策略是否为白名单枚举(空串由调用方先行放过 = 不渲染)。
+func validLBPolicy(p string) bool {
+	switch p {
+	case LBPolicyRoundRobin, LBPolicyLeastConn, LBPolicyRandom, LBPolicyFirst:
+		return true
+	default:
+		return false
+	}
+}
+
 // imageRefRe 校验 docker 镜像引用(registry/path:tag@sha 常见安全字符;首字符非 `-` 防 flag 注入,
 // 无空白/shell 元字符)。供经 env 覆盖反代镜像时防注入。
 var imageRefRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$`)
@@ -572,6 +635,38 @@ func normalizeConfig(in RouteConfig) RouteConfig {
 		prs = nil
 	}
 	out.PathRules = prs
+
+	// R4 E4.2:额外上游去空白丢空项;lb_policy / health_uri / health_interval 去空白小写(策略小写)。
+	ups := make([]Upstream, 0, len(in.Upstreams))
+	for _, u := range in.Upstreams {
+		c := strings.TrimSpace(u.Container)
+		if c == "" && u.Port == 0 {
+			continue
+		}
+		ups = append(ups, Upstream{Container: c, Port: u.Port})
+	}
+	if len(ups) == 0 {
+		ups = nil
+	}
+	out.Upstreams = ups
+	out.LBPolicy = strings.ToLower(strings.TrimSpace(in.LBPolicy))
+	if out.LBPolicy == LBPolicyFirst {
+		out.LBPolicy = "" // first = Caddy 默认,不渲染 lb_policy
+	}
+	out.HealthURI = strings.TrimSpace(in.HealthURI)
+	out.HealthInterval = strings.TrimSpace(in.HealthInterval)
+
+	// R4 E4.3:TCP 透传去空白(容器名);WS/gRPC 布尔原样。
+	if in.TCPPassthrough != nil {
+		tc := *in.TCPPassthrough
+		tc.UpstreamContainer = strings.TrimSpace(tc.UpstreamContainer)
+		// 全零(无监听端口、无上游)视为未配置 → 置 nil。
+		if tc.ListenPort == 0 && tc.UpstreamPort == 0 && tc.UpstreamContainer == "" {
+			out.TCPPassthrough = nil
+		} else {
+			out.TCPPassthrough = &tc
+		}
+	}
 	return out
 }
 
@@ -613,6 +708,42 @@ func validateConfig(cfg RouteConfig) error {
 		}
 		if pr.UpstreamPort < 1 || pr.UpstreamPort > 65535 {
 			return ErrInvalidPathRule
+		}
+	}
+	// R4 E4.2:额外上游(负载均衡)逐条同主上游校验(容器名 + 端口)。
+	for _, u := range cfg.Upstreams {
+		if !containerRe.MatchString(u.Container) {
+			return ErrInvalidUpstream
+		}
+		if u.Port < 1 || u.Port > 65535 {
+			return ErrInvalidUpstream
+		}
+	}
+	// lb_policy 仅当非空时校验白名单(空 = 不渲染,first 已在归一化时被清空)。
+	if cfg.LBPolicy != "" && !validLBPolicy(cfg.LBPolicy) {
+		return ErrInvalidLBPolicy
+	}
+	// health_uri 须以 / 起 + 安全字符集(空 = 不启用主动健康检查)。
+	if cfg.HealthURI != "" && !healthURIRe.MatchString(cfg.HealthURI) {
+		return ErrInvalidHealthURI
+	}
+	// health_interval 须可被 time.ParseDuration 解析且为正(空 = Caddy 默认)。
+	if cfg.HealthInterval != "" {
+		d, perr := time.ParseDuration(cfg.HealthInterval)
+		if perr != nil || d <= 0 {
+			return ErrInvalidHealthInterval
+		}
+	}
+	// R4 E4.3:TCP 透传(监听/上游端口 1..65535;上游容器名同主上游校验)。
+	if tc := cfg.TCPPassthrough; tc != nil {
+		if tc.ListenPort < 1 || tc.ListenPort > 65535 {
+			return ErrInvalidTCPPassthrough
+		}
+		if tc.UpstreamPort < 1 || tc.UpstreamPort > 65535 {
+			return ErrInvalidTCPPassthrough
+		}
+		if !containerRe.MatchString(tc.UpstreamContainer) {
+			return ErrInvalidTCPPassthrough
 		}
 	}
 	return nil

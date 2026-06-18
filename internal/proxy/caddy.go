@@ -55,6 +55,12 @@ func renderCaddyfile(routes []Route, dnsCreds map[string]dnsCred) string {
 
 	var b strings.Builder
 	b.WriteString("# 由 Pipewright 自动生成,请勿手改。\n")
+
+	// R4 E4.3:TCP 透传(caddy-l4)走 Caddyfile **全局选项块**里的 layer4 段,不是 HTTP 站点块。
+	// 凡有路由带 TCPPassthrough,就先发一个全局 { layer4 { :port { route { proxy c:port } } } }。
+	// 必须在任何站点块之前(Caddyfile 要求全局选项块为文件首个块)。
+	renderLayer4Global(&b, sorted)
+
 	if len(sorted) == 0 {
 		b.WriteString("# 当前没有启用的反代路由。\n")
 		return b.String()
@@ -63,6 +69,46 @@ func renderCaddyfile(routes []Route, dnsCreds map[string]dnsCred) string {
 		renderSite(&b, r, dnsCreds)
 	}
 	return b.String()
+}
+
+// renderLayer4Global 渲染 TCP 透传的 layer4 全局块(R4 E4.3;caddy-l4)。
+// 仅当至少一条路由带 TCPPassthrough 时才输出;按监听端口升序稳定排序(渲染确定 + reload 幂等)。
+// 形如:
+//
+//	{
+//	    layer4 {
+//	        :5432 {
+//	            route {
+//	                proxy db_container:5432
+//	            }
+//	        }
+//	    }
+//	}
+//
+// 所有进入文本的值已在领域层(validateConfig)严格校验过(端口 1..65535 + 容器名安全字符集)。
+func renderLayer4Global(b *strings.Builder, routes []Route) {
+	tcps := make([]TCPConfig, 0)
+	for _, r := range routes {
+		if tc := r.Config.TCPPassthrough; tc != nil {
+			tcps = append(tcps, *tc)
+		}
+	}
+	if len(tcps) == 0 {
+		return
+	}
+	sort.Slice(tcps, func(i, j int) bool { return tcps[i].ListenPort < tcps[j].ListenPort })
+
+	b.WriteString("{\n")
+	b.WriteString("    layer4 {\n")
+	for _, tc := range tcps {
+		b.WriteString("        :" + strconv.Itoa(tc.ListenPort) + " {\n")
+		b.WriteString("            route {\n")
+		b.WriteString("                proxy " + tc.UpstreamContainer + ":" + strconv.Itoa(tc.UpstreamPort) + "\n")
+		b.WriteString("            }\n")
+		b.WriteString("        }\n")
+	}
+	b.WriteString("    }\n")
+	b.WriteString("}\n")
 }
 
 // renderSite 渲染单条路由的站点块(R2:多域名别名 + 访问控制 + 安全头 + 压缩 + 重定向)。
@@ -131,18 +177,57 @@ func renderSite(b *strings.Builder, r Route, dnsCreds map[string]dnsCred) {
 	// 反代到上游(始终最后)。
 	if len(cfg.PathRules) > 0 {
 		// R3 E3.5 路径路由:逐条 handle <path> { reverse_proxy c:port },末尾默认 handle 落主上游。
+		// 路径路由的各 handle 用裸单上游(LB/健康检查/gRPC 仅作用于默认主上游块,保持语义简单确定)。
 		for _, pr := range cfg.PathRules {
 			b.WriteString("    handle " + pr.Path + " {\n")
 			b.WriteString("        reverse_proxy " + pr.UpstreamContainer + ":" + strconv.Itoa(pr.UpstreamPort) + "\n")
 			b.WriteString("    }\n")
 		}
 		b.WriteString("    handle {\n")
-		b.WriteString("        reverse_proxy " + r.UpstreamContainer + ":" + strconv.Itoa(r.UpstreamPort) + "\n")
+		renderReverseProxy(b, "        ", r, cfg)
 		b.WriteString("    }\n")
 	} else {
-		b.WriteString("    reverse_proxy " + r.UpstreamContainer + ":" + strconv.Itoa(r.UpstreamPort) + "\n")
+		renderReverseProxy(b, "    ", r, cfg)
 	}
 	b.WriteString("}\n")
+}
+
+// renderReverseProxy 渲染主上游的 reverse_proxy 指令(R4 E4.2 多上游/负载均衡/健康检查 + E4.3 gRPC h2c)。
+// indent 是行首缩进(站点块内 4 空格;默认 handle 内 8 空格)。
+//   - 多上游:reverse_proxy primary:p up2:p up3:p(主上游始终第一)。
+//   - lb_policy / health_uri / health_interval / gRPC transport 任一存在 → 渲染 { ... } 配置块;
+//     否则单行(保持 R1-R3 既有 golden 不变)。
+//
+// 所有进入文本的值已在领域层(validateConfig)严格校验过,渲染处不再二次防注入。
+func renderReverseProxy(b *strings.Builder, indent string, r Route, cfg RouteConfig) {
+	// 上游列表:主上游 + 额外上游(E4.2)。
+	upstreams := r.UpstreamContainer + ":" + strconv.Itoa(r.UpstreamPort)
+	for _, u := range cfg.Upstreams {
+		upstreams += " " + u.Container + ":" + strconv.Itoa(u.Port)
+	}
+
+	needBlock := cfg.LBPolicy != "" || cfg.HealthURI != "" || cfg.HealthInterval != "" || cfg.GRPC
+	if !needBlock {
+		b.WriteString(indent + "reverse_proxy " + upstreams + "\n")
+		return
+	}
+	b.WriteString(indent + "reverse_proxy " + upstreams + " {\n")
+	if cfg.LBPolicy != "" {
+		b.WriteString(indent + "    lb_policy " + cfg.LBPolicy + "\n")
+	}
+	if cfg.HealthURI != "" {
+		b.WriteString(indent + "    health_uri " + cfg.HealthURI + "\n")
+	}
+	if cfg.HealthInterval != "" {
+		b.WriteString(indent + "    health_interval " + cfg.HealthInterval + "\n")
+	}
+	if cfg.GRPC {
+		// gRPC 走 h2c(明文 HTTP/2)到上游容器;与上游/lb/health 合并在同一 reverse_proxy 块内。
+		b.WriteString(indent + "    transport http {\n")
+		b.WriteString(indent + "        versions h2c 2\n")
+		b.WriteString(indent + "    }\n")
+	}
+	b.WriteString(indent + "}\n")
 }
 
 // ensureCaddy 幂等地在目标主机上保证 Caddy 反代就绪:建共享网络 + 起 Caddy 容器(若缺)。

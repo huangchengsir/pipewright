@@ -255,6 +255,55 @@ func (s *service) AllocateSubdomain(ctx context.Context, in AllocateInput) (*Rou
 	return nil, ErrAllocate
 }
 
+// AllocateFQDN 为一个**指定的** FQDN 建 A 记录指向 hostIP → 创建一条 DNS-01 反代路由(R4 E4.1)。
+// 与 AllocateSubdomain 共享校验/建记录/建路由逻辑,但子域名由调用方给定(不随机挑),用于
+// 幂等可预测的预览域名 pr-<n>-<proj>.base。
+//   - in.Subdomain 必须非空且落在提供商 base_domain 下(后缀 .base 校验);否则 ErrAllocate。
+//   - 域名已占用(同 PR 重复分配且未先回收旧路由)→ 透传 proxy 的 domain-taken 错误,供上层处置。
+func (s *service) AllocateFQDN(ctx context.Context, in AllocateInput) (*RouteRef, error) {
+	if s.routes == nil {
+		return nil, fmt.Errorf("%w:路由创建器未装配", ErrAllocate)
+	}
+	p, err := s.store.get(ctx, in.ProviderID)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(in.ServerID) == "" || strings.TrimSpace(in.UpstreamContainer) == "" {
+		return nil, ErrAllocate
+	}
+	if in.UpstreamPort < 1 || in.UpstreamPort > 65535 {
+		return nil, ErrAllocate
+	}
+	if !validIPv4(in.HostIP) {
+		return nil, fmt.Errorf("%w:宿主机 IP 非法", ErrAllocate)
+	}
+	domain := strings.ToLower(strings.TrimSpace(in.Subdomain))
+	// 必须落在该提供商的根域下(杜绝越权为任意域签证书 / 建记录)。
+	if domain == "" || domain == p.BaseDomain || !strings.HasSuffix(domain, "."+p.BaseDomain) {
+		return nil, fmt.Errorf("%w:子域名须落在提供商根域下", ErrAllocate)
+	}
+
+	client, cerr := s.clientFor(p)
+	if cerr != nil {
+		return nil, cerr
+	}
+	// 建 A 记录指向宿主机 IP(幂等)。DNSPod/alidns 桩返回未实现 → 直接上抛。
+	if err := client.EnsureARecord(ctx, p.BaseDomain, domain, in.HostIP); err != nil {
+		return nil, err
+	}
+	routeID, rerr := s.routes.CreateDNS01Route(ctx, CreateDNS01RouteInput{
+		ServerID:          in.ServerID,
+		Domain:            domain,
+		UpstreamContainer: in.UpstreamContainer,
+		UpstreamPort:      in.UpstreamPort,
+		DNSProviderID:     p.ID,
+	})
+	if rerr != nil {
+		return nil, rerr
+	}
+	return &RouteRef{RouteID: routeID, Domain: domain, ProviderID: p.ID}, nil
+}
+
 // isDomainCollision 判定路由创建错误是否为「域名已占用」(供子域名重试)。
 // 用文本匹配(避免 import proxy 形成环;proxy.ErrDomainTaken 的文本含 "domain already in use")。
 func isDomainCollision(err error) bool {

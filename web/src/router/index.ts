@@ -21,6 +21,8 @@ const ServerStatus = () => import('../views/ServerStatus.vue')
 const Containers = () => import('../views/Containers.vue')
 // R2 / E2.4: 证书总览大盘(跨主机跨域名一张表 + 到期高亮;只读聚合)
 const ProxyOverview = () => import('../views/ProxyOverview.vue')
+// R4 / E4.1: PR 预览环境大盘(临时环境列表 + 手动回收;对标 Vercel preview deployments)
+const Previews = () => import('../views/Previews.vue')
 // Story 6-5: configurable anomaly detection & alerts (FR-23)
 const AnomalyDetection = () => import('../views/AnomalyDetection.vue')
 const Settings    = () => import('../views/Settings.vue')
@@ -125,6 +127,8 @@ const router = createRouter({
         { path: 'containers', name: 'containers', component: Containers, meta: { title: '容器' } },
         // R2 / E2.4: 证书总览大盘(跨主机跨域名 + 到期高亮)
         { path: 'proxy', name: 'proxy-overview', component: ProxyOverview, meta: { title: '证书总览' } },
+        // R4 / E4.1: PR 预览环境大盘(临时环境列表 + 手动回收)
+        { path: 'previews', name: 'previews', component: Previews, meta: { title: '预览环境' } },
         // Story 6-5: configurable anomaly detection & alerts (FR-23)
         { path: 'anomaly', name: 'anomaly', component: AnomalyDetection, meta: { title: '异常检测' } },
         // 顶层「通知」占位页 → 重定向到真实的通知配置页。

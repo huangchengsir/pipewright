@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,8 +18,12 @@ const (
 	proxyNetwork = "pipewright-proxy"
 	// caddyContainer 是托管的反代容器名(每主机一个,幂等创建)。
 	caddyContainer = "pipewright-caddy"
-	// caddyImage 是反代镜像(Caddy v2,自带 LE HTTP-01 自动签发 + 续期)。
-	caddyImage = "caddy:2"
+	// defaultCaddyImage 是默认反代镜像:含 DNS-01 插件 + ratelimit + layer4 的自构建 Caddy
+	// (见 deploy/caddy/Dockerfile + .github/workflows/caddy-image.yml)。可经
+	// PIPEWRIGHT_CADDY_IMAGE 覆盖(如用 stock caddy:2,但那样没有 DNS-01/通配符/L4 能力)。
+	defaultCaddyImage = "ghcr.io/huangchengsir/pipewright-caddy:latest"
+	// caddyImageEnv 是覆盖反代镜像的环境变量名。
+	caddyImageEnv = "PIPEWRIGHT_CADDY_IMAGE"
 	// caddyDataVol 是证书/ACME 账户持久卷(删路由不删卷,避免重签触发 LE 限速)。
 	caddyDataVol = "pipewright_caddy_data"
 	// caddyConfigVol 是 Caddy 自动持久化配置卷。
@@ -29,11 +34,20 @@ const (
 	caddyfileTmpPath = "/tmp/pipewright-caddyfile"
 )
 
+// dnsCred 是一条 DNS 提供商的渲染材料(类型 + token 明文)。token 仅在 apply 渲染时存在于内存,
+// 注入 0600 临时 Caddyfile,绝不日志/回库/回 API。
+type dnsCred struct {
+	Type  string // cloudflare | dnspod | alidns
+	Token string // 凭据明文(进程内,用完即弃)
+}
+
 // renderCaddyfile 据一组 enabled 路由生成 Caddyfile 文本(纯函数,可直接单测)。
 // 每条路由产一个站点块:`domain {\n    reverse_proxy container:port\n}`。Caddy 见到带域名的
 // 站点块即自动经 Let's Encrypt(HTTP-01)签发并续期证书,无需任何额外指令。
+// dnsCreds 按 DNS 提供商 id 索引:某路由绑了 DNS 提供商时渲染 `tls { dns <type> <token> }`(DNS-01,
+// 通配符必需)。未提供 token(map 缺该 id)的 DNS-01 路由退回 HTTP-01 渲染(不写 token)。
 // 无 enabled 路由时返回带说明注释的空配置(reload 一份合法空配置,不破坏既有 Caddy 进程)。
-func renderCaddyfile(routes []Route) string {
+func renderCaddyfile(routes []Route, dnsCreds map[string]dnsCred) string {
 	// 稳定排序:按 domain 升序,保证渲染结果确定(便于测试 + reload 幂等)。
 	sorted := make([]Route, len(routes))
 	copy(sorted, routes)
@@ -46,7 +60,7 @@ func renderCaddyfile(routes []Route) string {
 		return b.String()
 	}
 	for _, r := range sorted {
-		renderSite(&b, r)
+		renderSite(&b, r, dnsCreds)
 	}
 	return b.String()
 }
@@ -55,7 +69,7 @@ func renderCaddyfile(routes []Route) string {
 // 站点块头 = 主域名 + 别名,以 ", " 连接;块内指令按确定顺序输出(IP 黑名单 → 白名单 →
 // basic auth → header → encode → redir → reverse_proxy),便于 golden 测试与 reload 幂等。
 // 所有进入文本的值已在领域层(validateConfig)严格校验过,渲染处不再二次防注入。
-func renderSite(b *strings.Builder, r Route) {
+func renderSite(b *strings.Builder, r Route, dnsCreds map[string]dnsCred) {
 	cfg := r.Config
 
 	// 站点块头:主域名 + 别名。
@@ -65,6 +79,16 @@ func renderSite(b *strings.Builder, r Route) {
 	}
 	b.WriteString(header)
 	b.WriteString(" {\n")
+
+	// DNS-01(R3:通配符必需):该路由绑了 DNS 提供商且 apply 取到了 token → 渲染 tls { dns ... }。
+	// token 注入此处(Caddy 据此经 DNS API 完成 ACME DNS-01 挑战);整份配置写 0600 临时文件,绝不日志。
+	if cfg.DNSProviderID != "" {
+		if cred, ok := dnsCreds[cfg.DNSProviderID]; ok && cred.Type != "" && cred.Token != "" {
+			b.WriteString("    tls {\n")
+			b.WriteString("        dns " + cred.Type + " " + cred.Token + "\n")
+			b.WriteString("    }\n")
+		}
+	}
 
 	// IP 黑名单:命中即 403(优先于白名单,显式拒绝先行)。
 	if len(cfg.IPDeny) > 0 {
@@ -105,7 +129,19 @@ func renderSite(b *strings.Builder, r Route) {
 	}
 
 	// 反代到上游(始终最后)。
-	b.WriteString("    reverse_proxy " + r.UpstreamContainer + ":" + strconv.Itoa(r.UpstreamPort) + "\n")
+	if len(cfg.PathRules) > 0 {
+		// R3 E3.5 路径路由:逐条 handle <path> { reverse_proxy c:port },末尾默认 handle 落主上游。
+		for _, pr := range cfg.PathRules {
+			b.WriteString("    handle " + pr.Path + " {\n")
+			b.WriteString("        reverse_proxy " + pr.UpstreamContainer + ":" + strconv.Itoa(pr.UpstreamPort) + "\n")
+			b.WriteString("    }\n")
+		}
+		b.WriteString("    handle {\n")
+		b.WriteString("        reverse_proxy " + r.UpstreamContainer + ":" + strconv.Itoa(r.UpstreamPort) + "\n")
+		b.WriteString("    }\n")
+	} else {
+		b.WriteString("    reverse_proxy " + r.UpstreamContainer + ":" + strconv.Itoa(r.UpstreamPort) + "\n")
+	}
 	b.WriteString("}\n")
 }
 
@@ -141,7 +177,14 @@ func ensureCaddy(ctx context.Context, tg target.Service, serverID string) error 
 		return fmt.Errorf("%w%s", ErrPortConflict, detail)
 	}
 
-	// 4) 起 Caddy 容器(array 不拼 shell)。
+	// 4) 先 docker pull 配置的镜像(确保宿主机拿到含 DNS-01/L4 插件的自构建 Caddy;best-effort:
+	//    pull 失败不直接拒起 —— 宿主机可能已有缓存镜像或处于离线环境,交由后续 docker run 决断)。
+	image := caddyImageRef()
+	if _, perr := tg.Exec(ctx, serverID, []string{"docker", "pull", image}); perr != nil {
+		return mapExecErr(perr)
+	}
+
+	// 5) 起 Caddy 容器(array 不拼 shell)。
 	runCmd := []string{
 		"docker", "run", "-d",
 		"--name", caddyContainer,
@@ -150,7 +193,7 @@ func ensureCaddy(ctx context.Context, tg target.Service, serverID string) error 
 		"-p", "80:80", "-p", "443:443",
 		"-v", caddyDataVol + ":/data",
 		"-v", caddyConfigVol + ":/config",
-		caddyImage,
+		image,
 		"caddy", "run", "--config", caddyfilePath, "--adapter", "caddyfile",
 	}
 	res, err := tg.Exec(ctx, serverID, runCmd)
@@ -207,6 +250,13 @@ func applyCaddyfile(ctx context.Context, tg target.Service, serverID, content st
 	if err := tg.Upload(ctx, serverID, bytes.NewReader([]byte(content)), caddyfileTmpPath); err != nil {
 		return mapExecErr(err)
 	}
+	// 1.5) 临时文件可能含 DNS-01 token(渲染进 tls { dns ... }),立即 chmod 0600 收紧权限
+	//      (best-effort:chmod 失败不阻断;path 作 array 参数不拼 shell)。
+	if chRes, chErr := tg.Exec(ctx, serverID, []string{"chmod", "600", caddyfileTmpPath}); chErr != nil {
+		return mapExecErr(chErr)
+	} else {
+		_ = chRes
+	}
 	// 2) docker cp 进容器。
 	cpRes, err := tg.Exec(ctx, serverID, []string{"docker", "cp", caddyfileTmpPath, caddyContainer + ":" + caddyfilePath})
 	if err != nil {
@@ -240,6 +290,19 @@ func looksUnsupported(stderr string) bool {
 	return strings.Contains(s, "unknown command") ||
 		strings.Contains(s, "unknown flag") ||
 		strings.Contains(s, "unknown shorthand")
+}
+
+// caddyImageRef 返回反代镜像引用:PIPEWRIGHT_CADDY_IMAGE 覆盖,否则默认自构建镜像。
+// 仅接受合法镜像引用字符集(防经 env 注入 docker 额外 flag/参数);非法即回退默认。
+func caddyImageRef() string {
+	v := strings.TrimSpace(os.Getenv(caddyImageEnv))
+	if v == "" {
+		return defaultCaddyImage
+	}
+	if !imageRefRe.MatchString(v) {
+		return defaultCaddyImage
+	}
+	return v
 }
 
 // firstNonEmpty 返回首个非空白字符串。

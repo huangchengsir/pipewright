@@ -6,6 +6,7 @@ export default {
   navOauth: 'OAuth 應用',
   navNotifications: '通知',
   navVault: '憑證保險庫',
+  navDnsProviders: 'DNS 供應商',
   navAccount: '帳戶',
   navServers: '伺服器',
   navDiagnosisStats: '診斷回饋',

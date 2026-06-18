@@ -13,7 +13,7 @@ import (
 // --- 渲染单测(纯函数) ----------------------------------------------------
 
 func TestRenderCaddyfileEmpty(t *testing.T) {
-	out := renderCaddyfile(nil)
+	out := renderCaddyfile(nil, nil)
 	if strings.Contains(out, "reverse_proxy") {
 		t.Fatalf("空路由不应渲染任何站点块:\n%s", out)
 	}
@@ -25,7 +25,7 @@ func TestRenderCaddyfileEmpty(t *testing.T) {
 func TestRenderCaddyfileSingle(t *testing.T) {
 	out := renderCaddyfile([]Route{
 		{Domain: "app.example.com", UpstreamContainer: "web", UpstreamPort: 8080},
-	})
+	}, nil)
 	want := "app.example.com {\n    reverse_proxy web:8080\n}\n"
 	if !strings.Contains(out, want) {
 		t.Fatalf("单路由站点块不符:\n--- got ---\n%s\n--- want substring ---\n%s", out, want)
@@ -37,7 +37,7 @@ func TestRenderCaddyfileMultipleSorted(t *testing.T) {
 	out := renderCaddyfile([]Route{
 		{Domain: "z.example.com", UpstreamContainer: "z", UpstreamPort: 3000},
 		{Domain: "a.example.com", UpstreamContainer: "a", UpstreamPort: 80},
-	})
+	}, nil)
 	ai := strings.Index(out, "a.example.com {")
 	zi := strings.Index(out, "z.example.com {")
 	if ai < 0 || zi < 0 {

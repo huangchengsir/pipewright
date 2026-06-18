@@ -6,6 +6,7 @@ export default {
   navOauth: 'OAuth 앱',
   navNotifications: '알림',
   navVault: '자격 증명 보관소',
+  navDnsProviders: 'DNS 공급자',
   navAccount: '계정',
   navServers: '서버',
   navDiagnosisStats: '진단 피드백',

@@ -1,0 +1,66 @@
+export default {
+  title: 'DNS 提供商',
+  desc: '挂接 Cloudflare / DNSPod / 阿里云 DNS,即可走 DNS-01 验证签发通配符证书,并一键分配子域名。API Token 只写不读 —— 存入保险库,绝不回显。',
+  addProvider: '添加 DNS 提供商',
+  addFirstProvider: '添加第一个 DNS 提供商',
+  panelTitle: 'DNS 提供商',
+  countLabel: '共 {n} 个',
+  // 类型
+  typeCloudflare: 'Cloudflare',
+  typeDnspod: 'DNSPod',
+  typeAlidns: '阿里云 DNS',
+  // 列表列
+  colName: '名称',
+  colType: '类型',
+  colBaseDomain: '根域',
+  colCredential: '凭据',
+  // 凭据状态
+  credConfigured: '已配置',
+  credMissing: '未配置',
+  // 空态
+  emptyLabel: '还没有 DNS 提供商',
+  emptyHint: '添加一个提供商后,即可对域名启用 DNS-01 通配符证书,并一键分配子域名。',
+  // 操作
+  verify: '验证',
+  verifying: '验证中…',
+  verifyOk: '验证通过',
+  verifyFail: '验证失败',
+  deleteTitle: '删除提供商 {name}',
+  deleteAria: '删除 DNS 提供商 {name}',
+  editTitle: '编辑 {name}',
+  // 添加 / 编辑弹窗
+  addTitle: '添加 DNS 提供商',
+  modalSub: 'API Token 只写不读:保存后存入保险库,不会再显示。',
+  closeDialog: '关闭对话框',
+  fieldType: '提供商类型',
+  fieldName: '名称',
+  namePlaceholder: '例:生产区 Cloudflare',
+  fieldBaseDomain: '根域(托管区)',
+  baseDomainPlaceholder: 'example.com',
+  fieldToken: 'API Token',
+  tokenPlaceholder: '粘贴提供商 API Token',
+  tokenHint: '需有对该根域的 DNS 记录读写权限。仅在创建时发送一次,绝不回显。',
+  // 校验
+  valNameRequired: '请填写名称。',
+  valBaseDomainRequired: '请填写根域。',
+  valBaseDomainInvalid: '请填写合法的根域,例:example.com。',
+  valTokenRequired: '请填写 API Token。',
+  // 删除确认
+  deleteConfirmTitle: '删除 DNS 提供商',
+  deleteIrreversible: '此操作不可撤销。',
+  deleteConfirmPrefix: '确定删除',
+  deleteConfirmSuffix: '吗?挂接到它的路由将失去 DNS-01 能力,需重新挂接。',
+  confirmDelete: '删除',
+  deleting: '删除中…',
+  // 按钮
+  cancel: '取消',
+  create: '添加提供商',
+  saving: '保存中…',
+  retry: '重试',
+  // 错误
+  errLoad: '加载 DNS 提供商失败({status})。',
+  errNetwork: '网络错误,请稍后重试。',
+  errSave: '保存失败({status})。',
+  errSaveRetry: '保存失败,请重试。',
+  errDelete: '删除失败({status})。',
+}

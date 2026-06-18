@@ -39,6 +39,20 @@ export interface Redirect {
 }
 
 /**
+ * One path-routing rule (R3 / E3.5): requests matching `path` (e.g. `/api/*`) are
+ * reverse-proxied to a different upstream than the route's primary (catch-all)
+ * binding. `path` must start with `/`.
+ */
+export interface PathRule {
+  /** Path matcher, e.g. `/api/*`. Must start with `/`. */
+  path: string
+  /** Upstream container this path routes to. */
+  upstreamContainer: string
+  /** Upstream port inside the container. */
+  upstreamPort: number
+}
+
+/**
  * Per-route advanced config (R2 / FR-6..FR-9). Returned on every route; mutated
  * via `updateProxyRoute`. The Basic-Auth password is **write-only** — it is never
  * returned (only `basicAuthEnabled` reflects whether one is set).
@@ -64,6 +78,17 @@ export interface ProxyRouteConfig {
   ipDeny: string[]
   /** HTTP redirect rules. */
   redirects: Redirect[]
+  /**
+   * R3 / E3.2: DNS provider attached to this route. When set, the route can use
+   * DNS-01 ACME (enabling wildcard domains like `*.example.com`). Empty / omitted
+   * → HTTP-01 only (no wildcards). The id references a `DnsProvider`.
+   */
+  dnsProviderId?: string
+  /**
+   * R3 / E3.5: per-path upstream overrides. The route's primary upstream remains
+   * the default / catch-all; each rule diverts a matching path prefix elsewhere.
+   */
+  pathRules?: PathRule[]
 }
 
 /** One domain → upstream container:port reverse-proxy route on a host. */
@@ -165,4 +190,30 @@ export async function deleteProxyRoute(id: string): Promise<{ ok: boolean }> {
 export async function getProxyOverview(): Promise<ProxyRouteOverview[]> {
   const res = await http.get<{ items: ProxyRouteOverview[] }>('/api/proxy/overview')
   return res.items ?? []
+}
+
+/**
+ * Body for `allocateSubdomain` (R3 / E3.3-E3.4 — the "wow" flow). The backend
+ * mints a fresh `app-xxxx.<baseDomain>` under the chosen provider's zone, creates
+ * the A record pointing at the host, and binds a route to the upstream — all in
+ * one call.
+ */
+export interface AllocateSubdomainInput {
+  /** DNS provider whose zone the subdomain is minted under. */
+  providerId: string
+  /** Target host the new route binds on (and the A record points to). */
+  serverId: string
+  /** Upstream container the route reverse-proxies to. */
+  upstreamContainer: string
+  /** Upstream port inside the container. */
+  upstreamPort: number
+}
+
+/**
+ * Instant subdomain (R3 / E3.3-E3.4): allocate `app-xxxx.<baseDomain>`, create the
+ * A record via the provider, and bind a route to the upstream — atomically. Returns
+ * the freshly created route (cert issuance proceeds asynchronously as usual).
+ */
+export async function allocateSubdomain(body: AllocateSubdomainInput): Promise<ProxyRoute> {
+  return http.post<ProxyRoute>('/api/proxy/subdomains', body)
 }

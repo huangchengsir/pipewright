@@ -17,7 +17,7 @@ func TestRenderCaddyfileAliases(t *testing.T) {
 	out := renderCaddyfile([]Route{{
 		Domain: "example.com", UpstreamContainer: "web", UpstreamPort: 8080,
 		Config: RouteConfig{Aliases: []string{"www.example.com"}},
-	}})
+	}}, nil)
 	if !strings.Contains(out, "example.com, www.example.com {") {
 		t.Fatalf("站点块头应含主域名+别名:\n%s", out)
 	}
@@ -30,7 +30,7 @@ func TestRenderCaddyfileBasicAuth(t *testing.T) {
 	out := renderCaddyfile([]Route{{
 		Domain: "a.example.com", UpstreamContainer: "web", UpstreamPort: 80,
 		Config: RouteConfig{BasicAuthUser: "admin", BasicAuthHash: "$2a$10$abcHASH"},
-	}})
+	}}, nil)
 	if !strings.Contains(out, "    basic_auth {\n        admin $2a$10$abcHASH\n    }\n") {
 		t.Fatalf("basic_auth 块不符:\n%s", out)
 	}
@@ -40,7 +40,7 @@ func TestRenderCaddyfileBasicAuthOmittedWithoutHash(t *testing.T) {
 	out := renderCaddyfile([]Route{{
 		Domain: "a.example.com", UpstreamContainer: "web", UpstreamPort: 80,
 		Config: RouteConfig{BasicAuthUser: "admin"}, // 无哈希 → 不渲染
-	}})
+	}}, nil)
 	if strings.Contains(out, "basic_auth") {
 		t.Fatalf("无哈希不应渲染 basic_auth:\n%s", out)
 	}
@@ -50,7 +50,7 @@ func TestRenderCaddyfileIPAllow(t *testing.T) {
 	out := renderCaddyfile([]Route{{
 		Domain: "a.example.com", UpstreamContainer: "web", UpstreamPort: 80,
 		Config: RouteConfig{IPAllow: []string{"10.0.0.0/8", "192.168.0.0/16"}},
-	}})
+	}}, nil)
 	if !strings.Contains(out, "    @notallowed not remote_ip 10.0.0.0/8 192.168.0.0/16\n") ||
 		!strings.Contains(out, "    respond @notallowed 403\n") {
 		t.Fatalf("IP 白名单块不符:\n%s", out)
@@ -61,7 +61,7 @@ func TestRenderCaddyfileIPDeny(t *testing.T) {
 	out := renderCaddyfile([]Route{{
 		Domain: "a.example.com", UpstreamContainer: "web", UpstreamPort: 80,
 		Config: RouteConfig{IPDeny: []string{"1.2.3.4/32"}},
-	}})
+	}}, nil)
 	if !strings.Contains(out, "    @denied remote_ip 1.2.3.4/32\n") ||
 		!strings.Contains(out, "    respond @denied 403\n") {
 		t.Fatalf("IP 黑名单块不符:\n%s", out)
@@ -72,7 +72,7 @@ func TestRenderCaddyfileHeaders(t *testing.T) {
 	out := renderCaddyfile([]Route{{
 		Domain: "a.example.com", UpstreamContainer: "web", UpstreamPort: 80,
 		Config: RouteConfig{HSTS: true, SecurityHeaders: true},
-	}})
+	}}, nil)
 	for _, want := range []string{
 		"    header {\n",
 		"        Strict-Transport-Security \"max-age=31536000; includeSubDomains\"\n",
@@ -90,7 +90,7 @@ func TestRenderCaddyfileCompression(t *testing.T) {
 	out := renderCaddyfile([]Route{{
 		Domain: "a.example.com", UpstreamContainer: "web", UpstreamPort: 80,
 		Config: RouteConfig{Compression: true},
-	}})
+	}}, nil)
 	if !strings.Contains(out, "    encode gzip zstd\n") {
 		t.Fatalf("压缩指令不符:\n%s", out)
 	}
@@ -103,7 +103,7 @@ func TestRenderCaddyfileRedirects(t *testing.T) {
 			{From: "/old", To: "/new", Status: 308},
 			{From: "/foo", To: "/bar", Status: 301},
 		}},
-	}})
+	}}, nil)
 	if !strings.Contains(out, "    redir /old /new 308\n") ||
 		!strings.Contains(out, "    redir /foo /bar 301\n") {
 		t.Fatalf("重定向指令不符:\n%s", out)
@@ -126,7 +126,7 @@ func TestRenderCaddyfileEverythingOn(t *testing.T) {
 			IPDeny:          []string{"1.2.3.4/32"},
 			Redirects:       []Redirect{{From: "/old", To: "/new", Status: 308}},
 		},
-	}})
+	}}, nil)
 
 	want := `example.com, www.example.com {
     @denied remote_ip 1.2.3.4/32

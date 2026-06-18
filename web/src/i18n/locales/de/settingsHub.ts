@@ -6,6 +6,7 @@ export default {
   navOauth: 'OAuth-Apps',
   navNotifications: 'Benachrichtigungen',
   navVault: 'Anmeldedaten-Tresor',
+  navDnsProviders: 'DNS-Anbieter',
   navAccount: 'Konto',
   navServers: 'Server',
   navDiagnosisStats: 'Diagnose-Feedback',

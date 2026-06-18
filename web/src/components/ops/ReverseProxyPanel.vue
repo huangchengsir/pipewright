@@ -40,6 +40,7 @@ import { HttpError } from '../../api/http'
 import { useToast } from '../../composables/useToast'
 import { useConfirm } from '../../composables/useConfirm'
 import RouteAdvancedSettings from './RouteAdvancedSettings.vue'
+import InstantSubdomain from './InstantSubdomain.vue'
 
 const props = defineProps<{
   /** Target host this panel binds domains on. */
@@ -180,6 +181,11 @@ async function submit(): Promise<void> {
   }
 }
 
+// R3:一键分配子域名成功 → 把新路由置顶插入列表(与手动绑定一致)。
+function onSubdomainAllocated(route: ProxyRoute): void {
+  routes.value = [route, ...routes.value.filter((r) => r.id !== route.id)]
+}
+
 // ─── 每条路由的操作:启停 / 刷新(重试)/ 删除 ──────────────────────────────────────
 const busy = ref<Set<string>>(new Set())
 function isBusy(id: string): boolean {
@@ -281,9 +287,16 @@ function statusLabel(s: ProxyRoute['certStatus']): string {
         <NIcon :size="16" class="rp__lede-ic"><Lock /></NIcon>
         <span>{{ t('reverseProxy.lede') }}</span>
       </div>
-      <div class="rp__ip" :title="t('reverseProxy.hostIpTitle')">
-        <span class="rp__ip-label">{{ t('reverseProxy.hostAddress') }}</span>
-        <span class="rp__ip-val mono">{{ host }}</span>
+      <div class="rp__head-right">
+        <InstantSubdomain
+          :server-id="serverId"
+          :containers="containers"
+          @allocated="onSubdomainAllocated"
+        />
+        <div class="rp__ip" :title="t('reverseProxy.hostIpTitle')">
+          <span class="rp__ip-label">{{ t('reverseProxy.hostAddress') }}</span>
+          <span class="rp__ip-val mono">{{ host }}</span>
+        </div>
       </div>
     </div>
 
@@ -481,6 +494,12 @@ function statusLabel(s: ProxyRoute['certStatus']): string {
 .rp__lede-ic {
   color: var(--color-primary);
   flex-shrink: 0;
+}
+.rp__head-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 .rp__ip {
   display: inline-flex;

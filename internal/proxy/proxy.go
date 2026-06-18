@@ -77,6 +77,14 @@ var (
 	ErrInvalidBasicAuthUser = errors.New("proxy: invalid basic auth user")
 	// ErrBcrypt 表示 Basic Auth 口令哈希失败。
 	ErrBcrypt = errors.New("proxy: hash basic auth password failed")
+
+	// ErrWildcardNeedsDNS 表示通配符域名(*.example.com)未绑 DNS 提供商(HTTP-01 无法签泛域名,
+	// 必须 DNS-01,故必须先绑一个 DNS 提供商)。
+	ErrWildcardNeedsDNS = errors.New("proxy: 通配符域名(*.example.com)必须绑定 DNS 提供商以走 DNS-01 签发")
+	// ErrInvalidDNSProvider 表示引用的 DNS 提供商不存在或类型非法。
+	ErrInvalidDNSProvider = errors.New("proxy: invalid dns provider reference")
+	// ErrInvalidPathRule 表示路径路由规则非法(路径未以 / 起 / 含危险字符 / 上游容器/端口非法)。
+	ErrInvalidPathRule = errors.New("proxy: invalid path rule")
 )
 
 // Route 是一条反代路由领域模型(冻结契约)。
@@ -102,6 +110,14 @@ type Redirect struct {
 	Status int    `json:"status"` // 301|302|307|308;默认 308
 }
 
+// PathRule 是一条路径路由规则(R3 E3.5;渲染为 Caddy `handle <path> { reverse_proxy ... }`)。冻结契约。
+// 例:Path=/api/* → 反代到 api_c:8080;未命中任何 PathRule 的请求落到默认 handle(主上游)。
+type PathRule struct {
+	Path              string `json:"path"`              // 须以 / 起;安全字符集(含 * glob)
+	UpstreamContainer string `json:"upstreamContainer"` // 该路径段的上游容器名
+	UpstreamPort      int    `json:"upstreamPort"`      // 该路径段的上游端口
+}
+
 // RouteConfig 是一条路由的「高级配置」(R2;持久化为 config 列 JSON)。冻结契约。
 // 注意:BasicAuthHash 的 JSON tag 为 `-`,绝不出现在 API DTO;但**持久化**到 DB 时必须保留它,
 // 故 store 层用独立的存储表示(storedConfig)序列化,不能直接复用本结构体写库。
@@ -116,6 +132,8 @@ type RouteConfig struct {
 	IPAllow         []string   `json:"ipAllow,omitempty"`       // CIDR(仅这些可访问)
 	IPDeny          []string   `json:"ipDeny,omitempty"`        // CIDR(这些被拒)
 	Redirects       []Redirect `json:"redirects,omitempty"`     //
+	DNSProviderID   string     `json:"dnsProviderId,omitempty"` // R3:绑定的 DNS 提供商(走 DNS-01;通配符必需)。空 = HTTP-01
+	PathRules       []PathRule `json:"pathRules,omitempty"`     // R3 E3.5:路径路由(/api→A、/→B)
 }
 
 // RouteWithServer 是一条路由 + 其所属目标主机展示名(证书总览大盘用)。
@@ -130,6 +148,8 @@ type CreateInput struct {
 	Domain            string
 	UpstreamContainer string
 	UpstreamPort      int
+	// DNSProviderID(R3)非空 → 该路由走 DNS-01(通配符域名必需)。空 = HTTP-01。
+	DNSProviderID string
 }
 
 // UpdateInput 是更新路由(R2)的入参。冻结契约。
@@ -163,6 +183,17 @@ type certProber interface {
 	Probe(ctx context.Context, domain string) ProbeResult
 }
 
+// DNSResolver 抽象「按 DNS 提供商 id 取 (类型, token 明文)」的能力(R3:DNS-01 渲染需要)。
+// 由上层用 dnsprovider + vault 适配注入,避免 proxy import dnsprovider 形成环。
+// token 仅在 apply 渲染时取一次,注入 0600 临时 Caddyfile,绝不日志/回库/回 API。
+type DNSResolver interface {
+	// Resolve 返回 providerType(cloudflare|dnspod|alidns)与该提供商凭据明文 token。
+	// 提供商不存在 → ok=false;vault 未配置/凭据缺失 → err。
+	Resolve(ctx context.Context, providerID string) (providerType, token string, ok bool, err error)
+	// ProviderType 仅返回类型(供校验 DNS 提供商引用存在/合法,不取 token)。
+	ProviderType(ctx context.Context, providerID string) (providerType string, ok bool, err error)
+}
+
 // ProbeResult 是一次证书探测结果。
 type ProbeResult struct {
 	// Status ∈ issued | pending | failed。
@@ -171,17 +202,27 @@ type ProbeResult struct {
 	Detail string
 }
 
-// service 是 store + target + prober 支撑的 Service 实现。
+// service 是 store + target + prober (+ 可选 dnsResolver) 支撑的 Service 实现。
 type service struct {
 	store  *Store
 	tg     target.Service
 	prober certProber
+	dns    DNSResolver // R3:解析 DNS 提供商 → (类型, token);nil 时不支持 DNS-01/通配符
 }
 
 // New 构造 Service。tg 复用已装配的 target.Service(SSH + docker);prober 默认走真实 TLS 握手。
 // 不在此做任何重活(无 init 副作用)。
 func New(db *sql.DB, tg target.Service) Service {
 	return &service{store: NewStore(db), tg: tg, prober: tlsProber{}}
+}
+
+// SetDNSResolver 注入 DNS 提供商解析器(R3:DNS-01 通配符 + 子域名)。
+// 拆成 setter 而非改 New 签名,以保持 R1/R2 的 New 冻结契约不变(main.go 装配时晚绑)。
+func (s *service) SetDNSResolver(r DNSResolver) { s.dns = r }
+
+// DNSConfigurable 让上层在装配后注入 DNS 解析器(避免 import 环 + 保持 New 签名稳定)。
+type DNSConfigurable interface {
+	SetDNSResolver(r DNSResolver)
 }
 
 func (s *service) List(ctx context.Context, serverID string) ([]Route, error) {
@@ -192,8 +233,15 @@ func (s *service) Create(ctx context.Context, in CreateInput) (*Route, error) {
 	in.ServerID = strings.TrimSpace(in.ServerID)
 	in.Domain = strings.ToLower(strings.TrimSpace(in.Domain))
 	in.UpstreamContainer = strings.TrimSpace(in.UpstreamContainer)
+	in.DNSProviderID = strings.TrimSpace(in.DNSProviderID)
 	if err := validateCreate(in); err != nil {
 		return nil, err
+	}
+	// 若引用了 DNS 提供商,校验其存在 + 类型合法(经注入的 resolver,不取 token)。
+	if in.DNSProviderID != "" {
+		if err := s.validateDNSProviderRef(ctx, in.DNSProviderID); err != nil {
+			return nil, err
+		}
 	}
 
 	r := newRoute(in)
@@ -291,7 +339,7 @@ func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Route
 		cfg.BasicAuthHash = r.Config.BasicAuthHash // 沿用旧哈希(仅改其它配置时不强制重设口令)
 	}
 
-	// 4) 严格校验(注入面全在此关闭:别名 FQDN / CIDR / 重定向路径 / basic auth 用户名)。
+	// 4) 严格校验(注入面全在此关闭:别名 FQDN / CIDR / 重定向路径 / basic auth 用户名 / 路径路由)。
 	if err := validateConfig(cfg); err != nil {
 		return nil, err
 	}
@@ -300,6 +348,16 @@ func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Route
 	}
 	if port < 1 || port > 65535 {
 		return nil, ErrInvalidPort
+	}
+	// R3:通配符主域名必须始终绑定 DNS 提供商(不能在 Update 里把它摘掉)。
+	if isWildcardDomain(r.Domain) && cfg.DNSProviderID == "" {
+		return nil, ErrWildcardNeedsDNS
+	}
+	// R3:若引用了 DNS 提供商,校验其存在 + 类型合法(经注入的 resolver,不取 token)。
+	if cfg.DNSProviderID != "" {
+		if err := s.validateDNSProviderRef(ctx, cfg.DNSProviderID); err != nil {
+			return nil, err
+		}
 	}
 
 	// 5) 持久化(config JSON 含 bcrypt 哈希)。
@@ -356,12 +414,43 @@ func (s *service) ensureAndApply(ctx context.Context, serverID, container string
 }
 
 // apply 渲染该主机所有 enabled 路由 → 下发 Caddyfile → reload。
+// 对绑了 DNS 提供商的路由,在此(且仅在此)经 resolver 取 token 注入渲染(DNS-01);
+// token 仅存活于本函数局部 + 写入的 0600 临时文件,绝不日志/回库/回 API。
 func (s *service) apply(ctx context.Context, serverID string) error {
 	routes, err := s.store.listEnabledForServer(ctx, serverID)
 	if err != nil {
 		return err
 	}
-	return applyCaddyfile(ctx, s.tg, serverID, renderCaddyfile(routes))
+	creds := s.resolveDNSCreds(ctx, routes)
+	return applyCaddyfile(ctx, s.tg, serverID, renderCaddyfile(routes, creds))
+}
+
+// resolveDNSCreds 为这批路由里引用的每个 DNS 提供商取一次 (类型, token)。
+// resolver 未注入 / 取不到(提供商被删 / vault 未配)时跳过该提供商 —— 对应路由退回 HTTP-01 渲染
+// (不阻断其它路由 apply;通配符路由会因无 token 而签不出证书,由用户在状态里看到 pending)。
+func (s *service) resolveDNSCreds(ctx context.Context, routes []Route) map[string]dnsCred {
+	if s.dns == nil {
+		return nil
+	}
+	out := map[string]dnsCred{}
+	for _, r := range routes {
+		pid := r.Config.DNSProviderID
+		if pid == "" {
+			continue
+		}
+		if _, seen := out[pid]; seen {
+			continue
+		}
+		pt, token, ok, err := s.dns.Resolve(ctx, pid)
+		if err != nil || !ok || pt == "" || token == "" {
+			continue
+		}
+		out[pid] = dnsCred{Type: pt, Token: token}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // --- 校验 -------------------------------------------------------------------
@@ -369,8 +458,23 @@ func (s *service) apply(ctx context.Context, serverID string) error {
 // domainRe 校验 FQDN(每段字母数字/连字符,段间点分,顶级域 ≥2 字母)。不接受裸 IP / 端口。
 var domainRe = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
 
+// wildcardDomainRe 校验通配符域名 `*.<FQDN>`(仅最左一级通配,其后为合法 FQDN)。
+// 仅允许 `*.` 前缀 + 合法 FQDN —— 杜绝 `*foo.x`、`a.*.x`、裸 `*` 等注入/越权形态。
+var wildcardDomainRe = regexp.MustCompile(`^\*\.([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
+
+// pathRe 校验路径路由的 Path:须以 / 起,字符集为 URL 路径安全字符 + glob `*`(无空白/花括号/引号/换行,
+// 防破坏 Caddyfile 或注入指令)。
+var pathRe = regexp.MustCompile(`^/[A-Za-z0-9._~:/?#\[\]@!$&'()+,;=%*-]*$`)
+
 // containerRe 校验上游容器名(docker 容器名/ID 允许字符;首字符非 `-` 防 flag 注入)。
 var containerRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+
+// imageRefRe 校验 docker 镜像引用(registry/path:tag@sha 常见安全字符;首字符非 `-` 防 flag 注入,
+// 无空白/shell 元字符)。供经 env 覆盖反代镜像时防注入。
+var imageRefRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$`)
+
+// isWildcardDomain 报告 domain 是否为通配符域名 `*.<FQDN>`。
+func isWildcardDomain(domain string) bool { return wildcardDomainRe.MatchString(domain) }
 
 // validateDomain 校验域名格式(FR-4:非法早拒,前端也挡一道)。
 func validateDomain(domain string) error {
@@ -383,11 +487,26 @@ func validateDomain(domain string) error {
 	return nil
 }
 
+// validateRouteDomain 校验主域名:普通 FQDN 始终允许;通配符 `*.x` 仅当 hasDNSProvider 才允许
+// (HTTP-01 无法签泛域名,必须 DNS-01 → 必须绑 DNS 提供商)。
+func validateRouteDomain(domain string, hasDNSProvider bool) error {
+	if isWildcardDomain(domain) {
+		if !hasDNSProvider {
+			return ErrWildcardNeedsDNS
+		}
+		if len(domain) > 253 {
+			return ErrInvalidDomain
+		}
+		return nil
+	}
+	return validateDomain(domain)
+}
+
 func validateCreate(in CreateInput) error {
 	if in.ServerID == "" {
 		return ErrEmptyServerID
 	}
-	if err := validateDomain(in.Domain); err != nil {
+	if err := validateRouteDomain(in.Domain, strings.TrimSpace(in.DNSProviderID) != ""); err != nil {
 		return err
 	}
 	if in.UpstreamContainer == "" {
@@ -436,6 +555,23 @@ func normalizeConfig(in RouteConfig) RouteConfig {
 		reds = nil
 	}
 	out.Redirects = reds
+
+	out.DNSProviderID = strings.TrimSpace(in.DNSProviderID)
+
+	// 路径路由:去空白、丢空项(路径为空的规则);容器名小写不强制(docker 容器名大小写敏感)。
+	prs := make([]PathRule, 0, len(in.PathRules))
+	for _, pr := range in.PathRules {
+		path := strings.TrimSpace(pr.Path)
+		container := strings.TrimSpace(pr.UpstreamContainer)
+		if path == "" && container == "" {
+			continue
+		}
+		prs = append(prs, PathRule{Path: path, UpstreamContainer: container, UpstreamPort: pr.UpstreamPort})
+	}
+	if len(prs) == 0 {
+		prs = nil
+	}
+	out.PathRules = prs
 	return out
 }
 
@@ -467,7 +603,40 @@ func validateConfig(cfg RouteConfig) error {
 	if cfg.BasicAuthUser != "" && !basicAuthUserRe.MatchString(cfg.BasicAuthUser) {
 		return ErrInvalidBasicAuthUser
 	}
+	// 路径路由规则(R3 E3.5):路径须以 / 起 + 安全字符集;上游容器/端口同主上游校验。
+	for _, pr := range cfg.PathRules {
+		if !pathRe.MatchString(pr.Path) {
+			return ErrInvalidPathRule
+		}
+		if !containerRe.MatchString(pr.UpstreamContainer) {
+			return ErrInvalidPathRule
+		}
+		if pr.UpstreamPort < 1 || pr.UpstreamPort > 65535 {
+			return ErrInvalidPathRule
+		}
+	}
 	return nil
+}
+
+// validateDNSProviderRef 校验 DNS 提供商引用存在且类型合法(经注入的 resolver,不取 token)。
+// 未注入 resolver → 视为「DNS 功能不可用」,引用即非法。
+func (s *service) validateDNSProviderRef(ctx context.Context, providerID string) error {
+	if s.dns == nil {
+		return ErrInvalidDNSProvider
+	}
+	pt, ok, err := s.dns.ProviderType(ctx, providerID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrInvalidDNSProvider
+	}
+	switch pt {
+	case "cloudflare", "dnspod", "alidns":
+		return nil
+	default:
+		return ErrInvalidDNSProvider
+	}
 }
 
 // validCIDROrIP 判定 s 是合法 CIDR(net.ParseCIDR)或单个 IP(按 /32、/128 处理)。

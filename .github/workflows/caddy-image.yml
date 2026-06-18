@@ -1,0 +1,60 @@
+# 自构建 Caddy 镜像(R3 零 DNS 体验 + R4 王牌所需插件)的多架构构建并推 GHCR。
+# 触发:打 tag(v*)时随发版一起出镜像 + 手动 workflow_dispatch(可临时重建/换 Caddy 版本)。
+# 与 release.yml(产品二进制/镜像)正交:此处只构建反代用的 Caddy 镜像。
+# Actions 一律 SHA 钉死(与 ci.yml / release.yml 同纪律)。
+name: caddy-image
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      caddy_version:
+        description: "Caddy 版本(覆盖 Dockerfile 默认)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  packages: write # 推镜像到 ghcr.io
+
+env:
+  IMAGE: ghcr.io/huangchengsir/pipewright-caddy
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # 多架构构建:QEMU(跨架构模拟)+ buildx。
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      # 登录 ghcr.io,用 workflow 自带 GITHUB_TOKEN,无需额外密钥。
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 标签:tag 推送 → :latest + :<tag>;手动触发 → :latest + :manual-<run_number>。
+      - id: meta
+        uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest
+
+      - uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcd730101868b # v6
+        with:
+          context: .
+          file: deploy/caddy/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            ${{ inputs.caddy_version != '' && format('CADDY_VERSION={0}', inputs.caddy_version) || '' }}

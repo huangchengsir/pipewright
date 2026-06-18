@@ -31,6 +31,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/cron"
 	"github.com/huangchengsir/pipewright/internal/dagrun"
 	"github.com/huangchengsir/pipewright/internal/deploy"
+	"github.com/huangchengsir/pipewright/internal/dnsprovider"
 	"github.com/huangchengsir/pipewright/internal/environments"
 	"github.com/huangchengsir/pipewright/internal/httpapi"
 	"github.com/huangchengsir/pipewright/internal/library"
@@ -461,6 +462,15 @@ func main() {
 	// 复用已装配的 targetSvc(SSH 执行/上传)+ st.DB(参数化 SQL),无新顶层依赖、无 init 副作用。
 	proxySvc := proxy.New(st.DB, targetSvc)
 
+	// DNS 提供商集成层(R3 E3.1–E3.4):Cloudflare / DNSPod / 阿里云 DNS 接入(凭据走 vault)。
+	// dnsSvc 的「创建 DNS-01 反代路由」复用 proxySvc.Create(经 proxyRouteCreator 适配,避免 import 环);
+	// proxySvc 的「apply 时解析 DNS token / 校验提供商引用」复用 dnsSvc(经 dnsResolverAdapter)。
+	// 两者互引经适配器在装配后晚绑,无 init 副作用、无新顶层依赖。
+	dnsSvc := dnsprovider.New(st.DB, credVault, &proxyRouteCreator{proxy: proxySvc})
+	if cfg, ok := proxySvc.(proxy.DNSConfigurable); ok {
+		cfg.SetDNSResolver(&dnsResolverAdapter{dns: dnsSvc})
+	}
+
 	// 装配只读源码读取器(Story 3.6;FR-4 预埋):go-git 浅克隆读 tree/blob;严格 SSRF 收口;
 	// 克隆失败优雅降级(不致命)。无 init 副作用/不驻留。
 	sourceReader := httpapi.NewSourceReader()
@@ -512,7 +522,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc)),
+		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;
@@ -704,4 +714,34 @@ type targetExister struct{ svc target.Service }
 func (t targetExister) Exists(ctx context.Context, id string) bool {
 	_, err := t.svc.Get(ctx, id)
 	return err == nil
+}
+
+// proxyRouteCreator 适配 dnsprovider.RouteCreator:把「创建 DNS-01 反代路由」下沉到 proxy.Service.Create
+// (带 DNS 提供商引用)。避免 dnsprovider import proxy 形成环 —— 适配器在 main 装配层桥接。
+type proxyRouteCreator struct{ proxy proxy.Service }
+
+func (c *proxyRouteCreator) CreateDNS01Route(ctx context.Context, in dnsprovider.CreateDNS01RouteInput) (string, error) {
+	route, err := c.proxy.Create(ctx, proxy.CreateInput{
+		ServerID:          in.ServerID,
+		Domain:            in.Domain,
+		UpstreamContainer: in.UpstreamContainer,
+		UpstreamPort:      in.UpstreamPort,
+		DNSProviderID:     in.DNSProviderID,
+	})
+	if err != nil {
+		return "", err
+	}
+	return route.ID, nil
+}
+
+// dnsResolverAdapter 适配 proxy.DNSResolver:把「按提供商 id 取 (类型, token) / 取类型」下沉到
+// dnsprovider.Service。token 仅在 proxy apply 渲染时取一次,即用即弃。
+type dnsResolverAdapter struct{ dns dnsprovider.Service }
+
+func (a *dnsResolverAdapter) Resolve(ctx context.Context, providerID string) (string, string, bool, error) {
+	return a.dns.ResolveToken(ctx, providerID)
+}
+
+func (a *dnsResolverAdapter) ProviderType(ctx context.Context, providerID string) (string, bool, error) {
+	return a.dns.ProviderType(ctx, providerID)
 }

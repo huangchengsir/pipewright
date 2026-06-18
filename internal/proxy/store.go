@@ -26,6 +26,8 @@ type storedConfig struct {
 	IPAllow         []string   `json:"ipAllow,omitempty"`
 	IPDeny          []string   `json:"ipDeny,omitempty"`
 	Redirects       []Redirect `json:"redirects,omitempty"`
+	DNSProviderID   string     `json:"dnsProviderId,omitempty"`
+	PathRules       []PathRule `json:"pathRules,omitempty"`
 }
 
 // marshalConfig 把领域 RouteConfig 序列化为 DB 存储 JSON(含 bcrypt 哈希)。零值配置 → 空串(向后兼容)。
@@ -44,6 +46,8 @@ func marshalConfig(c RouteConfig) (string, error) {
 		IPAllow:         c.IPAllow,
 		IPDeny:          c.IPDeny,
 		Redirects:       c.Redirects,
+		DNSProviderID:   c.DNSProviderID,
+		PathRules:       c.PathRules,
 	})
 	if err != nil {
 		return "", fmt.Errorf("proxy: marshal config: %w", err)
@@ -71,6 +75,8 @@ func unmarshalConfig(s string) (RouteConfig, error) {
 		IPAllow:         sc.IPAllow,
 		IPDeny:          sc.IPDeny,
 		Redirects:       sc.Redirects,
+		DNSProviderID:   sc.DNSProviderID,
+		PathRules:       sc.PathRules,
 	}, nil
 }
 
@@ -78,7 +84,8 @@ func unmarshalConfig(s string) (RouteConfig, error) {
 func isZeroConfig(c RouteConfig) bool {
 	return len(c.Aliases) == 0 && !c.ForceHTTPS && !c.HSTS && !c.SecurityHeaders &&
 		!c.Compression && c.BasicAuthUser == "" && c.BasicAuthHash == "" &&
-		len(c.IPAllow) == 0 && len(c.IPDeny) == 0 && len(c.Redirects) == 0
+		len(c.IPAllow) == 0 && len(c.IPDeny) == 0 && len(c.Redirects) == 0 &&
+		c.DNSProviderID == "" && len(c.PathRules) == 0
 }
 
 // Store 持久化反代路由(参数化 SQL,两方言一致)。
@@ -256,6 +263,10 @@ func (s *Store) del(ctx context.Context, id string) error {
 // newRoute 据入参构造一条待插入路由(id/时间戳/初始证书态在此填好)。
 func newRoute(in CreateInput) *Route {
 	now := time.Now().UTC()
+	var cfg RouteConfig
+	if in.DNSProviderID != "" {
+		cfg.DNSProviderID = in.DNSProviderID
+	}
 	return &Route{
 		ID:                uuid.NewString(),
 		ServerID:          in.ServerID,
@@ -266,6 +277,7 @@ func newRoute(in CreateInput) *Route {
 		Enabled:           true,
 		CertStatus:        CertStatusPending,
 		CertDetail:        "",
+		Config:            cfg,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}

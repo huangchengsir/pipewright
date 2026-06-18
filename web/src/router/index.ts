@@ -28,6 +28,8 @@ const SettingsAI  = () => import('../views/settings/SettingsAI.vue')
 // OAuth app config: per-provider Client ID/Secret for one-click "连接" in the vault
 const SettingsOAuth = () => import('../views/settings/SettingsOAuth.vue')
 const SettingsVault = () => import('../views/settings/SettingsVault.vue')
+// R3 / E3.1: DNS providers (Cloudflare / DNSPod / 阿里云 DNS) — unlocks DNS-01 wildcard + instant subdomains
+const SettingsDnsProviders = () => import('../views/settings/SettingsDnsProviders.vue')
 const SettingsAccount = () => import('../views/settings/SettingsAccount.vue')
 // Story 4-1: target server registry + shared SSH layer (FR-14)
 const SettingsServers = () => import('../views/settings/SettingsServers.vue')
@@ -138,6 +140,8 @@ const router = createRouter({
             { path: 'oauth', name: 'settings-oauth', component: SettingsOAuth, meta: { title: 'OAuth 设置' } },
             { path: 'notifications', name: 'settings-notifications', component: SettingsNotifications, meta: { title: '通知设置' } },
             { path: 'vault', name: 'settings-vault', component: SettingsVault, meta: { title: '凭据保险库' } },
+            // R3 / E3.1: DNS 提供商(DNS-01 通配符 + 一键分配子域名)
+            { path: 'dns-providers', name: 'settings-dns-providers', component: SettingsDnsProviders, meta: { title: 'DNS 提供商' } },
             { path: 'account', name: 'settings-account', component: SettingsAccount, meta: { title: '账户设置' } },
             // 系统信息 + 一键检查更新
             { path: 'system', name: 'settings-system', component: SettingsSystem, meta: { title: '系统信息' } },

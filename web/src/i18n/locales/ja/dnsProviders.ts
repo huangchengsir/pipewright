@@ -1,0 +1,66 @@
+export default {
+  title: 'DNS プロバイダー',
+  desc: 'Cloudflare / DNSPod / Alibaba Cloud DNS を接続すると DNS-01 でワイルドカード証明書を発行し、ワンクリックでサブドメインを割り当てられます。API トークンは書き込み専用 — ボールトに保存され二度と表示されません。',
+  addProvider: 'DNS プロバイダーを追加',
+  addFirstProvider: '最初の DNS プロバイダーを追加',
+  panelTitle: 'DNS プロバイダー',
+  countLabel: '{n} 件',
+  // 類型
+  typeCloudflare: 'Cloudflare',
+  typeDnspod: 'DNSPod',
+  typeAlidns: 'Alibaba Cloud DNS',
+  // 列表列
+  colName: '名前',
+  colType: '種類',
+  colBaseDomain: 'ベースドメイン',
+  colCredential: '認証情報',
+  // 凭据状态
+  credConfigured: '設定済み',
+  credMissing: '未設定',
+  // 空态
+  emptyLabel: 'DNS プロバイダーがまだありません',
+  emptyHint: 'プロバイダーを追加すると、ドメインで DNS-01 ワイルドカード証明書を有効化し、ワンクリックでサブドメインを割り当てられます。',
+  // 操作
+  verify: '検証',
+  verifying: '検証中…',
+  verifyOk: '検証成功',
+  verifyFail: '検証失敗',
+  deleteTitle: '{name} を削除',
+  deleteAria: 'DNS プロバイダー {name} を削除',
+  editTitle: '{name} を編集',
+  // 添加 / 编辑弹窗
+  addTitle: 'DNS プロバイダーを追加',
+  modalSub: 'API トークンは書き込み専用:保存後はボールトに格納され、再表示されません。',
+  closeDialog: 'ダイアログを閉じる',
+  fieldType: 'プロバイダーの種類',
+  fieldName: '名前',
+  namePlaceholder: '例:本番 Cloudflare',
+  fieldBaseDomain: 'ベースドメイン(ゾーン)',
+  baseDomainPlaceholder: 'example.com',
+  fieldToken: 'API トークン',
+  tokenPlaceholder: 'プロバイダーの API トークンを貼り付け',
+  tokenHint: 'このゾーンの DNS レコードへの読み書き権限が必要です。作成時に一度だけ送信され、返却されません。',
+  // 校验
+  valNameRequired: '名前を入力してください。',
+  valBaseDomainRequired: 'ベースドメインを入力してください。',
+  valBaseDomainInvalid: '有効なベースドメインを入力してください(例:example.com)。',
+  valTokenRequired: 'API トークンを入力してください。',
+  // 删除确认
+  deleteConfirmTitle: 'DNS プロバイダーを削除',
+  deleteIrreversible: 'この操作は取り消せません。',
+  deleteConfirmPrefix: '削除しますか',
+  deleteConfirmSuffix: '？ 接続中のルートは DNS-01 が無効になり、再接続が必要です。',
+  confirmDelete: '削除',
+  deleting: '削除中…',
+  // 按钮
+  cancel: 'キャンセル',
+  create: 'プロバイダーを追加',
+  saving: '保存中…',
+  retry: '再試行',
+  // 错误
+  errLoad: 'DNS プロバイダーの読み込みに失敗しました({status})。',
+  errNetwork: 'ネットワークエラー。しばらくして再試行してください。',
+  errSave: '保存に失敗しました({status})。',
+  errSaveRetry: '保存に失敗しました。再試行してください。',
+  errDelete: '削除に失敗しました({status})。',
+}

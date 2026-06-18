@@ -25,6 +25,7 @@ const ko: typeof zhCN = {
     dora: 'DORA 지표',
     serverStatus: '서버',
     containers: '컨테이너',
+    proxyOverview: '인증서 개요',
     anomaly: '이상 감지',
     notifications: '알림',
     settings: '설정',

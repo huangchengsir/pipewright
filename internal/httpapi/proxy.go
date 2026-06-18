@@ -20,22 +20,74 @@ const (
 	auditActionProxyRouteDelete  = "proxy.route.delete"
 	auditActionProxyRouteEnable  = "proxy.route.enable"
 	auditActionProxyRouteDisable = "proxy.route.disable"
+	auditActionProxyRouteUpdate  = "proxy.route.update"
 	auditTargetProxyRoute        = "proxy_route"
 )
 
+// proxyRedirectDTO 是单条重定向规则对外响应体(camelCase;冻结契约)。
+type proxyRedirectDTO struct {
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Status int    `json:"status"`
+}
+
+// proxyRouteConfigDTO 是路由高级配置对外响应体(R2;冻结契约)。
+// 绝不外泄 bcrypt 哈希/明文口令:仅以 basicAuthEnabled 布尔告知前端「是否已设认证」。
+type proxyRouteConfigDTO struct {
+	Aliases          []string           `json:"aliases"`
+	ForceHTTPS       bool               `json:"forceHttps"`
+	HSTS             bool               `json:"hsts"`
+	SecurityHeaders  bool               `json:"securityHeaders"`
+	Compression      bool               `json:"compression"`
+	BasicAuthUser    string             `json:"basicAuthUser"`
+	BasicAuthEnabled bool               `json:"basicAuthEnabled"`
+	IPAllow          []string           `json:"ipAllow"`
+	IPDeny           []string           `json:"ipDeny"`
+	Redirects        []proxyRedirectDTO `json:"redirects"`
+}
+
 // proxyRouteDTO 是反代路由对外响应体(冻结契约;camelCase;与前端约定字段名严格一致)。
 type proxyRouteDTO struct {
-	ID                string `json:"id"`
-	ServerID          string `json:"serverId"`
-	Domain            string `json:"domain"`
-	UpstreamContainer string `json:"upstreamContainer"`
-	UpstreamPort      int    `json:"upstreamPort"`
-	TLSMode           string `json:"tlsMode"`
-	Enabled           bool   `json:"enabled"`
-	CertStatus        string `json:"certStatus"`
-	CertDetail        string `json:"certDetail"`
-	CreatedAt         string `json:"createdAt"`
-	UpdatedAt         string `json:"updatedAt"`
+	ID                string              `json:"id"`
+	ServerID          string              `json:"serverId"`
+	Domain            string              `json:"domain"`
+	UpstreamContainer string              `json:"upstreamContainer"`
+	UpstreamPort      int                 `json:"upstreamPort"`
+	TLSMode           string              `json:"tlsMode"`
+	Enabled           bool                `json:"enabled"`
+	CertStatus        string              `json:"certStatus"`
+	CertDetail        string              `json:"certDetail"`
+	Config            proxyRouteConfigDTO `json:"config"`
+	CreatedAt         string              `json:"createdAt"`
+	UpdatedAt         string              `json:"updatedAt"`
+}
+
+// toProxyRouteConfigDTO 把领域 RouteConfig 转为契约 DTO(剥离 bcrypt 哈希;空切片归一化为 []())。
+func toProxyRouteConfigDTO(c proxy.RouteConfig) proxyRouteConfigDTO {
+	reds := make([]proxyRedirectDTO, 0, len(c.Redirects))
+	for _, rd := range c.Redirects {
+		reds = append(reds, proxyRedirectDTO{From: rd.From, To: rd.To, Status: rd.Status})
+	}
+	return proxyRouteConfigDTO{
+		Aliases:          orEmptySlice(c.Aliases),
+		ForceHTTPS:       c.ForceHTTPS,
+		HSTS:             c.HSTS,
+		SecurityHeaders:  c.SecurityHeaders,
+		Compression:      c.Compression,
+		BasicAuthUser:    c.BasicAuthUser,
+		BasicAuthEnabled: c.BasicAuthHash != "", // 绝不回显哈希/口令,只给「是否已设认证」
+		IPAllow:          orEmptySlice(c.IPAllow),
+		IPDeny:           orEmptySlice(c.IPDeny),
+		Redirects:        reds,
+	}
+}
+
+// orEmptySlice 把 nil 切片归一化为非 nil 空切片(JSON 输出 [] 而非 null,前端契约稳定)。
+func orEmptySlice(in []string) []string {
+	if in == nil {
+		return []string{}
+	}
+	return in
 }
 
 // toProxyRouteDTO 把领域 Route 转为契约 DTO。
@@ -50,6 +102,7 @@ func toProxyRouteDTO(r proxy.Route) proxyRouteDTO {
 		Enabled:           r.Enabled,
 		CertStatus:        r.CertStatus,
 		CertDetail:        r.CertDetail,
+		Config:            toProxyRouteConfigDTO(r.Config),
 		CreatedAt:         r.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:         r.UpdatedAt.UTC().Format(time.RFC3339),
 	}
@@ -74,6 +127,16 @@ func writeProxyError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, "invalid_route", "上游容器名含非法字符")
 	case errors.Is(err, proxy.ErrInvalidPort):
 		writeError(w, http.StatusBadRequest, "invalid_route", "上游端口必须在 1..65535 之间")
+	case errors.Is(err, proxy.ErrInvalidAlias):
+		writeError(w, http.StatusBadRequest, "invalid_route", "别名域名格式非法,请填写有效的 FQDN(如 www.example.com)")
+	case errors.Is(err, proxy.ErrInvalidCIDR):
+		writeError(w, http.StatusBadRequest, "invalid_route", "IP 白名单/黑名单含非法网段,请填写合法的 CIDR(如 10.0.0.0/8)或 IP")
+	case errors.Is(err, proxy.ErrInvalidRedirect):
+		writeError(w, http.StatusBadRequest, "invalid_route", "重定向规则非法:路径含非法字符,或状态码不在 301/302/307/308 之内")
+	case errors.Is(err, proxy.ErrInvalidBasicAuthUser):
+		writeError(w, http.StatusBadRequest, "invalid_route", "Basic Auth 用户名含非法字符")
+	case errors.Is(err, proxy.ErrBcrypt):
+		writeError(w, http.StatusInternalServerError, "internal", "口令哈希失败")
 	case errors.Is(err, proxy.ErrPortConflict):
 		writeError(w, http.StatusConflict, "port_conflict", "目标主机 80/443 端口被占用,无法启动反代(Let's Encrypt 校验需要 80)")
 	case errors.Is(err, proxy.ErrCaddyStart):
@@ -222,6 +285,119 @@ func makeRefreshProxyRouteHandler(svc proxy.Service) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, toProxyRouteDTO(*route))
+	}
+}
+
+// proxyUpdateBody 是 PUT /api/proxy/routes/{id} 的请求体(冻结契约)。
+type proxyUpdateBody struct {
+	UpstreamContainer string `json:"upstreamContainer"`
+	UpstreamPort      int    `json:"upstreamPort"`
+	Config            struct {
+		Aliases         []string `json:"aliases"`
+		ForceHTTPS      bool     `json:"forceHttps"`
+		HSTS            bool     `json:"hsts"`
+		SecurityHeaders bool     `json:"securityHeaders"`
+		Compression     bool     `json:"compression"`
+		BasicAuthUser   string   `json:"basicAuthUser"`
+		IPAllow         []string `json:"ipAllow"`
+		IPDeny          []string `json:"ipDeny"`
+		Redirects       []struct {
+			From   string `json:"from"`
+			To     string `json:"to"`
+			Status int    `json:"status"`
+		} `json:"redirects"`
+	} `json:"config"`
+	BasicAuthPassword string `json:"basicAuthPassword"`
+}
+
+// makeUpdateProxyRouteHandler 返回 PUT /api/proxy/routes/{id}(认证 + CSRF)→ Route。
+// 更新上游 + 高级配置(R2:别名 / 访问控制 / 头 / 压缩 / 重定向);basicAuthPassword 非空则
+// bcrypt 哈希进配置,basicAuthUser 为空则清认证。审计 detail 绝无明文口令/哈希。
+func makeUpdateProxyRouteHandler(svc proxy.Service, rec audit.Recorder) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "反代服务未初始化")
+			return
+		}
+		id := chi.URLParam(r, "id")
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
+		var in proxyUpdateBody
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
+			return
+		}
+
+		reds := make([]proxy.Redirect, 0, len(in.Config.Redirects))
+		for _, rd := range in.Config.Redirects {
+			reds = append(reds, proxy.Redirect{From: rd.From, To: rd.To, Status: rd.Status})
+		}
+		route, err := svc.Update(r.Context(), id, proxy.UpdateInput{
+			UpstreamContainer: in.UpstreamContainer,
+			UpstreamPort:      in.UpstreamPort,
+			Config: proxy.RouteConfig{
+				Aliases:         in.Config.Aliases,
+				ForceHTTPS:      in.Config.ForceHTTPS,
+				HSTS:            in.Config.HSTS,
+				SecurityHeaders: in.Config.SecurityHeaders,
+				Compression:     in.Config.Compression,
+				BasicAuthUser:   in.Config.BasicAuthUser,
+				IPAllow:         in.Config.IPAllow,
+				IPDeny:          in.Config.IPDeny,
+				Redirects:       reds,
+			},
+			BasicAuthPassword: in.BasicAuthPassword,
+		})
+		if err != nil {
+			writeProxyError(w, err)
+			return
+		}
+		recordAudit(r.Context(), rec, audit.Entry{
+			Actor:      auditActor,
+			Action:     auditActionProxyRouteUpdate,
+			TargetType: auditTargetProxyRoute,
+			TargetID:   route.ID,
+			Detail: map[string]any{
+				"domain":            route.Domain,
+				"upstreamContainer": route.UpstreamContainer,
+				"upstreamPort":      route.UpstreamPort,
+				"aliases":           route.Config.Aliases,
+				"basicAuthEnabled":  route.Config.BasicAuthHash != "",
+				"ipAllow":           route.Config.IPAllow,
+				"ipDeny":            route.Config.IPDeny,
+			},
+			IP: clientIP(r),
+		})
+		writeJSON(w, http.StatusOK, toProxyRouteDTO(*route))
+	}
+}
+
+// proxyOverviewItemDTO 是证书总览大盘单项(Route DTO + 主机展示名 serverName)。冻结契约。
+type proxyOverviewItemDTO struct {
+	proxyRouteDTO
+	ServerName string `json:"serverName"`
+}
+
+// makeProxyOverviewHandler 返回 GET /api/proxy/overview → { items: [...] }(只读,无审计)。
+// 跨全部主机聚合所有路由 + 主机展示名 + 证书状态,供跨主机证书总览大盘(E2.4)。
+func makeProxyOverviewHandler(svc proxy.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "反代服务未初始化")
+			return
+		}
+		items, err := svc.Overview(r.Context())
+		if err != nil {
+			writeProxyError(w, err)
+			return
+		}
+		out := make([]proxyOverviewItemDTO, 0, len(items))
+		for _, it := range items {
+			out = append(out, proxyOverviewItemDTO{
+				proxyRouteDTO: toProxyRouteDTO(it.Route),
+				ServerName:    it.ServerName,
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": out})
 	}
 }
 

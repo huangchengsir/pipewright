@@ -39,6 +39,7 @@ import type { ContainerInfo } from '../../api/containers'
 import { HttpError } from '../../api/http'
 import { useToast } from '../../composables/useToast'
 import { useConfirm } from '../../composables/useConfirm'
+import RouteAdvancedSettings from './RouteAdvancedSettings.vue'
 
 const props = defineProps<{
   /** Target host this panel binds domains on. */
@@ -381,6 +382,10 @@ function statusLabel(s: ProxyRoute['certStatus']): string {
               <span>{{ t('reverseProxy.proxiesTo') }}</span>
               <span class="route__chip">{{ r.upstreamContainer }}:{{ r.upstreamPort }}</span>
             </div>
+            <div v-if="r.config.aliases.length > 0" class="route__aliases">
+              <span class="route__aliases-label">{{ t('reverseProxy.aliasesLabel') }}</span>
+              <span v-for="a in r.config.aliases" :key="a" class="route__alias mono">{{ a }}</span>
+            </div>
           </div>
 
           <span class="route__badge" :class="`route__badge--${r.certStatus}`">
@@ -442,6 +447,9 @@ function statusLabel(s: ProxyRoute['certStatus']): string {
             </button>
           </div>
         </template>
+
+        <!-- R2:每条路由的「高级设置」(别名 / 访问控制 / 加固 / 重定向) -->
+        <RouteAdvancedSettings :route="r" @saved="replaceRoute" />
       </li>
     </ul>
   </div>
@@ -703,6 +711,24 @@ function statusLabel(s: ProxyRoute['certStatus']): string {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.route__aliases {
+  margin-top: 5px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.route__aliases-label {
+  font-size: var(--text-micro);
+  color: var(--color-faint);
+}
+.route__alias {
+  font-size: var(--text-micro);
+  padding: 1px 7px;
+  border-radius: var(--rounded-full);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
 }
 .route__badge {
   display: inline-flex;

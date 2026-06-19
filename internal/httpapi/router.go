@@ -788,6 +788,8 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 反代环境(pipewright-caddy 容器)知情同意 + 移除:GET 探测状态(auth);DELETE 移除容器
 		// (auth + CSRF + 审计;保留证书卷)。字面段 /proxy/caddy 与 /proxy/routes 不同尾段,不会被吞。
 		ar.Get("/proxy/caddy", makeProxyCaddyStatusHandler(px))
+		// POST 显式部署反代环境(ensureCaddy,无需先绑域名;写方法,过 auth + CSRF + 审计)。
+		ar.Post("/proxy/caddy", makeProxyCaddyPrepareHandler(px, aud))
 		ar.Delete("/proxy/caddy", makeRemoveProxyCaddyHandler(px, aud))
 
 		// DNS 提供商集成层(R3 E3.1–E3.4):Cloudflare / DNSPod / 阿里云 DNS 接入(凭据走 vault)。

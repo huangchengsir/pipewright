@@ -271,11 +271,15 @@ func ensureCaddy(ctx context.Context, tg target.Service, serverID string) error 
 	}
 
 	// 5) 起 Caddy 容器(array 不拼 shell)。
+	//    --add-host host.docker.internal:host-gateway(Docker 20.10+)让 address 类上游能反代到
+	//    宿主机上(非容器)的服务(host.docker.internal 解析到宿主)。已存在的旧 Caddy 容器不会
+	//    追溯获得此项;仅新部署生效(MVP 可接受,移除后重新部署即可补上)。
 	runCmd := []string{
 		"docker", "run", "-d",
 		"--name", caddyContainer,
 		"--restart", "unless-stopped",
 		"--network", proxyNetwork,
+		"--add-host", "host.docker.internal:host-gateway",
 		"-p", "80:80", "-p", "443:443",
 		"-v", caddyDataVol + ":/data",
 		"-v", caddyConfigVol + ":/config",

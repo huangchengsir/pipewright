@@ -36,6 +36,7 @@ import {
   refreshProxyRoute,
   deleteProxyRoute,
   getCaddyStatus,
+  prepareCaddyEnv,
   removeCaddyEnv,
   type ProxyRoute,
   type CaddyStatus,
@@ -99,6 +100,7 @@ onMounted(loadRoutes)
 // consent:首次拉起前要用户确认;reversibility:可随时移除。
 const caddy = ref<CaddyStatus | null>(null)
 const caddyRemoving = ref(false)
+const caddyDeploying = ref(false)
 
 async function loadCaddyStatus(): Promise<void> {
   try {
@@ -110,6 +112,42 @@ async function loadCaddyStatus(): Promise<void> {
 }
 
 onMounted(loadCaddyStatus)
+
+/** 反代环境首次部署的同意确认弹窗(deploy 按钮与首次绑定共用同一文案)。 */
+function confirmCaddyConsent(): Promise<boolean> {
+  return confirm.open({
+    title: t('reverseProxy.caddy.consentTitle'),
+    body: t('reverseProxy.caddy.consentBody', { host: props.host }),
+    confirmLabel: t('reverseProxy.caddy.consentConfirm'),
+    variant: 'primary',
+  })
+}
+
+/**
+ * 用户主动部署反代环境:走与首次绑定相同的同意弹窗,确认后拉起 pipewright-caddy 容器,
+ * 成功即把状态卡翻到「运行中」。给用户一条显式、自助的同意路径(无需先绑域名)。
+ */
+async function deployEnv(): Promise<void> {
+  if (caddyDeploying.value) return
+  const ok = await confirmCaddyConsent()
+  if (!ok) return
+  caddyDeploying.value = true
+  try {
+    caddy.value = await prepareCaddyEnv(props.serverId)
+    toast.success(t('reverseProxy.caddy.deployed'))
+  } catch (err) {
+    toast.error(t('reverseProxy.caddy.deployFail'), {
+      detail:
+        err instanceof HttpError
+          ? (err.apiError?.message ?? t('reverseProxy.errReq', { status: err.status }))
+          : t('reverseProxy.errNetwork'),
+    })
+    // 失败后回读真实状态,避免卡片停在过时态。
+    await loadCaddyStatus()
+  } finally {
+    caddyDeploying.value = false
+  }
+}
 
 /** 移除反代环境(停止并删除 pipewright-caddy 容器,证书卷保留)。 */
 async function removeEnv(): Promise<void> {
@@ -147,7 +185,10 @@ async function removeEnv(): Promise<void> {
 
 // ─── 绑定表单 ───────────────────────────────────────────────────────────────────
 const domain = ref('')
+// 上游可以是「运行中的容器」(按名走共享网络转发)或「自定义地址」(host:port 直转)。
+const upstreamKind = ref<'container' | 'address'>('container')
 const upstreamContainer = ref('')
+const upstreamAddress = ref('')
 const upstreamPort = ref('')
 const submitting = ref(false)
 
@@ -192,10 +233,32 @@ const portValid = computed(
   () => Number.isInteger(portNum.value) && portNum.value >= 1 && portNum.value <= 65535,
 )
 
-/** 内联提示:域名格式 / 重复 / 端口。空串 = 无错。 */
+// 自定义地址校验:合法 IPv4 / FQDN / host.docker.internal(轻量,非穷尽)。
+const IPV4_RE = /^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$/
+const HOSTNAME_RE = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i
+const normalizedAddress = computed(() => upstreamAddress.value.trim())
+const addressValid = computed(() => {
+  const v = normalizedAddress.value
+  if (!v) return false
+  return v === 'host.docker.internal' || IPV4_RE.test(v) || HOSTNAME_RE.test(v)
+})
+
+// 当前选中的上游目标(容器名 / 地址),供提交与校验复用。
+const upstreamTarget = computed(() =>
+  upstreamKind.value === 'address' ? normalizedAddress.value : upstreamContainer.value.trim(),
+)
+const upstreamValid = computed(() =>
+  upstreamKind.value === 'address'
+    ? addressValid.value
+    : upstreamContainer.value.trim().length > 0,
+)
+
+/** 内联提示:域名格式 / 重复 / 地址 / 端口。空串 = 无错。 */
 const formHint = computed(() => {
   if (normalizedDomain.value && !domainValid.value) return t('reverseProxy.hintInvalidDomain')
   if (domainDuplicate.value) return t('reverseProxy.hintDuplicate')
+  if (upstreamKind.value === 'address' && normalizedAddress.value && !addressValid.value)
+    return t('reverseProxy.hintInvalidAddress')
   if (upstreamPort.value.trim() && !portValid.value) return t('reverseProxy.hintInvalidPort')
   return ''
 })
@@ -204,7 +267,7 @@ const canSubmit = computed(
   () =>
     domainValid.value &&
     !domainDuplicate.value &&
-    upstreamContainer.value.trim().length > 0 &&
+    upstreamValid.value &&
     portValid.value &&
     !submitting.value,
 )
@@ -214,12 +277,7 @@ async function submit(): Promise<void> {
   // Consent:反代环境尚未部署时,启用第一个域名会在本机拉起 pipewright-caddy 容器
   // 占用 80/443。动手前显式征求一次同意;环境已就位则直接绑定,不再重复打扰。
   if (caddy.value && caddy.value.installed === false) {
-    const ok = await confirm.open({
-      title: t('reverseProxy.caddy.consentTitle'),
-      body: t('reverseProxy.caddy.consentBody', { host: props.host }),
-      confirmLabel: t('reverseProxy.caddy.consentConfirm'),
-      variant: 'primary',
-    })
+    const ok = await confirmCaddyConsent()
     if (!ok) return
   }
   submitting.value = true
@@ -227,14 +285,16 @@ async function submit(): Promise<void> {
     const route = await createProxyRoute({
       serverId: props.serverId,
       domain: normalizedDomain.value,
-      upstreamContainer: upstreamContainer.value.trim(),
+      upstreamContainer: upstreamTarget.value,
       upstreamPort: portNum.value,
+      config: { upstreamKind: upstreamKind.value },
     })
     // 新路由置顶,即时可见证书申请中状态。
     routes.value = [route, ...routes.value.filter((r) => r.id !== route.id)]
     toast.success(t('reverseProxy.bound'), { detail: route.domain })
     domain.value = ''
     upstreamContainer.value = ''
+    upstreamAddress.value = ''
     upstreamPort.value = ''
     // 绑定可能刚拉起了反代环境 —— 刷新状态卡。
     void loadCaddyStatus()
@@ -430,6 +490,15 @@ function statusLabel(s: ProxyRoute['certStatus']): string {
         <NIcon :size="14"><CircleX /></NIcon>
         {{ caddyRemoving ? t('reverseProxy.caddy.removing') : t('reverseProxy.caddy.remove') }}
       </button>
+      <button
+        v-else
+        class="caddy__deploy"
+        :disabled="caddyDeploying"
+        @click="deployEnv"
+      >
+        <NIcon :size="14"><Server /></NIcon>
+        {{ caddyDeploying ? t('reverseProxy.caddy.deploying') : t('reverseProxy.caddy.deploy') }}
+      </button>
     </div>
 
     <!-- 绑定表单 -->
@@ -446,21 +515,54 @@ function statusLabel(s: ProxyRoute['certStatus']): string {
         />
       </div>
       <div class="rp__field rp__field--grow">
-        <label class="rp__label">{{ t('reverseProxy.upstreamLabel') }}</label>
-        <select
-          v-if="hasContainerChoices"
-          v-model="upstreamContainer"
-          class="rp__in"
-          @change="onContainerPick"
-        >
-          <option value="">{{ t('reverseProxy.upstreamPick') }}</option>
-          <option v-for="name in runningContainers" :key="name" :value="name">{{ name }}</option>
-        </select>
+        <div class="rp__label-row">
+          <label class="rp__label">{{ t('reverseProxy.upstreamLabel') }}</label>
+          <div class="rp__seg" role="group" :aria-label="t('reverseProxy.upstreamKindLabel')">
+            <button
+              type="button"
+              class="rp__seg-btn"
+              :class="{ 'rp__seg-btn--on': upstreamKind === 'container' }"
+              :aria-pressed="upstreamKind === 'container'"
+              @click="upstreamKind = 'container'"
+            >
+              {{ t('reverseProxy.modeContainer') }}
+            </button>
+            <button
+              type="button"
+              class="rp__seg-btn"
+              :class="{ 'rp__seg-btn--on': upstreamKind === 'address' }"
+              :aria-pressed="upstreamKind === 'address'"
+              @click="upstreamKind = 'address'"
+            >
+              {{ t('reverseProxy.modeAddress') }}
+            </button>
+          </div>
+        </div>
+        <template v-if="upstreamKind === 'container'">
+          <select
+            v-if="hasContainerChoices"
+            v-model="upstreamContainer"
+            class="rp__in"
+            @change="onContainerPick"
+          >
+            <option value="">{{ t('reverseProxy.upstreamPick') }}</option>
+            <option v-for="name in runningContainers" :key="name" :value="name">{{ name }}</option>
+          </select>
+          <input
+            v-else
+            v-model="upstreamContainer"
+            class="rp__in mono"
+            :placeholder="t('reverseProxy.upstreamPlaceholder')"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </template>
         <input
           v-else
-          v-model="upstreamContainer"
+          v-model="upstreamAddress"
           class="rp__in mono"
-          :placeholder="t('reverseProxy.upstreamPlaceholder')"
+          :class="{ 'rp__in--bad': normalizedAddress.length > 0 && !addressValid }"
+          :placeholder="t('reverseProxy.addressPlaceholder')"
           autocomplete="off"
           spellcheck="false"
         />
@@ -481,6 +583,9 @@ function statusLabel(s: ProxyRoute['certStatus']): string {
         {{ submitting ? t('reverseProxy.binding') : t('reverseProxy.enable') }}
       </button>
     </form>
+    <p class="rp__modehint">
+      {{ upstreamKind === 'address' ? t('reverseProxy.addressHint') : t('reverseProxy.upstreamKindHint') }}
+    </p>
     <p v-if="formHint" class="rp__formhint">{{ formHint }}</p>
 
     <!-- 路由列表 -->
@@ -526,6 +631,13 @@ function statusLabel(s: ProxyRoute['certStatus']): string {
               <NIcon :size="12"><ArrowRight /></NIcon>
               <span>{{ t('reverseProxy.proxiesTo') }}</span>
               <span class="route__chip">{{ r.upstreamContainer }}:{{ r.upstreamPort }}</span>
+              <span class="route__kind">
+                {{
+                  r.config.upstreamKind === 'address'
+                    ? t('reverseProxy.modeAddress')
+                    : t('reverseProxy.modeContainer')
+                }}
+              </span>
             </div>
             <div v-if="r.config.aliases.length > 0" class="route__aliases">
               <span class="route__aliases-label">{{ t('reverseProxy.aliasesLabel') }}</span>
@@ -744,6 +856,29 @@ function statusLabel(s: ProxyRoute['certStatus']): string {
   opacity: 0.5;
   cursor: not-allowed;
 }
+.caddy__deploy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  align-self: center;
+  font-size: var(--text-micro);
+  font-weight: 600;
+  padding: 7px 14px;
+  border-radius: var(--rounded-md);
+  border: 1px solid var(--color-primary);
+  background: var(--color-primary);
+  color: #fff;
+  cursor: pointer;
+  transition: filter var(--duration-fast, 150ms) var(--ease-out-expo, ease);
+}
+.caddy__deploy:hover:not(:disabled) {
+  background: var(--color-primary-press);
+}
+.caddy__deploy:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
 /* 绑定表单 */
 .rp__form {
@@ -771,6 +906,41 @@ function statusLabel(s: ProxyRoute['certStatus']): string {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--color-faint);
+}
+.rp__label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+/* 上游类型分段切换 */
+.rp__seg {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: var(--rounded-full);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-inset);
+}
+.rp__seg-btn {
+  font-size: var(--text-micro);
+  font-weight: 600;
+  padding: 3px 11px;
+  border: none;
+  border-radius: var(--rounded-full);
+  background: transparent;
+  color: var(--color-faint);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast, 150ms) var(--ease-out-expo, ease),
+    background var(--duration-fast, 150ms) var(--ease-out-expo, ease);
+}
+.rp__seg-btn:hover:not(.rp__seg-btn--on) {
+  color: var(--color-dim);
+}
+.rp__seg-btn--on {
+  background: var(--color-card);
+  color: var(--color-primary);
+  box-shadow: 0 1px 2px oklch(0% 0 0 / 0.12);
 }
 .rp__in {
   font-size: var(--text-label);
@@ -812,6 +982,12 @@ function statusLabel(s: ProxyRoute['certStatus']): string {
 .rp__submit:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.rp__modehint {
+  margin: 9px 0 0;
+  font-size: var(--text-micro);
+  color: var(--color-faint);
+  line-height: 1.6;
 }
 .rp__formhint {
   margin: 9px 0 0;
@@ -952,6 +1128,15 @@ function statusLabel(s: ProxyRoute['certStatus']): string {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.route__kind {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: var(--rounded-full);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  font-size: var(--text-micro);
+  white-space: nowrap;
 }
 .route__aliases {
   margin-top: 5px;

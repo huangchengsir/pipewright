@@ -93,6 +93,12 @@ export interface TcpPassthrough {
  * returned (only `basicAuthEnabled` reflects whether one is set).
  */
 export interface ProxyRouteConfig {
+  /**
+   * Upstream kind: `'container'` reverse-proxies to a running Docker container by
+   * name over the shared network; `'address'` forwards straight to the host:port
+   * the user typed (an IP / FQDN / `host.docker.internal`). Defaults to `'container'`.
+   */
+  upstreamKind?: 'container' | 'address'
   /** Extra FQDNs served by the same route (besides `domain`). */
   aliases: string[]
   /** Redirect plain HTTP → HTTPS (default on for `auto` TLS). */
@@ -197,8 +203,19 @@ export interface UpdateProxyRouteInput {
 export interface CreateProxyRouteInput {
   serverId: string
   domain: string
+  /**
+   * Upstream target: a running container name when `config.upstreamKind` is
+   * `'container'`, or the host (IP / FQDN / `host.docker.internal`) the user typed
+   * when it is `'address'`.
+   */
   upstreamContainer: string
   upstreamPort: number
+  /**
+   * Partial advanced config sent on create. For the simple bind form this carries
+   * only `upstreamKind` (`'container'` | `'address'`); the backend fills the rest
+   * with defaults. Omit to default to a container upstream.
+   */
+  config?: Partial<ProxyRouteConfig>
 }
 
 /** List all reverse-proxy routes bound on a single server. */
@@ -272,6 +289,19 @@ export interface CaddyStatus {
  */
 export async function getCaddyStatus(serverId: string): Promise<CaddyStatus> {
   return http.get<CaddyStatus>(`/api/proxy/caddy?serverId=${encodeURIComponent(serverId)}`)
+}
+
+/**
+ * Deploy the reverse-proxy environment on a host (R4 · explicit consent path):
+ * starts the `pipewright-caddy` container so it's running and ready before any
+ * domain is bound. User-triggered from the awareness card's "deploy" button —
+ * the same act otherwise done implicitly on first bind, surfaced explicitly here.
+ * Returns the refreshed status (should reflect installed + running).
+ *
+ * POST /api/proxy/caddy?serverId=<id> → CaddyStatus   (needs CSRF)
+ */
+export async function prepareCaddyEnv(serverId: string): Promise<CaddyStatus> {
+  return http.post<CaddyStatus>(`/api/proxy/caddy?serverId=${encodeURIComponent(serverId)}`, {})
 }
 
 /**

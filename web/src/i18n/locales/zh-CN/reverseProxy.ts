@@ -9,6 +9,14 @@ export default {
   upstreamLabel: '上游容器',
   upstreamPick: '选择一个运行中的容器…',
   upstreamPlaceholder: '容器名,例:my-web-app',
+  // 上游类型:选容器 / 自定义地址
+  upstreamKindLabel: '上游类型',
+  modeContainer: '选运行中容器',
+  modeAddress: '自定义地址',
+  upstreamKindHint: '容器:走共享网络按容器名转发;地址:直接转发到 host:port。',
+  addressPlaceholder: 'host.docker.internal 或 IP / 域名',
+  addressHint: '宿主机服务填 host.docker.internal,别的机器填 IP 或域名,端口在右侧填。',
+  hintInvalidAddress: '请填写合法地址:IP、域名,或 host.docker.internal。',
   portLabel: '上游端口',
   enable: '启用',
   binding: '绑定中…',
@@ -68,6 +76,11 @@ export default {
     stoppedTitle: '反代环境已停止',
     stoppedDesc:
       'pipewright-caddy 容器已部署但未运行 —— 启用任一域名会重新拉起,届时恢复 HTTPS 反代。',
+    // 部署按钮(未部署态,用户主动拉起)
+    deploy: '部署反代环境',
+    deploying: '部署中…',
+    deployed: '反代环境已部署',
+    deployFail: '部署失败',
     // 移除按钮
     remove: '移除反代环境',
     removing: '移除中…',

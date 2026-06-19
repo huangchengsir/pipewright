@@ -16,6 +16,7 @@ import (
 // 用普通 JSON tag 序列化(领域结构体的 `json:"-"` 是为了不外泄给 API DTO,故落库不能复用它)。
 // 落库时 RouteConfig → storedConfig(含哈希)→ JSON;读库反向。
 type storedConfig struct {
+	UpstreamKind    string     `json:"upstreamKind,omitempty"`
 	Aliases         []string   `json:"aliases,omitempty"`
 	ForceHTTPS      bool       `json:"forceHttps"`
 	HSTS            bool       `json:"hsts"`
@@ -43,6 +44,7 @@ func marshalConfig(c RouteConfig) (string, error) {
 		return "", nil
 	}
 	b, err := json.Marshal(storedConfig{
+		UpstreamKind:    c.UpstreamKind,
 		Aliases:         c.Aliases,
 		ForceHTTPS:      c.ForceHTTPS,
 		HSTS:            c.HSTS,
@@ -79,6 +81,7 @@ func unmarshalConfig(s string) (RouteConfig, error) {
 		return RouteConfig{}, fmt.Errorf("proxy: unmarshal config: %w", err)
 	}
 	return RouteConfig{
+		UpstreamKind:    sc.UpstreamKind,
 		Aliases:         sc.Aliases,
 		ForceHTTPS:      sc.ForceHTTPS,
 		HSTS:            sc.HSTS,
@@ -103,7 +106,10 @@ func unmarshalConfig(s string) (RouteConfig, error) {
 
 // isZeroConfig 判定配置是否为零值(全默认),用于决定是否落空串。
 func isZeroConfig(c RouteConfig) bool {
-	return len(c.Aliases) == 0 && !c.ForceHTTPS && !c.HSTS && !c.SecurityHeaders &&
+	// container 上游(含空串归一化)视为默认,不阻止落空串(保持 R1 容器路由的向后兼容字节)。
+	// 仅 address 上游(非默认)使配置非零,触发 config JSON 落库。
+	kindZero := c.UpstreamKind == "" || c.UpstreamKind == UpstreamKindContainer
+	return kindZero && len(c.Aliases) == 0 && !c.ForceHTTPS && !c.HSTS && !c.SecurityHeaders &&
 		!c.Compression && c.BasicAuthUser == "" && c.BasicAuthHash == "" &&
 		len(c.IPAllow) == 0 && len(c.IPDeny) == 0 && len(c.Redirects) == 0 &&
 		c.DNSProviderID == "" && len(c.PathRules) == 0 &&
@@ -287,6 +293,11 @@ func (s *Store) del(ctx context.Context, id string) error {
 func newRoute(in CreateInput) *Route {
 	now := time.Now().UTC()
 	var cfg RouteConfig
+	// 主上游类型(container 默认 / address):存进 config JSON(免迁移)。空串归一化为 container。
+	cfg.UpstreamKind = in.UpstreamKind
+	if cfg.UpstreamKind == "" {
+		cfg.UpstreamKind = UpstreamKindContainer
+	}
 	if in.DNSProviderID != "" {
 		cfg.DNSProviderID = in.DNSProviderID
 	}

@@ -33,6 +33,13 @@ import (
 const (
 	tlsModeAuto = "auto"
 
+	// UpstreamKindContainer 表示上游为目标主机上的 docker 容器(默认 / 向后兼容):
+	// UpstreamContainer = 容器名,Caddy 把它接入共享网络并按容器名路由。空串归一化为本值。
+	UpstreamKindContainer = "container"
+	// UpstreamKindAddress 表示上游为任意地址(host:port):UpstreamContainer 存 HOST
+	// (IP / FQDN / host.docker.internal),Caddy 直接 reverse_proxy 到 host:port,不接网络。
+	UpstreamKindAddress = "address"
+
 	// CertStatusPending 表示证书尚未签发成功(刚建 / 仍在 LE 流程 / 临时证书)。
 	CertStatusPending = "pending"
 	// CertStatusIssued 表示已握手到受信任的有效证书。
@@ -57,6 +64,10 @@ var (
 	ErrInvalidContainer = errors.New("proxy: invalid upstream container")
 	// ErrInvalidPort 表示上游端口非法(非 1..65535)。
 	ErrInvalidPort = errors.New("proxy: upstream port must be in 1..65535")
+	// ErrInvalidUpstreamKind 表示上游类型非法(非 container | address)。
+	ErrInvalidUpstreamKind = errors.New("proxy: invalid upstream kind")
+	// ErrInvalidUpstreamHost 表示 address 上游的 HOST 非法(非 IP / FQDN / host.docker.internal)。
+	ErrInvalidUpstreamHost = errors.New("proxy: invalid upstream host")
 
 	// ErrPortConflict 表示目标主机 80/443 被占用,无法起 Caddy(LE 校验需 80)。
 	ErrPortConflict = errors.New("proxy: 80/443 端口被占用,无法启动反代(Let's Encrypt 校验需要 80)")
@@ -161,6 +172,11 @@ type TCPConfig struct {
 // 注意:BasicAuthHash 的 JSON tag 为 `-`,绝不出现在 API DTO;但**持久化**到 DB 时必须保留它,
 // 故 store 层用独立的存储表示(storedConfig)序列化,不能直接复用本结构体写库。
 type RouteConfig struct {
+	// UpstreamKind 是主上游的类型判别字段(放 config JSON,免迁移):
+	//   - "container"(默认 / 空串归一化):Route.UpstreamContainer 为容器名,接入共享网络按名路由。
+	//   - "address":Route.UpstreamContainer 存 HOST(IP/FQDN/host.docker.internal),直接反代,不接网络。
+	// 仅作用于「主上游」;额外上游(Upstreams[])与路径/TCP 透传仍为 container 语义。
+	UpstreamKind    string     `json:"upstreamKind,omitempty"`  // "" => "container"(向后兼容)
 	Aliases         []string   `json:"aliases,omitempty"`       // 同站点块额外服务的 FQDN(如 www)
 	ForceHTTPS      bool       `json:"forceHttps"`              // MVP 文档化 no-op:Caddy 对带域名站点默认即强制 HTTP→HTTPS,故此开关恒为「已强制」语义;字段保留供前端展示/未来 auto_https off 扩展
 	HSTS            bool       `json:"hsts"`                    //
@@ -209,6 +225,9 @@ type CreateInput struct {
 	Domain            string
 	UpstreamContainer string
 	UpstreamPort      int
+	// UpstreamKind ∈ "container"(默认/空) | "address"。container → UpstreamContainer 为容器名;
+	// address → UpstreamContainer 为 HOST(IP/FQDN/host.docker.internal)。
+	UpstreamKind string
 	// DNSProviderID(R3)非空 → 该路由走 DNS-01(通配符域名必需)。空 = HTTP-01。
 	DNSProviderID string
 }
@@ -217,6 +236,7 @@ type CreateInput struct {
 type UpdateInput struct {
 	UpstreamContainer string      // 空 = 保持不变
 	UpstreamPort      int         // 0 = 保持不变
+	UpstreamKind      string      // ""/"container" | "address";归一化进 Config.UpstreamKind
 	Config            RouteConfig //
 	BasicAuthPassword string      // 明文;非空 → bcrypt 哈希入 Config.BasicAuthHash;若 BasicAuthUser=="" → 清空认证
 }
@@ -240,6 +260,9 @@ type Service interface {
 	// CaddyStatus 探测某主机上的反代容器(pipewright-caddy)环境:是否已安装/运行/镜像/端口 + 该主机路由数。
 	// 容器不存在不报错(Installed:false);仅传输/SSH 层错误才返回 error(由 httpapi 映射 502/503)。
 	CaddyStatus(ctx context.Context, serverID string) (*CaddyStatus, error)
+	// PrepareCaddy 显式部署反代环境(ensureCaddy)而无需先绑域名,返回部署后的 CaddyStatus。
+	// 空 serverID → ErrEmptyServerID;80/443 冲突等人话错误由 ensureCaddy 透出。
+	PrepareCaddy(ctx context.Context, serverID string) (*CaddyStatus, error)
 	// RemoveCaddy 停止并删除某主机上的反代容器(pipewright-caddy);保留命名卷(避免重签触发 LE 限速)。
 	// 幂等:容器已不存在也成功。
 	RemoveCaddy(ctx context.Context, serverID string) error
@@ -300,6 +323,7 @@ func (s *service) Create(ctx context.Context, in CreateInput) (*Route, error) {
 	in.ServerID = strings.TrimSpace(in.ServerID)
 	in.Domain = strings.ToLower(strings.TrimSpace(in.Domain))
 	in.UpstreamContainer = strings.TrimSpace(in.UpstreamContainer)
+	in.UpstreamKind = normalizeUpstreamKind(in.UpstreamKind)
 	in.DNSProviderID = strings.TrimSpace(in.DNSProviderID)
 	if err := validateCreate(in); err != nil {
 		return nil, err
@@ -316,9 +340,10 @@ func (s *service) Create(ctx context.Context, in CreateInput) (*Route, error) {
 	if err := s.store.insert(ctx, r); err != nil {
 		return nil, err
 	}
-	// 2) 编排:保证 Caddy 就绪 → 上游接入共享网络 → 渲染 + 下发 + reload。
+	// 2) 编排:保证 Caddy 就绪 → (仅 container 上游)接入共享网络 → 渲染 + 下发 + reload。
+	//    address 上游为任意 host:port,Caddy 直接反代,无需也不可 docker network connect。
 	//    编排失败回滚刚插入的路由(避免留下「库里有、反代上没有」的孤儿)。
-	if err := s.ensureAndApply(ctx, r.ServerID, in.UpstreamContainer); err != nil {
+	if err := s.ensureAndApply(ctx, r.ServerID, upstreamForConnect(in.UpstreamKind, in.UpstreamContainer)); err != nil {
 		_ = s.store.del(ctx, r.ID)
 		return nil, err
 	}
@@ -349,9 +374,9 @@ func (s *service) SetEnabled(ctx context.Context, id string, on bool) error {
 	if err := s.store.setEnabled(ctx, id, on); err != nil {
 		return err
 	}
-	// 启用时确保上游已接入网络;停用时无需(渲染时自然摘除)。
+	// 启用时确保上游已接入网络(仅 container 上游;address 上游不接网络);停用时无需(渲染时自然摘除)。
 	if on {
-		if err := s.ensureAndApply(ctx, r.ServerID, r.UpstreamContainer); err != nil {
+		if err := s.ensureAndApply(ctx, r.ServerID, upstreamForConnect(r.Config.UpstreamKind, r.UpstreamContainer)); err != nil {
 			return err
 		}
 		return nil
@@ -389,8 +414,12 @@ func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Route
 		port = in.UpstreamPort
 	}
 
-	// 2) 归一化高级配置(域名小写去空白 / 去重 / 状态码默认)。
+	// 2) 归一化高级配置(域名小写去空白 / 去重 / 状态码默认 / 上游类型归一)。
 	cfg := normalizeConfig(in.Config)
+	// 上游类型:入参 UpstreamKind 优先(显式),否则沿用 config 里的(normalizeConfig 已归一化)。
+	if k := strings.ToLower(strings.TrimSpace(in.UpstreamKind)); k != "" {
+		cfg.UpstreamKind = k
+	}
 
 	// 3) Basic Auth:用户名为空 → 清认证;否则若给了明文口令则 bcrypt 哈希,未给则沿用旧哈希。
 	if cfg.BasicAuthUser == "" {
@@ -410,11 +439,8 @@ func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Route
 	if err := validateConfig(cfg); err != nil {
 		return nil, err
 	}
-	if !containerRe.MatchString(container) {
-		return nil, ErrInvalidContainer
-	}
-	if port < 1 || port > 65535 {
-		return nil, ErrInvalidPort
+	if err := validateUpstream(cfg.UpstreamKind, container, port); err != nil {
+		return nil, err
 	}
 	// R3:通配符主域名必须始终绑定 DNS 提供商(不能在 Update 里把它摘掉)。
 	if isWildcardDomain(r.Domain) && cfg.DNSProviderID == "" {
@@ -498,16 +524,52 @@ func (s *service) RemoveCaddy(ctx context.Context, serverID string) error {
 	return removeCaddy(ctx, s.tg, serverID)
 }
 
-// ensureAndApply 是 Create/启用 路径的编排:保证 Caddy 就绪 → 接入上游 → apply。
+// ensureAndApply 是 Create/启用 路径的编排:保证 Caddy 就绪 → (container 上游才)接入上游 → apply。
+// container 为空串表示「address 上游」,跳过 docker network connect(Caddy 直接反代任意 host:port)。
 func (s *service) ensureAndApply(ctx context.Context, serverID, container string) error {
 	if err := ensureCaddy(ctx, s.tg, serverID); err != nil {
 		return err
 	}
-	if err := connectUpstream(ctx, s.tg, serverID, container); err != nil {
-		return err
+	if container != "" {
+		if err := connectUpstream(ctx, s.tg, serverID, container); err != nil {
+			return err
+		}
 	}
 	return s.apply(ctx, serverID)
 }
+
+// PrepareCaddy 显式部署反代环境(ensureCaddy)而无需先绑域名,返回部署后的 CaddyStatus。
+func (s *service) PrepareCaddy(ctx context.Context, serverID string) (*CaddyStatus, error) {
+	serverID = strings.TrimSpace(serverID)
+	if serverID == "" {
+		return nil, ErrEmptyServerID
+	}
+	if err := ensureCaddy(ctx, s.tg, serverID); err != nil {
+		return nil, err
+	}
+	return s.CaddyStatus(ctx, serverID)
+}
+
+// upstreamForConnect 返回需接入共享网络的容器名:container 上游返回容器名;address 上游返回 ""
+// (调用方据此跳过 docker network connect)。
+func upstreamForConnect(kind, container string) string {
+	if kind == UpstreamKindAddress {
+		return ""
+	}
+	return container
+}
+
+// normalizeUpstreamKind 把空串归一化为 "container"(向后兼容);其余原样返回交校验判定。
+func normalizeUpstreamKind(kind string) string {
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	if kind == "" {
+		return UpstreamKindContainer
+	}
+	return kind
+}
+
+// upstreamHostRe 校验 address 上游的 FQDN(同 domainRe 但此处单列以便阅读);IP 走 net.ParseIP。
+var upstreamHostRe = domainRe
 
 // apply 渲染该主机所有 enabled 路由 → 下发 Caddyfile → reload。
 // 对绑了 DNS 提供商的路由,在此(且仅在此)经 resolver 取 token 注入渲染(DNS-01);
@@ -621,13 +683,48 @@ func validateCreate(in CreateInput) error {
 	if in.UpstreamContainer == "" {
 		return ErrEmptyContainer
 	}
-	if !containerRe.MatchString(in.UpstreamContainer) {
-		return ErrInvalidContainer
+	if err := validateUpstream(in.UpstreamKind, in.UpstreamContainer, in.UpstreamPort); err != nil {
+		return err
 	}
-	if in.UpstreamPort < 1 || in.UpstreamPort > 65535 {
+	return nil
+}
+
+// validateUpstream 校验主上游(kind + container/host + port):
+//   - kind=container(含归一化空串):UpstreamContainer 须过 containerRe(docker 容器名安全字符)。
+//   - kind=address:UpstreamContainer 持 HOST,须为合法 IPv4/IPv6(net.ParseIP)、合法 FQDN(domainRe)
+//     或字面 host.docker.internal —— 关闭 Caddyfile 注入面(无空格/冒号/斜杠/花括号)。
+//   - 端口两种 kind 均须 1..65535。
+//
+// 调用前 kind 应已 normalizeUpstreamKind(空串归一化为 container)。
+func validateUpstream(kind, host string, port int) error {
+	switch kind {
+	case UpstreamKindContainer:
+		if !containerRe.MatchString(host) {
+			return ErrInvalidContainer
+		}
+	case UpstreamKindAddress:
+		if !validUpstreamHost(host) {
+			return ErrInvalidUpstreamHost
+		}
+	default:
+		return ErrInvalidUpstreamKind
+	}
+	if port < 1 || port > 65535 {
 		return ErrInvalidPort
 	}
 	return nil
+}
+
+// validUpstreamHost 报告 host 是否为合法的 address 上游主机:IP / FQDN / 字面 host.docker.internal。
+// 拒绝一切含空白、冒号、斜杠、花括号等会破坏 Caddyfile 的字符。
+func validUpstreamHost(host string) bool {
+	if host == "host.docker.internal" {
+		return true
+	}
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	return upstreamHostRe.MatchString(host)
 }
 
 // redirectPathRe 限定重定向 from/to 的字符集:斜杠路径 / 简单 URL,绝无空白、花括号、引号、换行
@@ -641,6 +738,7 @@ var basicAuthUserRe = regexp.MustCompile(`^[A-Za-z0-9._@-]{1,128}$`)
 // 不做合法性判定(交 validateConfig);只整形,使渲染稳定、校验可靠。
 func normalizeConfig(in RouteConfig) RouteConfig {
 	out := in
+	out.UpstreamKind = normalizeUpstreamKind(in.UpstreamKind)
 	out.BasicAuthUser = strings.TrimSpace(in.BasicAuthUser)
 
 	out.Aliases = dedupLower(in.Aliases)

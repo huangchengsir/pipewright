@@ -36,12 +36,19 @@ type RouteDeleter interface {
 	DeleteRoute(ctx context.Context, routeID string) error
 }
 
-// service 是 store(+ 可选 allocator / routeDeleter / baseDomain 校验)支撑的 Service 实现。
+// RecordDeleter 抽象「删某 DNS 提供商根域下一个 FQDN 的 A 记录」的能力(回收预览环境时清 DNS 解析)。
+// 由上层用 dnsprovider.Service 适配注入;未绑则回收不清 DNS(优雅降级,仅删路由 + 标记)。
+type RecordDeleter interface {
+	DeleteRecord(ctx context.Context, providerID, fqdn string) error
+}
+
+// service 是 store(+ 可选 allocator / routeDeleter / recordDeleter / baseDomain 校验)支撑的 Service 实现。
 type service struct {
-	store        *Store
-	allocator    Allocator
-	routeDeleter RouteDeleter
-	validBase    validBaseDomainFunc
+	store         *Store
+	allocator     Allocator
+	routeDeleter  RouteDeleter
+	recordDeleter RecordDeleter
+	validBase     validBaseDomainFunc
 }
 
 // New 构造 Service。allocator/routeDeleter 可在装配后晚绑(SetAllocator/SetRouteDeleter),
@@ -55,6 +62,9 @@ func (s *service) SetAllocator(a Allocator) { s.allocator = a }
 
 // SetRouteDeleter 注入反代路由删除器(回收预览环境时删路由)。
 func (s *service) SetRouteDeleter(d RouteDeleter) { s.routeDeleter = d }
+
+// SetRecordDeleter 注入 DNS 记录删除器(回收预览环境时清 A 记录;未绑则不清 DNS)。
+func (s *service) SetRecordDeleter(d RecordDeleter) { s.recordDeleter = d }
 
 // SetBaseDomainValidator 注入根域校验器(默认用内置宽松校验;上层可换成 dnsprovider.ValidBaseDomain)。
 func (s *service) SetBaseDomainValidator(f validBaseDomainFunc) {
@@ -127,6 +137,15 @@ func (s *service) Reclaim(ctx context.Context, projectID string, prNumber int) e
 	// 残留路由由用户/总览可见并手动清,绝不因删路由失败把环境永久卡在 active)。
 	if s.routeDeleter != nil && strings.TrimSpace(env.RouteID) != "" {
 		_ = s.routeDeleter.DeleteRoute(ctx, env.RouteID)
+	}
+	// 清 DNS A 记录(best-effort:provision 时建了 pr-<n>-<proj>.base 的 A 记录,回收须一并删除,
+	// 否则解析记录悬挂累积。取项目预览配置里的 DNS 提供商 + 本环境子域名;任何失败仅记日志不阻断标记)。
+	if s.recordDeleter != nil && strings.TrimSpace(env.Subdomain) != "" {
+		if cfg, cerr := s.store.getConfig(ctx, projectID); cerr == nil && cfg != nil && strings.TrimSpace(cfg.DNSProviderID) != "" {
+			if derr := s.recordDeleter.DeleteRecord(ctx, cfg.DNSProviderID, env.Subdomain); derr != nil {
+				log.Printf("[previewenv] 回收 PR #%d:删 DNS 记录 %s 失败(不阻断,请手动清):%v", prNumber, env.Subdomain, derr)
+			}
+		}
 	}
 	return s.store.markReclaimed(ctx, env.ID, time.Now().UTC())
 }

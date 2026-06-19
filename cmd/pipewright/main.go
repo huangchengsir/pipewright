@@ -396,6 +396,7 @@ func main() {
 	previewSvc := previewenv.New(st.DB)
 	previewSvc.SetAllocator(&previewAllocator{dns: dnsSvc})
 	previewSvc.SetRouteDeleter(&previewRouteDeleter{proxy: proxySvc})
+	previewSvc.SetRecordDeleter(&previewRecordDeleter{dns: dnsSvc})
 	previewSvc.SetBaseDomainValidator(dnsprovider.ValidBaseDomain)
 
 	// 终态钩子:通知(Story 5.2)+「PR 状态回写」(Story 8-9 / FR-8-9):run 终态 → 据项目仓库
@@ -815,6 +816,13 @@ type previewRouteDeleter struct{ proxy proxy.Service }
 
 func (d *previewRouteDeleter) DeleteRoute(ctx context.Context, routeID string) error {
 	return d.proxy.Delete(ctx, routeID)
+}
+
+// previewRecordDeleter 适配 previewenv.RecordDeleter:回收预览环境时删该子域名的 DNS A 记录。
+type previewRecordDeleter struct{ dns dnsprovider.Service }
+
+func (d *previewRecordDeleter) DeleteRecord(ctx context.Context, providerID, fqdn string) error {
+	return d.dns.DeleteSubdomainRecord(ctx, providerID, fqdn)
 }
 
 // previewRepoResolver 适配 previewenv.ProjectRepoResolver:把项目 id 解析为「仓库地址 + 平台令牌」,

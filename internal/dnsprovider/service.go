@@ -119,6 +119,20 @@ func (s *service) Verify(ctx context.Context, id string) error {
 	return nil
 }
 
+// DeleteSubdomainRecord 删除某提供商根域下 fqdn 的 A 记录(回收预览/子域名时清 DNS)。
+// 幂等:无记录视为成功。providerID 不存在 → ErrNotFound;vault 未配/凭据缺失 → 相应错误。
+func (s *service) DeleteSubdomainRecord(ctx context.Context, providerID, fqdn string) error {
+	p, err := s.store.get(ctx, providerID)
+	if err != nil {
+		return err
+	}
+	client, err := s.clientFor(p)
+	if err != nil {
+		return err
+	}
+	return client.DeleteARecord(ctx, p.BaseDomain, fqdn)
+}
+
 // ProviderType 返回某提供商类型(不取 token);不存在 → ok=false。
 func (s *service) ProviderType(ctx context.Context, providerID string) (string, bool, error) {
 	p, err := s.store.get(ctx, providerID)

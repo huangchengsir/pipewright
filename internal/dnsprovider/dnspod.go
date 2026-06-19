@@ -211,3 +211,38 @@ func (c *dnspodClient) EnsureARecord(ctx context.Context, zone, name, ip string)
 	}
 	return nil
 }
+
+// DeleteARecord 删除 zone 下 name 的 A 记录(幂等:无记录返回 nil)。Record.List 找 → Record.Remove。
+func (c *dnspodClient) DeleteARecord(ctx context.Context, zone, name string) error {
+	sub := subDomain(name, zone)
+
+	var list dpRecordListResp
+	listFields := url.Values{
+		"domain":      {zone},
+		"sub_domain":  {sub},
+		"record_type": {"A"},
+	}
+	if err := c.post(ctx, "/Record.List", listFields, &list); err != nil {
+		return fmt.Errorf("%w:%v", ErrDeleteRecord, err)
+	}
+	if list.Status.Code == "10" {
+		return nil // 无记录 → 幂等成功。
+	}
+	if list.Status.Code != "1" {
+		return dpStatusErr(ErrDeleteRecord, list.Status)
+	}
+	for i := range list.Records {
+		r := list.Records[i]
+		if strings.EqualFold(r.Type, "A") && strings.EqualFold(r.Name, sub) {
+			var rm dpMutateResp
+			if err := c.post(ctx, "/Record.Remove", url.Values{"domain": {zone}, "record_id": {r.ID}}, &rm); err != nil {
+				return fmt.Errorf("%w:%v", ErrDeleteRecord, err)
+			}
+			if rm.Status.Code != "1" {
+				return dpStatusErr(ErrDeleteRecord, rm.Status)
+			}
+			return nil
+		}
+	}
+	return nil
+}

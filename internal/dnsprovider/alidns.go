@@ -269,3 +269,27 @@ func (c *alidnsClient) EnsureARecord(ctx context.Context, zone, name, ip string)
 	}
 	return c.call(ctx, ErrEnsureRecord, "AddDomainRecord", addFields, nil)
 }
+
+// DeleteARecord 删除 zone 下 name 的 A 记录(幂等:DescribeDomainRecords 找 RR==sub 的 A 记录 →
+// DeleteDomainRecord;无记录视为已删,返回 nil)。
+func (c *alidnsClient) DeleteARecord(ctx context.Context, zone, name string) error {
+	sub := subDomain(name, zone)
+
+	var list aliDescribeRecordsResp
+	listFields := url.Values{
+		"DomainName": {zone},
+		"RRKeyWord":  {sub},
+		"Type":       {"A"},
+	}
+	if err := c.call(ctx, ErrDeleteRecord, "DescribeDomainRecords", listFields, &list); err != nil {
+		return err
+	}
+	for i := range list.DomainRecords.Record {
+		r := list.DomainRecords.Record[i]
+		if strings.EqualFold(r.Type, "A") && strings.EqualFold(r.RR, sub) {
+			delFields := url.Values{"RecordId": {r.RecordID}}
+			return c.call(ctx, ErrDeleteRecord, "DeleteDomainRecord", delFields, nil)
+		}
+	}
+	return nil // 无记录 → 幂等成功。
+}

@@ -62,6 +62,8 @@ var (
 	ErrVerifyFailed = errors.New("dnsprovider: zone verification failed")
 	// ErrEnsureRecord 表示建/改 A 记录失败。
 	ErrEnsureRecord = errors.New("dnsprovider: ensure A record failed")
+	// ErrDeleteRecord 表示删除 A 记录失败(回收预览/子域名时清 DNS)。
+	ErrDeleteRecord = errors.New("dnsprovider: delete A record failed")
 	// ErrAllocate 表示子域名分配失败(多次随机仍冲突 / 建记录失败 / 建路由失败)。
 	ErrAllocate = errors.New("dnsprovider: allocate subdomain failed")
 )
@@ -90,6 +92,8 @@ type CreateInput struct {
 type DNSClient interface {
 	// EnsureARecord 为 zone(根域)下的 name(FQDN)建/改 A 记录指向 ip(幂等 upsert)。
 	EnsureARecord(ctx context.Context, zone, name, ip string) error
+	// DeleteARecord 删除 zone(根域)下 name(FQDN)的 A 记录(回收子域名时清 DNS;幂等:无记录视为成功)。
+	DeleteARecord(ctx context.Context, zone, name string) error
 	// VerifyZone 校验当前凭据可管理 zone(根域),失败返回人话错误(绝不含 token)。
 	VerifyZone(ctx context.Context, zone string) error
 }
@@ -106,6 +110,8 @@ type Service interface {
 	Delete(ctx context.Context, id string) error
 	// Verify 取该提供商凭据明文 → 经 DNSClient 校验 zone 可管理。token 用完即弃,绝不外泄。
 	Verify(ctx context.Context, id string) error
+	// DeleteSubdomainRecord 删除该提供商根域下 fqdn 的 A 记录(回收预览/子域名时清 DNS;幂等)。
+	DeleteSubdomainRecord(ctx context.Context, providerID, fqdn string) error
 	// AllocateSubdomain 瞬时分配子域名(E3.3 + E3.4):挑 app-<6char>.<baseDomain> → 建 A 记录
 	// 指向 hostIP → 创建一条 DNS-01 反代路由(证书即刻可签)。返回新建的反代路由。
 	AllocateSubdomain(ctx context.Context, in AllocateInput) (*RouteRef, error)

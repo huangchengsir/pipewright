@@ -14,7 +14,7 @@
   证书状态由后端回读(Caddy),前端只展示;reload/签发是后端职责。本面板按需懒加载:
   父组件首次切到 domains tab 才挂载,挂载即拉一次路由列表。
 */
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NIcon } from 'naive-ui'
 import {
@@ -354,6 +354,42 @@ async function toggleEnabled(r: ProxyRoute): Promise<void> {
     setBusy(r.id, false)
   }
 }
+
+// ─── pending 证书自动轮询 ────────────────────────────────────────────────────────
+// 证书 DNS-01/HTTP-01 签发是异步的(绑定后约数十秒才就绪),后端 Create 只置 pending,
+// 不会主动回探。没有这个轮询,卡片会一直停在「申请中」直到用户手点刷新 —— 体验上像卡死。
+// 这里每 POLL_MS 静默重探所有 enabled 且仍 pending 的路由(不弹 toast、不置 busy),
+// 全部签发完(无 pending)即自然空转;新绑定的路由下一拍自动纳入。
+const POLL_MS = 5000
+let pollTimer: ReturnType<typeof setInterval> | null = null
+let polling = false
+
+async function pollPendingCerts(): Promise<void> {
+  if (polling) return
+  const pend = routes.value.filter((r) => r.enabled && r.certStatus === 'pending')
+  if (!pend.length) return
+  polling = true
+  try {
+    await Promise.all(
+      pend.map(async (r) => {
+        try {
+          replaceRoute(await refreshProxyRoute(r.id))
+        } catch {
+          /* 静默:本拍失败不打扰用户,下一拍再试 */
+        }
+      }),
+    )
+  } finally {
+    polling = false
+  }
+}
+
+onMounted(() => {
+  pollTimer = setInterval(pollPendingCerts, POLL_MS)
+})
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer)
+})
 
 async function refresh(r: ProxyRoute): Promise<void> {
   if (isBusy(r.id)) return

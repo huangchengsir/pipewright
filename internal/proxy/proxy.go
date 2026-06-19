@@ -18,6 +18,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net"
@@ -389,11 +390,80 @@ func (s *service) RefreshStatus(ctx context.Context, id string) (*Route, error) 
 	if err != nil {
 		return nil, err
 	}
+	// 优先经 SSH 直接读 Caddy 容器里已签发的证书文件来判定状态:这反映 Caddy 的真实证书态,
+	// 不受「Caddy 不在 443(被宿主 nginx 占用而映射到别的端口)/ 公网 DNS 未指向 / 探测方有本地代理」
+	// 等部署形态影响——公网 TLS 握手探测在这些场景会误报 pending/failed,而证书其实早已签发。
+	// 读不到(无 SSH / 容器无此域名证书文件 / 传输层错误)才回退到公网 443 握手探测。
+	if res, ok := s.probeCaddyCertViaSSH(ctx, r.ServerID, r.Domain); ok {
+		if err := s.store.setCertStatus(ctx, id, res.Status, res.Detail); err != nil {
+			return nil, err
+		}
+		return s.store.get(ctx, id)
+	}
 	res := s.prober.Probe(ctx, r.Domain)
 	if err := s.store.setCertStatus(ctx, id, res.Status, res.Detail); err != nil {
 		return nil, err
 	}
 	return s.store.get(ctx, id)
+}
+
+// probeCaddyCertViaSSH 经 target(SSH)进 pipewright-caddy 容器读该域名已签发的证书文件(仅证书公钥
+// 部分,绝不碰私钥),解析有效期/签发机构判定状态。ok=false 表示「读不到、判不了」,调用方据此回退公网探测。
+//   - 证书在有效期 → issued(detail 含签发机构 + 到期日)。
+//   - 证书文件在但不在有效期(临时证/尚未生效)→ pending。
+//   - 无 tg / serverID 空 / SSH 传输层错误 / 无该域名证书文件 → ok=false(回退公网探测)。
+func (s *service) probeCaddyCertViaSSH(ctx context.Context, serverID, domain string) (ProbeResult, bool) {
+	if s.tg == nil || strings.TrimSpace(serverID) == "" {
+		return ProbeResult{}, false
+	}
+	// Caddy 把通配符 *.example.com 的证书存为目录/文件名 wildcard_.example.com。
+	name := domain
+	if strings.HasPrefix(name, "*.") {
+		name = "wildcard_." + name[2:]
+	}
+	// 跨各 CA 目录 glob 该域名的叶子证书;仅 cat 公钥证书(.crt),绝不读 .key 私钥。
+	certGlob := "/data/caddy/certificates/*/" + name + "/" + name + ".crt"
+	out, err := s.tg.Exec(ctx, serverID, []string{
+		"docker", "exec", caddyContainer, "sh", "-c", "cat " + certGlob + " 2>/dev/null",
+	})
+	if err != nil || out == nil {
+		return ProbeResult{}, false // 传输层错误(SSH 不可达等)→ 回退
+	}
+	leaf := parseFirstCertPEM(out.Stdout)
+	if leaf == nil {
+		return ProbeResult{}, false // 还没有证书文件(可能仍在签发中)→ 回退公网探测
+	}
+	now := time.Now()
+	if now.Before(leaf.NotBefore) || now.After(leaf.NotAfter) {
+		return ProbeResult{Status: CertStatusPending, Detail: "证书不在有效期(可能仍在签发中)"}, true
+	}
+	issuer := strings.TrimSpace(leaf.Issuer.CommonName)
+	if issuer == "" && len(leaf.Issuer.Organization) > 0 {
+		issuer = leaf.Issuer.Organization[0]
+	}
+	detail := fmt.Sprintf("证书有效,到期 %s", leaf.NotAfter.UTC().Format("2006-01-02"))
+	if issuer != "" {
+		detail = fmt.Sprintf("已由 %s 签发,到期 %s", issuer, leaf.NotAfter.UTC().Format("2006-01-02"))
+	}
+	return ProbeResult{Status: CertStatusIssued, Detail: detail}, true
+}
+
+// parseFirstCertPEM 从 PEM 文本中解析第一张 CERTIFICATE。无有效证书返回 nil。
+func parseFirstCertPEM(pemText string) *x509.Certificate {
+	rest := []byte(pemText)
+	for {
+		var blk *pem.Block
+		blk, rest = pem.Decode(rest)
+		if blk == nil {
+			return nil
+		}
+		if blk.Type != "CERTIFICATE" {
+			continue
+		}
+		if cert, err := x509.ParseCertificate(blk.Bytes); err == nil {
+			return cert
+		}
+	}
 }
 
 // Update 校验入参 → 归一化 + bcrypt 口令 → 持久化高级配置 → apply(reload)。
@@ -817,6 +887,14 @@ func normalizeConfig(in RouteConfig) RouteConfig {
 // validateConfig 严格校验高级配置(关闭一切 Caddyfile 注入面)。
 func validateConfig(cfg RouteConfig) error {
 	for _, a := range cfg.Aliases {
+		// 通配符别名(*.example.com)合法,但与主域名同规则:必须走 DNS-01,需绑 DNS 提供商
+		// (HTTP-01 签不出泛域名)。前端在挂了 DNS 提供商时才允许填通配符别名,这里做后端兜底。
+		if isWildcardDomain(a) {
+			if cfg.DNSProviderID == "" {
+				return ErrWildcardNeedsDNS
+			}
+			continue
+		}
 		if validateDomain(a) != nil {
 			return ErrInvalidAlias
 		}

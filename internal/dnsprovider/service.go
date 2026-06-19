@@ -223,9 +223,10 @@ func (s *service) AllocateSubdomain(ctx context.Context, in AllocateInput) (*Rou
 		}
 		domain := "app-" + suffix + "." + p.BaseDomain
 
-		// 建 A 记录指向宿主机 IP(幂等)。Cloudflare 真实;DNSPod/alidns 桩返回未实现 → 直接上抛。
+		// 建 A 记录指向宿主机 IP(幂等)。确定性错误(未实现 / 凭据格式非法)直接上抛,不重试;
+		// 其余(瞬时网络 / API)记为 lastErr 后换下一个后缀重试。
 		if err := client.EnsureARecord(ctx, p.BaseDomain, domain, in.HostIP); err != nil {
-			if errors.Is(err, ErrProviderNotImplemented) {
+			if errors.Is(err, ErrProviderNotImplemented) || errors.Is(err, ErrInvalidCredential) {
 				return nil, err
 			}
 			lastErr = err

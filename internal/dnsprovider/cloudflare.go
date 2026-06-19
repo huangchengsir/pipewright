@@ -182,10 +182,17 @@ func (n notImplementedClient) VerifyZone(context.Context, string) error {
 }
 
 // newDNSClient 据提供商类型 + token 构造对应 DNSClient。transport/base 供测试注入(生产为 nil/空)。
+// Cloudflare / DNSPod / 阿里云 DNS 均为经 net/http 直连的真实实现(无 SDK)。
 func newDNSClient(providerType, token string, transport http.RoundTripper, base string) DNSClient {
 	switch providerType {
 	case TypeCloudflare:
 		return newCloudflareClient(token, transport, base)
+	case TypeDNSPod:
+		// token 为保险库里存的 "id,token" 原串(经典 DNSPod login_token);客户端请求时解析。
+		return newDNSPodClient(token, transport, base)
+	case TypeAliDNS:
+		// token 为保险库里存的 "accessKeyId,accessKeySecret" 原串;客户端请求时解析。
+		return newAliDNSClient(token, transport, base)
 	default:
 		return notImplementedClient{providerType: providerType}
 	}

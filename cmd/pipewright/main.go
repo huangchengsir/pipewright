@@ -491,6 +491,29 @@ func main() {
 	retentionSweeper.Start(context.Background())
 	log.Printf("[retention] 保留清理器已启动(每小时一扫;策略默认关,需在设置开启)")
 
+	// Per-PR 预览环境自动回收器(R4 E4.1 收尾):按固定间隔遍历 active 预览环境,查其 PR 是否
+	// 已 closed/merged,**确证已终结**才回收(删路由 + 标记 reclaimed)。安全铁律:一切不确定不回收
+	// (API 错误 / 缺凭据 / 未知平台 → unknown → 跳过)。间隔经 PIPEWRIGHT_PREVIEW_SWEEP_INTERVAL
+	// 覆盖(Go duration,如 "10m";默认 5m);PR 状态读取的 API base 复用 PR 回写的同名 env 覆盖。
+	// checker 复用项目凭据(vault)+ 仓库地址识别 GitHub/Gitee;无凭据/未知平台时自动降级为不回收。
+	previewSweepInterval := 5 * time.Minute
+	if v := strings.TrimSpace(os.Getenv("PIPEWRIGHT_PREVIEW_SWEEP_INTERVAL")); v != "" {
+		if d, perr := time.ParseDuration(v); perr == nil && d > 0 {
+			previewSweepInterval = d
+		} else {
+			log.Printf("[previewenv] 警告:PIPEWRIGHT_PREVIEW_SWEEP_INTERVAL=%q 非法(须为正 Go duration),用默认 %s", v, previewSweepInterval)
+		}
+	}
+	previewChecker := previewenv.NewPRStateChecker(
+		&previewRepoResolver{projects: projectSvc, vault: credVault},
+		&http.Client{Timeout: 10 * time.Second},
+	).WithBaseURLs(
+		strings.TrimSpace(os.Getenv("PIPEWRIGHT_PR_STATUS_GITHUB_BASE")),
+		strings.TrimSpace(os.Getenv("PIPEWRIGHT_PR_STATUS_GITEE_BASE")))
+	previewSweeper := previewenv.NewSweeper(previewSvc, previewChecker, previewSweepInterval)
+	previewSweeper.Start(context.Background())
+	log.Printf("[previewenv] 预览环境自动回收器已启动(每 %s 一扫;仅回收确证 PR 已关闭/合并的环境)", previewSweepInterval)
+
 	// 装配只读源码读取器(Story 3.6;FR-4 预埋):go-git 浅克隆读 tree/blob;严格 SSRF 收口;
 	// 克隆失败优雅降级(不致命)。无 init 副作用/不驻留。
 	sourceReader := httpapi.NewSourceReader()
@@ -627,6 +650,7 @@ func main() {
 	// HTTP 停机后停 worker pool:取消在途运行执行,等 worker 退出(随 shutdownCtx 超时)。
 	cronScheduler.Stop()
 	retentionSweeper.Stop()
+	previewSweeper.Stop()
 	pool.Stop(shutdownCtx)
 	log.Printf("[run] worker pool stopped")
 }
@@ -791,4 +815,26 @@ type previewRouteDeleter struct{ proxy proxy.Service }
 
 func (d *previewRouteDeleter) DeleteRoute(ctx context.Context, routeID string) error {
 	return d.proxy.Delete(ctx, routeID)
+}
+
+// previewRepoResolver 适配 previewenv.ProjectRepoResolver:把项目 id 解析为「仓库地址 + 平台令牌」,
+// 供自动回收 sweeper 据此查 PR 状态。token 经 vault 即取即用,绝不进 URL/日志。
+// 避免 previewenv import project/vault 形成环。
+type previewRepoResolver struct {
+	projects project.Service
+	vault    vault.Vault
+}
+
+func (r *previewRepoResolver) Resolve(ctx context.Context, projectID string) (string, string, error) {
+	proj, err := r.projects.Get(ctx, projectID)
+	if err != nil {
+		return "", "", err
+	}
+	token := ""
+	if r.vault != nil && strings.TrimSpace(proj.CredentialID) != "" {
+		if tok, terr := r.vault.Reveal(proj.CredentialID); terr == nil {
+			token = tok
+		}
+	}
+	return proj.RepoURL, token, nil
 }

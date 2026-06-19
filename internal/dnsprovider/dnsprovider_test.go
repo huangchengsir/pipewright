@@ -345,16 +345,19 @@ func TestAllocateSubdomainRejectsBadHostIP(t *testing.T) {
 	}
 }
 
-func TestAllocateSubdomainDNSPodNotImplemented(t *testing.T) {
+// DNSPod / 阿里云 现已是真实实现;若保险库里存的凭据格式不合约定(DNSPod 须 "id,token"),
+// AllocateSubdomain 应在建 A 记录阶段返回 ErrInvalidCredential 且不建任何路由。
+func TestAllocateSubdomainDNSPodBadCredential(t *testing.T) {
 	ctx := context.Background()
 	rc := &stubRouteCreator{}
+	// "dp-token" 无逗号 → 非法 DNSPod 凭据。
 	svc := newTestService(t, stubVault{tokens: map[string]string{"cred-1": "dp-token"}}, rc, prodDialFactory)
 	p, _ := svc.Create(ctx, CreateInput{Type: "dnspod", Name: "DP", CredentialID: "cred-1", BaseDomain: "example.com"})
 	_, err := svc.AllocateSubdomain(ctx, AllocateInput{
 		ProviderID: p.ID, ServerID: "srv-1", UpstreamContainer: "web", UpstreamPort: 80, HostIP: "203.0.113.5",
 	})
-	if !errors.Is(err, ErrProviderNotImplemented) {
-		t.Fatalf("DNSPod 自动建 A 记录应 ErrProviderNotImplemented, got %v", err)
+	if !errors.Is(err, ErrInvalidCredential) {
+		t.Fatalf("DNSPod 坏凭据应 ErrInvalidCredential, got %v", err)
 	}
 	if len(rc.calls) != 0 {
 		t.Fatalf("未建 A 记录就不应建路由")

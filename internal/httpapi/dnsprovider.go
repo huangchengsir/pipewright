@@ -66,6 +66,8 @@ func writeDNSProviderError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnprocessableEntity, "credential_error", "引用的 API 凭据不存在")
 	case errors.Is(err, dnsprovider.ErrVaultUnconfigured):
 		writeError(w, http.StatusServiceUnavailable, "vault_unconfigured", "保险库未配置 master key,无法取 DNS 凭据")
+	case errors.Is(err, dnsprovider.ErrInvalidCredential):
+		writeError(w, http.StatusBadRequest, "invalid_dns_credential", "DNS 凭据格式非法(DNSPod 填 ID,Token;阿里云填 AccessKeyId,AccessKeySecret)")
 	case errors.Is(err, dnsprovider.ErrProviderNotImplemented):
 		writeError(w, http.StatusNotImplemented, "not_implemented", "该提供商暂未实现自动建 A 记录(DNS-01 证书签发仍可用,请手动添加解析)")
 	case errors.Is(err, dnsprovider.ErrVerifyFailed):

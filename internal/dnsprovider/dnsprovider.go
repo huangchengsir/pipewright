@@ -6,9 +6,10 @@
 //
 // 能力:
 //   - DNSClient 抽象「为某域建/改 A 记录」「校验某 zone 可管理」(注入便于单测,不触真网络)。
-//     Cloudflare 经 net/http 直连 API 真实实现;DNSPod / 阿里云 DNS 暂返回 ErrProviderNotImplemented
-//     的「自动 A 记录」桩(但三者的 DNS-01 通配符证书签发都能用 —— 那走 Caddy 镜像内的 DNS 插件,
-//     与本包的自动建 A 记录正交)。
+//     Cloudflare / DNSPod / 阿里云 DNS 三家均经 net/http 直连各自 API 真实实现(无 SDK):
+//     Cloudflare 用 v4 REST(Bearer token);DNSPod 用经典 dnsapi.cn form-POST(login_token=id,token);
+//     阿里云用 RPC v1(HMAC-SHA1 签名,凭据 accessKeyId,accessKeySecret)。
+//     三家的 DNS-01 通配符证书签发也都能用(走 Caddy 镜像内的 DNS 插件,与自动建 A 记录正交)。
 //   - AllocateSubdomain:瞬时挑一个可读子域名 app-<6char>.<baseDomain> → 自动建 A 记录指向宿主机
 //     公网 IP → 创建一条 DNS-01 的反代路由(证书即刻可签)。
 //
@@ -28,9 +29,9 @@ import (
 const (
 	// TypeCloudflare 是 Cloudflare DNS(自动 A 记录已真实实现)。
 	TypeCloudflare = "cloudflare"
-	// TypeDNSPod 是腾讯云 DNSPod(DNS-01 证书可用;自动 A 记录暂未实现)。
+	// TypeDNSPod 是腾讯云 DNSPod(自动 A 记录已真实实现;凭据格式 "id,token")。
 	TypeDNSPod = "dnspod"
-	// TypeAliDNS 是阿里云 DNS(DNS-01 证书可用;自动 A 记录暂未实现)。
+	// TypeAliDNS 是阿里云 DNS(自动 A 记录已真实实现;凭据格式 "accessKeyId,accessKeySecret")。
 	TypeAliDNS = "alidns"
 )
 
@@ -54,6 +55,9 @@ var (
 	// ErrProviderNotImplemented 表示该提供商的某能力(如自动建 A 记录)尚未实现。
 	// 注意:DNS-01 通配符证书签发对三种提供商都可用(走 Caddy 镜像内 DNS 插件),不受此影响。
 	ErrProviderNotImplemented = errors.New("dnsprovider: provider capability not implemented")
+	// ErrInvalidCredential 表示保险库里存的凭据格式不符合该提供商约定(如 DNSPod 须 "id,token"、
+	// 阿里云须 "accessKeyId,accessKeySecret")。错误体绝不含凭据任何片段。httpapi 层可映射 400。
+	ErrInvalidCredential = errors.New("dnsprovider: invalid provider credential format")
 	// ErrVerifyFailed 表示 zone 校验失败(token 无效 / 无该 zone 权限 / API 不可达)。
 	ErrVerifyFailed = errors.New("dnsprovider: zone verification failed")
 	// ErrEnsureRecord 表示建/改 A 记录失败。

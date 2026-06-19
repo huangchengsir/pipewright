@@ -3,6 +3,7 @@ package previewenv
 import (
 	"context"
 	"database/sql"
+	"log"
 	"strings"
 	"time"
 )
@@ -128,6 +129,45 @@ func (s *service) Reclaim(ctx context.Context, projectID string, prNumber int) e
 		_ = s.routeDeleter.DeleteRoute(ctx, env.RouteID)
 	}
 	return s.store.markReclaimed(ctx, env.ID, time.Now().UTC())
+}
+
+// SweepReclaim 执行一轮自动回收:遍历全部 active 预览环境,对每个用 checker 查其 PR 状态;
+// **仅当确证 closed / merged** 时回收(删路由 + 标记 reclaimed);open / unknown / 查询出错 一律跳过。
+// 返回本轮回收条数。安全铁律:绝不回收未能确证已关闭/合并的环境(checker 自身对一切不确定回 unknown)。
+//
+// 配置门控:仅回收**所属项目仍开启预览**的环境;项目未开启预览(配置缺失 / Enabled=false)→ 跳过
+// (该环境的路由实际已不再由预览逻辑续建,留给手动回收 / 重新开启后处理,绝不在此误删)。
+// 幂等:已是 reclaimed 的环境不在 active 列表内,天然不重复回收;回收过程中环境消失(并发)→ 静默跳过。
+func (s *service) SweepReclaim(ctx context.Context, checker PRStateChecker) (int, error) {
+	if checker == nil {
+		return 0, nil
+	}
+	envs, err := s.store.listActive(ctx)
+	if err != nil {
+		return 0, err
+	}
+	reclaimed := 0
+	for i := range envs {
+		env := envs[i]
+		// 配置门控:项目未开启预览 → 跳过(不在此误删历史环境)。
+		cfg, cerr := s.store.getConfig(ctx, env.ProjectID)
+		if cerr != nil || cfg == nil || !cfg.Enabled {
+			continue
+		}
+		state, serr := checker.State(ctx, env.ProjectID, env.PRNumber)
+		if serr != nil || !state.IsClosedOrMerged() {
+			// 查询出错 / open / unknown:绝不回收。
+			continue
+		}
+		if rerr := s.Reclaim(ctx, env.ProjectID, env.PRNumber); rerr != nil {
+			// 回收失败(含并发已被回收 → ErrNotFound):跳过本条,不计数。
+			continue
+		}
+		reclaimed++
+		log.Printf("[previewenv] 自动回收预览环境:project=%s pr=%d subdomain=%s state=%s",
+			env.ProjectID, env.PRNumber, env.Subdomain, state)
+	}
+	return reclaimed, nil
 }
 
 // defaultValidBase 是内置宽松根域校验(无 dnsprovider 依赖时兜底):至少一个点 + 非空。

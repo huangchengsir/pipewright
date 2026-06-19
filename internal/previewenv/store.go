@@ -53,6 +53,29 @@ func (s *Store) list(ctx context.Context, projectID string) ([]PreviewEnv, error
 	return out, nil
 }
 
+// listActive 返回全部 active 预览环境(创建时间倒序),供自动回收 sweeper 逐个核查 PR 状态。
+func (s *Store) listActive(ctx context.Context) ([]PreviewEnv, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+envColumns+` FROM preview_envs WHERE status = ? ORDER BY created_at DESC, id`, StatusActive)
+	if err != nil {
+		return nil, fmt.Errorf("previewenv: list active: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]PreviewEnv, 0)
+	for rows.Next() {
+		e, serr := scanEnv(rows)
+		if serr != nil {
+			return nil, serr
+		}
+		out = append(out, *e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("previewenv: iterate active: %w", err)
+	}
+	return out, nil
+}
+
 // get 读取单条预览环境;不存在 → ErrNotFound。
 func (s *Store) get(ctx context.Context, id string) (*PreviewEnv, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+envColumns+` FROM preview_envs WHERE id = ?`, id)

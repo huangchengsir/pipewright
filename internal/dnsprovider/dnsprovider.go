@@ -6,9 +6,10 @@
 //
 // 能力:
 //   - DNSClient 抽象「为某域建/改 A 记录」「校验某 zone 可管理」(注入便于单测,不触真网络)。
-//     Cloudflare 经 net/http 直连 API 真实实现;DNSPod / 阿里云 DNS 暂返回 ErrProviderNotImplemented
-//     的「自动 A 记录」桩(但三者的 DNS-01 通配符证书签发都能用 —— 那走 Caddy 镜像内的 DNS 插件,
-//     与本包的自动建 A 记录正交)。
+//     Cloudflare / DNSPod / 阿里云 DNS 三家均经 net/http 直连各自 API 真实实现(无 SDK):
+//     Cloudflare 用 v4 REST(Bearer token);DNSPod 用经典 dnsapi.cn form-POST(login_token=id,token);
+//     阿里云用 RPC v1(HMAC-SHA1 签名,凭据 accessKeyId,accessKeySecret)。
+//     三家的 DNS-01 通配符证书签发也都能用(走 Caddy 镜像内的 DNS 插件,与自动建 A 记录正交)。
 //   - AllocateSubdomain:瞬时挑一个可读子域名 app-<6char>.<baseDomain> → 自动建 A 记录指向宿主机
 //     公网 IP → 创建一条 DNS-01 的反代路由(证书即刻可签)。
 //
@@ -28,9 +29,9 @@ import (
 const (
 	// TypeCloudflare 是 Cloudflare DNS(自动 A 记录已真实实现)。
 	TypeCloudflare = "cloudflare"
-	// TypeDNSPod 是腾讯云 DNSPod(DNS-01 证书可用;自动 A 记录暂未实现)。
+	// TypeDNSPod 是腾讯云 DNSPod(自动 A 记录已真实实现;凭据格式 "id,token")。
 	TypeDNSPod = "dnspod"
-	// TypeAliDNS 是阿里云 DNS(DNS-01 证书可用;自动 A 记录暂未实现)。
+	// TypeAliDNS 是阿里云 DNS(自动 A 记录已真实实现;凭据格式 "accessKeyId,accessKeySecret")。
 	TypeAliDNS = "alidns"
 )
 
@@ -54,10 +55,15 @@ var (
 	// ErrProviderNotImplemented 表示该提供商的某能力(如自动建 A 记录)尚未实现。
 	// 注意:DNS-01 通配符证书签发对三种提供商都可用(走 Caddy 镜像内 DNS 插件),不受此影响。
 	ErrProviderNotImplemented = errors.New("dnsprovider: provider capability not implemented")
+	// ErrInvalidCredential 表示保险库里存的凭据格式不符合该提供商约定(如 DNSPod 须 "id,token"、
+	// 阿里云须 "accessKeyId,accessKeySecret")。错误体绝不含凭据任何片段。httpapi 层可映射 400。
+	ErrInvalidCredential = errors.New("dnsprovider: invalid provider credential format")
 	// ErrVerifyFailed 表示 zone 校验失败(token 无效 / 无该 zone 权限 / API 不可达)。
 	ErrVerifyFailed = errors.New("dnsprovider: zone verification failed")
 	// ErrEnsureRecord 表示建/改 A 记录失败。
 	ErrEnsureRecord = errors.New("dnsprovider: ensure A record failed")
+	// ErrDeleteRecord 表示删除 A 记录失败(回收预览/子域名时清 DNS)。
+	ErrDeleteRecord = errors.New("dnsprovider: delete A record failed")
 	// ErrAllocate 表示子域名分配失败(多次随机仍冲突 / 建记录失败 / 建路由失败)。
 	ErrAllocate = errors.New("dnsprovider: allocate subdomain failed")
 )
@@ -86,6 +92,8 @@ type CreateInput struct {
 type DNSClient interface {
 	// EnsureARecord 为 zone(根域)下的 name(FQDN)建/改 A 记录指向 ip(幂等 upsert)。
 	EnsureARecord(ctx context.Context, zone, name, ip string) error
+	// DeleteARecord 删除 zone(根域)下 name(FQDN)的 A 记录(回收子域名时清 DNS;幂等:无记录视为成功)。
+	DeleteARecord(ctx context.Context, zone, name string) error
 	// VerifyZone 校验当前凭据可管理 zone(根域),失败返回人话错误(绝不含 token)。
 	VerifyZone(ctx context.Context, zone string) error
 }
@@ -102,9 +110,16 @@ type Service interface {
 	Delete(ctx context.Context, id string) error
 	// Verify 取该提供商凭据明文 → 经 DNSClient 校验 zone 可管理。token 用完即弃,绝不外泄。
 	Verify(ctx context.Context, id string) error
+	// DeleteSubdomainRecord 删除该提供商根域下 fqdn 的 A 记录(回收预览/子域名时清 DNS;幂等)。
+	DeleteSubdomainRecord(ctx context.Context, providerID, fqdn string) error
 	// AllocateSubdomain 瞬时分配子域名(E3.3 + E3.4):挑 app-<6char>.<baseDomain> → 建 A 记录
 	// 指向 hostIP → 创建一条 DNS-01 反代路由(证书即刻可签)。返回新建的反代路由。
 	AllocateSubdomain(ctx context.Context, in AllocateInput) (*RouteRef, error)
+
+	// AllocateFQDN 为一个**指定的** FQDN(in.Subdomain,须落在提供商 base_domain 下)建 A 记录指向
+	// hostIP → 创建一条 DNS-01 反代路由(R4 E4.1 预览环境用:子域名确定而非随机)。返回新建路由引用。
+	// in.Subdomain 缺省/不在 base_domain 下 → ErrAllocate。
+	AllocateFQDN(ctx context.Context, in AllocateInput) (*RouteRef, error)
 
 	// ProviderType 返回某提供商的类型(供 proxy 校验 DNS-01 引用,不取 token)。
 	// 不存在 → ok=false。供 proxy.DNSResolver 适配。
@@ -124,6 +139,9 @@ type AllocateInput struct {
 	UpstreamPort      int
 	// HostIP 是宿主机公网 IP(由调用方/上层据 server 解析得出,非用户自由文本)。写入 A 记录指向它。
 	HostIP string
+	// Subdomain 是 AllocateFQDN 用的**指定** FQDN(如 pr-12-abcd.preview.example.com);
+	// AllocateSubdomain 不用此字段(它随机挑后缀)。须落在提供商 base_domain 下(后缀匹配校验)。
+	Subdomain string
 }
 
 // RouteRef 是 AllocateSubdomain 创建出的反代路由引用(避免本包 import proxy 形成环;

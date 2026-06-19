@@ -18,6 +18,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net"
@@ -32,6 +33,13 @@ import (
 // tls_mode / cert_status 枚举(DB 存小写字串;JSON 同名)。
 const (
 	tlsModeAuto = "auto"
+
+	// UpstreamKindContainer 表示上游为目标主机上的 docker 容器(默认 / 向后兼容):
+	// UpstreamContainer = 容器名,Caddy 把它接入共享网络并按容器名路由。空串归一化为本值。
+	UpstreamKindContainer = "container"
+	// UpstreamKindAddress 表示上游为任意地址(host:port):UpstreamContainer 存 HOST
+	// (IP / FQDN / host.docker.internal),Caddy 直接 reverse_proxy 到 host:port,不接网络。
+	UpstreamKindAddress = "address"
 
 	// CertStatusPending 表示证书尚未签发成功(刚建 / 仍在 LE 流程 / 临时证书)。
 	CertStatusPending = "pending"
@@ -57,6 +65,10 @@ var (
 	ErrInvalidContainer = errors.New("proxy: invalid upstream container")
 	// ErrInvalidPort 表示上游端口非法(非 1..65535)。
 	ErrInvalidPort = errors.New("proxy: upstream port must be in 1..65535")
+	// ErrInvalidUpstreamKind 表示上游类型非法(非 container | address)。
+	ErrInvalidUpstreamKind = errors.New("proxy: invalid upstream kind")
+	// ErrInvalidUpstreamHost 表示 address 上游的 HOST 非法(非 IP / FQDN / host.docker.internal)。
+	ErrInvalidUpstreamHost = errors.New("proxy: invalid upstream host")
 
 	// ErrPortConflict 表示目标主机 80/443 被占用,无法起 Caddy(LE 校验需 80)。
 	ErrPortConflict = errors.New("proxy: 80/443 端口被占用,无法启动反代(Let's Encrypt 校验需要 80)")
@@ -85,6 +97,17 @@ var (
 	ErrInvalidDNSProvider = errors.New("proxy: invalid dns provider reference")
 	// ErrInvalidPathRule 表示路径路由规则非法(路径未以 / 起 / 含危险字符 / 上游容器/端口非法)。
 	ErrInvalidPathRule = errors.New("proxy: invalid path rule")
+
+	// ErrInvalidUpstream 表示额外上游(负载均衡)条目非法(容器名/端口非法)。
+	ErrInvalidUpstream = errors.New("proxy: invalid additional upstream")
+	// ErrInvalidLBPolicy 表示负载均衡策略非白名单枚举。
+	ErrInvalidLBPolicy = errors.New("proxy: invalid load balancing policy")
+	// ErrInvalidHealthURI 表示健康检查路径非法(未以 / 起 / 含危险字符)。
+	ErrInvalidHealthURI = errors.New("proxy: invalid health_uri")
+	// ErrInvalidHealthInterval 表示健康检查间隔无法被 time.ParseDuration 解析。
+	ErrInvalidHealthInterval = errors.New("proxy: invalid health_interval")
+	// ErrInvalidTCPPassthrough 表示 TCP 透传配置非法(监听/上游端口越界 / 上游容器名非法)。
+	ErrInvalidTCPPassthrough = errors.New("proxy: invalid tcp passthrough config")
 )
 
 // Route 是一条反代路由领域模型(冻结契约)。
@@ -118,10 +141,43 @@ type PathRule struct {
 	UpstreamPort      int    `json:"upstreamPort"`      // 该路径段的上游端口
 }
 
+// Upstream 是一条额外上游(R4 E4.2 负载均衡;渲染为 reverse_proxy 行内追加的 container:port)。冻结契约。
+// 主上游仍是 Route.UpstreamContainer:UpstreamPort;这里列的是「主上游之外」的后端,与主上游一起
+// 进同一个 reverse_proxy(由 LBPolicy 在它们之间分流)。
+type Upstream struct {
+	Container string `json:"container"` // 上游容器名(同主上游容器名校验)
+	Port      int    `json:"port"`      // 上游端口(1..65535)
+}
+
+// 负载均衡策略枚举(白名单;DB 存小写串,渲染进 lb_policy)。
+const (
+	// LBPolicyFirst 表示「按顺序取第一个可用上游」(Caddy 默认;等价不设 lb_policy)。
+	LBPolicyFirst = "first"
+	// LBPolicyRoundRobin 表示轮询。
+	LBPolicyRoundRobin = "round_robin"
+	// LBPolicyLeastConn 表示最少连接。
+	LBPolicyLeastConn = "least_conn"
+	// LBPolicyRandom 表示随机。
+	LBPolicyRandom = "random"
+)
+
+// TCPConfig 是一条 TCP 透传配置(R4 E4.3;经 Caddy 自构建镜像内的 caddy-l4 渲染进 layer4 全局块)。冻结契约。
+// TCP 路由不是 HTTP 站点块:它在 Caddyfile 全局选项里声明一个 layer4 监听端口 → 代理到上游容器:端口。
+type TCPConfig struct {
+	ListenPort        int    `json:"listenPort"`        // Caddy 在反代主机上监听的 TCP 端口(1..65535)
+	UpstreamContainer string `json:"upstreamContainer"` // 上游容器名(同主上游容器名校验)
+	UpstreamPort      int    `json:"upstreamPort"`      // 上游端口(1..65535)
+}
+
 // RouteConfig 是一条路由的「高级配置」(R2;持久化为 config 列 JSON)。冻结契约。
 // 注意:BasicAuthHash 的 JSON tag 为 `-`,绝不出现在 API DTO;但**持久化**到 DB 时必须保留它,
 // 故 store 层用独立的存储表示(storedConfig)序列化,不能直接复用本结构体写库。
 type RouteConfig struct {
+	// UpstreamKind 是主上游的类型判别字段(放 config JSON,免迁移):
+	//   - "container"(默认 / 空串归一化):Route.UpstreamContainer 为容器名,接入共享网络按名路由。
+	//   - "address":Route.UpstreamContainer 存 HOST(IP/FQDN/host.docker.internal),直接反代,不接网络。
+	// 仅作用于「主上游」;额外上游(Upstreams[])与路径/TCP 透传仍为 container 语义。
+	UpstreamKind    string     `json:"upstreamKind,omitempty"`  // "" => "container"(向后兼容)
 	Aliases         []string   `json:"aliases,omitempty"`       // 同站点块额外服务的 FQDN(如 www)
 	ForceHTTPS      bool       `json:"forceHttps"`              // MVP 文档化 no-op:Caddy 对带域名站点默认即强制 HTTP→HTTPS,故此开关恒为「已强制」语义;字段保留供前端展示/未来 auto_https off 扩展
 	HSTS            bool       `json:"hsts"`                    //
@@ -134,6 +190,17 @@ type RouteConfig struct {
 	Redirects       []Redirect `json:"redirects,omitempty"`     //
 	DNSProviderID   string     `json:"dnsProviderId,omitempty"` // R3:绑定的 DNS 提供商(走 DNS-01;通配符必需)。空 = HTTP-01
 	PathRules       []PathRule `json:"pathRules,omitempty"`     // R3 E3.5:路径路由(/api→A、/→B)
+
+	// R4 E4.2:多上游负载均衡 + 健康检查故障转移。
+	Upstreams      []Upstream `json:"upstreams,omitempty"`      // 主上游之外的额外后端(与主上游一起进同一 reverse_proxy)
+	LBPolicy       string     `json:"lbPolicy,omitempty"`       // round_robin|least_conn|random|first;空/first = 不渲染 lb_policy
+	HealthURI      string     `json:"healthUri,omitempty"`      // 主动健康检查路径(如 /healthz);空 = 不启用
+	HealthInterval string     `json:"healthInterval,omitempty"` // 健康检查间隔(time.ParseDuration,如 10s);空 = Caddy 默认
+
+	// R4 E4.3:WS / gRPC / TCP 透传。
+	WebSocket      bool       `json:"websocket,omitempty"`      // WS 在 Caddy reverse_proxy 中天然透传;此 flag 仅为前端确认/文档化(no-op 渲染)
+	GRPC           bool       `json:"grpc,omitempty"`           // gRPC:渲染 reverse_proxy { transport http { versions h2c 2 } }
+	TCPPassthrough *TCPConfig `json:"tcpPassthrough,omitempty"` // TCP 透传(caddy-l4);非 HTTP 站点块,渲染进 layer4 全局块
 }
 
 // RouteWithServer 是一条路由 + 其所属目标主机展示名(证书总览大盘用)。
@@ -142,12 +209,26 @@ type RouteWithServer struct {
 	ServerName string
 }
 
+// CaddyStatus 是某主机上反代(pipewright-caddy)运行环境的探测快照(冻结契约)。
+// 供前端在「绑定首个域名(会隐式起 Caddy 容器)」前展示知情同意,以及提供「移除反代环境」入口。
+type CaddyStatus struct {
+	ServerID   string // 目标主机 id
+	Installed  bool   // pipewright-caddy 容器是否存在(docker inspect 成功)
+	Running    bool   // 容器是否正在运行
+	Image      string // 容器镜像(docker inspect 读)
+	Ports      string // 发布端口摘要,如 "80,443"(探测到的;读不到给 "",前端按 80/443 兜底文案)
+	RouteCount int    // 该主机当前路由数(DB count;帮前端提示移除影响)
+}
+
 // CreateInput 是创建路由的入参。
 type CreateInput struct {
 	ServerID          string
 	Domain            string
 	UpstreamContainer string
 	UpstreamPort      int
+	// UpstreamKind ∈ "container"(默认/空) | "address"。container → UpstreamContainer 为容器名;
+	// address → UpstreamContainer 为 HOST(IP/FQDN/host.docker.internal)。
+	UpstreamKind string
 	// DNSProviderID(R3)非空 → 该路由走 DNS-01(通配符域名必需)。空 = HTTP-01。
 	DNSProviderID string
 }
@@ -156,6 +237,7 @@ type CreateInput struct {
 type UpdateInput struct {
 	UpstreamContainer string      // 空 = 保持不变
 	UpstreamPort      int         // 0 = 保持不变
+	UpstreamKind      string      // ""/"container" | "address";归一化进 Config.UpstreamKind
 	Config            RouteConfig //
 	BasicAuthPassword string      // 明文;非空 → bcrypt 哈希入 Config.BasicAuthHash;若 BasicAuthUser=="" → 清空认证
 }
@@ -176,6 +258,15 @@ type Service interface {
 	Update(ctx context.Context, id string, in UpdateInput) (*Route, error)
 	// Overview 返回全部路由 + 所属主机展示名(跨主机证书总览大盘用)。
 	Overview(ctx context.Context) ([]RouteWithServer, error)
+	// CaddyStatus 探测某主机上的反代容器(pipewright-caddy)环境:是否已安装/运行/镜像/端口 + 该主机路由数。
+	// 容器不存在不报错(Installed:false);仅传输/SSH 层错误才返回 error(由 httpapi 映射 502/503)。
+	CaddyStatus(ctx context.Context, serverID string) (*CaddyStatus, error)
+	// PrepareCaddy 显式部署反代环境(ensureCaddy)而无需先绑域名,返回部署后的 CaddyStatus。
+	// 空 serverID → ErrEmptyServerID;80/443 冲突等人话错误由 ensureCaddy 透出。
+	PrepareCaddy(ctx context.Context, serverID string) (*CaddyStatus, error)
+	// RemoveCaddy 停止并删除某主机上的反代容器(pipewright-caddy);保留命名卷(避免重签触发 LE 限速)。
+	// 幂等:容器已不存在也成功。
+	RemoveCaddy(ctx context.Context, serverID string) error
 }
 
 // certProber 抽象「对 域名:443 做 TLS 握手并回报证书状态」的能力(注入便于单测,不触真网络)。
@@ -233,6 +324,7 @@ func (s *service) Create(ctx context.Context, in CreateInput) (*Route, error) {
 	in.ServerID = strings.TrimSpace(in.ServerID)
 	in.Domain = strings.ToLower(strings.TrimSpace(in.Domain))
 	in.UpstreamContainer = strings.TrimSpace(in.UpstreamContainer)
+	in.UpstreamKind = normalizeUpstreamKind(in.UpstreamKind)
 	in.DNSProviderID = strings.TrimSpace(in.DNSProviderID)
 	if err := validateCreate(in); err != nil {
 		return nil, err
@@ -249,9 +341,10 @@ func (s *service) Create(ctx context.Context, in CreateInput) (*Route, error) {
 	if err := s.store.insert(ctx, r); err != nil {
 		return nil, err
 	}
-	// 2) 编排:保证 Caddy 就绪 → 上游接入共享网络 → 渲染 + 下发 + reload。
+	// 2) 编排:保证 Caddy 就绪 → (仅 container 上游)接入共享网络 → 渲染 + 下发 + reload。
+	//    address 上游为任意 host:port,Caddy 直接反代,无需也不可 docker network connect。
 	//    编排失败回滚刚插入的路由(避免留下「库里有、反代上没有」的孤儿)。
-	if err := s.ensureAndApply(ctx, r.ServerID, in.UpstreamContainer); err != nil {
+	if err := s.ensureAndApply(ctx, r.ServerID, upstreamForConnect(in.UpstreamKind, in.UpstreamContainer)); err != nil {
 		_ = s.store.del(ctx, r.ID)
 		return nil, err
 	}
@@ -282,9 +375,9 @@ func (s *service) SetEnabled(ctx context.Context, id string, on bool) error {
 	if err := s.store.setEnabled(ctx, id, on); err != nil {
 		return err
 	}
-	// 启用时确保上游已接入网络;停用时无需(渲染时自然摘除)。
+	// 启用时确保上游已接入网络(仅 container 上游;address 上游不接网络);停用时无需(渲染时自然摘除)。
 	if on {
-		if err := s.ensureAndApply(ctx, r.ServerID, r.UpstreamContainer); err != nil {
+		if err := s.ensureAndApply(ctx, r.ServerID, upstreamForConnect(r.Config.UpstreamKind, r.UpstreamContainer)); err != nil {
 			return err
 		}
 		return nil
@@ -297,11 +390,80 @@ func (s *service) RefreshStatus(ctx context.Context, id string) (*Route, error) 
 	if err != nil {
 		return nil, err
 	}
+	// 优先经 SSH 直接读 Caddy 容器里已签发的证书文件来判定状态:这反映 Caddy 的真实证书态,
+	// 不受「Caddy 不在 443(被宿主 nginx 占用而映射到别的端口)/ 公网 DNS 未指向 / 探测方有本地代理」
+	// 等部署形态影响——公网 TLS 握手探测在这些场景会误报 pending/failed,而证书其实早已签发。
+	// 读不到(无 SSH / 容器无此域名证书文件 / 传输层错误)才回退到公网 443 握手探测。
+	if res, ok := s.probeCaddyCertViaSSH(ctx, r.ServerID, r.Domain); ok {
+		if err := s.store.setCertStatus(ctx, id, res.Status, res.Detail); err != nil {
+			return nil, err
+		}
+		return s.store.get(ctx, id)
+	}
 	res := s.prober.Probe(ctx, r.Domain)
 	if err := s.store.setCertStatus(ctx, id, res.Status, res.Detail); err != nil {
 		return nil, err
 	}
 	return s.store.get(ctx, id)
+}
+
+// probeCaddyCertViaSSH 经 target(SSH)进 pipewright-caddy 容器读该域名已签发的证书文件(仅证书公钥
+// 部分,绝不碰私钥),解析有效期/签发机构判定状态。ok=false 表示「读不到、判不了」,调用方据此回退公网探测。
+//   - 证书在有效期 → issued(detail 含签发机构 + 到期日)。
+//   - 证书文件在但不在有效期(临时证/尚未生效)→ pending。
+//   - 无 tg / serverID 空 / SSH 传输层错误 / 无该域名证书文件 → ok=false(回退公网探测)。
+func (s *service) probeCaddyCertViaSSH(ctx context.Context, serverID, domain string) (ProbeResult, bool) {
+	if s.tg == nil || strings.TrimSpace(serverID) == "" {
+		return ProbeResult{}, false
+	}
+	// Caddy 把通配符 *.example.com 的证书存为目录/文件名 wildcard_.example.com。
+	name := domain
+	if strings.HasPrefix(name, "*.") {
+		name = "wildcard_." + name[2:]
+	}
+	// 跨各 CA 目录 glob 该域名的叶子证书;仅 cat 公钥证书(.crt),绝不读 .key 私钥。
+	certGlob := "/data/caddy/certificates/*/" + name + "/" + name + ".crt"
+	out, err := s.tg.Exec(ctx, serverID, []string{
+		"docker", "exec", caddyContainer, "sh", "-c", "cat " + certGlob + " 2>/dev/null",
+	})
+	if err != nil || out == nil {
+		return ProbeResult{}, false // 传输层错误(SSH 不可达等)→ 回退
+	}
+	leaf := parseFirstCertPEM(out.Stdout)
+	if leaf == nil {
+		return ProbeResult{}, false // 还没有证书文件(可能仍在签发中)→ 回退公网探测
+	}
+	now := time.Now()
+	if now.Before(leaf.NotBefore) || now.After(leaf.NotAfter) {
+		return ProbeResult{Status: CertStatusPending, Detail: "证书不在有效期(可能仍在签发中)"}, true
+	}
+	issuer := strings.TrimSpace(leaf.Issuer.CommonName)
+	if issuer == "" && len(leaf.Issuer.Organization) > 0 {
+		issuer = leaf.Issuer.Organization[0]
+	}
+	detail := fmt.Sprintf("证书有效,到期 %s", leaf.NotAfter.UTC().Format("2006-01-02"))
+	if issuer != "" {
+		detail = fmt.Sprintf("已由 %s 签发,到期 %s", issuer, leaf.NotAfter.UTC().Format("2006-01-02"))
+	}
+	return ProbeResult{Status: CertStatusIssued, Detail: detail}, true
+}
+
+// parseFirstCertPEM 从 PEM 文本中解析第一张 CERTIFICATE。无有效证书返回 nil。
+func parseFirstCertPEM(pemText string) *x509.Certificate {
+	rest := []byte(pemText)
+	for {
+		var blk *pem.Block
+		blk, rest = pem.Decode(rest)
+		if blk == nil {
+			return nil
+		}
+		if blk.Type != "CERTIFICATE" {
+			continue
+		}
+		if cert, err := x509.ParseCertificate(blk.Bytes); err == nil {
+			return cert
+		}
+	}
 }
 
 // Update 校验入参 → 归一化 + bcrypt 口令 → 持久化高级配置 → apply(reload)。
@@ -322,8 +484,12 @@ func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Route
 		port = in.UpstreamPort
 	}
 
-	// 2) 归一化高级配置(域名小写去空白 / 去重 / 状态码默认)。
+	// 2) 归一化高级配置(域名小写去空白 / 去重 / 状态码默认 / 上游类型归一)。
 	cfg := normalizeConfig(in.Config)
+	// 上游类型:入参 UpstreamKind 优先(显式),否则沿用 config 里的(normalizeConfig 已归一化)。
+	if k := strings.ToLower(strings.TrimSpace(in.UpstreamKind)); k != "" {
+		cfg.UpstreamKind = k
+	}
 
 	// 3) Basic Auth:用户名为空 → 清认证;否则若给了明文口令则 bcrypt 哈希,未给则沿用旧哈希。
 	if cfg.BasicAuthUser == "" {
@@ -343,11 +509,8 @@ func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Route
 	if err := validateConfig(cfg); err != nil {
 		return nil, err
 	}
-	if !containerRe.MatchString(container) {
-		return nil, ErrInvalidContainer
-	}
-	if port < 1 || port > 65535 {
-		return nil, ErrInvalidPort
+	if err := validateUpstream(cfg.UpstreamKind, container, port); err != nil {
+		return nil, err
 	}
 	// R3:通配符主域名必须始终绑定 DNS 提供商(不能在 Update 里把它摘掉)。
 	if isWildcardDomain(r.Domain) && cfg.DNSProviderID == "" {
@@ -366,8 +529,11 @@ func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Route
 	}
 
 	// 6) 重渲染并下发(只对 enabled 路由生效;停用路由改配置不触网 apply 也无妨,仍持久化)。
+	//    走 ensureAndApply 而非裸 apply:高级设置可能新增/改动 TCP 透传监听端口,需经 ensureCaddy
+	//    确保 Caddy 容器对宿主发布这些端口(缺则带「既有映射 ∪ TCP 端口」重建),否则 layer4 监听
+	//    不可达、且无 l4 的旧镜像会让 apply 校验失败。container 传 "" —— 主上游在 Create 时已接网络。
 	if r.Enabled {
-		if err := s.apply(ctx, r.ServerID); err != nil {
+		if err := s.ensureAndApply(ctx, r.ServerID, ""); err != nil {
 			return nil, err
 		}
 	}
@@ -402,16 +568,102 @@ func (s *service) Overview(ctx context.Context) ([]RouteWithServer, error) {
 	return out, nil
 }
 
-// ensureAndApply 是 Create/启用 路径的编排:保证 Caddy 就绪 → 接入上游 → apply。
+// CaddyStatus 探测某主机反代容器环境 + 统计该主机路由数。
+// 容器缺失非错误(Installed:false);传输/SSH 错误才返回 error。端口为 best-effort,读不到给 ""。
+func (s *service) CaddyStatus(ctx context.Context, serverID string) (*CaddyStatus, error) {
+	serverID = strings.TrimSpace(serverID)
+	if serverID == "" {
+		return nil, ErrEmptyServerID
+	}
+	st, err := inspectCaddy(ctx, s.tg, serverID)
+	if err != nil {
+		return nil, err
+	}
+	st.ServerID = serverID
+	// 路由数:DB count(best-effort;list 失败不掩盖容器探测结果,计 0)。
+	if routes, lerr := s.store.list(ctx, serverID); lerr == nil {
+		st.RouteCount = len(routes)
+	}
+	return st, nil
+}
+
+// RemoveCaddy 停止并删除某主机反代容器(保留命名卷)。幂等:已不存在也成功。
+// 注意:库中既有路由不删,但在 Caddy 重新就绪(下次绑域名)前不会再被反代;前端会在调用前提醒用户。
+func (s *service) RemoveCaddy(ctx context.Context, serverID string) error {
+	serverID = strings.TrimSpace(serverID)
+	if serverID == "" {
+		return ErrEmptyServerID
+	}
+	return removeCaddy(ctx, s.tg, serverID)
+}
+
+// ensureAndApply 是 Create/启用 路径的编排:保证 Caddy 就绪 → (container 上游才)接入上游 → apply。
+// container 为空串表示「address 上游」,跳过 docker network connect(Caddy 直接反代任意 host:port)。
 func (s *service) ensureAndApply(ctx context.Context, serverID, container string) error {
-	if err := ensureCaddy(ctx, s.tg, serverID); err != nil {
+	// 取本主机所有 enabled 路由声明的 TCP 透传监听端口 —— ensureCaddy 据此确保 Caddy 容器
+	// 对宿主发布这些端口(缺则带「既有映射 ∪ TCP 端口」重建),否则 layer4 监听不可达。
+	if err := ensureCaddy(ctx, s.tg, serverID, s.tcpPortsForServer(ctx, serverID)); err != nil {
 		return err
 	}
-	if err := connectUpstream(ctx, s.tg, serverID, container); err != nil {
-		return err
+	if container != "" {
+		if err := connectUpstream(ctx, s.tg, serverID, container); err != nil {
+			return err
+		}
 	}
 	return s.apply(ctx, serverID)
 }
+
+// tcpPortsForServer 收集本主机所有 enabled 路由的 TCP 透传监听端口(去重)。
+// 查询失败 → 返回 nil(降级:不因端口探测失败阻断 apply)。
+func (s *service) tcpPortsForServer(ctx context.Context, serverID string) []int {
+	routes, err := s.store.listEnabledForServer(ctx, serverID)
+	if err != nil {
+		return nil
+	}
+	seen := map[int]bool{}
+	var ports []int
+	for _, r := range routes {
+		if tc := r.Config.TCPPassthrough; tc != nil && tc.ListenPort > 0 && !seen[tc.ListenPort] {
+			seen[tc.ListenPort] = true
+			ports = append(ports, tc.ListenPort)
+		}
+	}
+	return ports
+}
+
+// PrepareCaddy 显式部署反代环境(ensureCaddy)而无需先绑域名,返回部署后的 CaddyStatus。
+func (s *service) PrepareCaddy(ctx context.Context, serverID string) (*CaddyStatus, error) {
+	serverID = strings.TrimSpace(serverID)
+	if serverID == "" {
+		return nil, ErrEmptyServerID
+	}
+	// 显式部署:按本主机既有 TCP 路由(若有)发布端口;无则 80/443 起。
+	if err := ensureCaddy(ctx, s.tg, serverID, s.tcpPortsForServer(ctx, serverID)); err != nil {
+		return nil, err
+	}
+	return s.CaddyStatus(ctx, serverID)
+}
+
+// upstreamForConnect 返回需接入共享网络的容器名:container 上游返回容器名;address 上游返回 ""
+// (调用方据此跳过 docker network connect)。
+func upstreamForConnect(kind, container string) string {
+	if kind == UpstreamKindAddress {
+		return ""
+	}
+	return container
+}
+
+// normalizeUpstreamKind 把空串归一化为 "container"(向后兼容);其余原样返回交校验判定。
+func normalizeUpstreamKind(kind string) string {
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	if kind == "" {
+		return UpstreamKindContainer
+	}
+	return kind
+}
+
+// upstreamHostRe 校验 address 上游的 FQDN(同 domainRe 但此处单列以便阅读);IP 走 net.ParseIP。
+var upstreamHostRe = domainRe
 
 // apply 渲染该主机所有 enabled 路由 → 下发 Caddyfile → reload。
 // 对绑了 DNS 提供商的路由,在此(且仅在此)经 resolver 取 token 注入渲染(DNS-01);
@@ -469,6 +721,19 @@ var pathRe = regexp.MustCompile(`^/[A-Za-z0-9._~:/?#\[\]@!$&'()+,;=%*-]*$`)
 // containerRe 校验上游容器名(docker 容器名/ID 允许字符;首字符非 `-` 防 flag 注入)。
 var containerRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 
+// healthURIRe 校验健康检查路径(须以 / 起;URL 路径安全字符,无空白/花括号/引号/换行,防破坏 Caddyfile)。
+var healthURIRe = regexp.MustCompile(`^/[A-Za-z0-9._~:/?#\[\]@!$&'()+,;=%*-]*$`)
+
+// validLBPolicy 报告负载均衡策略是否为白名单枚举(空串由调用方先行放过 = 不渲染)。
+func validLBPolicy(p string) bool {
+	switch p {
+	case LBPolicyRoundRobin, LBPolicyLeastConn, LBPolicyRandom, LBPolicyFirst:
+		return true
+	default:
+		return false
+	}
+}
+
 // imageRefRe 校验 docker 镜像引用(registry/path:tag@sha 常见安全字符;首字符非 `-` 防 flag 注入,
 // 无空白/shell 元字符)。供经 env 覆盖反代镜像时防注入。
 var imageRefRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$`)
@@ -512,13 +777,48 @@ func validateCreate(in CreateInput) error {
 	if in.UpstreamContainer == "" {
 		return ErrEmptyContainer
 	}
-	if !containerRe.MatchString(in.UpstreamContainer) {
-		return ErrInvalidContainer
+	if err := validateUpstream(in.UpstreamKind, in.UpstreamContainer, in.UpstreamPort); err != nil {
+		return err
 	}
-	if in.UpstreamPort < 1 || in.UpstreamPort > 65535 {
+	return nil
+}
+
+// validateUpstream 校验主上游(kind + container/host + port):
+//   - kind=container(含归一化空串):UpstreamContainer 须过 containerRe(docker 容器名安全字符)。
+//   - kind=address:UpstreamContainer 持 HOST,须为合法 IPv4/IPv6(net.ParseIP)、合法 FQDN(domainRe)
+//     或字面 host.docker.internal —— 关闭 Caddyfile 注入面(无空格/冒号/斜杠/花括号)。
+//   - 端口两种 kind 均须 1..65535。
+//
+// 调用前 kind 应已 normalizeUpstreamKind(空串归一化为 container)。
+func validateUpstream(kind, host string, port int) error {
+	switch kind {
+	case UpstreamKindContainer:
+		if !containerRe.MatchString(host) {
+			return ErrInvalidContainer
+		}
+	case UpstreamKindAddress:
+		if !validUpstreamHost(host) {
+			return ErrInvalidUpstreamHost
+		}
+	default:
+		return ErrInvalidUpstreamKind
+	}
+	if port < 1 || port > 65535 {
 		return ErrInvalidPort
 	}
 	return nil
+}
+
+// validUpstreamHost 报告 host 是否为合法的 address 上游主机:IP / FQDN / 字面 host.docker.internal。
+// 拒绝一切含空白、冒号、斜杠、花括号等会破坏 Caddyfile 的字符。
+func validUpstreamHost(host string) bool {
+	if host == "host.docker.internal" {
+		return true
+	}
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	return upstreamHostRe.MatchString(host)
 }
 
 // redirectPathRe 限定重定向 from/to 的字符集:斜杠路径 / 简单 URL,绝无空白、花括号、引号、换行
@@ -532,6 +832,7 @@ var basicAuthUserRe = regexp.MustCompile(`^[A-Za-z0-9._@-]{1,128}$`)
 // 不做合法性判定(交 validateConfig);只整形,使渲染稳定、校验可靠。
 func normalizeConfig(in RouteConfig) RouteConfig {
 	out := in
+	out.UpstreamKind = normalizeUpstreamKind(in.UpstreamKind)
 	out.BasicAuthUser = strings.TrimSpace(in.BasicAuthUser)
 
 	out.Aliases = dedupLower(in.Aliases)
@@ -572,12 +873,52 @@ func normalizeConfig(in RouteConfig) RouteConfig {
 		prs = nil
 	}
 	out.PathRules = prs
+
+	// R4 E4.2:额外上游去空白丢空项;lb_policy / health_uri / health_interval 去空白小写(策略小写)。
+	ups := make([]Upstream, 0, len(in.Upstreams))
+	for _, u := range in.Upstreams {
+		c := strings.TrimSpace(u.Container)
+		if c == "" && u.Port == 0 {
+			continue
+		}
+		ups = append(ups, Upstream{Container: c, Port: u.Port})
+	}
+	if len(ups) == 0 {
+		ups = nil
+	}
+	out.Upstreams = ups
+	out.LBPolicy = strings.ToLower(strings.TrimSpace(in.LBPolicy))
+	if out.LBPolicy == LBPolicyFirst {
+		out.LBPolicy = "" // first = Caddy 默认,不渲染 lb_policy
+	}
+	out.HealthURI = strings.TrimSpace(in.HealthURI)
+	out.HealthInterval = strings.TrimSpace(in.HealthInterval)
+
+	// R4 E4.3:TCP 透传去空白(容器名);WS/gRPC 布尔原样。
+	if in.TCPPassthrough != nil {
+		tc := *in.TCPPassthrough
+		tc.UpstreamContainer = strings.TrimSpace(tc.UpstreamContainer)
+		// 全零(无监听端口、无上游)视为未配置 → 置 nil。
+		if tc.ListenPort == 0 && tc.UpstreamPort == 0 && tc.UpstreamContainer == "" {
+			out.TCPPassthrough = nil
+		} else {
+			out.TCPPassthrough = &tc
+		}
+	}
 	return out
 }
 
 // validateConfig 严格校验高级配置(关闭一切 Caddyfile 注入面)。
 func validateConfig(cfg RouteConfig) error {
 	for _, a := range cfg.Aliases {
+		// 通配符别名(*.example.com)合法,但与主域名同规则:必须走 DNS-01,需绑 DNS 提供商
+		// (HTTP-01 签不出泛域名)。前端在挂了 DNS 提供商时才允许填通配符别名,这里做后端兜底。
+		if isWildcardDomain(a) {
+			if cfg.DNSProviderID == "" {
+				return ErrWildcardNeedsDNS
+			}
+			continue
+		}
 		if validateDomain(a) != nil {
 			return ErrInvalidAlias
 		}
@@ -613,6 +954,42 @@ func validateConfig(cfg RouteConfig) error {
 		}
 		if pr.UpstreamPort < 1 || pr.UpstreamPort > 65535 {
 			return ErrInvalidPathRule
+		}
+	}
+	// R4 E4.2:额外上游(负载均衡)逐条同主上游校验(容器名 + 端口)。
+	for _, u := range cfg.Upstreams {
+		if !containerRe.MatchString(u.Container) {
+			return ErrInvalidUpstream
+		}
+		if u.Port < 1 || u.Port > 65535 {
+			return ErrInvalidUpstream
+		}
+	}
+	// lb_policy 仅当非空时校验白名单(空 = 不渲染,first 已在归一化时被清空)。
+	if cfg.LBPolicy != "" && !validLBPolicy(cfg.LBPolicy) {
+		return ErrInvalidLBPolicy
+	}
+	// health_uri 须以 / 起 + 安全字符集(空 = 不启用主动健康检查)。
+	if cfg.HealthURI != "" && !healthURIRe.MatchString(cfg.HealthURI) {
+		return ErrInvalidHealthURI
+	}
+	// health_interval 须可被 time.ParseDuration 解析且为正(空 = Caddy 默认)。
+	if cfg.HealthInterval != "" {
+		d, perr := time.ParseDuration(cfg.HealthInterval)
+		if perr != nil || d <= 0 {
+			return ErrInvalidHealthInterval
+		}
+	}
+	// R4 E4.3:TCP 透传(监听/上游端口 1..65535;上游容器名同主上游校验)。
+	if tc := cfg.TCPPassthrough; tc != nil {
+		if tc.ListenPort < 1 || tc.ListenPort > 65535 {
+			return ErrInvalidTCPPassthrough
+		}
+		if tc.UpstreamPort < 1 || tc.UpstreamPort > 65535 {
+			return ErrInvalidTCPPassthrough
+		}
+		if !containerRe.MatchString(tc.UpstreamContainer) {
+			return ErrInvalidTCPPassthrough
 		}
 	}
 	return nil

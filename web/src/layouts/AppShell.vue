@@ -16,6 +16,7 @@ import {
   Settings,
   Stack2,
   Rocket,
+  Browser,
   ChevronRight,
   Logout,
 } from '@vicons/tabler'
@@ -84,6 +85,8 @@ const navItems: NavItem[] = [
   { name: 'containers',    to: '/containers',    icon: Box,        labelKey: 'nav.containers',    ariaKey: 'nav.containers' },
   // R2 / E2.4: 证书总览大盘(跨主机跨域名一张表 + 到期高亮)。
   { name: 'proxy-overview', to: '/proxy',        icon: Certificate, labelKey: 'nav.proxyOverview', ariaKey: 'nav.proxyOverview' },
+  // R4 / E4.1: PR 预览环境大盘(临时环境列表 + 手动回收)。
+  { name: 'previews',      to: '/previews',      icon: Browser,    labelKey: 'nav.previews',      ariaKey: 'nav.previews' },
   // Story 6-5: configurable anomaly detection & alerts (FR-23)
   { name: 'anomaly',       to: '/anomaly',       icon: AlertTriangle, labelKey: 'nav.anomaly',    ariaKey: 'nav.anomaly' },
   { name: 'notifications', to: '/settings/notifications', icon: Bell, labelKey: 'nav.notifications', ariaKey: 'nav.notifications' },
@@ -292,6 +295,14 @@ function toggleExpanded(): void {
   gap: 4px;
   width: 100%;
   align-items: center;
+  /* 主菜单占据 head 与底部固定项之间的弹性空间;菜单项过多时自身滚动,
+     绝不挤压(或被 .rail overflow:hidden 裁掉)底部的「设置 / 退出登录」。
+     min-height:0 让 flex 子项能收缩到内容高度以下,overflow 才会生效。 */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
 }
 .is-expanded .nav-list {
   align-items: stretch;
@@ -423,7 +434,9 @@ function toggleExpanded(): void {
 }
 
 .rail-spacer {
-  flex: 1;
+  /* nav-list 现已 flex:1 占满中间并把底部项推到底;spacer 不再伸展
+     (否则会与 nav-list 平分空间、把菜单区压到一半)。保留为零高占位。 */
+  flex: 0 0 0;
 }
 
 /* ——— Main area ——— */

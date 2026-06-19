@@ -93,6 +93,8 @@ export default {
   phCategory: 'Build & Artifacts',
   metaSummaryPre: 'One-line summary (may contain ',
   metaSummaryPost: ')',
+  imgPlaceholder: 'e.g. node:20-alpine',
+  summaryPlaceholder: 'e.g. Build with npm and emit dist',
   metaHint: 'The category decides which group it shows under in the “Add node” picker; the summary + icon are the card reusers see first.',
   defaultCategory: 'Custom',
 

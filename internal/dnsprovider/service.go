@@ -119,6 +119,20 @@ func (s *service) Verify(ctx context.Context, id string) error {
 	return nil
 }
 
+// DeleteSubdomainRecord 删除某提供商根域下 fqdn 的 A 记录(回收预览/子域名时清 DNS)。
+// 幂等:无记录视为成功。providerID 不存在 → ErrNotFound;vault 未配/凭据缺失 → 相应错误。
+func (s *service) DeleteSubdomainRecord(ctx context.Context, providerID, fqdn string) error {
+	p, err := s.store.get(ctx, providerID)
+	if err != nil {
+		return err
+	}
+	client, err := s.clientFor(p)
+	if err != nil {
+		return err
+	}
+	return client.DeleteARecord(ctx, p.BaseDomain, fqdn)
+}
+
 // ProviderType 返回某提供商类型(不取 token);不存在 → ok=false。
 func (s *service) ProviderType(ctx context.Context, providerID string) (string, bool, error) {
 	p, err := s.store.get(ctx, providerID)
@@ -223,9 +237,10 @@ func (s *service) AllocateSubdomain(ctx context.Context, in AllocateInput) (*Rou
 		}
 		domain := "app-" + suffix + "." + p.BaseDomain
 
-		// 建 A 记录指向宿主机 IP(幂等)。Cloudflare 真实;DNSPod/alidns 桩返回未实现 → 直接上抛。
+		// 建 A 记录指向宿主机 IP(幂等)。确定性错误(未实现 / 凭据格式非法)直接上抛,不重试;
+		// 其余(瞬时网络 / API)记为 lastErr 后换下一个后缀重试。
 		if err := client.EnsureARecord(ctx, p.BaseDomain, domain, in.HostIP); err != nil {
-			if errors.Is(err, ErrProviderNotImplemented) {
+			if errors.Is(err, ErrProviderNotImplemented) || errors.Is(err, ErrInvalidCredential) {
 				return nil, err
 			}
 			lastErr = err
@@ -253,6 +268,55 @@ func (s *service) AllocateSubdomain(ctx context.Context, in AllocateInput) (*Rou
 		return nil, fmt.Errorf("%w:多次尝试仍失败", ErrAllocate)
 	}
 	return nil, ErrAllocate
+}
+
+// AllocateFQDN 为一个**指定的** FQDN 建 A 记录指向 hostIP → 创建一条 DNS-01 反代路由(R4 E4.1)。
+// 与 AllocateSubdomain 共享校验/建记录/建路由逻辑,但子域名由调用方给定(不随机挑),用于
+// 幂等可预测的预览域名 pr-<n>-<proj>.base。
+//   - in.Subdomain 必须非空且落在提供商 base_domain 下(后缀 .base 校验);否则 ErrAllocate。
+//   - 域名已占用(同 PR 重复分配且未先回收旧路由)→ 透传 proxy 的 domain-taken 错误,供上层处置。
+func (s *service) AllocateFQDN(ctx context.Context, in AllocateInput) (*RouteRef, error) {
+	if s.routes == nil {
+		return nil, fmt.Errorf("%w:路由创建器未装配", ErrAllocate)
+	}
+	p, err := s.store.get(ctx, in.ProviderID)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(in.ServerID) == "" || strings.TrimSpace(in.UpstreamContainer) == "" {
+		return nil, ErrAllocate
+	}
+	if in.UpstreamPort < 1 || in.UpstreamPort > 65535 {
+		return nil, ErrAllocate
+	}
+	if !validIPv4(in.HostIP) {
+		return nil, fmt.Errorf("%w:宿主机 IP 非法", ErrAllocate)
+	}
+	domain := strings.ToLower(strings.TrimSpace(in.Subdomain))
+	// 必须落在该提供商的根域下(杜绝越权为任意域签证书 / 建记录)。
+	if domain == "" || domain == p.BaseDomain || !strings.HasSuffix(domain, "."+p.BaseDomain) {
+		return nil, fmt.Errorf("%w:子域名须落在提供商根域下", ErrAllocate)
+	}
+
+	client, cerr := s.clientFor(p)
+	if cerr != nil {
+		return nil, cerr
+	}
+	// 建 A 记录指向宿主机 IP(幂等)。DNSPod/alidns 桩返回未实现 → 直接上抛。
+	if err := client.EnsureARecord(ctx, p.BaseDomain, domain, in.HostIP); err != nil {
+		return nil, err
+	}
+	routeID, rerr := s.routes.CreateDNS01Route(ctx, CreateDNS01RouteInput{
+		ServerID:          in.ServerID,
+		Domain:            domain,
+		UpstreamContainer: in.UpstreamContainer,
+		UpstreamPort:      in.UpstreamPort,
+		DNSProviderID:     p.ID,
+	})
+	if rerr != nil {
+		return nil, rerr
+	}
+	return &RouteRef{RouteID: routeID, Domain: domain, ProviderID: p.ID}, nil
 }
 
 // isDomainCollision 判定路由创建错误是否为「域名已占用」(供子域名重试)。

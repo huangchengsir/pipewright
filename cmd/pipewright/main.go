@@ -41,6 +41,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/oauth"
 	"github.com/huangchengsir/pipewright/internal/pacloader"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
+	"github.com/huangchengsir/pipewright/internal/previewenv"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/promotion"
 	"github.com/huangchengsir/pipewright/internal/proxy"
@@ -373,6 +374,31 @@ func main() {
 		runnerOpts = []run.PoolOption{run.WithRunner(dagrun.New(specLoader, dagOpts...))}
 	}
 
+	// 自动 HTTPS + 域名反向代理(R1):路由 CRUD + 在目标主机上经 targetSvc(SSH + docker)编排
+	// Caddy(渲染 Caddyfile + reload),Caddy 自动经 Let's Encrypt(HTTP-01)签发/续期证书。
+	// 复用已装配的 targetSvc(SSH 执行/上传)+ st.DB(参数化 SQL),无新顶层依赖、无 init 副作用。
+	// (提前到终态钩子装配前构造:R4 预览环境终态钩子需 proxySvc + dnsSvc + previewSvc 三者就绪。)
+	proxySvc := proxy.New(st.DB, targetSvc)
+
+	// DNS 提供商集成层(R3 E3.1–E3.4):Cloudflare / DNSPod / 阿里云 DNS 接入(凭据走 vault)。
+	// dnsSvc 的「创建 DNS-01 反代路由」复用 proxySvc.Create(经 proxyRouteCreator 适配,避免 import 环);
+	// proxySvc 的「apply 时解析 DNS token / 校验提供商引用」复用 dnsSvc(经 dnsResolverAdapter)。
+	// 两者互引经适配器在装配后晚绑,无 init 副作用、无新顶层依赖。
+	dnsSvc := dnsprovider.New(st.DB, credVault, &proxyRouteCreator{proxy: proxySvc})
+	if cfg, ok := proxySvc.(proxy.DNSConfigurable); ok {
+		cfg.SetDNSResolver(&dnsResolverAdapter{dns: dnsSvc})
+	}
+
+	// Per-PR 预览环境(R4 E4.1 · 差异化王牌):某 PR 运行成功部署 → 在项目预览配置的根域下分配
+	// pr-<n>-<proj> 预览域名(复用 R3 DNS-01 + 反代路由)。allocator 复用 dnsSvc.AllocateFQDN;
+	// 回收路由复用 proxySvc.Delete。两者经适配器晚绑(避免 previewenv import dnsprovider/proxy 形成环)。
+	// 根域校验复用 dnsprovider.ValidBaseDomain。优雅降级:未配 allocator / 项目未开启 → provision no-op。
+	previewSvc := previewenv.New(st.DB)
+	previewSvc.SetAllocator(&previewAllocator{dns: dnsSvc})
+	previewSvc.SetRouteDeleter(&previewRouteDeleter{proxy: proxySvc})
+	previewSvc.SetRecordDeleter(&previewRecordDeleter{dns: dnsSvc})
+	previewSvc.SetBaseDomainValidator(dnsprovider.ValidBaseDomain)
+
 	// 终态钩子:通知(Story 5.2)+「PR 状态回写」(Story 8-9 / FR-8-9):run 终态 → 据项目仓库
 	// 识别 GitHub/Gitee → 经项目凭据回写该 commit 的提交状态(PR 检查)。
 	//
@@ -416,6 +442,15 @@ func main() {
 		chainHook(ctx, runID, finalStatus)
 	}
 
+	// Per-PR 预览环境分配钩子(R4 E4.1):run 落 success 且属于某 PR、其项目开启预览 → 分配预览域名。
+	// best-effort + recover-safe:任何前置不满足 / 分配失败一律静默或仅记日志,绝不阻断 run 终态。
+	previewHook := httpapi.NewPreviewProvisionHook(runSvc, previewSvc, proxySvc, targetSvc)
+	beforePreview := terminalHook
+	terminalHook = func(ctx context.Context, runID, finalStatus string) {
+		beforePreview(ctx, runID, finalStatus)
+		previewHook(ctx, runID, finalStatus)
+	}
+
 	// 并发/队列控制(FR-8-10):全局上限经 PIPEWRIGHT_MAX_CONCURRENT 设置(默认 = worker 数);
 	// 项目级上限经 concurrencySvc(/api/projects/{id}/concurrency 配置)。突发超限的运行保持 queued
 	// 排队,待槽位释放再调度(FIFO)。非法/未设 env → 0,pool 回落到默认行为(仅受全局上限)。
@@ -457,19 +492,28 @@ func main() {
 	retentionSweeper.Start(context.Background())
 	log.Printf("[retention] 保留清理器已启动(每小时一扫;策略默认关,需在设置开启)")
 
-	// 自动 HTTPS + 域名反向代理(R1):路由 CRUD + 在目标主机上经 targetSvc(SSH + docker)编排
-	// Caddy(渲染 Caddyfile + reload),Caddy 自动经 Let's Encrypt(HTTP-01)签发/续期证书。
-	// 复用已装配的 targetSvc(SSH 执行/上传)+ st.DB(参数化 SQL),无新顶层依赖、无 init 副作用。
-	proxySvc := proxy.New(st.DB, targetSvc)
-
-	// DNS 提供商集成层(R3 E3.1–E3.4):Cloudflare / DNSPod / 阿里云 DNS 接入(凭据走 vault)。
-	// dnsSvc 的「创建 DNS-01 反代路由」复用 proxySvc.Create(经 proxyRouteCreator 适配,避免 import 环);
-	// proxySvc 的「apply 时解析 DNS token / 校验提供商引用」复用 dnsSvc(经 dnsResolverAdapter)。
-	// 两者互引经适配器在装配后晚绑,无 init 副作用、无新顶层依赖。
-	dnsSvc := dnsprovider.New(st.DB, credVault, &proxyRouteCreator{proxy: proxySvc})
-	if cfg, ok := proxySvc.(proxy.DNSConfigurable); ok {
-		cfg.SetDNSResolver(&dnsResolverAdapter{dns: dnsSvc})
+	// Per-PR 预览环境自动回收器(R4 E4.1 收尾):按固定间隔遍历 active 预览环境,查其 PR 是否
+	// 已 closed/merged,**确证已终结**才回收(删路由 + 标记 reclaimed)。安全铁律:一切不确定不回收
+	// (API 错误 / 缺凭据 / 未知平台 → unknown → 跳过)。间隔经 PIPEWRIGHT_PREVIEW_SWEEP_INTERVAL
+	// 覆盖(Go duration,如 "10m";默认 5m);PR 状态读取的 API base 复用 PR 回写的同名 env 覆盖。
+	// checker 复用项目凭据(vault)+ 仓库地址识别 GitHub/Gitee;无凭据/未知平台时自动降级为不回收。
+	previewSweepInterval := 5 * time.Minute
+	if v := strings.TrimSpace(os.Getenv("PIPEWRIGHT_PREVIEW_SWEEP_INTERVAL")); v != "" {
+		if d, perr := time.ParseDuration(v); perr == nil && d > 0 {
+			previewSweepInterval = d
+		} else {
+			log.Printf("[previewenv] 警告:PIPEWRIGHT_PREVIEW_SWEEP_INTERVAL=%q 非法(须为正 Go duration),用默认 %s", v, previewSweepInterval)
+		}
 	}
+	previewChecker := previewenv.NewPRStateChecker(
+		&previewRepoResolver{projects: projectSvc, vault: credVault},
+		&http.Client{Timeout: 10 * time.Second},
+	).WithBaseURLs(
+		strings.TrimSpace(os.Getenv("PIPEWRIGHT_PR_STATUS_GITHUB_BASE")),
+		strings.TrimSpace(os.Getenv("PIPEWRIGHT_PR_STATUS_GITEE_BASE")))
+	previewSweeper := previewenv.NewSweeper(previewSvc, previewChecker, previewSweepInterval)
+	previewSweeper.Start(context.Background())
+	log.Printf("[previewenv] 预览环境自动回收器已启动(每 %s 一扫;仅回收确证 PR 已关闭/合并的环境)", previewSweepInterval)
 
 	// 装配只读源码读取器(Story 3.6;FR-4 预埋):go-git 浅克隆读 tree/blob;严格 SSRF 收口;
 	// 克隆失败优雅降级(不致命)。无 init 副作用/不驻留。
@@ -522,7 +566,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc)),
+		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;
@@ -607,6 +651,7 @@ func main() {
 	// HTTP 停机后停 worker pool:取消在途运行执行,等 worker 退出(随 shutdownCtx 超时)。
 	cronScheduler.Stop()
 	retentionSweeper.Stop()
+	previewSweeper.Stop()
 	pool.Stop(shutdownCtx)
 	log.Printf("[run] worker pool stopped")
 }
@@ -744,4 +789,60 @@ func (a *dnsResolverAdapter) Resolve(ctx context.Context, providerID string) (st
 
 func (a *dnsResolverAdapter) ProviderType(ctx context.Context, providerID string) (string, bool, error) {
 	return a.dns.ProviderType(ctx, providerID)
+}
+
+// previewAllocator 适配 previewenv.Allocator:把「为指定 FQDN 分配 DNS-01 反代路由」下沉到
+// dnsprovider.AllocateFQDN(R4 E4.1 预览域名 pr-<n>-<proj>.base)。避免 previewenv import dnsprovider 形成环。
+type previewAllocator struct{ dns dnsprovider.Service }
+
+func (a *previewAllocator) Allocate(ctx context.Context, in previewenv.AllocateInput) (string, error) {
+	ref, err := a.dns.AllocateFQDN(ctx, dnsprovider.AllocateInput{
+		ProviderID:        in.ProviderID,
+		ServerID:          in.ServerID,
+		UpstreamContainer: in.UpstreamContainer,
+		UpstreamPort:      in.UpstreamPort,
+		HostIP:            in.HostIP,
+		Subdomain:         in.Subdomain,
+	})
+	if err != nil {
+		return "", err
+	}
+	return ref.RouteID, nil
+}
+
+// previewRouteDeleter 适配 previewenv.RouteDeleter:回收预览环境时把「删反代路由」下沉到
+// proxy.Service.Delete(摘除 Caddyfile 路由 + reload)。避免 previewenv import proxy 形成环。
+type previewRouteDeleter struct{ proxy proxy.Service }
+
+func (d *previewRouteDeleter) DeleteRoute(ctx context.Context, routeID string) error {
+	return d.proxy.Delete(ctx, routeID)
+}
+
+// previewRecordDeleter 适配 previewenv.RecordDeleter:回收预览环境时删该子域名的 DNS A 记录。
+type previewRecordDeleter struct{ dns dnsprovider.Service }
+
+func (d *previewRecordDeleter) DeleteRecord(ctx context.Context, providerID, fqdn string) error {
+	return d.dns.DeleteSubdomainRecord(ctx, providerID, fqdn)
+}
+
+// previewRepoResolver 适配 previewenv.ProjectRepoResolver:把项目 id 解析为「仓库地址 + 平台令牌」,
+// 供自动回收 sweeper 据此查 PR 状态。token 经 vault 即取即用,绝不进 URL/日志。
+// 避免 previewenv import project/vault 形成环。
+type previewRepoResolver struct {
+	projects project.Service
+	vault    vault.Vault
+}
+
+func (r *previewRepoResolver) Resolve(ctx context.Context, projectID string) (string, string, error) {
+	proj, err := r.projects.Get(ctx, projectID)
+	if err != nil {
+		return "", "", err
+	}
+	token := ""
+	if r.vault != nil && strings.TrimSpace(proj.CredentialID) != "" {
+		if tok, terr := r.vault.Reveal(proj.CredentialID); terr == nil {
+			token = tok
+		}
+	}
+	return proj.RepoURL, token, nil
 }

@@ -22,6 +22,12 @@ const (
 	auditActionProxyRouteDisable = "proxy.route.disable"
 	auditActionProxyRouteUpdate  = "proxy.route.update"
 	auditTargetProxyRoute        = "proxy_route"
+
+	// 反代环境(pipewright-caddy 容器)移除审计。detail 仅 serverId,无敏感信息。
+	auditActionProxyCaddyRemove = "proxy.caddy.remove"
+	// 反代环境(pipewright-caddy 容器)显式部署审计。detail 仅 serverId,无敏感信息。
+	auditActionProxyCaddyPrepare = "proxy.caddy.prepare"
+	auditTargetProxyCaddy        = "proxy_caddy"
 )
 
 // proxyRedirectDTO 是单条重定向规则对外响应体(camelCase;冻结契约)。
@@ -42,6 +48,7 @@ type proxyPathRuleDTO struct {
 // 绝不外泄 bcrypt 哈希/明文口令:仅以 basicAuthEnabled 布尔告知前端「是否已设认证」。
 // R3:dnsProviderId(DNS-01 引用,绝不外泄 token)+ pathRules(路径路由)。
 type proxyRouteConfigDTO struct {
+	UpstreamKind     string             `json:"upstreamKind"` // "container"(默认) | "address"
 	Aliases          []string           `json:"aliases"`
 	ForceHTTPS       bool               `json:"forceHttps"`
 	HSTS             bool               `json:"hsts"`
@@ -54,6 +61,27 @@ type proxyRouteConfigDTO struct {
 	Redirects        []proxyRedirectDTO `json:"redirects"`
 	DNSProviderID    string             `json:"dnsProviderId"`
 	PathRules        []proxyPathRuleDTO `json:"pathRules"`
+	// R4:多上游负载均衡 / 协议(gRPC h2c、WS、TCP 透传)。
+	Upstreams      []proxyUpstreamDTO `json:"upstreams"`
+	LBPolicy       string             `json:"lbPolicy"`
+	HealthURI      string             `json:"healthUri"`
+	HealthInterval string             `json:"healthInterval"`
+	WebSocket      bool               `json:"websocket"`
+	GRPC           bool               `json:"grpc"`
+	TCPPassthrough *proxyTCPDTO       `json:"tcpPassthrough"`
+}
+
+// proxyUpstreamDTO 是额外上游(R4 负载均衡;主上游之外的后端)。
+type proxyUpstreamDTO struct {
+	Container string `json:"container"`
+	Port      int    `json:"port"`
+}
+
+// proxyTCPDTO 是 TCP 透传配置(R4;caddy-l4 layer4)。
+type proxyTCPDTO struct {
+	ListenPort        int    `json:"listenPort"`
+	UpstreamContainer string `json:"upstreamContainer"`
+	UpstreamPort      int    `json:"upstreamPort"`
 }
 
 // proxyRouteDTO 是反代路由对外响应体(冻结契约;camelCase;与前端约定字段名严格一致)。
@@ -82,7 +110,21 @@ func toProxyRouteConfigDTO(c proxy.RouteConfig) proxyRouteConfigDTO {
 	for _, pr := range c.PathRules {
 		prs = append(prs, proxyPathRuleDTO{Path: pr.Path, UpstreamContainer: pr.UpstreamContainer, UpstreamPort: pr.UpstreamPort})
 	}
+	ups := make([]proxyUpstreamDTO, 0, len(c.Upstreams))
+	for _, u := range c.Upstreams {
+		ups = append(ups, proxyUpstreamDTO{Container: u.Container, Port: u.Port})
+	}
+	var tcp *proxyTCPDTO
+	if c.TCPPassthrough != nil {
+		tcp = &proxyTCPDTO{ListenPort: c.TCPPassthrough.ListenPort, UpstreamContainer: c.TCPPassthrough.UpstreamContainer, UpstreamPort: c.TCPPassthrough.UpstreamPort}
+	}
+	// 上游类型对外恒返回具体值:空串(R1 老路由)归一化为 "container"。
+	kind := c.UpstreamKind
+	if kind == "" {
+		kind = proxy.UpstreamKindContainer
+	}
 	return proxyRouteConfigDTO{
+		UpstreamKind:     kind,
 		Aliases:          orEmptySlice(c.Aliases),
 		ForceHTTPS:       c.ForceHTTPS,
 		HSTS:             c.HSTS,
@@ -95,6 +137,13 @@ func toProxyRouteConfigDTO(c proxy.RouteConfig) proxyRouteConfigDTO {
 		Redirects:        reds,
 		DNSProviderID:    c.DNSProviderID, // 仅引用 id,绝不外泄 token
 		PathRules:        prs,
+		Upstreams:        ups,
+		LBPolicy:         c.LBPolicy,
+		HealthURI:        c.HealthURI,
+		HealthInterval:   c.HealthInterval,
+		WebSocket:        c.WebSocket,
+		GRPC:             c.GRPC,
+		TCPPassthrough:   tcp,
 	}
 }
 
@@ -143,6 +192,10 @@ func writeProxyError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, "invalid_route", "上游容器名含非法字符")
 	case errors.Is(err, proxy.ErrInvalidPort):
 		writeError(w, http.StatusBadRequest, "invalid_route", "上游端口必须在 1..65535 之间")
+	case errors.Is(err, proxy.ErrInvalidUpstreamKind):
+		writeError(w, http.StatusBadRequest, "invalid_route", "上游类型非法,只支持「容器」或「地址」")
+	case errors.Is(err, proxy.ErrInvalidUpstreamHost):
+		writeError(w, http.StatusBadRequest, "invalid_route", "上游地址非法,请填写合法的 IP、域名(FQDN)或 host.docker.internal")
 	case errors.Is(err, proxy.ErrInvalidAlias):
 		writeError(w, http.StatusBadRequest, "invalid_route", "别名域名格式非法,请填写有效的 FQDN(如 www.example.com)")
 	case errors.Is(err, proxy.ErrInvalidCIDR):
@@ -218,6 +271,10 @@ func makeCreateProxyRouteHandler(svc proxy.Service, rec audit.Recorder) http.Han
 			UpstreamContainer string `json:"upstreamContainer"`
 			UpstreamPort      int    `json:"upstreamPort"`
 			DNSProviderID     string `json:"dnsProviderId"`
+			// 主上游类型在 config 内传(与前端约定一致);缺省 → "container"。
+			Config struct {
+				UpstreamKind string `json:"upstreamKind"`
+			} `json:"config"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
@@ -228,6 +285,7 @@ func makeCreateProxyRouteHandler(svc proxy.Service, rec audit.Recorder) http.Han
 			Domain:            in.Domain,
 			UpstreamContainer: in.UpstreamContainer,
 			UpstreamPort:      in.UpstreamPort,
+			UpstreamKind:      in.Config.UpstreamKind,
 			DNSProviderID:     in.DNSProviderID,
 		})
 		if err != nil {
@@ -317,6 +375,7 @@ type proxyUpdateBody struct {
 	UpstreamContainer string `json:"upstreamContainer"`
 	UpstreamPort      int    `json:"upstreamPort"`
 	Config            struct {
+		UpstreamKind    string   `json:"upstreamKind"`
 		Aliases         []string `json:"aliases"`
 		ForceHTTPS      bool     `json:"forceHttps"`
 		HSTS            bool     `json:"hsts"`
@@ -336,6 +395,20 @@ type proxyUpdateBody struct {
 			UpstreamContainer string `json:"upstreamContainer"`
 			UpstreamPort      int    `json:"upstreamPort"`
 		} `json:"pathRules"`
+		Upstreams []struct {
+			Container string `json:"container"`
+			Port      int    `json:"port"`
+		} `json:"upstreams"`
+		LBPolicy       string `json:"lbPolicy"`
+		HealthURI      string `json:"healthUri"`
+		HealthInterval string `json:"healthInterval"`
+		WebSocket      bool   `json:"websocket"`
+		GRPC           bool   `json:"grpc"`
+		TCPPassthrough *struct {
+			ListenPort        int    `json:"listenPort"`
+			UpstreamContainer string `json:"upstreamContainer"`
+			UpstreamPort      int    `json:"upstreamPort"`
+		} `json:"tcpPassthrough"`
 	} `json:"config"`
 	BasicAuthPassword string `json:"basicAuthPassword"`
 }
@@ -365,10 +438,20 @@ func makeUpdateProxyRouteHandler(svc proxy.Service, rec audit.Recorder) http.Han
 		for _, pr := range in.Config.PathRules {
 			prs = append(prs, proxy.PathRule{Path: pr.Path, UpstreamContainer: pr.UpstreamContainer, UpstreamPort: pr.UpstreamPort})
 		}
+		ups := make([]proxy.Upstream, 0, len(in.Config.Upstreams))
+		for _, u := range in.Config.Upstreams {
+			ups = append(ups, proxy.Upstream{Container: u.Container, Port: u.Port})
+		}
+		var tcp *proxy.TCPConfig
+		if in.Config.TCPPassthrough != nil {
+			tcp = &proxy.TCPConfig{ListenPort: in.Config.TCPPassthrough.ListenPort, UpstreamContainer: in.Config.TCPPassthrough.UpstreamContainer, UpstreamPort: in.Config.TCPPassthrough.UpstreamPort}
+		}
 		route, err := svc.Update(r.Context(), id, proxy.UpdateInput{
 			UpstreamContainer: in.UpstreamContainer,
 			UpstreamPort:      in.UpstreamPort,
+			UpstreamKind:      in.Config.UpstreamKind,
 			Config: proxy.RouteConfig{
+				UpstreamKind:    in.Config.UpstreamKind,
 				Aliases:         in.Config.Aliases,
 				ForceHTTPS:      in.Config.ForceHTTPS,
 				HSTS:            in.Config.HSTS,
@@ -380,6 +463,13 @@ func makeUpdateProxyRouteHandler(svc proxy.Service, rec audit.Recorder) http.Han
 				Redirects:       reds,
 				DNSProviderID:   in.Config.DNSProviderID,
 				PathRules:       prs,
+				Upstreams:       ups,
+				LBPolicy:        in.Config.LBPolicy,
+				HealthURI:       in.Config.HealthURI,
+				HealthInterval:  in.Config.HealthInterval,
+				WebSocket:       in.Config.WebSocket,
+				GRPC:            in.Config.GRPC,
+				TCPPassthrough:  tcp,
 			},
 			BasicAuthPassword: in.BasicAuthPassword,
 		})
@@ -434,6 +524,111 @@ func makeProxyOverviewHandler(svc proxy.Service) http.HandlerFunc {
 			})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": out})
+	}
+}
+
+// proxyCaddyStatusDTO 是反代环境探测对外响应体(camelCase;冻结契约)。
+type proxyCaddyStatusDTO struct {
+	ServerID   string `json:"serverId"`
+	Installed  bool   `json:"installed"`
+	Running    bool   `json:"running"`
+	Image      string `json:"image"`
+	Ports      string `json:"ports"`
+	RouteCount int    `json:"routeCount"`
+}
+
+// makeProxyCaddyStatusHandler 返回 GET /api/proxy/caddy?serverId=<id>(认证;只读探测,无审计)。
+// serverId 为空 → 400;传输/SSH 错误 → 502/503;容器不存在 → { installed:false }(非错误)。
+func makeProxyCaddyStatusHandler(svc proxy.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "反代服务未初始化")
+			return
+		}
+		serverID := strings.TrimSpace(r.URL.Query().Get("serverId"))
+		if serverID == "" {
+			writeError(w, http.StatusBadRequest, "invalid_route", "请选择目标主机")
+			return
+		}
+		st, err := svc.CaddyStatus(r.Context(), serverID)
+		if err != nil {
+			writeProxyError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, proxyCaddyStatusDTO{
+			ServerID:   st.ServerID,
+			Installed:  st.Installed,
+			Running:    st.Running,
+			Image:      st.Image,
+			Ports:      st.Ports,
+			RouteCount: st.RouteCount,
+		})
+	}
+}
+
+// makeProxyCaddyPrepareHandler 返回 POST /api/proxy/caddy?serverId=<id>(认证 + CSRF + 审计)→ CaddyStatus DTO。
+// 显式部署反代环境(pipewright-caddy 容器)而无需先绑域名;80/443 冲突等人话错误透出。serverId 为空 → 400。
+func makeProxyCaddyPrepareHandler(svc proxy.Service, rec audit.Recorder) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "反代服务未初始化")
+			return
+		}
+		serverID := strings.TrimSpace(r.URL.Query().Get("serverId"))
+		if serverID == "" {
+			writeError(w, http.StatusBadRequest, "invalid_route", "请选择目标主机")
+			return
+		}
+		st, err := svc.PrepareCaddy(r.Context(), serverID)
+		if err != nil {
+			writeProxyError(w, err)
+			return
+		}
+		recordAudit(r.Context(), rec, audit.Entry{
+			Actor:      auditActor,
+			Action:     auditActionProxyCaddyPrepare,
+			TargetType: auditTargetProxyCaddy,
+			TargetID:   serverID,
+			Detail:     map[string]any{"serverId": serverID},
+			IP:         clientIP(r),
+		})
+		writeJSON(w, http.StatusOK, proxyCaddyStatusDTO{
+			ServerID:   st.ServerID,
+			Installed:  st.Installed,
+			Running:    st.Running,
+			Image:      st.Image,
+			Ports:      st.Ports,
+			RouteCount: st.RouteCount,
+		})
+	}
+}
+
+// makeRemoveProxyCaddyHandler 返回 DELETE /api/proxy/caddy?serverId=<id>(认证 + CSRF + 审计)→ { ok: true }。
+// 停止并删除 pipewright-caddy 容器(保留证书卷);幂等。serverId 为空 → 400。
+func makeRemoveProxyCaddyHandler(svc proxy.Service, rec audit.Recorder) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "反代服务未初始化")
+			return
+		}
+		serverID := strings.TrimSpace(r.URL.Query().Get("serverId"))
+		if serverID == "" {
+			writeError(w, http.StatusBadRequest, "invalid_route", "请选择目标主机")
+			return
+		}
+		if err := svc.RemoveCaddy(r.Context(), serverID); err != nil {
+			writeProxyError(w, err)
+			return
+		}
+		recordAudit(r.Context(), rec, audit.Entry{
+			Actor:      auditActor,
+			Action:     auditActionProxyCaddyRemove,
+			TargetType: auditTargetProxyCaddy,
+			TargetID:   serverID,
+			Detail:     map[string]any{"serverId": serverID},
+			IP:         clientIP(r),
+		})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	}
 }
 

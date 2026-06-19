@@ -32,6 +32,7 @@ import RiskAnnotationPanel from '../components/pipeline/RiskAnnotationPanel.vue'
 import YamlImportModal from '../components/pipeline/YamlImportModal.vue'
 import TemplatePickerModal from '../components/pipeline/TemplatePickerModal.vue'
 import PacPreviewModal from '../components/pipeline/PacPreviewModal.vue'
+import ProjectPreviewConfig from '../components/pipeline/ProjectPreviewConfig.vue'
 
 // ─── Route ────────────────────────────────────────────────────────────────────
 
@@ -693,7 +694,11 @@ async function togglePrStatus(next: boolean): Promise<void> {
           role="tabpanel"
           aria-labelledby="tab-triggers"
         >
-          <TriggersPanel :project-id="projectId" />
+          <div class="triggers-stack">
+            <TriggersPanel :project-id="projectId" />
+            <!-- R4 / E4.1: 每项目 PR 预览环境配置 -->
+            <ProjectPreviewConfig :project-id="projectId" />
+          </div>
         </div>
 
         <!-- 环境与凭据 -->
@@ -1114,6 +1119,13 @@ async function togglePrStatus(next: boolean): Promise<void> {
 .tab-panel:not(.tab-panel--canvas) {
   overflow-y: auto;
   padding: var(--main-pad-top) var(--main-pad) var(--main-pad-bottom);
+}
+
+/* 触发设置 tab:触发器面板 + PR 预览环境配置卡纵向堆叠 */
+.triggers-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
 }
 
 /* ─── Banners ────────────────────────────────────────────────────────────── */

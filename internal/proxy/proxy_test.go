@@ -247,6 +247,191 @@ func TestRefreshStatusMapping(t *testing.T) {
 	}
 }
 
+// --- CaddyStatus / RemoveCaddy 单测(注入假 target.Service) -----------------
+
+// TestCaddyStatusRunning 验证 inspect 成功 → Installed/Running/Image/Ports 解析正确,RouteCount 反映 store。
+func TestCaddyStatusRunning(t *testing.T) {
+	ctx := context.Background()
+	st := storetest.OpenDB(t)
+	ft := &fakeTarget{
+		resultFor: func(cmd []string) *target.ExecResult {
+			if len(cmd) >= 2 && cmd[0] == "docker" && cmd[1] == "inspect" {
+				j := cmdJoin(cmd)
+				if strings.Contains(j, "NetworkSettings.Ports") {
+					return &target.ExecResult{ExitCode: 0, Stdout: `{"443/tcp":[{"HostPort":"443"}],"80/tcp":[{"HostPort":"80"}]}`}
+				}
+				return &target.ExecResult{ExitCode: 0, Stdout: "true|ghc.io/x/pipewright-caddy:latest\n"}
+			}
+			return nil
+		},
+	}
+	svc := &service{store: NewStore(st), tg: ft, prober: fakeProber{}}
+
+	// 先建一条路由 → RouteCount 应为 1。
+	if _, err := svc.Create(ctx, CreateInput{ServerID: "srv-1", Domain: "app.example.com", UpstreamContainer: "web", UpstreamPort: 8080}); err != nil {
+		t.Fatalf("seed Create: %v", err)
+	}
+
+	got, err := svc.CaddyStatus(ctx, "srv-1")
+	if err != nil {
+		t.Fatalf("CaddyStatus: %v", err)
+	}
+	if !got.Installed || !got.Running {
+		t.Fatalf("应为已安装且运行: %+v", got)
+	}
+	if got.Image != "ghc.io/x/pipewright-caddy:latest" {
+		t.Fatalf("镜像解析不符: %q", got.Image)
+	}
+	if got.Ports != "80,443" {
+		t.Fatalf("端口摘要应为 80,443(升序去后缀), got %q", got.Ports)
+	}
+	if got.ServerID != "srv-1" {
+		t.Fatalf("serverID 不符: %q", got.ServerID)
+	}
+	if got.RouteCount != 1 {
+		t.Fatalf("RouteCount 应为 1, got %d", got.RouteCount)
+	}
+}
+
+// TestCaddyStatusAbsent 验证容器不存在(inspect 非零)→ Installed:false 且不报错。
+func TestCaddyStatusAbsent(t *testing.T) {
+	ctx := context.Background()
+	st := storetest.OpenDB(t)
+	ft := &fakeTarget{
+		resultFor: func(cmd []string) *target.ExecResult {
+			if len(cmd) >= 2 && cmd[0] == "docker" && cmd[1] == "inspect" {
+				return &target.ExecResult{ExitCode: 1, Stderr: "Error: No such object: pipewright-caddy"}
+			}
+			return nil
+		},
+	}
+	svc := &service{store: NewStore(st), tg: ft, prober: fakeProber{}}
+
+	got, err := svc.CaddyStatus(ctx, "srv-1")
+	if err != nil {
+		t.Fatalf("容器不存在不应报错, got %v", err)
+	}
+	if got.Installed || got.Running {
+		t.Fatalf("应为未安装: %+v", got)
+	}
+	if got.Image != "" || got.Ports != "" {
+		t.Fatalf("未安装时镜像/端口应为空: %+v", got)
+	}
+}
+
+// TestCaddyStatusStopped 验证容器存在但已停止 → Installed:true, Running:false。
+func TestCaddyStatusStopped(t *testing.T) {
+	ctx := context.Background()
+	st := storetest.OpenDB(t)
+	ft := &fakeTarget{
+		resultFor: func(cmd []string) *target.ExecResult {
+			if len(cmd) >= 2 && cmd[0] == "docker" && cmd[1] == "inspect" {
+				if strings.Contains(cmdJoin(cmd), "NetworkSettings.Ports") {
+					return &target.ExecResult{ExitCode: 0, Stdout: `{}`}
+				}
+				return &target.ExecResult{ExitCode: 0, Stdout: "false|caddy:2\n"}
+			}
+			return nil
+		},
+	}
+	svc := &service{store: NewStore(st), tg: ft, prober: fakeProber{}}
+
+	got, err := svc.CaddyStatus(ctx, "srv-1")
+	if err != nil {
+		t.Fatalf("CaddyStatus: %v", err)
+	}
+	if !got.Installed || got.Running {
+		t.Fatalf("应为已安装但未运行: %+v", got)
+	}
+	if got.Image != "caddy:2" {
+		t.Fatalf("镜像不符: %q", got.Image)
+	}
+	if got.Ports != "" {
+		t.Fatalf("空 Ports 应为 \"\", got %q", got.Ports)
+	}
+}
+
+// TestCaddyStatusTransportError 验证 SSH/传输层错误 → 返回 error(不掩盖为「未安装」)。
+func TestCaddyStatusTransportError(t *testing.T) {
+	ctx := context.Background()
+	st := storetest.OpenDB(t)
+	ft := &errTarget{err: target.ErrUnreachable}
+	svc := &service{store: NewStore(st), tg: ft, prober: fakeProber{}}
+
+	if _, err := svc.CaddyStatus(ctx, "srv-1"); err == nil {
+		t.Fatalf("传输层错误应返回 error")
+	}
+}
+
+// TestRemoveCaddySequence 验证 RemoveCaddy 按序发 docker stop → docker rm,且绝不删卷。
+func TestRemoveCaddySequence(t *testing.T) {
+	ctx := context.Background()
+	st := storetest.OpenDB(t)
+	ft := &fakeTarget{}
+	svc := &service{store: NewStore(st), tg: ft, prober: fakeProber{}}
+
+	if err := svc.RemoveCaddy(ctx, "srv-1"); err != nil {
+		t.Fatalf("RemoveCaddy: %v", err)
+	}
+	joined := make([]string, len(ft.execCalls))
+	for i, c := range ft.execCalls {
+		joined[i] = cmdJoin(c)
+	}
+	mustHaveInOrder(t, joined, []string{
+		"docker stop pipewright-caddy",
+		"docker rm pipewright-caddy",
+	})
+	// 绝不删命名卷。
+	for _, j := range joined {
+		if strings.Contains(j, "volume rm") || strings.Contains(j, caddyDataVol) {
+			t.Fatalf("RemoveCaddy 绝不可删卷, but issued: %q", j)
+		}
+	}
+}
+
+// TestRemoveCaddyIdempotentNoSuchContainer 验证容器已不存在(stop/rm 报 No such container)仍成功。
+func TestRemoveCaddyIdempotentNoSuchContainer(t *testing.T) {
+	ctx := context.Background()
+	st := storetest.OpenDB(t)
+	ft := &fakeTarget{
+		resultFor: func(cmd []string) *target.ExecResult {
+			if len(cmd) >= 2 && cmd[0] == "docker" && (cmd[1] == "stop" || cmd[1] == "rm") {
+				return &target.ExecResult{ExitCode: 1, Stderr: "Error: No such container: pipewright-caddy"}
+			}
+			return nil
+		},
+	}
+	svc := &service{store: NewStore(st), tg: ft, prober: fakeProber{}}
+
+	if err := svc.RemoveCaddy(ctx, "srv-1"); err != nil {
+		t.Fatalf("已不存在的容器移除应幂等成功, got %v", err)
+	}
+}
+
+// errTarget 是每次 Exec/Upload 都返回传输层 error 的假 target.Service(测 SSH 不可达路径)。
+type errTarget struct{ err error }
+
+func (e *errTarget) Exec(context.Context, string, []string) (*target.ExecResult, error) {
+	return nil, e.err
+}
+func (e *errTarget) Upload(context.Context, string, io.Reader, string) error { return e.err }
+func (e *errTarget) Get(context.Context, string) (*target.Server, error)     { return nil, nil }
+func (e *errTarget) List(context.Context) ([]*target.Server, error)          { return nil, nil }
+func (e *errTarget) Create(context.Context, target.CreateInput) (*target.Server, error) {
+	return nil, nil
+}
+func (e *errTarget) Update(context.Context, string, target.UpdateInput) (*target.Server, error) {
+	return nil, nil
+}
+func (e *errTarget) Delete(context.Context, string) error                     { return nil }
+func (e *errTarget) Test(context.Context, string) (*target.TestResult, error) { return nil, nil }
+func (e *errTarget) ExecStream(context.Context, string, []string) (io.ReadCloser, error) {
+	return nil, nil
+}
+func (e *errTarget) ExecInteractive(context.Context, string, []string) (target.Session, error) {
+	return nil, nil
+}
+
 // --- 测试小工具 ------------------------------------------------------------
 
 func firstIndexWithPrefix(haystack []string, prefix string) int {

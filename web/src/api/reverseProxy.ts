@@ -53,11 +53,52 @@ export interface PathRule {
 }
 
 /**
+ * One extra upstream behind a route, for load balancing (R4 / E4.2). The route's
+ * primary `upstreamContainer:upstreamPort` is the first upstream; each entry here
+ * is an *additional* backend Caddy spreads traffic across per `lbPolicy`. Two or
+ * more total upstreams enable load balancing + optional active health checks.
+ */
+export interface Upstream {
+  /** Backend container name (resolved on the shared network). */
+  container: string
+  /** Backend port inside the container. */
+  port: number
+}
+
+/**
+ * Load-balancing policy across the route's upstreams (R4 / E4.2). Mirrors Caddy's
+ * `lb_policy`. Only meaningful when ≥2 upstreams exist.
+ */
+export type LbPolicy = 'round_robin' | 'least_conn' | 'random' | 'first'
+
+/**
+ * TCP (L4) passthrough for a route (R4 / E4.3). When set, Caddy's layer-4 app
+ * listens on `listenPort` on the host and forwards raw TCP to
+ * `upstreamContainer:upstreamPort` — bypassing HTTP routing entirely (no TLS
+ * termination, no path rules). Use for databases, message brokers, custom
+ * protocols. Cleared (null/omitted) → HTTP-only route.
+ */
+export interface TcpPassthrough {
+  /** Host port the L4 listener binds. */
+  listenPort: number
+  /** Backend container raw TCP is forwarded to. */
+  upstreamContainer: string
+  /** Backend port inside the container. */
+  upstreamPort: number
+}
+
+/**
  * Per-route advanced config (R2 / FR-6..FR-9). Returned on every route; mutated
  * via `updateProxyRoute`. The Basic-Auth password is **write-only** — it is never
  * returned (only `basicAuthEnabled` reflects whether one is set).
  */
 export interface ProxyRouteConfig {
+  /**
+   * Upstream kind: `'container'` reverse-proxies to a running Docker container by
+   * name over the shared network; `'address'` forwards straight to the host:port
+   * the user typed (an IP / FQDN / `host.docker.internal`). Defaults to `'container'`.
+   */
+  upstreamKind?: 'container' | 'address'
   /** Extra FQDNs served by the same route (besides `domain`). */
   aliases: string[]
   /** Redirect plain HTTP → HTTPS (default on for `auto` TLS). */
@@ -89,6 +130,31 @@ export interface ProxyRouteConfig {
    * the default / catch-all; each rule diverts a matching path prefix elsewhere.
    */
   pathRules?: PathRule[]
+  /**
+   * R4 / E4.2: additional upstreams behind this route (besides the primary
+   * `upstreamContainer:upstreamPort`). Two or more total upstreams enable load
+   * balancing. Empty / omitted → single upstream, no LB.
+   */
+  upstreams?: Upstream[]
+  /** R4 / E4.2: load-balancing policy across upstreams. Defaults to round_robin. */
+  lbPolicy?: LbPolicy
+  /**
+   * R4 / E4.2: optional active health-check URI (e.g. `/healthz`). When set, Caddy
+   * polls each upstream and routes only to healthy ones. Empty → passive only.
+   */
+  healthUri?: string
+  /** R4 / E4.2: health-check interval (Go duration, e.g. `10s`). Empty → Caddy default. */
+  healthInterval?: string
+  /**
+   * R4 / E4.3: serve the upstream over HTTP/2 cleartext (h2c) — required for plain
+   * gRPC backends. WebSocket needs no flag (Caddy upgrades it automatically).
+   */
+  grpc?: boolean
+  /**
+   * R4 / E4.3: optional L4 TCP passthrough listener. Separate from HTTP routing —
+   * raw TCP on `listenPort` → upstream container:port. null / omitted → HTTP only.
+   */
+  tcpPassthrough?: TcpPassthrough | null
 }
 
 /** One domain → upstream container:port reverse-proxy route on a host. */
@@ -137,8 +203,19 @@ export interface UpdateProxyRouteInput {
 export interface CreateProxyRouteInput {
   serverId: string
   domain: string
+  /**
+   * Upstream target: a running container name when `config.upstreamKind` is
+   * `'container'`, or the host (IP / FQDN / `host.docker.internal`) the user typed
+   * when it is `'address'`.
+   */
   upstreamContainer: string
   upstreamPort: number
+  /**
+   * Partial advanced config sent on create. For the simple bind form this carries
+   * only `upstreamKind` (`'container'` | `'address'`); the backend fills the rest
+   * with defaults. Omit to default to a container upstream.
+   */
+  config?: Partial<ProxyRouteConfig>
 }
 
 /** List all reverse-proxy routes bound on a single server. */
@@ -180,6 +257,63 @@ export async function updateProxyRoute(id: string, body: UpdateProxyRouteInput):
 /** Delete a route (FR-5). Removes it from Caddy and reloads; the cert volume is kept. */
 export async function deleteProxyRoute(id: string): Promise<{ ok: boolean }> {
   return http.delete<{ ok: boolean }>(`/api/proxy/routes/${encodeURIComponent(id)}`)
+}
+
+/**
+ * Status of the `pipewright-caddy` reverse-proxy container on one host (R4).
+ * The reverse proxy is a real Docker container Pipewright runs ON the target
+ * host — this surfaces that fact for awareness + consent + reversibility:
+ * whether it exists, whether it's running, and what it's occupying.
+ */
+export interface CaddyStatus {
+  /** Host the status is for. */
+  serverId: string
+  /** Whether the `pipewright-caddy` container exists on the host. */
+  installed: boolean
+  /** Whether that container is currently running. */
+  running: boolean
+  /** Container image, e.g. `caddy:2`. `''` if unknown. */
+  image: string
+  /** Host ports it occupies, e.g. `80,443`. `''` if unknown. */
+  ports: string
+  /** Number of reverse-proxy routes bound on this host. */
+  routeCount: number
+}
+
+/**
+ * Read the reverse-proxy environment status on a host (R4): whether the
+ * `pipewright-caddy` container exists, is running, and what it occupies. Drives
+ * the awareness card and gates the first-start consent dialog.
+ *
+ * GET /api/proxy/caddy?serverId=<id> → CaddyStatus
+ */
+export async function getCaddyStatus(serverId: string): Promise<CaddyStatus> {
+  return http.get<CaddyStatus>(`/api/proxy/caddy?serverId=${encodeURIComponent(serverId)}`)
+}
+
+/**
+ * Deploy the reverse-proxy environment on a host (R4 · explicit consent path):
+ * starts the `pipewright-caddy` container so it's running and ready before any
+ * domain is bound. User-triggered from the awareness card's "deploy" button —
+ * the same act otherwise done implicitly on first bind, surfaced explicitly here.
+ * Returns the refreshed status (should reflect installed + running).
+ *
+ * POST /api/proxy/caddy?serverId=<id> → CaddyStatus   (needs CSRF)
+ */
+export async function prepareCaddyEnv(serverId: string): Promise<CaddyStatus> {
+  return http.post<CaddyStatus>(`/api/proxy/caddy?serverId=${encodeURIComponent(serverId)}`, {})
+}
+
+/**
+ * Remove the reverse-proxy environment on a host (R4 · reversibility): stops and
+ * deletes the `pipewright-caddy` container. The certificate volume is kept, so
+ * re-enabling a domain restores HTTPS without re-issuing from scratch. Bound
+ * domains on this host stop serving HTTPS until the env is brought back up.
+ *
+ * DELETE /api/proxy/caddy?serverId=<id> → { ok: true }   (needs CSRF)
+ */
+export async function removeCaddyEnv(serverId: string): Promise<{ ok: boolean }> {
+  return http.delete<{ ok: boolean }>(`/api/proxy/caddy?serverId=${encodeURIComponent(serverId)}`)
 }
 
 /**

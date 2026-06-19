@@ -15,7 +15,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NIcon } from 'naive-ui'
-import { ChevronRight, Plus, X, Trash, ShieldLock, World, ArrowRight, Route } from '@vicons/tabler'
+import { ChevronRight, Plus, X, Trash, ShieldLock, World, ArrowRight, Route, Scale, Plug } from '@vicons/tabler'
 import {
   updateProxyRoute,
   type ProxyRoute,
@@ -23,6 +23,9 @@ import {
   type Redirect,
   type RedirectStatus,
   type PathRule,
+  type Upstream,
+  type LbPolicy,
+  type TcpPassthrough,
 } from '../../api/reverseProxy'
 import { listDnsProviders, type DnsProvider } from '../../api/dnsProviders'
 import { HttpError } from '../../api/http'
@@ -57,6 +60,16 @@ const redirects = ref<Redirect[]>([])
 // R3:DNS 提供商挂接(空=不挂接,仅 HTTP-01)+ 路径路由
 const dnsProviderId = ref('')
 const pathRules = ref<PathRule[]>([])
+// R4 / E4.2:负载均衡(额外上游 + 策略 + 健康检查);E4.3:gRPC(h2c)+ TCP 透传(L4)
+const upstreams = ref<Upstream[]>([])
+const lbPolicy = ref<LbPolicy>('round_robin')
+const healthUri = ref('')
+const healthInterval = ref('')
+const grpc = ref(false)
+const tcpEnabled = ref(false)
+const tcpListenPort = ref(0)
+const tcpUpstreamContainer = ref('')
+const tcpUpstreamPort = ref(0)
 
 function resetFromRoute(): void {
   const c = props.route.config
@@ -73,6 +86,16 @@ function resetFromRoute(): void {
   redirects.value = c.redirects.map((r) => ({ ...r }))
   dnsProviderId.value = c.dnsProviderId ?? ''
   pathRules.value = (c.pathRules ?? []).map((r) => ({ ...r }))
+  upstreams.value = (c.upstreams ?? []).map((u) => ({ ...u }))
+  lbPolicy.value = c.lbPolicy ?? 'round_robin'
+  healthUri.value = c.healthUri ?? ''
+  healthInterval.value = c.healthInterval ?? ''
+  grpc.value = c.grpc ?? false
+  const tcp = c.tcpPassthrough
+  tcpEnabled.value = Boolean(tcp)
+  tcpListenPort.value = tcp?.listenPort ?? 0
+  tcpUpstreamContainer.value = tcp?.upstreamContainer ?? ''
+  tcpUpstreamPort.value = tcp?.upstreamPort ?? 0
 }
 
 // ─── DNS 提供商(供「挂接」下拉 + 通配符放行) ───────────────────────────────────────
@@ -221,6 +244,47 @@ const pathRuleIncomplete = computed(() =>
   pathRules.value.some((r) => pathRuleStarted(r) && !pathRuleValid(r)),
 )
 
+// ─── R4 / E4.2:负载均衡(额外上游) ───────────────────────────────────────────────
+const LB_POLICIES: LbPolicy[] = ['round_robin', 'least_conn', 'random', 'first']
+function lbPolicyLabel(p: LbPolicy): string {
+  return t(`reverseProxy.adv.lbPolicy_${p}`)
+}
+function addUpstream(): void {
+  upstreams.value = [...upstreams.value, { container: '', port: 0 }]
+}
+function removeUpstream(i: number): void {
+  upstreams.value = upstreams.value.filter((_, idx) => idx !== i)
+}
+function upstreamStarted(u: Upstream): boolean {
+  return Boolean(u.container.trim() || u.port)
+}
+function upstreamValid(u: Upstream): boolean {
+  return (
+    u.container.trim().length > 0 &&
+    Number.isInteger(u.port) &&
+    u.port >= 1 &&
+    u.port <= 65535
+  )
+}
+// 任一额外上游「开始填但未填全/无效」→ 禁用保存。
+const upstreamIncomplete = computed(() =>
+  upstreams.value.some((u) => upstreamStarted(u) && !upstreamValid(u)),
+)
+// 总上游数(主上游 + 填全有效的额外上游)≥2 → 真正启用 LB。
+const validExtraUpstreams = computed(() => upstreams.value.filter((u) => upstreamStarted(u) && upstreamValid(u)))
+const lbActive = computed(() => validExtraUpstreams.value.length >= 1)
+
+// ─── R4 / E4.3:TCP 透传(L4) ─────────────────────────────────────────────────────
+// 启用透传后:监听端口 + 上游容器 + 上游端口都须有效。
+function portValid(n: number): boolean {
+  return Number.isInteger(n) && n >= 1 && n <= 65535
+}
+const tcpIncomplete = computed(
+  () =>
+    tcpEnabled.value &&
+    !(portValid(tcpListenPort.value) && tcpUpstreamContainer.value.trim().length > 0 && portValid(tcpUpstreamPort.value)),
+)
+
 // ─── Basic Auth 派生状态 ──────────────────────────────────────────────────────
 const authUserCleared = computed(() => basicAuthUser.value.trim().length === 0)
 // 启用认证但既无存量密码、又没输入新密码 → 不合法(空密码无意义)。
@@ -238,7 +302,9 @@ const canSave = computed(
     !saving.value &&
     !redirectIncomplete.value &&
     !authNeedsPassword.value &&
-    !pathRuleIncomplete.value,
+    !pathRuleIncomplete.value &&
+    !upstreamIncomplete.value &&
+    !tcpIncomplete.value,
 )
 
 async function save(): Promise<void> {
@@ -266,6 +332,23 @@ async function save(): Promise<void> {
         upstreamContainer: r.upstreamContainer.trim(),
         upstreamPort: r.upstreamPort,
       })),
+    // R4 / E4.2:只提交填全有效的额外上游;规范化。
+    upstreams: validExtraUpstreams.value.map((u) => ({
+      container: u.container.trim(),
+      port: u.port,
+    })),
+    lbPolicy: lbPolicy.value,
+    healthUri: healthUri.value.trim(),
+    healthInterval: healthInterval.value.trim(),
+    // R4 / E4.3:gRPC(h2c)+ TCP 透传(L4);未启用透传 → null。
+    grpc: grpc.value,
+    tcpPassthrough: tcpEnabled.value
+      ? {
+          listenPort: tcpListenPort.value,
+          upstreamContainer: tcpUpstreamContainer.value.trim(),
+          upstreamPort: tcpUpstreamPort.value,
+        }
+      : null,
   }
   saving.value = true
   try {
@@ -572,6 +655,144 @@ async function save(): Promise<void> {
         </button>
         <p v-if="pathBadSlash" class="advhint advhint--err">{{ t('reverseProxy.adv.pathMustStartSlash') }}</p>
         <p v-else-if="pathRuleIncomplete" class="advhint advhint--err">{{ t('reverseProxy.adv.pathRuleIncomplete') }}</p>
+      </section>
+
+      <!-- R4 / E4.2:负载均衡(额外上游 + 策略 + 健康检查) -->
+      <section class="advsec">
+        <h4 class="advsec__h">{{ t('reverseProxy.adv.lbTitle') }}</h4>
+        <p class="advsec__lede">{{ t('reverseProxy.adv.lbLede') }}</p>
+        <ul v-if="upstreams.length > 0" class="pathlist" role="list">
+          <li v-for="(u, i) in upstreams" :key="i" class="lb__row">
+            <input
+              v-model="u.container"
+              class="advin mono"
+              :placeholder="t('reverseProxy.adv.lbUpstreamPlaceholder')"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <input
+              v-model.number="u.port"
+              class="advin mono lb__port"
+              inputmode="numeric"
+              :placeholder="t('reverseProxy.adv.lbPortPlaceholder')"
+              autocomplete="off"
+            />
+            <button
+              class="rdr__del"
+              :aria-label="t('reverseProxy.adv.removeUpstream')"
+              :title="t('reverseProxy.adv.removeUpstream')"
+              @click="removeUpstream(i)"
+            >
+              <NIcon :size="14"><Trash /></NIcon>
+            </button>
+          </li>
+        </ul>
+        <button class="advghost" @click="addUpstream">
+          <NIcon :size="13"><Scale /></NIcon>
+          {{ t('reverseProxy.adv.addUpstream') }}
+        </button>
+        <p v-if="upstreamIncomplete" class="advhint advhint--err">{{ t('reverseProxy.adv.upstreamIncomplete') }}</p>
+        <p v-else-if="lbActive" class="advhint advhint--lb">{{ t('reverseProxy.adv.lbActiveHint') }}</p>
+        <p v-else class="advhint">{{ t('reverseProxy.adv.lbSingleHint') }}</p>
+
+        <!-- 策略 + 健康检查(仅在有额外上游时才有意义,但始终可填) -->
+        <div class="advsub advsub--gap">
+          <span class="advsub__label">{{ t('reverseProxy.adv.lbPolicyLabel') }}</span>
+        </div>
+        <select v-model="lbPolicy" class="advin" :disabled="!lbActive">
+          <option v-for="p in LB_POLICIES" :key="p" :value="p">{{ lbPolicyLabel(p) }}</option>
+        </select>
+        <div class="advsub advsub--gap">
+          <span class="advsub__label">{{ t('reverseProxy.adv.healthLabel') }}</span>
+        </div>
+        <div class="advgrid2">
+          <input
+            v-model="healthUri"
+            class="advin mono"
+            :placeholder="t('reverseProxy.adv.healthUriPlaceholder')"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <input
+            v-model="healthInterval"
+            class="advin mono"
+            :placeholder="t('reverseProxy.adv.healthIntervalPlaceholder')"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </div>
+        <p class="advhint">{{ t('reverseProxy.adv.healthHint') }}</p>
+      </section>
+
+      <!-- R4 / E4.3:协议(gRPC h2c · WebSocket · TCP 透传 L4) -->
+      <section class="advsec">
+        <h4 class="advsec__h">{{ t('reverseProxy.adv.protoTitle') }}</h4>
+        <p class="advsec__lede">{{ t('reverseProxy.adv.protoLede') }}</p>
+        <div class="toggles">
+          <label class="tgl">
+            <input v-model="grpc" type="checkbox" class="tgl__cb" />
+            <span class="tgl__box" aria-hidden="true" />
+            <span class="tgl__txt">
+              <span class="tgl__name">{{ t('reverseProxy.adv.grpc') }}</span>
+              <span class="tgl__desc">{{ t('reverseProxy.adv.grpcDesc') }}</span>
+            </span>
+          </label>
+        </div>
+        <p class="advhint advhint--ws">
+          <NIcon :size="13" class="advhint__ic"><Plug /></NIcon>
+          {{ t('reverseProxy.adv.wsNote') }}
+        </p>
+
+        <!-- TCP 透传(L4),明确与 HTTP 分开 -->
+        <div class="l4box" :class="{ 'l4box--on': tcpEnabled }">
+          <label class="tgl tgl--bare">
+            <input v-model="tcpEnabled" type="checkbox" class="tgl__cb" />
+            <span class="tgl__box" aria-hidden="true" />
+            <span class="tgl__txt">
+              <span class="tgl__name">
+                {{ t('reverseProxy.adv.tcpTitle') }}
+                <span class="l4tag">L4</span>
+              </span>
+              <span class="tgl__desc">{{ t('reverseProxy.adv.tcpDesc') }}</span>
+            </span>
+          </label>
+          <template v-if="tcpEnabled">
+            <div class="l4grid">
+              <label class="l4field">
+                <span class="l4field__lbl">{{ t('reverseProxy.adv.tcpListenLabel') }}</span>
+                <input
+                  v-model.number="tcpListenPort"
+                  class="advin mono"
+                  inputmode="numeric"
+                  :placeholder="t('reverseProxy.adv.tcpListenPlaceholder')"
+                  autocomplete="off"
+                />
+              </label>
+              <label class="l4field">
+                <span class="l4field__lbl">{{ t('reverseProxy.adv.tcpUpstreamLabel') }}</span>
+                <input
+                  v-model="tcpUpstreamContainer"
+                  class="advin mono"
+                  :placeholder="t('reverseProxy.adv.tcpUpstreamPlaceholder')"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+              </label>
+              <label class="l4field">
+                <span class="l4field__lbl">{{ t('reverseProxy.adv.tcpPortLabel') }}</span>
+                <input
+                  v-model.number="tcpUpstreamPort"
+                  class="advin mono"
+                  inputmode="numeric"
+                  :placeholder="t('reverseProxy.adv.tcpPortPlaceholder')"
+                  autocomplete="off"
+                />
+              </label>
+            </div>
+            <p v-if="tcpIncomplete" class="advhint advhint--err">{{ t('reverseProxy.adv.tcpIncomplete') }}</p>
+            <p v-else class="advhint">{{ t('reverseProxy.adv.tcpHint') }}</p>
+          </template>
+        </div>
       </section>
 
       <!-- 保存 -->
@@ -930,6 +1151,86 @@ async function save(): Promise<void> {
   width: 78px;
 }
 
+/* R4:负载均衡额外上游行 */
+.lb__row {
+  display: grid;
+  grid-template-columns: 1fr 90px auto;
+  align-items: center;
+  gap: 7px;
+}
+.lb__port {
+  width: 90px;
+}
+.advhint--lb {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+.advhint--ws {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.advhint__ic {
+  color: var(--color-primary);
+  flex-shrink: 0;
+}
+
+/* R4 / E4.3:TCP 透传(L4)—— 明确独立成框,与上方 HTTP 设置区分 */
+.l4box {
+  margin-top: 4px;
+  padding: 12px 13px;
+  border-radius: var(--rounded-md);
+  border: 1px dashed var(--color-border-strong);
+  background: var(--color-card-2);
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  transition:
+    border-color var(--duration-fast, 150ms) ease,
+    background var(--duration-fast, 150ms) ease;
+}
+.l4box--on {
+  border-style: solid;
+  border-color: var(--color-cyan-line, var(--color-primary-soft));
+  background: var(--color-cyan-soft, var(--color-primary-soft));
+}
+.tgl--bare {
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+.tgl--bare:hover {
+  border: none;
+}
+.l4tag {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: var(--text-micro);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: var(--rounded-full);
+  color: var(--color-cyan, var(--color-primary));
+  background: var(--color-cyan-soft, var(--color-primary-soft));
+  vertical-align: middle;
+}
+.l4grid {
+  display: grid;
+  grid-template-columns: 100px 1fr 100px;
+  gap: 8px;
+}
+.l4field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.l4field__lbl {
+  font-size: var(--text-micro);
+  font-weight: 600;
+  color: var(--color-faint);
+}
+
 .advghost {
   align-self: flex-start;
   display: inline-flex;
@@ -1005,6 +1306,12 @@ async function save(): Promise<void> {
   }
   .path__row {
     grid-template-columns: 1fr 60px auto;
+  }
+  .lb__row {
+    grid-template-columns: 1fr 64px auto;
+  }
+  .l4grid {
+    grid-template-columns: 1fr;
   }
   .rdr__arrow {
     display: none;

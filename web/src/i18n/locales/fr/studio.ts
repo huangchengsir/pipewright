@@ -93,6 +93,8 @@ export default {
   phCategory: 'Compilation et artefacts',
   metaSummaryPre: 'Résumé en une ligne (peut contenir ',
   metaSummaryPost: ')',
+  imgPlaceholder: 'p. ex. node:20-alpine',
+  summaryPlaceholder: 'p. ex. Compiler avec npm et produire dist',
   metaHint: 'La catégorie détermine dans quel groupe il apparaît dans le sélecteur « Ajouter un nœud » ; le résumé + l’icône sont la carte que les réutilisateurs voient en premier.',
   defaultCategory: 'Personnalisé',
 

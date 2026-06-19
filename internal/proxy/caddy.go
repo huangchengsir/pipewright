@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -55,6 +56,12 @@ func renderCaddyfile(routes []Route, dnsCreds map[string]dnsCred) string {
 
 	var b strings.Builder
 	b.WriteString("# 由 Pipewright 自动生成,请勿手改。\n")
+
+	// R4 E4.3:TCP 透传(caddy-l4)走 Caddyfile **全局选项块**里的 layer4 段,不是 HTTP 站点块。
+	// 凡有路由带 TCPPassthrough,就先发一个全局 { layer4 { :port { route { proxy c:port } } } }。
+	// 必须在任何站点块之前(Caddyfile 要求全局选项块为文件首个块)。
+	renderLayer4Global(&b, sorted)
+
 	if len(sorted) == 0 {
 		b.WriteString("# 当前没有启用的反代路由。\n")
 		return b.String()
@@ -63,6 +70,46 @@ func renderCaddyfile(routes []Route, dnsCreds map[string]dnsCred) string {
 		renderSite(&b, r, dnsCreds)
 	}
 	return b.String()
+}
+
+// renderLayer4Global 渲染 TCP 透传的 layer4 全局块(R4 E4.3;caddy-l4)。
+// 仅当至少一条路由带 TCPPassthrough 时才输出;按监听端口升序稳定排序(渲染确定 + reload 幂等)。
+// 形如:
+//
+//	{
+//	    layer4 {
+//	        :5432 {
+//	            route {
+//	                proxy db_container:5432
+//	            }
+//	        }
+//	    }
+//	}
+//
+// 所有进入文本的值已在领域层(validateConfig)严格校验过(端口 1..65535 + 容器名安全字符集)。
+func renderLayer4Global(b *strings.Builder, routes []Route) {
+	tcps := make([]TCPConfig, 0)
+	for _, r := range routes {
+		if tc := r.Config.TCPPassthrough; tc != nil {
+			tcps = append(tcps, *tc)
+		}
+	}
+	if len(tcps) == 0 {
+		return
+	}
+	sort.Slice(tcps, func(i, j int) bool { return tcps[i].ListenPort < tcps[j].ListenPort })
+
+	b.WriteString("{\n")
+	b.WriteString("    layer4 {\n")
+	for _, tc := range tcps {
+		b.WriteString("        :" + strconv.Itoa(tc.ListenPort) + " {\n")
+		b.WriteString("            route {\n")
+		b.WriteString("                proxy " + tc.UpstreamContainer + ":" + strconv.Itoa(tc.UpstreamPort) + "\n")
+		b.WriteString("            }\n")
+		b.WriteString("        }\n")
+	}
+	b.WriteString("    }\n")
+	b.WriteString("}\n")
 }
 
 // renderSite 渲染单条路由的站点块(R2:多域名别名 + 访问控制 + 安全头 + 压缩 + 重定向)。
@@ -85,20 +132,46 @@ func renderSite(b *strings.Builder, r Route, dnsCreds map[string]dnsCred) {
 	if cfg.DNSProviderID != "" {
 		if cred, ok := dnsCreds[cfg.DNSProviderID]; ok && cred.Type != "" && cred.Token != "" {
 			b.WriteString("    tls {\n")
-			b.WriteString("        dns " + cred.Type + " " + cred.Token + "\n")
+			switch cred.Type {
+			case "alidns":
+				// 阿里云:凭据 = "AccessKeyId,AccessKeySecret";caddy-dns/alidns 要两字段块,
+				// 不是单 token(单 token 会被 caddy 当成非法语法、DNS-01 签失败)。
+				id, secret := splitDNSCred(cred.Token)
+				b.WriteString("        dns alidns {\n")
+				b.WriteString("            access_key_id " + id + "\n")
+				b.WriteString("            access_key_secret " + secret + "\n")
+				b.WriteString("        }\n")
+			case "dnspod", "tencentcloud":
+				// 腾讯云/DNSPod:凭据 = "SecretId,SecretKey";caddy-dns/tencentcloud 要两字段块。
+				id, secret := splitDNSCred(cred.Token)
+				b.WriteString("        dns tencentcloud {\n")
+				b.WriteString("            secret_id " + id + "\n")
+				b.WriteString("            secret_key " + secret + "\n")
+				b.WriteString("        }\n")
+			default:
+				// cloudflare 等单 token 厂商:dns <type> <token> 即正确。
+				b.WriteString("        dns " + cred.Type + " " + cred.Token + "\n")
+			}
 			b.WriteString("    }\n")
 		}
 	}
 
 	// IP 黑名单:命中即 403(优先于白名单,显式拒绝先行)。
+	// 用 handle 包 respond,不发裸 `respond @denied 403`:Caddy 的指令排序会把裸 respond 排到
+	// reverse_proxy/handle 之后,一旦本路由用了路径规则/负载均衡(handle 块),IP 名单会被绕过、形同虚设。
+	// handle 在指令顺序里早于 reverse_proxy,且 handle 块按源码顺序互斥求值,放在内容 handle 之前即真正拦截。
 	if len(cfg.IPDeny) > 0 {
 		b.WriteString("    @denied remote_ip " + strings.Join(cfg.IPDeny, " ") + "\n")
-		b.WriteString("    respond @denied 403\n")
+		b.WriteString("    handle @denied {\n")
+		b.WriteString("        respond 403\n")
+		b.WriteString("    }\n")
 	}
 	// IP 白名单:不在白名单内即 403(只有列出的网段可访问)。
 	if len(cfg.IPAllow) > 0 {
 		b.WriteString("    @notallowed not remote_ip " + strings.Join(cfg.IPAllow, " ") + "\n")
-		b.WriteString("    respond @notallowed 403\n")
+		b.WriteString("    handle @notallowed {\n")
+		b.WriteString("        respond 403\n")
+		b.WriteString("    }\n")
 	}
 	// Basic Auth:用户名 + bcrypt 哈希(两者都在才渲染)。
 	if cfg.BasicAuthUser != "" && cfg.BasicAuthHash != "" {
@@ -129,25 +202,72 @@ func renderSite(b *strings.Builder, r Route, dnsCreds map[string]dnsCred) {
 	}
 
 	// 反代到上游(始终最后)。
-	if len(cfg.PathRules) > 0 {
+	// 主内容包进 handle 的条件:有路径规则,或有 IP 名单。有 IP 名单时必须包 handle{},
+	// 才能与上面的 `handle @denied/@notallowed` 互斥——否则被拒请求 respond 403 后,裸
+	// reverse_proxy 仍会执行并重复写响应。两者都无时保持裸 reverse_proxy(最简形态)。
+	if len(cfg.PathRules) > 0 || len(cfg.IPAllow) > 0 || len(cfg.IPDeny) > 0 {
 		// R3 E3.5 路径路由:逐条 handle <path> { reverse_proxy c:port },末尾默认 handle 落主上游。
+		// 路径路由的各 handle 用裸单上游(LB/健康检查/gRPC 仅作用于默认主上游块,保持语义简单确定)。
 		for _, pr := range cfg.PathRules {
 			b.WriteString("    handle " + pr.Path + " {\n")
 			b.WriteString("        reverse_proxy " + pr.UpstreamContainer + ":" + strconv.Itoa(pr.UpstreamPort) + "\n")
 			b.WriteString("    }\n")
 		}
 		b.WriteString("    handle {\n")
-		b.WriteString("        reverse_proxy " + r.UpstreamContainer + ":" + strconv.Itoa(r.UpstreamPort) + "\n")
+		renderReverseProxy(b, "        ", r, cfg)
 		b.WriteString("    }\n")
 	} else {
-		b.WriteString("    reverse_proxy " + r.UpstreamContainer + ":" + strconv.Itoa(r.UpstreamPort) + "\n")
+		renderReverseProxy(b, "    ", r, cfg)
 	}
 	b.WriteString("}\n")
 }
 
+// renderReverseProxy 渲染主上游的 reverse_proxy 指令(R4 E4.2 多上游/负载均衡/健康检查 + E4.3 gRPC h2c)。
+// indent 是行首缩进(站点块内 4 空格;默认 handle 内 8 空格)。
+//   - 多上游:reverse_proxy primary:p up2:p up3:p(主上游始终第一)。
+//   - lb_policy / health_uri / health_interval / gRPC transport 任一存在 → 渲染 { ... } 配置块;
+//     否则单行(保持 R1-R3 既有 golden 不变)。
+//
+// 所有进入文本的值已在领域层(validateConfig)严格校验过,渲染处不再二次防注入。
+func renderReverseProxy(b *strings.Builder, indent string, r Route, cfg RouteConfig) {
+	// 上游列表:主上游 + 额外上游(E4.2)。
+	upstreams := r.UpstreamContainer + ":" + strconv.Itoa(r.UpstreamPort)
+	for _, u := range cfg.Upstreams {
+		upstreams += " " + u.Container + ":" + strconv.Itoa(u.Port)
+	}
+
+	needBlock := cfg.LBPolicy != "" || cfg.HealthURI != "" || cfg.HealthInterval != "" || cfg.GRPC
+	if !needBlock {
+		b.WriteString(indent + "reverse_proxy " + upstreams + "\n")
+		return
+	}
+	b.WriteString(indent + "reverse_proxy " + upstreams + " {\n")
+	if cfg.LBPolicy != "" {
+		b.WriteString(indent + "    lb_policy " + cfg.LBPolicy + "\n")
+	}
+	if cfg.HealthURI != "" {
+		b.WriteString(indent + "    health_uri " + cfg.HealthURI + "\n")
+	}
+	if cfg.HealthInterval != "" {
+		b.WriteString(indent + "    health_interval " + cfg.HealthInterval + "\n")
+	}
+	if cfg.GRPC {
+		// gRPC 走 h2c(明文 HTTP/2)到上游容器;与上游/lb/health 合并在同一 reverse_proxy 块内。
+		b.WriteString(indent + "    transport http {\n")
+		b.WriteString(indent + "        versions h2c 2\n")
+		b.WriteString(indent + "    }\n")
+	}
+	b.WriteString(indent + "}\n")
+}
+
 // ensureCaddy 幂等地在目标主机上保证 Caddy 反代就绪:建共享网络 + 起 Caddy 容器(若缺)。
 // 起容器前探测 80/443 占用,冲突即返回人话错误(不强起)。
-func ensureCaddy(ctx context.Context, tg target.Service, serverID string) error {
+//
+// tcpPorts 是本主机所有 enabled 路由声明的 TCP 透传监听端口(R4 E4.3 caddy-l4)。这些端口必须由
+// Caddy 容器**对宿主发布**(-p)才能被外部访问 —— layer4 监听在容器内,不发布则不可达。Docker 端口
+// 在容器创建时固定,故当既有 Caddy 容器未发布某个新增 TCP 端口时,需带「既有映射 ∪ TCP 端口」重建容器
+// (镜像自带默认 Caddyfile 兜底启动,随后 apply 会覆盖为真实配置 + reload;证书/配置走持久卷不丢)。
+func ensureCaddy(ctx context.Context, tg target.Service, serverID string, tcpPorts []int) error {
 	// 1) 共享网络(存在即跳过)。inspect 非零退出(网络不存在)→ create。
 	netInsp, err := tg.Exec(ctx, serverID, []string{"docker", "network", "inspect", proxyNetwork})
 	if err != nil {
@@ -163,45 +283,215 @@ func ensureCaddy(ctx context.Context, tg target.Service, serverID string) error 
 		}
 	}
 
-	// 2) Caddy 容器存在则直接返回(幂等)。inspect 成功(exit 0)= 已在。
+	// 2) Caddy 容器存在:校验是否已发布全部 TCP 监听端口。已覆盖 → 幂等返回;缺端口 → 保留既有
+	//    端口映射(如自定义 18080/18443)并补上缺失的 TCP 端口后重建容器。
 	insp, err := tg.Exec(ctx, serverID, []string{"docker", "inspect", caddyContainer})
 	if err != nil {
 		return mapExecErr(err)
 	}
 	if insp.ExitCode == 0 {
-		return nil
+		cur, perr := inspectCaddyPortMap(ctx, tg, serverID)
+		if perr != nil {
+			return perr
+		}
+		if caddyPortsCover(cur, tcpPorts) {
+			return nil
+		}
+		// 重建:rm -f 释放端口 → 用「既有映射 ∪ TCP 端口」重起。
+		if rmRes, rmErr := tg.Exec(ctx, serverID, []string{"docker", "rm", "-f", caddyContainer}); rmErr != nil {
+			return mapExecErr(rmErr)
+		} else if rmRes.ExitCode != 0 {
+			return fmt.Errorf("%w:%s", ErrCaddyStart, strings.TrimSpace(firstNonEmpty(rmRes.Stderr, rmRes.Stdout)))
+		}
+		return runCaddyContainer(ctx, tg, serverID, mergeCaddyPorts(cur, tcpPorts))
 	}
 
-	// 3) 起前探测 80/443 占用(避免与既有进程抢端口,LE 校验需 80)。
+	// 3) 全新部署:起前探测 80/443 占用(避免与既有进程抢端口,LE 校验需 80)。
 	if busy, detail := portsBusy(ctx, tg, serverID); busy {
 		return fmt.Errorf("%w%s", ErrPortConflict, detail)
 	}
+	// 默认映射 80→80 / 443→443,再叠加 TCP 端口(p→p)。
+	defaults := map[int]int{80: 80, 443: 443}
+	return runCaddyContainer(ctx, tg, serverID, mergeCaddyPorts(defaults, tcpPorts))
+}
 
-	// 4) 先 docker pull 配置的镜像(确保宿主机拿到含 DNS-01/L4 插件的自构建 Caddy;best-effort:
-	//    pull 失败不直接拒起 —— 宿主机可能已有缓存镜像或处于离线环境,交由后续 docker run 决断)。
+// runCaddyContainer 用给定的「容器端口 → 宿主端口」映射起 Caddy 容器(array 不拼 shell)。
+// --add-host host.docker.internal:host-gateway 让 address 类上游能反代到宿主机服务。
+func runCaddyContainer(ctx context.Context, tg target.Service, serverID string, ports map[int]int) error {
 	image := caddyImageRef()
+	// best-effort pull(离线/已缓存场景交由 docker run 决断)。
 	if _, perr := tg.Exec(ctx, serverID, []string{"docker", "pull", image}); perr != nil {
 		return mapExecErr(perr)
 	}
-
-	// 5) 起 Caddy 容器(array 不拼 shell)。
 	runCmd := []string{
 		"docker", "run", "-d",
 		"--name", caddyContainer,
 		"--restart", "unless-stopped",
 		"--network", proxyNetwork,
-		"-p", "80:80", "-p", "443:443",
-		"-v", caddyDataVol + ":/data",
-		"-v", caddyConfigVol + ":/config",
+		"--add-host", "host.docker.internal:host-gateway",
+	}
+	// 端口按容器端口升序发布(渲染确定,便于诊断)。
+	cports := make([]int, 0, len(ports))
+	for cp := range ports {
+		cports = append(cports, cp)
+	}
+	sort.Ints(cports)
+	for _, cp := range cports {
+		runCmd = append(runCmd, "-p", strconv.Itoa(ports[cp])+":"+strconv.Itoa(cp))
+	}
+	runCmd = append(runCmd,
+		"-v", caddyDataVol+":/data",
+		"-v", caddyConfigVol+":/config",
 		image,
 		"caddy", "run", "--config", caddyfilePath, "--adapter", "caddyfile",
-	}
+	)
 	res, err := tg.Exec(ctx, serverID, runCmd)
 	if err != nil {
 		return mapExecErr(err)
 	}
 	if res.ExitCode != 0 {
 		return fmt.Errorf("%w:%s", ErrCaddyStart, strings.TrimSpace(firstNonEmpty(res.Stderr, res.Stdout)))
+	}
+	return nil
+}
+
+// inspectCaddyPortMap 读 pipewright-caddy 已发布的「容器端口 → 宿主端口」(仅 tcp)。
+// 无容器 / 解析失败 → 空 map(调用方据此当全新部署处理)。
+func inspectCaddyPortMap(ctx context.Context, tg target.Service, serverID string) (map[int]int, error) {
+	res, err := tg.Exec(ctx, serverID, []string{
+		"docker", "inspect", caddyContainer,
+		"--format", "{{range $p, $c := .HostConfig.PortBindings}}{{$p}}={{(index $c 0).HostPort}} {{end}}",
+	})
+	if err != nil {
+		return nil, mapExecErr(err)
+	}
+	m := map[int]int{}
+	for _, tok := range strings.Fields(res.Stdout) {
+		eq := strings.IndexByte(tok, '=')
+		if eq <= 0 {
+			continue
+		}
+		proto := tok[:eq] // 形如 "80/tcp"
+		if !strings.HasSuffix(proto, "/tcp") {
+			continue
+		}
+		cp, e1 := strconv.Atoi(strings.TrimSuffix(proto, "/tcp"))
+		hp, e2 := strconv.Atoi(tok[eq+1:])
+		if e1 == nil && e2 == nil {
+			m[cp] = hp
+		}
+	}
+	return m, nil
+}
+
+// caddyPortsCover 报告既有端口映射是否已覆盖全部所需 TCP 端口。
+func caddyPortsCover(cur map[int]int, tcpPorts []int) bool {
+	for _, tp := range tcpPorts {
+		if _, ok := cur[tp]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// mergeCaddyPorts 在既有「容器端口 → 宿主端口」映射上叠加 TCP 端口(p→p,已存在则不覆盖)。
+func mergeCaddyPorts(base map[int]int, tcpPorts []int) map[int]int {
+	out := make(map[int]int, len(base)+len(tcpPorts))
+	for cp, hp := range base {
+		out[cp] = hp
+	}
+	for _, tp := range tcpPorts {
+		if _, ok := out[tp]; !ok {
+			out[tp] = tp
+		}
+	}
+	return out
+}
+
+// inspectCaddy 经 docker inspect 探测目标主机上的 pipewright-caddy 容器:
+//   - inspect 非零退出(No such object)= 容器不存在 → Installed:false(非错误)。
+//   - inspect 成功 → Installed:true,并从 --format 输出解析 running / image。
+//   - 端口为 best-effort:再发一次 inspect 读 NetworkSettings.Ports,解析失败给 ""(前端按 80/443 兜底)。
+//
+// 仅 target.Exec 的传输层错误(SSH 不可达 / vault 未配 / 主机不存在)才返回 error。
+func inspectCaddy(ctx context.Context, tg target.Service, serverID string) (*CaddyStatus, error) {
+	st := &CaddyStatus{}
+	// 一次 inspect 同时拿运行态与镜像(format 以 | 分隔,避免拼 shell)。
+	insp, err := tg.Exec(ctx, serverID, []string{
+		"docker", "inspect", caddyContainer,
+		"--format", "{{.State.Running}}|{{.Config.Image}}",
+	})
+	if err != nil {
+		return nil, mapExecErr(err)
+	}
+	if insp.ExitCode != 0 {
+		// 容器不存在(或 inspect 失败但非传输层)→ 视为未安装,不报错。
+		return st, nil
+	}
+	st.Installed = true
+	out := strings.TrimSpace(insp.Stdout)
+	if i := strings.IndexByte(out, '|'); i >= 0 {
+		st.Running = strings.EqualFold(strings.TrimSpace(out[:i]), "true")
+		st.Image = strings.TrimSpace(out[i+1:])
+	}
+	// 端口摘要(best-effort:任何失败都给 "",不阻断也不报错)。
+	st.Ports = inspectCaddyPorts(ctx, tg, serverID)
+	return st, nil
+}
+
+// inspectCaddyPorts best-effort 读 pipewright-caddy 的发布端口摘要(如 "80,443")。
+// 解析 NetworkSettings.Ports 的 key(形如 "80/tcp"),取端口号去重升序。任何失败给 ""。
+func inspectCaddyPorts(ctx context.Context, tg target.Service, serverID string) string {
+	res, err := tg.Exec(ctx, serverID, []string{
+		"docker", "inspect", caddyContainer,
+		"--format", "{{json .NetworkSettings.Ports}}",
+	})
+	if err != nil || res == nil || res.ExitCode != 0 {
+		return ""
+	}
+	var ports map[string]any
+	if jerr := json.Unmarshal([]byte(strings.TrimSpace(res.Stdout)), &ports); jerr != nil {
+		return ""
+	}
+	seen := map[string]struct{}{}
+	nums := make([]int, 0, len(ports))
+	for k := range ports {
+		p := k
+		if i := strings.IndexByte(p, '/'); i >= 0 {
+			p = p[:i] // 去掉 "/tcp" 后缀
+		}
+		n, cerr := strconv.Atoi(p)
+		if cerr != nil {
+			continue
+		}
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
+		nums = append(nums, n)
+	}
+	if len(nums) == 0 {
+		return ""
+	}
+	sort.Ints(nums)
+	parts := make([]string, len(nums))
+	for i, n := range nums {
+		parts[i] = strconv.Itoa(n)
+	}
+	return strings.Join(parts, ",")
+}
+
+// removeCaddy 停止并删除目标主机上的 pipewright-caddy 容器(array 不拼 shell)。
+// 保留命名卷 pipewright_caddy_data(证书/ACME 账户持久,避免重建时重签触发 LE 限速)。
+// 幂等:容器已不存在时,docker stop/rm 报「No such container」视为成功;仅传输层错误才返回 error。
+func removeCaddy(ctx context.Context, tg target.Service, serverID string) error {
+	// 1) stop(容器不存在的 "No such container" 容忍)。
+	if _, err := tg.Exec(ctx, serverID, []string{"docker", "stop", caddyContainer}); err != nil {
+		return mapExecErr(err)
+	}
+	// 2) rm(同样容忍不存在)。绝不删卷(无 docker volume rm)。
+	if _, err := tg.Exec(ctx, serverID, []string{"docker", "rm", caddyContainer}); err != nil {
+		return mapExecErr(err)
 	}
 	return nil
 }
@@ -313,6 +603,17 @@ func firstNonEmpty(ss ...string) string {
 		}
 	}
 	return ""
+}
+
+// splitDNSCred 把「id,secret」形态的 DNS 凭据按首个逗号切成两段(两侧去空白)。
+// 用于 alidns(AccessKeyId,AccessKeySecret)、tencentcloud(SecretId,SecretKey)等需两字段的厂商。
+func splitDNSCred(token string) (id, secret string) {
+	parts := strings.SplitN(token, ",", 2)
+	id = strings.TrimSpace(parts[0])
+	if len(parts) == 2 {
+		secret = strings.TrimSpace(parts[1])
+	}
+	return id, secret
 }
 
 // mapExecErr 把 target.Exec/Upload 的传输层错误透传(领域错误已是人话;由上层 humanize)。

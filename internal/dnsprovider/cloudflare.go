@@ -169,23 +169,57 @@ func (c *cloudflareClient) EnsureARecord(ctx context.Context, zone, name, ip str
 	return nil
 }
 
-// notImplementedClient 是 DNSPod / 阿里云 DNS 的「自动 A 记录」占位实现(诚实地返回未实现)。
-// DNS-01 通配符证书签发对这两家仍可用(走 Caddy 镜像内 DNS 插件),与本桩无关。
+// DeleteARecord 删除 zone 下 name 的所有同名 A 记录(幂等:无记录返回 nil)。
+func (c *cloudflareClient) DeleteARecord(ctx context.Context, zone, name string) error {
+	zid, err := c.zoneID(ctx, zone)
+	if err != nil {
+		return err
+	}
+	listResp, err := c.do(ctx, http.MethodGet,
+		fmt.Sprintf("/zones/%s/dns_records?type=A&name=%s", url.PathEscape(zid), url.QueryEscape(name)), nil)
+	if err != nil {
+		return fmt.Errorf("%w:%s", ErrDeleteRecord, strings.TrimPrefix(err.Error(), ErrVerifyFailed.Error()+":"))
+	}
+	var records []cfRecord
+	if err := json.Unmarshal(listResp.Result, &records); err != nil {
+		return fmt.Errorf("%w:记录列表解析失败", ErrDeleteRecord)
+	}
+	for _, r := range records {
+		if _, err := c.do(ctx, http.MethodDelete,
+			fmt.Sprintf("/zones/%s/dns_records/%s", url.PathEscape(zid), url.PathEscape(r.ID)), nil); err != nil {
+			return fmt.Errorf("%w:删除 A 记录失败", ErrDeleteRecord)
+		}
+	}
+	return nil
+}
+
+// notImplementedClient 是未知提供商类型的「自动 A 记录」占位实现(诚实地返回未实现)。
+// DNS-01 通配符证书签发仍可用(走 Caddy 镜像内 DNS 插件),与本桩无关。
 type notImplementedClient struct{ providerType string }
 
 func (n notImplementedClient) EnsureARecord(context.Context, string, string, string) error {
 	return fmt.Errorf("%w(%s 暂未实现自动建 A 记录,请手动添加解析;DNS-01 证书签发仍可用)", ErrProviderNotImplemented, n.providerType)
 }
 
+// DeleteARecord 占位:没建过记录 → 无可删,幂等返回 nil(回收 best-effort,不阻断)。
+func (n notImplementedClient) DeleteARecord(context.Context, string, string) error { return nil }
+
 func (n notImplementedClient) VerifyZone(context.Context, string) error {
 	return fmt.Errorf("%w(%s 暂未实现 zone 校验)", ErrProviderNotImplemented, n.providerType)
 }
 
 // newDNSClient 据提供商类型 + token 构造对应 DNSClient。transport/base 供测试注入(生产为 nil/空)。
+// Cloudflare / DNSPod / 阿里云 DNS 均为经 net/http 直连的真实实现(无 SDK)。
 func newDNSClient(providerType, token string, transport http.RoundTripper, base string) DNSClient {
 	switch providerType {
 	case TypeCloudflare:
 		return newCloudflareClient(token, transport, base)
+	case TypeDNSPod:
+		// token 为保险库里存的 "id,token" 原串(经典 DNSPod login_token);客户端请求时解析。
+		return newDNSPodClient(token, transport, base)
+	case TypeAliDNS:
+		// token 为保险库里存的 "accessKeyId,accessKeySecret" 原串;客户端请求时解析。
+		return newAliDNSClient(token, transport, base)
 	default:
 		return notImplementedClient{providerType: providerType}
 	}

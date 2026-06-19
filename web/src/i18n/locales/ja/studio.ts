@@ -93,6 +93,8 @@ export default {
   phCategory: 'ビルドと成果物',
   metaSummaryPre: '一言の説明（',
   metaSummaryPost: 'を含められます）',
+  imgPlaceholder: '例:node:20-alpine',
+  summaryPlaceholder: '例:npm でビルドして dist を生成',
   metaHint: 'カテゴリは「ノードを追加」セレクターのどのグループに表示されるかを決めます。説明とアイコンは再利用者が最初に目にするカードです。',
   defaultCategory: 'カスタム',
 

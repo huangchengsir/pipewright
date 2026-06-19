@@ -93,6 +93,8 @@ export default {
   phCategory: '빌드 및 산출물',
   metaSummaryPre: '한 줄 설명(',
   metaSummaryPost: ' 포함 가능)',
+  imgPlaceholder: '예: node:20-alpine',
+  summaryPlaceholder: '예: npm으로 빌드하고 dist 생성',
   metaHint: '분류는 「노드 추가」 선택기의 어느 그룹에 표시될지 결정합니다. 설명과 아이콘은 재사용자가 처음 보는 카드입니다.',
   defaultCategory: '커스텀',
 

@@ -9,6 +9,14 @@ export default {
   upstreamLabel: '上游容器',
   upstreamPick: '选择一个运行中的容器…',
   upstreamPlaceholder: '容器名,例:my-web-app',
+  // 上游类型:选容器 / 自定义地址
+  upstreamKindLabel: '上游类型',
+  modeContainer: '选运行中容器',
+  modeAddress: '自定义地址',
+  upstreamKindHint: '容器:走共享网络按容器名转发;地址:直接转发到 host:port。',
+  addressPlaceholder: 'host.docker.internal 或 IP / 域名',
+  addressHint: '宿主机服务填 host.docker.internal,别的机器填 IP 或域名,端口在右侧填。',
+  hintInvalidAddress: '请填写合法地址:IP、域名,或 host.docker.internal。',
   portLabel: '上游端口',
   enable: '启用',
   binding: '绑定中…',
@@ -54,6 +62,43 @@ export default {
   removeFail: '删除失败',
   // 路由摘要上的别名
   aliasesLabel: '别名:',
+  // R4:反代环境(pipewright-caddy 容器)—— awareness / consent / reversibility
+  caddy: {
+    // 状态卡:未部署
+    absentTitle: '反代环境未部署',
+    absentDesc:
+      '启用域名时,将在本机拉起一个 Caddy 容器(pipewright-caddy),占用 80 / 443 端口作为反代载体。',
+    // 状态卡:运行中
+    runningTitle: '反代环境运行中',
+    runningDesc: '由 pipewright-caddy 容器承载 · 镜像 {image} · 端口 {ports}。',
+    unknownImage: '未知',
+    // 状态卡:已部署但已停止
+    stoppedTitle: '反代环境已停止',
+    stoppedDesc:
+      'pipewright-caddy 容器已部署但未运行 —— 启用任一域名会重新拉起,届时恢复 HTTPS 反代。',
+    // 部署按钮(未部署态,用户主动拉起)
+    deploy: '部署反代环境',
+    deploying: '部署中…',
+    deployed: '反代环境已部署',
+    deployFail: '部署失败',
+    // 移除按钮
+    remove: '移除反代环境',
+    removing: '移除中…',
+    // 首次部署前的同意确认
+    consentTitle: '在本机部署反代环境?',
+    consentBody:
+      'Pipewright 将在 {host} 上拉起一个 pipewright-caddy 容器作为反向代理载体 —— 自动申请 / 续期 HTTPS 证书;占用 80 / 443 端口;证书与配置存于 docker 卷;不影响你的其他容器,随时可在此移除。',
+    consentConfirm: '确认部署并启用',
+    // 移除确认
+    removeTitle: '移除反代环境?',
+    removeBody:
+      '将停止并删除 {host} 上的 pipewright-caddy 容器(证书卷保留,以便日后快速恢复)。',
+    removeBodyWithRoutes:
+      '将停止并删除 {host} 上的 pipewright-caddy 容器(证书卷保留)。本机已绑定 {n} 个域名,移除后它们将停止提供 HTTPS,直到你重新启用。',
+    removeConfirm: '移除',
+    removed: '反代环境已移除',
+    removeFail: '移除失败',
+  },
   // R3:一键分配子域名(零 DNS · E3.3/E3.4)
   sub: {
     cta: '一键分配子域名',
@@ -145,6 +190,41 @@ export default {
     removeRedirect: '删除此重定向',
     redirectIncomplete: '每条重定向的「来源」与「目标」都需填写。',
     // 保存
+    // R4 / E4.2:负载均衡(额外上游 + 策略 + 健康检查)
+    lbTitle: '负载均衡(多上游)',
+    lbLede: '在主上游之外再加几个后端;两个以上上游即自动开启负载均衡。',
+    lbUpstreamPlaceholder: '上游容器',
+    lbPortPlaceholder: '端口',
+    addUpstream: '添加上游',
+    removeUpstream: '删除此上游',
+    upstreamIncomplete: '每个额外上游的「容器」「端口」都需填写且有效(1–65535)。',
+    lbActiveHint: '已有多个上游 —— 负载均衡已启用。',
+    lbSingleHint: '仅一个上游 —— 再加一个即可启用负载均衡。',
+    lbPolicyLabel: '负载均衡策略',
+    lbPolicy_round_robin: '轮询(round robin)',
+    lbPolicy_least_conn: '最少连接(least conn)',
+    lbPolicy_random: '随机(random)',
+    lbPolicy_first: '首个可用(first)',
+    healthLabel: '健康检查(可选)',
+    healthUriPlaceholder: '健康检查路径,例:/healthz',
+    healthIntervalPlaceholder: '间隔,例:10s',
+    healthHint: '填写路径后,Caddy 会主动探测各上游,只把流量发给健康的后端。',
+    // R4 / E4.3:协议(gRPC / WebSocket / TCP 透传)
+    protoTitle: '协议',
+    protoLede: 'gRPC、WebSocket、以及四层 TCP 透传的额外开关。',
+    grpc: 'gRPC(h2c)',
+    grpcDesc: '以 HTTP/2 明文(h2c)转发到上游 —— 明文 gRPC 后端需要。',
+    wsNote: 'WebSocket 无需额外设置,Caddy 会自动升级连接。',
+    tcpTitle: 'TCP 透传',
+    tcpDesc: '四层(L4)原始 TCP 转发,绕过 HTTP 路由 —— 用于数据库、消息队列、自定义协议。',
+    tcpListenLabel: '监听端口',
+    tcpListenPlaceholder: '例:5432',
+    tcpUpstreamLabel: '上游容器',
+    tcpUpstreamPlaceholder: '容器名',
+    tcpPortLabel: '上游端口',
+    tcpPortPlaceholder: '例:5432',
+    tcpIncomplete: 'TCP 透传需要有效的监听端口、上游容器和上游端口。',
+    tcpHint: '原始 TCP:不做 TLS 终止,也不走 HTTP 路径规则。',
     footNote: '保存后会重新渲染 Caddy 配置并 reload,即时生效。',
     save: '保存高级设置',
     saving: '保存中…',

@@ -43,6 +43,23 @@ const typeLabels = computed<Record<DnsProviderType, string>>(() => ({
   alidns: t('dnsProviders.typeAlidns'),
 }))
 
+// 凭据是单字串字段;按提供商类型给出格式占位 + 提示(后端按逗号切分多段凭据)。
+const tokenPlaceholders = computed<Record<DnsProviderType, string>>(() => ({
+  cloudflare: t('dnsProviders.tokenPlaceholderCloudflare'),
+  dnspod: t('dnsProviders.tokenPlaceholderDnspod'),
+  alidns: t('dnsProviders.tokenPlaceholderAlidns'),
+}))
+const tokenHints = computed<Record<DnsProviderType, string>>(() => ({
+  cloudflare: t('dnsProviders.tokenHintCloudflare'),
+  dnspod: t('dnsProviders.tokenHintDnspod'),
+  alidns: t('dnsProviders.tokenHintAlidns'),
+}))
+const tokenLabels = computed<Record<DnsProviderType, string>>(() => ({
+  cloudflare: t('dnsProviders.fieldTokenCloudflare'),
+  dnspod: t('dnsProviders.fieldTokenDnspod'),
+  alidns: t('dnsProviders.fieldTokenAlidns'),
+}))
+
 async function load(): Promise<void> {
   loadState.value = 'loading'
   loadError.value = ''
@@ -360,22 +377,22 @@ async function confirmDelete(): Promise<void> {
             <span v-if="errors.baseDomain" class="field-error" role="alert">{{ errors.baseDomain }}</span>
           </div>
 
-          <!-- token (write-only) -->
+          <!-- token (write-only) — 标签/占位/提示按提供商类型切换 -->
           <div class="field">
-            <label class="field-label" for="dns-token">{{ t('dnsProviders.fieldToken') }}</label>
+            <label class="field-label" for="dns-token">{{ tokenLabels[form.type] }}</label>
             <input
               id="dns-token"
               v-model="form.token"
               class="field-input field-input--mono"
               :class="{ 'field-input--error': errors.token }"
               type="password"
-              :placeholder="t('dnsProviders.tokenPlaceholder')"
+              :placeholder="tokenPlaceholders[form.type]"
               :disabled="submitting"
               autocomplete="new-password"
               @input="errors.token = ''"
             />
             <span v-if="errors.token" class="field-error" role="alert">{{ errors.token }}</span>
-            <span class="field-hint">{{ t('dnsProviders.tokenHint') }}</span>
+            <span class="field-hint">{{ tokenHints[form.type] }}</span>
           </div>
 
           <div class="modal-footer">

@@ -93,6 +93,8 @@ export default {
   phCategory: 'Build & Artefakte',
   metaSummaryPre: 'Einzeilige Zusammenfassung (kann ',
   metaSummaryPost: ' enthalten)',
+  imgPlaceholder: 'z. B. node:20-alpine',
+  summaryPlaceholder: 'z. B. Mit npm bauen und dist erzeugen',
   metaHint: 'Die Kategorie bestimmt, in welcher Gruppe er im „Knoten hinzufügen“-Auswahlmenü erscheint; Zusammenfassung + Symbol sind die Karte, die Wiederverwender zuerst sehen.',
   defaultCategory: 'Benutzerdefiniert',
 

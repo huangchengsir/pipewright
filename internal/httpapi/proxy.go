@@ -31,8 +31,16 @@ type proxyRedirectDTO struct {
 	Status int    `json:"status"`
 }
 
-// proxyRouteConfigDTO 是路由高级配置对外响应体(R2;冻结契约)。
+// proxyPathRuleDTO 是单条路径路由规则对外响应体(R3 E3.5;camelCase;冻结契约)。
+type proxyPathRuleDTO struct {
+	Path              string `json:"path"`
+	UpstreamContainer string `json:"upstreamContainer"`
+	UpstreamPort      int    `json:"upstreamPort"`
+}
+
+// proxyRouteConfigDTO 是路由高级配置对外响应体(R2/R3;冻结契约)。
 // 绝不外泄 bcrypt 哈希/明文口令:仅以 basicAuthEnabled 布尔告知前端「是否已设认证」。
+// R3:dnsProviderId(DNS-01 引用,绝不外泄 token)+ pathRules(路径路由)。
 type proxyRouteConfigDTO struct {
 	Aliases          []string           `json:"aliases"`
 	ForceHTTPS       bool               `json:"forceHttps"`
@@ -44,6 +52,8 @@ type proxyRouteConfigDTO struct {
 	IPAllow          []string           `json:"ipAllow"`
 	IPDeny           []string           `json:"ipDeny"`
 	Redirects        []proxyRedirectDTO `json:"redirects"`
+	DNSProviderID    string             `json:"dnsProviderId"`
+	PathRules        []proxyPathRuleDTO `json:"pathRules"`
 }
 
 // proxyRouteDTO 是反代路由对外响应体(冻结契约;camelCase;与前端约定字段名严格一致)。
@@ -68,6 +78,10 @@ func toProxyRouteConfigDTO(c proxy.RouteConfig) proxyRouteConfigDTO {
 	for _, rd := range c.Redirects {
 		reds = append(reds, proxyRedirectDTO{From: rd.From, To: rd.To, Status: rd.Status})
 	}
+	prs := make([]proxyPathRuleDTO, 0, len(c.PathRules))
+	for _, pr := range c.PathRules {
+		prs = append(prs, proxyPathRuleDTO{Path: pr.Path, UpstreamContainer: pr.UpstreamContainer, UpstreamPort: pr.UpstreamPort})
+	}
 	return proxyRouteConfigDTO{
 		Aliases:          orEmptySlice(c.Aliases),
 		ForceHTTPS:       c.ForceHTTPS,
@@ -79,6 +93,8 @@ func toProxyRouteConfigDTO(c proxy.RouteConfig) proxyRouteConfigDTO {
 		IPAllow:          orEmptySlice(c.IPAllow),
 		IPDeny:           orEmptySlice(c.IPDeny),
 		Redirects:        reds,
+		DNSProviderID:    c.DNSProviderID, // 仅引用 id,绝不外泄 token
+		PathRules:        prs,
 	}
 }
 
@@ -135,6 +151,12 @@ func writeProxyError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, "invalid_route", "重定向规则非法:路径含非法字符,或状态码不在 301/302/307/308 之内")
 	case errors.Is(err, proxy.ErrInvalidBasicAuthUser):
 		writeError(w, http.StatusBadRequest, "invalid_route", "Basic Auth 用户名含非法字符")
+	case errors.Is(err, proxy.ErrWildcardNeedsDNS):
+		writeError(w, http.StatusBadRequest, "invalid_route", "通配符域名(*.example.com)必须先绑定一个 DNS 提供商(走 DNS-01 签发)")
+	case errors.Is(err, proxy.ErrInvalidDNSProvider):
+		writeError(w, http.StatusUnprocessableEntity, "invalid_route", "引用的 DNS 提供商不存在或不可用")
+	case errors.Is(err, proxy.ErrInvalidPathRule):
+		writeError(w, http.StatusBadRequest, "invalid_route", "路径路由规则非法:路径须以 / 起且仅含安全字符,上游容器/端口须合法")
 	case errors.Is(err, proxy.ErrBcrypt):
 		writeError(w, http.StatusInternalServerError, "internal", "口令哈希失败")
 	case errors.Is(err, proxy.ErrPortConflict):
@@ -195,6 +217,7 @@ func makeCreateProxyRouteHandler(svc proxy.Service, rec audit.Recorder) http.Han
 			Domain            string `json:"domain"`
 			UpstreamContainer string `json:"upstreamContainer"`
 			UpstreamPort      int    `json:"upstreamPort"`
+			DNSProviderID     string `json:"dnsProviderId"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
@@ -205,6 +228,7 @@ func makeCreateProxyRouteHandler(svc proxy.Service, rec audit.Recorder) http.Han
 			Domain:            in.Domain,
 			UpstreamContainer: in.UpstreamContainer,
 			UpstreamPort:      in.UpstreamPort,
+			DNSProviderID:     in.DNSProviderID,
 		})
 		if err != nil {
 			writeProxyError(w, err)
@@ -306,6 +330,12 @@ type proxyUpdateBody struct {
 			To     string `json:"to"`
 			Status int    `json:"status"`
 		} `json:"redirects"`
+		DNSProviderID string `json:"dnsProviderId"`
+		PathRules     []struct {
+			Path              string `json:"path"`
+			UpstreamContainer string `json:"upstreamContainer"`
+			UpstreamPort      int    `json:"upstreamPort"`
+		} `json:"pathRules"`
 	} `json:"config"`
 	BasicAuthPassword string `json:"basicAuthPassword"`
 }
@@ -331,6 +361,10 @@ func makeUpdateProxyRouteHandler(svc proxy.Service, rec audit.Recorder) http.Han
 		for _, rd := range in.Config.Redirects {
 			reds = append(reds, proxy.Redirect{From: rd.From, To: rd.To, Status: rd.Status})
 		}
+		prs := make([]proxy.PathRule, 0, len(in.Config.PathRules))
+		for _, pr := range in.Config.PathRules {
+			prs = append(prs, proxy.PathRule{Path: pr.Path, UpstreamContainer: pr.UpstreamContainer, UpstreamPort: pr.UpstreamPort})
+		}
 		route, err := svc.Update(r.Context(), id, proxy.UpdateInput{
 			UpstreamContainer: in.UpstreamContainer,
 			UpstreamPort:      in.UpstreamPort,
@@ -344,6 +378,8 @@ func makeUpdateProxyRouteHandler(svc proxy.Service, rec audit.Recorder) http.Han
 				IPAllow:         in.Config.IPAllow,
 				IPDeny:          in.Config.IPDeny,
 				Redirects:       reds,
+				DNSProviderID:   in.Config.DNSProviderID,
+				PathRules:       prs,
 			},
 			BasicAuthPassword: in.BasicAuthPassword,
 		})

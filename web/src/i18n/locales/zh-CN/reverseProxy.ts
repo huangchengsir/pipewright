@@ -54,6 +54,28 @@ export default {
   removeFail: '删除失败',
   // 路由摘要上的别名
   aliasesLabel: '别名:',
+  // R3:一键分配子域名(零 DNS · E3.3/E3.4)
+  sub: {
+    cta: '一键分配子域名',
+    title: '一键分配子域名',
+    lede: '选一个 DNS 提供商和上游容器,自动在其根域下生成 app-xxxx 子域、写好 A 记录并绑定路由 —— 无需手动改 DNS。',
+    providerLabel: 'DNS 提供商',
+    providerPick: '选择一个 DNS 提供商…',
+    providerUnderDomain: '将在 {domain} 下生成子域名',
+    noProvider: '尚未配置 DNS 提供商。',
+    manageProviders: '去配置 DNS 提供商 →',
+    upstreamLabel: '上游容器',
+    portLabel: '上游端口',
+    allocate: '分配子域名',
+    allocating: '正在分配…',
+    allocated: '子域名已分配',
+    allocateFail: '分配失败',
+    successTitle: '子域名已就绪 🎉',
+    successLede: '已创建子域名并写入 A 记录,证书正在自动签发。',
+    visit: '访问',
+    done: '完成',
+    cancel: '取消',
+  },
   // R2:高级设置(别名 / 访问控制 / 加固 / 重定向)
   adv: {
     title: '高级设置',
@@ -68,6 +90,24 @@ export default {
     aliasIsPrimary: '该域名已是主域名。',
     aliasDup: '该别名已添加。',
     removeAlias: '移除别名 {v}',
+    // R3:DNS 提供商 + 通配符(DNS-01)
+    dnsTitle: 'DNS 提供商(DNS-01 / 通配符)',
+    dnsLede: '挂接一个 DNS 提供商即可走 DNS-01 验证,从而支持通配符域名(*.example.com)。',
+    dnsProviderLabel: 'DNS 提供商',
+    dnsProviderNone: '不挂接(仅 HTTP-01,不支持通配符)',
+    dnsProviderUnderDomain: '根域:{domain}',
+    wildcardHint: '已挂接 DNS 提供商,域名/别名可使用通配符,例:*.example.com。',
+    wildcardNeedsProvider: '通配符域名需要先挂接一个 DNS 提供商。',
+    // R3:路径路由(E3.5)
+    pathTitle: '路径路由',
+    pathLede: '把指定路径前缀转发到不同的上游容器;主上游作为默认/兜底。',
+    pathPlaceholder: '路径,例:/api/*',
+    pathUpstreamPlaceholder: '上游容器',
+    pathPortPlaceholder: '端口',
+    addPathRule: '添加路径规则',
+    removePathRule: '删除此路径规则',
+    pathMustStartSlash: '路径需以 / 开头,例:/api/*。',
+    pathRuleIncomplete: '每条路径规则的「路径」「上游容器」「端口」都需填写且有效。',
     // 访问控制
     accessTitle: '访问控制',
     basicAuthLabel: 'Basic Auth(用户名 / 密码)',

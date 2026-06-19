@@ -1,0 +1,66 @@
+export default {
+  title: 'Proveedores DNS',
+  desc: 'Conecta Cloudflare / DNSPod / Alibaba Cloud DNS para emitir certificados comodín por DNS-01 y asignar subdominios con un clic. El token de API es de solo escritura: se guarda en la bóveda y nunca se vuelve a mostrar.',
+  addProvider: 'Añadir proveedor DNS',
+  addFirstProvider: 'Añadir tu primer proveedor DNS',
+  panelTitle: 'Proveedores DNS',
+  countLabel: '{n} en total',
+  // Tipos
+  typeCloudflare: 'Cloudflare',
+  typeDnspod: 'DNSPod',
+  typeAlidns: 'Alibaba Cloud DNS',
+  // Columnas de la lista
+  colName: 'Nombre',
+  colType: 'Tipo',
+  colBaseDomain: 'Dominio base',
+  colCredential: 'Credencial',
+  // Estado de la credencial
+  credConfigured: 'Configurado',
+  credMissing: 'Sin configurar',
+  // Estado vacío
+  emptyLabel: 'Aún no hay proveedores DNS',
+  emptyHint: 'Añade un proveedor para habilitar certificados comodín DNS-01 en tus dominios y la asignación de subdominios con un clic.',
+  // Acciones
+  verify: 'Verificar',
+  verifying: 'Verificando…',
+  verifyOk: 'Verificado',
+  verifyFail: 'Error de verificación',
+  deleteTitle: 'Eliminar proveedor {name}',
+  deleteAria: 'Eliminar proveedor DNS {name}',
+  editTitle: 'Editar {name}',
+  // Diálogo de añadir / editar
+  addTitle: 'Añadir proveedor DNS',
+  modalSub: 'El token de API es de solo escritura: una vez guardado va a la bóveda y no se vuelve a mostrar.',
+  closeDialog: 'Cerrar diálogo',
+  fieldType: 'Tipo de proveedor',
+  fieldName: 'Nombre',
+  namePlaceholder: 'p. ej. Cloudflare de producción',
+  fieldBaseDomain: 'Dominio base (zona)',
+  baseDomainPlaceholder: 'example.com',
+  fieldToken: 'Token de API',
+  tokenPlaceholder: 'Pega el token de API del proveedor',
+  tokenHint: 'Necesita permisos de lectura/escritura sobre los registros DNS de esta zona. Se envía una sola vez al crear y nunca se devuelve.',
+  // Validación
+  valNameRequired: 'Introduce un nombre.',
+  valBaseDomainRequired: 'Introduce un dominio base.',
+  valBaseDomainInvalid: 'Introduce un dominio base válido, p. ej. example.com.',
+  valTokenRequired: 'Introduce un token de API.',
+  // Confirmación de eliminación
+  deleteConfirmTitle: 'Eliminar proveedor DNS',
+  deleteIrreversible: 'Esta acción no se puede deshacer.',
+  deleteConfirmPrefix: '¿Eliminar',
+  deleteConfirmSuffix: '? Las rutas vinculadas perderán DNS-01 y habrá que volver a vincularlas.',
+  confirmDelete: 'Eliminar',
+  deleting: 'Eliminando…',
+  // Botones
+  cancel: 'Cancelar',
+  create: 'Añadir proveedor',
+  saving: 'Guardando…',
+  retry: 'Reintentar',
+  // Errores
+  errLoad: 'Error al cargar los proveedores DNS ({status}).',
+  errNetwork: 'Error de red, inténtalo de nuevo.',
+  errSave: 'Error al guardar ({status}).',
+  errSaveRetry: 'Error al guardar, inténtalo de nuevo.',
+  errDelete: 'Error al eliminar ({status}).',
+}

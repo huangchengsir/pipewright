@@ -18,6 +18,7 @@ const { t } = useI18n()
       <router-link to="/settings/oauth" class="settings-nav-item">{{ t('settingsHub.navOauth') }}</router-link>
       <router-link to="/settings/notifications" class="settings-nav-item">{{ t('settingsHub.navNotifications') }}</router-link>
       <router-link to="/settings/vault" class="settings-nav-item">{{ t('settingsHub.navVault') }}</router-link>
+      <router-link to="/settings/dns-providers" class="settings-nav-item">{{ t('settingsHub.navDnsProviders') }}</router-link>
       <router-link to="/settings/account" class="settings-nav-item">{{ t('settingsHub.navAccount') }}</router-link>
       <router-link to="/settings/servers" class="settings-nav-item">{{ t('settingsHub.navServers') }}</router-link>
       <router-link to="/settings/diagnosis-stats" class="settings-nav-item">{{ t('settingsHub.navDiagnosisStats') }}</router-link>

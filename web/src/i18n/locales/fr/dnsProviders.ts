@@ -1,0 +1,66 @@
+export default {
+  title: 'Fournisseurs DNS',
+  desc: 'Connectez Cloudflare / DNSPod / Alibaba Cloud DNS pour émettre des certificats génériques via DNS-01 et attribuer des sous-domaines en un clic. Le jeton d’API est en écriture seule — stocké dans le coffre, jamais réaffiché.',
+  addProvider: 'Ajouter un fournisseur DNS',
+  addFirstProvider: 'Ajouter votre premier fournisseur DNS',
+  panelTitle: 'Fournisseurs DNS',
+  countLabel: '{n} au total',
+  // Type
+  typeCloudflare: 'Cloudflare',
+  typeDnspod: 'DNSPod',
+  typeAlidns: 'Alibaba Cloud DNS',
+  // Colonnes de la liste
+  colName: 'Nom',
+  colType: 'Type',
+  colBaseDomain: 'Domaine de base',
+  colCredential: 'Identifiant',
+  // Statut de l’identifiant
+  credConfigured: 'Configuré',
+  credMissing: 'Non configuré',
+  // État vide
+  emptyLabel: 'Aucun fournisseur DNS pour l’instant',
+  emptyHint: 'Ajoutez un fournisseur pour activer les certificats génériques DNS-01 sur vos domaines et l’attribution de sous-domaines en un clic.',
+  // Actions
+  verify: 'Vérifier',
+  verifying: 'Vérification…',
+  verifyOk: 'Vérifié',
+  verifyFail: 'Échec de la vérification',
+  deleteTitle: 'Supprimer le fournisseur {name}',
+  deleteAria: 'Supprimer le fournisseur DNS {name}',
+  editTitle: 'Modifier {name}',
+  // Boîte de dialogue Ajouter / Modifier
+  addTitle: 'Ajouter un fournisseur DNS',
+  modalSub: 'Le jeton d’API est en écriture seule : une fois enregistré, il va dans le coffre et n’est plus réaffiché.',
+  closeDialog: 'Fermer la boîte de dialogue',
+  fieldType: 'Type de fournisseur',
+  fieldName: 'Nom',
+  namePlaceholder: 'ex. Cloudflare de production',
+  fieldBaseDomain: 'Domaine de base (zone)',
+  baseDomainPlaceholder: 'example.com',
+  fieldToken: 'Jeton d’API',
+  tokenPlaceholder: 'Collez le jeton d’API du fournisseur',
+  tokenHint: 'Nécessite un accès lecture/écriture aux enregistrements DNS de cette zone. Envoyé une seule fois à la création, jamais renvoyé.',
+  // Validation
+  valNameRequired: 'Saisissez un nom.',
+  valBaseDomainRequired: 'Saisissez un domaine de base.',
+  valBaseDomainInvalid: 'Saisissez un domaine de base valide, ex. example.com.',
+  valTokenRequired: 'Saisissez un jeton d’API.',
+  // Confirmation de suppression
+  deleteConfirmTitle: 'Supprimer le fournisseur DNS',
+  deleteIrreversible: 'Cette action est irréversible.',
+  deleteConfirmPrefix: 'Supprimer',
+  deleteConfirmSuffix: ' ? Les routes qui y sont rattachées perdront DNS-01 et devront être rattachées à nouveau.',
+  confirmDelete: 'Supprimer',
+  deleting: 'Suppression…',
+  // Boutons
+  cancel: 'Annuler',
+  create: 'Ajouter le fournisseur',
+  saving: 'Enregistrement…',
+  retry: 'Réessayer',
+  // Erreurs
+  errLoad: 'Échec du chargement des fournisseurs DNS ({status}).',
+  errNetwork: 'Erreur réseau, veuillez réessayer.',
+  errSave: 'Échec de l’enregistrement ({status}).',
+  errSaveRetry: 'Échec de l’enregistrement, veuillez réessayer.',
+  errDelete: 'Échec de la suppression ({status}).',
+}

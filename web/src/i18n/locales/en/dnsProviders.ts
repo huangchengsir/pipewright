@@ -1,0 +1,66 @@
+export default {
+  title: 'DNS Providers',
+  desc: 'Attach Cloudflare / DNSPod / Alibaba Cloud DNS to issue wildcard certs via DNS-01 and allocate subdomains in one click. The API token is write-only — stored in the vault, never shown again.',
+  addProvider: 'Add DNS provider',
+  addFirstProvider: 'Add your first DNS provider',
+  panelTitle: 'DNS providers',
+  countLabel: '{n} total',
+  // Types
+  typeCloudflare: 'Cloudflare',
+  typeDnspod: 'DNSPod',
+  typeAlidns: 'Alibaba Cloud DNS',
+  // Table columns
+  colName: 'Name',
+  colType: 'Type',
+  colBaseDomain: 'Base domain',
+  colCredential: 'Credential',
+  // Credential status
+  credConfigured: 'Configured',
+  credMissing: 'Not configured',
+  // Empty state
+  emptyLabel: 'No DNS providers yet',
+  emptyHint: 'Add a provider to enable DNS-01 wildcard certificates on your domains and one-click subdomain allocation.',
+  // Actions
+  verify: 'Verify',
+  verifying: 'Verifying…',
+  verifyOk: 'Verified',
+  verifyFail: 'Verification failed',
+  deleteTitle: 'Delete provider {name}',
+  deleteAria: 'Delete DNS provider {name}',
+  editTitle: 'Edit {name}',
+  // Add / edit modal
+  addTitle: 'Add DNS provider',
+  modalSub: 'The API token is write-only: once saved it goes into the vault and is never shown again.',
+  closeDialog: 'Close dialog',
+  fieldType: 'Provider type',
+  fieldName: 'Name',
+  namePlaceholder: 'e.g. Production Cloudflare',
+  fieldBaseDomain: 'Base domain (zone)',
+  baseDomainPlaceholder: 'example.com',
+  fieldToken: 'API token',
+  tokenPlaceholder: 'Paste the provider API token',
+  tokenHint: 'Needs read/write access to DNS records for this zone. Sent once on creation, never returned.',
+  // Validation
+  valNameRequired: 'Please enter a name.',
+  valBaseDomainRequired: 'Please enter a base domain.',
+  valBaseDomainInvalid: 'Please enter a valid base domain, e.g. example.com.',
+  valTokenRequired: 'Please enter an API token.',
+  // Delete confirmation
+  deleteConfirmTitle: 'Delete DNS provider',
+  deleteIrreversible: 'This action cannot be undone.',
+  deleteConfirmPrefix: 'Delete',
+  deleteConfirmSuffix: '? Routes attached to it lose DNS-01 and must be re-attached.',
+  confirmDelete: 'Delete',
+  deleting: 'Deleting…',
+  // Buttons
+  cancel: 'Cancel',
+  create: 'Add provider',
+  saving: 'Saving…',
+  retry: 'Retry',
+  // Errors
+  errLoad: 'Failed to load DNS providers ({status}).',
+  errNetwork: 'Network error, please try again.',
+  errSave: 'Save failed ({status}).',
+  errSaveRetry: 'Save failed, please try again.',
+  errDelete: 'Delete failed ({status}).',
+}

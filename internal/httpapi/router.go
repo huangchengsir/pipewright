@@ -25,6 +25,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/chain"
 	"github.com/huangchengsir/pipewright/internal/cron"
 	"github.com/huangchengsir/pipewright/internal/deploy"
+	"github.com/huangchengsir/pipewright/internal/dnsprovider"
 	"github.com/huangchengsir/pipewright/internal/environments"
 	"github.com/huangchengsir/pipewright/internal/i18n"
 	"github.com/huangchengsir/pipewright/internal/library"
@@ -101,6 +102,7 @@ type options struct {
 	artifactStore    *artifactstore.Store
 	retention        *retention.Service
 	proxy            proxy.Service
+	dnsProviders     dnsprovider.Service
 }
 
 // WithArtifactStore 注入制品库(Story 8-16):挂载产物下载端点
@@ -334,6 +336,14 @@ func WithRetention(s *retention.Service) Option {
 // 不传则相关端点返回 503(服务未初始化)。
 func WithProxy(s proxy.Service) Option {
 	return func(o *options) { o.proxy = s }
+}
+
+// WithDNSProviders 注入 DNS 提供商集成层服务(R3 E3.1–E3.4),挂载 /api/dns/providers* 与
+// POST /api/proxy/subdomains 路由(GET auth;POST/DELETE/verify auth + CSRF + 审计)。
+// DNS token 经已注入的 vault 加密入库、apply 时即用即弃,响应/审计/日志绝无明文 token。
+// 不传则相关端点返回 503(服务未初始化)。
+func WithDNSProviders(s dnsprovider.Service) Option {
+	return func(o *options) { o.dnsProviders = s }
 }
 
 // WithAnomaly 注入可配置异常检测服务(Story 6.5;FR-23),挂载 /api/anomaly/* 路由
@@ -767,6 +777,18 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Post("/proxy/routes/{id}/enabled", makeSetProxyRouteEnabledHandler(px, aud))
 		ar.Post("/proxy/routes/{id}/refresh", makeRefreshProxyRouteHandler(px))
 		ar.Delete("/proxy/routes/{id}", makeDeleteProxyRouteHandler(px, aud))
+
+		// DNS 提供商集成层(R3 E3.1–E3.4):Cloudflare / DNSPod / 阿里云 DNS 接入(凭据走 vault)。
+		// dp 为 nil → handler 返回 503。GET(列表)过 auth;POST/DELETE/verify 为写方法,过 auth + CSRF + 审计。
+		// DNS token 经 vault 密文、apply 时即用即弃,响应/审计/日志绝无明文 token。
+		// 字面段 /proxy/subdomains 与 /proxy/routes 不同尾段,不会被吞。
+		dp := o.dnsProviders
+		ar.Get("/dns/providers", makeListDNSProvidersHandler(dp))
+		ar.Post("/dns/providers", makeCreateDNSProviderHandler(dp, aud))
+		ar.Post("/dns/providers/{id}/verify", makeVerifyDNSProviderHandler(dp, aud))
+		ar.Delete("/dns/providers/{id}", makeDeleteDNSProviderHandler(dp, aud))
+		// 瞬时子域名分配(R3 E3.3 + E3.4):建 A 记录 + 建 DNS-01 反代路由 → 普通 Route DTO。
+		ar.Post("/proxy/subdomains", makeAllocateSubdomainHandler(subdomainDeps{dns: dp, servers: sv, proxy: px}, aud))
 
 		ar.Get("/notifications/channels", makeListChannelsHandler(nf))
 		ar.Post("/notifications/channels", makeCreateChannelHandler(nf))

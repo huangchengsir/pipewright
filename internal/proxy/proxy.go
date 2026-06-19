@@ -529,8 +529,11 @@ func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Route
 	}
 
 	// 6) 重渲染并下发(只对 enabled 路由生效;停用路由改配置不触网 apply 也无妨,仍持久化)。
+	//    走 ensureAndApply 而非裸 apply:高级设置可能新增/改动 TCP 透传监听端口,需经 ensureCaddy
+	//    确保 Caddy 容器对宿主发布这些端口(缺则带「既有映射 ∪ TCP 端口」重建),否则 layer4 监听
+	//    不可达、且无 l4 的旧镜像会让 apply 校验失败。container 传 "" —— 主上游在 Create 时已接网络。
 	if r.Enabled {
-		if err := s.apply(ctx, r.ServerID); err != nil {
+		if err := s.ensureAndApply(ctx, r.ServerID, ""); err != nil {
 			return nil, err
 		}
 	}
@@ -597,7 +600,9 @@ func (s *service) RemoveCaddy(ctx context.Context, serverID string) error {
 // ensureAndApply 是 Create/启用 路径的编排:保证 Caddy 就绪 → (container 上游才)接入上游 → apply。
 // container 为空串表示「address 上游」,跳过 docker network connect(Caddy 直接反代任意 host:port)。
 func (s *service) ensureAndApply(ctx context.Context, serverID, container string) error {
-	if err := ensureCaddy(ctx, s.tg, serverID); err != nil {
+	// 取本主机所有 enabled 路由声明的 TCP 透传监听端口 —— ensureCaddy 据此确保 Caddy 容器
+	// 对宿主发布这些端口(缺则带「既有映射 ∪ TCP 端口」重建),否则 layer4 监听不可达。
+	if err := ensureCaddy(ctx, s.tg, serverID, s.tcpPortsForServer(ctx, serverID)); err != nil {
 		return err
 	}
 	if container != "" {
@@ -608,13 +613,32 @@ func (s *service) ensureAndApply(ctx context.Context, serverID, container string
 	return s.apply(ctx, serverID)
 }
 
+// tcpPortsForServer 收集本主机所有 enabled 路由的 TCP 透传监听端口(去重)。
+// 查询失败 → 返回 nil(降级:不因端口探测失败阻断 apply)。
+func (s *service) tcpPortsForServer(ctx context.Context, serverID string) []int {
+	routes, err := s.store.listEnabledForServer(ctx, serverID)
+	if err != nil {
+		return nil
+	}
+	seen := map[int]bool{}
+	var ports []int
+	for _, r := range routes {
+		if tc := r.Config.TCPPassthrough; tc != nil && tc.ListenPort > 0 && !seen[tc.ListenPort] {
+			seen[tc.ListenPort] = true
+			ports = append(ports, tc.ListenPort)
+		}
+	}
+	return ports
+}
+
 // PrepareCaddy 显式部署反代环境(ensureCaddy)而无需先绑域名,返回部署后的 CaddyStatus。
 func (s *service) PrepareCaddy(ctx context.Context, serverID string) (*CaddyStatus, error) {
 	serverID = strings.TrimSpace(serverID)
 	if serverID == "" {
 		return nil, ErrEmptyServerID
 	}
-	if err := ensureCaddy(ctx, s.tg, serverID); err != nil {
+	// 显式部署:按本主机既有 TCP 路由(若有)发布端口;无则 80/443 起。
+	if err := ensureCaddy(ctx, s.tg, serverID, s.tcpPortsForServer(ctx, serverID)); err != nil {
 		return nil, err
 	}
 	return s.CaddyStatus(ctx, serverID)

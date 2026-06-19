@@ -262,7 +262,12 @@ func renderReverseProxy(b *strings.Builder, indent string, r Route, cfg RouteCon
 
 // ensureCaddy 幂等地在目标主机上保证 Caddy 反代就绪:建共享网络 + 起 Caddy 容器(若缺)。
 // 起容器前探测 80/443 占用,冲突即返回人话错误(不强起)。
-func ensureCaddy(ctx context.Context, tg target.Service, serverID string) error {
+//
+// tcpPorts 是本主机所有 enabled 路由声明的 TCP 透传监听端口(R4 E4.3 caddy-l4)。这些端口必须由
+// Caddy 容器**对宿主发布**(-p)才能被外部访问 —— layer4 监听在容器内,不发布则不可达。Docker 端口
+// 在容器创建时固定,故当既有 Caddy 容器未发布某个新增 TCP 端口时,需带「既有映射 ∪ TCP 端口」重建容器
+// (镜像自带默认 Caddyfile 兜底启动,随后 apply 会覆盖为真实配置 + reload;证书/配置走持久卷不丢)。
+func ensureCaddy(ctx context.Context, tg target.Service, serverID string, tcpPorts []int) error {
 	// 1) 共享网络(存在即跳过)。inspect 非零退出(网络不存在)→ create。
 	netInsp, err := tg.Exec(ctx, serverID, []string{"docker", "network", "inspect", proxyNetwork})
 	if err != nil {
@@ -278,43 +283,68 @@ func ensureCaddy(ctx context.Context, tg target.Service, serverID string) error 
 		}
 	}
 
-	// 2) Caddy 容器存在则直接返回(幂等)。inspect 成功(exit 0)= 已在。
+	// 2) Caddy 容器存在:校验是否已发布全部 TCP 监听端口。已覆盖 → 幂等返回;缺端口 → 保留既有
+	//    端口映射(如自定义 18080/18443)并补上缺失的 TCP 端口后重建容器。
 	insp, err := tg.Exec(ctx, serverID, []string{"docker", "inspect", caddyContainer})
 	if err != nil {
 		return mapExecErr(err)
 	}
 	if insp.ExitCode == 0 {
-		return nil
+		cur, perr := inspectCaddyPortMap(ctx, tg, serverID)
+		if perr != nil {
+			return perr
+		}
+		if caddyPortsCover(cur, tcpPorts) {
+			return nil
+		}
+		// 重建:rm -f 释放端口 → 用「既有映射 ∪ TCP 端口」重起。
+		if rmRes, rmErr := tg.Exec(ctx, serverID, []string{"docker", "rm", "-f", caddyContainer}); rmErr != nil {
+			return mapExecErr(rmErr)
+		} else if rmRes.ExitCode != 0 {
+			return fmt.Errorf("%w:%s", ErrCaddyStart, strings.TrimSpace(firstNonEmpty(rmRes.Stderr, rmRes.Stdout)))
+		}
+		return runCaddyContainer(ctx, tg, serverID, mergeCaddyPorts(cur, tcpPorts))
 	}
 
-	// 3) 起前探测 80/443 占用(避免与既有进程抢端口,LE 校验需 80)。
+	// 3) 全新部署:起前探测 80/443 占用(避免与既有进程抢端口,LE 校验需 80)。
 	if busy, detail := portsBusy(ctx, tg, serverID); busy {
 		return fmt.Errorf("%w%s", ErrPortConflict, detail)
 	}
+	// 默认映射 80→80 / 443→443,再叠加 TCP 端口(p→p)。
+	defaults := map[int]int{80: 80, 443: 443}
+	return runCaddyContainer(ctx, tg, serverID, mergeCaddyPorts(defaults, tcpPorts))
+}
 
-	// 4) 先 docker pull 配置的镜像(确保宿主机拿到含 DNS-01/L4 插件的自构建 Caddy;best-effort:
-	//    pull 失败不直接拒起 —— 宿主机可能已有缓存镜像或处于离线环境,交由后续 docker run 决断)。
+// runCaddyContainer 用给定的「容器端口 → 宿主端口」映射起 Caddy 容器(array 不拼 shell)。
+// --add-host host.docker.internal:host-gateway 让 address 类上游能反代到宿主机服务。
+func runCaddyContainer(ctx context.Context, tg target.Service, serverID string, ports map[int]int) error {
 	image := caddyImageRef()
+	// best-effort pull(离线/已缓存场景交由 docker run 决断)。
 	if _, perr := tg.Exec(ctx, serverID, []string{"docker", "pull", image}); perr != nil {
 		return mapExecErr(perr)
 	}
-
-	// 5) 起 Caddy 容器(array 不拼 shell)。
-	//    --add-host host.docker.internal:host-gateway(Docker 20.10+)让 address 类上游能反代到
-	//    宿主机上(非容器)的服务(host.docker.internal 解析到宿主)。已存在的旧 Caddy 容器不会
-	//    追溯获得此项;仅新部署生效(MVP 可接受,移除后重新部署即可补上)。
 	runCmd := []string{
 		"docker", "run", "-d",
 		"--name", caddyContainer,
 		"--restart", "unless-stopped",
 		"--network", proxyNetwork,
 		"--add-host", "host.docker.internal:host-gateway",
-		"-p", "80:80", "-p", "443:443",
-		"-v", caddyDataVol + ":/data",
-		"-v", caddyConfigVol + ":/config",
+	}
+	// 端口按容器端口升序发布(渲染确定,便于诊断)。
+	cports := make([]int, 0, len(ports))
+	for cp := range ports {
+		cports = append(cports, cp)
+	}
+	sort.Ints(cports)
+	for _, cp := range cports {
+		runCmd = append(runCmd, "-p", strconv.Itoa(ports[cp])+":"+strconv.Itoa(cp))
+	}
+	runCmd = append(runCmd,
+		"-v", caddyDataVol+":/data",
+		"-v", caddyConfigVol+":/config",
 		image,
 		"caddy", "run", "--config", caddyfilePath, "--adapter", "caddyfile",
-	}
+	)
 	res, err := tg.Exec(ctx, serverID, runCmd)
 	if err != nil {
 		return mapExecErr(err)
@@ -323,6 +353,59 @@ func ensureCaddy(ctx context.Context, tg target.Service, serverID string) error 
 		return fmt.Errorf("%w:%s", ErrCaddyStart, strings.TrimSpace(firstNonEmpty(res.Stderr, res.Stdout)))
 	}
 	return nil
+}
+
+// inspectCaddyPortMap 读 pipewright-caddy 已发布的「容器端口 → 宿主端口」(仅 tcp)。
+// 无容器 / 解析失败 → 空 map(调用方据此当全新部署处理)。
+func inspectCaddyPortMap(ctx context.Context, tg target.Service, serverID string) (map[int]int, error) {
+	res, err := tg.Exec(ctx, serverID, []string{
+		"docker", "inspect", caddyContainer,
+		"--format", "{{range $p, $c := .HostConfig.PortBindings}}{{$p}}={{(index $c 0).HostPort}} {{end}}",
+	})
+	if err != nil {
+		return nil, mapExecErr(err)
+	}
+	m := map[int]int{}
+	for _, tok := range strings.Fields(res.Stdout) {
+		eq := strings.IndexByte(tok, '=')
+		if eq <= 0 {
+			continue
+		}
+		proto := tok[:eq] // 形如 "80/tcp"
+		if !strings.HasSuffix(proto, "/tcp") {
+			continue
+		}
+		cp, e1 := strconv.Atoi(strings.TrimSuffix(proto, "/tcp"))
+		hp, e2 := strconv.Atoi(tok[eq+1:])
+		if e1 == nil && e2 == nil {
+			m[cp] = hp
+		}
+	}
+	return m, nil
+}
+
+// caddyPortsCover 报告既有端口映射是否已覆盖全部所需 TCP 端口。
+func caddyPortsCover(cur map[int]int, tcpPorts []int) bool {
+	for _, tp := range tcpPorts {
+		if _, ok := cur[tp]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// mergeCaddyPorts 在既有「容器端口 → 宿主端口」映射上叠加 TCP 端口(p→p,已存在则不覆盖)。
+func mergeCaddyPorts(base map[int]int, tcpPorts []int) map[int]int {
+	out := make(map[int]int, len(base)+len(tcpPorts))
+	for cp, hp := range base {
+		out[cp] = hp
+	}
+	for _, tp := range tcpPorts {
+		if _, ok := out[tp]; !ok {
+			out[tp] = tp
+		}
+	}
+	return out
 }
 
 // inspectCaddy 经 docker inspect 探测目标主机上的 pipewright-caddy 容器:

@@ -541,6 +541,11 @@ async function togglePrStatus(next: boolean): Promise<void> {
       >{{ tab.label }}</button>
     </nav>
 
+    <!--
+      Source-of-truth bars (PaC + PR status) are pipeline-definition concerns,
+      so they belong to the 编排/canvas tab only — not above every tab body.
+    -->
+    <template v-if="activeTab === 'canvas'">
     <!-- ─── Pipeline-as-code (GitOps) toggle (FR-8-12) ─────────────────────── -->
     <div class="pac-bar" :class="{ 'pac-bar--on': pacEnabled }">
       <div class="pac-bar-text">
@@ -610,6 +615,7 @@ async function togglePrStatus(next: boolean): Promise<void> {
         <span class="pac-switch-knob" aria-hidden="true"/>
       </button>
     </div>
+    </template>
 
     <!-- ─── Tab body: panels + optional validation side-drawer ─────────────── -->
     <!--

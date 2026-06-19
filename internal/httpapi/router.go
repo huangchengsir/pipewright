@@ -759,6 +759,11 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		px := o.proxy
 		ar.Get("/proxy/routes", makeListProxyRoutesHandler(px))
 		ar.Post("/proxy/routes", makeCreateProxyRouteHandler(px, aud))
+		// 跨主机证书总览大盘(R2 E2.4):聚合全部路由 + 主机展示名 + 证书状态(只读,无审计)。
+		// 字面段 /proxy/overview 与 /proxy/routes 不同首段,不会被吞。
+		ar.Get("/proxy/overview", makeProxyOverviewHandler(px))
+		// 更新高级配置(R2:多域名 / 访问控制 / 安全头 / 压缩 / 重定向)。写方法,过 auth + CSRF + 审计。
+		ar.Put("/proxy/routes/{id}", makeUpdateProxyRouteHandler(px, aud))
 		ar.Post("/proxy/routes/{id}/enabled", makeSetProxyRouteEnabledHandler(px, aud))
 		ar.Post("/proxy/routes/{id}/refresh", makeRefreshProxyRouteHandler(px))
 		ar.Delete("/proxy/routes/{id}", makeDeleteProxyRouteHandler(px, aud))

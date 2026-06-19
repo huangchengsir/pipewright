@@ -25,6 +25,7 @@ const es: typeof zhCN = {
     dora: 'Métricas DORA',
     serverStatus: 'Servidores',
     containers: 'Contenedores',
+    proxyOverview: 'Certificados',
     anomaly: 'Detección de anomalías',
     notifications: 'Notificaciones',
     settings: 'Ajustes',

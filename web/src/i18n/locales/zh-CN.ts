@@ -24,6 +24,7 @@ export default {
     dora: 'DORA 指标',
     serverStatus: '服务器',
     containers: '容器',
+    proxyOverview: '证书总览',
     anomaly: '异常检测',
     notifications: '通知',
     settings: '设置',

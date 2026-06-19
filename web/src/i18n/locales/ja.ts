@@ -25,6 +25,7 @@ const ja: typeof zhCN = {
     dora: 'DORA 指標',
     serverStatus: 'サーバー',
     containers: 'コンテナ',
+    proxyOverview: '証明書一覧',
     anomaly: '異常検知',
     notifications: '通知',
     settings: '設定',

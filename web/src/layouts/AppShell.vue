@@ -295,6 +295,14 @@ function toggleExpanded(): void {
   gap: 4px;
   width: 100%;
   align-items: center;
+  /* 主菜单占据 head 与底部固定项之间的弹性空间;菜单项过多时自身滚动,
+     绝不挤压(或被 .rail overflow:hidden 裁掉)底部的「设置 / 退出登录」。
+     min-height:0 让 flex 子项能收缩到内容高度以下,overflow 才会生效。 */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
 }
 .is-expanded .nav-list {
   align-items: stretch;
@@ -426,7 +434,9 @@ function toggleExpanded(): void {
 }
 
 .rail-spacer {
-  flex: 1;
+  /* nav-list 现已 flex:1 占满中间并把底部项推到底;spacer 不再伸展
+     (否则会与 nav-list 平分空间、把菜单区压到一半)。保留为零高占位。 */
+  flex: 0 0 0;
 }
 
 /* ——— Main area ——— */

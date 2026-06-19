@@ -52,7 +52,7 @@ func TestRenderCaddyfileIPAllow(t *testing.T) {
 		Config: RouteConfig{IPAllow: []string{"10.0.0.0/8", "192.168.0.0/16"}},
 	}}, nil)
 	if !strings.Contains(out, "    @notallowed not remote_ip 10.0.0.0/8 192.168.0.0/16\n") ||
-		!strings.Contains(out, "    respond @notallowed 403\n") {
+		!strings.Contains(out, "    handle @notallowed {\n        respond 403\n    }\n") {
 		t.Fatalf("IP 白名单块不符:\n%s", out)
 	}
 }
@@ -63,7 +63,7 @@ func TestRenderCaddyfileIPDeny(t *testing.T) {
 		Config: RouteConfig{IPDeny: []string{"1.2.3.4/32"}},
 	}}, nil)
 	if !strings.Contains(out, "    @denied remote_ip 1.2.3.4/32\n") ||
-		!strings.Contains(out, "    respond @denied 403\n") {
+		!strings.Contains(out, "    handle @denied {\n        respond 403\n    }\n") {
 		t.Fatalf("IP 黑名单块不符:\n%s", out)
 	}
 }
@@ -130,9 +130,13 @@ func TestRenderCaddyfileEverythingOn(t *testing.T) {
 
 	want := `example.com, www.example.com {
     @denied remote_ip 1.2.3.4/32
-    respond @denied 403
+    handle @denied {
+        respond 403
+    }
     @notallowed not remote_ip 10.0.0.0/8
-    respond @notallowed 403
+    handle @notallowed {
+        respond 403
+    }
     basic_auth {
         admin $2a$10$HASH
     }
@@ -144,7 +148,9 @@ func TestRenderCaddyfileEverythingOn(t *testing.T) {
     }
     encode gzip zstd
     redir /old /new 308
-    reverse_proxy web:8080
+    handle {
+        reverse_proxy web:8080
+    }
 }
 `
 	if !strings.Contains(out, want) {

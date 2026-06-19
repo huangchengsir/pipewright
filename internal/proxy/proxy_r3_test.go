@@ -61,7 +61,9 @@ func TestRenderDNS01OmittedWhenNoToken(t *testing.T) {
 }
 
 func TestRenderWildcardWithDNS01(t *testing.T) {
-	creds := map[string]dnsCred{"prov-1": {Type: "alidns", Token: "ali-token"}}
+	// 阿里云凭据为「AccessKeyId,AccessKeySecret」单字串,renderSite 拆成两字段块
+	// (caddy-dns/alidns 要两字段,单 token 会被当非法语法、DNS-01 签失败)。
+	creds := map[string]dnsCred{"prov-1": {Type: "alidns", Token: "ali-id,ali-secret"}}
 	out := renderCaddyfile([]Route{{
 		Domain: "*.example.com", UpstreamContainer: "web", UpstreamPort: 80,
 		Config: RouteConfig{DNSProviderID: "prov-1"},
@@ -69,8 +71,9 @@ func TestRenderWildcardWithDNS01(t *testing.T) {
 	if !strings.Contains(out, "*.example.com {\n") {
 		t.Fatalf("通配符站点块头不符:\n%s", out)
 	}
-	if !strings.Contains(out, "        dns alidns ali-token\n") {
-		t.Fatalf("通配符应走 DNS-01:\n%s", out)
+	want := "        dns alidns {\n            access_key_id ali-id\n            access_key_secret ali-secret\n        }\n"
+	if !strings.Contains(out, want) {
+		t.Fatalf("通配符应走 DNS-01(两字段 alidns):\n--- got ---\n%s\n--- want ---\n%s", out, want)
 	}
 }
 

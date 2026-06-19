@@ -132,20 +132,46 @@ func renderSite(b *strings.Builder, r Route, dnsCreds map[string]dnsCred) {
 	if cfg.DNSProviderID != "" {
 		if cred, ok := dnsCreds[cfg.DNSProviderID]; ok && cred.Type != "" && cred.Token != "" {
 			b.WriteString("    tls {\n")
-			b.WriteString("        dns " + cred.Type + " " + cred.Token + "\n")
+			switch cred.Type {
+			case "alidns":
+				// 阿里云:凭据 = "AccessKeyId,AccessKeySecret";caddy-dns/alidns 要两字段块,
+				// 不是单 token(单 token 会被 caddy 当成非法语法、DNS-01 签失败)。
+				id, secret := splitDNSCred(cred.Token)
+				b.WriteString("        dns alidns {\n")
+				b.WriteString("            access_key_id " + id + "\n")
+				b.WriteString("            access_key_secret " + secret + "\n")
+				b.WriteString("        }\n")
+			case "dnspod", "tencentcloud":
+				// 腾讯云/DNSPod:凭据 = "SecretId,SecretKey";caddy-dns/tencentcloud 要两字段块。
+				id, secret := splitDNSCred(cred.Token)
+				b.WriteString("        dns tencentcloud {\n")
+				b.WriteString("            secret_id " + id + "\n")
+				b.WriteString("            secret_key " + secret + "\n")
+				b.WriteString("        }\n")
+			default:
+				// cloudflare 等单 token 厂商:dns <type> <token> 即正确。
+				b.WriteString("        dns " + cred.Type + " " + cred.Token + "\n")
+			}
 			b.WriteString("    }\n")
 		}
 	}
 
 	// IP 黑名单:命中即 403(优先于白名单,显式拒绝先行)。
+	// 用 handle 包 respond,不发裸 `respond @denied 403`:Caddy 的指令排序会把裸 respond 排到
+	// reverse_proxy/handle 之后,一旦本路由用了路径规则/负载均衡(handle 块),IP 名单会被绕过、形同虚设。
+	// handle 在指令顺序里早于 reverse_proxy,且 handle 块按源码顺序互斥求值,放在内容 handle 之前即真正拦截。
 	if len(cfg.IPDeny) > 0 {
 		b.WriteString("    @denied remote_ip " + strings.Join(cfg.IPDeny, " ") + "\n")
-		b.WriteString("    respond @denied 403\n")
+		b.WriteString("    handle @denied {\n")
+		b.WriteString("        respond 403\n")
+		b.WriteString("    }\n")
 	}
 	// IP 白名单:不在白名单内即 403(只有列出的网段可访问)。
 	if len(cfg.IPAllow) > 0 {
 		b.WriteString("    @notallowed not remote_ip " + strings.Join(cfg.IPAllow, " ") + "\n")
-		b.WriteString("    respond @notallowed 403\n")
+		b.WriteString("    handle @notallowed {\n")
+		b.WriteString("        respond 403\n")
+		b.WriteString("    }\n")
 	}
 	// Basic Auth:用户名 + bcrypt 哈希(两者都在才渲染)。
 	if cfg.BasicAuthUser != "" && cfg.BasicAuthHash != "" {
@@ -176,7 +202,10 @@ func renderSite(b *strings.Builder, r Route, dnsCreds map[string]dnsCred) {
 	}
 
 	// 反代到上游(始终最后)。
-	if len(cfg.PathRules) > 0 {
+	// 主内容包进 handle 的条件:有路径规则,或有 IP 名单。有 IP 名单时必须包 handle{},
+	// 才能与上面的 `handle @denied/@notallowed` 互斥——否则被拒请求 respond 403 后,裸
+	// reverse_proxy 仍会执行并重复写响应。两者都无时保持裸 reverse_proxy(最简形态)。
+	if len(cfg.PathRules) > 0 || len(cfg.IPAllow) > 0 || len(cfg.IPDeny) > 0 {
 		// R3 E3.5 路径路由:逐条 handle <path> { reverse_proxy c:port },末尾默认 handle 落主上游。
 		// 路径路由的各 handle 用裸单上游(LB/健康检查/gRPC 仅作用于默认主上游块,保持语义简单确定)。
 		for _, pr := range cfg.PathRules {
@@ -491,6 +520,17 @@ func firstNonEmpty(ss ...string) string {
 		}
 	}
 	return ""
+}
+
+// splitDNSCred 把「id,secret」形态的 DNS 凭据按首个逗号切成两段(两侧去空白)。
+// 用于 alidns(AccessKeyId,AccessKeySecret)、tencentcloud(SecretId,SecretKey)等需两字段的厂商。
+func splitDNSCred(token string) (id, secret string) {
+	parts := strings.SplitN(token, ",", 2)
+	id = strings.TrimSpace(parts[0])
+	if len(parts) == 2 {
+		secret = strings.TrimSpace(parts[1])
+	}
+	return id, secret
 }
 
 // mapExecErr 把 target.Exec/Upload 的传输层错误透传(领域错误已是人话;由上层 humanize)。

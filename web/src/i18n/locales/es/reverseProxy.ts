@@ -54,6 +54,32 @@ export default {
   removeFail: 'Error al eliminar',
   // Alias mostrados en el resumen de la ruta
   aliasesLabel: 'Alias:',
+  // R4: entorno de proxy inverso (contenedor pipewright-caddy) — conciencia / consentimiento / reversibilidad
+  caddy: {
+    absentTitle: 'Entorno de proxy inverso no desplegado',
+    absentDesc:
+      'Al habilitar un dominio se iniciará un contenedor Caddy (pipewright-caddy) en este host, ocupando los puertos 80 / 443 como soporte del proxy inverso.',
+    runningTitle: 'Entorno de proxy inverso en ejecución',
+    runningDesc: 'Soportado por el contenedor pipewright-caddy · imagen {image} · puertos {ports}.',
+    unknownImage: 'desconocida',
+    stoppedTitle: 'Entorno de proxy inverso detenido',
+    stoppedDesc:
+      'El contenedor pipewright-caddy está desplegado pero no en ejecución: al habilitar cualquier dominio se iniciará de nuevo y se restaurará el proxy HTTPS.',
+    remove: 'Eliminar entorno',
+    removing: 'Eliminando…',
+    consentTitle: '¿Desplegar el entorno de proxy inverso en este host?',
+    consentBody:
+      'Pipewright iniciará un contenedor pipewright-caddy en {host} como soporte del proxy inverso: solicita / renueva automáticamente los certificados HTTPS; ocupa los puertos 80 / 443; los certificados y la configuración se guardan en un volumen de docker; no afecta a tus otros contenedores y puede eliminarse aquí en cualquier momento.',
+    consentConfirm: 'Desplegar y habilitar',
+    removeTitle: '¿Eliminar el entorno de proxy inverso?',
+    removeBody:
+      'Detiene y elimina el contenedor pipewright-caddy en {host} (el volumen del certificado se conserva para una recuperación rápida más adelante).',
+    removeBodyWithRoutes:
+      'Detiene y elimina el contenedor pipewright-caddy en {host} (el volumen del certificado se conserva). Hay {n} dominio(s) vinculado(s) en este host; tras la eliminación dejarán de servir HTTPS hasta que los vuelvas a habilitar.',
+    removeConfirm: 'Eliminar',
+    removed: 'Entorno de proxy inverso eliminado',
+    removeFail: 'Error al eliminar',
+  },
   // R3: asignar un subdominio con un clic (sin DNS · E3.3/E3.4)
   sub: {
     cta: 'Asignar un subdominio',

@@ -243,6 +243,50 @@ export async function deleteProxyRoute(id: string): Promise<{ ok: boolean }> {
 }
 
 /**
+ * Status of the `pipewright-caddy` reverse-proxy container on one host (R4).
+ * The reverse proxy is a real Docker container Pipewright runs ON the target
+ * host — this surfaces that fact for awareness + consent + reversibility:
+ * whether it exists, whether it's running, and what it's occupying.
+ */
+export interface CaddyStatus {
+  /** Host the status is for. */
+  serverId: string
+  /** Whether the `pipewright-caddy` container exists on the host. */
+  installed: boolean
+  /** Whether that container is currently running. */
+  running: boolean
+  /** Container image, e.g. `caddy:2`. `''` if unknown. */
+  image: string
+  /** Host ports it occupies, e.g. `80,443`. `''` if unknown. */
+  ports: string
+  /** Number of reverse-proxy routes bound on this host. */
+  routeCount: number
+}
+
+/**
+ * Read the reverse-proxy environment status on a host (R4): whether the
+ * `pipewright-caddy` container exists, is running, and what it occupies. Drives
+ * the awareness card and gates the first-start consent dialog.
+ *
+ * GET /api/proxy/caddy?serverId=<id> → CaddyStatus
+ */
+export async function getCaddyStatus(serverId: string): Promise<CaddyStatus> {
+  return http.get<CaddyStatus>(`/api/proxy/caddy?serverId=${encodeURIComponent(serverId)}`)
+}
+
+/**
+ * Remove the reverse-proxy environment on a host (R4 · reversibility): stops and
+ * deletes the `pipewright-caddy` container. The certificate volume is kept, so
+ * re-enabling a domain restores HTTPS without re-issuing from scratch. Bound
+ * domains on this host stop serving HTTPS until the env is brought back up.
+ *
+ * DELETE /api/proxy/caddy?serverId=<id> → { ok: true }   (needs CSRF)
+ */
+export async function removeCaddyEnv(serverId: string): Promise<{ ok: boolean }> {
+  return http.delete<{ ok: boolean }>(`/api/proxy/caddy?serverId=${encodeURIComponent(serverId)}`)
+}
+
+/**
  * Cross-host / cross-domain certificate overview (R2 / FR-10): every route on
  * every reachable host, each enriched with its server's display name. Powers the
  * cert dashboard's table + summary cards. Read-only aggregate.

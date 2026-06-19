@@ -192,6 +192,17 @@ type RouteWithServer struct {
 	ServerName string
 }
 
+// CaddyStatus 是某主机上反代(pipewright-caddy)运行环境的探测快照(冻结契约)。
+// 供前端在「绑定首个域名(会隐式起 Caddy 容器)」前展示知情同意,以及提供「移除反代环境」入口。
+type CaddyStatus struct {
+	ServerID   string // 目标主机 id
+	Installed  bool   // pipewright-caddy 容器是否存在(docker inspect 成功)
+	Running    bool   // 容器是否正在运行
+	Image      string // 容器镜像(docker inspect 读)
+	Ports      string // 发布端口摘要,如 "80,443"(探测到的;读不到给 "",前端按 80/443 兜底文案)
+	RouteCount int    // 该主机当前路由数(DB count;帮前端提示移除影响)
+}
+
 // CreateInput 是创建路由的入参。
 type CreateInput struct {
 	ServerID          string
@@ -226,6 +237,12 @@ type Service interface {
 	Update(ctx context.Context, id string, in UpdateInput) (*Route, error)
 	// Overview 返回全部路由 + 所属主机展示名(跨主机证书总览大盘用)。
 	Overview(ctx context.Context) ([]RouteWithServer, error)
+	// CaddyStatus 探测某主机上的反代容器(pipewright-caddy)环境:是否已安装/运行/镜像/端口 + 该主机路由数。
+	// 容器不存在不报错(Installed:false);仅传输/SSH 层错误才返回 error(由 httpapi 映射 502/503)。
+	CaddyStatus(ctx context.Context, serverID string) (*CaddyStatus, error)
+	// RemoveCaddy 停止并删除某主机上的反代容器(pipewright-caddy);保留命名卷(避免重签触发 LE 限速)。
+	// 幂等:容器已不存在也成功。
+	RemoveCaddy(ctx context.Context, serverID string) error
 }
 
 // certProber 抽象「对 域名:443 做 TLS 握手并回报证书状态」的能力(注入便于单测,不触真网络)。
@@ -450,6 +467,35 @@ func (s *service) Overview(ctx context.Context) ([]RouteWithServer, error) {
 		out = append(out, RouteWithServer{Route: rt, ServerName: name})
 	}
 	return out, nil
+}
+
+// CaddyStatus 探测某主机反代容器环境 + 统计该主机路由数。
+// 容器缺失非错误(Installed:false);传输/SSH 错误才返回 error。端口为 best-effort,读不到给 ""。
+func (s *service) CaddyStatus(ctx context.Context, serverID string) (*CaddyStatus, error) {
+	serverID = strings.TrimSpace(serverID)
+	if serverID == "" {
+		return nil, ErrEmptyServerID
+	}
+	st, err := inspectCaddy(ctx, s.tg, serverID)
+	if err != nil {
+		return nil, err
+	}
+	st.ServerID = serverID
+	// 路由数:DB count(best-effort;list 失败不掩盖容器探测结果,计 0)。
+	if routes, lerr := s.store.list(ctx, serverID); lerr == nil {
+		st.RouteCount = len(routes)
+	}
+	return st, nil
+}
+
+// RemoveCaddy 停止并删除某主机反代容器(保留命名卷)。幂等:已不存在也成功。
+// 注意:库中既有路由不删,但在 Caddy 重新就绪(下次绑域名)前不会再被反代;前端会在调用前提醒用户。
+func (s *service) RemoveCaddy(ctx context.Context, serverID string) error {
+	serverID = strings.TrimSpace(serverID)
+	if serverID == "" {
+		return ErrEmptyServerID
+	}
+	return removeCaddy(ctx, s.tg, serverID)
 }
 
 // ensureAndApply 是 Create/启用 路径的编排:保证 Caddy 就绪 → 接入上游 → apply。

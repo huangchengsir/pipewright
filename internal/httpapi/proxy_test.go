@@ -21,6 +21,11 @@ type stubProxyService struct {
 	updateRoute proxy.Route
 	updateErr   error
 	overview    []proxy.RouteWithServer
+
+	caddyStatus    *proxy.CaddyStatus
+	caddyStatusErr error
+	removeCaddyID  string
+	removeCaddyErr error
 }
 
 func (s *stubProxyService) List(context.Context, string) ([]proxy.Route, error) { return nil, nil }
@@ -43,6 +48,19 @@ func (s *stubProxyService) Update(_ context.Context, id string, in proxy.UpdateI
 }
 func (s *stubProxyService) Overview(context.Context) ([]proxy.RouteWithServer, error) {
 	return s.overview, nil
+}
+func (s *stubProxyService) CaddyStatus(_ context.Context, serverID string) (*proxy.CaddyStatus, error) {
+	if s.caddyStatusErr != nil {
+		return nil, s.caddyStatusErr
+	}
+	if s.caddyStatus != nil {
+		return s.caddyStatus, nil
+	}
+	return &proxy.CaddyStatus{ServerID: serverID}, nil
+}
+func (s *stubProxyService) RemoveCaddy(_ context.Context, serverID string) error {
+	s.removeCaddyID = serverID
+	return s.removeCaddyErr
 }
 
 func setupProxyServer(t *testing.T, px proxy.Service) (*httptest.Server, *http.Client, string) {
@@ -191,6 +209,96 @@ func TestProxyUpdate_Unconfigured503(t *testing.T) {
 	csrf := loginWithClient(t, client, srv.URL)
 
 	resp := doJSON(t, client, http.MethodPut, srv.URL+"/api/proxy/routes/r1", csrf, `{"config":{}}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", resp.StatusCode)
+	}
+}
+
+// TestProxyCaddyStatus_DTO 验证 GET /api/proxy/caddy 返回 camelCase DTO,字段透传领域层。
+func TestProxyCaddyStatus_DTO(t *testing.T) {
+	px := &stubProxyService{
+		caddyStatus: &proxy.CaddyStatus{
+			ServerID: "srv-1", Installed: true, Running: true,
+			Image: "ghcr.io/x/pipewright-caddy:latest", Ports: "80,443", RouteCount: 2,
+		},
+	}
+	srv, client, csrf := setupProxyServer(t, px)
+	resp := doJSON(t, client, http.MethodGet, srv.URL+"/api/proxy/caddy?serverId=srv-1", csrf, "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	var dto proxyCaddyStatusDTO
+	if err := json.Unmarshal(raw, &dto); err != nil {
+		t.Fatalf("unmarshal: %v (%s)", err, raw)
+	}
+	if dto.ServerID != "srv-1" || !dto.Installed || !dto.Running {
+		t.Fatalf("DTO 字段不符: %+v", dto)
+	}
+	if dto.Image != "ghcr.io/x/pipewright-caddy:latest" || dto.Ports != "80,443" || dto.RouteCount != 2 {
+		t.Fatalf("DTO 字段不符: %+v", dto)
+	}
+}
+
+// TestProxyCaddyStatus_EmptyServerID400 验证 serverId 为空 → 400。
+func TestProxyCaddyStatus_EmptyServerID400(t *testing.T) {
+	px := &stubProxyService{}
+	srv, client, csrf := setupProxyServer(t, px)
+	resp := doJSON(t, client, http.MethodGet, srv.URL+"/api/proxy/caddy", csrf, "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+// TestProxyRemoveCaddy_AuditsAndOK 验证 DELETE /api/proxy/caddy 调用 RemoveCaddy 并返回 { ok:true }。
+func TestProxyRemoveCaddy_AuditsAndOK(t *testing.T) {
+	px := &stubProxyService{}
+	srv, client, csrf := setupProxyServer(t, px)
+	resp := doJSON(t, client, http.MethodDelete, srv.URL+"/api/proxy/caddy?serverId=srv-1", csrf, "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200 (%s)", resp.StatusCode, raw)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	var body struct {
+		OK bool `json:"ok"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil || !body.OK {
+		t.Fatalf("应返回 { ok:true }, got %s (err %v)", raw, err)
+	}
+	if px.removeCaddyID != "srv-1" {
+		t.Fatalf("RemoveCaddy 应收到 serverId=srv-1, got %q", px.removeCaddyID)
+	}
+}
+
+// TestProxyRemoveCaddy_EmptyServerID400 验证 serverId 为空 → 400。
+func TestProxyRemoveCaddy_EmptyServerID400(t *testing.T) {
+	px := &stubProxyService{}
+	srv, client, csrf := setupProxyServer(t, px)
+	resp := doJSON(t, client, http.MethodDelete, srv.URL+"/api/proxy/caddy", csrf, "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+// TestProxyCaddy_Unconfigured503 验证未注入 proxy 时 GET /api/proxy/caddy 返回 503。
+func TestProxyCaddy_Unconfigured503(t *testing.T) {
+	st := testStoreAuth(t)
+	svc := auth.NewService(st.DB, nil)
+	if err := svc.Bootstrap("admin", "testpass"); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	srv := httptest.NewServer(New(testWebFSAuth(), svc)) // 不注入 WithProxy
+	t.Cleanup(srv.Close)
+	client := newTestClient(t)
+	csrf := loginWithClient(t, client, srv.URL)
+
+	resp := doJSON(t, client, http.MethodGet, srv.URL+"/api/proxy/caddy?serverId=srv-1", csrf, "")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", resp.StatusCode)

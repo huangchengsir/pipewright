@@ -54,6 +54,32 @@ export default {
   removeFail: 'Delete failed',
   // Aliases shown on the route summary
   aliasesLabel: 'Aliases:',
+  // R4: reverse-proxy environment (pipewright-caddy container) — awareness / consent / reversibility
+  caddy: {
+    absentTitle: 'Reverse-proxy environment not deployed',
+    absentDesc:
+      'Enabling a domain will start a Caddy container (pipewright-caddy) on this host, occupying ports 80 / 443 as the reverse-proxy carrier.',
+    runningTitle: 'Reverse-proxy environment running',
+    runningDesc: 'Carried by the pipewright-caddy container · image {image} · ports {ports}.',
+    unknownImage: 'unknown',
+    stoppedTitle: 'Reverse-proxy environment stopped',
+    stoppedDesc:
+      'The pipewright-caddy container is deployed but not running — enabling any domain will start it again and restore HTTPS proxying.',
+    remove: 'Remove environment',
+    removing: 'Removing…',
+    consentTitle: 'Deploy the reverse-proxy environment on this host?',
+    consentBody:
+      'Pipewright will start a pipewright-caddy container on {host} as the reverse-proxy carrier — automatically requesting / renewing HTTPS certificates; occupying ports 80 / 443; certificates and config live in a docker volume; it does not affect your other containers and can be removed here at any time.',
+    consentConfirm: 'Deploy and enable',
+    removeTitle: 'Remove the reverse-proxy environment?',
+    removeBody:
+      'Stops and deletes the pipewright-caddy container on {host} (the certificate volume is kept for quick recovery later).',
+    removeBodyWithRoutes:
+      'Stops and deletes the pipewright-caddy container on {host} (the certificate volume is kept). {n} domain(s) are bound on this host; after removal they stop serving HTTPS until you re-enable them.',
+    removeConfirm: 'Remove',
+    removed: 'Reverse-proxy environment removed',
+    removeFail: 'Removal failed',
+  },
   // Subdomain allocation
   sub: {
     cta: 'Allocate a subdomain',

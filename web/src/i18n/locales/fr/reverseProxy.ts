@@ -54,6 +54,32 @@ export default {
   removeFail: 'Échec de la suppression',
   // Alias affichés dans le résumé de la route
   aliasesLabel: 'Alias :',
+  // R4 : environnement de proxy inverse (conteneur pipewright-caddy) — information / consentement / réversibilité
+  caddy: {
+    absentTitle: 'Environnement de proxy inverse non déployé',
+    absentDesc:
+      'Activer un domaine démarrera un conteneur Caddy (pipewright-caddy) sur cet hôte, occupant les ports 80 / 443 comme support du proxy inverse.',
+    runningTitle: 'Environnement de proxy inverse en cours d\'exécution',
+    runningDesc: 'Porté par le conteneur pipewright-caddy · image {image} · ports {ports}.',
+    unknownImage: 'inconnue',
+    stoppedTitle: 'Environnement de proxy inverse arrêté',
+    stoppedDesc:
+      'Le conteneur pipewright-caddy est déployé mais n\'est pas en cours d\'exécution — activer un domaine le redémarrera et rétablira le proxy HTTPS.',
+    remove: 'Supprimer l\'environnement',
+    removing: 'Suppression…',
+    consentTitle: 'Déployer l\'environnement de proxy inverse sur cet hôte ?',
+    consentBody:
+      'Pipewright démarrera un conteneur pipewright-caddy sur {host} comme support du proxy inverse — demande / renouvelle automatiquement les certificats HTTPS ; occupe les ports 80 / 443 ; les certificats et la configuration sont stockés dans un volume docker ; cela n\'affecte pas vos autres conteneurs et peut être supprimé ici à tout moment.',
+    consentConfirm: 'Déployer et activer',
+    removeTitle: 'Supprimer l\'environnement de proxy inverse ?',
+    removeBody:
+      'Arrête et supprime le conteneur pipewright-caddy sur {host} (le volume du certificat est conservé pour une récupération rapide ultérieure).',
+    removeBodyWithRoutes:
+      'Arrête et supprime le conteneur pipewright-caddy sur {host} (le volume du certificat est conservé). {n} domaine(s) sont liés sur cet hôte ; après la suppression, ils cessent de servir HTTPS jusqu\'à ce que vous les réactiviez.',
+    removeConfirm: 'Supprimer',
+    removed: 'Environnement de proxy inverse supprimé',
+    removeFail: 'Échec de la suppression',
+  },
   // R3 : attribution de sous-domaine en un clic (zéro DNS)
   sub: {
     cta: 'Attribuer un sous-domaine',

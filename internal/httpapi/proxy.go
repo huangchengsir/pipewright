@@ -22,6 +22,10 @@ const (
 	auditActionProxyRouteDisable = "proxy.route.disable"
 	auditActionProxyRouteUpdate  = "proxy.route.update"
 	auditTargetProxyRoute        = "proxy_route"
+
+	// 反代环境(pipewright-caddy 容器)移除审计。detail 仅 serverId,无敏感信息。
+	auditActionProxyCaddyRemove = "proxy.caddy.remove"
+	auditTargetProxyCaddy       = "proxy_caddy"
 )
 
 // proxyRedirectDTO 是单条重定向规则对外响应体(camelCase;冻结契约)。
@@ -499,6 +503,74 @@ func makeProxyOverviewHandler(svc proxy.Service) http.HandlerFunc {
 			})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": out})
+	}
+}
+
+// proxyCaddyStatusDTO 是反代环境探测对外响应体(camelCase;冻结契约)。
+type proxyCaddyStatusDTO struct {
+	ServerID   string `json:"serverId"`
+	Installed  bool   `json:"installed"`
+	Running    bool   `json:"running"`
+	Image      string `json:"image"`
+	Ports      string `json:"ports"`
+	RouteCount int    `json:"routeCount"`
+}
+
+// makeProxyCaddyStatusHandler 返回 GET /api/proxy/caddy?serverId=<id>(认证;只读探测,无审计)。
+// serverId 为空 → 400;传输/SSH 错误 → 502/503;容器不存在 → { installed:false }(非错误)。
+func makeProxyCaddyStatusHandler(svc proxy.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "反代服务未初始化")
+			return
+		}
+		serverID := strings.TrimSpace(r.URL.Query().Get("serverId"))
+		if serverID == "" {
+			writeError(w, http.StatusBadRequest, "invalid_route", "请选择目标主机")
+			return
+		}
+		st, err := svc.CaddyStatus(r.Context(), serverID)
+		if err != nil {
+			writeProxyError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, proxyCaddyStatusDTO{
+			ServerID:   st.ServerID,
+			Installed:  st.Installed,
+			Running:    st.Running,
+			Image:      st.Image,
+			Ports:      st.Ports,
+			RouteCount: st.RouteCount,
+		})
+	}
+}
+
+// makeRemoveProxyCaddyHandler 返回 DELETE /api/proxy/caddy?serverId=<id>(认证 + CSRF + 审计)→ { ok: true }。
+// 停止并删除 pipewright-caddy 容器(保留证书卷);幂等。serverId 为空 → 400。
+func makeRemoveProxyCaddyHandler(svc proxy.Service, rec audit.Recorder) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "反代服务未初始化")
+			return
+		}
+		serverID := strings.TrimSpace(r.URL.Query().Get("serverId"))
+		if serverID == "" {
+			writeError(w, http.StatusBadRequest, "invalid_route", "请选择目标主机")
+			return
+		}
+		if err := svc.RemoveCaddy(r.Context(), serverID); err != nil {
+			writeProxyError(w, err)
+			return
+		}
+		recordAudit(r.Context(), rec, audit.Entry{
+			Actor:      auditActor,
+			Action:     auditActionProxyCaddyRemove,
+			TargetType: auditTargetProxyCaddy,
+			TargetID:   serverID,
+			Detail:     map[string]any{"serverId": serverID},
+			IP:         clientIP(r),
+		})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	}
 }
 

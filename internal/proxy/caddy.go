@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -287,6 +288,94 @@ func ensureCaddy(ctx context.Context, tg target.Service, serverID string) error 
 	}
 	if res.ExitCode != 0 {
 		return fmt.Errorf("%w:%s", ErrCaddyStart, strings.TrimSpace(firstNonEmpty(res.Stderr, res.Stdout)))
+	}
+	return nil
+}
+
+// inspectCaddy 经 docker inspect 探测目标主机上的 pipewright-caddy 容器:
+//   - inspect 非零退出(No such object)= 容器不存在 → Installed:false(非错误)。
+//   - inspect 成功 → Installed:true,并从 --format 输出解析 running / image。
+//   - 端口为 best-effort:再发一次 inspect 读 NetworkSettings.Ports,解析失败给 ""(前端按 80/443 兜底)。
+//
+// 仅 target.Exec 的传输层错误(SSH 不可达 / vault 未配 / 主机不存在)才返回 error。
+func inspectCaddy(ctx context.Context, tg target.Service, serverID string) (*CaddyStatus, error) {
+	st := &CaddyStatus{}
+	// 一次 inspect 同时拿运行态与镜像(format 以 | 分隔,避免拼 shell)。
+	insp, err := tg.Exec(ctx, serverID, []string{
+		"docker", "inspect", caddyContainer,
+		"--format", "{{.State.Running}}|{{.Config.Image}}",
+	})
+	if err != nil {
+		return nil, mapExecErr(err)
+	}
+	if insp.ExitCode != 0 {
+		// 容器不存在(或 inspect 失败但非传输层)→ 视为未安装,不报错。
+		return st, nil
+	}
+	st.Installed = true
+	out := strings.TrimSpace(insp.Stdout)
+	if i := strings.IndexByte(out, '|'); i >= 0 {
+		st.Running = strings.EqualFold(strings.TrimSpace(out[:i]), "true")
+		st.Image = strings.TrimSpace(out[i+1:])
+	}
+	// 端口摘要(best-effort:任何失败都给 "",不阻断也不报错)。
+	st.Ports = inspectCaddyPorts(ctx, tg, serverID)
+	return st, nil
+}
+
+// inspectCaddyPorts best-effort 读 pipewright-caddy 的发布端口摘要(如 "80,443")。
+// 解析 NetworkSettings.Ports 的 key(形如 "80/tcp"),取端口号去重升序。任何失败给 ""。
+func inspectCaddyPorts(ctx context.Context, tg target.Service, serverID string) string {
+	res, err := tg.Exec(ctx, serverID, []string{
+		"docker", "inspect", caddyContainer,
+		"--format", "{{json .NetworkSettings.Ports}}",
+	})
+	if err != nil || res == nil || res.ExitCode != 0 {
+		return ""
+	}
+	var ports map[string]any
+	if jerr := json.Unmarshal([]byte(strings.TrimSpace(res.Stdout)), &ports); jerr != nil {
+		return ""
+	}
+	seen := map[string]struct{}{}
+	nums := make([]int, 0, len(ports))
+	for k := range ports {
+		p := k
+		if i := strings.IndexByte(p, '/'); i >= 0 {
+			p = p[:i] // 去掉 "/tcp" 后缀
+		}
+		n, cerr := strconv.Atoi(p)
+		if cerr != nil {
+			continue
+		}
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
+		nums = append(nums, n)
+	}
+	if len(nums) == 0 {
+		return ""
+	}
+	sort.Ints(nums)
+	parts := make([]string, len(nums))
+	for i, n := range nums {
+		parts[i] = strconv.Itoa(n)
+	}
+	return strings.Join(parts, ",")
+}
+
+// removeCaddy 停止并删除目标主机上的 pipewright-caddy 容器(array 不拼 shell)。
+// 保留命名卷 pipewright_caddy_data(证书/ACME 账户持久,避免重建时重签触发 LE 限速)。
+// 幂等:容器已不存在时,docker stop/rm 报「No such container」视为成功;仅传输层错误才返回 error。
+func removeCaddy(ctx context.Context, tg target.Service, serverID string) error {
+	// 1) stop(容器不存在的 "No such container" 容忍)。
+	if _, err := tg.Exec(ctx, serverID, []string{"docker", "stop", caddyContainer}); err != nil {
+		return mapExecErr(err)
+	}
+	// 2) rm(同样容忍不存在)。绝不删卷(无 docker volume rm)。
+	if _, err := tg.Exec(ctx, serverID, []string{"docker", "rm", caddyContainer}); err != nil {
+		return mapExecErr(err)
 	}
 	return nil
 }

@@ -54,6 +54,32 @@ export default {
   removeFail: '刪除失敗',
   // 路由摘要上的別名
   aliasesLabel: '別名:',
+  // R4:反代環境(pipewright-caddy 容器)—— awareness / consent / reversibility
+  caddy: {
+    absentTitle: '反代環境尚未部署',
+    absentDesc:
+      '啟用網域時,將在本機拉起一個 Caddy 容器(pipewright-caddy),佔用 80 / 443 連接埠作為反代載體。',
+    runningTitle: '反代環境執行中',
+    runningDesc: '由 pipewright-caddy 容器承載 · 映像 {image} · 連接埠 {ports}。',
+    unknownImage: '未知',
+    stoppedTitle: '反代環境已停止',
+    stoppedDesc:
+      'pipewright-caddy 容器已部署但未執行 —— 啟用任一網域會重新拉起,屆時恢復 HTTPS 反代。',
+    remove: '移除反代環境',
+    removing: '移除中…',
+    consentTitle: '在本機部署反代環境?',
+    consentBody:
+      'Pipewright 將在 {host} 上拉起一個 pipewright-caddy 容器作為反向代理載體 —— 自動申請 / 續期 HTTPS 憑證;佔用 80 / 443 連接埠;憑證與設定存於 docker volume;不影響你的其他容器,隨時可在此移除。',
+    consentConfirm: '確認部署並啟用',
+    removeTitle: '移除反代環境?',
+    removeBody:
+      '將停止並刪除 {host} 上的 pipewright-caddy 容器(憑證 volume 保留,以便日後快速恢復)。',
+    removeBodyWithRoutes:
+      '將停止並刪除 {host} 上的 pipewright-caddy 容器(憑證 volume 保留)。本機已綁定 {n} 個網域,移除後它們將停止提供 HTTPS,直到你重新啟用。',
+    removeConfirm: '移除',
+    removed: '反代環境已移除',
+    removeFail: '移除失敗',
+  },
   sub: {
     cta: '一鍵分配子網域',
     title: '一鍵分配子網域',

@@ -54,6 +54,32 @@ export default {
   removeFail: '삭제 실패',
   // 라우트 요약에 표시되는 별칭
   aliasesLabel: '별칭:',
+  // R4: 리버스 프록시 환경(pipewright-caddy 컨테이너) — 인지 / 동의 / 되돌리기
+  caddy: {
+    absentTitle: '리버스 프록시 환경이 배포되지 않음',
+    absentDesc:
+      '도메인을 활성화하면 이 호스트에서 Caddy 컨테이너(pipewright-caddy)가 실행되어 80 / 443 포트를 리버스 프록시 기반으로 점유합니다.',
+    runningTitle: '리버스 프록시 환경 실행 중',
+    runningDesc: 'pipewright-caddy 컨테이너가 담당 · 이미지 {image} · 포트 {ports}.',
+    unknownImage: '알 수 없음',
+    stoppedTitle: '리버스 프록시 환경 중지됨',
+    stoppedDesc:
+      'pipewright-caddy 컨테이너가 배포되었으나 실행 중이 아닙니다 —— 도메인을 활성화하면 다시 시작되어 HTTPS 프록시가 복구됩니다.',
+    remove: '환경 제거',
+    removing: '제거 중…',
+    consentTitle: '이 호스트에 리버스 프록시 환경을 배포할까요?',
+    consentBody:
+      'Pipewright는 {host}에서 pipewright-caddy 컨테이너를 리버스 프록시 기반으로 실행합니다 —— HTTPS 인증서를 자동으로 신청 / 갱신하고 80 / 443 포트를 점유합니다. 인증서와 설정은 docker 볼륨에 저장되며 다른 컨테이너에 영향을 주지 않고 언제든 여기서 제거할 수 있습니다.',
+    consentConfirm: '배포하고 활성화',
+    removeTitle: '리버스 프록시 환경을 제거할까요?',
+    removeBody:
+      '{host}의 pipewright-caddy 컨테이너를 중지하고 삭제합니다(나중에 빠르게 복구할 수 있도록 인증서 볼륨은 유지됩니다).',
+    removeBodyWithRoutes:
+      '{host}의 pipewright-caddy 컨테이너를 중지하고 삭제합니다(인증서 볼륨은 유지). 이 호스트에 {n}개의 도메인이 연결되어 있으며, 제거하면 다시 활성화할 때까지 HTTPS 제공이 중단됩니다.',
+    removeConfirm: '제거',
+    removed: '리버스 프록시 환경을 제거했습니다',
+    removeFail: '제거 실패',
+  },
   sub: {
     cta: '서브도메인 할당',
     title: '서브도메인 할당',

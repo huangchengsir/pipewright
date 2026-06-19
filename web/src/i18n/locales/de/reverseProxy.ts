@@ -54,6 +54,32 @@ export default {
   removeFail: 'Löschen fehlgeschlagen',
   // In der Routenübersicht angezeigte Aliase
   aliasesLabel: 'Aliase:',
+  // R4: Reverse-Proxy-Umgebung (pipewright-caddy-Container) — Transparenz / Zustimmung / Umkehrbarkeit
+  caddy: {
+    absentTitle: 'Reverse-Proxy-Umgebung nicht bereitgestellt',
+    absentDesc:
+      'Beim Aktivieren einer Domain wird auf diesem Host ein Caddy-Container (pipewright-caddy) gestartet, der die Ports 80 / 443 als Reverse-Proxy-Träger belegt.',
+    runningTitle: 'Reverse-Proxy-Umgebung läuft',
+    runningDesc: 'Getragen vom pipewright-caddy-Container · Image {image} · Ports {ports}.',
+    unknownImage: 'unbekannt',
+    stoppedTitle: 'Reverse-Proxy-Umgebung gestoppt',
+    stoppedDesc:
+      'Der pipewright-caddy-Container ist bereitgestellt, läuft aber nicht — beim Aktivieren einer Domain wird er erneut gestartet und das HTTPS-Proxying wiederhergestellt.',
+    remove: 'Umgebung entfernen',
+    removing: 'Wird entfernt…',
+    consentTitle: 'Reverse-Proxy-Umgebung auf diesem Host bereitstellen?',
+    consentBody:
+      'Pipewright startet auf {host} einen pipewright-caddy-Container als Reverse-Proxy-Träger — fordert HTTPS-Zertifikate automatisch an / erneuert sie; belegt die Ports 80 / 443; Zertifikate und Konfiguration liegen in einem docker-Volume; deine anderen Container sind nicht betroffen und er kann hier jederzeit entfernt werden.',
+    consentConfirm: 'Bereitstellen und aktivieren',
+    removeTitle: 'Reverse-Proxy-Umgebung entfernen?',
+    removeBody:
+      'Stoppt und löscht den pipewright-caddy-Container auf {host} (das Zertifikatsvolume bleibt für eine spätere schnelle Wiederherstellung erhalten).',
+    removeBodyWithRoutes:
+      'Stoppt und löscht den pipewright-caddy-Container auf {host} (das Zertifikatsvolume bleibt erhalten). Auf diesem Host sind {n} Domain(s) gebunden; nach dem Entfernen liefern sie kein HTTPS mehr, bis du sie erneut aktivierst.',
+    removeConfirm: 'Entfernen',
+    removed: 'Reverse-Proxy-Umgebung entfernt',
+    removeFail: 'Entfernen fehlgeschlagen',
+  },
   sub: {
     cta: 'Subdomain zuweisen',
     title: 'Subdomain zuweisen',

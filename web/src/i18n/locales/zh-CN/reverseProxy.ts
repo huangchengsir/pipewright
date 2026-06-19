@@ -54,6 +54,38 @@ export default {
   removeFail: '删除失败',
   // 路由摘要上的别名
   aliasesLabel: '别名:',
+  // R4:反代环境(pipewright-caddy 容器)—— awareness / consent / reversibility
+  caddy: {
+    // 状态卡:未部署
+    absentTitle: '反代环境未部署',
+    absentDesc:
+      '启用域名时,将在本机拉起一个 Caddy 容器(pipewright-caddy),占用 80 / 443 端口作为反代载体。',
+    // 状态卡:运行中
+    runningTitle: '反代环境运行中',
+    runningDesc: '由 pipewright-caddy 容器承载 · 镜像 {image} · 端口 {ports}。',
+    unknownImage: '未知',
+    // 状态卡:已部署但已停止
+    stoppedTitle: '反代环境已停止',
+    stoppedDesc:
+      'pipewright-caddy 容器已部署但未运行 —— 启用任一域名会重新拉起,届时恢复 HTTPS 反代。',
+    // 移除按钮
+    remove: '移除反代环境',
+    removing: '移除中…',
+    // 首次部署前的同意确认
+    consentTitle: '在本机部署反代环境?',
+    consentBody:
+      'Pipewright 将在 {host} 上拉起一个 pipewright-caddy 容器作为反向代理载体 —— 自动申请 / 续期 HTTPS 证书;占用 80 / 443 端口;证书与配置存于 docker 卷;不影响你的其他容器,随时可在此移除。',
+    consentConfirm: '确认部署并启用',
+    // 移除确认
+    removeTitle: '移除反代环境?',
+    removeBody:
+      '将停止并删除 {host} 上的 pipewright-caddy 容器(证书卷保留,以便日后快速恢复)。',
+    removeBodyWithRoutes:
+      '将停止并删除 {host} 上的 pipewright-caddy 容器(证书卷保留)。本机已绑定 {n} 个域名,移除后它们将停止提供 HTTPS,直到你重新启用。',
+    removeConfirm: '移除',
+    removed: '反代环境已移除',
+    removeFail: '移除失败',
+  },
   // R3:一键分配子域名(零 DNS · E3.3/E3.4)
   sub: {
     cta: '一键分配子域名',

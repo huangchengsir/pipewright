@@ -26,6 +26,8 @@ import {
   ArrowRight,
   ExternalLink,
   World,
+  Server,
+  CircleX,
 } from '@vicons/tabler'
 import {
   listProxyRoutes,
@@ -33,7 +35,10 @@ import {
   setProxyRouteEnabled,
   refreshProxyRoute,
   deleteProxyRoute,
+  getCaddyStatus,
+  removeCaddyEnv,
   type ProxyRoute,
+  type CaddyStatus,
 } from '../../api/reverseProxy'
 import type { ContainerInfo } from '../../api/containers'
 import { HttpError } from '../../api/http'
@@ -88,6 +93,57 @@ async function loadRoutes(): Promise<void> {
 }
 
 onMounted(loadRoutes)
+
+// ─── 反代环境(pipewright-caddy 容器)状态 ────────────────────────────────────────
+// 反向代理本质是一台跑在「本机」上的 Caddy 容器。awareness:把这事显式摆出来;
+// consent:首次拉起前要用户确认;reversibility:可随时移除。
+const caddy = ref<CaddyStatus | null>(null)
+const caddyRemoving = ref(false)
+
+async function loadCaddyStatus(): Promise<void> {
+  try {
+    caddy.value = await getCaddyStatus(props.serverId)
+  } catch {
+    // 状态卡是增强信息,拉取失败不阻断主流程 —— 静默降级为「未知/未部署」展示。
+    caddy.value = null
+  }
+}
+
+onMounted(loadCaddyStatus)
+
+/** 移除反代环境(停止并删除 pipewright-caddy 容器,证书卷保留)。 */
+async function removeEnv(): Promise<void> {
+  const n = caddy.value?.routeCount ?? 0
+  const ok = await confirm.open({
+    title: t('reverseProxy.caddy.removeTitle'),
+    body:
+      n > 0
+        ? t('reverseProxy.caddy.removeBodyWithRoutes', { host: props.host, n })
+        : t('reverseProxy.caddy.removeBody', { host: props.host }),
+    confirmLabel: t('reverseProxy.caddy.removeConfirm'),
+    variant: 'danger',
+  })
+  if (!ok) return
+  caddyRemoving.value = true
+  try {
+    const res = await removeCaddyEnv(props.serverId)
+    if (res.ok) {
+      toast.success(t('reverseProxy.caddy.removed'))
+      await loadCaddyStatus()
+    } else {
+      toast.error(t('reverseProxy.caddy.removeFail'))
+    }
+  } catch (err) {
+    toast.error(t('reverseProxy.caddy.removeFail'), {
+      detail:
+        err instanceof HttpError
+          ? (err.apiError?.message ?? t('reverseProxy.errReq', { status: err.status }))
+          : t('reverseProxy.errNetwork'),
+    })
+  } finally {
+    caddyRemoving.value = false
+  }
+}
 
 // ─── 绑定表单 ───────────────────────────────────────────────────────────────────
 const domain = ref('')
@@ -155,6 +211,17 @@ const canSubmit = computed(
 
 async function submit(): Promise<void> {
   if (!canSubmit.value) return
+  // Consent:反代环境尚未部署时,启用第一个域名会在本机拉起 pipewright-caddy 容器
+  // 占用 80/443。动手前显式征求一次同意;环境已就位则直接绑定,不再重复打扰。
+  if (caddy.value && caddy.value.installed === false) {
+    const ok = await confirm.open({
+      title: t('reverseProxy.caddy.consentTitle'),
+      body: t('reverseProxy.caddy.consentBody', { host: props.host }),
+      confirmLabel: t('reverseProxy.caddy.consentConfirm'),
+      variant: 'primary',
+    })
+    if (!ok) return
+  }
   submitting.value = true
   try {
     const route = await createProxyRoute({
@@ -169,6 +236,8 @@ async function submit(): Promise<void> {
     domain.value = ''
     upstreamContainer.value = ''
     upstreamPort.value = ''
+    // 绑定可能刚拉起了反代环境 —— 刷新状态卡。
+    void loadCaddyStatus()
   } catch (err) {
     toast.error(t('reverseProxy.bindFail'), {
       detail:
@@ -184,6 +253,8 @@ async function submit(): Promise<void> {
 // R3:一键分配子域名成功 → 把新路由置顶插入列表(与手动绑定一致)。
 function onSubdomainAllocated(route: ProxyRoute): void {
   routes.value = [route, ...routes.value.filter((r) => r.id !== route.id)]
+  // 分配子域名同样可能首次拉起反代环境 —— 同步状态卡。
+  void loadCaddyStatus()
 }
 
 // ─── 每条路由的操作:启停 / 刷新(重试)/ 删除 ──────────────────────────────────────
@@ -257,6 +328,8 @@ async function removeRoute(r: ProxyRoute): Promise<void> {
     if (res.ok) {
       routes.value = routes.value.filter((x) => x.id !== r.id)
       toast.success(t('reverseProxy.removed'), { detail: r.domain })
+      // 路由数变化 —— 刷新反代环境状态卡的 routeCount。
+      void loadCaddyStatus()
     } else {
       toast.error(t('reverseProxy.removeFail'))
     }
@@ -298,6 +371,65 @@ function statusLabel(s: ProxyRoute['certStatus']): string {
           <span class="rp__ip-val mono">{{ host }}</span>
         </div>
       </div>
+    </div>
+
+    <!-- 反代环境(pipewright-caddy 容器)状态卡 —— awareness + reversibility -->
+    <div
+      v-if="caddy"
+      class="caddy"
+      :class="[
+        caddy.installed
+          ? caddy.running
+            ? 'caddy--running'
+            : 'caddy--stopped'
+          : 'caddy--absent',
+      ]"
+    >
+      <div class="caddy__ic">
+        <NIcon :size="18">
+          <Server v-if="caddy.installed && caddy.running" />
+          <AlertTriangle v-else-if="caddy.installed" />
+          <World v-else />
+        </NIcon>
+      </div>
+      <div class="caddy__body">
+        <p class="caddy__title">
+          <template v-if="caddy.installed && caddy.running">
+            {{ t('reverseProxy.caddy.runningTitle') }}
+          </template>
+          <template v-else-if="caddy.installed">
+            {{ t('reverseProxy.caddy.stoppedTitle') }}
+          </template>
+          <template v-else>
+            {{ t('reverseProxy.caddy.absentTitle') }}
+          </template>
+        </p>
+        <p class="caddy__desc">
+          <template v-if="caddy.installed && caddy.running">
+            {{
+              t('reverseProxy.caddy.runningDesc', {
+                image: caddy.image || t('reverseProxy.caddy.unknownImage'),
+                ports: caddy.ports || '80,443',
+              })
+            }}
+          </template>
+          <template v-else-if="caddy.installed">
+            {{ t('reverseProxy.caddy.stoppedDesc') }}
+          </template>
+          <template v-else>
+            {{ t('reverseProxy.caddy.absentDesc') }}
+          </template>
+        </p>
+      </div>
+      <button
+        v-if="caddy.installed"
+        class="caddy__remove"
+        :disabled="caddyRemoving"
+        @click="removeEnv"
+      >
+        <NIcon :size="14"><CircleX /></NIcon>
+        {{ caddyRemoving ? t('reverseProxy.caddy.removing') : t('reverseProxy.caddy.remove') }}
+      </button>
     </div>
 
     <!-- 绑定表单 -->
@@ -521,6 +653,96 @@ function statusLabel(s: ProxyRoute['certStatus']): string {
   font-size: var(--text-label);
   color: var(--color-text);
   font-weight: 600;
+}
+
+/* 反代环境状态卡(awareness + reversibility) */
+.caddy {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 13px 15px;
+  border-radius: var(--rounded-lg);
+  border: 1px solid var(--color-border);
+  background: var(--color-card-2);
+}
+.caddy--running {
+  border-color: var(--color-green-line);
+  background: var(--color-green-soft);
+}
+.caddy--stopped {
+  border-color: var(--color-amber);
+  background: var(--color-amber-soft);
+}
+.caddy--absent {
+  border-color: var(--color-border-strong);
+  background: var(--color-inset);
+}
+.caddy__ic {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--rounded-md);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  border: 1px solid var(--color-border);
+  background: var(--color-card);
+}
+.caddy--running .caddy__ic {
+  color: var(--color-green);
+  border-color: var(--color-green-line);
+}
+.caddy--stopped .caddy__ic {
+  color: var(--color-amber);
+  border-color: var(--color-amber);
+}
+.caddy--absent .caddy__ic {
+  color: var(--color-primary);
+}
+.caddy__body {
+  flex: 1;
+  min-width: 0;
+}
+.caddy__title {
+  margin: 0;
+  font-size: var(--text-label);
+  font-weight: 600;
+  color: var(--color-text);
+  line-height: 1.4;
+}
+.caddy__desc {
+  margin: 3px 0 0;
+  font-size: var(--text-micro);
+  color: var(--color-dim);
+  line-height: 1.6;
+}
+.caddy__remove {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  align-self: center;
+  font-size: var(--text-micro);
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: var(--rounded-md);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-card);
+  color: var(--color-dim);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast, 150ms) var(--ease-out-expo, ease),
+    border-color var(--duration-fast, 150ms) var(--ease-out-expo, ease),
+    background var(--duration-fast, 150ms) var(--ease-out-expo, ease);
+}
+.caddy__remove:hover:not(:disabled) {
+  color: var(--color-red);
+  border-color: var(--color-red-line);
+  background: var(--color-red-soft);
+}
+.caddy__remove:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* 绑定表单 */

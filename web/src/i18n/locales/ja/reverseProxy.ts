@@ -54,6 +54,32 @@ export default {
   removeFail: '削除に失敗しました',
   // ルート概要に表示されるエイリアス
   aliasesLabel: 'エイリアス:',
+  // R4:リバースプロキシ環境(pipewright-caddy コンテナ)—— 認知 / 同意 / 取り消し可能
+  caddy: {
+    absentTitle: 'リバースプロキシ環境は未デプロイ',
+    absentDesc:
+      'ドメインを有効化すると、このホストで Caddy コンテナ(pipewright-caddy)が起動し、ポート 80 / 443 をリバースプロキシの土台として占有します。',
+    runningTitle: 'リバースプロキシ環境は稼働中',
+    runningDesc: 'pipewright-caddy コンテナが担当 · イメージ {image} · ポート {ports}。',
+    unknownImage: '不明',
+    stoppedTitle: 'リバースプロキシ環境は停止中',
+    stoppedDesc:
+      'pipewright-caddy コンテナはデプロイ済みですが稼働していません —— いずれかのドメインを有効化すると再び起動し、HTTPS プロキシが復旧します。',
+    remove: '環境を削除',
+    removing: '削除中…',
+    consentTitle: 'このホストにリバースプロキシ環境をデプロイしますか?',
+    consentBody:
+      'Pipewright は {host} 上で pipewright-caddy コンテナをリバースプロキシの土台として起動します —— HTTPS 証明書を自動で申請 / 更新し、ポート 80 / 443 を占有します。証明書と設定は docker ボリュームに保存され、他のコンテナには影響せず、いつでもここから削除できます。',
+    consentConfirm: 'デプロイして有効化',
+    removeTitle: 'リバースプロキシ環境を削除しますか?',
+    removeBody:
+      '{host} 上の pipewright-caddy コンテナを停止して削除します(後で素早く復旧できるよう証明書ボリュームは保持されます)。',
+    removeBodyWithRoutes:
+      '{host} 上の pipewright-caddy コンテナを停止して削除します(証明書ボリュームは保持)。このホストには {n} 件のドメインがバインドされており、削除後は再度有効化するまで HTTPS の提供が停止します。',
+    removeConfirm: '削除',
+    removed: 'リバースプロキシ環境を削除しました',
+    removeFail: '削除に失敗しました',
+  },
   // サブドメインの割り当て
   sub: {
     cta: 'サブドメインを割り当て',

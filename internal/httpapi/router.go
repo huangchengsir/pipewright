@@ -785,6 +785,10 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Post("/proxy/routes/{id}/enabled", makeSetProxyRouteEnabledHandler(px, aud))
 		ar.Post("/proxy/routes/{id}/refresh", makeRefreshProxyRouteHandler(px))
 		ar.Delete("/proxy/routes/{id}", makeDeleteProxyRouteHandler(px, aud))
+		// 反代环境(pipewright-caddy 容器)知情同意 + 移除:GET 探测状态(auth);DELETE 移除容器
+		// (auth + CSRF + 审计;保留证书卷)。字面段 /proxy/caddy 与 /proxy/routes 不同尾段,不会被吞。
+		ar.Get("/proxy/caddy", makeProxyCaddyStatusHandler(px))
+		ar.Delete("/proxy/caddy", makeRemoveProxyCaddyHandler(px, aud))
 
 		// DNS 提供商集成层(R3 E3.1–E3.4):Cloudflare / DNSPod / 阿里云 DNS 接入(凭据走 vault)。
 		// dp 为 nil → handler 返回 503。GET(列表)过 auth;POST/DELETE/verify 为写方法,过 auth + CSRF + 审计。

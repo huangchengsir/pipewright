@@ -93,6 +93,8 @@ export default {
   phCategory: 'Compilación y artefactos',
   metaSummaryPre: 'Resumen de una línea (puede contener ',
   metaSummaryPost: ')',
+  imgPlaceholder: 'p. ej. node:20-alpine',
+  summaryPlaceholder: 'p. ej. Compilar con npm y generar dist',
   metaHint: 'La categoría determina en qué grupo aparece en el selector «Añadir nodo»; el resumen + el icono son la tarjeta que los reutilizadores ven primero.',
   defaultCategory: 'Personalizado',
 

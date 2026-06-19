@@ -93,6 +93,8 @@ export default {
   phCategory: '构建与制品',
   metaSummaryPre: '一句话说明(可含 ',
   metaSummaryPost: ')',
+  imgPlaceholder: '例:node:20-alpine',
+  summaryPlaceholder: '例:用 npm 构建并产出 dist',
   metaHint: '分类决定它出现在「加节点」选择器的哪一组;说明 + 图标是复用者第一眼看到的卡片。',
   defaultCategory: '自定义',
 

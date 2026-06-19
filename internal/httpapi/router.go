@@ -798,7 +798,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 字面段 /proxy/subdomains 与 /proxy/routes 不同尾段,不会被吞。
 		dp := o.dnsProviders
 		ar.Get("/dns/providers", makeListDNSProvidersHandler(dp))
-		ar.Post("/dns/providers", makeCreateDNSProviderHandler(dp, aud))
+		ar.Post("/dns/providers", makeCreateDNSProviderHandler(dp, o.vault, aud))
 		ar.Post("/dns/providers/{id}/verify", makeVerifyDNSProviderHandler(dp, aud))
 		ar.Delete("/dns/providers/{id}", makeDeleteDNSProviderHandler(dp, aud))
 		// 瞬时子域名分配(R3 E3.3 + E3.4):建 A 记录 + 建 DNS-01 反代路由 → 普通 Route DTO。

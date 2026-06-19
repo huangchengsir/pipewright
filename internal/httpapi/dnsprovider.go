@@ -14,6 +14,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/dnsprovider"
 	"github.com/huangchengsir/pipewright/internal/proxy"
 	"github.com/huangchengsir/pipewright/internal/target"
+	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 // 审计 action / target(DNS 提供商 + 子域名分配写操作)。detail 绝无 token / 凭据明文。
@@ -105,30 +106,52 @@ func makeListDNSProvidersHandler(svc dnsprovider.Service) http.HandlerFunc {
 }
 
 // makeCreateDNSProviderHandler 返回 POST /api/dns/providers(认证 + CSRF)→ Provider(201)。
-func makeCreateDNSProviderHandler(svc dnsprovider.Service, rec audit.Recorder) http.HandlerFunc {
+func makeCreateDNSProviderHandler(svc dnsprovider.Service, v vault.Vault, rec audit.Recorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if svc == nil {
 			writeError(w, http.StatusServiceUnavailable, "internal", "DNS 提供商服务未初始化")
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<14)
+		// token 是「只写」字段:前端创建时提交一次明文,经 vault 加密入库换取 credentialId
+		// 后即弃,绝不回库/响应/审计/日志。DB 的 dns_providers 只持 credential_id 引用。
 		var in struct {
-			Type         string `json:"type"`
-			Name         string `json:"name"`
-			CredentialID string `json:"credentialId"`
-			BaseDomain   string `json:"baseDomain"`
+			Type       string `json:"type"`
+			Name       string `json:"name"`
+			Token      string `json:"token"`
+			BaseDomain string `json:"baseDomain"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
 			return
 		}
+		if v == nil {
+			writeError(w, http.StatusServiceUnavailable, "vault_unconfigured", "保险库未配置 master key,无法存 DNS 凭据")
+			return
+		}
+		if strings.TrimSpace(in.Token) == "" {
+			writeError(w, http.StatusBadRequest, "invalid_dns_provider", "请填写 API 凭据")
+			return
+		}
+		// 先把 token 存入 vault(加密),拿到 credentialId;DB 与领域层全程只见 credential_id。
+		cred, err := v.Create(vault.CreateInput{
+			Name:   "DNS · " + strings.TrimSpace(in.Name),
+			Type:   vault.TypeDNSToken,
+			Secret: in.Token,
+		})
+		if err != nil {
+			writeVaultError(w, err)
+			return
+		}
 		p, err := svc.Create(r.Context(), dnsprovider.CreateInput{
 			Type:         in.Type,
 			Name:         in.Name,
-			CredentialID: in.CredentialID,
+			CredentialID: cred.ID,
 			BaseDomain:   in.BaseDomain,
 		})
 		if err != nil {
+			// 登记失败 → 回滚刚存的凭据,避免悬挂(provider 没建成,凭据不应留存)。
+			_ = v.Delete(cred.ID)
 			writeDNSProviderError(w, err)
 			return
 		}

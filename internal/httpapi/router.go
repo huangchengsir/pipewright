@@ -34,6 +34,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/promotion"
+	"github.com/huangchengsir/pipewright/internal/proxy"
 	"github.com/huangchengsir/pipewright/internal/retention"
 	"github.com/huangchengsir/pipewright/internal/run"
 	"github.com/huangchengsir/pipewright/internal/runner"
@@ -99,6 +100,7 @@ type options struct {
 	customNodes      library.CustomNodeService
 	artifactStore    *artifactstore.Store
 	retention        *retention.Service
+	proxy            proxy.Service
 }
 
 // WithArtifactStore 注入制品库(Story 8-16):挂载产物下载端点
@@ -325,6 +327,13 @@ func WithNotifications(s notify.Service) Option {
 // 不传则相关端点返回 503。
 func WithRetention(s *retention.Service) Option {
 	return func(o *options) { o.retention = s }
+}
+
+// WithProxy 注入自动 HTTPS + 域名反向代理服务(R1),挂载 /api/proxy/routes* 路由
+// (GET auth;POST/DELETE auth + CSRF + 审计)。经已注入的 target.Service 在目标主机上编排 Caddy。
+// 不传则相关端点返回 503(服务未初始化)。
+func WithProxy(s proxy.Service) Option {
+	return func(o *options) { o.proxy = s }
 }
 
 // WithAnomaly 注入可配置异常检测服务(Story 6.5;FR-23),挂载 /api/anomaly/* 路由
@@ -741,6 +750,18 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 运行数据保留策略(全局)。GET 过 auth;PUT 写方法过 auth + CSRF。
 		ar.Get("/retention/config", makeGetRetentionConfigHandler(o.retention))
 		ar.Put("/retention/config", makeSetRetentionConfigHandler(o.retention))
+
+		// 自动 HTTPS + 域名反向代理(R1):路由 CRUD;经已装配的 target.Service 在目标主机上编排
+		// Caddy(渲染 Caddyfile + reload),Caddy 自动经 Let's Encrypt(HTTP-01)签发/续期证书。
+		// px 为 nil → handler 返回 503。GET(列表)过 auth;POST/DELETE/enabled/refresh 为写方法,
+		// 过 auth + CSRF;写操作记审计(detail 仅域名/容器/端口,无敏感信息)。enabled/refresh 比
+		// /proxy/routes/{id} 多一段,不会被吞。
+		px := o.proxy
+		ar.Get("/proxy/routes", makeListProxyRoutesHandler(px))
+		ar.Post("/proxy/routes", makeCreateProxyRouteHandler(px, aud))
+		ar.Post("/proxy/routes/{id}/enabled", makeSetProxyRouteEnabledHandler(px, aud))
+		ar.Post("/proxy/routes/{id}/refresh", makeRefreshProxyRouteHandler(px))
+		ar.Delete("/proxy/routes/{id}", makeDeleteProxyRouteHandler(px, aud))
 
 		ar.Get("/notifications/channels", makeListChannelsHandler(nf))
 		ar.Post("/notifications/channels", makeCreateChannelHandler(nf))

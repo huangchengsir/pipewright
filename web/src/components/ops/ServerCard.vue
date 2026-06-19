@@ -38,6 +38,7 @@ import {
 } from '../../api/containers'
 import { serviceAction } from '../../api/servers'
 import { generateCompose } from '../../api/aiOps'
+import ReverseProxyPanel from './ReverseProxyPanel.vue'
 import { HttpError } from '../../api/http'
 import { useToast } from '../../composables/useToast'
 import { useConfirm } from '../../composables/useConfirm'
@@ -80,7 +81,7 @@ const toast = useToast()
 const confirm = useConfirm()
 const { t } = useI18n()
 
-type TabKey = 'containers' | 'images' | 'stacks' | 'volumes' | 'networks'
+type TabKey = 'containers' | 'images' | 'stacks' | 'volumes' | 'networks' | 'domains'
 const tab = ref<TabKey>('containers')
 
 // 运行时显示名:首字母大写(docker → Docker)。
@@ -228,6 +229,10 @@ async function loadImages(): Promise<void> {
   }
 }
 
+// ─── 域名 / 反向代理(懒加载:首次切到 domains tab 才挂载面板) ─────────────────────
+const domainsMounted = ref(false)
+const domainCount = ref(-1) // -1 = 尚未加载(角标不显示)
+
 function switchTab(tabKey: TabKey): void {
   tab.value = tabKey
   if (tabKey === 'containers') void loadStats()
@@ -235,6 +240,7 @@ function switchTab(tabKey: TabKey): void {
   if (tabKey === 'stacks' && stackState.value === 'idle') void loadStacks()
   if (tabKey === 'volumes' && volState.value === 'idle') void loadVolumes()
   if (tabKey === 'networks' && netState.value === 'idle') void loadNetworks()
+  if (tabKey === 'domains') domainsMounted.value = true
 }
 
 // ─── 数据卷(懒加载) ──────────────────────────────────────────────────────────
@@ -735,6 +741,9 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
         <button class="ctab" :class="{ 'ctab--active': tab === 'networks' }" role="tab" @click="switchTab('networks')">
           {{ t('opsServer.card.tabNetworks') }} <span v-if="netState === 'loaded'" class="ctab__n">{{ networks.length }}</span>
         </button>
+        <button class="ctab" :class="{ 'ctab--active': tab === 'domains' }" role="tab" @click="switchTab('domains')">
+          {{ t('opsServer.card.tabDomains') }} <span v-if="domainCount >= 0" class="ctab__n">{{ domainCount }}</span>
+        </button>
       </div>
 
       <!-- 容器 tab -->
@@ -973,7 +982,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
       </template>
 
       <!-- 网络 tab -->
-      <template v-else>
+      <template v-else-if="tab === 'networks'">
         <div class="img-toolbar">
           <div class="pull">
             <input v-model="newNet" class="pull__in mono" :placeholder="t('opsServer.card.newNetPlaceholder')" @keyup.enter="doCreateNet" />
@@ -1032,6 +1041,17 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
             </div>
           </li>
         </ul>
+      </template>
+
+      <!-- 域名 / 反向代理 tab(R1 · 自动 HTTPS) -->
+      <template v-else-if="tab === 'domains'">
+        <ReverseProxyPanel
+          v-if="domainsMounted"
+          :server-id="group.serverId"
+          :host="host"
+          :containers="group.containers"
+          @count="(n) => (domainCount = n)"
+        />
       </template>
     </template>
   </article>

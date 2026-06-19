@@ -11,6 +11,7 @@ export default {
     tabStacks: 'Stacks',
     tabVolumes: '卷',
     tabNetworks: '网络',
+    tabDomains: '域名',
     // 容器 tab
     realtimeStats: '实时资源(docker stats)',
     refreshStatsTitle: '刷新实时资源采样',

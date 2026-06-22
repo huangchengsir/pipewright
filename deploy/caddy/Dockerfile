@@ -11,7 +11,7 @@
 # 版本钉死(可复现构建);升级时同步改 CADDY_VERSION 并跑一次镜像 CI。
 
 # --- 构建阶段:xcaddy 编译自定义 caddy 二进制 ---
-ARG CADDY_VERSION=2.8.4
+ARG CADDY_VERSION=2.11.4
 FROM caddy:${CADDY_VERSION}-builder AS builder
 
 # 插件版本不钉到具体 tag(xcaddy 默认拉各插件最新兼容版);如需完全可复现可在此加 @vX.Y.Z。

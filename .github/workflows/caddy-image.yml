@@ -48,7 +48,7 @@ jobs:
             type=ref,event=tag
             type=raw,value=latest
 
-      - uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcd730101868b # v6
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: deploy/caddy/Dockerfile

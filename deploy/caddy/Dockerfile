@@ -15,6 +15,10 @@ ARG CADDY_VERSION=2.8.4
 FROM caddy:${CADDY_VERSION}-builder AS builder
 
 # 插件版本不钉到具体 tag(xcaddy 默认拉各插件最新兼容版);如需完全可复现可在此加 @vX.Y.Z。
+# GOTOOLCHAIN=auto:builder 镜像自带的 Go 版本可能低于某些「拉最新」插件的 go.mod 要求
+# (如 caddy-dns/tencentcloud v0.4.3 要 go>=1.25),auto 允许 go 按需自动下载对应工具链,
+# 避免插件升级把构建卡在 builder 镜像的固定 Go 版本上(默认 local 会直接 FATAL)。
+ENV GOTOOLCHAIN=auto
 RUN xcaddy build \
     --with github.com/caddy-dns/cloudflare \
     --with github.com/caddy-dns/alidns \

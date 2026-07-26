@@ -209,6 +209,53 @@ func TestCancelRunning(t *testing.T) {
 	}
 }
 
+// TestCancelBetweenPickupAndRunning 覆盖 TestCancelQueued(worker 取走**前**取消)与
+// TestCancelRunning(已 running 时取消)之间的窗口:worker 已注册取消句柄、但尚未做
+// queued→running 时被取消。
+//
+// 该窗口曾使两边都不落终态:Cancel 见句柄已注册 → 走 cancel() 交由 worker 落终态;
+// 而 worker 的 queued→running 拿到已废的 runCtx,报 context canceled(非
+// ErrInvalidTransition),旧代码只记日志便返回 → run 永久卡在 queued(僵尸)。
+//
+// 用「已取消的池 ctx」直调 execute 确定性复现:runCtx 派生自池 ctx,故一出生即已取消,
+// queued→running 必报 context canceled,与真实竞态命中同一分支。
+func TestCancelBetweenPickupAndRunning(t *testing.T) {
+	db := testDB(t)
+	svc := New(db)
+	// runner 不应被触达(转 running 就失败了);若被调用则说明分支走错。
+	pool := NewWorkerPool(svc, WithRunner(&failIfCalledRunner{t: t}))
+	projID := seedProject(t, db)
+
+	r, err := svc.Create(context.Background(), projID, Trigger{Type: TriggerManual})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	pool.ctx = ctx // 不 Start():直接以已取消的池 ctx 执行
+	pool.execute(r.ID)
+
+	got, err := svc.Get(context.Background(), r.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !IsTerminal(got.Status) {
+		t.Fatalf("被取消的 run 必须落终态,got %q(僵尸:永久卡 queued,不重启不会被清)", got.Status)
+	}
+	if got.Status != StatusFailed {
+		t.Fatalf("取消复用 failed(无独立 canceled 态), got %q", got.Status)
+	}
+}
+
+// failIfCalledRunner 在被调用时让测试失败,用于断言某分支不该执行到 runner。
+type failIfCalledRunner struct{ t *testing.T }
+
+func (r *failIfCalledRunner) Run(context.Context, *Run, StepSink) error {
+	r.t.Error("runner 不应被调用:queued→running 失败后应直接落终态")
+	return nil
+}
+
 // blockingRunner 在第一步后阻塞直到 ctx 取消或 gate 关闭,用于测试运行中取消。
 type blockingRunner struct{ gate chan struct{} }
 

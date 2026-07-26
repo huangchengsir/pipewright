@@ -415,6 +415,18 @@ func (p *WorkerPool) execute(runID string) {
 			return // 已被取消/非队列态:跳过。
 		}
 		log.Printf("[run] run %s: to running failed: %v", runID, err)
+		// 非 ErrInvalidTransition 的失败意味着 run **仍是 queued**,而本 worker 已接手它、
+		// 其它 worker 不会再取——就此返回会让它永久卡在 queued(僵尸运行,页面上永不终结;
+		// FailOrphanedRuns 只在进程启动时扫一次,不重启则一直挂着)。
+		//
+		// 最典型触发:用户取消恰落在上方「注册取消句柄」与本转移之间。Cancel 见句柄已注册,
+		// 于是走「cancel() 后由 worker 落终态」那条路;而本转移拿到的 runCtx 已废,报的是
+		// context canceled(**不是** ErrInvalidTransition),于是两边都不落终态。
+		//
+		// 故此处落终态兜底,与下方 Get 失败分支一致。failToTerminal / reconcile 均用
+		// background ctx,不受已取消的 runCtx 影响。
+		p.svc.failToTerminal(runID)
+		sink.reconcile(StatusFailed)
 		return
 	}
 

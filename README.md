@@ -20,14 +20,21 @@ English | [简体中文](README.zh-CN.md)
 
 Mainstream options are either heavy (Jenkins with a pile of plugins + JVM) or a three-tool assembly (Woodpecker/Drone + Ansible/Kamal + Portainer). Pipewright packs "continuous integration, multi-server deployment, and server/container ops" into **one static binary**: download, start, open the browser — that's the entire install.
 
+It has since grown past that trio: publishing a deployed service on an HTTPS domain (the nginx + certbot step) and giving every pull request its own live preview URL are built in too.
+
 | | Pipewright | Jenkins | Drone + Ansible + Portainer |
 |---|:---:|:---:|:---:|
 | Single-binary deploy | ✅ | ❌ JVM + plugins | ❌ three-tool assembly |
 | Visual pipeline orchestration (DAG) | ✅ built-in canvas | plugin | hand-written YAML |
+| Pipeline as code (per-branch YAML) | ✅ | plugin | ✅ |
 | Isolated builds | ✅ | ✅ | ✅ |
 | Multi-server deploy (SSH, agentless) | ✅ built-in | plugin | Ansible |
 | Server / container ops | ✅ built-in | ❌ | Portainer |
 | Zero-downtime + failure rollback | ✅ | plugin | DIY |
+| Auto HTTPS + domain reverse proxy | ✅ built-in | ❌ | ❌ |
+| Per-PR preview environments | ✅ built-in | ❌ | ❌ |
+| DORA metrics | ✅ built-in | plugin | ❌ |
+| AI failure diagnosis | ✅ optional | ❌ | ❌ |
 | One-click self-update | ✅ | ❌ | ❌ |
 
 ## Screenshots
@@ -50,13 +57,18 @@ Mainstream options are either heavy (Jenkins with a pile of plugins + JVM) or a 
 
 ## Feature Overview
 
-- **🔐 Security foundation** — single-admin auth (argon2id + CSRF) · encrypted credential vault (NaCl secretbox, masked display, never plaintext) · append-only audit · end-to-end secret redaction.
-- **🧩 Projects & pipelines** — visual orchestration canvas (stage DAG + intra-stage job-level DAG) · matrix builds · manual approval gates · sidecar services (attach DB/Redis for tests) · trigger rules + branch→environment mapping · server-authoritative validation.
-- **🏗 Isolated builds & artifacts** — version-pinned isolated builds inside containers · build dependency caching · multiple artifact types (image/JAR/dist) + push to private registries · live terminal logs (SSE) + history replay · read-only code browsing (Monaco).
-- **🚀 Multi-server deployment** — agentless deploy over SSH · health gating · zero-downtime cutover + failure rollback · parallel fan-out across hosts + visible partial failures · environment deployment history and rollback.
-- **📣 Notifications** — WeCom / DingTalk / Lark (Feishu) / email / custom webhook · fine-grained event→channel routing · templates + custom variables · in-pipeline notification nodes.
-- **🖥 Server & container ops** — multi-host status overview (CPU/memory/disk) · container/image/Stacks/volume/network management · live + historical service logs · interactive container terminal · web ops terminal (host shell, full copy-paste/signal support) · anomaly detection alerts.
-- **📈 Metrics** — the four DORA metrics (deployment frequency / lead time for changes / change failure rate / mean time to restore) out of the box.
+- **🔐 Security foundation** — single-admin auth (argon2id + CSRF) · encrypted credential vault (NaCl secretbox, masked display, never plaintext) · OAuth app onboarding for Gitee / GitHub / GitLab / self-hosted instances (the access token lands straight in the vault as a reusable credential) · append-only audit (SQLite triggers hard-block UPDATE/DELETE) with an optional remote sink · per-run secret redaction across logs, diagnostics, and notifications.
+- **🧩 Projects & pipelines** — visual orchestration canvas (stage DAG + intra-stage job-level DAG) · matrix builds · manual approval gates (approve straight from a notification via signed link) · sidecar services (attach DB/Redis for tests) · stage `when` conditions + post-stage steps · typed run parameters (enum/bool/number, validated at trigger time) · triggers: webhook, branch→environment mapping, 5-field cron, and upstream→downstream pipeline chaining (loop-safe by depth + path guards) · per-project concurrency caps with FIFO queueing · a reuse library of pipeline templates, variable groups, and custom nodes · server-authoritative validation.
+- **📝 Pipeline as code** — commit the pipeline structure to `.pipewright.yml` and let it evolve per branch, with the canvas as the always-available fallback ([details below](#pipeline-as-code-gitops)).
+- **🏗 Isolated builds & artifacts** — version-pinned isolated builds inside containers (docker/nerdctl/podman) · a local bare-mirror repo cache (incremental fetch, then a workspace in seconds) · build dependency caching keyed by branch + lockfile hash · a content-addressed artifact store that keeps the **real bytes** of jar/dist for deployment (not just a placeholder reference) · image build + push to private registries with image GC · an optional remote build machine per project (build is offloaded over SSH; tokens stay on the control node) · JUnit + Cobertura test reports feeding quality gates that fail the stage and block downstream deploys · live terminal logs (SSE) + history replay · read-only code browsing (Monaco).
+- **🚀 Multi-server deployment** — agentless deploy over SSH · health gating · zero-downtime cutover + failure rollback · parallel fan-out across hosts + visible partial failures · command-style deploys (restart a service with no artifact) · **environments as first-class objects**: per-environment deployment timeline, current active version, and one-click rollback to the last fully successful deploy · environment promotion chains (dev→staging→prod) with per-environment variables/secrets and approval gates.
+- **🌐 Auto HTTPS + domain reverse proxy** — one managed Caddy container per target host, orchestrated over the same SSH + docker path as container ops (render Caddyfile → `docker cp` → graceful reload). Certificates are issued and renewed automatically by Let's Encrypt over HTTP-01, or over **DNS-01 with Cloudflare / DNSPod / Alibaba Cloud DNS** for wildcards. Plus: multi-domain aliases, path routing (`/api`→A, `/`→B), redirects, access control (basic auth, IP allow/deny CIDR), HSTS / security headers / compression, load balancing across upstreams with active health-check failover, WebSocket / gRPC (h2c) / TCP passthrough (caddy-l4), a certificate dashboard that probes the real 443 handshake, and one-click subdomain allocation.
+- **🔎 Per-PR preview environments** — when a PR's run deploys successfully, it automatically gets a throwaway `pr-<n>-<proj>.<base>` domain with its own certificate and route, so reviewers open one link and see that PR actually running. Idempotent per PR, and reclaimed automatically — but **only** once the PR is provably closed or merged.
+- **📣 Notifications** — WeCom / DingTalk / Lark (Feishu) / Slack / email / custom webhook · fine-grained event→channel routing · templates + custom variables · rich Lark cards with approve/detail action buttons and a release summary · in-pipeline notification nodes.
+- **🖥 Server & container ops** — multi-host status overview (CPU/memory/disk) plus time-series trend charts · container/image/Stacks/volume/network management · container create/inspect/prune · live + historical service logs · live stats · interactive container terminal · web ops terminal (host shell, full copy-paste/signal support) · configurable anomaly detection that runs on a timer, dedupes by cooldown, and routes alerts to your notification channels.
+- **🤖 AI assist (optional, fully degradable)** — bring your own Claude / OpenAI / Ollama endpoint (API key encrypted in the vault). Automatic root-cause diagnosis when a build or deploy fails, with a 👍/👎 feedback loop and accuracy stats · repo analysis → generated pipeline draft · success-vs-failure commit diff · script risk annotation · natural-language→shell assistant and container diagnosis in the ops terminal. The core CI/CD path never depends on any of it (NFR-10).
+- **📈 Metrics** — the four DORA metrics (deployment frequency / lead time for changes / change failure rate / mean time to restore) out of the box, with Elite/High/Medium/Low performance bands.
+- **🧹 Housekeeping & platform** — configurable run-data retention sweeper (off by default; never touches in-flight runs) · SQLite (pure Go) or MySQL · 8 UI languages (zh-CN / zh-TW / en / ja / ko / de / fr / es) including server-side localization of API error messages.
 - **🔄 Update check + one-click self-update** — Settings → System checks GitHub for the latest release with semantic comparison; binary deployments can **auto-update with one click** from the UI (download + checksum verification + atomic replace + self-restart), while Docker deployments get the exact upgrade command.
 
 > Security is non-negotiable: credentials stored as ciphertext only, commands arrayified against injection, outbound SSRF locked down, logs redacted.
@@ -133,17 +145,64 @@ Open **Settings → System** and click "Check for updates" to query the latest r
 
 ### Configuration (environment variables)
 
+A normal install only needs the first two (plus `PIPEWRIGHT_PUBLIC_URL` if you run behind a reverse proxy); everything else has a sane default.
+
+**Core**
+
 | Variable | Description | Default |
 |---|---|---|
+| `PIPEWRIGHT_ADMIN_PASSWORD` | Admin password on first launch | none (must be set) |
+| `PIPEWRIGHT_MASTER_KEY` | Credential vault master key (base64-encoded 32 bytes); or use `PIPEWRIGHT_MASTER_KEY_FILE` to point to a file | vault disabled if unset |
 | `PIPEWRIGHT_ADDR` | HTTP listen address | `:8080` |
+| `PIPEWRIGHT_PUBLIC_URL` | Externally reachable base URL (e.g. `https://ci.example.com`). Required for webhook callbacks, OAuth redirects, signed approval links in notifications, and PR status links | none |
+| `PIPEWRIGHT_ADMIN_USERNAME` | Admin username on first launch | `admin` |
+| `PIPEWRIGHT_TRUST_PROXY` | Trust the first `X-Forwarded-For` hop as the audit client IP (`1`/`true`/`yes`/`on`). Leave off unless a trusted reverse proxy sits in front — otherwise anyone can forge audit source IPs | off |
 | `PIPEWRIGHT_RELEASE_REPO` | GitHub repo queried for update checks (change it for a fork) | `huangchengsir/pipewright` |
+| `PIPEWRIGHT_RUNTIME` | Set `docker` to declare a container deployment (affects self-update mode); otherwise auto-detected via `/.dockerenv` | auto-detect |
+| `PIPEWRIGHT_AUDIT_SINK` | Remote audit sink: an `http(s)://` endpoint, or any other value as a second local JSON Lines file path. Keeps audit records complete even if the local DB is wiped | none |
+
+**Database**
+
+| Variable | Description | Default |
+|---|---|---|
 | `PIPEWRIGHT_DB_DRIVER` | Database driver: `sqlite` or `mysql` | `sqlite` |
 | `PIPEWRIGHT_DB` | SQLite database path (when driver=sqlite) | `pipewright.db` |
 | `PIPEWRIGHT_DB_DSN` | MySQL DSN (required when driver=mysql) | none |
-| `PIPEWRIGHT_MASTER_KEY` | Credential vault master key (base64-encoded 32 bytes); or use `_FILE` to point to a file | vault disabled if unset |
-| `PIPEWRIGHT_ADMIN_USERNAME` | Admin username on first launch | `admin` |
-| `PIPEWRIGHT_ADMIN_PASSWORD` | Admin password on first launch | none (must be set) |
+
+**Runs & builds**
+
+| Variable | Description | Default |
+|---|---|---|
 | `PIPEWRIGHT_RUNNER` | Run executor: default DAG (orchestrates stages/script/deploy_ssh/notify per the canvas); set `legacy` to fall back to the old fixed flow | `dag` |
+| `PIPEWRIGHT_BUILDER` | `auto` uses a real container build when docker/nerdctl/podman is found and falls back to a stub otherwise; `real` refuses to start without a container CLI; `stub` never touches containers | `auto` |
+| `PIPEWRIGHT_MAX_CONCURRENT` | Global cap on simultaneously running runs (excess stays queued, FIFO). Per-project caps are configured in the UI | worker count (4) |
+| `PIPEWRIGHT_ARTIFACT_DIR` | Artifact store directory (real jar/dist bytes) | `<db dir>/artifacts` |
+| `PIPEWRIGHT_REPO_CACHE_DIR` | Local bare-mirror repo cache directory | `<db dir>/repos` |
+| `PIPEWRIGHT_NO_REPO_CACHE` | `1` disables the repo cache (every build clones over the network) | off |
+| `PIPEWRIGHT_CACHE_DIR` | Build dependency cache directory | `<db dir>/cache` |
+| `PIPEWRIGHT_NO_BUILD_CACHE` | `1` disables build dependency caching (always a cold build) | off |
+| `PIPEWRIGHT_NO_IMAGE_GC` | `1` keeps built images instead of garbage-collecting them | off |
+| `PIPEWRIGHT_PAC_RUNTIME` | `1` forces pipeline-as-code on for **all** projects, ignoring the per-project toggle | off |
+| `PIPEWRIGHT_CHAIN_MAX_DEPTH` | Max pipeline-chaining depth (hard stop against runaway chains) | `5` |
+
+**Integrations**
+
+| Variable | Description | Default |
+|---|---|---|
+| `PIPEWRIGHT_PR_STATUS` | `1` forces PR status reporting on for **all** projects, ignoring the per-project toggle | off |
+| `PIPEWRIGHT_PR_STATUS_GITHUB_BASE` | GitHub API base URL (for GitHub Enterprise) | public GitHub |
+| `PIPEWRIGHT_PR_STATUS_GITEE_BASE` | Gitee API base URL (for self-hosted Gitee) | public Gitee |
+| `PIPEWRIGHT_CADDY_IMAGE` | Reverse-proxy image. The default is a self-built Caddy bundling the DNS-01, ratelimit, and layer4 plugins; stock `caddy:2` works but loses DNS-01/wildcard/TCP support | `ghcr.io/huangchengsir/pipewright-caddy:latest` |
+| `PIPEWRIGHT_PREVIEW_SWEEP_INTERVAL` | How often to check whether preview environments can be reclaimed (Go duration, e.g. `10m`) | `5m` |
+
+**Ops monitoring**
+
+| Variable | Description | Default |
+|---|---|---|
+| `PIPEWRIGHT_ANOMALY_INTERVAL` | Anomaly detection interval in seconds; `0` disables the timer (manual checks still work) | `60` |
+| `PIPEWRIGHT_ANOMALY_COOLDOWN` | Minimum seconds between repeat alerts for the same server×rule | `600` |
+| `PIPEWRIGHT_METRICS_SAMPLE_INTERVAL` | Server metrics sampling interval in seconds (source of the trend charts); `0` disables sampling | `60` |
+| `PIPEWRIGHT_METRICS_RETENTION_DAYS` | How many days of metric samples to keep | `7` |
 
 ## Pipeline as code (GitOps)
 
@@ -154,6 +213,7 @@ Commit your pipeline structure to `.pipewright.yml` in the repo — **same sourc
 - **Never breaks a run**: if the file is **missing** → falls back to the pipeline configured in the canvas (UI); if it exists but is **invalid YAML** → also falls back to the stored canvas config.
 - **Scope**: the YAML controls **pipeline structure only** (stages / jobs / `needs` / DAG layout). **Variables & cache, environments & credentials, and trigger rules** still come from the canvas (UI) settings — they are **not** in the YAML.
 - **Schema** is the same one used by the platform's "Import from YAML" (`version` + `stages` → `jobs`; a job uses a nested `script:` block for `image`/`commands`/`env`/`workdir`).
+- **Job types** available in both the canvas and the YAML: `git_source`, `script`, `build_backend`, `build_frontend`, `build_image`, `push_image`, `deploy_ssh`, `deploy_frontend`, `health_check`, `notify`, `templated`, `custom`.
 
 ```yaml
 version: 1
@@ -197,27 +257,72 @@ stages:
 
 ## Tech Stack
 
-- **Backend**: Go · Chi (routing) · modernc/sqlite (pure Go, no CGO) · go-git · NaCl secretbox (vault) · argon2id · golang.org/x/crypto/ssh (agentless deployment)
-- **Frontend**: Vue 3 `<script setup>` · Vite · naive-ui · OKLCH dual theme · Monaco (read-only code browsing) · embedded into the binary via `go:embed`
+- **Backend**: Go · Chi (routing) · modernc/sqlite (pure Go, no CGO) + go-sql-driver/mysql · go-git (no host git dependency) · NaCl secretbox (vault) · argon2id + bcrypt · golang.org/x/crypto/ssh (agentless deployment) · coder/websocket (terminals) · Caddy (orchestrated on target hosts for auto HTTPS)
+- **Frontend**: Vue 3 `<script setup>` · Vite · naive-ui · OKLCH dual theme · Monaco (read-only code browsing) · Vitest + Playwright · embedded into the binary via `go:embed`
+
+Deliberately dependency-lean: the cron parser, DAG engine, DNS provider clients, artifact/build caches, and Caddyfile renderer are all in-tree rather than pulled in as libraries.
 
 ## Architecture
 
+One process, ~45 domain packages. `internal/httpapi` is the only package that touches HTTP; every domain package is injected into it, and `cmd/pipewright/main.go` is the single wiring layer (including the adapters that keep otherwise-circular packages pointing one way).
+
 ```
 single static binary (cmd/pipewright)
-├── internal/auth        auth + sessions + CSRF
-├── internal/vault       encrypted credential vault (secretbox)
-├── internal/audit       append-only audit + redaction
-├── internal/project     project onboarding + repo detection
-├── internal/pipeline    pipeline spec + build/deploy config + validation
-├── internal/trigger     webhook + branch-mapping triggers
-├── internal/run         run model + worker pool + logs + artifacts
-├── internal/dagrun      DAG scheduling (stage-level + job-level, matrix expansion)
-├── internal/build       isolated builds + image/artifacts + dependency caching
-├── internal/target      generic SSH exec/session layer (shared by deploy + ops)
-├── internal/deploy      SSH deploy execution + health gating + rollback
-├── internal/notify      multi-channel notifications + event routing + templates
-├── internal/httpapi     the sole outward HTTP surface (domain packages never touch HTTP)
-└── web/                 Vue 3 frontend (embedded via go:embed)
+│
+├─ foundation
+│  ├── internal/config        env config + master key loading
+│  ├── internal/store         DB open + migrations (sqlite / mysql dialects)
+│  ├── internal/auth          auth + sessions + CSRF
+│  ├── internal/vault         encrypted credential vault (secretbox)
+│  ├── internal/oauth         OAuth app onboarding → token stored as a vault credential
+│  ├── internal/audit         append-only audit + optional remote sink
+│  ├── internal/mask          secret redaction (logs / diagnostics / notifications)
+│  ├── internal/i18n          server-side localization of user-facing messages
+│  └── internal/version       release check + one-click self-update
+│
+├─ pipelines
+│  ├── internal/project       project onboarding + repo detection
+│  ├── internal/pipeline      pipeline spec + build/deploy config + validation
+│  ├── internal/pipelineyaml  YAML ↔ spec round-trip (import / export)
+│  ├── internal/pacloader     pipeline-as-code loader (.pipewright.yml, per branch)
+│  ├── internal/library       reusable templates + variable groups + custom nodes
+│  ├── internal/trigger       webhook + branch→environment mapping
+│  ├── internal/cron          5-field cron parser + minute-granularity scheduler
+│  └── internal/chain         upstream→downstream chaining (loop-safe)
+│
+├─ execution
+│  ├── internal/run           run model + worker pool + logs + artifacts + parameters
+│  ├── internal/dag           pure DAG scheduling kernel (no I/O)
+│  ├── internal/dagrun        DAG run orchestration (stage + job level, matrix expansion)
+│  ├── internal/build         isolated container builds + images + stage executor
+│  ├── internal/runner        per-project remote build machine config
+│  ├── internal/repocache     local bare-mirror repo cache (incremental fetch)
+│  ├── internal/buildcache    build dependency cache (branch + lockfile keyed)
+│  ├── internal/artifactstore content-addressed artifact bytes
+│  ├── internal/testreport    JUnit + Cobertura parsing
+│  ├── internal/qualitygate   pure quality-gate evaluation
+│  ├── internal/approval      manual approval gates (coordinator + persistence)
+│  └── internal/retention     run data retention sweeper
+│
+├─ delivery
+│  ├── internal/target        generic SSH exec/session layer (shared by deploy + ops)
+│  ├── internal/deploy        SSH deploy execution + health gating + rollback
+│  ├── internal/environments  environments as first-class objects + rollback targets
+│  ├── internal/promotion     environment promotion chains + per-env vars
+│  ├── internal/prstatus      PR / commit status reporting (GitHub / Gitee)
+│  ├── internal/proxy         auto HTTPS + domain reverse proxy (Caddy orchestration)
+│  ├── internal/dnsprovider   Cloudflare / DNSPod / Alibaba DNS (DNS-01 + subdomains)
+│  └── internal/previewenv    per-PR preview environments + auto reclamation
+│
+├─ observability
+│  ├── internal/notify        multi-channel notifications + event routing + templates
+│  ├── internal/anomaly       configurable threshold detection + alerts
+│  ├── internal/metrics       server metric time series (trend charts)
+│  ├── internal/dora          DORA metrics + performance bands
+│  └── internal/ai            optional AI: diagnosis, repo analysis, run diff, risk
+│
+├── internal/httpapi          the sole outward HTTP surface (~188 routes)
+└── web/                      Vue 3 frontend (embedded via go:embed)
 ```
 
 ## Project Status

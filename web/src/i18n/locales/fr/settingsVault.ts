@@ -32,6 +32,7 @@ export default {
   colLastUsed: 'Dernière utilisation',
 
   typeGitToken: 'Jeton Git',
+  typeGitHttp: 'Git HTTPS',
   typeSshKey: 'Clé SSH',
   typeSshPassword: 'Mot de passe SSH',
   typeRegistry: 'Registre',
@@ -67,6 +68,7 @@ export default {
   gitUsernamePlaceholder: 'Votre nom de compte Gitee',
   hintGitUsername: 'Requis pour les dépôts d’organisation Gitee ; laissez vide pour conserver le comportement existant.',
   fieldSecret: 'Contenu du secret',
+  fieldSecretGitHttp: 'Mot de passe / jeton',
   fieldSecretNew: 'Contenu du nouveau secret',
   valNameRequired: 'Le nom est requis',
   valTypeRequired: 'Le type est requis',
@@ -76,8 +78,10 @@ export default {
   secretPlaceholderKeep: 'Laisser vide pour conserver le secret actuel',
   secretPlaceholderSshPassword: 'Saisissez le mot de passe de connexion SSH…',
   secretPlaceholderToken: 'Collez le contenu du jeton…',
+  secretPlaceholderGitHttp: 'Saisissez le mot de passe ou le jeton Git HTTPS…',
   hintSshPassword: 'Le nom d’utilisateur de connexion SSH se renseigne lors de « l’enregistrement du serveur » ; seul le mot de passe est stocké ici. Il ne peut pas être relu après enregistrement ; seul le masque est affiché.',
   hintSecret: 'Le secret ne peut pas être relu après son enregistrement ; l’interface n’affiche que la valeur masquée',
+  hintGitHttp: 'Pour la connexion Git HTTPS : utilisez le mot de passe du compte ou un Personal Access Token. Seul le masque est affiché après l’enregistrement.',
 
   cancel: 'Annuler',
   saving: 'Enregistrement…',

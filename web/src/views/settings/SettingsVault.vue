@@ -167,6 +167,7 @@ function relativeTime(isoStr: string | null): string {
 
 const typeLabels = computed<Record<CredentialType, string>>(() => ({
   git_token: t('settingsVault.typeGitToken'),
+  git_http: t('settingsVault.typeGitHttp'),
   ssh_key: t('settingsVault.typeSshKey'),
   ssh_password: t('settingsVault.typeSshPassword'),
   registry: t('settingsVault.typeRegistry'),
@@ -496,8 +497,8 @@ async function toggleEditReveal(): Promise<void> {
             :title="typeLabels[cred.type]"
             aria-hidden="true"
           >
-            <!-- git_token -->
-            <svg v-if="cred.type === 'git_token'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+            <!-- Git HTTPS -->
+            <svg v-if="cred.type === 'git_token' || cred.type === 'git_http'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
               <path d="M14.5 9.5 21 3M21 3h-5M21 3v5"/>
               <path d="M10 14a5 5 0 1 1-7 4.6"/>
             </svg>
@@ -667,7 +668,7 @@ async function toggleEditReveal(): Promise<void> {
             <label class="field-label" for="cred-type">{{ t('settingsVault.fieldType') }}</label>
             <div class="segmented" role="group" :aria-label="t('settingsVault.credentialTypeAria')">
               <button
-                v-for="opt in (['git_token', 'ssh_key', 'ssh_password', 'registry'] as CredentialType[])"
+                v-for="opt in (['git_token', 'git_http', 'ssh_key', 'ssh_password', 'registry'] as CredentialType[])"
                 :key="opt"
                 type="button"
                 class="seg-item"
@@ -697,7 +698,7 @@ async function toggleEditReveal(): Promise<void> {
           </div>
 
           <!-- Secret — password type, never echoed back -->
-          <div v-if="form.type === 'git_token'" class="field">
+          <div v-if="form.type === 'git_token' || form.type === 'git_http'" class="field">
             <label class="field-label" for="cred-username">
               {{ t('settingsVault.fieldGitUsername') }}
               <span class="field-optional">{{ t('settingsVault.optional') }}</span>
@@ -717,7 +718,7 @@ async function toggleEditReveal(): Promise<void> {
           <div class="field">
             <div class="field-label-row">
               <label class="field-label" for="cred-secret">
-                {{ modalMode === 'add' ? t('settingsVault.fieldSecret') : t('settingsVault.fieldSecretNew') }}
+                {{ modalMode === 'add' && form.type === 'git_http' ? t('settingsVault.fieldSecretGitHttp') : (modalMode === 'add' ? t('settingsVault.fieldSecret') : t('settingsVault.fieldSecretNew')) }}
                 <span v-if="modalMode === 'edit'" class="field-optional">{{ t('settingsVault.secretOptionalEdit') }}</span>
               </label>
               <!-- Reveal current plaintext (edit only; audited server-side) -->
@@ -768,7 +769,7 @@ async function toggleEditReveal(): Promise<void> {
               class="field-input field-input--mono"
               :class="{ 'field-input--error': formErrors.secret }"
               type="password"
-              :placeholder="modalMode === 'add' ? (form.type === 'ssh_password' ? t('settingsVault.secretPlaceholderSshPassword') : t('settingsVault.secretPlaceholderToken')) : t('settingsVault.secretPlaceholderKeep')"
+              :placeholder="modalMode === 'add' ? (form.type === 'ssh_password' ? t('settingsVault.secretPlaceholderSshPassword') : (form.type === 'git_http' ? t('settingsVault.secretPlaceholderGitHttp') : t('settingsVault.secretPlaceholderToken'))) : t('settingsVault.secretPlaceholderKeep')"
               :disabled="formSubmitting"
               :aria-invalid="formErrors.secret ? 'true' : undefined"
               :aria-describedby="formErrors.secret ? 'cred-secret-err' : undefined"
@@ -777,6 +778,7 @@ async function toggleEditReveal(): Promise<void> {
             />
             <span v-if="formErrors.secret" id="cred-secret-err" class="field-error" role="alert">{{ formErrors.secret }}</span>
             <span v-if="form.type === 'ssh_password'" class="field-hint">{{ t('settingsVault.hintSshPassword') }}</span>
+            <span v-else-if="form.type === 'git_http'" class="field-hint">{{ t('settingsVault.hintGitHttp') }}</span>
             <span v-else class="field-hint">{{ t('settingsVault.hintSecret') }}</span>
           </div>
 
@@ -1180,6 +1182,11 @@ async function toggleEditReveal(): Promise<void> {
 }
 
 .type-icon--git_token {
+  background: var(--color-cyan-soft);
+  color: var(--color-cyan);
+}
+
+.type-icon--git_http {
   background: var(--color-cyan-soft);
   color: var(--color-cyan);
 }

@@ -13,7 +13,7 @@
 
 import { http } from './http'
 
-export type CredentialType = 'git_token' | 'ssh_key' | 'ssh_password' | 'registry'
+export type CredentialType = 'git_token' | 'git_http' | 'ssh_key' | 'ssh_password' | 'registry'
 
 export interface Credential {
   id: string

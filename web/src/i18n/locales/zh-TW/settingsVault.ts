@@ -32,6 +32,7 @@ export default {
   colLastUsed: '最近使用',
 
   typeGitToken: 'Git 權杖',
+  typeGitHttp: 'Git HTTPS',
   typeSshKey: 'SSH 私鑰',
   typeSshPassword: 'SSH 密碼',
   typeRegistry: '映像倉庫',
@@ -67,6 +68,7 @@ export default {
   gitUsernamePlaceholder: '你的 Gitee 帳號使用者名稱',
   hintGitUsername: 'Gitee 組織倉庫需要填寫帳號使用者名稱；留空會保留既有的倉庫擁有者回退邏輯。',
   fieldSecret: '密鑰內容',
+  fieldSecretGitHttp: '密碼 / Token',
   fieldSecretNew: '新密鑰內容',
   valNameRequired: '請填寫名稱',
   valTypeRequired: '請選擇類型',
@@ -76,8 +78,10 @@ export default {
   secretPlaceholderKeep: '留空則保持目前密鑰不變',
   secretPlaceholderSshPassword: '輸入 SSH 登入密碼…',
   secretPlaceholderToken: '貼上權杖內容…',
+  secretPlaceholderGitHttp: '輸入 Git HTTPS 密碼或 Token…',
   hintSshPassword: 'SSH 登入使用者名稱於「登記伺服器」時填寫;此處僅存密碼。寫入後不可讀出,僅顯示遮罩。',
   hintSecret: '密鑰寫入後不可讀出,介面僅顯示遮罩值',
+  hintGitHttp: '用於 Git HTTPS 登入：可填寫帳號密碼，也可填寫 Personal Access Token。寫入後僅顯示遮罩。',
 
   cancel: '取消',
   saving: '儲存中…',

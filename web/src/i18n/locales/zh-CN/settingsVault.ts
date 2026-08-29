@@ -32,6 +32,7 @@ export default {
   colLastUsed: '最近使用',
 
   typeGitToken: 'Git 令牌',
+  typeGitHttp: 'Git HTTPS',
   typeSshKey: 'SSH 私钥',
   typeSshPassword: 'SSH 密码',
   typeRegistry: '镜像仓库',
@@ -67,6 +68,7 @@ export default {
   gitUsernamePlaceholder: '你的 Gitee 账号用户名',
   hintGitUsername: 'Gitee 组织仓库需要填写账号用户名；留空则保持原有的仓库所有者回退逻辑。',
   fieldSecret: '密钥内容',
+  fieldSecretGitHttp: '密码 / Token',
   fieldSecretNew: '新密钥内容',
   valNameRequired: '请填写名称',
   valTypeRequired: '请选择类型',
@@ -76,8 +78,10 @@ export default {
   secretPlaceholderKeep: '留空保持当前密钥不变',
   secretPlaceholderSshPassword: '输入 SSH 登录密码…',
   secretPlaceholderToken: '粘贴令牌内容…',
+  secretPlaceholderGitHttp: '输入 Git HTTPS 密码或 Token…',
   hintSshPassword: 'SSH 登录用户名在「登记服务器」时填写;此处仅存密码。写入后不可读出,仅展示掩码。',
   hintSecret: '密钥写入后不可读出，界面仅展示掩码值',
+  hintGitHttp: '用于 Git HTTPS 登录：可填写账号密码，也可填写 Personal Access Token。写入后仅展示掩码。',
 
   cancel: '取消',
   saving: '保存中…',

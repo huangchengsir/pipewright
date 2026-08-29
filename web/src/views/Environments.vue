@@ -29,6 +29,7 @@ import ErrorState from '../components/ui/ErrorState.vue'
 import EmptyState from '../components/ui/EmptyState.vue'
 import SkeletonBlock from '../components/ui/SkeletonBlock.vue'
 import StatusBadge from '../components/ui/StatusBadge.vue'
+import AppSelect from '../components/ui/AppSelect.vue'
 
 type LoadState = 'idle' | 'loading' | 'error'
 
@@ -170,10 +171,15 @@ onMounted(() => {
     <div class="env-controls">
       <label class="env-controls__field">
         <span class="env-controls__label">{{ t('environments.project') }}</span>
-        <select class="select" :value="projectId" @change="onProjectChange" :aria-label="t('environments.filterByProject')">
-          <option value="" disabled>{{ t('environments.selectProject') }}</option>
-          <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
-        </select>
+        <AppSelect
+          class="select"
+          :model-value="projectId"
+          :options="projects.map((p) => ({ value: p.id, label: p.name }))"
+          :placeholder="t('environments.selectProject')"
+          :aria-label="t('environments.filterByProject')"
+          min-width="220px"
+          @update:model-value="setProject"
+        />
       </label>
     </div>
 

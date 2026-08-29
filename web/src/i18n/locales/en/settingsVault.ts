@@ -32,6 +32,7 @@ export default {
   colLastUsed: 'Last used',
 
   typeGitToken: 'Git token',
+  typeGitHttp: 'Git HTTPS',
   typeSshKey: 'SSH key',
   typeSshPassword: 'SSH password',
   typeRegistry: 'Registry',
@@ -67,6 +68,7 @@ export default {
   gitUsernamePlaceholder: 'Your Gitee account username',
   hintGitUsername: 'Required by Gitee organization repositories; leave blank to keep the existing repository-owner fallback.',
   fieldSecret: 'Secret',
+  fieldSecretGitHttp: 'Password / Token',
   fieldSecretNew: 'New secret',
   valNameRequired: 'Name is required',
   valTypeRequired: 'Type is required',
@@ -76,8 +78,10 @@ export default {
   secretPlaceholderKeep: 'Leave blank to keep the current secret',
   secretPlaceholderSshPassword: 'Enter the SSH login password…',
   secretPlaceholderToken: 'Paste the token…',
+  secretPlaceholderGitHttp: 'Enter the Git HTTPS password or token…',
   hintSshPassword: 'The SSH login username is set when you register the server; only the password is stored here. It cannot be read back after saving — only the mask is shown.',
   hintSecret: 'The secret cannot be read back after it is saved; the UI only shows the masked value.',
+  hintGitHttp: 'Used for Git HTTPS login: enter an account password or a Personal Access Token. Only the mask is shown after saving.',
 
   cancel: 'Cancel',
   saving: 'Saving…',

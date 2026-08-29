@@ -28,6 +28,7 @@ import DoraMetricCard from '../components/metrics/DoraMetricCard.vue'
 import AppButton from '../components/ui/AppButton.vue'
 import ErrorState from '../components/ui/ErrorState.vue'
 import SkeletonBlock from '../components/ui/SkeletonBlock.vue'
+import AppSelect from '../components/ui/AppSelect.vue'
 
 type LoadState = 'idle' | 'loading' | 'error'
 
@@ -66,8 +67,8 @@ function setQuery(patch: Record<string, string | undefined>): void {
   void router.replace({ query: next })
 }
 
-function onProjectChange(e: Event): void {
-  setQuery({ projectId: (e.target as HTMLSelectElement).value || undefined })
+function selectProject(id: string): void {
+  setQuery({ projectId: id || undefined })
 }
 function onWindowChange(value: string): void {
   setQuery({ window: value })
@@ -144,10 +145,16 @@ onMounted(() => {
     <div class="dora-controls">
       <label class="dora-controls__field">
         <span class="dora-controls__label">{{ t('doraDashboard.projectLabel') }}</span>
-        <select class="select" :value="projectId" @change="onProjectChange" :aria-label="t('doraDashboard.projectFilterAria')">
-          <option value="">{{ t('doraDashboard.allProjects') }}</option>
-          <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
-        </select>
+        <AppSelect
+          class="select"
+          :model-value="projectId"
+          :options="[{ value: '', label: t('doraDashboard.allProjects') }, ...projects.map((p) => ({ value: p.id, label: p.name }))]"
+          :placeholder="t('doraDashboard.allProjects')"
+          :aria-label="t('doraDashboard.projectFilterAria')"
+          min-width="180px"
+          height="36px"
+          @update:model-value="selectProject"
+        />
       </label>
 
       <div class="dora-segmented" role="group" :aria-label="t('doraDashboard.windowAria')">
@@ -315,13 +322,6 @@ onMounted(() => {
   font-size: var(--text-body);
   color: var(--color-text);
   background: var(--color-card);
-  background-image: linear-gradient(45deg, transparent 50%, var(--color-dim) 50%),
-    linear-gradient(135deg, var(--color-dim) 50%, transparent 50%);
-  background-position:
-    calc(100% - 16px) center,
-    calc(100% - 11px) center;
-  background-size: 5px 5px, 5px 5px;
-  background-repeat: no-repeat;
   border: 1px solid var(--color-border-strong);
   border-radius: var(--rounded-md);
   min-width: 180px;

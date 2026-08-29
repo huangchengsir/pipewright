@@ -13,11 +13,12 @@ import {
   type CreateProjectInput,
   type UpdateProjectInput,
 } from '../api/projects'
-import { listCredentials, type Credential } from '../api/credentials'
+import { listCredentials, createCredential, type Credential, type CredentialType } from '../api/credentials'
 import { triggerManual, type RunDetail, type TriggerManualInput } from '../api/runs'
 import { listRefs, listCommits, type GitRef, type GitCommit } from '../api/refs'
 import RunParamsEditor from '../components/RunParamsEditor.vue'
 import TypedRunParams from '../components/TypedRunParams.vue'
+import CredentialSelect from '../components/projects/CredentialSelect.vue'
 import { getParameters, validateParamValues, type ParamDef } from '../api/parameters'
 import { HttpError } from '../api/http'
 
@@ -98,7 +99,7 @@ const credentials = ref<Credential[]>([])
 const credentialsLoading = ref(false)
 
 const gitCredentials = computed(() =>
-  credentials.value.filter((c) => c.type === 'git_token'),
+  credentials.value.filter((c) => c.type === 'git_token' || c.type === 'git_http'),
 )
 
 async function loadCredentials(): Promise<void> {
@@ -155,6 +156,12 @@ const createErrors = ref({
   credentialId: '',
 })
 
+const inlineCredentialOpen = ref(false)
+const inlineCredentialForm = ref<{ name: string; type: CredentialType; username: string; secret: string }>({ name: '', type: 'git_http', username: '', secret: '' })
+const inlineCredentialErrors = ref({ name: '', username: '', secret: '' })
+const inlineCredentialBanner = ref('')
+const inlineCredentialSubmitting = ref(false)
+
 const createBanner = ref('')
 const createSubmitting = ref(false)
 
@@ -171,6 +178,10 @@ function openCreateModal(): void {
   testState.value = 'idle'
   testError.value = ''
   testDetectedBranch.value = ''
+  inlineCredentialOpen.value = false
+  inlineCredentialForm.value = { name: '', type: 'git_http', username: '', secret: '' }
+  inlineCredentialErrors.value = { name: '', username: '', secret: '' }
+  inlineCredentialBanner.value = ''
   createModalOpen.value = true
 }
 
@@ -181,6 +192,53 @@ function closeCreateModal(): void {
 
 function clearCreateErrors(): void {
   createErrors.value = { name: '', repoUrl: '', credentialId: '' }
+}
+
+function clearInlineCredentialErrors(): void {
+  inlineCredentialErrors.value = { name: '', username: '', secret: '' }
+  inlineCredentialBanner.value = ''
+}
+
+async function handleInlineCredentialSubmit(): Promise<void> {
+  clearInlineCredentialErrors()
+  let valid = true
+  if (!inlineCredentialForm.value.name.trim()) {
+    inlineCredentialErrors.value.name = t('projects.inlineCredNameRequired')
+    valid = false
+  }
+  if (inlineCredentialForm.value.type === 'git_http' && !inlineCredentialForm.value.username.trim()) {
+    inlineCredentialErrors.value.username = t('projects.inlineCredUsernameRequired')
+    valid = false
+  }
+  if (!inlineCredentialForm.value.secret) {
+    inlineCredentialErrors.value.secret = t('projects.inlineCredSecretRequired')
+    valid = false
+  }
+  if (!valid) return
+
+  inlineCredentialSubmitting.value = true
+  try {
+    const credential = await createCredential({
+      name: inlineCredentialForm.value.name.trim(),
+      type: inlineCredentialForm.value.type,
+      scope: '',
+      username: inlineCredentialForm.value.username.trim(),
+      secret: inlineCredentialForm.value.secret,
+    })
+    credentials.value = [credential, ...credentials.value]
+    createForm.value.credentialId = credential.id
+    inlineCredentialOpen.value = false
+    inlineCredentialForm.value.secret = ''
+    testState.value = 'idle'
+  } catch (err) {
+    if (err instanceof HttpError) {
+      inlineCredentialBanner.value = err.apiError?.message ?? t('projects.inlineCredCreateStatus', { status: err.status })
+    } else {
+      inlineCredentialBanner.value = t('projects.inlineCredCreateRetry')
+    }
+  } finally {
+    inlineCredentialSubmitting.value = false
+  }
 }
 
 function validateCreateForm(): boolean {
@@ -528,10 +586,6 @@ function relativeTime(isoStr: string): string {
   if (h < 24) return t('time.hourAgo', { n: h })
   const d = Math.floor(h / 24)
   return t('time.dayAgo', { n: d })
-}
-
-function credentialLabel(c: Credential): string {
-  return `${c.name} · ${c.maskedValue}`
 }
 
 // Status pill config — fixed six-word vocabulary, no substitutes
@@ -1100,36 +1154,32 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
             <span v-if="createErrors.repoUrl" id="proj-repo-err" class="field-error" role="alert">{{ createErrors.repoUrl }}</span>
           </div>
 
-          <!-- Credential dropdown — git_token only, masked display -->
+          <!-- Credential dropdown — Git credentials supported by project clone, masked display -->
           <div class="field">
             <label class="field-label" for="proj-cred">
               {{ t('projects.credential') }}
               <span class="field-hint-inline">{{ t('projects.fieldCredHint') }}</span>
             </label>
-            <div class="select-wrap">
-              <select
-                id="proj-cred"
-                v-model="createForm.credentialId"
-                class="field-select"
-                :class="{ 'field-input--error': createErrors.credentialId }"
-                :disabled="createSubmitting || credentialsLoading"
-                :aria-invalid="createErrors.credentialId ? 'true' : undefined"
-                :aria-describedby="createErrors.credentialId ? 'proj-cred-err' : undefined"
-                @change="createErrors.credentialId = ''; testState = 'idle'"
-              >
-                <option value="" disabled>
-                  {{ credentialsLoading ? t('projects.credLoading') : t('projects.credSelect') }}
-                </option>
-                <option
-                  v-for="cred in gitCredentials"
-                  :key="cred.id"
-                  :value="cred.id"
-                >{{ credentialLabel(cred) }}</option>
-              </select>
-              <svg class="select-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
-                <path d="M6 9l6 6 6-6"/>
-              </svg>
-            </div>
+            <CredentialSelect
+              input-id="proj-cred"
+              v-model="createForm.credentialId"
+              :credentials="gitCredentials"
+              :loading="credentialsLoading"
+              :disabled="createSubmitting"
+              :has-error="Boolean(createErrors.credentialId)"
+              :placeholder="t('projects.credSelect')"
+              :loading-label="t('projects.credLoading')"
+              :empty-label="t('projects.credSelect')"
+              @change="createErrors.credentialId = ''; testState = 'idle'"
+            />
+            <button
+              type="button"
+              class="btn-ghost credential-create-toggle"
+              :disabled="createSubmitting || inlineCredentialSubmitting"
+              @click="inlineCredentialOpen = !inlineCredentialOpen; clearInlineCredentialErrors()"
+            >
+              {{ inlineCredentialOpen ? t('projects.inlineCredCancel') : t('projects.inlineCredNew') }}
+            </button>
             <span v-if="createErrors.credentialId" id="proj-cred-err" class="field-error" role="alert">{{ createErrors.credentialId }}</span>
             <span
               v-if="!credentialsLoading && gitCredentials.length === 0"
@@ -1139,6 +1189,79 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
               <a href="/settings/vault" class="link">{{ t('projects.credVaultLink') }}</a>
               {{ t('projects.credEmptyPost') }}
             </span>
+          </div>
+
+          <div v-if="inlineCredentialOpen" class="inline-credential-panel">
+            <div class="inline-credential-title">{{ t('projects.inlineCredTitle') }}</div>
+            <div v-if="inlineCredentialBanner" class="field-error" role="alert">{{ inlineCredentialBanner }}</div>
+            <div class="field">
+              <span class="field-label">{{ t('settingsVault.fieldType') }}</span>
+              <div class="inline-credential-types" role="group" :aria-label="t('settingsVault.credentialTypeAria')">
+                <button
+                  v-for="type in (['git_token', 'git_http'] as CredentialType[])"
+                  :key="type"
+                  type="button"
+                  class="inline-credential-type"
+                  :class="{ 'inline-credential-type--active': inlineCredentialForm.type === type }"
+                  :disabled="inlineCredentialSubmitting"
+                  @click="inlineCredentialForm.type = type"
+                >{{ type === 'git_token' ? t('settingsVault.typeGitToken') : t('settingsVault.typeGitHttp') }}</button>
+              </div>
+            </div>
+            <div class="field">
+              <label class="field-label" for="inline-cred-name">{{ t('projects.inlineCredName') }}</label>
+              <input
+                id="inline-cred-name"
+                v-model="inlineCredentialForm.name"
+                class="field-input"
+                :class="{ 'field-input--error': inlineCredentialErrors.name }"
+                type="text"
+                :placeholder="t('projects.inlineCredNamePlaceholder')"
+                :disabled="inlineCredentialSubmitting"
+                @input="inlineCredentialErrors.name = ''"
+              />
+              <span v-if="inlineCredentialErrors.name" class="field-error" role="alert">{{ inlineCredentialErrors.name }}</span>
+            </div>
+            <div class="field">
+              <label class="field-label" for="inline-cred-username">
+                {{ t('projects.inlineCredUsername') }}
+                <span class="field-optional">{{ inlineCredentialForm.type === 'git_http' ? '' : t('settingsVault.optional') }}</span>
+              </label>
+              <input
+                id="inline-cred-username"
+                v-model="inlineCredentialForm.username"
+                class="field-input"
+                :class="{ 'field-input--error': inlineCredentialErrors.username }"
+                type="text"
+                :placeholder="t('projects.inlineCredUsernamePlaceholder')"
+                :disabled="inlineCredentialSubmitting"
+                autocomplete="username"
+                @input="inlineCredentialErrors.username = ''"
+              />
+              <span v-if="inlineCredentialErrors.username" class="field-error" role="alert">{{ inlineCredentialErrors.username }}</span>
+            </div>
+            <div class="field">
+              <label class="field-label" for="inline-cred-secret">{{ t('projects.inlineCredSecret') }}</label>
+              <input
+                id="inline-cred-secret"
+                v-model="inlineCredentialForm.secret"
+                class="field-input"
+                :class="{ 'field-input--error': inlineCredentialErrors.secret }"
+                type="password"
+                :placeholder="t('projects.inlineCredSecretPlaceholder')"
+                :disabled="inlineCredentialSubmitting"
+                autocomplete="new-password"
+                @input="inlineCredentialErrors.secret = ''"
+              />
+              <span class="field-hint">{{ t('projects.inlineCredSecretHint') }}</span>
+              <span v-if="inlineCredentialErrors.secret" class="field-error" role="alert">{{ inlineCredentialErrors.secret }}</span>
+            </div>
+            <button
+              type="button"
+              class="btn-secondary inline-credential-submit"
+              :disabled="inlineCredentialSubmitting"
+              @click="handleInlineCredentialSubmit"
+            >{{ inlineCredentialSubmitting ? t('projects.inlineCredCreating') : t('projects.inlineCredCreate') }}</button>
           </div>
 
           <!-- Default branch (optional) -->
@@ -2106,11 +2229,14 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
 .modal {
   width: 100%;
   max-width: 520px;
+  max-height: calc(100dvh - 48px);
   background: var(--color-card);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--rounded-xl);
   box-shadow: var(--shadow-modal);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
   animation: modal-in 0.35s var(--ease-out-expo) both;
 }
 
@@ -2212,6 +2338,8 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .modal-body {
@@ -2380,6 +2508,68 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
   gap: 12px;
   flex-wrap: wrap;
   margin-top: -4px;
+}
+
+.credential-create-toggle {
+  margin-top: 8px;
+}
+
+.inline-credential-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: -2px;
+  padding: 14px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--rounded);
+  background: var(--color-inset);
+}
+
+.inline-credential-title {
+  font-size: 0.82rem;
+  font-weight: 650;
+  color: var(--color-text);
+}
+
+.inline-credential-types {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  padding: 3px;
+  gap: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded);
+  background: var(--color-card-2);
+}
+
+.inline-credential-type {
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: calc(var(--rounded) - 2px);
+  background: transparent;
+  color: var(--color-dim);
+  font: inherit;
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.inline-credential-type:hover:not(:disabled) {
+  color: var(--color-text);
+}
+
+.inline-credential-type--active {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  font-weight: 650;
+}
+
+.inline-credential-type:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.inline-credential-submit {
+  justify-self: start;
 }
 
 .test-result {

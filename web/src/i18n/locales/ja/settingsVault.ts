@@ -32,6 +32,7 @@ export default {
   colLastUsed: '最終使用',
 
   typeGitToken: 'Git トークン',
+  typeGitHttp: 'Git HTTPS',
   typeSshKey: 'SSH キー',
   typeSshPassword: 'SSH パスワード',
   typeRegistry: 'レジストリ',
@@ -67,6 +68,7 @@ export default {
   gitUsernamePlaceholder: 'Gitee アカウントのユーザー名',
   hintGitUsername: 'Gitee 組織リポジトリでは必要です。空欄の場合は従来のフォールバックを使用します。',
   fieldSecret: 'シークレットの内容',
+  fieldSecretGitHttp: 'パスワード / トークン',
   fieldSecretNew: '新しいシークレットの内容',
   valNameRequired: '名前を入力してください',
   valTypeRequired: '種類を選択してください',
@@ -76,8 +78,10 @@ export default {
   secretPlaceholderKeep: '空欄にすると現在のシークレットを保持します',
   secretPlaceholderSshPassword: 'SSH ログインパスワードを入力…',
   secretPlaceholderToken: 'トークンの内容を貼り付け…',
+  secretPlaceholderGitHttp: 'Git HTTPS のパスワードまたはトークンを入力…',
   hintSshPassword: 'SSH ログインのユーザー名は「サーバー登録」時に入力します。ここにはパスワードのみを保存します。保存後は読み出せず、マスクのみが表示されます。',
   hintSecret: 'シークレットは保存後に読み出せません。画面にはマスク値のみが表示されます',
+  hintGitHttp: 'Git HTTPS ログイン用です。アカウントのパスワードまたは Personal Access Token を入力してください。保存後はマスクのみ表示されます。',
 
   cancel: 'キャンセル',
   saving: '保存中…',

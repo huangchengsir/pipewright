@@ -120,6 +120,27 @@ func TestCreateMissingSecret(t *testing.T) {
 	assertErrCode(t, resp, "invalid_credential")
 }
 
+func TestCreateGitHTTPCredential(t *testing.T) {
+	srv, client, csrf := setupVaultServer(t)
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/credentials", csrf,
+		`{"name":"basic git","type":"git_http","username":"alice","secret":"account-password"}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", resp.StatusCode)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	if strings.Contains(string(raw), "account-password") {
+		t.Fatalf("create response leaks secret: %s", raw)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got["type"] != "git_http" || got["username"] != "alice" {
+		t.Fatalf("response metadata = %s", raw)
+	}
+}
+
 // TestCreateRequiresCSRF 验证写操作缺 CSRF → 403。
 func TestCreateRequiresCSRF(t *testing.T) {
 	srv, client, _ := setupVaultServer(t)

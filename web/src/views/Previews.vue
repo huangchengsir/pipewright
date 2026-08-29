@@ -28,6 +28,7 @@ import { useConfirm } from '../composables/useConfirm'
 import EmptyState from '../components/ui/EmptyState.vue'
 import ErrorState from '../components/ui/ErrorState.vue'
 import SkeletonBlock from '../components/ui/SkeletonBlock.vue'
+import AppSelect from '../components/ui/AppSelect.vue'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -182,10 +183,15 @@ async function reclaim(env: PreviewEnv): Promise<void> {
     <div class="pvb__controls">
       <label class="pvb__field">
         <span class="pvb__field-lbl">{{ t('previewEnvs.board.projectLabel') }}</span>
-        <select class="pvb__select" :value="projectId" @change="onProjectChange" :aria-label="t('previewEnvs.board.projectAria')">
-          <option value="" disabled>{{ t('previewEnvs.board.projectPick') }}</option>
-          <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
-        </select>
+        <AppSelect
+          class="pvb__select"
+          :model-value="projectId"
+          :options="projects.map((p) => ({ value: p.id, label: p.name }))"
+          :placeholder="t('previewEnvs.board.projectPick')"
+          :aria-label="t('previewEnvs.board.projectAria')"
+          min-width="200px"
+          @update:model-value="selectProject"
+        />
       </label>
       <div v-if="loadState === 'loaded' && envs.length > 0" class="pvb__stats">
         <span class="pvb__stat pvb__stat--active">

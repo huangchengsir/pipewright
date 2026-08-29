@@ -32,6 +32,7 @@ export default {
   colLastUsed: '최근 사용',
 
   typeGitToken: 'Git 토큰',
+  typeGitHttp: 'Git HTTPS',
   typeSshKey: 'SSH 키',
   typeSshPassword: 'SSH 비밀번호',
   typeRegistry: '레지스트리',
@@ -67,6 +68,7 @@ export default {
   gitUsernamePlaceholder: 'Gitee 계정 사용자 이름',
   hintGitUsername: 'Gitee 조직 저장소에 필요합니다. 비워 두면 기존 대체 동작을 사용합니다.',
   fieldSecret: '시크릿 내용',
+  fieldSecretGitHttp: '비밀번호 / 토큰',
   fieldSecretNew: '새 시크릿 내용',
   valNameRequired: '이름을 입력하세요',
   valTypeRequired: '유형을 선택하세요',
@@ -76,8 +78,10 @@ export default {
   secretPlaceholderKeep: '비워 두면 현재 시크릿을 유지합니다',
   secretPlaceholderSshPassword: 'SSH 로그인 비밀번호를 입력하세요…',
   secretPlaceholderToken: '토큰 내용을 붙여넣으세요…',
+  secretPlaceholderGitHttp: 'Git HTTPS 비밀번호 또는 토큰 입력…',
   hintSshPassword: 'SSH 로그인 사용자 이름은 「서버 등록」 시 입력합니다. 여기에는 비밀번호만 저장됩니다. 기록 후에는 읽을 수 없으며 마스킹만 표시됩니다.',
   hintSecret: '시크릿은 기록 후 다시 읽을 수 없으며, 화면에는 마스킹 값만 표시됩니다',
+  hintGitHttp: 'Git HTTPS 로그인에 사용됩니다. 계정 비밀번호 또는 Personal Access Token을 입력하세요. 저장 후에는 마스크만 표시됩니다.',
 
   cancel: '취소',
   saving: '저장 중…',

@@ -32,6 +32,7 @@ export default {
   colLastUsed: 'Último uso',
 
   typeGitToken: 'Token de Git',
+  typeGitHttp: 'Git HTTPS',
   typeSshKey: 'Clave SSH',
   typeSshPassword: 'Contraseña SSH',
   typeRegistry: 'Registro',
@@ -67,6 +68,7 @@ export default {
   gitUsernamePlaceholder: 'Tu nombre de usuario de Gitee',
   hintGitUsername: 'Necesario para repositorios de organizaciones Gitee; déjalo vacío para usar el comportamiento anterior.',
   fieldSecret: 'Contenido del secreto',
+  fieldSecretGitHttp: 'Contraseña / Token',
   fieldSecretNew: 'Contenido del nuevo secreto',
   valNameRequired: 'El nombre es obligatorio',
   valTypeRequired: 'El tipo es obligatorio',
@@ -76,8 +78,10 @@ export default {
   secretPlaceholderKeep: 'Déjalo en blanco para mantener el secreto actual',
   secretPlaceholderSshPassword: 'Introduce la contraseña de inicio de sesión SSH…',
   secretPlaceholderToken: 'Pega el contenido del token…',
+  secretPlaceholderGitHttp: 'Introduce la contraseña o el token de Git HTTPS…',
   hintSshPassword: 'El nombre de usuario de inicio de sesión SSH se indica al «registrar el servidor»; aquí solo se almacena la contraseña. No puede volver a leerse tras guardarla; solo se muestra el enmascarado.',
   hintSecret: 'El secreto no puede volver a leerse tras guardarlo; la interfaz solo muestra el valor enmascarado',
+  hintGitHttp: 'Para iniciar sesión en Git HTTPS: usa la contraseña de la cuenta o un Personal Access Token. Tras guardarlo solo se muestra la máscara.',
 
   cancel: 'Cancelar',
   saving: 'Guardando…',

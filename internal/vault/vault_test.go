@@ -138,6 +138,34 @@ func TestValidateType(t *testing.T) {
 	}
 }
 
+func TestGitHTTPCredentialStoresUsernameAndSecretEncrypted(t *testing.T) {
+	db := testDB(t)
+	v := New(db, testKey())
+	cred, err := v.Create(CreateInput{
+		Name: "basic git", Type: TypeGitHTTP, Username: "alice", Secret: "account-password",
+	})
+	if err != nil {
+		t.Fatalf("Create git_http: %v", err)
+	}
+	if cred.Type != TypeGitHTTP || cred.Username != "alice" {
+		t.Fatalf("credential metadata = %+v", cred)
+	}
+	got, err := v.GetGitAuth(cred.ID)
+	if err != nil {
+		t.Fatalf("GetGitAuth: %v", err)
+	}
+	if got.Username != "alice" || got.Token != "account-password" {
+		t.Fatalf("GitAuth = %+v", got)
+	}
+	var ciphertext string
+	if err := db.QueryRow(`SELECT ciphertext FROM credentials WHERE id = ?`, cred.ID).Scan(&ciphertext); err != nil {
+		t.Fatalf("read ciphertext: %v", err)
+	}
+	if strings.Contains(ciphertext, "account-password") {
+		t.Fatal("git_http secret stored in plaintext")
+	}
+}
+
 // TestUpdateRotateSecret 验证轮换 secret 后旧密文换新、Get 返回新明文、掩码更新。
 func TestUpdateRotateSecret(t *testing.T) {
 	v := New(testDB(t), testKey())

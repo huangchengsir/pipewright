@@ -240,7 +240,7 @@ func TestReleaseFirstDeployHealthFailNoRollback(t *testing.T) {
 	}
 }
 
-// TestReleaseRollbackCmdFailStillRecorded:回滚命令本身失败 → 仍记 rolled_back + 人读(不上抛/不 500)。
+// TestReleaseRollbackCmdFailStillRecorded:回滚命令本身失败 → 记 failed，不能声称已回滚。
 func TestReleaseRollbackCmdFailStillRecorded(t *testing.T) {
 	db := testDB(t)
 	rsvc := run.New(db)
@@ -275,8 +275,8 @@ func TestReleaseRollbackCmdFailStillRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Deploy 不应上抛(回滚失败也内化): %v", err)
 	}
-	if res[0].Status != run.TargetRolledBack {
-		t.Fatalf("回滚命令失败仍应记 rolled_back, got %+v", res[0])
+	if res[0].Status != run.TargetFailed {
+		t.Fatalf("回滚未确认应记 failed, got %+v", res[0])
 	}
 	if !strings.Contains(res[0].Message, "回滚命令执行失败") {
 		t.Fatalf("message 应说明回滚未确认: %q", res[0].Message)

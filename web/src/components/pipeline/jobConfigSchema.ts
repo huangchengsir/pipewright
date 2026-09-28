@@ -192,6 +192,13 @@ const SCRIPT_FIELDS: JobField[] = [
     placeholder: 'frontend/dist\nbackend/target/app.jar',
     get hint() { return t('pipelineJob.fieldArtifactPathHint') },
   },
+  {
+    key: 'artifacts',
+    get label() { return t('pipelineJob.namedArtifactsRaw') },
+    kind: 'textarea',
+    monospace: true,
+    placeholder: '[{"path":"frontend/dist","name":"Web UI"}]',
+  },
   ...EXEC_OPTION_FIELDS,
   {
     key: 'cachePaths',
@@ -227,6 +234,14 @@ const DEPLOY_SSH_FIELDS: JobField[] = [
     get hint() { return t('pipelineJob.fieldArtifactTypeHint') },
   },
   {
+    key: 'artifactSource',
+    get label() { return t('pipelineJob.artifactSourceLabel') },
+    kind: 'select',
+    options: [{ value: '', get label() { return t('pipelineJob.artifactSourceAuto') } }],
+    get hint() { return t('pipelineJob.artifactSourceHint') },
+    when: (c) => c.artifactType !== 'image' && c.artifactType !== 'command',
+  },
+  {
     key: 'deployPath',
     get label() { return t('pipelineJob.fieldDeployPathLabel') },
     kind: 'text',
@@ -235,6 +250,10 @@ const DEPLOY_SSH_FIELDS: JobField[] = [
     get hint() { return t('pipelineJob.fieldDeployPathHint') },
     when: (c) => c.artifactType !== 'image',
   },
+  { key: 'commandTimeoutSeconds', get label() { return t('pipelineJob.deployCommandTimeout') }, kind: 'number', placeholder: '60' },
+  { key: 'connectTimeoutSeconds', get label() { return t('pipelineJob.deployConnectTimeout') }, kind: 'number', placeholder: '15' },
+  { key: 'uploadIdleTimeoutSeconds', get label() { return t('pipelineJob.deployUploadIdleTimeout') }, kind: 'number', placeholder: '120', when: (c) => c.artifactType !== 'image' },
+  { key: 'uploadTimeoutSeconds', get label() { return t('pipelineJob.deployUploadTotalTimeout') }, kind: 'number', placeholder: '0', when: (c) => c.artifactType !== 'image', get hint() { return t('pipelineJob.deployUploadTimeoutHint') } },
   {
     key: 'containerName',
     get label() { return t('pipelineJob.fieldContainerNameLabel') },

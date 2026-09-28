@@ -73,6 +73,33 @@ func TestCreatePassesGiteeUsernameToProber(t *testing.T) {
 	}
 }
 
+func TestGitCredentialProtocolMustMatch(t *testing.T) {
+	db := testDB(t)
+	v := vault.New(db, testMasterKey())
+	pr := &stubProber{branch: "main"}
+	svc := New(db, v, pr)
+	key, err := v.Create(vault.CreateInput{Name: "Git SSH key", Type: vault.TypeSSHKey, Secret: "private-key-placeholder"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	http, err := v.Create(vault.CreateInput{Name: "Git HTTP", Type: vault.TypeGitHTTP, Username: "user", Secret: "password"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.TestClone(context.Background(), "ssh://git@192.168.31.105:2424/org/repo.git", key.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.TestClone(context.Background(), "https://git.example.com/org/repo.git", key.ID); !errors.Is(err, ErrCredentialError) {
+		t.Fatalf("SSH key on HTTPS: %v", err)
+	}
+	if _, err := svc.TestClone(context.Background(), "git@192.168.31.105:org/repo.git", http.ID); !errors.Is(err, ErrCredentialError) {
+		t.Fatalf("HTTP credential on SSH: %v", err)
+	}
+	if pr.calls != 1 {
+		t.Fatalf("mismatched credential reached probe: %d", pr.calls)
+	}
+}
+
 func TestCreateAndList(t *testing.T) {
 	db := testDB(t)
 	v := vault.New(db, testMasterKey())

@@ -3,6 +3,9 @@ export default {
   artifactImage: 'Container image (image)',
   artifactJar: 'JAR package (jar)',
   artifactDist: 'Static assets (dist)',
+  artifactNameLabel: 'Artifact name',
+  artifactNamePlaceholder: 'Optional name for this artifact',
+  namedArtifactsRaw: 'Named artifact declarations (JSON)',
   buildModelDockerfile: 'Bring your own Dockerfile',
   buildModelToolchain: 'Platform toolchain',
   toolchainCustom: 'Custom',
@@ -13,6 +16,9 @@ export default {
   probeModeCommand: 'Command probe',
   deployArtifactAuto: 'Auto (prefer file artifact, fall back to image)',
   deployArtifactArchive: 'Archive package (archive)',
+  artifactSourceLabel: 'Artifact source',
+  artifactSourceAuto: 'Choose automatically',
+  artifactSourceHint: 'Bind a build declaration when several artifacts exist. Missing or ambiguous output fails deployment instead of selecting another artifact.',
 
   // ─── jobConfigSchema · exec option fields ──────────────────────────────
   fieldTimeoutLabel: 'Timeout (s)',
@@ -48,6 +54,11 @@ export default {
   fieldArtifactTypeLabel: 'Deploy artifact type',
   fieldArtifactTypeHint:
     'Which one to pick when this run emits both an image and file artifacts; an image goes via docker pull on the target → start new container → health check → roll back to the previous image on failure',
+  deployCommandTimeout: 'Command timeout (seconds)',
+  deployConnectTimeout: 'SSH connection timeout (seconds)',
+  deployUploadIdleTimeout: 'Upload inactivity timeout (seconds)',
+  deployUploadTotalTimeout: 'Upload total timeout (seconds)',
+  deployUploadTimeoutHint: '0 means no total upload limit. Uploads remain subject to the inactivity timeout.',
   fieldDeployPathLabel: 'Deploy path',
   fieldDeployPathHint:
     'File artifacts: published to <deploy path>/releases/<runId>/, the current symlink atomically switches to this release (zero downtime, old releases kept for rollback)',

@@ -1,7 +1,7 @@
 export default {
   // ─── page header ───────────────────────────────────────────────
   title: 'Projets',
-  subtitle: 'Dépôts Gitee gérés : chaque projet correspond à une configuration de pipeline et à des cibles de déploiement',
+  subtitle: 'Dépôts gérés : chaque projet correspond à une configuration de pipeline et à des cibles de déploiement',
   newProject: 'Nouveau projet',
   retry: 'Réessayer',
 
@@ -15,7 +15,7 @@ export default {
   // ─── list states ───────────────────────────────────────────────
   loading: 'Chargement',
   emptyTitle: 'Aucun projet pour l’instant',
-  emptyHint: 'Connectez votre premier dépôt Gitee, puis configurez un pipeline et déployez vers les serveurs cibles.',
+  emptyHint: 'Connectez votre premier dépôt, puis configurez un pipeline et déployez vers les serveurs cibles.',
   noMatchTitle: 'Aucun projet correspondant',
   noMatchHint: 'Ajustez le terme de recherche ou le filtre de statut, puis réessayez.',
   clearFilter: 'Effacer les filtres',
@@ -66,7 +66,7 @@ export default {
   runNow: 'Exécuter maintenant',
 
   // ─── create modal ──────────────────────────────────────────────
-  createSub: 'Connectez un dépôt Gitee et liez un identifiant de dépôt',
+  createSub: 'Connectez un dépôt et liez ses identifiants',
   fieldName: 'Nom du projet',
   fieldNamePlaceholder: 'ex. acme-web',
   fieldRepo: 'URL du dépôt',
@@ -80,7 +80,7 @@ export default {
   inlineCredCancel: 'Annuler le nouvel identifiant',
   inlineCredTitle: 'Nouvel identifiant Git HTTPS',
   inlineCredName: 'Nom de l’identifiant',
-  inlineCredNamePlaceholder: 'ex. dépôt d’organisation Gitee',
+  inlineCredNamePlaceholder: 'ex. dépôt d’équipe',
   inlineCredUsername: 'Nom d’utilisateur Git',
   inlineCredUsernamePlaceholder: 'Nom du compte Git',
   inlineCredSecret: 'Mot de passe ou jeton',
@@ -123,13 +123,16 @@ export default {
   errLoadRetry: 'Échec du chargement des projets, veuillez réessayer plus tard',
   errNameRequired: 'Veuillez saisir un nom de projet',
   errRepoRequired: 'Veuillez saisir une URL de dépôt',
-  errRepoFormat: 'Format d’URL de dépôt invalide. Elle doit commencer par https:// ou git{\'@\'}',
+  errRepoFormat: 'Saisissez une URL de dépôt HTTP ou HTTPS valide',
+  errRepoProtocol: 'Seules les URL HTTP(S) et Git SSH sont prises en charge',
+  repoSSHKnownHosts: 'Ajoutez d’abord la clé de l’hôte SSH au known_hosts du compte de service. Utilisez une URL ssh:// pour un port personnalisé.',
+  repoHttpWarning: 'HTTP transmet les identifiants sans chiffrement du transport. Utilisez HTTPS si possible.',
   errCredRequired: 'Veuillez sélectionner un identifiant de dépôt',
   errRepoFirst: 'Veuillez d’abord saisir une URL de dépôt',
   errCredFirst: 'Veuillez d’abord sélectionner un identifiant de dépôt',
   errNameEmpty: 'Le nom du projet ne peut pas être vide',
 
-  testErrCredential: 'Erreur d’identifiant : vérifiez que votre jeton d’accès Gitee est valide et mettez-le à jour dans le coffre d’identifiants.',
+  testErrCredential: 'Erreur d’identifiant : vérifiez le nom d’utilisateur, le mot de passe ou le jeton et les droits d’accès.',
   testErrUnreachable: 'Dépôt inaccessible : vérifiez que l’URL est correcte et que le dépôt existe et est accessible.',
   testErrVault: 'Le coffre n’a pas de master key configurée ; les identifiants ne peuvent pas être lus.',
   testErrStatus: 'Échec du test de connexion ({status})',

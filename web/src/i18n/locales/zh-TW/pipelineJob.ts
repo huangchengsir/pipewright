@@ -3,6 +3,9 @@ export default {
   artifactImage: '容器映像 (image)',
   artifactJar: 'JAR 包 (jar)',
   artifactDist: '靜態資源 (dist)',
+  artifactNameLabel: '產物名稱',
+  artifactNamePlaceholder: '選填,用於區分產物',
+  namedArtifactsRaw: '命名產物宣告 (JSON)',
   buildModelDockerfile: '自帶 Dockerfile',
   buildModelToolchain: '平台工具鏈',
   toolchainCustom: '自訂',
@@ -13,6 +16,9 @@ export default {
   probeModeCommand: '命令探測',
   deployArtifactAuto: '自動(優先檔案產物,無則用映像)',
   deployArtifactArchive: '歸檔包 (archive)',
+  artifactSourceLabel: '產物來源',
+  artifactSourceAuto: '自動選擇產物',
+  artifactSourceHint: '多產物時綁定建置節點與宣告;本次執行未唯一產出時部署會失敗,不會改用其他產物。',
 
   // ─── jobConfigSchema · exec option fields ──────────────────────────────
   fieldTimeoutLabel: '逾時(秒)',
@@ -48,6 +54,11 @@ export default {
   fieldArtifactTypeLabel: '部署產物類型',
   fieldArtifactTypeHint:
     '本 run 同時產出映像與檔案產物時挑哪件;映像走目標機 docker pull → 起新容器 → 健康檢查 → 失敗回復上一映像',
+  deployCommandTimeout: '部署命令逾時(秒)',
+  deployConnectTimeout: 'SSH 連線逾時(秒)',
+  deployUploadIdleTimeout: '上傳無進展逾時(秒)',
+  deployUploadTotalTimeout: '上傳總逾時(秒)',
+  deployUploadTimeoutHint: '0 表示不限制上傳總時長；持續無進展仍會逾時。',
   fieldDeployPathLabel: '部署路徑',
   fieldDeployPathHint:
     '檔案產物:發佈到 <部署路徑>/releases/<runId>/,current 軟連結原子切到本次發佈(零停機,舊發佈保留供回復)',

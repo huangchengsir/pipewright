@@ -58,10 +58,16 @@ func TestDeployStoredJarUploadsRealBytes(t *testing.T) {
 		t.Fatalf("status = %s (msg %q), want success", res[0].Status, res[0].Message)
 	}
 	// 目标机发布目录里应被 Upload 了**真 jar 字节**(非 reference 串占位)。
-	wantPath := base + "/releases/" + runID + "/app.jar"
-	got, ok := tgt.uploads[wantPath]
+	wantPrefix := base + "/releases/" + runID + "-"
+	var got []byte
+	var ok bool
+	for remotePath, payload := range tgt.uploads {
+		if strings.HasPrefix(remotePath, wantPrefix) && strings.HasSuffix(remotePath, "/app.jar") {
+			got, ok = payload, true
+		}
+	}
 	if !ok {
-		t.Fatalf("未在 %s 上传产物;uploads=%v", wantPath, keysOf(tgt.uploads))
+		t.Fatalf("未在 %s 上传产物;uploads=%v", wantPrefix, keysOf(tgt.uploads))
 	}
 	if !bytes.Equal(got, jarBytes) {
 		t.Fatalf("上传的不是真 jar 字节")
@@ -99,9 +105,15 @@ func TestDeployStoredDistUploadsAndUntars(t *testing.T) {
 		t.Fatalf("status = %s (msg %q), want success", res[0].Status, res[0].Message)
 	}
 	// 应上传了 tar.gz。
-	tarPath := base + "/releases/" + runID + "/.pw-artifact.tar.gz"
-	if _, ok := tgt.uploads[tarPath]; !ok {
-		t.Fatalf("未上传 dist tar.gz 到 %s", tarPath)
+	tarPrefix := base + "/releases/" + runID + "-"
+	var found bool
+	for remotePath := range tgt.uploads {
+		if strings.HasPrefix(remotePath, tarPrefix) && strings.HasSuffix(remotePath, "/.pw-artifact.tar.gz") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("未上传 dist tar.gz 到 %s", tarPrefix)
 	}
 	// 远端应解包(命令序列含 tar -xzf)。
 	var sawUntar bool

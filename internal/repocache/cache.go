@@ -96,7 +96,10 @@ func (c *Cache) ensureMirror(ctx context.Context, repoURL, username, token strin
 		return "", errors.New("repocache: repo url not allowed")
 	}
 	mirror := c.mirrorPath(repoURL)
-	auth := gitauth.BasicAuth(repoURL, username, token)
+	auth, err := gitauth.AuthMethod(repoURL, username, token)
+	if err != nil {
+		return "", errors.New("repocache: invalid git credential")
+	}
 	cctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 

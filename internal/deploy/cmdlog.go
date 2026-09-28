@@ -42,6 +42,8 @@ func cmdLogFrom(ctx context.Context) CmdLogFunc {
 // exec 包裹 targets.Exec:执行前回显命令、执行后回流 stdout/stderr 到 ctx 的命令日志(若挂了)。
 // 返回值与 targets.Exec 完全一致,不改变任何控制流(无 ctx 日志时 = 纯透传)。
 func (s *service) exec(ctx context.Context, serverID string, cmd []string) (*target.ExecResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, policyFrom(ctx).command)
+	defer cancel()
 	lg := cmdLogFrom(ctx)
 	lg(cmdStreamStdout, "$ "+displayCmd(cmd))
 	out, err := s.targets.Exec(ctx, serverID, cmd)
@@ -59,6 +61,14 @@ func (s *service) exec(ctx context.Context, serverID string, cmd []string) (*tar
 		if out.ExitCode != 0 {
 			lg(cmdStreamStderr, fmt.Sprintf("  ✗ 退出码 %d", out.ExitCode))
 		}
+	}
+	return out, err
+}
+
+func (s *service) execChecked(ctx context.Context, serverID string, cmd []string) (*target.ExecResult, error) {
+	out, err := s.exec(ctx, serverID, cmd)
+	if err == nil && out != nil && out.ExitCode != 0 {
+		err = fmt.Errorf("deploy: command failed (exit %d)", out.ExitCode)
 	}
 	return out, err
 }

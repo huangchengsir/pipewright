@@ -3,8 +3,6 @@ package build
 import (
 	"context"
 	"errors"
-	"net"
-	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -30,7 +28,7 @@ var (
 //
 // 与 2-5/3-6 的内存克隆(memfs)不同:构建上下文须是真实目录树供容器 CLI 读取。工作区由调用方
 // (Builder)经 MkdirTemp 建、defer RemoveAll 销(宿主零污染,FR-5)。SSRF 收口复用全平台同款策略:
-// 仅 http/https;拒云元数据/链路本地/回环;私网放行(自托管内网 Git 友好)。
+// 仅 HTTP(S) 或 Git SSH;拒云元数据/链路本地/回环;私网放行(自托管内网 Git 友好)。
 type Cloner struct {
 	// allowInsecure 仅供测试:为 true 时跳过 SSRF scheme/host 校验(放行 file:// 本地夹具)。
 	// 生产路径绝不设置(NewCloner 默认 false)。
@@ -63,7 +61,10 @@ func (c *Cloner) Clone(ctx context.Context, repoURL, username, token, branch, co
 	cctx, cancel := context.WithTimeout(ctx, cloneTimeout)
 	defer cancel()
 
-	auth := gitauth.BasicAuth(repoURL, username, token)
+	auth, err := gitauth.AuthMethod(repoURL, username, token)
+	if err != nil {
+		return nil, ErrCloneFailed
+	}
 	commit = strings.TrimSpace(commit)
 	branch = strings.TrimSpace(branch)
 
@@ -110,41 +111,7 @@ func IsRepoURLAllowed(repoURL string) bool { return validRepoURL(repoURL) }
 // validRepoURL 对仓库地址做 SSRF 收口(生产路径),复用全平台同款策略:
 // 仅 http/https;拒云元数据/链路本地/回环;私网放行(自托管内网 Git 友好)。
 func validRepoURL(repoURL string) bool {
-	u, err := url.Parse(strings.TrimSpace(repoURL))
-	if err != nil {
-		return false
-	}
-	switch strings.ToLower(u.Scheme) {
-	case "http", "https":
-	default:
-		return false
-	}
-	host := u.Hostname()
-	if host == "" {
-		return false
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return !blockedIP(ip)
-	}
-	addrs, err := net.LookupIP(host)
-	if err != nil || len(addrs) == 0 {
-		return true // 留给 clone 路径(会失败映射);不在此误拒临时 DNS 抖动。
-	}
-	for _, ip := range addrs {
-		if blockedIP(ip) {
-			return false
-		}
-	}
-	return true
-}
-
-// blockedIP 判定 IP 是否落在禁止区:回环、链路本地(含云元数据 169.254.169.254)、未指定。
-// 私网(RFC1918 / fc00::/7)不在此列(放行)。
-func blockedIP(ip net.IP) bool {
-	return ip.IsLoopback() ||
-		ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() ||
-		ip.IsUnspecified()
+	return gitauth.AllowedRepoURL(repoURL)
 }
 
 // shortSHA 取 commit 的前 7 位(短 sha);不足 7 位原样返回。

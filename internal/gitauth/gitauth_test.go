@@ -1,6 +1,103 @@
 package gitauth
 
-import "testing"
+import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+
+	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
+	"golang.org/x/crypto/ssh"
+)
+
+func TestSSHAuthUsesPinnedHostKeyAlgorithms(t *testing.T) {
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	knownHosts := filepath.Join(t.TempDir(), "known_hosts")
+	if err := os.WriteFile(knownHosts, []byte(fmt.Sprintf("[192.168.31.105]:2424 %s", ssh.MarshalAuthorizedKey(signer.PublicKey()))), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSH_KNOWN_HOSTS", knownHosts)
+	auth, err := AuthMethod("ssh://git@192.168.31.105:2424/org/repo.git", "", "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	password, ok := auth.(*gitssh.Password)
+	if !ok {
+		t.Fatalf("auth method = %T, want SSH password", auth)
+	}
+	config, err := password.ClientConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.HostKeyAlgorithms) != 1 || config.HostKeyAlgorithms[0] != ssh.KeyAlgoED25519 {
+		t.Fatalf("host key algorithms = %v, want ed25519 only", config.HostKeyAlgorithms)
+	}
+}
+
+func TestAllowedRepoURLSSH(t *testing.T) {
+	for _, addr := range []string{
+		"ssh://git@192.168.31.105:2424/root/repo.git",
+		"git@git.example.com:team/repo.git",
+		"https://gitee.com/org/repo.git",
+	} {
+		if !AllowedRepoURL(addr) {
+			t.Errorf("allowed Git address rejected: %q", addr)
+		}
+	}
+	for _, addr := range []string{
+		"ssh://git@127.0.0.1/repo.git",
+		"git@169.254.169.254:repo.git",
+		"ssh://git:password@192.168.31.105/repo.git",
+		"file:///tmp/repo.git",
+		"git://git.example.com/repo.git",
+		"git@git.example.com:",
+	} {
+		if AllowedRepoURL(addr) {
+			t.Errorf("unsafe Git address accepted: %q", addr)
+		}
+	}
+}
+
+func TestAuthMethodSSHKeyAndPassword(t *testing.T) {
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkcs8, err := x509.MarshalPKCS8PrivateKey(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8}))
+	auth, err := AuthMethod("ssh://git@192.168.31.105:2424/root/repo.git", "ignored", key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := auth.(*gitssh.PublicKeys); !ok || got.User != "git" {
+		t.Fatalf("key auth = %T", auth)
+	}
+	auth, err = AuthMethod("deploy@host:org/repo.git", "ignored", "my-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := auth.(*gitssh.Password); !ok || got.User != "deploy" || got.Password != "my-password" {
+		t.Fatalf("password auth = %T", auth)
+	}
+	if _, err = AuthMethod("git@host:org/repo.git", "", "-----BEGIN PRIVATE KEY-----\nbad"); !errors.Is(err, ErrInvalidAuth) {
+		t.Fatalf("bad key should fail without leaking bytes: %v", err)
+	}
+}
 
 func TestUsername(t *testing.T) {
 	cases := []struct {
@@ -49,11 +146,24 @@ func TestBasicAuthReturnsNilWithoutToken(t *testing.T) {
 	}
 }
 
-func TestUsernameUsesExplicitGiteeAccount(t *testing.T) {
+func TestUsernameUsesExplicitAccountForEveryHost(t *testing.T) {
 	if got := Username("https://gitee.com/university-org/private-repo.git", "actual-account"); got != "actual-account" {
 		t.Fatalf("Username() = %q, want actual-account", got)
 	}
-	if got := Username("https://github.com/org/private-repo.git", "actual-account"); got != "git" {
-		t.Fatalf("non-Gitee Username() = %q, want git", got)
+	for _, repoURL := range []string{
+		"https://github.com/org/private-repo.git",
+		"https://gitlab.example.com:8443/group/subgroup/private-repo.git",
+		"http://git.internal.example/group/private-repo.git",
+	} {
+		if got := Username(repoURL, " actual-account "); got != "actual-account" {
+			t.Fatalf("Username(%q) = %q, want actual-account", repoURL, got)
+		}
+	}
+	if got := Username("https://gitlab.example.com/group/repo.git", "   "); got != "git" {
+		t.Fatalf("empty explicit username = %q, want git", got)
+	}
+	auth := BasicAuth("https://gitlab.example.com/group/repo.git", "actual-account", " secret with spaces ")
+	if auth.Username != "actual-account" || auth.Password != " secret with spaces " {
+		t.Fatal("BasicAuth must preserve the explicit identity and secret bytes")
 	}
 }

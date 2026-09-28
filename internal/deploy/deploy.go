@@ -13,6 +13,7 @@ package deploy
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -46,9 +47,6 @@ var (
 
 // truncateLen 是写入 message 的命令输出最大长度(防超大输出撑爆响应 / 内存)。
 const truncateLen = 800
-
-// execTimeout 是单台部署的执行超时(防一台挂死拖垮整次部署;失败不连累其它机)。
-const execTimeout = 60 * time.Second
 
 // maxParallelDeploys 是多机扇出的有界并发上限(Story 4.5;信号量防同时打爆 N 台 SSH)。
 // 每机独立 goroutine,信号量 cap 4:目标机再多也不会一次性建超过 4 条 SSH 连接。
@@ -147,6 +145,7 @@ type service struct {
 	// artStore 是制品库(Story 8-16):非 nil 时部署 release 类「已归档」产物会取真字节经 SSH 上传到
 	// 目标机;nil 或产物非归档 → 旧占位路径(向后兼容)。由 main 注入(WithArtifactStore)。
 	artStore *artifactstore.Store
+	batchDB  *sql.DB
 }
 
 // Option 配置 deploy.Service(如注入诊断钩子)。
@@ -166,6 +165,8 @@ func WithArtifactStore(st *artifactstore.Store) Option {
 		}
 	}
 }
+
+func WithBatchDB(db *sql.DB) Option { return func(s *service) { s.batchDB = db } }
 
 // New 构造部署 Service。
 //   - targetSvc:通用 SSH 执行层(Story 4.1),部署命令经其 Exec 执行(array 不拼 shell)。
@@ -219,6 +220,10 @@ func (s *service) seedDiagnosisOnFailure(ctx context.Context, runID, status stri
 }
 
 func (s *service) Deploy(ctx context.Context, in DeployInput) ([]TargetResult, error) {
+	ctx, policyErr := withUploadPolicy(ctx, in.Config)
+	if policyErr != nil {
+		return nil, policyErr
+	}
 	if len(in.ServerIDs) == 0 {
 		return nil, ErrNoServers
 	}
@@ -314,6 +319,10 @@ func (s *service) Deploy(ctx context.Context, in DeployInput) ([]TargetResult, e
 
 // DeployForStage 见接口注释:流水线 deploy_ssh 节点的中途部署(不校验 run 状态、不置终态)。
 func (s *service) DeployForStage(ctx context.Context, runID string, serverIDs []string, cfg map[string]string, strategy string) ([]TargetResult, error) {
+	ctx, policyErr := withUploadPolicy(ctx, cfg)
+	if policyErr != nil {
+		return nil, policyErr
+	}
 	if len(serverIDs) == 0 {
 		return nil, ErrNoServers
 	}
@@ -321,6 +330,9 @@ func (s *service) DeployForStage(ctx context.Context, runID string, serverIDs []
 	// 供「配置类」流水线用(如 frp 隧道:就地 upsert frpc.ini + reload)。与产物发布完全隔离——
 	// **真实产物部署(artifactType != command)绝不进此分支**,既有部署/策略/健康检查路径零影响。
 	if strings.TrimSpace(cfg["artifactType"]) == "command" {
+		if strings.TrimSpace(cfg["artifactSource"]) != "" {
+			return nil, ErrArtifactSourceInvalid
+		}
 		return s.runCommandOnly(ctx, runID, serverIDs, cfg)
 	}
 	// 取该 run 已产出的可部署产物。dist/jar/archive 走文件发布;image 走容器 pull→停旧起新→
@@ -330,7 +342,10 @@ func (s *service) DeployForStage(ctx context.Context, runID string, serverIDs []
 	if err != nil {
 		return nil, err
 	}
-	artifact := pickStageArtifact(arts, strings.TrimSpace(cfg["artifactType"]))
+	artifact, selectionErr := selectStageArtifact(arts, strings.TrimSpace(cfg["artifactType"]), strings.TrimSpace(cfg["artifactSource"]))
+	if selectionErr != nil {
+		return nil, selectionErr
+	}
 	if artifact == nil {
 		return nil, ErrArtifactNotFound
 	}
@@ -463,6 +478,10 @@ func pickStageArtifact(arts []run.Artifact, prefer string) *run.Artifact {
 
 // RetryFailed 仅重试该 run 当前 failed/rolled_back 的目标(Story 4.5;FR-13)。见 Service 接口注释。
 func (s *service) RetryFailed(ctx context.Context, in RetryInput) ([]TargetResult, error) {
+	ctx, policyErr := withUploadPolicy(ctx, in.Config)
+	if policyErr != nil {
+		return nil, policyErr
+	}
 	// 1) 校验 run 存在 + 处于失败/部分失败态(成功 run 无失败目标可重试)。
 	rn, err := s.runs.Get(ctx, in.RunID)
 	if err != nil {
@@ -654,8 +673,7 @@ func (s *service) deployOne(ctx context.Context, srv *target.Server, a run.Artif
 		return res
 	}
 
-	execCtx, cancel := context.WithTimeout(ctx, execTimeout)
-	defer cancel()
+	execCtx := ctx
 
 	for _, cmd := range cmds {
 		out, eerr := s.exec(execCtx, srv.ID, cmd)
@@ -759,6 +777,16 @@ func truncate(s string) string {
 // target.Exec 已把连接 / 认证类错误映射为领域错误,本层进一步人读化。
 func humanExecError(err error) string {
 	switch {
+	case errors.Is(err, ErrUploadBusy):
+		return "同一产物正在上传,请稍后重试"
+	case errors.Is(err, ErrUploadIntegrity):
+		return "产物大小或 SHA-256 校验失败,未发布"
+	case errors.Is(err, ErrUploadSpace):
+		return "目标机暂存空间不足"
+	case errors.Is(err, ErrUploadTools):
+		return "目标机缺少 SHA-256 校验或基础文件工具"
+	case errors.Is(err, ErrUploadLease):
+		return "上传会话已失效,可重新发起续传"
 	case errors.Is(err, target.ErrAuth):
 		return "SSH 认证失败:密钥或口令无效,或无登录权限"
 	case errors.Is(err, target.ErrUnreachable):
@@ -769,6 +797,8 @@ func humanExecError(err error) string {
 		return "引用的 SSH 凭据不存在"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "部署执行超时"
+	case errors.Is(err, context.Canceled):
+		return "部署已取消"
 	default:
 		// 兜底:不泄漏内部细节(target 层错误体已无凭据明文)。
 		return "部署执行失败"

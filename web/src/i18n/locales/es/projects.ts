@@ -1,7 +1,7 @@
 export default {
   // ─── page header ───────────────────────────────────────────────
   title: 'Proyectos',
-  subtitle: 'Repositorios de Gitee gestionados: cada proyecto corresponde a una configuración de pipeline y destinos de despliegue',
+  subtitle: 'Repositorios gestionados: cada proyecto corresponde a una configuración de pipeline y destinos de despliegue',
   newProject: 'Nuevo proyecto',
   retry: 'Reintentar',
 
@@ -15,7 +15,7 @@ export default {
   // ─── list states ───────────────────────────────────────────────
   loading: 'Cargando',
   emptyTitle: 'Aún no hay proyectos',
-  emptyHint: 'Conecta tu primer repositorio de Gitee y luego configura un pipeline y despliega en servidores de destino.',
+  emptyHint: 'Conecta tu primer repositorio y luego configura un pipeline y despliega en servidores de destino.',
   noMatchTitle: 'No hay proyectos coincidentes',
   noMatchHint: 'Ajusta el término de búsqueda o el filtro de estado e inténtalo de nuevo.',
   clearFilter: 'Limpiar filtros',
@@ -66,7 +66,7 @@ export default {
   runNow: 'Ejecutar ahora',
 
   // ─── create modal ──────────────────────────────────────────────
-  createSub: 'Conecta un repositorio de Gitee y vincula una credencial del repositorio',
+  createSub: 'Conecta un repositorio y vincula sus credenciales',
   fieldName: 'Nombre del proyecto',
   fieldNamePlaceholder: 'p. ej. acme-web',
   fieldRepo: 'URL del repositorio',
@@ -80,7 +80,7 @@ export default {
   inlineCredCancel: 'Cancelar nueva credencial',
   inlineCredTitle: 'Nueva credencial Git HTTPS',
   inlineCredName: 'Nombre de la credencial',
-  inlineCredNamePlaceholder: 'p. ej., repositorio de organización Gitee',
+  inlineCredNamePlaceholder: 'p. ej., repositorio de equipo',
   inlineCredUsername: 'Usuario de Git',
   inlineCredUsernamePlaceholder: 'Usuario de tu cuenta Git',
   inlineCredSecret: 'Contraseña o token',
@@ -123,13 +123,16 @@ export default {
   errLoadRetry: 'Error al cargar los proyectos, inténtalo de nuevo más tarde',
   errNameRequired: 'Introduce un nombre de proyecto',
   errRepoRequired: 'Introduce una URL del repositorio',
-  errRepoFormat: 'Formato de URL del repositorio no válido. Debe empezar por https:// o git{\'@\'}',
+  errRepoFormat: 'Introduce una URL de repositorio HTTP o HTTPS válida',
+  errRepoProtocol: 'Solo se admiten repositorios HTTP(S) y Git SSH',
+  repoSSHKnownHosts: 'Añade primero la clave del host SSH al known_hosts de la cuenta de servicio. Usa una URL ssh:// para un puerto personalizado.',
+  repoHttpWarning: 'HTTP transmite las credenciales sin cifrado de transporte. Usa HTTPS cuando sea posible.',
   errCredRequired: 'Selecciona una credencial del repositorio',
   errRepoFirst: 'Introduce primero una URL del repositorio',
   errCredFirst: 'Selecciona primero una credencial del repositorio',
   errNameEmpty: 'El nombre del proyecto no puede estar vacío',
 
-  testErrCredential: 'Error de credencial: comprueba que tu token de acceso de Gitee sea válido y actualízalo en la bóveda de credenciales.',
+  testErrCredential: 'Error de credencial: comprueba el usuario, la contraseña o el token y los permisos del repositorio.',
   testErrUnreachable: 'Repositorio inaccesible: confirma que la URL sea correcta y que el repositorio exista y sea accesible.',
   testErrVault: 'La bóveda no tiene configurada una master key, por lo que no se pueden leer las credenciales.',
   testErrStatus: 'La prueba de conexión falló ({status})',

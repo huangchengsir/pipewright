@@ -18,8 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"net"
-	"net/url"
 	"strings"
 	"time"
 
@@ -107,7 +105,10 @@ func (a goGitAnalyzer) Analyze(ctx context.Context, repoURL, username, token str
 	fs := memfs.New()
 	storer := memory.NewStorage()
 
-	auth := gitauth.BasicAuth(repoURL, username, token)
+	auth, authErr := gitauth.AuthMethod(repoURL, username, token)
+	if authErr != nil {
+		return RepoAnalysis{Cloned: false, Signals: []string{}, DegradeReason: "仓库凭据不可用"}
+	}
 
 	cctx, cancel := context.WithTimeout(ctx, cloneTimeout)
 	defer cancel()
@@ -346,39 +347,5 @@ func readManifest(fs billy.Filesystem, name string) []byte {
 // 仅 http/https;拒云元数据/链路本地/回环;私网放行(自托管内网 Git 友好)。
 // 返回 true=允许。解析失败/被拒返回 false(调用方走降级,绝不泄漏细节)。
 func validRepoURL(repoURL string) bool {
-	u, err := url.Parse(strings.TrimSpace(repoURL))
-	if err != nil {
-		return false
-	}
-	switch strings.ToLower(u.Scheme) {
-	case "http", "https":
-	default:
-		return false
-	}
-	host := u.Hostname()
-	if host == "" {
-		return false
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return !blockedIP(ip)
-	}
-	addrs, err := net.LookupIP(host)
-	if err != nil || len(addrs) == 0 {
-		// 解析失败:留给 clone 路径(会降级);不在此误拒临时 DNS 抖动。
-		return true
-	}
-	for _, ip := range addrs {
-		if blockedIP(ip) {
-			return false
-		}
-	}
-	return true
-}
-
-// blockedIP 判定 IP 是否落在禁止区:回环、链路本地(含云元数据 169.254.169.254)、未指定。
-func blockedIP(ip net.IP) bool {
-	return ip.IsLoopback() ||
-		ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() ||
-		ip.IsUnspecified()
+	return gitauth.AllowedRepoURL(repoURL)
 }

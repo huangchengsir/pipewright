@@ -1,7 +1,7 @@
 export default {
   // ─── page header ───────────────────────────────────────────────
   title: 'プロジェクト',
-  subtitle: '管理対象の Gitee リポジトリ。各プロジェクトはパイプライン設定とデプロイ先に対応します',
+  subtitle: '管理対象のコードリポジトリ。各プロジェクトはパイプライン設定とデプロイ先に対応します',
   newProject: 'プロジェクトを新規作成',
   retry: '再試行',
 
@@ -15,7 +15,7 @@ export default {
   // ─── list states ───────────────────────────────────────────────
   loading: '読み込み中',
   emptyTitle: 'プロジェクトがまだありません',
-  emptyHint: '最初の Gitee リポジトリを接続すると、パイプラインを設定してターゲットサーバーへデプロイできます。',
+  emptyHint: '最初のリポジトリを接続すると、パイプラインを設定してターゲットサーバーへデプロイできます。',
   noMatchTitle: '一致するプロジェクトがありません',
   noMatchHint: '検索語またはステータスの絞り込み条件を調整して再試行してください。',
   clearFilter: '絞り込みをクリア',
@@ -66,7 +66,7 @@ export default {
   runNow: '今すぐ実行',
 
   // ─── create modal ──────────────────────────────────────────────
-  createSub: 'Gitee リポジトリを接続し、リポジトリ認証情報をバインドします',
+  createSub: 'リポジトリを接続し、認証情報をバインドします',
   fieldName: 'プロジェクト名',
   fieldNamePlaceholder: '例:acme-web',
   fieldRepo: 'リポジトリ URL',
@@ -80,7 +80,7 @@ export default {
   inlineCredCancel: '新規認証情報をキャンセル',
   inlineCredTitle: 'Git HTTPS 認証情報を新規作成',
   inlineCredName: '認証情報名',
-  inlineCredNamePlaceholder: '例: Gitee 組織リポジトリ',
+  inlineCredNamePlaceholder: '例: チームリポジトリ',
   inlineCredUsername: 'Git ユーザー名',
   inlineCredUsernamePlaceholder: 'Git アカウントのユーザー名',
   inlineCredSecret: 'パスワードまたはトークン',
@@ -123,13 +123,16 @@ export default {
   errLoadRetry: 'プロジェクトの読み込みに失敗しました。しばらくしてから再試行してください',
   errNameRequired: 'プロジェクト名を入力してください',
   errRepoRequired: 'リポジトリ URL を入力してください',
-  errRepoFormat: 'リポジトリ URL の形式が正しくありません。https:// または git{\'@\'} で始めてください',
+  errRepoFormat: '有効な HTTP または HTTPS のリポジトリ URL を入力してください',
+  errRepoProtocol: 'HTTP(S) と Git SSH のリポジトリ URL のみ対応しています',
+  repoSSHKnownHosts: 'SSH ホスト鍵をサービスアカウントの known_hosts に登録してください。独自ポートは ssh:// 形式を使用します。',
+  repoHttpWarning: 'HTTP では認証情報が暗号化されずに送信されます。可能なら HTTPS を使用してください。',
   errCredRequired: 'リポジトリ認証情報を選択してください',
   errRepoFirst: '先にリポジトリ URL を入力してください',
   errCredFirst: '先にリポジトリ認証情報を選択してください',
   errNameEmpty: 'プロジェクト名は空にできません',
 
-  testErrCredential: '認証情報エラー：Gitee アクセストークンが有効か確認し、認証情報ボールトで更新してください。',
+  testErrCredential: '認証情報エラー：ユーザー名、パスワードまたはトークンとリポジトリ権限を確認してください。',
   testErrUnreachable: 'リポジトリに到達できません：URL が正しく、リポジトリが存在しアクセス可能か確認してください。',
   testErrVault: 'ボールトに master key が設定されていないため、認証情報を読み取れません。',
   testErrStatus: '接続テストに失敗しました（{status}）',

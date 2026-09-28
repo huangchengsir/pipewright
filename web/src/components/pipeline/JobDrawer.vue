@@ -25,10 +25,12 @@ import { createCustomNode } from '../../api/customNodes'
 import JobTypeIcon from './JobTypeIcon.vue'
 import StepBuilder from './StepBuilder.vue'
 import StudioInstanceParams from './StudioInstanceParams.vue'
+import AppSelect from '../ui/AppSelect.vue'
 
 const props = defineProps<{
   job: PipelineJob
   stage: PipelineStage
+  stages?: PipelineStage[]
   credentials?: Credential[]
   servers?: Server[]
   channels?: NotificationChannel[]
@@ -99,7 +101,7 @@ watch(() => props.job, (next) => hydrate(next))
 const spec = computed(() => getJobTypeSpec(localType.value))
 
 /** 步骤构建器拥有的 config 键(commands 多行 / artifactPath 多行)。 */
-const STEP_OWNED_KEYS = new Set(['commands', 'artifactPath'])
+const STEP_OWNED_KEYS = new Set(['commands', 'artifactPath', 'artifacts'])
 
 // 「自定义脚本」节点(script/custom)天然就是写命令文本,可视化步骤构建器对它是冗余:
 // 这些类型不提供 steps/raw 切换、默认就用原始参数(命令文本框)。可视化步骤仅保留给
@@ -150,11 +152,12 @@ const firstAdvancedKey = computed<string>(
 )
 
 /** 步骤构建器回传的编译片段并入 typedConfig 落库。 */
-function onStepsUpdate(patch: { commands: string; artifactPath: string }): void {
+function onStepsUpdate(patch: { commands: string; artifactPath: string; artifacts?: string }): void {
   typedConfig.value = {
     ...typedConfig.value,
     commands: patch.commands,
     artifactPath: patch.artifactPath,
+    artifacts: patch.artifacts ?? '',
   }
   flush()
 }
@@ -201,6 +204,50 @@ function credentialOptions(field: JobField): Credential[] {
   return all.filter((c) => c.type === field.credentialType)
 }
 
+function credentialSelectOptions(field: JobField): { value: string; label: string }[] {
+  return [
+    { value: '', label: t('pipelineJob.credUnselected') },
+    ...credentialOptions(field).map((c) => ({ value: c.id, label: `${c.name} (${c.maskedValue})` })),
+  ]
+}
+
+const serverSelectOptions = computed(() => [
+  { value: '', label: t('pipelineJob.credUnselected') },
+  ...(props.servers ?? []).map((srv) => ({ value: srv.id, label: `${srv.name} · ${srv.host}` })),
+])
+
+const artifactSourceOptions = computed(() => {
+  const options = [{ value: '', label: t('pipelineJob.artifactSourceAuto') }]
+  for (const stage of props.stages ?? []) {
+    for (const job of stage.jobs) {
+      let declarations: { path: string; name?: string }[] = []
+      if (job.config?.artifacts) {
+        try {
+          const parsed: unknown = JSON.parse(job.config.artifacts)
+          if (Array.isArray(parsed)) declarations = parsed.filter((item): item is { path: string; name?: string } => item && typeof item.path === 'string')
+        } catch { /* The raw editor will report malformed declarations on save. */ }
+      } else if (job.config?.artifactPath) {
+        declarations = job.config.artifactPath.split(/\r?\n/).filter((path) => path.trim()).map((path) => ({ path }))
+      }
+      declarations.forEach((declaration, declarationIndex) => {
+        options.push({
+          value: JSON.stringify({ stageId: stage.id, jobId: job.id, declarationIndex }),
+          label: `${stage.name} / ${job.name} / ${declaration.name?.trim() || declaration.path}`,
+        })
+      })
+    }
+  }
+  return options
+})
+
+const channelSelectOptions = computed(() => [
+  { value: '', label: t('pipelineJob.channelUnselected') },
+  ...(props.channels ?? []).map((ch) => ({
+    value: ch.id,
+    label: `${ch.name} · ${channelTypeLabel(ch.type)}${ch.enabled ? '' : t('pipelineJob.channelDisabled')}`,
+  })),
+])
+
 const CHANNEL_TYPE_LABELS: Record<string, string> = {
   webhook: 'Webhook',
   email: t('pipelineJob.channelTypeEmail'),
@@ -232,6 +279,9 @@ function updateLocal(key: string, value: string): void {
 
 function setField(key: string, value: string): void {
   updateLocal(key, value)
+  if (key === 'artifactType' && (value === 'image' || value === 'command')) {
+    updateLocal('artifactSource', '')
+  }
   flush()
 }
 
@@ -482,59 +532,48 @@ async function confirmSave(): Promise<void> {
         ></textarea>
 
         <!-- select -->
-        <select
+        <AppSelect
           v-else-if="field.kind === 'select'"
-          :value="selectValue(field)"
-          class="drawer-select"
+          :model-value="selectValue(field)"
+          :options="field.key === 'artifactSource' ? artifactSourceOptions : (field.options ?? [])"
           :aria-label="field.label"
-          @change="setField(field.key, ($event.target as HTMLSelectElement).value)"
-        >
-          <option v-for="opt in field.options" :key="opt.value" :value="opt.value">
-            {{ opt.label }}
-          </option>
-        </select>
+          min-width="0"
+          portal
+          @update:model-value="setField(field.key, $event)"
+        />
 
         <!-- credential picker -->
-        <select
+        <AppSelect
           v-else-if="field.kind === 'credential'"
-          :value="fieldValue(field.key)"
-          class="drawer-select"
+          :model-value="fieldValue(field.key)"
+          :options="credentialSelectOptions(field)"
           :aria-label="field.label"
-          @change="setField(field.key, ($event.target as HTMLSelectElement).value)"
-        >
-          <option value="">{{ t('pipelineJob.credUnselected') }}</option>
-          <option v-for="c in credentialOptions(field)" :key="c.id" :value="c.id">
-            {{ c.name }} ({{ c.maskedValue }})
-          </option>
-        </select>
+          min-width="0"
+          portal
+          @update:model-value="setField(field.key, $event)"
+        />
 
         <!-- server picker -->
-        <select
+        <AppSelect
           v-else-if="field.kind === 'server'"
-          :value="fieldValue(field.key)"
-          class="drawer-select"
+          :model-value="fieldValue(field.key)"
+          :options="serverSelectOptions"
           :aria-label="field.label"
-          @change="setField(field.key, ($event.target as HTMLSelectElement).value)"
-        >
-          <option value="">{{ t('pipelineJob.credUnselected') }}</option>
-          <option v-for="srv in (servers ?? [])" :key="srv.id" :value="srv.id">
-            {{ srv.name }} · {{ srv.host }}
-          </option>
-        </select>
+          min-width="0"
+          portal
+          @update:model-value="setField(field.key, $event)"
+        />
 
         <!-- notification channel picker -->
-        <select
+        <AppSelect
           v-else-if="field.kind === 'channel'"
-          :value="fieldValue(field.key)"
-          class="drawer-select"
+          :model-value="fieldValue(field.key)"
+          :options="channelSelectOptions"
           :aria-label="field.label"
-          @change="setField(field.key, ($event.target as HTMLSelectElement).value)"
-        >
-          <option value="">{{ t('pipelineJob.channelUnselected') }}</option>
-          <option v-for="ch in (channels ?? [])" :key="ch.id" :value="ch.id">
-            {{ ch.name }} · {{ channelTypeLabel(ch.type) }}{{ ch.enabled ? '' : t('pipelineJob.channelDisabled') }}
-          </option>
-        </select>
+          min-width="0"
+          portal
+          @update:model-value="setField(field.key, $event)"
+        />
 
         <!-- toggle -->
         <label v-else-if="field.kind === 'toggle'" class="drawer-toggle">

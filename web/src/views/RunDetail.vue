@@ -44,10 +44,12 @@ import SuccessFailDiff from '../components/run/SuccessFailDiff.vue'
 import RunTerminal from '../components/run/RunTerminal.vue'
 import RunStepList from '../components/run/RunStepList.vue'
 import ArtifactList from '../components/run/ArtifactList.vue'
+import AppSelect from '../components/ui/AppSelect.vue'
 import TestReportPanel from '../components/run/TestReportPanel.vue'
 import DeployTargets from '../components/run/DeployTargets.vue'
 import RunDagView from '../components/run/RunDagView.vue'
 import PromotionPanel from '../components/run/PromotionPanel.vue'
+import BatchDeployPanel from '../components/run/BatchDeployPanel.vue'
 
 // ─── route ────────────────────────────────────────────────────────────────────
 
@@ -134,6 +136,10 @@ async function decideApproval(approve: boolean): Promise<void> {
 const deployServers = ref<Server[]>([])
 const deployServersLoaded = ref(false)
 const selectedArtifactId = ref('')
+const artifactOptions = computed(() => (run.value?.artifacts ?? []).map((a) => {
+  const source = typeof a.metadata.workspacePath === 'string' ? a.metadata.workspacePath : a.reference.slice(0, 12)
+  return { value: a.id, label: `${a.name} · ${a.type} · ${source}` }
+}))
 const selectedServerIds = ref<string[]>([])
 const deploying = ref(false)
 const deployError = ref('')
@@ -156,6 +162,10 @@ const hcTimeoutSeconds = ref(5)
 const showAdvanced = ref(false)
 const releaseBase = ref('')
 const keepReleases = ref(1)
+const commandTimeoutSeconds = ref(60)
+const connectTimeoutSeconds = ref(15)
+const uploadIdleTimeoutSeconds = ref(120)
+const uploadTimeoutSeconds = ref(0)
 
 // ─── 部署策略(Story 8-8 / FR-8-8)──────────────────────────────────────────
 // rolling(默认)= 全机并行各自成败;canary = 先发金丝雀批次、健康通过才铺其余;
@@ -179,6 +189,10 @@ function buildDeployConfig(): Record<string, string> | undefined {
   const keep = clampInt(keepReleases.value, 1, 50, 1)
   // 仅在非默认(1)时下发,避免无谓字段。
   if (keep !== 1) cfg.keepReleases = String(keep)
+  if (commandTimeoutSeconds.value !== 60) cfg.commandTimeoutSeconds = String(clampInt(commandTimeoutSeconds.value, 1, 86400, 60))
+  if (connectTimeoutSeconds.value !== 15) cfg.connectTimeoutSeconds = String(clampInt(connectTimeoutSeconds.value, 1, 300, 15))
+  if (uploadIdleTimeoutSeconds.value !== 120) cfg.uploadIdleTimeoutSeconds = String(clampInt(uploadIdleTimeoutSeconds.value, 1, 86400, 120))
+  if (uploadTimeoutSeconds.value > 0) cfg.uploadTimeoutSeconds = String(clampInt(uploadTimeoutSeconds.value, 1, 604800, 0))
   // 首批量:canary / interactive 策略且 >1 时下发(默认 1 台)。
   if (deployStrategy.value === 'canary' || deployStrategy.value === 'interactive') {
     const n = clampInt(canaryCount.value, 1, 100, 1)
@@ -932,11 +946,12 @@ function nodeClass(status: StepStatus): string {
                 <!-- 选择产物 -->
                 <div class="deploy-field">
                   <label class="deploy-label" for="deploy-artifact">{{ t('runDetail.deployArtifact') }}</label>
-                  <select id="deploy-artifact" v-model="selectedArtifactId" class="deploy-select">
-                    <option v-for="a in run.artifacts" :key="a.id" :value="a.id">
-                      {{ a.name }} · {{ a.type }} · {{ a.reference }}
-                    </option>
-                  </select>
+                  <AppSelect
+                    input-id="deploy-artifact"
+                    v-model="selectedArtifactId"
+                    :options="artifactOptions"
+                    :aria-label="t('runDetail.deployArtifact')"
+                  />
                 </div>
 
                 <!-- 选择服务器 -->
@@ -1075,6 +1090,23 @@ function nodeClass(status: StepStatus): string {
                       <span class="adv-key">{{ t('runDetail.keepReleases') }}</span>
                       <input v-model.number="keepReleases" class="hc-num" type="number" min="1" max="50" />
                     </label>
+                    <label class="adv-row">
+                      <span class="adv-key">{{ t('pipelineJob.deployCommandTimeout') }}</span>
+                      <input v-model.number="commandTimeoutSeconds" class="hc-num" type="number" min="1" max="86400" />
+                    </label>
+                    <label class="adv-row">
+                      <span class="adv-key">{{ t('pipelineJob.deployConnectTimeout') }}</span>
+                      <input v-model.number="connectTimeoutSeconds" class="hc-num" type="number" min="1" max="300" />
+                    </label>
+                    <label class="adv-row">
+                      <span class="adv-key">{{ t('pipelineJob.deployUploadIdleTimeout') }}</span>
+                      <input v-model.number="uploadIdleTimeoutSeconds" class="hc-num" type="number" min="1" max="86400" />
+                    </label>
+                    <label class="adv-row">
+                      <span class="adv-key">{{ t('pipelineJob.deployUploadTotalTimeout') }}</span>
+                      <input v-model.number="uploadTimeoutSeconds" class="hc-num" type="number" min="0" max="604800" />
+                    </label>
+                    <p class="adv-hint">{{ t('pipelineJob.deployUploadTimeoutHint') }}</p>
                     <p class="adv-hint">
                       {{ t('runDetail.advancedHint') }}
                     </p>
@@ -1292,6 +1324,14 @@ function nodeClass(status: StepStatus): string {
 
       </div>
       <!-- END detail-card -->
+
+      <BatchDeployPanel
+        v-if="run.artifacts.length > 0 && ['success', 'partial_failed', 'failed'].includes(run.status)"
+        :run-id="run.id"
+        :artifacts="run.artifacts"
+        :can-create="run.status === 'success' || run.status === 'partial_failed'"
+        @completed="loadRun"
+      />
 
     </template>
     <!-- END run detail -->

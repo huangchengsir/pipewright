@@ -5,9 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net"
 	"net/http"
-	"net/url"
 	"path"
 	"sort"
 	"strings"
@@ -106,7 +104,10 @@ func (g goGitSourceReader) cloneWorktree(ctx context.Context, repoURL, username,
 
 	fs := memfs.New()
 	storer := memory.NewStorage()
-	auth := gitauth.BasicAuth(repoURL, username, token)
+	auth, err := gitauth.AuthMethod(repoURL, username, token)
+	if err != nil {
+		return nil, errSourceCloneFailed
+	}
 
 	cctx, cancel := context.WithTimeout(ctx, sourceCloneTimeout)
 	defer cancel()
@@ -224,40 +225,7 @@ func (g goGitSourceReader) Blob(ctx context.Context, repoURL, username, token, r
 // validSourceURL 对仓库地址做 SSRF 收口(生产路径),复用 2-5 同款策略:
 // 仅 http/https;拒云元数据/链路本地/回环;私网放行(自托管内网 Git 友好)。
 func validSourceURL(repoURL string) bool {
-	u, err := url.Parse(strings.TrimSpace(repoURL))
-	if err != nil {
-		return false
-	}
-	switch strings.ToLower(u.Scheme) {
-	case "http", "https":
-	default:
-		return false
-	}
-	host := u.Hostname()
-	if host == "" {
-		return false
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return !blockedSourceIP(ip)
-	}
-	addrs, err := net.LookupIP(host)
-	if err != nil || len(addrs) == 0 {
-		return true // 留给 clone 路径(会降级);不在此误拒临时 DNS 抖动。
-	}
-	for _, ip := range addrs {
-		if blockedSourceIP(ip) {
-			return false
-		}
-	}
-	return true
-}
-
-// blockedSourceIP 判定 IP 是否落在禁止区:回环、链路本地(含云元数据)、未指定。
-func blockedSourceIP(ip net.IP) bool {
-	return ip.IsLoopback() ||
-		ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() ||
-		ip.IsUnspecified()
+	return gitauth.AllowedRepoURL(repoURL)
 }
 
 // cleanRelPath 把请求 path 规范化为相对仓库根的安全路径;穿越(..、绝对、越根)返回 ok=false。

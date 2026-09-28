@@ -82,6 +82,10 @@ func (s *service) deployInteractiveFirstBatch(ctx context.Context, servers []*ta
 
 // ContinueDeploy 见接口注释:续发 pending 目标。
 func (s *service) ContinueDeploy(ctx context.Context, in ContinueInput) ([]TargetResult, error) {
+	ctx, policyErr := withUploadPolicy(ctx, in.Config)
+	if policyErr != nil {
+		return nil, policyErr
+	}
 	rn, existing, pendingIDs, artifact, err := s.loadPending(ctx, in.RunID, in.ArtifactID)
 	if err != nil {
 		return nil, err

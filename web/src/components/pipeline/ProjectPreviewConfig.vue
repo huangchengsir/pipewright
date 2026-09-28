@@ -23,6 +23,7 @@ import {
 import { listDnsProviders, type DnsProvider } from '../../api/dnsProviders'
 import { HttpError } from '../../api/http'
 import { useToast } from '../../composables/useToast'
+import AppSelect from '../ui/AppSelect.vue'
 
 const props = defineProps<{
   projectId: string
@@ -44,6 +45,10 @@ const providers = ref<DnsProvider[]>([])
 const FQDN_RE = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i
 const baseDomainValid = computed(() => FQDN_RE.test(baseDomain.value.trim().toLowerCase()))
 const selectedProvider = computed(() => providers.value.find((p) => p.id === dnsProviderId.value))
+const providerOptions = computed(() => [
+  { value: '', label: t('previewEnvs.config.providerNone') },
+  ...providers.value.map((p) => ({ value: p.id, label: `${p.name} · ${p.baseDomain}` })),
+])
 
 // 开启预览必须:选定提供商 + 合法根域。关闭态不校验(可随时保存关闭)。
 const enabledConfigInvalid = computed(
@@ -154,10 +159,7 @@ const examplePreview = computed(() => {
       <div class="pvc__grid">
         <div class="pvc__field">
           <label class="pvc__lbl">{{ t('previewEnvs.config.providerLabel') }}</label>
-          <select v-model="dnsProviderId" class="pvc__in">
-            <option value="">{{ t('previewEnvs.config.providerNone') }}</option>
-            <option v-for="p in providers" :key="p.id" :value="p.id">{{ p.name }} · {{ p.baseDomain }}</option>
-          </select>
+          <AppSelect v-model="dnsProviderId" :options="providerOptions" :aria-label="t('previewEnvs.config.providerLabel')" min-width="0" portal />
           <p v-if="providers.length === 0" class="pvc__hint">{{ t('previewEnvs.config.noProviders') }}</p>
         </div>
 

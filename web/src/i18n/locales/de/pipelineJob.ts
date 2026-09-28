@@ -3,6 +3,9 @@ export default {
   artifactImage: 'Container-Image (image)',
   artifactJar: 'JAR-Paket (jar)',
   artifactDist: 'Statische Assets (dist)',
+  artifactNameLabel: 'Artefaktname',
+  artifactNamePlaceholder: 'Optionaler Name zur Unterscheidung',
+  namedArtifactsRaw: 'Benannte Artefakte (JSON)',
   buildModelDockerfile: 'Eigenes Dockerfile',
   buildModelToolchain: 'Plattform-Toolchain',
   toolchainCustom: 'Benutzerdefiniert',
@@ -13,6 +16,9 @@ export default {
   probeModeCommand: 'Befehls-Probe',
   deployArtifactAuto: 'Automatisch (Datei-Artefakt bevorzugen, sonst Image)',
   deployArtifactArchive: 'Archivpaket (archive)',
+  artifactSourceLabel: 'Artefaktquelle',
+  artifactSourceAuto: 'Automatisch wählen',
+  artifactSourceHint: 'Bei mehreren Artefakten eine Build-Deklaration binden. Fehlende oder mehrdeutige Ausgaben stoppen das Deployment.',
 
   // ─── jobConfigSchema · exec option fields ──────────────────────────────
   fieldTimeoutLabel: 'Timeout (s)',
@@ -48,6 +54,11 @@ export default {
   fieldArtifactTypeLabel: 'Bereitzustellender Artefakttyp',
   fieldArtifactTypeHint:
     'Welches gewählt wird, wenn dieser Lauf sowohl ein Image als auch Datei-Artefakte ausgibt; ein Image geht per docker pull auf dem Ziel → neuen Container starten → Health-Check → bei Fehler Rollback auf das vorherige Image',
+  deployCommandTimeout: 'Zeitlimit für Bereitstellungsbefehle (Sek.)',
+  deployConnectTimeout: 'SSH-Verbindungszeitlimit (Sek.)',
+  deployUploadIdleTimeout: 'Upload ohne Fortschritt (Sek.)',
+  deployUploadTotalTimeout: 'Gesamtzeitlimit für Upload (Sek.)',
+  deployUploadTimeoutHint: '0 bedeutet kein Gesamtzeitlimit. Ohne Fortschritt gilt weiterhin das Inaktivitätslimit.',
   fieldDeployPathLabel: 'Bereitstellungspfad',
   fieldDeployPathHint:
     'Datei-Artefakte: veröffentlicht unter <Bereitstellungspfad>/releases/<runId>/, der current-Symlink wechselt atomar auf diese Version (ohne Ausfallzeit, alte Versionen bleiben für Rollback erhalten)',

@@ -147,7 +147,10 @@ func (d goGitDiffer) Diff(ctx context.Context, repoURL, username, token, baselin
 	// 克隆到内存(不设 Depth:浅克隆 HEAD 取不到任意历史 commit;此处需两个具体 commit 的 tree,
 	// 故取全量历史。内存 storer 限驻留,用完即随 GC 释放)。
 	storer := memory.NewStorage()
-	auth := gitauth.BasicAuth(repoURL, username, token)
+	auth, authErr := gitauth.AuthMethod(repoURL, username, token)
+	if authErr != nil {
+		return RunDiff{Available: false, Reason: "仓库凭据不可用", Files: []FileDiff{}}
+	}
 	repo, err := gogit.CloneContext(cctx, storer, memfs.New(), &gogit.CloneOptions{
 		URL:  repoURL,
 		Auth: auth,
@@ -193,7 +196,10 @@ func (d goGitDiffer) DiffCommit(ctx context.Context, repoURL, username, token, c
 	defer cancel()
 
 	storer := memory.NewStorage()
-	auth := gitauth.BasicAuth(repoURL, username, token)
+	auth, authErr := gitauth.AuthMethod(repoURL, username, token)
+	if authErr != nil {
+		return RunDiff{Available: false, Reason: "仓库凭据不可用", Files: []FileDiff{}}, ""
+	}
 	repo, err := gogit.CloneContext(cctx, storer, memfs.New(), &gogit.CloneOptions{
 		URL:  repoURL,
 		Auth: auth,

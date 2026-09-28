@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
@@ -98,9 +98,9 @@ const filteredProjects = computed(() => {
 const credentials = ref<Credential[]>([])
 const credentialsLoading = ref(false)
 
-const gitCredentials = computed(() =>
-  credentials.value.filter((c) => c.type === 'git_token' || c.type === 'git_http'),
-)
+const gitCredentials = computed(() => credentials.value.filter((c) =>
+  isSSHRepo.value ? (c.type === 'ssh_key' || c.type === 'ssh_password') : (c.type === 'git_token' || c.type === 'git_http'),
+))
 
 async function loadCredentials(): Promise<void> {
   credentialsLoading.value = true
@@ -149,6 +149,32 @@ const createForm = ref({
   credentialId: '',
   defaultBranch: '',
 })
+const isPlainHTTPRepo = computed(() => createForm.value.repoUrl.trim().toLowerCase().startsWith('http://'))
+const isSSHRepo = computed(() => /^(ssh:\/\/|[^\s@/:]+@[^\s@/:]+:)/i.test(createForm.value.repoUrl.trim()))
+const inlineCredentialTypes = computed<CredentialType[]>(() => isSSHRepo.value ? ['ssh_key', 'ssh_password'] : ['git_token', 'git_http'])
+const inlineCredentialLabels: Record<CredentialType, string> = {
+  git_token: 'typeGitToken', git_http: 'typeGitHttp', ssh_key: 'typeSshKey',
+  ssh_password: 'typeSshPassword', registry: 'typeRegistry',
+}
+
+watch(isSSHRepo, (ssh) => {
+  createForm.value.credentialId = ''
+  inlineCredentialForm.value.type = ssh ? 'ssh_key' : 'git_http'
+  inlineCredentialForm.value.secret = ''
+  testState.value = 'idle'
+})
+
+function repoURLProblem(raw: string): 'errRepoFormat' | 'errRepoProtocol' | '' {
+  if (/^[^\s@/:]+@[^\s@/:]+:[^\s]+$/.test(raw.trim())) return ''
+  try {
+    const parsed = new URL(raw.trim())
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:' && parsed.protocol !== 'ssh:') return 'errRepoProtocol'
+    if (parsed.protocol === 'ssh:' && (!parsed.username || parsed.password)) return 'errRepoFormat'
+    return parsed.hostname && parsed.pathname && parsed.pathname !== '/' ? '' : 'errRepoFormat'
+  } catch {
+    return 'errRepoFormat'
+  }
+}
 
 const createErrors = ref({
   name: '',
@@ -244,6 +270,7 @@ async function handleInlineCredentialSubmit(): Promise<void> {
 function validateCreateForm(): boolean {
   clearCreateErrors()
   let ok = true
+  const repoProblem = repoURLProblem(createForm.value.repoUrl)
   if (!createForm.value.name.trim()) {
     createErrors.value.name = t('projects.errNameRequired')
     ok = false
@@ -251,11 +278,8 @@ function validateCreateForm(): boolean {
   if (!createForm.value.repoUrl.trim()) {
     createErrors.value.repoUrl = t('projects.errRepoRequired')
     ok = false
-  } else if (
-    !createForm.value.repoUrl.trim().startsWith('http') &&
-    !createForm.value.repoUrl.trim().startsWith('git@')
-  ) {
-    createErrors.value.repoUrl = t('projects.errRepoFormat')
+  } else if (repoProblem) {
+    createErrors.value.repoUrl = t(`projects.${repoProblem}`)
     ok = false
   }
   if (!createForm.value.credentialId) {
@@ -270,6 +294,9 @@ async function handleTestClone(): Promise<void> {
   let ok = true
   if (!createForm.value.repoUrl.trim()) {
     createErrors.value.repoUrl = t('projects.errRepoFirst')
+    ok = false
+  } else if (repoURLProblem(createForm.value.repoUrl)) {
+    createErrors.value.repoUrl = t(`projects.${repoURLProblem(createForm.value.repoUrl)}`)
     ok = false
   }
   if (!createForm.value.credentialId) {
@@ -299,6 +326,8 @@ async function handleTestClone(): Promise<void> {
       const code = err.apiError?.code
       if (code === 'credential_error') {
         testError.value = t('projects.testErrCredential')
+      } else if (code === 'unsupported_repo_protocol') {
+        testError.value = t('projects.errRepoProtocol')
       } else if (code === 'repo_unreachable') {
         testError.value = t('projects.testErrUnreachable')
       } else if (code === 'vault_unconfigured') {
@@ -341,6 +370,9 @@ async function handleCreateSubmit(): Promise<void> {
       } else if (code === 'repo_unreachable') {
         createErrors.value.repoUrl = t('projects.createErrRepoField')
         createBanner.value = t('projects.createErrRepoBanner')
+      } else if (code === 'unsupported_repo_protocol') {
+        createErrors.value.repoUrl = t('projects.errRepoProtocol')
+        createBanner.value = t('projects.errRepoProtocol')
       } else if (code === 'vault_unconfigured') {
         createBanner.value = t('projects.createErrVault')
       } else if (err.status === 0) {
@@ -1143,8 +1175,8 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
               v-model="createForm.repoUrl"
               class="field-input field-input--mono"
               :class="{ 'field-input--error': createErrors.repoUrl }"
-              type="url"
-              placeholder="https://gitee.com/your-org/repo.git"
+              type="text"
+              placeholder="https://gitee.com/org/repo.git / ssh://git@host:2424/org/repo.git"
               autocomplete="off"
               :disabled="createSubmitting"
               :aria-invalid="createErrors.repoUrl ? 'true' : undefined"
@@ -1152,6 +1184,8 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
               @input="createErrors.repoUrl = ''; testState = 'idle'"
             />
             <span v-if="createErrors.repoUrl" id="proj-repo-err" class="field-error" role="alert">{{ createErrors.repoUrl }}</span>
+            <span v-else-if="isPlainHTTPRepo" class="field-hint">{{ t('projects.repoHttpWarning') }}</span>
+            <span v-else-if="isSSHRepo" class="field-hint">{{ t('projects.repoSSHKnownHosts') }}</span>
           </div>
 
           <!-- Credential dropdown — Git credentials supported by project clone, masked display -->
@@ -1198,14 +1232,14 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
               <span class="field-label">{{ t('settingsVault.fieldType') }}</span>
               <div class="inline-credential-types" role="group" :aria-label="t('settingsVault.credentialTypeAria')">
                 <button
-                  v-for="type in (['git_token', 'git_http'] as CredentialType[])"
+                  v-for="type in inlineCredentialTypes"
                   :key="type"
                   type="button"
                   class="inline-credential-type"
                   :class="{ 'inline-credential-type--active': inlineCredentialForm.type === type }"
                   :disabled="inlineCredentialSubmitting"
                   @click="inlineCredentialForm.type = type"
-                >{{ type === 'git_token' ? t('settingsVault.typeGitToken') : t('settingsVault.typeGitHttp') }}</button>
+                >{{ t(`settingsVault.${inlineCredentialLabels[type]}`) }}</button>
               </div>
             </div>
             <div class="field">
@@ -1222,7 +1256,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
               />
               <span v-if="inlineCredentialErrors.name" class="field-error" role="alert">{{ inlineCredentialErrors.name }}</span>
             </div>
-            <div class="field">
+            <div v-if="!isSSHRepo" class="field">
               <label class="field-label" for="inline-cred-username">
                 {{ t('projects.inlineCredUsername') }}
                 <span class="field-optional">{{ inlineCredentialForm.type === 'git_http' ? '' : t('settingsVault.optional') }}</span>
@@ -1241,19 +1275,32 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
               <span v-if="inlineCredentialErrors.username" class="field-error" role="alert">{{ inlineCredentialErrors.username }}</span>
             </div>
             <div class="field">
-              <label class="field-label" for="inline-cred-secret">{{ t('projects.inlineCredSecret') }}</label>
+              <label class="field-label" for="inline-cred-secret">{{ isSSHRepo ? t('settingsVault.fieldSecret') : t('projects.inlineCredSecret') }}</label>
+              <textarea
+                v-if="inlineCredentialForm.type === 'ssh_key'"
+                id="inline-cred-secret"
+                v-model="inlineCredentialForm.secret"
+                class="field-input"
+                :class="{ 'field-input--error': inlineCredentialErrors.secret }"
+                :placeholder="t('settingsVault.secretPlaceholderSshKey')"
+                :disabled="inlineCredentialSubmitting"
+                autocomplete="off"
+                rows="5"
+                @input="inlineCredentialErrors.secret = ''"
+              />
               <input
+                v-else
                 id="inline-cred-secret"
                 v-model="inlineCredentialForm.secret"
                 class="field-input"
                 :class="{ 'field-input--error': inlineCredentialErrors.secret }"
                 type="password"
-                :placeholder="t('projects.inlineCredSecretPlaceholder')"
+                :placeholder="inlineCredentialForm.type === 'ssh_password' ? t('settingsVault.secretPlaceholderSshPassword') : t('projects.inlineCredSecretPlaceholder')"
                 :disabled="inlineCredentialSubmitting"
                 autocomplete="new-password"
                 @input="inlineCredentialErrors.secret = ''"
               />
-              <span class="field-hint">{{ t('projects.inlineCredSecretHint') }}</span>
+              <span v-if="!isSSHRepo" class="field-hint">{{ t('projects.inlineCredSecretHint') }}</span>
               <span v-if="inlineCredentialErrors.secret" class="field-error" role="alert">{{ inlineCredentialErrors.secret }}</span>
             </div>
             <button

@@ -42,19 +42,11 @@ func (sshDialer) Run(ctx context.Context, addr string, cfg SSHConfig, cmd []stri
 		Timeout:         resolveTimeout(ctx),
 	}
 
-	// 经 net.Dialer 让 TCP 拨号也尊重 ctx 取消/超时。
-	d := net.Dialer{Timeout: clientCfg.Timeout}
-	conn, err := d.DialContext(ctx, "tcp", addr)
+	client, cleanup, err := dialSSH(ctx, addr, clientCfg)
 	if err != nil {
-		return nil, fmt.Errorf("%w", classifyDialErr(err))
+		return nil, err
 	}
-
-	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, clientCfg)
-	if err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("%w", classifyHandshakeErr(err))
-	}
-	client := ssh.NewClient(sshConn, chans, reqs)
+	defer cleanup()
 	defer func() { _ = client.Close() }()
 
 	session, err := client.NewSession()
@@ -104,17 +96,11 @@ func (sshDialer) RunWithStdin(ctx context.Context, addr string, cfg SSHConfig, c
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // dev-only;生产固定 known_hosts(deferred)
 		Timeout:         resolveTimeout(ctx),
 	}
-	d := net.Dialer{Timeout: clientCfg.Timeout}
-	conn, err := d.DialContext(ctx, "tcp", addr)
+	client, cleanup, err := dialSSH(ctx, addr, clientCfg)
 	if err != nil {
-		return nil, fmt.Errorf("%w", classifyDialErr(err))
+		return nil, err
 	}
-	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, clientCfg)
-	if err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("%w", classifyHandshakeErr(err))
-	}
-	client := ssh.NewClient(sshConn, chans, reqs)
+	defer cleanup()
 	defer func() { _ = client.Close() }()
 
 	session, err := client.NewSession()
@@ -381,8 +367,8 @@ func runWithContext(ctx context.Context, session *ssh.Session, cmd string) error
 	go func() { done <- session.Run(cmd) }()
 	select {
 	case <-ctx.Done():
-		_ = session.Signal(ssh.SIGKILL)
-		_ = session.Close()
+		// dialSSH closes the socket, unblocking Run and its output pumps.
+		<-done
 		return ctx.Err()
 	case err := <-done:
 		return err
@@ -407,13 +393,20 @@ func authMethods(cfg SSHConfig) ([]ssh.AuthMethod, error) {
 
 // resolveTimeout 取 ctx 剩余时间作为拨号超时;无 deadline 时用 dialTimeout 兜底。
 func resolveTimeout(ctx context.Context) time.Duration {
+	limit := dialTimeout
+	if opts, ok := ctx.Value(transferTimeoutKey{}).(transferTimeouts); ok && opts.connect > 0 {
+		limit = opts.connect
+	}
 	if dl, ok := ctx.Deadline(); ok {
 		if d := time.Until(dl); d > 0 {
-			return d
+			if d < limit {
+				return d
+			}
+			return limit
 		}
 		return time.Millisecond // 已超时:让拨号立即失败
 	}
-	return dialTimeout
+	return limit
 }
 
 // classifyDialErr 把 TCP 拨号错误映射为干净领域错误(绝不含内部地址/栈)。

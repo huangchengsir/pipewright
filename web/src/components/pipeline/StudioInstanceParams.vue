@@ -15,6 +15,7 @@
  */
 import { ref, watch } from 'vue'
 import type { PromotedParam } from './studioCompile'
+import AppSelect from '../ui/AppSelect.vue'
 
 const props = defineProps<{
   /** 提升参数定义(只读):提供控件类型/标签/候选项与初始值。 */
@@ -66,16 +67,17 @@ function toggleBool(key: string): void {
       </label>
 
       <!-- 枚举 → 下拉 -->
-      <select
+      <AppSelect
         v-if="p.type === 'select'"
-        :id="`si-${p.key}`"
-        class="si-input"
-        :value="values[p.key]"
+        :input-id="`si-${p.key}`"
+        :model-value="values[p.key] ?? ''"
+        :options="(p.options ?? []).map((opt) => ({ value: opt, label: opt }))"
         :aria-label="p.label || p.key"
-        @change="setVal(p.key, ($event.target as HTMLSelectElement).value)"
-      >
-        <option v-for="opt in p.options ?? []" :key="opt" :value="opt">{{ opt }}</option>
-      </select>
+        min-width="0"
+        height="34px"
+        portal
+        @update:model-value="setVal(p.key, $event)"
+      />
 
       <!-- 布尔 → 开关 -->
       <button

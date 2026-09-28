@@ -405,6 +405,7 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
       v-if="selectedJob && selectedStage"
       :job="selectedJob"
       :stage="selectedStage"
+      :stages="props.stages"
       :credentials="props.credentials"
       :servers="props.servers"
       :channels="props.channels"

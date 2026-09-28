@@ -9,6 +9,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { PipelinePostStep } from '../../api/pipeline'
 import { POST_CONDITIONS, POST_CONDITION_LABELS, type PostCondition } from './stageSettings'
+import AppSelect from '../ui/AppSelect.vue'
 
 const props = defineProps<{
   steps: PipelinePostStep[] | undefined
@@ -22,6 +23,7 @@ const emit = defineEmits<{
 const { t } = useI18n()
 
 const rows = computed<PipelinePostStep[]>(() => props.steps ?? [])
+const conditionOptions = POST_CONDITIONS.map((condition) => ({ value: condition, label: POST_CONDITION_LABELS[condition] }))
 
 function commit(next: PipelinePostStep[]): void {
   emit('update', next.length > 0 ? next : undefined)
@@ -47,14 +49,17 @@ function setCommands(i: number, text: string): void {
   <div class="post-editor">
     <div v-for="(step, i) in rows" :key="i" class="post-row">
       <div class="post-line">
-        <select
-          class="settings-input post-cond"
-          :value="step.condition"
+        <div class="post-cond">
+        <AppSelect
+          :model-value="step.condition"
+          :options="conditionOptions"
           :aria-label="t('pipelineCanvas.postCondAria', { n: i + 1 })"
-          @change="patch(i, { condition: ($event.target as HTMLSelectElement).value as PostCondition })"
-        >
-          <option v-for="c in POST_CONDITIONS" :key="c" :value="c">{{ POST_CONDITION_LABELS[c] }}</option>
-        </select>
+          min-width="0"
+          height="34px"
+          portal
+          @update:model-value="patch(i, { condition: $event as PostCondition })"
+        />
+        </div>
         <input
           class="settings-input post-image"
           type="text"

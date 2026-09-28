@@ -17,6 +17,7 @@ const props = withDefaults(defineProps<{
   ariaLabel?: string
   minWidth?: string
   height?: string
+  portal?: boolean
 }>(), {
   inputId: undefined,
   placeholder: '',
@@ -24,6 +25,7 @@ const props = withDefaults(defineProps<{
   ariaLabel: undefined,
   minWidth: '180px',
   height: undefined,
+  portal: false,
 })
 
 const emit = defineEmits<{
@@ -32,9 +34,27 @@ const emit = defineEmits<{
 }>()
 
 const root = ref<HTMLElement | null>(null)
+const menu = ref<HTMLElement | null>(null)
 const open = ref(false)
 const activeIndex = ref(-1)
+const menuStyle = ref<Record<string, string>>({})
 const selected = computed(() => props.options.find((option) => option.value === props.modelValue))
+
+function positionMenu(): void {
+  if (!props.portal || !root.value) return
+  const rect = root.value.getBoundingClientRect()
+  const availableBelow = window.innerHeight - rect.bottom - 8
+  const availableAbove = rect.top - 8
+  const desiredHeight = Math.min(240, props.options.length * 38 + 12)
+  const above = availableBelow < desiredHeight && availableAbove > availableBelow
+  const maxHeight = Math.max(80, Math.min(240, above ? availableAbove : availableBelow))
+  menuStyle.value = {
+    left: `${rect.left}px`,
+    width: `${rect.width}px`,
+    top: `${above ? Math.max(8, rect.top - Math.min(desiredHeight, maxHeight) - 6) : rect.bottom + 6}px`,
+    maxHeight: `${maxHeight}px`,
+  }
+}
 
 function close(): void {
   open.value = false
@@ -43,6 +63,7 @@ function close(): void {
 
 function toggle(): void {
   if (props.disabled) return
+  if (!open.value) positionMenu()
   open.value = !open.value
   if (open.value) activeIndex.value = Math.max(0, props.options.findIndex((option) => option.value === props.modelValue))
 }
@@ -75,11 +96,19 @@ function handleKeydown(event: KeyboardEvent): void {
 }
 
 function handlePointerdown(event: PointerEvent): void {
-  if (open.value && root.value && !root.value.contains(event.target as Node)) close()
+  if (open.value && root.value && !root.value.contains(event.target as Node) && !menu.value?.contains(event.target as Node)) close()
 }
 
-onMounted(() => document.addEventListener('pointerdown', handlePointerdown))
-onBeforeUnmount(() => document.removeEventListener('pointerdown', handlePointerdown))
+onMounted(() => {
+  document.addEventListener('pointerdown', handlePointerdown)
+  window.addEventListener('resize', positionMenu)
+  window.addEventListener('scroll', positionMenu, true)
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', handlePointerdown)
+  window.removeEventListener('resize', positionMenu)
+  window.removeEventListener('scroll', positionMenu, true)
+})
 </script>
 
 <template>
@@ -101,7 +130,8 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handlePointerd
       <span :class="selected ? 'app-select__value' : 'app-select__placeholder'">{{ selected?.label || placeholder }}</span>
       <svg class="app-select__chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
     </button>
-    <div v-if="open" :id="inputId ? `${inputId}-options` : undefined" class="app-select__menu" role="listbox">
+    <Teleport to="body" :disabled="!portal">
+    <div v-if="open" :id="inputId ? `${inputId}-options` : undefined" ref="menu" class="app-select__menu" :class="{ 'app-select__menu--portal': portal }" :style="portal ? menuStyle : undefined" role="listbox">
       <button
         v-for="(option, index) in options"
         :key="option.value"
@@ -118,6 +148,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handlePointerd
       </button>
       <div v-if="!options.length" class="app-select__empty">{{ placeholder }}</div>
     </div>
+    </Teleport>
   </div>
 </template>
 
@@ -137,6 +168,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handlePointerd
 .app-select__chevron { position: absolute; right: 11px; color: var(--color-faint); transition: transform var(--duration-fast), color var(--duration-fast); }
 .app-select--open .app-select__chevron { transform: rotate(180deg); color: var(--color-primary); }
 .app-select__menu { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; width: 100%; max-height: 240px; overflow-y: auto; padding: 5px; border: 1px solid var(--color-border-strong); border-radius: var(--rounded); background: var(--color-card-2); box-shadow: 0 12px 28px rgb(0 0 0 / 24%); }
+.app-select__menu--portal { position: fixed; z-index: 10000; }
 .app-select__option { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 38px; padding: 8px 9px; border: 0; border-radius: calc(var(--rounded) - 2px); background: transparent; color: var(--color-text); font: inherit; text-align: left; cursor: pointer; }
 .app-select__option:hover, .app-select__option--active { background: var(--color-inset); }
 .app-select__option--selected, .app-select__check { color: var(--color-primary); }

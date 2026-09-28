@@ -1,7 +1,7 @@
 export default {
   // ─── page header ───────────────────────────────────────────────
   title: '專案',
-  subtitle: '納管的 Gitee 倉庫,每個專案對應一套流水線設定與部署目標',
+  subtitle: '納管的程式碼倉庫,每個專案對應一套流水線設定與部署目標',
   newProject: '新建專案',
   retry: '重試',
 
@@ -15,7 +15,7 @@ export default {
   // ─── list states ───────────────────────────────────────────────
   loading: '載入中',
   emptyTitle: '還沒有專案',
-  emptyHint: '接入第一個 Gitee 倉庫,後續可設定流水線並部署到目標伺服器。',
+  emptyHint: '接入第一個程式碼倉庫,後續可設定流水線並部署到目標伺服器。',
   noMatchTitle: '沒有符合的專案',
   noMatchHint: '調整搜尋詞或狀態篩選條件後重試。',
   clearFilter: '清除篩選',
@@ -66,7 +66,7 @@ export default {
   runNow: '立即執行',
 
   // ─── create modal ──────────────────────────────────────────────
-  createSub: '接入 Gitee 倉庫並綁定倉庫憑證',
+  createSub: '接入程式碼倉庫並綁定倉庫憑證',
   fieldName: '專案名稱',
   fieldNamePlaceholder: '例:acme-web',
   fieldRepo: '倉庫位址',
@@ -80,7 +80,7 @@ export default {
   inlineCredCancel: '取消新增憑證',
   inlineCredTitle: '新增 Git HTTPS 憑證',
   inlineCredName: '憑證名稱',
-  inlineCredNamePlaceholder: '例：Gitee 組織倉庫',
+  inlineCredNamePlaceholder: '例：團隊程式碼倉庫',
   inlineCredUsername: 'Git 使用者名稱',
   inlineCredUsernamePlaceholder: '實際 Git 平台帳號使用者名稱',
   inlineCredSecret: '密碼或權杖',
@@ -123,13 +123,16 @@ export default {
   errLoadRetry: '載入專案失敗,請稍後重試',
   errNameRequired: '請輸入專案名稱',
   errRepoRequired: '請輸入倉庫位址',
-  errRepoFormat: '倉庫位址格式不正確,請以 https:// 或 git{\'@\'} 開頭',
+  errRepoFormat: '請輸入有效的 HTTP 或 HTTPS 倉庫位址',
+  errRepoProtocol: '僅支援 HTTP(S) 與 Git SSH 倉庫位址',
+  repoSSHKnownHosts: '請先將 SSH 主機金鑰加入服務帳號的 known_hosts；自訂連接埠請使用 ssh:// 協定網址。',
+  repoHttpWarning: 'HTTP 會以明文傳輸倉庫憑證,建議使用 HTTPS。',
   errCredRequired: '請選擇倉庫憑證',
   errRepoFirst: '請先輸入倉庫位址',
   errCredFirst: '請先選擇倉庫憑證',
   errNameEmpty: '專案名稱不能為空',
 
-  testErrCredential: '憑證錯誤:請檢查 Gitee 存取權杖是否有效,前往憑證保險庫更新。',
+  testErrCredential: '憑證錯誤:請檢查使用者名稱、密碼或權杖及倉庫權限。',
   testErrUnreachable: '倉庫不可達:請確認倉庫位址正確,且倉庫存在且可存取。',
   testErrVault: '保險庫未設定 master key,無法讀取憑證。',
   testErrStatus: '連線測試失敗({status})',

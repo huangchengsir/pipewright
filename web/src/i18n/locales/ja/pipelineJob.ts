@@ -3,6 +3,9 @@ export default {
   artifactImage: 'コンテナイメージ (image)',
   artifactJar: 'JAR パッケージ (jar)',
   artifactDist: '静的アセット (dist)',
+  artifactNameLabel: '成果物名',
+  artifactNamePlaceholder: '識別用の任意の名前',
+  namedArtifactsRaw: '名前付き成果物の宣言 (JSON)',
   buildModelDockerfile: '自前の Dockerfile',
   buildModelToolchain: 'プラットフォームのツールチェーン',
   toolchainCustom: 'カスタム',
@@ -13,6 +16,9 @@ export default {
   probeModeCommand: 'コマンドプローブ',
   deployArtifactAuto: '自動(ファイル成果物を優先、無ければイメージ)',
   deployArtifactArchive: 'アーカイブパッケージ (archive)',
+  artifactSourceLabel: '成果物の出所',
+  artifactSourceAuto: '自動選択',
+  artifactSourceHint: '複数の成果物がある場合はビルド宣言を指定します。未生成または複数一致の場合、別の成果物に切り替えず失敗します。',
 
   // ─── jobConfigSchema · exec option fields ──────────────────────────────
   fieldTimeoutLabel: 'タイムアウト(秒)',
@@ -48,6 +54,11 @@ export default {
   fieldArtifactTypeLabel: 'デプロイ成果物タイプ',
   fieldArtifactTypeHint:
     'この run がイメージとファイル成果物を同時に出力する場合にどれを選ぶか。イメージはターゲットで docker pull → 新コンテナ起動 → ヘルスチェック → 失敗時に前のイメージへロールバック',
+  deployCommandTimeout: 'デプロイコマンドのタイムアウト（秒）',
+  deployConnectTimeout: 'SSH 接続タイムアウト（秒）',
+  deployUploadIdleTimeout: 'アップロード無進捗タイムアウト（秒）',
+  deployUploadTotalTimeout: 'アップロード総タイムアウト（秒）',
+  deployUploadTimeoutHint: '0 は総時間制限なし。進捗がない場合はタイムアウトします。',
   fieldDeployPathLabel: 'デプロイパス',
   fieldDeployPathHint:
     'ファイル成果物:<デプロイパス>/releases/<runId>/ に公開、current シンボリックリンクを今回のリリースへアトミックに切替(ゼロダウンタイム、旧リリースはロールバック用に保持)',

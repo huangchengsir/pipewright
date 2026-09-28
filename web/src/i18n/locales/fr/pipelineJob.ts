@@ -3,6 +3,9 @@ export default {
   artifactImage: 'Image de conteneur (image)',
   artifactJar: 'Paquet JAR (jar)',
   artifactDist: 'Ressources statiques (dist)',
+  artifactNameLabel: 'Nom de l’artefact',
+  artifactNamePlaceholder: 'Nom facultatif pour le distinguer',
+  namedArtifactsRaw: 'Artefacts nommés (JSON)',
   buildModelDockerfile: 'Dockerfile fourni',
   buildModelToolchain: 'Chaîne d’outils de la plateforme',
   toolchainCustom: 'Personnalisé',
@@ -13,6 +16,9 @@ export default {
   probeModeCommand: 'Sonde par commande',
   deployArtifactAuto: 'Auto (préférer l’artefact fichier, sinon l’image)',
   deployArtifactArchive: 'Paquet d’archive (archive)',
+  artifactSourceLabel: 'Source de l’artéfact',
+  artifactSourceAuto: 'Choix automatique',
+  artifactSourceHint: 'Liez une déclaration de build. Si le résultat manque ou est ambigu, le déploiement échoue sans choisir un autre artéfact.',
 
   // ─── jobConfigSchema · exec option fields ──────────────────────────────
   fieldTimeoutLabel: 'Délai d’expiration (s)',
@@ -48,6 +54,11 @@ export default {
   fieldArtifactTypeLabel: 'Type d’artefact à déployer',
   fieldArtifactTypeHint:
     'Lequel choisir lorsque cette exécution produit à la fois une image et des artefacts fichiers ; une image passe par docker pull sur la cible → démarrage d’un nouveau conteneur → contrôle de santé → retour à l’image précédente en cas d’échec',
+  deployCommandTimeout: 'Délai des commandes de déploiement (s)',
+  deployConnectTimeout: 'Délai de connexion SSH (s)',
+  deployUploadIdleTimeout: 'Délai sans progression du transfert (s)',
+  deployUploadTotalTimeout: 'Délai total du transfert (s)',
+  deployUploadTimeoutHint: '0 désactive le délai total. Le délai sans progression reste actif.',
   fieldDeployPathLabel: 'Chemin de déploiement',
   fieldDeployPathHint:
     'Artefacts fichiers : publiés dans <chemin de déploiement>/releases/<runId>/, le lien symbolique current bascule de façon atomique vers cette version (sans interruption, les anciennes versions sont conservées pour le retour arrière)',

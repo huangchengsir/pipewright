@@ -87,8 +87,7 @@ func (s *service) stageImageOne(ctx context.Context, srv *target.Server, a run.A
 	if st.ref == "" {
 		return st, "image 产物缺少 reference(repo:tag 或镜像 id)", false
 	}
-	execCtx, cancel := context.WithTimeout(ctx, execTimeout)
-	defer cancel()
+	execCtx := ctx
 
 	// 探测当前同名容器所用镜像(供回滚);无容器 / 读失败 → 空(首次部署,无可回滚)。
 	st.prevImage = s.readContainerImage(execCtx, srv.ID, st.name)
@@ -119,8 +118,7 @@ func (s *service) deployImageOne(ctx context.Context, srv *target.Server, a run.
 // modeLabel 仅用于成功文案区分编排策略("蓝绿" / 空=滚动/金丝雀);回滚文案策略无关。
 func (s *service) activateImageOne(ctx context.Context, srv *target.Server, a run.Artifact, hc *HealthCheck, st imageState, started time.Time, modeLabel string) TargetResult {
 	res := TargetResult{ServerID: srv.ID, ServerName: srv.Name, StartedAt: started}
-	execCtx, cancel := context.WithTimeout(ctx, execTimeout)
-	defer cancel()
+	execCtx := ctx
 
 	// 切换:移除同名旧容器(幂等)→ 后台起新镜像容器(带 cfg 解析的端口 / run 参数)。
 	swap := [][]string{
@@ -153,6 +151,8 @@ func (s *service) activateImageOne(ctx context.Context, srv *target.Server, a ru
 // rollbackImage 在健康失败后把容器回滚到上一镜像(rm 新容器 → run 上一镜像)。
 // 无上一镜像(首次部署)→ failed;回滚命令失败仍记 rolled_back(尽力)。
 func (s *service) rollbackImage(ctx context.Context, srv *target.Server, res TargetResult, st imageState, healthMsg string) TargetResult {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), policyFrom(ctx).command)
+	defer cancel()
 	finish := time.Now().UTC()
 	res.FinishedAt = &finish
 	if st.prevImage == "" {
@@ -165,13 +165,14 @@ func (s *service) rollbackImage(ctx context.Context, srv *target.Server, res Tar
 		{"docker", "rm", "-f", st.name},
 		dockerRunCmd(st.name, st.runArgs, st.prevImage),
 	} {
-		if _, e := s.exec(ctx, srv.ID, cmd); e != nil {
+		if _, e := s.execChecked(ctx, srv.ID, cmd); e != nil {
 			rbErr = e
 			break
 		}
 	}
 	res.Status = run.TargetRolledBack
 	if rbErr != nil {
+		res.Status = run.TargetFailed
 		res.Message = fmt.Sprintf("健康检查失败,已尝试回滚容器 %s → 上一镜像 %s,但回滚命令失败:%s(健康原因:%s)",
 			st.name, st.prevImage, humanExecError(rbErr), healthMsg)
 		return res
@@ -182,14 +183,14 @@ func (s *service) rollbackImage(ctx context.Context, srv *target.Server, res Tar
 
 // fleetRollbackImageOne 把一台「本机切换成功、但机群其它机失败」的容器回滚到上一镜像(蓝绿机群级原子性)。
 func (s *service) fleetRollbackImageOne(ctx context.Context, srv *target.Server, st imageState, res *TargetResult) {
-	execCtx, cancel := context.WithTimeout(ctx, execTimeout)
+	execCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), policyFrom(ctx).command)
 	defer cancel()
 	var rbErr error
 	for _, cmd := range [][]string{
 		{"docker", "rm", "-f", st.name},
 		dockerRunCmd(st.name, st.runArgs, st.prevImage),
 	} {
-		if _, e := s.exec(execCtx, srv.ID, cmd); e != nil {
+		if _, e := s.execChecked(execCtx, srv.ID, cmd); e != nil {
 			rbErr = e
 			break
 		}
@@ -198,6 +199,7 @@ func (s *service) fleetRollbackImageOne(ctx context.Context, srv *target.Server,
 	res.Status = run.TargetRolledBack
 	res.FinishedAt = &finish
 	if rbErr != nil {
+		res.Status = run.TargetFailed
 		res.Message = "蓝绿:其它机切换失败,本机尝试回滚到上一镜像但回滚命令失败:" + humanExecError(rbErr)
 		return
 	}

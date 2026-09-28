@@ -161,6 +161,16 @@ A normal install only needs the first two (plus `PIPEWRIGHT_PUBLIC_URL` if you r
 | `PIPEWRIGHT_RUNTIME` | Set `docker` to declare a container deployment (affects self-update mode); otherwise auto-detected via `/.dockerenv` | auto-detect |
 | `PIPEWRIGHT_AUDIT_SINK` | Remote audit sink: an `http(s)://` endpoint, or any other value as a second local JSON Lines file path. Keeps audit records complete even if the local DB is wiped | none |
 
+### Git SSH repositories
+
+For Git SSH repositories, use `git@host:group/repo.git` on port 22 or
+`ssh://git@host:2424/group/repo.git` for a custom port. Select an SSH key or
+SSH password credential in the project form. Before connecting, verify the
+server's SSH host key out of band and add it to the Pipewright process
+account's `~/.ssh/known_hosts`; alternatively set `SSH_KNOWN_HOSTS` to a
+known-hosts file. Unknown or changed host keys are rejected. SSH private keys
+are stored only in the encrypted credential vault.
+
 **Database**
 
 | Variable | Description | Default |

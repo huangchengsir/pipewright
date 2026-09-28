@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/gitauth"
 	"github.com/huangchengsir/pipewright/internal/store"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
@@ -35,6 +36,8 @@ var (
 	ErrCredentialError = errors.New("project: credential error")
 	// ErrRepoUnreachable 表示仓库地址不可达/不存在/网络错误。
 	ErrRepoUnreachable = errors.New("project: repo unreachable")
+	// ErrUnsupportedRepoProtocol 表示仓库地址使用了尚未支持的 Git 协议。
+	ErrUnsupportedRepoProtocol = errors.New("project: unsupported repo protocol")
 	// ErrVaultUnconfigured 表示保险库未配置 master key,无法取凭据做校验。
 	ErrVaultUnconfigured = errors.New("project: vault unconfigured")
 	// ErrCredentialNotFound 表示引用的凭据不存在(下拉项已被删除等)。
@@ -180,6 +183,13 @@ func (s *service) probe(ctx context.Context, repoURL, credentialID string) (stri
 			return "", ErrCredentialNotFound
 		default:
 			// 解密等内部错误:不泄漏细节,统一按凭据错误对待。
+			return "", ErrCredentialError
+		}
+	}
+	if auth.Type != "" {
+		ssh := gitauth.IsSSH(repoURL)
+		if (ssh && auth.Type != vault.TypeSSHKey && auth.Type != vault.TypeSSHPassword) ||
+			(!ssh && auth.Type != vault.TypeGitToken && auth.Type != vault.TypeGitHTTP) {
 			return "", ErrCredentialError
 		}
 	}

@@ -302,6 +302,18 @@ func makeAbortDeployHandler(svc deploy.Service, runSvc run.Service) http.Handler
 // 执行类失败由 deploy.Deploy 内化为每机 failed,不走此路径(整体 200)。
 func writeDeployError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, deploy.ErrInvalidUploadPolicy):
+		writeError(w, http.StatusUnprocessableEntity, "invalid_upload_policy", err.Error())
+	case errors.Is(err, deploy.ErrBatchInvalid):
+		writeError(w, http.StatusUnprocessableEntity, "invalid_deploy_batch", "部署批次无效,请检查产物、服务器和目标路径")
+	case errors.Is(err, deploy.ErrBatchNotFound):
+		writeError(w, http.StatusNotFound, "deploy_batch_not_found", "部署批次不存在")
+	case errors.Is(err, deploy.ErrBatchConflict):
+		writeError(w, http.StatusConflict, "deploy_batch_conflict", "幂等键已用于另一份部署请求")
+	case errors.Is(err, deploy.ErrBatchBusy):
+		writeError(w, http.StatusConflict, "deploy_batch_busy", "部署批次正在执行")
+	case errors.Is(err, deploy.ErrBatchNoTargets):
+		writeError(w, http.StatusUnprocessableEntity, "deploy_batch_no_targets", "没有符合条件的部署目标")
 	case errors.Is(err, deploy.ErrRunNotFound), errors.Is(err, run.ErrNotFound):
 		writeError(w, http.StatusNotFound, "run_not_found", "运行不存在")
 	case errors.Is(err, deploy.ErrRunNotSuccessful):

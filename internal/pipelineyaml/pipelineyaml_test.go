@@ -186,6 +186,26 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestNamedArtifactsSurviveYAMLRoundTrip(t *testing.T) {
+	cfg, err := Parse([]byte(multiStageFixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const declarations = `[{"path":"target/app.jar","name":"Backend API"}]`
+	cfg.Spec.Stages[1].Jobs[0].Config["artifacts"] = declarations
+	out, err := Marshal(cfg.Spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := asString(parsed.Spec.Stages[1].Jobs[0].Config["artifacts"]); got != declarations {
+		t.Fatalf("named artifacts lost in YAML round-trip: %q", got)
+	}
+}
+
 func TestParseEmpty(t *testing.T) {
 	if _, err := Parse([]byte("   \n  ")); !errors.Is(err, ErrParse) {
 		t.Fatalf("空文档应回 ErrParse, got %v", err)

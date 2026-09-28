@@ -1,7 +1,7 @@
 export default {
   // ─── page header ───────────────────────────────────────────────
   title: '项目',
-  subtitle: '纳管的 Gitee 仓库,每个项目对应一套流水线配置与部署目标',
+  subtitle: '纳管的代码仓库,每个项目对应一套流水线配置与部署目标',
   newProject: '新建项目',
   retry: '重试',
 
@@ -15,7 +15,7 @@ export default {
   // ─── list states ───────────────────────────────────────────────
   loading: '加载中',
   emptyTitle: '还没有项目',
-  emptyHint: '接入第一个 Gitee 仓库,后续可配置流水线并部署到目标服务器。',
+  emptyHint: '接入第一个代码仓库,后续可配置流水线并部署到目标服务器。',
   noMatchTitle: '没有匹配的项目',
   noMatchHint: '调整搜索词或状态筛选条件后重试。',
   clearFilter: '清除筛选',
@@ -66,7 +66,7 @@ export default {
   runNow: '立即运行',
 
   // ─── create modal ──────────────────────────────────────────────
-  createSub: '接入 Gitee 仓库并绑定仓库凭据',
+  createSub: '接入代码仓库并绑定仓库凭据',
   fieldName: '项目名称',
   fieldNamePlaceholder: '例:acme-web',
   fieldRepo: '仓库地址',
@@ -80,7 +80,7 @@ export default {
   inlineCredCancel: '取消新建凭据',
   inlineCredTitle: '新建 Git 凭据',
   inlineCredName: '凭据名称',
-  inlineCredNamePlaceholder: '例: Gitee 组织仓库',
+  inlineCredNamePlaceholder: '例: 团队代码仓库',
   inlineCredUsername: 'Git 用户名',
   inlineCredUsernamePlaceholder: '实际 Git 平台账号用户名',
   inlineCredSecret: '密码或 Token',
@@ -123,13 +123,16 @@ export default {
   errLoadRetry: '加载项目失败,请稍后重试',
   errNameRequired: '请输入项目名称',
   errRepoRequired: '请输入仓库地址',
-  errRepoFormat: '仓库地址格式不正确,请以 https:// 或 git{\'@\'} 开头',
+  errRepoFormat: '请输入有效的 HTTP(S) 或 Git SSH 仓库地址',
+  errRepoProtocol: '仅支持 HTTP(S) 和 Git SSH 仓库地址',
+  repoSSHKnownHosts: 'SSH 主机公钥须预先写入服务运行账号的 known_hosts；自定义端口请使用 ssh:// 协议地址。',
+  repoHttpWarning: 'HTTP 会明文传输仓库凭据,建议使用 HTTPS。',
   errCredRequired: '请选择仓库凭据',
   errRepoFirst: '请先输入仓库地址',
   errCredFirst: '请先选择仓库凭据',
   errNameEmpty: '项目名称不能为空',
 
-  testErrCredential: '凭据错误:请检查 Gitee 访问令牌是否有效,前往凭据保险库更新。',
+  testErrCredential: '凭据错误:请检查用户名、密码或 Token 及仓库权限。',
   testErrUnreachable: '仓库不可达:请确认仓库地址正确,且仓库存在且可访问。',
   testErrVault: '保险库未配置 master key,无法读取凭据。',
   testErrStatus: '连接测试失败({status})',

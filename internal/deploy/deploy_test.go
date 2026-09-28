@@ -2,9 +2,12 @@ package deploy
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -53,7 +56,66 @@ func (s *stubTarget) Exec(_ context.Context, serverID string, cmd []string) (*ta
 	if s.execFn != nil {
 		return s.execFn(serverID, cmd)
 	}
+	if len(cmd) >= 7 && cmd[0] == "sh" && cmd[1] == "-c" && cmd[2] == uploadScript {
+		return s.uploadCommand(cmd), nil
+	}
 	return &target.ExecResult{ExitCode: 0}, nil
+}
+
+func (s *stubTarget) uploadCommand(cmd []string) *target.ExecResult {
+	s.callMu.Lock()
+	defer s.callMu.Unlock()
+	if s.uploads == nil {
+		s.uploads = map[string][]byte{}
+	}
+	action, dir, owner := cmd[4], cmd[5], cmd[6]
+	result := &target.ExecResult{}
+	check := func(file, size, digest string) bool {
+		body, ok := s.uploads[file]
+		return ok && strconv.Itoa(len(body)) == size && fmt.Sprintf("%x", sha256.Sum256(body)) == digest
+	}
+	switch action {
+	case "acquire", "renew":
+	case "probe":
+		if !check(dir+"/chunk-"+cmd[7], cmd[8], cmd[9]) {
+			result.ExitCode = 77
+		}
+	case "commit":
+		tmp := dir + "/" + owner + "-" + cmd[7] + ".tmp"
+		if !check(tmp, cmd[8], cmd[9]) {
+			result.ExitCode = 78
+		} else {
+			s.uploads[dir+"/chunk-"+cmd[7]] = s.uploads[tmp]
+			delete(s.uploads, tmp)
+		}
+	case "assemble":
+		count, _ := strconv.Atoi(cmd[7])
+		var body []byte
+		for i := 0; i < count; i++ {
+			part, ok := s.uploads[fmt.Sprintf("%s/chunk-%d", dir, i)]
+			if !ok {
+				result.ExitCode = 78
+				return result
+			}
+			body = append(body, part...)
+		}
+		if strconv.Itoa(len(body)) != cmd[8] || fmt.Sprintf("%x", sha256.Sum256(body)) != cmd[9] {
+			result.ExitCode = 78
+		} else {
+			s.uploads[cmd[10]] = body
+		}
+	case "release", "discard":
+		for file := range s.uploads {
+			if strings.HasPrefix(file, dir+"/") {
+				if action == "discard" || strings.Contains(file, "/"+owner+"-") {
+					delete(s.uploads, file)
+				}
+			}
+		}
+	default:
+		result.ExitCode = 1
+	}
+	return result
 }
 
 // ExecStream 满足 target.Service 接口(Story 6.2 append);部署不用流式,桩返回 not-supported。

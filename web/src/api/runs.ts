@@ -461,6 +461,57 @@ export function deployRun(id: string, input: DeployRunInput): Promise<DeployRunR
   return http.post<DeployRunResponse>(`/api/runs/${id}/deploy`, input)
 }
 
+export interface DeployBatchItemInput {
+  artifactId: string
+  serverIds: string[]
+  deployConfig: Record<string, string>
+}
+
+export interface DeployBatchInput {
+  idempotencyKey: string
+  items: DeployBatchItemInput[]
+}
+
+export interface DeployBatchTarget {
+  id: string
+  itemIndex: number
+  artifactId: string
+  artifactName: string
+  serverId: string
+  serverName: string
+  deployConfig: Record<string, string>
+  status: string
+  message: string
+  attempt: number
+  startedAt?: string
+  finishedAt?: string
+}
+
+export interface DeployBatch {
+  id: string
+  runId: string
+  status: string
+  createdAt: string
+  updatedAt: string
+  items: DeployBatchTarget[]
+}
+
+export function deployBatch(runId: string, input: DeployBatchInput): Promise<DeployBatch> {
+  return http.post<DeployBatch>(`/api/runs/${runId}/deploy/batches`, input)
+}
+
+export function listDeployBatches(runId: string): Promise<{ batches: DeployBatch[] }> {
+  return http.get<{ batches: DeployBatch[] }>(`/api/runs/${runId}/deploy/batches`)
+}
+
+export function retryDeployBatch(runId: string, batchId: string): Promise<DeployBatch> {
+  return http.post<DeployBatch>(`/api/runs/${runId}/deploy/batches/${batchId}/retry`, {})
+}
+
+export function continueDeployBatch(runId: string, batchId: string): Promise<DeployBatch> {
+  return http.post<DeployBatch>(`/api/runs/${runId}/deploy/batches/${batchId}/continue`, {})
+}
+
 // ─── Retry only failed targets (Story 4-5 frozen contract — FR-13) ────────────
 //
 // POST /api/runs/{id}/deploy/retry  body { artifactId, serverIds?, deployConfig?, healthCheck? }

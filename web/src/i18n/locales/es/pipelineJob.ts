@@ -3,6 +3,9 @@ export default {
   artifactImage: 'Imagen de contenedor (image)',
   artifactJar: 'Paquete JAR (jar)',
   artifactDist: 'Recursos estáticos (dist)',
+  artifactNameLabel: 'Nombre del artefacto',
+  artifactNamePlaceholder: 'Nombre opcional para distinguirlo',
+  namedArtifactsRaw: 'Artefactos con nombre (JSON)',
   buildModelDockerfile: 'Dockerfile propio',
   buildModelToolchain: 'Cadena de herramientas de la plataforma',
   toolchainCustom: 'Personalizado',
@@ -13,6 +16,9 @@ export default {
   probeModeCommand: 'Sonda por comando',
   deployArtifactAuto: 'Automático (preferir artefacto de archivo, si no usar imagen)',
   deployArtifactArchive: 'Paquete de archivo (archive)',
+  artifactSourceLabel: 'Origen del artefacto',
+  artifactSourceAuto: 'Selección automática',
+  artifactSourceHint: 'Vincula una declaración de compilación. Si falta o es ambigua, el despliegue falla sin elegir otro artefacto.',
 
   // ─── jobConfigSchema · exec option fields ──────────────────────────────
   fieldTimeoutLabel: 'Tiempo de espera (s)',
@@ -48,6 +54,11 @@ export default {
   fieldArtifactTypeLabel: 'Tipo de artefacto a desplegar',
   fieldArtifactTypeHint:
     'Cuál elegir cuando esta ejecución emite tanto una imagen como artefactos de archivo; una imagen va mediante docker pull en el destino → iniciar nuevo contenedor → comprobación de salud → revertir a la imagen anterior si falla',
+  deployCommandTimeout: 'Tiempo límite de comandos (segundos)',
+  deployConnectTimeout: 'Tiempo límite de conexión SSH (segundos)',
+  deployUploadIdleTimeout: 'Tiempo sin progreso de carga (segundos)',
+  deployUploadTotalTimeout: 'Tiempo total de carga (segundos)',
+  deployUploadTimeoutHint: '0 desactiva el límite total. El límite sin progreso sigue activo.',
   fieldDeployPathLabel: 'Ruta de despliegue',
   fieldDeployPathHint:
     'Artefactos de archivo: se publican en <ruta de despliegue>/releases/<runId>/, el enlace simbólico current cambia de forma atómica a esta versión (sin tiempo de inactividad, las versiones antiguas se conservan para revertir)',

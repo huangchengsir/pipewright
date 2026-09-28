@@ -3,6 +3,9 @@ export default {
   artifactImage: '컨테이너 이미지 (image)',
   artifactJar: 'JAR 패키지 (jar)',
   artifactDist: '정적 자산 (dist)',
+  artifactNameLabel: '산출물 이름',
+  artifactNamePlaceholder: '구분을 위한 선택적 이름',
+  namedArtifactsRaw: '이름 지정 산출물 선언 (JSON)',
   buildModelDockerfile: '자체 Dockerfile',
   buildModelToolchain: '플랫폼 툴체인',
   toolchainCustom: '사용자 지정',
@@ -13,6 +16,9 @@ export default {
   probeModeCommand: '명령 프로브',
   deployArtifactAuto: '자동(파일 아티팩트 우선, 없으면 이미지)',
   deployArtifactArchive: '아카이브 패키지 (archive)',
+  artifactSourceLabel: '아티팩트 출처',
+  artifactSourceAuto: '자동 선택',
+  artifactSourceHint: '여러 아티팩트가 있으면 빌드 선언을 지정합니다. 없거나 중복되면 다른 아티팩트를 선택하지 않고 배포에 실패합니다.',
 
   // ─── jobConfigSchema · exec option fields ──────────────────────────────
   fieldTimeoutLabel: '타임아웃(초)',
@@ -48,6 +54,11 @@ export default {
   fieldArtifactTypeLabel: '배포 아티팩트 유형',
   fieldArtifactTypeHint:
     '이 run 이 이미지와 파일 아티팩트를 동시에 출력할 때 어느 것을 선택할지. 이미지는 대상 머신에서 docker pull → 새 컨테이너 시작 → 헬스 체크 → 실패 시 이전 이미지로 롤백',
+  deployCommandTimeout: '배포 명령 제한 시간(초)',
+  deployConnectTimeout: 'SSH 연결 제한 시간(초)',
+  deployUploadIdleTimeout: '업로드 무진행 제한 시간(초)',
+  deployUploadTotalTimeout: '업로드 총 제한 시간(초)',
+  deployUploadTimeoutHint: '0은 총 시간 제한 없음입니다. 진행이 없으면 시간 초과됩니다.',
   fieldDeployPathLabel: '배포 경로',
   fieldDeployPathHint:
     '파일 아티팩트: <배포 경로>/releases/<runId>/ 에 게시, current 심볼릭 링크가 이번 릴리스로 원자적 전환(무중단, 이전 릴리스는 롤백용으로 보존)',

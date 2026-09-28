@@ -288,14 +288,14 @@ func (s *service) deployBlueGreenImage(ctx context.Context, servers []*target.Se
 }
 
 // fleetRollbackOne 把一台「本机切换成功、但机群中其它机失败」的目标回滚到上一发布(蓝绿阶段 3)。
-// 原子切回 current → prev;就地改写该机结果为 rolled_back + 人读。回滚命令失败仍记 rolled_back(意图)。
+// 原子切回 current → prev;成功时记 rolled_back,失败时记 failed 并说明回滚未确认。
 func (s *service) fleetRollbackOne(ctx context.Context, srv *target.Server, st releaseState, res *TargetResult) {
-	execCtx, cancel := context.WithTimeout(ctx, execTimeout)
+	execCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), policyFrom(ctx).command)
 	defer cancel()
 
 	var rbErr error
 	for _, cmd := range atomicSymlinkCmds(st.prev, st.current) {
-		if _, e := s.exec(execCtx, srv.ID, cmd); e != nil {
+		if _, e := s.execChecked(execCtx, srv.ID, cmd); e != nil {
 			rbErr = e
 			break
 		}
@@ -304,6 +304,7 @@ func (s *service) fleetRollbackOne(ctx context.Context, srv *target.Server, st r
 	res.Status = run.TargetRolledBack
 	res.FinishedAt = &finish
 	if rbErr != nil {
+		res.Status = run.TargetFailed
 		res.Message = "蓝绿:其它机切换失败,本机尝试回滚到上一发布但回滚命令执行失败:" + humanExecError(rbErr)
 		return
 	}

@@ -199,6 +199,7 @@ function shq(v: string): string {
 export interface CompiledSteps {
   commandTemplate: string
   artifactPath: string
+  artifacts?: string
   /** 质量门禁等额外 config 键(testReport / reportPath / gateMinCoverage)。 */
   extraKeys: Record<string, string>
 }
@@ -207,6 +208,7 @@ export interface CompiledSteps {
 export function compileSteps(steps: readonly StudioStep[]): CompiledSteps {
   const cmds: string[] = []
   const artifacts: string[] = []
+  const declarations: Array<{ path: string; name: string }> = []
   const extraKeys: Record<string, string> = {}
   const f = (s: StudioStep, k: string): string => (s.fields[k] ?? '').trim()
   for (const s of steps) {
@@ -228,7 +230,10 @@ export function compileSteps(steps: readonly StudioStep[]): CompiledSteps {
         if (f(s, 'dir')) cmds.push(`cd ${shq(s.fields.dir)}`)
         break
       case 'artifact':
-        if (f(s, 'artifact')) artifacts.push(s.fields.artifact)
+        if (f(s, 'artifact')) {
+          artifacts.push(s.fields.artifact)
+          declarations.push({ path: s.fields.artifact, name: f(s, 'artifactName') })
+        }
         break
       case 'download':
         if (f(s, 'url')) cmds.push(`curl -fsSL ${shq(s.fields.url)} -o ${shq(f(s, 'out') || 'download.bin')}`)
@@ -265,7 +270,12 @@ export function compileSteps(steps: readonly StudioStep[]): CompiledSteps {
         break
     }
   }
-  return { commandTemplate: cmds.join('\n'), artifactPath: artifacts.join('\n'), extraKeys }
+  const compiled: CompiledSteps = { commandTemplate: cmds.join('\n'), artifactPath: artifacts.join('\n'), extraKeys }
+  if (declarations.some((d) => d.name)) {
+    compiled.artifactPath = ''
+    compiled.artifacts = JSON.stringify(declarations)
+  }
+  return compiled
 }
 
 /** 工作室完整模型。 */
@@ -476,8 +486,22 @@ export function parseStudioConfig(config: Record<string, unknown>): StudioModel 
     steps = []
     const script = configString(config, 'commandTemplate') || configString(config, 'commands')
     if (script.trim()) steps.push({ id: ++stepUid, kind: 'command', fields: { command: script } })
-    const artifact = configString(config, 'artifactPath')
-    if (artifact.trim()) steps.push({ id: ++stepUid, kind: 'artifact', fields: { artifact } })
+    const declarationText = configString(config, 'artifacts')
+    if (declarationText) {
+      try {
+        const declarations: unknown = JSON.parse(declarationText)
+        if (Array.isArray(declarations)) {
+          for (const declaration of declarations) {
+            if (typeof declaration?.path === 'string') {
+              steps.push({ id: ++stepUid, kind: 'artifact', fields: { artifact: declaration.path, artifactName: typeof declaration.name === 'string' ? declaration.name : '' } })
+            }
+          }
+        }
+      } catch { /* Raw config remains editable when malformed. */ }
+    } else {
+      const artifact = configString(config, 'artifactPath')
+      if (artifact.trim()) steps.push({ id: ++stepUid, kind: 'artifact', fields: { artifact } })
+    }
   }
   return {
     image: configString(config, 'image'),
@@ -496,9 +520,10 @@ export function compileStudioConfig(model: StudioModel): Record<string, string> 
   const config: Record<string, string> = {}
   const image = model.image.trim()
   if (image) config.image = model.image
-  const { commandTemplate, artifactPath, extraKeys } = compileSteps(model.steps)
+  const { commandTemplate, artifactPath, artifacts, extraKeys } = compileSteps(model.steps)
   if (commandTemplate.trim()) config.commandTemplate = commandTemplate
   if (artifactPath.trim()) config.artifactPath = artifactPath
+  if (artifacts) config.artifacts = artifacts
   for (const [k, v] of Object.entries(extraKeys)) config[k] = v
   const params = paramsToText(model.params)
   if (params) config.params = params

@@ -1,7 +1,7 @@
 export default {
   // ─── page header ───────────────────────────────────────────────
   title: '프로젝트',
-  subtitle: '관리 중인 Gitee 저장소 — 각 프로젝트는 하나의 파이프라인 설정과 배포 대상에 매핑됩니다',
+  subtitle: '관리 중인 코드 저장소 — 각 프로젝트는 하나의 파이프라인 설정과 배포 대상에 매핑됩니다',
   newProject: '새 프로젝트',
   retry: '다시 시도',
 
@@ -15,7 +15,7 @@ export default {
   // ─── list states ───────────────────────────────────────────────
   loading: '불러오는 중',
   emptyTitle: '아직 프로젝트가 없습니다',
-  emptyHint: '첫 Gitee 저장소를 연결하면 파이프라인을 설정하고 대상 서버에 배포할 수 있습니다.',
+  emptyHint: '첫 저장소를 연결하면 파이프라인을 설정하고 대상 서버에 배포할 수 있습니다.',
   noMatchTitle: '일치하는 프로젝트가 없습니다',
   noMatchHint: '검색어나 상태 필터 조건을 조정한 후 다시 시도하세요.',
   clearFilter: '필터 지우기',
@@ -66,7 +66,7 @@ export default {
   runNow: '지금 실행',
 
   // ─── create modal ──────────────────────────────────────────────
-  createSub: 'Gitee 저장소를 연결하고 저장소 자격 증명을 바인딩합니다',
+  createSub: '저장소를 연결하고 자격 증명을 바인딩합니다',
   fieldName: '프로젝트 이름',
   fieldNamePlaceholder: '예: acme-web',
   fieldRepo: '저장소 URL',
@@ -80,7 +80,7 @@ export default {
   inlineCredCancel: '새 자격 증명 취소',
   inlineCredTitle: '새 Git HTTPS 자격 증명',
   inlineCredName: '자격 증명 이름',
-  inlineCredNamePlaceholder: '예: Gitee 조직 저장소',
+  inlineCredNamePlaceholder: '예: 팀 저장소',
   inlineCredUsername: 'Git 사용자 이름',
   inlineCredUsernamePlaceholder: 'Git 계정 사용자 이름',
   inlineCredSecret: '비밀번호 또는 토큰',
@@ -123,13 +123,16 @@ export default {
   errLoadRetry: '프로젝트를 불러오지 못했습니다. 잠시 후 다시 시도하세요',
   errNameRequired: '프로젝트 이름을 입력하세요',
   errRepoRequired: '저장소 URL을 입력하세요',
-  errRepoFormat: '저장소 URL 형식이 올바르지 않습니다. https:// 또는 git{\'@\'} 로 시작해야 합니다',
+  errRepoFormat: '유효한 HTTP 또는 HTTPS 저장소 URL을 입력하세요',
+  errRepoProtocol: 'HTTP(S) 및 Git SSH 저장소 URL만 지원합니다',
+  repoSSHKnownHosts: 'SSH 호스트 키를 서비스 계정의 known_hosts에 먼저 등록하세요. 사용자 지정 포트는 ssh:// URL을 사용합니다.',
+  repoHttpWarning: 'HTTP는 저장소 자격 증명을 암호화하지 않고 전송합니다. 가능하면 HTTPS를 사용하세요.',
   errCredRequired: '저장소 자격 증명을 선택하세요',
   errRepoFirst: '먼저 저장소 URL을 입력하세요',
   errCredFirst: '먼저 저장소 자격 증명을 선택하세요',
   errNameEmpty: '프로젝트 이름은 비워 둘 수 없습니다',
 
-  testErrCredential: '자격 증명 오류: Gitee 액세스 토큰이 유효한지 확인하고 자격 증명 볼트에서 업데이트하세요.',
+  testErrCredential: '자격 증명 오류: 사용자 이름, 비밀번호 또는 토큰과 저장소 권한을 확인하세요.',
   testErrUnreachable: '저장소에 연결할 수 없습니다: URL이 올바르고 저장소가 존재하며 접근 가능한지 확인하세요.',
   testErrVault: '볼트에 master key가 설정되지 않아 자격 증명을 읽을 수 없습니다.',
   testErrStatus: '연결 테스트에 실패했습니다({status})',

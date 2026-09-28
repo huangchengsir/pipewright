@@ -57,6 +57,8 @@ func writeProjectError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnprocessableEntity, "credential_error", "凭据无效或无权限,无法访问该仓库")
 	case errors.Is(err, project.ErrRepoUnreachable):
 		writeError(w, http.StatusUnprocessableEntity, "repo_unreachable", "仓库地址不可达,请检查地址")
+	case errors.Is(err, project.ErrUnsupportedRepoProtocol):
+		writeError(w, http.StatusUnprocessableEntity, "unsupported_repo_protocol", "目前仅支持 HTTP/HTTPS 仓库地址,暂不支持 Git SSH")
 	case errors.Is(err, project.ErrNotFound):
 		writeError(w, http.StatusNotFound, "project_not_found", "项目不存在")
 	case errors.Is(err, project.ErrProjectHasActiveRuns):

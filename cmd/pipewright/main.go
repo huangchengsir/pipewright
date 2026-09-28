@@ -325,7 +325,12 @@ func main() {
 	}
 
 	// 部署服务(提前到 dag 装配前构造,供 deploy_ssh 流水线节点注入)。Story 4.6 诊断钩子复用 7-2。
-	deploySvc := deploy.New(targetSvc, runSvc, deploy.WithDiagnoseHook(httpapi.NewDiagnoseHook(runSvc, aiSvc, secretSrc)), deploy.WithArtifactStore(artStore))
+	deploySvc := deploy.New(targetSvc, runSvc, deploy.WithDiagnoseHook(httpapi.NewDiagnoseHook(runSvc, aiSvc, secretSrc)), deploy.WithArtifactStore(artStore), deploy.WithBatchDB(st.DB))
+	if recovery, ok := deploySvc.(interface{ RecoverInterruptedBatches(context.Context) error }); ok {
+		if err := recovery.RecoverInterruptedBatches(context.Background()); err != nil {
+			log.Fatalf("recover deploy batches: %v", err)
+		}
+	}
 
 	// 运行执行器选择(Epic 8):**默认走 DAG 调度执行器**——它是唯一真正按 UI 配置的
 	// stages/script job/deploy_ssh/notify 编排执行的运行器。只有显式 PIPEWRIGHT_RUNNER=legacy

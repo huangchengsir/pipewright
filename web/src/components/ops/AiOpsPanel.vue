@@ -702,7 +702,8 @@ function goSettings(): void {
   flex: 1;
   background: none;
   border: none;
-  color: var(--color-text);
+  color: oklch(96% 0.006 240);
+  caret-color: oklch(84% 0.09 195);
   font: inherit;
   font-size: 0.84rem;
   resize: none;
@@ -713,7 +714,7 @@ function goSettings(): void {
   line-height: 1.5;
 }
 .compose textarea::placeholder {
-  color: var(--color-faint);
+  color: oklch(72% 0.012 240);
 }
 .send {
   width: 38px;

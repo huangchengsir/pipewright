@@ -57,9 +57,12 @@ const (
 	ActionVarGroupUpdate = "variable_group_update"
 	ActionVarGroupDelete = "variable_group_delete"
 	// 自定义节点(复用库 Tier 2)。
-	ActionCustomNodeCreate = "custom_node_create"
-	ActionCustomNodeUpdate = "custom_node_update"
-	ActionCustomNodeDelete = "custom_node_delete"
+	ActionCustomNodeCreate    = "custom_node_create"
+	ActionCustomNodeUpdate    = "custom_node_update"
+	ActionCustomNodeDelete    = "custom_node_delete"
+	ActionDeployBatchCreate   = "deploy_batch_create"
+	ActionDeployBatchRetry    = "deploy_batch_retry"
+	ActionDeployBatchContinue = "deploy_batch_continue"
 )
 
 // 目标类型枚举(供 TargetType 填值;非强制白名单,便于后续 story 扩展)。

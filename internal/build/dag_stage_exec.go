@@ -281,7 +281,9 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 					_ = rep.JobDone(ctx, jb.ID, run.StepSuccess)
 				}
 
-				b.collectScriptArtifacts(ctx, scriptJobs, workspace, slugify(proj.Name), stage.Name, rep)
+				if err := b.collectScriptArtifacts(ctx, scriptJobs, workspace, slugify(proj.Name), stage.ID, stage.Name, rep); err != nil {
+					return err
+				}
 				if err := collectStageReport(ctx, reportSink, r, stage, workspace, rep); err != nil {
 					return err
 				}
@@ -550,7 +552,9 @@ func (b *Builder) runScriptJobIsolated(
 	}
 	b.saveJobCache(ctx, rep, jb, r.Trigger.Branch, ws)
 	out := captureStageEnv(ctx, rep, ws)
-	b.collectScriptArtifacts(ctx, []pipeline.Job{jb}, ws, slugify(proj.Name), stage.Name, rep)
+	if err := b.collectScriptArtifacts(ctx, []pipeline.Job{jb}, ws, slugify(proj.Name), stage.ID, stage.Name, rep); err != nil {
+		return out, err
+	}
 	if rerr := collectStageReport(ctx, reportSink, r, stage, ws, rep); rerr != nil {
 		return out, rerr // 质量门禁阻断
 	}
@@ -602,7 +606,7 @@ func (b *Builder) runDeployJob(ctx context.Context, rep dagrun.StageReporter, jb
 	// 镜像产物部署参数(#51)透传:deploy.DeployForStage 经这些键挑镜像产物并组装
 	// `docker run`(artifactType=image 选镜像;containerName/ports/runArgs 驱动容器名与端口/运行参数)。
 	// 各值原样搬运(deploy 层 array 化、绝不拼 shell,守 AC-SEC-02);空值不入 cfg 保持默认。
-	for _, k := range []string{"artifactType", "containerName", "ports", "runArgs"} {
+	for _, k := range []string{"artifactType", "artifactSource", "containerName", "ports", "runArgs", "commandTimeoutSeconds", "connectTimeoutSeconds", "uploadIdleTimeoutSeconds", "uploadTimeoutSeconds"} {
 		if v := cfgString(jb.Config, k); v != "" {
 			cfg[k] = v
 		}
@@ -780,74 +784,152 @@ func (b *Builder) runBuildImageJob(ctx context.Context, sink run.StepSink, rep d
 // 逐条定位工作区内路径 → 按类型(目录=dist、*.jar=jar、其它文件=archive)归档进制品库真字节 →
 // EmitArtifact 登记。一个 job 可声明多条(既出 jar 又出 dist 等);未声明则跳过。
 // 镜像类产物不走这里(走 build_image 节点);文件类才在此收集。
-func (b *Builder) collectScriptArtifacts(ctx context.Context, jobs []pipeline.Job, workspace, slug, stageName string, rep dagrun.StageReporter) {
+func (b *Builder) collectScriptArtifacts(ctx context.Context, jobs []pipeline.Job, workspace, slug, stageID, stageName string, rep dagrun.StageReporter) error {
 	onLine := func(stream, line string) { _ = rep.Log(ctx, stream, line) }
+	seenPaths := map[string]bool{}
+	seenNames := map[string]bool{}
 	for _, jb := range jobs {
-		for _, rel := range splitCommands(renderTemplate(cfgString(jb.Config, "artifactPath"), templateContext(jb.Config))) { // 渲染 {{参数}} + 按行拆分
+		declarations, explicit, err := artifactDeclarations(jb.Config)
+		if err != nil {
+			onLine(streamStderr, "产物声明无效:"+err.Error())
+			return ErrBuildFailed
+		}
+		if !explicit {
+			for _, rel := range splitCommands(renderTemplate(cfgString(jb.Config, "artifactPath"), templateContext(jb.Config))) {
+				declarations = append(declarations, artifactDeclaration{Path: rel})
+			}
+		}
+		for declarationIndex, declaration := range declarations {
+			rel := renderTemplate(declaration.Path, templateContext(jb.Config))
+			if rel == "" {
+				onLine(streamStderr, "产物路径为空")
+				if explicit {
+					return ErrBuildFailed
+				}
+				continue
+			}
 			// 通配(如 backend/target/*.jar)→ 展开为实际文件逐个收集;否则按原路径收集。
+			var matches []string
 			if strings.ContainsAny(rel, "*?[") {
 				clean := filepath.Clean(rel)
 				if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 					onLine(streamStderr, "产物路径越界,已拒绝:"+rel)
+					if explicit {
+						return ErrBuildFailed
+					}
 					continue
 				}
-				matches, _ := filepath.Glob(filepath.Join(workspace, clean))
+				matches, err = filepath.Glob(filepath.Join(workspace, clean))
+				if err != nil {
+					onLine(streamStderr, "产物通配无效:"+rel)
+					if explicit {
+						return ErrBuildFailed
+					}
+					continue
+				}
 				if len(matches) == 0 {
 					onLine(streamStderr, "产物通配未匹配,跳过:"+rel)
+					if explicit {
+						return ErrBuildFailed
+					}
 					continue
 				}
-				for _, m := range matches {
-					if relMatch, rerr := filepath.Rel(workspace, m); rerr == nil {
-						b.collectOneFileArtifact(ctx, workspace, relMatch, slug, jb.Name, stageName, rep, onLine)
+			} else {
+				matches = []string{filepath.Join(workspace, rel)}
+			}
+			for _, match := range matches {
+				matchedRel, rerr := filepath.Rel(workspace, match)
+				if rerr != nil {
+					onLine(streamStderr, "产物路径越界,已拒绝:"+rel)
+					if explicit {
+						return ErrBuildFailed
+					}
+					continue
+				}
+				name := declaration.Name
+				if name != "" && len(matches) > 1 {
+					name += " / " + filepath.Base(match)
+				}
+				if explicit {
+					identity := filepath.Clean(matchedRel)
+					if seenPaths[identity] || (name != "" && seenNames[name]) {
+						onLine(streamStderr, "产物声明重复或名称冲突:"+identity)
+						return ErrBuildFailed
+					}
+					seenPaths[identity] = true
+					if name != "" {
+						seenNames[name] = true
 					}
 				}
-				continue
+				if err := b.collectOneFileArtifact(ctx, workspace, matchedRel, slug, jb.ID, jb.Name, stageID, stageName, declarationIndex, name, explicit, rep, onLine); err != nil {
+					onLine(streamStderr, "产物收集失败:"+err.Error())
+					if explicit {
+						return ErrBuildFailed
+					}
+				}
 			}
-			b.collectOneFileArtifact(ctx, workspace, rel, slug, jb.Name, stageName, rep, onLine)
 		}
 	}
+	return nil
 }
 
 // collectOneFileArtifact 收集单条文件产物路径:越界(.. / 绝对)拒绝;定位不到打日志跳过(不致命);
 // 类型按路径自动判(目录=dist、*.jar=jar、其它文件=archive)。产物 metadata 记来源节点(阶段 + job 名),
 // 供运行详情标注「哪个节点产的」。制品库未注入时 emit 占位引用,向后兼容。
-func (b *Builder) collectOneFileArtifact(ctx context.Context, workspace, rel, slug, jobName, stageName string, rep dagrun.StageReporter, onLine func(stream, line string)) {
+func (b *Builder) collectOneFileArtifact(ctx context.Context, workspace, rel, slug, jobID, jobName, stageID, stageName string, declarationIndex int, name string, strict bool, rep dagrun.StageReporter, onLine func(stream, line string)) error {
 	clean := filepath.Clean(rel)
 	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		onLine(streamStderr, "产物路径越界,已拒绝:"+rel)
-		return
+		return fmt.Errorf("产物路径越界:%s", rel)
 	}
 	full := filepath.Join(workspace, clean)
+	workspaceReal, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		return err
+	}
+	fullReal, err := filepath.EvalSymlinks(full)
+	if err != nil {
+		return err
+	}
+	realRel, err := filepath.Rel(workspaceReal, fullReal)
+	if err != nil || realRel == ".." || strings.HasPrefix(realRel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("产物符号链接越界:%s", rel)
+	}
 	fi, err := os.Stat(full)
 	if err != nil {
-		onLine(streamStderr, "产物路径未找到,跳过:"+rel)
-		return
+		return err
 	}
 	// 产物名带上路径基名,避免一个 job 多产物同名(如多个 dist 目录)难以区分。
 	base := filepath.Base(full)
 	// metadata 记来源节点:sourceStage/sourceJob 供 UI 标注「哪个节点产的」(storeXxx 只补 stored/format,不清这些)。
 	// workspacePath 记原始工作区相对路径,供跨阶段产物传递:下游阶段据此把本产物真字节恢复回原位
 	// (如 backend/target/x.jar),使被拆到下游阶段的 build_image「COPY target/x.jar」仍能命中。
-	art := &run.Artifact{Name: slug + "-" + base, Reference: base, Metadata: map[string]any{"sourceStage": stageName, "sourceJob": jobName, "workspacePath": clean}}
+	if name == "" {
+		name = slug + "-" + base
+	}
+	art := &run.Artifact{Name: name, Reference: base, Metadata: map[string]any{"sourceStage": stageName, "sourceStageId": stageID, "sourceJob": jobName, "sourceJobId": jobID, "declarationIndex": declarationIndex, "workspacePath": clean}}
+	stored := false
 	switch {
 	case fi.IsDir():
 		art.Type = run.ArtifactDist
 		art.SizeBytes = dirSize(full)
-		b.storeDistDir(art, full, onLine)
+		stored = b.storeDistDir(art, full, onLine)
 	case strings.HasSuffix(strings.ToLower(full), ".jar"):
 		art.Type = run.ArtifactJar
 		art.SizeBytes = fileSize(full)
-		b.storeJarBytes(art, full, onLine)
+		stored = b.storeJarBytes(art, full, onLine)
 	default:
 		art.Type = run.ArtifactArchive
 		art.SizeBytes = fileSize(full)
-		b.storeJarBytes(art, full, onLine) // 单文件原样字节归档(format=file)
+		stored = b.storeJarBytes(art, full, onLine) // 单文件原样字节归档(format=file)
+	}
+	if strict && b.artStore != nil && !stored {
+		return errors.New("显式声明的产物未能归档到制品库")
 	}
 	if err := rep.EmitArtifact(ctx, *art); err != nil {
-		onLine(streamStderr, "登记产物失败:"+err.Error())
-		return
+		return err
 	}
 	onLine(streamStdout, "已产出产物:"+art.Name+"("+art.Type+","+rel+")")
+	return nil
 }
 
 // scriptStepFromJob 从画布 job.Config 构造一条 script 步骤(image + 多行 commands + 可选 workDir)。

@@ -1,7 +1,7 @@
 export default {
   // ─── page header ───────────────────────────────────────────────
   title: 'Projects',
-  subtitle: 'Managed Gitee repositories — each project maps to a pipeline configuration and deploy targets',
+  subtitle: 'Managed code repositories — each project maps to a pipeline configuration and deploy targets',
   newProject: 'New project',
   retry: 'Retry',
 
@@ -15,7 +15,7 @@ export default {
   // ─── list states ───────────────────────────────────────────────
   loading: 'Loading',
   emptyTitle: 'No projects yet',
-  emptyHint: 'Connect your first Gitee repository, then configure a pipeline and deploy to target servers.',
+  emptyHint: 'Connect your first repository, then configure a pipeline and deploy to target servers.',
   noMatchTitle: 'No matching projects',
   noMatchHint: 'Adjust your search term or status filter and try again.',
   clearFilter: 'Clear filters',
@@ -66,7 +66,7 @@ export default {
   runNow: 'Run now',
 
   // ─── create modal ──────────────────────────────────────────────
-  createSub: 'Connect a Gitee repository and bind a repository credential',
+  createSub: 'Connect a repository and bind a credential',
   fieldName: 'Project name',
   fieldNamePlaceholder: 'e.g. acme-web',
   fieldRepo: 'Repository URL',
@@ -80,7 +80,7 @@ export default {
   inlineCredCancel: 'Cancel new credential',
   inlineCredTitle: 'New Git credential',
   inlineCredName: 'Credential name',
-  inlineCredNamePlaceholder: 'e.g. Gitee organization repo',
+  inlineCredNamePlaceholder: 'e.g. team repository',
   inlineCredUsername: 'Git username',
   inlineCredUsernamePlaceholder: 'Your Git provider account username',
   inlineCredSecret: 'Password or token',
@@ -123,13 +123,16 @@ export default {
   errLoadRetry: 'Failed to load projects, please try again later',
   errNameRequired: 'Please enter a project name',
   errRepoRequired: 'Please enter a repository URL',
-  errRepoFormat: 'Invalid repository URL format. It must start with https:// or git{\'@\'}',
+  errRepoFormat: 'Enter a valid HTTP or HTTPS repository URL',
+  errRepoProtocol: 'Only HTTP(S) and Git SSH repository URLs are supported',
+  repoSSHKnownHosts: 'Trust the SSH host key in the service account known_hosts first. Use an ssh:// URL for custom ports.',
+  repoHttpWarning: 'HTTP sends repository credentials without transport encryption. Use HTTPS when possible.',
   errCredRequired: 'Please select a repository credential',
   errRepoFirst: 'Please enter a repository URL first',
   errCredFirst: 'Please select a repository credential first',
   errNameEmpty: 'Project name cannot be empty',
 
-  testErrCredential: 'Credential error: check that your Gitee access token is valid and update it in the credential vault.',
+  testErrCredential: 'Credential error: check the username, password or token, and repository permissions.',
   testErrUnreachable: 'Repository unreachable: confirm the URL is correct and the repository exists and is accessible.',
   testErrVault: 'The vault has no master key configured, so credentials cannot be read.',
   testErrStatus: 'Connection test failed ({status})',

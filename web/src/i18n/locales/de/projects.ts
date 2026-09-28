@@ -1,7 +1,7 @@
 export default {
   // ─── page header ───────────────────────────────────────────────
   title: 'Projekte',
-  subtitle: 'Verwaltete Gitee-Repositorys – jedes Projekt entspricht einer Pipeline-Konfiguration und Bereitstellungszielen',
+  subtitle: 'Verwaltete Code-Repositorys – jedes Projekt entspricht einer Pipeline-Konfiguration und Bereitstellungszielen',
   newProject: 'Neues Projekt',
   retry: 'Erneut versuchen',
 
@@ -15,7 +15,7 @@ export default {
   // ─── list states ───────────────────────────────────────────────
   loading: 'Wird geladen',
   emptyTitle: 'Noch keine Projekte',
-  emptyHint: 'Verbinde dein erstes Gitee-Repository, konfiguriere dann eine Pipeline und stelle auf Zielservern bereit.',
+  emptyHint: 'Verbinde dein erstes Repository, konfiguriere dann eine Pipeline und stelle auf Zielservern bereit.',
   noMatchTitle: 'Keine passenden Projekte',
   noMatchHint: 'Passe den Suchbegriff oder den Statusfilter an und versuche es erneut.',
   clearFilter: 'Filter zurücksetzen',
@@ -66,7 +66,7 @@ export default {
   runNow: 'Jetzt ausführen',
 
   // ─── create modal ──────────────────────────────────────────────
-  createSub: 'Verbinde ein Gitee-Repository und binde Repository-Anmeldedaten ein',
+  createSub: 'Verbinde ein Repository und binde Anmeldedaten ein',
   fieldName: 'Projektname',
   fieldNamePlaceholder: 'z. B. acme-web',
   fieldRepo: 'Repository-URL',
@@ -80,7 +80,7 @@ export default {
   inlineCredCancel: 'Neue Anmeldedaten abbrechen',
   inlineCredTitle: 'Neue Git-HTTPS-Anmeldedaten',
   inlineCredName: 'Name der Anmeldedaten',
-  inlineCredNamePlaceholder: 'z. B. Gitee-Organisations-Repository',
+  inlineCredNamePlaceholder: 'z. B. Team-Repository',
   inlineCredUsername: 'Git-Benutzername',
   inlineCredUsernamePlaceholder: 'Benutzername des Git-Kontos',
   inlineCredSecret: 'Passwort oder Token',
@@ -123,13 +123,16 @@ export default {
   errLoadRetry: 'Laden der Projekte fehlgeschlagen, bitte später erneut versuchen',
   errNameRequired: 'Bitte gib einen Projektnamen ein',
   errRepoRequired: 'Bitte gib eine Repository-URL ein',
-  errRepoFormat: 'Ungültiges Repository-URL-Format. Sie muss mit https:// oder git{\'@\'} beginnen',
+  errRepoFormat: 'Gültige HTTP- oder HTTPS-Repository-URL eingeben',
+  errRepoProtocol: 'Nur HTTP(S)- und Git-SSH-Repository-URLs werden unterstützt',
+  repoSSHKnownHosts: 'Den SSH-Hostschlüssel zuerst in known_hosts des Dienstkontos hinterlegen. Für eigene Ports eine ssh:// URL verwenden.',
+  repoHttpWarning: 'HTTP überträgt Repository-Zugangsdaten unverschlüsselt. Verwende nach Möglichkeit HTTPS.',
   errCredRequired: 'Bitte wähle Repository-Anmeldedaten aus',
   errRepoFirst: 'Bitte gib zuerst eine Repository-URL ein',
   errCredFirst: 'Bitte wähle zuerst Repository-Anmeldedaten aus',
   errNameEmpty: 'Der Projektname darf nicht leer sein',
 
-  testErrCredential: 'Anmeldedaten-Fehler: Prüfe, ob dein Gitee-Zugriffstoken gültig ist, und aktualisiere es im Anmeldedaten-Tresor.',
+  testErrCredential: 'Anmeldedaten-Fehler: Benutzername, Passwort oder Token und Repository-Berechtigungen prüfen.',
   testErrUnreachable: 'Repository nicht erreichbar: Stelle sicher, dass die URL korrekt ist und das Repository existiert und zugänglich ist.',
   testErrVault: 'Im Tresor ist kein Master Key konfiguriert, daher können die Anmeldedaten nicht gelesen werden.',
   testErrStatus: 'Verbindungstest fehlgeschlagen ({status})',

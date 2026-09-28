@@ -29,7 +29,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   /** 步骤变更后回传编译出的 config 片段(只含 commands / artifactPath) */
-  (e: 'update', patch: { commands: string; artifactPath: string }): void
+  (e: 'update', patch: { commands: string; artifactPath: string; artifacts?: string }): void
 }>()
 
 const steps = ref<StepBlock[]>([])
@@ -51,7 +51,7 @@ watch(
   (next) => {
     if (hydrated) {
       const mine = compileSteps(steps.value)
-      if ((next.commands ?? '') === mine.commands && (next.artifactPath ?? '') === mine.artifactPath) {
+      if ((next.commands ?? '') === mine.commands && (next.artifactPath ?? '') === mine.artifactPath && (next.artifacts ?? '') === (mine.artifacts ?? '')) {
         return
       }
     }
@@ -265,16 +265,27 @@ const stepCount = computed(() => steps.value.length)
         </div>
 
         <!-- 上传产物 -->
-        <input
-          v-else
-          :value="step.artifact ?? ''"
-          class="sb-input is-mono"
-          type="text"
-          placeholder="frontend/dist"
-          :aria-label="t('pipelineJob.sbArtifactAria', { n: index + 1 })"
-          @input="patchStep(step.id, { artifact: ($event.target as HTMLInputElement).value })"
-          @blur="flush"
-        />
+        <div v-else class="sb-artifact-fields">
+          <input
+            :value="step.artifact ?? ''"
+            class="sb-input is-mono"
+            type="text"
+            placeholder="frontend/dist"
+            :aria-label="t('pipelineJob.sbArtifactAria', { n: index + 1 })"
+            @input="patchStep(step.id, { artifact: ($event.target as HTMLInputElement).value })"
+            @blur="flush"
+          />
+          <input
+            :value="step.artifactName ?? ''"
+            class="sb-input"
+            type="text"
+            maxlength="128"
+            :placeholder="t('pipelineJob.artifactNamePlaceholder')"
+            :aria-label="t('pipelineJob.artifactNameLabel')"
+            @input="patchStep(step.id, { artifactName: ($event.target as HTMLInputElement).value })"
+            @blur="flush"
+          />
+        </div>
       </li>
     </ol>
 
@@ -472,6 +483,17 @@ const stepCount = computed(() => steps.value.length)
   font: inherit;
   font-size: 0.8rem;
   transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
+}
+
+.sb-artifact-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+}
+
+@media (max-width: 680px) {
+  .sb-artifact-fields { grid-template-columns: minmax(0, 1fr); }
 }
 
 .sb-textarea {

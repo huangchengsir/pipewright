@@ -76,6 +76,7 @@ type UpdateInput struct {
 }
 
 type GitAuth struct {
+	Type     string
 	Username string
 	Token    string
 }
@@ -233,9 +234,9 @@ func (s *service) GetGitAuth(id string) (GitAuth, error) {
 	if !s.configured() {
 		return GitAuth{}, ErrVaultUnconfigured
 	}
-	var username string
+	var username, credType string
 	var sealed []byte
-	err := s.db.QueryRow(`SELECT username, ciphertext FROM credentials WHERE id = ?`, id).Scan(&username, &sealed)
+	err := s.db.QueryRow(`SELECT type, username, ciphertext FROM credentials WHERE id = ?`, id).Scan(&credType, &username, &sealed)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return GitAuth{}, ErrNotFound
@@ -248,7 +249,7 @@ func (s *service) GetGitAuth(id string) (GitAuth, error) {
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, _ = s.db.Exec(`UPDATE credentials SET last_used_at = ? WHERE id = ?`, now, id)
-	return GitAuth{Username: username, Token: string(plaintext)}, nil
+	return GitAuth{Type: credType, Username: username, Token: string(plaintext)}, nil
 }
 
 func (s *service) Reveal(id string) (string, error) {

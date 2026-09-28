@@ -165,6 +165,20 @@ describe('studioCompile', () => {
   })
 
   describe('round-trip compile → parse', () => {
+    it('keeps named artifact declarations through studio config and fallback parsing', () => {
+      const model: StudioModel = {
+        image: 'node:20', params: [],
+        steps: [step('command', { command: 'npm run build' }), step('artifact', { artifact: 'dist', artifactName: 'Web UI' })],
+        meta: { icon: '🔧', category: '自定义', summary: '' },
+      }
+      const cfg = compileStudioConfig(model)
+      expect(JSON.parse(cfg.artifacts)).toEqual([{ path: 'dist', name: 'Web UI' }])
+      expect(cfg.artifactPath).toBeUndefined()
+      expect(parseStudioConfig(cfg).steps[1].fields).toEqual({ artifact: 'dist', artifactName: 'Web UI' })
+      const { __studio: _unused, ...withoutMeta } = cfg
+      expect(parseStudioConfig(withoutMeta).steps[1].fields).toEqual({ artifact: 'dist', artifactName: 'Web UI' })
+    })
+
     it('preserves image, params (type/label/options), structured steps, and meta', () => {
       const model: StudioModel = {
         image: 'golang:{{ver}}',

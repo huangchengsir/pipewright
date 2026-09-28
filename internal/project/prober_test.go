@@ -34,17 +34,17 @@ func TestProberEmptyURL(t *testing.T) {
 // TestProberSSRFRejectsFileScheme 验证生产路径(默认严格)拒绝 file:// scheme。
 func TestProberSSRFRejectsFileScheme(t *testing.T) {
 	pr := goGitProber{} // 生产默认:allowInsecureSchemes=false
-	if _, err := pr.Probe(context.Background(), "file:///etc/passwd", "", ""); !errors.Is(err, ErrRepoUnreachable) {
-		t.Fatalf("file:// 应被拒为 ErrRepoUnreachable, got %v", err)
+	if _, err := pr.Probe(context.Background(), "file:///etc/passwd", "", ""); !errors.Is(err, ErrUnsupportedRepoProtocol) {
+		t.Fatalf("file:// 应被拒为 ErrUnsupportedRepoProtocol, got %v", err)
 	}
 }
 
-// TestProberSSRFRejectsNonHTTPScheme 验证拒绝 ssh:// / git:// 等非 http(s) scheme。
+// TestProberSSRFRejectsNonGitScheme rejects unsupported transports.
 func TestProberSSRFRejectsNonHTTPScheme(t *testing.T) {
 	pr := goGitProber{}
-	for _, u := range []string{"ssh://git@host/repo.git", "git://host/repo.git", "ftp://host/x"} {
-		if _, err := pr.Probe(context.Background(), u, "", "tok"); !errors.Is(err, ErrRepoUnreachable) {
-			t.Fatalf("%s 应被拒为 ErrRepoUnreachable, got %v", u, err)
+	for _, u := range []string{"git://host/repo.git", "ftp://host/x", "file:///tmp/repo.git"} {
+		if _, err := pr.Probe(context.Background(), u, "", "tok"); !errors.Is(err, ErrUnsupportedRepoProtocol) {
+			t.Fatalf("%s 应被拒为 ErrUnsupportedRepoProtocol, got %v", u, err)
 		}
 	}
 }

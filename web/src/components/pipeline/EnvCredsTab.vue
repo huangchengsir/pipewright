@@ -17,6 +17,7 @@ import type {
   RegistryType,
 } from '../../api/pipelineSettings'
 import type { Credential } from '../../api/credentials'
+import AppSelect from '../ui/AppSelect.vue'
 
 interface Props {
   environments: Environment[]
@@ -75,6 +76,15 @@ const REGISTRY_TYPES = computed<Array<{ key: RegistryType; label: string }>>(() 
   { key: 'acr', label: t('pipelinePanels.envRegistryAcr') },
   { key: 'dockerhub', label: 'Docker Hub' },
   { key: 'custom', label: t('pipelinePanels.envRegistryCustom') },
+])
+const vaultOptions = computed(() => props.credentials.map((c) => ({ value: c.id, label: `${c.name} · ${c.maskedValue}` })))
+const registryOptions = computed(() => [
+  { value: '', label: t('pipelinePanels.envRegistryUnbound') },
+  ...REGISTRY_TYPES.value.map((r) => ({ value: r.key, label: r.label })),
+])
+const registryCredentialOptions = computed(() => [
+  { value: '', label: t('pipelinePanels.envRegistryCredOptional') },
+  ...vaultOptions.value,
 ])
 
 // ─── Compose + emit on change ───────────────────────────────────────────────────
@@ -248,16 +258,17 @@ function maskFor(row: VarRow): string {
             <div class="evar-list">
               <div v-for="row in env.envVars" :key="row._key" class="evar-row">
                 <input v-model="row.key" class="ev-k mono" type="text" placeholder="KEY" :aria-label="t('pipelinePanels.envVarKeyAria')" :disabled="disabled">
-                <select
+                <AppSelect
                   v-if="row.secret"
-                  v-model="row.credentialId"
-                  class="ev-sel"
+                  :model-value="row.credentialId ?? ''"
+                  :options="vaultOptions"
+                  :placeholder="t('pipelinePanels.envSelectVaultCred')"
                   :aria-label="t('pipelinePanels.envVaultCredAria')"
                   :disabled="disabled"
-                >
-                  <option value="" disabled>{{ t('pipelinePanels.envSelectVaultCred') }}</option>
-                  <option v-for="c in credentials" :key="c.id" :value="c.id">{{ c.name }} · {{ c.maskedValue }}</option>
-                </select>
+                  min-width="0"
+                  portal
+                  @update:model-value="row.credentialId = $event"
+                />
                 <input v-else v-model="row.value" class="ev-v mono" type="text" :placeholder="t('pipelinePanels.envVarValuePlaceholder')" :aria-label="t('pipelinePanels.envVarValueAria')" :disabled="disabled">
                 <button
                   type="button"
@@ -288,10 +299,7 @@ function maskFor(row: VarRow): string {
               <span class="eg-hint">{{ t('pipelinePanels.envRegistryHint') }}</span>
             </div>
             <div class="reg-grid">
-              <select v-model="env.registryType" class="ev-sel" :aria-label="t('pipelinePanels.envRegistryTypeAria')" :disabled="disabled">
-                <option value="">{{ t('pipelinePanels.envRegistryUnbound') }}</option>
-                <option v-for="r in REGISTRY_TYPES" :key="r.key" :value="r.key">{{ r.label }}</option>
-              </select>
+              <AppSelect :model-value="env.registryType" :options="registryOptions" :aria-label="t('pipelinePanels.envRegistryTypeAria')" :disabled="disabled" min-width="0" portal @update:model-value="env.registryType = $event as RegistryType | ''" />
               <input
                 v-model="env.registryUrl"
                 class="ev-v mono"
@@ -300,15 +308,14 @@ function maskFor(row: VarRow): string {
                 :aria-label="t('pipelinePanels.envRegistryUrlAria')"
                 :disabled="disabled || env.registryType === ''"
               >
-              <select
+              <AppSelect
                 v-model="env.registryCredentialId"
-                class="ev-sel"
+                :options="registryCredentialOptions"
                 :aria-label="t('pipelinePanels.envRegistryCredAria')"
                 :disabled="disabled || env.registryType === ''"
-              >
-                <option value="">{{ t('pipelinePanels.envRegistryCredOptional') }}</option>
-                <option v-for="c in credentials" :key="c.id" :value="c.id">{{ c.name }} · {{ c.maskedValue }}</option>
-              </select>
+                min-width="0"
+                portal
+              />
             </div>
           </div>
         </div>

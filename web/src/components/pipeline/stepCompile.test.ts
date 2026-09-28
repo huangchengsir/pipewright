@@ -87,6 +87,22 @@ describe('stepCompile', () => {
     it('yields empty strings for no steps', () => {
       expect(compileSteps([])).toEqual({ commands: '', artifactPath: '' })
     })
+
+    it('round-trips named and unnamed declarations without duplicating legacy paths', () => {
+      const compiled = compileSteps([
+        step({ kind: 'artifact', artifact: 'frontend/dist', artifactName: 'Web UI' }),
+        step({ kind: 'artifact', artifact: 'backend/target/*.jar' }),
+      ])
+      expect(compiled.artifactPath).toBe('')
+      expect(JSON.parse(compiled.artifacts!)).toEqual([
+        { path: 'frontend/dist', name: 'Web UI' },
+        { path: 'backend/target/*.jar', name: '' },
+      ])
+      expect(parseSteps({ ...compiled }).map((s) => [s.artifact, s.artifactName])).toEqual([
+        ['frontend/dist', 'Web UI'],
+        ['backend/target/*.jar', ''],
+      ])
+    })
   })
 
   describe('lineToStep', () => {

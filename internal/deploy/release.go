@@ -19,7 +19,7 @@ package deploy
 //       - 通过 → 该机 success(保留上一发布供回滚)+ keepReleases 清理旧发布。
 //       - 失败 + 有上一发布 → **回滚**:ln -sfn <上一发布> <base>/current + status=rolled_back + 人读 message。
 //       - 失败 + 无上一发布(首次)→ status=failed(无可回滚)+ 人读 message。
-//       - 回滚动作本身失败 → 仍记录 rolled_back + 人读(不 500;尽力回滚)。
+//       - 回滚动作本身失败 → 记录 failed，说明回滚未确认。
 //
 // 全程命令 **array 化**([]string)经 target.Exec(AC-SEC-02 不拼 shell);切换 / 回滚命令幂等。
 
@@ -32,6 +32,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/run"
 	"github.com/huangchengsir/pipewright/internal/target"
 )
@@ -128,17 +129,19 @@ func (s *service) stageReleaseOne(ctx context.Context, srv *target.Server, a run
 		current:     path.Join(base, "current"),
 		release:     path.Join(base, "releases", sanitizeRunID(a.RunID)),
 	}
+	if isStoredArtifact(a) {
+		st.release += "-" + uuid.NewString()
+	}
 	file := path.Join(st.release, deployFileName(a))
 
-	execCtx, cancel := context.WithTimeout(ctx, execTimeout)
-	defer cancel()
+	execCtx := ctx
 
 	// 1) 探测上一发布(readlink current);失败 / 无软链 → prev 为空(首次部署,无可回滚)。
 	st.prev = s.readCurrentRelease(execCtx, srv.ID, st.current)
 
 	// 2) 放置产物到发布目录。**制品库支撑的产物(Story 8-16)走「上传真字节」**;否则旧占位路径。
 	if isStoredArtifact(a) {
-		if failMsg, ok := s.stageStoredArtifact(execCtx, srv, a, st, file); !ok {
+		if failMsg, ok := s.stageStoredArtifact(ctx, srv, a, st, file); !ok {
 			return st, failMsg, false
 		}
 		return st, "", true
@@ -170,12 +173,6 @@ func (s *service) stageStoredArtifact(ctx context.Context, srv *target.Server, a
 	if s.artStore == nil {
 		return "部署侧未配置制品库,无法取产物真字节(产物已归档但制品库不可用)", false
 	}
-	rc, err := s.artStore.Open(a.Reference)
-	if err != nil {
-		return "从制品库取产物失败:" + err.Error(), false
-	}
-	defer func() { _ = rc.Close() }()
-
 	// 先建发布目录(Upload 自身也会 mkdir 父目录,这里显式建一次,语义清晰)。
 	if failMsg, ok := s.runStep(ctx, srv.ID, [][]string{{"mkdir", "-p", st.release}}); !ok {
 		return failMsg, false
@@ -185,7 +182,7 @@ func (s *service) stageStoredArtifact(ctx context.Context, srv *target.Server, a
 	case "tar.gz":
 		// dist:上传 tar.gz → 远端解包 → 删包。
 		tarPath := path.Join(st.release, ".pw-artifact.tar.gz")
-		if err := s.targets.Upload(ctx, srv.ID, rc, tarPath); err != nil {
+		if err := s.uploadArtifact(ctx, srv.ID, a, path.Dir(st.releasesDir), tarPath); err != nil {
 			return "上传 dist 制品到目标机失败:" + humanExecError(err), false
 		}
 		unpack := [][]string{
@@ -201,9 +198,12 @@ func (s *service) stageStoredArtifact(ctx context.Context, srv *target.Server, a
 		// jar / 其它单文件:上传到目标文件路径。
 		dest := jarFile
 		if name := artifactFilename(a); name != "" {
+			if path.Base(name) != name || name == "." || name == ".." || strings.ContainsAny(name, "\\\x00") {
+				return "deploy: invalid artifact filename", false
+			}
 			dest = path.Join(st.release, name)
 		}
-		if err := s.targets.Upload(ctx, srv.ID, rc, dest); err != nil {
+		if err := s.uploadArtifact(ctx, srv.ID, a, path.Dir(st.releasesDir), dest); err != nil {
 			return "上传 jar 制品到目标机失败:" + humanExecError(err), false
 		}
 		if a.Type == run.ArtifactJar {
@@ -242,8 +242,7 @@ func artifactFilename(a run.Artifact) string {
 func (s *service) activateReleaseOne(ctx context.Context, srv *target.Server, a run.Artifact, cfg map[string]string, hc *HealthCheck, st releaseState, started time.Time) TargetResult {
 	res := TargetResult{ServerID: srv.ID, ServerName: srv.Name, StartedAt: started}
 
-	execCtx, cancel := context.WithTimeout(ctx, execTimeout)
-	defer cancel()
+	execCtx := ctx
 
 	// 3) **真·原子**切换 current 软链 → 本次发布(code-review P2)。
 	// `ln -sfn` 在 current 已存在时是 unlink+symlink 两步,中间有 current 不存在的窗口(并发请求 404),
@@ -270,7 +269,9 @@ func (s *service) activateReleaseOne(ctx context.Context, srv *target.Server, a 
 
 	// 5) 成功(健康通过或未配置健康检查)→ 清理超 keepReleases 的旧发布(尽力;失败不影响成功态)。
 	keep := keepReleases(cfg)
-	s.pruneReleases(execCtx, srv.ID, st.releasesDir, sanitizeRunID(a.RunID), st.prev, keep)
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cleanupCancel()
+	s.pruneReleases(cleanupCtx, srv.ID, st.releasesDir, path.Base(st.release), st.prev, keep)
 
 	finish := time.Now().UTC()
 	res.Status = run.TargetSuccess
@@ -285,9 +286,11 @@ func (s *service) activateReleaseOne(ctx context.Context, srv *target.Server, a 
 
 // rollback 在健康门控失败后回滚 current 软链到上一发布。
 //   - 有上一发布:ln -sfn <上一发布> current → status=rolled_back + 人读(说明回滚到哪个 release)。
-//     回滚命令本身失败 → 仍记 rolled_back(尽力回滚)+ 人读说明回滚未确认(不 500)。
+//     回滚命令本身失败 → 记 failed + 人读说明回滚未确认(不 500)。
 //   - 无上一发布(首次部署):无可回滚 → status=failed + 人读。
 func (s *service) rollback(ctx context.Context, srv *target.Server, res TargetResult, current, prev, release, healthMsg string) TargetResult {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), policyFrom(ctx).command)
+	defer cancel()
 	finish := time.Now().UTC()
 	res.FinishedAt = &finish
 
@@ -301,7 +304,7 @@ func (s *service) rollback(ctx context.Context, srv *target.Server, res TargetRe
 	// 回滚:把 current 软链原子切回上一发布(code-review P2:同样 ln tmp + mv -T,避免回滚窗口)。
 	var rbErr error
 	for _, cmd := range atomicSymlinkCmds(prev, current) {
-		if _, e := s.exec(ctx, srv.ID, cmd); e != nil {
+		if _, e := s.execChecked(ctx, srv.ID, cmd); e != nil {
 			rbErr = e
 			break
 		}
@@ -309,7 +312,8 @@ func (s *service) rollback(ctx context.Context, srv *target.Server, res TargetRe
 	res.Status = run.TargetRolledBack
 	prevName := path.Base(prev)
 	if rbErr != nil {
-		// 回滚动作本身失败:仍记 rolled_back(语义:意图回滚),人读说明回滚未确认。
+		res.Status = run.TargetFailed
+		// 回滚动作本身失败时，不能把意图记成已完成。
 		res.Message = fmt.Sprintf("健康检查失败,已尝试回滚 current → 上一发布 %s,但回滚命令执行失败:%s(健康原因:%s)",
 			prevName, humanExecError(rbErr), healthMsg)
 		return res

@@ -82,7 +82,7 @@ const STEP_FIELDS = computed<Record<StudioStepKind, FieldDef[][]>>(() => ({
   env: [[{ field: 'envKey', label: t('studio.fieldEnvKey') }, { field: 'envValue', label: t('studio.fieldEnvValue') }]],
   workDir: [[{ field: 'dir', label: t('studio.fieldTargetDir') }]],
   path: [[{ field: 'dir', label: t('studio.fieldPathDir'), placeholder: 'node_modules/.bin' }]],
-  artifact: [[{ field: 'artifact', label: t('studio.fieldArtifactPath') }]],
+  artifact: [[{ field: 'artifact', label: t('studio.fieldArtifactPath') }, { field: 'artifactName', label: t('pipelineJob.artifactNameLabel'), placeholder: t('pipelineJob.artifactNamePlaceholder') }]],
   download: [[{ field: 'url', label: 'URL', placeholder: 'https://…' }, { field: 'out', label: t('studio.fieldSaveAs') }]],
   extract: [[{ field: 'file', label: t('studio.fieldArchiveFile'), placeholder: 'x.tar.gz' }, { field: 'dir', label: t('studio.fieldExtractTo') }]],
   condition: [[{ field: 'condition', label: t('studio.fieldCondition'), placeholder: 'test -f package.json' }]],
@@ -210,7 +210,7 @@ const compiledSteps = computed(() => compileSteps(steps.value))
 const undeclaredRefs = computed<string[]>(() => {
   const declared = new Set(params.value.map((p) => p.key.trim()).filter(Boolean))
   const c = compiledSteps.value
-  const text = `${image.value}\n${c.commandTemplate}\n${c.artifactPath}`
+  const text = `${image.value}\n${c.commandTemplate}\n${c.artifactPath}\n${c.artifacts ?? ''}`
   const refs = new Set<string>()
   for (const m of text.matchAll(/\{\{\s*([a-zA-Z_]\w*)\s*\}\}/g)) if (!declared.has(m[1])) refs.add(m[1])
   return [...refs]
@@ -228,7 +228,7 @@ function highlight(value: string): string {
 const compiledLines = computed<Array<{ key: string; value: string; block?: boolean }>>(() => {
   const c = compiled.value
   const out: Array<{ key: string; value: string; block?: boolean }> = []
-  const order = ['image', 'commandTemplate', 'artifactPath', 'testReport', 'reportPath', 'gateMinCoverage', 'params']
+  const order = ['image', 'commandTemplate', 'artifactPath', 'artifacts', 'testReport', 'reportPath', 'gateMinCoverage', 'params']
   for (const k of order) {
     const v = c[k]
     if (v == null || v === '') continue

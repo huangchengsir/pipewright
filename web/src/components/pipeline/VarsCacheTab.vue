@@ -20,6 +20,7 @@ import type {
   ArtifactType,
 } from '../../api/pipelineSettings'
 import type { Credential } from '../../api/credentials'
+import AppSelect from '../ui/AppSelect.vue'
 
 interface Props {
   build: BuildConfig
@@ -145,7 +146,7 @@ function toggleSecret(row: VarRow): void {
 }
 
 // Credentials suitable for secret values (any vault credential is a valid reference).
-const credOptions = computed(() => props.credentials)
+const credOptions = computed(() => props.credentials.map((c) => ({ value: c.id, label: `${c.name} · ${c.maskedValue}` })))
 
 function maskFor(row: VarRow): string {
   if (row.maskedValue) return row.maskedValue
@@ -187,17 +188,16 @@ function maskFor(row: VarRow): string {
         >
 
         <template v-if="row.secret">
-          <select
-            v-model="row.credentialId"
-            class="vsel"
+          <AppSelect
+            :model-value="row.credentialId ?? ''"
+            :options="credOptions"
+            :placeholder="t('pipelinePanels.vcSelectVaultCred')"
             :aria-label="t('pipelinePanels.vcVaultCredAria')"
             :disabled="disabled"
-          >
-            <option value="" disabled>{{ t('pipelinePanels.vcSelectVaultCred') }}</option>
-            <option v-for="c in credOptions" :key="c.id" :value="c.id">
-              {{ c.name }} · {{ c.maskedValue }}
-            </option>
-          </select>
+            min-width="0"
+            portal
+            @update:model-value="row.credentialId = $event"
+          />
         </template>
         <input
           v-else

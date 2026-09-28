@@ -46,6 +46,8 @@ export interface StepBlock {
   dir?: string
   /** artifact:产物路径(glob) */
   artifact?: string
+  /** artifact:展示名称，不改变产物路径 */
+  artifactName?: string
   /** condition:shell 条件表达式(不成立则跳过后续步骤) */
   condition?: string
 }
@@ -54,6 +56,7 @@ export interface StepBlock {
 export interface CompiledSteps {
   commands: string
   artifactPath: string
+  artifacts?: string
 }
 
 let _seq = 0
@@ -119,18 +122,27 @@ export function stepToCommandLines(step: StepBlock): string[] {
 export function compileSteps(steps: readonly StepBlock[]): CompiledSteps {
   const cmdLines: string[] = []
   const artifacts: string[] = []
+  const declarations: Array<{ path: string; name: string }> = []
   for (const step of steps) {
     if (step.kind === 'artifact') {
       const p = (step.artifact ?? '').trim()
-      if (p) artifacts.push(p)
+      if (p) {
+        artifacts.push(p)
+        declarations.push({ path: p, name: (step.artifactName ?? '').trim() })
+      }
       continue
     }
     cmdLines.push(...stepToCommandLines(step))
   }
-  return {
+  const compiled: CompiledSteps = {
     commands: cmdLines.join('\n'),
     artifactPath: artifacts.join('\n'),
   }
+  if (declarations.some((d) => d.name)) {
+    compiled.artifactPath = ''
+    compiled.artifacts = JSON.stringify(declarations)
+  }
+  return compiled
 }
 
 // ─── 反解析:config → steps ─────────────────────────────────────────────────────
@@ -212,6 +224,18 @@ export function parseSteps(config: Record<string, string>): StepBlock[] {
   for (const line of commands.replace(/\r/g, '').split('\n')) {
     if (line.trim() === '') continue
     steps.push(lineToStep(line))
+  }
+  if (config.artifacts) {
+    try {
+      const declarations: unknown = JSON.parse(config.artifacts)
+      if (Array.isArray(declarations)) {
+        for (const declaration of declarations) {
+          if (!declaration || typeof declaration.path !== 'string') continue
+          steps.push({ id: nextStepId(), kind: 'artifact', artifact: declaration.path, artifactName: typeof declaration.name === 'string' ? declaration.name : '' })
+        }
+        return steps
+      }
+    } catch { /* An invalid raw declaration remains available in the raw editor. */ }
   }
   const artifactPath = config.artifactPath ?? ''
   for (const line of artifactPath.replace(/\r/g, '').split('\n')) {

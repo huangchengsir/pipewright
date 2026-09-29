@@ -67,6 +67,7 @@ const envs = ref<EnvRow[]>(props.environments.map(toEnvRow))
 watch(
   () => props.environments,
   (list) => {
+    if (envsKey(list) === envsKey(compose())) return
     envs.value = list.map(toEnvRow)
   },
 )
@@ -109,9 +110,8 @@ function compose(): Environment[] {
   }))
 }
 
-// 规范化内容键:防双向绑定回环(同 VarsCacheTab)。父回写 :environments → watch 重置本地
-// (keySeq++ 造新 _key)→ envs 变 → 若无脑 emit 则父再回写 → 无限循环 → 渲染器 OOM。
-// 仅当规范化内容确有差异时才 emit。
+// 规范化内容键用于跳过父组件的等价回写,保留输入行的 _key 和焦点;
+// 同时防止本地变更与父组件之间的重复 emit。
 function envsKey(list: Environment[]): string {
   return JSON.stringify(
     list.map((e) => ({
@@ -124,6 +124,7 @@ function envsKey(list: Environment[]): string {
         secret: !!v.secret,
         value: v.value ?? '',
         credentialId: v.credentialId ?? '',
+        maskedValue: v.maskedValue ?? '',
       })),
       registryType: e.imageRegistry.type,
       registryUrl: e.imageRegistry.url.trim(),

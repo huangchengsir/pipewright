@@ -223,6 +223,7 @@ func (s *StubRunner) Run(ctx context.Context, r *Run, sink StepSink) error {
 			return err
 		}
 		// 逐行 emit 本步骤 stdout 日志(驱动实时流 + 持久化 + 回放;含一个假 secret 验脱敏)。
+		RecordExecution(sink, ExecutionStub)
 		// best-effort:单行落库失败仅忽略,不阻断步骤/运行(日志不应连累 run 终态)。
 		for _, line := range stubStepLogs(names[i]) {
 			_ = sink.Log(ctx, streamStdout, i, line)

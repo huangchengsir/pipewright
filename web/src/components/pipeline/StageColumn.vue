@@ -216,7 +216,7 @@ function resetDrag(): void {
 </script>
 
 <template>
-  <div class="stage-col" :class="{ 'stage-col--dag': useDag }">
+  <div class="stage-col" :data-stage-kind="stage.kind" :class="{ 'stage-col--dag': useDag }">
     <!-- Stage header -->
     <div class="stage-header">
       <span class="stage-index" aria-hidden="true">{{ stageLabel(stageIndex) }}</span>
@@ -400,6 +400,7 @@ function resetDrag(): void {
     <div v-if="stage.kind !== 'source'" class="add-job-row">
       <button
         class="add-job-btn add-job-btn--serial"
+        data-onboarding-target="add-task"
         :aria-label="t('pipelineCanvas.addSerialAria', { name: stage.name })"
         :title="t('pipelineCanvas.addSerialTitle')"
         @click="addSerial"

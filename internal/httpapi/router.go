@@ -60,6 +60,7 @@ const contextKeySession contextKey = 1
 type Option func(*options)
 
 type options struct {
+	onboarding       onboardingStatusReader
 	vault            vault.Vault
 	projects         project.Service
 	triggers         trigger.Service
@@ -452,6 +453,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 
 		// 检查更新:鉴权只读,查 GitHub 最新发布并与当前版本比对(GET 免 CSRF)。
 		ar.Get("/version/check", makeCheckUpdateHandler(updateChecker))
+		ar.Get("/onboarding/status", makeOnboardingStatusHandler(o.onboarding))
 		// 一键自动更新:鉴权 + CSRF(写操作);binary 自替换+重启,docker 返回升级命令。
 		ar.Post("/version/update", makeSelfUpdateHandler(updateChecker, updateInflight))
 

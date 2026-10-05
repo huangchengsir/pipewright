@@ -117,6 +117,7 @@ type Config struct {
 	YAML      string
 	Status    string
 	UpdatedAt time.Time
+	SavedAt   *time.Time
 }
 
 // Service 定义流水线配置领域对外接口。
@@ -239,9 +240,9 @@ func (s *service) Save(ctx context.Context, projectID string, spec Spec) (*Confi
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 	_, err = s.db.ExecContext(ctx,
 		`UPDATE pipeline_configs
-		 SET spec_json = ?, spec_yaml = ?, status = ?, updated_at = ?
+		 SET spec_json = ?, spec_yaml = ?, status = ?, updated_at = ?, saved_at = ?
 		 WHERE project_id = ?`,
-		string(specJSON), renderedYAML, statusDraft, nowStr, projectID,
+		string(specJSON), renderedYAML, statusDraft, nowStr, nowStr, projectID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("pipeline: update config: %w", err)
@@ -256,11 +257,12 @@ func (s *service) load(ctx context.Context, projectID string) (*Config, error) {
 		specYAML   string
 		status     string
 		updatedStr string
+		savedStr   sql.NullString
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT spec_json, spec_yaml, status, updated_at
+		`SELECT spec_json, spec_yaml, status, updated_at, saved_at
 		 FROM pipeline_configs WHERE project_id = ?`, projectID,
-	).Scan(&specJSON, &specYAML, &status, &updatedStr)
+	).Scan(&specJSON, &specYAML, &status, &updatedStr, &savedStr)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, sql.ErrNoRows
@@ -280,7 +282,21 @@ func (s *service) load(ctx context.Context, projectID string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pipeline: parse updated_at: %w", err)
 	}
-	return &Config{Spec: spec, YAML: specYAML, Status: status, UpdatedAt: updated}, nil
+	cfg := &Config{Spec: spec, YAML: specYAML, Status: status, UpdatedAt: updated}
+	if savedStr.Valid {
+		saved, err := time.Parse(time.RFC3339, savedStr.String)
+		if err != nil {
+			return nil, fmt.Errorf("pipeline: parse saved_at: %w", err)
+		}
+		cfg.SavedAt = &saved
+	}
+	return cfg, nil
+}
+
+// LoadExisting reads persisted configuration without creating defaults or filling source fields.
+// A missing configuration returns sql.ErrNoRows; storage and decoding errors are preserved.
+func LoadExisting(ctx context.Context, db *sql.DB, projectID string) (*Config, error) {
+	return (&service{db: db}).load(ctx, projectID)
 }
 
 // createDefault 惰性生成项目默认流水线配置:源阶段(1 个 git_source 任务引用项目仓库)

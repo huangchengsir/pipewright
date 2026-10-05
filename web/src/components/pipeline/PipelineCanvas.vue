@@ -13,6 +13,7 @@ import type { CustomNode } from '../../api/customNodes'
 import { jobTypeLabel, getJobTypeSpec } from './jobConfigSchema'
 import { hasAnyNeeds } from './stageDeps'
 import './pipeline.css'
+import { guideJobs, type GuideContext } from '../../composables/pipelineGuideState'
 
 // ─── Props / emits ────────────────────────────────────────────────────────────
 
@@ -22,10 +23,12 @@ const props = defineProps<{
   credentials?: Credential[]
   servers?: Server[]
   channels?: NotificationChannel[]
+  guideEnabled?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'update', stages: PipelineStage[]): void
+  (e: 'guide-context', context: GuideContext): void
 }>()
 
 const { t } = useI18n()
@@ -137,6 +140,21 @@ interface PickerState {
 }
 
 const picker = ref<PickerState>({ open: false, mode: 'add', stageId: '', jobId: '', current: '', needs: [] })
+watch([selectedJobId, () => picker.value.open], ([selectedJobId, pickerOpen]) => {
+  emit('guide-context', { selectedJobId, pickerOpen })
+}, { immediate: true })
+
+// An explicit tutorial "locate" action opens only the existing inspector, not a mutation.
+function focusGuideJob(): void {
+  const jobs = guideJobs(props.stages)
+  const selected = jobs.find(j => j.id === selectedJobId.value) ?? jobs[0]
+  if (selected) { selectedJobId.value = selected.id; selectedStageSettingsId.value = null }
+}
+function focusGuideStage(): void {
+  const stage = props.stages.find(s => s.kind !== 'source' && s.jobs.length)
+  if (stage) { selectedStageSettingsId.value = stage.id; selectedJobId.value = null }
+}
+defineExpose({ focusGuideJob, focusGuideStage })
 
 /** Open the type picker to add a new job to a stage. `needs` seeds intra-stage deps. */
 function requestAddJob(stageId: string, needs: string[] = []): void {
@@ -333,7 +351,7 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
 </script>
 
 <template>
-  <div class="canvas-body">
+  <div class="canvas-body" :class="{ 'canvas-body--guided': props.guideEnabled }">
     <!-- ─── Scrollable canvas ────────────────────────────────────────────── -->
     <div class="pipeline-canvas">
       <div ref="flowRef" class="pipeline-flow pipeline-flow--dag" role="list" :aria-label="t('pipelineCanvas.flowAriaLabel')">
@@ -375,6 +393,7 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
         <!-- Add stage button (dashed) -->
         <button
           class="add-stage-btn"
+          data-onboarding-target="add-stage"
           :aria-label="t('pipelineCanvas.addStageAria')"
           @click="addStage"
         >{{ t('pipelineCanvas.addStage') }}</button>
@@ -429,6 +448,7 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
     <!-- Type picker modal (add new job / change type) -->
     <JobTypePicker
       :open="picker.open"
+      :guide-enabled="props.guideEnabled"
       :current="picker.mode === 'change' ? picker.current : ''"
       :title="picker.mode === 'change' ? t('pipelineCanvas.pickerTitleChange') : t('pipelineCanvas.pickerTitleAdd')"
       @select="onPickerSelect"
@@ -444,6 +464,11 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
   display: flex;
   min-height: 0;
   overflow: hidden;
+}
+@media (max-width: 900px) {
+  .canvas-body--guided { flex-direction: column; flex: none; min-height: 420px; overflow: visible; }
+  .canvas-body--guided .pipeline-canvas { flex: none; height: 280px; }
+  .canvas-body--guided :deep(.job-drawer), .canvas-body--guided :deep(.stage-drawer) { width: 100%; height: 420px; border-left: 0; border-top: 1px solid var(--color-border); }
 }
 
 /* DAG layout: position the flow so the overlay anchors to it; give columns a gap for edges. */

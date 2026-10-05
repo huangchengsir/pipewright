@@ -313,6 +313,23 @@ func (s *settingsService) Save(ctx context.Context, projectID string, in Setting
 
 // load 读取已存在的配置行并回算掩码。无行 → sql.ErrNoRows(由 Get 转惰性默认)。
 func (s *settingsService) load(ctx context.Context, projectID string) (*Settings, error) {
+	st, err := s.loadStored(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.applyMasks(ctx, st); err != nil {
+		return nil, err
+	}
+	return st, nil
+}
+
+// LoadExistingSettings reads stored configuration without defaults, masks, or vault access.
+// Missing optional settings return sql.ErrNoRows, allowing a caller to use memory defaults.
+func LoadExistingSettings(ctx context.Context, db *sql.DB, projectID string) (*Settings, error) {
+	return (&settingsService{db: db}).loadStored(ctx, projectID)
+}
+
+func (s *settingsService) loadStored(ctx context.Context, projectID string) (*Settings, error) {
 	var (
 		buildJSON  string
 		envsJSON   string
@@ -356,24 +373,21 @@ func (s *settingsService) load(ctx context.Context, projectID string) (*Settings
 
 	st := &Settings{Build: build, Environments: envs, Steps: steps, UpdatedAt: updated}
 	normalizeSettingsShape(st)
-	// 回算掩码(读取库内引用对应保险库 masked_value;明文 secret 从不入库)。
-	if err := s.applyMasks(ctx, st); err != nil {
-		return nil, err
-	}
 	return st, nil
+}
+
+// DefaultSettings is the same default configuration as Get, without persistence or timestamps.
+func DefaultSettings() *Settings {
+	return &Settings{Build: BuildConfig{
+		Model: BuildModelDockerfile, DockerfilePath: defaultDockerfilePath,
+		ArtifactType: ArtifactImage, Vars: []BuildVar{}, Cache: Cache{Paths: []string{}},
+	}, Environments: []Environment{}, Steps: []PipelineStep{}}
 }
 
 // createDefault 惰性生成默认构建/部署配置(模型 dockerfile / 产物 image / 空变量 / 空环境)。
 // 项目不存在 → ErrProjectNotFound。并发首访 ON CONFLICT DO NOTHING + 回读权威行。
 func (s *settingsService) createDefault(ctx context.Context, projectID string) (*Settings, error) {
-	defaultBuild := BuildConfig{
-		Model:          BuildModelDockerfile,
-		DockerfilePath: defaultDockerfilePath,
-		Toolchain:      Toolchain{},
-		ArtifactType:   ArtifactImage,
-		Vars:           []BuildVar{},
-		Cache:          Cache{Enabled: false, Paths: []string{}},
-	}
+	defaultBuild := DefaultSettings().Build
 	buildJSON, err := json.Marshal(toStoredBuild(defaultBuild))
 	if err != nil {
 		return nil, fmt.Errorf("pipeline: marshal default build: %w", err)

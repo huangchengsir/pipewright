@@ -4,7 +4,7 @@
  * Tabs: 流水线编排 / 变量与缓存 / 触发设置 / 环境与凭据
  * URL state: ?tab=canvas|vars|triggers|envs  (shareable)
  */
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, shallowRef, computed, onMounted, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { getPipeline, savePipeline, type PipelineDTO, type PipelineStage } from '../api/pipeline'
@@ -23,6 +23,8 @@ import { listChannels, type NotificationChannel } from '../api/notifications'
 import { getValidation, type ValidationDTO, type IssueScope } from '../api/pipelineValidation'
 import { HttpError } from '../api/http'
 import PipelineCanvas from '../components/pipeline/PipelineCanvas.vue'
+import PipelineGuide from '../components/onboarding/PipelineGuide.vue'
+import type { GuideContext, GuidePhase } from '../composables/pipelineGuideState'
 import VarsCacheTab from '../components/pipeline/VarsCacheTab.vue'
 import EnvCredsTab from '../components/pipeline/EnvCredsTab.vue'
 import TriggersPanel from '../components/TriggersPanel.vue'
@@ -77,9 +79,33 @@ const pipeline = ref<PipelineDTO | null>(null)
 
 /** Local editable stages; written back via savePipeline */
 const editStages = ref<PipelineStage[]>([])
+const persistedStages = shallowRef('')
+const guideEnabled = computed(() => route.query.onboardingGuide === '1')
+const guideRef = ref<InstanceType<typeof PipelineGuide> | null>(null)
+const canvasRef = ref<InstanceType<typeof PipelineCanvas> | null>(null)
+const guideContext = ref<GuideContext>({ selectedJobId: null, pickerOpen: false })
+const guideDirty = computed(() => !!pipeline.value && (
+  JSON.stringify(editStages.value) !== persistedStages.value
+  || (!!settings.value && !!editBuild.value && (JSON.stringify(editBuild.value) !== JSON.stringify(settings.value.build)
+    || JSON.stringify(editEnvs.value) !== JSON.stringify(settings.value.environments)))))
+
+async function locateGuide(phase: GuidePhase | 'conditions'): Promise<void> {
+  if (phase !== 'save') {
+    await router.replace({ query: { ...route.query, tab: 'canvas' } })
+    await nextTick()
+  }
+  if (phase === 'configure') canvasRef.value?.focusGuideJob()
+  if (phase === 'conditions') canvasRef.value?.focusGuideStage()
+}
+function closeGuide(): void {
+  const query = { ...route.query }
+  delete query.onboardingGuide
+  void router.replace({ query })
+}
 
 function applyPipeline(dto: PipelineDTO): void {
   pipeline.value = dto
+  persistedStages.value = JSON.stringify(dto.stages)
   editStages.value = JSON.parse(JSON.stringify(dto.stages)) as PipelineStage[]
 }
 
@@ -244,6 +270,7 @@ async function handleSave(): Promise<void> {
       applyPipeline(dto)
     }
     showSaveSuccess()
+    void guideRef.value?.refresh()
     // Revalidate after a successful save (debounced, only when panel is open).
     scheduleValidation(400)
   } catch (err) {
@@ -286,6 +313,7 @@ function handleTemplates(): void {
 /** Apply-template succeeded: server already persisted; reload pipeline + settings + revalidate. */
 async function handleTemplateApplied(): Promise<void> {
   await Promise.all([loadPipeline(), loadSettings()])
+  void guideRef.value?.refresh()
   if (activeTab.value !== 'canvas') setTab('canvas')
   showSaveSuccess()
   scheduleValidation(400)
@@ -305,6 +333,7 @@ function handleImportPreview(dto: PipelineDTO): void {
 /** Save (save=true): the modal already persisted. Reload everything + revalidate. */
 async function handleImportSaved(): Promise<void> {
   await Promise.all([loadPipeline(), loadSettings()])
+  void guideRef.value?.refresh()
   if (activeTab.value !== 'canvas') setTab('canvas')
   showSaveSuccess()
   scheduleValidation(400)
@@ -313,6 +342,7 @@ async function handleImportSaved(): Promise<void> {
 /** Called by AIGenerateWizard after a successful apply. Reload all data. */
 async function handleAIApplied(): Promise<void> {
   await Promise.all([loadPipeline(), loadSettings()])
+  void guideRef.value?.refresh()
   // Trigger TriggersPanel to refresh — it is self-loading, close+reopen is the
   // simplest approach; alternatively emit a key-change or use a triggerKey ref.
   scheduleValidation(400)
@@ -398,6 +428,7 @@ async function togglePac(next: boolean): Promise<void> {
   try {
     const updated = await updateProject(projectId.value, { pacEnabled: next })
     project.value = updated
+    void guideRef.value?.refresh()
   } catch {
     project.value = { ...project.value, pacEnabled: prev } // rollback
     pacError.value = t('projectPipeline.pacToggleFailed')
@@ -494,6 +525,7 @@ async function togglePrStatus(next: boolean): Promise<void> {
 
         <button
           class="top-btn top-btn--save"
+          data-onboarding-target="save"
           :disabled="saveSubmitting || loadState !== 'idle'"
           :aria-busy="saveSubmitting"
           @click="handleSave"
@@ -503,6 +535,10 @@ async function togglePrStatus(next: boolean): Promise<void> {
         </button>
       </div>
     </header>
+
+    <PipelineGuide v-if="guideEnabled && loadState === 'idle' && pipeline" ref="guideRef"
+      :project-id="projectId" :stages="editStages" :dirty="guideDirty" :context="guideContext" :active-tab="activeTab"
+      @locate="locateGuide" @close="closeGuide" />
 
     <!-- ─── Banners (save success / error) ────────────────────────────────── -->
     <div
@@ -547,7 +583,7 @@ async function togglePrStatus(next: boolean): Promise<void> {
     -->
     <template v-if="activeTab === 'canvas'">
     <!-- ─── Pipeline-as-code (GitOps) toggle (FR-8-12) ─────────────────────── -->
-    <div class="pac-bar" :class="{ 'pac-bar--on': pacEnabled }">
+    <div class="pac-bar" data-onboarding-target="repository" :class="{ 'pac-bar--on': pacEnabled }">
       <div class="pac-bar-text">
         <span class="pac-bar-title">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -660,12 +696,15 @@ async function togglePrStatus(next: boolean): Promise<void> {
           <!-- Canvas -->
           <PipelineCanvas
             v-else-if="loadState === 'idle' && pipeline"
+            ref="canvasRef"
+            :guide-enabled="guideEnabled"
             :stages="editStages"
             :yaml="pipeline.yaml"
             :credentials="credentials"
             :servers="servers"
             :channels="channels"
             @update="handleCanvasUpdate"
+            @guide-context="guideContext = $event"
           />
 
           <!-- AI 脚本风险标注(护城河):对脚本步骤命令做风险体检,提交前先发现高危/泄漏/不可复现项 -->
@@ -804,6 +843,21 @@ async function togglePrStatus(next: boolean): Promise<void> {
   margin-bottom: calc(20px - var(--main-pad-bottom));
   min-height: 0;
   gap: 0;
+}
+.pipeline-root :deep(.onboarding-target) { outline: 2px solid var(--color-primary); outline-offset: 3px; box-shadow: 0 0 0 5px var(--color-primary-soft); }
+.pipeline-root:has(.pipeline-guide) { min-height: 660px; }
+@media (max-width: 900px) {
+  .pipeline-root:has(.pipeline-guide) { height: auto; margin-bottom: 0; }
+  .pipeline-root:has(.pipeline-guide) .pipeline-top { flex-wrap: wrap; padding: 12px; }
+  .pipeline-root:has(.pipeline-guide) .pipeline-top-left { flex-basis: 100%; }
+  .pipeline-root:has(.pipeline-guide) .pipeline-top-actions { flex: 1 1 100%; min-width: 0; max-width: 100%; flex-wrap: wrap; }
+  .pipeline-root:has(.pipeline-guide) .tab-body { flex: none; min-height: 400px; overflow: visible; }
+  .pipeline-root:has(.pipeline-guide) .tab-panels { overflow: visible; }
+  .pipeline-root:has(.pipeline-guide) .tab-strip { overflow-x: auto; flex: none; }
+  .pipeline-root:has(.pipeline-guide) .tab-btn { flex: none; white-space: nowrap; }
+  .pipeline-root:has(.pipeline-guide) .pac-bar { flex-wrap: wrap; padding: 12px; }
+  .pipeline-root:has(.pipeline-guide) .pac-bar-text { flex-basis: 100%; min-width: 0; }
+  .pipeline-root:has(.pipeline-guide) .pac-bar-title { flex-wrap: wrap; }
 }
 
 /* ─── Top bar ────────────────────────────────────────────────────────────── */

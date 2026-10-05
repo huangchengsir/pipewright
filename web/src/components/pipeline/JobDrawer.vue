@@ -515,6 +515,7 @@ async function confirmSave(): Promise<void> {
       <div
         v-show="!ADVANCED_FIELD_KEYS.has(field.key) || showExecAdvanced"
         class="drawer-field"
+        :data-config-key="field.key"
       >
         <div class="drawer-field-label">{{ field.label }}</div>
 

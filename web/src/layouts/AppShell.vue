@@ -22,6 +22,8 @@ import {
 } from '@vicons/tabler'
 import { NIcon } from 'naive-ui'
 import ThemeToggle from '../components/ThemeToggle.vue'
+import ContinueOnboarding from '../components/onboarding/ContinueOnboarding.vue'
+import { useOnboardingPreferences } from '../composables/useOnboarding'
 import { logout } from '../api/auth'
 import { useSessionStore } from '../stores/session'
 import { useConfirm } from '../composables/useConfirm'
@@ -33,6 +35,7 @@ const sessionStore = useSessionStore()
 const confirm = useConfirm()
 const toast = useToast()
 const { t } = useI18n()
+const { continuing, preferences: onboardingPreferences } = useOnboardingPreferences()
 
 // 退出登录:确认 → POST /api/auth/logout(吊销当前会话)→ 清本地会话缓存 → 回登录页。
 // 即便后端请求失败也照样清缓存跳转(本地一定登出),避免卡在"看似已登录但实际无效"。
@@ -117,7 +120,7 @@ function toggleExpanded(): void {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'is-expanded': expanded }">
+  <div class="app-shell" :class="{ 'is-expanded': expanded, 'has-onboarding': !onboardingPreferences.completed && (continuing || onboardingPreferences.dismissed) && route.path !== '/onboarding' }">
     <!-- Left rail navigation -->
     <nav class="rail" :aria-label="t('nav.ariaMain')">
       <!-- 顶部:品牌 -->
@@ -192,6 +195,7 @@ function toggleExpanded(): void {
 
     <!-- Theme toggle (bottom-right, always visible) -->
     <ThemeToggle />
+    <ContinueOnboarding :current-path="route.path" />
   </div>
 </template>
 
@@ -455,5 +459,11 @@ function toggleExpanded(): void {
      的右侧操作按钮(如概览的「新建项目」)下移到带下方,避免被切换器压住。 */
   padding: calc(var(--main-pad-top) + 38px) var(--main-pad) var(--main-pad-bottom);
   min-height: 100vh;
+}
+.has-onboarding .main-inner {
+  padding-bottom: max(var(--main-pad-bottom), 132px);
+}
+@media (max-width: 900px) {
+  .main-inner:has(.pipeline-guide) { padding-left: 12px; padding-right: 12px; }
 }
 </style>

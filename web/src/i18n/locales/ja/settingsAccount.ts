@@ -42,7 +42,7 @@ export default {
   toastRevokeFailed: 'セッションの無効化に失敗しました',
 
   onboardingTitle: '初回オンボーディング',
-  onboardingSub: '「AI 接続 → サーバー追加 → プロジェクト作成」の 3 ステップガイドをいつでも再表示できます。',
+  onboardingSub: "「プロジェクト作成 → パイプライン準備 → 成功実行」を再表示し、現在の状態を読み取ります。",
   onboardingBtn: 'オンボーディングを再開',
   toastOnboardingReset: 'オンボーディングをリセットしました',
   toastOnboardingResetDetail: '初回ガイドを開いています',

@@ -19,12 +19,40 @@ func TestMigrationsApplied(t *testing.T) {
 		if err := st.DB.QueryRowContext(ctx, `SELECT COUNT(1) FROM schema_migrations`).Scan(&n); err != nil {
 			t.Fatalf("count migrations: %v", err)
 		}
-		if n != 48 {
-			t.Fatalf("应用迁移数 = %d, 期望 48", n)
+		if n != 49 {
+			t.Fatalf("应用迁移数 = %d, 期望 49", n)
 		}
 		// 核心领域表存在(随手验一张)。
 		if _, err := st.DB.ExecContext(ctx, `SELECT 1 FROM audit_log WHERE 1=0`); err != nil {
 			t.Fatalf("audit_log 表缺失: %v", err)
+		}
+	})
+}
+
+func TestOnboardingEvidenceDefaults(t *testing.T) {
+	storetest.ForEachDialect(t, func(t *testing.T, st *store.Store) {
+		stamp := now()
+		statements := []struct {
+			sql  string
+			args []any
+		}{
+			{`INSERT INTO credentials (id,name,type,scope,ciphertext,masked_value,created_at,updated_at) VALUES ('evidence-c','c','git_token','',X'00','m',?,?)`, []any{stamp, stamp}},
+			{`INSERT INTO projects (id,name,repo_url,default_branch,credential_id,created_at,updated_at) VALUES ('evidence-p','p','https://example.com/r','main','evidence-c',?,?)`, []any{stamp, stamp}},
+			{`INSERT INTO pipeline_configs (project_id,created_at,updated_at) VALUES ('evidence-p',?,?)`, []any{stamp, stamp}},
+			{`INSERT INTO pipeline_runs (id,project_id,created_at) VALUES ('evidence-r','evidence-p',?)`, []any{stamp}},
+		}
+		for _, stmt := range statements {
+			if _, err := st.DB.Exec(stmt.sql, stmt.args...); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var saved *string
+		if err := st.DB.QueryRow(`SELECT saved_at FROM pipeline_configs WHERE project_id='evidence-p'`).Scan(&saved); err != nil || saved != nil {
+			t.Fatalf("default saved_at = %v, %v", saved, err)
+		}
+		var mode string
+		if err := st.DB.QueryRow(`SELECT execution_mode FROM pipeline_runs WHERE id='evidence-r'`).Scan(&mode); err != nil || mode != "pending" {
+			t.Fatalf("new execution_mode = %s, %v", mode, err)
 		}
 	})
 }

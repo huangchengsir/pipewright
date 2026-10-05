@@ -134,6 +134,9 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 						_ = jr.Log(ctx, streamStdout, line)
 					}
 				} else {
+					if strings.TrimSpace(jb.Type) != "push_image" {
+						run.RecordExecution(jr, run.ExecutionStub)
+					}
 					_ = jr.Log(ctx, streamStdout, fmt.Sprintf("· %s(%s)— 真实执行未接入;本阶段放行", jb.Name, jb.Type))
 				}
 				_ = rep.JobDone(ctx, jb.ID, run.StepSuccess)
@@ -257,7 +260,7 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 					// 构建依赖缓存(#61):执行前恢复(暖构建)、成功后保存(best-effort,缓存问题绝不让构建失败)。
 					// 任务级 timeout/retry(#63):零值时 runScriptStepWithOpts 退化为单次无超时执行(旧行为)。
 					b.restoreJobCache(ctx, jrep, jb, r.Trigger.Branch, workspace)
-					if err := b.runScriptStepWithOpts(ctx, jsink, 0, step, workspace); err != nil {
+					if err := b.scriptEvidenceBuilder(jsink).runScriptStepWithOpts(ctx, jsink, 0, step, workspace); err != nil {
 						_ = rep.JobDone(ctx, jb.ID, run.StepFailed)
 						return err // ErrBuildFailed / run.ErrCanceled
 					}
@@ -313,6 +316,13 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 				_ = rep.JobDone(ctx, jb.ID, run.StepSuccess)
 			}
 
+			// The grouped path otherwise silently omits unsupported jobs.
+			for _, jb := range stage.Jobs {
+				if !isScriptJob(jb.Type) && !isBuildImageJob(jb.Type) && !isDeployJob(jb.Type) &&
+					strings.TrimSpace(jb.Type) != "notify" && strings.TrimSpace(jb.Type) != "git_source" && strings.TrimSpace(jb.Type) != "push_image" {
+					run.RecordExecution(rep, run.ExecutionStub)
+				}
+			}
 			return nil
 		}()
 
@@ -431,6 +441,9 @@ func (b *Builder) runStageJobsDAG(
 				b.runNotifyJob(ctx, jrep, jb, r)
 				return nil
 			default:
+				if strings.TrimSpace(jb.Type) != "git_source" {
+					run.RecordExecution(jrep, run.ExecutionStub)
+				}
 				_ = jrep.Log(ctx, streamStdout, fmt.Sprintf("· %s(%s)— 真实执行未接入;本节点放行", jb.Name, jb.Type))
 				return nil
 			}
@@ -547,7 +560,7 @@ func (b *Builder) runScriptJobIsolated(
 		step.Resource.Network = svcNetwork
 	}
 	b.restoreJobCache(ctx, rep, jb, r.Trigger.Branch, ws)
-	if err := b.runScriptStepWithOpts(ctx, sink, 0, step, ws); err != nil {
+	if err := b.scriptEvidenceBuilder(sink).runScriptStepWithOpts(ctx, sink, 0, step, ws); err != nil {
 		return nil, err // ErrBuildFailed / run.ErrCanceled
 	}
 	b.saveJobCache(ctx, rep, jb, r.Trigger.Branch, ws)
@@ -586,6 +599,7 @@ func (b *Builder) runBuildImageJobIsolated(
 // (复用 deploy.Service.DeployForStage 中途部署,不动 run 终态)。任一目标失败 → 阶段失败、阻断下游。
 func (b *Builder) runDeployJob(ctx context.Context, rep dagrun.StageReporter, jb pipeline.Job, runID string, params map[string]string) error {
 	if b.deployer == nil {
+		run.RecordExecution(rep, run.ExecutionStub)
 		_ = rep.Log(ctx, streamStdout, "· 部署节点:部署服务未注入,跳过")
 		return nil
 	}
@@ -619,6 +633,7 @@ func (b *Builder) runDeployJob(ctx context.Context, rep dagrun.StageReporter, jb
 	_ = rep.Log(ctx, streamStdout, fmt.Sprintf("→ SSH 部署本次产物到服务器 %s(策略 %s)…", serverID, stratLabel))
 	// 把目标机真实执行的命令 + stdout/stderr 实时回流到本部署步骤日志(脱敏由 sink 侧 Masker 兜底)。
 	dctx := deploy.WithCmdLog(ctx, func(stream, text string) { _ = rep.Log(ctx, stream, text) })
+	run.RecordExecution(rep, run.ExecutionReal)
 	results, err := b.deployer.DeployForStage(dctx, runID, []string{serverID}, cfg, strategy)
 	if err != nil {
 		_ = rep.Log(ctx, streamStderr, "部署失败:"+err.Error())
@@ -644,16 +659,19 @@ func (b *Builder) runDeployJob(ctx context.Context, rep dagrun.StageReporter, jb
 // best-effort:通知失败只记日志、不令阶段失败(与终态通知钩子一致)。
 func (b *Builder) runNotifyJob(ctx context.Context, rep dagrun.StageReporter, jb pipeline.Job, r *run.Run) {
 	if b.notifier == nil {
+		run.RecordExecution(rep, run.ExecutionStub)
 		_ = rep.Log(ctx, streamStdout, "· 通知节点:通知服务未注入,跳过")
 		return
 	}
 	chRef := cfgString(jb.Config, "channel")
 	if chRef == "" {
+		run.RecordExecution(rep, run.ExecutionStub)
 		_ = rep.Log(ctx, streamStdout, "· 通知节点:未配渠道,跳过")
 		return
 	}
 	chID, chName := b.resolveChannel(ctx, chRef)
 	if chID == "" {
+		run.RecordExecution(rep, run.ExecutionStub)
 		_ = rep.Log(ctx, streamStderr, "通知节点:找不到渠道「"+chRef+"」,跳过")
 		return
 	}
@@ -686,7 +704,16 @@ func (b *Builder) runNotifyJob(ctx context.Context, rep dagrun.StageReporter, jb
 			payload.Body = notify.RenderText(bodyTpl, vars)
 		}
 	}
-	if err := b.notifier.SendVia(ctx, chID, payload); err != nil {
+	attempted := false
+	nctx := notify.WithDeliveryObserver(ctx, func() {
+		attempted = true
+		run.RecordExecution(rep, run.ExecutionReal)
+	})
+	err := b.notifier.SendVia(nctx, chID, payload)
+	if !attempted {
+		run.RecordExecution(rep, run.ExecutionStub)
+	}
+	if err != nil {
 		_ = rep.Log(ctx, streamStderr, "通知发送失败(best-effort):"+err.Error())
 		return
 	}
@@ -1107,6 +1134,8 @@ func splitCommands(s string) []string {
 type reporterSink struct {
 	rep dagrun.StageReporter
 }
+
+func (s *reporterSink) RecordExecution(mode string) { run.RecordExecution(s.rep, mode) }
 
 func (s *reporterSink) Plan(context.Context, []run.StepDecl) error          { return nil }
 func (s *reporterSink) StepRunning(context.Context, int) error              { return nil }

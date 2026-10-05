@@ -42,7 +42,7 @@ export default {
   toastRevokeFailed: '注销会话失败',
 
   onboardingTitle: '首次使用引导',
-  onboardingSub: '随时重新打开「连 AI → 加服务器 → 建项目」三步引导。',
+  onboardingSub: "重新打开「创建项目 → 准备流水线 → 成功运行」引导，读取实例当前状态。",
   onboardingBtn: '重新引导',
   toastOnboardingReset: '已重置引导',
   toastOnboardingResetDetail: '正在打开首次使用引导',

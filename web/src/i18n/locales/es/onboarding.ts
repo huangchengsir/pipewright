@@ -1,3 +1,6 @@
 export default {
-  errorTitle: 'No se pudo cargar la introducción',
+  "continue": "Continuar configuración",
+  "skip": "Omitir por ahora",
+  "dashboard": "Volver al panel",
+  "errorTitle": "Estado de configuración no disponible"
 }

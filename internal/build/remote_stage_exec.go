@@ -61,9 +61,12 @@ func (b *Builder) runStageRemote(ctx context.Context, r *run.Run, stage pipeline
 	for _, jb := range stage.Jobs {
 		if isScriptJob(jb.Type) {
 			scriptJobs = append(scriptJobs, jb)
+		} else if strings.TrimSpace(jb.Type) != "git_source" && strings.TrimSpace(jb.Type) != "push_image" {
+			run.RecordExecution(rep, run.ExecutionStub)
 		}
 	}
 	if len(scriptJobs) == 0 {
+		markRemoteOmissions(stage, rep, false)
 		for _, jb := range stage.Jobs {
 			_ = rep.Log(ctx, streamStdout, fmt.Sprintf("· %s(%s)— 远程 runner 仅执行 script 类型;本阶段放行", jb.Name, jb.Type))
 		}
@@ -114,7 +117,7 @@ func (b *Builder) runStageRemote(ctx context.Context, r *run.Run, stage pipeline
 	defer func() { _, _ = tgt.Exec(context.WithoutCancel(ctx), serverID, []string{"rm", "-rf", remoteWS}) }()
 
 	// 3) 在远程机用容器跑 script job(远程 driver:docker run 经 SSH)。
-	driver := NewRemoteDriver(tgt, serverID, "docker")
+	driver := &scriptEvidenceDriver{Driver: NewRemoteDriver(tgt, serverID, "docker"), sink: &reporterSink{rep: rep}}
 	onLine := func(stream, line string) { _ = rep.Log(ctx, stream, line) }
 	for _, jb := range scriptJobs {
 		if canceled(ctx) {
@@ -127,12 +130,25 @@ func (b *Builder) runStageRemote(ctx context.Context, r *run.Run, stage pipeline
 		}
 		step.Env = append(runParamsAsEnv(r.Trigger.Params), step.Env...)
 		if err := b.runScriptOnDriver(ctx, driver, onLine, step, remoteWS); err != nil {
+			markRemoteOmissions(stage, rep, true)
 			return err
 		}
 	}
 
+	markRemoteOmissions(stage, rep, false)
 	_ = rep.Log(ctx, streamStdout, fmt.Sprintf("✓ 远程 runner(%s)执行完成;测试报告/质量门禁在远程模式暂不回采(后续增量)", serverID))
 	return nil
+}
+
+func markRemoteOmissions(stage pipeline.Stage, rep dagrun.StageReporter, failed bool) {
+	for _, post := range stage.Post {
+		if pipeline.PostConditionMatches(post.Condition, failed) {
+			run.RecordExecution(rep, run.ExecutionStub)
+		}
+	}
+	if len(stage.Services) > 0 || reportSpecFromStage(stage) != nil {
+		run.RecordExecution(rep, run.ExecutionStub)
+	}
 }
 
 // runScriptOnDriver 用给定 driver(本地或远程)跑一条 script 步骤;remoteWS 为容器挂载的工作区(远程机上的路径)。

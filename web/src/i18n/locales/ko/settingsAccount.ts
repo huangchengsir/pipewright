@@ -42,7 +42,7 @@ export default {
   toastRevokeFailed: '세션 해지에 실패했습니다',
 
   onboardingTitle: '첫 사용 안내',
-  onboardingSub: '「AI 연결 → 서버 추가 → 프로젝트 생성」 3단계 가이드를 언제든지 다시 열 수 있습니다.',
+  onboardingSub: "「프로젝트 만들기 → 파이프라인 준비 → 성공 실행」 가이드를 다시 열고 인스턴스의 현재 상태를 읽습니다.",
   onboardingBtn: '안내 다시 시작',
   toastOnboardingReset: '안내를 초기화했습니다',
   toastOnboardingResetDetail: '첫 사용 가이드를 여는 중',

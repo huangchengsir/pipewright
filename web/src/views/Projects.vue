@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
   listProjects,
@@ -21,6 +21,7 @@ import TypedRunParams from '../components/TypedRunParams.vue'
 import CredentialSelect from '../components/projects/CredentialSelect.vue'
 import { getParameters, validateParamValues, type ParamDef } from '../api/parameters'
 import { HttpError } from '../api/http'
+import { selectCreatedOnboardingProject } from '../composables/useOnboarding'
 
 // ─── i18n ─────────────────────────────────────────────────────────────────────
 
@@ -43,6 +44,7 @@ function runStatusLabel(s: RunStatus): string {
 // ─── router ───────────────────────────────────────────────────────────────────
 
 const router = useRouter()
+const route = useRoute()
 
 function goToPipeline(projectId: string): void {
   void router.push({ name: 'project-pipeline', params: { id: projectId } })
@@ -121,6 +123,7 @@ async function loadProjects(): Promise<void> {
   try {
     projects.value = await listProjects()
     loadState.value = 'idle'
+    consumeOnboardingQuery()
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
@@ -360,6 +363,7 @@ async function handleCreateSubmit(): Promise<void> {
   try {
     const created = await createProject(input)
     projects.value = [created, ...projects.value]
+    selectCreatedOnboardingProject(created.id)
     createModalOpen.value = false
   } catch (err) {
     if (err instanceof HttpError) {
@@ -396,8 +400,17 @@ const renameValue = ref('')
 const renameError = ref('')
 const renameBanner = ref('')
 const renameSubmitting = ref(false)
+const repairCredential = ref(false)
+const renameCredentialId = ref('')
+const renameCredentialError = ref('')
+const renameCredentials = computed(() => credentials.value.filter(c =>
+  /^(ssh:\/\/|[^\s@/:]+@[^\s@/:]+:)/i.test(renamingProject.value?.repoUrl ?? '')
+    ? c.type === 'ssh_key' || c.type === 'ssh_password' : c.type === 'git_token' || c.type === 'git_http'))
 
-function openRenameModal(p: Project): void {
+function openRenameModal(p: Project, credentialRepair = false): void {
+  repairCredential.value = credentialRepair
+  renameCredentialId.value = p.credentialId
+  renameCredentialError.value = ''
   renamingProject.value = p
   renameValue.value = p.name
   renameError.value = ''
@@ -412,6 +425,10 @@ function closeRenameModal(): void {
 }
 
 async function handleRenameSubmit(): Promise<void> {
+  if (repairCredential.value && !renameCredentialId.value) {
+    renameCredentialError.value = t('projects.errCredRequired')
+    return
+  }
   if (!renameValue.value.trim()) {
     renameError.value = t('projects.errNameEmpty')
     return
@@ -423,6 +440,7 @@ async function handleRenameSubmit(): Promise<void> {
   const input: UpdateProjectInput = { name: renameValue.value.trim() }
 
   try {
+    if (repairCredential.value) input.credentialId = renameCredentialId.value
     const updated = await updateProject(renamingProject.value.id, input)
     projects.value = projects.value.map((p) => (p.id === updated.id ? updated : p))
     renameModalOpen.value = false
@@ -497,8 +515,15 @@ const triggerDefs        = ref<ParamDef[]>([])
 const triggerBranchError = ref('')
 const triggerBanner      = ref('')
 const triggerSubmitting  = ref(false)
+let triggerLoadReferences = true
+let referenceLoadSeq = 0
 
-function openTriggerModal(p: Project): void {
+function openTriggerModal(p: Project, loadReferences = true): void {
+  triggerLoadReferences = loadReferences
+  referenceLoadSeq++
+  commitLoadSeq++
+  branchOptions.value = []
+  commitOptions.value = []
   triggerProject.value     = p
   triggerForm.value        = { branch: p.defaultBranch || '', commit: '' }
   triggerParams.value      = {}
@@ -507,7 +532,7 @@ function openTriggerModal(p: Project): void {
   triggerBanner.value      = ''
   triggerSubmitting.value  = false
   triggerModalOpen.value   = true
-  void loadBranchOptions(p.id)
+  if (loadReferences) void loadBranchOptions(p.id)
   void loadTriggerDefs(p.id)
 }
 
@@ -524,15 +549,16 @@ async function loadTriggerDefs(projectId: string): Promise<void> {
 const branchOptions = ref<GitRef[]>([])
 const commitOptions = ref<GitCommit[]>([])
 async function loadBranchOptions(projectId: string): Promise<void> {
+  const seq = referenceLoadSeq
   branchOptions.value = []
   commitOptions.value = []
   try {
     const refs = await listRefs(projectId)
-    branchOptions.value = [...refs.branches, ...refs.tags]
+    if (seq === referenceLoadSeq && triggerLoadReferences) branchOptions.value = [...refs.branches, ...refs.tags]
   } catch {
     // 代码管理区未启用(503)或仓库不可达:静默,保持纯文本输入(优雅降级)。
   }
-  void loadCommitOptions(projectId, triggerForm.value.branch)
+  if (seq === referenceLoadSeq && triggerLoadReferences) void loadCommitOptions(projectId, triggerForm.value.branch)
 }
 
 // 据当前分支拉最近 commit 供 commit 下拉(分支变化时刷新);失败静默。
@@ -549,14 +575,36 @@ async function loadCommitOptions(projectId: string, ref: string): Promise<void> 
 
 function onTriggerBranchInput(): void {
   triggerBranchError.value = ''
-  if (triggerProject.value) void loadCommitOptions(triggerProject.value.id, triggerForm.value.branch)
+  if (triggerLoadReferences && triggerProject.value) void loadCommitOptions(triggerProject.value.id, triggerForm.value.branch)
 }
 
 function closeTriggerModal(): void {
   if (triggerSubmitting.value) return
   triggerModalOpen.value = false
   triggerProject.value   = null
+  referenceLoadSeq++
+  commitLoadSeq++
 }
+
+function consumeOnboardingQuery(): void {
+  if (loadState.value !== 'idle') return
+  const { onboardingCreate, onboardingRun, onboardingEdit } = route.query
+  if (onboardingCreate === undefined && onboardingRun === undefined && onboardingEdit === undefined) return
+  const query = { ...route.query }
+  delete query.onboardingCreate
+  delete query.onboardingRun
+  delete query.onboardingEdit
+  void router.replace({ query })
+  if (onboardingCreate === '1') openCreateModal()
+  else if (typeof onboardingRun === 'string') {
+    const p = projects.value.find(p => p.id === onboardingRun)
+    if (p) openTriggerModal(p, false)
+  } else if (typeof onboardingEdit === 'string') {
+    const p = projects.value.find(p => p.id === onboardingEdit)
+    if (p) openRenameModal(p, true)
+  }
+}
+watch(() => route.query, consumeOnboardingQuery)
 
 async function handleTriggerSubmit(): Promise<void> {
   triggerBranchError.value = ''
@@ -1104,7 +1152,6 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
       :aria-label="t('projects.newProject')"
       aria-modal="true"
       @keydown.esc="closeCreateModal"
-      @click.self="closeCreateModal"
     >
       <div class="modal">
         <!-- Header -->
@@ -1405,7 +1452,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
       v-if="renameModalOpen && renamingProject"
       class="modal-scrim"
       role="dialog"
-      :aria-label="t('projects.renameTitle')"
+      :aria-label="repairCredential ? t('onboardingFlow.actions.repairCredential') : t('projects.renameTitle')"
       aria-modal="true"
       @keydown.esc="closeRenameModal"
       @click.self="closeRenameModal"
@@ -1419,8 +1466,8 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
             </svg>
           </div>
           <div>
-            <h3 class="modal-title">{{ t('projects.renameTitle') }}</h3>
-            <p class="modal-sub">{{ t('projects.renameSub') }}</p>
+            <h3 class="modal-title">{{ repairCredential ? t('onboardingFlow.actions.repairCredential') : t('projects.renameTitle') }}</h3>
+            <p class="modal-sub">{{ repairCredential ? t('onboardingFlow.repairCredentialDescription') : t('projects.renameSub') }}</p>
           </div>
           <button
             class="modal-close"
@@ -1465,6 +1512,16 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
               @input="renameError = ''"
             />
             <span v-if="renameError" id="rename-err" class="field-error" role="alert">{{ renameError }}</span>
+          </div>
+
+          <div v-if="repairCredential" class="field">
+            <label class="field-label" for="onboarding-repair-credential">{{ t('projects.credential') }}</label>
+            <CredentialSelect v-model="renameCredentialId" :credentials="renameCredentials" :loading="credentialsLoading"
+              input-id="onboarding-repair-credential" :disabled="renameSubmitting" :placeholder="t('projects.credSelect')"
+              :has-error="!!renameCredentialError" :aria-invalid="!!renameCredentialError || undefined" :aria-describedby="renameCredentialError ? 'onboarding-repair-error' : undefined"
+              :loading-label="t('projects.credLoading')" :empty-label="t('projects.credSelect')" @change="renameCredentialError = ''" />
+            <span v-if="renameCredentialError" id="onboarding-repair-error" class="field-error" role="alert">{{ renameCredentialError }}</span>
+            <router-link to="/settings/vault">{{ t('onboardingFlow.actions.credentials') }}</router-link>
           </div>
 
           <div class="modal-footer">

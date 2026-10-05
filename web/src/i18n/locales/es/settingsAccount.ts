@@ -42,7 +42,7 @@ export default {
   toastRevokeFailed: 'Error al revocar la sesión',
 
   onboardingTitle: 'Guía de primer uso',
-  onboardingSub: 'Reabre en cualquier momento la guía de tres pasos «Conectar IA → Añadir servidor → Crear proyecto».',
+  onboardingSub: "Reabre Crear proyecto → Preparar pipeline → Ejecución correcta y consulta el estado actual de la instancia.",
   onboardingBtn: 'Reiniciar la guía',
   toastOnboardingReset: 'Guía reiniciada',
   toastOnboardingResetDetail: 'Abriendo la guía de primer uso',

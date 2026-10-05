@@ -401,6 +401,7 @@ func (p *WorkerPool) execute(runID string) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			log.Printf("[run] worker recovered from panic on run %s: %v", runID, rec)
+			sink.persistExecution()
 			// 幂等置 failed:按当前状态合法转移(panic 可能发生在转 running 之前,
 			// 此时来源仍是 queued,硬编码 running→failed 会破坏语义/RowsAffected=0)。
 			p.svc.failToTerminal(runID)
@@ -448,6 +449,7 @@ func (p *WorkerPool) execute(runID string) {
 	// (StepDone 失败/runner 漏置不致留下"run=终态但 step 永远 running")。顺序反了会有竞态窗口
 	// ——观测方(SSE/轮询/waitForStatus)在 run 终态与步骤校正之间读到悬挂步骤。
 	sink.reconcile(final)
+	sink.persistExecution()
 	// 用后台 ctx 落终态:取消场景下派生 ctx 已 Done,仍须持久化终态。
 	if err := p.svc.transition(context.Background(), runID, StatusRunning, final, false); err != nil {
 		log.Printf("[run] run %s: to %s failed: %v", runID, final, err)
@@ -526,13 +528,29 @@ func (p *WorkerPool) runNotifyHook(runID, finalStatus string) {
 // dbStepSink 是 StepSink 实现:把 Runner 的步骤进展持久化到 run_steps，
 // 并经事件总线发布 step 事件(供 SSE)。步骤 id 在 Plan 时分配并缓存。
 type dbStepSink struct {
-	svc     *service
-	runID   string
-	stepIDs []string
-	names   []string
-	stages  []string // 各 step 所属阶段名(节点级分组;与 names/stepIDs 同序)
+	evidence     ExecutionEvidence
+	evidenceOnce sync.Once
+	svc          *service
+	runID        string
+	stepIDs      []string
+	names        []string
+	stages       []string // 各 step 所属阶段名(节点级分组;与 names/stepIDs 同序)
 	// masker 在日志行落库/出网前脱敏(AC-SEC-04);nil 则不脱敏(纯单测可省)。
 	masker *mask.Masker
+}
+
+func (d *dbStepSink) RecordExecution(mode string) { d.evidence.RecordExecution(mode) }
+
+// Evidence is written once, before terminal publication. A failed write leaves
+// the new row's pending default intact and must not change the run's outcome.
+func (d *dbStepSink) persistExecution() {
+	d.evidenceOnce.Do(func() {
+		if _, err := d.svc.db.ExecContext(context.Background(),
+			`UPDATE pipeline_runs SET execution_mode = ? WHERE id = ? AND execution_mode = ?`,
+			d.evidence.Mode(), d.runID, ExecutionPending); err != nil {
+			log.Printf("[run] run %s: execution evidence write failed: %v", d.runID, err)
+		}
+	})
 }
 
 func (d *dbStepSink) Plan(ctx context.Context, steps []StepDecl) error {

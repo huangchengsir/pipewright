@@ -42,7 +42,7 @@ export default {
   toastRevokeFailed: 'Sitzung konnte nicht widerrufen werden',
 
   onboardingTitle: 'Erstnutzungs-Onboarding',
-  onboardingSub: 'Öffne jederzeit erneut den dreistufigen Leitfaden „KI verbinden → Server hinzufügen → Projekt erstellen“.',
+  onboardingSub: "Projekt erstellen → Pipeline vorbereiten → Erfolgreicher Lauf erneut öffnen und den aktuellen Instanzstatus lesen.",
   onboardingBtn: 'Onboarding neu starten',
   toastOnboardingReset: 'Onboarding zurückgesetzt',
   toastOnboardingResetDetail: 'Erstnutzungs-Leitfaden wird geöffnet',

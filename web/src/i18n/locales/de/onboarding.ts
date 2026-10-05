@@ -1,3 +1,6 @@
 export default {
-  errorTitle: 'Onboarding kann nicht geladen werden',
+  "continue": "Einrichtung fortsetzen",
+  "skip": "Vorerst überspringen",
+  "dashboard": "Zurück zur Übersicht",
+  "errorTitle": "Einrichtungsstatus nicht verfügbar"
 }

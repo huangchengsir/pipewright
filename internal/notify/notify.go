@@ -438,6 +438,7 @@ func (s *service) SendVia(ctx context.Context, channelID string, payload Payload
 	if !ch.Enabled {
 		return nil
 	}
+	observeDelivery(ctx)
 	return s.deliver(ctx, ch, sealed, payload)
 }
 

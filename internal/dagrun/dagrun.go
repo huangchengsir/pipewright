@@ -85,6 +85,14 @@ type StageExecutor func(ctx context.Context, r *run.Run, stage pipeline.Stage, r
 // StubStageExecutor 是默认占位执行器:为每个 job 打一行日志后即判该阶段成功。
 // 不做任何真实构建/部署(诚实占位,真实执行 = Story 8-2)。
 func StubStageExecutor(ctx context.Context, _ *run.Run, stage pipeline.Stage, rep StageReporter) error {
+	for _, post := range stage.Post {
+		if pipeline.PostConditionMatches(post.Condition, false) {
+			run.RecordExecution(rep, run.ExecutionStub)
+		}
+	}
+	if len(stage.Services) > 0 {
+		run.RecordExecution(rep, run.ExecutionStub)
+	}
 	if len(stage.Jobs) == 0 {
 		_ = rep.Log(ctx, "stdout", fmt.Sprintf("阶段「%s」无 job,跳过执行体", stage.Name))
 		return nil
@@ -94,6 +102,9 @@ func StubStageExecutor(ctx context.Context, _ *run.Run, stage pipeline.Stage, re
 			return err
 		}
 		_ = rep.Log(ctx, "stdout", fmt.Sprintf("· %s(%s)", jb.Name, jb.Type))
+		if strings.TrimSpace(jb.Type) != "git_source" && strings.TrimSpace(jb.Type) != "push_image" {
+			run.RecordExecution(rep, run.ExecutionStub)
+		}
 	}
 	return nil
 }
@@ -311,6 +322,8 @@ func (t *tapSink) tail() string {
 	return strings.Join(t.buf, "\n")
 }
 
+func (t *tapSink) RecordExecution(mode string) { run.RecordExecution(t.StepSink, mode) }
+
 // stageReporter 把一个阶段的节点(job)级 step 上报绑定到各 job 的全局 ordinal,并经 mutex
 // 串行化对 sink 的调用。阶段级日志(无 job 上下文)归到本阶段首个节点 step(firstOrd)。
 type stageReporter struct {
@@ -319,6 +332,12 @@ type stageReporter struct {
 	jobOrd   map[string]int // jobID → 全局 step ordinal
 	firstOrd int            // 阶段级日志/产物归位的 step ordinal
 	done     map[string]bool
+}
+
+func (s *stageReporter) RecordExecution(mode string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run.RecordExecution(s.sink, mode)
 }
 
 // Log 阶段级日志 → 归到首个节点 step(节点级 reporter 见 jobReporter 覆盖到各自 ordinal)。
@@ -391,6 +410,12 @@ type jobReporter struct {
 	sink    run.StepSink
 	mu      *sync.Mutex
 	ordinal int
+}
+
+func (j *jobReporter) RecordExecution(mode string) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	run.RecordExecution(j.sink, mode)
 }
 
 func (j *jobReporter) Log(ctx context.Context, stream, line string) error {

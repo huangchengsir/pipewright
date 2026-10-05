@@ -42,7 +42,7 @@ export default {
   toastRevokeFailed: 'Failed to revoke session',
 
   onboardingTitle: 'First-run onboarding',
-  onboardingSub: 'Reopen the three-step guide "Connect AI → Add server → Create project" anytime.',
+  onboardingSub: "Reopen Create project → Prepare pipeline → Successful run and read the instance's current status.",
   onboardingBtn: 'Restart onboarding',
   toastOnboardingReset: 'Onboarding reset',
   toastOnboardingResetDetail: 'Opening the first-run guide',

@@ -1,7 +1,10 @@
 package store
 
 import (
+	"database/sql"
 	"io/fs"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -23,6 +26,81 @@ func TestMigrationSetsMatch(t *testing.T) {
 	}
 	if len(sq) == 0 {
 		t.Fatal("未找到任何迁移")
+	}
+	if len(sq) != 49 || len(my) != 49 || !sq["0050_onboarding_evidence"] || !my["0050_onboarding_evidence"] {
+		t.Fatalf("expected 49 paired migrations including evidence: sqlite=%d mysql=%d", len(sq), len(my))
+	}
+}
+
+func TestOnboardingEvidenceUpgrade(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "upgrade.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := &Store{DB: db, Dialect: SQLite}
+	if _, err := db.Exec(s.schemaMigrationsDDL()); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := fs.Glob(sqliteMigrationFS, "migrations/sqlite/*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry, "0050_") {
+			continue
+		}
+		body, err := sqliteMigrationFS.ReadFile(entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.applyMigration(migrationVersion(entry), string(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, stmt := range []string{
+		`INSERT INTO credentials (id,name,type,scope,ciphertext,masked_value,created_at,updated_at) VALUES ('c','c','git_token','',X'00','m','old','old')`,
+		`INSERT INTO projects (id,name,repo_url,default_branch,credential_id,created_at,updated_at) VALUES ('p','p','https://example.com/r','main','c','old','old')`,
+		`INSERT INTO pipeline_configs (project_id,created_at,updated_at) VALUES ('p','old','old')`,
+		`INSERT INTO pipeline_runs (id,project_id,status,created_at) VALUES ('old','p','success','old')`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.migrate(); err != nil {
+		t.Fatal(err)
+	}
+	var mode, status, updated string
+	var saved sql.NullString
+	if err := db.QueryRow(`SELECT execution_mode,status FROM pipeline_runs WHERE id='old'`).Scan(&mode, &status); err != nil || mode != "legacy_unknown" || status != "success" {
+		t.Fatalf("history = %s/%s, %v", mode, status, err)
+	}
+	if err := db.QueryRow(`SELECT saved_at,updated_at FROM pipeline_configs WHERE project_id='p'`).Scan(&saved, &updated); err != nil || saved.Valid || updated != "old" {
+		t.Fatalf("historical config changed: %v/%s, %v", saved, updated, err)
+	}
+	if _, err := db.Exec(`INSERT INTO pipeline_runs (id,project_id,created_at) VALUES ('new','p','new')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.migrate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT execution_mode FROM pipeline_runs WHERE id='new'`).Scan(&mode); err != nil || mode != "pending" {
+		t.Fatalf("new run after reopen = %s, %v", mode, err)
+	}
+}
+
+func TestEvidenceMigrationStatementsBothDialects(t *testing.T) {
+	for name, fsys := range map[string]fs.FS{"sqlite": sqliteMigrationFS, "mysql": mysqlMigrationFS} {
+		body, err := fs.ReadFile(fsys, "migrations/"+name+"/0050_onboarding_evidence.sql")
+		if err != nil {
+			t.Fatal(err)
+		}
+		stmts := splitStatements(string(body))
+		if len(stmts) != 3 || !strings.Contains(stmts[0], "saved_at") || !strings.Contains(stmts[0], "NULL") ||
+			!strings.Contains(stmts[1], "NOT NULL DEFAULT 'pending'") || stmts[2] != "UPDATE pipeline_runs SET execution_mode = 'legacy_unknown'" {
+			t.Fatalf("%s evidence migration contract: %v", name, stmts)
+		}
 	}
 }
 

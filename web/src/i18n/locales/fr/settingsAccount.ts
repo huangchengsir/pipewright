@@ -42,7 +42,7 @@ export default {
   toastRevokeFailed: 'Échec de la révocation de la session',
 
   onboardingTitle: 'Guide de première utilisation',
-  onboardingSub: 'Rouvrez à tout moment le guide en trois étapes « Connecter l’IA → Ajouter un serveur → Créer un projet ».',
+  onboardingSub: "Rouvrez Créer un projet → Préparer le pipeline → Exécution réussie et lisez l'état actuel de l'instance.",
   onboardingBtn: 'Relancer le guide',
   toastOnboardingReset: 'Guide réinitialisé',
   toastOnboardingResetDetail: 'Ouverture du guide de première utilisation',

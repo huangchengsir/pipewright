@@ -44,7 +44,7 @@ func (b *Builder) runStagePost(ctx context.Context, sink run.StepSink, r *run.Ru
 		}
 		// post 也享运行参数环境(便于引用分支/参数);不接步骤输出捕获(post 不向下游传值)。
 		step.Env = append(runParamsAsEnv(r.Trigger.Params), step.Env...)
-		if err := b.runScriptStep(ctx, sink, 0, step, workspace); err != nil {
+		if err := b.scriptEvidenceBuilder(sink).runScriptStep(ctx, sink, 0, step, workspace); err != nil {
 			// best-effort:记日志,继续后续 post 步骤,绝不覆盖阶段结果。
 			_ = rep.Log(ctx, streamStderr, fmt.Sprintf("· 阶段后置步骤 #%d 未成功(best-effort,不影响阶段结果):%v", i+1, err))
 		}

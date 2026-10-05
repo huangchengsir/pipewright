@@ -310,7 +310,7 @@ func (b *Builder) Run(ctx context.Context, r *run.Run, sink run.StepSink) error 
 		if err := sink.StepRunning(ctx, ordinal); err != nil {
 			return err
 		}
-		serr := b.runScriptStep(ctx, sink, ordinal, cs, workspace)
+		serr := b.scriptEvidenceBuilder(sink).runScriptStep(ctx, sink, ordinal, cs, workspace)
 		if serr != nil {
 			if errors.Is(serr, run.ErrCanceled) || errors.Is(ctx.Err(), context.Canceled) {
 				return b.cancelAt(ctx, sink, ordinal)
@@ -403,6 +403,7 @@ func (b *Builder) build(ctx context.Context, sink run.StepSink, ordinal int, pro
 			}
 		}
 		localTag := localTagPrefix + "/" + slug + ":" + commitTag
+		run.RecordExecution(sink, run.ExecutionReal)
 		code, err := b.driver.Build(ctx, contextDir, dockerfile, localTag, buildArgs, secretArgs, onLine)
 		if err != nil && code < 0 {
 			return "", nil, fmt.Errorf("构建器无法启动")
@@ -433,6 +434,7 @@ func (b *Builder) build(ctx context.Context, sink run.StepSink, ordinal int, pro
 		}
 		env := append(buildArgs, secretArgs...) // 工具链构建经 -e 注入(secret 回显只列 key)
 		buildCmd := toolchainBuildCmd(cfg.ArtifactType)
+		run.RecordExecution(sink, run.ExecutionReal)
 		code, err := b.driver.RunToolchain(ctx, image, workspace, "/src", env, buildCmd, pipeline.Resource{}, onLine)
 		if err != nil && code < 0 {
 			return "", nil, fmt.Errorf("构建器无法启动")
@@ -459,6 +461,7 @@ func (b *Builder) push(ctx context.Context, sink run.StepSink, ordinal int, loca
 	// 登录(口令经 stdin,绝不进 argv/日志)。凭据缺失(user 空)时跳过登录,直接 tag/push
 	// (匿名/已登录场景);仓库要求鉴权则 push 自身会失败并落失败日志。
 	if user != "" {
+		run.RecordExecution(sink, run.ExecutionReal)
 		code, err := b.driver.Login(ctx, registry.URL, user, pass, onLine)
 		pass = "" // 口令用完即弃
 		_ = pass
@@ -470,6 +473,7 @@ func (b *Builder) push(ctx context.Context, sink run.StepSink, ordinal int, loca
 		}
 	}
 
+	run.RecordExecution(sink, run.ExecutionReal)
 	if code, err := b.driver.Tag(ctx, localTag, remoteTag, onLine); err != nil && code < 0 {
 		return "", "", fmt.Errorf("构建器无法启动")
 	} else if code != 0 {
@@ -482,6 +486,24 @@ func (b *Builder) push(ctx context.Context, sink run.StepSink, ordinal int, loca
 	}
 	digest, _, _ := b.driver.InspectImage(ctx, remoteTag)
 	return remoteTag, digest, nil
+}
+
+// The copy is used only for script invocation; the shared builder and its driver
+// are never mutated. Mark at the driver boundary so canceled retry loops stay pending.
+func (b *Builder) scriptEvidenceBuilder(sink run.StepSink) *Builder {
+	copy := *b
+	copy.driver = &scriptEvidenceDriver{Driver: b.driver, sink: sink}
+	return &copy
+}
+
+type scriptEvidenceDriver struct {
+	Driver
+	sink run.StepSink
+}
+
+func (d *scriptEvidenceDriver) RunToolchain(ctx context.Context, image, workspace, workdir string, env, cmd []string, res pipeline.Resource, onLine func(string, string)) (int, error) {
+	run.RecordExecution(d.sink, run.ExecutionReal)
+	return d.Driver.RunToolchain(ctx, image, workspace, workdir, env, cmd, res, onLine)
 }
 
 // buildArgs 把构建变量拆成非 secret(明文 K=V)与 secret(vault.Reveal 明文 K=V)。

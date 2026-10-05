@@ -42,7 +42,7 @@ export default {
   toastRevokeFailed: '中斷工作階段失敗',
 
   onboardingTitle: '首次使用引導',
-  onboardingSub: '隨時重新開啟「連 AI → 加伺服器 → 建專案」三步引導。',
+  onboardingSub: "重新開啟「建立專案 → 準備流水線 → 成功執行」引導，讀取實例目前狀態。",
   onboardingBtn: '重新引導',
   toastOnboardingReset: '已重設引導',
   toastOnboardingResetDetail: '正在開啟首次使用引導',

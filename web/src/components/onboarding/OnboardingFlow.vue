@@ -1,501 +1,137 @@
 <script setup lang="ts">
-/**
- * OnboardingFlow — first-run guide (UX-DR11).
- *
- * Value props (3 cards) + a 3-step checklist:
- *   1. 连接 AI 提供商   — depends on 7-1 (not built) → "即将可用", links to /settings/ai
- *   2. 添加第一台服务器 — depends on 4-1 (not built) → "即将可用", links to /servers
- *   3. 创建第一个项目   — REAL CTA (→ /projects); the only step truly judged complete
- *
- * Steps lock by dependency in the visual sense: AI/Server show "即将可用" and never
- * block; the project step is the live action. Progress counts only真实可判定 steps.
- *
- * Skip writes localStorage(onboarding_dismissed); re-openable from 设置.
- */
-import { computed } from 'vue'
+import { computed, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { Check, Circle, Help, ArrowRight, Refresh, AlertTriangle } from '@vicons/tabler'
 import AppButton from '../ui/AppButton.vue'
-import type { OnboardingStatus } from '../../composables/useOnboarding'
+import AppSelect from '../ui/AppSelect.vue'
+import type { Snapshot } from '../../api/onboarding'
+import { ISSUE_KEYS, type FlowAction, type FlowState } from '../../composables/onboardingState'
 
-const props = defineProps<{
-  status: OnboardingStatus
-}>()
-
-const emit = defineEmits<{
-  skip: []
-}>()
-
-const router = useRouter()
+const props = defineProps<{ snapshot: Readonly<Snapshot> | null; flow: FlowState; loading: boolean; error: boolean }>()
+const emit = defineEmits<{ select: [id: string]; retry: []; skip: []; navigate: [to: string] }>()
 const { t } = useI18n()
-
-type StepState = 'done' | 'now' | 'soon'
-
-interface StepView {
-  key: string
-  num: string
-  title: string
-  badge?: string
-  desc: string
-  state: StepState
-  /** action kind: 'go' real CTA, 'soon' coming-soon link, 'done' completed marker */
-  ctaLabel?: string
-  to?: string
-  doneLabel?: string
-}
-
-const steps = computed<StepView[]>(() => {
-  // The project step is the only真实 gate; AI/Server are forward-declared.
-  return [
-    {
-      key: 'ai',
-      num: '1',
-      title: t('onboardingFlow.step1Title'),
-      badge: t('onboardingFlow.step1Badge'),
-      desc: t('onboardingFlow.step1Desc'),
-      state: 'soon',
-      ctaLabel: t('onboardingFlow.configCta'),
-      to: '/settings/ai',
-    },
-    {
-      key: 'server',
-      num: '2',
-      title: t('onboardingFlow.step2Title'),
-      desc: t('onboardingFlow.step2Desc'),
-      state: 'soon',
-      ctaLabel: t('onboardingFlow.configCta'),
-      to: '/servers',
-    },
-    {
-      key: 'project',
-      num: '3',
-      title: t('onboardingFlow.step3Title'),
-      desc: t('onboardingFlow.step3Desc'),
-      state: props.status.hasProject ? 'done' : 'now',
-      ctaLabel: t('onboardingFlow.createProjectCta'),
-      to: '/projects',
-      doneLabel: t('onboardingFlow.projectDoneLabel'),
-    },
-  ]
-})
-
-// Progress is judged only on真实可判定 steps (本期仅「建项目」)。
-const doneCount = computed(() => (props.status.hasProject ? 1 : 0))
-const realStepCount = 1
-const progressPct = computed(() => `${(doneCount.value / realStepCount) * 100}%`)
-
-function goto(to?: string): void {
-  if (to) {
-    router.push(to)
+const helpOpen = shallowRef(false)
+const browsedStep = shallowRef<number | null>(null)
+const completed = computed(() => props.flow.kind === 'success' || props.flow.kind === 'legacy')
+const stepKeys = ['project', 'pipeline', 'run'] as const
+const options = computed(() => props.snapshot?.projects.map(p => ({ value: p.id, label: p.name })) ?? [])
+const issues = computed(() => [...new Set(props.snapshot?.pipeline.issues.map(i => ISSUE_KEYS[i.code] ?? 'pipeline') ?? [])])
+const serverMissing = computed(() => props.snapshot?.pipeline.issues.some(i => i.code === 'server_missing') ?? false)
+const selected = computed(() => props.snapshot?.selectedProject)
+const projectName = computed(() => completed.value ? props.snapshot?.success?.projectName || t('onboardingFlow.projectUnavailable') : selected.value?.name)
+const browseLinks = computed(() => {
+  if (completed.value && props.snapshot?.success) {
+    const success = props.snapshot.success
+    return [success.projectExists ? '/projects' : null,
+      success.projectExists ? `/projects/${encodeURIComponent(success.projectId)}/pipeline` : null,
+      `/runs/${encodeURIComponent(success.id)}`]
   }
-}
-
-function skip(): void {
-  emit('skip')
-  router.push('/')
+  if (props.flow.kind === 'unknown' || !selected.value) return ['/projects', null, null]
+  const id = encodeURIComponent(selected.value.id)
+  return ['/projects', `/projects/${id}/pipeline`, `/projects?onboardingRun=${id}`]
+})
+function action(a: FlowAction): void {
+  if (a.kind === 'retry') emit('retry')
+  else if (a.kind === 'help') helpOpen.value = true
+  else if (a.to) emit('navigate', a.to)
 }
 </script>
 
 <template>
-  <div class="onboarding">
-    <!-- Hero -->
-    <header class="ob-hero">
-      <div class="ob-mark mono" aria-hidden="true">p&gt;</div>
-      <div>
-        <h1 class="ob-title">{{ t('onboardingFlow.heroTitle') }}</h1>
-        <p class="ob-lede">
-          {{ t('onboardingFlow.ledeBefore') }}<b>{{ t('onboardingFlow.ledeBold1') }}</b>{{ t('onboardingFlow.ledeMid1') }}<b>{{ t('onboardingFlow.ledeBold2') }}</b>{{ t('onboardingFlow.ledeAfter') }}
-        </p>
-      </div>
+  <section class="onboarding" data-testid="onboarding-flow" aria-labelledby="onboarding-title">
+    <header class="flow-header">
+      <h1 id="onboarding-title" class="flow-title">{{ t('onboardingFlow.title') }}</h1>
+      <p class="flow-intro">{{ t('onboardingFlow.intro') }}</p>
     </header>
-
-    <!-- Value props -->
-    <section class="ob-props" :aria-label="t('onboardingFlow.propsAria')">
-      <article class="ob-prop ob-prop--green">
-        <div class="ob-prop__i" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M13 2 3 14h7l-1 8 10-12h-7z" /></svg>
-        </div>
-        <b class="ob-prop__h">{{ t('onboardingFlow.prop1Head') }} <span class="ob-prop__u">{{ t('onboardingFlow.prop1Unit') }}</span></b>
-        <span class="ob-prop__d">{{ t('onboardingFlow.prop1Desc') }}</span>
-      </article>
-      <article class="ob-prop">
-        <div class="ob-prop__i" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>
-        </div>
-        <b class="ob-prop__h">{{ t('onboardingFlow.prop2Head') }}</b>
-        <span class="ob-prop__d">{{ t('onboardingFlow.prop2Desc') }}</span>
-      </article>
-      <article class="ob-prop ob-prop--cyan">
-        <div class="ob-prop__i" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h3.5l2.2-6 3.6 12 2.4-7 1.3 1h4.5" /></svg>
-        </div>
-        <b class="ob-prop__h">{{ t('onboardingFlow.prop3Head') }}</b>
-        <span class="ob-prop__d">{{ t('onboardingFlow.prop3Desc') }}</span>
-      </article>
+    <section v-if="options.length || completed" class="project-choice">
+      <label v-if="!completed && options.length > 1" for="onboarding-project">{{ t('onboardingFlow.projectLabel') }}</label>
+      <span v-else>{{ completed ? t('onboardingFlow.resultProjectLabel') : t('onboardingFlow.projectLabel') }}</span>
+      <AppSelect v-if="!completed && options.length > 1" input-id="onboarding-project" :model-value="selected?.id ?? ''"
+        :options="options" min-width="0" height="44px" :aria-label="t('onboardingFlow.projectLabel')" @update:model-value="emit('select', $event)" />
+      <p class="project-name" :title="projectName ?? options[0]?.label">{{ projectName ?? options[0]?.label }}</p>
     </section>
-
-    <!-- Setup checklist -->
-    <section class="ob-setup" :aria-label="t('onboardingFlow.setupAria')">
-      <div class="ob-setup__h">
-        <div class="ob-setup__t">
-          {{ t('onboardingFlow.setupTitle') }}
-          <span>{{ t('onboardingFlow.setupSubtitle') }}</span>
+    <ol class="flow-steps" :aria-label="t('onboardingFlow.stepsLabel')">
+      <li v-for="(key, index) in stepKeys" :key="key" class="flow-step" :data-state="flow.steps[index]">
+        <button class="step-button" type="button" :aria-expanded="browsedStep === index" :aria-controls="`onboarding-step-${index}`"
+          :aria-current="['current', 'saved'].includes(flow.steps[index]!) ? 'step' : undefined" @click="browsedStep = browsedStep === index ? null : index">
+          <component :is="['done', 'saved'].includes(flow.steps[index]!) ? Check : flow.steps[index] === 'unknown' ? Help : Circle" aria-hidden="true" class="step-icon" />
+          <span class="step-copy"><b>{{ t(`onboardingFlow.steps.${key}`) }}</b><span>{{ t(`onboardingFlow.stepStates.${flow.steps[index]}`) }}</span></span>
+          <span class="step-number" aria-hidden="true">{{ index + 1 }}</span>
+        </button>
+        <div v-if="browsedStep === index" :id="`onboarding-step-${index}`" class="step-detail">
+          <p>{{ t(`onboardingFlow.stepDescriptions.${key}`) }}</p>
+          <AppButton v-if="browseLinks[index]" variant="ghost" @click="emit('navigate', browseLinks[index]!)"><span>{{ t('onboardingFlow.actions.open') }}</span><ArrowRight aria-hidden="true" /></AppButton>
         </div>
-        <div class="ob-setup__prog">
-          <span class="ob-setup__n mono">{{ doneCount }} / {{ realStepCount }}</span>
-          <div class="ob-setup__bar"><i :style="{ width: progressPct }" /></div>
-        </div>
+      </li>
+    </ol>
+    <section class="flow-next" aria-live="polite" :aria-busy="loading" data-testid="onboarding-next">
+      <div class="status-heading">
+        <Check v-if="flow.kind === 'success' || flow.kind === 'legacy'" aria-hidden="true" class="success-icon" />
+        <AlertTriangle v-else-if="error || flow.kind === 'unknown' || flow.kind === 'failed'" aria-hidden="true" />
+        <h2 class="next-title">{{ t(`onboardingFlow.states.${flow.kind}`) }}</h2>
       </div>
-
-      <div
-        v-for="step in steps"
-        :key="step.key"
-        class="ob-step"
-        :class="`ob-step--${step.state}`"
-      >
-        <span class="ob-step__num mono" aria-hidden="true">
-          <svg v-if="step.state === 'done'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2"><path d="m5 13 4 4 10-11" /></svg>
-          <template v-else>{{ step.num }}</template>
-        </span>
-        <div class="ob-step__bd">
-          <b class="ob-step__title">
-            {{ step.title }}
-            <span v-if="step.badge" class="ob-step__badge">{{ step.badge }}</span>
-            <span v-if="step.state === 'soon'" class="ob-step__soon">{{ t('onboardingFlow.soonBadge') }}</span>
-          </b>
-          <span class="ob-step__desc">{{ step.desc }}</span>
-        </div>
-        <div class="ob-step__act">
-          <span v-if="step.state === 'done'" class="ob-step__done">
-            <span class="ob-step__done-dot" aria-hidden="true" />{{ step.doneLabel }}
-          </span>
-          <AppButton
-            v-else-if="step.state === 'now'"
-            variant="primary"
-            @click="goto(step.to)"
-          >
-            {{ step.ctaLabel }}
-          </AppButton>
-          <AppButton
-            v-else
-            variant="default"
-            @click="goto(step.to)"
-          >
-            {{ step.ctaLabel }}
-          </AppButton>
-        </div>
+      <p class="next-description">{{ t(`onboardingFlow.descriptions.${flow.kind}`) }}</p>
+      <ul v-if="issues.length && !['success', 'legacy'].includes(flow.kind)" class="flow-issues">
+        <li v-for="key in issues" :key="key">{{ t(`onboardingFlow.issues.${key}`) }}</li>
+      </ul>
+      <div class="flow-actions">
+        <AppButton v-if="flow.primary" variant="primary" data-testid="onboarding-primary" @click="action(flow.primary)">
+          <Refresh v-if="flow.primary.kind === 'retry'" aria-hidden="true" /><Help v-else-if="flow.primary.kind === 'help'" aria-hidden="true" /><ArrowRight v-else aria-hidden="true" />
+          {{ t(`onboardingFlow.actions.${flow.primary.label}`) }}
+        </AppButton>
+        <AppButton v-for="secondary in flow.secondary" :key="secondary.label" variant="ghost" @click="action(secondary)">{{ t(`onboardingFlow.actions.${secondary.label}`) }}</AppButton>
       </div>
     </section>
-
-    <p class="ob-skip">
-      {{ t('onboardingFlow.skipBefore') }}
-      <button type="button" class="ob-skip__link" @click="skip">{{ t('onboardingFlow.skipLink') }}</button>
-      {{ t('onboardingFlow.skipAfter') }}
-    </p>
-  </div>
+    <details v-if="!completed" class="runtime-help" :open="helpOpen" @toggle="helpOpen = ($event.target as HTMLDetailsElement).open">
+      <summary>{{ t('onboardingFlow.actions.runtimeHelp') }}</summary>
+      <p>{{ t(`onboardingFlow.runtime.${snapshot?.runtime ?? 'unknown'}`) }}</p>
+      <p>{{ t('onboardingFlow.runtime.instructions') }}</p>
+      <router-link v-if="serverMissing" to="/settings/servers">{{ t('onboardingFlow.actions.servers') }}</router-link>
+    </details>
+    <footer class="flow-footer">
+      <AppButton variant="ghost" data-testid="onboarding-skip" @click="emit('skip')">{{ t('onboarding.skip') }}</AppButton>
+      <router-link to="/" class="dashboard-link">{{ t('onboarding.dashboard') }}</router-link>
+    </footer>
+  </section>
 </template>
 
 <style scoped>
-.onboarding {
-  max-width: 1080px;
-  margin: 0 auto;
-  padding: 8px 0 60px;
-}
-
-/* ——— hero ——— */
-.ob-hero {
-  display: flex;
-  align-items: flex-start;
-  gap: 18px;
-  margin-bottom: 30px;
-  animation: ob-in 0.5s var(--ease-out-expo) both;
-}
-.ob-mark {
-  width: 54px;
-  height: 54px;
-  border-radius: var(--rounded-card);
-  background: var(--color-primary);
-  color: #fff;
-  display: grid;
-  place-items: center;
-  font-weight: 700;
-  font-size: 1.5rem;
-  flex: none;
-  box-shadow: 0 8px 26px var(--color-primary-soft);
-}
-.ob-title {
-  font-size: var(--text-display);
-  font-weight: 700;
-  letter-spacing: -0.025em;
-  color: var(--color-text);
-}
-.ob-lede {
-  font-size: 0.95rem;
-  color: var(--color-dim);
-  margin-top: 6px;
-  max-width: 62ch;
-  line-height: 1.55;
-}
-.ob-lede b {
-  color: var(--color-text);
-  font-weight: 600;
-}
-
-/* ——— value props ——— */
-.ob-props {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 14px;
-  margin-bottom: 30px;
-}
-.ob-prop {
-  background: var(--color-card);
-  border: 1px solid var(--color-border);
-  border-radius: var(--rounded-xl);
-  box-shadow: var(--shadow);
-  padding: 16px 17px;
-  animation: ob-in 0.5s 0.05s var(--ease-out-expo) both;
-}
-.ob-prop__i {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--rounded);
-  background: var(--color-primary-soft);
-  color: var(--color-primary);
-  display: grid;
-  place-items: center;
-  margin-bottom: 11px;
-}
-.ob-prop__i svg {
-  width: 17px;
-  height: 17px;
-}
-.ob-prop--cyan .ob-prop__i {
-  background: var(--color-cyan-soft);
-  color: var(--color-cyan);
-}
-.ob-prop--green .ob-prop__i {
-  background: var(--color-green-soft);
-  color: var(--color-green);
-}
-.ob-prop__h {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: var(--color-text);
-}
-.ob-prop__u {
-  font-size: 0.72rem;
-  color: var(--color-faint);
-  font-weight: 500;
-}
-.ob-prop__d {
-  display: block;
-  font-size: 0.79rem;
-  color: var(--color-faint);
-  margin-top: 5px;
-  line-height: 1.5;
-}
-
-/* ——— setup checklist ——— */
-.ob-setup {
-  background: var(--color-card);
-  border: 1px solid var(--color-border);
-  border-radius: var(--rounded-card);
-  box-shadow: var(--shadow);
-  overflow: hidden;
-  animation: ob-in 0.55s 0.1s var(--ease-out-expo) both;
-}
-.ob-setup__h {
-  display: flex;
-  align-items: center;
-  gap: 13px;
-  padding: 17px 20px;
-  border-bottom: 1px solid var(--color-border);
-}
-.ob-setup__t {
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--color-text);
-}
-.ob-setup__t span {
-  display: block;
-  font-size: 0.78rem;
-  color: var(--color-faint);
-  font-weight: 400;
-  margin-top: 2px;
-}
-.ob-setup__prog {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.ob-setup__n {
-  font-size: 0.78rem;
-  color: var(--color-dim);
-}
-.ob-setup__bar {
-  width: 120px;
-  height: 6px;
-  border-radius: var(--rounded-full);
-  background: var(--color-inset);
-  overflow: hidden;
-}
-.ob-setup__bar i {
-  display: block;
-  height: 100%;
-  background: var(--color-primary);
-  border-radius: var(--rounded-full);
-  transition: width var(--duration-normal, 300ms) var(--ease-out-expo);
-}
-
-.ob-step {
-  display: flex;
-  align-items: center;
-  gap: 15px;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--color-border);
-}
-.ob-step:last-child {
-  border-bottom: none;
-}
-.ob-step__num {
-  width: 30px;
-  height: 30px;
-  border-radius: var(--rounded);
-  display: grid;
-  place-items: center;
-  flex: none;
-  font-weight: 600;
-  font-size: 0.85rem;
-}
-.ob-step__num svg {
-  width: 15px;
-  height: 15px;
-}
-.ob-step--done .ob-step__num {
-  background: var(--color-green-soft);
-  color: var(--color-green);
-}
-.ob-step--now .ob-step__num {
-  background: var(--color-primary);
-  color: #fff;
-  box-shadow: 0 4px 14px var(--color-primary-soft);
-}
-.ob-step--soon .ob-step__num {
-  background: var(--color-inset);
-  color: var(--color-faint);
-  border: 1px dashed var(--color-border-strong);
-}
-.ob-step__bd {
-  flex: 1;
-  min-width: 0;
-}
-.ob-step__title {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: var(--color-text);
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  flex-wrap: wrap;
-}
-.ob-step--soon .ob-step__title {
-  color: var(--color-faint);
-}
-.ob-step__badge {
-  font-size: 0.66rem;
-  color: var(--color-cyan);
-  background: var(--color-cyan-soft);
-  border-radius: var(--rounded-sm);
-  padding: 1px 7px;
-  font-weight: 500;
-}
-.ob-step__soon {
-  font-size: 0.66rem;
-  color: var(--color-faint);
-  background: var(--color-inset);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--rounded-sm);
-  padding: 1px 7px;
-  font-weight: 500;
-}
-.ob-step__desc {
-  display: block;
-  font-size: 0.79rem;
-  color: var(--color-faint);
-  margin-top: 3px;
-  line-height: 1.5;
-}
-.ob-step__act {
-  flex: none;
-}
-.ob-step__done {
-  font-size: 0.78rem;
-  color: var(--color-green);
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.ob-step__done-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: var(--rounded-full);
-  background: var(--color-green);
-}
-
-.ob-skip {
-  text-align: center;
-  margin-top: 22px;
-  font-size: 0.82rem;
-  color: var(--color-faint);
-}
-.ob-skip__link {
-  color: var(--color-dim);
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  background: none;
-  border: none;
-  font: inherit;
-  padding: 0;
-}
-.ob-skip__link:hover {
-  color: var(--color-text);
-}
-.ob-skip__link:focus-visible {
-  outline: 2px solid var(--color-primary);
-  outline-offset: 2px;
-  border-radius: var(--rounded-sm);
-}
-
-@keyframes ob-in {
-  from {
-    opacity: 0;
-    transform: translateY(14px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .ob-hero,
-  .ob-prop,
-  .ob-setup {
-    animation: none;
-  }
-  .ob-setup__bar i {
-    transition: none;
-  }
-}
-
-@media (max-width: 720px) {
-  .ob-props {
-    grid-template-columns: 1fr;
-  }
-  .ob-step {
-    flex-wrap: wrap;
-  }
-}
+.onboarding { width: 100%; max-width: 880px; margin: 0 auto; padding: 24px 0 48px; color: var(--color-text); font-size: 16px; letter-spacing: 0; overflow-wrap: anywhere; }
+.flow-header { margin-bottom: 24px; }
+.flow-title { font-size: 1.5rem; font-weight: 650; margin: 0 0 8px; }
+.flow-intro, .next-description, .step-detail, .runtime-help { line-height: 1.6; color: var(--color-dim); }
+.project-choice { display: grid; gap: 8px; margin-bottom: 24px; min-width: 0; }
+.project-choice label { font-size: 0.875rem; color: var(--color-dim); }
+.project-name { font-weight: 600; margin: 0; line-height: 1.6; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.project-choice :deep(.app-select__trigger) { min-height: 44px; }
+.project-choice :deep(.app-select__option span) { white-space: normal; overflow-wrap: anywhere; }
+.flow-steps { list-style: none; padding: 0; margin: 0; border-top: 1px solid var(--color-border); }
+.flow-step { border-bottom: 1px solid var(--color-border); min-width: 0; }
+.step-button { display: flex; gap: 16px; align-items: center; width: 100%; min-height: 76px; padding: 16px 4px; text-align: left; background: transparent; border: 0; font: inherit; color: inherit; cursor: pointer; }
+.step-icon { width: 24px; height: 24px; flex: none; color: var(--color-faint); }
+.flow-step[data-state="done"] .step-icon, .success-icon { color: var(--color-green); }
+.flow-step[data-state="current"] .step-icon, .flow-step[data-state="saved"] .step-icon { color: var(--color-primary); }
+.step-copy { display: grid; gap: 4px; flex: 1; min-width: 0; }
+.step-copy span, .step-number { font-size: 0.875rem; color: var(--color-dim); }
+.step-detail { padding: 0 4px 16px 44px; }
+.step-detail p { margin: 0 0 12px; }
+.step-detail svg { width: 18px; height: 18px; flex: none; }
+.step-detail :deep(.app-btn) { width: fit-content; gap: 8px; }
+.step-detail .app-btn span { min-width: 0; }
+.flow-next { padding: 28px 0 24px; }
+.status-heading { display: flex; align-items: flex-start; gap: 10px; }
+.status-heading svg, .flow-actions svg { width: 20px; height: 20px; flex: none; }
+.next-title { font-size: 1.125rem; font-weight: 650; margin: 0 0 8px; }
+.next-description { margin: 0 0 16px; }
+.flow-issues { padding-left: 20px; margin-bottom: 16px; color: var(--color-dim); line-height: 1.6; }
+.flow-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.flow-actions :deep(.app-btn), .flow-footer :deep(.app-btn), .step-detail :deep(.app-btn) { min-height: 44px; height: auto; white-space: normal; overflow-wrap: anywhere; padding-top: 10px; padding-bottom: 10px; max-width: 100%; font-size: 16px; }
+.runtime-help { border-top: 1px solid var(--color-border); padding: 16px 0; }
+.runtime-help summary { cursor: pointer; min-height: 44px; display: list-item; padding-top: 8px; }
+.runtime-help p { margin: 8px 0; }
+.runtime-help a, .dashboard-link { color: var(--color-primary); }
+.flow-footer { border-top: 1px solid var(--color-border); padding-top: 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
+.dashboard-link { display: inline-flex; align-items: center; min-height: 44px; text-decoration: none; }
+.step-button:focus-visible, .runtime-help summary:focus-visible, .dashboard-link:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; }
+@media (min-width: 720px) { .onboarding { padding: 32px 32px 56px; } .project-choice { max-width: 560px; } }
 </style>

@@ -1,55 +1,20 @@
 <script setup lang="ts">
-/**
- * Onboarding view (Story 1.7) — first-run guide shell.
- *
- * Loads onboarding status (frontend-derived) and renders OnboardingFlow.
- * Skipping persists localStorage(onboarding_dismissed) and falls to /overview.
- */
-import { onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import OnboardingFlow from '../components/onboarding/OnboardingFlow.vue'
-import SkeletonBlock from '../components/ui/SkeletonBlock.vue'
-import ErrorState from '../components/ui/ErrorState.vue'
 import { useOnboardingStatus, dismissOnboarding } from '../composables/useOnboarding'
-
-const { t } = useI18n()
-const { status, loading, error, refresh } = useOnboardingStatus()
-
-onMounted(refresh)
-
-function onSkip(): void {
-  dismissOnboarding()
+const router = useRouter()
+const { snapshot, loading, error, flow, refresh, select } = useOnboardingStatus()
+function skip(): void { dismissOnboarding(); void router.push('/') }
+function navigate(to: string): void {
+  const resolved = router.resolve(to)
+  if (resolved.name === 'project-pipeline' || /\/projects\/[^/]+\/pipeline$/.test(resolved.path)) {
+    void router.push({ path: resolved.path, query: { ...resolved.query,
+      ...(!['success', 'legacy'].includes(flow.value.kind) ? { onboardingGuide: '1' } : {}) }, hash: resolved.hash })
+  } else void router.push(to)
 }
 </script>
 
 <template>
-  <div class="onboarding-view">
-    <div v-if="loading" class="ob-loading" aria-busy="true">
-      <SkeletonBlock :height="120" />
-      <SkeletonBlock :height="110" />
-      <SkeletonBlock :height="200" />
-    </div>
-    <ErrorState
-      v-else-if="error"
-      :title="t('onboarding.errorTitle')"
-      :description="error"
-      @retry="refresh"
-    />
-    <OnboardingFlow v-else :status="status" @skip="onSkip" />
-  </div>
+  <OnboardingFlow :snapshot="snapshot" :loading="loading" :error="error" :flow="flow"
+    @select="select" @retry="refresh" @skip="skip" @navigate="navigate" />
 </template>
-
-<style scoped>
-.onboarding-view {
-  padding: 40px 32px 0;
-  max-width: 1080px;
-  margin: 0 auto;
-}
-.ob-loading {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  max-width: 1080px;
-  margin: 0 auto;
-}
-</style>

@@ -20,6 +20,7 @@ const props = defineProps<{
   current?: string
   /** Heading — "添加任务" vs "更换任务类型" */
   title?: string
+  guideEnabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -108,6 +109,7 @@ watch(
           </header>
 
           <div class="jtp-body">
+            <p v-if="guideEnabled" class="jtp-guide" data-testid="guide-picker-hint">{{ t('onboardingGuide.phases.choose.description') }}</p>
             <!-- 复用库 Tier 2:我的自定义节点(已保存的单节点,选中即预填 config) -->
             <section v-if="customLoading || customNodes.length" class="jtp-group">
               <h3 class="jtp-group-label">{{ t('pipelineCanvas.myCustomNodes') }}</h3>
@@ -138,8 +140,9 @@ watch(
                 <button
                   v-for="spec in group.specs"
                   :key="spec.type"
+                  :data-job-type="spec.type"
                   class="type-card"
-                  :class="{ 'type-card--current': spec.type === current }"
+                  :class="{ 'type-card--current': spec.type === current, 'type-card--guide': guideEnabled && spec.type === 'script' }"
                   @click="choose(spec.type)"
                 >
                   <JobTypeIcon :type="spec.type" :size="38" />
@@ -172,6 +175,8 @@ watch(
   place-items: center;
   padding: 24px;
 }
+.jtp-guide { padding: 12px; margin: 0 0 16px; border-left: 3px solid var(--color-primary); background: var(--color-primary-soft); color: var(--color-text); font-size: 13px; line-height: 1.6; }
+.type-card--guide { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 
 .jtp-dialog {
   width: min(840px, 100%);

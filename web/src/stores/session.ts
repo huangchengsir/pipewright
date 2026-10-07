@@ -12,6 +12,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { http, HttpError } from '../api/http'
+import { resetOpsAuth } from '../utils/opsAuth'
 
 export interface SessionUser {
   username: string
@@ -55,6 +56,7 @@ export const useSessionStore = defineStore('session', () => {
       return { kind: 'ok', user: data }
     } catch (err) {
       if (err instanceof HttpError && err.status === 401) {
+        resetOpsAuth()
         // Confirmed not logged in
         user.value = null
         isNetworkError.value = false
@@ -85,6 +87,7 @@ export const useSessionStore = defineStore('session', () => {
 
   /** Clear the cached session (call after logout). */
   function clearSession(): void {
+    resetOpsAuth()
     user.value = null
     isNetworkError.value = false
     fetched = true

@@ -1,4 +1,11 @@
 export default {
+  manualCopy: {
+    compatibleHint: "复制可使用兼容或手动方式",
+    title: "手动复制",
+    unavailable: "自动复制未成功。文本可手动选择复制，尚未确认写入剪贴板。",
+    textAria: "待复制文本",
+    selectAll: "全选文本",
+  },
   // 公共
   close: '关闭',
   cancel: '取消',

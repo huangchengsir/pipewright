@@ -8,6 +8,7 @@
  */
 
 import { currentLocale } from '../i18n'
+import { resetOpsAuth } from '../utils/opsAuth'
 
 export interface ApiError {
   code: string
@@ -74,6 +75,7 @@ async function request<T>(
   const isAuthEndpoint = url.includes('/api/auth/')
 
   if (response.status === 401 && !isAuthEndpoint) {
+    resetOpsAuth()
     // Not logged in — redirect to login exactly once even if multiple
     // concurrent requests all return 401 simultaneously.
     if (!redirectingToLogin) {
@@ -86,6 +88,7 @@ async function request<T>(
       location.replace(`/login?redirect=${redirectTo}`)
     }
     // Return a never-resolving promise so callers don't see undefined
+    if (url.startsWith('/api/ai/ops/')) throw new HttpError(401, null, 'Unauthorized')
     return new Promise<never>(() => undefined)
   }
 

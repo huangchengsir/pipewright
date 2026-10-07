@@ -4,11 +4,14 @@
   复用既有 /api/servers/:id/logs(source=docker)历史拉取 + SSE 实时 tail。
   右侧滑入,顶栏显示容器名/短 ID,可切 tail 行数、开/停实时跟随、复制、清屏。
 */
-import { ref, watch, nextTick, onBeforeUnmount } from 'vue'
+import { ref, shallowRef, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getServerLogs, subscribeServerLogs } from '../../api/servers'
 import { HttpError } from '../../api/http'
 import { useToast } from '../../composables/useToast'
+import AppSelect from '../ui/AppSelect.vue'
+import CopyTextDialog from './CopyTextDialog.vue'
+import { copyText } from '../../utils/clipboard'
 
 const props = defineProps<{
   serverId: string
@@ -26,12 +29,24 @@ const errorMsg = ref('')
 const lines = ref<string[]>([])
 const tailN = ref(200)
 const TAIL_OPTIONS = [100, 200, 500, 1000]
+const tailOptions = TAIL_OPTIONS.map((n) => ({ value: String(n), label: String(n) }))
+const tailValue = computed({
+  get: () => String(tailN.value),
+  set: (value: string) => {
+    const n = Number(value)
+    if (TAIL_OPTIONS.includes(n)) tailN.value = n
+  },
+})
+const manualCopyText = shallowRef<string | null>(null)
+const copying = shallowRef(false)
 const following = ref(false)
 const bodyEl = ref<HTMLElement | null>(null)
 
 let unsub: (() => void) | null = null
+let generation = 0
 
 function stopStream(): void {
+  generation++
   if (unsub) {
     unsub()
     unsub = null
@@ -47,14 +62,19 @@ async function scrollToBottom(): Promise<void> {
 
 async function loadHistory(): Promise<void> {
   stopStream()
+  const requestGeneration = generation
+  const serverId = props.serverId
+  const containerName = props.containerName
+  const count = tailN.value
   viewState.value = 'loading'
   errorMsg.value = ''
   try {
-    const res = await getServerLogs(props.serverId, {
+    const res = await getServerLogs(serverId, {
       source: 'docker',
-      target: props.containerName,
-      lines: tailN.value,
+      target: containerName,
+      lines: count,
     })
+    if (requestGeneration !== generation) return
     if (res.error) {
       viewState.value = 'error'
       errorMsg.value = res.error
@@ -64,6 +84,7 @@ async function loadHistory(): Promise<void> {
     viewState.value = 'loaded'
     void scrollToBottom()
   } catch (err) {
+    if (requestGeneration !== generation) return
     viewState.value = 'error'
     errorMsg.value =
       err instanceof HttpError
@@ -79,6 +100,8 @@ function toggleFollow(): void {
     return
   }
   // 开实时:先保留已有历史,再订阅增量。
+  stopStream()
+  const streamGeneration = generation
   following.value = true
   viewState.value = 'streaming'
   unsub = subscribeServerLogs(
@@ -86,17 +109,20 @@ function toggleFollow(): void {
     { source: 'docker', target: props.containerName, lines: tailN.value },
     {
       onLine(line) {
+        if (streamGeneration !== generation || !following.value) return
         lines.value.push(line)
         // 防爆:实时跟随时只保留最近 5000 行。
         if (lines.value.length > 5000) lines.value.splice(0, lines.value.length - 5000)
         void scrollToBottom()
       },
       onError(message) {
+        if (streamGeneration !== generation || !following.value) return
         errorMsg.value = message
         stopStream()
         viewState.value = 'error'
       },
       onTransportError() {
+        if (streamGeneration !== generation || !following.value) return
         stopStream()
         // 传输断开不当致命错误:停跟随,保留已拉到的内容。
         viewState.value = 'loaded'
@@ -106,11 +132,18 @@ function toggleFollow(): void {
 }
 
 async function copyAll(): Promise<void> {
+  if (copying.value || manualCopyText.value !== null) return
+  const text = lines.value.join('\n')
+  const count = lines.value.length
+  copying.value = true
   try {
-    await navigator.clipboard.writeText(lines.value.join('\n'))
-    toast.success(t('opsContainer.logs.copied'), { detail: t('opsContainer.logs.lineCount', { n: lines.value.length }) })
-  } catch {
-    toast.error(t('opsContainer.copyFailed'), { detail: t('opsContainer.logs.copyFailedDetail') })
+    if (await copyText(text)) {
+      toast.success(t('opsContainer.logs.copied'), { detail: t('opsContainer.logs.lineCount', { n: count }) })
+    } else {
+      manualCopyText.value = text
+    }
+  } finally {
+    copying.value = false
   }
 }
 
@@ -118,10 +151,10 @@ function clearView(): void {
   lines.value = []
 }
 
-watch(tailN, () => void loadHistory())
-
-// 打开即拉历史(组件随抽屉 v-if 挂载)。
-void loadHistory()
+watch([tailN, () => props.serverId, () => props.containerName], () => {
+  lines.value = []
+  void loadHistory()
+}, { immediate: true })
 
 onBeforeUnmount(stopStream)
 </script>
@@ -139,18 +172,18 @@ onBeforeUnmount(stopStream)
       </header>
 
       <div class="drawer__toolbar">
-        <label class="tool">
+        <div class="tool">
           <span class="tool__k">{{ t('opsContainer.logs.lines') }}</span>
-          <select v-model.number="tailN" class="tool__sel" :aria-label="t('opsContainer.logs.linesAria')">
-            <option v-for="n in TAIL_OPTIONS" :key="n" :value="n">{{ n }}</option>
-          </select>
-        </label>
+          <div class="tool__sel">
+            <AppSelect v-model="tailValue" :options="tailOptions" :aria-label="t('opsContainer.logs.linesAria')" min-width="88px" height="36px" portal />
+          </div>
+        </div>
         <button class="tool-btn" :disabled="viewState === 'loading'" @click="loadHistory">↻ {{ t('common.refresh') }}</button>
         <button class="tool-btn" :class="{ 'tool-btn--on': following }" @click="toggleFollow">
           {{ following ? `⏸ ${t('opsContainer.logs.stopLive')}` : `▶ ${t('opsContainer.logs.follow')}` }}
         </button>
         <span class="grow" />
-        <button class="tool-btn" :disabled="lines.length === 0" @click="copyAll">{{ t('opsContainer.copy') }}</button>
+        <button class="tool-btn" :disabled="lines.length === 0 || copying" @click="copyAll">{{ t('opsContainer.copy') }}</button>
         <button class="tool-btn" :disabled="lines.length === 0" @click="clearView">{{ t('opsContainer.logs.clear') }}</button>
       </div>
 
@@ -170,6 +203,7 @@ onBeforeUnmount(stopStream)
       </footer>
     </aside>
   </div>
+  <CopyTextDialog v-if="manualCopyText !== null" :text="manualCopyText" @close="manualCopyText = null" />
 </template>
 
 <style scoped>
@@ -214,8 +248,11 @@ onBeforeUnmount(stopStream)
   align-items: baseline;
   gap: 10px;
   min-width: 0;
+  flex-wrap: wrap;
 }
 .drawer__name {
+  overflow-wrap: anywhere;
+  min-width: 0;
   font-size: var(--text-section);
   font-weight: 700;
   color: var(--color-text);
@@ -250,6 +287,7 @@ onBeforeUnmount(stopStream)
 
 .drawer__toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 10px 18px;
@@ -260,20 +298,19 @@ onBeforeUnmount(stopStream)
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  flex-shrink: 0;
 }
 .tool__k {
   font-size: var(--text-micro);
   color: var(--color-faint);
 }
 .tool__sel {
+  width: 88px;
+  flex: 0 0 88px;
   font-size: var(--text-label);
-  padding: 3px 6px;
-  border-radius: var(--rounded-sm);
-  border: 1px solid var(--color-border-strong);
-  background: var(--color-card);
-  color: var(--color-text);
 }
 .tool-btn {
+  min-height: 36px;
   font-size: var(--text-micro);
   font-weight: 600;
   padding: 5px 11px;
@@ -330,6 +367,7 @@ onBeforeUnmount(stopStream)
 
 .drawer__foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   padding: 8px 18px;

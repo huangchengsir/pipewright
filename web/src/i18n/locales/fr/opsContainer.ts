@@ -1,4 +1,11 @@
 export default {
+  manualCopy: {
+    compatibleHint: "Copie compatible ou manuelle disponible",
+    title: "Copie manuelle",
+    unavailable: "La copie automatique a échoué. Le texte peut être copié manuellement ; le contenu du presse-papiers n'est pas confirmé.",
+    textAria: "Texte à copier",
+    selectAll: "Tout sélectionner",
+  },
   // common
   close: 'Fermer',
   cancel: 'Annuler',

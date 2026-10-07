@@ -85,6 +85,85 @@ func (m *Masker) Scrub(line string) string {
 	return out
 }
 
+// ScrubTruncated also masks a trailing prefix (at least four bytes) of a
+// registered secret. Use on bounded output before any further clipping.
+// Matching is linear in the bounded suffix, even for repetitive credentials.
+func (m *Masker) ScrubTruncated(text string) string {
+	if m == nil || text == "" {
+		return text
+	}
+	m.mu.RLock()
+	secrets := make([]string, 0, len(m.secrets))
+	for secret := range m.secrets {
+		secrets = append(secrets, secret)
+	}
+	m.mu.RUnlock()
+	if len(secrets) == 0 {
+		return text
+	}
+	overlap := 0
+	// Union full-secret and truncated-prefix spans on the original text. Replacing
+	// a shorter secret first must not destroy a longer truncated match.
+	coverage := make([]int, len(text)+1)
+	for _, secret := range secrets {
+		for offset := 0; offset < len(text); {
+			index := strings.Index(text[offset:], secret)
+			if index < 0 {
+				break
+			}
+			start := offset + index
+			coverage[start]++
+			coverage[start+len(secret)]--
+			offset = start + len(secret)
+		}
+		n := min(len(text), len(secret)-1)
+		if n < minSecretLen {
+			continue
+		}
+		prefix := secret[:n]
+		failure := make([]int, n)
+		for i, j := 1, 0; i < n; i++ {
+			for j > 0 && prefix[i] != prefix[j] {
+				j = failure[j-1]
+			}
+			if prefix[i] == prefix[j] {
+				j++
+			}
+			failure[i] = j
+		}
+		matched := 0
+		for i := len(text) - n; i < len(text); i++ {
+			for matched > 0 && (matched == n || text[i] != prefix[matched]) {
+				matched = failure[matched-1]
+			}
+			if text[i] == prefix[matched] {
+				matched++
+			}
+		}
+		if matched >= minSecretLen {
+			overlap = max(overlap, matched)
+		}
+	}
+	if overlap > 0 {
+		coverage[len(text)-overlap]++
+		coverage[len(text)]--
+	}
+	var out strings.Builder
+	covered := 0
+	for i := 0; i < len(text); i++ {
+		previous := covered
+		covered += coverage[i]
+		if covered > 0 {
+			if previous == 0 {
+				out.WriteString(Placeholder)
+			}
+		} else {
+			out.WriteByte(text[i])
+		}
+	}
+	return out.String()
+}
+
 // ScrubMap 返回 detail 的脱敏深拷贝:对每个字符串值/嵌套字符串递归 Scrub。
 // 供审计 detail 落库前过滤,确保 detail_json 绝不含明文 secret。
 // 非字符串值(数字/布尔/nil)原样保留;嵌套 map[string]any 与 []any 递归处理。

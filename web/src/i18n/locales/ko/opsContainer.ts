@@ -1,4 +1,11 @@
 export default {
+  manualCopy: {
+    compatibleHint: "호환 모드 또는 수동 복사 가능",
+    title: "수동 복사",
+    unavailable: "자동 복사에 실패했습니다. 텍스트를 선택하여 직접 복사할 수 있습니다. 클립보드 저장은 확인되지 않았습니다.",
+    textAria: "복사할 텍스트",
+    selectAll: "텍스트 전체 선택",
+  },
   // common
   close: '닫기',
   cancel: '취소',

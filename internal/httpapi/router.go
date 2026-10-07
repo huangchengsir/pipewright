@@ -32,6 +32,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/metrics"
 	"github.com/huangchengsir/pipewright/internal/notify"
 	"github.com/huangchengsir/pipewright/internal/oauth"
+	"github.com/huangchengsir/pipewright/internal/opschat"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/promotion"
@@ -60,6 +61,7 @@ const contextKeySession contextKey = 1
 type Option func(*options)
 
 type options struct {
+	opsChat          *opschat.Service
 	onboarding       onboardingStatusReader
 	vault            vault.Vault
 	projects         project.Service
@@ -446,6 +448,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Use(func(next http.Handler) http.Handler {
 			return requireCSRF(next)
 		})
+		mountOpsChat(ar, o.opsChat, svc)
 
 		// 审计 Recorder(Story 1.4):传给既有敏感操作 handler,业务成功后追加审计行。
 		// 为 nil 时 handler 跳过审计(不阻断业务)。

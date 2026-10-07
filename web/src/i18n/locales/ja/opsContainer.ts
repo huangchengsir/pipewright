@@ -1,4 +1,11 @@
 export default {
+  manualCopy: {
+    compatibleHint: "互換モードまたは手動でコピー可能",
+    title: "手動コピー",
+    unavailable: "自動コピーに失敗しました。テキストを選択して手動でコピーできます。クリップボードへの書き込みは確認されていません。",
+    textAria: "コピーするテキスト",
+    selectAll: "すべて選択",
+  },
   // 共通
   close: '閉じる',
   cancel: 'キャンセル',

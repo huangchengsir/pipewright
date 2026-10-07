@@ -407,6 +407,8 @@ function refit(): void {
   const t = term.value
   const host = termHost.value
   if (!fit || !t || !host) return
+  const bounds = host.getBoundingClientRect()
+  if (!host.isConnected || bounds.width <= 0 || bounds.height <= 0) return
   try {
     fit.fit()
     const screen = host.querySelector('.xterm-screen') as HTMLElement | null
@@ -1340,14 +1342,17 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 880px) {
-  /* 窄屏:展开时上下堆叠(终端在上、AI 在下);收起时终端占满。 */
+  /* Narrow screens give the assistant the main area; closing restores the terminal. */
   .main.ai-open {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 1.4fr) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
   }
   .main.ai-open .term-wrap {
-    border-right: none;
-    border-bottom: 1px solid var(--color-border);
+    display: none;
+  }
+  .main.ai-open ~ .caret-ghost,
+  .main.ai-open ~ .ctx {
+    display: none;
   }
   .seg .cell .v {
     max-width: 120px;

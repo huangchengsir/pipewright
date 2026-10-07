@@ -881,6 +881,362 @@ test('container log dropdown is custom and latest numeric tail wins delayed hist
   expect(await logs.locator('select').count()).toBe(0)
 })
 
+test('narrow assistant hide preserves PTY dimensions until terminal is restored', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 500 })
+  await fixture(page)
+  await page.addInitScript(() =>
+    localStorage.setItem('pw-terminal-ai-open', '0'),
+  )
+  const sizes: { cols: number; rows: number }[] = []
+  const inputs: string[] = []
+  await page.routeWebSocket('**/api/servers/a/terminal*', (ws) => {
+    ws.onMessage((raw) => {
+      try {
+        const frame = JSON.parse(String(raw))
+        if (frame.type === 'resize')
+          sizes.push({ cols: frame.cols, rows: frame.rows })
+      } catch {
+        inputs.push(String(raw))
+      }
+    })
+  })
+  await page.goto('/servers/a/terminal')
+  await page.evaluate(() => document.fonts.ready)
+  await expect.poll(() => sizes.length).toBeGreaterThan(0)
+  await page.evaluate(
+    () =>
+      new Promise<void>((r) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => r())),
+      ),
+  )
+  const before = sizes.length
+  const dimensions = sizes.at(-1)
+  await page.locator('.xterm-helper-textarea').pressSequentially('do')
+  await expect(page.locator('.caret-ghost')).toBeVisible()
+  const inputCount = inputs.length
+  await page.locator('.ai-launcher').click()
+  await expect(
+    panel(page).getByRole('textbox', { name: '输入运维需求' }),
+  ).toBeEnabled()
+  await expect(page.locator('.term-wrap')).toBeHidden()
+  await expect(page.locator('.caret-ghost')).toBeHidden()
+  await page.evaluate(
+    () =>
+      new Promise<void>((r) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => r())),
+      ),
+  )
+  expect(sizes.length).toBe(before)
+  expect(inputs.length).toBe(inputCount)
+  await button(page, '收起助手').click()
+  await expect(page.locator('.term-wrap')).toBeVisible()
+  await expect.poll(() => sizes.length).toBeGreaterThan(before)
+  expect(sizes.at(-1)!.cols).toBe(dimensions!.cols)
+  expect(sizes.at(-1)!.rows).toBeGreaterThanOrEqual(dimensions!.rows - 1)
+  expect(sizes.at(-1)!.rows).toBeLessThanOrEqual(dimensions!.rows + 1)
+})
+
+for (const viewport of [
+  { width: 390, height: 500 },
+  { width: 390, height: 844 },
+  { width: 1366, height: 500 },
+])
+  test(`embedded terminal assistant ${viewport.width}x${viewport.height}`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize(viewport)
+    const f = await fixture(page)
+    const ids = ['a', ...Array.from({ length: 7 }, (_, i) => 'target' + i)]
+    f.state.db.chat!.session.serverIds = ids
+    f.state.db.chat!.session.title = 'Long session title '.repeat(4)
+    for (let i = 0; i < 12; i++)
+      f.entry(f.state.db.chat!, 'assistant', 'content '.repeat(100))
+    for (let i = 0; i < 15; i++)
+      f.state.db['history' + i] = snap(session('history' + i))
+    await page.route(
+      (u) => u.pathname === '/api/servers',
+      (r) =>
+        json(r, {
+          items: ids.map((id) => ({
+            ...server(id),
+            name: 'Long server name '.repeat(5) + id,
+          })),
+        }),
+    )
+    await page.addInitScript(() =>
+      localStorage.setItem('pw-terminal-ai-open', '1'),
+    )
+    await page.routeWebSocket('**/api/servers/a/terminal*', () => {})
+    await page.goto('/servers/a/terminal')
+    const input = panel(page).getByRole('textbox', { name: '输入运维需求' })
+    await expect(input).toBeEnabled()
+    await button(page, '会话历史').click()
+    await panel(page).getByTestId('ops-navigation').locator('summary').click()
+    await input.scrollIntoViewIfNeeded()
+    const panelBox = (await panel(page).boundingBox())!
+    const inputBox = (await input.boundingBox())!
+    expect(inputBox.y + inputBox.height).toBeLessThanOrEqual(
+      panelBox.y + panelBox.height + 1,
+    )
+    await panel(page).getByText('运维工具', { exact: true }).click()
+    f.state.patchFailure = 'ops_storage_failed'
+    await input.fill('recoverable draft')
+    await expect(panel(page)).toContainText('保存失败')
+    await expect(panel(page).getByRole('alert')).toBeVisible()
+    await input.scrollIntoViewIfNeeded()
+    const bodyBox = (await panel(page)
+      .getByTestId('ops-messages-scroll')
+      .boundingBox())!
+    const composerBox = (await panel(page).locator('.composer').boundingBox())!
+    expect(bodyBox.height).toBeGreaterThanOrEqual(48)
+    expect(composerBox.height).toBeGreaterThan(40)
+    expect(composerBox.y + composerBox.height).toBeLessThanOrEqual(
+      panelBox.y + panelBox.height + 1,
+    )
+    await panel(page)
+      .locator('.composer')
+      .getByRole('button', { name: '保存', exact: true })
+      .click()
+    await expect(panel(page)).toContainText('草稿已保存')
+    await page.screenshot({
+      path: testInfo.outputPath('embedded-terminal.png'),
+    })
+    await button(page, '收起助手').click()
+    await expect(panel(page)).toHaveCount(0)
+    await expect(page.locator('.term-wrap')).toBeVisible()
+    expect(
+      f.state.requests.some(
+        (r) => r.path.endsWith('/turns') || r.path.endsWith('/cancel'),
+      ),
+    ).toBe(false)
+  })
+
+test('short panel keeps long targets, rename and expanded tools reachable', async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 500 })
+  const f = await fixture(page)
+  const ids = Array.from({ length: 8 }, (_, i) => 'target' + i)
+  f.state.db.chat!.session.serverIds = ids
+  f.state.db.chat!.session.title = 'Long session title '.repeat(4)
+  for (let i = 0; i < 10; i++)
+    f.entry(f.state.db.chat!, 'assistant', 'content '.repeat(100))
+  await page.route(
+    (u) => u.pathname === '/api/servers',
+    (r) =>
+      json(r, {
+        items: ids.map((id) => ({
+          ...server(id),
+          name: 'Long server name '.repeat(5) + id,
+        })),
+      }),
+  )
+  await open(page)
+  await button(page, '会话历史').click()
+  const nav = panel(page).getByTestId('ops-navigation')
+  await nav.locator('summary').click()
+  await button(page, '重命名').click()
+  await panel(page).getByText('运维工具', { exact: true }).click()
+  const input = panel(page).getByRole('textbox', { name: '输入运维需求' })
+  await input.fill('short panel draft')
+  await expect(panel(page)).toContainText('草稿已保存')
+  const box = (await panel(page)
+    .getByTestId('ops-messages-scroll')
+    .boundingBox())!
+  const summary = (await nav.locator('.target-summary').boundingBox())!
+  const list = (await nav.locator('.server-list').boundingBox())!
+  expect(box.height).toBeGreaterThanOrEqual(48)
+  expect(summary.y + summary.height).toBeLessThanOrEqual(box.y + 1)
+  expect(list.y + list.height).toBeLessThanOrEqual(summary.y + 1)
+  await input.scrollIntoViewIfNeeded()
+  await input.focus()
+  expect(
+    (await input.boundingBox())!.y + (await input.boundingBox())!.height,
+  ).toBeLessThanOrEqual(501)
+  await expect(button(page, '保存')).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('short-panel.png') })
+})
+
+for (const viewport of [
+  { width: 1366, height: 900 },
+  { width: 1920, height: 900 },
+  { width: 390, height: 844 },
+  { width: 390, height: 500 },
+])
+  for (const theme of ['light', 'dark'])
+    test(`fixed navigation ${viewport.width}x${viewport.height} ${theme}`, async ({
+      page,
+    }, testInfo) => {
+      await page.setViewportSize(viewport)
+      const f = await fixture(page, { theme })
+      for (let i = 0; i < 30; i++)
+        f.state.db['history' + i] = snap(session('history' + i))
+      for (let i = 0; i < 40; i++)
+        f.entry(
+          f.state.db.chat!,
+          'assistant',
+          'Message ' + i + '\n' + 'long content '.repeat(30),
+        )
+      await page.route(
+        (u) => u.pathname === '/api/servers',
+        (r) =>
+          json(r, {
+            items: Array.from({ length: 30 }, (_, i) =>
+              server(i === 0 ? 'a' : i === 1 ? 'b' : 'extra' + i),
+            ),
+          }),
+      )
+      await open(page)
+      const header = panel(page).getByTestId('ops-header')
+      const nav = panel(page).getByTestId('ops-navigation')
+      const messages = panel(page).getByTestId('ops-messages-scroll')
+      const input = panel(page).getByRole('textbox', { name: '输入运维需求' })
+      await expect(messages.locator('.message')).toHaveCount(40)
+      await button(page, '会话历史').click()
+      await nav.locator('summary').click()
+      const before = await Promise.all([
+        header.boundingBox(),
+        nav.boundingBox(),
+        input.boundingBox(),
+      ])
+      await messages.evaluate((el) => {
+        el.scrollTop = el.scrollHeight
+      })
+      await expect
+        .poll(() => messages.evaluate((el) => el.scrollTop))
+        .toBeGreaterThan(0)
+      const after = await Promise.all([
+        header.boundingBox(),
+        nav.boundingBox(),
+        input.boundingBox(),
+      ])
+      for (let i = 0; i < before.length; i++) {
+        expect(after[i]!.y).toBeCloseTo(before[i]!.y, 1)
+        expect(after[i]!.height).toBeCloseTo(before[i]!.height, 1)
+      }
+      expect(after[0]!.y).toBeGreaterThanOrEqual(0)
+      expect(after[2]!.y + after[2]!.height).toBeLessThanOrEqual(
+        viewport.height,
+      )
+      expect((await messages.boundingBox())!.height).toBeGreaterThan(40)
+      const serversBox = (await nav.locator('.server-list').boundingBox())!
+      const summaryBox = (await nav.locator('.target-summary').boundingBox())!
+      const historyBox = (await nav.locator('.session-list').boundingBox())!
+      const navBox = (await nav.boundingBox())!
+      expect(serversBox.y + serversBox.height).toBeLessThanOrEqual(
+        summaryBox.y + 1,
+      )
+      expect(historyBox.y + historyBox.height).toBeLessThanOrEqual(
+        navBox.y + navBox.height + 1,
+      )
+      for (const list of [
+        nav.locator('.session-list'),
+        nav.locator('.server-list'),
+      ]) {
+        await list.evaluate((el) => {
+          el.scrollTop = el.scrollHeight
+        })
+        await expect
+          .poll(() => list.evaluate((el) => el.scrollTop))
+          .toBeGreaterThan(0)
+        await list.evaluate((el) => {
+          el.scrollTop = 0
+        })
+      }
+      await input.fill('layout draft')
+      await expect(panel(page)).toContainText('草稿已保存')
+      await nav
+        .locator('.session-row')
+        .filter({ hasText: 'Session other' })
+        .click()
+      await expect(input).toHaveValue('')
+      await expect(nav.locator('.target-summary')).toContainText('Server B')
+      await nav
+        .locator('.session-row')
+        .filter({ hasText: 'Session chat' })
+        .click()
+      await expect(input).toHaveValue('layout draft')
+      await expect(messages.locator('.message')).toHaveCount(40)
+      expect(
+        await panel(page).evaluate(
+          (el) => el.scrollWidth <= el.clientWidth + 1,
+        ),
+      ).toBe(true)
+      await page.screenshot({
+        path: testInfo.outputPath('fixed-navigation.png'),
+        fullPage: true,
+      })
+      expect(
+        f.state.requests.some(
+          (r) => r.path.endsWith('/turns') || r.path.endsWith('/cancel'),
+        ),
+      ).toBe(false)
+      expect(f.state.external).toEqual([])
+    })
+
+for (const width of [1366, 1920, 390])
+  for (const theme of ['light', 'dark'])
+    test(`server entry layout ${width} ${theme}`, async ({
+      page,
+    }, testInfo) => {
+      await page.setViewportSize({ width, height: 900 })
+      await fixture(page, { theme })
+      await page.route(
+        (u) => u.pathname === '/api/servers',
+        (r) =>
+          json(r, {
+            items: [
+              server('a'),
+              { ...server('b'), name: 'Long-server-name-'.repeat(20) },
+            ],
+          }),
+      )
+      await page.route(
+        (u) => u.pathname === '/api/servers/metrics',
+        (r) =>
+          json(r, {
+            items: ['a', 'b'].map((serverId) => ({
+              serverId,
+              reachable: serverId === 'a',
+              error: serverId === 'b' ? 'Offline fixture' : '',
+              cpu: null,
+              memory: null,
+              disk: null,
+              collectedAt: stamp,
+            })),
+          }),
+      )
+      await page.goto('/servers')
+      const actions = page.locator('.view-header__actions')
+      await expect(actions.getByRole('button')).toHaveCount(2)
+      const buttons = await actions.getByRole('button').all()
+      const a = (await buttons[0]!.boundingBox())!,
+        b = (await buttons[1]!.boundingBox())!
+      expect(Math.abs(a.y - b.y)).toBeLessThan(2)
+      expect(b.x - (a.x + a.width)).toBeLessThanOrEqual(17)
+      await expect(page.locator('.metrics-card')).toHaveCount(2)
+      await expect(
+        page.locator('.metrics-card .metrics-card__actions button'),
+      ).toHaveCount(2)
+      for (const card of await page.locator('.metrics-card').all()) {
+        expect(
+          await card.evaluate((el) => el.scrollWidth <= el.clientWidth + 1),
+        ).toBe(true)
+        const rect = (await card.boundingBox())!,
+          button = (await card
+            .locator('.metrics-card__actions button')
+            .boundingBox())!
+        expect(button.y + button.height).toBeLessThan(rect.y + rect.height)
+        expect(rect.x + rect.width).toBeLessThanOrEqual(width + 1)
+      }
+      await page.screenshot({
+        path: testInfo.outputPath('server-entries.png'),
+        fullPage: true,
+      })
+    })
+
 for (const width of [1366, 1920, 390])
   for (const theme of ['light', 'dark'])
     test('layout ' + width + ' ' + theme, async ({ page }, testInfo) => {

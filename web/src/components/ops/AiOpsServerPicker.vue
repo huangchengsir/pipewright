@@ -23,10 +23,12 @@ function toggle(id: string): void {
 }
 </script>
 <template>
-  <section class="ops-section">
-    <details>
-      <summary>{{ t('opsChat.targets') }} · {{ selected.length }}/8</summary>
-      <div class="server-list">
+  <section class="ops-section server-navigation">
+    <details class="server-details">
+      <summary class="server-summary">
+        {{ t('opsChat.targets') }} · {{ selected.length }}/8
+      </summary>
+      <div class="server-list" tabindex="0" :aria-label="t('opsChat.targets')">
         <label v-for="server in servers" :key="server.id" class="server-choice">
           <input
             type="checkbox"
@@ -57,7 +59,7 @@ function toggle(id: string): void {
         </p>
       </div>
     </details>
-    <p class="target-summary ops-muted ops-wrap">
+    <p class="target-summary ops-muted ops-wrap" tabindex="0">
       {{
         selected.length
           ? selected
@@ -74,13 +76,25 @@ function toggle(id: string): void {
 </template>
 <style scoped src="./opsChat.css"></style>
 <style scoped>
-summary {
+.server-navigation {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  min-height: 0;
+}
+.server-details {
+  flex: none;
+}
+.server-summary {
   cursor: pointer;
   min-height: 28px;
+  overflow-wrap: anywhere;
 }
 .server-list {
-  max-height: 200px;
+  /* Native details content does not reliably participate in flex shrinking. */
+  height: var(--ops-list-max-height, 200px);
   overflow: auto;
+  overscroll-behavior: contain;
 }
 .server-choice {
   display: flex;
@@ -99,6 +113,22 @@ summary {
   display: block;
 }
 .target-summary {
+  flex: none;
+  max-height: 4.2em;
+  line-height: 1.4;
+  overflow: auto;
+  overscroll-behavior: contain;
   margin: 4px 0 0;
+}
+.server-summary:focus-visible,
+.server-list:focus-visible,
+.target-summary:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+@container ops-panel (max-height: 600px) {
+  .server-navigation {
+    padding-block: 6px;
+  }
 }
 </style>

@@ -52,7 +52,7 @@ describe('ops components', () => {
         disabled: false,
       },
     })
-    await w.get('[class="ops-btn"]').trigger('click')
+    await w.get('[aria-label="重命名"]').trigger('click')
     await w.get('input').setValue('wrong title')
     await w.setProps({ currentId: 'b' })
     expect(w.find('form').exists()).toBe(false)

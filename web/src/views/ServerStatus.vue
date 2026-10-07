@@ -12,6 +12,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { Robot, Refresh } from '@vicons/tabler'
 import { getAllServerMetrics, listServers, type ServerMetrics, type Server } from '../api/servers'
 import { HttpError } from '../api/http'
 import ServerMetricsCard from '../components/ops/ServerMetricsCard.vue'
@@ -133,10 +134,22 @@ onUnmounted(() => {
           <span class="view-sub__count">· {{ t('serverStatus.autoRefresh', { n: 12 }) }}</span>
         </p>
       </div>
-      <AppButton variant="ai" @click="aiTargets = []">{{ t('opsChat.title') }}</AppButton>
-      <AppButton variant="default" :loading="loadState === 'loading'" @click="load">
-        {{ t('common.refresh') }}
-      </AppButton>
+      <div class="view-header__actions">
+        <AppButton variant="ai" @click="aiTargets = []">
+          <Robot class="action-icon" aria-hidden="true" />{{ t('opsChat.title') }}
+        </AppButton>
+        <AppButton
+          variant="default"
+          :loading="loadState === 'loading'"
+          @click="load"
+        >
+          <Refresh
+            v-if="loadState !== 'loading'"
+            class="action-icon"
+            aria-hidden="true"
+          />{{ t('common.refresh') }}
+        </AppButton>
+      </div>
     </header>
 
     <!-- Initial loading skeletons -->
@@ -170,13 +183,18 @@ onUnmounted(() => {
 
     <!-- Metrics grid (per-host cards) -->
     <div v-else class="metrics-grid" :aria-busy="refreshing || undefined">
-      <section v-for="m in metrics" :key="m.serverId">
       <ServerMetricsCard
+        v-for="m in metrics"
+        :key="m.serverId"
         :name="displayName(m)"
         :metrics="m"
-      />
-      <AppButton size="sm" variant="ai" @click="aiTargets = [m.serverId]">{{ t('opsChat.title') }}</AppButton>
-      </section>
+      >
+        <template #actions>
+          <AppButton variant="ai" @click="aiTargets = [m.serverId]">
+            <Robot class="action-icon" aria-hidden="true" />{{ t('opsChat.title') }}
+          </AppButton>
+        </template>
+      </ServerMetricsCard>
     </div>
     <ContainerAiPanel v-if="aiTargets !== null" :initial-server-ids="aiTargets" @close="aiTargets = null" />
   </div>
@@ -191,14 +209,29 @@ onUnmounted(() => {
 
 .view-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
 }
 .view-header__text {
   display: flex;
+  flex: 1 1 240px;
+  min-width: 0;
   flex-direction: column;
   gap: 4px;
+}
+.view-header__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.action-icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
 }
 .view-title {
   margin: 0;
@@ -218,7 +251,7 @@ onUnmounted(() => {
 
 .metrics-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
   gap: 16px;
   transition: opacity var(--duration-fast) var(--ease-out-expo);
 }

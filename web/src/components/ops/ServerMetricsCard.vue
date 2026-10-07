@@ -219,12 +219,16 @@ const loadText = computed(() => {
     <footer v-if="metrics.reachable" class="metrics-card__foot">
       {{ t('opsServer.metrics.collectedAt', { time: new Date(metrics.collectedAt).toLocaleTimeString() }) }}
     </footer>
+    <div v-if="$slots.actions" class="metrics-card__actions">
+      <slot name="actions" />
+    </div>
   </article>
 </template>
 
 <style scoped>
 .metrics-card {
   display: flex;
+  min-width: 0;
   flex-direction: column;
   gap: 14px;
   padding: 18px 18px 14px;
@@ -248,6 +252,7 @@ const loadText = computed(() => {
   gap: 10px;
 }
 .metrics-card__name {
+  min-width: 0;
   margin: 0;
   font-size: var(--text-body);
   font-weight: 650;
@@ -292,6 +297,7 @@ const loadText = computed(() => {
 }
 
 .metrics-card__error {
+  overflow-wrap: anywhere;
   margin: 0;
   font-size: var(--text-label);
   color: var(--color-red);
@@ -364,5 +370,14 @@ const loadText = computed(() => {
   font-size: var(--text-label);
   color: var(--color-faint);
   font-variant-numeric: tabular-nums;
+}
+.metrics-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-line);
 }
 </style>

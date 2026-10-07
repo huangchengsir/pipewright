@@ -162,11 +162,13 @@ defineExpose({ close })
 </script>
 <template>
   <aside class="ops-panel" data-testid="ops-panel">
-    <header class="ops-section ops-row">
+    <header class="ops-section ops-row ops-header" data-testid="ops-header">
       <div class="ops-grow">
-        <strong class="ops-wrap">{{
-          session?.title || t('opsChat.title')
-        }}</strong>
+        <strong
+          class="ops-wrap ops-heading"
+          :title="session?.title || t('opsChat.title')"
+          >{{ session?.title || t('opsChat.title') }}</strong
+        >
         <div class="ops-muted">
           {{
             activeRun
@@ -179,6 +181,7 @@ defineExpose({ close })
         class="ops-btn ops-icon"
         :title="t('opsChat.history')"
         :aria-label="t('opsChat.history')"
+        :aria-expanded="historyOpen"
         @click="historyOpen = !historyOpen"
       >
         <History />
@@ -201,8 +204,10 @@ defineExpose({ close })
         <X />
       </button>
     </header>
-    <div v-if="error" class="ops-section ops-row" role="alert">
-      <span class="ops-error ops-grow">{{ t('opsChat.errors.' + error) }}</span
+    <div v-if="error" class="ops-section ops-row ops-feedback" role="alert">
+      <span class="ops-error ops-grow ops-wrap">{{
+        t('opsChat.errors.' + error)
+      }}</span
       ><button
         class="ops-btn ops-icon"
         :title="t('opsChat.refresh')"
@@ -212,7 +217,17 @@ defineExpose({ close })
         <Refresh />
       </button>
     </div>
-    <div class="ops-body">
+    <div
+      class="ops-navigation"
+      :class="{ 'ops-navigation--history': historyOpen }"
+      data-testid="ops-navigation"
+    >
+      <AiOpsServerPicker
+        :servers="servers"
+        :selected="session?.serverIds ?? []"
+        :disabled="disabled || !!session?.activeRunId || !!pending"
+        @change="chat.targets"
+      />
       <AiOpsSessionList
         v-if="historyOpen"
         :sessions="state.sessions"
@@ -222,12 +237,13 @@ defineExpose({ close })
         @rename="chat.rename"
         @remove="remove"
       />
-      <AiOpsServerPicker
-        :servers="servers"
-        :selected="session?.serverIds ?? []"
-        :disabled="disabled || !!session?.activeRunId || !!pending"
-        @change="chat.targets"
-      />
+    </div>
+    <div
+      class="ops-body"
+      data-testid="ops-messages-scroll"
+      tabindex="0"
+      :aria-label="t('opsChat.title')"
+    >
       <AiOpsMessageList
         :entries="state.entries"
         :calls="state.calls"
@@ -260,6 +276,7 @@ defineExpose({ close })
       />
     </div>
     <AiOpsComposer
+      class="ops-composer"
       :draft="draft"
       :draft-status="draftStatus"
       :tools="tools"
@@ -286,9 +303,67 @@ defineExpose({ close })
 </template>
 <style scoped src="./opsChat.css"></style>
 <style scoped>
-.ops-body {
-  flex: 1;
+.ops-panel {
+  container: ops-panel / size;
+  overflow: hidden;
+}
+.ops-header {
+  flex: none;
+  flex-wrap: nowrap;
+}
+.ops-heading {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.ops-feedback {
+  flex: 0 1 auto;
+  max-height: 16%;
   min-height: 0;
   overflow: auto;
+}
+.ops-navigation {
+  /* Reserve navigation chrome before sharing the panel's height between lists. */
+  --ops-list-max-height: clamp(24px, calc(40cqh - 110px), 180px);
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  max-height: 40%;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.ops-navigation--history {
+  --ops-list-max-height: clamp(24px, calc((40cqh - 180px) / 2), 180px);
+}
+.ops-body {
+  flex: 1 0 48px;
+  min-height: 48px;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.ops-panel > .ops-composer {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 36%;
+}
+.ops-body:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+@container ops-panel (max-height: 600px) {
+  .ops-header,
+  .ops-feedback {
+    padding-block: 6px;
+  }
+  .ops-navigation--history {
+    --ops-list-max-height: clamp(24px, calc(40cqh - 110px), 180px);
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: minmax(0, 1fr);
+  }
 }
 </style>

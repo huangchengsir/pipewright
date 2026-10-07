@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"io"
 	"net"
 	"runtime"
@@ -125,8 +126,12 @@ func TestRunLimitedLoopbackStallsCancelAndGoroutinesConverge(t *testing.T) {
 					}
 					select {
 					case got := <-finished:
-						if got.err == nil || ctx.Err() == nil {
-							t.Fatal("stalled transport was not cancelled", got.err)
+						want := error(context.Canceled)
+						if timeout {
+							want = context.DeadlineExceeded
+						}
+						if !errors.Is(got.err, want) {
+							t.Fatalf("stalled transport returned %v, want %v", got.err, want)
 						}
 						if phase == "output" && (got.res == nil || !got.res.Truncated || len(got.res.Stdout)+len(got.res.Stderr) > 1024) {
 							t.Fatal("stalled output exceeded bounded capture", got.res)
@@ -153,5 +158,35 @@ func TestRunLimitedLoopbackStallsCancelAndGoroutinesConverge(t *testing.T) {
 	}
 	if got := runtime.NumGoroutine(); got > baseline+2 {
 		t.Fatalf("goroutines did not converge after 24 cancelled SSH transports: baseline=%d got=%d", baseline, got)
+	}
+}
+
+type delayedDeadlineContext struct {
+	context.Context
+	deadline time.Time
+}
+
+func (c delayedDeadlineContext) Deadline() (time.Time, bool) { return c.deadline, true }
+
+func TestRunLimitedHonorsDeadlineBeforeContextTimerNotification(t *testing.T) {
+	ctx := delayedDeadlineContext{Context: context.Background(), deadline: time.Now().Add(-time.Second)}
+	if ctx.Err() != nil {
+		t.Fatal("fixture must delay context cancellation notification")
+	}
+	// An expired operation must not start a connection, even without Done being closed.
+	res, err := (sshDialer{}).RunLimited(ctx, "not-a-network-address", SSHConfig{User: "fixture", Password: "fixture-only"}, []string{"fixture-command"}, ExecutionLimits{Bytes: 1024, Lines: 20})
+	if res != nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expired operation returned %v, want deadline", err)
+	}
+	if err := limitedContextErr(delayedDeadlineContext{Context: context.Background(), deadline: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatalf("future deadline returned %v", err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := limitedContextErr(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("explicit cancellation returned %v", err)
+	}
+	if err := limitedContextErr(context.Background()); err != nil {
+		t.Fatalf("unbounded context returned %v", err)
 	}
 }

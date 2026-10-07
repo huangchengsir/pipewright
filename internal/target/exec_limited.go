@@ -224,6 +224,9 @@ func (sshDialer) RunLimited(ctx context.Context, addr string, cfg SSHConfig, cmd
 	if err != nil {
 		return nil, err
 	}
+	if err := limitedContextErr(ctx); err != nil {
+		return nil, err
+	}
 	auth, err := authMethods(cfg)
 	if err != nil {
 		return nil, err
@@ -235,12 +238,18 @@ func (sshDialer) RunLimited(ctx context.Context, addr string, cfg SSHConfig, cmd
 	}
 	client, cleanup, err := dialSSH(ctx, addr, clientCfg)
 	if err != nil {
+		if ctxErr := limitedContextErr(ctx); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, err
 	}
 	defer cleanup()
 	defer func() { _ = client.Close() }()
 	session, err := client.NewSession()
 	if err != nil {
+		if ctxErr := limitedContextErr(ctx); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, ErrUnreachable
 	}
 	defer func() { _ = session.Close() }()
@@ -257,11 +266,22 @@ func (sshDialer) RunLimited(ctx context.Context, addr string, cfg SSHConfig, cmd
 		res.ExitCode = exitErr.ExitStatus()
 		return res, nil
 	}
-	if ctx.Err() != nil {
-		return res, ctx.Err()
+	if ctxErr := limitedContextErr(ctx); ctxErr != nil {
+		return res, ctxErr
 	}
 	if errors.Is(runErr, io.EOF) {
 		return res, ErrUnreachable
 	}
 	return res, fmt.Errorf("%w", ErrUnreachable)
+}
+
+func limitedContextErr(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Socket deadlines can fire before the context timer publishes cancellation.
+	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		return context.DeadlineExceeded
+	}
+	return nil
 }

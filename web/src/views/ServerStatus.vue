@@ -15,6 +15,7 @@ import { useI18n } from 'vue-i18n'
 import { getAllServerMetrics, listServers, type ServerMetrics, type Server } from '../api/servers'
 import { HttpError } from '../api/http'
 import ServerMetricsCard from '../components/ops/ServerMetricsCard.vue'
+import ContainerAiPanel from '../components/ops/ContainerAiPanel.vue'
 import AppButton from '../components/ui/AppButton.vue'
 import EmptyState from '../components/ui/EmptyState.vue'
 import ErrorState from '../components/ui/ErrorState.vue'
@@ -23,6 +24,7 @@ import SkeletonBlock from '../components/ui/SkeletonBlock.vue'
 type LoadState = 'idle' | 'loading' | 'error'
 
 const { t } = useI18n()
+const aiTargets = ref<string[] | null>(null)
 
 const loadState = ref<LoadState>('idle')
 const loadError = ref('')
@@ -131,6 +133,7 @@ onUnmounted(() => {
           <span class="view-sub__count">· {{ t('serverStatus.autoRefresh', { n: 12 }) }}</span>
         </p>
       </div>
+      <AppButton variant="ai" @click="aiTargets = []">{{ t('opsChat.title') }}</AppButton>
       <AppButton variant="default" :loading="loadState === 'loading'" @click="load">
         {{ t('common.refresh') }}
       </AppButton>
@@ -167,13 +170,15 @@ onUnmounted(() => {
 
     <!-- Metrics grid (per-host cards) -->
     <div v-else class="metrics-grid" :aria-busy="refreshing || undefined">
+      <section v-for="m in metrics" :key="m.serverId">
       <ServerMetricsCard
-        v-for="m in metrics"
-        :key="m.serverId"
         :name="displayName(m)"
         :metrics="m"
       />
+      <AppButton size="sm" variant="ai" @click="aiTargets = [m.serverId]">{{ t('opsChat.title') }}</AppButton>
+      </section>
     </div>
+    <ContainerAiPanel v-if="aiTargets !== null" :initial-server-ids="aiTargets" @close="aiTargets = null" />
   </div>
 </template>
 

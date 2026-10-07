@@ -206,7 +206,6 @@ function openTerminal(serverId: string, c: ContainerInfo): void {
 
 // AI 助手抽屉。
 const showAi = ref(false)
-const aiContext = { os: 'linux', shell: '/bin/sh', container: t('containers.aiContextContainer') }
 
 // AI 诊断弹窗。
 const diagnoseTarget = ref<{ serverId: string; name: string } | null>(null)
@@ -428,7 +427,7 @@ onUnmounted(() => {
     />
 
     <!-- AI 助手抽屉 -->
-    <ContainerAiPanel v-if="showAi" :context="aiContext" @close="showAi = false" />
+    <ContainerAiPanel v-if="showAi" @close="showAi = false" />
 
     <!-- 容器详情 inspect 弹窗 -->
     <ContainerInspectModal

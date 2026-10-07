@@ -1,4 +1,11 @@
 export default {
+  manualCopy: {
+    compatibleHint: "Copy supports compatibility or manual mode",
+    title: "Manual copy",
+    unavailable: "Automatic copy did not succeed. The text is available for manual copying; clipboard contents are not confirmed.",
+    textAria: "Text to copy",
+    selectAll: "Select all text",
+  },
   // common
   close: 'Close',
   cancel: 'Cancel',

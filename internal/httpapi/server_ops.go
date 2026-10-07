@@ -67,45 +67,14 @@ var (
 // validateServiceParams 据 type 严格校验 target 与 action 枚举,合法返回 nil。
 // AC-SEC-02 要害:绝不放过可能被远端当 flag / shell 解释的危险输入。action 白名单按 type 区分。
 func validateServiceParams(typ, tgt, action string) error {
-	if tgt == "" {
-		return errors.New("target 不能为空")
-	}
-	if len(tgt) > 256 {
-		return errors.New("target 过长")
-	}
-	switch typ {
-	case "systemd":
-		if !systemdActions[action] {
-			return errors.New("非法 action(systemd 仅支持 restart/stop/start)")
-		}
-		if !reSystemdUnit.MatchString(tgt) {
-			return errors.New("非法 systemd unit 名")
-		}
-	case "docker":
-		if !dockerActions[action] {
-			return errors.New("非法 action(docker 仅支持 restart/stop/start/pause/unpause/kill/rm)")
-		}
-		if !reDockerTgt.MatchString(tgt) {
-			return errors.New("非法 docker 容器名")
-		}
-	default:
-		return errors.New("非法 type(仅支持 systemd/docker)")
-	}
-	return nil
+	return target.ValidateServiceParams(typ, tgt, action)
 }
 
 // buildServiceCmd 据 type/action/target 构造命令 array(不拼 shell)。调用前须先过 validateServiceParams。
 //   - systemd:`systemctl <action> <unit>`
 //   - docker: `docker <action> <name>`
 func buildServiceCmd(typ, action, tgt string) []string {
-	switch typ {
-	case "systemd":
-		return []string{"systemctl", action, tgt}
-	case "docker":
-		return []string{"docker", action, tgt}
-	default:
-		return nil
-	}
+	return target.BuildServiceCmd(typ, action, tgt)
 }
 
 // humanServiceError 把领域错误映射为人读文案(绝不含凭据明文/内部栈)。

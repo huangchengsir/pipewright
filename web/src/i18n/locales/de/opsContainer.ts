@@ -1,4 +1,11 @@
 export default {
+  manualCopy: {
+    compatibleHint: "Kopieren im Kompatibilitätsmodus oder manuell",
+    title: "Manuell kopieren",
+    unavailable: "Das automatische Kopieren war nicht erfolgreich. Der Text kann manuell kopiert werden; der Inhalt der Zwischenablage ist nicht bestätigt.",
+    textAria: "Text zum Kopieren",
+    selectAll: "Alles auswählen",
+  },
   // common
   close: 'Schließen',
   cancel: 'Abbrechen',

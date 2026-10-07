@@ -1,0 +1,129 @@
+.ops-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  color: var(--color-text);
+  background: var(--color-card);
+  font-size: 13px;
+  letter-spacing: 0;
+}
+.ops-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.ops-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font: inherit;
+  color: var(--color-text);
+  background: var(--color-card);
+  cursor: pointer;
+}
+.ops-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.ops-btn:hover:not(:disabled) {
+  border-color: var(--color-primary);
+}
+.ops-btn:focus-visible,
+.ops-input:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+.ops-btn svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+.ops-icon {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  flex: none;
+}
+.ops-primary {
+  background: var(--color-primary);
+  color: white;
+  border-color: var(--color-primary);
+}
+.ops-danger,
+.ops-error {
+  color: var(--color-red);
+}
+.ops-muted {
+  color: var(--color-dim);
+  font-size: 12px;
+}
+.ops-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.ops-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  background: var(--color-inset);
+  color: var(--color-text);
+  font: inherit;
+  padding: 9px 10px;
+}
+.ops-input::placeholder {
+  color: var(--color-dim);
+  opacity: 1;
+}
+.ops-section {
+  border-bottom: 1px solid var(--color-border);
+  padding: 12px 16px;
+  min-width: 0;
+}
+.ops-pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  color: var(--color-text);
+  background: var(--color-inset);
+  padding: 10px;
+  border-radius: 4px;
+}
+.ops-wrap {
+  overflow-wrap: anywhere;
+  min-width: 0;
+  white-space: pre-wrap;
+}
+.ops-grow {
+  flex: 1;
+  min-width: 0;
+}
+@media (max-width: 600px) {
+  .ops-btn {
+    min-height: 44px;
+  }
+  .ops-icon {
+    width: 44px;
+    height: 44px;
+  }
+  .ops-section {
+    padding: 10px 12px;
+  }
+}

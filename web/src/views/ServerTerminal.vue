@@ -25,6 +25,8 @@ import {
   type TerminalShell,
 } from '../api/servers'
 import AiOpsPanel from '../components/ops/AiOpsPanel.vue'
+import CopyTextDialog from '../components/ops/CopyTextDialog.vue'
+import { copyText } from '../utils/clipboard'
 import { completeCommand } from '../api/aiOps'
 
 import type { Terminal as XTerm } from '@xterm/xterm'
@@ -96,6 +98,7 @@ function readAiOpen(): boolean {
   }
 }
 const aiOpen = ref(readAiOpen())
+const aiPanel = ref<InstanceType<typeof AiOpsPanel> | null>(null)
 function setAiOpen(open: boolean): void {
   aiOpen.value = open
   try {
@@ -106,8 +109,12 @@ function setAiOpen(open: boolean): void {
   // 宽度变了,等布局稳定后让终端重新 fit。
   void nextTick(() => refit())
 }
-function toggleAi(): void {
-  setAiOpen(!aiOpen.value)
+async function toggleAi(): Promise<void> {
+  if (aiOpen.value) {
+    await aiPanel.value?.close()
+  } else {
+    setAiOpen(true)
+  }
 }
 
 // ─── P2 智能补全:输入上方建议条 + Tab 接受 ─────────────────────────────────────────
@@ -498,19 +505,24 @@ function closePage(): void {
 }
 
 // ─── 剪贴板 / 选中复制 / 右键菜单 ─────────────────────────────────────────────────
+const manualCopyText = shallowRef<string | null>(null)
+let copying = false
 async function copySelection(): Promise<void> {
+  if (copying || manualCopyText.value !== null) return
   const t = term.value
   if (!t) return
   const sel = t.getSelection()
   if (!sel) return
-  if (clipboardOK) {
-    try {
-      await navigator.clipboard.writeText(sel)
-    } catch {
-      /* 用户可能拒绝权限;静默降级 */
+  copying = true
+  try {
+    if (await copyText(sel)) {
+      flashToast('copy', tg('serverTerminal.toastCopied'), tg('serverTerminal.charCount', { n: sel.length }))
+    } else {
+      manualCopyText.value = sel
     }
+  } finally {
+    copying = false
   }
-  flashToast('copy', tg('serverTerminal.toastCopied'), tg('serverTerminal.charCount', { n: sel.length }))
 }
 
 async function pasteFromClipboard(): Promise<void> {
@@ -565,22 +577,6 @@ function ctxSelectAll(): void {
 function ctxClear(): void {
   term.value?.clear()
   closeCtxMenu()
-}
-
-// ─── AI 助手 → 终端 ──────────────────────────────────────────────────────────────
-function onInsertCommand(cmd: string): void {
-  // 写进终端输入行(不回车),让用户编辑后自行执行。
-  conn.value?.send(cmd)
-  lineBuffer += cmd // 同步输入行模型(补全)
-  clearSuggestion()
-  term.value?.focus()
-}
-function onExecuteCommand(cmd: string): void {
-  // 执行:发 PTY + 回车(danger 已在面板内二次确认)。
-  conn.value?.send(cmd + '\r')
-  lineBuffer = ''
-  clearSuggestion()
-  term.value?.focus()
 }
 
 // ─── toasts(轻量反馈,照 demo) ──────────────────────────────────────────────────
@@ -703,7 +699,7 @@ onBeforeUnmount(() => {
           <span class="s"><kbd>⌘V</kbd> {{ tg('serverTerminal.paste') }}</span>
           <span class="s"><kbd>^C</kbd> {{ tg('serverTerminal.interrupt') }}</span>
           <span class="s">{{ tg('serverTerminal.contextMenu') }}</span>
-          <span v-if="!clipboardOK" class="s warn">{{ tg('serverTerminal.clipboardSecureWarn') }}</span>
+          <span v-if="!clipboardOK" class="s warn">{{ tg('opsContainer.manualCopy.compatibleHint') }}</span>
           <button
             class="ai-toggle"
             :class="{ on: completeEnabled }"
@@ -716,12 +712,11 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <!-- AI 运维助手(可折叠侧栏;v-show 保留对话不丢) -->
+      <!-- Closing flushes the draft; persisted sessions restore on reopening. -->
       <AiOpsPanel
-        v-show="aiOpen"
-        :context="aiContext"
-        @insert="onInsertCommand"
-        @execute="onExecuteCommand"
+        ref="aiPanel"
+        v-if="aiOpen"
+        :initial-server-ids="[serverId]"
         @collapse="setAiOpen(false)"
       />
     </div>
@@ -756,6 +751,8 @@ onBeforeUnmount(() => {
       <div class="div" />
       <button type="button" @click="ctxClear">{{ tg('serverTerminal.clearScreen') }}</button>
     </div>
+
+    <CopyTextDialog v-if="manualCopyText !== null" :text="manualCopyText" @close="manualCopyText = null" />
 
     <!-- toasts -->
     <div class="toasts">

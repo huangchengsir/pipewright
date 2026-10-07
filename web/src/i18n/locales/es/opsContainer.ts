@@ -1,4 +1,11 @@
 export default {
+  manualCopy: {
+    compatibleHint: "Copia compatible o manual disponible",
+    title: "Copia manual",
+    unavailable: "La copia automática no se completó. El texto está disponible para copiarlo manualmente; el contenido del portapapeles no está confirmado.",
+    textAria: "Texto para copiar",
+    selectAll: "Seleccionar todo",
+  },
   // common
   close: 'Cerrar',
   cancel: 'Cancelar',

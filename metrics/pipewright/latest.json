@@ -1,0 +1,710 @@
+{
+  "schema_version": 1,
+  "repository": "huangchengsir/pipewright",
+  "collection_started_at": "2026-10-08T16:03:39.733Z",
+  "collected_at": "2026-10-08T16:03:46.209Z",
+  "star_count": 108,
+  "stargazers": [
+    {
+      "id": 250643,
+      "login": "ericheroster",
+      "html_url": "https://github.com/ericheroster",
+      "starred_at": "2026-06-23T07:20:39Z"
+    },
+    {
+      "id": 495785,
+      "login": "onekr-billy",
+      "html_url": "https://github.com/onekr-billy",
+      "starred_at": "2026-10-08T08:57:52Z"
+    },
+    {
+      "id": 865817,
+      "login": "cole2295",
+      "html_url": "https://github.com/cole2295",
+      "starred_at": "2026-09-21T05:55:46Z"
+    },
+    {
+      "id": 1464446,
+      "login": "fightingbamboo",
+      "html_url": "https://github.com/fightingbamboo",
+      "starred_at": "2026-09-29T10:08:00Z"
+    },
+    {
+      "id": 1559999,
+      "login": "sonlia",
+      "html_url": "https://github.com/sonlia",
+      "starred_at": "2026-09-08T03:50:15Z"
+    },
+    {
+      "id": 1635900,
+      "login": "heyewong",
+      "html_url": "https://github.com/heyewong",
+      "starred_at": "2026-09-22T04:41:13Z"
+    },
+    {
+      "id": 2135391,
+      "login": "fenghuilee",
+      "html_url": "https://github.com/fenghuilee",
+      "starred_at": "2026-09-21T00:49:24Z"
+    },
+    {
+      "id": 2263105,
+      "login": "alex413x",
+      "html_url": "https://github.com/alex413x",
+      "starred_at": "2026-08-01T06:33:40Z"
+    },
+    {
+      "id": 2347587,
+      "login": "vinsonzou",
+      "html_url": "https://github.com/vinsonzou",
+      "starred_at": "2026-09-23T04:02:20Z"
+    },
+    {
+      "id": 2599496,
+      "login": "xdroff",
+      "html_url": "https://github.com/xdroff",
+      "starred_at": "2026-09-09T07:32:54Z"
+    },
+    {
+      "id": 3115116,
+      "login": "hujghc",
+      "html_url": "https://github.com/hujghc",
+      "starred_at": "2026-09-17T01:13:10Z"
+    },
+    {
+      "id": 3364698,
+      "login": "yfm10",
+      "html_url": "https://github.com/yfm10",
+      "starred_at": "2026-09-22T00:35:39Z"
+    },
+    {
+      "id": 4169105,
+      "login": "keving23",
+      "html_url": "https://github.com/keving23",
+      "starred_at": "2026-09-28T00:59:22Z"
+    },
+    {
+      "id": 4794681,
+      "login": "paanree",
+      "html_url": "https://github.com/paanree",
+      "starred_at": "2026-09-21T02:27:56Z"
+    },
+    {
+      "id": 5058706,
+      "login": "ahjdzx",
+      "html_url": "https://github.com/ahjdzx",
+      "starred_at": "2026-09-24T14:38:06Z"
+    },
+    {
+      "id": 5461715,
+      "login": "maxincai",
+      "html_url": "https://github.com/maxincai",
+      "starred_at": "2026-06-23T05:26:14Z"
+    },
+    {
+      "id": 5529213,
+      "login": "lijunwyf21",
+      "html_url": "https://github.com/lijunwyf21",
+      "starred_at": "2026-06-22T17:22:35Z"
+    },
+    {
+      "id": 6813552,
+      "login": "forging2012",
+      "html_url": "https://github.com/forging2012",
+      "starred_at": "2026-09-18T09:36:50Z"
+    },
+    {
+      "id": 8000832,
+      "login": "liuts",
+      "html_url": "https://github.com/liuts",
+      "starred_at": "2026-09-21T01:14:56Z"
+    },
+    {
+      "id": 8702825,
+      "login": "chgxtony",
+      "html_url": "https://github.com/chgxtony",
+      "starred_at": "2026-07-28T00:04:33Z"
+    },
+    {
+      "id": 8746373,
+      "login": "deraylei",
+      "html_url": "https://github.com/deraylei",
+      "starred_at": "2026-09-21T03:06:21Z"
+    },
+    {
+      "id": 9104654,
+      "login": "yiihub",
+      "html_url": "https://github.com/yiihub",
+      "starred_at": "2026-09-26T08:09:02Z"
+    },
+    {
+      "id": 9817146,
+      "login": "wohsj110",
+      "html_url": "https://github.com/wohsj110",
+      "starred_at": "2026-09-18T08:30:38Z"
+    },
+    {
+      "id": 10129066,
+      "login": "aasdpiao",
+      "html_url": "https://github.com/aasdpiao",
+      "starred_at": "2026-06-18T01:57:46Z"
+    },
+    {
+      "id": 10607961,
+      "login": "meilunzhi",
+      "html_url": "https://github.com/meilunzhi",
+      "starred_at": "2026-09-17T02:27:25Z"
+    },
+    {
+      "id": 11608532,
+      "login": "yanming-zhang",
+      "html_url": "https://github.com/yanming-zhang",
+      "starred_at": "2026-09-16T15:04:30Z"
+    },
+    {
+      "id": 11935122,
+      "login": "ntuwang",
+      "html_url": "https://github.com/ntuwang",
+      "starred_at": "2026-10-04T10:47:42Z"
+    },
+    {
+      "id": 12226042,
+      "login": "Hexiaopi",
+      "html_url": "https://github.com/Hexiaopi",
+      "starred_at": "2026-09-17T15:53:29Z"
+    },
+    {
+      "id": 13144607,
+      "login": "SsJackX",
+      "html_url": "https://github.com/SsJackX",
+      "starred_at": "2026-09-20T14:28:07Z"
+    },
+    {
+      "id": 13392610,
+      "login": "BuckHome",
+      "html_url": "https://github.com/BuckHome",
+      "starred_at": "2026-08-08T15:46:01Z"
+    },
+    {
+      "id": 13825717,
+      "login": "predatorL",
+      "html_url": "https://github.com/predatorL",
+      "starred_at": "2026-10-08T02:31:13Z"
+    },
+    {
+      "id": 13997180,
+      "login": "ZY9898",
+      "html_url": "https://github.com/ZY9898",
+      "starred_at": "2026-09-17T03:39:14Z"
+    },
+    {
+      "id": 16122074,
+      "login": "lilvy",
+      "html_url": "https://github.com/lilvy",
+      "starred_at": "2026-09-28T15:06:19Z"
+    },
+    {
+      "id": 16486344,
+      "login": "abracadabbra",
+      "html_url": "https://github.com/abracadabbra",
+      "starred_at": "2026-09-13T11:50:19Z"
+    },
+    {
+      "id": 16556693,
+      "login": "TMaize",
+      "html_url": "https://github.com/TMaize",
+      "starred_at": "2026-07-27T16:56:06Z"
+    },
+    {
+      "id": 17822547,
+      "login": "aiwyn",
+      "html_url": "https://github.com/aiwyn",
+      "starred_at": "2026-10-06T12:19:55Z"
+    },
+    {
+      "id": 17906377,
+      "login": "zangwj",
+      "html_url": "https://github.com/zangwj",
+      "starred_at": "2026-09-24T09:43:18Z"
+    },
+    {
+      "id": 18082104,
+      "login": "Lyzin",
+      "html_url": "https://github.com/Lyzin",
+      "starred_at": "2026-08-30T15:57:06Z"
+    },
+    {
+      "id": 18117854,
+      "login": "Mr-LiuDC",
+      "html_url": "https://github.com/Mr-LiuDC",
+      "starred_at": "2026-09-23T13:30:00Z"
+    },
+    {
+      "id": 19308346,
+      "login": "LittleFi987",
+      "html_url": "https://github.com/LittleFi987",
+      "starred_at": "2026-07-29T08:51:43Z"
+    },
+    {
+      "id": 19458454,
+      "login": "lyz7805",
+      "html_url": "https://github.com/lyz7805",
+      "starred_at": "2026-09-11T05:54:25Z"
+    },
+    {
+      "id": 19524311,
+      "login": "AnKingOne",
+      "html_url": "https://github.com/AnKingOne",
+      "starred_at": "2026-06-22T08:03:13Z"
+    },
+    {
+      "id": 19809767,
+      "login": "Lack30",
+      "html_url": "https://github.com/Lack30",
+      "starred_at": "2026-07-24T06:48:21Z"
+    },
+    {
+      "id": 20079505,
+      "login": "SWZ128",
+      "html_url": "https://github.com/SWZ128",
+      "starred_at": "2026-06-21T07:15:56Z"
+    },
+    {
+      "id": 20200473,
+      "login": "qingquaner",
+      "html_url": "https://github.com/qingquaner",
+      "starred_at": "2026-09-16T12:31:50Z"
+    },
+    {
+      "id": 20771028,
+      "login": "qincasin",
+      "html_url": "https://github.com/qincasin",
+      "starred_at": "2026-09-23T14:56:14Z"
+    },
+    {
+      "id": 21213820,
+      "login": "kingofzihua",
+      "html_url": "https://github.com/kingofzihua",
+      "starred_at": "2026-09-21T02:36:29Z"
+    },
+    {
+      "id": 22880818,
+      "login": "klvchen",
+      "html_url": "https://github.com/klvchen",
+      "starred_at": "2026-09-28T02:49:02Z"
+    },
+    {
+      "id": 22908212,
+      "login": "generalK2016",
+      "html_url": "https://github.com/generalK2016",
+      "starred_at": "2026-09-21T00:39:08Z"
+    },
+    {
+      "id": 23715881,
+      "login": "originnets",
+      "html_url": "https://github.com/originnets",
+      "starred_at": "2026-06-18T09:54:06Z"
+    },
+    {
+      "id": 24538374,
+      "login": "YangDevops",
+      "html_url": "https://github.com/YangDevops",
+      "starred_at": "2026-09-21T10:55:28Z"
+    },
+    {
+      "id": 25072084,
+      "login": "suncyi",
+      "html_url": "https://github.com/suncyi",
+      "starred_at": "2026-08-14T01:29:59Z"
+    },
+    {
+      "id": 25677587,
+      "login": "Aurorxa",
+      "html_url": "https://github.com/Aurorxa",
+      "starred_at": "2026-09-23T12:55:22Z"
+    },
+    {
+      "id": 26359783,
+      "login": "geenln",
+      "html_url": "https://github.com/geenln",
+      "starred_at": "2026-09-18T03:39:43Z"
+    },
+    {
+      "id": 26454042,
+      "login": "leihenshang",
+      "html_url": "https://github.com/leihenshang",
+      "starred_at": "2026-06-25T07:37:40Z"
+    },
+    {
+      "id": 28600794,
+      "login": "kiwii139",
+      "html_url": "https://github.com/kiwii139",
+      "starred_at": "2026-09-20T15:47:43Z"
+    },
+    {
+      "id": 28992717,
+      "login": "xxdx",
+      "html_url": "https://github.com/xxdx",
+      "starred_at": "2026-09-25T09:47:14Z"
+    },
+    {
+      "id": 29120060,
+      "login": "xieyuhua",
+      "html_url": "https://github.com/xieyuhua",
+      "starred_at": "2026-06-22T00:12:24Z"
+    },
+    {
+      "id": 30766431,
+      "login": "xss517",
+      "html_url": "https://github.com/xss517",
+      "starred_at": "2026-06-23T23:54:03Z"
+    },
+    {
+      "id": 32188874,
+      "login": "crux1981",
+      "html_url": "https://github.com/crux1981",
+      "starred_at": "2026-06-22T08:17:15Z"
+    },
+    {
+      "id": 32697166,
+      "login": "chenjinlei1122",
+      "html_url": "https://github.com/chenjinlei1122",
+      "starred_at": "2026-09-24T02:25:13Z"
+    },
+    {
+      "id": 33012419,
+      "login": "zzzhangjian",
+      "html_url": "https://github.com/zzzhangjian",
+      "starred_at": "2026-06-18T11:37:49Z"
+    },
+    {
+      "id": 33688588,
+      "login": "fuuhoo",
+      "html_url": "https://github.com/fuuhoo",
+      "starred_at": "2026-09-21T00:20:57Z"
+    },
+    {
+      "id": 33745963,
+      "login": "binlihpu",
+      "html_url": "https://github.com/binlihpu",
+      "starred_at": "2026-09-17T10:22:57Z"
+    },
+    {
+      "id": 36104701,
+      "login": "soulpointer",
+      "html_url": "https://github.com/soulpointer",
+      "starred_at": "2026-09-28T01:51:32Z"
+    },
+    {
+      "id": 39671098,
+      "login": "Buringcarbon",
+      "html_url": "https://github.com/Buringcarbon",
+      "starred_at": "2026-08-03T03:08:07Z"
+    },
+    {
+      "id": 40641468,
+      "login": "sunweiyi913",
+      "html_url": "https://github.com/sunweiyi913",
+      "starred_at": "2026-09-20T15:39:54Z"
+    },
+    {
+      "id": 41095867,
+      "login": "chickenw1",
+      "html_url": "https://github.com/chickenw1",
+      "starred_at": "2026-09-20T14:10:39Z"
+    },
+    {
+      "id": 42169096,
+      "login": "uskg8",
+      "html_url": "https://github.com/uskg8",
+      "starred_at": "2026-09-17T00:48:08Z"
+    },
+    {
+      "id": 42409839,
+      "login": "justwhenjing",
+      "html_url": "https://github.com/justwhenjing",
+      "starred_at": "2026-10-08T02:47:00Z"
+    },
+    {
+      "id": 44093648,
+      "login": "alexg9781",
+      "html_url": "https://github.com/alexg9781",
+      "starred_at": "2026-09-28T07:21:26Z"
+    },
+    {
+      "id": 45086115,
+      "login": "eric-jxl",
+      "html_url": "https://github.com/eric-jxl",
+      "starred_at": "2026-09-26T08:48:33Z"
+    },
+    {
+      "id": 45650869,
+      "login": "chen934298133",
+      "html_url": "https://github.com/chen934298133",
+      "starred_at": "2026-09-16T01:36:30Z"
+    },
+    {
+      "id": 46178311,
+      "login": "mumu-lab",
+      "html_url": "https://github.com/mumu-lab",
+      "starred_at": "2026-09-04T09:13:13Z"
+    },
+    {
+      "id": 46213278,
+      "login": "Ywenxiao",
+      "html_url": "https://github.com/Ywenxiao",
+      "starred_at": "2026-06-23T11:11:37Z"
+    },
+    {
+      "id": 50123204,
+      "login": "xiaolongstart",
+      "html_url": "https://github.com/xiaolongstart",
+      "starred_at": "2026-08-05T13:01:39Z"
+    },
+    {
+      "id": 52695829,
+      "login": "MISTLXC",
+      "html_url": "https://github.com/MISTLXC",
+      "starred_at": "2026-09-22T03:08:55Z"
+    },
+    {
+      "id": 53165495,
+      "login": "shy-big-boy",
+      "html_url": "https://github.com/shy-big-boy",
+      "starred_at": "2026-10-02T08:44:20Z"
+    },
+    {
+      "id": 53986661,
+      "login": "AprDeci",
+      "html_url": "https://github.com/AprDeci",
+      "starred_at": "2026-09-20T08:06:38Z"
+    },
+    {
+      "id": 54433308,
+      "login": "CaryChy",
+      "html_url": "https://github.com/CaryChy",
+      "starred_at": "2026-09-17T00:32:35Z"
+    },
+    {
+      "id": 54468334,
+      "login": "patrickering",
+      "html_url": "https://github.com/patrickering",
+      "starred_at": "2026-09-17T06:00:26Z"
+    },
+    {
+      "id": 55235198,
+      "login": "GmuMu",
+      "html_url": "https://github.com/GmuMu",
+      "starred_at": "2026-09-24T08:28:14Z"
+    },
+    {
+      "id": 57905753,
+      "login": "pfzdcn",
+      "html_url": "https://github.com/pfzdcn",
+      "starred_at": "2026-09-24T02:41:41Z"
+    },
+    {
+      "id": 58986305,
+      "login": "henriquesoaresg2",
+      "html_url": "https://github.com/henriquesoaresg2",
+      "starred_at": "2026-08-05T00:29:51Z"
+    },
+    {
+      "id": 62226549,
+      "login": "fantasticbin",
+      "html_url": "https://github.com/fantasticbin",
+      "starred_at": "2026-09-09T14:13:20Z"
+    },
+    {
+      "id": 68266519,
+      "login": "nanjofan",
+      "html_url": "https://github.com/nanjofan",
+      "starred_at": "2026-09-16T01:36:54Z"
+    },
+    {
+      "id": 71647213,
+      "login": "NickJerome",
+      "html_url": "https://github.com/NickJerome",
+      "starred_at": "2026-09-20T14:39:40Z"
+    },
+    {
+      "id": 73836721,
+      "login": "Fizznoc",
+      "html_url": "https://github.com/Fizznoc",
+      "starred_at": "2026-07-12T14:27:06Z"
+    },
+    {
+      "id": 73889045,
+      "login": "ymkhimself",
+      "html_url": "https://github.com/ymkhimself",
+      "starred_at": "2026-06-19T03:29:48Z"
+    },
+    {
+      "id": 92646224,
+      "login": "kikoshot",
+      "html_url": "https://github.com/kikoshot",
+      "starred_at": "2026-09-29T13:01:03Z"
+    },
+    {
+      "id": 104041263,
+      "login": "edgeTurbo",
+      "html_url": "https://github.com/edgeTurbo",
+      "starred_at": "2026-08-05T00:56:21Z"
+    },
+    {
+      "id": 106526876,
+      "login": "keke2871",
+      "html_url": "https://github.com/keke2871",
+      "starred_at": "2026-09-29T02:57:38Z"
+    },
+    {
+      "id": 112529624,
+      "login": "aihh0820",
+      "html_url": "https://github.com/aihh0820",
+      "starred_at": "2026-07-31T00:21:19Z"
+    },
+    {
+      "id": 114728916,
+      "login": "cailegecai",
+      "html_url": "https://github.com/cailegecai",
+      "starred_at": "2026-09-23T23:31:14Z"
+    },
+    {
+      "id": 118646023,
+      "login": "wang3076",
+      "html_url": "https://github.com/wang3076",
+      "starred_at": "2026-09-20T14:58:47Z"
+    },
+    {
+      "id": 120358997,
+      "login": "Daytimestill",
+      "html_url": "https://github.com/Daytimestill",
+      "starred_at": "2026-08-06T07:21:50Z"
+    },
+    {
+      "id": 128211841,
+      "login": "leebrouse",
+      "html_url": "https://github.com/leebrouse",
+      "starred_at": "2026-09-24T04:54:21Z"
+    },
+    {
+      "id": 134716789,
+      "login": "huangchengsir",
+      "html_url": "https://github.com/huangchengsir",
+      "starred_at": "2026-08-06T07:25:46Z"
+    },
+    {
+      "id": 139112833,
+      "login": "Xingruming",
+      "html_url": "https://github.com/Xingruming",
+      "starred_at": "2026-09-21T03:33:20Z"
+    },
+    {
+      "id": 150005948,
+      "login": "RabbitHareLu",
+      "html_url": "https://github.com/RabbitHareLu",
+      "starred_at": "2026-09-30T06:05:06Z"
+    },
+    {
+      "id": 167765319,
+      "login": "yunloon",
+      "html_url": "https://github.com/yunloon",
+      "starred_at": "2026-09-16T02:44:23Z"
+    },
+    {
+      "id": 170583866,
+      "login": "advanceit2004",
+      "html_url": "https://github.com/advanceit2004",
+      "starred_at": "2026-09-20T19:02:55Z"
+    },
+    {
+      "id": 170846875,
+      "login": "name1acde2428",
+      "html_url": "https://github.com/name1acde2428",
+      "starred_at": "2026-10-08T06:39:09Z"
+    },
+    {
+      "id": 198386574,
+      "login": "Zeeeepa",
+      "html_url": "https://github.com/Zeeeepa",
+      "starred_at": "2026-10-06T00:22:08Z"
+    },
+    {
+      "id": 233929453,
+      "login": "yfast105",
+      "html_url": "https://github.com/yfast105",
+      "starred_at": "2026-09-22T15:52:21Z"
+    },
+    {
+      "id": 249049443,
+      "login": "xiaozheng-devops",
+      "html_url": "https://github.com/xiaozheng-devops",
+      "starred_at": "2026-08-24T03:24:11Z"
+    },
+    {
+      "id": 256903425,
+      "login": "youkelike3-maker",
+      "html_url": "https://github.com/youkelike3-maker",
+      "starred_at": "2026-09-22T04:43:10Z"
+    },
+    {
+      "id": 265753094,
+      "login": "yy9634067-web",
+      "html_url": "https://github.com/yy9634067-web",
+      "starred_at": "2026-07-30T01:40:07Z"
+    }
+  ],
+  "traffic": {
+    "window_days": 14,
+    "referrer_limit": 10,
+    "referrers": [
+      {
+        "referrer": "github.com",
+        "count": 88,
+        "uniques": 48
+      },
+      {
+        "referrer": "Bing",
+        "count": 45,
+        "uniques": 30
+      },
+      {
+        "referrer": "Google",
+        "count": 37,
+        "uniques": 27
+      },
+      {
+        "referrer": "Baidu",
+        "count": 10,
+        "uniques": 5
+      },
+      {
+        "referrer": "link.segmentfault.com",
+        "count": 4,
+        "uniques": 4
+      },
+      {
+        "referrer": "DuckDuckGo",
+        "count": 1,
+        "uniques": 1
+      },
+      {
+        "referrer": "chatgpt.com",
+        "count": 1,
+        "uniques": 1
+      },
+      {
+        "referrer": "doubao.com",
+        "count": 1,
+        "uniques": 1
+      }
+    ]
+  },
+  "comparison": {
+    "baseline": true,
+    "previous_collected_at": null,
+    "net_growth": null,
+    "added": [],
+    "removed": []
+  }
+}

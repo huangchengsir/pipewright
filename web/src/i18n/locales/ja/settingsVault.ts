@@ -1,4 +1,8 @@
 export default {
+  registryUsername: 'レジストリのユーザー名',
+  registryPassword: 'パスワードまたは Token',
+  registryUsernameOptional: '任意。空欄で従来の Token に対応',
+  invalidRegistryUsername: 'ユーザー名にコロンや制御文字は使えません',
   title: '認証情報の保管庫',
   desc: 'すべてのシークレットは NaCl secretbox で暗号化され、本インスタンスに保存され、保存時にマスクされます。平文の表示はこのページでの明示的な操作で、監査に記録されます。パイプラインはスコープで参照し、ログや診断コンテキストには一切含まれません。',
   addCredential: '認証情報を追加',

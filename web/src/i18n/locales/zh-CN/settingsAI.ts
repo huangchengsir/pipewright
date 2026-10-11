@@ -1,4 +1,15 @@
 export default {
+  protocolHelp:
+    '选择的是接口兼容协议，不限于官网。DeepSeek、OpenRouter 或自建网关只要兼容其中一种协议，就能填写对应的接入地址、API Key 和模型 ID。',
+  compatibleProtocol: '兼容协议',
+  selectProtocol: '选择 API 协议',
+  quickSetup: '快捷配置',
+  customGateway: '自定义网关',
+  modelId: '模型 ID',
+  availableModels: '可用模型',
+  searchModels: '搜索模型',
+  fetchModels: '获取模型',
+  modelsUnavailable: '模型列表不可用，可手动输入模型 ID。',
   title: 'AI 提供商',
   subtitle:
     'Pipewright 不自训模型 —— 接入你自己的 LLM 用于失败诊断与配置生成。密钥仅存于本实例的加密保险库,绝不外泄。',
@@ -27,7 +38,8 @@ export default {
   apiKeyPaste: '粘贴 API Key…',
   apiKeyMaskedAria: '已配置掩码: {masked}',
 
-  ollamaHint: '本地 Ollama 无需 API Key —— 确保 Ollama 服务已在指定地址运行即可。',
+  ollamaHint:
+    '本地 Ollama 无需 API Key —— 确保 Ollama 服务已在指定地址运行即可。',
 
   baseUrlLabel: '接入地址 (Base URL)',
   baseUrlHint: '默认: {url}',
@@ -56,7 +68,8 @@ export default {
 
   errServerUnreachable: '无法连接到服务器,请检查后端是否运行后重试',
   errServerUnreachableShort: '无法连接到服务器',
-  errVaultUnconfigured: '保险库未配置 master key,请设置 PIPEWRIGHT_MASTER_KEY 环境变量',
+  errVaultUnconfigured:
+    '保险库未配置 master key,请设置 PIPEWRIGHT_MASTER_KEY 环境变量',
   errLoadFailed: '加载失败({status})',
   errLoadGeneric: '加载 AI 配置失败,请稍后重试',
   errBudgetInvalid: '月 token 上限须为正整数或留空',

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import { computed, shallowRef, onBeforeUnmount } from 'vue'
-import type { Call, Confirmation } from '../../api/opsChat'
+import { isValidExecArgv, type BoundCall, type Call, type Confirmation } from '../../api/opsChat'
 const props = defineProps<{
   confirmation: Confirmation
   calls: Record<string, Call>
@@ -23,40 +23,46 @@ const fresh = computed(
     props.confirmation.valid &&
     Date.parse(props.confirmation.expiresAt) > now.value,
 )
-const loaded = computed(
-  () =>
-    props.confirmation.calls.length > 0 &&
-    props.confirmation.calls.every((bound) => {
-      const call = props.calls[bound.callId]
-      return (
-        call &&
-        call.serverId === bound.serverId &&
-        call.object === bound.object &&
-        call.argsHash === bound.argsHash &&
-        call.targetHash === bound.targetHash &&
-        !!call.args.action
-      )
-    }),
-)
+function matchingCall(bound: BoundCall): Call | undefined {
+  const call = props.calls[bound.callId]
+  if (!call || call.callId !== bound.callId || call.runId !== props.confirmation.runId ||
+    call.serverId !== bound.serverId || call.toolId !== bound.toolId ||
+    !bound.object || call.object !== bound.object ||
+    !bound.argsHash || call.argsHash !== bound.argsHash ||
+    !bound.targetHash || call.targetHash !== bound.targetHash) return undefined
+  if (bound.toolId === 'docker_exec') {
+    return isValidExecArgv(call.args.argv) && call.args.action === undefined ? call : undefined
+  }
+  return ['docker_action', 'systemd_action'].includes(bound.toolId) && !!call.args.action ? call : undefined
+}
+const rows = computed(() => props.confirmation.calls.map((bound) => ({ bound, call: matchingCall(bound) })))
+const loaded = computed(() => rows.value.length > 0 && rows.value.every((row) => !!row.call))
+const hasExec = computed(() => props.confirmation.calls.some((bound) => bound.toolId === 'docker_exec'))
+function confirm(): void {
+  if (!props.disabled && fresh.value && loaded.value) emit('confirm', props.confirmation)
+}
 </script>
 <template>
   <section class="confirmation">
     <strong>{{ t('opsChat.batch') }}</strong>
     <p class="ops-muted">{{ t('opsChat.batchImpact') }}</p>
+    <p v-if="hasExec" class="ops-error" role="status">{{ t('opsChat.exec.risk') }}</p>
     <ul class="batch-list">
-      <li v-for="bound in confirmation.calls" :key="bound.callId">
+      <li v-for="{ bound, call } in rows" :key="bound.callId">
         <strong class="ops-wrap">{{
-          calls[bound.callId]?.serverName || bound.serverId
+          call?.serverName || bound.serverId
         }}</strong>
+        <p class="ops-muted ops-wrap">{{ bound.serverId }}</p>
         <p class="ops-wrap">
           {{ t('opsChat.tools.' + bound.toolId) }} ·
           {{
-            calls[bound.callId]?.args.action
-              ? t('opsChat.actions.' + calls[bound.callId]!.args.action)
-              : t('opsChat.loadingResult')
+            !call ? t('opsChat.loadingResult') :
+              bound.toolId === 'docker_exec' ? t('opsChat.exec.argv') :
+                t('opsChat.actions.' + call.args.action)
           }}
         </p>
         <code class="ops-wrap">{{ bound.object }}</code>
+        <pre v-if="call && bound.toolId === 'docker_exec'" class="exec-argv">{{ JSON.stringify(call.args.argv) }}</pre>
         <details class="ops-muted">
           <summary>{{ t('opsChat.binding') }}</summary>
           <p class="ops-wrap">
@@ -76,7 +82,7 @@ const loaded = computed(
         v-if="fresh"
         class="ops-btn ops-primary"
         :disabled="disabled || !loaded"
-        @click="emit('confirm', confirmation)"
+        @click="confirm"
       >
         {{ t('opsChat.confirmBatch') }}
       </button>
@@ -114,5 +120,15 @@ const loaded = computed(
 }
 .confirmation p {
   margin: 6px 0;
+}
+.exec-argv {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  margin: 8px 0;
+  padding: 8px;
+  font-family: var(--font-mono);
+  color: var(--color-text);
+  background: var(--color-inset);
 }
 </style>

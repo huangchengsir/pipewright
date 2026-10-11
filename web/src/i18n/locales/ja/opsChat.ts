@@ -1,4 +1,59 @@
 export default {
+  continuationError: {
+    preserved: '収集済みの事実は保持されています。後続のサーバータスクは実行されていません。',
+    unknown: '後続タスクの計画を完了できませんでした。',
+    unavailable: 'AI エンドポイントは現在利用できません。',
+    invalid_plan: '後続タスクまたは引数はサポートされていません。',
+  },
+  exec: {
+    program: 'プログラム',
+    argument: '引数 {index}',
+    addArgument: '引数を追加',
+    removeArgument: '引数 {index} を削除',
+    argv: '正確な argv',
+    invalidArgs: 'プログラムは ASCII 英数字と _ . / を使用し、+ と - は先頭以外で使用できます。ドット・親・ルートだけのパスと末尾の / は不可です。最大61要素、各2048 UTF-8バイト、合計4096バイトです。NUL・タブ・改行を含む C0/C1 制御文字は禁止です。',
+    risk: 'コンテナ内の非対話実行はデータを変更したり秘密情報にアクセスしたりする可能性があります。終了コードはコマンドの終了を示すだけで、業務上の変更成功を保証しません。停止しても変更は取り消されません。',
+  },
+  planningError: {
+    unknown:
+      'タスク計画を作成できませんでした。過去のリクエストの原因は記録されていません。',
+    token_limit: '出力トークン上限に達し、計画が完了しませんでした。',
+    timeout: 'タスク計画がタイムアウトしました。',
+    rejected:
+      'モデルがリクエストを拒否しました。モデル、認証情報、割り当てを確認してください。',
+    invalid_response: 'モデルの計画が不正または不完全です。',
+    unavailable:
+      'AI エンドポイントを利用できません。サーバータスクは実行していません。',
+    input_limit: '計画が入力または出力上限を超えています。',
+    invalid_plan:
+      '生成されたタスクや引数は未対応です。サーバータスクは実行していません。',
+  },
+  analysisError: {
+    unknown:
+      'AI 分析は完了しませんでした。収集結果は保持されています。過去のリクエストには原因の記録がなく、手動で再分析できます。',
+    token_limit:
+      'AI の出力トークン上限に達し、分析が完了しませんでした。収集結果は保持されています。',
+    timeout: 'AI 分析がタイムアウトしました。収集結果は保持されています。',
+    rejected:
+      'モデルが分析リクエストを拒否しました。モデル、認証情報、割り当てを確認してください。収集結果は保持されています。',
+    invalid_response:
+      'モデルの応答が不正または不完全です。収集結果は保持されています。',
+    unavailable:
+      'AI エンドポイントを利用できません。収集結果は保持されています。',
+    input_limit:
+      '分析の入力上限を超えています。結果は送信していません。サーバーごとに分析してください。',
+  },
+  loadedItems: '読み込み済み項目',
+  analyzeLoaded: '読み込み済み項目を分析',
+  selectedLimit: '{count} 台選択 / 最大 {limit} 台',
+  waiting: '応答を待っています',
+  submitting: '送信中',
+  runResults: '今回の収集結果',
+  analyzeRun: '今回の全結果を分析',
+  analyzeGroup: 'このサーバーを分析',
+  localSummary: 'ローカルの事実',
+  occupantsMissing: '使用者データが未取得',
+  occupants: { processes: 'プロセス', containers: 'コンテナ' },
   title: 'AI 運用アシスタント',
   history: 'セッション履歴',
   newSession: '新しいセッション',
@@ -85,6 +140,7 @@ export default {
     unknown: '結果不明',
   },
   tools: {
+    docker_exec: 'コンテナ内でプログラムを実行',
     host_resources: 'ホスト資源',
     host_processes: 'プロセス',
     host_ports: '待受ポート',

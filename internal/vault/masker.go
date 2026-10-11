@@ -1,6 +1,9 @@
 package vault
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 // 掩码服务端计算:列表/响应只暴露掩码值,绝不回显明文。
 // 掩码字符串本身只含「极少量」可识别尾部/前缀,不足以还原密钥。
@@ -85,6 +88,9 @@ func maskRegistry(secret string) string {
 	s := strings.TrimSpace(secret)
 	if i := strings.Index(s, ":"); i >= 0 {
 		user := s[:i]
+		if strings.IndexFunc(user, unicode.IsControl) >= 0 {
+			return maskDots
+		}
 		return user + " " + maskDots
 	}
 	if len([]rune(s)) < maskMinLen {

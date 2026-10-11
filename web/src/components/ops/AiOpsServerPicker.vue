@@ -1,14 +1,25 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { Server } from '../../api/servers'
-const props = defineProps<{
-  servers: Server[]
-  selected: string[]
-  disabled: boolean
-}>()
+const props = withDefaults(
+  defineProps<{
+    servers: Server[]
+    selected: string[]
+    disabled: boolean
+    limit?: number
+  }>(),
+  { limit: 8 },
+)
 const emit = defineEmits<{ change: [ids: string[]] }>()
 const { t } = useI18n()
+const expanded = shallowRef(!props.disabled && !props.selected.length)
+watch(
+  () => [props.selected.length, props.disabled] as const,
+  ([count, disabled]) => {
+    if (!disabled && count === 0) expanded.value = true
+  },
+)
 const missing = computed(() =>
   props.selected.filter((id) => !props.servers.some((s) => s.id === id)),
 )
@@ -18,15 +29,19 @@ function toggle(id: string): void {
     'change',
     props.selected.includes(id)
       ? props.selected.filter((x) => x !== id)
-      : [...props.selected, id].slice(0, 8),
+      : [...props.selected, id].slice(0, props.limit),
   )
 }
 </script>
 <template>
   <section class="ops-section server-navigation">
-    <details class="server-details">
+    <details
+      class="server-details"
+      :open="expanded"
+      @toggle="expanded = ($event.target as HTMLDetailsElement).open"
+    >
       <summary class="server-summary">
-        {{ t('opsChat.targets') }} · {{ selected.length }}/8
+        {{ t('opsChat.selectedLimit', { count: selected.length, limit }) }}
       </summary>
       <div class="server-list" tabindex="0" :aria-label="t('opsChat.targets')">
         <label v-for="server in servers" :key="server.id" class="server-choice">
@@ -35,7 +50,7 @@ function toggle(id: string): void {
             :checked="selected.includes(server.id)"
             :disabled="
               disabled ||
-              (selected.length >= 8 && !selected.includes(server.id))
+              (selected.length >= limit && !selected.includes(server.id))
             "
             @change="toggle(server.id)"
           />

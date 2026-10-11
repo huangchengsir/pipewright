@@ -36,6 +36,7 @@ export interface Session {
   updatedAt: string
 }
 export interface Run {
+  phase?: 'analysis'
   id: string
   sessionId: string
   clientRequestId: string
@@ -45,6 +46,7 @@ export interface Run {
 }
 export interface ToolArgs {
   container?: string
+  argv?: string[]
   unit?: string
   lines?: number
   action?: string
@@ -115,15 +117,27 @@ export interface Confirmation {
   valid: boolean
 }
 export interface Entry {
+  targetNames?: Record<string, string>
+	 replaceSeq?: number
+	 revisionSeq?: number
+	 requestId?: string
+	 call?: Call
+	 run?: Run
+	 session?: Session
+	 confirmation?: Confirmation
+	 summary?: RunSummary
   sessionId: string
   seq: number
   kind: string
   runId?: string
   callId?: string
   text?: string
-  status?: Status
+  status?: Status | 'partial'
   createdAt: string
 }
+export interface Occupant { id: string; name: string; cpuPercent: number; memoryPercent?: number; memoryUsage?: string }
+export interface CallFact {callId: string;toolId: string;status: Status;truncated: boolean;error?: string;excerpt?: string;resources?: Resources;occupants?: Occupant[]}
+export interface RunSummary {servers: {serverId: string;serverName: string;facts: CallFact[];missing: string[]}[]}
 export interface EntryPage {
   entries: Entry[] | null
   cursor: string
@@ -157,6 +171,8 @@ export interface Preview {
   provider: Provider
 }
 export interface Turn {
+  analyzeResults?: boolean
+  provider?: Provider
   clientRequestId: string
   revision: number
   text?: string
@@ -174,10 +190,15 @@ export interface Retry {
   revision: number
   callIds: string[]
 }
-export interface Analysis extends Retry {
-  previewHash: string
+export interface Analysis {
+  clientRequestId: string
+  revision: number
+  runId?: string
+  callIds?: string[]
+  analyzeResults?: boolean
+  previewHash?: string
   provider: Provider
-  consent: boolean
+  consent?: boolean
 }
 const root = '/api/ai/ops'
 const path = (id: string): string =>
@@ -185,13 +206,13 @@ const path = (id: string): string =>
 export const opsApi = {
   capabilities: () => http.get<Capabilities>(`${root}/capabilities`),
   tools: () => http.get<Tool[]>(`${root}/tools`),
-  list: () => http.get<SessionPage>(`${root}/sessions?limit=100`),
-  create: (serverIds: string[]) =>
-    http.post<Session>(`${root}/sessions`, { title: '', serverIds }),
+  list: (context='') => http.get<SessionPage>(`${root}/sessions?limit=100${context?'&context='+encodeURIComponent(context):''}`),
+  create: (serverIds: string[],context='') =>
+    http.post<Session>(`${root}/sessions`, { title: '', serverIds,...(context?{context}:{}) }),
   snapshot: (id: string) => http.get<Snapshot>(path(id)),
   patch: (id: string, input: Patch) => http.patch<Session>(path(id), input),
-  activate: (id: string) =>
-    http.post<{ ok: boolean }>(`${path(id)}/activate`, {}),
+  activate: (id: string,context='') =>
+    http.post<{ ok: boolean }>(`${path(id)}/activate`, context?{context}:{}),
   delete: (id: string) => http.delete<void>(path(id)),
   entries: (id: string, before: string) =>
     http.get<EntryPage>(
@@ -233,6 +254,28 @@ export function requestId(): string {
 }
 export const utf8Bytes = (text: string): number =>
   new TextEncoder().encode(text).length
+export const execArgvLimits = { count: 61, tokenBytes: 2048, totalBytes: 4096 }
+export function isValidExecArgv(argv: unknown): argv is string[] {
+  if (!Array.isArray(argv) || argv.length < 1 || argv.length > execArgvLimits.count)
+    return false
+  const program = argv[0]
+  if (typeof program !== 'string' || !/^[A-Za-z0-9_./][A-Za-z0-9_./+-]*$/.test(program) || program.endsWith('/'))
+    return false
+  const basename = program.slice(program.lastIndexOf('/') + 1)
+  if (basename === '.' || basename === '..') return false
+  let total = 0
+  for (const token of argv) {
+    if (typeof token !== 'string' || /[\u0000-\u001f\u007f-\u009f]/.test(token)) return false
+    for (const character of token) {
+      const codePoint = character.codePointAt(0)!
+      if (codePoint >= 0xd800 && codePoint <= 0xdfff) return false
+    }
+    const bytes = utf8Bytes(token)
+    if (bytes > execArgvLimits.tokenBytes) return false
+    total += bytes
+  }
+  return total <= execArgvLimits.totalBytes
+}
 export function errorCode(error: unknown): string {
   if (error instanceof HttpError) {
     if (error.status === 401) return 'unauthorized'

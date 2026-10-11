@@ -122,6 +122,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Session, error) 
 	if err := s.ready(); err != nil {
 		return nil, err
 	}
+	if err := s.validateContext(ctx, in.Context); err != nil {
+		return nil, err
+	}
 	if !validTargets(in.ServerIDs) || !utf8.ValidString(in.Title) || utf8.RuneCountInString(in.Title) > 80 {
 		return nil, ErrInvalid
 	}
@@ -151,6 +154,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Session, error) 
 		_, e := tx.ExecContext(ctx, "INSERT INTO ops_chat_sessions(id,revision,body,created_at,updated_at) VALUES(?,1,?,?,?)", id, sealed, now, now)
 		if e != nil {
 			return ErrStorage
+		}
+		if in.Context != "" {
+			if e = s.bindContext(ctx, tx, in.Context, id); e != nil {
+				return e
+			}
 		}
 		return s.append(ctx, tx, Entry{SessionID: id, Kind: "session_updated"}, false, false)
 	})
@@ -221,16 +229,7 @@ func (s *Service) Patch(ctx context.Context, id string, in PatchInput) (*Session
 	return s.Get(ctx, id)
 }
 func (s *Service) Activate(ctx context.Context, id string) error {
-	if err := s.ready(); err != nil {
-		return err
-	}
-	return s.transaction(ctx, true, func(tx *sql.Tx) error {
-		if _, err := s.session(ctx, tx, id); err != nil {
-			return err
-		}
-		_, err := tx.ExecContext(ctx, "UPDATE ops_chat_state SET active_session=? WHERE id=1", id)
-		return databaseError(err)
-	})
+	return s.ActivateContext(ctx, id, "")
 }
 func (s *Service) duplicate(ctx context.Context, session, request, hash string) (*Run, error) {
 	var id, chat, payload string
@@ -276,6 +275,9 @@ func (s *Service) Submit(ctx context.Context, id string, in TurnInput) (*Run, er
 	if in.ToolID == "" && (s.model == nil || !validProvider(s.model.Info())) {
 		return nil, ErrUnavailable
 	}
+	if in.AnalyzeResults && (in.ToolID != "" || s.model == nil || !validProvider(in.Provider) || in.Provider != s.model.Info()) {
+		return nil, ErrConsent
+	}
 	if in.ToolID != "" && s.executor == nil {
 		return nil, ErrUnavailable
 	}
@@ -286,7 +288,7 @@ func (s *Service) Submit(ctx context.Context, id string, in TurnInput) (*Run, er
 	if chat.Revision != in.Revision {
 		return nil, ErrConflict
 	}
-	if in.ToolID != "" && len(chat.ServerIDs) == 0 {
+	if (in.ToolID != "" || in.AnalyzeResults) && len(chat.ServerIDs) == 0 {
 		return nil, ErrInvalid
 	}
 	snapshots := []target.ConnectionSnapshot{}
@@ -313,7 +315,11 @@ func (s *Service) Submit(ctx context.Context, id string, in TurnInput) (*Run, er
 		}
 	}
 	in.Text = s.scrub(in.Text, 8<<10)
-	return s.enqueue(ctx, id, in.ClientRequestID, hash, runBody{Turn: in, Targets: snapshots}, in.Revision)
+	provider := in.Provider
+	if in.ToolID == "" && !in.AnalyzeResults {
+		provider = s.model.Info()
+	}
+	return s.enqueue(ctx, id, in.ClientRequestID, hash, runBody{Turn: in, Targets: snapshots, Provider: provider, AnalysisAuthorized: in.AnalyzeResults, Question: in.Text}, in.Revision)
 }
 func (s *Service) enqueue(ctx context.Context, id, request, hash string, body runBody, revision int64) (*Run, error) {
 	for _, snap := range body.Targets {
@@ -355,6 +361,13 @@ func (s *Service) enqueue(ctx context.Context, id, request, hash string, body ru
 		}
 		if e = s.validateRetryTx(ctx, tx, id, body, sr); e != nil {
 			return e
+		}
+		if body.Turn.ToolID == "" && body.Analysis == nil && len(body.RetryActions) == 0 {
+			body.Question, e = s.turnQuestion(ctx, tx, id, body)
+			if e != nil {
+				return e
+			}
+			r.Body.Question = body.Question
 		}
 		b, e := s.seal(body)
 		if e != nil {

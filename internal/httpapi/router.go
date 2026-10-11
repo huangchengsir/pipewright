@@ -628,6 +628,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Get("/settings/ai", makeGetAISettingsHandler(aiSvc))
 		ar.Put("/settings/ai", makeSaveAISettingsHandler(aiSvc))
 		ar.Post("/settings/ai/test", makeTestAISettingsHandler(aiSvc))
+		ar.Post("/settings/ai/models", makeAIModelsHandler(aiSvc))
 
 		// 诊断反馈闭环统计(Story 7.5;FR-26):准确率/计数/最近趋势/最近 corrections(知识库种子可视化)。
 		// 只读 + 认证;无反馈 → 全 0 / 空数组 / accuracy:null(不报错)。fb 为 nil → 503。

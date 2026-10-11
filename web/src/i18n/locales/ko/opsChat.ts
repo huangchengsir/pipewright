@@ -1,4 +1,58 @@
 export default {
+  continuationError: {
+    preserved: '수집된 사실은 보존됩니다. 후속 서버 작업은 실행되지 않았습니다.',
+    unknown: '후속 작업 계획을 완료하지 못했습니다.',
+    unavailable: 'AI 엔드포인트를 현재 사용할 수 없습니다.',
+    invalid_plan: '후속 작업 또는 인수가 지원되지 않습니다.',
+  },
+  exec: {
+    program: '프로그램',
+    argument: '인수 {index}',
+    addArgument: '인수 추가',
+    removeArgument: '인수 {index} 삭제',
+    argv: '정확한 argv',
+    invalidArgs: '프로그램은 ASCII 영문자, 숫자, _ . / 를 사용하며 + 와 - 는 첫 문자 이후에만 허용됩니다. 점·상위·루트만 가리키는 경로와 끝의 / 는 금지됩니다. 최대 61개 요소, 요소당 UTF-8 2048바이트, 전체 4096바이트입니다. NUL, 탭, 줄바꿈을 포함한 C0/C1 제어 문자는 허용되지 않습니다.',
+    risk: '컨테이너의 비대화형 실행은 데이터를 변경하거나 비밀 정보에 접근할 수 있습니다. 종료 코드는 명령 종료만 나타내며 업무상 변경 성공을 보장하지 않습니다. 중지는 변경을 되돌리지 않습니다.',
+  },
+  planningError: {
+    unknown:
+      '작업 계획을 생성하지 못했습니다. 이전 요청의 원인은 기록되지 않았습니다.',
+    token_limit: '출력 토큰 한도에 도달하여 계획이 완료되지 않았습니다.',
+    timeout: '작업 계획 요청 시간이 초과되었습니다.',
+    rejected:
+      '모델이 요청을 거부했습니다. 모델, 자격 증명 또는 할당량을 확인하세요.',
+    invalid_response: '모델의 계획이 잘못되었거나 불완전합니다.',
+    unavailable:
+      'AI 엔드포인트를 사용할 수 없습니다. 서버 작업은 실행하지 않았습니다.',
+    input_limit: '계획이 입력 또는 출력 한도를 초과했습니다.',
+    invalid_plan:
+      '생성된 작업이나 인수가 지원되지 않습니다. 서버 작업은 실행하지 않았습니다.',
+  },
+  analysisError: {
+    unknown:
+      'AI 분석이 완료되지 않았습니다. 수집 결과는 보존됩니다. 이전 요청에는 원인이 기록되지 않았으며 수동으로 다시 분석할 수 있습니다.',
+    token_limit:
+      'AI 출력 토큰 한도에 도달하여 분석이 완료되지 않았습니다. 수집 결과는 보존됩니다.',
+    timeout: 'AI 분석 요청 시간이 초과되었습니다. 수집 결과는 보존됩니다.',
+    rejected:
+      '모델이 분석 요청을 거부했습니다. 모델, 자격 증명 또는 할당량을 확인하세요. 수집 결과는 보존됩니다.',
+    invalid_response:
+      '모델 응답이 잘못되었거나 불완전합니다. 수집 결과는 보존됩니다.',
+    unavailable: 'AI 엔드포인트를 사용할 수 없습니다. 수집 결과는 보존됩니다.',
+    input_limit:
+      '분석 입력 한도를 초과했습니다. 결과를 전송하지 않았습니다. 서버별로 분석하세요.',
+  },
+  loadedItems: '불러온 항목',
+  analyzeLoaded: '불러온 항목 분석',
+  selectedLimit: '{count}대 선택 / 최대 {limit}대',
+  waiting: '응답 대기 중',
+  submitting: '전송 중',
+  runResults: '이번 수집 결과',
+  analyzeRun: '전체 결과 분석',
+  analyzeGroup: '이 서버 분석',
+  localSummary: '로컬 사실',
+  occupantsMissing: '사용 프로세스 데이터 없음',
+  occupants: { processes: '프로세스', containers: '컨테이너' },
   title: 'AI 운영 도우미',
   history: '세션 기록',
   newSession: '새 세션',
@@ -84,6 +138,7 @@ export default {
     unknown: '결과 미확인',
   },
   tools: {
+    docker_exec: '컨테이너에서 프로그램 실행',
     host_resources: '호스트 자원',
     host_processes: '프로세스',
     host_ports: '수신 포트',

@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, shallowRef, toRef, onBeforeUnmount } from 'vue'
+import { computed, shallowRef, toRef, onBeforeUnmount, watch } from 'vue'
 import { onBeforeRouteLeave, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { History, Plus, X, Refresh } from '@vicons/tabler'
 import { useOpsChat } from '../../composables/useOpsChat'
+import { useOpsAutoScroll } from '../../composables/useOpsAutoScroll'
 import { useConfirm } from '../../composables/useConfirm'
 import { useToast } from '../../composables/useToast'
 import { copyText } from '../../utils/clipboard'
@@ -14,10 +15,13 @@ import AiOpsServerPicker from './AiOpsServerPicker.vue'
 import AiOpsMessageList from './AiOpsMessageList.vue'
 import AiOpsComposer from './AiOpsComposer.vue'
 import AiOpsConfirmation from './AiOpsConfirmation.vue'
-import AiOpsAnalysisConsent from './AiOpsAnalysisConsent.vue'
 const props = withDefaults(
-  defineProps<{ active?: boolean; initialServerIds?: string[] }>(),
-  { active: true, initialServerIds: () => [] },
+  defineProps<{
+    active?: boolean
+    initialServerIds?: string[]
+    context?: string
+  }>(),
+  { active: true, initialServerIds: () => [], context: 'containers' },
 )
 const emit = defineEmits<{ collapse: [] }>()
 const { t } = useI18n(),
@@ -27,6 +31,7 @@ const { t } = useI18n(),
 const chat = useOpsChat({
   active: toRef(props, 'active'),
   initialServerIds: () => props.initialServerIds,
+  context: () => props.context,
 })
 const {
   state,
@@ -38,13 +43,31 @@ const {
   busy,
   loading,
   error,
-  preview,
   pending,
   servers,
   tools,
   confirmations,
   historyCursor,
 } = chat
+const {
+  viewport: messagesViewport,
+  content: messagesContent,
+  scrollToBottom,
+  preserveHistory,
+} = useOpsAutoScroll({
+  active: toRef(props, 'active'),
+  sessionId: () => session.value?.id,
+})
+watch(
+  () => {
+    const entry = state.optimistic[state.optimistic.length - 1]
+    return entry?.sessionId === session.value?.id ? entry?.requestId : undefined
+  },
+  (requestId) => {
+    if (requestId) void scrollToBottom()
+  },
+  { flush: 'post' },
+)
 const historyOpen = shallowRef(false),
   manualCopy = shallowRef<string | null>(null)
 let disposed = false
@@ -58,6 +81,27 @@ onBeforeUnmount(() => {
 })
 const disabled = computed(
   () => busy.value || loading.value || !capabilities.value?.available,
+)
+const waiting = computed(() => {
+  if (
+    busy.value &&
+    state.optimistic.some((e) => e.sessionId === session.value?.id)
+  )
+    return true
+  const run = activeRun.value
+  if (!run || (run.status !== 'planning' && run.phase !== 'analysis'))
+    return false
+  return !state.entries.some(
+    (e) =>
+      e.runId === run.id &&
+      !!e.text &&
+      (run.phase === 'analysis'
+        ? e.kind === 'analysis'
+        : e.kind === 'assistant'),
+  )
+})
+const optimistic = computed(() =>
+  state.optimistic.filter((e) => e.sessionId === session.value?.id),
 )
 async function leave(): Promise<boolean> {
   if (await chat.close()) return true
@@ -170,11 +214,13 @@ defineExpose({ close })
           >{{ session?.title || t('opsChat.title') }}</strong
         >
         <div class="ops-muted">
-          {{
-            activeRun
-              ? t('opsChat.status.' + activeRun.status)
-              : t('opsChat.idle')
-          }}
+          <template v-if="activeRun?.status !== 'planning'">
+            {{
+              activeRun
+                ? t('opsChat.status.' + activeRun.status)
+                : t('opsChat.idle')
+            }}
+          </template>
         </div>
       </div>
       <button
@@ -225,6 +271,7 @@ defineExpose({ close })
       <AiOpsServerPicker
         :servers="servers"
         :selected="session?.serverIds ?? []"
+        :limit="capabilities?.limits?.targets ?? 8"
         :disabled="disabled || !!session?.activeRunId || !!pending"
         @change="chat.targets"
       />
@@ -239,41 +286,40 @@ defineExpose({ close })
       />
     </div>
     <div
+      ref="messagesViewport"
       class="ops-body"
       data-testid="ops-messages-scroll"
       tabindex="0"
       :aria-label="t('opsChat.title')"
     >
-      <AiOpsMessageList
-        :entries="state.entries"
-        :calls="state.calls"
-        :disabled="disabled || !!session?.activeRunId || !!pending"
-        :model-available="capabilities?.modelAvailable ?? false"
-        :has-history="!!historyCursor"
-        @copy="copy"
-        @retry="(id) => chat.retry([id])"
-        @analyze="(id) => chat.analyzePreview([id])"
-        @terminal="terminal"
-        @history="chat.history"
-      />
-      <AiOpsConfirmation
-        v-for="confirmation in confirmations"
-        :key="confirmation.runId"
-        :confirmation="confirmation"
-        :calls="state.calls"
-        :disabled="disabled"
-        @confirm="chat.confirmBatch"
-        @cancel="chat.stop"
-        @reissue="chat.reissue"
-      />
-      <AiOpsAnalysisConsent
-        v-if="preview"
-        :preview="preview"
-        :calls="state.calls"
-        :disabled="disabled"
-        @approve="chat.analyze"
-        @cancel="preview = null"
-      />
+      <div ref="messagesContent" class="ops-scroll-content">
+        <AiOpsMessageList
+          :entries="state.entries"
+          :calls="state.calls"
+          :runs="state.snapshot?.runs ?? []"
+          :optimistic="optimistic"
+          :waiting="waiting"
+          :disabled="disabled || !!session?.activeRunId || !!pending"
+          :model-available="capabilities?.modelAvailable ?? false"
+          :has-history="!!historyCursor"
+          @copy="copy"
+          @retry="(id) => chat.retry([id])"
+          @analyze="chat.analyze"
+          @analyze-run="(runId) => chat.analyze([], runId)"
+          @terminal="terminal"
+          @history="preserveHistory(chat.history)"
+        />
+        <AiOpsConfirmation
+          v-for="confirmation in confirmations"
+          :key="confirmation.runId"
+          :confirmation="confirmation"
+          :calls="state.calls"
+          :disabled="disabled"
+          @confirm="chat.confirmBatch"
+          @cancel="chat.stop"
+          @reissue="chat.reissue"
+        />
+      </div>
     </div>
     <AiOpsComposer
       class="ops-composer"
@@ -344,6 +390,11 @@ defineExpose({ close })
   min-width: 0;
   overflow: auto;
   overscroll-behavior: contain;
+  overflow-anchor: none;
+}
+.ops-scroll-content {
+  display: flow-root;
+  min-width: 0;
 }
 .ops-panel > .ops-composer {
   flex: 0 1 auto;

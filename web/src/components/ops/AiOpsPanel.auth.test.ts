@@ -28,7 +28,7 @@ vi.mock('../../utils/clipboard', async (importOriginal) => ({
 vi.mock('../../composables/useOpsChat', () => ({
   useOpsChat: () => {
     const value = {
-      state: { sessions: [], currentId: 'chat', entries: [], calls: {} },
+      state: { sessions: [], currentId: 'chat', entries: [], calls: {}, optimistic: [] },
       capabilities: shallowRef({ available: true, modelAvailable: false }),
       session: shallowRef(null),
       activeRun: shallowRef(null),

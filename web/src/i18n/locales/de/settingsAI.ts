@@ -1,4 +1,15 @@
 export default {
+  protocolHelp:
+    'Wählen Sie das API-Format, nicht den Anbieter. DeepSeek, OpenRouter und eigene Gateways funktionieren mit einem kompatiblen Protokoll. Verwenden Sie deren Basis-URL, API-Schlüssel und Modell-ID.',
+  compatibleProtocol: 'Kompatibles Protokoll',
+  selectProtocol: 'API-Protokoll wählen',
+  quickSetup: 'Schnelle Einrichtung',
+  customGateway: 'Eigenes Gateway',
+  modelId: 'Modell-ID',
+  availableModels: 'Verfügbare Modelle',
+  searchModels: 'Modelle suchen',
+  fetchModels: 'Modelle abrufen',
+  modelsUnavailable: 'Modellliste nicht verfügbar; Modell-ID manuell eingeben.',
   title: 'AI-Anbieter',
   subtitle:
     'Pipewright trainiert keine eigenen Modelle – binde dein eigenes LLM für die Fehlerdiagnose und Konfigurationserstellung ein. Schlüssel liegen ausschließlich im verschlüsselten Tresor dieser Instanz und verlassen ihn nie.',
@@ -21,30 +32,35 @@ export default {
   providerConfig: '{name}-Konfiguration',
   lastSaved: 'Zuletzt gespeichert {time}',
 
-  apiKeyHint: 'Nach dem Speichern wird nur ein maskierter Wert angezeigt; leer lassen, um den vorhandenen Schlüssel zu behalten',
+  apiKeyHint:
+    'Nach dem Speichern wird nur ein maskierter Wert angezeigt; leer lassen, um den vorhandenen Schlüssel zu behalten',
   apiKeyReplacing: 'Wird ersetzt…',
   apiKeyConfigured: 'Konfiguriert •••• (leer lassen = unverändert)',
   apiKeyPaste: 'API Key einfügen…',
   apiKeyMaskedAria: 'Konfigurierte Maske: {masked}',
 
-  ollamaHint: 'Lokales Ollama benötigt keinen API Key – stelle nur sicher, dass der Ollama-Dienst unter der angegebenen Adresse läuft.',
+  ollamaHint:
+    'Lokales Ollama benötigt keinen API Key – stelle nur sicher, dass der Ollama-Dienst unter der angegebenen Adresse läuft.',
 
   baseUrlLabel: 'Base URL',
   baseUrlHint: 'Standard: {url}',
 
   modelLabel: 'Modell',
-  modelHint: 'Hauptmodell für die Diagnose, z. B. claude-opus-4-7 / gpt-4o / llama3',
+  modelHint:
+    'Hauptmodell für die Diagnose, z. B. claude-opus-4-7 / gpt-4o / llama3',
 
   testConnection: 'Verbindung testen',
   testOk: 'Verbindung OK · Latenz {ms}ms',
   testFail: 'Verbindung fehlgeschlagen',
 
   budgetLabel: 'Monatliches Token-Limit',
-  budgetHint: 'Pausiert die AI-Diagnose bei Überschreitung (leer = unbegrenzt; in diesem Zyklus nur deklariert, im nächsten Epic erzwungen)',
+  budgetHint:
+    'Pausiert die AI-Diagnose bei Überschreitung (leer = unbegrenzt; in diesem Zyklus nur deklariert, im nächsten Epic erzwungen)',
   budgetPlaceholder: 'z. B. 500000, leer = unbegrenzt',
 
   enableAi: 'AI-Funktionen aktivieren',
-  enableAiDesc: 'Im ausgeschalteten Zustand wird die AI-Diagnose still übersprungen und die zentralen CI/CD-Pipelines bleiben unberührt',
+  enableAiDesc:
+    'Im ausgeschalteten Zustand wird die AI-Diagnose still übersprungen und die zentralen CI/CD-Pipelines bleiben unberührt',
 
   dirtyNote: 'Es gibt ungespeicherte Änderungen',
   cleanNote: 'Keine Änderungen',
@@ -54,15 +70,20 @@ export default {
   toastSaveSuccess: 'AI-Einstellungen gespeichert',
   toastSaveFailed: 'Speichern fehlgeschlagen',
 
-  errServerUnreachable: 'Server nicht erreichbar. Prüfe, ob das Backend läuft, und versuche es erneut.',
+  errServerUnreachable:
+    'Server nicht erreichbar. Prüfe, ob das Backend läuft, und versuche es erneut.',
   errServerUnreachableShort: 'Server nicht erreichbar',
-  errVaultUnconfigured: 'Im Tresor ist kein Master Key konfiguriert. Setze die Umgebungsvariable PIPEWRIGHT_MASTER_KEY.',
+  errVaultUnconfigured:
+    'Im Tresor ist kein Master Key konfiguriert. Setze die Umgebungsvariable PIPEWRIGHT_MASTER_KEY.',
   errLoadFailed: 'Laden fehlgeschlagen ({status})',
-  errLoadGeneric: 'AI-Einstellungen konnten nicht geladen werden. Bitte später erneut versuchen.',
-  errBudgetInvalid: 'Das monatliche Token-Limit muss eine positive Ganzzahl oder leer sein',
+  errLoadGeneric:
+    'AI-Einstellungen konnten nicht geladen werden. Bitte später erneut versuchen.',
+  errBudgetInvalid:
+    'Das monatliche Token-Limit muss eine positive Ganzzahl oder leer sein',
   errProviderInvalid: 'Bitte einen gültigen Anbieter auswählen',
   errBaseUrlRequired: 'Bitte die Base URL eingeben',
-  errApiKeyRequired: 'API Key darf nicht leer sein (außer bei Ollama erforderlich)',
+  errApiKeyRequired:
+    'API Key darf nicht leer sein (außer bei Ollama erforderlich)',
   errRequestFailed: 'Anfrage fehlgeschlagen ({status})',
   errUnknown: 'Unbekannter Fehler',
 }

@@ -2,8 +2,9 @@
 import { nextTick, onBeforeUnmount, onMounted, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AiOpsPanel from './AiOpsPanel.vue'
-withDefaults(defineProps<{ initialServerIds?: string[] }>(), {
+withDefaults(defineProps<{ initialServerIds?: string[];context?:string }>(), {
   initialServerIds: () => [],
+  context:'containers',
 })
 const emit = defineEmits<{ close: [] }>()
 const { t } = useI18n()
@@ -76,6 +77,7 @@ onBeforeUnmount(() => {
         <AiOpsPanel
           ref="panel"
           :initial-server-ids="initialServerIds"
+          :context="context"
           @collapse="emit('close')"
         />
       </aside>

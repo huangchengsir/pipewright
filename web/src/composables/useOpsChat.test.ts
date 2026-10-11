@@ -11,6 +11,9 @@ import {
   type Preview,
   type StreamEvent,
   type Call,
+  type Run,
+  type Entry,
+  type Confirmation,
 } from '../api/opsChat'
 import { HttpError } from '../api/http'
 import { resetOpsAuth } from '../utils/opsAuth'
@@ -85,13 +88,14 @@ let chat: ReturnType<typeof useOpsChat>, view: VueWrapper | undefined
 let db: Record<string, Snapshot>,
   active = 'chat'
 const events: ((event: StreamEvent) => void)[] = []
-async function open(initial = ['b']): Promise<void> {
+async function open(initial = ['b'], context?:()=>string): Promise<void> {
   view = mount(
     defineComponent({
       setup() {
         chat = useOpsChat({
           active: shallowRef(true),
           initialServerIds: () => initial,
+          context,
         })
         return () => null
       },
@@ -168,6 +172,280 @@ afterEach(() => {
   vi.useRealTimers()
 })
 describe('local ops lifecycle and concurrency', () => {
+  it.each(['assistant', 'analysis'])('recovers omitted %s text by revision without downgrading newer replies', async (kind) => {
+    const partial: Entry = {sessionId:'chat',seq:1,revisionSeq:1,kind,text:'partial',status:'partial',createdAt:stamp}
+    db.chat!.watermark=1
+    db.chat!.entries.entries=[partial]
+    await open()
+    db.chat!.watermark=100
+    db.chat!.entries.entries=Array.from({length:50},(_,i)=>({sessionId:'chat',seq:i+51,kind:'assistant',text:'later turn',createdAt:stamp}))
+    await chat.refresh()
+    events[0]!({type:'entry',id:'chat:9',data:{...partial,seq:9,replaceSeq:1,revisionSeq:9,text:'complete reply',status:'succeeded'}})
+    expect(chat.state.entries.find(e=>e.seq===1)).toMatchObject({text:'complete reply',status:'succeeded',revisionSeq:9})
+    events[0]!({type:'entry',id:'chat:10',data:{...partial,seq:10,replaceSeq:1,revisionSeq:8}})
+    expect(chat.state.entries.find(e=>e.seq===1)?.text).toBe('complete reply')
+    db.chat!.entries.entries=[{...partial,revisionSeq:20,text:'authoritative newer reply',status:'succeeded'}]
+    await chat.refresh()
+    events[0]!({type:'entry',id:'chat:11',data:{...partial,seq:11,replaceSeq:1,revisionSeq:9}})
+    expect(chat.state.entries.find(e=>e.seq===1)).toMatchObject({text:'authoritative newer reply',status:'succeeded',revisionSeq:20})
+    expect(opsApi.turn).not.toHaveBeenCalled()
+    expect(opsApi.retry).not.toHaveBeenCalled()
+  })
+  it.each(['running','succeeded'] as const)('authoritatively recovers a retained %s call omitted by the 50-entry snapshot window', async (status) => {
+    db.chat!.watermark=1
+    db.chat!.calls=[call(status)]
+    db.chat!.entries.entries=[{sessionId:'chat',seq:1,kind:'tool_call',callId:'call',createdAt:stamp}]
+    await open()
+    const d=defer<Call>()
+    vi.mocked(opsApi.call).mockReturnValueOnce(d.promise)
+    db.chat!.watermark=100
+    db.chat!.calls=[]
+    db.chat!.entries.entries=Array.from({length:50},(_,i)=>({sessionId:'chat',seq:i+51,kind:'assistant',text:'later turn',createdAt:stamp}))
+    const refreshing=chat.refresh()
+    await flushPromises()
+    events[0]!({type:'entry',id:'chat:2',data:{sessionId:'chat',seq:2,kind:'call_status',callId:'call',call:{...call('succeeded'),output:'untrusted delayed projection'},createdAt:stamp}})
+    await flushPromises()
+    expect(opsApi.call).toHaveBeenCalledOnce()
+    expect(chat.state.calls.call?.output).toBe('')
+    d.resolve({...call('succeeded'),output:'authoritative final facts'})
+    await refreshing
+    await flushPromises()
+    expect(chat.state.calls.call).toMatchObject({status:'succeeded',output:'authoritative final facts'})
+    events[0]!({type:'entry',id:'chat:3',data:{sessionId:'chat',seq:3,kind:'call_status',call:call(),createdAt:stamp}})
+    await flushPromises()
+    expect(chat.state.calls.call?.output).toBe('authoritative final facts')
+    expect(opsApi.call).toHaveBeenCalledOnce()
+  })
+  it('does not let an older recovery GET replace a newer live call projection', async () => {
+    db.chat!.calls=[call()]
+    await open()
+    const d=defer<Call>()
+    vi.mocked(opsApi.call).mockReturnValueOnce(d.promise)
+    db.chat!.watermark=100
+    db.chat!.calls=[]
+    const refreshing=chat.refresh()
+    await flushPromises()
+    events[0]!({type:'entry',id:'chat:101',data:{sessionId:'chat',seq:101,kind:'call_status',call:{...call('succeeded'),output:'newer live facts'},createdAt:stamp}})
+    d.resolve(call())
+    await refreshing
+    expect(chat.state.calls.call).toMatchObject({status:'succeeded',output:'newer live facts'})
+  })
+  it('retries failed snapshot hints on equal-watermark heartbeats until recovery completes', async () => {
+    await open()
+    vi.mocked(opsApi.snapshot).mockRejectedValueOnce(new HttpError(0,null,'down')).mockRejectedValueOnce(new HttpError(0,null,'still down'))
+    events[0]!({type:'entry',id:'chat:1',data:{sessionId:'chat',seq:1,kind:'snapshot_required',createdAt:stamp}})
+    events[0]!({type:'entry',id:'chat:2',data:{sessionId:'chat',seq:2,kind:'session_updated',session:{...session(),watermark:2},createdAt:stamp}})
+    await vi.advanceTimersByTimeAsync(100)
+    expect(chat.state.snapshot?.watermark).toBe(2)
+    db.chat!.watermark=2
+    db.chat!.calls=[{...call('succeeded'),output:'recovered hint facts'}]
+    events[0]!({type:'heartbeat',id:'',data:{watermark:2}})
+    await flushPromises()
+    expect(opsApi.snapshot).toHaveBeenCalledTimes(3)
+    expect(chat.state.calls.call).toBeUndefined()
+    events[0]!({type:'heartbeat',id:'',data:{watermark:2}})
+    await flushPromises()
+    expect(opsApi.snapshot).toHaveBeenCalledTimes(4)
+    expect(chat.state.calls.call?.output).toBe('recovered hint facts')
+    events[0]!({type:'heartbeat',id:'',data:{watermark:2}})
+    await flushPromises()
+    expect(opsApi.snapshot).toHaveBeenCalledTimes(4)
+  })
+  it('keeps a hint gap pending when snapshot hydration fails and retries the omitted call on heartbeat', async () => {
+    db.chat!.calls=[call()]
+    await open()
+    vi.mocked(opsApi.call).mockRejectedValueOnce(new HttpError(0,null,'down')).mockResolvedValueOnce({...call('succeeded'),output:'old call final facts'})
+    events[0]!({type:'entry',id:'chat:1',data:{sessionId:'chat',seq:1,kind:'snapshot_required',createdAt:stamp}})
+    events[0]!({type:'entry',id:'chat:2',data:{sessionId:'chat',seq:2,kind:'session_updated',session:{...session(),watermark:2},createdAt:stamp}})
+    db.chat!.watermark=2
+    db.chat!.calls=[]
+    await vi.advanceTimersByTimeAsync(100)
+    expect(chat.state.calls.call?.status).toBe('running')
+    events[0]!({type:'heartbeat',id:'',data:{watermark:2}})
+    await flushPromises()
+    expect(opsApi.call).toHaveBeenCalledTimes(2)
+    expect(chat.state.calls.call?.output).toBe('old call final facts')
+    const requests=vi.mocked(opsApi.snapshot).mock.calls.length
+    events[0]!({type:'heartbeat',id:'',data:{watermark:2}})
+    await flushPromises()
+    expect(opsApi.snapshot).toHaveBeenCalledTimes(requests)
+  })
+  it('updates the exposed clean composer on a remote draft event, but preserves dirty text', async () => {
+    await open()
+    const remote = {...session(),revision:2,draft:'remote',watermark:1}
+    db.chat!.session = remote
+    events[0]!({type:'entry',id:'chat:1',data:{sessionId:'chat',seq:1,kind:'session_updated',session:remote,createdAt:stamp}})
+    expect(chat.draft.value).toBe('remote')
+    expect(chat.dirty.value).toBe(false)
+    expect(chat.state.drafts.chat).toMatchObject({text:'remote',baseline:'remote',status:'saved'})
+    chat.editDraft('local')
+    events[0]!({type:'entry',id:'chat:2',data:{sessionId:'chat',seq:2,kind:'session_updated',session:{...remote,revision:3,draft:'new remote'},createdAt:stamp}})
+    expect(chat.draft.value).toBe('local')
+    expect(chat.draftStatus.value).toBe('conflict')
+    expect(await chat.flush()).toBe(false)
+    expect(opsApi.patch).not.toHaveBeenCalled()
+  })
+  it.each(['session','run','call','confirmation','text','optimistic'])('rejects every late %s projection covered by a newer snapshot', async (kind) => {
+    await open()
+    const run: Run = {id:'run',sessionId:'chat',clientRequestId:'request',status:'succeeded',cancelRequested:false,createdAt:stamp}
+    db.chat!.watermark = 10
+    db.chat!.session = {...session(),revision:3,draft:'final',watermark:10}
+    db.chat!.runs = [run]
+    db.chat!.calls = [{...call('succeeded'),output:'full facts'}]
+    db.chat!.entries.entries = [{sessionId:'chat',seq:1,revisionSeq:10,kind:'assistant',status:'succeeded',text:'complete',createdAt:stamp}]
+    await chat.refresh()
+    const entry: Entry = {sessionId:'chat',seq:9,kind:'run_status',createdAt:stamp}
+    if(kind==='session') entry.session={...session(),revision:3,draft:'stale',activeRunId:'run'}
+    if(kind==='run') entry.run={...run,status:'running'}
+    if(kind==='call') entry.call=call()
+    if(kind==='confirmation') entry.confirmation={runId:'run',nonce:'old',expiresAt:stamp,calls:[],valid:true}
+    if(kind==='text') Object.assign(entry,{kind:'assistant',replaceSeq:1,revisionSeq:9,status:'partial',text:'stale'})
+    if(kind==='optimistic') {
+      chat.state.optimistic=[{...entry,seq:-1,kind:'user',requestId:'pending',text:'pending'}]
+      entry.requestId='pending'
+    }
+    const before = structuredClone(toRaw(chat.state.snapshot))
+    events[0]!({type:'entry',id:'chat:9',data:entry})
+    events[0]!({type:'entry',id:'chat:10',data:{...entry,seq:10}})
+    expect(chat.state.snapshot).toEqual(before)
+    expect(chat.state.calls.call).toMatchObject({status:'succeeded',output:'full facts'})
+    expect(chat.state.entries[0]).toMatchObject({text:'complete',status:'succeeded'})
+    expect(chat.draft.value).toBe('final')
+    expect(chat.draftStatus.value).toBe('saved')
+    expect(chat.state.optimistic).toHaveLength(kind==='optimistic'?1:0)
+  })
+  it.each(['queued','running','succeeded'] as const)('clears consumed confirmation on a cross-tab %s event and snapshot', async (status) => {
+    const confirmation: Confirmation = {runId:'run',nonce:'approval',expiresAt:stamp,calls:[],valid:true}
+    const run: Run = {id:'run',sessionId:'chat',clientRequestId:'request',status:'awaiting_confirmation',cancelRequested:false,createdAt:stamp}
+    db.chat!.session.activeRunId='run'
+    db.chat!.runs=[run]
+    db.chat!.confirmations=[confirmation]
+    await open()
+    expect(chat.confirmations.value).toHaveLength(1)
+    events[0]!({type:'entry',id:'chat:1',data:{sessionId:'chat',seq:1,kind:'run_status',run:{...run,status},createdAt:stamp}})
+    expect(chat.state.snapshot?.confirmations).toHaveLength(0)
+    expect(chat.confirmations.value).toHaveLength(0)
+    db.chat!.watermark=2
+    db.chat!.runs=[{...run,status}]
+    await chat.refresh()
+    expect(chat.state.snapshot?.confirmations).toHaveLength(0)
+  })
+  it('recovers full escaped output from a snapshot hint even when a later event races the snapshot', async () => {
+    await open()
+    const d=defer<Snapshot>()
+    vi.mocked(opsApi.snapshot).mockReturnValueOnce(d.promise)
+    events[0]!({type:'entry',id:'chat:1',data:{sessionId:'chat',seq:1,kind:'snapshot_required',createdAt:stamp}})
+    await vi.advanceTimersByTimeAsync(100)
+    const stale=structuredClone(db.chat!)
+    stale.watermark=1
+    db.chat!.watermark=2
+    db.chat!.calls=[{...call('succeeded'),output:'\x01'.repeat(65536)}]
+    events[0]!({type:'entry',id:'chat:2',data:{sessionId:'chat',seq:2,kind:'session_updated',session:{...session(),watermark:2},createdAt:stamp}})
+    d.resolve(stale)
+    await flushPromises()
+    expect(chat.state.calls.call?.output).toBe('\x01'.repeat(65536))
+    expect(chat.state.snapshot?.watermark).toBe(2)
+    expect(streamOps).toHaveBeenCalledOnce()
+    expect(opsApi.snapshot).toHaveBeenCalledTimes(3)
+  })
+  it('does not replace a live call with an older history projection or in-flight historical GET', async () => {
+    db.chat!.entries.cursor='chat:100'
+    await open()
+    const d=defer<Call>()
+    vi.mocked(opsApi.call).mockReturnValueOnce(d.promise)
+    vi.mocked(opsApi.entries).mockResolvedValueOnce({entries:[{sessionId:'chat',seq:1,kind:'tool_call',callId:'call',createdAt:stamp}],cursor:'chat:1',watermark:0,reset:false})
+    const loading=chat.history()
+    await flushPromises()
+    events[0]!({type:'entry',id:'chat:2',data:{sessionId:'chat',seq:2,kind:'call_status',call:{...call('succeeded'),output:'final'},createdAt:stamp}})
+    d.resolve(call())
+    await loading
+    vi.mocked(opsApi.entries).mockResolvedValueOnce({entries:[{sessionId:'chat',seq:1,kind:'tool_call',call:call(),createdAt:stamp}],cursor:'',watermark:1,reset:false})
+    await chat.history()
+    expect(chat.state.calls.call).toMatchObject({status:'succeeded',output:'final'})
+  })
+  it('keeps the draft and makes no turn request when no targets are selected', async () => {
+    db.chat!.session.serverIds = []
+    await open([])
+    chat.editDraft('check resources')
+    expect(await chat.send()).toBe(false)
+    expect(chat.draft.value).toBe('check resources')
+    expect(opsApi.turn).not.toHaveBeenCalled()
+    expect(chat.state.optimistic).toHaveLength(0)
+    expect(await chat.targets(['a'])).toBe(true)
+    expect(await chat.send()).toBe(true)
+    expect(opsApi.turn).toHaveBeenCalledOnce()
+  })
+  it('restores independent entry sessions, preserving drafts and refusing a failed-save switch',async()=>{
+    const context=shallowRef('containers'),contexts:Record<string,string>={containers:'chat',overview:'other'}
+    vi.mocked(opsApi.list).mockImplementation(async(key='')=>({sessions:Object.values(db).map(s=>structuredClone(s.session)),activeSessionId:contexts[key]??'',cursor:''}))
+    vi.mocked(opsApi.activate).mockImplementation(async(id,key='')=>{contexts[key]=id;return {ok:true}})
+    await open(['b'],()=>context.value)
+    chat.editDraft('container draft')
+    context.value='overview';await flushPromises()
+    expect(chat.session.value?.id).toBe('other')
+    expect(db.chat!.session.draft).toBe('container draft')
+    chat.editDraft('overview draft')
+    context.value='containers';await flushPromises()
+    expect(chat.draft.value).toBe('container draft')
+    expect(db.other!.session.draft).toBe('overview draft')
+    chat.editDraft('unsaved')
+    vi.mocked(opsApi.patch).mockRejectedValueOnce(new HttpError(0,null,'down'))
+    context.value='overview';await flushPromises()
+    expect(chat.session.value?.id).toBe('chat')
+    expect(chat.draft.value).toBe('unsaved')
+    expect(contexts.overview).toBe('other')
+    expect(opsApi.cancel).not.toHaveBeenCalled()
+  })
+  it('streams stable revisions without full snapshots, ignores stale history, and reconciles a lost final event', async () => {
+    await open()
+    const initial=vi.mocked(opsApi.snapshot).mock.calls.length
+    const send=(seq:number,text:string,status:'partial'|'succeeded',replaceSeq?:number)=>events[0]!({type:'entry',id:'chat:'+seq,data:{sessionId:'chat',seq,revisionSeq:seq,replaceSeq,kind:'assistant',text,status,createdAt:stamp}})
+    send(1,'part','partial')
+    const stable=chat.state.entries[0]
+    for(let seq=2;seq<=30;seq++) send(seq,'part '+seq,'partial',1)
+    expect(chat.state.entries).toHaveLength(1)
+    expect(chat.state.entries[0]?.text).toBe('part 30')
+    expect(opsApi.snapshot).toHaveBeenCalledTimes(initial)
+    db.chat!.entries.entries=[{...stable!,text:'complete',status:'succeeded',revisionSeq:31}]
+    db.chat!.watermark=31
+    db.chat!.session.watermark=31
+    events[0]!({type:'heartbeat',id:'',data:{watermark:31}})
+    await flushPromises()
+    expect(chat.state.entries).toHaveLength(1)
+    expect(chat.state.entries[0]?.status).toBe('succeeded')
+    expect(chat.state.entries[0]?.text).toBe('complete')
+    db.chat!.entries.entries=[stable!]
+    await chat.refresh()
+    expect(chat.state.entries[0]?.text).toBe('complete')
+  })
+  it('immediately presents one optimistic request while a save waits, then deduplicates the persisted user entry', async () => {
+    await open()
+    const d=defer<Session>()
+    vi.mocked(opsApi.patch).mockReturnValueOnce(d.promise)
+    chat.editDraft('inspect')
+    const sending=chat.send()
+    expect(chat.state.optimistic).toHaveLength(1)
+    expect(await chat.send()).toBe(false)
+    await flushPromises()
+    const id=chat.state.optimistic[0]!.requestId
+    d.resolve({...session(),revision:2,draft:'inspect'})
+    await sending
+    events[0]!({type:'entry',id:'chat:1',data:{sessionId:'chat',seq:1,kind:'user',text:'inspect',requestId:id,createdAt:stamp}})
+    expect(chat.state.optimistic).toHaveLength(0)
+    expect(chat.state.entries.filter(e=>e.kind==='user')).toHaveLength(1)
+    expect(opsApi.turn).toHaveBeenCalledOnce()
+    expect(vi.mocked(opsApi.turn).mock.calls[0]?.[1]).toMatchObject({analyzeResults:true,provider:{configHash:'hash'}})
+  })
+  it('typing never proxies or replaces a 300-result history', async () => {
+    db.chat!.entries.entries=Array.from({length:300},(_,i)=>({sessionId:'chat',seq:i+1,kind:'assistant',text:'x'.repeat(8192),createdAt:stamp}))
+    await open()
+    const entries=chat.state.entries,first=entries[0],calls=chat.state.calls
+    for(let i=0;i<100;i++)chat.editDraft('typing '+i)
+    expect(chat.state.entries).toBe(entries)
+    expect(chat.state.entries[0]).toBe(first)
+    expect(chat.state.calls).toBe(calls)
+    expect(opsApi.snapshot).toHaveBeenCalledOnce()
+  })
   it('does not resurrect a finished run from a delayed same-revision PATCH ACK', async () => {
     db.chat!.session.activeRunId = 'run'
     await open()
@@ -377,6 +655,7 @@ describe('local ops lifecycle and concurrency', () => {
     })
     await flushPromises()
     expect(chat.state.calls.call?.status).toBe('running')
+    await vi.advanceTimersByTimeAsync(100)
     db.chat!.watermark = 1
     db.chat!.calls = [{ ...call('succeeded'), output: 'done' }]
     events[0]!({ type: 'heartbeat', id: '', data: { watermark: 1 } })
@@ -511,7 +790,7 @@ describe('local ops lifecycle and concurrency', () => {
     await open(['b'])
     expect(chat.session.value?.serverIds).toEqual(['a'])
     await chat.create()
-    expect(opsApi.create).toHaveBeenCalledWith(['b'])
+    expect(opsApi.create).toHaveBeenCalledWith(['b'], '')
     expect(chat.session.value?.serverIds).toEqual(['b'])
   })
   it('saves at 500ms and awaits the final dirty draft before close without canceling', async () => {
@@ -615,6 +894,7 @@ describe('local ops lifecycle and concurrency', () => {
     db.chat!.calls = [
       { ...call('succeeded'), output: 'final output', exitCode: 0 },
     ]
+    await vi.advanceTimersByTimeAsync(100)
     d.resolve(stale)
     await first
     expect(chat.session.value?.revision).toBe(2)
@@ -767,14 +1047,13 @@ describe('local ops lifecycle and concurrency', () => {
         'changed',
       ),
     )
-    expect(await chat.analyze()).toBe(false)
+    expect(await chat.analyze(['c'])).toBe(false)
     expect(opsApi.analyze).toHaveBeenCalledWith(
       'chat',
       expect.objectContaining({
         callIds: ['c'],
-        provider: p.provider,
-        previewHash: 'preview',
-        consent: true,
+        provider: {provider:'test',model:'m',configHash:'hash'},
+        analyzeResults: true,
       }),
     )
     expect(chat.error.value).toBe('ops_consent_changed')

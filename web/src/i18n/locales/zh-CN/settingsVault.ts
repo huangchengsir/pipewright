@@ -1,4 +1,8 @@
 export default {
+  registryUsername: '镜像仓库用户名',
+  registryPassword: '密码或 Token',
+  registryUsernameOptional: '可选，留空兼容旧 Token',
+  invalidRegistryUsername: '用户名不能包含冒号或控制字符',
   title: '凭据保险库',
   desc: '所有密钥经 NaCl secretbox 加密后存于本实例,落库即掩码;查看明文需在此页显式操作并留审计。流水线按作用域引用,绝不进日志或诊断上下文。',
   addCredential: '添加凭据',

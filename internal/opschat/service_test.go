@@ -709,6 +709,9 @@ func TestStrictTools(t *testing.T) {
 	}
 	for _, tool := range Tools() {
 		raw := "{}"
+		if tool.ID == "docker_exec" {
+			raw = `{"container":"app","argv":["true"]}`
+		}
 		if strings.HasPrefix(tool.ID, "docker_") && (tool.ID == "docker_logs" || tool.ID == "docker_inspect" || tool.ID == "docker_action") {
 			raw = `{"container":"app"}`
 			if tool.Mutation {

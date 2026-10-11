@@ -1,4 +1,8 @@
 export default {
+  registryUsername: 'Registry-Benutzername',
+  registryPassword: 'Passwort oder Token',
+  registryUsernameOptional: 'Optional; leer fuer bestehende Tokens',
+  invalidRegistryUsername: 'Benutzername darf keine Doppelpunkte oder Steuerzeichen enthalten',
   title: 'Anmeldedaten-Tresor',
   desc: 'Alle Geheimnisse werden mit NaCl secretbox verschlüsselt und auf dieser Instanz gespeichert, im Ruhezustand maskiert. Das Anzeigen von Klartext ist hier eine explizite, auditierte Aktion. Pipelines referenzieren sie über den Geltungsbereich, und sie gelangen nie in Protokolle oder den Diagnosekontext.',
   addCredential: 'Anmeldedaten hinzufügen',

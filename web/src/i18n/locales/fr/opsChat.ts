@@ -1,4 +1,58 @@
 export default {
+  continuationError: {
+    preserved: 'Les faits collectés sont conservés. Aucune tâche ultérieure sur le serveur n’a été exécutée.',
+    unknown: 'La planification de la suite n’a pas pu être terminée.',
+    unavailable: 'Le service d’IA est indisponible.',
+    invalid_plan: 'Les tâches suivantes ou leurs arguments ne sont pas pris en charge.',
+  },
+  exec: {
+    program: 'Programme',
+    argument: 'Argument {index}',
+    addArgument: 'Ajouter un argument',
+    removeArgument: 'Supprimer l’argument {index}',
+    argv: 'argv exact',
+    invalidArgs: 'Un programme est requis. Utilisez des lettres ASCII, chiffres et _ . / ; + et - uniquement après le premier caractère. Pas de chemin point, parent ou racine, ni de / final. Maximum 61 éléments, 2048 octets UTF-8 par élément et 4096 au total. Les contrôles C0/C1, dont NUL, tabulations et sauts de ligne, sont interdits.',
+    risk: 'L’exécution non interactive dans le conteneur peut modifier des données ou accéder à des secrets. Un code de sortie indique seulement la fin de la commande, pas la réussite du changement métier. Arrêter n’annule pas les modifications.',
+  },
+  planningError: {
+    unknown:
+      'Planification inachevée. La cause des anciennes requêtes est inconnue.',
+    token_limit: 'Limite de jetons atteinte avant la fin du plan.',
+    timeout: 'Délai de planification dépassé.',
+    rejected:
+      'Le modèle a refusé la requête. Vérifiez le modèle, les identifiants ou le quota.',
+    invalid_response: 'Plan du modèle invalide ou incomplet.',
+    unavailable: 'Service IA indisponible. Aucune tâche serveur exécutée.',
+    input_limit: 'Le plan dépasse la limite d’entrée ou de sortie.',
+    invalid_plan:
+      'Tâches ou arguments non pris en charge. Aucune tâche serveur exécutée.',
+  },
+  analysisError: {
+    unknown:
+      'Analyse IA inachevée. Les résultats collectés sont conservés. La cause des anciennes requêtes est inconnue ; vous pouvez relancer l’analyse manuellement.',
+    token_limit:
+      'Limite de jetons de sortie atteinte avant la fin de l’analyse. Les résultats sont conservés.',
+    timeout: 'Délai de l’analyse IA dépassé. Les résultats sont conservés.',
+    rejected:
+      'Le modèle a refusé la requête. Vérifiez le modèle, les identifiants ou le quota. Les résultats sont conservés.',
+    invalid_response:
+      'Réponse du modèle invalide ou incomplète. Les résultats sont conservés.',
+    unavailable:
+      'Point de terminaison IA indisponible. Les résultats sont conservés.',
+    input_limit:
+      'Limite d’entrée dépassée. Aucun résultat envoyé ; analysez par serveur.',
+  },
+  loadedItems: 'Éléments chargés',
+  analyzeLoaded: 'Analyser les éléments chargés',
+  selectedLimit: '{count} sélectionnés / maximum {limit} serveurs',
+  waiting: 'Réponse en attente',
+  submitting: 'Envoi en cours',
+  runResults: 'Résultats du tour',
+  analyzeRun: 'Analyser le tour entier',
+  analyzeGroup: 'Analyser ce serveur',
+  localSummary: 'Faits locaux',
+  occupantsMissing: 'Données des consommateurs absentes',
+  occupants: { processes: 'Processus', containers: 'Conteneurs' },
   title: 'Assistant opérations IA',
   history: 'Sessions',
   newSession: 'Nouvelle session',
@@ -85,6 +139,7 @@ export default {
     unknown: 'Résultat inconnu',
   },
   tools: {
+    docker_exec: 'Exécuter un programme dans le conteneur',
     host_resources: 'Ressources hôte',
     host_processes: 'Processus',
     host_ports: 'Ports en écoute',

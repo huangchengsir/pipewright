@@ -35,6 +35,22 @@ func NewMasker() *Masker {
 	return &Masker{secrets: make(map[string]struct{})}
 }
 
+func (m *Masker) RegisterRegistrySecret(value string) {
+	m.RegisterSecret(value)
+	if _, password, found := strings.Cut(value, ":"); found && password != "" {
+		// Passwords remain sensitive even below the ordinary token-length threshold.
+		if m == nil {
+			return
+		}
+		m.mu.Lock()
+		if m.secrets == nil {
+			m.secrets = make(map[string]struct{})
+		}
+		m.secrets[password] = struct{}{}
+		m.mu.Unlock()
+	}
+}
+
 // RegisterSecret 登记一个敏感串。空串或过短串(< minSecretLen)被忽略以避免误伤;
 // 重复登记幂等。登记后 Scrub 会把该串的所有出现替换为 [MASKED]。
 func (m *Masker) RegisterSecret(s string) {

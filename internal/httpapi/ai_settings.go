@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"time"
 
@@ -13,6 +14,35 @@ import (
 
 type aiBudgetDTO struct {
 	MonthlyTokenLimit *int64 `json:"monthlyTokenLimit"`
+}
+
+func makeAIModelsHandler(svc ai.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		lister, ok := svc.(ai.ModelLister)
+		if !ok {
+			writeError(w, 503, "ai_models_unavailable", "Model listing is unavailable; enter a model ID manually.")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
+		var req struct {
+			Provider *string `json:"provider"`
+			BaseURL  *string `json:"baseUrl"`
+			Model    *string `json:"model"`
+			APIKey   *string `json:"apiKey"`
+		}
+		d := json.NewDecoder(r.Body)
+		d.DisallowUnknownFields()
+		if err := d.Decode(&req); err != nil || d.Decode(new(any)) != io.EOF {
+			writeError(w, 400, "bad_request", "Invalid model list request.")
+			return
+		}
+		res, err := lister.Models(r.Context(), ai.TestInput{Provider: req.Provider, BaseURL: req.BaseURL, Model: req.Model, APIKey: req.APIKey})
+		if err != nil {
+			writeAIError(w, err)
+			return
+		}
+		writeJSON(w, 200, res)
+	}
 }
 
 // aiConfigDTO 是 GET/PUT 响应体(冻结契约;apiKey 只暴露掩码 apiKeyMasked,绝无明文)。

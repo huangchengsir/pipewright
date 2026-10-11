@@ -719,6 +719,7 @@ onBeforeUnmount(() => {
         ref="aiPanel"
         v-if="aiOpen"
         :initial-server-ids="[serverId]"
+        :context="'terminal:'+serverId"
         @collapse="setAiOpen(false)"
       />
     </div>

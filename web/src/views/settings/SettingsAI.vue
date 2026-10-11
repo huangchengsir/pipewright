@@ -17,10 +17,21 @@
  * Reuses: FormField / AppButton tokens / vault patterns from 1-6.
  * No new UI libraries. Animation: transform/opacity + prefers-reduced-motion.
  */
-import { ref, computed, onMounted } from 'vue'
+import {
+  ref,
+  computed,
+  onMounted,
+  onBeforeUnmount,
+  shallowRef,
+  watch,
+} from 'vue'
 import { useI18n } from 'vue-i18n'
 import FormField from '../../components/ui/FormField.vue'
 import AppButton from '../../components/ui/AppButton.vue'
+import AppSelect from '../../components/ui/AppSelect.vue'
+import AppTooltip from '../../components/ui/AppTooltip.vue'
+import { Refresh, Help } from '@vicons/tabler'
+import { useAIModelCatalog } from '../../composables/useAIModelCatalog'
 import { useToast } from '../../composables/useToast'
 import { HttpError } from '../../api/http'
 import {
@@ -55,8 +66,8 @@ const { t } = useI18n()
 const PROVIDERS: ProviderMeta[] = [
   {
     id: 'claude',
-    label: 'Claude',
-    desc: 'Anthropic',
+    label: 'Anthropic',
+    desc: t('settingsAI.compatibleProtocol'),
     logoText: 'A',
     logoStyle: 'background:#D97757;color:#fff',
     tag: t('settingsAI.providerClaudeTag'),
@@ -65,7 +76,7 @@ const PROVIDERS: ProviderMeta[] = [
   {
     id: 'openai',
     label: 'OpenAI',
-    desc: 'GPT-4o / o-series',
+    desc: t('settingsAI.compatibleProtocol'),
     logoText: '○',
     logoStyle: 'background:oklch(70% 0.14 160);color:#0b1f17',
   },
@@ -74,7 +85,8 @@ const PROVIDERS: ProviderMeta[] = [
     label: 'Ollama',
     desc: t('settingsAI.providerOllamaDesc'),
     logoText: 'Ll',
-    logoStyle: 'background:var(--color-inset);color:var(--color-dim);font-size:0.72rem',
+    logoStyle:
+      'background:var(--color-inset);color:var(--color-dim);font-size:0.72rem',
     tag: t('settingsAI.providerOllamaTag'),
     tagStyle: 'color:var(--color-green);background:var(--color-green-soft)',
   },
@@ -84,6 +96,49 @@ const DEFAULT_BASE_URLS: Record<string, string> = {
   claude: 'https://api.anthropic.com',
   openai: 'https://api.openai.com',
   ollama: 'http://localhost:11434',
+}
+const preset = shallowRef('custom')
+const presets = [
+  { value: 'anthropic', label: 'Anthropic' },
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'ollama', label: 'Ollama' },
+  { value: 'deepseek', label: 'DeepSeek' },
+  { value: 'gemini', label: 'Gemini' },
+  { value: 'glm', label: 'GLM' },
+  { value: 'kimi', label: 'Kimi' },
+  { value: 'mimo', label: 'Xiaomi MiMo' },
+  { value: 'openrouter', label: 'OpenRouter' },
+  { value: 'custom', label: t('settingsAI.customGateway') },
+]
+const presetConfig: Record<string, { provider: AIProvider; url: string }> = {
+  anthropic: { provider: 'claude', url: DEFAULT_BASE_URLS.claude! },
+  openai: { provider: 'openai', url: DEFAULT_BASE_URLS.openai! },
+  ollama: { provider: 'ollama', url: DEFAULT_BASE_URLS.ollama! },
+  deepseek: { provider: 'openai', url: 'https://api.deepseek.com' },
+  gemini: {
+    provider: 'openai',
+    url: 'https://generativelanguage.googleapis.com/v1beta/openai',
+  },
+  glm: { provider: 'openai', url: 'https://open.bigmodel.cn/api/paas/v4' },
+  kimi: { provider: 'openai', url: 'https://api.moonshot.cn/v1' },
+  mimo: { provider: 'openai', url: 'https://api.xiaomimimo.com/v1' },
+  openrouter: { provider: 'openai', url: 'https://openrouter.ai/api/v1' },
+}
+function selectPreset(): void {
+  const config = presetConfig[preset.value]
+  if (!config) {
+    if (!selectedProvider.value) selectProvider('openai')
+    return
+  }
+  const replace =
+    !baseUrl.value ||
+    Object.values(presetConfig).some(
+      (p) =>
+        normalizedBase(p.url, p.provider) === normalizedBase(baseUrl.value),
+    )
+  if (replace && baseUrl.value !== config.url) apiKey.value = ''
+  selectProvider(config.provider)
+  if (replace) baseUrl.value = config.url
 }
 
 // ─── toast ────────────────────────────────────────────────────────────────────
@@ -101,8 +156,8 @@ const savedSettings = ref<AISettings | null>(null)
 const selectedProvider = ref<AIProvider>('')
 const baseUrl = ref('')
 const model = ref('')
-const apiKey = ref('')          // write-only: blank = keep existing; non-blank = rotate
-const monthlyTokenLimit = ref<string>('')  // string for input binding; coerced on save
+const apiKey = ref('') // write-only: blank = keep existing; non-blank = rotate
+const monthlyTokenLimit = ref<string>('') // string for input binding; coerced on save
 const enabled = ref(false)
 
 // field errors (422 mapping)
@@ -119,6 +174,18 @@ const saving = ref(false)
 type TestState = 'idle' | 'running' | 'ok' | 'fail'
 const testState = ref<TestState>('idle')
 const testResult = ref<AITestResult | null>(null)
+let disposed = false,
+  testGeneration = 0
+function invalidateModels(): void {
+  testGeneration++
+  testState.value = 'idle'
+  testResult.value = null
+}
+watch([selectedProvider, baseUrl, apiKey], invalidateModels, { flush: 'sync' })
+onBeforeUnmount(() => {
+  disposed = true
+  invalidateModels()
+})
 
 // ─── derived ──────────────────────────────────────────────────────────────────
 
@@ -126,8 +193,50 @@ const isOllama = computed(() => selectedProvider.value === 'ollama')
 
 /** True when there is an existing configured key in the saved settings */
 const hasExistingKey = computed(
-  () => !!savedSettings.value?.apiKeyMasked,
+  () =>
+    !!savedSettings.value?.apiKeyMasked &&
+    savedSettings.value.provider === selectedProvider.value &&
+    normalizedBase(savedSettings.value.baseUrl) ===
+      normalizedBase(baseUrl.value),
 )
+
+function normalizedBase(
+  base: string,
+  provider = selectedProvider.value,
+): string {
+  const baseValue = base.trim().replace(/\/+$/, '')
+  const direct =
+    provider === 'openai' &&
+    [
+      'https://generativelanguage.googleapis.com/v1beta/openai',
+      'https://open.bigmodel.cn/api/paas/v4',
+      'https://open.bigmodel.cn/api/coding/paas/v4',
+    ].includes(baseValue.replace(/^https:/i, 'https:'))
+  const suffix = provider === 'ollama' ? '/api' : '/v1'
+  const value = direct
+    ? baseValue
+    : baseValue.replace(provider === 'ollama' ? /\/api$/ : /\/v1$/, '') + suffix
+  try {
+    return new URL(value).href
+  } catch {
+    return value
+  }
+}
+
+const {
+  options: modelOptions,
+  loading: modelsLoading,
+  error: modelsError,
+  refresh: fetchModels,
+  canFetch: canFetchModels,
+} = useAIModelCatalog({
+  provider: selectedProvider,
+  baseUrl,
+  apiKey,
+  ready: computed(() => loadState.value === 'ready'),
+  hasExistingKey,
+  unavailable: () => t('settingsAI.modelsUnavailable'),
+})
 
 /** True when apiKey input has been touched (rotation intent) */
 const isRotatingKey = computed(() => apiKey.value.length > 0)
@@ -161,7 +270,9 @@ async function loadSettings(): Promise<void> {
       } else if (err.apiError?.code === 'vault_unconfigured') {
         loadError.value = t('settingsAI.errVaultUnconfigured')
       } else {
-        loadError.value = err.apiError?.message ?? t('settingsAI.errLoadFailed', { status: err.status })
+        loadError.value =
+          err.apiError?.message ??
+          t('settingsAI.errLoadFailed', { status: err.status })
       }
     } else {
       loadError.value = t('settingsAI.errLoadGeneric')
@@ -175,10 +286,11 @@ function applySettings(data: AISettings): void {
   selectedProvider.value = data.provider
   baseUrl.value = data.baseUrl
   model.value = data.model
-  apiKey.value = ''  // never pre-fill
-  monthlyTokenLimit.value = data.budget.monthlyTokenLimit != null
-    ? String(data.budget.monthlyTokenLimit)
-    : ''
+  apiKey.value = '' // never pre-fill
+  monthlyTokenLimit.value =
+    data.budget.monthlyTokenLimit != null
+      ? String(data.budget.monthlyTokenLimit)
+      : ''
   enabled.value = data.enabled
 }
 
@@ -188,6 +300,7 @@ onMounted(loadSettings)
 
 function selectProvider(id: AIProvider): void {
   if (selectedProvider.value === id) return
+  apiKey.value = ''
   const oldDefault = DEFAULT_BASE_URLS[selectedProvider.value] ?? ''
   const wasDefault = baseUrl.value === '' || baseUrl.value === oldDefault
   selectedProvider.value = id
@@ -203,28 +316,38 @@ function selectProvider(id: AIProvider): void {
 // ─── test connection ──────────────────────────────────────────────────────────
 
 async function handleTest(): Promise<void> {
+  const generation = ++testGeneration
   testState.value = 'running'
   testResult.value = null
   try {
-    const draft: { provider?: AIProvider; baseUrl?: string; model?: string; apiKey?: string } = {}
+    const draft: {
+      provider?: AIProvider
+      baseUrl?: string
+      model?: string
+      apiKey?: string
+    } = {}
     if (selectedProvider.value) draft.provider = selectedProvider.value
-    if (baseUrl.value)           draft.baseUrl  = baseUrl.value
-    if (model.value)             draft.model    = model.value
-    if (apiKey.value)            draft.apiKey   = apiKey.value
+    if (baseUrl.value) draft.baseUrl = baseUrl.value
+    if (model.value) draft.model = model.value
+    if (apiKey.value) draft.apiKey = apiKey.value
     const result = await testAIConnection(draft)
+    if (disposed || generation !== testGeneration) return
     testResult.value = result
     testState.value = result.ok ? 'ok' : 'fail'
   } catch (err) {
+    if (disposed || generation !== testGeneration) return
     testState.value = 'fail'
     testResult.value = {
       ok: false,
       latencyMs: 0,
       detail: '',
-      error: err instanceof HttpError
-        ? (err.apiError?.message ?? t('settingsAI.errRequestFailed', { status: err.status }))
-        : err instanceof Error
-          ? err.message
-          : t('settingsAI.errUnknown'),
+      error:
+        err instanceof HttpError
+          ? (err.apiError?.message ??
+            t('settingsAI.errRequestFailed', { status: err.status }))
+          : err instanceof Error
+            ? err.message
+            : t('settingsAI.errUnknown'),
     }
   }
 }
@@ -241,9 +364,14 @@ async function handleSave(): Promise<void> {
   try {
     const limit = monthlyTokenLimit.value.trim()
     const parsed = limit === '' ? null : Number(limit)
-    if (limit !== '' && (Number.isNaN(parsed) || (parsed !== null && parsed < 0))) {
+    if (
+      limit !== '' &&
+      (Number.isNaN(parsed) || (parsed !== null && parsed < 0))
+    ) {
       saving.value = false
-      toast.error(t('settingsAI.toastSaveFailed'), { detail: t('settingsAI.errBudgetInvalid') })
+      toast.error(t('settingsAI.toastSaveFailed'), {
+        detail: t('settingsAI.errBudgetInvalid'),
+      })
       return
     }
 
@@ -270,17 +398,25 @@ async function handleSave(): Promise<void> {
         } else if (code === 'api_key_required') {
           errors.value.apiKey = t('settingsAI.errApiKeyRequired')
         } else {
-          toast.error(t('settingsAI.toastSaveFailed'), { detail: err.apiError.message })
+          toast.error(t('settingsAI.toastSaveFailed'), {
+            detail: err.apiError.message,
+          })
         }
         return
       }
       if (err.status === 0) {
-        toast.error(t('settingsAI.toastSaveFailed'), { detail: t('settingsAI.errServerUnreachableShort') })
+        toast.error(t('settingsAI.toastSaveFailed'), {
+          detail: t('settingsAI.errServerUnreachableShort'),
+        })
       } else {
-        toast.error(t('settingsAI.toastSaveFailed'), { detail: err.apiError?.message ?? `HTTP ${err.status}` })
+        toast.error(t('settingsAI.toastSaveFailed'), {
+          detail: err.apiError?.message ?? `HTTP ${err.status}`,
+        })
       }
     } else {
-      toast.error(t('settingsAI.toastSaveFailed'), { detail: err instanceof Error ? err.message : t('settingsAI.errUnknown') })
+      toast.error(t('settingsAI.toastSaveFailed'), {
+        detail: err instanceof Error ? err.message : t('settingsAI.errUnknown'),
+      })
     }
   } finally {
     saving.value = false
@@ -324,11 +460,17 @@ function relativeTime(iso: string | null): string {
         </p>
       </div>
       <!-- Connection status badge -->
-      <div v-if="loadState === 'ready' && savedSettings?.configured" class="status-chip status-chip--ok">
+      <div
+        v-if="loadState === 'ready' && savedSettings?.configured"
+        class="status-chip status-chip--ok"
+      >
         <span class="status-dot status-dot--ok" aria-hidden="true" />
         {{ t('settingsAI.statusConfigured') }}
       </div>
-      <div v-else-if="loadState === 'ready' && !savedSettings?.configured" class="status-chip status-chip--idle">
+      <div
+        v-else-if="loadState === 'ready' && !savedSettings?.configured"
+        class="status-chip status-chip--idle"
+      >
         <span class="status-dot" aria-hidden="true" />
         {{ t('settingsAI.statusUnconfigured') }}
       </div>
@@ -336,32 +478,59 @@ function relativeTime(iso: string | null): string {
 
     <!-- ─── load error ──────────────────────────────────────────────────────── -->
     <div v-if="loadState === 'error'" class="banner banner--error" role="alert">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-        <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
+      <svg
+        width="15"
+        height="15"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        aria-hidden="true"
+      >
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 8v4M12 16h.01" />
       </svg>
       <span>{{ loadError }}</span>
-      <button class="banner-retry" @click="loadSettings">↻ {{ t('settingsAI.retry') }}</button>
+      <button class="banner-retry" @click="loadSettings">
+        ↻ {{ t('settingsAI.retry') }}
+      </button>
     </div>
 
     <!-- ─── loading skeleton ────────────────────────────────────────────────── -->
     <template v-if="loadState === 'loading'">
       <div class="panel panel--anim">
         <div class="panel-head">
-          <span class="skel skel--text" style="width:90px" aria-hidden="true" />
+          <span
+            class="skel skel--text"
+            style="width: 90px"
+            aria-hidden="true"
+          />
         </div>
         <div class="skel-body">
           <div class="prov-grid">
-            <div v-for="i in 3" :key="i" class="skel skel--card" aria-hidden="true" />
+            <div
+              v-for="i in 3"
+              :key="i"
+              class="skel skel--card"
+              aria-hidden="true"
+            />
           </div>
-          <div class="skel skel--field" style="height:38px;margin-top:20px" aria-hidden="true" />
-          <div class="skel skel--field" style="height:38px" aria-hidden="true" />
+          <div
+            class="skel skel--field"
+            style="height: 38px; margin-top: 20px"
+            aria-hidden="true"
+          />
+          <div
+            class="skel skel--field"
+            style="height: 38px"
+            aria-hidden="true"
+          />
         </div>
       </div>
     </template>
 
     <!-- ─── main form ───────────────────────────────────────────────────────── -->
     <template v-else-if="loadState === 'ready'">
-
       <!-- Unconfigured guidance banner -->
       <div
         v-if="!savedSettings?.configured && selectedProvider === ''"
@@ -370,9 +539,18 @@ function relativeTime(iso: string | null): string {
         :aria-label="t('settingsAI.guidanceAria')"
       >
         <div class="guidance-icon" aria-hidden="true">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M3 12h3.5l2.2-6 3.6 12 2.4-7 1.3 1h4.5"/>
-            <circle cx="19" cy="5" r="2"/>
+          <svg
+            width="22"
+            height="22"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M3 12h3.5l2.2-6 3.6 12 2.4-7 1.3 1h4.5" />
+            <circle cx="19" cy="5" r="2" />
           </svg>
         </div>
         <div class="guidance-text">
@@ -382,16 +560,44 @@ function relativeTime(iso: string | null): string {
       </div>
 
       <!-- Provider selection panel -->
-      <div class="panel panel--anim">
+      <div class="panel panel--anim panel--protocol">
         <div class="panel-head">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-            <circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/>
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="10" />
+            <path d="M12 8v4l3 3" />
           </svg>
-          {{ t('settingsAI.selectProvider') }}
-          <span v-if="errors.provider" class="panel-head-error">{{ errors.provider }}</span>
+          {{ t('settingsAI.selectProtocol') }}
+          <AppTooltip
+            class="protocol-help"
+            :content="t('settingsAI.protocolHelp')"
+            placement="bottom"
+          >
+            <button
+              type="button"
+              class="protocol-help-button"
+              :aria-label="t('settingsAI.protocolHelp')"
+            >
+              <Help aria-hidden="true" />
+            </button>
+          </AppTooltip>
+          <span v-if="errors.provider" class="panel-head-error">{{
+            errors.provider
+          }}</span>
         </div>
         <div class="panel-body">
-          <div class="prov-grid" role="radiogroup" :aria-label="t('settingsAI.providerRadioAria')">
+          <div
+            class="prov-grid"
+            role="radiogroup"
+            :aria-label="t('settingsAI.providerRadioAria')"
+          >
             <button
               v-for="prov in PROVIDERS"
               :key="prov.id"
@@ -399,43 +605,83 @@ function relativeTime(iso: string | null): string {
               class="prov-card"
               :class="{ 'prov-card--active': selectedProvider === prov.id }"
               :aria-pressed="selectedProvider === prov.id"
-              :aria-label="t('settingsAI.selectProviderAria', { name: prov.label })"
+              :aria-label="
+                t('settingsAI.selectProviderAria', { name: prov.label })
+              "
               @click="selectProvider(prov.id)"
             >
-              <span v-if="selectedProvider === prov.id" class="prov-check" aria-hidden="true">
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-                  <path d="m5 13 4 4 10-11"/>
+              <span
+                v-if="selectedProvider === prov.id"
+                class="prov-check"
+                aria-hidden="true"
+              >
+                <svg
+                  width="11"
+                  height="11"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="3"
+                >
+                  <path d="m5 13 4 4 10-11" />
                 </svg>
               </span>
-              <div class="prov-logo" :style="prov.logoStyle" aria-hidden="true">{{ prov.logoText }}</div>
+              <div class="prov-logo" :style="prov.logoStyle" aria-hidden="true">
+                {{ prov.logoText }}
+              </div>
               <div class="prov-name">{{ prov.label }}</div>
               <div class="prov-desc">{{ prov.desc }}</div>
-              <span v-if="prov.tag" class="prov-tag" :style="prov.tagStyle">{{ prov.tag }}</span>
+              <span v-if="prov.tag" class="prov-tag" :style="prov.tagStyle">{{
+                prov.tag
+              }}</span>
             </button>
           </div>
+          <FormField :label="t('settingsAI.quickSetup')" field-id="ai-preset"
+            ><AppSelect
+              input-id="ai-preset"
+              v-model="preset"
+              :options="presets"
+              portal
+              :aria-label="t('settingsAI.quickSetup')"
+              @change="selectPreset"
+          /></FormField>
         </div>
       </div>
 
       <!-- Config detail panel (shown once a provider is chosen) -->
       <Transition name="panel-slide">
-        <div v-if="selectedProvider !== ''" class="panel panel--anim" :key="selectedProvider">
+        <div
+          v-if="selectedProvider !== ''"
+          class="panel panel--anim"
+          :key="selectedProvider"
+        >
           <!-- Panel header with provider logo -->
           <div class="panel-head">
             <div
               class="ph-logo"
-              :style="PROVIDERS.find(p => p.id === selectedProvider)?.logoStyle"
+              :style="
+                PROVIDERS.find((p) => p.id === selectedProvider)?.logoStyle
+              "
               aria-hidden="true"
             >
-              {{ PROVIDERS.find(p => p.id === selectedProvider)?.logoText }}
+              {{ PROVIDERS.find((p) => p.id === selectedProvider)?.logoText }}
             </div>
-            {{ t('settingsAI.providerConfig', { name: PROVIDERS.find(p => p.id === selectedProvider)?.label ?? '' }) }}
+            {{
+              t('settingsAI.providerConfig', {
+                name:
+                  PROVIDERS.find((p) => p.id === selectedProvider)?.label ?? '',
+              })
+            }}
             <span v-if="savedSettings?.updatedAt" class="panel-updated">
-              {{ t('settingsAI.lastSaved', { time: relativeTime(savedSettings.updatedAt) }) }}
+              {{
+                t('settingsAI.lastSaved', {
+                  time: relativeTime(savedSettings.updatedAt),
+                })
+              }}
             </span>
           </div>
           <div class="panel-body">
             <form class="config-form" novalidate @submit.prevent="handleSave">
-
               <!-- API Key — only shown for non-Ollama -->
               <div v-if="!isOllama" class="config-row">
                 <FormField
@@ -453,9 +699,13 @@ function relativeTime(iso: string | null): string {
                         type="password"
                         class="field-input field-input--mono"
                         :class="{ 'field-input--error': errors.apiKey }"
-                        :placeholder="hasExistingKey
-                          ? (isRotatingKey ? t('settingsAI.apiKeyReplacing') : t('settingsAI.apiKeyConfigured'))
-                          : t('settingsAI.apiKeyPaste')"
+                        :placeholder="
+                          hasExistingKey
+                            ? isRotatingKey
+                              ? t('settingsAI.apiKeyReplacing')
+                              : t('settingsAI.apiKeyConfigured')
+                            : t('settingsAI.apiKeyPaste')
+                        "
                         autocomplete="new-password"
                         :aria-invalid="!!errors.apiKey || undefined"
                         :aria-describedby="ariaDescribedby"
@@ -465,9 +715,15 @@ function relativeTime(iso: string | null): string {
                       <span
                         v-if="hasExistingKey && !isRotatingKey"
                         class="key-masked"
-                        :aria-label="t('settingsAI.apiKeyMaskedAria', { masked: savedSettings?.apiKeyMasked })"
+                        :aria-label="
+                          t('settingsAI.apiKeyMaskedAria', {
+                            masked: savedSettings?.apiKeyMasked,
+                          })
+                        "
                       >
-                        <span class="mono dim">{{ savedSettings?.apiKeyMasked }}</span>
+                        <span class="mono dim">{{
+                          savedSettings?.apiKeyMasked
+                        }}</span>
                       </span>
                     </div>
                   </template>
@@ -476,8 +732,18 @@ function relativeTime(iso: string | null): string {
 
               <!-- Ollama key-less hint -->
               <div v-else class="ollama-hint">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 4v4m0 4h.01"/>
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 4v4m0 4h.01"
+                  />
                 </svg>
                 {{ t('settingsAI.ollamaHint') }}
               </div>
@@ -488,7 +754,11 @@ function relativeTime(iso: string | null): string {
                   :label="t('settingsAI.baseUrlLabel')"
                   field-id="ai-baseurl"
                   :error="errors.baseUrl"
-                  :hint="t('settingsAI.baseUrlHint', { url: DEFAULT_BASE_URLS[selectedProvider] ?? '' })"
+                  :hint="
+                    t('settingsAI.baseUrlHint', {
+                      url: DEFAULT_BASE_URLS[selectedProvider] ?? '',
+                    })
+                  "
                   required
                 >
                   <template #default="{ fieldId, ariaDescribedby }">
@@ -498,7 +768,9 @@ function relativeTime(iso: string | null): string {
                       type="url"
                       class="field-input field-input--mono"
                       :class="{ 'field-input--error': errors.baseUrl }"
-                      :placeholder="DEFAULT_BASE_URLS[selectedProvider] ?? 'https://'"
+                      :placeholder="
+                        DEFAULT_BASE_URLS[selectedProvider] ?? 'https://'
+                      "
                       autocomplete="off"
                       :aria-invalid="!!errors.baseUrl || undefined"
                       :aria-describedby="ariaDescribedby"
@@ -522,15 +794,36 @@ function relativeTime(iso: string | null): string {
                       v-model="model"
                       type="text"
                       class="field-input field-input--mono"
-                      :placeholder="selectedProvider === 'claude'
-                        ? 'claude-opus-4-7'
-                        : selectedProvider === 'openai'
-                          ? 'gpt-4o'
-                          : 'llama3'"
+                      :placeholder="t('settingsAI.modelId')"
                       autocomplete="off"
                       :aria-describedby="ariaDescribedby"
                       :disabled="saving"
                     />
+                    <div class="model-list-row">
+                      <AppSelect
+                        v-model="model"
+                        :options="modelOptions"
+                        :placeholder="t('settingsAI.modelId')"
+                        :aria-label="t('settingsAI.availableModels')"
+                        :search-placeholder="t('settingsAI.searchModels')"
+                        searchable
+                        portal
+                        :disabled="saving || !modelOptions.length"
+                      />
+                      <AppButton
+                        variant="ghost"
+                        type="button"
+                        :loading="modelsLoading"
+                        :disabled="saving || modelsLoading || !canFetchModels"
+                        :aria-label="t('settingsAI.fetchModels')"
+                        :title="t('settingsAI.fetchModels')"
+                        @click="fetchModels"
+                        ><Refresh
+                      /></AppButton>
+                    </div>
+                    <p v-if="modelsError" class="models-error" role="alert">
+                      {{ modelsError }}
+                    </p>
                   </template>
                 </FormField>
               </div>
@@ -544,8 +837,16 @@ function relativeTime(iso: string | null): string {
                   :disabled="saving"
                   @click="handleTest"
                 >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
-                    <path d="M3 12h3.5l2.2-6 3.6 12 2.4-7 1.3 1h4.5"/>
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.2"
+                    aria-hidden="true"
+                  >
+                    <path d="M3 12h3.5l2.2-6 3.6 12 2.4-7 1.3 1h4.5" />
                   </svg>
                   {{ t('settingsAI.testConnection') }}
                 </AppButton>
@@ -557,22 +858,43 @@ function relativeTime(iso: string | null): string {
                     class="test-result test-result--ok"
                     role="status"
                   >
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" aria-hidden="true">
-                      <path d="m5 13 4 4 10-11"/>
+                    <svg
+                      width="13"
+                      height="13"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2.6"
+                      aria-hidden="true"
+                    >
+                      <path d="m5 13 4 4 10-11" />
                     </svg>
                     {{ t('settingsAI.testOk', { ms: testResult.latencyMs }) }}
-                    <span v-if="testResult.detail" class="test-detail">· {{ testResult.detail }}</span>
+                    <span v-if="testResult.detail" class="test-detail"
+                      >· {{ testResult.detail }}</span
+                    >
                   </div>
                   <div
                     v-else-if="testState === 'fail' && testResult"
                     class="test-result test-result--fail"
                     role="alert"
                   >
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
-                      <circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/>
+                    <svg
+                      width="13"
+                      height="13"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2.2"
+                      aria-hidden="true"
+                    >
+                      <circle cx="12" cy="12" r="9" />
+                      <path d="M15 9l-6 6M9 9l6 6" />
                     </svg>
                     {{ testResult.error ?? t('settingsAI.testFail') }}
-                    <span v-if="testResult.detail" class="test-detail">· {{ testResult.detail }}</span>
+                    <span v-if="testResult.detail" class="test-detail"
+                      >· {{ testResult.detail }}</span
+                    >
                   </div>
                 </Transition>
               </div>
@@ -623,7 +945,6 @@ function relativeTime(iso: string | null): string {
                   <span>{{ t('settingsAI.enableAiDesc') }}</span>
                 </div>
               </div>
-
             </form>
           </div>
         </div>
@@ -632,8 +953,13 @@ function relativeTime(iso: string | null): string {
       <!-- Save bar (shown when dirty or provider selected) -->
       <Transition name="fade">
         <div v-if="isDirty || selectedProvider !== ''" class="save-bar">
-          <span class="save-bar-note" :class="{ 'save-bar-note--warn': isDirty }">
-            {{ isDirty ? t('settingsAI.dirtyNote') : t('settingsAI.cleanNote') }}
+          <span
+            class="save-bar-note"
+            :class="{ 'save-bar-note--warn': isDirty }"
+          >
+            {{
+              isDirty ? t('settingsAI.dirtyNote') : t('settingsAI.cleanNote')
+            }}
           </span>
           <div class="save-bar-actions">
             <AppButton
@@ -656,12 +982,44 @@ function relativeTime(iso: string | null): string {
           </div>
         </div>
       </Transition>
-
     </template>
   </div>
 </template>
 
 <style scoped>
+.panel.panel--protocol {
+  overflow: visible;
+  container-type: inline-size;
+}
+.protocol-help-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--rounded);
+  color: var(--color-dim);
+  background: transparent;
+  cursor: help;
+}
+.protocol-help-button:hover,
+.protocol-help-button:focus-visible {
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+.protocol-help :deep(.tooltip-bubble) {
+  left: -140px;
+  translate: none;
+  width: min(300px, calc(100cqw - 40px));
+  white-space: normal;
+  line-height: 1.6;
+  font-weight: 400;
+}
+.protocol-help :deep(.tooltip-bubble::after) {
+  left: 154px;
+}
 /* ─── layout ──────────────────────────────────────────────────────────────── */
 .ai-root {
   display: flex;
@@ -738,8 +1096,13 @@ function relativeTime(iso: string | null): string {
 }
 
 @keyframes pulse-dot {
-  0%, 100% { box-shadow: 0 0 0 3px var(--color-green-soft); }
-  50%       { box-shadow: 0 0 0 5px var(--color-green-soft); }
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px var(--color-green-soft);
+  }
+  50% {
+    box-shadow: 0 0 0 5px var(--color-green-soft);
+  }
 }
 
 /* ─── banner ──────────────────────────────────────────────────────────────── */
@@ -773,7 +1136,9 @@ function relativeTime(iso: string | null): string {
   text-underline-offset: 2px;
 }
 
-.banner-retry:hover { opacity: 0.8; }
+.banner-retry:hover {
+  opacity: 0.8;
+}
 
 /* ─── guidance banner ─────────────────────────────────────────────────────── */
 .guidance-banner {
@@ -833,8 +1198,14 @@ function relativeTime(iso: string | null): string {
 }
 
 @keyframes panel-in {
-  from { opacity: 0; transform: translateY(13px); }
-  to   { opacity: 1; transform: none; }
+  from {
+    opacity: 0;
+    transform: translateY(13px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .panel-head {
@@ -900,19 +1271,30 @@ function relativeTime(iso: string | null): string {
   animation: shimmer 1.4s ease-in-out infinite;
 }
 
-.skel--text { height: 14px; }
-.skel--field { width: 100%; }
-.skel--card { height: 100px; border-radius: var(--rounded-card); }
+.skel--text {
+  height: 14px;
+}
+.skel--field {
+  width: 100%;
+}
+.skel--card {
+  height: 100px;
+  border-radius: var(--rounded-card);
+}
 
 @keyframes shimmer {
-  0%   { background-position: 200% center; }
-  100% { background-position: -200% center; }
+  0% {
+    background-position: 200% center;
+  }
+  100% {
+    background-position: -200% center;
+  }
 }
 
 /* ─── provider card grid ──────────────────────────────────────────────────── */
 .prov-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
   gap: 10px;
 }
 
@@ -1002,6 +1384,25 @@ function relativeTime(iso: string | null): string {
   display: flex;
   flex-direction: column;
   gap: 18px;
+}
+.model-list-row {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 8px;
+}
+.model-list-row :deep(.app-select) {
+  min-width: 0 !important;
+  flex: 1;
+}
+.model-list-row svg {
+  width: 18px;
+  height: 18px;
+}
+.models-error {
+  color: var(--color-red);
+  overflow-wrap: anywhere;
+  font-size: 0.82rem;
 }
 
 .config-row {
@@ -1257,15 +1658,35 @@ function relativeTime(iso: string | null): string {
 }
 
 @keyframes panel-out {
-  from { opacity: 1; transform: none; }
-  to   { opacity: 0; transform: translateY(-8px); }
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
 }
 
 /* ─── fade transition ─────────────────────────────────────────────────────── */
-.fade-enter-active { transition: opacity var(--duration-normal), transform var(--duration-normal); }
-.fade-leave-active { transition: opacity var(--duration-fast),  transform var(--duration-fast); }
-.fade-enter-from  { opacity: 0; transform: translateY(6px); }
-.fade-leave-to    { opacity: 0; transform: translateY(-4px); }
+.fade-enter-active {
+  transition:
+    opacity var(--duration-normal),
+    transform var(--duration-normal);
+}
+.fade-leave-active {
+  transition:
+    opacity var(--duration-fast),
+    transform var(--duration-fast);
+}
+.fade-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
 
 /* ─── reduced motion ──────────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {

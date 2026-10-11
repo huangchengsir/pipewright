@@ -1,4 +1,59 @@
 export default {
+  continuationError: {
+    preserved: 'Erfasste Fakten bleiben erhalten. Keine nachfolgenden Serveraufgaben wurden ausgeführt.',
+    unknown: 'Die Folgeplanung konnte nicht abgeschlossen werden.',
+    unavailable: 'Der KI-Endpunkt ist nicht verfügbar.',
+    invalid_plan: 'Die Folgeaufgaben oder Argumente werden nicht unterstützt.',
+  },
+  exec: {
+    program: 'Programm',
+    argument: 'Argument {index}',
+    addArgument: 'Argument hinzufügen',
+    removeArgument: 'Argument {index} entfernen',
+    argv: 'Exakte argv',
+    invalidArgs: 'Ein Programm ist erforderlich. ASCII-Buchstaben, Ziffern und _ . / sind erlaubt, + und - erst nach dem ersten Zeichen; kein Punkt-, Eltern- oder Wurzelpfad und kein abschließendes /. Maximal 61 Elemente, je 2048 UTF-8-Bytes und insgesamt 4096 Bytes. Steuerzeichen (C0/C1), einschließlich NUL, Tabulatoren und Zeilenumbrüchen, sind nicht erlaubt.',
+    risk: 'Nichtinteraktive Ausführung im Container kann Daten ändern oder auf Geheimnisse zugreifen. Ein Exit-Code bestätigt nur das Programmende, nicht den Erfolg einer fachlichen Änderung. Stoppen macht Änderungen nicht rückgängig.',
+  },
+  planningError: {
+    unknown:
+      'Planung nicht abgeschlossen. Für ältere Anfragen ist keine Ursache gespeichert.',
+    token_limit: 'Ausgabe-Tokenlimit vor Abschluss des Plans erreicht.',
+    timeout: 'Zeitüberschreitung bei der Aufgabenplanung.',
+    rejected:
+      'Das Modell hat die Anfrage abgelehnt. Modell, Zugangsdaten oder Kontingent prüfen.',
+    invalid_response: 'Modellplan ungültig oder unvollständig.',
+    unavailable:
+      'KI-Endpunkt nicht verfügbar. Keine Serveraufgaben ausgeführt.',
+    input_limit: 'Der Plan überschreitet das Eingabe- oder Ausgabelimit.',
+    invalid_plan:
+      'Aufgaben oder Argumente werden nicht unterstützt. Keine Serveraufgaben ausgeführt.',
+  },
+  analysisError: {
+    unknown:
+      'KI-Analyse nicht abgeschlossen. Erfasste Ergebnisse bleiben erhalten. Für ältere Anfragen ist keine Ursache gespeichert; die Analyse kann manuell erneut gestartet werden.',
+    token_limit:
+      'Ausgabe-Tokenlimit vor Abschluss der Analyse erreicht. Ergebnisse bleiben erhalten.',
+    timeout:
+      'Zeitüberschreitung bei der KI-Analyse. Ergebnisse bleiben erhalten.',
+    rejected:
+      'Das Modell hat die Anfrage abgelehnt. Modell, Zugangsdaten oder Kontingent prüfen. Ergebnisse bleiben erhalten.',
+    invalid_response:
+      'Modellantwort ungültig oder unvollständig. Ergebnisse bleiben erhalten.',
+    unavailable: 'KI-Endpunkt nicht verfügbar. Ergebnisse bleiben erhalten.',
+    input_limit:
+      'Eingabelimit überschritten. Keine Ergebnisse gesendet; bitte je Server analysieren.',
+  },
+  loadedItems: 'Geladene Einträge',
+  analyzeLoaded: 'Geladene Einträge analysieren',
+  selectedLimit: '{count} ausgewählt / maximal {limit} Server',
+  waiting: 'Antwort ausstehend',
+  submitting: 'Übermittlung',
+  runResults: 'Ergebnisse dieser Runde',
+  analyzeRun: 'Gesamte Runde analysieren',
+  analyzeGroup: 'Diesen Server analysieren',
+  localSummary: 'Lokale Fakten',
+  occupantsMissing: 'Verbraucherdaten fehlen',
+  occupants: { processes: 'Prozesse', containers: 'Container' },
   title: 'KI-Betriebsassistent',
   history: 'Sitzungen',
   newSession: 'Neue Sitzung',
@@ -87,6 +142,7 @@ export default {
     unknown: 'Ergebnis unbekannt',
   },
   tools: {
+    docker_exec: 'Programm im Container ausführen',
     host_resources: 'Host-Ressourcen',
     host_processes: 'Prozesse',
     host_ports: 'Lauschende Ports',

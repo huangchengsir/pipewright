@@ -35,6 +35,10 @@ func (s *Service) Call(ctx context.Context, id, cid string) (*Call, error) {
 	return &view, nil
 }
 func retryable(c callRecord) error {
+	// Generic exec must be submitted afresh with fresh approval, never replayed by RetryFailed.
+	if c.Body.View.ToolID == "docker_exec" {
+		return ErrVerifyFirst
+	}
 	switch c.Body.View.Status {
 	case Failed, PartialFailed:
 		return nil
@@ -83,6 +87,7 @@ func (s *Service) RetryFailed(ctx context.Context, id string, in RetryInput) (*R
 	// Validate every source before capturing any connection or accepting a new task.
 	oldCalls := []callRecord{}
 	runTimes := map[string]int64{}
+	sourceRuns := map[string]runRecord{}
 	for _, cid := range in.CallIDs {
 		if !validID(cid) || seen[cid] {
 			return nil, ErrInvalid
@@ -112,6 +117,18 @@ func (s *Service) RetryFailed(ctx context.Context, id string, in RetryInput) (*R
 				return nil, e
 			}
 			runTimes[c.Body.View.RunID] = r.View.CreatedAt.UnixMilli()
+			sourceRuns[c.Body.View.RunID] = r
+		}
+	}
+	// Preserve provenance for a later, explicitly authorized analysis only.
+	// Mixed-source retries have no single original question; never inherit consent.
+	if len(sourceRuns) == 1 {
+		for _, source := range sourceRuns {
+			body.Question = source.Body.Question
+			if body.Question == "" {
+				body.Question = source.Body.Turn.Text
+			}
+			body.Question = s.scrub(body.Question, 8<<10)
 		}
 	}
 	sort.SliceStable(oldCalls, func(i, j int) bool {

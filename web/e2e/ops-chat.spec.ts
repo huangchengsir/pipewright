@@ -57,6 +57,7 @@ const toolIds = [
   'systemd_status',
   'systemd_logs',
   'docker_action',
+  'docker_exec',
   'systemd_action',
 ]
 async function fixture(
@@ -81,10 +82,13 @@ async function fixture(
     db: options.empty
       ? ({} as Record<string, Snapshot>)
       : ({
-          chat: snap(session('chat')),
+          chat: snap(session('chat', ['a'])),
           other: snap(session('other', ['b'])),
         } as Record<string, Snapshot>),
     active: options.empty ? '' : 'chat',
+    contexts: options.empty
+      ? ({} as Record<string, string>)
+      : ({ containers: 'chat' } as Record<string, string>),
     patchFailure: '',
     holdRuns: false,
     dropSend: false,
@@ -100,7 +104,7 @@ async function fixture(
   }
   const catalog: Tool[] = toolIds.map((toolId) => ({
     toolId,
-    mutation: toolId.endsWith('_action'),
+    mutation: toolId.endsWith('_action') || toolId === 'docker_exec',
     schema: {},
   }))
   const inventory = {
@@ -134,6 +138,14 @@ async function fixture(
       kind,
       text,
       callId,
+      runId: callId
+        ? s.calls?.find((c) => c.callId === callId)?.runId
+        : s.session.activeRunId || undefined,
+      requestId:
+        kind === 'user'
+          ? s.runs?.find((run) => run.id === s.session.activeRunId)
+              ?.clientRequestId
+          : undefined,
       createdAt: stamp,
     })
     s.entries.watermark = s.watermark
@@ -153,7 +165,10 @@ async function fixture(
         serverName: 'Frozen ' + id.toUpperCase(),
         toolId,
         args,
-        object: toolId.endsWith('_action') ? id.repeat(64) : '',
+        object:
+          toolId.endsWith('_action') || toolId === 'docker_exec'
+            ? id.repeat(64)
+            : '',
         status: id === 'a' ? 'succeeded' : 'failed',
         argsHash: 'args-' + id,
         targetHash: 'target-' + id,
@@ -270,13 +285,16 @@ async function fixture(
       if (path === '/sessions' && method === 'GET')
         return json(r, {
           sessions: Object.values(state.db).map((s) => s.session),
-          activeSessionId: state.active,
+          activeSessionId: u.searchParams.get('context')
+            ? (state.contexts[u.searchParams.get('context')!] ?? '')
+            : state.active,
           cursor: '',
         })
       if (path === '/sessions' && method === 'POST') {
         const id = 'new' + ++state.next
         const s = session(id, body?.serverIds as string[])
         state.db[id] = snap(s)
+        if (body?.context) state.contexts[body.context as string] = id
         return json(r, s, 201)
       }
       const match = path.match(/^\/sessions\/([^/]+)(.*)$/),
@@ -320,6 +338,7 @@ async function fixture(
       }
       if (suffix === '/activate') {
         state.active = id
+        if (body?.context) state.contexts[body.context as string] = id
         return json(r, { ok: true })
       }
       if (suffix === '/entries')
@@ -347,7 +366,22 @@ async function fixture(
               ':' +
               e.seq +
               '\nevent: entry\ndata: ' +
-              JSON.stringify(e) +
+              JSON.stringify({
+                ...e,
+                call: e.callId
+                  ? s.calls?.find((c) => c.callId === e.callId)
+                  : undefined,
+                run: e.runId
+                  ? s.runs?.find((run) => run.id === e.runId)
+                  : undefined,
+                session:
+                  e.kind === 'run_status' ||
+                  e.kind === 'user' ||
+                  e.kind === 'tool_request'
+                    ? s.session
+                    : undefined,
+                confirmation: s.confirmations?.[0],
+              }) +
               '\n\n',
           )
           .join('')
@@ -381,7 +415,10 @@ async function fixture(
           body?.text ? 'user' : 'tool_request',
           (body?.text as string) ?? '',
         )
-        if (body?.toolId?.toString().endsWith('_action')) {
+        if (
+          body?.toolId?.toString().endsWith('_action') ||
+          body?.toolId === 'docker_exec'
+        ) {
           run.status = 'awaiting_confirmation'
           const calls = (s.session.serverIds ?? []).map((target) => ({
             ...({
@@ -499,7 +536,7 @@ async function fixture(
             { error: { code: 'ops_consent_changed', message: 'RAW_SECRET' } },
             409,
           )
-        expect(body?.consent).toBe(true)
+        expect(body?.analyzeResults).toBe(true)
         entry(s, 'assistant', 'Analysis of explicitly shared batch')
         return json(
           r,
@@ -566,10 +603,371 @@ async function fixture(
   return { state, complete, entry, inventory }
 }
 const panel = (page: Page) => page.getByTestId('ops-panel')
+test('300 large results keep typing and send immediate without rebuilding history', async ({
+  page,
+}, testInfo) => {
+  const f = await fixture(page)
+  const s = f.state.db.chat!
+  s.session.serverIds = ['a', 'b']
+  for (let i = 0; i < 300; i++) {
+    const c: Call = {
+      callId: 'large' + i,
+      runId: 'old',
+      sessionId: 'chat',
+      serverId: i < 150 ? 'a' : 'b',
+      serverName: i < 150 ? 'Frozen A' : 'Frozen B',
+      toolId: 'docker_logs',
+      args: {},
+      status: 'succeeded',
+      argsHash: 'a',
+      targetHash: 't',
+      output: 'x'.repeat(8192),
+      error: '',
+      truncated: false,
+      collectedAt: stamp,
+    }
+    s.calls!.push(c)
+    f.entry(s, 'tool_call', '', c.callId)
+  }
+  await open(page)
+  await expect(panel(page).locator('[data-call-id]')).toHaveCount(300)
+  await expect(panel(page).locator('.ops-pre')).toHaveCount(0)
+  const before = f.state.requests.filter(
+    (r) => r.path === '/sessions/chat' && r.method === 'GET',
+  ).length
+  const timing = await panel(page)
+    .getByRole('textbox', { name: '输入运维需求' })
+    .evaluate(async (el) => {
+      const input = el as HTMLTextAreaElement,
+        history = document.querySelector('.messages')!,
+        times: number[] = []
+      let changes = 0
+      const observer = new MutationObserver(
+        (records) => (changes += records.length),
+      )
+      observer.observe(history, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+      })
+      for (let i = 0; i < 40; i++) {
+        const start = performance.now()
+        input.value += 'a'
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => resolve()),
+        )
+        times.push(performance.now() - start)
+      }
+      observer.disconnect()
+      times.sort((a, b) => a - b)
+      return {
+        p95: times[Math.floor(times.length * 0.95)],
+        max: times.at(-1),
+        historyChanges: changes,
+      }
+    })
+  expect(timing.historyChanges).toBe(0)
+  expect(timing.p95).toBeLessThan(100)
+  expect(
+    f.state.requests.filter(
+      (r) => r.path === '/sessions/chat' && r.method === 'GET',
+    ),
+  ).toHaveLength(before)
+  f.state.holdRuns = true
+  await button(page, '发送').click()
+  await expect(panel(page).locator('.message.user')).toContainText(
+    'a'.repeat(40),
+  )
+  expect(
+    f.state.requests.filter((r) => r.path.endsWith('/turns')),
+  ).toHaveLength(1)
+  await testInfo.attach('performance', {
+    body: JSON.stringify(timing),
+    contentType: 'application/json',
+  })
+  console.log('ops history performance', JSON.stringify(timing))
+  await page.screenshot({ path: testInfo.outputPath('large-history.png') })
+})
+
+test('waiting dots become one partial reply, terminal revision survives replay and refresh', async ({
+  page,
+}, testInfo) => {
+  const f = await fixture(page)
+  await open(page)
+  f.state.holdRuns = true
+  await panel(page)
+    .getByRole('textbox', { name: '输入运维需求' })
+    .fill('question')
+  await button(page, '发送').click()
+  await expect.poll(() => f.state.db.chat!.runs!.length).toBe(1)
+  const s = f.state.db.chat!,
+    run = s.runs![0]!
+  run.status = 'planning'
+  f.entry(s, 'run_status')
+  await expect(panel(page).locator('.waiting')).toBeVisible()
+  await expect(panel(page)).not.toContainText('正在思考')
+  const snapshots = f.state.requests.filter(
+    (r) => r.path === '/sessions/chat' && r.method === 'GET',
+  ).length
+  f.entry(s, 'assistant', 'first safe text')
+  const first = s.entries.entries!.at(-1)!
+  first.status = 'partial'
+  first.revisionSeq = first.seq
+  await expect(panel(page)).toContainText('first safe text')
+  await expect(panel(page).locator('.waiting')).toHaveCount(0)
+  await page.screenshot({ path: testInfo.outputPath('partial-reply.png') })
+  f.entry(s, 'assistant', 'first safe text final')
+  const final = s.entries.entries!.at(-1)!
+  final.replaceSeq = first.seq
+  final.revisionSeq = final.seq
+  final.status = 'succeeded'
+  final.runId = run.id
+  first.text = final.text
+  first.status = 'succeeded'
+  first.revisionSeq = final.seq
+  run.status = 'succeeded'
+  s.session.activeRunId = ''
+  f.entry(s, 'run_status')
+  await expect(
+    panel(page).locator('[data-entry-status="succeeded"]'),
+  ).toHaveCount(1)
+  expect(
+    f.state.requests.filter(
+      (r) => r.path === '/sessions/chat' && r.method === 'GET',
+    ),
+  ).toHaveLength(snapshots)
+  await page.reload()
+  await launcher(page).click()
+  await expect(
+    panel(page).locator('[data-entry-status="succeeded"]'),
+  ).toHaveCount(1)
+  await expect(panel(page)).toContainText('first safe text final')
+  expect(
+    f.state.requests.filter((r) => r.path.endsWith('/turns')),
+  ).toHaveLength(1)
+})
 const button = (page: Page, name: string) =>
   panel(page).getByRole('button', { name, exact: true })
+
+for (const status of ['planning', 'running'])
+  test('analysis waits for first natural text ' + status, async ({ page }) => {
+    const f = await fixture(page)
+    await open(page)
+    f.state.holdRuns = true
+    await panel(page)
+      .getByRole('textbox', { name: '输入运维需求' })
+      .fill('question')
+    await button(page, '发送').click()
+    await expect.poll(() => f.state.db.chat!.runs!.length).toBe(1)
+    const s = f.state.db.chat!,
+      run = s.runs![0]!
+    run.status = status
+    run.phase = 'analysis'
+    f.entry(s, 'run_status')
+    await expect(panel(page).locator('.waiting')).toBeVisible()
+    await expect(panel(page)).not.toContainText('正在思考')
+    f.entry(s, 'analysis', 'natural analysis started')
+    await expect(panel(page)).toContainText('natural analysis started')
+    await expect(panel(page).locator('.waiting')).toHaveCount(0)
+  })
 const launcher = (page: Page) =>
   page.getByRole('button', { name: /^✦? ?AI 助手$/ })
+for (const width of [1366, 390]) {
+  test(`empty targets and anchored copy ${width}`, async ({ page }, info) => {
+    await page.setViewportSize({ width, height: 900 })
+    const f = await fixture(page)
+    const s = f.state.db.chat!
+    s.session.serverIds = []
+    f.entry(s, 'assistant', 'A short reply.')
+    f.entry(s, 'assistant', '[planning:invalid_plan]')
+    s.entries.entries!.at(-1)!.status = 'failed'
+    await open(page)
+    const picker = panel(page).locator('.server-details')
+    await expect(picker).toHaveAttribute('open', '')
+    const input = panel(page).getByRole('textbox', { name: '输入运维需求' })
+    await input.fill('check resources')
+    await expect(button(page, '发送')).toBeDisabled()
+    expect(
+      f.state.requests.filter((r) => r.path.endsWith('/turns')),
+    ).toHaveLength(0)
+    for (const message of await panel(page)
+      .locator('.message.copyable')
+      .all()) {
+      const box = (await message.boundingBox())!
+      const copy = message.getByRole('button', { name: '复制', exact: true })
+      const copyBox = (await copy.boundingBox())!
+      expect(copyBox.width).toBe(28)
+      expect(copyBox.height).toBe(28)
+      expect(
+        Math.abs(box.x + box.width - copyBox.x - copyBox.width - 10),
+      ).toBeLessThan(1)
+      expect(
+        Math.abs(box.y + box.height - copyBox.y - copyBox.height - 8),
+      ).toBeLessThan(1)
+    }
+    await page.screenshot({ path: info.outputPath('copy-and-targets.png') })
+    await picker
+      .locator('.server-choice')
+      .filter({ hasText: 'Server A' })
+      .getByRole('checkbox')
+      .check()
+    await expect(button(page, '发送')).toBeEnabled()
+    await expect(input).toHaveValue('check resources')
+    await expect(picker).toHaveAttribute('open', '')
+    await picker
+      .locator('.server-choice')
+      .filter({ hasText: 'Server B' })
+      .getByRole('checkbox')
+      .check()
+    await expect(panel(page).locator('.target-summary')).toContainText(
+      'Server B',
+    )
+    await button(page, '发送').click()
+    await expect
+      .poll(
+        () => f.state.requests.filter((r) => r.path.endsWith('/turns')).length,
+      )
+      .toBe(1)
+  })
+}
+for (const [width, theme] of [
+  [1366, 'light'],
+  [390, 'dark'],
+] as const) {
+  test(`Markdown and own-message scroll ${width} ${theme}`, async ({
+    page,
+  }, info) => {
+    await page.setViewportSize({ width, height: 900 })
+    const f = await fixture(page, { theme })
+    const snapshot = f.state.db.chat!
+    snapshot.session.serverIds = ['a']
+    for (let i = 0; i < 30; i++)
+      f.entry(
+        snapshot,
+        'assistant',
+        'Historical answer ' + i + '\n\n' + 'text '.repeat(30),
+      )
+    f.entry(
+      snapshot,
+      'analysis',
+      '## Server A\n\n### Resources\n\n- **Memory**: 1 GiB\n- **Disk**: 84%\n\n| Metric | Value |\n| --- | --- |\n| CPU | 1% |\n\n```sh\ndocker ps\n' +
+        'long-command-'.repeat(80) +
+        '\n```\n\n![remote](https://never-load.invalid/image)\n\n<script>alert(1)</script>',
+    )
+    await open(page)
+    await expect(
+      panel(page).getByRole('heading', { name: 'Server A', exact: true }),
+    ).toBeVisible()
+    await expect(panel(page).locator('.ops-markdown table')).toBeVisible()
+    await expect(
+      panel(page).locator('.ops-markdown img, .ops-markdown script'),
+    ).toHaveCount(0)
+    const scroll = panel(page).getByTestId('ops-messages-scroll')
+    await expect
+      .poll(() =>
+        scroll.evaluate(
+          (el) => el.scrollHeight - el.scrollTop - el.clientHeight,
+        ),
+      )
+      .toBeLessThan(3)
+    expect(
+      await panel(page).evaluate((el) => el.scrollWidth <= el.clientWidth + 1),
+    ).toBe(true)
+    await page.screenshot({ path: info.outputPath('markdown.png') })
+    await scroll.evaluate((el) => {
+      el.dispatchEvent(new WheelEvent('wheel', { deltaY: -1000 }))
+      el.scrollTop = 0
+      el.dispatchEvent(new Event('scroll'))
+    })
+    await page.waitForTimeout(200)
+    expect(await scroll.evaluate((el) => el.scrollTop)).toBe(0)
+    await panel(page)
+      .getByRole('textbox', { name: '输入运维需求' })
+      .fill('new own message')
+    await button(page, '发送').click()
+    await expect(
+      panel(page).getByText('new own message', { exact: true }),
+    ).toBeVisible()
+    await expect
+      .poll(() =>
+        scroll.evaluate(
+          (el) => el.scrollHeight - el.scrollTop - el.clientHeight,
+        ),
+      )
+      .toBeLessThan(3)
+    expect(f.state.external).toEqual([])
+  })
+}
+for (const width of [1366, 390]) {
+  test(`streamed growth stays pinned and aliases stay local ${width}`, async ({
+    page,
+  }, info) => {
+    await page.setViewportSize({ width, height: 900 })
+    const f = await fixture(page)
+    f.state.holdRuns = true
+    const s = f.state.db.chat!
+    await open(page)
+    await panel(page)
+      .getByRole('textbox', { name: '输入运维需求' })
+      .fill('检查资源')
+    await button(page, '发送').click()
+    await expect.poll(() => s.runs!.length).toBe(1)
+    f.entry(s, 'analysis', '## target_A\n\n开始')
+    const first = s.entries.entries!.at(-1)!
+    first.status = 'partial'
+    first.targetNames = { target_A: '测试服务器' }
+    const scroll = panel(page).getByTestId('ops-messages-scroll')
+    for (let i = 1; i <= 8; i++) {
+      f.entry(
+        s,
+        'analysis',
+        '## target_A\n\nchunk-' +
+          i +
+          '\n\n' +
+          '**资源正常**：已有证据。\n\n'.repeat(i * 15),
+      )
+      const chunk = s.entries.entries!.at(-1)!
+      chunk.replaceSeq = first.seq
+      chunk.revisionSeq = chunk.seq
+      chunk.status = 'partial'
+      chunk.targetNames = first.targetNames
+      await expect(
+        panel(page).locator(`[data-entry-seq="${first.seq}"]`),
+      ).toContainText('chunk-' + i)
+      await expect
+        .poll(() =>
+          scroll.evaluate(
+            (el) => el.scrollHeight - el.clientHeight - el.scrollTop,
+          ),
+        )
+        .toBeLessThan(3)
+    }
+    await expect(
+      panel(page).getByRole('heading', { name: '测试服务器', exact: true }),
+    ).toBeVisible()
+    await scroll.evaluate((el) => {
+      el.dispatchEvent(new WheelEvent('wheel', { deltaY: -1000 }))
+      el.scrollTop = 0
+      el.dispatchEvent(new Event('scroll'))
+    })
+    f.entry(
+      s,
+      'analysis',
+      '## target_A\n\n' + '读历史不应被打断。\n\n'.repeat(150),
+    )
+    const last = s.entries.entries!.at(-1)!
+    last.replaceSeq = first.seq
+    last.revisionSeq = last.seq
+    last.targetNames = first.targetNames
+    last.status = 'succeeded'
+    await expect(panel(page)).toContainText('读历史不应被打断')
+    await page.waitForTimeout(200)
+    expect(await scroll.evaluate((el) => el.scrollTop)).toBe(0)
+    await page.screenshot({ path: info.outputPath('stream-and-alias.png') })
+    expect(f.state.external).toEqual([])
+  })
+}
 async function open(page: Page): Promise<void> {
   await page.goto('/containers')
   await launcher(page).click()
@@ -578,7 +976,9 @@ async function open(page: Page): Promise<void> {
   ).toBeEnabled()
 }
 async function selectTargets(page: Page): Promise<void> {
-  await panel(page).locator('.ops-section details summary').first().click()
+  const picker = panel(page).locator('.server-details')
+  if (!(await picker.evaluate((el) => (el as HTMLDetailsElement).open)))
+    await picker.locator('summary').click()
   await panel(page)
     .locator('.server-choice')
     .filter({ hasText: 'Server A' })
@@ -596,6 +996,8 @@ async function collect(page: Page): Promise<void> {
   await panel(page).getByText('运维工具', { exact: true }).click()
   await button(page, '采集数据').click()
   await expect(panel(page).locator('[data-call-id]')).toHaveCount(2)
+  for (const details of await panel(page).locator('[data-call-id]').all())
+    await details.locator('summary').click()
 }
 
 test('saved sessions survive hide, reopen and refresh without cancel or model request', async ({
@@ -686,6 +1088,8 @@ test('global new session has no targets; read-only tools, partial results and is
     .filter({ hasText: 'Frozen B' })
     .getByRole('button', { name: '仅重试此失败调用' })
     .click()
+  await expect(panel(page).locator('[data-call-id]')).toHaveCount(3)
+  await panel(page).locator('[data-call-id]').last().locator('summary').click()
   await expect(panel(page)).toContainText('Retry B succeeded')
   const retries = f.state.requests.filter((r) => r.path.endsWith('/retry'))
   expect(retries).toHaveLength(1)
@@ -697,7 +1101,7 @@ test('global new session has no targets; read-only tools, partial results and is
     f.state.requests.filter((r) => r.path.endsWith('/turns')),
   ).toHaveLength(1)
 })
-test('analysis previews exact content, consent defaults off and provider change rejects', async ({
+test('analysis sends only clicked IDs without another consent; provider change rejects', async ({
   page,
 }) => {
   const f = await fixture(page)
@@ -708,23 +1112,24 @@ test('analysis previews exact content, consent defaults off and provider change 
     .locator('[data-call-id]')
     .filter({ hasText: 'Frozen A' })
   await result.getByRole('button', { name: '交给 AI 分析' }).click()
-  const consent = panel(page).locator('.consent')
-  await expect(consent).toContainText('mock-provider')
-  await expect(consent).toContainText('Result on A')
-  await expect(
-    consent.getByRole('button', { name: '交给 AI 分析' }),
-  ).toBeDisabled()
+  await expect(panel(page).locator('.consent')).toHaveCount(0)
+  await expect
+    .poll(
+      () => f.state.requests.filter((r) => r.path.endsWith('/analysis')).length,
+    )
+    .toBe(1)
   expect(
-    f.state.requests.filter((r) => r.path.endsWith('/analysis')),
-  ).toHaveLength(0)
+    f.state.requests.some((r) => r.path.endsWith('/analysis/preview')),
+  ).toBe(false)
   f.state.changeProvider = true
-  await consent.getByRole('checkbox').check()
-  await consent.getByRole('button', { name: '交给 AI 分析' }).click()
-  await expect(panel(page)).toContainText('分析内容或模型配置已变化')
+  await result.getByRole('button', { name: '交给 AI 分析' }).click()
+  await expect(panel(page)).toContainText('分析内容、目标或模型配置已变化')
   const payload = f.state.requests.find((r) =>
     r.path.endsWith('/analysis'),
   )!.body!
-  expect(payload.previewHash).toBe('preview-hash')
+  expect(payload.previewHash).toBeUndefined()
+  expect(payload.consent).toBeUndefined()
+  expect(payload.callIds).toEqual([f.state.db.chat!.calls![0]!.callId])
   expect(payload.provider).toEqual({
     provider: 'mock-provider',
     model: 'mock-model',
@@ -763,6 +1168,69 @@ test('batch reissue is explicit and confirms every frozen target exactly once', 
       .calls as unknown[],
   ).toHaveLength(2)
 })
+for (const width of [1366, 390]) {
+  test(`generic container exec requires exact approval and preserves literal argv at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 })
+    const f = await fixture(page)
+    await open(page)
+    await panel(page).getByText('运维工具', { exact: true }).click()
+    await panel(page).getByRole('combobox', { name: '运维工具' }).click()
+    await page
+      .getByRole('option', { name: '容器内执行程序', exact: true })
+      .click()
+    await panel(page)
+      .getByRole('textbox', { name: '容器名称或 ID' })
+      .fill('web-a')
+    await expect(button(page, '准备修改')).toBeDisabled()
+    await panel(page)
+      .getByRole('textbox', { name: '程序', exact: true })
+      .fill('sh')
+    await panel(page)
+      .getByRole('button', { name: '添加参数', exact: true })
+      .click()
+    await panel(page)
+      .getByRole('textbox', { name: '参数 1', exact: true })
+      .fill('-c')
+    await panel(page)
+      .getByRole('button', { name: '添加参数', exact: true })
+      .click()
+    const script = "printf '%s' '<img src=x>; $(id)'"
+    await panel(page)
+      .getByRole('textbox', { name: '参数 2', exact: true })
+      .fill(script)
+    await button(page, '准备修改').click()
+    const batch = panel(page).locator('.confirmation')
+    await expect(batch).toContainText('Frozen A')
+    await expect(batch.locator('.exec-argv')).toHaveText(
+      JSON.stringify(['sh', '-c', script]),
+    )
+    await expect(batch).toContainText('可能修改数据或访问秘密')
+    await expect(batch.locator('img')).toHaveCount(0)
+    expect(
+      f.state.requests.filter((r) => r.path.endsWith('/calls/confirm')),
+    ).toHaveLength(0)
+    const request = f.state.requests.find((r) =>
+      r.path.endsWith('/turns'),
+    )!.body!
+    expect(request.toolId).toBe('docker_exec')
+    expect(request.args).toEqual({
+      container: 'web-a',
+      argv: ['sh', '-c', script],
+    })
+    await page.screenshot({
+      path: `../../ai-ops-181-runtime/exec-approval-${width}.png`,
+    })
+    await button(page, '确认这一批').click()
+    await expect(batch).toHaveCount(0)
+    expect(
+      f.state.requests.filter((r) => r.path.endsWith('/calls/confirm')),
+    ).toHaveLength(1)
+    expect(f.state.external).toEqual([])
+  })
+}
+
 test('ambiguous submission preserves exact request ID and newer typed draft', async ({
   page,
 }) => {
@@ -1279,12 +1747,14 @@ for (const width of [1366, 1920, 390])
           contrast: (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05),
           placeholder: getComputedStyle(input, '::placeholder').color,
           text: style.color,
+          fontSize: parseFloat(style.fontSize),
         }
       })
       expect(bounds.left).toBeGreaterThanOrEqual(0)
       expect(bounds.right).toBeLessThanOrEqual(bounds.width + 1)
       expect(bounds.scroll).toBeLessThanOrEqual(bounds.client + 1)
       expect(bounds.contrast).toBeGreaterThanOrEqual(4.5)
+      if (width === 390) expect(bounds.fontSize).toBeGreaterThanOrEqual(16)
       expect(bounds.placeholder).not.toBe('rgba(0, 0, 0, 0)')
       await page.screenshot({
         path: testInfo.outputPath('ops-' + width + '-' + theme + '.png'),

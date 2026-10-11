@@ -91,8 +91,12 @@ type Session struct {
 	UpdatedAt   time.Time `json:"updatedAt"`
 }
 type CreateInput struct {
+	Context   string   `json:"context,omitempty"`
 	Title     string   `json:"title"`
 	ServerIDs []string `json:"serverIds"`
+}
+type ActivateInput struct {
+	Context string `json:"context,omitempty"`
 }
 type PatchInput struct {
 	Revision  int64     `json:"revision"`
@@ -101,6 +105,8 @@ type PatchInput struct {
 	ServerIDs *[]string `json:"serverIds,omitempty"`
 }
 type TurnInput struct {
+	AnalyzeResults  bool            `json:"analyzeResults,omitempty"`
+	Provider        ProviderInfo    `json:"provider,omitempty"`
 	ClientRequestID string          `json:"clientRequestId"`
 	Revision        int64           `json:"revision"`
 	Text            string          `json:"text,omitempty"`
@@ -113,6 +119,7 @@ type RetryInput struct {
 	CallIDs         []string `json:"callIds"`
 }
 type Run struct {
+	Phase           string    `json:"phase,omitempty"`
 	ID              string    `json:"id"`
 	SessionID       string    `json:"sessionId"`
 	ClientRequestID string    `json:"clientRequestId"`
@@ -121,10 +128,11 @@ type Run struct {
 	CreatedAt       time.Time `json:"createdAt"`
 }
 type ToolArgs struct {
-	Container string `json:"container,omitempty"`
-	Unit      string `json:"unit,omitempty"`
-	Lines     int    `json:"lines,omitempty"`
-	Action    string `json:"action,omitempty"`
+	Argv      []string `json:"argv,omitempty"`
+	Container string   `json:"container,omitempty"`
+	Unit      string   `json:"unit,omitempty"`
+	Lines     int      `json:"lines,omitempty"`
+	Action    string   `json:"action,omitempty"`
 }
 type Action struct {
 	ToolID        string          `json:"toolId"`
@@ -136,25 +144,47 @@ type Message struct {
 	Text string `json:"text"`
 }
 type PlanRequest struct {
-	Messages         []Message `json:"messages"`
-	Targets          []string  `json:"targets"`
-	Tools            []Tool    `json:"tools"`
-	MaxResponseBytes int       `json:"maxResponseBytes"`
+	Question         string                 `json:"question,omitempty"`
+	Provider         ProviderInfo           `json:"provider,omitempty"`
+	Messages         []Message              `json:"messages"`
+	Targets          []string               `json:"targets"`
+	Tools            []Tool                 `json:"tools"`
+	MaxResponseBytes int                    `json:"maxResponseBytes"`
+	ContainerFacts   []ContainerObservation `json:"containerFacts,omitempty"`
+	Continuation     bool                   `json:"continuation,omitempty"`
+}
+type ContainerFact struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Image string `json:"image"`
+	State string `json:"state"`
+}
+type ContainerObservation struct {
+	TargetAlias string          `json:"targetAlias"`
+	CollectedAt *time.Time      `json:"collectedAt,omitempty"`
+	Containers  []ContainerFact `json:"containers"`
+	Truncated   bool            `json:"truncated"`
+	Unavailable string          `json:"unavailable,omitempty"`
 }
 type Plan struct {
-	Text         string   `json:"text"`
-	ManualAdvice string   `json:"manualAdvice,omitempty"`
-	Actions      []Action `json:"actions"`
+	Text           string   `json:"text"`
+	ManualAdvice   string   `json:"manualAdvice,omitempty"`
+	Actions        []Action `json:"actions"`
+	NeedsDiscovery bool     `json:"needsDiscovery,omitempty"`
 }
 type AnalysisItem struct {
-	CallID      string `json:"callId"`
-	TargetAlias string `json:"targetAlias"`
-	ToolID      string `json:"toolId"`
-	Output      string `json:"output"`
-	Error       string `json:"error"`
-	Status      string `json:"status"`
+	Truncated   bool       `json:"truncated"`
+	CollectedAt *time.Time `json:"collectedAt,omitempty"`
+	ExitCode    *int       `json:"exitCode,omitempty"`
+	CallID      string     `json:"callId"`
+	TargetAlias string     `json:"targetAlias"`
+	ToolID      string     `json:"toolId"`
+	Output      string     `json:"output"`
+	Error       string     `json:"error"`
+	Status      string     `json:"status"`
 }
 type AnalysisRequest struct {
+	Question         string         `json:"question"`
 	Provider         ProviderInfo   `json:"provider"`
 	Items            []AnalysisItem `json:"items"`
 	MaxResponseBytes int            `json:"maxResponseBytes"`
@@ -165,6 +195,17 @@ type Model interface {
 	Info() ProviderInfo
 	Plan(context.Context, PlanRequest) (Plan, error)
 	Analyze(context.Context, AnalysisRequest) (string, error)
+}
+
+type StreamChunk struct {
+	Text     string
+	Fallback bool
+}
+
+// StreamModel publishes only natural text; adapters validate complete plans before returning actions.
+type StreamModel interface {
+	PlanStream(context.Context, PlanRequest, func(StreamChunk) error) (Plan, error)
+	AnalyzeStream(context.Context, AnalysisRequest, func(StreamChunk) error) (string, error)
 }
 
 // SecretRegistrar registers current (including disabled) provider keys with the
@@ -218,6 +259,8 @@ type AnalysisPreview struct {
 	Provider ProviderInfo   `json:"provider"`
 }
 type AnalysisInput struct {
+	RunID           string       `json:"runId,omitempty"`
+	AnalyzeResults  bool         `json:"analyzeResults,omitempty"`
 	ClientRequestID string       `json:"clientRequestId"`
 	Revision        int64        `json:"revision"`
 	CallIDs         []string     `json:"callIds"`
@@ -226,14 +269,24 @@ type AnalysisInput struct {
 	Consent         bool         `json:"consent"`
 }
 type Entry struct {
-	SessionID string    `json:"sessionId"`
-	Seq       int64     `json:"seq"`
-	Kind      string    `json:"kind"`
-	RunID     string    `json:"runId,omitempty"`
-	CallID    string    `json:"callId,omitempty"`
-	Text      string    `json:"text,omitempty"`
-	Status    string    `json:"status,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
+	// TargetNames is reconstructed for local display, never persisted or sent to models.
+	TargetNames  map[string]string `json:"targetNames,omitempty"`
+	ReplaceSeq   int64             `json:"replaceSeq,omitempty"`
+	RevisionSeq  int64             `json:"revisionSeq,omitempty"`
+	RequestID    string            `json:"requestId,omitempty"`
+	Call         *Call             `json:"call,omitempty"`
+	Run          *Run              `json:"run,omitempty"`
+	Session      *Session          `json:"session,omitempty"`
+	Confirmation *Confirmation     `json:"confirmation,omitempty"`
+	Summary      *RunSummary       `json:"summary,omitempty"`
+	SessionID    string            `json:"sessionId"`
+	Seq          int64             `json:"seq"`
+	Kind         string            `json:"kind"`
+	RunID        string            `json:"runId,omitempty"`
+	CallID       string            `json:"callId,omitempty"`
+	Text         string            `json:"text,omitempty"`
+	Status       string            `json:"status,omitempty"`
+	CreatedAt    time.Time         `json:"createdAt"`
 }
 type EntryPage struct {
 	Entries   []Entry `json:"entries"`
@@ -261,15 +314,22 @@ type sessionBody struct {
 	Named     bool
 }
 type runBody struct {
-	ReadBytes    int
-	RetryActions []Action
-	RetryCallIDs []string
-	Turn         TurnInput
-	Targets      []target.ConnectionSnapshot
-	Analysis     *AnalysisPreview
-	ActiveMillis int64
-	ModelCalls   int
-	OutputBytes  int
+	Provider            ProviderInfo
+	AnalysisAuthorized  bool
+	AnalysisStarted     bool
+	Question            string
+	SummarySaved        bool
+	ReadBytes           int
+	RetryActions        []Action
+	RetryCallIDs        []string
+	Turn                TurnInput
+	Targets             []target.ConnectionSnapshot
+	Analysis            *AnalysisPreview
+	ActiveMillis        int64
+	ModelCalls          int
+	NeedsDiscovery      bool
+	ContinuationStarted bool
+	OutputBytes         int
 }
 type callBody struct {
 	ReadBytes     int

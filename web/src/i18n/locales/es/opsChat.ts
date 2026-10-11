@@ -1,4 +1,60 @@
 export default {
+  continuationError: {
+    preserved: 'Los datos recopilados se conservan. No se ejecutaron tareas posteriores en el servidor.',
+    unknown: 'No se pudo completar la planificación posterior.',
+    unavailable: 'El servicio de IA no está disponible.',
+    invalid_plan: 'Las tareas posteriores o sus argumentos no son compatibles.',
+  },
+  exec: {
+    program: 'Programa',
+    argument: 'Argumento {index}',
+    addArgument: 'Añadir argumento',
+    removeArgument: 'Eliminar argumento {index}',
+    argv: 'argv exacto',
+    invalidArgs: 'Se requiere un programa. Use letras ASCII, dígitos y _ . /; + y - solo después del primer carácter. No se permiten rutas de punto, padre o raíz ni / final. Máximo 61 elementos, 2048 bytes UTF-8 por elemento y 4096 en total. No se permiten controles C0/C1, incluidos NUL, tabulaciones y saltos de línea.',
+    risk: 'La ejecución no interactiva en el contenedor puede modificar datos o acceder a secretos. Un código de salida solo indica que el comando terminó, no que el cambio previsto se realizó. Detener no revierte cambios.',
+  },
+  planningError: {
+    unknown:
+      'La planificación no se completó. Las solicitudes anteriores no registraron la causa.',
+    token_limit: 'Se alcanzó el límite de tokens antes de completar el plan.',
+    timeout: 'Se agotó el tiempo de planificación.',
+    rejected:
+      'El modelo rechazó la solicitud. Revise el modelo, las credenciales o la cuota.',
+    invalid_response: 'El plan del modelo es inválido o incompleto.',
+    unavailable:
+      'El servicio de IA no está disponible. No se ejecutaron tareas en servidores.',
+    input_limit: 'El plan supera el límite de entrada o salida.',
+    invalid_plan:
+      'Las tareas o los argumentos no son compatibles. No se ejecutaron tareas en servidores.',
+  },
+  analysisError: {
+    unknown:
+      'El análisis de IA no se completó. Los resultados se conservan. Las solicitudes anteriores no registraron la causa; puede repetir el análisis manualmente.',
+    token_limit:
+      'Se alcanzó el límite de tokens de salida antes de completar el análisis. Los resultados se conservan.',
+    timeout:
+      'Se agotó el tiempo del análisis de IA. Los resultados se conservan.',
+    rejected:
+      'El modelo rechazó la solicitud. Revise el modelo, las credenciales o la cuota. Los resultados se conservan.',
+    invalid_response:
+      'La respuesta del modelo es inválida o incompleta. Los resultados se conservan.',
+    unavailable:
+      'El servicio de IA no está disponible. Los resultados se conservan.',
+    input_limit:
+      'Se superó el límite de entrada. No se enviaron resultados; analice por servidor.',
+  },
+  loadedItems: 'Elementos cargados',
+  analyzeLoaded: 'Analizar elementos cargados',
+  selectedLimit: '{count} seleccionados / máximo {limit} servidores',
+  waiting: 'Esperando respuesta',
+  submitting: 'Enviando',
+  runResults: 'Resultados del turno',
+  analyzeRun: 'Analizar todo el turno',
+  analyzeGroup: 'Analizar este servidor',
+  localSummary: 'Datos locales',
+  occupantsMissing: 'Datos de consumidores no disponibles',
+  occupants: { processes: 'Procesos', containers: 'Contenedores' },
   title: 'Asistente de operaciones IA',
   history: 'Sesiones',
   newSession: 'Nueva sesión',
@@ -85,6 +141,7 @@ export default {
     unknown: 'Resultado desconocido',
   },
   tools: {
+    docker_exec: 'Ejecutar programa en contenedor',
     host_resources: 'Recursos del host',
     host_processes: 'Procesos',
     host_ports: 'Puertos en escucha',

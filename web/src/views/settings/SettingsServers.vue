@@ -328,7 +328,7 @@ async function handleTest(s: Server): Promise<void> {
 
 <template>
   <div class="servers-root">
-    <ContainerAiPanel v-if="aiTargets !== null" :initial-server-ids="aiTargets" @close="aiTargets = null" />
+    <ContainerAiPanel v-if="aiTargets !== null" context="servers" :initial-server-ids="aiTargets" @close="aiTargets = null" />
     <!-- ─── section header ──────────────────────────────────────────────────── -->
     <div class="section-head">
       <div class="section-head-text">

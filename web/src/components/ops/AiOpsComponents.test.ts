@@ -2,12 +2,22 @@ import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import AiOpsServerPicker from './AiOpsServerPicker.vue'
 import AiOpsComposer from './AiOpsComposer.vue'
+import AiOpsExecArgs from './AiOpsExecArgs.vue'
+import AppSelect from '../ui/AppSelect.vue'
 import AiOpsToolResult from './AiOpsToolResult.vue'
 import AiOpsMessageList from './AiOpsMessageList.vue'
 import AiOpsConfirmation from './AiOpsConfirmation.vue'
-import AiOpsAnalysisConsent from './AiOpsAnalysisConsent.vue'
+import AiOpsRunResults from './AiOpsRunResults.vue'
 import AiOpsSessionList from './AiOpsSessionList.vue'
-import type { Call, Confirmation, Preview } from '../../api/opsChat'
+import type { Call, Confirmation } from '../../api/opsChat'
+import en from '../../i18n/locales/en/opsChat'
+import de from '../../i18n/locales/de/opsChat'
+import es from '../../i18n/locales/es/opsChat'
+import fr from '../../i18n/locales/fr/opsChat'
+import ja from '../../i18n/locales/ja/opsChat'
+import ko from '../../i18n/locales/ko/opsChat'
+import zhCN from '../../i18n/locales/zh-CN/opsChat'
+import zhTW from '../../i18n/locales/zh-TW/opsChat'
 const call: Call = {
   callId: 'c',
   runId: 'r',
@@ -41,6 +51,127 @@ const confirmation: Confirmation = {
   ],
 }
 describe('ops components', () => {
+  it('has matching exec keys in all eight locales', () => {
+    for (const locale of [en, de, es, fr, ja, ko, zhCN, zhTW]) {
+      expect(Object.keys(locale.exec).sort()).toEqual(Object.keys(en.exec).sort())
+      expect(Object.values(locale.exec).every((value) => value.length > 0)).toBe(true)
+      expect(locale.tools.docker_exec).toBeTruthy()
+    }
+  })
+  it('prepares literal docker_exec argv without action, risk or readonly fields', async () => {
+    const w = mount(AiOpsComposer, {
+      props: {
+        draft: '', draftStatus: 'saved',
+        tools: [{ toolId: 'host_resources', mutation: false, schema: {} }, { toolId: 'docker_exec', mutation: true, schema: {} }],
+        disabled: false, active: false, modelAvailable: false, hasTargets: true, pending: false,
+      },
+    })
+    try {
+      w.getComponent(AppSelect).vm.$emit('update:modelValue', 'docker_exec')
+      await w.vm.$nextTick()
+      expect(w.findAllComponents(AppSelect)).toHaveLength(1)
+      const prepare = w.get('.tool-fields > button')
+      expect(prepare.text()).toBe('准备修改')
+      expect(prepare.attributes('disabled')).toBeDefined()
+      await w.get('input[aria-label="容器名称或 ID"]').setValue('web')
+      const editor = w.getComponent(AiOpsExecArgs)
+      await editor.get('input').setValue('sh')
+      const tokens = ['-c', `printf '%s\\n' "quoted"; echo $(date) & <tag>; exit 0`, '  literal spaces  ', '']
+      for (const [i, token] of tokens.entries()) {
+        await editor.get('.exec-add').trigger('click')
+        await editor.findAll('textarea')[i]!.setValue(token)
+      }
+      expect(prepare.attributes('disabled')).toBeUndefined()
+      await prepare.trigger('click')
+      expect(w.emitted('tool')).toEqual([['docker_exec', { container: 'web', argv: ['sh', ...tokens] }]])
+      await w.setProps({ tools: [{ toolId: 'docker_exec', mutation: false, schema: {} }] })
+      expect(prepare.text()).toBe('采集数据')
+    } finally { w.unmount() }
+  })
+  it('blocks invalid or busy exec forms and keeps lifecycle actions separate', async () => {
+    const w = mount(AiOpsComposer, {
+      props: {
+        draft: '', draftStatus: 'saved',
+        tools: [{ toolId: 'docker_exec', mutation: true, schema: {} }, { toolId: 'docker_action', mutation: true, schema: {} }],
+        disabled: false, active: false, modelAvailable: true, hasTargets: true, pending: false,
+      },
+    })
+    try {
+      w.getComponent(AppSelect).vm.$emit('update:modelValue', 'docker_exec')
+      await w.vm.$nextTick()
+      await w.get('input[aria-label="容器名称或 ID"]').setValue('web')
+      const editor = w.getComponent(AiOpsExecArgs)
+      const prepare = w.get('.tool-fields > button')
+      for (const argv of [[''], ['  '], ['sh', '\u6d4b'.repeat(683)], ['sh', 'a'.repeat(2048), 'b'.repeat(2047)], ['sh', 'a\0b'], ['sh', 'a\nb'], ['sh', 'a\tb'], ['sh', '\u0085'], ['sh', '\ud800'], ['sh', '\udfff'], ['.'], ['/bin/..'], ['dir/.'], ['dir/sub/..'], Array<string>(62).fill('x')]) {
+        editor.vm.$emit('update:argv', argv)
+        await w.vm.$nextTick()
+        expect(prepare.attributes('disabled')).toBeDefined()
+        await prepare.trigger('click')
+      }
+      expect(w.emitted('tool')).toBeUndefined()
+      editor.vm.$emit('update:argv', ['sh', '-c', 'echo ok'])
+      await w.vm.$nextTick()
+      for (const prop of ['disabled', 'active', 'pending'] as const) {
+        await w.setProps({ [prop]: true })
+        expect(prepare.attributes('disabled')).toBeDefined()
+        expect(editor.get('input').attributes('disabled')).toBeDefined()
+        await prepare.trigger('click')
+        await w.setProps({ [prop]: false })
+      }
+      await w.setProps({ hasTargets: false })
+      expect(prepare.attributes('disabled')).toBeDefined()
+      await w.setProps({ hasTargets: true })
+      w.findAllComponents(AppSelect)[0]!.vm.$emit('update:modelValue', 'docker_action')
+      await w.vm.$nextTick()
+      expect(w.findComponent(AiOpsExecArgs).exists()).toBe(false)
+      expect(w.findAllComponents(AppSelect)).toHaveLength(2)
+      await prepare.trigger('click')
+      expect(w.emitted('tool')).toEqual([['docker_action', { container: 'web', action: 'restart' }]])
+    } finally { w.unmount() }
+  })
+  it('displays and confirms full frozen exec argv as escaped text', async () => {
+    const argv = ['sh', '-c', `echo "quoted"; <img src=x onerror=alert(1)>; ${'x'.repeat(1800)}`, '']
+    const execCall: Call = { ...call, toolId: 'docker_exec', args: { container: call.object, argv } }
+    const batch: Confirmation = { ...confirmation, calls: [{ ...confirmation.calls[0]!, toolId: 'docker_exec' }] }
+    const w = mount(AiOpsConfirmation, { props: { confirmation: batch, calls: { c: execCall }, disabled: false } })
+    try {
+      expect(w.get('pre').text()).toBe(JSON.stringify(argv))
+      expect(w.find('img').exists()).toBe(false)
+      expect(w.text()).toContain(execCall.serverName)
+      expect(w.text()).toContain(execCall.serverId)
+      expect(w.text()).toContain(execCall.object)
+      expect(w.text()).toContain('可能修改数据或访问秘密')
+      expect(w.text()).toContain('不保证业务变更成功')
+      expect(w.get('.ops-primary').attributes('disabled')).toBeUndefined()
+      await w.get('.ops-primary').trigger('click')
+      expect(w.emitted('confirm')).toEqual([[batch]])
+    } finally { w.unmount() }
+  })
+  it.each(['toolId', 'callId', 'runId', 'serverId', 'object', 'argsHash', 'targetHash'] as const)(
+    'blocks exec approval when the frozen %s binding differs', async (field) => {
+      const execCall: Call = { ...call, toolId: 'docker_exec', args: { container: call.object, argv: ['sh', '-c', 'echo ok'] }, [field]: 'mismatch' }
+      const batch: Confirmation = { ...confirmation, calls: [{ ...confirmation.calls[0]!, toolId: 'docker_exec' }] }
+      const w = mount(AiOpsConfirmation, { props: { confirmation: batch, calls: { c: execCall }, disabled: false } })
+      try {
+        expect(w.get('.ops-primary').attributes('disabled')).toBeDefined()
+        expect(w.find('pre').exists()).toBe(false)
+        await w.get('.ops-primary').trigger('click')
+        expect(w.emitted('confirm')).toBeUndefined()
+      } finally { w.unmount() }
+    },
+  )
+  it('requires argv for exec instead of guessing from a lifecycle action', async () => {
+    const batch: Confirmation = { ...confirmation, calls: [{ ...confirmation.calls[0]!, toolId: 'docker_exec' }] }
+    const w = mount(AiOpsConfirmation, { props: { confirmation: batch, calls: { c: { ...call, toolId: 'docker_exec' } }, disabled: false } })
+    try {
+      expect(w.get('.ops-primary').attributes('disabled')).toBeDefined()
+      expect(w.find('pre').exists()).toBe(false)
+      await w.setProps({ calls: { c: { ...call, toolId: 'docker_exec', args: { container: call.object, argv: [] } } } })
+      expect(w.get('.ops-primary').attributes('disabled')).toBeDefined()
+      await w.get('.ops-primary').trigger('click')
+      expect(w.emitted('confirm')).toBeUndefined()
+    } finally { w.unmount() }
+  })
   it('switching sessions clears a previous rename edit', async () => {
     const w = mount(AiOpsSessionList, {
       props: {
@@ -124,7 +255,7 @@ describe('ops components', () => {
   })
   it.each(['unknown', 'interrupted'] as const)(
     'does not expose blind retry for %s',
-    (status) => {
+    async (status) => {
       const w = mount(AiOpsToolResult, {
         props: {
           call: { ...call, status },
@@ -132,6 +263,8 @@ describe('ops components', () => {
           modelAvailable: false,
         },
       })
+      ;(w.get('details').element as HTMLDetailsElement).open=true
+      await w.get('details').trigger('toggle')
       expect(w.find('[aria-label="仅重试此失败调用"]').exists()).toBe(false)
       expect(w.text()).toContain('远端影响尚未核实')
       expect(w.text()).toContain('Frozen server A')
@@ -163,6 +296,9 @@ describe('ops components', () => {
         modelAvailable: false,
       },
     })
+    expect(w.find('pre').exists()).toBe(false)
+    ;(w.get('details').element as HTMLDetailsElement).open=true
+    await w.get('details').trigger('toggle')
     expect(w.text()).toContain('512.0 MiB / 1.0 GiB')
     expect(w.text()).toContain('未取得指标')
     await w.get('[aria-label="复制"]').trigger('click')
@@ -209,44 +345,25 @@ describe('ops components', () => {
     expect(w.findAllComponents(AiOpsToolResult)).toHaveLength(1)
     await w
       .findAll('button')
-      .find((b) => b.text() === '复制')!
+      .find((b) => b.attributes('aria-label') === '复制')!
       .trigger('click')
     expect(w.emitted('copy')).toEqual([['rm -rf /example']])
     expect(w.emitted('execute')).toBeUndefined()
     w.unmount()
   })
-  it('analysis shows actual payload and destination; new previews reset checkbox', async () => {
-    const preview: Preview = {
-      callIds: ['c'],
-      items: [
-        {
-          callId: 'c',
-          targetAlias: 'target_0',
-          toolId: 'docker_logs',
-          output: 'actual output',
-          error: 'actual error',
-          status: 'failed',
-        },
-      ],
-      hash: 'hash',
-      provider: {
-        provider: 'configured-provider',
-        model: 'model',
-        configHash: 'config-hash',
-      },
-    }
-    const w = mount(AiOpsAnalysisConsent, {
-      props: { preview, calls: { c: call }, disabled: false },
-    })
-    expect(w.text()).toContain('actual output')
-    expect(w.text()).toContain('actual error')
-    expect(w.text()).toContain('configured-provider')
-    expect(w.get('.ops-primary').attributes('disabled')).toBeDefined()
-    await w.get('input').setValue(true)
-    await w.get('.ops-primary').trigger('click')
-    expect(w.emitted('approve')).toHaveLength(1)
-    await w.setProps({ preview: { ...preview, hash: 'new' } })
-    expect((w.get('input').element as HTMLInputElement).checked).toBe(false)
+  it('analysis needs no extra consent and never presents a paginated subset as a complete group', async () => {
+    const w=mount(AiOpsRunResults,{props:{runId:'r',calls:[{...call,status:'succeeded'}],disabled:false,modelAvailable:true}})
+    expect(w.text()).toContain('已加载项')
+    expect(w.find('input').exists()).toBe(false)
+    await w.get('[aria-label="分析已加载项"]').trigger('click')
+    expect(w.emitted('analyze')).toEqual([[['c']]])
+    await w.setProps({summary:{servers:[{serverId:'a',serverName:'A',missing:[],facts:[{callId:'c',toolId:'docker_logs',status:'succeeded',truncated:false},{callId:'unloaded',toolId:'host_processes',status:'succeeded',truncated:false}]}]}})
+    expect(w.text()).toContain('2/2')
+    expect(w.text()).not.toContain('已加载项')
+    await w.get('[aria-label="分析此服务器结果"]').trigger('click')
+    expect(w.emitted('analyze')?.at(-1)).toEqual([['c','unloaded']])
+    await w.get('[aria-label="分析整轮结果"]').trigger('click')
+    expect(w.emitted('analyzeRun')).toEqual([['r']])
     w.unmount()
   })
 })

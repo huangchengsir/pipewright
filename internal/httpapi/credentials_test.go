@@ -23,6 +23,63 @@ func testMasterKey() *[32]byte {
 	return &k
 }
 
+func TestRegistryHTTPIndependentFieldsAndMaskedEdits(t *testing.T) {
+	srv, client, csrf := setupVaultServer(t)
+	resp := doJSON(t, client, "POST", srv.URL+"/api/credentials", csrf, `{"name":"registry","type":"registry","username":"alice","secret":" colon:password "}`)
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	var c credentialDTO
+	if resp.StatusCode != 201 || json.Unmarshal(raw, &c) != nil || c.Username != "alice" || strings.Contains(string(raw), "colon:password") {
+		t.Fatal(resp.StatusCode, string(raw))
+	}
+	resp = doJSON(t, client, "PATCH", srv.URL+"/api/credentials/"+c.ID, csrf, `{"username":"bob","secret":""}`)
+	raw, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || strings.Contains(string(raw), "colon:password") {
+		t.Fatal(resp.StatusCode, string(raw))
+	}
+	resp = doJSON(t, client, "PATCH", srv.URL+"/api/credentials/"+c.ID, csrf, `{"username":""}`)
+	raw, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || json.Unmarshal(raw, &c) != nil || c.Username != "" || strings.Contains(string(raw), "colon:password") {
+		t.Fatal(resp.StatusCode, string(raw))
+	}
+	resp = doJSON(t, client, "POST", srv.URL+"/api/credentials", csrf, `{"name":"invalid","type":"registry","username":"bad:user","secret":"private"}`)
+	raw, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 400 || strings.Contains(string(raw), "private") {
+		t.Fatal(resp.StatusCode, string(raw))
+	}
+}
+
+func TestCredentialConcurrentUpdateErrorIsConflict(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeVaultError(w, vault.ErrConflict)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `"credential_conflict"`) {
+		t.Fatal(w.Code, w.Body.String())
+	}
+}
+
+func TestRegistryCreateExplicitEmptyUsernameDoesNotExposeTokenPrefix(t *testing.T) {
+	srv, client, csrf := setupVaultServer(t)
+	resp := doJSON(t, client, "POST", srv.URL+"/api/credentials", csrf, `{"name":"token","type":"registry","username":"","secret":"private:token"}`)
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	var c credentialDTO
+	if resp.StatusCode != 201 || json.Unmarshal(raw, &c) != nil || c.Username != "" || strings.Contains(string(raw), "private") {
+		t.Fatal(resp.StatusCode, string(raw))
+	}
+	resp, err := client.Get(srv.URL + "/api/credentials")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ = io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 || strings.Contains(string(raw), "private") {
+		t.Fatal(resp.StatusCode, string(raw))
+	}
+}
+
 // setupVaultServer 构造带认证 + 凭据保险库的测试 server。
 func setupVaultServer(t *testing.T) (*httptest.Server, *http.Client, string) {
 	t.Helper()

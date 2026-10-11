@@ -70,7 +70,11 @@ func opsHandler(s *opschat.Service, operation string) http.HandlerFunc {
 		switch operation {
 		case "list", "entries":
 			key := "before"
-			if err = opsQuery(r, key, "limit"); err != nil {
+			keys := []string{key, "limit"}
+			if operation == "list" {
+				keys = append(keys, "context")
+			}
+			if err = opsQuery(r, keys...); err != nil {
 				break
 			}
 			limit := 0
@@ -82,7 +86,7 @@ func opsHandler(s *opschat.Service, operation string) http.HandlerFunc {
 				}
 			}
 			if operation == "list" {
-				value, err = s.List(r.Context(), r.URL.Query().Get(key), limit)
+				value, err = s.ListContext(r.Context(), r.URL.Query().Get(key), limit, r.URL.Query().Get("context"))
 			} else {
 				value, err = s.Entries(r.Context(), id, r.URL.Query().Get(key), limit)
 			}
@@ -107,15 +111,18 @@ func opsHandler(s *opschat.Service, operation string) http.HandlerFunc {
 				err = s.Delete(r.Context(), id)
 			}
 			status = http.StatusNoContent
-		case "activate", "cancel", "reissue":
+		case "activate":
+			var in opschat.ActivateInput
+			if err = opsDecode(w, r, &in, true); err == nil {
+				err = s.ActivateContext(r.Context(), id, in.Context)
+				value = map[string]bool{"ok": true}
+			}
+		case "cancel", "reissue":
 			var empty struct{}
 			if err = opsDecode(w, r, &empty, true); err != nil {
 				break
 			}
 			switch operation {
-			case "activate":
-				err = s.Activate(r.Context(), id)
-				value = map[string]bool{"ok": true}
 			case "cancel":
 				value, err = s.Cancel(r.Context(), id, chi.URLParam(r, "runId"))
 				status = http.StatusAccepted

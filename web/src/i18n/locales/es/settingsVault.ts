@@ -1,4 +1,8 @@
 export default {
+  registryUsername: 'Usuario del registro',
+  registryPassword: 'Contraseña o token',
+  registryUsernameOptional: 'Opcional; vacío conserva tokens existentes',
+  invalidRegistryUsername: 'El usuario no puede contener dos puntos ni caracteres de control',
   title: 'Bóveda de credenciales',
   desc: 'Todos los secretos se cifran con NaCl secretbox y se almacenan en esta instancia, enmascarados en reposo. Mostrar el texto plano es una acción explícita y auditada aquí. Las canalizaciones los referencian por ámbito y nunca llegan a los registros ni al contexto de diagnóstico.',
   addCredential: 'Añadir credencial',

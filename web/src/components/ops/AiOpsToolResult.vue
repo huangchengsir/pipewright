@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Copy, Refresh, Stars, Terminal2 } from '@vicons/tabler'
 import type { Call } from '../../api/opsChat'
@@ -15,7 +15,9 @@ const emit = defineEmits<{
   terminal: [serverId: string]
 }>()
 const { t } = useI18n()
+const expanded=shallowRef(false)
 const retryable = computed(() =>
+  props.call.toolId !== 'docker_exec' &&
   ['failed', 'partial_failed'].includes(props.call.status),
 )
 const copyable = computed(
@@ -41,7 +43,9 @@ const bytes = (n: number): string =>
     : (n / 1048576).toFixed(1) + ' MiB'
 </script>
 <template>
-  <article class="result" :data-call-id="call.callId">
+  <details class="result" :data-call-id="call.callId" @toggle="expanded=($event.target as HTMLDetailsElement).open">
+    <summary class="ops-row result-summary"><span class="ops-grow ops-wrap">{{t('opsChat.tools.'+call.toolId)}}</span><span class="result-status">{{t('opsChat.status.'+call.status)}}</span><span v-if="call.truncated" class="ops-muted">{{t('opsChat.truncated')}}</span></summary>
+    <template v-if="expanded">
     <header class="ops-row">
       <strong class="ops-grow ops-wrap">{{
         call.serverName || call.serverId
@@ -66,6 +70,7 @@ const bytes = (n: number): string =>
           : ''
       }}{{ call.object }}
     </p>
+    <pre v-if="call.toolId === 'docker_exec' && call.args.argv" class="ops-pre exec-argv" :aria-label="t('opsChat.tools.docker_exec')">{{ JSON.stringify(call.args.argv) }}</pre>
     <div v-if="call.resources" class="metrics">
       <p v-if="call.resources.load">
         {{ t('opsChat.load') }}: {{ call.resources.load.one }} /
@@ -149,19 +154,18 @@ const bytes = (n: number): string =>
         <Terminal2 />
       </button>
     </footer>
-  </article>
+    </template>
+  </details>
 </template>
 <style scoped src="./opsChat.css"></style>
 <style scoped>
 .result {
-  border: 1px solid var(--color-border-strong);
-  border-radius: 8px;
-  padding: 12px;
+  border-bottom: 1px solid var(--color-border);
+  padding: 8px 0;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
 }
+.result-summary { cursor: pointer; min-height: 28px; }
+.result > :not(summary) { margin-top: 8px; }
 .result p {
   margin: 0;
   line-height: 1.6;

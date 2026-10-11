@@ -59,6 +59,49 @@ func TestAIGetLazyDefault(t *testing.T) {
 	}
 }
 
+func TestAIModelsAuthenticatedDraftAndStrictBody(t *testing.T) {
+	requests := 0
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path != "/api/v1/models" || r.Header.Get("Authorization") != "Bearer test-draft-key" {
+			t.Error("incorrect draft destination or auth")
+		}
+		w.Write([]byte(`{"data":[{"id":"custom/id"}]}`))
+	}))
+	defer provider.Close()
+	srv, client, csrf := setupAIServer(t, provider.Client())
+	body := `{"provider":"openai","baseUrl":"` + provider.URL + `/api/v1","apiKey":"test-draft-key"}`
+	for _, token := range []string{"", csrf} {
+		resp := doJSON(t, client, "POST", srv.URL+"/api/settings/ai/models", token, body)
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if token == "" {
+			if resp.StatusCode != 403 {
+				t.Fatal(resp.StatusCode)
+			}
+			continue
+		}
+		if resp.StatusCode != 200 || !strings.Contains(string(raw), "custom/id") || strings.Contains(string(raw), "test-draft-key") {
+			t.Fatal(resp.StatusCode, string(raw))
+		}
+	}
+	for _, invalid := range []string{body + `{}`, `{"unknown":true}`} {
+		resp := doJSON(t, client, "POST", srv.URL+"/api/settings/ai/models", csrf, invalid)
+		resp.Body.Close()
+		if resp.StatusCode != 400 {
+			t.Fatal(resp.StatusCode)
+		}
+	}
+	resp, err := http.Post(srv.URL+"/api/settings/ai/models", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 401 || requests != 1 {
+		t.Fatal(resp.StatusCode, requests)
+	}
+}
+
 func TestAIPutClaudeMaskedNoPlaintext(t *testing.T) {
 	srv, client, csrf := setupAIServer(t, nil)
 	body := `{"provider":"claude","model":"claude-sonnet-4","apiKey":"sk-ant-PLAINTEXT-abcd","budget":{"monthlyTokenLimit":1000},"enabled":true}`

@@ -18,6 +18,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // maxLLMRespBytes 是 LLM 响应体读取上限(防异常大响应吃内存)。
@@ -146,7 +147,12 @@ func (s *service) chat(ctx context.Context, provider, baseURL, model, apiKey, pr
 // chatWithTokens 同 chat,但允许调用方指定 claude 的 max_tokens(openai/ollama 沿用其默认)。
 // 复用同一套 per-provider 请求构造 / 响应解析 / 错误脱敏逻辑(供风险标注等较短回包场景调小)。
 func (s *service) chatWithTokens(ctx context.Context, provider, baseURL, model, apiKey, prompt string, maxTokens int) (string, error) {
-	base := strings.TrimRight(baseURL, "/")
+	return (&opsModel{service: s}).chatWithTokens(ctx, provider, baseURL, model, apiKey, prompt, maxTokens)
+}
+
+func (m *opsModel) chatWithTokens(ctx context.Context, provider, baseURL, model, apiKey, prompt string, maxTokens int) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
 
 	var (
 		endpoint string
@@ -157,7 +163,7 @@ func (s *service) chatWithTokens(ctx context.Context, provider, baseURL, model, 
 
 	switch provider {
 	case ProviderClaude:
-		endpoint = base + "/v1/messages"
+		endpoint = apiEndpoint(provider, baseURL, "messages")
 		header["x-api-key"] = apiKey
 		header["anthropic-version"] = "2023-06-01"
 		body, err = json.Marshal(map[string]any{
@@ -168,7 +174,7 @@ func (s *service) chatWithTokens(ctx context.Context, provider, baseURL, model, 
 			},
 		})
 	case ProviderOpenAI:
-		endpoint = base + "/v1/chat/completions"
+		endpoint = apiEndpoint(provider, baseURL, "chat/completions")
 		header["Authorization"] = "Bearer " + apiKey
 		body, err = json.Marshal(map[string]any{
 			"model": model,
@@ -177,7 +183,7 @@ func (s *service) chatWithTokens(ctx context.Context, provider, baseURL, model, 
 			},
 		})
 	case ProviderOllama:
-		endpoint = base + "/api/chat"
+		endpoint = apiEndpoint(provider, baseURL, "chat")
 		body, err = json.Marshal(map[string]any{
 			"model":  model,
 			"stream": false,
@@ -200,7 +206,12 @@ func (s *service) chatWithTokens(ctx context.Context, provider, baseURL, model, 
 		req.Header.Set(k, v)
 	}
 
-	resp, err := s.client.Do(req)
+	client, cleanup, pinErr := m.pinnedClient(ctx, baseURL)
+	if pinErr != nil {
+		return "", fmt.Errorf("%w: endpoint is not allowed or DNS resolution failed", ErrGenerateFailed)
+	}
+	defer cleanup()
+	resp, err := client.Do(req)
 	if err != nil {
 		// 绝不回显底层错误(可能含 endpoint/凭据细节)。
 		return "", fmt.Errorf("%w: %s", ErrGenerateFailed, mapTransportError(err))

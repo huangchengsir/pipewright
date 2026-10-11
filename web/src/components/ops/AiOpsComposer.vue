@@ -3,7 +3,8 @@ import { computed, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Send, PlayerStop, Refresh } from '@vicons/tabler'
 import AppSelect from '../ui/AppSelect.vue'
-import { utf8Bytes, type Tool, type ToolArgs } from '../../api/opsChat'
+import AiOpsExecArgs from './AiOpsExecArgs.vue'
+import { isValidExecArgv, utf8Bytes, type Tool, type ToolArgs } from '../../api/opsChat'
 const props = defineProps<{
   draft: string
   draftStatus: string
@@ -29,12 +30,22 @@ const toolId = shallowRef('host_resources'),
   object = shallowRef(''),
   lines = shallowRef('200'),
   action = shallowRef('restart')
+const execArgv = shallowRef<string[]>([''])
+const exec = computed(() => toolId.value === 'docker_exec')
 const needsContainer = computed(() =>
-  ['docker_inspect', 'docker_logs', 'docker_action'].includes(toolId.value),
+  ['docker_inspect', 'docker_logs', 'docker_action', 'docker_exec'].includes(toolId.value),
 )
 const needsUnit = computed(() => toolId.value.startsWith('systemd_'))
 const needsLines = computed(() => toolId.value.endsWith('_logs'))
-const mutation = computed(() => toolId.value.endsWith('_action'))
+const selectedTool = computed(() => props.tools.find((tool) => tool.toolId === toolId.value))
+const mutation = computed(() => selectedTool.value?.mutation ?? false)
+const needsAction = computed(() => ['docker_action', 'systemd_action'].includes(toolId.value))
+const formBusy = computed(() => props.disabled || props.active || props.pending)
+const toolDisabled = computed(() =>
+  formBusy.value || !props.hasTargets || !selectedTool.value ||
+  ((needsContainer.value || needsUnit.value) && !object.value.trim()) ||
+  (exec.value && !isValidExecArgv(execArgv.value)),
+)
 const catalogue = computed(() =>
   props.tools.map((tool) => ({
     value: tool.toolId,
@@ -48,12 +59,13 @@ const actions = computed(() =>
   ).map((value) => ({ value, label: t('opsChat.actions.' + value) })),
 )
 function run(): void {
-  if (!props.tools.some((tool) => tool.toolId === toolId.value)) return
+  if (toolDisabled.value) return
   const args: ToolArgs = {}
   if (needsContainer.value) args.container = object.value.trim()
   if (needsUnit.value) args.unit = object.value.trim()
   if (needsLines.value) args.lines = Number(lines.value)
-  if (mutation.value) args.action = action.value
+  if (needsAction.value) args.action = action.value
+  if (exec.value) args.argv = [...execArgv.value]
   emit('tool', toolId.value, args)
 }
 </script>
@@ -78,15 +90,26 @@ function run(): void {
           maxlength="256"
           :placeholder="t(needsUnit ? 'opsChat.unit' : 'opsChat.container')"
           :aria-label="t(needsUnit ? 'opsChat.unit' : 'opsChat.container')"
+          :disabled="formBusy"
         />
+        <AiOpsExecArgs
+          v-if="exec"
+          :argv="execArgv"
+          :disabled="formBusy"
+          @update:argv="execArgv = $event"
+        />
+        <p v-if="exec && !isValidExecArgv(execArgv)" class="ops-error" role="status">
+          {{ t('opsChat.exec.invalidArgs') }}
+        </p>
         <AppSelect
-          v-if="mutation"
+          v-if="needsAction"
           v-model="action"
           :options="actions"
           :aria-label="t('opsChat.action')"
           min-width="100%"
           height="36px"
           portal
+          :disabled="formBusy"
         />
         <AppSelect
           v-if="needsLines"
@@ -104,13 +127,7 @@ function run(): void {
         />
         <button
           class="ops-btn"
-          :disabled="
-            disabled ||
-            active ||
-            pending ||
-            !hasTargets ||
-            ((needsContainer || needsUnit) && !object.trim())
-          "
+          :disabled="toolDisabled"
           @click="run"
         >
           {{ t(mutation ? 'opsChat.prepareBatch' : 'opsChat.collect') }}
@@ -119,6 +136,9 @@ function run(): void {
     </details>
     <p v-if="!modelAvailable" class="ops-muted">
       {{ t('opsChat.modelUnavailable') }}
+    </p>
+    <p v-if="!hasTargets" class="ops-muted" role="status">
+      {{ t('opsChat.noTargets') }}
     </p>
     <div class="input-row">
       <textarea
@@ -137,10 +157,11 @@ function run(): void {
           active ||
           pending ||
           !modelAvailable ||
+          !hasTargets ||
           !draft.trim() ||
           utf8Bytes(draft) > 8192
         "
-        :title="t('opsChat.send')"
+        :title="t(hasTargets ? 'opsChat.send' : 'opsChat.noTargets')"
         :aria-label="t('opsChat.send')"
         @click="emit('send')"
       >
@@ -217,6 +238,12 @@ function run(): void {
   max-height: 140px;
   flex: 1;
   line-height: 1.5;
+}
+@media (max-width: 600px) {
+  .composer input,
+  .composer textarea {
+    font-size: 16px;
+  }
 }
 .composer p {
   margin: 0;

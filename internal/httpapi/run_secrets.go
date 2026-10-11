@@ -65,13 +65,16 @@ func (s *RunSecretSource) registerProjectSecrets(ctx context.Context, m *mask.Ma
 	if s.vault == nil {
 		return
 	}
-	reveal := func(credID string) {
+	reveal := func(credID string, registry ...bool) {
 		if credID == "" {
 			return
 		}
 		// Reveal:解密取明文但不刷新 last_used_at(脱敏登记非「使用」)。失败静默跳过。
 		if pt, err := s.vault.Reveal(credID); err == nil && pt != "" {
 			m.RegisterSecret(pt)
+			if len(registry) > 0 && registry[0] {
+				m.RegisterRegistrySecret(pt)
+			}
 		}
 	}
 
@@ -96,7 +99,7 @@ func (s *RunSecretSource) registerProjectSecrets(ctx context.Context, m *mask.Ma
 						reveal(v.CredentialID)
 					}
 				}
-				reveal(e.ImageRegistry.CredentialID)
+				reveal(e.ImageRegistry.CredentialID, true)
 			}
 			// ③ 自定义脚本步骤(Epic 8)的 secret env 引用。
 			for _, step := range st.Steps {

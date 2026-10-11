@@ -258,6 +258,10 @@ function validateForm(): boolean {
     formErrors.value.secret = t('settingsVault.valSecretRequired')
     ok = false
   }
+  if (form.value.type === 'registry' && /[:\x00-\x1f\x7f-\x9f]/.test(form.value.username)) {
+    formBanner.value = t('settingsVault.invalidRegistryUsername')
+    ok = false
+  }
   return ok
 }
 
@@ -698,9 +702,9 @@ async function toggleEditReveal(): Promise<void> {
           </div>
 
           <!-- Secret — password type, never echoed back -->
-          <div v-if="form.type === 'git_token' || form.type === 'git_http'" class="field">
+          <div v-if="form.type === 'git_token' || form.type === 'git_http' || form.type === 'registry'" class="field">
             <label class="field-label" for="cred-username">
-              {{ t('settingsVault.fieldGitUsername') }}
+              {{ t(form.type === 'registry' ? 'settingsVault.registryUsername' : 'settingsVault.fieldGitUsername') }}
               <span class="field-optional">{{ t('settingsVault.optional') }}</span>
             </label>
             <input
@@ -712,13 +716,13 @@ async function toggleEditReveal(): Promise<void> {
               :disabled="formSubmitting"
               autocomplete="username"
             />
-            <span class="field-hint">{{ t('settingsVault.hintGitUsername') }}</span>
+            <span class="field-hint">{{ t(form.type === 'registry' ? 'settingsVault.registryUsernameOptional' : 'settingsVault.hintGitUsername') }}</span>
           </div>
 
           <div class="field">
             <div class="field-label-row">
               <label class="field-label" for="cred-secret">
-                {{ modalMode === 'add' && form.type === 'git_http' ? t('settingsVault.fieldSecretGitHttp') : (modalMode === 'add' ? t('settingsVault.fieldSecret') : t('settingsVault.fieldSecretNew')) }}
+                {{ form.type === 'registry' ? t('settingsVault.registryPassword') : (modalMode === 'add' && form.type === 'git_http' ? t('settingsVault.fieldSecretGitHttp') : (modalMode === 'add' ? t('settingsVault.fieldSecret') : t('settingsVault.fieldSecretNew'))) }}
                 <span v-if="modalMode === 'edit'" class="field-optional">{{ t('settingsVault.secretOptionalEdit') }}</span>
               </label>
               <!-- Reveal current plaintext (edit only; audited server-side) -->

@@ -3,6 +3,7 @@ package opschat
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -122,6 +123,9 @@ func (s *Service) run(ctx context.Context, q querier, session, id string) (runRe
 	r.View.CancelRequested = canceled != 0
 	r.View.CreatedAt = time.UnixMilli(created).UTC()
 	err = s.open(b, &r.Body)
+	if r.Body.Analysis != nil || r.Body.AnalysisStarted {
+		r.View.Phase = "analysis"
+	}
 	return r, err
 }
 func (s *Service) saveRun(ctx context.Context, tx *sql.Tx, r runRecord) error {
@@ -189,9 +193,11 @@ func (s *Service) approval(ctx context.Context, q querier, session, run string) 
 func (s *Service) append(ctx context.Context, tx *sql.Tx, e Entry, visible, allowed bool) error {
 	e.CreatedAt = time.Now().UTC()
 	b, err := s.seal(struct {
-		Text   string
-		Status string
-	}{e.Text, e.Status})
+		Text    string
+		Status  string
+		Summary *RunSummary
+		RefSeq  int64
+	}{e.Text, e.Status, e.Summary, e.ReplaceSeq})
 	if err != nil {
 		return err
 	}
@@ -203,6 +209,10 @@ func (s *Service) append(ctx context.Context, tx *sql.Tx, e Entry, visible, allo
 		a = 1
 	}
 	size := len(e.Text)
+	if e.Summary != nil {
+		encoded, _ := json.Marshal(e.Summary)
+		size += len(encoded)
+	}
 	if _, err = tx.ExecContext(ctx, `UPDATE ops_chat_sessions SET seq=seq+1,visible_count=visible_count+?,body_bytes=body_bytes+?,updated_at=? WHERE id=?`, v, size, e.CreatedAt.UnixMilli(), e.SessionID); err != nil {
 		return ErrStorage
 	}
@@ -220,16 +230,28 @@ func (s *Service) append(ctx context.Context, tx *sql.Tx, e Entry, visible, allo
 	return databaseError(err)
 }
 func (s *Service) finishTx(ctx context.Context, tx *sql.Tx, r runRecord, status string) error {
+	if err := s.interruptReplies(ctx, tx, r); err != nil {
+		return err
+	}
+	if err := s.summaryTx(ctx, tx, &r); err != nil {
+		return err
+	}
 	if !terminal(r.View.Status) && (status == Failed || status == Interrupted && r.View.Status == Planning) {
-		text := "Operation could not be completed."
-		if r.View.Status == Planning {
-			text = "Planning could not be completed."
-			if r.Body.Analysis != nil {
-				text = "Analysis could not be completed."
-			}
+		var replies int
+		if tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM ops_chat_entries WHERE session_id=? AND run_id=? AND kind IN ('assistant','analysis') AND visible=1 AND body_size>0", r.View.SessionID, r.View.ID).Scan(&replies) != nil {
+			return ErrStorage
 		}
-		if err := s.append(ctx, tx, Entry{SessionID: r.View.SessionID, RunID: r.View.ID, Kind: "assistant", Text: text, Status: status}, true, false); err != nil {
-			return err
+		if replies == 0 {
+			text := "Operation could not be completed."
+			if r.View.Status == Planning {
+				text = "Planning could not be completed."
+				if r.Body.Analysis != nil {
+					text = "Analysis could not be completed."
+				}
+			}
+			if err := s.append(ctx, tx, Entry{SessionID: r.View.SessionID, RunID: r.View.ID, Kind: "assistant", Text: text, Status: status}, true, false); err != nil {
+				return err
+			}
 		}
 	}
 	r.View.Status = status
@@ -251,4 +273,8 @@ func terminal(status string) bool {
 	}
 	return false
 }
-func activeBudget(r sessionRecord) bool { return r.Count+27 <= 2000 }
+func activeBudget(r sessionRecord) bool {
+	// Reserve calls across both plans, user, two replies, three fallback
+	// notices, analysis reply/error, planning error, summary, terminal feedback.
+	return r.Count+resourceLimits.Calls+11 <= resourceLimits.Entries
+}

@@ -46,10 +46,14 @@ func (s *Service) open(b []byte, v any) error {
 	return nil
 }
 func strict(b []byte, v any) error {
+	return strictWithLimit(b, v, 8<<10)
+}
+
+func strictWithLimit(b []byte, v any, limit int) error {
 	if len(b) == 0 {
 		b = []byte("{}")
 	}
-	if len(b) > 8<<10 || !bytes.HasPrefix(bytes.TrimSpace(b), []byte("{")) {
+	if len(b) > limit || !bytes.HasPrefix(bytes.TrimSpace(b), []byte("{")) {
 		return ErrInvalid
 	}
 	// Duplicate keys are rejected as well as unknown fields.
@@ -125,6 +129,9 @@ func (s *Service) registerSecrets() error {
 			return ErrDecrypt
 		}
 		s.masker.RegisterSecret(val)
+		if c.Type == vault.TypeRegistry {
+			s.masker.RegisterRegistrySecret(val)
+		}
 	}
 	return nil
 }

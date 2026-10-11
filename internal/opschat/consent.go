@@ -13,6 +13,9 @@ func bound(c Call) BoundCall {
 }
 
 func mutationCommand(argv []string) bool {
+	if len(argv) >= 4 && argv[0] == "docker" && argv[1] == "exec" {
+		return true
+	}
 	if len(argv) != 3 || (argv[0] != "docker" && argv[0] != "systemctl") {
 		return false
 	}
@@ -203,6 +206,9 @@ func validProvider(p ProviderInfo) bool {
 	return p.Provider != "" && p.Model != "" && len(p.Provider) <= 256 && len(p.Model) <= 256 && len(p.ConfigHash) == 64
 }
 func (s *Service) AnalysisPreview(ctx context.Context, id string, ids []string) (*AnalysisPreview, error) {
+	return s.analysisPreview(ctx, id, ids, "")
+}
+func (s *Service) analysisPreview(ctx context.Context, id string, ids []string, ownRun string) (*AnalysisPreview, error) {
 	if err := s.registerSecrets(); err != nil {
 		return nil, err
 	}
@@ -220,6 +226,7 @@ func (s *Service) AnalysisPreview(ctx context.Context, id string, ids []string) 
 	seen := map[string]bool{}
 	size := 0
 	aliases := map[string]string{}
+	targetHashes := map[string]string{}
 	err := s.transaction(ctx, false, func(tx *sql.Tx) error {
 		if _, e := s.session(ctx, tx, id); e != nil {
 			return e
@@ -238,15 +245,23 @@ func (s *Service) AnalysisPreview(ctx context.Context, id string, ids []string) 
 			if e := s.open(b, &c); e != nil {
 				return e
 			}
-			if !terminal(status) || c.View.CollectedAt == nil {
+			if !terminal(status) {
 				return ErrConflict
 			}
+			r, e := s.run(ctx, tx, id, c.View.RunID)
+			if e != nil {
+				return e
+			}
+			if !terminal(r.View.Status) && (ownRun != r.View.ID || !r.Body.AnalysisStarted || r.View.Status != Running) {
+				return ErrConflict
+			}
+			targetHashes[c.View.ServerID] = c.View.TargetHash
 			alias, ok := aliases[c.View.ServerID]
 			if !ok {
 				alias = "target_" + string(rune('A'+len(aliases)))
 				aliases[c.View.ServerID] = alias
 			}
-			item := AnalysisItem{CallID: cid, TargetAlias: alias, ToolID: c.View.ToolID, Output: c.View.Output, Error: c.View.Error, Status: status}
+			item := AnalysisItem{CallID: cid, TargetAlias: alias, ToolID: c.View.ToolID, Output: c.View.Output, Error: c.View.Error, Status: status, Truncated: c.View.Truncated, CollectedAt: c.View.CollectedAt, ExitCode: c.View.ExitCode}
 			if c.View.Resources != nil {
 				encoded, _ := json.Marshal(c.View.Resources)
 				item.Output = string(encoded)
@@ -265,6 +280,15 @@ func (s *Service) AnalysisPreview(ctx context.Context, id string, ids []string) 
 	if err != nil {
 		return nil, err
 	}
+	for server, hash := range targetHashes {
+		if s.executor == nil {
+			return nil, ErrUnavailable
+		}
+		snap, err := s.executor.Capture(ctx, server)
+		if err != nil || snap.Fingerprint() != hash {
+			return nil, ErrConsent
+		}
+	}
 	out.Hash = digest(struct {
 		SessionID string
 		CallIDs   []string
@@ -277,7 +301,7 @@ func (s *Service) Analyze(ctx context.Context, id string, in AnalysisInput) (*Ru
 	if err := s.ready(); err != nil {
 		return nil, err
 	}
-	if !in.Consent || !validID(in.ClientRequestID) {
+	if (!in.Consent && !in.AnalyzeResults) || !validID(in.ClientRequestID) {
 		return nil, ErrConsent
 	}
 	hash := digest(in)
@@ -287,13 +311,61 @@ func (s *Service) Analyze(ctx context.Context, id string, in AnalysisInput) (*Ru
 	if err := s.registerSecrets(); err != nil {
 		return nil, err
 	}
-	preview, err := s.AnalysisPreview(ctx, id, in.CallIDs)
+	ids := in.CallIDs
+	question := ""
+	if in.RunID != "" {
+		if len(ids) > 0 {
+			return nil, ErrInvalid
+		}
+		r, err := s.run(ctx, s.db, id, in.RunID)
+		if err != nil {
+			return nil, err
+		}
+		if !terminal(r.View.Status) {
+			return nil, ErrConflict
+		}
+		question = r.Body.Question
+		if question == "" {
+			question = r.Body.Turn.Text
+		}
+		calls, err := s.calls(ctx, s.db, id, in.RunID)
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range calls {
+			ids = append(ids, c.Body.View.ID)
+		}
+	} else {
+		// Explicit IDs must belong to one completed source turn, never mixed turns.
+		source := ""
+		for _, cid := range ids {
+			c, err := s.call(ctx, s.db, id, cid)
+			if err != nil {
+				return nil, err
+			}
+			if source != "" && source != c.Body.View.RunID {
+				return nil, ErrInvalid
+			}
+			source = c.Body.View.RunID
+		}
+		if source != "" {
+			r, err := s.run(ctx, s.db, id, source)
+			if err != nil {
+				return nil, err
+			}
+			question = r.Body.Question
+			if question == "" {
+				question = r.Body.Turn.Text
+			}
+		}
+	}
+	preview, err := s.AnalysisPreview(ctx, id, ids)
 	if err != nil {
 		return nil, err
 	}
-	if preview.Hash != in.PreviewHash || preview.Provider != in.Provider {
+	if (in.PreviewHash != "" && preview.Hash != in.PreviewHash) || preview.Provider != in.Provider || (!in.AnalyzeResults && in.PreviewHash == "") {
 		return nil, ErrConsent
 	}
 	preview.Items = nil // Only references and permission persist; result text has a single owner.
-	return s.enqueue(ctx, id, in.ClientRequestID, hash, runBody{Analysis: preview}, in.Revision)
+	return s.enqueue(ctx, id, in.ClientRequestID, hash, runBody{Analysis: preview, Provider: preview.Provider, Question: question}, in.Revision)
 }

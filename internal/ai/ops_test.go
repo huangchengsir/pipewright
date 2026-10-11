@@ -218,7 +218,7 @@ func TestOpsRedirectDoesNotForwardDataOrCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := NewOpsModel(svc, mask.NewMasker())
-	if _, err := m.Plan(ctx(), opsRequest()); err != ErrGenerateFailed || destinationCalls.Load() != 0 || client.CheckRedirect != nil {
+	if _, err := m.Plan(ctx(), opsRequest()); !errors.Is(err, ErrGenerateFailed) || destinationCalls.Load() != 0 || client.CheckRedirect != nil {
 		t.Fatal(err, destinationCalls.Load())
 	}
 }
@@ -272,7 +272,7 @@ func TestOpsAddressAndPostMaskBounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.chat(ctx(), cfg, secret, "prompt", 500); err != ErrGenerateFailed {
+	if _, err := m.chat(ctx(), cfg, secret, "prompt", 500); !errors.Is(err, ErrGenerateFailed) {
 		t.Fatal("post-mask expanded output accepted", err)
 	}
 }
@@ -329,7 +329,7 @@ func TestOpsEnvelopeOutputBoundsAndSanitizedFailures(t *testing.T) {
 				in.MaxResponseBytes = 8
 			}
 			_, err := m.Plan(context.Background(), in)
-			if err != ErrGenerateFailed {
+			if !errors.Is(err, ErrGenerateFailed) {
 				t.Fatal(err)
 			}
 		})

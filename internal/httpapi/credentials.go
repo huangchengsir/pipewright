@@ -49,6 +49,8 @@ func writeVaultError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusServiceUnavailable, "vault_unconfigured", "保险库未配置 master key")
 	case errors.Is(err, vault.ErrNotFound):
 		writeError(w, http.StatusNotFound, "credential_not_found", "凭据不存在")
+	case errors.Is(err, vault.ErrConflict):
+		writeError(w, http.StatusConflict, "credential_conflict", "凭据已被其他操作修改,请刷新后重试")
 	case errors.Is(err, vault.ErrCredentialInUse):
 		writeError(w, http.StatusConflict, "credential_in_use", "凭据正被项目或流水线配置引用,无法删除;请先解除引用")
 	case errors.Is(err, vault.ErrInvalidType):
@@ -57,6 +59,8 @@ func writeVaultError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, "invalid_credential", "secret 不能为空")
 	case errors.Is(err, vault.ErrEmptyName):
 		writeError(w, http.StatusBadRequest, "invalid_credential", "name 不能为空")
+	case errors.Is(err, vault.ErrInvalidUsername):
+		writeError(w, http.StatusBadRequest, "invalid_credential", "Registry username cannot contain colons or control characters.")
 	default:
 		// 包含 ErrDecrypt 等内部错误:不泄漏细节。
 		writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
@@ -93,22 +97,27 @@ func makeCreateCredentialHandler(v vault.Vault, aud audit.Recorder) http.Handler
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 私钥可能较大,放宽到 1MB
 		var req struct {
-			Name     string `json:"name"`
-			Type     string `json:"type"`
-			Scope    string `json:"scope"`
-			Username string `json:"username"`
-			Secret   string `json:"secret"`
+			Name     string  `json:"name"`
+			Type     string  `json:"type"`
+			Scope    string  `json:"scope"`
+			Username *string `json:"username"`
+			Secret   string  `json:"secret"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
 			return
 		}
+		username := ""
+		if req.Username != nil {
+			username = *req.Username
+		}
 		cred, err := v.Create(vault.CreateInput{
-			Name:     req.Name,
-			Type:     req.Type,
-			Scope:    req.Scope,
-			Username: req.Username,
-			Secret:   req.Secret,
+			Name:             req.Name,
+			Type:             req.Type,
+			Scope:            req.Scope,
+			Username:         username,
+			UsernameProvided: req.Username != nil,
+			Secret:           req.Secret,
 		})
 		if err != nil {
 			writeVaultError(w, err)

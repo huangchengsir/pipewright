@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 )
@@ -40,7 +41,9 @@ var (
 	// ErrEmptySecret 表示创建/轮换时 secret 为空。
 	ErrEmptySecret = errors.New("vault: secret must not be empty")
 	// ErrEmptyName 表示名称为空。
-	ErrEmptyName = errors.New("vault: name must not be empty")
+	ErrEmptyName       = errors.New("vault: name must not be empty")
+	ErrInvalidUsername = errors.New("vault: invalid registry username")
+	ErrConflict        = errors.New("vault: credential changed concurrently")
 	// ErrCredentialInUse 表示凭据正被项目/流水线配置引用,不可删除(防悬挂引用)。
 	ErrCredentialInUse = errors.New("vault: credential in use")
 )
@@ -64,6 +67,8 @@ type CreateInput struct {
 	Scope    string
 	Username string
 	Secret   string
+	// UsernameProvided distinguishes an explicit empty registry username from legacy composite input.
+	UsernameProvided bool
 }
 
 // UpdateInput 是更新凭据的入参;指针字段为 nil 表示不修改。
@@ -148,6 +153,13 @@ func (s *service) Create(in CreateInput) (*Credential, error) {
 	if in.Secret == "" {
 		return nil, ErrEmptySecret
 	}
+	if in.Type == TypeRegistry {
+		var err error
+		in.Username, in.Secret, err = registryValue(in.Username, in.Secret, !in.UsernameProvided)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	sealed, err := seal(s.key, []byte(in.Secret))
 	if err != nil {
@@ -203,6 +215,12 @@ func (s *service) List() ([]Credential, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("vault: iterate credentials: %w", err)
+	}
+	rows.Close()
+	for i := range creds {
+		if err := s.registryView(&creds[i]); err != nil {
+			return nil, err
+		}
 	}
 	return creds, nil
 }
@@ -293,9 +311,10 @@ func (s *service) Update(id string, in UpdateInput) (*Credential, error) {
 
 	// 先取出当前行(需 type 以便在轮换 secret 时重算掩码)。
 	var name, credType, scope, username, masked string
+	var oldSealed []byte
 	err := s.db.QueryRow(
-		`SELECT name, type, scope, username, masked_value FROM credentials WHERE id = ?`, id,
-	).Scan(&name, &credType, &scope, &username, &masked)
+		`SELECT name, type, scope, username, masked_value, ciphertext FROM credentials WHERE id = ?`, id,
+	).Scan(&name, &credType, &scope, &username, &masked, &oldSealed)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -303,6 +322,7 @@ func (s *service) Update(id string, in UpdateInput) (*Credential, error) {
 		return nil, fmt.Errorf("vault: load credential: %w", err)
 	}
 
+	oldName, oldScope, oldUsername := name, scope, username
 	var newSealed []byte
 	rotate := false
 	if in.Name != nil {
@@ -313,6 +333,49 @@ func (s *service) Update(id string, in UpdateInput) (*Credential, error) {
 	}
 	if in.Scope != nil {
 		scope = *in.Scope
+	}
+	if in.Username != nil {
+		if credType == TypeRegistry && (strings.Contains(*in.Username, ":") || strings.IndexFunc(*in.Username, unicode.IsControl) >= 0) {
+			return nil, ErrInvalidUsername
+		}
+		username = strings.TrimSpace(*in.Username)
+	}
+	if credType == TypeRegistry {
+		plaintext, err := open(s.key, oldSealed)
+		if err != nil {
+			return nil, err
+		}
+		old := string(plaintext)
+		password := old
+		user, pass, found := strings.Cut(old, ":")
+		if found {
+			password = pass
+		}
+		if in.Username == nil {
+			// Legacy consumers used the encrypted prefix, not metadata.
+			username = ""
+			if found {
+				username = user
+			}
+		}
+		if in.Secret != nil && *in.Secret != "" {
+			password = *in.Secret
+			// An omitted username preserves legacy composite-input support.
+			if in.Username == nil {
+				if user, pass, found := strings.Cut(password, ":"); found {
+					username, password = user, pass
+				}
+			}
+		}
+		if password == "" {
+			return nil, ErrEmptySecret
+		}
+		username, value, err := registryValue(username, password, in.Username == nil && !strings.HasPrefix(old, ":"))
+		if err != nil {
+			return nil, err
+		}
+		in.Username = &username
+		in.Secret = &value
 	}
 	if in.Username != nil {
 		username = strings.TrimSpace(*in.Username)
@@ -331,19 +394,40 @@ func (s *service) Update(id string, in UpdateInput) (*Credential, error) {
 	}
 
 	nowStr := time.Now().UTC().Format(time.RFC3339)
+	var result sql.Result
 	if rotate {
-		_, err = s.db.Exec(
-			`UPDATE credentials SET name = ?, scope = ?, username = ?, ciphertext = ?, masked_value = ?, updated_at = ? WHERE id = ?`,
-			name, scope, username, newSealed, masked, nowStr, id,
+		result, err = s.db.Exec(
+			`UPDATE credentials SET name = ?, scope = ?, username = ?, ciphertext = ?, masked_value = ?, updated_at = ?
+			 WHERE id = ? AND name = ? AND scope = ? AND username = ? AND ciphertext = ?`,
+			name, scope, username, newSealed, masked, nowStr, id, oldName, oldScope, oldUsername, oldSealed,
 		)
 	} else {
-		_, err = s.db.Exec(
-			`UPDATE credentials SET name = ?, scope = ?, username = ?, updated_at = ? WHERE id = ?`,
-			name, scope, username, nowStr, id,
+		result, err = s.db.Exec(
+			`UPDATE credentials SET name = ?, scope = ?, username = ?, updated_at = ?
+			 WHERE id = ? AND name = ? AND scope = ? AND username = ? AND ciphertext = ?`,
+			name, scope, username, nowStr, id, oldName, oldScope, oldUsername, oldSealed,
 		)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("vault: update credential: %w", err)
+	}
+	if n, err := result.RowsAffected(); err != nil {
+		return nil, fmt.Errorf("vault: update credential result: %w", err)
+	} else if n == 0 {
+		// MySQL may report zero affected rows for a matching no-op update.
+		expected := oldSealed
+		if rotate {
+			expected = newSealed
+		}
+		var matches int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM credentials
+			WHERE id = ? AND name = ? AND scope = ? AND username = ? AND ciphertext = ?`,
+			id, name, scope, username, expected).Scan(&matches); err != nil {
+			return nil, fmt.Errorf("vault: check update result: %w", err)
+		}
+		if matches == 0 {
+			return nil, ErrConflict
+		}
 	}
 
 	// 回读完整视图(含 last_used_at/created_at)。
@@ -415,7 +499,48 @@ func (s *service) getView(id string) (*Credential, error) {
 		}
 		return nil, err
 	}
+	if err := s.registryView(c); err != nil {
+		return nil, err
+	}
 	return c, nil
+}
+
+// Registry consumers retain their existing encrypted user:password contract.
+func registryValue(username, password string, legacy bool) (string, string, error) {
+	if strings.Contains(username, ":") || strings.IndexFunc(username, unicode.IsControl) >= 0 {
+		return "", "", ErrInvalidUsername
+	}
+	username = strings.TrimSpace(username)
+	if username == "" {
+		if !legacy {
+			// An empty prefix keeps colons in token-only secrets unambiguous.
+			return "", ":" + password, nil
+		}
+		if user, _, found := strings.Cut(password, ":"); found {
+			if strings.IndexFunc(user, unicode.IsControl) >= 0 {
+				return "", "", ErrInvalidUsername
+			}
+			username = user
+		}
+		return username, password, nil
+	}
+	return username, username + ":" + password, nil
+}
+
+func (s *service) registryView(c *Credential) error {
+	if c.Type != TypeRegistry {
+		return nil
+	}
+	value, err := s.Reveal(c.ID)
+	if err != nil {
+		return err
+	}
+	c.MaskedValue = maskRegistry(value)
+	c.Username = ""
+	if user, _, found := strings.Cut(value, ":"); found && strings.IndexFunc(user, unicode.IsControl) < 0 {
+		c.Username = user
+	}
+	return nil
 }
 
 // scanner 抽象 *sql.Row 与 *sql.Rows 的 Scan。

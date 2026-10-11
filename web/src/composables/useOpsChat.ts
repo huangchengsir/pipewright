@@ -35,10 +35,13 @@ const visibleKinds = new Set([
   'analysis',
   'tool_request',
   'tool_call',
+  'summary',
+  'notice',
 ])
 export function useOpsChat(options: {
   active: Ref<boolean>
   initialServerIds: () => string[]
+  context?: () => string
 }) {
   const store = useOpsChatStore()
   const state = store.state
@@ -66,7 +69,7 @@ export function useOpsChat(options: {
   const pending = computed(() => state.pending[state.currentId] ?? null)
   const confirmations = computed(() =>
     (state.snapshot?.confirmations ?? []).filter(
-      (c) => c.runId === session.value?.activeRunId,
+      (c) => c.runId === session.value?.activeRunId && activeRun.value?.status === 'awaiting_confirmation',
     ),
   )
   let generation = 0,
@@ -74,10 +77,19 @@ export function useOpsChat(options: {
     previewGeneration = 0
   let controller: AbortController | null = null
   let timer: ReturnType<typeof setTimeout> | undefined
+  let eventRefresh: ReturnType<typeof setTimeout> | undefined
+  let preparing = false
+  let entryContext = options.context?.()??''
   let reconnect: ReturnType<typeof setTimeout> | undefined
   let cursor = '',
     backoff = 500
   let resetHistoryPending = false
+  let projectionGap = 0
+  const callWatermarks = new Map<string, number>()
+  const pendingCallReads = new Set<string>()
+  const callReads = new Map<string, Promise<boolean>>()
+  const unfinishedCall = (status: string) =>
+    ['queued', 'planning', 'running', 'awaiting_confirmation', 'awaiting_analysis_consent'].includes(status)
   let userEditGeneration = 0
   let chain: Promise<unknown> = Promise.resolve()
   let refreshState: {
@@ -104,8 +116,14 @@ export function useOpsChat(options: {
     previewGeneration++
     detach()
     clearTimeout(timer)
+    clearTimeout(eventRefresh)
+    eventRefresh = undefined
     preview.value = null
     resetHistoryPending = false
+    projectionGap = 0
+    callWatermarks.clear()
+    pendingCallReads.clear()
+    callReads.clear()
   }
   function remember(): void {
     if (state.currentId && mine === owner)
@@ -126,14 +144,64 @@ export function useOpsChat(options: {
   function fail(e: unknown): void {
     error.value = errorCode(e)
   }
-  function mergeEntries(entries: Entry[]): void {
+  function mergeEntries(entries: Entry[], watermark = state.snapshot?.watermark ?? 0): void {
     const bySeq = new Map(state.entries.map((e) => [e.seq, e]))
-    for (const entry of entries)
-      if (entry.sessionId === state.currentId && visibleKinds.has(entry.kind))
-        bySeq.set(entry.seq, entry)
-    state.entries = [...bySeq.values()]
-      .sort((a, b) => a.seq - b.seq)
-      .slice(-2000)
+    let changed = false
+    for (const entry of entries) {
+      if(entry.sessionId !== state.currentId) continue
+      if(entry.call && (watermark >= (state.snapshot?.watermark ?? 0) || !state.calls[entry.call.callId])) {
+        state.calls = {...state.calls,[entry.call.callId]:entry.call}
+        callWatermarks.set(entry.call.callId, watermark)
+      }
+      if(entry.requestId) state.optimistic = state.optimistic.filter(e=>e.requestId!==entry.requestId)
+      if(!visibleKinds.has(entry.kind)) continue
+      const seq = entry.replaceSeq || entry.seq
+      const previous=bySeq.get(seq)
+      if(previous && (previous.revisionSeq??previous.seq)>=(entry.revisionSeq??entry.seq)) continue
+      bySeq.set(seq,{...entry,seq,createdAt:previous?.createdAt??entry.createdAt})
+      changed=true
+    }
+    if(changed) state.entries = [...bySeq.values()].sort((a,b)=>a.seq-b.seq).slice(-2000)
+  }
+  function applyEventEntry(entry: Entry): boolean {
+    const snapshot=state.snapshot
+    if(!snapshot) return false
+    if(entry.seq <= snapshot.watermark) {
+      // Text has its own persisted revision even outside the snapshot window.
+      // Merge only that projection; runtime facts still require authority.
+      if(entry.kind === 'assistant' || entry.kind === 'analysis') mergeEntries([{...entry, call:undefined}])
+      // The visible snapshot window may omit a retained historical call.
+      // Recover it by GET, never by accepting a potentially stale projection.
+      const id = entry.call?.callId ?? entry.callId
+      if(id && (callWatermarks.get(id) ?? -1) < entry.seq) void hydrateCall(id)
+      return true
+    }
+    mergeEntries([entry], entry.seq)
+    const supported=!!(entry.call||entry.run||entry.session||entry.confirmation||entry.replaceSeq||visibleKinds.has(entry.kind))
+    if(!supported)return false
+    if(entry.session) {
+      const wasDirty=dirty.value
+      if(applySession(entry.session)) {
+        if(wasDirty && entry.session.draft!==savedDraft.value) draftStatus.value='conflict'
+        else if(!wasDirty) {
+          draft.value=savedDraft.value=entry.session.draft
+          draftStatus.value='saved'
+        }
+        remember()
+      }
+    }
+    const current=state.snapshot!
+    let nextConfirmations=entry.confirmation?[...(current.confirmations??[]).filter(c=>c.runId!==entry.confirmation!.runId),entry.confirmation]:current.confirmations
+    if(entry.run && entry.run.status!=='awaiting_confirmation') nextConfirmations=(nextConfirmations??[]).filter(c=>c.runId!==entry.run!.id)
+    state.snapshot={...current,watermark:Math.max(current.watermark,entry.seq),
+      runs:entry.run?[...(current.runs??[]).filter(r=>r.id!==entry.run!.id),entry.run]:current.runs,
+      confirmations:nextConfirmations}
+    return true
+  }
+  function scheduleRefresh(): void {
+    if(eventRefresh) return
+    const t=token()
+    eventRefresh=setTimeout(()=>{eventRefresh=undefined;if(valid(t.g,t.auth))void refresh()},100)
   }
   function applySession(
     value: Session,
@@ -162,13 +230,13 @@ export function useOpsChat(options: {
     }
     return false
   }
-  function applySnapshot(value: Snapshot, restoring = false): void {
+  function applySnapshot(value: Snapshot, restoring = false): boolean {
     if (
       !restoring &&
       state.snapshot &&
       value.watermark < state.snapshot.watermark
     )
-      return
+      return false
     if (
       !restoring &&
       session.value &&
@@ -207,36 +275,71 @@ export function useOpsChat(options: {
             : 'conflict'
       }
     }
+    value = {...value, confirmations:(value.confirmations??[]).filter(c=>(value.runs??[]).some(r=>r.id===c.runId && r.status==='awaiting_confirmation'))}
     state.snapshot = value
     state.entries = keepEntries
     state.calls = {
       ...oldCalls,
       ...Object.fromEntries((value.calls ?? []).map((c) => [c.callId, c])),
     }
+    for (const call of value.calls ?? []) callWatermarks.set(call.callId, value.watermark)
     mergeEntries(value.entries.entries ?? [])
     if (replacingHistory) historyCursor.value = value.entries.cursor
     resetHistoryPending = false
     applySession(value.session)
     remember()
+    return true
   }
-  async function hydrateCalls(): Promise<void> {
+  async function hydrateCall(id: string): Promise<boolean> {
+    const existing = callReads.get(id)
+    if (existing) return existing
     const t = token()
-    const ids = [
-      ...new Set(
-        state.entries
-          .filter((e) => e.callId && !state.calls[e.callId])
-          .map((e) => e.callId!),
-      ),
-    ]
-    for (const id of ids) {
-      if (!valid(t.g, t.auth)) return
+    const previous = state.calls[id]
+    const watermark = state.snapshot?.watermark ?? 0
+    pendingCallReads.add(id)
+    const job = (async () => {
       try {
         const call = await opsApi.call(t.id, id)
-        if (valid(t.g, t.auth)) state.calls = { ...state.calls, [id]: call }
+        if (!valid(t.g, t.auth)) return false
+        // A snapshot or live event that arrived during GET owns the newer value.
+        if (state.calls[id] === previous) {
+          state.calls = { ...state.calls, [id]: call }
+          callWatermarks.set(id, Math.max(callWatermarks.get(id) ?? 0, watermark))
+        }
+        pendingCallReads.delete(id)
+        return true
       } catch (e) {
         if (valid(t.g, t.auth)) fail(e)
+        return false
       }
+    })()
+    callReads.set(id, job)
+    try {
+      return await job
+    } finally {
+      if (callReads.get(id) === job) callReads.delete(id)
     }
+  }
+  async function hydrateCalls(): Promise<boolean> {
+    const t = token()
+    const watermark = state.snapshot?.watermark ?? 0
+    const ids = [
+      ...new Set([
+        ...pendingCallReads,
+        ...Object.values(state.calls)
+          .filter(c => unfinishedCall(c.status) && (callWatermarks.get(c.callId) ?? -1) < watermark)
+          .map(c => c.callId),
+        ...state.entries
+          .filter((e) => e.callId && !state.calls[e.callId])
+          .map((e) => e.callId!),
+      ]),
+    ]
+    let ok = true
+    for (const id of ids) {
+      if (!valid(t.g, t.auth)) return false
+      if (!(await hydrateCall(id))) ok = false
+    }
+    return ok
   }
   async function refresh(): Promise<boolean> {
     if (refreshState?.generation === generation) {
@@ -257,9 +360,9 @@ export function useOpsChat(options: {
         try {
           const value = await opsApi.snapshot(t.id)
           if (!valid(t.g, t.auth)) return false
-          applySnapshot(value)
-          await hydrateCalls()
-          ok = true
+          const applied = applySnapshot(value)
+          ok = await hydrateCalls()
+          if (applied && ok && value.watermark >= projectionGap) projectionGap = 0
         } catch (e) {
           if (valid(t.g, t.auth)) fail(e)
           ok = false
@@ -300,8 +403,8 @@ export function useOpsChat(options: {
       backoff = 500
       const seq = Number(cursor.slice(cursor.lastIndexOf(':') + 1))
       if (
-        resetHistoryPending ||
-        (state.snapshot && seq > state.snapshot.watermark)
+        resetHistoryPending || projectionGap > 0 || pendingCallReads.size > 0 ||
+        (state.snapshot && (seq > state.snapshot.watermark || (event.type==='heartbeat' && Number((event.data as {watermark?:number}).watermark)>state.snapshot.watermark)))
       )
         void refresh()
       return
@@ -317,8 +420,12 @@ export function useOpsChat(options: {
     const last = Number(cursor.slice(cursor.lastIndexOf(':') + 1))
     if (entry.seq <= last) return
     cursor = event.id
-    mergeEntries([entry])
-    void refresh()
+    if(!applyEventEntry(entry)) {
+      projectionGap = Math.max(projectionGap, entry.seq)
+      scheduleRefresh()
+    }
+    // A later projected event cannot make an earlier snapshot hint complete.
+    if(projectionGap && refreshState?.generation === generation) refreshState.again = true
   }
   function connect(): void {
     if (!options.active.value || !state.currentId || controller) return
@@ -377,7 +484,7 @@ export function useOpsChat(options: {
     state.calls = {}
     refreshState = null
     try {
-      await opsApi.activate(id)
+      await opsApi.activate(id,entryContext)
       const value = await opsApi.snapshot(id)
       if (!valid(t.g, t.auth)) return false
       applySnapshot(value, true)
@@ -399,7 +506,7 @@ export function useOpsChat(options: {
     const t = token()
     busy.value = true
     try {
-      const value = await opsApi.create(options.initialServerIds().slice(0, 8))
+      const value = await opsApi.create(options.initialServerIds().slice(0, capabilities.value?.limits.targets??8),entryContext)
       if (!valid(t.g, t.auth)) return false
       state.sessions = [...state.sessions, value]
       return await select(value.id)
@@ -411,9 +518,11 @@ export function useOpsChat(options: {
     }
   }
   async function restore(): Promise<void> {
+    if(mine===owner&&mine!==0&&!(await flush()))return
     for (const release of relinquish) release()
     mine = ++owner
     invalidate()
+    entryContext=options.context?.()??''
     const t = token()
     loading.value = true
     error.value = ''
@@ -431,12 +540,12 @@ export function useOpsChat(options: {
         error.value = 'ops_unavailable'
         return
       }
-      const page = await opsApi.list()
+      const page = await opsApi.list(entryContext)
       if (!valid(t.g, t.auth)) return
       state.sessions = (page.sessions ?? []).sort((a, b) =>
         b.updatedAt.localeCompare(a.updatedAt),
       )
-      const id = page.activeSessionId || state.sessions[0]?.id
+      const id = page.activeSessionId || (!entryContext?state.sessions[0]?.id:undefined)
       // Entry defaults only apply to a genuinely new session.
       if (id) await select(id)
       else await create()
@@ -542,7 +651,7 @@ export function useOpsChat(options: {
     if (
       busy.value ||
       pending.value ||
-      ids.length > 8 ||
+      ids.length > (capabilities.value?.limits.targets??8) ||
       session.value?.activeRunId
     )
       return false
@@ -573,13 +682,15 @@ export function useOpsChat(options: {
     busy.value = true
     error.value = ''
     try {
-      if (p.kind === 'turn') await opsApi.turn(t.id, p.input as Turn)
-      else if (p.kind === 'retry') await opsApi.retry(t.id, p.input as Retry)
-      else await opsApi.analyze(t.id, p.input as Analysis)
+      const run = p.kind==='turn' ? await opsApi.turn(t.id,p.input as Turn) : p.kind==='retry' ? await opsApi.retry(t.id,p.input as Retry) : await opsApi.analyze(t.id,p.input as Analysis)
       if (!valid(t.g, t.auth)) return false
       delete state.pending[t.id]
       preview.value = null
+      if(run && state.snapshot && !state.snapshot.runs?.some(r=>r.id===run.id)) state.snapshot={...state.snapshot,session:{...state.snapshot.session,activeRunId:['queued','planning','running','awaiting_confirmation'].includes(run.status)?run.id:state.snapshot.session.activeRunId},runs:[...(state.snapshot.runs??[]),run]}
+      connect()
+      // Submission advances CAS server-side; synchronize once before clearing its draft.
       await refresh()
+      if (!valid(t.g,t.auth)) return false
       if (
         valid(t.g, t.auth) &&
         p.sentText !== undefined &&
@@ -597,7 +708,7 @@ export function useOpsChat(options: {
           errorCode(e) !== 'network' &&
           !(e instanceof HttpError && e.status >= 500)
         )
-          delete state.pending[t.id]
+          {delete state.pending[t.id];state.optimistic=state.optimistic.filter(entry=>entry.requestId!==p.input.clientRequestId)}
       }
       return false
     } finally {
@@ -612,10 +723,15 @@ export function useOpsChat(options: {
     kind: PendingSubmission['kind'],
     input: Partial<Turn & Retry & Analysis>,
     sentText?: string,
+    clientRequestId = requestId(),
   ): Promise<boolean> {
     const t = token()
     const sentEditGeneration = userEditGeneration
     if (pending.value) return submitPending()
+    if(preparing) return false
+    preparing=true
+    if(sentText!==undefined) state.optimistic=[...state.optimistic,{sessionId:state.currentId,seq:-Date.now(),kind:'user',text:sentText,status:'queued',requestId:clientRequestId,createdAt:new Date().toISOString()}]
+    try {
     if (
       busy.value ||
       session.value?.activeRunId ||
@@ -634,23 +750,25 @@ export function useOpsChat(options: {
       kind,
       input: {
         ...input,
-        clientRequestId: requestId(),
+        clientRequestId,
         revision: session.value.revision,
       } as Turn | Retry | Analysis,
       sentText,
       sentEditGeneration,
     }
     return submitPending()
+    } finally {preparing=false;if(!state.pending[t.id]&&!state.snapshot?.runs?.some(r=>r.clientRequestId===clientRequestId))state.optimistic=state.optimistic.filter(e=>e.requestId!==clientRequestId)}
   }
   async function send(): Promise<boolean> {
     const text = draft.value
+    if (!session.value?.serverIds?.length) return false
     if (
       !text.trim() ||
       utf8Bytes(text) > 8192 ||
       !capabilities.value?.modelAvailable
     )
       return false
-    return submit('turn', { text }, text)
+    return submit('turn', { text, analyzeResults:true, provider:capabilities.value.provider }, text)
   }
   async function tool(toolId: string, args: ToolArgs): Promise<boolean> {
     if (
@@ -707,14 +825,12 @@ export function useOpsChat(options: {
       if (valid(t.g, t.auth) && previewToken === previewGeneration) fail(e)
     }
   }
-  async function analyze(): Promise<boolean> {
-    const value = preview.value
-    if (!value) return false
+  async function analyze(callIds: string[] = [],runId?: string): Promise<boolean> {
+    if(!capabilities.value?.modelAvailable || (!callIds.length&&!runId))return false
     return submit('analysis', {
-      callIds: value.callIds,
-      previewHash: value.hash,
-      provider: value.provider,
-      consent: true,
+      ...(runId?{runId}:{callIds}),
+      provider: capabilities.value.provider,
+      analyzeResults:true,
     })
   }
   async function history(): Promise<void> {
@@ -723,7 +839,7 @@ export function useOpsChat(options: {
     try {
       const page = await opsApi.entries(t.id, historyCursor.value)
       if (valid(t.g, t.auth)) {
-        mergeEntries(page.entries ?? [])
+        mergeEntries(page.entries ?? [], page.watermark)
         historyCursor.value = page.entries?.length ? page.cursor : ''
         await hydrateCalls()
       }
@@ -785,8 +901,8 @@ export function useOpsChat(options: {
     error.value = 'unauthorized'
   })
   watch(
-    options.active,
-    (active) => {
+    [options.active,()=>options.context?.()??''],
+    ([active]) => {
       if (active) void restore()
       else {
         void flush()

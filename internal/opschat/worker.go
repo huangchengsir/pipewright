@@ -4,7 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"strconv"
+	"errors"
+	"sort"
 	"strings"
 	"time"
 
@@ -314,6 +315,84 @@ func (s *Service) failRun(id, run, status string) {
 	}
 }
 
+func (s *Service) planningFailure(id, run, status string, reason error) {
+	text := strings.Replace(analysisFailureText(reason), "[analysis:", "[planning:", 1)
+	if errors.Is(reason, ErrInvalid) {
+		text = "[planning:invalid_plan]"
+	}
+	if err := s.persistAttempts(id, func(ctx context.Context, tx *sql.Tx) error {
+		r, e := s.run(ctx, tx, id, run)
+		if e != nil || terminal(r.View.Status) {
+			return e
+		}
+		if r.View.CancelRequested {
+			return s.finishTx(ctx, tx, r, Interrupted)
+		}
+		if r.Body.NeedsDiscovery {
+			text = strings.Replace(text, "[planning:", "[continuation:", 1)
+		}
+		if e = s.append(ctx, tx, Entry{SessionID: id, RunID: run, Kind: "assistant", Text: text, Status: Failed}, true, false); e != nil {
+			return e
+		}
+		return s.finishTx(ctx, tx, r, status)
+	}, 50); err != nil {
+		s.fenceWorker()
+	}
+}
+
+// Validate every action before publishing success or executing any tool.
+func (s *Service) planCalls(r runRecord, plan Plan) ([]callRecord, error) {
+	raw, err := json.Marshal(plan)
+	if err != nil || len(raw) > 32<<10 || len(plan.Actions) > 24 || (len(plan.Actions) == 0 && strings.TrimSpace(plan.Text+plan.ManualAdvice) == "") {
+		return nil, ErrInvalid
+	}
+	if plan.NeedsDiscovery {
+		if len(plan.Actions) == 0 || r.Body.ContinuationStarted {
+			return nil, ErrInvalid
+		}
+		seen := map[int]bool{}
+		for _, a := range plan.Actions {
+			if a.ToolID != "docker_containers" {
+				return nil, ErrInvalid
+			}
+			for _, i := range a.TargetIndexes {
+				if seen[i] {
+					return nil, ErrInvalid
+				}
+				seen[i] = true
+			}
+		}
+	}
+	candidates := []callRecord{}
+	for _, a := range plan.Actions {
+		if r.Body.ContinuationStarted && a.ToolID == "docker_containers" {
+			return nil, ErrInvalid
+		}
+		args, e := parseArgs(a.ToolID, a.Args)
+		if e != nil || s.secretArgs(args) || len(a.TargetIndexes) == 0 {
+			return nil, ErrInvalid
+		}
+		seen := map[int]bool{}
+		for _, index := range a.TargetIndexes {
+			if index < 0 || index >= len(r.Body.Targets) || seen[index] {
+				return nil, ErrInvalid
+			}
+			seen[index] = true
+			snap := r.Body.Targets[index]
+			object := args.Container
+			if object == "" {
+				object = args.Unit
+			}
+			view := Call{ID: uuid.NewString(), RunID: r.View.ID, SessionID: r.View.SessionID, ServerID: snap.Server.ID, ServerName: s.scrub(snap.Server.Name, 1024), ToolID: a.ToolID, Args: args, Object: object, Status: Queued, ArgsHash: digest(args), TargetHash: snap.Fingerprint()}
+			candidates = append(candidates, callRecord{Body: callBody{View: view, Snapshot: snap}, Created: time.Now().UnixMilli(), Ordinal: len(candidates)})
+			if len(candidates) > 24 {
+				return nil, ErrInvalid
+			}
+		}
+	}
+	return candidates, nil
+}
+
 func (s *Service) fenceWorker() {
 	s.mu.Lock()
 	s.lost = true
@@ -429,6 +508,7 @@ func (s *Service) work(parent context.Context, id, run string) {
 	}
 	if len(calls) == 0 {
 		plan := Plan{}
+		var candidates []callRecord
 		if len(r.Body.RetryActions) > 0 {
 			plan.Actions = r.Body.RetryActions
 		} else if r.Body.Turn.ToolID != "" {
@@ -438,93 +518,42 @@ func (s *Service) work(parent context.Context, id, run string) {
 			}
 			plan.Actions = []Action{{ToolID: r.Body.Turn.ToolID, Args: r.Body.Turn.Args, TargetIndexes: indexes}}
 		} else {
-			messages, e := s.contextMessages(ctx, id)
+			var e error
+			plan, candidates, e = s.requestPlan(ctx, r, false)
 			if e != nil {
-				s.failRun(id, run, Failed)
+				status := Failed
+				if ctx.Err() != nil {
+					status = Interrupted
+				}
+				s.planningFailure(id, run, status, e)
 				return
 			}
-			aliases := []string{}
-			for i := range r.Body.Targets {
-				aliases = append(aliases, "target_"+strconv.Itoa(i))
-			}
-			req := PlanRequest{Messages: messages, Targets: aliases, Tools: Tools(), MaxResponseBytes: 32 << 10}
-			for {
-				encoded, _ := json.Marshal(req)
-				if len(encoded) <= 32<<10 {
-					break
-				}
-				if len(req.Messages) <= 1 {
-					s.failRun(id, run, Failed)
-					return
-				}
-				req.Messages = req.Messages[1:]
-			}
-			if s.model == nil {
-				s.failRun(id, run, Failed)
+		}
+		if candidates == nil {
+			candidates, err = s.planCalls(r, plan)
+			if err != nil {
+				s.planningFailure(id, run, Failed, err)
 				return
 			}
-			r.Body.ModelCalls++
-			if r.Body.ModelCalls > 2 {
-				s.failRun(id, run, Failed)
-				return
+		}
+		// Group only wholly read-only plans; mutation barriers retain their order.
+		readOnly := true
+		for _, c := range candidates {
+			readOnly = readOnly && !mutation(c.Body.View.ToolID)
+		}
+		if readOnly {
+			order := map[string]int{}
+			for i, snap := range r.Body.Targets {
+				order[snap.Server.ID] = i
 			}
-			e = s.persist(id, func(c context.Context, tx *sql.Tx) error {
-				current, e := s.run(c, tx, id, run)
-				if e != nil {
-					return e
-				}
-				current.Body.ModelCalls = r.Body.ModelCalls
-				return s.saveRun(c, tx, current)
+			sort.SliceStable(candidates, func(i, j int) bool {
+				return order[candidates[i].Body.View.ServerID] < order[candidates[j].Body.View.ServerID]
 			})
-			if e != nil {
-				return
-			}
-			modelCtx, stop := context.WithTimeout(ctx, 60*time.Second)
-			plan, e = s.model.Plan(modelCtx, req)
-			stop()
-			if e != nil || s.registerSecrets() != nil {
-				s.failRun(id, run, Failed)
-				return
-			}
-			raw, e := json.Marshal(plan)
-			if e != nil || len(raw) > 32<<10 {
-				s.failRun(id, run, Failed)
-				return
+			for i := range candidates {
+				candidates[i].Ordinal = i
 			}
 		}
-		// Validate the whole plan before any call is executed.
-		candidates := []callRecord{}
-		for _, a := range plan.Actions {
-			args, e := parseArgs(a.ToolID, a.Args)
-			if e != nil || s.secretArgs(args) || len(a.TargetIndexes) == 0 {
-				s.failRun(id, run, Failed)
-				return
-			}
-			seen := map[int]bool{}
-			for _, index := range a.TargetIndexes {
-				if index < 0 || index >= len(r.Body.Targets) || seen[index] {
-					s.failRun(id, run, Failed)
-					return
-				}
-				seen[index] = true
-				snap := r.Body.Targets[index]
-				object := args.Container
-				if object == "" {
-					object = args.Unit
-				}
-				view := Call{ID: uuid.NewString(), RunID: run, SessionID: id, ServerID: snap.Server.ID, ServerName: s.scrub(snap.Server.Name, 1024), ToolID: a.ToolID, Args: args, Object: object, Status: Queued, ArgsHash: digest(args), TargetHash: snap.Fingerprint()}
-				candidates = append(candidates, callRecord{Body: callBody{View: view, Snapshot: snap}, Created: time.Now().UnixMilli(), Ordinal: len(candidates)})
-				if len(candidates) > 24 {
-					s.failRun(id, run, Failed)
-					return
-				}
-			}
-		}
-		text := s.scrub(plan.Text, 16<<10)
-		advice := s.scrub(plan.ManualAdvice, 8<<10)
-		if advice != "" {
-			text += "\n" + advice
-		}
+		text := s.planText(plan)
 		err = s.persist(id, func(c context.Context, tx *sql.Tx) error {
 			current, e := s.run(c, tx, id, run)
 			if e != nil {
@@ -534,7 +563,7 @@ func (s *Service) work(parent context.Context, id, run string) {
 				return ErrConflict
 			}
 			if text != "" {
-				if e = s.append(c, tx, Entry{SessionID: id, RunID: run, Kind: "assistant", Text: text}, true, true); e != nil {
+				if e = s.append(c, tx, Entry{SessionID: id, RunID: run, Kind: "assistant", Text: text}, true, len(plan.Actions) == 0); e != nil {
 					return e
 				}
 			}
@@ -553,6 +582,7 @@ func (s *Service) work(parent context.Context, id, run string) {
 				}
 			}
 			current.View.Status = Running
+			current.Body.NeedsDiscovery = plan.NeedsDiscovery
 			if e = s.saveRun(c, tx, current); e != nil {
 				return e
 			}
@@ -564,44 +594,81 @@ func (s *Service) work(parent context.Context, id, run string) {
 		}
 		calls = candidates
 	}
-	// Calls in a run are serial; separate sessions can use the four global SSH slots.
-	barrier := false
-	for _, call := range calls {
-		if ctx.Err() != nil {
-			break
-		}
-		if call.Body.View.Status == AwaitingConfirmation {
-			barrier = true
-			continue
-		}
-		if terminal(call.Body.View.Status) {
-			continue
-		}
-		if mutation(call.Body.View.ToolID) {
-			a, e := s.approval(ctx, s.db, id, run)
-			approved := e == nil && a.Status == "consumed" && a.Instance == s.instance && a.View.ExpiresAt.After(time.Now())
-			if !approved {
+	for {
+		// Calls in a run are serial; separate sessions can use the four global SSH slots.
+		barrier := false
+		for _, call := range calls {
+			if ctx.Err() != nil {
+				break
+			}
+			if call.Body.View.Status == AwaitingConfirmation {
 				barrier = true
-				if e = s.prepareMutation(ctx, call); e != nil {
-					s.failRun(id, run, Failed)
-					return
-				}
 				continue
 			}
+			if terminal(call.Body.View.Status) {
+				continue
+			}
+			if mutation(call.Body.View.ToolID) {
+				a, e := s.approval(ctx, s.db, id, run)
+				approved := e == nil && a.Status == "consumed" && a.Instance == s.instance && a.View.ExpiresAt.After(time.Now())
+				if !approved {
+					barrier = true
+					if e = s.prepareMutation(ctx, call); e != nil {
+						s.failRun(id, run, Failed)
+						return
+					}
+					continue
+				}
+			}
+			// Only mutation object resolution may cross the confirmation barrier.
+			if barrier {
+				continue
+			}
+			if err = s.executeCall(ctx, call); err != nil {
+				s.failRun(id, run, Failed)
+				return
+			}
 		}
-		// Only mutation object resolution may cross the confirmation barrier.
-		if barrier {
-			continue
+		if ctx.Err() != nil {
+			return
 		}
-		if err = s.executeCall(ctx, call); err != nil {
+		current, e := s.run(ctx, s.db, id, run)
+		if e != nil {
 			s.failRun(id, run, Failed)
 			return
 		}
+		if !current.Body.NeedsDiscovery || current.Body.ContinuationStarted {
+			break
+		}
+		cs, e := s.calls(ctx, s.db, id, run)
+		if e != nil {
+			s.failRun(id, run, Failed)
+			return
+		}
+		complete := len(cs) > 0
+		for _, c := range cs {
+			complete = complete && c.Body.View.ToolID == "docker_containers" && c.Body.View.Status == Succeeded
+		}
+		if !complete {
+			break
+		}
+		plan, next, e := s.requestPlan(ctx, current, true)
+		if e == nil {
+			e = s.publishContinuation(ctx, current, plan, next)
+		}
+		if e != nil {
+			status := Failed
+			if ctx.Err() != nil {
+				status = Interrupted
+			}
+			s.planningFailure(id, run, status, e)
+			return
+		}
+		calls = next
 	}
-	if ctx.Err() != nil {
-		return
-	}
-	_ = s.persist(id, func(c context.Context, tx *sql.Tx) error {
+	auto := false
+	toolStatus := Succeeded
+	err = s.persist(id, func(c context.Context, tx *sql.Tx) error {
 		current, e := s.run(c, tx, id, run)
 		if e != nil {
 			return e
@@ -668,19 +735,82 @@ func (s *Service) work(parent context.Context, id, run string) {
 				status = PartialFailed
 			}
 		}
+		toolStatus = status
+		if current.Body.AnalysisAuthorized && !current.Body.AnalysisStarted && !current.View.CancelRequested && len(cs) > 0 {
+			current.Body.AnalysisStarted = true // persisted before any external call; never recovered/retried
+			current.View.Status = Running
+			if e = s.summaryTx(c, tx, &current); e != nil {
+				return e
+			}
+			auto = true
+			if e = s.saveRun(c, tx, current); e != nil {
+				return e
+			}
+			return s.append(c, tx, Entry{SessionID: id, RunID: run, Kind: "run_status", Status: Running}, false, false)
+		}
 		return s.finishTx(c, tx, current, status)
 	})
+	if err == nil && auto {
+		current, e := s.run(ctx, s.db, id, run)
+		if e != nil {
+			return
+		}
+		ids := []string{}
+		cs, e := s.calls(ctx, s.db, id, run)
+		if e != nil {
+			return
+		}
+		for _, c := range cs {
+			ids = append(ids, c.Body.View.ID)
+		}
+		preview, e := s.analysisPreview(ctx, id, ids, run)
+		if e != nil || preview.Provider != current.Body.Provider {
+			s.analysisFailure(id, run, toolStatus, e)
+			return
+		}
+		current.Body.Analysis = preview
+		s.analyzeWorkStatus(ctx, id, run, current, toolStatus)
+	}
 }
 func (s *Service) analyzeWork(ctx context.Context, id, run string, r runRecord) {
-	preview, err := s.AnalysisPreview(ctx, id, r.Body.Analysis.CallIDs)
+	s.analyzeWorkStatus(ctx, id, run, r, Succeeded)
+}
+func (s *Service) analysisFailure(id, run, status string, reason error) {
+	text := analysisFailureText(reason)
+	_ = s.persist(id, func(ctx context.Context, tx *sql.Tx) error {
+		r, e := s.run(ctx, tx, id, run)
+		if e != nil {
+			return e
+		}
+		if r.View.CancelRequested {
+			status = Interrupted
+		}
+		if !r.Body.AnalysisAuthorized {
+			if !r.View.CancelRequested {
+				status = Failed
+			}
+			return s.finishTx(ctx, tx, r, status)
+		}
+		if e = s.append(ctx, tx, Entry{SessionID: id, RunID: run, Kind: "analysis", Text: text, Status: Failed}, true, false); e != nil {
+			return e
+		}
+		return s.finishTx(ctx, tx, r, status)
+	})
+}
+func (s *Service) analyzeWorkStatus(ctx context.Context, id, run string, r runRecord, finalStatus string) {
+	ownRun := ""
+	if r.Body.AnalysisStarted {
+		ownRun = run
+	}
+	preview, err := s.analysisPreview(ctx, id, r.Body.Analysis.CallIDs, ownRun)
 	if err != nil || preview.Hash != r.Body.Analysis.Hash || preview.Provider != r.Body.Analysis.Provider {
-		s.failRun(id, run, Failed)
+		s.analysisFailure(id, run, finalStatus, err)
 		return
 	}
-	req := AnalysisRequest{Provider: preview.Provider, Items: preview.Items, MaxResponseBytes: 16 << 10}
+	req := AnalysisRequest{Provider: preview.Provider, Items: preview.Items, Question: r.Body.Question, MaxResponseBytes: 16 << 10}
 	raw, _ := json.Marshal(req)
 	if len(raw) > 32<<10 {
-		s.failRun(id, run, Failed)
+		s.analysisFailure(id, run, finalStatus, ErrQuota)
 		return
 	}
 	err = s.persist(id, func(c context.Context, tx *sql.Tx) error {
@@ -688,7 +818,11 @@ func (s *Service) analyzeWork(ctx context.Context, id, run string, r runRecord) 
 		if e != nil {
 			return e
 		}
-		if current.View.CancelRequested || current.Body.ModelCalls >= 2 {
+		limit := 2
+		if current.Body.ContinuationStarted {
+			limit = 3
+		}
+		if current.View.CancelRequested || current.Body.ModelCalls >= limit {
 			return ErrConflict
 		}
 		current.Body.ModelCalls++
@@ -698,10 +832,22 @@ func (s *Service) analyzeWork(ctx context.Context, id, run string, r runRecord) 
 		return
 	}
 	modelCtx, stop := context.WithTimeout(ctx, 60*time.Second)
-	text, err := s.model.Analyze(modelCtx, req)
+	reply := s.reply(modelCtx, id, run, "analysis", 16<<10)
+	var text string
+	if streaming, ok := s.model.(StreamModel); ok {
+		text, err = streaming.AnalyzeStream(modelCtx, req, reply.chunk)
+	} else {
+		text, err = s.model.Analyze(modelCtx, req)
+	}
+	if err != nil && reply.seq != 0 {
+		_ = reply.finish(reply.text, Interrupted, false)
+	}
+	if err == nil && reply.seq != 0 {
+		err = reply.finish(s.scrub(text, 16<<10), Succeeded, false)
+	}
 	stop()
 	if err != nil || len(text) > 16<<10 || s.registerSecrets() != nil {
-		s.failRun(id, run, Failed)
+		s.analysisFailure(id, run, finalStatus, err)
 		return
 	}
 	_ = s.persist(id, func(c context.Context, tx *sql.Tx) error {
@@ -713,10 +859,12 @@ func (s *Service) analyzeWork(ctx context.Context, id, run string, r runRecord) 
 			return s.finishTx(c, tx, current, Interrupted)
 		}
 		// Derived analysis is excluded from every future planning context.
-		if e = s.append(c, tx, Entry{SessionID: id, RunID: run, Kind: "analysis", Text: s.scrub(text, 16<<10)}, true, false); e != nil {
-			return e
+		if reply.seq == 0 {
+			if e = s.append(c, tx, Entry{SessionID: id, RunID: run, Kind: "analysis", Text: s.scrub(text, 16<<10)}, true, false); e != nil {
+				return e
+			}
 		}
-		return s.finishTx(c, tx, current, Succeeded)
+		return s.finishTx(c, tx, current, finalStatus)
 	})
 }
 func (s *Service) takeSlot(ctx context.Context, server string) (func(), error) {
@@ -1061,7 +1209,13 @@ func (s *Service) executeCall(ctx context.Context, c callRecord) error {
 	if v.ToolID == "host_resources" {
 		v.Resources = &HostResources{Unavailable: []string{}}
 	}
-	for _, argv := range commands(v.ToolID, v.Args) {
+	cmds := commands(v.ToolID, v.Args)
+	if len(cmds) == 0 {
+		v.Status = Failed
+		v.Error = "invalid command"
+		return s.recordResult(c)
+	}
+	for _, argv := range cmds {
 		res, e := exec(callCtx, &c, argv, b)
 		if e != nil {
 			if v.Resources != nil && callCtx.Err() == nil && e != ErrLease && e != ErrStorage && e != ErrConflict {
@@ -1100,7 +1254,7 @@ func (s *Service) executeCall(ctx context.Context, c callRecord) error {
 		v.Truncated = b.truncated
 		if exit != 0 {
 			v.Status = Failed
-			if mutation(v.ToolID) {
+			if mutation(v.ToolID) && v.ToolID != "docker_exec" {
 				v.Status = Unknown
 			}
 			v.Error = "remote command exited nonzero"
@@ -1123,7 +1277,8 @@ func (s *Service) executeCall(ctx context.Context, c callRecord) error {
 			v.Truncated = true
 		}
 	}
-	if mutation(v.ToolID) && c.Body.Dispatched && v.ExitCode != nil && callCtx.Err() == nil {
+	// Exec exit status proves command completion only, never a verified business effect.
+	if mutation(v.ToolID) && v.ToolID != "docker_exec" && c.Body.Dispatched && v.ExitCode != nil && callCtx.Err() == nil {
 		if s.verifyMutation(callCtx, &c, b) {
 			v.Status = Succeeded
 			v.Error = ""

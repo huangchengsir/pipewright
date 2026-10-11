@@ -1,4 +1,8 @@
 export default {
+  registryUsername: 'Utilisateur du registre',
+  registryPassword: 'Mot de passe ou token',
+  registryUsernameOptional: 'Facultatif ; vide pour les tokens existants',
+  invalidRegistryUsername: 'Le nom ne doit pas contenir de deux-points ni de caractères de contrôle',
   title: 'Coffre d’identifiants',
   desc: 'Tous les secrets sont chiffrés avec NaCl secretbox et stockés sur cette instance, masqués au repos. Afficher le texte en clair est une action explicite et auditée ici. Les pipelines les référencent par portée et ils n’apparaissent jamais dans les journaux ni le contexte de diagnostic.',
   addCredential: 'Ajouter un identifiant',

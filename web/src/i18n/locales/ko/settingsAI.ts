@@ -1,4 +1,16 @@
 export default {
+  protocolHelp:
+    '공급업체가 아닌 API 호환 형식을 선택합니다. DeepSeek, OpenRouter, 자체 게이트웨이도 호환 프로토콜을 선택하고 해당 주소, API 키, 모델 ID를 입력하면 사용할 수 있습니다.',
+  compatibleProtocol: '호환 프로토콜',
+  selectProtocol: 'API 프로토콜 선택',
+  quickSetup: '빠른 설정',
+  customGateway: '사용자 지정 게이트웨이',
+  modelId: '모델 ID',
+  availableModels: '사용 가능한 모델',
+  searchModels: '모델 검색',
+  fetchModels: '모델 가져오기',
+  modelsUnavailable:
+    '모델 목록을 사용할 수 없습니다. ID를 직접 입력할 수 있습니다.',
   title: 'AI 제공자',
   subtitle:
     'Pipewright는 자체 모델을 학습하지 않습니다 —— 실패 진단과 설정 생성을 위해 직접 보유한 LLM을 연결하세요. 키는 이 인스턴스의 암호화된 보관소에만 저장되며 절대 외부로 유출되지 않습니다.',
@@ -21,13 +33,15 @@ export default {
   providerConfig: '{name} 구성',
   lastSaved: '마지막 저장 {time}',
 
-  apiKeyHint: '입력 후에는 마스킹된 값만 표시됩니다. 비워 두면 기존 키를 유지합니다',
+  apiKeyHint:
+    '입력 후에는 마스킹된 값만 표시됩니다. 비워 두면 기존 키를 유지합니다',
   apiKeyReplacing: '교체 중…',
   apiKeyConfigured: '구성됨 ••••(비워 두면 변경 없음)',
   apiKeyPaste: 'API Key 붙여넣기…',
   apiKeyMaskedAria: '구성된 마스크: {masked}',
 
-  ollamaHint: '로컬 Ollama는 API Key가 필요 없습니다 —— Ollama 서비스가 지정된 주소에서 실행 중인지 확인하세요.',
+  ollamaHint:
+    '로컬 Ollama는 API Key가 필요 없습니다 —— Ollama 서비스가 지정된 주소에서 실행 중인지 확인하세요.',
 
   baseUrlLabel: '접속 주소 (Base URL)',
   baseUrlHint: '기본값: {url}',
@@ -40,11 +54,13 @@ export default {
   testFail: '연결 실패',
 
   budgetLabel: '월 Token 한도',
-  budgetHint: '초과 시 AI 진단을 일시 중지합니다(비워 두면 무제한. 이번 주기에는 선언만, 다음 Epic에서 강제 적용)',
+  budgetHint:
+    '초과 시 AI 진단을 일시 중지합니다(비워 두면 무제한. 이번 주기에는 선언만, 다음 Epic에서 강제 적용)',
   budgetPlaceholder: '예: 500000, 비워 두면 무제한',
 
   enableAi: 'AI 기능 활성화',
-  enableAiDesc: '끄면 AI 진단이 조용히 건너뛰며 핵심 CI/CD 파이프라인에는 영향이 없습니다',
+  enableAiDesc:
+    '끄면 AI 진단이 조용히 건너뛰며 핵심 CI/CD 파이프라인에는 영향이 없습니다',
 
   dirtyNote: '저장하지 않은 변경 사항이 있습니다',
   cleanNote: '변경 사항 없음',
@@ -54,9 +70,11 @@ export default {
   toastSaveSuccess: 'AI 설정이 저장되었습니다',
   toastSaveFailed: '저장 실패',
 
-  errServerUnreachable: '서버에 연결할 수 없습니다. 백엔드가 실행 중인지 확인한 후 다시 시도하세요.',
+  errServerUnreachable:
+    '서버에 연결할 수 없습니다. 백엔드가 실행 중인지 확인한 후 다시 시도하세요.',
   errServerUnreachableShort: '서버에 연결할 수 없습니다',
-  errVaultUnconfigured: '보관소에 master key가 구성되지 않았습니다. PIPEWRIGHT_MASTER_KEY 환경 변수를 설정하세요.',
+  errVaultUnconfigured:
+    '보관소에 master key가 구성되지 않았습니다. PIPEWRIGHT_MASTER_KEY 환경 변수를 설정하세요.',
   errLoadFailed: '불러오기 실패({status})',
   errLoadGeneric: 'AI 설정을 불러오지 못했습니다. 잠시 후 다시 시도하세요.',
   errBudgetInvalid: '월 token 한도는 양의 정수이거나 비워 두어야 합니다',

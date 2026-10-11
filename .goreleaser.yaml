@@ -137,5 +137,5 @@ release:
 
     Docker:
     ```sh
-    docker run -d -p 8080:8080 -v pipewright-data:/data ghcr.io/huangchengsir/pipewright:{{ .Tag }}
+    docker run -d -p 8080:8080 -v pipewright-data:/data ghcr.io/huangchengsir/pipewright:{{ .Version }}
     ```

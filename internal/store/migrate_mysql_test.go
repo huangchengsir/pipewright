@@ -27,7 +27,7 @@ func TestMigrationSetsMatch(t *testing.T) {
 	if len(sq) == 0 {
 		t.Fatal("未找到任何迁移")
 	}
-	if len(sq) != 50 || len(my) != 50 || !sq["0051_ops_chat"] || !my["0051_ops_chat"] {
+	if len(sq) != 51 || len(my) != 51 || !sq["0052_ops_chat_contexts"] || !my["0052_ops_chat_contexts"] {
 		t.Fatalf("expected 50 paired migrations including ops chat: sqlite=%d mysql=%d", len(sq), len(my))
 	}
 }

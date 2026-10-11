@@ -425,7 +425,7 @@ func TestCancelReturnsErrCanceled(t *testing.T) {
 // TestPushFlow 验证 image + 配 registry 时:计划含推送步骤;login 口令经 stdin(不进 argv);
 // tag/push 执行;产物 reference 改为远端 tag。
 func TestPushFlow(t *testing.T) {
-	const regPass = "registry-password-xyz"
+	const regPass = " registry:password:xyz "
 	cmdr := newFakeCommander()
 	cmdr.script("build", fakeCmd{stdoutLines: []string{"built"}, exitCode: 0})
 	cmdr.script("inspect", fakeCmd{stdoutLines: []string{`{"Id":"sha256:x","RepoDigests":["reg.example.com/app@sha256:deadbeef"],"Size":100}`}, exitCode: 0})

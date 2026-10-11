@@ -3,6 +3,7 @@ package opschat
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"strconv"
 	"strings"
 	"sync"
@@ -100,18 +101,101 @@ func (s *Service) entryPage(ctx context.Context, q querier, id, cursor string, l
 			return out, ErrStorage
 		}
 		var body struct {
-			Text   string
-			Status string
+			Text        string
+			Status      string
+			Summary     *RunSummary
+			RefSeq      int64
+			RevisionSeq int64
 		}
 		if err = s.open(b, &body); err != nil {
 			return out, err
 		}
 		e.Text, e.Status = body.Text, body.Status
+		e.Summary = body.Summary
+		e.ReplaceSeq = body.RefSeq
+		e.RevisionSeq = body.RevisionSeq
+		if e.RevisionSeq == 0 {
+			e.RevisionSeq = e.Seq
+		}
 		e.CreatedAt = time.UnixMilli(created).UTC()
 		out.Entries = append(out.Entries, s.publicEntry(e))
 	}
 	if rows.Err() != nil {
 		return out, ErrStorage
+	}
+	rows.Close()
+	// Events carry references on disk and only the changed object over SSE.
+	targetNames := map[entryTargetKey]map[string]string{}
+	for i := range out.Entries {
+		e := &out.Entries[i]
+		if e.ReplaceSeq != 0 {
+			var b []byte
+			var kind string
+			if q.QueryRowContext(ctx, "SELECT body,kind FROM ops_chat_entries WHERE session_id=? AND seq=?", id, e.ReplaceSeq).Scan(&b, &kind) != nil {
+				return out, ErrStorage
+			}
+			var body struct {
+				Text, Status string
+				RevisionSeq  int64
+			}
+			if err = s.open(b, &body); err != nil {
+				return out, err
+			}
+			e.Kind, e.Text, e.Status = kind, body.Text, body.Status
+			e.RevisionSeq = body.RevisionSeq
+		}
+		if e.RunID != "" && (e.Kind == "assistant" || e.Kind == "analysis") {
+			key := entryTargetKey{run: e.RunID, kind: e.Kind}
+			names, loaded := targetNames[key]
+			if !loaded {
+				names, err = s.entryTargetNames(ctx, q, id, key)
+				if err != nil {
+					return out, err
+				}
+				targetNames[key] = names
+			}
+			e.TargetNames = names
+		}
+		if e.CallID != "" {
+			c, err := s.call(ctx, q, id, e.CallID)
+			if err != nil {
+				return out, err
+			}
+			v := s.publicCall(c.Body.View)
+			e.Call = &v
+		}
+		if e.RunID != "" && (e.Kind == "run_status" || e.Kind == "user" || e.Kind == "confirmation_ready" || e.Kind == "cancel_requested") {
+			r, err := s.run(ctx, q, id, e.RunID)
+			if err != nil {
+				return out, err
+			}
+			e.Run = &r.View
+			e.RequestID = r.View.ClientRequestID
+		}
+		if e.Kind == "run_status" || e.Kind == "session_updated" || e.Kind == "cancel_requested" {
+			view := s.publicSession(sr.View)
+			e.Session = &view
+		}
+		if e.Kind == "confirmation_ready" {
+			a, err := s.approval(ctx, q, id, e.RunID)
+			if err != nil {
+				return out, err
+			}
+			view := s.publicConfirmation(a.View)
+			e.Confirmation = &view
+		}
+		*e = s.publicEntry(*e)
+		if events {
+			encoded, err := json.Marshal(e)
+			if err != nil {
+				return out, ErrStorage
+			}
+			// Escaping can expand bounded SSH output sixfold. Snapshots keep
+			// the full projection; this hint stays below the SSE parser cap.
+			if len(encoded) > (256<<10)-1024 {
+				*e = Entry{SessionID: id, Seq: e.Seq, Kind: "snapshot_required", CreatedAt: e.CreatedAt}
+			}
+		}
 	}
 	if len(out.Entries) > 0 {
 		out.Cursor = EventCursor(id, out.Entries[len(out.Entries)-1].Seq)
@@ -142,7 +226,13 @@ func (s *Service) Events(ctx context.Context, id, after string, limit int) (Entr
 	return out, err
 }
 func (s *Service) List(ctx context.Context, before string, limit int) (SessionPage, error) {
+	return s.ListContext(ctx, before, limit, "")
+}
+func (s *Service) ListContext(ctx context.Context, before string, limit int, key string) (SessionPage, error) {
 	out := SessionPage{Sessions: []Session{}}
+	if err := s.validateContext(ctx, key); err != nil {
+		return out, err
+	}
 	limit, err := pageLimit(limit)
 	if err != nil {
 		return out, err
@@ -151,8 +241,15 @@ func (s *Service) List(ctx context.Context, before string, limit int) (SessionPa
 		return out, err
 	}
 	err = s.transaction(ctx, false, func(tx *sql.Tx) error {
-		if tx.QueryRowContext(ctx, "SELECT active_session FROM ops_chat_state WHERE id=1").Scan(&out.ActiveSessionID) != nil {
-			return ErrStorage
+		if key == "" {
+			if tx.QueryRowContext(ctx, "SELECT active_session FROM ops_chat_state WHERE id=1").Scan(&out.ActiveSessionID) != nil {
+				return ErrStorage
+			}
+		} else {
+			err := tx.QueryRowContext(ctx, "SELECT session_id FROM ops_chat_contexts WHERE context_key=?", key).Scan(&out.ActiveSessionID)
+			if err != nil && err != sql.ErrNoRows {
+				return ErrStorage
+			}
 		}
 		if before != "" {
 			if _, e := s.session(ctx, tx, before); e != nil {
@@ -212,6 +309,16 @@ func (s *Service) Snapshot(ctx context.Context, id string) (*Snapshot, error) {
 		}
 		out.Session = s.publicSession(sr.View)
 		out.Watermark = sr.View.Watermark
+		out.Entries, e = s.entryPage(ctx, tx, id, "", 50, false)
+		if e != nil {
+			return e
+		}
+		visibleRuns := map[string]bool{sr.View.ActiveRunID: true}
+		for _, entry := range out.Entries.Entries {
+			if entry.RunID != "" {
+				visibleRuns[entry.RunID] = true
+			}
+		}
 		rows, e := tx.QueryContext(ctx, "SELECT id FROM ops_chat_runs WHERE session_id=? ORDER BY created_at DESC,id DESC LIMIT 100", id)
 		if e != nil {
 			return ErrStorage
@@ -246,12 +353,14 @@ func (s *Service) Snapshot(ctx context.Context, id string) (*Snapshot, error) {
 				return e
 			}
 			out.Runs = append(out.Runs, r.View)
-			calls, e := s.calls(ctx, tx, id, rid)
-			if e != nil {
-				return e
-			}
-			for _, c := range calls {
-				out.Calls = append(out.Calls, s.publicCall(c.Body.View))
+			if visibleRuns[rid] {
+				calls, e := s.calls(ctx, tx, id, rid)
+				if e != nil {
+					return e
+				}
+				for _, c := range calls {
+					out.Calls = append(out.Calls, s.publicCall(c.Body.View))
+				}
 			}
 			a, e := s.approval(ctx, tx, id, rid)
 			if e == nil {
@@ -260,8 +369,23 @@ func (s *Service) Snapshot(ctx context.Context, id string) (*Snapshot, error) {
 				return e
 			}
 		}
-		out.Entries, e = s.entryPage(ctx, tx, id, "", 50, false)
-		return e
+		// Older visible runs may fall outside the metadata window; entry projections
+		// already carry their calls. Avoid duplicating current-page output in JSON.
+		loaded := map[string]bool{}
+		for _, call := range out.Calls {
+			loaded[call.ID] = true
+		}
+		for i := range out.Entries.Entries {
+			entry := &out.Entries.Entries[i]
+			if entry.Call != nil {
+				if !loaded[entry.Call.ID] {
+					out.Calls = append(out.Calls, *entry.Call)
+					loaded[entry.Call.ID] = true
+				}
+				entry.Call = nil
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err

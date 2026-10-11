@@ -1,4 +1,59 @@
 export default {
+  continuationError: {
+    preserved: 'Collected facts are preserved. No later server tasks were executed.',
+    unknown: 'Continuation planning could not be completed.',
+    unavailable: 'The AI endpoint is unavailable.',
+    invalid_plan: 'The follow-up tasks or arguments are unsupported.',
+  },
+  exec: {
+    program: 'Program',
+    argument: 'Argument {index}',
+    addArgument: 'Add argument',
+    removeArgument: 'Remove argument {index}',
+    argv: 'Exact argv',
+    invalidArgs: 'A program is required. Use ASCII letters, digits, _ . /, with + or - only after the first character; not a dot, parent or root path, or trailing /. Maximum 61 tokens, 2048 UTF-8 bytes per token and 4096 total. Control characters (C0/C1), including NUL, tabs and newlines, are not allowed.',
+    risk: 'Non-interactive container execution may change data or access secrets. An exit code only indicates command completion, not that a business change succeeded. Stopping does not undo changes.',
+  },
+  planningError: {
+    unknown:
+      'Planning did not complete. Older requests have no recorded cause.',
+    token_limit: 'Output token limit reached without a complete plan.',
+    timeout: 'Task planning timed out.',
+    rejected:
+      'The model rejected the request. Check the model, credentials or quota.',
+    invalid_response: 'The model returned an invalid or incomplete plan.',
+    unavailable:
+      'The AI endpoint is unavailable. No server tasks were executed.',
+    input_limit: 'The plan exceeds the input or output limit.',
+    invalid_plan:
+      'The generated tasks or arguments are unsupported. No server tasks were executed.',
+  },
+  analysisError: {
+    unknown:
+      'AI analysis did not complete. Collected results are preserved. Older requests have no recorded cause; analysis can be retried manually.',
+    token_limit:
+      'AI output token limit reached without a complete analysis. Collected results are preserved.',
+    timeout: 'AI analysis timed out. Collected results are preserved.',
+    rejected:
+      'The model rejected the analysis request. Check the model, credentials or quota. Collected results are preserved.',
+    invalid_response:
+      'The model response was invalid or incomplete. Collected results are preserved.',
+    unavailable:
+      'The AI endpoint is unavailable. Collected results are preserved.',
+    input_limit:
+      'This turn exceeds the analysis input limit. No results were sent; analyze by server instead.',
+  },
+  loadedItems: 'Loaded items',
+  analyzeLoaded: 'Analyze loaded items',
+  selectedLimit: '{count} selected / maximum {limit} servers',
+  waiting: 'Waiting for reply',
+  submitting: 'Submitting',
+  runResults: 'Turn results',
+  analyzeRun: 'Analyze entire turn',
+  analyzeGroup: 'Analyze this server',
+  localSummary: 'Local facts',
+  occupantsMissing: 'Occupier data unavailable',
+  occupants: { processes: 'Processes', containers: 'Containers' },
   title: 'AI Operations',
   history: 'Sessions',
   newSession: 'New session',
@@ -84,6 +139,7 @@ export default {
     unknown: 'Unknown result',
   },
   tools: {
+    docker_exec: 'Run program in container',
     host_resources: 'Host resources',
     host_processes: 'Processes',
     host_ports: 'Listening ports',
@@ -115,7 +171,7 @@ export default {
     ops_confirmation_changed:
       'Confirmation expired or target changed. Recheck and confirm again.',
     ops_consent_changed:
-      'Content or model configuration changed. Preview and consent again.',
+      'Content, targets or model configuration changed. Review and request analysis again.',
     ops_quota:
       'Local storage or execution limit reached. Narrow the scope or start a new session.',
     ops_unavailable:

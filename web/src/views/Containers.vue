@@ -427,7 +427,7 @@ onUnmounted(() => {
     />
 
     <!-- AI 助手抽屉 -->
-    <ContainerAiPanel v-if="showAi" @close="showAi = false" />
+    <ContainerAiPanel v-if="showAi" context="containers" @close="showAi = false" />
 
     <!-- 容器详情 inspect 弹窗 -->
     <ContainerInspectModal

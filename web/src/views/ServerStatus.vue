@@ -196,7 +196,7 @@ onUnmounted(() => {
         </template>
       </ServerMetricsCard>
     </div>
-    <ContainerAiPanel v-if="aiTargets !== null" :initial-server-ids="aiTargets" @close="aiTargets = null" />
+    <ContainerAiPanel v-if="aiTargets !== null" context="overview" :initial-server-ids="aiTargets" @close="aiTargets = null" />
   </div>
 </template>
 

@@ -66,10 +66,26 @@ export async function getAISettings(): Promise<AISettings> {
   return http.get<AISettings>('/api/settings/ai')
 }
 
-export async function saveAISettings(input: SaveAISettingsInput): Promise<AISettings> {
+export async function saveAISettings(
+  input: SaveAISettingsInput,
+): Promise<AISettings> {
   return http.put<AISettings>('/api/settings/ai', input)
 }
 
-export async function testAIConnection(draft?: TestAIConnectionInput): Promise<AITestResult> {
+export async function testAIConnection(
+  draft?: TestAIConnectionInput,
+): Promise<AITestResult> {
   return http.post<AITestResult>('/api/settings/ai/test', draft ?? {})
+}
+
+export interface AIModelsResult {
+  ok: boolean
+  items: { id: string; name: string }[]
+  error?: string
+}
+export function listAIModels(
+  draft: TestAIConnectionInput,
+  signal?: AbortSignal,
+): Promise<AIModelsResult> {
+  return http.post('/api/settings/ai/models', draft, { signal })
 }

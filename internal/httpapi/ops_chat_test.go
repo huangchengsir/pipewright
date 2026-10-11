@@ -228,6 +228,33 @@ func TestOpsCRUDCASStrictBodiesAndPureReads(t *testing.T) {
 	opsHTTP(t, h, "GET", base, "", 404)
 }
 
+func TestOpsEntryContextRoutes(t *testing.T) {
+	s, _, e, a, m := opsFixture(t)
+	h := New(nil, a, WithOpsChat(s))
+	prefix := "/api/ai/ops/sessions"
+	ids := map[string]string{}
+	for _, key := range []string{"containers", "overview", "servers", "terminal:" + e.id} {
+		w := opsHTTP(t, h, "POST", prefix, fmt.Sprintf(`{"context":%q}`, key), 201)
+		var session opschat.Session
+		if err := json.Unmarshal(w.Body.Bytes(), &session); err != nil {
+			t.Fatal(err)
+		}
+		ids[key] = session.ID
+	}
+	for key, id := range ids {
+		w := opsHTTP(t, h, "GET", prefix+"?context="+key, "", 200)
+		var page opschat.SessionPage
+		if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil || page.ActiveSessionID != id {
+			t.Fatal(key, page, err)
+		}
+	}
+	opsHTTP(t, h, "GET", prefix+"?context=http://evil", "", 422)
+	opsHTTP(t, h, "POST", prefix+"/"+ids["containers"]+"/activate", `{"context":"invalid"}`, 422)
+	if e.calls.Load() != 0 || m.calls.Load() != 0 {
+		t.Fatal("context restore executed remote work")
+	}
+}
+
 func TestOpsTurnsIdempotenceCrossSessionAndAnalysisConsent(t *testing.T) {
 	s, _, e, a, m := opsFixture(t)
 	h := New(nil, a, WithOpsChat(s))

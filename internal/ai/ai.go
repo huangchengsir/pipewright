@@ -185,7 +185,7 @@ func (s *service) Save(ctx context.Context, in SaveInput) (*Config, error) {
 	}
 
 	// 读既有行(判 apiKey 保留语义 + budget 兜底);无行视为空默认。
-	_, existingSealed, err := s.load(ctx)
+	existing, existingSealed, err := s.load(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -200,6 +200,9 @@ func (s *service) Save(ctx context.Context, in SaveInput) (*Config, error) {
 
 	// apiKey 保留语义:nil/空 → 沿用既有密文;非空 → 轮换(SealSecret 加密)。
 	sealed := existingSealed
+	if provider != "" && !sameDestination(provider, baseURL, existing) {
+		sealed = nil
+	}
 	if in.APIKey != nil && *in.APIKey != "" {
 		if s.vault == nil {
 			return nil, ErrVaultUnconfigured
@@ -247,14 +250,11 @@ func (s *service) Save(ctx context.Context, in SaveInput) (*Config, error) {
 
 func (s *service) Test(ctx context.Context, in TestInput) (*TestResult, error) {
 	// 读既有行作为 draft 字段的回退值(apiKey 回退到已存密钥)。
-	_, existingSealed, err := s.load(ctx)
+	current, existingSealed, err := s.load(ctx)
 	if err != nil {
 		return nil, err
 	}
-	var existing Config
-	if c, _, lerr := s.load(ctx); lerr == nil {
-		existing = *c
-	}
+	existing := *current
 
 	provider := existing.Provider
 	if in.Provider != nil {
@@ -283,7 +283,7 @@ func (s *service) Test(ctx context.Context, in TestInput) (*TestResult, error) {
 	apiKey := ""
 	if in.APIKey != nil && *in.APIKey != "" {
 		apiKey = *in.APIKey
-	} else if provider != ProviderOllama && len(existingSealed) > 0 {
+	} else if provider != ProviderOllama && len(existingSealed) > 0 && sameDestination(provider, baseURL, &existing) {
 		plain, oerr := s.openSecret(existingSealed)
 		if oerr != nil {
 			return nil, oerr
@@ -302,12 +302,21 @@ func (s *service) Test(ctx context.Context, in TestInput) (*TestResult, error) {
 
 // probe 向 provider 发轻量探测;2xx → ok+延迟;否则 ok=false + 人读错误(绝无密钥)。
 func (s *service) probe(ctx context.Context, provider, baseURL, apiKey string) *TestResult {
+	return (&opsModel{service: s}).probe(ctx, provider, baseURL, apiKey)
+}
+
+func (m *opsModel) probe(ctx context.Context, provider, baseURL, apiKey string) *TestResult {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
 	// SSRF 收口:baseUrl 用户可控,探测向其发请求——拒云元数据/链路本地/未指定;
 	// 回环仅 ollama(本地默认 localhost:11434)放行,其余 provider 拒回环;私网放行(自托管,
 	// 与仓库既定策略一致)。否则管理员可借 test 探测做内网/元数据端口探活(盲 SSRF)。
-	if !validProbeURL(provider, baseURL) {
+	_, catalogBase, _ := catalogDestination(provider, baseURL)
+	client, cleanup, pinErr := m.pinnedClient(ctx, catalogBase)
+	if pinErr != nil {
 		return &TestResult{OK: false, Error: "baseUrl 不被允许:仅 http/https,且不可指向云元数据/链路本地地址"}
 	}
+	defer cleanup()
 
 	reqURL, header := probeRequest(provider, baseURL, apiKey)
 
@@ -321,7 +330,7 @@ func (s *service) probe(ctx context.Context, provider, baseURL, apiKey string) *
 		req.Header.Set(k, v)
 	}
 
-	resp, err := s.client.Do(req)
+	resp, err := client.Do(req)
 	latency := time.Since(start).Milliseconds()
 	if err != nil {
 		return &TestResult{OK: false, LatencyMs: latency, Error: mapTransportError(err)}
@@ -349,20 +358,23 @@ func (s *service) probe(ctx context.Context, provider, baseURL, apiKey string) *
 //   - openai:GET {baseUrl}/v1/models;header Authorization: Bearer <key>
 //   - ollama:GET {baseUrl}/api/tags;无 key
 func probeRequest(provider, baseURL, apiKey string) (string, map[string]string) {
-	base := strings.TrimRight(baseURL, "/")
+	_, _, deepSeek := catalogDestination(provider, baseURL)
+	if deepSeek {
+		return apiEndpoint(provider, baseURL, "models"), map[string]string{"Authorization": "Bearer " + apiKey}
+	}
 	header := map[string]string{}
 	switch provider {
 	case ProviderClaude:
 		header["x-api-key"] = apiKey
 		header["anthropic-version"] = "2023-06-01"
-		return base + "/v1/models", header
+		return apiEndpoint(provider, baseURL, "models"), header
 	case ProviderOpenAI:
 		header["Authorization"] = "Bearer " + apiKey
-		return base + "/v1/models", header
+		return apiEndpoint(provider, baseURL, "models"), header
 	case ProviderOllama:
-		return base + "/api/tags", header
+		return apiEndpoint(provider, baseURL, "tags"), header
 	default:
-		return base, header
+		return endpointBase(provider, baseURL), header
 	}
 }
 

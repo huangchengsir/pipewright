@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -83,6 +84,9 @@ type service struct {
 	vault  vault.Vault
 	client *http.Client
 	states *stateStore
+	// Optional in-process test adapters; production uses the system resolver/dialer.
+	lookupIP    func(context.Context, string) ([]net.IPAddr, error)
+	dialContext func(context.Context, string, string) (net.Conn, error)
 }
 
 // New 构造 Service。
@@ -94,7 +98,12 @@ func New(db *sql.DB, v vault.Vault, client *http.Client) Service {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
-	return &service{db: db, vault: v, client: client, states: newStateStore()}
+	guarded := *client
+	guarded.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	if guarded.Timeout <= 0 || guarded.Timeout > 10*time.Second {
+		guarded.Timeout = 10 * time.Second
+	}
+	return &service{db: db, vault: v, client: &guarded, states: newStateStore()}
 }
 
 func (s *service) IssueState(sessionID string) (string, error) { return s.states.issue(sessionID) }
@@ -144,20 +153,25 @@ func (s *service) SaveApp(ctx context.Context, in SaveAppInput) (*AppConfig, err
 	}
 	baseURL := strings.TrimSpace(in.BaseURL)
 	// 自建必填 baseUrl,且须能推导端点(否则 authorize/exchange 必失败)。
-	if provider == ProviderCustom {
-		if _, derr := customProvider(baseURL); derr != nil {
+	if provider == ProviderCustom || provider == ProviderGitea {
+		if _, derr := resolveProvider(provider, baseURL); derr != nil {
 			return nil, derr
 		}
 	}
 
 	// 读既有行以实现 client_secret 保留语义。
-	_, _, existingSealed, _, _, _, err := s.loadApp(ctx, provider)
+	_, _, existingSealed, existingBase, _, _, err := s.loadApp(ctx, provider)
 	if err != nil {
 		return nil, err
 	}
 
 	// client_secret 保留语义:nil/空 → 沿用既有密文;非空 → 轮换(SealSecret 加密)。
 	sealed := existingSealed
+	// Do not carry an existing application secret to a changed self-hosted endpoint.
+	if (provider == ProviderCustom || provider == ProviderGitea) &&
+		strings.TrimRight(baseURL, "/") != strings.TrimRight(strings.TrimSpace(existingBase), "/") {
+		sealed = nil
+	}
 	if in.ClientSecret != nil && *in.ClientSecret != "" {
 		if s.vault == nil {
 			return nil, ErrVaultUnconfigured
@@ -225,11 +239,13 @@ func (s *service) AuthorizeURL(ctx context.Context, provider, state, redirectURI
 }
 
 func (s *service) Exchange(ctx context.Context, provider, code, redirectURI string) (*TokenResult, error) {
-	prov, clientID, sealed, baseURL, _, _, err := s.loadApp(ctx, provider)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	prov, clientID, sealed, baseURL, enabled, _, err := s.loadApp(ctx, provider)
 	if err != nil {
 		return nil, err
 	}
-	if clientID == "" || len(sealed) == 0 {
+	if clientID == "" || len(sealed) == 0 || !enabled {
 		return nil, ErrAppNotConfigured
 	}
 	if strings.TrimSpace(code) == "" {
@@ -277,12 +293,15 @@ func (s *service) requestToken(ctx context.Context, p Provider, clientID, client
 	// GitHub 默认回表单编码,显式要 JSON;其余平台本就回 JSON,加这头无害。
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := s.client.Do(req)
+	resp, err := s.request(req)
 	if err != nil {
 		return "", ErrExchangeFailed
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, (1<<16)+1))
+	if readErr != nil || len(body) > 1<<16 {
+		return "", ErrExchangeFailed
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", ErrExchangeFailed
 	}
@@ -294,7 +313,7 @@ func (s *service) requestToken(ctx context.Context, p Provider, clientID, client
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return "", ErrExchangeFailed
 	}
-	if parsed.AccessToken == "" {
+	if parsed.AccessToken == "" || parsed.Error != "" {
 		// 兑换失败(如 code 失效):人读错误,绝不回 provider 原文(可能含敏感细节)。
 		return "", ErrExchangeFailed
 	}
@@ -310,12 +329,15 @@ func (s *service) requestUser(ctx context.Context, p Provider, accessToken strin
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := s.client.Do(req)
+	resp, err := s.request(req)
 	if err != nil {
 		return "", ErrExchangeFailed
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, (1<<16)+1))
+	if readErr != nil || len(body) > 1<<16 {
+		return "", ErrExchangeFailed
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", ErrExchangeFailed
 	}

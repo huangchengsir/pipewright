@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -208,19 +209,31 @@ func (m *opsModel) chatWithTokens(ctx context.Context, provider, baseURL, model,
 
 	client, cleanup, pinErr := m.pinnedClient(ctx, baseURL)
 	if pinErr != nil {
+		if ctx.Err() != nil {
+			return "", generateTransportError(ctx, ctx.Err())
+		}
 		return "", fmt.Errorf("%w: endpoint is not allowed or DNS resolution failed", ErrGenerateFailed)
 	}
 	defer cleanup()
+	// Inference has its own deadline; the injected client's short probe timeout
+	// must not truncate a successful model response after headers arrive.
+	client.Timeout = 60 * time.Second
 	resp, err := client.Do(req)
 	if err != nil {
 		// 绝不回显底层错误(可能含 endpoint/凭据细节)。
-		return "", fmt.Errorf("%w: %s", ErrGenerateFailed, mapTransportError(err))
+		return "", generateTransportError(ctx, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxLLMRespBytes))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("%w: %s", ErrGenerateFailed, mapStatusError(resp.StatusCode))
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxLLMRespBytes+1))
+	if err != nil {
+		return "", generateTransportError(ctx, err)
+	}
+	if len(raw) > maxLLMRespBytes {
+		return "", fmt.Errorf("%w: 响应超过大小限制", ErrGenerateFailed)
 	}
 
 	text, err := extractChatText(provider, raw)
@@ -228,6 +241,20 @@ func (m *opsModel) chatWithTokens(ctx context.Context, provider, baseURL, model,
 		return "", err
 	}
 	return text, nil
+}
+
+func generateTransportError(ctx context.Context, err error) error {
+	// Only wrap safe context sentinels, never provider URLs, bodies or raw errors.
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	if errors.Is(err, context.Canceled) {
+		return fmt.Errorf("%w: 请求已取消: %w", ErrGenerateFailed, context.Canceled)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%w: %s: %w", ErrGenerateFailed, mapTransportError(err), context.DeadlineExceeded)
+	}
+	return fmt.Errorf("%w: %s", ErrGenerateFailed, mapTransportError(err))
 }
 
 // extractChatText 按 provider 从响应 JSON 取助手回复文本。

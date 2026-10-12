@@ -6,7 +6,8 @@ export default {
 
   providerCustomLabel: '자체 호스팅',
   providerGiteeDesc: 'Gitee',
-  providerCustomDesc: '자체 호스팅 GitLab / Gitea 등',
+  providerCustomDesc: '자체 호스팅 GitLab',
+  providerGiteaDesc: '자체 호스팅 Gitea',
 
   statusEnabled: '활성화됨',
   statusConfiguredIdle: '구성됨 · 비활성',

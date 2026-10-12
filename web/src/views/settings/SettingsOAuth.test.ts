@@ -47,8 +47,7 @@ describe('SettingsOAuth', () => {
     const wrapper = mount(SettingsOAuth)
     await flushPromises()
 
-    // four provider cards (gitee/github/gitlab/custom)
-    expect(wrapper.findAll('[data-provider]')).toHaveLength(4)
+    expect(wrapper.findAll('[data-provider]')).toHaveLength(5)
 
     // github clientId hydrated from server
     const githubInput = wrapper.get('#oauth-clientid-github')
@@ -69,13 +68,28 @@ describe('SettingsOAuth', () => {
     expect(wrapper.text()).toContain('••••a91f')
   })
 
-  it('only the self-hosted (custom) card exposes a Base URL field', async () => {
+  it('self-hosted GitLab and Gitea cards expose a Base URL field', async () => {
     getOAuthApps.mockResolvedValue([])
     const wrapper = mount(SettingsOAuth)
     await flushPromises()
 
     expect(wrapper.find('#oauth-baseurl-custom').exists()).toBe(true)
+    expect(wrapper.find('#oauth-baseurl-gitea').exists()).toBe(true)
     expect(wrapper.find('#oauth-baseurl-github').exists()).toBe(false)
+  })
+
+  it('saves Gitea separately and retains its subpath without changing GitLab', async () => {
+    const app = makeApp({ provider: 'gitea', baseUrl: 'https://git.example/gitea/' })
+    getOAuthApps.mockResolvedValue([app, makeApp({ provider: 'custom', baseUrl: 'https://gitlab.example/' })])
+    saveOAuthApp.mockResolvedValue(app)
+    const wrapper = mount(SettingsOAuth)
+    await flushPromises()
+    await wrapper.get('[data-provider="gitea"] form').trigger('submit')
+    await flushPromises()
+    expect(saveOAuthApp).toHaveBeenCalledWith('gitea', {
+      clientId: 'existing-id', baseUrl: 'https://git.example/gitea/', enabled: true,
+    })
+    expect((wrapper.get('#oauth-baseurl-custom').element as HTMLInputElement).value).toBe('https://gitlab.example/')
   })
 
   it('blocks save when enabling a provider with no Client ID', async () => {

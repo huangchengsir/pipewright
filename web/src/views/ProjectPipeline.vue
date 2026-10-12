@@ -4,7 +4,7 @@
  * Tabs: 流水线编排 / 变量与缓存 / 触发设置 / 环境与凭据
  * URL state: ?tab=canvas|vars|triggers|envs  (shareable)
  */
-import { ref, shallowRef, computed, onMounted, watch, nextTick } from 'vue'
+import { ref, shallowRef, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { getPipeline, savePipeline, type PipelineDTO, type PipelineStage } from '../api/pipeline'
@@ -35,6 +35,8 @@ import YamlImportModal from '../components/pipeline/YamlImportModal.vue'
 import TemplatePickerModal from '../components/pipeline/TemplatePickerModal.vue'
 import PacPreviewModal from '../components/pipeline/PacPreviewModal.vue'
 import ProjectPreviewConfig from '../components/pipeline/ProjectPreviewConfig.vue'
+import { usePipelineDraftSave, type PipelineDraftParticipant } from '../composables/usePipelineDraftSave'
+import { useConfirm } from '../composables/useConfirm'
 
 // ─── Route ────────────────────────────────────────────────────────────────────
 
@@ -84,10 +86,7 @@ const guideEnabled = computed(() => route.query.onboardingGuide === '1')
 const guideRef = ref<InstanceType<typeof PipelineGuide> | null>(null)
 const canvasRef = ref<InstanceType<typeof PipelineCanvas> | null>(null)
 const guideContext = ref<GuideContext>({ selectedJobId: null, pickerOpen: false })
-const guideDirty = computed(() => !!pipeline.value && (
-  JSON.stringify(editStages.value) !== persistedStages.value
-  || (!!settings.value && !!editBuild.value && (JSON.stringify(editBuild.value) !== JSON.stringify(settings.value.build)
-    || JSON.stringify(editEnvs.value) !== JSON.stringify(settings.value.environments)))))
+const stagesDirty = computed(() => !!pipeline.value && JSON.stringify(editStages.value) !== persistedStages.value)
 
 async function locateGuide(phase: GuidePhase | 'conditions'): Promise<void> {
   if (phase !== 'save') {
@@ -110,13 +109,16 @@ function applyPipeline(dto: PipelineDTO): void {
 }
 
 async function loadPipeline(): Promise<void> {
+  const id = projectId.value
   loadState.value = 'loading'
   loadError.value = ''
   try {
-    const dto = await getPipeline(projectId.value)
+    const dto = await getPipeline(id)
+    if (id !== projectId.value) return
     applyPipeline(dto)
     loadState.value = 'idle'
   } catch (err) {
+    if (id !== projectId.value) return
     if (err instanceof HttpError) {
       if (err.status === 0) {
         loadError.value = t('projectPipeline.errNoServer')
@@ -140,6 +142,10 @@ const editEnvs     = ref<Environment[]>([])
 const credentials  = ref<Credential[]>([])
 const servers      = ref<Server[]>([])
 const channels     = ref<NotificationChannel[]>([])
+const settingsLoadState = shallowRef<LoadState>('loading')
+const settingsDirty = computed(() => !!settings.value && !!editBuild.value && (
+  JSON.stringify(editBuild.value) !== JSON.stringify(settings.value.build)
+  || JSON.stringify(editEnvs.value) !== JSON.stringify(settings.value.environments)))
 
 function applySettings(dto: SettingsDTO): void {
   settings.value = dto
@@ -148,20 +154,24 @@ function applySettings(dto: SettingsDTO): void {
 }
 
 async function loadSettings(): Promise<void> {
+  const id = projectId.value
+  settingsLoadState.value = 'loading'
   try {
     const [dto, creds, srvs, chs] = await Promise.all([
-      getSettings(projectId.value),
+      getSettings(id),
       listCredentials().catch(() => [] as Credential[]),
       listServers().catch(() => [] as Server[]),
       listChannels().catch(() => [] as NotificationChannel[]),
     ])
+    if (id !== projectId.value) return
     applySettings(dto)
     credentials.value = creds
     servers.value = srvs
     channels.value = chs
+    settingsLoadState.value = 'idle'
   } catch {
-    // Settings load failure is non-fatal for the canvas; the vars/envs tabs show
-    // their own empty state until a successful save. Surfaced on save attempts.
+    if (id !== projectId.value) return
+    settingsLoadState.value = 'error'
   }
 }
 
@@ -173,7 +183,16 @@ function handleEnvsUpdate(envs: Environment[]): void {
   editEnvs.value = envs
 }
 
-watch(projectId, () => { void loadProject(); void loadPipeline(); void loadSettings() })
+watch(projectId, () => {
+  project.value = null
+  pipeline.value = null
+  settings.value = null
+  editBuild.value = null
+  editEnvs.value = []
+  saveBanner.value = ''
+  saveSuccess.value = false
+  void loadProject(); void loadPipeline(); void loadSettings()
+})
 onMounted(() => { void loadProject(); void loadPipeline(); void loadSettings() })
 
 // ─── Canvas update ────────────────────────────────────────────────────────────
@@ -184,7 +203,56 @@ function handleCanvasUpdate(stages: PipelineStage[]): void {
 
 // ─── Save pipeline ────────────────────────────────────────────────────────────
 
-const saveSubmitting = ref(false)
+const triggersRef = ref<InstanceType<typeof TriggersPanel> | null>(null)
+const previewRef = ref<InstanceType<typeof ProjectPreviewConfig> | null>(null)
+const confirm = useConfirm()
+
+function triggerParticipant(part: PipelineDraftParticipant | null): PipelineDraftParticipant | null {
+  if (!part) return null
+  return {
+    ready: part.ready,
+    dirty: part.dirty,
+    saving: part.saving,
+    validate: () => {
+      const valid = part.validate?.() ?? true
+      if (!valid) setTab('triggers')
+      return valid
+    },
+    save: async () => {
+      const saved = await part.save()
+      if (!saved) setTab('triggers')
+      return saved
+    },
+  }
+}
+
+const draftSave = usePipelineDraftSave({
+  participants: () => [
+    {
+      ready: loadState.value === 'idle' && !!pipeline.value,
+      dirty: stagesDirty.value,
+      saving: false,
+      saveEvenIfClean: true,
+      save: saveStagesDraft,
+    },
+    {
+      ready: settingsLoadState.value === 'idle' && !!editBuild.value,
+      dirty: settingsDirty.value,
+      saving: false,
+      save: saveSettingsDraft,
+    },
+    triggerParticipant(triggersRef.value),
+    triggerParticipant(previewRef.value),
+  ],
+  confirmDiscard: () => confirm.open({
+    title: t('opsChat.unsaved'),
+    body: t('opsChat.discardBody'),
+    confirmLabel: t('opsChat.discard'),
+    variant: 'danger',
+  }),
+})
+const saveSubmitting = draftSave.busy
+const guideDirty = draftSave.dirty
 const saveBanner     = ref('')
 const saveSuccess    = ref(false)
 let saveSuccessTimer: ReturnType<typeof setTimeout> | null = null
@@ -251,23 +319,14 @@ function buildSettingsPayload(): SaveSettingsInput | null {
 }
 
 async function handleSave(): Promise<void> {
-  saveSubmitting.value = true
+  if (saveSubmitting.value) return
   saveBanner.value     = ''
   saveSuccess.value    = false
 
   try {
-    // The vars/envs tabs persist build/deploy settings; canvas/triggers persist the spec.
-    if (activeTab.value === 'vars' || activeTab.value === 'envs') {
-      const payload = buildSettingsPayload()
-      if (payload) {
-        const dto = await saveSettings(projectId.value, payload)
-        applySettings(dto)
-        // Refresh credential masks in case a referenced credential changed.
-        credentials.value = await listCredentials().catch(() => credentials.value)
-      }
-    } else {
-      const dto = await savePipeline(projectId.value, { stages: editStages.value })
-      applyPipeline(dto)
+    if (!await draftSave.save()) {
+      saveBanner.value = t('projectPipeline.errSaveFailedRetry')
+      return
     }
     showSaveSuccess()
     void guideRef.value?.refresh()
@@ -281,10 +340,36 @@ async function handleSave(): Promise<void> {
     } else {
       saveBanner.value = t('projectPipeline.errSaveFailedRetry')
     }
-  } finally {
-    saveSubmitting.value = false
   }
 }
+
+async function saveStagesDraft(): Promise<boolean> {
+  const snapshot = JSON.stringify(editStages.value)
+  const dto = await savePipeline(projectId.value, { stages: JSON.parse(snapshot) as PipelineStage[] })
+  if (JSON.stringify(editStages.value) === snapshot && JSON.stringify(dto.stages) !== snapshot) applyPipeline(dto)
+  else {
+    pipeline.value = dto
+    persistedStages.value = JSON.stringify(dto.stages)
+  }
+  return true
+}
+
+async function saveSettingsDraft(): Promise<boolean> {
+  const payload = buildSettingsPayload()
+  if (!payload) return false
+  const snapshot = JSON.stringify({ build: editBuild.value, environments: editEnvs.value })
+  const dto = await saveSettings(projectId.value, JSON.parse(JSON.stringify(payload)) as SaveSettingsInput)
+  if (JSON.stringify({ build: editBuild.value, environments: editEnvs.value }) === snapshot) applySettings(dto)
+  else settings.value = dto
+  credentials.value = await listCredentials().catch(() => credentials.value)
+  return true
+}
+
+watch(guideDirty, (dirty) => { if (dirty) saveSuccess.value = false })
+onUnmounted(() => {
+  if (saveSuccessTimer) clearTimeout(saveSuccessTimer)
+  if (validationDebounce) clearTimeout(validationDebounce)
+})
 
 // ─── AI wizard (Story 2-5) ────────────────────────────────────────────────────
 
@@ -400,10 +485,13 @@ const project = ref<Project | null>(null)
 const projectName = computed(() => project.value?.name ?? String(route.params.id))
 
 async function loadProject(): Promise<void> {
+  const id = projectId.value
   try {
     const all = await listProjects()
-    project.value = all.find((p) => p.id === projectId.value) ?? null
+    if (id !== projectId.value) return
+    project.value = all.find((p) => p.id === id) ?? null
   } catch {
+    if (id !== projectId.value) return
     project.value = null // 面包屑回退显示 ID,不阻断编辑器
   }
 }
@@ -561,6 +649,11 @@ async function togglePrStatus(next: boolean): Promise<void> {
         <path d="M20 6 9 17l-5-5"/>
       </svg>
       <span>{{ t('projectPipeline.draftSaved') }}</span>
+    </div>
+
+    <div v-if="settingsLoadState === 'error'" class="pipeline-banner pipeline-banner--error" role="alert">
+      <span>{{ t('projectPipeline.errLoadFailedRetry') }}</span>
+      <button class="banner-retry" :disabled="saveSubmitting" @click="loadSettings">{{ t('projectPanels.triggers.retry') }}</button>
     </div>
 
     <!-- ─── Tab strip ──────────────────────────────────────────────────────── -->
@@ -726,7 +819,7 @@ async function togglePrStatus(next: boolean): Promise<void> {
             v-if="editBuild"
             :build="editBuild"
             :credentials="credentials"
-            :disabled="saveSubmitting"
+            :disabled="saveSubmitting || settingsLoadState !== 'idle'"
             @update="handleBuildUpdate"
           />
         </div>
@@ -740,9 +833,9 @@ async function togglePrStatus(next: boolean): Promise<void> {
           aria-labelledby="tab-triggers"
         >
           <div class="triggers-stack">
-            <TriggersPanel :project-id="projectId" />
+            <TriggersPanel ref="triggersRef" :project-id="projectId" :disabled="saveSubmitting" />
             <!-- R4 / E4.1: 每项目 PR 预览环境配置 -->
-            <ProjectPreviewConfig :project-id="projectId" />
+            <ProjectPreviewConfig ref="previewRef" :project-id="projectId" :disabled="saveSubmitting" />
           </div>
         </div>
 
@@ -755,9 +848,10 @@ async function togglePrStatus(next: boolean): Promise<void> {
           aria-labelledby="tab-envs"
         >
           <EnvCredsTab
+            :key="projectId"
             :environments="editEnvs"
             :credentials="credentials"
-            :disabled="saveSubmitting"
+            :disabled="saveSubmitting || settingsLoadState !== 'idle'"
             @update="handleEnvsUpdate"
           />
         </div>

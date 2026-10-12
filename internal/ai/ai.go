@@ -390,6 +390,13 @@ func mapStatusError(status int) string {
 
 // mapTransportError 把传输层错误映射为人读错误(超时/连接失败;绝无密钥/URL 细节泄漏 key)。
 func mapTransportError(err error) string {
+	if errors.Is(err, context.Canceled) {
+		return "请求已取消"
+	}
+	var timeout net.Error
+	if errors.As(err, &timeout) && timeout.Timeout() {
+		return "连接超时:provider 无响应"
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "连接超时:provider 无响应"
 	}

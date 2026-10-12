@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 )
@@ -16,8 +18,11 @@ import (
 // 全被当字面量,无注入面)。secret 构建变量经 --build-arg 注入但命令回显里只列 key(不打印值);
 // 仓库口令经 stdin(--password-stdin)注入,绝不进 argv/日志。
 type shellDriver struct {
-	bin  string
-	cmdr Commander
+	bin                     string
+	cmdr                    Commander
+	copyWorkspace           bool
+	workspaceReconcileMu    sync.Mutex
+	workspaceReconcileAfter time.Time
 }
 
 func (d *shellDriver) Binary() string { return d.bin }
@@ -58,9 +63,13 @@ func (d *shellDriver) Build(ctx context.Context, contextDir, dockerfile, localTa
 }
 
 func (d *shellDriver) RunToolchain(ctx context.Context, image, hostDir, workdir string, env []string, cmd []string, res pipeline.Resource, onLine func(stream, line string)) (int, error) {
+	if d.copyWorkspace {
+		return d.runCopiedWorkspace(ctx, image, hostDir, workdir, env, cmd, res, onLine)
+	}
+	mount := toolchainWorkspaceMount(workdir)
 	// docker run --rm -v hostDir:workdir -w workdir [--cpus N] [--memory M] [-e K=V...] image cmd...
-	args := []string{"run", "--rm", "-v", hostDir + ":" + workdir, "-w", workdir}
-	display := []string{"run", "--rm", "-v", hostDir + ":" + workdir, "-w", workdir}
+	args := []string{"run", "--rm", "-v", hostDir + ":" + mount, "-w", workdir}
+	display := []string{"run", "--rm", "-v", hostDir + ":" + mount, "-w", workdir}
 	// 资源规格(可选):cpu→--cpus、memory→--memory。值原样作 array 实参(不拼 shell;非法值由 docker 拒绝)。
 	// 资源 flag 非 secret,回显与真实参数一致。
 	if cpu := strings.TrimSpace(res.CPU); cpu != "" {
@@ -113,12 +122,14 @@ func (d *shellDriver) Push(ctx context.Context, remoteTag string, onLine func(st
 func (d *shellDriver) InspectImage(ctx context.Context, ref string) (string, int64, error) {
 	// 取 RepoDigests(推送后才有)+ Id + Size 的 JSON。
 	args := []string{"inspect", "--format", "{{json .}}", ref}
-	stdout, _, code, _ := d.cmdr.Run(ctx, d.bin, args, "")
+	stdout, _, code, err := d.cmdr.Run(ctx, d.bin, args, "")
 	if code != 0 || strings.TrimSpace(stdout) == "" {
 		return "", 0, nil // 不致命:产物仍 emit,metadata 退化
 	}
-	digest, size := parseInspect(stdout)
-	return digest, size, nil
+	if err != nil {
+		return "", 0, err
+	}
+	return inspectImageReference(stdout, ref)
 }
 
 // inspectShape 是 docker/nerdctl/podman inspect 输出里本包关心的子集。

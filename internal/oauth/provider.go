@@ -1,6 +1,6 @@
 // Package oauth 是「多 provider OAuth 凭据接入」的领域层。
 //
-// 运营者一次性配置各 git 平台(gitee|github|gitlab|custom)的 OAuth 应用(client_id +
+// 运营者一次性配置各 git 平台(gitee|github|gitlab|custom|gitea)的 OAuth 应用(client_id +
 // client_secret〔加密〕+ base_url〔自建用〕),用户在页面点「连接」→ 跳 git 平台授权 →
 // 平台回跳带 code → 后端用 client_id/client_secret 换 access_token → 拉登录名 → 把 token
 // 经 vault.Create 存成 git_token 凭据。之后克隆/构建直接复用该凭据(BasicAuth token)。
@@ -23,8 +23,10 @@ const (
 	ProviderGitHub = "github"
 	// ProviderGitLab 表示 gitlab.com。
 	ProviderGitLab = "gitlab"
-	// ProviderCustom 表示自建实例(据 base_url 推导 GitLab/Gitea 风格端点)。
+	// ProviderCustom 表示自建 GitLab 实例(保留旧配置语义)。
 	ProviderCustom = "custom"
+	// ProviderGitea selects Gitea explicitly; custom retains legacy GitLab behavior.
+	ProviderGitea = "gitea"
 )
 
 // 领域错误。错误体永不含 client_secret / access_token 明文。
@@ -117,6 +119,8 @@ func normalizeProvider(p string) (string, error) {
 		return ProviderGitLab, nil
 	case ProviderCustom:
 		return ProviderCustom, nil
+	case ProviderGitea:
+		return ProviderGitea, nil
 	default:
 		return "", ErrInvalidProvider
 	}
@@ -124,7 +128,7 @@ func normalizeProvider(p string) (string, error) {
 
 // resolveProvider 据 provider 名 + 配置的 baseURL 返回可用的 Provider 端点模板。
 //   - gitee/github/gitlab:返回内置预设(忽略 baseURL,除非将来允许覆盖)。
-//   - custom:据 baseURL 推导 GitLab/Gitea 风格端点(authorize/token/user)。
+//   - custom/gitea:据 baseURL 和明确选择的协议推导端点。
 //     custom 缺 baseURL → ErrBaseURLRequired。
 func resolveProvider(name, baseURL string) (Provider, error) {
 	n, err := normalizeProvider(name)
@@ -134,24 +138,28 @@ func resolveProvider(name, baseURL string) (Provider, error) {
 	if n == ProviderCustom {
 		return customProvider(baseURL)
 	}
+	if n == ProviderGitea {
+		base, err := providerBase(baseURL)
+		if err != nil {
+			return Provider{}, err
+		}
+		return Provider{
+			Name:          ProviderGitea,
+			AuthorizeURL:  base + "/login/oauth/authorize",
+			TokenURL:      base + "/login/oauth/access_token",
+			UserURL:       base + "/api/v1/user",
+			DefaultScopes: []string{"read:user", "read:repository"},
+			parseLogin:    parseLoginField("login"),
+		}, nil
+	}
 	return presets[n], nil
 }
 
-// customProvider 据自建实例 baseURL 推导 GitLab/Gitea 风格 OAuth 端点。
-// 约定(GitLab 与 Gitea 端点路径一致):
-//
-//	authorize: {base}/oauth/authorize
-//	token    : {base}/oauth/token
-//	user     : {base}/api/v4/user   (GitLab;Gitea 为 /api/v1/user,登录名字段均含 username/login)
-//
-// 用户解析器同时认 username/login 字段,兼容 GitLab(username)与 Gitea(login)。
+// customProvider preserves the legacy self-hosted GitLab protocol.
 func customProvider(baseURL string) (Provider, error) {
-	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	if base == "" {
-		return Provider{}, ErrBaseURLRequired
-	}
-	if _, err := url.Parse(base); err != nil {
-		return Provider{}, ErrBaseURLRequired
+	base, err := providerBase(baseURL)
+	if err != nil {
+		return Provider{}, err
 	}
 	return Provider{
 		Name:          ProviderCustom,
@@ -161,4 +169,16 @@ func customProvider(baseURL string) (Provider, error) {
 		DefaultScopes: []string{"read_repository", "read_user"},
 		parseLogin:    parseLoginField("username"),
 	}, nil
+}
+
+func providerBase(baseURL string) (string, error) {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	u, err := url.Parse(base)
+	if err != nil || len(base) > 4096 || u == nil ||
+		(u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" ||
+		u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(base, "#") ||
+		strings.Contains(u.Hostname(), "%") {
+		return "", ErrBaseURLRequired
+	}
+	return base, nil
 }

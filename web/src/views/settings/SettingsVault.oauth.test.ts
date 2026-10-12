@@ -79,6 +79,17 @@ describe('SettingsVault — OAuth callback query handling', () => {
     )
   })
 
+  it('renders an enabled Gitea connection and recognizes its callback', async () => {
+    getOAuthApps.mockResolvedValue([
+      { provider: 'gitea', clientId: 'a', baseUrl: 'https://git.example/gitea', enabled: true, maskedSecret: 'm', configured: true, updatedAt: null },
+    ])
+    routeQuery.value = { connected: 'gitea', account: 'alice' }
+    const wrapper = mountVault()
+    await flushPromises()
+    expect(wrapper.get('.connect-btn').text()).toContain('Gitea')
+    expect(toastSuccess).toHaveBeenCalledWith('已连接 Gitea(alice)', expect.any(Object))
+  })
+
   it('shows an error toast on ?oauth_error= and clears the query', async () => {
     routeQuery.value = { oauth_error: 'access_denied' }
     mountVault()

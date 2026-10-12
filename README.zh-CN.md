@@ -113,6 +113,8 @@ SETUP_SERVICE=1 PIPEWRIGHT_DB_DRIVER=mysql \
 
 ### ② docker compose(推荐自托管)
 
+在包含 Docker CLI 的 Pipewright 容器中挂载宿主 Docker socket 时，工具链任务会把源码复制到本轮独立 Docker 卷，并在结束后回收构建产物，无需共享挂载宿主 `/tmp`。二进制本机部署仍直接挂载工作区。标准 distroless 镜像不含 Docker CLI；本地构建仍需 CLI 镜像或二进制安装。挂载 Docker socket 等同授予宿主级控制权限，仅在可信环境开启。
+
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/huangchengsir/pipewright/master/docker-compose.yml
 curl -fsSLO https://raw.githubusercontent.com/huangchengsir/pipewright/master/.env.example

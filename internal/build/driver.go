@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -157,7 +158,17 @@ func DetectDriver(cmdr Commander) (Driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &shellDriver{bin: bin, cmdr: cmdr}, nil
+	return &shellDriver{bin: bin, cmdr: cmdr, copyWorkspace: bin == "docker" && isolatedDockerWorkspace()}, nil
+}
+
+func isolatedDockerWorkspace() bool {
+	for _, marker := range []string{"/.dockerenv", "/run/.containerenv"} {
+		if _, err := os.Stat(marker); err == nil {
+			return true
+		}
+	}
+	return os.Getenv("DOCKER_HOST") != "" || os.Getenv("KUBERNETES_SERVICE_HOST") != "" ||
+		(os.Getenv("DOCKER_CONTEXT") != "" && os.Getenv("DOCKER_CONTEXT") != "default")
 }
 
 // lookPath 是默认 PATH 探测(可注入便于测试)。

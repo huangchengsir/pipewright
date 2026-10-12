@@ -99,10 +99,17 @@ func isBuildImageJob(jobType string) bool {
 }
 
 // NewStageExecutor 返回一个复用 Builder 容器基建的真实 dagrun.StageExecutor。
-// 仅对 script/custom 类型 job 做真实容器执行;其余类型打占位日志放行。
+// 执行脚本、镜像构建/推送、部署和通知节点;未接入类型保留诚实占位。
 // reportSink 可选(nil = 不持久化测试报告,但质量门禁阻断仍生效;Story 8-6 / FR-8-6)。
 func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecutor {
-	return func(ctx context.Context, r *run.Run, stage pipeline.Stage, rep dagrun.StageReporter) error {
+	return func(ctx context.Context, r *run.Run, stage pipeline.Stage, rep dagrun.StageReporter) (stageErr error) {
+		images := &stageImageArtifacts{}
+		defer func() {
+			if stageErr != nil {
+				b.releaseFailedStageImages(ctx, r, stage, images, rep)
+			}
+		}()
+		rep = &imageStageReporter{StageReporter: rep, images: images, stage: stage}
 		scriptJobs := make([]pipeline.Job, 0, len(stage.Jobs))
 		buildImageJobs := make([]pipeline.Job, 0, len(stage.Jobs))
 		deployJobs := make([]pipeline.Job, 0, len(stage.Jobs))
@@ -125,7 +132,7 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 
 		needsBuild := len(scriptJobs) > 0 || len(buildImageJobs) > 0
 		// 没有任何可执行节点(script/build_image/deploy_ssh/notify)且无 post → 诚实占位放行。
-		if !needsBuild && len(deployJobs) == 0 && len(notifyJobs) == 0 && len(stage.Post) == 0 {
+		if !needsBuild && !hasPushJob && len(deployJobs) == 0 && len(notifyJobs) == 0 && len(stage.Post) == 0 {
 			for _, jb := range stage.Jobs {
 				_ = rep.JobRunning(ctx, jb.ID)
 				jr := rep.JobReporter(jb.ID)
@@ -168,7 +175,7 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 			workspace string
 			commitTag = "latest"
 		)
-		if needsBuild || hasPost {
+		if needsBuild || hasPost || hasPushJob {
 			p, s, perr := b.resolve(ctx, r)
 			if perr != nil {
 				_ = rep.Log(ctx, streamStderr, "无法加载项目构建配置:"+perr.Error())
@@ -225,7 +232,7 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 
 			// ── 阶段内 job 级 DAG 路径:按 job 依赖并发调度,无依赖 job 并行、各自独立工作区 ──
 			if hasJobDAG {
-				return b.runStageJobsDAG(ctx, r, stage, rep, sink, proj, settings, svcNetwork, hasPushJob, reportSink)
+				return b.runStageJobsDAG(ctx, r, stage, rep, sink, proj, settings, svcNetwork, hasPushJob, reportSink, images)
 			}
 
 			// ── 既有路径(零行为变化):类型分组串行,共用单一阶段工作区 ──
@@ -276,8 +283,11 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 					}
 					_ = rep.JobRunning(ctx, jb.ID)
 					jrep := rep.JobReporter(jb.ID)
+					if imageRep, ok := jrep.(*imageStageReporter); ok {
+						imageRep.job = jb // Grouped legacy stages may have empty job IDs.
+					}
 					jsink := &reporterSink{rep: jrep}
-					if err := b.runBuildImageJob(ctx, jsink, jrep, jb, stage.Name, proj, settings, r.Trigger.ResolvedEnvironment, workspace, commitTag, hasPushJob); err != nil {
+					if err := b.runBuildImageJob(ctx, jsink, jrep, jb, stage.Name, proj, settings, r.Trigger.ResolvedEnvironment, workspace, commitTag, imageBuildConsumedByPush(stage, jb), imageJobLocalTag(proj, r.ID, stage.ID, jb.ID, commitTag), stage.ID); err != nil {
 						_ = rep.JobDone(ctx, jb.ID, run.StepFailed)
 						return err
 					}
@@ -292,6 +302,22 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 				}
 			}
 
+			for _, jb := range stage.Jobs {
+				if strings.TrimSpace(jb.Type) != "push_image" {
+					continue
+				}
+				_ = rep.JobRunning(ctx, jb.ID)
+				err := b.runPushImageJob(ctx, r, stage, jb, rep.JobReporter(jb.ID), proj, settings, images)
+				status := run.StepSuccess
+				if err != nil {
+					status = run.StepFailed
+				}
+				_ = rep.JobDone(ctx, jb.ID, status)
+				if err != nil {
+					return err
+				}
+			}
+
 			// ── 部署节点(deploy_ssh):把本 run 已产出的产物经 SSH 部署到目标机(中途部署,不动 run 终态)──
 			for _, jb := range deployJobs {
 				if canceled(ctx) {
@@ -299,7 +325,7 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 				}
 				_ = rep.JobRunning(ctx, jb.ID)
 				jrep := rep.JobReporter(jb.ID)
-				if err := b.runDeployJob(ctx, jrep, jb, r.ID, r.Trigger.Params); err != nil {
+				if err := b.runDeployJob(ctx, jrep, jb, r.ID, r.Trigger.Params, stage); err != nil {
 					_ = rep.JobDone(ctx, jb.ID, run.StepFailed)
 					return err
 				}
@@ -379,11 +405,22 @@ func (b *Builder) runStageJobsDAG(
 	svcNetwork string,
 	hasPushJob bool,
 	reportSink TestReportSink,
+	images *stageImageArtifacts,
 ) error {
 	nodes := make([]dag.Node, 0, len(stage.Jobs))
 	jobByID := make(map[string]pipeline.Job, len(stage.Jobs))
 	for _, jb := range stage.Jobs {
-		nodes = append(nodes, dag.Node{ID: jb.ID, Needs: jb.Needs})
+		needs := jb.Needs
+		if strings.TrimSpace(jb.Type) == "push_image" && len(needs) == 0 {
+			// A unique image source is deterministic even for older canvases without needs.
+			sources := pushImageSourceJobs(stage, jb)
+			if len(sources) == 1 {
+				for id := range sources {
+					needs = []string{id}
+				}
+			}
+		}
+		nodes = append(nodes, dag.Node{ID: jb.ID, Needs: needs})
 		jobByID[jb.ID] = jb
 	}
 	g, gerr := dag.New(nodes)
@@ -432,11 +469,9 @@ func (b *Builder) runStageJobsDAG(
 			case isBuildImageJob(jb.Type):
 				return b.runBuildImageJobIsolated(ctx, jsink, jrep, r, jb, stage, proj, settings, hasPushJob)
 			case isDeployJob(jb.Type):
-				return b.runDeployJob(ctx, jrep, jb, r.ID, r.Trigger.Params)
+				return b.runDeployJob(ctx, jrep, jb, r.ID, r.Trigger.Params, stage)
 			case strings.TrimSpace(jb.Type) == "push_image":
-				// 推送随构建镜像节点完成(hasPushJob);本节点仅用于在 DAG 中编排顺序/展示。
-				_ = jrep.Log(ctx, streamStdout, fmt.Sprintf("· 推送镜像「%s」:已随构建镜像节点完成推送(本节点用于编排顺序)", jb.Name))
-				return nil
+				return b.runPushImageJob(ctx, r, stage, jb, jrep, proj, settings, images)
 			case strings.TrimSpace(jb.Type) == "notify":
 				b.runNotifyJob(ctx, jrep, jb, r)
 				return nil
@@ -592,12 +627,12 @@ func (b *Builder) runBuildImageJobIsolated(
 		return err
 	}
 	defer cleanup()
-	return b.runBuildImageJob(ctx, sink, rep, jb, stage.Name, proj, settings, r.Trigger.ResolvedEnvironment, ws, commitTag, hasPushJob)
+	return b.runBuildImageJob(ctx, sink, rep, jb, stage.Name, proj, settings, r.Trigger.ResolvedEnvironment, ws, commitTag, imageBuildConsumedByPush(stage, jb), imageJobLocalTag(proj, r.ID, stage.ID, jb.ID, commitTag), stage.ID)
 }
 
 // runDeployJob 执行一个 deploy_ssh 节点:把本 run 已产出的产物经 SSH 部署到节点配置的目标机
 // (复用 deploy.Service.DeployForStage 中途部署,不动 run 终态)。任一目标失败 → 阶段失败、阻断下游。
-func (b *Builder) runDeployJob(ctx context.Context, rep dagrun.StageReporter, jb pipeline.Job, runID string, params map[string]string) error {
+func (b *Builder) runDeployJob(ctx context.Context, rep dagrun.StageReporter, jb pipeline.Job, runID string, params map[string]string, stages ...pipeline.Stage) error {
 	if b.deployer == nil {
 		run.RecordExecution(rep, run.ExecutionStub)
 		_ = rep.Log(ctx, streamStdout, "· 部署节点:部署服务未注入,跳过")
@@ -623,6 +658,12 @@ func (b *Builder) runDeployJob(ctx context.Context, rep dagrun.StageReporter, jb
 	for _, k := range []string{"artifactType", "artifactSource", "containerName", "ports", "runArgs", "commandTimeoutSeconds", "connectTimeoutSeconds", "uploadIdleTimeoutSeconds", "uploadTimeoutSeconds"} {
 		if v := cfgString(jb.Config, k); v != "" {
 			cfg[k] = v
+		}
+	}
+	if len(stages) > 0 {
+		if err := b.preferPublishedImage(ctx, runID, cfg, stages[0], jb); err != nil {
+			_ = rep.Log(ctx, streamStderr, err.Error())
+			return ErrBuildFailed
 		}
 	}
 	strategy := cfgString(jb.Config, "strategy")
@@ -739,10 +780,10 @@ func (b *Builder) resolveChannel(ctx context.Context, ref string) (id, name stri
 
 // runBuildImageJob 真实执行一个 build_image 节点:据节点 config 构造 BuildConfig,复用 Builder.build
 // (模型 A=docker build / 模型 B=工具链构建)在宿主驱动上真实构建,产出镜像/jar/dist 产物。
-// 镜像产物:环境绑定了 registry(或本阶段含 push_image 节点示意要推)→ b.push 推送并改写为远端引用 + digest;
-// 无 registry → 镜像留本地,emit 本地 tag。其它产物(jar/dist)直接 emit。失败映射 ErrBuildFailed / 取消。
+// 显式 push_image 由推送节点执行;否则保留环境仓库自动推送。镜像源引用不可变,
+// 并记来源 ID,供并行/跨阶段推送选择。其它产物(jar/dist)直接 emit。
 // 边界:docker build 上下文沿用工作区根(子目录上下文 = 后续);buildCommand 覆盖工具链默认命令 = 后续。
-func (b *Builder) runBuildImageJob(ctx context.Context, sink run.StepSink, rep dagrun.StageReporter, jb pipeline.Job, stageName string, proj *project.Project, settings *pipeline.Settings, envName, workspace, commitTag string, hasPushJob bool) error {
+func (b *Builder) runBuildImageJob(ctx context.Context, sink run.StepSink, rep dagrun.StageReporter, jb pipeline.Job, stageName string, proj *project.Project, settings *pipeline.Settings, envName, workspace, commitTag string, hasPushJob bool, imageTag, stageID string) error {
 	cfg := pipeline.BuildConfig{
 		Model:          cfgString(jb.Config, "buildModel"),
 		DockerfilePath: cfgString(jb.Config, "dockerfilePath"),
@@ -757,7 +798,7 @@ func (b *Builder) runBuildImageJob(ctx context.Context, sink run.StepSink, rep d
 		cfg.Model = pipeline.BuildModelDockerfile
 	}
 
-	localTag, art, berr := b.build(ctx, sink, 0, proj, cfg, workspace, commitTag)
+	localTag, art, berr := b.build(ctx, sink, 0, proj, cfg, workspace, commitTag, imageTag)
 	if berr != nil {
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return run.ErrCanceled
@@ -770,7 +811,7 @@ func (b *Builder) runBuildImageJob(ctx context.Context, sink run.StepSink, rep d
 	}
 
 	// 镜像产物 + 绑定了 registry → 推送并登记远端引用(与非-dag Builder 同语义)。
-	if art.Type == run.ArtifactImage && localTag != "" {
+	if art.Type == run.ArtifactImage && localTag != "" && !hasPushJob {
 		registry := b.resolveRegistry(settings, envName)
 		switch {
 		case registry != nil:
@@ -783,14 +824,17 @@ func (b *Builder) runBuildImageJob(ctx context.Context, sink run.StepSink, rep d
 				return ErrBuildFailed
 			}
 			art.Reference = remoteTag
+			if art.Metadata == nil {
+				art.Metadata = map[string]any{}
+			}
+			art.Metadata["pushed"], art.Metadata["declarationIndex"] = true, 0
+			art.Metadata["digestRepository"] = imageReferenceRepository(remoteTag)
 			if digest != "" {
 				if art.Metadata == nil {
 					art.Metadata = map[string]any{}
 				}
 				art.Metadata["digest"] = digest
 			}
-		case hasPushJob:
-			_ = rep.Log(ctx, streamStdout, "配了 push_image 但环境未绑定镜像仓库(registry),镜像留本地;到「触发设置 → 环境」绑定仓库后即自动推送")
 		}
 	}
 
@@ -799,7 +843,14 @@ func (b *Builder) runBuildImageJob(ctx context.Context, sink run.StepSink, rep d
 		art.Metadata = map[string]any{}
 	}
 	art.Metadata["sourceStage"] = stageName
+	art.Metadata["sourceStageId"] = stageID
 	art.Metadata["sourceJob"] = jb.Name
+	art.Metadata["sourceJobId"] = jb.ID
+	if art.Type == run.ArtifactImage {
+		art.Metadata["localReference"] = localTag
+		art.Metadata["commitTag"] = commitTag
+		art.Metadata["declarationIndex"] = 0
+	}
 
 	if err := rep.EmitArtifact(ctx, *art); err != nil {
 		_ = rep.Log(ctx, streamStderr, "登记产物失败:"+err.Error())

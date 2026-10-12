@@ -47,9 +47,9 @@ func toOAuthAppDTO(c oauth.AppConfig) oauthAppDTO {
 func writeOAuthError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, oauth.ErrInvalidProvider):
-		writeError(w, http.StatusUnprocessableEntity, "invalid_provider", "provider 只能为 gitee、github、gitlab 或 custom")
+		writeError(w, http.StatusUnprocessableEntity, "invalid_provider", "provider 只能为 gitee、github、gitlab、gitea 或 custom")
 	case errors.Is(err, oauth.ErrBaseURLRequired):
-		writeError(w, http.StatusUnprocessableEntity, "base_url_required", "自建(custom)provider 必须配置 baseUrl")
+		writeError(w, http.StatusUnprocessableEntity, "base_url_required", "自建(custom/gitea)provider 必须配置合法的 HTTP(S) baseUrl")
 	case errors.Is(err, oauth.ErrClientIDRequired):
 		writeError(w, http.StatusUnprocessableEntity, "client_id_required", "clientId 不能为空")
 	case errors.Is(err, oauth.ErrClientSecretRequired):

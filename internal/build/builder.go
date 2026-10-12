@@ -290,6 +290,11 @@ func (b *Builder) Run(ctx context.Context, r *run.Run, sink run.StepSink) error 
 		}
 		// 推送后产物引用改为远端 tag,digest 用推送后(repoDigest)的。
 		artifact.Reference = remoteTag
+		if artifact.Metadata == nil {
+			artifact.Metadata = map[string]any{}
+		}
+		artifact.Metadata["pushed"], artifact.Metadata["declarationIndex"] = true, 0
+		artifact.Metadata["digestRepository"] = imageReferenceRepository(remoteTag)
 		if pdigest != "" {
 			if artifact.Metadata == nil {
 				artifact.Metadata = map[string]any{}
@@ -377,7 +382,7 @@ func (b *Builder) resolveRegistry(settings *pipeline.Settings, envName string) *
 //   - 模型 A(dockerfile)或产物=image:docker build -f <DockerfilePath> -t <local-tag> .
 //   - 模型 B(toolchain)产 jar/dist:docker run --rm -v ws:/src -w /src <toolchain:ver> <build-cmd>;
 //     对 image 产物退化为要求 Dockerfile(走模型 A 路径)。
-func (b *Builder) build(ctx context.Context, sink run.StepSink, ordinal int, proj *project.Project, cfg pipeline.BuildConfig, workspace, commitTag string) (string, *run.Artifact, error) {
+func (b *Builder) build(ctx context.Context, sink run.StepSink, ordinal int, proj *project.Project, cfg pipeline.BuildConfig, workspace, commitTag string, imageTags ...string) (string, *run.Artifact, error) {
 	onLine := b.lineSink(sink, ordinal)
 
 	// 构建变量:非 secret → 明文 K=V;secret → vault.Reveal 明文 K=V(注入子进程,绝不回显值)。
@@ -403,9 +408,15 @@ func (b *Builder) build(ctx context.Context, sink run.StepSink, ordinal int, pro
 			}
 		}
 		localTag := localTagPrefix + "/" + slug + ":" + commitTag
+		if len(imageTags) > 0 {
+			localTag = imageTags[0]
+		}
+		if !validLocalImageReference(localTag) {
+			return "", nil, errors.New("invalid build image reference")
+		}
 		run.RecordExecution(sink, run.ExecutionReal)
 		code, err := b.driver.Build(ctx, contextDir, dockerfile, localTag, buildArgs, secretArgs, onLine)
-		if err != nil && code < 0 {
+		if err != nil {
 			return "", nil, fmt.Errorf("构建器无法启动")
 		}
 		if code != 0 {
@@ -452,40 +463,11 @@ func (b *Builder) build(ctx context.Context, sink run.StepSink, ordinal int, pro
 
 // push 执行镜像推送(3-5):login(口令经 stdin)→ tag → push → inspect 取推送后 digest。
 func (b *Builder) push(ctx context.Context, sink run.StepSink, ordinal int, localTag string, registry *pipeline.ImageRegistry, proj *project.Project, commitTag string) (string, string, error) {
-	onLine := b.lineSink(sink, ordinal)
-
-	user, pass := b.revealRegistryCred(registry.CredentialID)
-	// 远端 tag:<registry-url>/<project-slug>:<commit7>(URL 去协议/尾斜杠)。
-	remoteTag := strings.TrimRight(stripScheme(registry.URL), "/") + "/" + slugify(proj.Name) + ":" + commitTag
-
-	// 登录(口令经 stdin,绝不进 argv/日志)。凭据缺失(user 空)时跳过登录,直接 tag/push
-	// (匿名/已登录场景);仓库要求鉴权则 push 自身会失败并落失败日志。
-	if user != "" {
-		run.RecordExecution(sink, run.ExecutionReal)
-		code, err := b.driver.Login(ctx, registry.URL, user, pass, onLine)
-		pass = "" // 口令用完即弃
-		_ = pass
-		if err != nil && code < 0 {
-			return "", "", fmt.Errorf("构建器无法启动")
-		}
-		if code != 0 {
-			return "", "", fmt.Errorf("仓库登录失败")
-		}
+	target, err := resolveImagePushTarget(nil, registry, proj, commitTag)
+	if err != nil {
+		return "", "", err
 	}
-
-	run.RecordExecution(sink, run.ExecutionReal)
-	if code, err := b.driver.Tag(ctx, localTag, remoteTag, onLine); err != nil && code < 0 {
-		return "", "", fmt.Errorf("构建器无法启动")
-	} else if code != 0 {
-		return "", "", ErrBuildFailed
-	}
-	if code, err := b.driver.Push(ctx, remoteTag, onLine); err != nil && code < 0 {
-		return "", "", fmt.Errorf("构建器无法启动")
-	} else if code != 0 {
-		return "", "", ErrBuildFailed
-	}
-	digest, _, _ := b.driver.InspectImage(ctx, remoteTag)
-	return remoteTag, digest, nil
+	return b.pushImageTarget(ctx, sink, ordinal, localTag, target)
 }
 
 // The copy is used only for script invocation; the shared builder and its driver

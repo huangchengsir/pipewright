@@ -56,8 +56,7 @@ func (b *Builder) runScriptStep(ctx context.Context, sink run.StepSink, ordinal 
 
 	// env:非 secret → 明文 K=V;secret → vault.Reveal 明文 K=V(注入容器,绝不回显值)。
 	// 复用与构建变量同款拆分(buildArgs):secret 明文即取即用,脱敏由 per-run Masker 兜底。
-	plain, secretEnv := b.buildArgs(step.Env)
-	env := append(plain, secretEnv...)
+	env := b.buildEnv(step.Env)
 
 	// 容器内工作目录:挂载点 + 可选相对子目录(WorkDir)。WorkDir 经 join 去穿越,落在挂载点内。
 	workdir := scriptWorkspaceMount

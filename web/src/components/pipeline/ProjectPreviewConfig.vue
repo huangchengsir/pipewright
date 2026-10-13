@@ -11,7 +11,7 @@
   - 保存调 PUT preview-config;乐观提示 + 失败回滚。
   本卡只持有编辑缓冲,保存成功才视为生效。
 */
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, shallowRef, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NIcon } from 'naive-ui'
 import { Rocket, World } from '@vicons/tabler'
@@ -27,6 +27,7 @@ import AppSelect from '../ui/AppSelect.vue'
 
 const props = defineProps<{
   projectId: string
+  disabled?: boolean
 }>()
 
 const { t } = useI18n()
@@ -41,6 +42,18 @@ const enabled = ref(false)
 const dnsProviderId = ref('')
 const baseDomain = ref('')
 const providers = ref<DnsProvider[]>([])
+const persistedDraft = shallowRef('')
+const ready = computed(() => loadState.value === 'idle' && persistedDraft.value !== '')
+const dirty = computed(() => ready.value && JSON.stringify(buildPayload()) !== persistedDraft.value)
+
+function buildPayload(): PreviewConfig {
+  return {
+    projectId: props.projectId,
+    enabled: enabled.value,
+    dnsProviderId: dnsProviderId.value,
+    baseDomain: baseDomain.value.trim().toLowerCase(),
+  }
+}
 
 const FQDN_RE = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i
 const baseDomainValid = computed(() => FQDN_RE.test(baseDomain.value.trim().toLowerCase()))
@@ -56,19 +69,20 @@ const enabledConfigInvalid = computed(
 )
 
 async function load(): Promise<void> {
+  const id = props.projectId
   loadState.value = 'loading'
   loadError.value = ''
   try {
     const [cfg, provs] = await Promise.all([
-      getPreviewConfig(props.projectId),
+      getPreviewConfig(id),
       listDnsProviders().catch(() => [] as DnsProvider[]),
     ])
-    enabled.value = cfg.enabled
-    dnsProviderId.value = cfg.dnsProviderId
-    baseDomain.value = cfg.baseDomain
+    if (id !== props.projectId) return
     providers.value = provs
+    applyConfig(cfg)
     loadState.value = 'idle'
   } catch (err) {
+    if (id !== props.projectId) return
     loadState.value = 'error'
     loadError.value =
       err instanceof HttpError
@@ -85,27 +99,39 @@ watch(dnsProviderId, () => {
   if (selectedProvider.value && !baseDomain.value.trim()) {
     baseDomain.value = selectedProvider.value.baseDomain
   }
-})
+}, { flush: 'sync' })
 
 // ─── 保存 ──────────────────────────────────────────────────────────────────────
 const saving = ref(false)
-const canSave = computed(() => !saving.value && !enabledConfigInvalid.value && loadState.value === 'idle')
+const canSave = computed(() => !props.disabled && !saving.value && !enabledConfigInvalid.value && ready.value)
 
-async function save(): Promise<void> {
-  if (!canSave.value) return
+function validate(): boolean {
+  return !enabledConfigInvalid.value
+}
+
+function applyConfig(cfg: PreviewConfig): void {
+  enabled.value = cfg.enabled
+  dnsProviderId.value = cfg.dnsProviderId
+  baseDomain.value = cfg.baseDomain
+  persistedDraft.value = JSON.stringify(buildPayload())
+}
+
+async function save(): Promise<boolean> {
+  if (!ready.value || saving.value || !validate()) return false
   saving.value = true
   try {
-    const body: PreviewConfig = {
-      projectId: props.projectId,
-      enabled: enabled.value,
-      dnsProviderId: dnsProviderId.value,
-      baseDomain: baseDomain.value.trim().toLowerCase(),
-    }
+    const body = buildPayload()
+    const snapshot = JSON.stringify(body)
     const updated = await setPreviewConfig(props.projectId, body)
-    enabled.value = updated.enabled
-    dnsProviderId.value = updated.dnsProviderId
-    baseDomain.value = updated.baseDomain
-    toast.success(t('previewEnvs.config.saved'))
+    if (JSON.stringify(buildPayload()) === snapshot) applyConfig(updated)
+    else persistedDraft.value = JSON.stringify({
+      projectId: updated.projectId,
+      enabled: updated.enabled,
+      dnsProviderId: updated.dnsProviderId,
+      baseDomain: updated.baseDomain.trim().toLowerCase(),
+    })
+    if (!dirty.value) toast.success(t('previewEnvs.config.saved'))
+    return true
   } catch (err) {
     toast.error(t('previewEnvs.config.saveFail'), {
       detail:
@@ -116,7 +142,11 @@ async function save(): Promise<void> {
   } finally {
     saving.value = false
   }
+  return false
 }
+
+function handleSave(): void { if (canSave.value) void save() }
+defineExpose({ ready, dirty, saving, validate, save })
 
 // 例:pr-42-myproj.preview.example.com —— 让用户直观看到链接形态。
 const examplePreview = computed(() => {
@@ -187,7 +217,7 @@ const examplePreview = computed(() => {
 
       <div class="pvc__foot">
         <span class="pvc__foot-note">{{ t('previewEnvs.config.footNote') }}</span>
-        <button class="pvc__save" :disabled="!canSave" @click="save">
+        <button class="pvc__save" :disabled="!canSave" @click="handleSave">
           {{ saving ? t('previewEnvs.config.saving') : t('previewEnvs.config.save') }}
         </button>
       </div>

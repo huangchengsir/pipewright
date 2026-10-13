@@ -62,5 +62,13 @@ describe('i18n message compilation (production-faithful)', () => {
     expect(render(pj.fieldTitleTemplateHint)).toContain('{{project}}')
     // ${VAR} 占位同样原样渲染(此前被当成空命名占位 → 渲染成空)。
     expect(render(pj.fieldTagHint)).toContain('${COMMIT_SHA}')
+    for (const messages of Object.values(LOCALES)) {
+      const hint = render((messages as { pipelineJob: Record<string, string> }).pipelineJob.fieldTagHint)
+      expect(hint).toContain('${DATE}')
+      expect(hint).toContain('${DATE:yyyyMMddHHmmss}')
+      expect(hint).toContain('UTC')
+      expect(hint).not.toContain('${BRANCH}')
+      expect(hint).not.toContain('${BUILD_NUMBER}')
+    }
   })
 })

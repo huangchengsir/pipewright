@@ -5,6 +5,7 @@ import type { PipelineStage, PipelineJob, StageKind } from '../../api/pipeline'
 import type { Credential } from '../../api/credentials'
 import type { Server } from '../../api/servers'
 import type { NotificationChannel } from '../../api/notifications'
+import type { Project } from '../../api/projects'
 import StageColumn from './StageColumn.vue'
 import JobDrawer from './JobDrawer.vue'
 import StageDrawer from './StageDrawer.vue'
@@ -23,6 +24,9 @@ const props = defineProps<{
   credentials?: Credential[]
   servers?: Server[]
   channels?: NotificationChannel[]
+  projectName?: string
+  project?: Project
+  environmentAutoPushPossible?: boolean
   guideEnabled?: boolean
 }>()
 
@@ -428,9 +432,13 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
       :credentials="props.credentials"
       :servers="props.servers"
       :channels="props.channels"
+      :project-name="props.projectName"
+      :project="props.project"
+      :environment-auto-push-possible="props.environmentAutoPushPossible"
       @close="closeDrawer"
       @update="handleDrawerUpdate"
       @change-type="requestChangeType"
+      @inspect-source="selectJob"
     />
 
     <StageDrawer
@@ -466,9 +474,9 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
   overflow: hidden;
 }
 @media (max-width: 900px) {
-  .canvas-body--guided { flex-direction: column; flex: none; min-height: 420px; overflow: visible; }
-  .canvas-body--guided .pipeline-canvas { flex: none; height: 280px; }
-  .canvas-body--guided :deep(.job-drawer), .canvas-body--guided :deep(.stage-drawer) { width: 100%; height: 420px; border-left: 0; border-top: 1px solid var(--color-border); }
+  .canvas-body { flex-direction: column; flex: none; min-height: 420px; overflow: visible; }
+  .canvas-body .pipeline-canvas { flex: none; height: 280px; }
+  .canvas-body :deep(.job-drawer), .canvas-body :deep(.stage-drawer) { width: 100%; height: 420px; border-left: 0; border-top: 1px solid var(--color-border); }
 }
 
 /* DAG layout: position the flow so the overlay anchors to it; give columns a gap for edges. */

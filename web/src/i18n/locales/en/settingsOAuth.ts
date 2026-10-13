@@ -6,7 +6,8 @@ export default {
 
   providerCustomLabel: 'Self-hosted',
   providerGiteeDesc: 'Gitee',
-  providerCustomDesc: 'Self-hosted GitLab / Gitea, etc.',
+  providerCustomDesc: 'Self-hosted GitLab',
+  providerGiteaDesc: 'Self-hosted Gitea',
 
   statusEnabled: 'Enabled',
   statusConfiguredIdle: 'Configured · Not enabled',

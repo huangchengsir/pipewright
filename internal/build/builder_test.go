@@ -428,7 +428,8 @@ func TestPushFlow(t *testing.T) {
 	const regPass = " registry:password:xyz "
 	cmdr := newFakeCommander()
 	cmdr.script("build", fakeCmd{stdoutLines: []string{"built"}, exitCode: 0})
-	cmdr.script("inspect", fakeCmd{stdoutLines: []string{`{"Id":"sha256:x","RepoDigests":["reg.example.com/app@sha256:deadbeef"],"Size":100}`}, exitCode: 0})
+	digest := "sha256:" + strings.Repeat("a", 64)
+	cmdr.script("inspect", fakeCmd{stdoutLines: []string{`{"Id":"sha256:x","RepoDigests":["reg.example.com/app@` + digest + `"],"Size":100}`}, exitCode: 0})
 	cmdr.script("login", fakeCmd{stdoutLines: []string{"Login Succeeded"}, exitCode: 0})
 	cmdr.script("tag", fakeCmd{exitCode: 0})
 	cmdr.script("push", fakeCmd{stdoutLines: []string{"pushed"}, exitCode: 0})
@@ -470,7 +471,7 @@ func TestPushFlow(t *testing.T) {
 	if a.Reference != "reg.example.com/app:abc1234" {
 		t.Fatalf("expected remote tag reference, got %q", a.Reference)
 	}
-	if a.Metadata["digest"] != "sha256:deadbeef" {
+	if a.Metadata["digest"] != digest || a.Metadata["pushed"] != true || a.Metadata["digestRepository"] != "reg.example.com/app" {
 		t.Fatalf("expected pushed digest, got %v", a.Metadata["digest"])
 	}
 }

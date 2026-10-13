@@ -1,4 +1,23 @@
 export default {
+  saveConfiguration: "儲存設定",
+  replaceDraftTitle: "替換編排草稿？",
+  replaceDraftBody: "未儲存的編排修改將被替換，其他設定草稿保持不變。",
+  replaceDraftConfirm: "替換草稿",
+  saveStatus: {
+    saved: "設定已儲存",
+    dirty: "有未儲存修改",
+    loading: "正在載入設定",
+    saving: "正在儲存設定",
+    error: "儲存失敗",
+    partial: "部分設定已儲存",
+    unavailable: "部分設定暫時無法使用",
+    newerEdits: "新編輯仍未儲存",
+    completedScopes: "已儲存：{scopes}",
+    pendingScopes: "待儲存：{scopes}",
+    failedScopes: "儲存失敗：{scopes}",
+    unavailableScopes: "無法使用：{scopes}",
+    dirtyTab: "{tab}，有未儲存修改",
+  },
   // ─── 頂欄 / 麵包屑 ───────────────────────────────────────────────
   breadcrumbAria: '麵包屑導航',
   breadcrumbProjects: '專案',

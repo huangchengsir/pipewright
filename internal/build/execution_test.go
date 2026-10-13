@@ -58,7 +58,7 @@ func TestLocalExecutionEvidence(t *testing.T) {
 	}{
 		{name: "empty", want: run.ExecutionPending, stage: scriptStage()},
 		{name: "source", want: run.ExecutionPending, stage: scriptStage(pipeline.Job{Type: "git_source"})},
-		{name: "push_marker", want: run.ExecutionPending, stage: scriptStage(pipeline.Job{Type: "push_image"})},
+		{name: "push_without_image", want: run.ExecutionPending, stage: scriptStage(pipeline.Job{Type: "push_image"}), fail: true},
 		{name: "unknown", want: run.ExecutionStub, stage: scriptStage(pipeline.Job{Type: "future_task"})},
 		{name: "missing_deployer", want: run.ExecutionStub, stage: scriptStage(pipeline.Job{Type: "deploy_ssh"})},
 		{name: "missing_notifier", want: run.ExecutionStub, stage: scriptStage(pipeline.Job{Type: "notify"})},

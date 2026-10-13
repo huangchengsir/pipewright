@@ -32,6 +32,7 @@ const props = defineProps<{
   loading: boolean
   ready: boolean
   issues: ValidationIssue[]
+  pendingMessage?: string
 }>()
 
 const emit = defineEmits<{
@@ -93,7 +94,7 @@ function handleLocate(scope: IssueScope): void {
       <div class="vp-head-left">
         <!-- Ready badge -->
         <span
-          v-if="!loading"
+          v-if="!loading && !pendingMessage"
           class="vp-ready-badge"
           :class="ready ? 'vp-ready-badge--ok' : 'vp-ready-badge--err'"
           aria-live="polite"
@@ -105,13 +106,13 @@ function handleLocate(scope: IssueScope): void {
         </span>
 
         <!-- Loading skeleton for badge -->
-        <span v-else class="vp-skel vp-skel--badge" aria-hidden="true" />
+        <span v-else-if="loading" class="vp-skel vp-skel--badge" aria-hidden="true" />
 
         <span class="vp-head-title">{{ t('pipelinePanels.vpTitle') }}</span>
       </div>
 
       <!-- Summary chips (only when not loading and has issues) -->
-      <div v-if="!loading && issues.length > 0" class="vp-chips" aria-hidden="true">
+      <div v-if="!loading && !pendingMessage && issues.length > 0" class="vp-chips" aria-hidden="true">
         <span v-if="errorCount > 0"   class="vp-chip vp-chip--error">{{ t('pipelinePanels.vpErrorChip', { count: errorCount }) }}</span>
         <span v-if="warningCount > 0" class="vp-chip vp-chip--warn">{{ t('pipelinePanels.vpWarnChip', { count: warningCount }) }}</span>
         <span v-if="infoCount > 0"    class="vp-chip vp-chip--info">{{ t('pipelinePanels.vpInfoChip', { count: infoCount }) }}</span>
@@ -136,7 +137,10 @@ function handleLocate(scope: IssueScope): void {
     </div>
 
     <!-- ─── No issues (ready) ─────────────────────────────────────────────── -->
-    <div v-else-if="issues.length === 0" class="vp-empty" role="status">
+    <div v-else-if="pendingMessage" class="vp-empty" role="status">
+      <span class="vp-empty-text">{{ pendingMessage }}</span>
+    </div>
+    <div v-else-if="ready && issues.length === 0" class="vp-empty" role="status">
       <span class="vp-empty-icon" aria-hidden="true">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M20 6 9 17l-5-5"/>

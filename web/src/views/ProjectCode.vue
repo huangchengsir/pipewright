@@ -166,11 +166,17 @@ function retryProject(): void {
 
 <style scoped>
 .code-page {
+  --code-bottom-space: var(--main-pad-bottom);
   display: flex;
   flex-direction: column;
-  height: 100%;
-  min-height: 0;
+  /* The shell has only min-height, so a percentage height shrinks to the tree. */
+  height: calc(100dvh - var(--main-pad-top) - 38px - var(--code-bottom-space));
+  min-height: 320px;
   gap: 14px;
+}
+
+:global(.has-onboarding .code-page) {
+  --code-bottom-space: max(var(--main-pad-bottom), 132px);
 }
 
 /* ─── header ──────────────────────────────────────────────────────────────── */
@@ -247,7 +253,8 @@ function retryProject(): void {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(220px, 300px) 1fr;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: 14px;
 }
 
@@ -361,9 +368,15 @@ function retryProject(): void {
 
 /* ─── responsive ──────────────────────────────────────────────────────────── */
 @media (max-width: 760px) {
+  .code-page {
+    height: auto;
+    min-height: 0;
+  }
+
   .code-split {
+    flex: none;
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(180px, 36vh) 1fr;
+    grid-template-rows: minmax(160px, 24dvh) minmax(360px, 60dvh);
   }
 }
 

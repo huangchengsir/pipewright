@@ -1,4 +1,30 @@
 export default {
+  projectSourceBinding: "プロジェクトのソース設定",
+  sourceRunBranch: "実行時に選択したブランチを優先",
+  sourceProjectUnavailable: "プロジェクトのソース情報を取得できません",
+  sourceLegacyOverrides: "ノードの従来のリポジトリ、ブランチ、認証情報、深度はプロジェクトのチェックアウト設定を上書きしません。",
+  sourceEditBinding: "プロジェクト認証情報を変更",
+  imageProvenanceTitle: "デプロイ対象イメージ",
+  inspectImageSource: "ソースノードを表示",
+  imageSourceNode: "ソースノード",
+  imageVersionTemplate: "バージョンテンプレート",
+  imageNameFromProject: "プロジェクト名から生成",
+  imageRegistryInvalid: "レジストリアドレスが無効です",
+  imageRegistryFromEnvironment: "実行時に選択した環境のレジストリ",
+  imageBuildRegistry: "ビルド成果物。レジストリは実行環境に依存",
+  imageBuildVersion: "今回の実行とコミットから生成",
+  imageRuntimeReference: "今回の実行の成果物のみ使用。DATE は実行作成時刻（UTC）で解決され、バージョンと digest は実行後に確定します。公開済みイメージは digest でデプロイします。",
+  imageSourceHint: "イメージ依存関係から自動選択。候補が複数ある場合はソースを指定してください。",
+  imageSourceMissing: "依存関係にイメージがありません。依存関係を追加するか上流のソースを選択してください。",
+  imageSourceAmbiguous: "イメージが複数あります。デプロイするソースを指定してください。",
+  imageSourceUnavailable: "ソースを利用できません。ノードと依存関係を確認してください。",
+  serverRequired: "空欄の場合、この実行で明示的に選択した一致する環境の対象のみを使用します。一致する環境または対象がなければ、サーバーを選択してください。",
+  serverFromEnvironment: "この実行の環境の対象を使用",
+  cacheUseProjectDefault: "プロジェクトのデフォルトキャッシュを使用",
+  cacheUsingDefault: "プロジェクトのデフォルトキャッシュを使用中",
+  cacheNoCaching: "キャッシュなし",
+  serverUnavailable: "参照サーバーを利用できません。削除済みまたはアクセス制限があります。",
+  credentialUnavailable: "参照認証情報を利用できないか種類が異なります。",
   // ─── jobConfigSchema · shared option sets ──────────────────────────────
   artifactImage: 'コンテナイメージ (image)',
   artifactJar: 'JAR パッケージ (jar)',
@@ -42,7 +68,7 @@ export default {
     '任意、1 行 1 件。ワークスペースのルートからの相対:ディレクトリ→dist、*.jar→jar、その他のファイル→archive。1 ノードで複数出力可。設定した場合のみ成果物ストアにアーカイブされ、実行詳細でダウンロード/デプロイ可能。イメージ成果物は「ビルド」ノード(build_image)を使用、ここではない',
   fieldCachePathsLabel: '依存キャッシュディレクトリ',
   fieldCachePathsHint:
-    '任意、1 行 1 件、ワークスペースのルートからの相対。設定した場合のみキャッシュ有効:ビルド前に復元、ビルド後に保存、複数回の実行で依存を再利用(node_modules/.m2/.gradle などの再取得を回避)。キャッシュの問題はビルド結果に影響しない',
+    "未設定ならプロジェクトのデフォルトを継承します。カスタムパスで上書きし、空にするとキャッシュを無効にします。1 行に 1 つ、ワークスペースルートからの相対パスです。",
   fieldCacheKeyLabel: 'キャッシュ Key(任意)',
   fieldCacheKeyPlaceholder: '空 = ブランチ + lockfile で自動',
   fieldCacheKeyHint:
@@ -50,7 +76,7 @@ export default {
 
   // ─── jobConfigSchema · deploy ssh fields ───────────────────────────────
   fieldServerIdLabel: 'ターゲットサーバー',
-  fieldServerIdHint: '登録済みのサーバーを選択(認証情報は参照でバインド)',
+  fieldServerIdHint: "ノードの選択が環境のデフォルトより優先されます。空欄の場合、この実行で明示的に選択した環境の対象のみを使用します。",
   fieldArtifactTypeLabel: 'デプロイ成果物タイプ',
   fieldArtifactTypeHint:
     'この run がイメージとファイル成果物を同時に出力する場合にどれを選ぶか。イメージはターゲットで docker pull → 新コンテナ起動 → ヘルスチェック → 失敗時に前のイメージへロールバック',
@@ -105,7 +131,7 @@ export default {
   fieldRegistryLabel: 'イメージレジストリ URL',
   fieldImageNameLabel: 'イメージ名',
   fieldTagLabel: 'タグ',
-  fieldTagHint: '使用可能な変数:{\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
+  fieldTagHint: '使用可能な変数: {\'${COMMIT_SHA}\'} {\'${DATE}\'} {\'${DATE:yyyyMMddHHmmss}\'}. 日時は実行の作成時刻（UTC）。既定: yyyy-MM-dd-HH-mm。書式: yyyy, MM, dd, HH, mm, ss',
   fieldRegistryCredentialLabel: 'レジストリ認証情報',
   fieldRegistryCredentialHint: 'イメージレジストリのログイン認証情報を参照',
 
@@ -151,7 +177,7 @@ export default {
   fieldTemplatedArtifactPathHint: '任意、1 行 1 件、{\'{{パラメータ}}\'} とワイルドカードに対応。ディレクトリ→dist、*.jar→jar、その他→archive',
   fieldTemplatedWorkDirHint: '任意、クローンしたワークスペースのルートからの相対',
   fieldTemplatedCachePathsHint:
-    '任意、1 行 1 件、ワークスペースのルートからの相対、{\'{{パラメータ}}\'} に対応。設定した場合のみキャッシュ有効:ビルド前に復元、ビルド後に保存、実行をまたいで依存を再利用。キャッシュの問題はビルド結果に影響しない',
+    "未設定ならプロジェクトのデフォルトを継承します。カスタムパスで上書きし、空にするとキャッシュを無効にします。1 行に 1 つ、ワークスペースルートからの相対パスで、{'{{パラメータ}}'} に対応します。",
   fieldTemplatedCacheKeyHint:
     '任意のキャッシュキーテンプレート、{\'{{パラメータ}}\'} に対応。空の場合はブランチ + lockfile の内容から自動導出(依存が変わると自動でコールドビルド)',
   typeScriptLabel: 'カスタムスクリプト',

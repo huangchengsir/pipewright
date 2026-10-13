@@ -239,6 +239,22 @@ func TestDeployForStageCommandOnlyNonZero(t *testing.T) {
 	}
 }
 
+func TestDeployForStageCommandOnlyPreflightsAllTargets(t *testing.T) {
+	db := testDB(t)
+	rsvc := run.New(db)
+	tgt := &stubTarget{}
+	srv := seedServer(t, tgt, "existing")
+	runID, _ := seedSuccessRunWithArtifact(t, db, rsvc, run.ArtifactDist, "dist/unused")
+	_, err := svcCmdOnly(tgt, rsvc).DeployForStage(context.Background(), runID, []string{srv.ID, "deleted"},
+		map[string]string{"artifactType": "command", "restartCommand": "touch /tmp/deployed"}, "")
+	if !errors.Is(err, ErrServerNotFound) {
+		t.Fatalf("expected missing target, got %v", err)
+	}
+	if len(tgt.calls) != 0 {
+		t.Fatal("command executed before all target records were checked")
+	}
+}
+
 // TestDeployForStageCommandOnlyMissingCmd 验证 command 型但缺 restartCommand → 报错。
 func TestDeployForStageCommandOnlyMissingCmd(t *testing.T) {
 	db := testDB(t)

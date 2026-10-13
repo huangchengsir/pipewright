@@ -78,6 +78,7 @@ const PROVIDER_LABELS = computed<Record<OAuthProvider, string>>(() => ({
   gitee: 'Gitee',
   github: 'GitHub',
   gitlab: 'GitLab',
+  gitea: 'Gitea',
   custom: t('settingsVault.providerCustom'),
 }))
 
@@ -85,6 +86,7 @@ const PROVIDER_LOGO: Record<OAuthProvider, { text: string; style: string }> = {
   gitee: { text: 'G', style: 'background:#c71d23;color:#fff' },
   github: { text: '', style: 'background:#1f2328;color:#fff' },
   gitlab: { text: '', style: 'background:#fc6d26;color:#fff' },
+  gitea: { text: 'G', style: 'background:#609926;color:#fff' },
   custom: { text: '⚙', style: 'background:var(--color-inset);color:var(--color-dim)' },
 }
 

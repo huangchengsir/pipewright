@@ -6,7 +6,8 @@ export default {
 
   providerCustomLabel: '自建',
   providerGiteeDesc: '碼雲',
-  providerCustomDesc: '自架 GitLab / Gitea 等',
+  providerCustomDesc: '自架 GitLab',
+  providerGiteaDesc: '自架 Gitea',
 
   statusEnabled: '已啟用',
   statusConfiguredIdle: '已設定·未啟用',

@@ -1,4 +1,30 @@
 export default {
+  projectSourceBinding: "專案原始碼綁定",
+  sourceRunBranch: "以執行時選擇的分支為準",
+  sourceProjectUnavailable: "尚未取得專案原始碼資訊",
+  sourceLegacyOverrides: "節點原有的倉庫、分支、憑據與深度參數不會覆蓋專案的原始碼拉取設定。",
+  sourceEditBinding: "修改專案憑據",
+  imageProvenanceTitle: "待部署映像",
+  inspectImageSource: "查看來源節點",
+  imageSourceNode: "來源節點",
+  imageVersionTemplate: "版本範本",
+  imageNameFromProject: "依專案名稱產生",
+  imageRegistryInvalid: "倉庫位址格式無效",
+  imageRegistryFromEnvironment: "取本次執行所選環境的倉庫",
+  imageBuildRegistry: "建置節點產物；倉庫取決於執行環境",
+  imageBuildVersion: "依本次執行與原始碼提交產生",
+  imageRuntimeReference: "僅使用本次執行產物。DATE 依執行建立時間（UTC）解析，實際版本與 digest 在執行後確定；已推送映像依 digest 部署。",
+  imageSourceHint: "自動選擇此節點相依的映像產物；有多個候選時，請明確選擇來源。",
+  imageSourceMissing: "相依項中沒有映像產物。請新增相依項，或選擇上游映像來源。",
+  imageSourceAmbiguous: "相依項中有多個映像產物，請選擇要部署的來源。",
+  imageSourceUnavailable: "所選映像來源無法使用，請檢查來源節點與相依關係。",
+  serverRequired: "留空僅使用本次執行明確選擇的匹配環境目標；無匹配環境或目標時須選擇伺服器。",
+  serverFromEnvironment: "使用本次執行的環境目標",
+  cacheUseProjectDefault: "使用專案預設快取",
+  cacheUsingDefault: "使用專案預設快取",
+  cacheNoCaching: "不使用快取",
+  serverUnavailable: "引用的伺服器無法使用，可能已刪除或目前沒有存取權限。",
+  credentialUnavailable: "引用的憑據無法使用，或類型與此欄位不符。",
   // ─── jobConfigSchema · shared option sets ──────────────────────────────
   artifactImage: '容器映像 (image)',
   artifactJar: 'JAR 包 (jar)',
@@ -42,7 +68,7 @@ export default {
     '可選,每行一條。相對工作區根:目錄→dist、*.jar→jar、其它檔案→archive。一個節點可出多件;填了才歸檔進製品庫並在執行詳情可下載/部署。映像產物請用「建置」節點(build_image),不在這裡',
   fieldCachePathsLabel: '相依快取目錄',
   fieldCachePathsHint:
-    '可選,每行一條,相對工作區根。配了才啟用快取:建置前還原、建置後儲存,跨多次執行複用相依(免重複拉 node_modules/.m2/.gradle 等)。快取問題絕不影響建置結果',
+    "欄位未設定時繼承專案預設；自訂路徑覆蓋預設值，清空則不快取。每行一條，相對於工作區根目錄。",
   fieldCacheKeyLabel: '快取 Key(可選)',
   fieldCacheKeyPlaceholder: '留空=按分支+lockfile 自動',
   fieldCacheKeyHint:
@@ -50,7 +76,7 @@ export default {
 
   // ─── jobConfigSchema · deploy ssh fields ───────────────────────────────
   fieldServerIdLabel: '目標伺服器',
-  fieldServerIdHint: '選擇已登記的伺服器(憑證按引用繫結)',
+  fieldServerIdHint: "節點選擇覆蓋環境預設；留空僅使用本次執行明確選擇環境的目標。",
   fieldArtifactTypeLabel: '部署產物類型',
   fieldArtifactTypeHint:
     '本 run 同時產出映像與檔案產物時挑哪件;映像走目標機 docker pull → 起新容器 → 健康檢查 → 失敗回復上一映像',
@@ -105,7 +131,7 @@ export default {
   fieldRegistryLabel: '映像倉庫位址',
   fieldImageNameLabel: '映像名',
   fieldTagLabel: '標籤',
-  fieldTagHint: '可用變數:{\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
+  fieldTagHint: '可用變數: {\'${COMMIT_SHA}\'} {\'${DATE}\'} {\'${DATE:yyyyMMddHHmmss}\'}. 日期使用本次執行建立時間（UTC），預設 yyyy-MM-dd-HH-mm；格式支援 yyyy、MM、dd、HH、mm、ss',
   fieldRegistryCredentialLabel: '倉庫憑證',
   fieldRegistryCredentialHint: '引用映像倉庫登入憑證',
 
@@ -151,7 +177,7 @@ export default {
   fieldTemplatedArtifactPathHint: '可選,每行一條,支援 {\'{{參數}}\'} 與萬用字元;目錄→dist、*.jar→jar、其它→archive',
   fieldTemplatedWorkDirHint: '可選,相對複製工作區根',
   fieldTemplatedCachePathsHint:
-    '可選,每行一條,相對工作區根,支援 {\'{{參數}}\'}。配了才啟用快取:建置前還原、建置後儲存,跨執行複用相依。快取問題絕不影響建置結果',
+    "欄位未設定時繼承專案預設；自訂路徑覆蓋預設值，清空則不快取。每行一條，相對於工作區根目錄，支援 {'{{參數}}'}。",
   fieldTemplatedCacheKeyHint:
     '可選快取鍵範本,支援 {\'{{參數}}\'}。留空則自動按分支 + lockfile 內容推導(相依變則自動冷建置)',
   typeScriptLabel: '自訂腳本',

@@ -8,7 +8,7 @@
  *   - ProjectTriggers.vue  (standalone page at /projects/:id/triggers)
  *   - ProjectPipeline.vue  (embedded in the "触发设置" tab)
  */
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   getTrigger,
@@ -17,6 +17,7 @@ import {
   type TriggerConfig,
   type BranchMapping,
   type UnmatchedPolicy,
+  type SaveTriggerInput,
 } from '../api/triggers'
 import { HttpError } from '../api/http'
 import CronPanel from './CronPanel.vue'
@@ -30,6 +31,7 @@ import RunnerPanel from './RunnerPanel.vue'
 
 const props = defineProps<{
   projectId: string
+  disabled?: boolean
 }>()
 
 const { t } = useI18n()
@@ -67,6 +69,22 @@ const unmatchedPolicy = ref<UnmatchedPolicy>('record')
 // 路径过滤(monorepo · P0):多行 glob 文本框;每行一条,空行忽略。
 // 仅当本次 push 改动文件匹配任一 glob 才触发(拿不到改动文件列表时放行,诚实降级)。
 const pathFiltersText = ref('')
+const persistedDraft = shallowRef('')
+const ready = computed(() => loadState.value === 'idle' && persistedDraft.value !== '')
+const dirty = computed(() => ready.value && JSON.stringify(buildPayload()) !== persistedDraft.value)
+
+function buildPayload(): SaveTriggerInput {
+  return {
+    events: { push: eventPush.value, tag: eventTag.value, pullRequest: eventPullRequest.value, release: eventRelease.value },
+    branchMappings: mappings.value.map((row) => ({
+      branchPattern: row.branchPattern.trim(),
+      environment: row.environment.trim(),
+      targetServerIds: [...row.targetServerIds],
+    })),
+    unmatchedPolicy: unmatchedPolicy.value,
+    pathFilters: parsePathFilters(pathFiltersText.value),
+  }
+}
 
 /** 解析多行 glob 文本为去空、trim 后的数组(去重保序)。 */
 function parsePathFilters(text: string): string[] {
@@ -207,31 +225,36 @@ function showSaveSuccess(): void {
   saveSuccessTimer = setTimeout(() => { saveSuccess.value = false }, 3200)
 }
 
-async function handleSave(): Promise<void> {
+function validate(): boolean {
   let hasError = false
   for (const row of mappings.value) {
     row.patternError = validatePattern(row.branchPattern)
     if (row.patternError) hasError = true
   }
-  if (hasError) return
+  return !hasError
+}
 
-  saveSubmitting.value = true
+async function save(): Promise<boolean> {
+  if (!ready.value || saveSubmitting.value) return false
   saveBanner.value = ''
   saveSuccess.value = false
+  if (!validate()) return false
+
+  saveSubmitting.value = true
 
   try {
-    const updated = await saveTrigger(props.projectId, {
-      events: { push: eventPush.value, tag: eventTag.value, pullRequest: eventPullRequest.value, release: eventRelease.value },
-      branchMappings: mappings.value.map((r) => ({
-        branchPattern: r.branchPattern.trim(),
-        environment:   r.environment.trim(),
-        targetServerIds: r.targetServerIds,
-      })),
-      unmatchedPolicy: unmatchedPolicy.value,
-      pathFilters: parsePathFilters(pathFiltersText.value),
+    const payload = buildPayload()
+    const snapshot = JSON.stringify(payload)
+    const updated = await saveTrigger(props.projectId, payload)
+    if (JSON.stringify(buildPayload()) === snapshot) applyConfig(updated)
+    else persistedDraft.value = JSON.stringify({
+      events: updated.events,
+      branchMappings: updated.branchMappings.map(({ branchPattern, environment, targetServerIds }) => ({ branchPattern, environment, targetServerIds })),
+      unmatchedPolicy: updated.unmatchedPolicy,
+      pathFilters: updated.pathFilters ?? [],
     })
-    applyConfig(updated)
-    showSaveSuccess()
+    if (!dirty.value) showSaveSuccess()
+    return true
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
@@ -247,7 +270,19 @@ async function handleSave(): Promise<void> {
   } finally {
     saveSubmitting.value = false
   }
+  return false
 }
+
+function handleSave(): void {
+  if (!props.disabled) void save()
+}
+
+defineExpose({ ready, dirty, saving: saveSubmitting, validate, save })
+watch(dirty, (changed) => { if (changed) saveSuccess.value = false })
+onUnmounted(() => {
+  if (saveSuccessTimer) clearTimeout(saveSuccessTimer)
+  if (copyTimer) clearTimeout(copyTimer)
+})
 
 // ─── Data loading ─────────────────────────────────────────────────────────────
 
@@ -265,21 +300,25 @@ function applyConfig(config: TriggerConfig): void {
     id: m.id,
     branchPattern: m.branchPattern,
     environment: m.environment,
-    targetServerIds: m.targetServerIds,
+    targetServerIds: [...m.targetServerIds],
     patternError: '',
   }))
+  persistedDraft.value = JSON.stringify(buildPayload())
 }
 
 async function loadTrigger(): Promise<void> {
+  const id = props.projectId
   loadState.value = 'loading'
   loadError.value = ''
   revealedSecret.value = null
 
   try {
-    const config = await getTrigger(props.projectId)
+    const config = await getTrigger(id)
+    if (id !== props.projectId) return
     applyConfig(config)
     loadState.value = 'idle'
   } catch (err) {
+    if (id !== props.projectId) return
     if (err instanceof HttpError) {
       if (err.status === 0) {
         loadError.value = t('projectPanels.triggers.errSaveConnect')
@@ -590,7 +629,7 @@ const displayWebhookUrl = computed(() => {
 
       <!-- ═══ Save bar ════════════════════════════════════════════════════ -->
       <div class="save-bar">
-        <button class="btn-primary" :disabled="saveSubmitting" :aria-busy="saveSubmitting" @click="handleSave">
+        <button class="btn-primary" :disabled="saveSubmitting || props.disabled" :aria-busy="saveSubmitting" @click="handleSave">
           <span v-if="saveSubmitting" class="spinner" aria-hidden="true"/>
           {{ saveSubmitting ? t('projectPanels.triggers.saving') : t('projectPanels.triggers.saveTriggers') }}
         </button>

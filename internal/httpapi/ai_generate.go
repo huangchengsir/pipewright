@@ -263,8 +263,8 @@ func humanizeGenerateErr(err error) string {
 // makeAIApplyHandler 返回 POST /api/projects/{id}/pipeline/ai-apply handler。
 //
 // 仅写被勾选项:selections.stageIds → 合入 pipeline spec(始终保留/补源阶段,满足不变式)
-// 经 pipeline.Save;selections.build=true → SettingsService.Save(secret 引用留空,不编造
-// credentialId);selections.branchMappingIds → trigger.Save(合并去重既有)。
+// 经 pipeline.Save;selections.build=true → SettingsService.Save(保留既有变量、缓存和
+// secret 引用);selections.branchMappingIds → trigger.Save(合并去重既有)。
 // 各服务校验仍生效:校验失败透传 422;项目不存在 404。
 func makeAIApplyHandler(d aiGenerateDeps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -300,7 +300,7 @@ func makeAIApplyHandler(d aiGenerateDeps) http.HandlerFunc {
 			resp.Applied.Spec = true
 		}
 
-		// 2) build=true → 写 pipeline_settings(secret 引用留空)。
+		// 2) build=true → 更新构建建议字段,保留既有变量和缓存。
 		if req.Selections.Build {
 			if err := applySelectedBuild(ctx, d.settings, id, req.Proposal.Build); err != nil {
 				writeAIApplyError(w, err)
@@ -457,8 +457,8 @@ func applySelectedStages(ctx context.Context, svc pipeline.Service, projectID st
 	return err
 }
 
-// applySelectedBuild 把提案 build 写入 pipeline_settings(secret 引用留空,不编造 credentialId)。
-// 保留既有环境定义(仅覆盖 build 部分)。
+// applySelectedBuild 仅覆盖提案包含的构建字段,保留变量、缓存、环境和脚本步骤。
+// secret 凭据沿用既有引用,不从 AI 提案编造。
 func applySelectedBuild(ctx context.Context, svc pipeline.SettingsService, projectID string, b struct {
 	Model     string `json:"model"`
 	Toolchain struct {
@@ -473,18 +473,16 @@ func applySelectedBuild(ctx context.Context, svc pipeline.SettingsService, proje
 		return err
 	}
 
-	build := pipeline.BuildConfig{
-		Model:          b.Model,
-		DockerfilePath: b.DockerfilePath,
-		Toolchain:      pipeline.Toolchain{Language: b.Toolchain.Language, Version: b.Toolchain.Version},
-		ArtifactType:   b.ArtifactType,
-		Vars:           []pipeline.BuildVar{}, // AI 不编造 secret 变量/凭据
-		Cache:          pipeline.Cache{Enabled: false, Paths: []string{}},
-	}
+	build := cur.Build
+	build.Model = b.Model
+	build.DockerfilePath = b.DockerfilePath
+	build.Toolchain = pipeline.Toolchain{Language: b.Toolchain.Language, Version: b.Toolchain.Version}
+	build.ArtifactType = b.ArtifactType
 
 	_, err = svc.Save(ctx, projectID, pipeline.SettingsInput{
 		Build:        build,
-		Environments: cur.Environments, // 保留既有环境
+		Environments: cur.Environments,
+		Steps:        cur.Steps,
 	})
 	return err
 }

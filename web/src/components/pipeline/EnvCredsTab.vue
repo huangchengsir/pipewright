@@ -1,11 +1,10 @@
 <script setup lang="ts">
 /**
  * EnvCredsTab — 环境与凭据 tab (Story 2.4).
- * Environment list (name + target-server placeholder + env vars) + image-registry
+ * Environment list (name + default target servers + env vars) + image-registry
  * binding (type + url + vault credential). Edits a local Environment[] copy and emits
  * `update`; the parent (ProjectPipeline) owns save.
  *
- * Target servers are placeholders until Story 4-1 (existence not validated yet).
  * Secret env vars / registry credentials reference a vault credentialId — plaintext is
  * never entered, stored, or shown; only the server-computed mask appears.
  */
@@ -17,11 +16,13 @@ import type {
   RegistryType,
 } from '../../api/pipelineSettings'
 import type { Credential } from '../../api/credentials'
+import type { Server } from '../../api/servers'
 import AppSelect from '../ui/AppSelect.vue'
 
 interface Props {
   environments: Environment[]
   credentials: Credential[]
+  servers?: Server[]
   disabled?: boolean
 }
 const props = defineProps<Props>()
@@ -42,7 +43,7 @@ interface EnvRow {
   _key: number
   id: string
   name: string
-  targetServersText: string
+  targetServerIds: string[]
   envVars: VarRow[]
   registryType: RegistryType | ''
   registryUrl: string
@@ -54,7 +55,7 @@ function toEnvRow(e: Environment): EnvRow {
     _key: keySeq++,
     id: e.id,
     name: e.name,
-    targetServersText: e.targetServerIds.join(', '),
+    targetServerIds: [...e.targetServerIds],
     envVars: e.envVars.map((v) => ({ ...v, _key: keySeq++ })),
     registryType: e.imageRegistry.type,
     registryUrl: e.imageRegistry.url,
@@ -85,8 +86,34 @@ const registryOptions = computed(() => [
 ])
 const registryCredentialOptions = computed(() => [
   { value: '', label: t('pipelinePanels.envRegistryCredOptional') },
-  ...vaultOptions.value,
+  ...props.credentials
+    .filter((c) => c.type === 'registry')
+    .map((c) => ({ value: c.id, label: `${c.name} · ${c.maskedValue}` })),
 ])
+const environmentRows = computed(() => {
+  const servers = props.servers ?? []
+  const visibleServerIds = new Set(servers.map((server) => server.id))
+  const registryCredentialIds = new Set(registryCredentialOptions.value.map((option) => option.value))
+  return envs.value.map((env) => {
+    const registryCredentialUnavailable = !registryCredentialIds.has(env.registryCredentialId)
+    return {
+      env,
+      serverOptions: [
+        ...servers.map((server) => ({ id: server.id, name: server.name, host: server.host, unavailable: false })),
+        ...[...new Set(env.targetServerIds)]
+          .filter((id) => !visibleServerIds.has(id))
+          .map((id) => ({ id, name: id, host: '', unavailable: true })),
+      ],
+      registryCredentialUnavailable,
+      registryCredentialOptions: registryCredentialUnavailable
+        ? [...registryCredentialOptions.value, {
+            value: env.registryCredentialId,
+            label: t('pipelinePanels.envRegistryCredUnavailable', { id: env.registryCredentialId }),
+          }]
+        : registryCredentialOptions.value,
+    }
+  })
+})
 
 // ─── Compose + emit on change ───────────────────────────────────────────────────
 
@@ -94,10 +121,7 @@ function compose(): Environment[] {
   return envs.value.map((e) => ({
     id: e.id,
     name: e.name,
-    targetServerIds: e.targetServersText
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean),
+    targetServerIds: [...e.targetServerIds],
     envVars: e.envVars.map(({ _key, ...v }) => {
       void _key
       return v
@@ -149,7 +173,7 @@ function addEnv(): void {
     _key: keySeq++,
     id: '',
     name: '',
-    targetServersText: '',
+    targetServerIds: [],
     envVars: [],
     registryType: '',
     registryUrl: '',
@@ -159,6 +183,13 @@ function addEnv(): void {
 
 function removeEnv(envKey: number): void {
   envs.value = envs.value.filter((e) => e._key !== envKey)
+}
+
+function toggleServer(env: EnvRow, id: string, event: Event): void {
+  if (props.disabled) return
+  const checked = (event.target as HTMLInputElement).checked
+  if (checked && !env.targetServerIds.includes(id)) env.targetServerIds.push(id)
+  if (!checked) env.targetServerIds = env.targetServerIds.filter((selected) => selected !== id)
 }
 
 function addVar(env: EnvRow, secret: boolean): void {
@@ -197,7 +228,7 @@ function maskFor(row: VarRow): string {
 <template>
   <div class="env-root">
     <!-- ─── Environments ────────────────────────────────────────────────────── -->
-    <section class="card">
+    <section class="env-section">
       <header class="card-head">
         <span class="card-ic" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
@@ -215,7 +246,7 @@ function maskFor(row: VarRow): string {
         </button>
       </div>
 
-      <article v-for="env in envs" :key="env._key" class="env">
+      <article v-for="{ env, serverOptions, registryCredentialOptions: credentialOptions, registryCredentialUnavailable } in environmentRows" :key="env._key" class="env">
         <header class="env-h">
           <input
             v-model="env.name"
@@ -239,23 +270,23 @@ function maskFor(row: VarRow): string {
         <div class="env-body">
           <!-- target servers -->
           <div class="eg">
-            <div class="eg-l">
-              {{ t('pipelinePanels.envTargetServers') }}
-              <span class="badge-soon">{{ t('pipelinePanels.envValidateBadge') }}</span>
+            <div :id="`env-targets-${env._key}`" class="eg-l">{{ t('pipelinePanels.envTargetServers') }}</div>
+            <p :id="`env-targets-hint-${env._key}`" class="eg-hint">{{ t('pipelinePanels.envTargetServersHint') }}</p>
+            <p v-if="!servers?.length" class="eg-hint server-empty">{{ t('pipelinePanels.envNoServers') }}</p>
+            <div v-if="serverOptions.length" class="server-list" role="group" :aria-labelledby="`env-targets-${env._key}`" :aria-describedby="`env-targets-hint-${env._key}`">
+              <label v-for="server in serverOptions" :key="server.id" class="server-row" :class="{ 'server-row--unavailable': server.unavailable, 'server-row--disabled': disabled }">
+                <input type="checkbox" :value="server.id" :checked="env.targetServerIds.includes(server.id)" :disabled="disabled" @change="toggleServer(env, server.id, $event)">
+                <span class="server-name">{{ server.name }}</span>
+                <span v-if="server.unavailable" class="server-status">{{ t('pipelinePanels.envServerUnavailable') }}</span>
+                <span v-else class="server-host mono">{{ server.host }}</span>
+              </label>
             </div>
-            <input
-              v-model="env.targetServersText"
-              class="eg-input mono"
-              type="text"
-              :placeholder="t('pipelinePanels.envTargetServersPlaceholder')"
-              :aria-label="t('pipelinePanels.envTargetServersAria')"
-              :disabled="disabled"
-            >
           </div>
 
           <!-- env vars -->
           <div class="eg">
             <div class="eg-l">{{ t('pipelinePanels.envEnvVars') }}</div>
+            <p class="eg-hint">{{ t('pipelinePanels.envEnvVarsHint') }}</p>
             <div class="evar-list">
               <div v-for="row in env.envVars" :key="row._key" class="evar-row">
                 <input v-model="row.key" class="ev-k mono" type="text" placeholder="KEY" :aria-label="t('pipelinePanels.envVarKeyAria')" :disabled="disabled">
@@ -311,13 +342,14 @@ function maskFor(row: VarRow): string {
               >
               <AppSelect
                 v-model="env.registryCredentialId"
-                :options="registryCredentialOptions"
+                :options="credentialOptions"
                 :aria-label="t('pipelinePanels.envRegistryCredAria')"
                 :disabled="disabled || env.registryType === ''"
                 min-width="0"
                 portal
               />
             </div>
+            <p v-if="registryCredentialUnavailable" class="field-warning" role="status">{{ t('pipelinePanels.envRegistryCredWarning') }}</p>
           </div>
         </div>
       </article>
@@ -334,15 +366,10 @@ function maskFor(row: VarRow): string {
 <style scoped>
 .env-root { display: flex; flex-direction: column; gap: 16px; max-width: 980px; }
 
-.card {
-  background: var(--color-card);
-  border: 1px solid var(--color-border);
-  border-radius: var(--rounded-card);
-  box-shadow: var(--shadow);
-  overflow: hidden;
-}
+.env-section { min-width: 0; }
 .card-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 9px;
   padding: 13px 18px;
@@ -392,6 +419,7 @@ function maskFor(row: VarRow): string {
 }
 .env-name {
   flex: 1;
+  min-width: 0;
   height: 32px;
   border: 1px solid transparent;
   background: transparent;
@@ -419,6 +447,7 @@ function maskFor(row: VarRow): string {
 .env-body { padding: 14px 18px; display: flex; flex-direction: column; gap: 16px; }
 .eg-l {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   font-size: var(--text-label);
@@ -426,16 +455,21 @@ function maskFor(row: VarRow): string {
   color: var(--color-dim);
   margin-bottom: 7px;
 }
-.eg-hint { font-size: 0.7rem; color: var(--color-faint); font-weight: 400; }
-.badge-soon {
-  font-size: 0.66rem;
-  font-weight: 500;
-  color: var(--color-amber);
-  background: var(--color-amber-soft);
-  border: 1px solid var(--color-amber-line);
-  border-radius: 100px;
-  padding: 2px 8px;
-}
+.eg-hint { font-size: 0.75rem; color: var(--color-faint); font-weight: 400; line-height: 1.5; }
+p.eg-hint { margin: 0 0 8px; }
+.server-empty { padding: 8px 0; }
+.server-list { max-height: 192px; overflow-y: auto; overscroll-behavior: contain; }
+.server-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 10px; min-height: 36px; padding: 6px 8px; cursor: pointer; }
+.server-row + .server-row { border-top: 1px solid var(--color-border); }
+.server-row:hover:not(.server-row--disabled) { background: var(--color-inset); }
+.server-row input { width: 16px; height: 16px; margin: 0; accent-color: var(--color-primary); }
+.server-row input:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.server-name, .server-host, .server-status { overflow-wrap: anywhere; font-size: 0.79rem; }
+.server-name { color: var(--color-text); }
+.server-host { color: var(--color-faint); }
+.server-status, .field-warning { color: var(--color-amber); }
+.server-row--disabled { cursor: not-allowed; opacity: 0.6; }
+.field-warning { margin: 8px 0 0; font-size: 0.75rem; line-height: 1.5; }
 
 .eg-input, .ev-k, .ev-v, .ev-sel {
   height: 32px;
@@ -452,7 +486,7 @@ function maskFor(row: VarRow): string {
 .mono { font-family: var(--font-mono); }
 
 .evar-list { display: flex; flex-direction: column; gap: 8px; }
-.evar-row { display: grid; grid-template-columns: 160px 1fr 124px 30px; gap: 8px; align-items: center; }
+.evar-row { display: grid; grid-template-columns: 160px minmax(0, 1fr) 124px 30px; gap: 8px; align-items: center; }
 
 .vfrom {
   height: 28px;
@@ -485,7 +519,7 @@ function maskFor(row: VarRow): string {
 .ev-del:hover:not(:disabled) { color: var(--color-red); border-color: var(--color-red-line); }
 .ev-del:focus-visible { outline: 2px solid var(--color-primary); }
 
-.reg-grid { display: grid; grid-template-columns: 150px 1fr 200px; gap: 8px; }
+.reg-grid { display: grid; grid-template-columns: 150px minmax(0, 1fr) 200px; gap: 8px; }
 @media (max-width: 700px) { .reg-grid { grid-template-columns: 1fr; } .evar-row { grid-template-columns: 1fr; } }
 
 .addrow { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 2px; }

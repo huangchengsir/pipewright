@@ -6,6 +6,7 @@ import type { PipelineJob, PipelineStage } from '../../api/pipeline'
 import type { Credential } from '../../api/credentials'
 import type { Server } from '../../api/servers'
 import type { NotificationChannel } from '../../api/notifications'
+import type { Project } from '../../api/projects'
 import {
   getJobTypeSpec,
   splitConfig,
@@ -26,6 +27,9 @@ import JobTypeIcon from './JobTypeIcon.vue'
 import StepBuilder from './StepBuilder.vue'
 import StudioInstanceParams from './StudioInstanceParams.vue'
 import AppSelect from '../ui/AppSelect.vue'
+import ImageProvenanceSummary from './ImageProvenanceSummary.vue'
+import ProjectSourceSummary from './ProjectSourceSummary.vue'
+import { imageSourceChoices, resolveImageSource } from './imageProvenance'
 
 const props = defineProps<{
   job: PipelineJob
@@ -34,12 +38,16 @@ const props = defineProps<{
   credentials?: Credential[]
   servers?: Server[]
   channels?: NotificationChannel[]
+  projectName?: string
+  project?: Project
+  environmentAutoPushPossible?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'close'): void
   (e: 'update', patch: Partial<PipelineJob>): void
   (e: 'change-type'): void
+  (e: 'inspect-source', jobId: string): void
 }>()
 
 const { t } = useI18n()
@@ -136,6 +144,7 @@ function pickViewMode(config: Record<string, string>): void {
 
 /** 步骤模式下,typed 表单只渲染「非步骤拥有」的字段(image/workDir/模板字段等)。 */
 const visibleFields = computed<JobField[]>(() => {
+  if (localType.value === 'git_source') return []
   if (!spec.value) return []
   return spec.value.fields.filter((f) => {
     if (f.when && !f.when(typedConfig.value)) return false
@@ -205,19 +214,35 @@ function credentialOptions(field: JobField): Credential[] {
 }
 
 function credentialSelectOptions(field: JobField): { value: string; label: string }[] {
-  return [
+  return withUnavailableOption([
     { value: '', label: t('pipelineJob.credUnselected') },
     ...credentialOptions(field).map((c) => ({ value: c.id, label: `${c.name} (${c.maskedValue})` })),
-  ]
+  ], fieldValue(field.key), 'pipelineJob.credentialUnavailable')
 }
 
-const serverSelectOptions = computed(() => [
-  { value: '', label: t('pipelineJob.credUnselected') },
+function withUnavailableOption(options: { value: string; label: string }[], value: string, key: string) {
+  return value && !options.some((option) => option.value === value)
+    ? [...options, { value, label: t(key) }]
+    : options
+}
+
+const serverSelectOptions = computed(() => withUnavailableOption([
+  { value: '', label: t('pipelineJob.serverFromEnvironment') },
   ...(props.servers ?? []).map((srv) => ({ value: srv.id, label: `${srv.name} · ${srv.host}` })),
-])
+], fieldValue('serverId'), 'pipelineJob.serverUnavailable'))
+
+const editedJob = computed(() => ({ ...props.job, config: liveConfig.value }))
+const imageSource = computed(() => resolveImageSource(props.stages ?? [], props.stage, editedJob.value, props.environmentAutoPushPossible))
+const imageDeployment = computed(() => ['deploy_ssh', 'deploy_frontend'].includes(localType.value) && fieldValue('artifactType') === 'image')
 
 const artifactSourceOptions = computed(() => {
   const options = [{ value: '', label: t('pipelineJob.artifactSourceAuto') }]
+  if (imageDeployment.value) {
+    options.push(...imageSourceChoices(props.stages ?? [], props.stage, editedJob.value).map((source) => ({
+      value: source.selector, label: `${source.stage.name} / ${source.job.name}`,
+    })))
+    return withUnavailableOption(options, imageSource.value.source?.selector ?? fieldValue('artifactSource'), 'pipelineJob.imageSourceUnavailable')
+  }
   for (const stage of props.stages ?? []) {
     for (const job of stage.jobs) {
       let declarations: { path: string; name?: string }[] = []
@@ -268,6 +293,7 @@ function fieldValue(key: string): string {
 
 /** Default-display value for selects so the first option shows before any edit. */
 function selectValue(field: JobField): string {
+  if (field.key === 'artifactSource' && imageDeployment.value && imageSource.value.source && fieldValue('artifactSource')) return imageSource.value.source.selector
   const v = typedConfig.value[field.key]
   if (v) return v
   return field.options?.[0]?.value ?? ''
@@ -277,12 +303,38 @@ function updateLocal(key: string, value: string): void {
   typedConfig.value = { ...typedConfig.value, [key]: value }
 }
 
+const cacheInherited = computed(() => !Object.hasOwn(typedConfig.value, 'cachePaths'))
+function setCacheInheritance(inherit: boolean): void {
+  const next = { ...typedConfig.value }
+  if (inherit) delete next.cachePaths
+  else next.cachePaths = ''
+  typedConfig.value = next
+  flush()
+}
+
 function setField(key: string, value: string): void {
+  const previous = fieldValue(key)
   updateLocal(key, value)
-  if (key === 'artifactType' && (value === 'image' || value === 'command')) {
+  if (key === 'artifactType' && value !== previous) {
     updateLocal('artifactSource', '')
   }
   flush()
+}
+
+function referenceWarning(field: JobField): string {
+  const value = fieldValue(field.key)
+  if (field.kind === 'server') {
+    if (!value) return t('pipelineJob.serverRequired')
+    if (props.servers && !props.servers.some((server) => server.id === value)) return t('pipelineJob.serverUnavailable')
+  }
+  if (field.kind === 'credential' && value && props.credentials && !credentialOptions(field).some((credential) => credential.id === value)) return t('pipelineJob.credentialUnavailable')
+  if (field.key === 'artifactSource' && imageDeployment.value && imageSource.value.status !== 'selected') return t(`pipelineJob.imageSource${imageSource.value.status === 'missing' ? 'Missing' : imageSource.value.status === 'ambiguous' ? 'Ambiguous' : 'Unavailable'}`)
+  return ''
+}
+
+function inspectSource(jobId: string): void {
+  flush()
+  emit('inspect-source', jobId)
 }
 
 // ─── Raw extras (advanced) ─────────────────────────────────────────────────────
@@ -471,8 +523,14 @@ async function confirmSave(): Promise<void> {
       </button>
     </div>
 
+    <ProjectSourceSummary
+      v-if="localType === 'git_source'"
+      :project="project"
+      :has-legacy-overrides="Object.values(liveConfig).some((value) => !!value)"
+    />
+
     <!-- Typed config section (per-type form) -->
-    <div v-if="spec && (!showShortlist || showStudioRaw)" class="drawer-section">
+    <div v-if="spec && localType !== 'git_source' && (!showShortlist || showStudioRaw)" class="drawer-section">
       <div class="drawer-section-head">
         <div class="drawer-section-label">{{ spec.label }}{{ t('pipelineJob.configSuffix') }}</div>
         <div v-if="canUseStepBuilder && !showShortlist" class="view-switch" role="tablist" :aria-label="t('pipelineJob.configView')">
@@ -519,6 +577,11 @@ async function confirmSave(): Promise<void> {
       >
         <div class="drawer-field-label">{{ field.label }}</div>
 
+        <label v-if="field.key === 'cachePaths'" class="drawer-toggle">
+          <input type="checkbox" :checked="cacheInherited" @change="setCacheInheritance(($event.target as HTMLInputElement).checked)">
+          <span>{{ t('pipelineJob.cacheUseProjectDefault') }}</span>
+        </label>
+
         <!-- textarea -->
         <textarea
           v-if="field.kind === 'textarea'"
@@ -528,6 +591,7 @@ async function confirmSave(): Promise<void> {
           rows="4"
           :placeholder="field.placeholder"
           :aria-label="field.label"
+          :disabled="field.key === 'cachePaths' && cacheInherited"
           @input="updateLocal(field.key, ($event.target as HTMLTextAreaElement).value)"
           @blur="flush"
         ></textarea>
@@ -600,7 +664,14 @@ async function confirmSave(): Promise<void> {
           @blur="flush"
         />
 
-        <p v-if="field.hint && field.kind !== 'toggle'" class="field-hint">{{ field.hint }}</p>
+        <p v-if="referenceWarning(field)" class="field-warning" role="status">{{ referenceWarning(field) }}</p>
+        <p v-if="field.hint && field.kind !== 'toggle'" class="field-hint">{{ field.key === 'artifactSource' && imageDeployment ? t('pipelineJob.imageSourceHint') : field.hint }}</p>
+        <ImageProvenanceSummary
+          v-if="field.key === 'artifactSource' && imageDeployment && imageSource.source"
+          :source="imageSource.source"
+          :project-name="projectName"
+          @inspect="inspectSource"
+        />
       </div>
       </template>
 
@@ -717,6 +788,7 @@ async function confirmSave(): Promise<void> {
 </template>
 
 <style scoped>
+.field-warning { margin: 6px 0 0; color: var(--color-amber); font-size: 0.76rem; line-height: 1.5; overflow-wrap: anywhere; }
 .drawer-section-head {
   display: flex;
   align-items: center;

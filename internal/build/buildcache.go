@@ -2,6 +2,7 @@ package build
 
 import (
 	"context"
+	"strings"
 
 	"github.com/huangchengsir/pipewright/internal/buildcache"
 	"github.com/huangchengsir/pipewright/internal/dagrun"
@@ -26,10 +27,14 @@ type jobCacheConfig struct {
 }
 
 // parseCacheConfig 从 job.Config 解析缓存配置(cachePaths 多行 + 可选 cacheKey 模板,渲染 {{参数}})。
-// 没配 cachePaths → enabled=false(调用方跳过)。
-func parseCacheConfig(jb pipeline.Job) jobCacheConfig {
+// 缺少 cachePaths 时继承启用的全局默认;显式空值禁用缓存。
+func parseCacheConfig(jb pipeline.Job, defaults ...pipeline.Cache) jobCacheConfig {
 	tplCtx := templateContext(jb.Config)
-	paths := splitCommands(renderTemplate(cfgString(jb.Config, "cachePaths"), tplCtx))
+	declaredPaths := cfgString(jb.Config, "cachePaths")
+	if _, explicit := jb.Config["cachePaths"]; !explicit && len(defaults) > 0 && defaults[0].Enabled {
+		declaredPaths = strings.Join(defaults[0].Paths, "\n")
+	}
+	paths := splitCommands(renderTemplate(declaredPaths, tplCtx))
 	if len(paths) == 0 {
 		return jobCacheConfig{enabled: false}
 	}
@@ -42,11 +47,11 @@ func parseCacheConfig(jb pipeline.Job) jobCacheConfig {
 
 // restoreJobCache 恢复 job 的缓存到工作区(best-effort:未命中/失败=冷构建,只记日志)。
 // 缓存库未注入或 job 未配 cachePaths → 无操作。branch 用于默认 key 推导。
-func (b *Builder) restoreJobCache(ctx context.Context, rep dagrun.StageReporter, jb pipeline.Job, branch, workspace string) {
+func (b *Builder) restoreJobCache(ctx context.Context, rep dagrun.StageReporter, jb pipeline.Job, branch, workspace string, defaults ...pipeline.Cache) {
 	if b.buildCache == nil {
 		return
 	}
-	cc := parseCacheConfig(jb)
+	cc := parseCacheConfig(jb, defaults...)
 	if !cc.enabled {
 		return
 	}
@@ -66,11 +71,11 @@ func (b *Builder) restoreJobCache(ctx context.Context, rep dagrun.StageReporter,
 
 // saveJobCache 把 job 的缓存路径保存回缓存库(best-effort:保存失败只记日志,不阻断构建)。
 // 缓存库未注入或 job 未配 cachePaths → 无操作。
-func (b *Builder) saveJobCache(ctx context.Context, rep dagrun.StageReporter, jb pipeline.Job, branch, workspace string) {
+func (b *Builder) saveJobCache(ctx context.Context, rep dagrun.StageReporter, jb pipeline.Job, branch, workspace string, defaults ...pipeline.Cache) {
 	if b.buildCache == nil {
 		return
 	}
-	cc := parseCacheConfig(jb)
+	cc := parseCacheConfig(jb, defaults...)
 	if !cc.enabled {
 		return
 	}

@@ -2,11 +2,11 @@
 /**
  * SettingsOAuth — OAuth application configuration for git providers.
  *
- * One config card per provider (Gitee / GitHub / GitLab / 自建):
+ * One config card per provider (Gitee / GitHub / GitLab / Gitea / self-hosted GitLab):
  *   - clientId text input
  *   - clientSecret password input — WRITE-ONLY, never echoed; placeholder
  *     hints "留空保留已存" when a secret is already configured
- *   - baseUrl (only the self-hosted `custom` provider)
+ *   - baseUrl (self-hosted `custom` and `gitea` providers)
  *   - enabled toggle
  *   - Save (PUT) → toast "OAuth 应用已保存" + masked secret echo (mirrors SettingsAI)
  *
@@ -84,6 +84,14 @@ const PROVIDERS: ProviderMeta[] = [
     hasBaseUrl: false,
   },
   {
+    id: 'gitea',
+    label: 'Gitea',
+    desc: '',
+    logoText: 'G',
+    logoStyle: 'background:#609926;color:#fff',
+    hasBaseUrl: true,
+  },
+  {
     id: 'custom',
     label: '',
     desc: '',
@@ -106,6 +114,7 @@ function labelFor(id: OAuthProvider): string {
 /** Provider sub-description — `gitee` / `custom` localized, others verbatim. */
 function descFor(id: OAuthProvider): string {
   if (id === 'gitee') return t('settingsOAuth.providerGiteeDesc')
+  if (id === 'gitea') return t('settingsOAuth.providerGiteaDesc')
   if (id === 'custom') return t('settingsOAuth.providerCustomDesc')
   return cards[id].meta.desc
 }

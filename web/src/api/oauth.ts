@@ -15,7 +15,7 @@
 
 import { http } from './http'
 
-export type OAuthProvider = 'gitee' | 'github' | 'gitlab' | 'custom'
+export type OAuthProvider = 'gitee' | 'github' | 'gitlab' | 'custom' | 'gitea'
 
 /** GET /api/oauth/apps element — never contains plaintext clientSecret. */
 export interface OAuthApp {
@@ -37,7 +37,7 @@ export interface SaveOAuthAppInput {
    * Non-empty rotates to the new secret.
    */
   clientSecret?: string
-  /** Only meaningful for the self-hosted (`custom`) provider. */
+  /** Only meaningful for self-hosted (`custom` GitLab or `gitea`) providers. */
   baseUrl?: string
   enabled: boolean
 }

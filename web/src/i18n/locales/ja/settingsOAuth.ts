@@ -6,7 +6,8 @@ export default {
 
   providerCustomLabel: 'セルフホスト',
   providerGiteeDesc: 'Gitee',
-  providerCustomDesc: 'セルフホストの GitLab / Gitea など',
+  providerCustomDesc: 'セルフホストの GitLab',
+  providerGiteaDesc: 'セルフホストの Gitea',
 
   statusEnabled: '有効',
   statusConfiguredIdle: '設定済み・無効',

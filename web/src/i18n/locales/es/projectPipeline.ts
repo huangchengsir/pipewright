@@ -1,4 +1,23 @@
 export default {
+  saveConfiguration: "Guardar configuración",
+  replaceDraftTitle: "¿Reemplazar borrador del lienzo?",
+  replaceDraftBody: "Se reemplazarán los cambios del lienzo sin guardar. Los demás borradores no cambian.",
+  replaceDraftConfirm: "Reemplazar borrador",
+  saveStatus: {
+    saved: "Configuración guardada",
+    dirty: "Cambios sin guardar",
+    loading: "Cargando configuración",
+    saving: "Guardando configuración",
+    error: "Error al guardar",
+    partial: "Parte de la configuración guardada",
+    unavailable: "Parte de la configuración no disponible",
+    newerEdits: "Los cambios recientes siguen sin guardar",
+    completedScopes: "Guardado: {scopes}",
+    pendingScopes: "Pendiente: {scopes}",
+    failedScopes: "Error al guardar: {scopes}",
+    unavailableScopes: "No disponible: {scopes}",
+    dirtyTab: "{tab}, cambios sin guardar",
+  },
   // ─── barra superior / migas de pan ──────────────────────────────
   breadcrumbAria: 'Navegación de migas de pan',
   breadcrumbProjects: 'Proyectos',

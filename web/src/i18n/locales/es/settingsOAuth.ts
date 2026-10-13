@@ -6,7 +6,8 @@ export default {
 
   providerCustomLabel: 'Autoalojado',
   providerGiteeDesc: 'Gitee',
-  providerCustomDesc: 'GitLab / Gitea autoalojado, etc.',
+  providerCustomDesc: 'GitLab autoalojado',
+  providerGiteaDesc: 'Gitea autoalojado',
 
   statusEnabled: 'Activado',
   statusConfiguredIdle: 'Configurado · No activado',

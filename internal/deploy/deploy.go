@@ -386,7 +386,7 @@ func (s *service) runCommandOnly(ctx context.Context, runID string, serverIDs []
 	if command == "" {
 		return nil, fmt.Errorf("deploy: 命令型部署缺少 restartCommand")
 	}
-	results := make([]TargetResult, 0, len(serverIDs))
+	serverNames := make(map[string]string, len(serverIDs))
 	for _, sid := range serverIDs {
 		srv, gerr := s.targets.Get(ctx, sid)
 		if gerr != nil {
@@ -395,10 +395,14 @@ func (s *service) runCommandOnly(ctx context.Context, runID string, serverIDs []
 			}
 			return nil, gerr
 		}
+		serverNames[sid] = srv.Name
+	}
+	results := make([]TargetResult, 0, len(serverIDs))
+	for _, sid := range serverIDs {
 		started := time.Now().UTC()
 		out, err := s.exec(ctx, sid, []string{"sh", "-c", command})
 		fin := time.Now().UTC()
-		tr := TargetResult{ServerID: sid, ServerName: srv.Name, StartedAt: started, FinishedAt: &fin}
+		tr := TargetResult{ServerID: sid, ServerName: serverNames[sid], StartedAt: started, FinishedAt: &fin}
 		switch {
 		case err != nil:
 			tr.Status = run.TargetFailed

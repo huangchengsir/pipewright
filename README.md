@@ -113,6 +113,13 @@ SETUP_SERVICE=1 PIPEWRIGHT_DB_DRIVER=mysql \
 
 ### ② docker compose (recommended for self-hosting)
 
+When running a Docker-CLI-enabled Pipewright container with the host Docker socket,
+toolchain jobs copy their source workspace into a per-job Docker volume and recover
+build outputs afterward. No shared host `/tmp` mount is needed. Native binary builds
+keep direct workspace mounts. The standard distroless image still requires a
+Docker CLI-enabled image or a native installation for local builds; mounting the
+Docker socket grants host-level control and should only be done in a trusted setup.
+
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/huangchengsir/pipewright/master/docker-compose.yml
 curl -fsSLO https://raw.githubusercontent.com/huangchengsir/pipewright/master/.env.example

@@ -12,7 +12,9 @@ package deploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -26,6 +28,44 @@ type imageState struct {
 	ref       string   // 本次新镜像 ref(repo:tag / image id)
 	prevImage string   // 切换前容器所用镜像(回滚目标;"" = 无上一容器,首次部署)
 	runArgs   []string // docker run 的附加参数(端口映射 / env 等;由 cfg 解析,参数自由)
+}
+
+var deploymentImageDigest = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+var deploymentImageRepository = regexp.MustCompile(`^(?:[a-z0-9][a-z0-9.-]*(?::[0-9]+)?|\[[a-f0-9:]+\](?::[0-9]+)?)(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)+$`)
+var deploymentImageTag = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
+
+// New published artifacts must pin the exact repository's manifest, not its mutable tag.
+func imageDeploymentReference(a run.Artifact) (string, error) {
+	ref := strings.TrimSpace(a.Reference)
+	repository, hasRepository := a.Metadata["digestRepository"].(string)
+	if a.Metadata["pushed"] != true && !hasRepository {
+		return ref, nil // Legacy local image/config digests are not remote manifests.
+	}
+	digest, _ := a.Metadata["digest"].(string)
+	bad := errors.New("published image repository digest missing or invalid")
+	if !deploymentImageDigest.MatchString(digest) || !deploymentImageRepository.MatchString(repository) || len(repository) > 255 {
+		return "", bad
+	}
+	host, _, _ := strings.Cut(repository, "/")
+	if host != "localhost" && !strings.ContainsAny(host, ".:") {
+		return "", bad
+	}
+	refRepo, refDigest, pinned := strings.Cut(ref, "@")
+	if pinned {
+		if refDigest != digest {
+			return "", bad
+		}
+	} else {
+		i := strings.LastIndex(ref, ":")
+		if i <= strings.LastIndex(ref, "/") || !deploymentImageTag.MatchString(ref[i+1:]) {
+			return "", bad
+		}
+		refRepo = ref[:i]
+	}
+	if refRepo != repository {
+		return "", bad
+	}
+	return repository + "@" + digest, nil
 }
 
 // imageContainerName 取部署容器名:cfg["containerName"] 显式优先(净化),否则产物名净化(空 → app)。
@@ -83,7 +123,11 @@ func dockerRunCmd(name string, runArgs []string, ref string) []string {
 // stageImageOne 执行 image 蓝绿**预备阶段**:pull 新镜像(不停旧容器)+ 探测当前容器镜像(回滚目标)。
 // 拉取失败 → (中间态, 人读 message, false)。
 func (s *service) stageImageOne(ctx context.Context, srv *target.Server, a run.Artifact, cfg map[string]string) (imageState, string, bool) {
-	st := imageState{name: imageContainerName(a, cfg), ref: strings.TrimSpace(a.Reference), runArgs: imageRunArgs(cfg)}
+	ref, err := imageDeploymentReference(a)
+	st := imageState{name: imageContainerName(a, cfg), ref: ref, runArgs: imageRunArgs(cfg)}
+	if err != nil {
+		return st, err.Error(), false
+	}
 	if st.ref == "" {
 		return st, "image 产物缺少 reference(repo:tag 或镜像 id)", false
 	}

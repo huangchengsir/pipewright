@@ -159,7 +159,7 @@ func TestOpsDeepSeekThinkingCompatibilityExactDestinationOnly(t *testing.T) {
 	}
 }
 
-func TestOpsDeepSeekThinkingWirePlanAnalysisAndGeneralChatUnaffected(t *testing.T) {
+func TestOpsDeepSeekThinkingWirePlanAnalysisAndStructuredChat(t *testing.T) {
 	for _, provider := range []string{ProviderOpenAI, ProviderClaude} {
 		base := "https://api.deepseek.com/v1"
 		if provider == ProviderClaude {
@@ -206,7 +206,6 @@ func TestOpsDeepSeekThinkingWirePlanAnalysisAndGeneralChatUnaffected(t *testing.
 		if text, err := m.chat(ctx(), cfg, "mock-key", "question", 4096); err != nil || text != "reply" {
 			t.Fatal(text, err)
 		}
-		expectDisabled = false
 		if text, err := m.chatWithTokens(ctx(), provider, base, cfg.Model, "mock-key", "question", 4096); err != nil || text != "reply" {
 			t.Fatal(text, err)
 		}

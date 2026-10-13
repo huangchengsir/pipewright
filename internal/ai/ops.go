@@ -544,8 +544,8 @@ func (m *opsModel) chat(ctx context.Context, cfg *Config, key, prompt string, li
 	return text, nil
 }
 
-// Keep bounded Ops replies out of DeepSeek's default reasoning token budget.
-// Other AI features and third-party gateways retain their configured semantics.
+// Keep bounded structured replies out of DeepSeek's default reasoning budget.
+// Explicit reasoning models and third-party gateways retain their semantics.
 func opsRequestCompatibility(cfg *Config, base string, body map[string]any) {
 	if strings.EqualFold(cfg.Model, "deepseek-reasoner") {
 		return

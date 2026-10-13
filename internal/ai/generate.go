@@ -145,7 +145,7 @@ func (s *service) chat(ctx context.Context, provider, baseURL, model, apiKey, pr
 	return s.chatWithTokens(ctx, provider, baseURL, model, apiKey, prompt, generateMaxTokens)
 }
 
-// chatWithTokens 同 chat,但允许调用方指定 claude 的 max_tokens(openai/ollama 沿用其默认)。
+// chatWithTokens 同 chat,但允许调用方指定支持的结构化回复 token 预算。
 // 复用同一套 per-provider 请求构造 / 响应解析 / 错误脱敏逻辑(供风险标注等较短回包场景调小)。
 func (s *service) chatWithTokens(ctx context.Context, provider, baseURL, model, apiKey, prompt string, maxTokens int) (string, error) {
 	return (&opsModel{service: s}).chatWithTokens(ctx, provider, baseURL, model, apiKey, prompt, maxTokens)
@@ -158,6 +158,7 @@ func (m *opsModel) chatWithTokens(ctx context.Context, provider, baseURL, model,
 	var (
 		endpoint string
 		header   = map[string]string{"Content-Type": "application/json"}
+		payload  map[string]any
 		body     []byte
 		err      error
 	)
@@ -167,34 +168,39 @@ func (m *opsModel) chatWithTokens(ctx context.Context, provider, baseURL, model,
 		endpoint = apiEndpoint(provider, baseURL, "messages")
 		header["x-api-key"] = apiKey
 		header["anthropic-version"] = "2023-06-01"
-		body, err = json.Marshal(map[string]any{
+		payload = map[string]any{
 			"model":      model,
 			"max_tokens": maxTokens,
 			"messages": []map[string]string{
 				{"role": "user", "content": prompt},
 			},
-		})
+		}
 	case ProviderOpenAI:
 		endpoint = apiEndpoint(provider, baseURL, "chat/completions")
 		header["Authorization"] = "Bearer " + apiKey
-		body, err = json.Marshal(map[string]any{
+		payload = map[string]any{
 			"model": model,
 			"messages": []map[string]string{
 				{"role": "user", "content": prompt},
 			},
-		})
+		}
 	case ProviderOllama:
 		endpoint = apiEndpoint(provider, baseURL, "chat")
-		body, err = json.Marshal(map[string]any{
+		payload = map[string]any{
 			"model":  model,
 			"stream": false,
 			"messages": []map[string]string{
 				{"role": "user", "content": prompt},
 			},
-		})
+		}
 	default:
 		return "", fmt.Errorf("%w: 不支持的 provider", ErrGenerateFailed)
 	}
+	opsRequestCompatibility(&Config{Provider: provider, Model: model}, baseURL, payload)
+	if _, bounded := payload["thinking"]; bounded && provider == ProviderOpenAI {
+		payload["max_tokens"] = maxTokens
+	}
+	body, err = json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("%w: 请求构造失败", ErrGenerateFailed)
 	}
@@ -234,6 +240,13 @@ func (m *opsModel) chatWithTokens(ctx context.Context, provider, baseURL, model,
 	}
 	if len(raw) > maxLLMRespBytes {
 		return "", fmt.Errorf("%w: 响应超过大小限制", ErrGenerateFailed)
+	}
+	if err := opsCompletionFailure(provider, raw); err != nil {
+		var failure *OpsFailure
+		if errors.As(err, &failure) && failure.SafeCode() == "token_limit" {
+			return "", fmt.Errorf("%w: 模型输出达到长度限制,未采纳不完整内容", ErrGenerateFailed)
+		}
+		return "", fmt.Errorf("%w: 模型未完成有效回复", ErrGenerateFailed)
 	}
 
 	text, err := extractChatText(provider, raw)

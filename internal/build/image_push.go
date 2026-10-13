@@ -108,7 +108,7 @@ func imageConfigString(cfg map[string]any, key string) (string, error) {
 	return strings.TrimSpace(s), nil
 }
 
-func resolveImagePushTarget(cfg map[string]any, registry *pipeline.ImageRegistry, proj *project.Project, commit string) (imagePushTarget, error) {
+func resolveImagePushTarget(cfg map[string]any, registry *pipeline.ImageRegistry, proj *project.Project, commit string, createdAt ...time.Time) (imagePushTarget, error) {
 	var target imagePushTarget
 	raw, err := imageConfigString(cfg, "registry")
 	if err != nil {
@@ -140,11 +140,13 @@ func resolveImagePushTarget(cfg map[string]any, registry *pipeline.ImageRegistry
 	if err != nil {
 		return target, err
 	}
-	if strings.Contains(tag, "${COMMIT_SHA}") {
-		if commit == "" || commit == "latest" {
-			return target, errors.New("push_image COMMIT_SHA unavailable")
-		}
-		tag = strings.ReplaceAll(tag, "${COMMIT_SHA}", commit)
+	var timestamp time.Time
+	if len(createdAt) > 0 {
+		timestamp = createdAt[0]
+	}
+	tag, err = expandImageTag(tag, commit, timestamp)
+	if err != nil {
+		return target, err
 	}
 	if tag == "" {
 		tag = commit
@@ -427,7 +429,7 @@ func (b *Builder) runPushImageJob(ctx context.Context, r *run.Run, stage pipelin
 			commit = commit[:7]
 		}
 	}
-	target, err := resolveImagePushTarget(job.Config, b.resolveRegistry(settings, r.Trigger.ResolvedEnvironment), proj, commit)
+	target, err := resolveImagePushTarget(job.Config, b.resolveRegistry(settings, r.Trigger.ResolvedEnvironment), proj, commit, r.CreatedAt)
 	if err == nil {
 		var remote, digest string
 		remote, digest, err = b.pushImageTarget(ctx, &reporterSink{rep: rep}, 0, local, target)

@@ -105,7 +105,7 @@ export default {
   fieldRegistryLabel: '이미지 레지스트리 URL',
   fieldImageNameLabel: '이미지 이름',
   fieldTagLabel: '태그',
-  fieldTagHint: '사용 가능한 변수: {\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
+  fieldTagHint: '사용 가능한 변수: {\'${COMMIT_SHA}\'} {\'${DATE}\'} {\'${DATE:yyyyMMddHHmmss}\'}. 날짜는 실행 생성 시간(UTC)입니다. 기본: yyyy-MM-dd-HH-mm. 형식: yyyy, MM, dd, HH, mm, ss',
   fieldRegistryCredentialLabel: '레지스트리 자격 증명',
   fieldRegistryCredentialHint: '이미지 레지스트리 로그인 자격 증명 참조',
 

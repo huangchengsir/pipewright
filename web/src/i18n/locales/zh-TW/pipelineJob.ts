@@ -105,7 +105,7 @@ export default {
   fieldRegistryLabel: '映像倉庫位址',
   fieldImageNameLabel: '映像名',
   fieldTagLabel: '標籤',
-  fieldTagHint: '可用變數:{\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
+  fieldTagHint: '可用變數: {\'${COMMIT_SHA}\'} {\'${DATE}\'} {\'${DATE:yyyyMMddHHmmss}\'}. 日期使用本次執行建立時間（UTC），預設 yyyy-MM-dd-HH-mm；格式支援 yyyy、MM、dd、HH、mm、ss',
   fieldRegistryCredentialLabel: '倉庫憑證',
   fieldRegistryCredentialHint: '引用映像倉庫登入憑證',
 

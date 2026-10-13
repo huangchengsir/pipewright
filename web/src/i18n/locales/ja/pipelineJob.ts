@@ -105,7 +105,7 @@ export default {
   fieldRegistryLabel: 'イメージレジストリ URL',
   fieldImageNameLabel: 'イメージ名',
   fieldTagLabel: 'タグ',
-  fieldTagHint: '使用可能な変数:{\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
+  fieldTagHint: '使用可能な変数: {\'${COMMIT_SHA}\'} {\'${DATE}\'} {\'${DATE:yyyyMMddHHmmss}\'}. 日時は実行の作成時刻（UTC）。既定: yyyy-MM-dd-HH-mm。書式: yyyy, MM, dd, HH, mm, ss',
   fieldRegistryCredentialLabel: 'レジストリ認証情報',
   fieldRegistryCredentialHint: 'イメージレジストリのログイン認証情報を参照',
 

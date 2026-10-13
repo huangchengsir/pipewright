@@ -105,7 +105,7 @@ export default {
   fieldRegistryLabel: '镜像仓库地址',
   fieldImageNameLabel: '镜像名',
   fieldTagLabel: '标签',
-  fieldTagHint: '可用变量:{\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
+  fieldTagHint: '可用变量: {\'${COMMIT_SHA}\'} {\'${DATE}\'} {\'${DATE:yyyyMMddHHmmss}\'}. 日期使用本次运行创建时间（UTC），默认 yyyy-MM-dd-HH-mm；格式支持 yyyy、MM、dd、HH、mm、ss',
   fieldRegistryCredentialLabel: '仓库凭据',
   fieldRegistryCredentialHint: '引用镜像仓库登录凭据',
 

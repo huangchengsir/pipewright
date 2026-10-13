@@ -105,7 +105,7 @@ export default {
   fieldRegistryLabel: 'Image-Registry-URL',
   fieldImageNameLabel: 'Image-Name',
   fieldTagLabel: 'Tag',
-  fieldTagHint: 'Verfügbare Variablen: {\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
+  fieldTagHint: 'Verfügbare Variablen: {\'${COMMIT_SHA}\'} {\'${DATE}\'} {\'${DATE:yyyyMMddHHmmss}\'}. Erstellungszeit dieses Laufs (UTC), Standard yyyy-MM-dd-HH-mm; Format: yyyy, MM, dd, HH, mm, ss',
   fieldRegistryCredentialLabel: 'Registry-Anmeldedaten',
   fieldRegistryCredentialHint: 'Referenziert die Login-Anmeldedaten der Image-Registry',
 

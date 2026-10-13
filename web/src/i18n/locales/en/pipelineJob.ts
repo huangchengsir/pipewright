@@ -105,7 +105,7 @@ export default {
   fieldRegistryLabel: 'Image registry URL',
   fieldImageNameLabel: 'Image name',
   fieldTagLabel: 'Tag',
-  fieldTagHint: 'Available variables: {\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
+  fieldTagHint: 'Available variables: {\'${COMMIT_SHA}\'} {\'${DATE}\'} {\'${DATE:yyyyMMddHHmmss}\'}. Date uses this run\'s creation time (UTC), default yyyy-MM-dd-HH-mm; format tokens: yyyy, MM, dd, HH, mm, ss',
   fieldRegistryCredentialLabel: 'Registry credential',
   fieldRegistryCredentialHint: 'Reference the image registry login credential',
 

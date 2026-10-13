@@ -105,7 +105,7 @@ export default {
   fieldRegistryLabel: 'URL del registro de imágenes',
   fieldImageNameLabel: 'Nombre de la imagen',
   fieldTagLabel: 'Etiqueta',
-  fieldTagHint: 'Variables disponibles: {\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
+  fieldTagHint: 'Variables disponibles: {\'${COMMIT_SHA}\'} {\'${DATE}\'} {\'${DATE:yyyyMMddHHmmss}\'}. Fecha de creación de esta ejecución (UTC), formato predeterminado yyyy-MM-dd-HH-mm; tokens: yyyy, MM, dd, HH, mm, ss',
   fieldRegistryCredentialLabel: 'Credencial del registro',
   fieldRegistryCredentialHint: 'Referencia la credencial de login del registro de imágenes',
 

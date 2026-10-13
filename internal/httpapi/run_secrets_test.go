@@ -63,3 +63,49 @@ func TestRunSecretSourceMasksRealCredential(t *testing.T) {
 		t.Fatal("nil 降级不应脱敏真实凭据(对照:证明真修来自 source)")
 	}
 }
+
+func TestRunSecretSourceMasksSelectedEnvironmentVariable(t *testing.T) {
+	st := testStoreAuth(t)
+	v := vault.New(st.DB, testMasterKey())
+	const secret = "environment_secret_must_not_appear_in_logs"
+	cred, err := v.Create(vault.CreateInput{Name: "environment", Type: vault.TypeGitToken, Secret: secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	gitCred, err := v.Create(vault.CreateInput{Name: "source", Type: vault.TypeGitToken, Secret: "unrelated_source_credential"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	psvc := project.New(st.DB, v, stubProber{branch: "main"})
+	proj, err := psvc.Create(ctx, project.CreateInput{Name: "env-mask", RepoURL: "https://gitee.com/acme/env.git", CredentialID: gitCred.ID, DefaultBranch: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := pipeline.NewSettingsService(st.DB, v)
+	_, err = settings.Save(ctx, proj.ID, pipeline.SettingsInput{
+		Build:        pipeline.DefaultSettings().Build,
+		Environments: []pipeline.Environment{{Name: "prod", EnvVars: []pipeline.BuildVar{{Key: "TOKEN", Secret: true, CredentialID: cred.ID}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The unrelated project credential cannot mask this environment-only secret.
+	rsvc := run.New(st.DB)
+	rn, err := rsvc.Create(ctx, proj.ID, run.Trigger{Type: "manual", Branch: "main", Actor: "admin", ResolvedEnvironment: "prod"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewRunSecretSource(rsvc, psvc, settings, v).MaskerForRun(ctx, rn.ID)
+	masked := m.Scrub("TOKEN=" + secret)
+	if strings.Contains(masked, secret) || !strings.Contains(masked, "[MASKED]") {
+		t.Fatal("environment variable was not masked")
+	}
+	if _, err = rsvc.AppendLog(ctx, rn.ID, "stdout", 0, masked); err != nil {
+		t.Fatal(err)
+	}
+	logs, err := rsvc.GetLogs(ctx, rn.ID, 0)
+	if err != nil || len(logs) != 1 || strings.Contains(logs[0].Text, secret) {
+		t.Fatal("persisted environment log was not masked")
+	}
+}

@@ -464,6 +464,6 @@ function toggleExpanded(): void {
   padding-bottom: max(var(--main-pad-bottom), 132px);
 }
 @media (max-width: 900px) {
-  .main-inner:has(.pipeline-guide) { padding-left: 12px; padding-right: 12px; }
+  .main-inner:has(.pipeline-root) { padding-left: 12px; padding-right: 12px; }
 }
 </style>

@@ -1,4 +1,30 @@
 export default {
+  projectSourceBinding: "프로젝트 소스 연결",
+  sourceRunBranch: "실행에서 선택한 브랜치 우선",
+  sourceProjectUnavailable: "프로젝트 소스 정보를 사용할 수 없습니다",
+  sourceLegacyOverrides: "노드의 이전 저장소, 브랜치, 자격 증명 및 깊이 매개변수는 프로젝트 체크아웃 설정을 재정의하지 않습니다.",
+  sourceEditBinding: "프로젝트 자격 증명 변경",
+  imageProvenanceTitle: "배포할 이미지",
+  inspectImageSource: "출처 노드 보기",
+  imageSourceNode: "출처 노드",
+  imageVersionTemplate: "버전 템플릿",
+  imageNameFromProject: "프로젝트 이름에서 생성",
+  imageRegistryInvalid: "잘못된 레지스트리 주소",
+  imageRegistryFromEnvironment: "실행에서 선택한 환경의 레지스트리",
+  imageBuildRegistry: "빌드 결과; 레지스트리는 실행 환경에 따라 결정",
+  imageBuildVersion: "이번 실행과 커밋으로 생성",
+  imageRuntimeReference: "이번 실행 결과만 사용합니다. DATE는 실행 생성 시각(UTC)을 사용하며 버전과 digest는 실행 후 결정됩니다. 게시된 이미지는 digest로 배포됩니다.",
+  imageSourceHint: "이미지 의존성에서 자동 선택합니다. 출력이 여러 개면 출처를 지정하세요.",
+  imageSourceMissing: "의존성에 이미지가 없습니다. 의존성을 추가하거나 상위 출처를 선택하세요.",
+  imageSourceAmbiguous: "이미지가 여러 개입니다. 배포할 출처를 선택하세요.",
+  imageSourceUnavailable: "이미지 출처를 사용할 수 없습니다. 노드와 의존성을 확인하세요.",
+  serverRequired: "비워 두면 이번 실행에서 명시적으로 선택한 일치하는 환경의 대상만 사용합니다. 일치하는 환경이나 대상이 없으면 서버를 선택해야 합니다.",
+  serverFromEnvironment: "이번 실행의 환경 대상 사용",
+  cacheUseProjectDefault: "프로젝트 기본 캐시 사용",
+  cacheUsingDefault: "프로젝트 기본 캐시 사용 중",
+  cacheNoCaching: "캐시 사용 안 함",
+  serverUnavailable: "참조 서버를 사용할 수 없습니다. 삭제되었거나 접근이 제한됩니다.",
+  credentialUnavailable: "참조 자격 증명을 사용할 수 없거나 유형이 다릅니다.",
   // ─── jobConfigSchema · shared option sets ──────────────────────────────
   artifactImage: '컨테이너 이미지 (image)',
   artifactJar: 'JAR 패키지 (jar)',
@@ -42,7 +68,7 @@ export default {
     '선택, 한 줄에 한 개. 작업 공간 루트 기준 상대: 디렉터리→dist, *.jar→jar, 그 외 파일→archive. 한 노드에서 여러 개 출력 가능. 설정해야만 아티팩트 저장소에 보관되고 실행 상세에서 다운로드/배포 가능. 이미지 아티팩트는 「빌드」 노드(build_image)를 사용, 여기가 아님',
   fieldCachePathsLabel: '의존성 캐시 디렉터리',
   fieldCachePathsHint:
-    '선택, 한 줄에 한 개, 작업 공간 루트 기준 상대. 설정해야만 캐시 활성화: 빌드 전 복원, 빌드 후 저장, 여러 실행에 걸쳐 의존성 재사용(node_modules/.m2/.gradle 등 재다운로드 방지). 캐시 문제는 빌드 결과에 절대 영향을 주지 않음',
+    "미설정 시 프로젝트 기본값을 상속합니다. 사용자 지정 경로가 덮어쓰며 비우면 캐시를 사용하지 않습니다. 작업 공간 루트 기준 상대 경로를 한 줄에 하나씩 입력합니다.",
   fieldCacheKeyLabel: '캐시 Key(선택)',
   fieldCacheKeyPlaceholder: '비움 = 브랜치 + lockfile 로 자동',
   fieldCacheKeyHint:
@@ -50,7 +76,7 @@ export default {
 
   // ─── jobConfigSchema · deploy ssh fields ───────────────────────────────
   fieldServerIdLabel: '대상 서버',
-  fieldServerIdHint: '등록된 서버 선택(자격 증명은 참조로 바인딩)',
+  fieldServerIdHint: "노드 선택이 환경 기본값보다 우선합니다. 비워 두면 이번 실행에서 명시적으로 선택한 환경의 대상만 사용합니다.",
   fieldArtifactTypeLabel: '배포 아티팩트 유형',
   fieldArtifactTypeHint:
     '이 run 이 이미지와 파일 아티팩트를 동시에 출력할 때 어느 것을 선택할지. 이미지는 대상 머신에서 docker pull → 새 컨테이너 시작 → 헬스 체크 → 실패 시 이전 이미지로 롤백',
@@ -151,7 +177,7 @@ export default {
   fieldTemplatedArtifactPathHint: '선택, 한 줄에 하나, {\'{{매개변수}}\'} 와 와일드카드 지원. 디렉터리→dist, *.jar→jar, 그 외→archive',
   fieldTemplatedWorkDirHint: '선택, 복제한 작업 공간 루트 기준 상대',
   fieldTemplatedCachePathsHint:
-    '선택, 한 줄에 하나, 작업 공간 루트 기준 상대, {\'{{매개변수}}\'} 지원. 설정해야만 캐시 활성화: 빌드 전 복원, 빌드 후 저장, 실행에 걸쳐 의존성 재사용. 캐시 문제는 빌드 결과에 절대 영향을 주지 않음',
+    "미설정 시 프로젝트 기본값을 상속합니다. 사용자 지정 경로가 덮어쓰며 비우면 캐시를 사용하지 않습니다. 작업 공간 루트 기준 상대 경로를 한 줄에 하나씩 입력하며 {'{{매개변수}}'}를 지원합니다.",
   fieldTemplatedCacheKeyHint:
     '선택적 캐시 키 템플릿, {\'{{매개변수}}\'} 지원. 비우면 브랜치 + lockfile 내용으로 자동 도출(의존성이 바뀌면 자동 콜드 빌드)',
   typeScriptLabel: '사용자 지정 스크립트',

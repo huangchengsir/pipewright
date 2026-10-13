@@ -1,4 +1,23 @@
 export default {
+  saveConfiguration: "Save Configuration",
+  replaceDraftTitle: "Replace canvas draft?",
+  replaceDraftBody: "Unsaved canvas changes will be replaced. Other configuration drafts remain unchanged.",
+  replaceDraftConfirm: "Replace Draft",
+  saveStatus: {
+    saved: "Configuration saved",
+    dirty: "Unsaved changes",
+    loading: "Loading configuration",
+    saving: "Saving configuration",
+    error: "Save failed",
+    partial: "Some configuration saved",
+    unavailable: "Some configuration unavailable",
+    newerEdits: "Newer edits remain unsaved",
+    completedScopes: "Saved: {scopes}",
+    pendingScopes: "Pending: {scopes}",
+    failedScopes: "Save failed: {scopes}",
+    unavailableScopes: "Unavailable: {scopes}",
+    dirtyTab: "{tab}, unsaved changes",
+  },
   // ─── top bar / breadcrumb ───────────────────────────────────────
   breadcrumbAria: 'Breadcrumb navigation',
   breadcrumbProjects: 'Projects',

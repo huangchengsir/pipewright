@@ -1,4 +1,30 @@
 export default {
+  projectSourceBinding: "Source liée au projet",
+  sourceRunBranch: "La branche choisie pour l’exécution est prioritaire",
+  sourceProjectUnavailable: "Informations de source du projet indisponibles",
+  sourceLegacyOverrides: "Les anciens paramètres de dépôt, branche, identifiant et profondeur du nœud ne remplacent pas le checkout du projet.",
+  sourceEditBinding: "Modifier les identifiants du projet",
+  imageProvenanceTitle: "Image à déployer",
+  inspectImageSource: "Voir le nœud source",
+  imageSourceNode: "Nœud source",
+  imageVersionTemplate: "Modèle de version",
+  imageNameFromProject: "Dérivé du nom du projet",
+  imageRegistryInvalid: "Adresse de registre invalide",
+  imageRegistryFromEnvironment: "Selon l’environnement choisi pour l’exécution",
+  imageBuildRegistry: "Sortie du build ; registre selon l’environnement",
+  imageBuildVersion: "Générée pour cette exécution et ce commit",
+  imageRuntimeReference: "Uniquement les sorties de cette exécution. DATE utilise la date de création (UTC) ; version et digest sont résolus après exécution. Les images publiées sont déployées par digest.",
+  imageSourceHint: "Sélection automatique parmi les dépendances image. Choisissez une source si plusieurs sorties existent.",
+  imageSourceMissing: "Aucune image dans les dépendances. Ajoutez une dépendance ou choisissez une source en amont.",
+  imageSourceAmbiguous: "Plusieurs images disponibles. Choisissez la source à déployer.",
+  imageSourceUnavailable: "Source image indisponible. Vérifiez le nœud et les dépendances.",
+  serverRequired: "Vide, utilise uniquement les cibles de l’environnement correspondant explicitement sélectionné pour cette exécution. Sans environnement correspondant ou cibles, sélectionnez un serveur.",
+  serverFromEnvironment: "Utiliser les cibles de l’environnement de cette exécution",
+  cacheUseProjectDefault: "Utiliser le cache par défaut du projet",
+  cacheUsingDefault: "Cache par défaut du projet utilisé",
+  cacheNoCaching: "Aucun cache",
+  serverUnavailable: "Serveur indisponible : supprimé ou accès restreint.",
+  credentialUnavailable: "Identifiant indisponible ou de type incorrect.",
   // ─── jobConfigSchema · shared option sets ──────────────────────────────
   artifactImage: 'Image de conteneur (image)',
   artifactJar: 'Paquet JAR (jar)',
@@ -42,7 +68,7 @@ export default {
     'Optionnel, un par ligne. Relatif à la racine de l’espace de travail : répertoire→dist, *.jar→jar, autres fichiers→archive. Un nœud peut en produire plusieurs ; ce n’est qu’une fois définis qu’ils sont archivés dans le magasin d’artefacts et téléchargeables/déployables dans les détails de l’exécution. Pour les artefacts d’image, utilisez le nœud « Build » (build_image), pas ici',
   fieldCachePathsLabel: 'Répertoires de cache des dépendances',
   fieldCachePathsHint:
-    'Optionnel, un par ligne, relatif à la racine de l’espace de travail. Ce n’est qu’une fois définis que le cache est activé : restauré avant le build, sauvegardé après, réutilisant les dépendances entre exécutions (évite de retélécharger node_modules/.m2/.gradle, etc.). Les problèmes de cache n’affectent jamais le résultat du build',
+    "Non défini, hérite des valeurs du projet ; les chemins personnalisés les remplacent et les vider désactive le cache. Un par ligne, relatif à la racine de l’espace de travail.",
   fieldCacheKeyLabel: 'Clé de cache (optionnel)',
   fieldCacheKeyPlaceholder: 'Vide = auto par branche + lockfile',
   fieldCacheKeyHint:
@@ -50,7 +76,7 @@ export default {
 
   // ─── jobConfigSchema · deploy ssh fields ───────────────────────────────
   fieldServerIdLabel: 'Serveur cible',
-  fieldServerIdHint: 'Sélectionnez un serveur enregistré (les identifiants sont liés par référence)',
+  fieldServerIdHint: "La sélection du nœud remplace les valeurs de l’environnement. Vide, utilise seulement les cibles de l’environnement explicitement sélectionné pour cette exécution.",
   fieldArtifactTypeLabel: 'Type d’artefact à déployer',
   fieldArtifactTypeHint:
     'Lequel choisir lorsque cette exécution produit à la fois une image et des artefacts fichiers ; une image passe par docker pull sur la cible → démarrage d’un nouveau conteneur → contrôle de santé → retour à l’image précédente en cas d’échec',
@@ -151,7 +177,7 @@ export default {
   fieldTemplatedArtifactPathHint: 'Optionnel, un par ligne, prend en charge {\'{{paramètre}}\'} et les jokers ; répertoire→dist, *.jar→jar, autre→archive',
   fieldTemplatedWorkDirHint: 'Optionnel, relatif à la racine de l’espace de travail cloné',
   fieldTemplatedCachePathsHint:
-    'Optionnel, un par ligne, relatif à la racine de l’espace de travail, prend en charge {\'{{paramètre}}\'}. Ce n’est qu’une fois définis que le cache est activé : restauré avant le build, sauvegardé après, réutilisant les dépendances entre exécutions. Les problèmes de cache n’affectent jamais le résultat du build',
+    "Non défini, hérite des valeurs du projet ; les chemins personnalisés les remplacent et les vider désactive le cache. Un par ligne, relatif à la racine de l’espace de travail ; accepte {'{{paramètre}}'}.",
   fieldTemplatedCacheKeyHint:
     'Modèle de clé de cache optionnel, prend en charge {\'{{paramètre}}\'}. Si vide, dérivé automatiquement de la branche + contenu du lockfile (un changement de dépendances déclenche un build à froid)',
   typeScriptLabel: 'Script personnalisé',

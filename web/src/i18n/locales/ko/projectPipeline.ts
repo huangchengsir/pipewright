@@ -1,4 +1,23 @@
 export default {
+  saveConfiguration: "설정 저장",
+  replaceDraftTitle: "캔버스 초안을 바꾸시겠습니까?",
+  replaceDraftBody: "저장하지 않은 캔버스 변경이 바뀝니다. 다른 설정 초안은 그대로 유지됩니다.",
+  replaceDraftConfirm: "초안 바꾸기",
+  saveStatus: {
+    saved: "설정 저장됨",
+    dirty: "저장하지 않은 변경",
+    loading: "설정 로딩 중",
+    saving: "설정 저장 중",
+    error: "저장 실패",
+    partial: "일부 설정 저장됨",
+    unavailable: "일부 설정 사용 불가",
+    newerEdits: "새로운 변경은 아직 저장되지 않음",
+    completedScopes: "저장됨: {scopes}",
+    pendingScopes: "대기: {scopes}",
+    failedScopes: "저장 실패: {scopes}",
+    unavailableScopes: "사용 불가: {scopes}",
+    dirtyTab: "{tab}, 저장하지 않은 변경",
+  },
   // ─── 상단 바 / 브레드크럼 ──────────────────────────────────────
   breadcrumbAria: '브레드크럼 내비게이션',
   breadcrumbProjects: '프로젝트',

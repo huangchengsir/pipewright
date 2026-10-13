@@ -89,7 +89,8 @@ func (s *Service) prepare(ctx context.Context, p projectRecord, cfg *pipeline.Co
 		}
 	}
 	settings := pipeline.DefaultSettings()
-	needSettings, usesBuildVars, usesImage := s.capabilities.Legacy, false, false
+	needSettings, usesBuildVars, usesImage := s.capabilities.Legacy, s.capabilities.Legacy, false
+	usesDeployTargets := false
 	needsSource := s.capabilities.Legacy
 	for _, stage := range stages {
 		for _, job := range stage.Jobs {
@@ -100,12 +101,17 @@ func (s *Service) prepare(ctx context.Context, p projectRecord, cfg *pipeline.Co
 					usesBuildVars = true
 				}
 			}
-			if strings.TrimSpace(job.Type) == "build_image" && !remote && (configString(job.Config, "artifactType") == "" || configString(job.Config, "artifactType") == pipeline.ArtifactImage) {
-				needSettings = true
-				usesImage = true
-			}
 			if strings.TrimSpace(job.Type) == "build_image" && !remote {
+				needSettings = true
+				usesBuildVars = true
+				if artifactType := configString(job.Config, "artifactType"); artifactType == "" || artifactType == pipeline.ArtifactImage {
+					usesImage = true
+				}
 				needsSource = true
+			}
+			if !s.capabilities.Legacy && !remote && (strings.TrimSpace(job.Type) == "deploy_ssh" || strings.TrimSpace(job.Type) == "deploy_frontend") && configString(job.Config, "serverId") == "" {
+				needSettings = true
+				usesDeployTargets = true
 			}
 		}
 		for _, post := range stage.Post {
@@ -122,19 +128,70 @@ func (s *Service) prepare(ctx context.Context, p projectRecord, cfg *pipeline.Co
 			unknown("settings_unavailable", pipeline.ScopeVars)
 		}
 	}
-	// The execution paths consume build variables only in legacy and local script
-	// jobs. Environment variables are not consumed by these executors.
+	if s.capabilities.Legacy {
+		usesImage = settings.Build.ArtifactType == pipeline.ArtifactImage
+	}
+	usesEnvVars := false
+	if usesBuildVars {
+		for _, env := range settings.Environments {
+			usesEnvVars = usesEnvVars || len(env.EnvVars) > 0
+		}
+	}
+	var envName string
+	var selectedEnv *pipeline.Environment
+	envKnown := true
+	if usesImage || usesDeployTargets || usesEnvVars {
+		name, _, err := trigger.ResolveExistingEnv(ctx, s.db, p.ID, p.branch)
+		if err != nil {
+			envKnown = false
+			unknown("triggers_unavailable", pipeline.ScopeTriggers)
+		} else {
+			envName = strings.TrimSpace(name)
+			if envName != "" {
+				for i := range settings.Environments {
+					if settings.Environments[i].Name == envName {
+						selectedEnv = &settings.Environments[i]
+						break
+					}
+				}
+			}
+		}
+	}
+	// Match local and legacy precedence before looking up secret references.
+	consumedVars := func(overrides []pipeline.BuildVar, script bool) []pipeline.ValidationVar {
+		if !envKnown {
+			return nil
+		}
+		values := append([]pipeline.BuildVar(nil), settings.Build.Vars...)
+		if selectedEnv != nil {
+			values = append(values, selectedEnv.EnvVars...)
+		}
+		values = append(values, overrides...)
+		last := make(map[string]int, len(values))
+		for i, v := range values {
+			last[v.Key] = i
+		}
+		if script {
+			last["PIPEWRIGHT_ENV"] = -1
+		}
+		var consumed []pipeline.BuildVar
+		for i, v := range values {
+			if last[v.Key] == i {
+				consumed = append(consumed, v)
+			}
+		}
+		return vars(consumed)
+	}
 	in := pipeline.ValidationInput{Stages: cfg.Spec.Stages, ProjectCredentialOK: true}
 	tasks := 0
 	uncertainTask := false
 	if s.capabilities.Legacy {
 		tasks = 1
-		usesBuildVars = true
-		usesImage = settings.Build.ArtifactType == pipeline.ArtifactImage
+		in.BuildVars = consumedVars(nil, false)
 		addValidation(pipeline.ValidateExecutionBuild(settings.Build))
 		for _, step := range settings.Steps {
 			addValidation(pipeline.ValidateExecutionScript(step))
-			stepInput := pipeline.ValidationInput{Stages: cfg.Spec.Stages, ProjectCredentialOK: true, BuildVars: vars(step.Env)}
+			stepInput := pipeline.ValidationInput{Stages: cfg.Spec.Stages, ProjectCredentialOK: true, BuildVars: consumedVars(step.Env, true)}
 			for _, issue := range pipeline.Validate(stepInput) {
 				if issue.Severity == pipeline.SeverityError {
 					add(issue.Code, pipeline.ScopeEnvs)
@@ -155,6 +212,9 @@ func (s *Service) prepare(ctx context.Context, p projectRecord, cfg *pipeline.Co
 				switch {
 				case isScript(typ):
 					tasks++
+					if !remote {
+						in.BuildVars = append(in.BuildVars, consumedVars(readinessMatrixVars(job.Config), true)...)
+					}
 					image, commands := configString(job.Config, "image"), configString(job.Config, "commands")
 					if template := configString(job.Config, "commandTemplate"); template != "" {
 						commands = template
@@ -165,11 +225,28 @@ func (s *Service) prepare(ctx context.Context, p projectRecord, cfg *pipeline.Co
 					addValidation(pipeline.ValidateExecutionScript(pipeline.PipelineStep{Image: image, Commands: strings.Split(commands, "\n")}))
 				case typ == "build_image":
 					tasks++
+					in.BuildVars = append(in.BuildVars, consumedVars(nil, false)...)
 					build := pipeline.BuildConfig{Model: configString(job.Config, "buildModel"), ArtifactType: configString(job.Config, "artifactType"), DockerfilePath: configString(job.Config, "dockerfilePath"), Toolchain: pipeline.Toolchain{Language: configString(job.Config, "toolchainLanguage"), Version: configString(job.Config, "toolchainVersion")}}
 					addValidation(pipeline.ValidateExecutionBuild(build))
 				case typ == "deploy_ssh" || typ == "deploy_frontend":
 					tasks++
-					server(configString(job.Config, "serverId"), pipeline.ScopeCanvas)
+					if id := configString(job.Config, "serverId"); id != "" {
+						server(id, pipeline.ScopeCanvas)
+					} else if envKnown {
+						seen := make(map[string]bool)
+						if selectedEnv != nil {
+							for _, id := range selectedEnv.TargetServerIDs {
+								id = strings.TrimSpace(id)
+								if id != "" && !seen[id] {
+									seen[id] = true
+									server(id, pipeline.ScopeCanvas)
+								}
+							}
+						}
+						if len(seen) == 0 {
+							add("server_missing", pipeline.ScopeCanvas)
+						}
+					}
 					if configString(job.Config, "artifactType") == "command" && configString(job.Config, "restartCommand") == "" {
 						add("script_incomplete", pipeline.ScopeCanvas)
 					}
@@ -217,18 +294,12 @@ func (s *Service) prepare(ctx context.Context, p projectRecord, cfg *pipeline.Co
 		if needsSource {
 			in.ProjectCredentialOK = credential(p.credentialID)
 		}
-		if usesBuildVars {
-			in.BuildVars = vars(settings.Build.Vars)
-		}
 	}
-	if usesImage {
-		env, _, err := trigger.ResolveExistingEnv(ctx, s.db, p.ID, p.branch)
-		if err != nil {
-			unknown("triggers_unavailable", pipeline.ScopeTriggers)
-		} else if strings.TrimSpace(env) != "" {
+	if usesImage && envKnown {
+		if envName != "" {
 			found := false
 			for _, e := range settings.Environments {
-				if strings.TrimSpace(e.Name) != strings.TrimSpace(env) {
+				if e.Name != envName {
 					continue
 				}
 				found = true
@@ -289,6 +360,23 @@ func isScript(typ string) bool {
 func configString(cfg map[string]any, key string) string {
 	value, _ := cfg[key].(string)
 	return strings.TrimSpace(value)
+}
+
+func readinessMatrixVars(cfg map[string]any) []pipeline.BuildVar {
+	var result []pipeline.BuildVar
+	switch matrix := cfg["__matrixEnv"].(type) {
+	case map[string]string:
+		for key, value := range matrix {
+			result = append(result, pipeline.BuildVar{Key: key, Value: value})
+		}
+	case map[string]any:
+		for key, value := range matrix {
+			if value, ok := value.(string); ok {
+				result = append(result, pipeline.BuildVar{Key: key, Value: value})
+			}
+		}
+	}
+	return result
 }
 
 // Respect both explicit dependencies and the runner's implicit linear ordering.

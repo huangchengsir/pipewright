@@ -1,4 +1,23 @@
 export default {
+  saveConfiguration: "Enregistrer la configuration",
+  replaceDraftTitle: "Remplacer le brouillon du canevas ?",
+  replaceDraftBody: "Les modifications non enregistrées du canevas seront remplacées. Les autres brouillons restent inchangés.",
+  replaceDraftConfirm: "Remplacer le brouillon",
+  saveStatus: {
+    saved: "Configuration enregistrée",
+    dirty: "Modifications non enregistrées",
+    loading: "Chargement de la configuration",
+    saving: "Enregistrement de la configuration",
+    error: "Échec de l’enregistrement",
+    partial: "Configuration partiellement enregistrée",
+    unavailable: "Configuration partiellement indisponible",
+    newerEdits: "Les nouvelles modifications restent non enregistrées",
+    completedScopes: "Enregistré : {scopes}",
+    pendingScopes: "En attente : {scopes}",
+    failedScopes: "Échec : {scopes}",
+    unavailableScopes: "Indisponible : {scopes}",
+    dirtyTab: "{tab}, modifications non enregistrées",
+  },
   // ─── barre supérieure / fil d'Ariane ────────────────────────────
   breadcrumbAria: "Navigation par fil d'Ariane",
   breadcrumbProjects: 'Projets',

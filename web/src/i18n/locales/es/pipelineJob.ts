@@ -1,4 +1,30 @@
 export default {
+  projectSourceBinding: "Origen vinculado al proyecto",
+  sourceRunBranch: "Prevalece la rama elegida para la ejecución",
+  sourceProjectUnavailable: "Información del origen del proyecto no disponible",
+  sourceLegacyOverrides: "Los parámetros antiguos de repositorio, rama, credencial y profundidad del nodo no sustituyen la configuración del proyecto.",
+  sourceEditBinding: "Cambiar credencial del proyecto",
+  imageProvenanceTitle: "Imagen a desplegar",
+  inspectImageSource: "Ver nodo de origen",
+  imageSourceNode: "Nodo de origen",
+  imageVersionTemplate: "Plantilla de versión",
+  imageNameFromProject: "Derivado del nombre del proyecto",
+  imageRegistryInvalid: "Dirección de registro no válida",
+  imageRegistryFromEnvironment: "Del entorno seleccionado para la ejecución",
+  imageBuildRegistry: "Salida de compilación; el registro depende del entorno",
+  imageBuildVersion: "Generada para esta ejecución y commit",
+  imageRuntimeReference: "Solo salidas de esta ejecución. DATE usa la hora de creación (UTC); versión y digest se resuelven tras ejecutar. Las imágenes publicadas se despliegan por digest.",
+  imageSourceHint: "Selección automática entre dependencias de imagen. Elige un origen si hay varias salidas.",
+  imageSourceMissing: "No hay imágenes en las dependencias. Añade una dependencia o elige un origen anterior.",
+  imageSourceAmbiguous: "Hay varias imágenes. Elige el origen a desplegar.",
+  imageSourceUnavailable: "Origen de imagen no disponible. Revisa el nodo y las dependencias.",
+  serverRequired: "En blanco, solo usa los destinos del entorno coincidente seleccionado explícitamente para esta ejecución. Sin un entorno coincidente o destinos, selecciona un servidor.",
+  serverFromEnvironment: "Usar destinos del entorno de esta ejecución",
+  cacheUseProjectDefault: "Usar caché predeterminada del proyecto",
+  cacheUsingDefault: "Usando caché predeterminada del proyecto",
+  cacheNoCaching: "Sin caché",
+  serverUnavailable: "Servidor no disponible: eliminado o acceso restringido.",
+  credentialUnavailable: "Credencial no disponible o de tipo incorrecto.",
   // ─── jobConfigSchema · shared option sets ──────────────────────────────
   artifactImage: 'Imagen de contenedor (image)',
   artifactJar: 'Paquete JAR (jar)',
@@ -42,7 +68,7 @@ export default {
     'Opcional, uno por línea. Relativo a la raíz del espacio de trabajo: directorio→dist, *.jar→jar, otros archivos→archive. Un nodo puede emitir varios; solo al definirlos se archivan en el almacén de artefactos y se pueden descargar/desplegar en los detalles de la ejecución. Para artefactos de imagen usa el nodo «Build» (build_image), no aquí',
   fieldCachePathsLabel: 'Directorios de caché de dependencias',
   fieldCachePathsHint:
-    'Opcional, uno por línea, relativo a la raíz del espacio de trabajo. Solo al definirlos se activa la caché: se restaura antes del build, se guarda después, reutilizando dependencias entre ejecuciones (evita volver a descargar node_modules/.m2/.gradle, etc.). Los problemas de caché nunca afectan al resultado del build',
+    "Sin definir, hereda los valores del proyecto; las rutas personalizadas los reemplazan y vaciarlas desactiva la caché. Una por línea, relativa a la raíz del espacio de trabajo.",
   fieldCacheKeyLabel: 'Clave de caché (opcional)',
   fieldCacheKeyPlaceholder: 'Vacío = automático por rama + lockfile',
   fieldCacheKeyHint:
@@ -50,7 +76,7 @@ export default {
 
   // ─── jobConfigSchema · deploy ssh fields ───────────────────────────────
   fieldServerIdLabel: 'Servidor de destino',
-  fieldServerIdHint: 'Selecciona un servidor registrado (las credenciales se vinculan por referencia)',
+  fieldServerIdHint: "La selección del nodo reemplaza los valores del entorno. En blanco, solo usa destinos del entorno seleccionado explícitamente para esta ejecución.",
   fieldArtifactTypeLabel: 'Tipo de artefacto a desplegar',
   fieldArtifactTypeHint:
     'Cuál elegir cuando esta ejecución emite tanto una imagen como artefactos de archivo; una imagen va mediante docker pull en el destino → iniciar nuevo contenedor → comprobación de salud → revertir a la imagen anterior si falla',
@@ -151,7 +177,7 @@ export default {
   fieldTemplatedArtifactPathHint: 'Opcional, uno por línea, admite {\'{{parámetro}}\'} y comodines; directorio→dist, *.jar→jar, otros→archive',
   fieldTemplatedWorkDirHint: 'Opcional, relativo a la raíz del espacio de trabajo clonado',
   fieldTemplatedCachePathsHint:
-    'Opcional, uno por línea, relativo a la raíz del espacio de trabajo, admite {\'{{parámetro}}\'}. Solo al definirlos se activa la caché: se restaura antes del build, se guarda después, reutilizando dependencias entre ejecuciones. Los problemas de caché nunca afectan al resultado del build',
+    "Sin definir, hereda los valores del proyecto; las rutas personalizadas los reemplazan y vaciarlas desactiva la caché. Una por línea, relativa a la raíz del espacio de trabajo; admite {'{{parámetro}}'}.",
   fieldTemplatedCacheKeyHint:
     'Plantilla de clave de caché opcional, admite {\'{{parámetro}}\'}. Si está vacía, se deriva automáticamente de la rama + contenido del lockfile (los cambios de dependencias provocan un build en frío)',
   typeScriptLabel: 'Script personalizado',

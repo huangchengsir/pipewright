@@ -1,4 +1,30 @@
 export default {
+  projectSourceBinding: "项目源码绑定",
+  sourceRunBranch: "以运行时选择的分支为准",
+  sourceProjectUnavailable: "暂未取得项目源码信息",
+  sourceLegacyOverrides: "节点中原有的仓库、分支、凭据和深度参数不会覆盖项目的源码拉取配置。",
+  sourceEditBinding: "修改项目凭据",
+  imageProvenanceTitle: "待部署镜像",
+  inspectImageSource: "查看来源节点",
+  imageSourceNode: "来源节点",
+  imageVersionTemplate: "版本模板",
+  imageNameFromProject: "按项目名称生成",
+  imageRegistryInvalid: "仓库地址格式无效",
+  imageRegistryFromEnvironment: "取本次运行所选环境的仓库",
+  imageBuildRegistry: "构建节点产物；仓库取决于运行环境",
+  imageBuildVersion: "按本次运行和源码提交生成",
+  imageRuntimeReference: "仅使用本次运行产物。DATE 按运行创建时间（UTC）解析，实际版本与 digest 在执行后确定；已推送镜像按 digest 部署。",
+  imageSourceHint: "自动选择本节点依赖的镜像产物；存在多个候选时，请明确选择来源。",
+  imageSourceMissing: "依赖中没有镜像产物。请添加依赖，或选择上游镜像来源。",
+  imageSourceAmbiguous: "依赖中有多个镜像产物，请明确选择要部署的来源。",
+  imageSourceUnavailable: "所选镜像来源不可用，请检查来源节点和依赖关系。",
+  serverRequired: "留空仅使用本次运行明确选择的匹配环境目标；无匹配环境或目标时须选择服务器。",
+  serverFromEnvironment: "使用本次运行的环境目标",
+  cacheUseProjectDefault: "使用项目默认缓存",
+  cacheUsingDefault: "使用项目默认缓存",
+  cacheNoCaching: "不使用缓存",
+  serverUnavailable: "引用的服务器不可用，可能已删除或当前无访问权限。",
+  credentialUnavailable: "引用的凭据不可用，或类型与此字段不匹配。",
   // ─── jobConfigSchema · shared option sets ──────────────────────────────
   artifactImage: '容器镜像 (image)',
   artifactJar: 'JAR 包 (jar)',
@@ -42,7 +68,7 @@ export default {
     '可选,每行一条。相对工作区根:目录→dist、*.jar→jar、其它文件→archive。一个节点可出多件;填了才归档进制品库并在运行详情可下载/部署。镜像产物请用「构建」节点(build_image),不在这里',
   fieldCachePathsLabel: '依赖缓存目录',
   fieldCachePathsHint:
-    '可选,每行一条,相对工作区根。配了才启用缓存:构建前恢复、构建后保存,跨多次运行复用依赖(免重复拉 node_modules/.m2/.gradle 等)。缓存问题绝不影响构建结果',
+    "字段未设置时继承项目默认；自定义路径覆盖，清空则不缓存。每行一条，相对工作区根。",
   fieldCacheKeyLabel: '缓存 Key(可选)',
   fieldCacheKeyPlaceholder: '留空=按分支+lockfile 自动',
   fieldCacheKeyHint:
@@ -50,7 +76,7 @@ export default {
 
   // ─── jobConfigSchema · deploy ssh fields ───────────────────────────────
   fieldServerIdLabel: '目标服务器',
-  fieldServerIdHint: '选择已登记的服务器(凭据按引用绑定)',
+  fieldServerIdHint: "节点选择覆盖环境默认；留空仅使用本次运行明确选择环境的目标。",
   fieldArtifactTypeLabel: '部署产物类型',
   fieldArtifactTypeHint:
     '本 run 同时产出镜像与文件产物时挑哪件;镜像走目标机 docker pull → 起新容器 → 健康检查 → 失败回滚上一镜像',
@@ -151,7 +177,7 @@ export default {
   fieldTemplatedArtifactPathHint: '可选,每行一条,支持 {\'{{参数}}\'} 与通配;目录→dist、*.jar→jar、其它→archive',
   fieldTemplatedWorkDirHint: '可选,相对克隆工作区根',
   fieldTemplatedCachePathsHint:
-    '可选,每行一条,相对工作区根,支持 {\'{{参数}}\'}。配了才启用缓存:构建前恢复、构建后保存,跨运行复用依赖。缓存问题绝不影响构建结果',
+    "字段未设置时继承项目默认；自定义路径覆盖，清空则不缓存。每行一条，相对工作区根，支持 {'{{参数}}'}。",
   fieldTemplatedCacheKeyHint:
     '可选缓存键模板,支持 {\'{{参数}}\'}。留空则自动按分支 + lockfile 内容推导(依赖变则自动冷构建)',
   typeScriptLabel: '自定义脚本',

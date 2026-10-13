@@ -307,6 +307,8 @@ func TestUnusedEnvironmentAndTablesDoNotBlockScript(t *testing.T) {
 		t.Fatalf("unused configuration blocks: %+v", out)
 	}
 	storetest.SkipIfMySQL(t)
+	// With no environment variables, trigger storage is genuinely unused.
+	exec(t, db, `UPDATE pipeline_settings SET environments_json='[]' WHERE project_id='p'`)
 	exec(t, db, `DROP TABLE pipeline_triggers`)
 	exec(t, db, `DROP TABLE servers`)
 	if out = svc.Status(context.Background(), "p"); out.Pipeline.State != "ready" {
@@ -385,7 +387,10 @@ func TestOnlyApplicableImageEnvironment(t *testing.T) {
 			exec(t, db, `INSERT INTO pipeline_triggers (project_id,webhook_token,webhook_secret_ciphertext,branch_mappings_json,created_at,updated_at) VALUES ('p','token',X'00',?,?,?)`, string(mapping), stamp, stamp)
 			if tc.name != "missing_environment" {
 				st := pipeline.DefaultSettings()
-				st.Environments = []pipeline.Environment{{Name: "prod", EnvVars: []pipeline.BuildVar{{Key: "SECRET_UNUSED", Secret: true, CredentialID: "deleted"}}, ImageRegistry: pipeline.ImageRegistry{Type: "custom", URL: tc.registryURL, CredentialID: tc.credential}}}
+				st.Environments = []pipeline.Environment{
+					{Name: "prod", ImageRegistry: pipeline.ImageRegistry{Type: "custom", URL: tc.registryURL, CredentialID: tc.credential}},
+					{Name: "unused", EnvVars: []pipeline.BuildVar{{Key: "SECRET_UNUSED", Secret: true, CredentialID: "deleted"}}},
+				}
 				settings(t, db, "p", st)
 			}
 			out := svc.Status(context.Background(), "p")

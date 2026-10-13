@@ -239,7 +239,7 @@ const DEPLOY_SSH_FIELDS: JobField[] = [
     kind: 'select',
     options: [{ value: '', get label() { return t('pipelineJob.artifactSourceAuto') } }],
     get hint() { return t('pipelineJob.artifactSourceHint') },
-    when: (c) => c.artifactType !== 'image' && c.artifactType !== 'command',
+    when: (c) => c.artifactType !== 'command',
   },
   {
     key: 'deployPath',

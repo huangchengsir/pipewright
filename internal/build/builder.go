@@ -262,7 +262,9 @@ func (b *Builder) Run(ctx context.Context, r *run.Run, sink run.StepSink) error 
 	if err := sink.StepRunning(ctx, 1); err != nil {
 		return err
 	}
-	localTag, artifact, berr := b.build(ctx, sink, 1, proj, settings.Build, workspace, commitTag)
+	buildConfig := settings.Build
+	buildConfig.Vars = projectBuildVars(settings, r.Trigger.ResolvedEnvironment)
+	localTag, artifact, berr := b.build(ctx, sink, 1, proj, buildConfig, workspace, commitTag)
 	if berr != nil {
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return b.cancelAt(ctx, sink, 1)
@@ -315,6 +317,7 @@ func (b *Builder) Run(ctx context.Context, r *run.Run, sink run.StepSink) error 
 		if err := sink.StepRunning(ctx, ordinal); err != nil {
 			return err
 		}
+		cs.Env = scriptEnv(settings, r.Trigger.ResolvedEnvironment, r.Trigger.Params, nil, cs.Env)
 		serr := b.scriptEvidenceBuilder(sink).runScriptStep(ctx, sink, ordinal, cs, workspace)
 		if serr != nil {
 			if errors.Is(serr, run.ErrCanceled) || errors.Is(ctx.Err(), context.Canceled) {
@@ -385,13 +388,11 @@ func (b *Builder) resolveRegistry(settings *pipeline.Settings, envName string) *
 func (b *Builder) build(ctx context.Context, sink run.StepSink, ordinal int, proj *project.Project, cfg pipeline.BuildConfig, workspace, commitTag string, imageTags ...string) (string, *run.Artifact, error) {
 	onLine := b.lineSink(sink, ordinal)
 
-	// 构建变量:非 secret → 明文 K=V;secret → vault.Reveal 明文 K=V(注入子进程,绝不回显值)。
-	buildArgs, secretArgs := b.buildArgs(cfg.Vars)
-
 	slug := slugify(proj.Name)
 
 	switch cfg.ArtifactType {
 	case pipeline.ArtifactImage:
+		buildArgs, secretArgs := b.buildArgs(cfg.Vars)
 		// image 产物:无论 model A/B 都要求 Dockerfile(模型 B 对 image 退化为 Dockerfile)。
 		dockerfile := strings.TrimSpace(cfg.DockerfilePath)
 		if dockerfile == "" {
@@ -443,7 +444,7 @@ func (b *Builder) build(ctx context.Context, sink run.StepSink, ordinal int, pro
 		if image == "" {
 			return "", nil, fmt.Errorf("未指定工具链镜像(toolchain.language/version)")
 		}
-		env := append(buildArgs, secretArgs...) // 工具链构建经 -e 注入(secret 回显只列 key)
+		env := b.buildEnv(cfg.Vars) // 工具链构建经 -e 注入(secret 回显只列 key)
 		buildCmd := toolchainBuildCmd(cfg.ArtifactType)
 		run.RecordExecution(sink, run.ExecutionReal)
 		code, err := b.driver.RunToolchain(ctx, image, workspace, "/src", env, buildCmd, pipeline.Resource{}, onLine)
@@ -491,7 +492,37 @@ func (d *scriptEvidenceDriver) RunToolchain(ctx context.Context, image, workspac
 // buildArgs 把构建变量拆成非 secret(明文 K=V)与 secret(vault.Reveal 明文 K=V)。
 // secret 明文即取即用,登记进 Masker 的脱敏由 sink 侧兜底;本包仅注入子进程不回显值。
 func (b *Builder) buildArgs(vars []pipeline.BuildVar) (plain []string, secret []string) {
-	for _, v := range vars {
+	for _, v := range b.resolveBuildVars(vars) {
+		kv := v.Key + "=" + v.Value
+		if v.Secret {
+			secret = append(secret, kv)
+		} else {
+			plain = append(plain, kv)
+		}
+	}
+	return plain, secret
+}
+
+func (b *Builder) buildEnv(vars []pipeline.BuildVar) []string {
+	var env []string
+	for _, v := range b.resolveBuildVars(vars) {
+		env = append(env, v.Key+"="+v.Value)
+	}
+	return env
+}
+
+func (b *Builder) resolveBuildVars(vars []pipeline.BuildVar) []pipeline.BuildVar {
+	// Choose the last declaration before revealing secrets; a missing winner
+	// must not revive an earlier value with lower precedence.
+	last := make(map[string]int, len(vars))
+	for i, v := range vars {
+		last[v.Key] = i
+	}
+	var resolved []pipeline.BuildVar
+	for i, v := range vars {
+		if last[v.Key] != i {
+			continue
+		}
 		if v.Secret {
 			if v.CredentialID == "" || b.vault == nil {
 				continue
@@ -500,12 +531,11 @@ func (b *Builder) buildArgs(vars []pipeline.BuildVar) (plain []string, secret []
 			if err != nil || pt == "" {
 				continue
 			}
-			secret = append(secret, v.Key+"="+pt)
-		} else {
-			plain = append(plain, v.Key+"="+v.Value)
+			v.Value = pt
 		}
+		resolved = append(resolved, v)
 	}
-	return plain, secret
+	return resolved
 }
 
 // revealToken 取项目主凭据(git token)明文(即取即用;失败返回空 → 匿名克隆,公开仓库友好)。

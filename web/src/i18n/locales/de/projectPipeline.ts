@@ -1,4 +1,23 @@
 export default {
+  saveConfiguration: "Konfiguration speichern",
+  replaceDraftTitle: "Canvas-Entwurf ersetzen?",
+  replaceDraftBody: "Ungespeicherte Canvas-Änderungen werden ersetzt. Andere Konfigurationsentwürfe bleiben erhalten.",
+  replaceDraftConfirm: "Entwurf ersetzen",
+  saveStatus: {
+    saved: "Konfiguration gespeichert",
+    dirty: "Ungespeicherte Änderungen",
+    loading: "Konfiguration wird geladen",
+    saving: "Konfiguration wird gespeichert",
+    error: "Speichern fehlgeschlagen",
+    partial: "Ein Teil wurde gespeichert",
+    unavailable: "Ein Teil ist nicht verfügbar",
+    newerEdits: "Neuere Änderungen noch ungespeichert",
+    completedScopes: "Gespeichert: {scopes}",
+    pendingScopes: "Ausstehend: {scopes}",
+    failedScopes: "Fehlgeschlagen: {scopes}",
+    unavailableScopes: "Nicht verfügbar: {scopes}",
+    dirtyTab: "{tab}, ungespeicherte Änderungen",
+  },
   // ─── Kopfleiste / Brotkrumen ────────────────────────────────────
   breadcrumbAria: 'Brotkrumen-Navigation',
   breadcrumbProjects: 'Projekte',

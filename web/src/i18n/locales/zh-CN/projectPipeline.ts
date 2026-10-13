@@ -1,4 +1,23 @@
 export default {
+  saveConfiguration: "保存配置",
+  replaceDraftTitle: "替换编排草稿？",
+  replaceDraftBody: "未保存的编排修改将被替换，其他配置草稿保持不变。",
+  replaceDraftConfirm: "替换草稿",
+  saveStatus: {
+    saved: "配置已保存",
+    dirty: "有未保存修改",
+    loading: "正在加载配置",
+    saving: "正在保存配置",
+    error: "保存失败",
+    partial: "部分配置已保存",
+    unavailable: "部分配置暂不可用",
+    newerEdits: "新编辑仍未保存",
+    completedScopes: "已保存：{scopes}",
+    pendingScopes: "待保存：{scopes}",
+    failedScopes: "未保存成功：{scopes}",
+    unavailableScopes: "暂不可用：{scopes}",
+    dirtyTab: "{tab}，有未保存修改",
+  },
   // ─── 顶栏 / 面包屑 ───────────────────────────────────────────────
   breadcrumbAria: '面包屑导航',
   breadcrumbProjects: '项目',

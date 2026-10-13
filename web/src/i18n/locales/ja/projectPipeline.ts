@@ -1,4 +1,23 @@
 export default {
+  saveConfiguration: "設定を保存",
+  replaceDraftTitle: "キャンバスの下書きを置換しますか？",
+  replaceDraftBody: "キャンバスの未保存変更を置換します。他の設定の下書きは保持されます。",
+  replaceDraftConfirm: "下書きを置換",
+  saveStatus: {
+    saved: "設定を保存しました",
+    dirty: "未保存の変更があります",
+    loading: "設定を読み込み中",
+    saving: "設定を保存中",
+    error: "保存に失敗しました",
+    partial: "一部の設定を保存しました",
+    unavailable: "一部の設定を利用できません",
+    newerEdits: "新しい変更はまだ未保存です",
+    completedScopes: "保存済み: {scopes}",
+    pendingScopes: "未保存: {scopes}",
+    failedScopes: "保存失敗: {scopes}",
+    unavailableScopes: "利用不可: {scopes}",
+    dirtyTab: "{tab}、未保存の変更があります",
+  },
   // ─── トップバー / パンくず ─────────────────────────────────────
   breadcrumbAria: 'パンくずナビゲーション',
   breadcrumbProjects: 'プロジェクト',

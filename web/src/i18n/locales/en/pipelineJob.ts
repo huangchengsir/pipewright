@@ -1,4 +1,30 @@
 export default {
+  projectSourceBinding: "Project Source Binding",
+  sourceRunBranch: "Run-selected branch takes precedence",
+  sourceProjectUnavailable: "Project source information is unavailable",
+  sourceLegacyOverrides: "Legacy node repository, branch, credential and depth parameters do not override the project checkout.",
+  sourceEditBinding: "Edit project credential",
+  imageProvenanceTitle: "Image to Deploy",
+  inspectImageSource: "View source node",
+  imageSourceNode: "Source node",
+  imageVersionTemplate: "Version template",
+  imageNameFromProject: "Derived from project name",
+  imageRegistryInvalid: "Invalid registry address",
+  imageRegistryFromEnvironment: "From the environment selected for the run",
+  imageBuildRegistry: "Build output; registry depends on the run environment",
+  imageBuildVersion: "Generated for this run and source commit",
+  imageRuntimeReference: "Current-run output only. DATE uses the run creation time (UTC); the resolved version and digest appear after execution. Published images deploy by digest.",
+  imageSourceHint: "Automatic selection uses this node’s image dependencies. Select a source explicitly when more than one output is eligible.",
+  imageSourceMissing: "No image output in this node’s dependencies. Add a dependency or select an upstream image source.",
+  imageSourceAmbiguous: "Multiple image outputs are eligible. Select the source to deploy.",
+  imageSourceUnavailable: "The selected image source is unavailable. Check the source node and dependencies.",
+  serverRequired: "Blank uses only targets of the matching environment explicitly selected for this run. Without a matching environment or targets, select a server.",
+  serverFromEnvironment: "Use this run’s environment targets",
+  cacheUseProjectDefault: "Use project default cache",
+  cacheUsingDefault: "Using project default cache",
+  cacheNoCaching: "No caching",
+  serverUnavailable: "The referenced server is unavailable. It may have been deleted or access is restricted.",
+  credentialUnavailable: "The referenced credential is unavailable or has the wrong type.",
   // ─── jobConfigSchema · shared option sets ──────────────────────────────
   artifactImage: 'Container image (image)',
   artifactJar: 'JAR package (jar)',
@@ -42,7 +68,7 @@ export default {
     'Optional, one per line. Relative to the workspace root: directory→dist, *.jar→jar, other files→archive. A node may emit several; only when set are they archived to the artifact store and downloadable/deployable in run details. For image artifacts use the “Build” node (build_image), not here',
   fieldCachePathsLabel: 'Dependency cache dirs',
   fieldCachePathsHint:
-    'Optional, one per line, relative to the workspace root. Only when set is caching enabled: restored before the build, saved after, reusing dependencies across runs (avoids re-pulling node_modules/.m2/.gradle etc.). Cache problems never affect build results',
+    "Unset inherits project defaults; custom paths override them, and clearing paths disables caching. One per line, relative to the workspace root.",
   fieldCacheKeyLabel: 'Cache key (optional)',
   fieldCacheKeyPlaceholder: 'Empty = auto by branch + lockfile',
   fieldCacheKeyHint:
@@ -50,7 +76,7 @@ export default {
 
   // ─── jobConfigSchema · deploy ssh fields ───────────────────────────────
   fieldServerIdLabel: 'Target server',
-  fieldServerIdHint: 'Pick a registered server (credentials bound by reference)',
+  fieldServerIdHint: "Node selection overrides environment defaults. Blank uses only targets of the environment explicitly selected for this run.",
   fieldArtifactTypeLabel: 'Deploy artifact type',
   fieldArtifactTypeHint:
     'Which one to pick when this run emits both an image and file artifacts; an image goes via docker pull on the target → start new container → health check → roll back to the previous image on failure',
@@ -151,7 +177,7 @@ export default {
   fieldTemplatedArtifactPathHint: 'Optional, one per line, supports {\'{{param}}\'} and globs; directory→dist, *.jar→jar, other→archive',
   fieldTemplatedWorkDirHint: 'Optional, relative to the cloned workspace root',
   fieldTemplatedCachePathsHint:
-    'Optional, one per line, relative to the workspace root, supports {\'{{param}}\'}. Only when set is caching enabled: restored before the build, saved after, reusing deps across runs. Cache problems never affect build results',
+    "Unset inherits project defaults; custom paths override them, and clearing paths disables caching. One per line, relative to the workspace root; supports {'{{param}}'}.",
   fieldTemplatedCacheKeyHint:
     'Optional cache key template, supports {\'{{param}}\'}. If empty, derived automatically from branch + lockfile content (dependency changes trigger a cold build)',
   typeScriptLabel: 'Custom script',

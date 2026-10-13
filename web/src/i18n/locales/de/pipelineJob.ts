@@ -1,4 +1,30 @@
 export default {
+  projectSourceBinding: "Projekt-Quellbindung",
+  sourceRunBranch: "Der beim Lauf gewählte Branch hat Vorrang",
+  sourceProjectUnavailable: "Projekt-Quellinformationen nicht verfügbar",
+  sourceLegacyOverrides: "Alte Repository-, Branch-, Zugangsdaten- und Tiefenparameter des Knotens überschreiben den Projekt-Checkout nicht.",
+  sourceEditBinding: "Projekt-Zugangsdaten ändern",
+  imageProvenanceTitle: "Zu deployendes Image",
+  inspectImageSource: "Quellknoten anzeigen",
+  imageSourceNode: "Quellknoten",
+  imageVersionTemplate: "Versionsvorlage",
+  imageNameFromProject: "Aus Projektname abgeleitet",
+  imageRegistryInvalid: "Ungültige Registry-Adresse",
+  imageRegistryFromEnvironment: "Aus der gewählten Laufumgebung",
+  imageBuildRegistry: "Build-Ausgabe; Registry hängt von der Laufumgebung ab",
+  imageBuildVersion: "Für diesen Lauf und Commit erzeugt",
+  imageRuntimeReference: "Nur Ausgaben dieses Laufs. DATE nutzt die Erstellungszeit (UTC); Version und Digest stehen nach der Ausführung fest. Gepushte Images werden per Digest deployt.",
+  imageSourceHint: "Automatische Auswahl aus Image-Abhängigkeiten. Bei mehreren Ausgaben eine Quelle wählen.",
+  imageSourceMissing: "Kein Image in den Abhängigkeiten. Abhängigkeit oder vorgelagerte Quelle wählen.",
+  imageSourceAmbiguous: "Mehrere Images verfügbar. Deployment-Quelle wählen.",
+  imageSourceUnavailable: "Image-Quelle nicht verfügbar. Knoten und Abhängigkeiten prüfen.",
+  serverRequired: "Leer werden nur Ziele der für diesen Lauf ausdrücklich ausgewählten passenden Umgebung verwendet. Ohne passende Umgebung oder Ziele muss ein Server ausgewählt werden.",
+  serverFromEnvironment: "Umgebungsziele dieses Laufs verwenden",
+  cacheUseProjectDefault: "Projektstandard-Cache verwenden",
+  cacheUsingDefault: "Projektstandard-Cache wird verwendet",
+  cacheNoCaching: "Kein Caching",
+  serverUnavailable: "Server nicht verfügbar: gelöscht oder Zugriff eingeschränkt.",
+  credentialUnavailable: "Zugangsdaten nicht verfügbar oder falscher Typ.",
   // ─── jobConfigSchema · shared option sets ──────────────────────────────
   artifactImage: 'Container-Image (image)',
   artifactJar: 'JAR-Paket (jar)',
@@ -42,7 +68,7 @@ export default {
     'Optional, einer pro Zeile. Relativ zur Workspace-Wurzel: Verzeichnis→dist, *.jar→jar, andere Dateien→archive. Ein Knoten kann mehrere ausgeben; nur wenn gesetzt, werden sie im Artefaktspeicher archiviert und in den Ausführungsdetails herunterladbar/bereitstellbar. Für Image-Artefakte den „Build“-Knoten (build_image) verwenden, nicht hier',
   fieldCachePathsLabel: 'Abhängigkeits-Cache-Verzeichnisse',
   fieldCachePathsHint:
-    'Optional, eines pro Zeile, relativ zur Workspace-Wurzel. Nur wenn gesetzt, wird das Caching aktiviert: vor dem Build wiederhergestellt, danach gespeichert, Abhängigkeiten werden über mehrere Läufe hinweg wiederverwendet (vermeidet erneutes Herunterladen von node_modules/.m2/.gradle usw.). Cache-Probleme beeinflussen das Build-Ergebnis niemals',
+    "Nicht gesetzt werden Projektstandardwerte geerbt; eigene Pfade überschreiben sie, leere Pfade deaktivieren das Caching. Einer pro Zeile, relativ zur Workspace-Wurzel.",
   fieldCacheKeyLabel: 'Cache-Key (optional)',
   fieldCacheKeyPlaceholder: 'Leer = automatisch nach Branch + Lockfile',
   fieldCacheKeyHint:
@@ -50,7 +76,7 @@ export default {
 
   // ─── jobConfigSchema · deploy ssh fields ───────────────────────────────
   fieldServerIdLabel: 'Zielserver',
-  fieldServerIdHint: 'Einen registrierten Server auswählen (Anmeldedaten per Referenz gebunden)',
+  fieldServerIdHint: "Die Knotenauswahl überschreibt die Umgebungsstandardwerte. Leer werden nur Ziele der für diesen Lauf ausdrücklich ausgewählten Umgebung verwendet.",
   fieldArtifactTypeLabel: 'Bereitzustellender Artefakttyp',
   fieldArtifactTypeHint:
     'Welches gewählt wird, wenn dieser Lauf sowohl ein Image als auch Datei-Artefakte ausgibt; ein Image geht per docker pull auf dem Ziel → neuen Container starten → Health-Check → bei Fehler Rollback auf das vorherige Image',
@@ -151,7 +177,7 @@ export default {
   fieldTemplatedArtifactPathHint: 'Optional, einer pro Zeile, unterstützt {\'{{Parameter}}\'} und Wildcards; Verzeichnis→dist, *.jar→jar, andere→archive',
   fieldTemplatedWorkDirHint: 'Optional, relativ zur Wurzel des geklonten Workspaces',
   fieldTemplatedCachePathsHint:
-    'Optional, eines pro Zeile, relativ zur Workspace-Wurzel, unterstützt {\'{{Parameter}}\'}. Nur wenn gesetzt, wird das Caching aktiviert: vor dem Build wiederhergestellt, danach gespeichert, Abhängigkeiten werden über Läufe hinweg wiederverwendet. Cache-Probleme beeinflussen das Build-Ergebnis niemals',
+    "Nicht gesetzt werden Projektstandardwerte geerbt; eigene Pfade überschreiben sie, leere Pfade deaktivieren das Caching. Einer pro Zeile, relativ zur Workspace-Wurzel; unterstützt {'{{Parameter}}'}.",
   fieldTemplatedCacheKeyHint:
     'Optionale Cache-Key-Vorlage, unterstützt {\'{{Parameter}}\'}. Wenn leer, automatisch aus Branch + Lockfile-Inhalt abgeleitet (Änderungen an Abhängigkeiten lösen einen Cold-Build aus)',
   typeScriptLabel: 'Benutzerdefiniertes Skript',

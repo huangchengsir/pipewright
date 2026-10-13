@@ -24,6 +24,7 @@ const props = defineProps<{
   projectId: string
   /** Current canvas stages — snapshotted when saving as a template. */
   stages: PipelineStage[]
+  beforeReplace?: () => Promise<boolean>
 }>()
 
 const { t } = useI18n()
@@ -58,22 +59,24 @@ async function loadTemplates(): Promise<void> {
 }
 
 async function doApply(): Promise<void> {
+  if (applying.value) return
   if (!selectedId.value) {
     errorMsg.value = t('pipelinePanels.tplSelectFirst')
     return
   }
-  if (
-    !window.confirm(t('pipelinePanels.tplConfirmApply'))
-  ) {
-    return
-  }
   applying.value = true
   errorMsg.value = ''
+  const templateId = selectedId.value
+  const projectId = props.projectId
   try {
-    const dto = await applyTemplate(props.projectId, selectedId.value)
+    if (!(props.beforeReplace ? await props.beforeReplace() : window.confirm(t('pipelinePanels.tplConfirmApply')))) return
+    if (projectId !== props.projectId) return
+    const dto = await applyTemplate(projectId, templateId)
+    if (projectId !== props.projectId) return
     emit('applied', dto)
     emit('close')
   } catch (err: unknown) {
+    if (projectId !== props.projectId) return
     errorMsg.value = err instanceof HttpError ? err.apiError?.message ?? t('pipelinePanels.tplApplyFailed') : t('pipelinePanels.tplApplyFailed')
   } finally {
     applying.value = false
@@ -126,6 +129,7 @@ async function doSave(): Promise<void> {
 }
 
 function switchMode(m: Mode): void {
+  if (applying.value || saving.value) return
   mode.value = m
   errorMsg.value = ''
   saveDone.value = false
@@ -135,11 +139,11 @@ onMounted(loadTemplates)
 </script>
 
 <template>
-  <div class="scrim" @click.self="emit('close')">
+  <div class="scrim" @click.self="!applying && !saving && emit('close')">
     <div class="modal" role="dialog" aria-modal="true" :aria-label="t('pipelinePanels.tplAria')">
       <header class="head">
         <h2 class="title">{{ t('pipelinePanels.tplTitle') }}</h2>
-        <button class="close" :aria-label="t('pipelinePanels.tplCloseAria')" @click="emit('close')">✕</button>
+        <button class="close" :disabled="applying || saving" :aria-label="t('pipelinePanels.tplCloseAria')" @click="emit('close')">✕</button>
       </header>
 
       <div class="seg" role="tablist">
@@ -148,6 +152,7 @@ onMounted(loadTemplates)
           role="tab"
           :aria-selected="mode === 'apply'"
           :class="{ active: mode === 'apply' }"
+          :disabled="applying || saving"
           @click="switchMode('apply')"
         >
           {{ t('pipelinePanels.tplApplyTab') }}
@@ -157,6 +162,7 @@ onMounted(loadTemplates)
           role="tab"
           :aria-selected="mode === 'save'"
           :class="{ active: mode === 'save' }"
+          :disabled="applying || saving"
           @click="switchMode('save')"
         >
           {{ t('pipelinePanels.tplSaveTab') }}
@@ -179,6 +185,7 @@ onMounted(loadTemplates)
                 name="tpl"
                 :value="tpl.id"
                 v-model="selectedId"
+                :disabled="applying"
                 class="tpl-radio"
               />
               <span class="tpl-info">
@@ -189,7 +196,7 @@ onMounted(loadTemplates)
           </li>
         </ul>
         <footer class="foot">
-          <button class="btn-secondary" @click="emit('close')">{{ t('pipelinePanels.tplCancel') }}</button>
+          <button class="btn-secondary" :disabled="applying" @click="emit('close')">{{ t('pipelinePanels.tplCancel') }}</button>
           <button
             class="btn-primary"
             :disabled="applying || templates.length === 0"

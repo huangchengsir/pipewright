@@ -1,17 +1,21 @@
 import { defineComponent, h } from 'vue'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter, RouterView, type Router } from 'vue-router'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ProjectPipeline from './ProjectPipeline.vue'
 import VarsCacheTab from '../components/pipeline/VarsCacheTab.vue'
 import EnvCredsTab from '../components/pipeline/EnvCredsTab.vue'
 import TriggersPanel from '../components/TriggersPanel.vue'
 import ProjectPreviewConfig from '../components/pipeline/ProjectPreviewConfig.vue'
+import PipelineSaveStatus from '../components/pipeline/PipelineSaveStatus.vue'
+import ValidationPanel from '../components/pipeline/ValidationPanel.vue'
+import { i18n } from '../i18n'
 import { http, HttpError } from '../api/http'
 import type { PipelineDTO, PipelineStage } from '../api/pipeline'
 import type { SettingsDTO } from '../api/pipelineSettings'
 import type { TriggerConfig } from '../api/triggers'
 import type { PreviewConfig } from '../api/previewEnvs'
+import type { ValidationDTO } from '../api/pipelineValidation'
 
 vi.mock('../api/http', async (importOriginal) => ({
   ...await importOriginal<typeof import('../api/http')>(),
@@ -25,6 +29,28 @@ vi.mock('../composables/useConfirm', () => ({
 }))
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
+// Locale files are owned by the parent change; keep pending copy isolated to this suite.
+const originalMessages = clone(i18n.global.getLocaleMessage('zh-CN'))
+i18n.global.mergeLocaleMessage('zh-CN', {
+  projectPipeline: {
+    saveConfiguration: '保存配置',
+    replaceDraftTitle: '替换编排草稿？',
+    replaceDraftBody: '未保存的编排修改将被替换，其他配置草稿保持不变。',
+    replaceDraftConfirm: '替换草稿',
+    saveStatus: {
+      saved: '配置已保存', dirty: '配置未保存', loading: '正在加载配置',
+      saving: '正在保存配置', error: '配置保存失败', partial: '配置已部分保存',
+      unavailable: '部分配置暂不可用', newerEdits: '新编辑仍未保存',
+      completedScopes: '已保存：{scopes}', pendingScopes: '待保存：{scopes}',
+      failedScopes: '未保存成功：{scopes}', unavailableScopes: '暂不可用：{scopes}',
+      dirtyTab: '{tab}，有未保存修改',
+    },
+  },
+})
+afterAll(() => i18n.global.setLocaleMessage('zh-CN', originalMessages))
+const scopeLabel = (scope: string): string => scope === 'preview'
+  ? i18n.global.t('previewEnvs.config.title')
+  : i18n.global.t(`projectPipeline.tab${scope[0].toUpperCase()}${scope.slice(1)}`)
 const prefix = '/api/projects/p1'
 let storedPipeline: PipelineDTO
 let storedSettings: SettingsDTO
@@ -35,9 +61,14 @@ let router: Router
 
 const CanvasStub = defineComponent({
   name: 'PipelineCanvas',
-  props: ['stages'],
+  props: ['stages', 'projectName', 'project', 'environmentAutoPushPossible'],
   emits: ['update'],
   setup: () => () => h('div', { class: 'canvas-stub' }),
+})
+const ReplacementModalStub = defineComponent({
+  props: ['beforeReplace'],
+  emits: ['saved', 'applied'],
+  setup: () => () => h('div'),
 })
 
 async function render(tab = 'canvas', realCanvas = false): Promise<VueWrapper> {
@@ -60,6 +91,7 @@ async function render(tab = 'canvas', realCanvas = false): Promise<VueWrapper> {
         CronPanel: true, EnvironmentsPanel: true, ParametersPanel: true,
         ConcurrencyPanel: true, ChainPanel: true, RunnerPanel: true,
         AppSelect: true,
+        YamlImportModal: ReplacementModalStub, TemplatePickerModal: ReplacementModalStub,
       },
     },
   })
@@ -102,6 +134,10 @@ function isGuarded(): boolean {
   const event = new Event('beforeunload', { cancelable: true })
   window.dispatchEvent(event)
   return event.defaultPrevented
+}
+
+function saveStatus() {
+  return wrapper!.findComponent(PipelineSaveStatus)
 }
 
 beforeEach(() => {
@@ -157,9 +193,69 @@ afterEach(() => {
   wrapper?.unmount()
   wrapper = undefined
   vi.restoreAllMocks()
+  vi.useRealTimers()
 })
 
 describe('ProjectPipeline draft save scope (#190/#193)', () => {
+  it('derives image auto-push uncertainty from edited environment registries', async () => {
+    await render()
+    const canvas = wrapper!.findComponent(CanvasStub)
+    expect(canvas.props('environmentAutoPushPossible')).toBe(false)
+    const env = { name: 'prod', targetServerIds: [], envVars: [], imageRegistry: { type: 'harbor', url: '   ', credentialId: '' } }
+    wrapper!.findComponent(EnvCredsTab).vm.$emit('update', [env])
+    await flushPromises()
+    expect(canvas.props('environmentAutoPushPossible')).toBe(false)
+    wrapper!.findComponent(EnvCredsTab).vm.$emit('update', [{ ...env, imageRegistry: { ...env.imageRegistry, url: ' http://harbor.example/team ' } }])
+    await flushPromises()
+    expect(canvas.props('environmentAutoPushPossible')).toBe(true)
+  })
+  it('does not assume builds are unpublished when environment settings are unavailable', async () => {
+    const get = vi.mocked(http.get).getMockImplementation()!
+    vi.mocked(http.get).mockImplementation((url, options) => url === `${prefix}/pipeline/settings`
+      ? Promise.reject(new Error('settings unavailable')) : get(url, options))
+    await render()
+    expect(wrapper!.findComponent(CanvasStub).props('environmentAutoPushPossible')).toBe(true)
+  })
+  it('shows persistent saved/dirty state and exact per-tab pending scope', async () => {
+    await render('vars')
+    expect(saveStatus().props('state')).toBe('saved')
+    expect(wrapper!.findComponent(CanvasStub).props('projectName')).toBe('Project')
+    expect(wrapper!.findComponent(CanvasStub).props('project')).toMatchObject({ id: 'p1', name: 'Project' })
+    await editVariable()
+    expect(saveStatus().props('state')).toBe('dirty')
+    expect(saveStatus().props('pendingScopes')).toEqual([scopeLabel('vars')])
+    expect(wrapper!.find('#tab-vars').classes()).toContain('tab-btn--dirty')
+    expect(wrapper!.find('#tab-envs').classes()).not.toContain('tab-btn--dirty')
+    expect(wrapper!.find('#tab-vars').attributes('aria-label')).toContain('有未保存修改')
+    await editEnvironment()
+    await editTrigger()
+    await wrapper!.findComponent(ProjectPreviewConfig).find('.pvc__in').setValue('preview.example.com')
+    wrapper!.findComponent(CanvasStub).vm.$emit('update', [{ id: 's', name: 'Build', kind: 'build', jobs: [] }])
+    await flushPromises()
+    expect(saveStatus().props('pendingScopes')).toEqual(['canvas', 'vars', 'envs', 'triggers', 'preview'].map(scopeLabel))
+    expect(wrapper!.findAll('.tab-btn--dirty')).toHaveLength(4)
+    await switchTab('canvas')
+    expect(saveStatus().find('.save-status-pending').text()).toContain(scopeLabel('preview'))
+    await clickSave()
+    expect(saveStatus().props('state')).toBe('saved')
+    expect(saveStatus().props('pendingScopes')).toEqual([])
+    expect(wrapper!.findAll('.tab-btn--dirty')).toHaveLength(0)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(saveStatus().text()).toBe('配置已保存')
+  })
+
+  it('marks the trigger tab for preview-only edits and returns to saved after its local save', async () => {
+    await render('triggers')
+    const preview = wrapper!.findComponent(ProjectPreviewConfig)
+    await preview.find('.pvc__in').setValue('preview.example.com')
+    expect(saveStatus().props('pendingScopes')).toEqual([scopeLabel('preview')])
+    expect(wrapper!.find('#tab-triggers').classes()).toContain('tab-btn--dirty')
+    await preview.find('.pvc__save').trigger('click')
+    await flushPromises()
+    expect(saveStatus().props('state')).toBe('saved')
+    expect(wrapper!.find('#tab-triggers').classes()).not.toContain('tab-btn--dirty')
+  })
   it('preserves an unblurred drawer edit when an unchanged save is acknowledged', async () => {
     storedPipeline.stages = [{ id: 's', name: 'Build', kind: 'build', jobs: [{ id: 'j', name: 'Before', summary: '', type: 'script', config: { script: 'true' } }] }]
     await render('canvas', true)
@@ -252,8 +348,17 @@ describe('ProjectPipeline draft save scope (#190/#193)', () => {
     await clickSave()
     expect(wrapper!.find('.pipeline-banner--success').exists()).toBe(false)
     expect(wrapper!.find('.pipeline-banner--error').exists()).toBe(true)
+    expect(saveStatus().props('state')).toBe(scope === 'pipeline' ? 'error' : 'partial')
+    const failedScopes = scope === 'pipeline/settings' ? ['vars'] : [scope === 'pipeline' ? 'canvas' : scope === 'trigger' ? 'triggers' : 'preview']
+    expect(saveStatus().props('failedScopes')).toEqual(failedScopes.map(scopeLabel))
+    expect(saveStatus().find('.save-status-failed').text()).toContain(scopeLabel(failedScopes[0]))
     expect(isGuarded()).toBe(true)
     const alreadySaved = vi.mocked(http.put).mock.calls.slice(0, -1).map(([url]) => url)
+    const acknowledged = alreadySaved.map((url) => url.endsWith('/pipeline/settings') ? 'vars' : url.endsWith('/pipeline') ? 'canvas' : 'triggers')
+    expect(saveStatus().props('completedScopes')).toEqual(acknowledged.map(scopeLabel))
+    for (const label of saveStatus().props('completedScopes')) {
+      expect(saveStatus().props('pendingScopes')).not.toContain(label)
+    }
     fail = false
     await clickSave()
     expect(wrapper!.find('.pipeline-banner--success').exists()).toBe(true)
@@ -272,6 +377,8 @@ describe('ProjectPipeline draft save scope (#190/#193)', () => {
     expect(wrapper!.find('.map-field-error').exists()).toBe(true)
     expect(router.currentRoute.value.query.tab).toBe('triggers')
     expect(wrapper!.find('.pipeline-banner--error').exists()).toBe(true)
+    expect(saveStatus().props('state')).toBe('error')
+    expect(saveStatus().props('failedScopes')).toEqual([scopeLabel('triggers')])
     await wrapper!.find('.map-input--mono').setValue('valid/*')
     await clickSave()
     expect(wrapper!.find('.pipeline-banner--success').exists()).toBe(true)
@@ -288,6 +395,9 @@ describe('ProjectPipeline draft save scope (#190/#193)', () => {
     expect(http.put).not.toHaveBeenCalled()
     expect(wrapper!.find('.pipeline-banner--success').exists()).toBe(false)
     expect(wrapper!.find('.pipeline-banner--error').exists()).toBe(true)
+    expect(saveStatus().props('state')).toBe(scope === 'pipeline/settings' ? 'error' : 'unavailable')
+    expect(saveStatus().props('unavailableScopes')).toEqual((scope === 'pipeline/settings' ? ['vars', 'envs'] : [scope === 'trigger' ? 'triggers' : 'preview']).map(scopeLabel))
+    expect(wrapper!.find('.top-btn--save').attributes('disabled')).toBeDefined()
   })
 
   it('guards leave/project changes, allows tab changes, and removes unload protection on unmount', async () => {
@@ -317,8 +427,12 @@ describe('ProjectPipeline draft save scope (#190/#193)', () => {
       return normalGet(url)
     })
     await render()
+    expect(saveStatus().props('state')).toBe('loading')
     await editTrigger()
+    expect(saveStatus().props('pendingScopes')).toEqual([scopeLabel('triggers')])
     await clickSave()
+    expect(saveStatus().props('state')).toBe('loading')
+    expect(saveStatus().attributes('aria-busy')).toBe('true')
     expect(http.put).not.toHaveBeenCalled()
     expect(wrapper!.find('.pipeline-banner--success').exists()).toBe(false)
     finish(clone(storedSettings))
@@ -388,6 +502,8 @@ describe('ProjectPipeline draft save scope (#190/#193)', () => {
     let finish!: (value: unknown) => void
     vi.mocked(http.put).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
     await clickSave()
+    expect(saveStatus().props('state')).toBe('saving')
+    expect(saveStatus().attributes('aria-busy')).toBe('true')
     if (scope === 'canvas') {
       wrapper!.findComponent(CanvasStub).vm.$emit('update', [{ ...submitted[0], name: 'Newer' }])
       finish({ ...storedPipeline, stages: submitted })
@@ -401,6 +517,11 @@ describe('ProjectPipeline draft save scope (#190/#193)', () => {
     }
     await flushPromises()
     expect(wrapper!.find('.pipeline-banner--success').exists()).toBe(false)
+    expect(saveStatus().props('state')).toBe('dirty')
+    expect(saveStatus().find('.save-status-title').text()).toBe('新编辑仍未保存')
+    expect(saveStatus().props('failedScopes')).toEqual([])
+    expect(wrapper!.find('.pipeline-banner--error').exists()).toBe(false)
+    expect(saveStatus().props('pendingScopes')).toEqual([scopeLabel(scope)])
     expect(isGuarded()).toBe(true)
     if (scope === 'canvas') expect(wrapper!.findComponent(CanvasStub).props('stages')[0].name).toBe('Newer')
     if (scope === 'triggers') expect((wrapper!.find('.map-input--mono').element as HTMLInputElement).value).toBe('newer/*')
@@ -440,6 +561,9 @@ describe('ProjectPipeline draft save scope (#190/#193)', () => {
     await flushPromises()
     expect((wrapper!.find('input[aria-label="变量值"]').element as HTMLInputElement).value).toBe('newer')
     expect(wrapper!.find('.pipeline-banner--success').exists()).toBe(false)
+    expect(saveStatus().props('state')).toBe('dirty')
+    expect(saveStatus().props('pendingScopes')).toEqual([scopeLabel('vars')])
+    expect(wrapper!.find('.pipeline-banner--error').exists()).toBe(false)
     expect(isGuarded()).toBe(true)
   })
 
@@ -456,5 +580,116 @@ describe('ProjectPipeline draft save scope (#190/#193)', () => {
     expect(http.put).toHaveBeenCalledTimes(3)
     expect(storedSettings.build.vars[0]).toEqual({ id: 'secret', key: 'TOKEN', secret: true, credentialId: 'credential' })
     expect(isGuarded()).toBe(false)
+  })
+
+  it.each(['import', 'template'])('guards %s stage replacement without guarding unrelated drafts', async (source) => {
+    await render()
+    await editVariable()
+    const label = i18n.global.t(source === 'import' ? 'projectPipeline.importYaml' : 'projectPipeline.templates')
+    await wrapper!.findAll('.top-btn').find((button) => button.text() === label)!.trigger('click')
+    const modal = wrapper!.findComponent(ReplacementModalStub)
+    const beforeReplace = modal.props('beforeReplace') as () => Promise<boolean>
+    expect(await beforeReplace()).toBe(true)
+    expect(window.confirm).not.toHaveBeenCalled()
+    const draft = [{ id: 's', name: 'Unsaved', kind: 'build', jobs: [] }]
+    wrapper!.findComponent(CanvasStub).vm.$emit('update', draft)
+    await flushPromises()
+    expect(await beforeReplace()).toBe(false)
+    expect(wrapper!.findComponent(CanvasStub).props('stages')).toEqual(draft)
+    vi.mocked(window.confirm).mockReturnValue(true)
+    expect(await beforeReplace()).toBe(true)
+    expect(window.confirm).toHaveBeenCalledTimes(2)
+    expect(http.put).not.toHaveBeenCalled()
+  })
+
+  it.each(['import', 'template'])('preserves variable, environment and trigger drafts after %s saves only stages', async (source) => {
+    await render('vars')
+    await editVariable()
+    await editEnvironment()
+    await editTrigger()
+    const build = wrapper!.findComponent(VarsCacheTab).props('build')
+    const environments = wrapper!.findComponent(EnvCredsTab).props('environments')
+    const label = i18n.global.t(source === 'import' ? 'projectPipeline.importYaml' : 'projectPipeline.templates')
+    await wrapper!.findAll('.top-btn').find((button) => button.text() === label)!.trigger('click')
+    storedPipeline.stages = [{ id: 'replacement', name: 'Replaced', kind: 'build', jobs: [] }]
+    wrapper!.findComponent(ReplacementModalStub).vm.$emit(source === 'import' ? 'saved' : 'applied')
+    await flushPromises()
+    expect(wrapper!.findComponent(CanvasStub).props('stages')).toEqual(storedPipeline.stages)
+    expect(wrapper!.findComponent(VarsCacheTab).props('build')).toBe(build)
+    expect(wrapper!.findComponent(EnvCredsTab).props('environments')).toBe(environments)
+    expect(vi.mocked(http.get).mock.calls.filter(([url]) => url === `${prefix}/pipeline/settings`)).toHaveLength(1)
+    expect(saveStatus().props('state')).toBe('dirty')
+    expect(saveStatus().props('pendingScopes')).toEqual(['vars', 'envs', 'triggers'].map(scopeLabel))
+    expect(wrapper!.find('#tab-canvas').classes()).not.toContain('tab-btn--dirty')
+    expect(isGuarded()).toBe(true)
+    await clickSave()
+    expect(storedSettings.build.vars[0].value).toBe('persisted')
+    expect(storedSettings.environments[0].name).toBe('acceptance-test')
+    expect(saveStatus().props('state')).toBe('saved')
+  })
+
+  it.each(['canvas', 'vars', 'envs', 'triggers', 'preview'])('clears cached persisted validation on new %s edits', async (scope) => {
+    const normalGet = vi.mocked(http.get).getMockImplementation()!
+    vi.mocked(http.get).mockImplementation(async (url) => url === `${prefix}/pipeline/validation`
+      ? { ready: true, issues: [] } : normalGet(url))
+    await render()
+    await wrapper!.find('.top-btn--validate').trigger('click')
+    await flushPromises()
+    expect(wrapper!.find('.top-btn-badge--ok').exists()).toBe(true)
+    if (scope === 'canvas') wrapper!.findComponent(CanvasStub).vm.$emit('update', [{ id: 's', name: 'Changed', kind: 'build', jobs: [] }])
+    if (scope === 'vars') await editVariable()
+    if (scope === 'envs') await editEnvironment()
+    if (scope === 'triggers') await editTrigger()
+    if (scope === 'preview') await wrapper!.findComponent(ProjectPreviewConfig).find('.pvc__in').setValue('changed.example.com')
+    await flushPromises()
+    expect(wrapper!.find('.top-btn-badge').exists()).toBe(false)
+    expect(wrapper!.findComponent(ValidationPanel).props('ready')).toBe(false)
+    expect(wrapper!.findComponent(ValidationPanel).props('issues')).toEqual([])
+    expect(wrapper!.findComponent(ValidationPanel).props('pendingMessage')).toBe(i18n.global.t('pipelinePanels.vpSaveFirst'))
+    const requests = vi.mocked(http.get).mock.calls.filter(([url]) => url === `${prefix}/pipeline/validation`).length
+    await wrapper!.find('.top-btn--validate').trigger('click')
+    await flushPromises()
+    expect(vi.mocked(http.get).mock.calls.filter(([url]) => url === `${prefix}/pipeline/validation`)).toHaveLength(requests)
+  })
+
+  it('does not restore obsolete validation when a response arrives after a draft edit', async () => {
+    const normalGet = vi.mocked(http.get).getMockImplementation()!
+    let finish!: (value: ValidationDTO) => void
+    vi.mocked(http.get).mockImplementation(async (url) => url === `${prefix}/pipeline/validation`
+      ? new Promise<ValidationDTO>((resolve) => { finish = resolve }) : normalGet(url))
+    await render()
+    await wrapper!.find('.top-btn--validate').trigger('click')
+    await flushPromises()
+    expect(wrapper!.findComponent(ValidationPanel).props('loading')).toBe(true)
+    await editVariable()
+    finish({ ready: true, issues: [] })
+    await flushPromises()
+    expect(wrapper!.find('.top-btn-badge').exists()).toBe(false)
+    expect(wrapper!.findComponent(ValidationPanel).props('ready')).toBe(false)
+  })
+
+  it('clears readiness on unblurred drawer input without changing parent-state dirty semantics', async () => {
+    const normalGet = vi.mocked(http.get).getMockImplementation()!
+    vi.mocked(http.get).mockImplementation(async (url) => url === `${prefix}/pipeline/validation`
+      ? { ready: true, issues: [] } : normalGet(url))
+    storedPipeline.stages = [{ id: 's', name: 'Build', kind: 'build', jobs: [{ id: 'j', name: 'Before', summary: '', type: 'script', config: { script: 'true' } }] }]
+    await render('canvas', true)
+    await wrapper!.find('.top-btn--validate').trigger('click')
+    await flushPromises()
+    await wrapper!.find('.job-card').trigger('click')
+    await wrapper!.find('.job-drawer input.drawer-input').setValue('Unblurred')
+    expect(wrapper!.find('.top-btn-badge').exists()).toBe(false)
+    expect(isGuarded()).toBe(false)
+  })
+
+  it('retains the existing all-scope validation of a clean invalid trigger draft', async () => {
+    storedTrigger.branchMappings = [{ id: 'bad', branchPattern: '/invalid/', environment: 'prod', targetServerIds: [] }]
+    await render('vars')
+    await editVariable()
+    expect(wrapper!.find('#tab-triggers').classes()).not.toContain('tab-btn--dirty')
+    await clickSave()
+    expect(http.put).not.toHaveBeenCalled()
+    expect(saveStatus().props('state')).toBe('error')
+    expect(saveStatus().props('failedScopes')).toEqual([scopeLabel('triggers')])
   })
 })

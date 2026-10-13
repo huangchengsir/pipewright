@@ -7,6 +7,7 @@
 import { ref, shallowRef, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
+import { DeviceFloppy, FileImport, ListCheck, Robot, Stack2 } from '@vicons/tabler'
 import { getPipeline, savePipeline, type PipelineDTO, type PipelineStage } from '../api/pipeline'
 import {
   getSettings,
@@ -23,6 +24,7 @@ import { listChannels, type NotificationChannel } from '../api/notifications'
 import { getValidation, type ValidationDTO, type IssueScope } from '../api/pipelineValidation'
 import { HttpError } from '../api/http'
 import PipelineCanvas from '../components/pipeline/PipelineCanvas.vue'
+import PipelineSaveStatus from '../components/pipeline/PipelineSaveStatus.vue'
 import PipelineGuide from '../components/onboarding/PipelineGuide.vue'
 import type { GuideContext, GuidePhase } from '../composables/pipelineGuideState'
 import VarsCacheTab from '../components/pipeline/VarsCacheTab.vue'
@@ -35,7 +37,7 @@ import YamlImportModal from '../components/pipeline/YamlImportModal.vue'
 import TemplatePickerModal from '../components/pipeline/TemplatePickerModal.vue'
 import PacPreviewModal from '../components/pipeline/PacPreviewModal.vue'
 import ProjectPreviewConfig from '../components/pipeline/ProjectPreviewConfig.vue'
-import { usePipelineDraftSave, type PipelineDraftParticipant } from '../composables/usePipelineDraftSave'
+import { usePipelineDraftSave, type PipelineDraftParticipant, type PipelineSaveState } from '../composables/usePipelineDraftSave'
 import { useConfirm } from '../composables/useConfirm'
 
 // ─── Route ────────────────────────────────────────────────────────────────────
@@ -143,9 +145,13 @@ const credentials  = ref<Credential[]>([])
 const servers      = ref<Server[]>([])
 const channels     = ref<NotificationChannel[]>([])
 const settingsLoadState = shallowRef<LoadState>('loading')
-const settingsDirty = computed(() => !!settings.value && !!editBuild.value && (
-  JSON.stringify(editBuild.value) !== JSON.stringify(settings.value.build)
-  || JSON.stringify(editEnvs.value) !== JSON.stringify(settings.value.environments)))
+const buildDirty = computed(() => !!settings.value && !!editBuild.value
+  && JSON.stringify(editBuild.value) !== JSON.stringify(settings.value.build))
+const environmentsDirty = computed(() => !!settings.value
+  && JSON.stringify(editEnvs.value) !== JSON.stringify(settings.value.environments))
+const settingsDirty = computed(() => buildDirty.value || environmentsDirty.value)
+const environmentAutoPushPossible = computed(() => settingsLoadState.value !== 'idle'
+  || editEnvs.value.some((env) => !!env.imageRegistry.type.trim() && !!env.imageRegistry.url.trim()))
 
 function applySettings(dto: SettingsDTO): void {
   settings.value = dto
@@ -190,7 +196,7 @@ watch(projectId, () => {
   editBuild.value = null
   editEnvs.value = []
   saveBanner.value = ''
-  saveSuccess.value = false
+  draftSave.resetOutcome()
   void loadProject(); void loadPipeline(); void loadSettings()
 })
 onMounted(() => { void loadProject(); void loadPipeline(); void loadSettings() })
@@ -207,9 +213,10 @@ const triggersRef = ref<InstanceType<typeof TriggersPanel> | null>(null)
 const previewRef = ref<InstanceType<typeof ProjectPreviewConfig> | null>(null)
 const confirm = useConfirm()
 
-function triggerParticipant(part: PipelineDraftParticipant | null): PipelineDraftParticipant | null {
+function triggerParticipant(part: PipelineDraftParticipant | null, scope: string): PipelineDraftParticipant | null {
   if (!part) return null
   return {
+    scopes: [scope],
     ready: part.ready,
     dirty: part.dirty,
     saving: part.saving,
@@ -229,6 +236,7 @@ function triggerParticipant(part: PipelineDraftParticipant | null): PipelineDraf
 const draftSave = usePipelineDraftSave({
   participants: () => [
     {
+      scopes: ['canvas'],
       ready: loadState.value === 'idle' && !!pipeline.value,
       dirty: stagesDirty.value,
       saving: false,
@@ -236,13 +244,19 @@ const draftSave = usePipelineDraftSave({
       save: saveStagesDraft,
     },
     {
+      get scopes() {
+        return [
+          ...(buildDirty.value ? ['vars'] : []),
+          ...(environmentsDirty.value ? ['envs'] : []),
+        ]
+      },
       ready: settingsLoadState.value === 'idle' && !!editBuild.value,
       dirty: settingsDirty.value,
       saving: false,
       save: saveSettingsDraft,
     },
-    triggerParticipant(triggersRef.value),
-    triggerParticipant(previewRef.value),
+    triggerParticipant(triggersRef.value, 'triggers'),
+    triggerParticipant(previewRef.value, 'preview'),
   ],
   confirmDiscard: () => confirm.open({
     title: t('opsChat.unsaved'),
@@ -254,14 +268,48 @@ const draftSave = usePipelineDraftSave({
 const saveSubmitting = draftSave.busy
 const guideDirty = draftSave.dirty
 const saveBanner     = ref('')
-const saveSuccess    = ref(false)
-let saveSuccessTimer: ReturnType<typeof setTimeout> | null = null
-
-function showSaveSuccess(): void {
-  saveSuccess.value = true
-  if (saveSuccessTimer) clearTimeout(saveSuccessTimer)
-  saveSuccessTimer = setTimeout(() => { saveSuccess.value = false }, 3200)
+const tabDirty = computed<Record<TabKey, boolean>>(() => ({
+  canvas: stagesDirty.value,
+  vars: buildDirty.value,
+  envs: environmentsDirty.value,
+  triggers: !!triggersRef.value?.dirty || !!previewRef.value?.dirty,
+}))
+const scopeLabels = computed<Record<string, string>>(() => ({
+  canvas: t('projectPipeline.tabCanvas'),
+  vars: t('projectPipeline.tabVars'),
+  envs: t('projectPipeline.tabEnvs'),
+  triggers: t('projectPipeline.tabTriggers'),
+  preview: t('previewEnvs.config.title'),
+}))
+const pendingScopeKeys = computed(() => [
+  ...(stagesDirty.value ? ['canvas'] : []),
+  ...(buildDirty.value ? ['vars'] : []),
+  ...(environmentsDirty.value ? ['envs'] : []),
+  ...(triggersRef.value?.dirty ? ['triggers'] : []),
+  ...(previewRef.value?.dirty ? ['preview'] : []),
+])
+const unavailableScopeKeys = computed(() => [
+  ...(loadState.value !== 'idle' || !pipeline.value ? ['canvas'] : []),
+  ...(settingsLoadState.value !== 'idle' || !editBuild.value ? ['vars', 'envs'] : []),
+  ...(!triggersRef.value?.ready ? ['triggers'] : []),
+  ...(!previewRef.value?.ready ? ['preview'] : []),
+])
+function labelScopes(scopes: readonly string[]): string[] {
+  return scopes.map((scope) => scopeLabels.value[scope] ?? scope)
 }
+const pendingScopeLabels = computed(() => labelScopes(pendingScopeKeys.value))
+const unavailableScopeLabels = computed(() => labelScopes(unavailableScopeKeys.value))
+const completedScopeLabels = computed(() => labelScopes(draftSave.outcome.value?.completedScopes ?? []))
+const failedScopeLabels = computed(() => labelScopes(draftSave.outcome.value?.failedScopes ?? []))
+const saveState = computed<PipelineSaveState>(() => {
+  if (saveSubmitting.value) return 'saving'
+  if (loadState.value === 'loading' || settingsLoadState.value === 'loading') return 'loading'
+  if (loadState.value === 'error' || settingsLoadState.value === 'error') return 'error'
+  if (!draftSave.ready.value) return 'unavailable'
+  const outcome = draftSave.outcome.value
+  if (outcome?.state === 'partial' || outcome?.state === 'error') return outcome.state
+  return guideDirty.value ? 'dirty' : 'saved'
+})
 
 /** Maps 422 error codes to user-visible hints. */
 function mapSaveError(err: HttpError): string {
@@ -321,14 +369,15 @@ function buildSettingsPayload(): SaveSettingsInput | null {
 async function handleSave(): Promise<void> {
   if (saveSubmitting.value) return
   saveBanner.value     = ''
-  saveSuccess.value    = false
 
   try {
     if (!await draftSave.save()) {
-      saveBanner.value = t('projectPipeline.errSaveFailedRetry')
+      // Acknowledged writes with newer local edits are pending, not a failed save.
+      if (draftSave.outcome.value?.state === 'error' || draftSave.outcome.value?.state === 'partial') {
+        saveBanner.value = t('projectPipeline.errSaveFailedRetry')
+      }
       return
     }
-    showSaveSuccess()
     void guideRef.value?.refresh()
     // Revalidate after a successful save (debounced, only when panel is open).
     scheduleValidation(400)
@@ -365,9 +414,7 @@ async function saveSettingsDraft(): Promise<boolean> {
   return true
 }
 
-watch(guideDirty, (dirty) => { if (dirty) saveSuccess.value = false })
 onUnmounted(() => {
-  if (saveSuccessTimer) clearTimeout(saveSuccessTimer)
   if (validationDebounce) clearTimeout(validationDebounce)
 })
 
@@ -395,12 +442,24 @@ function handleTemplates(): void {
   templateModalOpen.value = true
 }
 
-/** Apply-template succeeded: server already persisted; reload pipeline + settings + revalidate. */
+async function confirmStageReplacement(): Promise<boolean> {
+  if (saveSubmitting.value) return false
+  if (!stagesDirty.value) return true
+  const replace = await confirm.open({
+    title: t('projectPipeline.replaceDraftTitle'),
+    body: t('projectPipeline.replaceDraftBody'),
+    confirmLabel: t('projectPipeline.replaceDraftConfirm'),
+    variant: 'danger',
+  })
+  return replace && !saveSubmitting.value
+}
+
+/** Templates persist only stages; keep unrelated settings drafts intact. */
 async function handleTemplateApplied(): Promise<void> {
-  await Promise.all([loadPipeline(), loadSettings()])
+  await loadPipeline()
   void guideRef.value?.refresh()
   if (activeTab.value !== 'canvas') setTab('canvas')
-  showSaveSuccess()
+  draftSave.resetOutcome()
   scheduleValidation(400)
 }
 
@@ -415,12 +474,12 @@ function handleImportPreview(dto: PipelineDTO): void {
   if (activeTab.value !== 'canvas') setTab('canvas')
 }
 
-/** Save (save=true): the modal already persisted. Reload everything + revalidate. */
+/** The modal persisted stages only; preserve variable and environment drafts. */
 async function handleImportSaved(): Promise<void> {
-  await Promise.all([loadPipeline(), loadSettings()])
+  await loadPipeline()
   void guideRef.value?.refresh()
   if (activeTab.value !== 'canvas') setTab('canvas')
-  showSaveSuccess()
+  draftSave.resetOutcome()
   scheduleValidation(400)
 }
 
@@ -441,17 +500,39 @@ const validationData    = ref<ValidationDTO | null>(null)
 
 /** Debounce handle for auto-revalidation after tab switch / save. */
 let validationDebounce: ReturnType<typeof setTimeout> | null = null
+let validationRequest = 0
+
+function clearDraftValidation(): void {
+  validationData.value = null
+  validationLoading.value = false
+  validationRequest += 1
+  if (validationDebounce) clearTimeout(validationDebounce)
+  validationDebounce = null
+}
+
+watch([
+  editStages, editBuild, editEnvs,
+  () => triggersRef.value?.dirty,
+  () => previewRef.value?.dirty,
+], clearDraftValidation, { deep: true })
 
 async function fetchValidation(): Promise<void> {
   if (!projectId.value) return
+  if (guideDirty.value) {
+    clearDraftValidation()
+    return
+  }
+  const id = projectId.value
+  const request = ++validationRequest
   validationLoading.value = true
   try {
-    validationData.value = await getValidation(projectId.value)
+    const data = await getValidation(id)
+    if (request === validationRequest && id === projectId.value) validationData.value = data
   } catch {
     // Non-fatal: panel stays open but shows stale data or nothing.
     // We intentionally swallow errors here — validation is a read-only aid.
   } finally {
-    validationLoading.value = false
+    if (request === validationRequest) validationLoading.value = false
   }
 }
 
@@ -568,23 +649,17 @@ async function togglePrStatus(next: boolean): Promise<void> {
 
       <div class="pipeline-top-actions">
         <button class="top-btn top-btn--ai" :disabled="saveSubmitting" @click="handleAI">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M3 12h3.5l2.2-6 3.6 12 2.4-7 1.3 1h4.5"/>
-          </svg>
+          <Robot class="top-btn-icon" aria-hidden="true" />
           {{ t('projectPipeline.aiGenerate') }}
         </button>
 
         <button class="top-btn" :disabled="saveSubmitting" @click="handleImport">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>
-          </svg>
+          <FileImport class="top-btn-icon" aria-hidden="true" />
           {{ t('projectPipeline.importYaml') }}
         </button>
 
         <button class="top-btn" :disabled="saveSubmitting" @click="handleTemplates">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M12 3l9 4.5-9 4.5-9-4.5z"/><path d="M3 12l9 4.5 9-4.5"/><path d="M3 16.5l9 4.5 9-4.5"/>
-          </svg>
+          <Stack2 class="top-btn-icon" aria-hidden="true" />
           {{ t('projectPipeline.templates') }}
         </button>
 
@@ -596,13 +671,11 @@ async function togglePrStatus(next: boolean): Promise<void> {
           :aria-label="validationOpen ? t('projectPipeline.closeValidationPanel') : t('projectPipeline.validate')"
           @click="validationOpen ? handleValidationClose() : handleValidateClick()"
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
-          </svg>
+          <ListCheck class="top-btn-icon" aria-hidden="true" />
           {{ t('projectPipeline.validate') }}
           <!-- inline ready badge when data is available -->
           <span
-            v-if="validationData !== null && !validationLoading"
+            v-if="validationData !== null && !validationLoading && !guideDirty"
             class="top-btn-badge"
             :class="validationData.ready ? 'top-btn-badge--ok' : 'top-btn-badge--err'"
             aria-hidden="true"
@@ -614,12 +687,13 @@ async function togglePrStatus(next: boolean): Promise<void> {
         <button
           class="top-btn top-btn--save"
           data-onboarding-target="save"
-          :disabled="saveSubmitting || loadState !== 'idle'"
+          :disabled="saveSubmitting || !draftSave.ready.value"
           :aria-busy="saveSubmitting"
           @click="handleSave"
         >
           <span v-if="saveSubmitting" class="spinner" aria-hidden="true"/>
-          {{ saveSubmitting ? t('projectPipeline.saving') : t('projectPipeline.saveDraft') }}
+          <DeviceFloppy v-else class="top-btn-icon" aria-hidden="true" />
+          {{ saveSubmitting ? t('projectPipeline.saving') : t('projectPipeline.saveConfiguration') }}
         </button>
       </div>
     </header>
@@ -628,28 +702,14 @@ async function togglePrStatus(next: boolean): Promise<void> {
       :project-id="projectId" :stages="editStages" :dirty="guideDirty" :context="guideContext" :active-tab="activeTab"
       @locate="locateGuide" @close="closeGuide" />
 
-    <!-- ─── Banners (save success / error) ────────────────────────────────── -->
-    <div
-      v-if="saveBanner"
-      class="pipeline-banner pipeline-banner--error"
-      role="alert"
-      aria-live="assertive"
-    >
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-        <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
-      </svg>
-      <span>{{ saveBanner }}</span>
-      <button class="banner-dismiss" :aria-label="t('projectPipeline.dismiss')" @click="saveBanner = ''">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
-      </button>
-    </div>
-
-    <div v-if="saveSuccess" class="pipeline-banner pipeline-banner--success" role="status" aria-live="polite">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
-        <path d="M20 6 9 17l-5-5"/>
-      </svg>
-      <span>{{ t('projectPipeline.draftSaved') }}</span>
-    </div>
+    <PipelineSaveStatus
+      :state="saveState"
+      :pending-scopes="pendingScopeLabels"
+      :completed-scopes="completedScopeLabels"
+      :failed-scopes="failedScopeLabels"
+      :unavailable-scopes="unavailableScopeLabels"
+      :error="saveBanner"
+    />
 
     <div v-if="settingsLoadState === 'error'" class="pipeline-banner pipeline-banner--error" role="alert">
       <span>{{ t('projectPipeline.errLoadFailedRetry') }}</span>
@@ -661,13 +721,18 @@ async function togglePrStatus(next: boolean): Promise<void> {
       <button
         v-for="tab in TABS"
         :key="tab.key"
+        :id="`tab-${tab.key}`"
         class="tab-btn"
-        :class="{ 'tab-btn--active': activeTab === tab.key }"
+        :class="{ 'tab-btn--active': activeTab === tab.key, 'tab-btn--dirty': tabDirty[tab.key] }"
         role="tab"
         :aria-selected="activeTab === tab.key"
         :aria-controls="`tabpanel-${tab.key}`"
+        :aria-label="tabDirty[tab.key] ? t('projectPipeline.saveStatus.dirtyTab', { tab: tab.label }) : tab.label"
         @click="setTab(tab.key)"
-      >{{ tab.label }}</button>
+      >
+        <span>{{ tab.label }}</span>
+        <span class="tab-dirty-marker" :class="{ 'tab-dirty-marker--visible': tabDirty[tab.key] }" aria-hidden="true">*</span>
+      </button>
     </nav>
 
     <!--
@@ -756,7 +821,7 @@ async function togglePrStatus(next: boolean): Promise<void> {
     <div class="tab-body">
 
       <!-- ─── Tab panels (left column) ─────────────────────────────────────── -->
-      <div class="tab-panels">
+      <div class="tab-panels" @input.capture="clearDraftValidation" @change.capture="clearDraftValidation">
 
         <!-- 流水线编排 -->
         <div
@@ -791,6 +856,9 @@ async function togglePrStatus(next: boolean): Promise<void> {
             v-else-if="loadState === 'idle' && pipeline"
             ref="canvasRef"
             :guide-enabled="guideEnabled"
+            :project-name="project?.name"
+            :project="project ?? undefined"
+            :environment-auto-push-possible="environmentAutoPushPossible"
             :stages="editStages"
             :yaml="pipeline.yaml"
             :credentials="credentials"
@@ -851,6 +919,7 @@ async function togglePrStatus(next: boolean): Promise<void> {
             :key="projectId"
             :environments="editEnvs"
             :credentials="credentials"
+            :servers="servers"
             :disabled="saveSubmitting || settingsLoadState !== 'idle'"
             @update="handleEnvsUpdate"
           />
@@ -867,6 +936,7 @@ async function togglePrStatus(next: boolean): Promise<void> {
       <ValidationPanel
         v-if="validationOpen"
         :loading="validationLoading"
+        :pending-message="guideDirty ? t('pipelinePanels.vpSaveFirst') : (!validationData ? t('pipelinePanels.vpUnavailable') : undefined)"
         :ready="validationData?.ready ?? false"
         :issues="validationData?.issues ?? []"
         @locate="handleLocate"
@@ -887,6 +957,7 @@ async function togglePrStatus(next: boolean): Promise<void> {
     <YamlImportModal
       v-if="yamlImportOpen"
       :project-id="projectId"
+      :before-replace="confirmStageReplacement"
       @close="yamlImportOpen = false"
       @preview="handleImportPreview"
       @saved="handleImportSaved"
@@ -897,6 +968,7 @@ async function togglePrStatus(next: boolean): Promise<void> {
       v-if="templateModalOpen"
       :project-id="projectId"
       :stages="editStages"
+      :before-replace="confirmStageReplacement"
       @close="templateModalOpen = false"
       @applied="handleTemplateApplied"
     />
@@ -917,46 +989,34 @@ async function togglePrStatus(next: boolean): Promise<void> {
 .pipeline-root {
   display: flex;
   flex-direction: column;
-  /*
-   * 流水线编辑器是「定高应用面板」(画布横向内滚 + 右侧检视抽屉纵向内滚 + 非画布 tab
-   * 内滚),需要一个相对视口确定的高度。父级 .main-inner 是 min-height:100vh(随内容
-   * 增高,height:100% 无法解析成确定值),会导致抽屉撑满内容、被 overflow:hidden 链裁掉
-   * 底部(后置步骤够不到)。这里按视口减去 .main-inner 的上下内边距锁定高度,使内部
-   * overflow:auto/hidden 的滚动真正生效。
-   *
-   * 底部只留一小段呼吸位(而非整段 --main-pad-bottom):编辑器是全幅工作面板,把原本
-   * ~90px 的底部留白还给画布,缓解「画布高度太窄」。
-   *
-   * ⚠ 两处必须对齐父内边距,否则编辑器比视口高、整页滚动、底部风险面板划不到/被截:
-   *  ① 顶部减 .main-inner 的**完整** padding-top = calc(--main-pad-top + 38px)(见 AppShell);
-   *     原来只减了 --main-pad-top,漏掉 38px。
-   *  ② 用负 margin-bottom 收掉 .main-inner 的 padding-bottom(--main-pad-bottom,默认 90px,
-   *     是给普通页准备的),只留 20px 呼吸位 —— 否则那 90px 叠在定高面板下方又把文档顶出视口。
-   */
+  /* Keep inner scrolling bounded; short screens scroll the page to preserve usable drawer height. */
   height: calc(100vh - var(--main-pad-top) - 38px - 20px);
   margin-bottom: calc(20px - var(--main-pad-bottom));
-  min-height: 0;
+  min-height: 850px;
   gap: 0;
 }
 .pipeline-root :deep(.onboarding-target) { outline: 2px solid var(--color-primary); outline-offset: 3px; box-shadow: 0 0 0 5px var(--color-primary-soft); }
-.pipeline-root:has(.pipeline-guide) { min-height: 660px; }
+.pipeline-root:has(.pipeline-guide) { min-height: 850px; }
 @media (max-width: 900px) {
-  .pipeline-root:has(.pipeline-guide) { height: auto; margin-bottom: 0; }
-  .pipeline-root:has(.pipeline-guide) .pipeline-top { flex-wrap: wrap; padding: 12px; }
-  .pipeline-root:has(.pipeline-guide) .pipeline-top-left { flex-basis: 100%; }
-  .pipeline-root:has(.pipeline-guide) .pipeline-top-actions { flex: 1 1 100%; min-width: 0; max-width: 100%; flex-wrap: wrap; }
-  .pipeline-root:has(.pipeline-guide) .tab-body { flex: none; min-height: 400px; overflow: visible; }
-  .pipeline-root:has(.pipeline-guide) .tab-panels { overflow: visible; }
-  .pipeline-root:has(.pipeline-guide) .tab-strip { overflow-x: auto; flex: none; }
-  .pipeline-root:has(.pipeline-guide) .tab-btn { flex: none; white-space: nowrap; }
-  .pipeline-root:has(.pipeline-guide) .pac-bar { flex-wrap: wrap; padding: 12px; }
-  .pipeline-root:has(.pipeline-guide) .pac-bar-text { flex-basis: 100%; min-width: 0; }
-  .pipeline-root:has(.pipeline-guide) .pac-bar-title { flex-wrap: wrap; }
+  .pipeline-root, .pipeline-root:has(.pipeline-guide) { height: auto; min-height: 0; margin-bottom: 0; }
+  .pipeline-root .pipeline-top { flex-wrap: wrap; padding: 12px; }
+  .pipeline-root .pipeline-top-left { flex-basis: 100%; }
+  .pipeline-root .pipeline-top-actions { flex: 1 1 100%; min-width: 0; max-width: 100%; flex-wrap: wrap; }
+  .pipeline-root .tab-body { flex: none; flex-direction: column; min-height: 400px; overflow: visible; }
+  .pipeline-root .tab-panels { overflow: visible; }
+  .pipeline-root .tab-panel { height: auto; min-height: 400px; overflow: visible; }
+  .pipeline-root :deep(.vp) { width: 100%; border-left: 0; border-top: 1px solid var(--color-border); max-height: 420px; }
+  .pipeline-root .tab-strip { overflow-x: auto; flex: none; }
+  .pipeline-root .tab-btn { flex: none; white-space: nowrap; }
+  .pipeline-root .pac-bar { flex-wrap: wrap; padding: 12px; }
+  .pipeline-root .pac-bar-text { flex-basis: 100%; min-width: 0; }
+  .pipeline-root .pac-bar-title { flex-wrap: wrap; }
 }
 
 /* ─── Top bar ────────────────────────────────────────────────────────────── */
 .pipeline-top {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 14px;
   padding: 14px 28px 12px;
@@ -965,12 +1025,13 @@ async function togglePrStatus(next: boolean): Promise<void> {
 }
 
 .pipeline-top-left {
-  flex: 1;
+  flex: 1 1 180px;
   min-width: 0;
 }
 
 .breadcrumb {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   font-size: 0.76rem;
@@ -987,14 +1048,15 @@ async function togglePrStatus(next: boolean): Promise<void> {
 .crumb-link:hover { color: var(--color-primary); }
 .crumb-link:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; border-radius: 2px; }
 .crumb-sep { color: var(--color-faint); }
-.crumb-cur { color: var(--color-text); font-weight: 500; }
+.crumb-cur { color: var(--color-text); font-weight: 500; overflow-wrap: anywhere; }
 
 .pipeline-title {
   font-size: 1.06rem;
   font-weight: 700;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
   color: var(--color-text);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
@@ -1013,13 +1075,17 @@ async function togglePrStatus(next: boolean): Promise<void> {
 
 .pipeline-top-actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
   gap: 8px;
-  flex: none;
+  flex: 1 1 520px;
+  min-width: 0;
 }
 
 .top-btn {
-  height: 34px;
+  min-height: 34px;
+  max-width: 100%;
   font-size: 0.83rem;
   font-weight: 500;
   border: 1px solid var(--color-border-strong);
@@ -1032,9 +1098,12 @@ async function togglePrStatus(next: boolean): Promise<void> {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  text-align: start;
   font-family: var(--font-sans);
 }
+
+.top-btn-icon { width: 14px; height: 14px; flex: none; }
 
 .top-btn:hover:not(:disabled) {
   border-color: var(--color-faint);
@@ -1136,6 +1205,7 @@ async function togglePrStatus(next: boolean): Promise<void> {
 /* ─── Tab strip ──────────────────────────────────────────────────────────── */
 .tab-strip {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   padding: 0 28px;
   border-bottom: 1px solid var(--color-border);
@@ -1143,6 +1213,12 @@ async function togglePrStatus(next: boolean): Promise<void> {
 }
 
 .tab-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 0.84rem;
   color: var(--color-faint);
   padding: 12px 14px;
@@ -1153,6 +1229,18 @@ async function togglePrStatus(next: boolean): Promise<void> {
   margin-bottom: -1px;
   font-family: var(--font-sans);
   transition: color var(--duration-fast), border-color var(--duration-fast);
+}
+
+.tab-dirty-marker { width: 8px; flex: none; visibility: hidden; color: var(--color-amber); font-weight: 700; }
+.tab-dirty-marker--visible { visibility: visible; }
+
+@media (max-width: 600px) {
+  .pipeline-top { padding: 12px; }
+  .pipeline-top-left { flex-basis: 100%; }
+  .pipeline-top-actions { justify-content: flex-start; flex-basis: 100%; }
+  .top-btn { min-height: 44px; padding: 6px 10px; }
+  .tab-strip { padding: 0 12px; }
+  .tab-btn { flex: 1 1 calc(50% - 4px); padding: 10px 6px; }
 }
 
 .tab-btn:hover { color: var(--color-dim); }

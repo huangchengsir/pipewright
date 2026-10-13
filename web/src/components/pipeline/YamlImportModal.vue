@@ -11,13 +11,14 @@
  *
  * Validation errors (422) are shown inline with the server's human-readable, secret-free message.
  */
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { importPipeline, type PipelineDTO } from '../../api/pipeline'
 import { HttpError } from '../../api/http'
 
 const props = defineProps<{
   projectId: string
+  beforeReplace?: () => Promise<boolean>
 }>()
 
 const { t } = useI18n()
@@ -50,6 +51,8 @@ stages:
 
 const yamlText = ref('')
 const busy = ref<'preview' | 'save' | null>(null)
+const replacing = ref(false)
+const locked = computed(() => busy.value !== null || replacing.value)
 const errorMsg = ref('')
 const previewedStageCount = ref<number | null>(null)
 
@@ -78,14 +81,16 @@ function handleError(err: unknown): void {
 }
 
 async function runPreview(): Promise<PipelineDTO | null> {
+  const projectId = props.projectId
   errorMsg.value = ''
   busy.value = 'preview'
   try {
-    const dto = await importPipeline(props.projectId, yamlText.value, false)
+    const dto = await importPipeline(projectId, yamlText.value, false)
+    if (projectId !== props.projectId) return null
     previewedStageCount.value = dto.stages.length
     return dto
   } catch (err) {
-    handleError(err)
+    if (projectId === props.projectId) handleError(err)
     previewedStageCount.value = null
     return null
   } finally {
@@ -95,31 +100,48 @@ async function runPreview(): Promise<PipelineDTO | null> {
 
 /** 预览:解析校验,把结果回灌画布(不落库)。 */
 async function onPreview(): Promise<void> {
-  const dto = await runPreview()
-  if (dto) emit('preview', dto)
+  if (locked.value) return
+  const projectId = props.projectId
+  replacing.value = true
+  try {
+    const dto = await runPreview()
+    if (dto && projectId === props.projectId && (!props.beforeReplace || await props.beforeReplace()) && projectId === props.projectId) emit('preview', dto)
+  } finally { replacing.value = false }
 }
 
 /** 导入到画布:与预览同一动作语义,关闭弹窗,让用户在画布上确认后再保存草稿。 */
 async function onApplyToCanvas(): Promise<void> {
-  const dto = await runPreview()
-  if (dto) {
-    emit('preview', dto)
-    emit('close')
-  }
+  if (locked.value) return
+  const projectId = props.projectId
+  replacing.value = true
+  try {
+    const dto = await runPreview()
+    if (dto && projectId === props.projectId && (!props.beforeReplace || await props.beforeReplace()) && projectId === props.projectId) {
+      emit('preview', dto)
+      emit('close')
+    }
+  } finally { replacing.value = false }
 }
 
 /** 导入并保存:解析 + 持久化 + 重载。 */
 async function onImportAndSave(): Promise<void> {
+  if (locked.value) return
+  const projectId = props.projectId
+  replacing.value = true
   errorMsg.value = ''
-  busy.value = 'save'
   try {
-    const dto = await importPipeline(props.projectId, yamlText.value, true)
+    if (props.beforeReplace && !await props.beforeReplace()) return
+    if (projectId !== props.projectId) return
+    busy.value = 'save'
+    const dto = await importPipeline(projectId, yamlText.value, true)
+    if (projectId !== props.projectId) return
     emit('saved', dto)
     emit('close')
   } catch (err) {
-    handleError(err)
+    if (projectId === props.projectId) handleError(err)
   } finally {
     busy.value = null
+    replacing.value = false
   }
 }
 
@@ -128,7 +150,7 @@ function loadStarter(): void {
 }
 
 function onBackdrop(e: MouseEvent): void {
-  if (e.target === e.currentTarget) emit('close')
+  if (!locked.value && e.target === e.currentTarget) emit('close')
 }
 </script>
 
@@ -140,7 +162,7 @@ function onBackdrop(e: MouseEvent): void {
           <h2 id="yi-title" class="yi-title">{{ t('pipelinePanels.yiTitle') }}</h2>
           <p class="yi-sub">{{ t('pipelinePanels.yiSub') }}</p>
         </div>
-        <button class="yi-close" :aria-label="t('pipelinePanels.yiCloseAria')" @click="emit('close')">
+        <button class="yi-close" :disabled="locked" :aria-label="t('pipelinePanels.yiCloseAria')" @click="emit('close')">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
         </button>
       </header>
@@ -148,7 +170,7 @@ function onBackdrop(e: MouseEvent): void {
       <div class="yi-body">
         <div class="yi-editor-head">
           <label for="yi-yaml" class="yi-label">{{ t('pipelinePanels.yiYamlLabel') }}</label>
-          <button class="yi-starter" type="button" @click="loadStarter">{{ t('pipelinePanels.yiLoadStarter') }}</button>
+          <button class="yi-starter" type="button" :disabled="locked" @click="loadStarter">{{ t('pipelinePanels.yiLoadStarter') }}</button>
         </div>
         <textarea
           id="yi-yaml"
@@ -157,7 +179,7 @@ function onBackdrop(e: MouseEvent): void {
           spellcheck="false"
           autocomplete="off"
           placeholder="version: 1&#10;stages:&#10;  - name: 流水线源&#10;    kind: source&#10;    jobs: [...]"
-          :disabled="busy !== null"
+          :disabled="locked"
         />
 
         <div v-if="errorMsg" class="yi-banner yi-banner--error" role="alert">
@@ -171,13 +193,13 @@ function onBackdrop(e: MouseEvent): void {
       </div>
 
       <footer class="yi-foot">
-        <button class="yi-btn" :disabled="busy !== null || !yamlText.trim()" @click="onPreview">
+        <button class="yi-btn" :disabled="locked || !yamlText.trim()" @click="onPreview">
           <span v-if="busy === 'preview'" class="yi-spin" aria-hidden="true"/>
           {{ t('pipelinePanels.yiPreview') }}
         </button>
         <div class="yi-foot-right">
-          <button class="yi-btn" :disabled="busy !== null || !yamlText.trim()" @click="onApplyToCanvas">{{ t('pipelinePanels.yiImportToCanvas') }}</button>
-          <button class="yi-btn yi-btn--primary" :disabled="busy !== null || !yamlText.trim()" @click="onImportAndSave">
+          <button class="yi-btn" :disabled="locked || !yamlText.trim()" @click="onApplyToCanvas">{{ t('pipelinePanels.yiImportToCanvas') }}</button>
+          <button class="yi-btn yi-btn--primary" :disabled="locked || !yamlText.trim()" @click="onImportAndSave">
             <span v-if="busy === 'save'" class="yi-spin" aria-hidden="true"/>
             {{ t('pipelinePanels.yiImportAndSave') }}
           </button>

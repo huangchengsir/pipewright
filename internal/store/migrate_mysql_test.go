@@ -27,8 +27,8 @@ func TestMigrationSetsMatch(t *testing.T) {
 	if len(sq) == 0 {
 		t.Fatal("未找到任何迁移")
 	}
-	if len(sq) != 51 || len(my) != 51 || !sq["0052_ops_chat_contexts"] || !my["0052_ops_chat_contexts"] {
-		t.Fatalf("expected 50 paired migrations including ops chat: sqlite=%d mysql=%d", len(sq), len(my))
+	if len(sq) != 53 || len(my) != 53 || !sq["0053_anomaly_ai_analysis"] || !my["0053_anomaly_ai_analysis"] || !sq["0054_pipeline_mcp"] || !my["0054_pipeline_mcp"] {
+		t.Fatalf("expected 53 paired migrations including anomaly analysis and MCP: sqlite=%d mysql=%d", len(sq), len(my))
 	}
 }
 

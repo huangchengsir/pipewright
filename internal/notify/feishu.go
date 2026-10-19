@@ -321,6 +321,9 @@ func feishuOrderedFields(fields map[string]string, lang string) []feishuCardFiel
 
 	out := make([]feishuCardField, 0, len(keys))
 	for _, k := range keys {
+		if k == "aiAnalysis" {
+			continue
+		} // Keep analysis in the body, not a duplicate narrow field.
 		value := fields[k]
 		// 状态字段值前置图标,双列里也一眼可读。
 		if k == "status" {

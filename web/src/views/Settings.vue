@@ -20,6 +20,7 @@ const { t } = useI18n()
       <router-link to="/settings/vault" class="settings-nav-item">{{ t('settingsHub.navVault') }}</router-link>
       <router-link to="/settings/dns-providers" class="settings-nav-item">{{ t('settingsHub.navDnsProviders') }}</router-link>
       <router-link to="/settings/account" class="settings-nav-item">{{ t('settingsHub.navAccount') }}</router-link>
+      <router-link to="/settings/mcp" class="settings-nav-item">MCP</router-link>
       <router-link to="/settings/servers" class="settings-nav-item">{{ t('settingsHub.navServers') }}</router-link>
       <router-link to="/settings/diagnosis-stats" class="settings-nav-item">{{ t('settingsHub.navDiagnosisStats') }}</router-link>
       <router-link to="/settings/system" class="settings-nav-item">{{ t('settingsHub.navSystem') }}</router-link>
@@ -63,12 +64,14 @@ const { t } = useI18n()
 /* Settings secondary nav — tab-style with primary underline */
 .settings-nav {
   display: flex;
+  overflow-x: auto;
   gap: 0;
   border-bottom: 1px solid var(--color-border);
   margin-bottom: 24px;
 }
 
 .settings-nav-item {
+  flex-shrink: 0;
   padding: 12px 18px;
   font-size: var(--text-label);
   font-weight: 500;

@@ -17,6 +17,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -71,35 +72,41 @@ func validOperator(op string) bool {
 //   - ServerID 为 nil 表示全局(对所有服务器);非空表示仅作用于该服务器。
 //   - Threshold 是百分比阈值。
 type Rule struct {
-	ID        string
-	Metric    string
-	Operator  string
-	Threshold float64
-	ServerID  *string
-	Enabled   bool
-	CreatedAt time.Time
+	ID                string
+	Metric            string
+	Operator          string
+	Threshold         float64
+	ServerID          *string
+	Enabled           bool
+	AIAnalysisEnabled bool
+	CreatedAt         time.Time
 }
 
 // CreateRuleInput 是创建规则的入参。
 type CreateRuleInput struct {
-	Metric    string
-	Operator  string
-	Threshold float64
-	ServerID  *string // nil = 全局
-	Enabled   bool
+	Metric            string
+	Operator          string
+	Threshold         float64
+	ServerID          *string // nil = 全局
+	Enabled           bool
+	AIAnalysisEnabled *bool // nil preserves the existing setting on update; defaults off on create.
+	PreserveEnabled   bool  // Used by PATCH clients that omit enabled.
 }
 
 // Alert 是命中规则产生的告警(冻结契约;持久化 + 列表可见)。
 type Alert struct {
-	ID         string
-	ServerID   string
-	ServerName string
-	Metric     string
-	Operator   string
-	Threshold  float64
-	Value      float64
-	Message    string
-	CreatedAt  time.Time
+	ID                string
+	ServerID          string
+	ServerName        string
+	Metric            string
+	Operator          string
+	Threshold         float64
+	Value             float64
+	Message           string
+	CreatedAt         time.Time
+	RuleID            string
+	AIAnalysisEnabled bool
+	Analysis          *Analysis
 }
 
 // ServerMetricsSnapshot 是单台服务器的「已归一为百分比」指标快照(由 Collector 提供)。
@@ -151,6 +158,7 @@ type Service interface {
 	Check(ctx context.Context) ([]*Alert, error)
 	// ListAlerts 返回最近告警(可按 serverID 过滤;limit 上限)。
 	ListAlerts(ctx context.Context, serverID string, limit int) ([]*Alert, error)
+	Close() // Cancels in-flight analysis and waits before the store is closed.
 }
 
 // Notifier 抽象「告警产生时发一次通知」(注入便于测试;nil = 不发)。实现侧 best-effort:
@@ -165,10 +173,24 @@ const defaultCooldown = 10 * time.Minute
 
 // service 是 store + collector 支撑的 Service 实现。
 type service struct {
-	db        *sql.DB
-	collector MetricsCollector
-	notifier  Notifier      // nil = 不发通知(命中仍入库 + 列表可见)
-	cooldown  time.Duration // 同条件去重窗口;<=0 视为 defaultCooldown
+	db                 *sql.DB
+	collector          MetricsCollector
+	notifier           Notifier      // nil = 不发通知(命中仍入库 + 列表可见)
+	cooldown           time.Duration // 同条件去重窗口;<=0 视为 defaultCooldown
+	checkGate          chan struct{}
+	analyzer           Analyzer
+	analysisTimeout    time.Duration
+	analysisSlots      chan struct{}
+	analysisContext    context.Context
+	analysisCancel     context.CancelFunc
+	analysisMu         sync.Mutex
+	analysisJobs       map[string]analysisJob
+	analysisWG         sync.WaitGroup
+	checkWG            sync.WaitGroup
+	recoveryWG         sync.WaitGroup
+	recoveryRunning    bool
+	recoveryGeneration uint64
+	closed             bool
 }
 
 // Option 配置可选依赖(通知器 / 去重窗口);默认零依赖、defaultCooldown。
@@ -189,12 +211,21 @@ func WithCooldown(d time.Duration) Option {
 // New 构造 Service。collector 复用 6-1 采集(httpapi 适配注入);为 nil 时 Check 返回空结果
 // (无采集源 → 不误报)。不在此做任何重活(无 init 副作用)。
 func New(db *sql.DB, collector MetricsCollector, opts ...Option) Service {
-	s := &service{db: db, collector: collector, cooldown: defaultCooldown}
+	background, cancel := context.WithCancel(context.Background())
+	s := &service{db: db, collector: collector, cooldown: defaultCooldown,
+		checkGate: make(chan struct{}, 1), analysisSlots: make(chan struct{}, 2),
+		analysisContext: background, analysisCancel: cancel, analysisTimeout: 30 * time.Second,
+		analysisJobs: make(map[string]analysisJob)}
 	for _, opt := range opts {
 		opt(s)
 	}
 	if s.cooldown <= 0 {
 		s.cooldown = defaultCooldown
+	}
+	if s.db != nil {
+		if s.recoverAnalysis() {
+			s.scheduleAnalysisRecovery()
+		}
 	}
 	return s
 }
@@ -204,7 +235,7 @@ const maxAlertLimit = 500
 
 func (s *service) ListRules(ctx context.Context) ([]*Rule, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, metric, operator, threshold, server_id, enabled, created_at
+		`SELECT id, metric, operator, threshold, server_id, enabled, created_at, ai_analysis_enabled
 		 FROM anomaly_rules
 		 ORDER BY created_at DESC, id`,
 	)
@@ -247,9 +278,9 @@ func (s *service) CreateRule(ctx context.Context, in CreateRuleInput) (*Rule, er
 	}
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO anomaly_rules (id, metric, operator, threshold, server_id, enabled, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id, in.Metric, in.Operator, in.Threshold, serverID, enabled, nowStr,
+		`INSERT INTO anomaly_rules (id, metric, operator, threshold, server_id, enabled, created_at, ai_analysis_enabled)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, in.Metric, in.Operator, in.Threshold, serverID, enabled, nowStr, boolValue(in.AIAnalysisEnabled),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("anomaly: insert rule: %w", err)
@@ -273,24 +304,31 @@ func (s *service) UpdateRule(ctx context.Context, id string, in CreateRuleInput)
 	if in.Enabled {
 		enabled = 1
 	}
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE anomaly_rules SET metric = ?, operator = ?, threshold = ?, server_id = ?, enabled = ?
+	var enabledValue any = enabled
+	if in.PreserveEnabled {
+		enabledValue = nil
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE anomaly_rules SET metric = ?, operator = ?, threshold = ?, server_id = ?, enabled = COALESCE(?, enabled), ai_analysis_enabled = COALESCE(?, ai_analysis_enabled)
 		 WHERE id = ?`,
-		in.Metric, in.Operator, in.Threshold, serverID, enabled, id,
+		in.Metric, in.Operator, in.Threshold, serverID, enabledValue, optionalBoolValue(in.AIAnalysisEnabled), id,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("anomaly: update rule: %w", err)
 	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return nil, ErrNotFound
+	if (!in.PreserveEnabled && !in.Enabled) || (in.AIAnalysisEnabled != nil && !*in.AIAnalysisEnabled) {
+		s.cancelRuleAnalysis(id)
 	}
-	return s.getRule(ctx, id)
+	rule, err := s.getRule(ctx, id)
+	if err == nil && (!rule.Enabled || !rule.AIAnalysisEnabled) {
+		s.cancelRuleAnalysis(id)
+	}
+	return rule, err
 }
 
 func (s *service) getRule(ctx context.Context, id string) (*Rule, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, metric, operator, threshold, server_id, enabled, created_at
+		`SELECT id, metric, operator, threshold, server_id, enabled, created_at, ai_analysis_enabled
 		 FROM anomaly_rules WHERE id = ?`, id,
 	)
 	r, err := scanRule(row)
@@ -312,6 +350,7 @@ func (s *service) DeleteRule(ctx context.Context, id string) error {
 	if n == 0 {
 		return ErrNotFound
 	}
+	s.cancelRuleAnalysis(id)
 	return nil
 }
 
@@ -321,6 +360,26 @@ func (s *service) DeleteRule(ctx context.Context, id string) error {
 //  3. 逐快照 × 逐规则(规则全局或匹配该服务器)求值:指标不可得 / 不可达 → 跳过。
 //  4. 命中 → 产告警入库,收集进返回列表。
 func (s *service) Check(ctx context.Context) ([]*Alert, error) {
+	select {
+	case s.checkGate <- struct{}{}:
+		defer func() { <-s.checkGate }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-s.analysisContext.Done():
+		return nil, s.analysisContext.Err()
+	}
+	s.analysisMu.Lock()
+	if s.closed {
+		s.analysisMu.Unlock()
+		return nil, context.Canceled
+	}
+	s.checkWG.Add(1)
+	s.analysisMu.Unlock()
+	defer s.checkWG.Done()
+	local, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(s.analysisContext, cancel)
+	defer func() { stop(); cancel() }()
+	ctx = local
 	rules, err := s.ListRules(ctx)
 	if err != nil {
 		return nil, err
@@ -377,10 +436,7 @@ func (s *service) Check(ctx context.Context) ([]*Alert, error) {
 				return nil, err
 			}
 			out = append(out, alert)
-			// 命中新告警 → 发一次通知(best-effort,实现侧不阻断;未注入则无操作)。
-			if s.notifier != nil {
-				s.notifier.NotifyAlert(ctx, alert)
-			}
+			s.dispatchAlert(ctx, *alert, cloneMetrics(snap))
 		}
 	}
 	return out, nil
@@ -420,27 +476,36 @@ func (s *service) recordAlert(ctx context.Context, rule *Rule, snap ServerMetric
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
 	msg := formatMessage(rule.Metric, rule.Operator, value, rule.Threshold)
+	status := ""
+	var analysis *Analysis
+	if rule.AIAnalysisEnabled {
+		status = AnalysisPending
+		analysis = &Analysis{Status: status}
+	}
 
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO anomaly_alerts
-		   (id, server_id, server_name, metric, operator, threshold, value, message, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		   (id, server_id, server_name, metric, operator, threshold, value, message, created_at, rule_id, ai_analysis_enabled, analysis_status)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, snap.ServerID, snap.ServerName, rule.Metric, rule.Operator,
-		rule.Threshold, value, msg, nowStr,
+		rule.Threshold, value, msg, nowStr, rule.ID, boolValue(&rule.AIAnalysisEnabled), status,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("anomaly: insert alert: %w", err)
 	}
 	return &Alert{
-		ID:         id,
-		ServerID:   snap.ServerID,
-		ServerName: snap.ServerName,
-		Metric:     rule.Metric,
-		Operator:   rule.Operator,
-		Threshold:  rule.Threshold,
-		Value:      value,
-		Message:    msg,
-		CreatedAt:  now,
+		ID:                id,
+		ServerID:          snap.ServerID,
+		ServerName:        snap.ServerName,
+		Metric:            rule.Metric,
+		Operator:          rule.Operator,
+		Threshold:         rule.Threshold,
+		Value:             value,
+		Message:           msg,
+		CreatedAt:         now,
+		RuleID:            rule.ID,
+		AIAnalysisEnabled: rule.AIAnalysisEnabled,
+		Analysis:          analysis,
 	}, nil
 }
 
@@ -490,7 +555,7 @@ func (s *service) ListAlerts(ctx context.Context, serverID string, limit int) ([
 	)
 	if serverID != "" {
 		rows, err = s.db.QueryContext(ctx,
-			`SELECT id, server_id, server_name, metric, operator, threshold, value, message, created_at
+			`SELECT `+alertColumns+`
 			 FROM anomaly_alerts
 			 WHERE server_id = ?
 			 ORDER BY created_at DESC, id
@@ -498,7 +563,7 @@ func (s *service) ListAlerts(ctx context.Context, serverID string, limit int) ([
 		)
 	} else {
 		rows, err = s.db.QueryContext(ctx,
-			`SELECT id, server_id, server_name, metric, operator, threshold, value, message, created_at
+			`SELECT `+alertColumns+`
 			 FROM anomaly_alerts
 			 ORDER BY created_at DESC, id
 			 LIMIT ?`, limit,
@@ -533,9 +598,10 @@ func scanRule(sc scanner) (*Rule, error) {
 	var r Rule
 	var serverID sql.NullString
 	var enabled int
+	var aiEnabled int
 	var createdStr string
 	if err := sc.Scan(
-		&r.ID, &r.Metric, &r.Operator, &r.Threshold, &serverID, &enabled, &createdStr,
+		&r.ID, &r.Metric, &r.Operator, &r.Threshold, &serverID, &enabled, &createdStr, &aiEnabled,
 	); err != nil {
 		return nil, err
 	}
@@ -544,6 +610,7 @@ func scanRule(sc scanner) (*Rule, error) {
 		r.ServerID = &v
 	}
 	r.Enabled = enabled != 0
+	r.AIAnalysisEnabled = aiEnabled != 0
 	created, err := time.Parse(time.RFC3339, createdStr)
 	if err != nil {
 		return nil, fmt.Errorf("anomaly: parse rule created_at: %w", err)
@@ -556,9 +623,12 @@ func scanRule(sc scanner) (*Rule, error) {
 func scanAlert(sc scanner) (*Alert, error) {
 	var a Alert
 	var createdStr string
+	var aiEnabled int
+	var status string
+	var body sql.NullString
 	if err := sc.Scan(
 		&a.ID, &a.ServerID, &a.ServerName, &a.Metric, &a.Operator,
-		&a.Threshold, &a.Value, &a.Message, &createdStr,
+		&a.Threshold, &a.Value, &a.Message, &createdStr, &a.RuleID, &aiEnabled, &status, &body,
 	); err != nil {
 		return nil, err
 	}
@@ -567,5 +637,7 @@ func scanAlert(sc scanner) (*Alert, error) {
 		return nil, fmt.Errorf("anomaly: parse alert created_at: %w", err)
 	}
 	a.CreatedAt = created
+	a.AIAnalysisEnabled = aiEnabled != 0
+	a.Analysis = decodeAnalysis(status, body.String)
 	return &a, nil
 }

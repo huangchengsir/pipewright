@@ -35,6 +35,8 @@ import (
 var (
 	// ErrEmptyRoot 表示构造时缓存根目录为空。
 	ErrEmptyRoot = errors.New("buildcache: empty root")
+	// ErrNoPayload means no nonempty regular file was archived. Existing cache is retained.
+	ErrNoPayload = errors.New("buildcache: no file payload")
 )
 
 // lockfileNames 是参与默认 key 推导的依赖锁文件名(命中工作区里这些文件就把其内容计入 hash)。
@@ -97,18 +99,19 @@ func (s *Store) Restore(ctx context.Context, key string, _ []string, workspace s
 	}
 	defer func() { _ = f.Close() }()
 
-	if err := extractTarGz(ctx, f, workspace); err != nil {
+	payload, err := extractTarGz(ctx, f, workspace)
+	if err != nil || ctx.Err() != nil {
 		// 归档损坏 / 解包中途失败 → 当作未命中(冷构建);残留的半截解包由后续构建覆盖,best-effort。
 		return false, nil
 	}
-	return true, nil
+	return payload > 0, nil
 }
 
 // Save 把 workspace 下 paths 指定的目录/文件打包成 tar.gz 存进缓存库(key 已存在则覆盖)。
 // paths 为相对工作区根的路径(如 node_modules、.m2/repository);越界(.. / 绝对)路径被跳过。
 // 不存在的路径跳过(首次构建可能还没生成某缓存目录,正常)。
 //
-// 返回 nil = 成功或 best-effort 跳过(无可缓存内容也算成功);仅在 key/workspace 非法时返回 error。
+// ErrNoPayload 表示无有效文件内容,不写空归档,也不覆盖已有缓存。
 // 写盘失败由调用方决定如何记日志:本方法把 I/O 错误透出供日志,但调用方应忽略它(不阻断构建)。
 func (s *Store) Save(ctx context.Context, key string, paths []string, workspace string) error {
 	if s == nil {
@@ -120,9 +123,12 @@ func (s *Store) Save(ctx context.Context, key string, paths []string, workspace 
 	if strings.TrimSpace(workspace) == "" {
 		return errors.New("buildcache: empty workspace")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	clean := cleanRelPaths(paths)
 	if len(clean) == 0 {
-		return nil // 无合法缓存路径 → 无操作(不致命)
+		return ErrNoPayload
 	}
 
 	dest := s.pathFor(key)
@@ -136,12 +142,19 @@ func (s *Store) Save(ctx context.Context, key string, paths []string, workspace 
 	tmpName := tmp.Name()
 	defer func() { _ = os.Remove(tmpName) }() // 成功路径已 rename 走,Remove 无害
 
-	if err := writeTarGz(ctx, tmp, workspace, clean); err != nil {
+	payload, err := writeTarGz(ctx, tmp, workspace, clean)
+	if err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("buildcache: write archive: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("buildcache: close temp: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if payload == 0 {
+		return ErrNoPayload
 	}
 	// 原子覆盖(rename 覆盖同名,Save 同 key 即最新依赖快照胜出)。
 	if err := os.Rename(tmpName, dest); err != nil {

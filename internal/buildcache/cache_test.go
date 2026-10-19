@@ -2,6 +2,7 @@ package buildcache
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -133,7 +134,7 @@ func TestSaveSkipsMissingAndEmpty(t *testing.T) {
 	}
 
 	// 全部为越界/空 → 无合法路径 → 无操作(不写归档,不报错)。
-	if err := s.Save(ctx, "k2", []string{"", "..", "/abs", "../escape"}, src); err != nil {
+	if err := s.Save(ctx, "k2", []string{"", "..", "/abs", "../escape"}, src); !errors.Is(err, ErrNoPayload) {
 		t.Fatalf("Save empty: %v", err)
 	}
 	if s.Has("k2") {

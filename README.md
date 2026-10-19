@@ -202,6 +202,8 @@ are stored only in the encrypted credential vault.
 | `PIPEWRIGHT_PAC_RUNTIME` | `1` forces pipeline-as-code on for **all** projects, ignoring the per-project toggle | off |
 | `PIPEWRIGHT_CHAIN_MAX_DEPTH` | Max pipeline-chaining depth (hard stop against runaway chains) | `5` |
 
+Maven script/toolchain builds with an enabled `.m2/repository` (or `.m2`) cache use the workspace repository, even with a script subdirectory. Explicit repository options win; empty/disabled cache settings leave commands unchanged. This does not configure Maven inside Dockerfile builds. See [build cache configuration](docs/build-cache.md).
+
 **Integrations**
 
 | Variable | Description | Default |
@@ -341,6 +343,14 @@ single static binary (cmd/pipewright)
 ├── internal/httpapi          the sole outward HTTP surface (~188 routes)
 └── web/                      Vue 3 frontend (embedded via go:embed)
 ```
+
+## MCP Integration
+
+MCP runs inside Pipewright on the same port at `/mcp`. Create project-scoped,
+expiring tokens in **Settings > MCP** for external AI clients to query and
+trigger existing pipelines, wait for results and inspect deployment records.
+Read-only is the default; human approvals remain required. See
+[MCP setup and security boundaries](docs/mcp.md).
 
 ## Project Status
 

@@ -31,7 +31,7 @@ func TestExtractRejectsTraversal(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 防穿越:前导 ../ 被锚到工作区根后中和,绝不写到工作区外(无论解包成功与否)。
-	_ = extractTarGz(context.Background(), bytes.NewReader(buf.Bytes()), dest)
+	_, _ = extractTarGz(context.Background(), bytes.NewReader(buf.Bytes()), dest)
 	if _, serr := os.Stat(filepath.Join(filepath.Dir(dest), "escape.txt")); !os.IsNotExist(serr) {
 		t.Errorf("escape file written outside workspace (err=%v)", serr)
 	}
@@ -54,7 +54,7 @@ func TestExtractNeutralizesAbsolutePath(t *testing.T) {
 
 	dest := filepath.Join(t.TempDir(), "ws")
 	_ = os.MkdirAll(dest, 0o755)
-	if err := extractTarGz(context.Background(), bytes.NewReader(buf.Bytes()), dest); err != nil {
+	if _, err := extractTarGz(context.Background(), bytes.NewReader(buf.Bytes()), dest); err != nil {
 		t.Fatalf("extract: %v", err)
 	}
 	if _, rerr := os.Stat(filepath.Join(dest, "abs", "file.txt")); rerr != nil {

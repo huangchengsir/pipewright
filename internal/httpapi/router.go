@@ -61,6 +61,8 @@ const contextKeySession contextKey = 1
 type Option func(*options)
 
 type options struct {
+	mcpHandler       http.Handler
+	mcpTokens        *auth.MCPTokenStore
 	opsChat          *opschat.Service
 	onboarding       onboardingStatusReader
 	vault            vault.Vault
@@ -107,6 +109,11 @@ type options struct {
 	proxy            proxy.Service
 	dnsProviders     dnsprovider.Service
 	previewEnvs      PreviewService
+}
+
+// WithMCP adds the embedded Bearer-authenticated MCP route and admin token management.
+func WithMCP(handler http.Handler, tokens *auth.MCPTokenStore) Option {
+	return func(o *options) { o.mcpHandler, o.mcpTokens = handler, tokens }
 }
 
 // WithArtifactStore 注入制品库(Story 8-16):挂载产物下载端点
@@ -413,6 +420,9 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 	// 解析请求 locale 并包装 writer,使 writeError 能按 UI 语言本地化错误消息
 	// (包装器转发 Flush/Hijack/Unwrap,不影响 SSE 日志流与 WS 终端)。
 	r.Use(localeMiddleware)
+	if o.mcpHandler != nil {
+		r.Handle("/mcp", o.mcpHandler)
+	}
 
 	r.Get("/healthz", handleHealthz)
 	// /version 公开只读:暴露构建版本元数据,供升级检查与运维探针使用(非敏感)。
@@ -453,6 +463,10 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 审计 Recorder(Story 1.4):传给既有敏感操作 handler,业务成功后追加审计行。
 		// 为 nil 时 handler 跳过审计(不阻断业务)。
 		aud := o.audit
+		mcpTokens := NewMCPTokenHandlers(o.mcpTokens, aud)
+		ar.Get("/settings/mcp/tokens", mcpTokens.List)
+		ar.Post("/settings/mcp/tokens", mcpTokens.Create)
+		ar.Delete("/settings/mcp/tokens/{id}", mcpTokens.Revoke)
 
 		// 检查更新:鉴权只读,查 GitHub 最新发布并与当前版本比对(GET 免 CSRF)。
 		ar.Get("/version/check", makeCheckUpdateHandler(updateChecker))
@@ -855,9 +869,9 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		an := o.anomaly
 		ar.Get("/anomaly/config", makeAnomalyConfigHandler(o.anomalyInterval, o.anomalyCooldown))
 		ar.Get("/anomaly/rules", makeListAnomalyRulesHandler(an))
-		ar.Post("/anomaly/rules", makeCreateAnomalyRuleHandler(an))
-		ar.Patch("/anomaly/rules/{id}", makeUpdateAnomalyRuleHandler(an))
-		ar.Delete("/anomaly/rules/{id}", makeDeleteAnomalyRuleHandler(an))
+		ar.Post("/anomaly/rules", makeCreateAnomalyRuleHandler(an, aud))
+		ar.Patch("/anomaly/rules/{id}", makeUpdateAnomalyRuleHandler(an, aud))
+		ar.Delete("/anomaly/rules/{id}", makeDeleteAnomalyRuleHandler(an, aud))
 		ar.Post("/anomaly/check", makeAnomalyCheckHandler(an))
 		ar.Get("/anomaly/alerts", makeListAnomalyAlertsHandler(an))
 		ar.Get("/metrics/history", makeMetricsHistoryHandler(o.metricsHistory))

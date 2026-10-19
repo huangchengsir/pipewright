@@ -172,6 +172,15 @@ func newService(db *sql.DB, opts ...Option) *service {
 }
 
 func (s *service) Create(ctx context.Context, projectID string, trigger Trigger) (*Run, error) {
+	idempotent := trigger.IdempotencyScope != "" || trigger.IdempotencyKey != "" || trigger.IdempotencyFingerprint != ""
+	if idempotent {
+		if !validIdempotency(trigger) {
+			return nil, ErrIdempotencyConflict
+		}
+		if original, found, err := s.idempotentRun(ctx, trigger); found || err != nil {
+			return original, err
+		}
+	}
 	projectID = strings.TrimSpace(projectID)
 	if projectID == "" {
 		return nil, ErrProjectNotFound
@@ -237,7 +246,31 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 
 	now := time.Now().UTC()
 	id := uuid.NewString()
-	_, err = s.db.ExecContext(ctx,
+	var insert interface {
+		ExecContext(context.Context, string, ...any) (sql.Result, error)
+	} = s.db
+	var tx *sql.Tx
+	if idempotent {
+		tx, err = s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		defer tx.Rollback()
+		_, err = tx.ExecContext(ctx, `INSERT INTO mcp_run_requests (scope, request_id, fingerprint, run_id) VALUES (?, ?, ?, ?)`, trigger.IdempotencyScope, trigger.IdempotencyKey, trigger.IdempotencyFingerprint, id)
+		if err != nil {
+			_ = tx.Rollback()
+			if store.IsUniqueErr(err) {
+				original, found, loadErr := s.idempotentRun(ctx, trigger)
+				if !found && loadErr == nil {
+					loadErr = ErrIdempotencyUnavailable
+				}
+				return original, loadErr
+			}
+			return nil, err
+		}
+		insert = tx
+	}
+	_, err = insert.ExecContext(ctx,
 		`INSERT INTO pipeline_runs
 		   (id, project_id, status, trigger_type, trigger_branch, trigger_commit, trigger_actor,
 		    resolved_environment, resolved_target_server_ids, params_json,
@@ -254,6 +287,16 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 		}
 		return nil, fmt.Errorf("run: insert run: %w", err)
 	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		// Once committed, finish the single enqueue attempt even if the caller
+		// disconnects. The tombstone already prevents any subsequent re-enqueue.
+		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		ctx = finishCtx
+	}
 
 	created, err := s.Get(ctx, id)
 	if err != nil {
@@ -263,6 +306,29 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 	s.enqueueMu.RLock()
 	fn := s.enqueue
 	s.enqueueMu.RUnlock()
+	if idempotent {
+		created.DispatchState = "unknown"
+		if fn == nil {
+			if err := s.rejectDispatch(ctx, created); err != nil {
+				return created, err
+			}
+			return created, ErrPoolStopped
+		}
+		if err := fn(id); err != nil {
+			if errors.Is(err, ErrQueueFull) || errors.Is(err, ErrPoolStopped) {
+				if persistErr := s.rejectDispatch(ctx, created); persistErr != nil {
+					return created, persistErr
+				}
+			}
+			return created, err
+		}
+		// Failure to record acknowledgement leaves a durable unknown, not a retry.
+		if _, err := s.db.ExecContext(ctx, `UPDATE mcp_run_requests SET dispatch_state = 'accepted' WHERE run_id = ?`, id); err != nil {
+			return created, err
+		}
+		created.DispatchState = "accepted"
+		return created, nil
+	}
 	if fn != nil {
 		if err := fn(id); err != nil {
 			// 入队失败(队列满/已停机):删除孤儿 queued 记录,失败返回避免留下永不调度的运行。
@@ -271,6 +337,88 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 		}
 	}
 	return created, nil
+}
+
+// Definitive rejection keeps the request tombstone, but cannot leave work queued forever.
+func (s *service) rejectDispatch(ctx context.Context, created *Run) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	finished := time.Now().UTC()
+	res, err := tx.ExecContext(ctx, `UPDATE pipeline_runs SET status = ?, finished_at = ? WHERE id = ? AND status = ?`, StatusFailed, finished.Format(time.RFC3339), created.ID, StatusQueued)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil || n == 0 {
+		return err // A caller which already started work is not a definite rejection.
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE mcp_run_requests SET dispatch_state = 'rejected' WHERE run_id = ?`, created.ID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	created.Status = StatusFailed
+	created.FinishedAt = &finished
+	created.DispatchState = "rejected"
+	s.bus.publish(Event{Kind: EventStatus, RunID: created.ID, Status: StatusFailed})
+	return nil
+}
+
+// LookupIdempotentRun checks durable identity without resolving mutable defaults or parameters.
+func (s *service) LookupIdempotentRun(ctx context.Context, t Trigger) (*Run, bool, error) {
+	if !validIdempotency(t) {
+		return nil, false, ErrIdempotencyConflict
+	}
+	return s.idempotentRun(ctx, t)
+}
+
+func validIdempotency(t Trigger) bool {
+	validKey := func(v string) bool {
+		if len(v) < 1 || len(v) > 128 {
+			return false
+		}
+		for _, c := range v {
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.' || c == ':') {
+				return false
+			}
+		}
+		return true
+	}
+	if !validKey(t.IdempotencyScope) || !validKey(t.IdempotencyKey) || len(t.IdempotencyFingerprint) != 64 {
+		return false
+	}
+	for _, c := range t.IdempotencyFingerprint {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *service) idempotentRun(ctx context.Context, t Trigger) (*Run, bool, error) {
+	var fingerprint, id, state string
+	err := s.db.QueryRowContext(ctx, `SELECT fingerprint, run_id, dispatch_state FROM mcp_run_requests WHERE scope = ? AND request_id = ?`, t.IdempotencyScope, t.IdempotencyKey).Scan(&fingerprint, &id, &state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if fingerprint != t.IdempotencyFingerprint {
+		return nil, true, ErrIdempotencyConflict
+	}
+	r, err := s.Get(ctx, id)
+	if errors.Is(err, ErrNotFound) {
+		return nil, true, ErrIdempotencyUnavailable
+	}
+	if r != nil {
+		r.DispatchState = state
+	}
+	return r, true, err
 }
 
 func (s *service) Get(ctx context.Context, id string) (*Run, error) {
@@ -292,9 +440,11 @@ func (s *service) Get(ctx context.Context, id string) (*Run, error) {
 		        pr.failure_log, pr.diagnosis_json, pr.params_json,
 		        pr.chain_source_run_id, pr.chain_depth,
 		        pr.resolved_environment, pr.resolved_target_server_ids,
-		        pr.spec_source, pr.spec_source_ref, pr.spec_source_file, pr.spec_source_fallback
+		        pr.spec_source, pr.spec_source_ref, pr.spec_source_file, pr.spec_source_fallback,
+		        COALESCE(mr.dispatch_state, '')
 		 FROM pipeline_runs pr
 		 LEFT JOIN projects p ON p.id = pr.project_id
+		 LEFT JOIN mcp_run_requests mr ON mr.run_id = pr.id
 		 WHERE pr.id = ?`, id,
 	).Scan(&r.ProjectID, &r.ProjectName, &r.Status,
 		&r.Trigger.Type, &r.Trigger.Branch, &r.Trigger.Commit, &r.Trigger.Actor,
@@ -302,7 +452,8 @@ func (s *service) Get(ctx context.Context, id string) (*Run, error) {
 		&failureLog, &diagnosisJSON, &paramsJSON,
 		&r.Trigger.ChainSourceRunID, &r.Trigger.ChainDepth,
 		&r.Trigger.ResolvedEnvironment, &targetIDsJSON,
-		&r.SpecSource.Source, &r.SpecSource.Ref, &r.SpecSource.File, &r.SpecSource.Fallback)
+		&r.SpecSource.Source, &r.SpecSource.Ref, &r.SpecSource.File, &r.SpecSource.Fallback,
+		&r.DispatchState)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound

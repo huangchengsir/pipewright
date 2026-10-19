@@ -51,7 +51,7 @@ func scriptSteps(settings *pipeline.Settings) []pipeline.PipelineStep {
 //
 // ordinal 是该步在整次运行步骤计划里的序号(已 StepRunning)。返回 nil=成功;
 // 非零退出 → ErrBuildFailed(调用方置 failed + SetFailureLog);ctx 取消 → run.ErrCanceled。
-func (b *Builder) runScriptStep(ctx context.Context, sink run.StepSink, ordinal int, step pipeline.PipelineStep, workspace string) error {
+func (b *Builder) runScriptStep(ctx context.Context, sink run.StepSink, ordinal int, step pipeline.PipelineStep, workspace string, cache ...jobCacheConfig) error {
 	onLine := b.lineSink(sink, ordinal)
 
 	// env:非 secret → 明文 K=V;secret → vault.Reveal 明文 K=V(注入容器,绝不回显值)。
@@ -68,6 +68,9 @@ func (b *Builder) runScriptStep(ctx context.Context, sink run.StepSink, ordinal 
 	// 宿主侧仍是 array(driver 不拼 host shell);用户命令永不被宿主 shell 解释(注入防护)。
 	script := "set -e\n" + strings.Join(step.Commands, "\n")
 	cmd := []string{"sh", "-c", script}
+	if b.buildCache != nil && len(cache) > 0 {
+		cmd = mavenCacheCommand(cmd, scriptWorkspaceMount, cache[0])
+	}
 
 	code, err := b.driver.RunToolchain(ctx, step.Image, workspace, workdir, env, cmd, step.Resource, onLine)
 	if err != nil && code < 0 {
@@ -95,7 +98,7 @@ func (b *Builder) runScriptStep(ctx context.Context, sink run.StepSink, ordinal 
 //
 // 重试(step.Retries>0):整步非零退出/容器启动失败时重跑,达上限(共 1+Retries 次尝试)才判失败。
 // run.ErrCanceled(取消)绝不重试。每次重试前再查一次 parent ctx。
-func (b *Builder) runScriptStepWithOpts(ctx context.Context, sink run.StepSink, ordinal int, step pipeline.PipelineStep, workspace string) error {
+func (b *Builder) runScriptStepWithOpts(ctx context.Context, sink run.StepSink, ordinal int, step pipeline.PipelineStep, workspace string, cache ...jobCacheConfig) error {
 	onLine := b.lineSink(sink, ordinal)
 	attempts := step.Retries + 1
 	if attempts < 1 {
@@ -117,7 +120,7 @@ func (b *Builder) runScriptStepWithOpts(ctx context.Context, sink run.StepSink, 
 		if step.TimeoutSeconds > 0 {
 			attemptCtx, cancel = context.WithTimeout(ctx, time.Duration(step.TimeoutSeconds)*time.Second)
 		}
-		err := b.runScriptStep(attemptCtx, sink, ordinal, step, workspace)
+		err := b.runScriptStep(attemptCtx, sink, ordinal, step, workspace, cache...)
 		timedOut := step.TimeoutSeconds > 0 && errors.Is(attemptCtx.Err(), context.DeadlineExceeded)
 		cancel()
 

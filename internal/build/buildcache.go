@@ -2,6 +2,8 @@ package build
 
 import (
 	"context"
+	"errors"
+	"path"
 	"strings"
 
 	"github.com/huangchengsir/pipewright/internal/buildcache"
@@ -26,6 +28,70 @@ type jobCacheConfig struct {
 	key     string   // 已渲染的 key 模板(空 = 用默认推导)
 }
 
+func mavenCacheEnabled(cc jobCacheConfig) bool {
+	if !cc.enabled {
+		return false
+	}
+	for _, rel := range cc.paths {
+		switch path.Clean(strings.TrimSpace(rel)) {
+		case ".m2", ".m2/repository":
+			return true
+		}
+	}
+	return false
+}
+
+// Only these workspace-relative cache locations opt in. User paths never enter shell source.
+func mavenCacheCommand(cmd []string, mount string, cc jobCacheConfig) []string {
+	if !mavenCacheEnabled(cc) {
+		return cmd
+	}
+	var repo string
+	switch mount {
+	case scriptWorkspaceMount:
+		repo = "/workspace/.m2/repository"
+	case "/src":
+		repo = "/src/.m2/repository"
+	default:
+		return cmd
+	}
+	// Evaluate inside the container to retain image-provided JVM options too. CLI
+	// properties still override JVM defaults; explicit env properties are left alone.
+	script := `pw_maven_repo_configured=
+pw_maven_dir="${MAVEN_BASEDIR:-$PWD}"
+pw_maven_depth=0
+while [ "$pw_maven_depth" -lt 64 ]; do
+  if [ -d "$pw_maven_dir/.mvn" ]; then
+    if [ -f "$pw_maven_dir/.mvn/jvm.config" ]; then
+      if [ -r "$pw_maven_dir/.mvn/jvm.config" ]; then
+        pw_maven_lines=0
+        while IFS= read -r pw_maven_line || [ -n "$pw_maven_line" ]; do
+          case "$pw_maven_line" in *maven.repo.local*) pw_maven_repo_configured=yes; break ;; esac
+          pw_maven_lines=$((pw_maven_lines + 1))
+          if [ "$pw_maven_lines" -ge 256 ]; then pw_maven_repo_configured=yes; break; fi
+        done < "$pw_maven_dir/.mvn/jvm.config"
+      else
+        pw_maven_repo_configured=yes
+      fi
+    fi
+    break
+  fi
+  if [ -n "${MAVEN_BASEDIR-}" ]; then break; fi
+  case "$pw_maven_dir" in ''|/) break ;; esac
+  pw_maven_dir="${pw_maven_dir%/*}"
+  pw_maven_depth=$((pw_maven_depth + 1))
+done
+if [ "$pw_maven_depth" -eq 64 ]; then pw_maven_repo_configured=yes; fi
+if [ "$pw_maven_repo_configured" != yes ]; then
+case "${MAVEN_OPTS-} ${MAVEN_ARGS-}" in
+  *maven.repo.local*) ;;
+  *) MAVEN_OPTS="-Dmaven.repo.local=` + repo + `${MAVEN_OPTS:+ $MAVEN_OPTS}"; export MAVEN_OPTS ;;
+esac
+fi
+exec "$@"`
+	return append([]string{"sh", "-c", script, "pipewright-maven-cache"}, cmd...)
+}
+
 // parseCacheConfig 从 job.Config 解析缓存配置(cachePaths 多行 + 可选 cacheKey 模板,渲染 {{参数}})。
 // 缺少 cachePaths 时继承启用的全局默认;显式空值禁用缓存。
 func parseCacheConfig(jb pipeline.Job, defaults ...pipeline.Cache) jobCacheConfig {
@@ -48,43 +114,54 @@ func parseCacheConfig(jb pipeline.Job, defaults ...pipeline.Cache) jobCacheConfi
 // restoreJobCache 恢复 job 的缓存到工作区(best-effort:未命中/失败=冷构建,只记日志)。
 // 缓存库未注入或 job 未配 cachePaths → 无操作。branch 用于默认 key 推导。
 func (b *Builder) restoreJobCache(ctx context.Context, rep dagrun.StageReporter, jb pipeline.Job, branch, workspace string, defaults ...pipeline.Cache) {
-	if b.buildCache == nil {
-		return
-	}
 	cc := parseCacheConfig(jb, defaults...)
-	if !cc.enabled {
+	b.restoreCache(ctx, mkLineLogger(ctx, rep), cc, branch, workspace)
+}
+
+func (b *Builder) restoreCache(ctx context.Context, log func(string, string), cc jobCacheConfig, branch, workspace string) {
+	if b.buildCache == nil || !cc.enabled || ctx.Err() != nil {
 		return
 	}
 	key := buildcache.DeriveKey(branch, cc.key, workspace)
 	hit, err := b.buildCache.Restore(ctx, key, cc.paths, workspace)
 	if err != nil {
 		// 仅输入非法才到这(理论上不会);当冷构建处理。
-		_ = rep.Log(ctx, streamStdout, "缓存恢复跳过(配置无效),本次冷构建")
+		log(streamStdout, "缓存恢复跳过(配置无效),本次冷构建")
 		return
 	}
 	if hit {
-		_ = rep.Log(ctx, streamStdout, "已恢复构建缓存(暖构建):"+joinPaths(cc.paths))
+		log(streamStdout, "已恢复构建缓存(暖构建):"+joinPaths(cc.paths))
 	} else {
-		_ = rep.Log(ctx, streamStdout, "未命中构建缓存(冷构建),构建后将保存:"+joinPaths(cc.paths))
+		log(streamStdout, "未命中构建缓存(冷构建),构建后将保存:"+joinPaths(cc.paths))
 	}
 }
 
 // saveJobCache 把 job 的缓存路径保存回缓存库(best-effort:保存失败只记日志,不阻断构建)。
 // 缓存库未注入或 job 未配 cachePaths → 无操作。
 func (b *Builder) saveJobCache(ctx context.Context, rep dagrun.StageReporter, jb pipeline.Job, branch, workspace string, defaults ...pipeline.Cache) {
-	if b.buildCache == nil {
-		return
-	}
 	cc := parseCacheConfig(jb, defaults...)
-	if !cc.enabled {
+	b.saveCache(ctx, mkLineLogger(ctx, rep), cc, branch, workspace)
+}
+
+func (b *Builder) saveCache(ctx context.Context, log func(string, string), cc jobCacheConfig, branch, workspace string) {
+	if b.buildCache == nil || !cc.enabled || ctx.Err() != nil {
 		return
 	}
 	key := buildcache.DeriveKey(branch, cc.key, workspace)
 	if err := b.buildCache.Save(ctx, key, cc.paths, workspace); err != nil {
-		_ = rep.Log(ctx, streamStderr, "构建缓存保存失败(不影响本次构建结果):"+err.Error())
+		if ctx.Err() != nil {
+			return
+		}
+		if errors.Is(err, buildcache.ErrNoPayload) {
+			log(streamStdout, "构建缓存无有效文件内容,跳过保存:"+joinPaths(cc.paths))
+			return
+		}
+		log(streamStderr, "构建缓存保存失败(不影响本次构建结果):"+err.Error())
 		return
 	}
-	_ = rep.Log(ctx, streamStdout, "已保存构建缓存:"+joinPaths(cc.paths))
+	if ctx.Err() == nil {
+		log(streamStdout, "已保存构建缓存:"+joinPaths(cc.paths))
+	}
 }
 
 // joinPaths 把缓存路径列表拼成一行日志(逗号分隔)。

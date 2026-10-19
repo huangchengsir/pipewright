@@ -110,6 +110,9 @@ func buildMessage(from string, to []string, payload Payload) []byte {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
+			if k == "aiAnalysis" {
+				continue
+			} // Already present in the notification body.
 			b.WriteString(k + ": " + payload.Fields[k] + "\r\n")
 		}
 	}

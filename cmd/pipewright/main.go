@@ -37,6 +37,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/httpapi"
 	"github.com/huangchengsir/pipewright/internal/library"
 	"github.com/huangchengsir/pipewright/internal/mask"
+	pmcp "github.com/huangchengsir/pipewright/internal/mcp"
 	"github.com/huangchengsir/pipewright/internal/metrics"
 	"github.com/huangchengsir/pipewright/internal/notify"
 	"github.com/huangchengsir/pipewright/internal/oauth"
@@ -571,15 +572,17 @@ func main() {
 	// 定时检测间隔:env PIPEWRIGHT_ANOMALY_INTERVAL(秒)覆盖,默认 60s;置 0 关闭定时(仅手动)。
 	// 在此提前算出(httpapi 经 WithAnomalyConfig 暴露给前端显示节奏 + 下方定时器复用)。
 	anomalyInterval := envDurationSeconds("PIPEWRIGHT_ANOMALY_INTERVAL", 60*time.Second)
+	metricsHist := metrics.New(st.DB)
 	anomalySvc := anomaly.New(st.DB, httpapi.NewAnomalyCollector(targetSvc),
 		anomaly.WithNotifier(httpapi.NewAnomalyNotifier(notifySvc)),
 		anomaly.WithCooldown(anomalyCooldown),
+		anomaly.WithAnalyzer(httpapi.NewAnomalyAnalyzer(aiSvc, targetSvc, credVault, metricsHist, opsMasker)),
 	)
+	defer anomalySvc.Close()
 
 	// 服务器指标时序历史(异常检测「看趋势」折线图数据源):后台采样器复用 6-1 采集周期性写样本,
 	// 按保留窗口清理。采样间隔 env PIPEWRIGHT_METRICS_SAMPLE_INTERVAL(秒,默认 60;0 关闭采样),
 	// 保留天数 env PIPEWRIGHT_METRICS_RETENTION_DAYS(默认 7)。
-	metricsHist := metrics.New(st.DB)
 	metricsSampleInterval := envDurationSeconds("PIPEWRIGHT_METRICS_SAMPLE_INTERVAL", 60*time.Second)
 	metricsRetentionDays := 7
 	if v := strings.TrimSpace(os.Getenv("PIPEWRIGHT_METRICS_RETENTION_DAYS")); v != "" {
@@ -595,9 +598,26 @@ func main() {
 	// state CSRF 短期内存绑会话。master key 未配置时涉及密钥的操作降级为明确错误(不 panic)。
 	oauthSvc := oauth.New(st.DB, credVault, &http.Client{Timeout: 10 * time.Second})
 
+	mcpTokens := auth.NewMCPTokenStore(st.DB)
+	mcpHandler, err := httpapi.NewMCPHandler(mcpTokens, pmcp.Dependencies{
+		Projects: projectSvc, Pipelines: pipelineSvc, Runs: runSvc,
+		Parameters: parameterSvc, Audit: auditRec, Masker: auditMasker,
+		RegisterSecrets: func(ctx context.Context) error {
+			if err := vault.RegisterMaskSecrets(ctx, credVault, auditMasker); err != nil {
+				return err
+			}
+			if registrar, ok := ai.NewOpsModel(aiSvc, auditMasker).(interface{ RegisterSecrets(context.Context) error }); ok {
+				return registrar.RegisterSecrets(ctx)
+			}
+			return nil
+		},
+	}, httpapi.MCPHTTPOptions{AllowedHosts: strings.Split(os.Getenv("PIPEWRIGHT_MCP_ALLOWED_HOSTS"), ",")})
+	if err != nil {
+		log.Fatalf("configure MCP: %v", err)
+	}
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithOnboarding(onboarding.New(st.DB, onboardingCapabilities)), httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc), httpapi.WithOpsChat(opsChatSvc)),
+		Handler:           httpapi.New(webFS, authSvc, httpapi.WithOnboarding(onboarding.New(st.DB, onboardingCapabilities)), httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc), httpapi.WithOpsChat(opsChatSvc), httpapi.WithMCP(mcpHandler, mcpTokens)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;

@@ -47,6 +47,7 @@ type DiagnoseInput struct {
 	StepName    string       // 失败步骤名(prompt 上下文;可空)
 	ProjectName string       // 项目名(prompt 上下文;可空)
 	Masker      *mask.Masker // 出网前脱敏器(已登记 run 相关 secret)
+	Monitoring  bool         // Fixed server-monitoring facts, not a failed build log.
 }
 
 // DiagnosisEvidence 是一条日志证据(取自**脱敏后**日志;绝无明文 secret)。
@@ -137,6 +138,7 @@ func (s *service) Diagnose(ctx context.Context, in DiagnoseInput) (*Diagnosis, e
 		}
 		apiKey = plain
 	}
+	masker.RegisterSecret(apiKey)
 
 	// ---- 出网前脱敏铁律:日志在进 prompt / 取证据前一律 Scrub ----
 	maskedLines := scrubLines(masker, in.FailureLog)
@@ -144,6 +146,9 @@ func (s *service) Diagnose(ctx context.Context, in DiagnoseInput) (*Diagnosis, e
 	maskedProject := masker.Scrub(in.ProjectName)
 
 	prompt := buildDiagnosePrompt(maskedLines, maskedStep, maskedProject)
+	if in.Monitoring {
+		prompt = buildMonitoringPrompt(maskedLines)
+	}
 
 	text, cerr := s.chat(ctx, provider, baseURL, cfg.Model, apiKey, prompt)
 	apiKey = "" // 明文用完即弃

@@ -73,6 +73,8 @@ const (
 
 // 领域错误。错误体不含敏感数据。
 var (
+	ErrIdempotencyConflict    = errors.New("run: idempotency request conflict")
+	ErrIdempotencyUnavailable = errors.New("run: original idempotent run unavailable")
 	// ErrNotFound 表示运行不存在。
 	ErrNotFound = errors.New("run: not found")
 	// ErrProjectNotFound 表示引用的项目不存在。
@@ -99,10 +101,14 @@ var (
 // 解析出的**运行内部元数据**(供 Epic 4 的 targets 扇出消费);它们**不进入**冻结的
 // run-detail DTO 输出(骨架所有权),仅持久化到 pipeline_runs 的内部列。
 type Trigger struct {
-	Type   string // webhook | manual
-	Branch string
-	Commit string
-	Actor  string
+	// Optional durable identity. Fingerprint covers caller input before defaults.
+	IdempotencyScope       string
+	IdempotencyKey         string
+	IdempotencyFingerprint string
+	Type                   string // webhook | manual
+	Branch                 string
+	Commit                 string
+	Actor                  string
 
 	// ResolvedEnvironment 是解析出的目标环境名(手动触发为空)。
 	ResolvedEnvironment string
@@ -144,15 +150,17 @@ type StepDecl struct {
 
 // Run 是一次流水线运行的领域模型。Steps 按 Ordinal 升序。
 type Run struct {
-	ID          string
-	ProjectID   string
-	ProjectName string // 冗余只读展示名(join projects),非持久列
-	Status      string
-	Trigger     Trigger
-	Steps       []Step
-	CreatedAt   time.Time
-	StartedAt   *time.Time
-	FinishedAt  *time.Time
+	// Only populated by idempotent Create; unknown must never cause re-enqueue.
+	DispatchState string
+	ID            string
+	ProjectID     string
+	ProjectName   string // 冗余只读展示名(join projects),非持久列
+	Status        string
+	Trigger       Trigger
+	Steps         []Step
+	CreatedAt     time.Time
+	StartedAt     *time.Time
+	FinishedAt    *time.Time
 
 	// FailureLog 是失败日志原文(脱敏前;桩 runner 合成,3-3/3-6 落地换真实日志)。
 	// 空串 = 无失败日志。**绝不**原样出网:出网前必过 mask.Masker(诊断在 ai 层脱敏)。

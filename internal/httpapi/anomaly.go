@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/huangchengsir/pipewright/internal/anomaly"
+	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/notify"
 	"github.com/huangchengsir/pipewright/internal/target"
 )
@@ -41,32 +42,74 @@ func NewAnomalyCollector(servers target.Service) anomaly.MetricsCollector {
 // **全局路由**(projectID 空,异常非 run/项目维度)发到各配置渠道。让 anomaly 包不 import notify
 // (仿 NewAnomalyCollector 解耦);未配置任何路由 → RouteEventForProject 内部 best-effort 不发。
 func NewAnomalyNotifier(notifySvc notify.Service) anomaly.Notifier {
-	return anomalyNotifier{notify: notifySvc}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &anomalyNotifier{notify: notifySvc, context: ctx, cancel: cancel, drained: make(chan struct{})}
 }
 
 // anomalyNotifier 把 anomaly.Alert 映射为通知事件并经渠道发送。
-type anomalyNotifier struct{ notify notify.Service }
+type anomalyNotifier struct {
+	notify  notify.Service
+	context context.Context
+	cancel  context.CancelFunc
+	mu      sync.Mutex
+	wg      sync.WaitGroup
+	closed  bool
+	drained chan struct{}
+}
 
-// NotifyAlert 异步发一次告警通知(fire-and-forget):不阻塞检测主流程(手动检测的 HTTP 响应 /
+// NotifyAlert 异步发一次告警通知:不阻塞检测主流程(手动检测的 HTTP 响应 /
 // 定时检测的 goroutine 都不等慢渠道)。用独立 ctx + 超时,失败仅记日志(best-effort,NFR-10)。
-func (n anomalyNotifier) NotifyAlert(ctx context.Context, a *anomaly.Alert) {
+func (n *anomalyNotifier) NotifyAlert(_ context.Context, a *anomaly.Alert) {
 	if n.notify == nil || a == nil {
 		return
 	}
 	// TemplateVars 复用既有占位:Project=服务器名(标题渲染为「[<服务器>] 异常检测」),
 	// Status=人读告警文案(如「磁盘使用率 92.3% > 1%」,正文/字段透出)。
 	vars := notify.TemplateVars{
-		Project: a.ServerName,
-		Status:  a.Message,
-		Event:   notify.EventAnomalyDetected,
+		Project:    a.ServerName,
+		Status:     a.Message,
+		Event:      notify.EventAnomalyDetected,
+		AIAnalysis: anomaly.AnalysisText(a.Analysis),
 	}
+	id := a.ID
+	n.mu.Lock()
+	if n.closed {
+		n.mu.Unlock()
+		return
+	}
+	n.wg.Add(1)
+	n.mu.Unlock()
 	go func() {
-		sendCtx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		defer n.wg.Done()
+		sendCtx, cancel := context.WithTimeout(n.context, 12*time.Second)
 		defer cancel()
 		if err := n.notify.RouteEventForProject(sendCtx, "", notify.EventAnomalyDetected, vars); err != nil {
-			log.Printf("[anomaly] 告警 %s 通知 best-effort 失败:%v", a.ID, err)
+			log.Printf("[anomaly] 告警 %s 通知 best-effort 失败:%v", id, err)
 		}
 	}()
+}
+
+func (n *anomalyNotifier) Drain(ctx context.Context) error {
+	n.mu.Lock()
+	if !n.closed {
+		// Stop registration before waiting, so no new job can race Wait.
+		n.closed = true
+		go func() {
+			n.wg.Wait()
+			close(n.drained)
+		}()
+	}
+	n.mu.Unlock()
+	stop := context.AfterFunc(ctx, n.cancel)
+	defer stop()
+	select {
+	case <-n.drained:
+		n.cancel()
+		return nil
+	case <-ctx.Done():
+		n.cancel()
+		return ctx.Err()
+	}
 }
 
 // metricsCollector 是 anomaly.MetricsCollector 的 httpapi 适配:复用 6-1 的 collectServerMetrics
@@ -156,51 +199,57 @@ func snapshotFromMetricsDTO(id, name string, dto serverMetricsDTO) anomaly.Serve
 
 // anomalyRuleDTO 是规则对外响应体(冻结契约;camelCase)。serverId 为 null 表示全局。
 type anomalyRuleDTO struct {
-	ID        string  `json:"id"`
-	Metric    string  `json:"metric"`
-	Operator  string  `json:"operator"`
-	Threshold float64 `json:"threshold"`
-	ServerID  *string `json:"serverId"`
-	Enabled   bool    `json:"enabled"`
-	CreatedAt string  `json:"createdAt"`
+	ID                string  `json:"id"`
+	Metric            string  `json:"metric"`
+	Operator          string  `json:"operator"`
+	Threshold         float64 `json:"threshold"`
+	ServerID          *string `json:"serverId"`
+	Enabled           bool    `json:"enabled"`
+	AIAnalysisEnabled bool    `json:"aiAnalysisEnabled"`
+	CreatedAt         string  `json:"createdAt"`
 }
 
 func toRuleDTO(r *anomaly.Rule) anomalyRuleDTO {
 	return anomalyRuleDTO{
-		ID:        r.ID,
-		Metric:    r.Metric,
-		Operator:  r.Operator,
-		Threshold: r.Threshold,
-		ServerID:  r.ServerID,
-		Enabled:   r.Enabled,
-		CreatedAt: r.CreatedAt.UTC().Format(time.RFC3339),
+		ID:                r.ID,
+		Metric:            r.Metric,
+		Operator:          r.Operator,
+		Threshold:         r.Threshold,
+		ServerID:          r.ServerID,
+		Enabled:           r.Enabled,
+		AIAnalysisEnabled: r.AIAnalysisEnabled,
+		CreatedAt:         r.CreatedAt.UTC().Format(time.RFC3339),
 	}
 }
 
 // anomalyAlertDTO 是告警对外响应体(冻结契约)。
 type anomalyAlertDTO struct {
-	ID         string  `json:"id"`
-	ServerID   string  `json:"serverId"`
-	ServerName string  `json:"serverName"`
-	Metric     string  `json:"metric"`
-	Operator   string  `json:"operator"`
-	Threshold  float64 `json:"threshold"`
-	Value      float64 `json:"value"`
-	Message    string  `json:"message"`
-	At         string  `json:"at"`
+	ID                string            `json:"id"`
+	ServerID          string            `json:"serverId"`
+	ServerName        string            `json:"serverName"`
+	Metric            string            `json:"metric"`
+	Operator          string            `json:"operator"`
+	Threshold         float64           `json:"threshold"`
+	Value             float64           `json:"value"`
+	Message           string            `json:"message"`
+	At                string            `json:"at"`
+	AIAnalysisEnabled bool              `json:"aiAnalysisEnabled"`
+	Analysis          *anomaly.Analysis `json:"analysis"`
 }
 
 func toAlertDTO(a *anomaly.Alert) anomalyAlertDTO {
 	return anomalyAlertDTO{
-		ID:         a.ID,
-		ServerID:   a.ServerID,
-		ServerName: a.ServerName,
-		Metric:     a.Metric,
-		Operator:   a.Operator,
-		Threshold:  a.Threshold,
-		Value:      a.Value,
-		Message:    a.Message,
-		At:         a.CreatedAt.UTC().Format(time.RFC3339),
+		ID:                a.ID,
+		ServerID:          a.ServerID,
+		ServerName:        a.ServerName,
+		Metric:            a.Metric,
+		Operator:          a.Operator,
+		Threshold:         a.Threshold,
+		Value:             a.Value,
+		Message:           a.Message,
+		At:                a.CreatedAt.UTC().Format(time.RFC3339),
+		AIAnalysisEnabled: a.AIAnalysisEnabled,
+		Analysis:          a.Analysis,
 	}
 }
 
@@ -242,7 +291,7 @@ func makeListAnomalyRulesHandler(svc anomaly.Service) http.HandlerFunc {
 
 // makeCreateAnomalyRuleHandler 返回 POST /api/anomaly/rules(auth + CSRF)。
 // metric/operator 枚举非法 → 400 invalid_rule。serverId 省略/空/null → 全局规则。
-func makeCreateAnomalyRuleHandler(svc anomaly.Service) http.HandlerFunc {
+func makeCreateAnomalyRuleHandler(svc anomaly.Service, aud audit.Recorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if svc == nil {
 			writeError(w, http.StatusServiceUnavailable, "internal", "异常检测服务未初始化")
@@ -250,11 +299,12 @@ func makeCreateAnomalyRuleHandler(svc anomaly.Service) http.HandlerFunc {
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
 		var req struct {
-			Metric    string  `json:"metric"`
-			Operator  string  `json:"operator"`
-			Threshold float64 `json:"threshold"`
-			ServerID  *string `json:"serverId"`
-			Enabled   *bool   `json:"enabled"`
+			Metric            string  `json:"metric"`
+			Operator          string  `json:"operator"`
+			Threshold         float64 `json:"threshold"`
+			ServerID          *string `json:"serverId"`
+			Enabled           *bool   `json:"enabled"`
+			AIAnalysisEnabled *bool   `json:"aiAnalysisEnabled"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
@@ -266,23 +316,25 @@ func makeCreateAnomalyRuleHandler(svc anomaly.Service) http.HandlerFunc {
 			enabled = *req.Enabled
 		}
 		rule, err := svc.CreateRule(r.Context(), anomaly.CreateRuleInput{
-			Metric:    req.Metric,
-			Operator:  req.Operator,
-			Threshold: req.Threshold,
-			ServerID:  req.ServerID,
-			Enabled:   enabled,
+			Metric:            req.Metric,
+			Operator:          req.Operator,
+			Threshold:         req.Threshold,
+			ServerID:          req.ServerID,
+			Enabled:           enabled,
+			AIAnalysisEnabled: req.AIAnalysisEnabled,
 		})
 		if err != nil {
 			writeAnomalyError(w, err)
 			return
 		}
+		recordAnomalyRule(r, aud, "anomaly_rule.create", rule)
 		writeJSON(w, http.StatusCreated, toRuleDTO(rule))
 	}
 }
 
 // makeUpdateAnomalyRuleHandler 返回 PATCH /api/anomaly/rules/{id}(auth + CSRF):
-// 整体更新规则(metric/operator/threshold/scope/enabled);不存在 → 404。enabled 省略 → 默认启用。
-func makeUpdateAnomalyRuleHandler(svc anomaly.Service) http.HandlerFunc {
+// 整体更新规则;开关省略时保留，不存在 → 404。
+func makeUpdateAnomalyRuleHandler(svc anomaly.Service, aud audit.Recorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if svc == nil {
 			writeError(w, http.StatusServiceUnavailable, "internal", "异常检测服务未初始化")
@@ -290,11 +342,12 @@ func makeUpdateAnomalyRuleHandler(svc anomaly.Service) http.HandlerFunc {
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
 		var req struct {
-			Metric    string  `json:"metric"`
-			Operator  string  `json:"operator"`
-			Threshold float64 `json:"threshold"`
-			ServerID  *string `json:"serverId"`
-			Enabled   *bool   `json:"enabled"`
+			Metric            string  `json:"metric"`
+			Operator          string  `json:"operator"`
+			Threshold         float64 `json:"threshold"`
+			ServerID          *string `json:"serverId"`
+			Enabled           *bool   `json:"enabled"`
+			AIAnalysisEnabled *bool   `json:"aiAnalysisEnabled"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
@@ -305,16 +358,19 @@ func makeUpdateAnomalyRuleHandler(svc anomaly.Service) http.HandlerFunc {
 			enabled = *req.Enabled
 		}
 		rule, err := svc.UpdateRule(r.Context(), chi.URLParam(r, "id"), anomaly.CreateRuleInput{
-			Metric:    req.Metric,
-			Operator:  req.Operator,
-			Threshold: req.Threshold,
-			ServerID:  req.ServerID,
-			Enabled:   enabled,
+			Metric:            req.Metric,
+			Operator:          req.Operator,
+			Threshold:         req.Threshold,
+			ServerID:          req.ServerID,
+			Enabled:           enabled,
+			AIAnalysisEnabled: req.AIAnalysisEnabled,
+			PreserveEnabled:   req.Enabled == nil,
 		})
 		if err != nil {
 			writeAnomalyError(w, err)
 			return
 		}
+		recordAnomalyRule(r, aud, "anomaly_rule.update", rule)
 		writeJSON(w, http.StatusOK, toRuleDTO(rule))
 	}
 }
@@ -331,7 +387,7 @@ func makeAnomalyConfigHandler(intervalSec, cooldownSec int) http.HandlerFunc {
 }
 
 // makeDeleteAnomalyRuleHandler 返回 DELETE /api/anomaly/rules/{id}(auth + CSRF)。
-func makeDeleteAnomalyRuleHandler(svc anomaly.Service) http.HandlerFunc {
+func makeDeleteAnomalyRuleHandler(svc anomaly.Service, aud audit.Recorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if svc == nil {
 			writeError(w, http.StatusServiceUnavailable, "internal", "异常检测服务未初始化")
@@ -341,8 +397,13 @@ func makeDeleteAnomalyRuleHandler(svc anomaly.Service) http.HandlerFunc {
 			writeAnomalyError(w, err)
 			return
 		}
+		recordAudit(r.Context(), aud, audit.Entry{Actor: auditActor, Action: "anomaly_rule.delete", TargetType: "anomaly_rule", TargetID: chi.URLParam(r, "id"), IP: clientIP(r)})
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+func recordAnomalyRule(r *http.Request, aud audit.Recorder, action string, rule *anomaly.Rule) {
+	recordAudit(r.Context(), aud, audit.Entry{Actor: auditActor, Action: action, TargetType: "anomaly_rule", TargetID: rule.ID, IP: clientIP(r), Detail: map[string]any{"metric": rule.Metric, "enabled": rule.Enabled, "aiAnalysisEnabled": rule.AIAnalysisEnabled}})
 }
 
 // makeAnomalyCheckHandler 返回 POST /api/anomaly/check(auth + CSRF)。

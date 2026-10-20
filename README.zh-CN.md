@@ -187,6 +187,8 @@ make build          # 前端构建 → go:embed → 单个静态二进制 ./pipe
 | `PIPEWRIGHT_PAC_RUNTIME` | `1` 对**所有项目**强开流水线即代码,无视各项目开关 | 关 |
 | `PIPEWRIGHT_CHAIN_MAX_DEPTH` | 流水线串联深度上限(防无限链的硬兜底) | `5` |
 
+Maven 脚本或工具链构建启用 `.m2/repository`（或 `.m2`）缓存后，使用工作区根目录的仓库，不受脚本子目录影响。显式仓库选项优先，空值或禁用缓存不改变命令；不影响 Dockerfile 内的 Maven 构建。详见[构建缓存配置](docs/build-cache.md)。
+
 **集成**
 
 | 变量 | 说明 | 默认 |
@@ -326,6 +328,13 @@ stages:
 ├── internal/httpapi          唯一对外 HTTP 面(约 188 条路由)
 └── web/                      Vue3 前端(go:embed 内嵌)
 ```
+
+## MCP 接入
+
+MCP 与 Pipewright 本体同进程、同端口启动，入口 `/mcp`。在「设置 > MCP」创建有
+有效期的项目级令牌，可供外部 AI 客户端查询、触发现有流水线、等待运行及查看各机
+部署记录。默认只读，触发需显式授权，人工审批不可绕过。接入方式与安全边界见
+[MCP 文档](docs/mcp.md)。
 
 ## 开发状态
 

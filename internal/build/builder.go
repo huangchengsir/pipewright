@@ -264,12 +264,25 @@ func (b *Builder) Run(ctx context.Context, r *run.Run, sink run.StepSink) error 
 	}
 	buildConfig := settings.Build
 	buildConfig.Vars = projectBuildVars(settings, r.Trigger.ResolvedEnvironment)
+	cc := parseCacheConfig(pipeline.Job{}, buildConfig.Cache)
+	if buildConfig.ArtifactType != pipeline.ArtifactJAR && !mavenCacheEnabled(cc) {
+		cc = jobCacheConfig{}
+	}
+	if buildConfig.ArtifactType == pipeline.ArtifactJAR {
+		b.restoreCache(ctx, b.lineSink(sink, 1), cc, r.Trigger.Branch, workspace)
+	}
 	localTag, artifact, berr := b.build(ctx, sink, 1, proj, buildConfig, workspace, commitTag)
 	if berr != nil {
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return b.cancelAt(ctx, sink, 1)
 		}
 		return b.failStep(ctx, sink, 1, "构建失败:"+berr.Error())
+	}
+	if ctx.Err() != nil {
+		return b.cancelAt(ctx, sink, 1)
+	}
+	if buildConfig.ArtifactType == pipeline.ArtifactJAR {
+		b.saveCache(ctx, b.lineSink(sink, 1), cc, r.Trigger.Branch, workspace)
 	}
 	if err := sink.StepDone(ctx, 1, run.StepSuccess); err != nil {
 		return err
@@ -318,13 +331,15 @@ func (b *Builder) Run(ctx context.Context, r *run.Run, sink run.StepSink) error 
 			return err
 		}
 		cs.Env = scriptEnv(settings, r.Trigger.ResolvedEnvironment, r.Trigger.Params, nil, cs.Env)
-		serr := b.scriptEvidenceBuilder(sink).runScriptStep(ctx, sink, ordinal, cs, workspace)
+		b.restoreCache(ctx, b.lineSink(sink, ordinal), cc, r.Trigger.Branch, workspace)
+		serr := b.scriptEvidenceBuilder(sink).runScriptStep(ctx, sink, ordinal, cs, workspace, cc)
 		if serr != nil {
 			if errors.Is(serr, run.ErrCanceled) || errors.Is(ctx.Err(), context.Canceled) {
 				return b.cancelAt(ctx, sink, ordinal)
 			}
 			return b.failStep(ctx, sink, ordinal, "自定义步骤「"+cs.Name+"」失败")
 		}
+		b.saveCache(ctx, b.lineSink(sink, ordinal), cc, r.Trigger.Branch, workspace)
 		if err := sink.StepDone(ctx, ordinal, run.StepSuccess); err != nil {
 			return err
 		}
@@ -446,6 +461,9 @@ func (b *Builder) build(ctx context.Context, sink run.StepSink, ordinal int, pro
 		}
 		env := b.buildEnv(cfg.Vars) // 工具链构建经 -e 注入(secret 回显只列 key)
 		buildCmd := toolchainBuildCmd(cfg.ArtifactType)
+		if b.buildCache != nil && cfg.ArtifactType == pipeline.ArtifactJAR {
+			buildCmd = mavenCacheCommand(buildCmd, "/src", parseCacheConfig(pipeline.Job{}, cfg.Cache))
+		}
 		run.RecordExecution(sink, run.ExecutionReal)
 		code, err := b.driver.RunToolchain(ctx, image, workspace, "/src", env, buildCmd, pipeline.Resource{}, onLine)
 		if err != nil && code < 0 {
@@ -454,7 +472,11 @@ func (b *Builder) build(ctx context.Context, sink run.StepSink, ordinal int, pro
 		if code != 0 {
 			return "", nil, ErrBuildFailed
 		}
-		art := b.locateFileArtifact(cfg.ArtifactType, slug, workspace, onLine)
+		var cachePaths []string
+		if b.buildCache != nil && cfg.Cache.Enabled {
+			cachePaths = cfg.Cache.Paths
+		}
+		art := b.locateFileArtifact(cfg.ArtifactType, slug, workspace, onLine, cachePaths...)
 		return "", art, nil
 
 	default:
@@ -579,10 +601,10 @@ func (b *Builder) revealRegistryCred(credID string) (string, string) {
 
 // locateFileArtifact 在工作区定位 jar/dist 产物文件/目录,算 size,构造产物。定位不到时
 // 退化为工作区根引用、size=0(产物仍 emit,不致命)。
-func (b *Builder) locateFileArtifact(artifactType, slug, workspace string, onLine func(stream, line string)) *run.Artifact {
+func (b *Builder) locateFileArtifact(artifactType, slug, workspace string, onLine func(stream, line string), cachePaths ...string) *run.Artifact {
 	switch artifactType {
 	case pipeline.ArtifactJAR:
-		if p := findFirst(workspace, ".jar"); p != "" {
+		if p := findBuildJAR(workspace, cachePaths); p != "" {
 			size := fileSize(p)
 			onLine(streamStdout, "产物:"+filepath.Base(p)+"("+itoa(size)+" bytes)")
 			art := &run.Artifact{
@@ -723,20 +745,103 @@ func slugify(s string) string {
 	return out
 }
 
-// findFirst 递归查工作区下首个以 suffix 结尾的文件,返回绝对路径(未找到 → "")。
-func findFirst(root, suffix string) string {
-	var found string
-	_ = filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
-		if err != nil || found != "" || info == nil {
+// Search module outputs, not arbitrary dependency JARs. Breadth-first traversal
+// prefers conventional outputs, retaining recursive discovery outside cache roots.
+func findBuildJAR(root string, cachePaths []string) string {
+	cacheDirs := make(map[string]bool, len(cachePaths))
+	for _, rel := range cachePaths {
+		clean := filepath.Clean(filepath.FromSlash(strings.TrimSpace(rel)))
+		if filepath.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			continue
+		}
+		cacheDirs[clean] = true
+	}
+	isCache := func(dir string) bool {
+		rel, err := filepath.Rel(root, dir)
+		return err == nil && cacheDirs[rel]
+	}
+	for dirs := []string{root}; len(dirs) > 0; {
+		dir := dirs[0]
+		dirs = dirs[1:]
+		if isCache(dir) {
+			continue
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		var output string
+		for _, entry := range entries {
+			full := filepath.Join(dir, entry.Name())
+			if !entry.IsDir() || isCache(full) {
+				continue
+			}
+			switch entry.Name() {
+			case ".git", ".m2", ".gradle", ".cache", "node_modules", "src", "test", "tests", "buildSrc":
+				continue
+			case "target":
+				if jar := firstOutputJAR(full); jar != "" {
+					output = jar
+				}
+			case "build":
+				libs := filepath.Join(full, "libs")
+				if output == "" && !isCache(libs) {
+					output = firstOutputJAR(libs)
+				}
+			default:
+				dirs = append(dirs, full)
+			}
+		}
+		if output != "" {
+			return output
+		}
+	}
+	var fallback string
+	_ = filepath.WalkDir(root, func(dir string, entry os.DirEntry, err error) error {
+		if err != nil || !entry.IsDir() {
 			return nil
 		}
-		if !info.IsDir() && strings.HasSuffix(info.Name(), suffix) {
-			found = p
+		if isCache(dir) {
 			return filepath.SkipDir
+		}
+		if dir != root {
+			switch entry.Name() {
+			case ".git", ".m2", ".gradle", ".cache", "node_modules":
+				return filepath.SkipDir
+			}
+		}
+		if jar := firstOutputJAR(dir); jar != "" {
+			fallback = jar
+			return filepath.SkipAll
 		}
 		return nil
 	})
-	return found
+	return fallback
+}
+
+func firstOutputJAR(dir string) string {
+	info, err := os.Lstat(dir)
+	if err != nil || !info.IsDir() {
+		return ""
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, entry := range entries {
+		name := strings.ToLower(entry.Name())
+		if !entry.Type().IsRegular() || !strings.HasSuffix(name, ".jar") || strings.HasPrefix(name, "original-") {
+			continue
+		}
+		auxiliary := false
+		for _, suffix := range []string{"-sources.jar", "-source.jar", "-javadoc.jar", "-tests.jar", "-test.jar", "-test-fixtures.jar", "-plain.jar"} {
+			if strings.HasSuffix(name, suffix) {
+				auxiliary = true
+				break
+			}
+		}
+		if !auxiliary {
+			return filepath.Join(dir, entry.Name())
+		}
+	}
+	return ""
 }
 
 // fileSize 取文件字节大小(失败 → 0)。

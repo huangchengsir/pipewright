@@ -90,6 +90,34 @@ func TestAnomalyRuleCRUD(t *testing.T) {
 	}
 }
 
+func TestAnomalyAIFlagDefaultsPreservesAndRequiresCSRF(t *testing.T) {
+	srv, client, csrf := setupAnomalyAPI(t, linuxLikeDialer())
+	code, old := createRuleAPI(t, client, srv.URL, csrf, `{"metric":"memory","operator":"gt","threshold":80,"enabled":false}`)
+	if code != 201 || old["aiAnalysisEnabled"] != false {
+		t.Fatalf("default: %d %+v", code, old)
+	}
+	id := old["id"].(string)
+	path := srv.URL + "/api/anomaly/rules/" + id
+	resp := doJSON(t, client, http.MethodPatch, path, csrf, `{"metric":"memory","operator":"gt","threshold":80,"aiAnalysisEnabled":true}`)
+	var updated map[string]any
+	json.NewDecoder(resp.Body).Decode(&updated)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || updated["enabled"] != false || updated["aiAnalysisEnabled"] != true {
+		t.Fatalf("enable AI accidentally resumed rule: %+v", updated)
+	}
+	resp = doJSON(t, client, http.MethodPatch, path, csrf, `{"metric":"memory","operator":"gt","threshold":81}`)
+	json.NewDecoder(resp.Body).Decode(&updated)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || updated["enabled"] != false || updated["aiAnalysisEnabled"] != true {
+		t.Fatalf("old client cleared AI/resumed rule: %+v", updated)
+	}
+	resp = doJSON(t, client, http.MethodPatch, path, "", `{"metric":"memory","operator":"gt","threshold":80,"aiAnalysisEnabled":false}`)
+	resp.Body.Close()
+	if resp.StatusCode != 403 {
+		t.Fatal("write without CSRF accepted")
+	}
+}
+
 func TestAnomalyRuleInvalidEnum(t *testing.T) {
 	srv, client, csrf := setupAnomalyAPI(t, linuxLikeDialer())
 	code, body := createRuleAPI(t, client, srv.URL, csrf, `{"metric":"bogus","operator":"gt","threshold":90}`)

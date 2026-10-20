@@ -69,6 +69,7 @@ type TemplateVars struct {
 	DurationMs   string
 	RunID        string
 	ErrorSummary string
+	AIAnalysis   string // Sanitized monitoring analysis, included only with anomaly notifications.
 	// ActionURL 是一次性操作链接(目前用于 approval_required 事件的签名审批链接);
 	// 空 = 该事件无操作链接。渲染时占位名 {{actionUrl}};并透出到 Payload.Fields["审批链接"]/正文。
 	ActionURL string
@@ -89,6 +90,7 @@ func (v TemplateVars) asMap() map[string]string {
 		"runId":        v.RunID,
 		"errorSummary": v.ErrorSummary,
 		"actionUrl":    v.ActionURL,
+		"aiAnalysis":   v.AIAnalysis,
 	}
 }
 
@@ -263,10 +265,13 @@ func (s *service) DeleteTemplate(ctx context.Context, id string) error {
 // 查最具体匹配模板(channelID 精确 > 该事件通用 > 无)→ 纯文本替换 → Payload。
 // 无匹配 → 平台默认(EventPayload,5-2 行为不变)。绝不执行用户模板(无 RCE)。
 func (s *service) RenderPayload(ctx context.Context, event, channelID string, vars TemplateVars) Payload {
+	if event != EventAnomalyDetected {
+		vars.AIAnalysis = ""
+	}
 	tpl := s.matchTemplate(ctx, event, channelID)
 	if tpl == nil {
 		// 无匹配模板:回平台默认(行为向后兼容 5-2)。
-		return s.defaultPayload(ctx, event, vars)
+		return withAlertAnalysis(event, s.defaultPayload(ctx, event, vars), vars)
 	}
 
 	m := vars.asMap()
@@ -278,7 +283,24 @@ func (s *service) RenderPayload(ctx context.Context, event, channelID string, va
 		title = s.defaultPayload(ctx, event, vars).Title
 	}
 	// 自定义模板正文是用户文本(不翻译),但 Lang 仍要带上,供飞书/邮件本地化字段标签与标题。
-	return Payload{Title: title, Body: body, Fields: varsFields(vars), Lang: s.notifyLanguage(ctx)}
+	return withAlertAnalysis(event, Payload{Title: title, Body: body, Fields: varsFields(vars), Lang: s.notifyLanguage(ctx)}, vars)
+}
+
+func withAlertAnalysis(event string, p Payload, vars TemplateVars) Payload {
+	if event != EventAnomalyDetected || strings.TrimSpace(vars.AIAnalysis) == "" {
+		return p
+	}
+	if p.Fields == nil {
+		p.Fields = map[string]string{}
+	}
+	p.Fields["aiAnalysis"] = vars.AIAnalysis
+	if alert := strings.TrimSpace(vars.Status); alert != "" && !strings.Contains(p.Body, alert) {
+		p.Body = strings.TrimSpace(p.Body) + "\n\n" + alert
+	}
+	if !strings.Contains(p.Body, vars.AIAnalysis) {
+		p.Body = strings.TrimSpace(p.Body) + "\n\n" + vars.AIAnalysis
+	}
+	return p
 }
 
 // defaultPayload 用 TemplateVars 还原 EventPayload 入参,产出平台默认 Payload(按通知语言本地化)。

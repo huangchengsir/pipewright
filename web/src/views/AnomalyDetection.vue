@@ -32,6 +32,7 @@ import EmptyState from '../components/ui/EmptyState.vue'
 import ErrorState from '../components/ui/ErrorState.vue'
 import SkeletonBlock from '../components/ui/SkeletonBlock.vue'
 import MetricTrendChart from '../components/metrics/MetricTrendChart.vue'
+import AnomalyAnalysis from '../components/anomaly/AnomalyAnalysis.vue'
 
 type LoadState = 'idle' | 'loading' | 'error'
 
@@ -51,11 +52,15 @@ const form = ref<{
   operator: AnomalyOperator
   threshold: number
   serverId: string // '' = global
+  enabled: boolean
+  aiAnalysisEnabled: boolean
 }>({
   metric: 'cpu',
   operator: 'gt',
   threshold: 90,
   serverId: '',
+  enabled: true,
+  aiAnalysisEnabled: false,
 })
 
 const formError = ref('')
@@ -72,6 +77,11 @@ const intervalSeconds = ref(0) // 0 = periodic detection off
 const countdown = ref(0)
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 let countdownTimer: ReturnType<typeof setInterval> | null = null
+let analysisTimer: ReturnType<typeof setTimeout> | null = null
+let analysisPollInFlight = false
+let mounted = false
+let alertRequest: Promise<AnomalyAlert[]> | null = null
+const hasPendingAnalysis = computed(() => alerts.value.some((a) => a.analysis?.status === 'pending'))
 
 const cadenceText = computed(() =>
   intervalSeconds.value > 0
@@ -81,11 +91,20 @@ const cadenceText = computed(() =>
 
 // ─── inline rule editing ────────────────────────────────────────────────────────
 const editingRuleId = ref<string | null>(null)
-const editForm = ref<{ metric: AnomalyMetric; operator: AnomalyOperator; threshold: number; serverId: string }>({
+const editForm = ref<{
+  metric: AnomalyMetric
+  operator: AnomalyOperator
+  threshold: number
+  serverId: string
+  enabled: boolean
+  aiAnalysisEnabled: boolean
+}>({
   metric: 'cpu',
   operator: 'gt',
   threshold: 90,
   serverId: '',
+  enabled: true,
+  aiAnalysisEnabled: false,
 })
 const savingEdit = ref(false)
 
@@ -129,6 +148,13 @@ const hasServers = computed(() => servers.value.length > 0)
 
 // ─── data loading ──────────────────────────────────────────────────────────────
 
+function fetchAlerts(): Promise<AnomalyAlert[]> {
+  if (!alertRequest) {
+    alertRequest = listAnomalyAlerts({ limit: 50 }).finally(() => { alertRequest = null })
+  }
+  return alertRequest
+}
+
 async function load(): Promise<void> {
   loadState.value = 'loading'
   loadError.value = ''
@@ -136,7 +162,7 @@ async function load(): Promise<void> {
     const [r, s, a] = await Promise.all([
       listAnomalyRules(),
       listServers(),
-      listAnomalyAlerts({ limit: 50 }),
+      fetchAlerts(),
     ])
     rules.value = r
     servers.value = s
@@ -171,11 +197,14 @@ async function submitRule(): Promise<void> {
       operator: form.value.operator,
       threshold: form.value.threshold,
       serverId: form.value.serverId || null,
+      enabled: form.value.enabled,
+      aiAnalysisEnabled: form.value.aiAnalysisEnabled,
     })
     // Prepend (list is created-desc).
     rules.value = [created, ...rules.value]
-    // Reset threshold/scope but keep metric/operator for fast multi-add.
+    // Keep metric/operator for fast multi-add; opt in to AI separately for each new rule.
     form.value.serverId = ''
+    form.value.aiAnalysisEnabled = false
   } catch (err) {
     formError.value = humanError(err, t('anomaly.errCreateRule'))
   } finally {
@@ -205,7 +234,7 @@ async function runCheck(): Promise<void> {
   try {
     const fresh = await checkAnomaly()
     // Refresh the alert list (newest first) and surface this run's hit count.
-    alerts.value = await listAnomalyAlerts({ limit: 50 })
+    alerts.value = await fetchAlerts()
     checkBanner.value =
       fresh.length === 0
         ? t('anomaly.checkDoneNone')
@@ -231,6 +260,8 @@ function startEdit(rule: AnomalyRule): void {
     operator: rule.operator,
     threshold: rule.threshold,
     serverId: rule.serverId ?? '',
+    enabled: rule.enabled,
+    aiAnalysisEnabled: rule.aiAnalysisEnabled ?? false,
   }
 }
 
@@ -250,6 +281,8 @@ async function saveEdit(rule: AnomalyRule): Promise<void> {
       operator: editForm.value.operator,
       threshold: editForm.value.threshold,
       serverId: editForm.value.serverId || null,
+      enabled: editForm.value.enabled,
+      aiAnalysisEnabled: editForm.value.aiAnalysisEnabled,
     })
     rules.value = rules.value.map((r) => (r.id === updated.id ? updated : r))
     editingRuleId.value = null
@@ -283,16 +316,51 @@ watch([trendServerId, trendHours], loadTrend)
 
 async function autoRefresh(): Promise<void> {
   try {
-    alerts.value = await listAnomalyAlerts({ limit: 50 })
+    alerts.value = await fetchAlerts()
   } catch {
     /* best-effort background refresh; ignore transient errors */
   }
+  if (!mounted) return
   await loadTrend()
   countdown.value = intervalSeconds.value
 }
 
+function stopAnalysisPolling(): void {
+  if (analysisTimer) clearTimeout(analysisTimer)
+  analysisTimer = null
+}
+
+function isPageVisible(): boolean {
+  return document.visibilityState !== 'hidden'
+}
+
+function scheduleAnalysisPolling(): void {
+  if (!mounted || !isPageVisible() || !hasPendingAnalysis.value) {
+    stopAnalysisPolling()
+    return
+  }
+  if (analysisTimer || analysisPollInFlight) return
+  // Schedule after completion so slow GETs never stack up.
+  analysisTimer = setTimeout(async () => {
+    analysisTimer = null
+    if (!mounted || !isPageVisible() || !hasPendingAnalysis.value) return
+    analysisPollInFlight = true
+    try {
+      const next = await fetchAlerts()
+      if (mounted && isPageVisible()) alerts.value = next
+    } catch {
+      /* Keep the last snapshot; the next visible pending poll may succeed. */
+    } finally {
+      analysisPollInFlight = false
+      scheduleAnalysisPolling()
+    }
+  }, 4000)
+}
+
+watch(hasPendingAnalysis, scheduleAnalysisPolling)
+
 function startTimers(): void {
-  if (intervalSeconds.value <= 0) return
+  if (!mounted || intervalSeconds.value <= 0) return
   countdown.value = intervalSeconds.value
   refreshTimer = setInterval(autoRefresh, intervalSeconds.value * 1000)
   countdownTimer = setInterval(() => {
@@ -301,13 +369,17 @@ function startTimers(): void {
 }
 
 onMounted(async () => {
+  mounted = true
+  document.addEventListener('visibilitychange', scheduleAnalysisPolling)
   try {
     const cfg = await getAnomalyConfig()
     intervalSeconds.value = cfg.intervalSeconds
   } catch {
     /* config best-effort; cadence badge just won't show a number */
   }
+  if (!mounted) return
   await load()
+  if (!mounted) return
   // default trend to the first server, then load its series + start cadence timers.
   if (!trendServerId.value && servers.value.length > 0) {
     trendServerId.value = servers.value[0].id
@@ -318,6 +390,9 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  mounted = false
+  document.removeEventListener('visibilitychange', scheduleAnalysisPolling)
+  stopAnalysisPolling()
   if (refreshTimer) clearInterval(refreshTimer)
   if (countdownTimer) clearInterval(countdownTimer)
 })
@@ -391,6 +466,25 @@ onUnmounted(() => {
             </select>
           </FormField>
 
+          <div class="rule-settings">
+            <label class="rule-setting">
+              <input v-model="form.enabled" type="checkbox" :disabled="creating" />
+              <span>{{ t('anomaly.ruleEnabled') }}</span>
+            </label>
+            <div class="rule-settings__ai">
+              <label class="rule-setting">
+                <input
+                  v-model="form.aiAnalysisEnabled"
+                  type="checkbox"
+                  aria-describedby="rule-ai-disclosure"
+                  :disabled="creating"
+                />
+                <span>{{ t('anomaly.aiAnalysisEnabled') }}</span>
+              </label>
+              <p id="rule-ai-disclosure" class="rule-setting__disclosure">{{ t('anomaly.aiDisclosure') }}</p>
+            </div>
+          </div>
+
           <div class="rule-form__submit">
             <AppButton type="submit" variant="default" :loading="creating">
               {{ t('anomaly.addRule') }}
@@ -422,6 +516,9 @@ onUnmounted(() => {
                 </span>
                 <span class="rule-item__scope">{{ serverName(rule.serverId) }}</span>
                 <span v-if="!rule.enabled" class="rule-item__disabled">{{ t('anomaly.disabled') }}</span>
+                <span class="rule-item__ai" :class="{ 'rule-item__ai--on': rule.aiAnalysisEnabled }">
+                  {{ t(rule.aiAnalysisEnabled ? 'anomaly.aiOn' : 'anomaly.aiOff') }}
+                </span>
               </div>
               <div class="rule-item__actions">
                 <AppButton variant="ghost" @click="startEdit(rule)">{{ t('anomaly.edit') }}</AppButton>
@@ -453,6 +550,24 @@ onUnmounted(() => {
                 <option value="">{{ t('anomaly.scopeAllGlobal') }}</option>
                 <option v-for="s in servers" :key="s.id" :value="s.id">{{ s.name }}</option>
               </select>
+              <div class="rule-settings">
+                <label class="rule-setting">
+                  <input v-model="editForm.enabled" type="checkbox" :disabled="savingEdit" />
+                  <span>{{ t('anomaly.ruleEnabled') }}</span>
+                </label>
+                <div class="rule-settings__ai">
+                  <label class="rule-setting">
+                    <input
+                      v-model="editForm.aiAnalysisEnabled"
+                      type="checkbox"
+                      aria-describedby="edit-ai-disclosure"
+                      :disabled="savingEdit"
+                    />
+                    <span>{{ t('anomaly.aiAnalysisEnabled') }}</span>
+                  </label>
+                  <p id="edit-ai-disclosure" class="rule-setting__disclosure">{{ t('anomaly.aiDisclosure') }}</p>
+                </div>
+              </div>
               <div class="rule-edit__actions">
                 <AppButton type="submit" variant="primary" :loading="savingEdit">{{ t('anomaly.save') }}</AppButton>
                 <AppButton type="button" variant="ghost" @click="cancelEdit">{{ t('anomaly.cancel') }}</AppButton>
@@ -513,6 +628,7 @@ onUnmounted(() => {
                 · {{ t('anomaly.actual', { n: a.value.toFixed(1) }) }}
                 · {{ formatAt(a.at) }}
               </p>
+              <AnomalyAnalysis :analysis="a.analysis ?? null" />
             </div>
           </li>
         </ul>
@@ -526,10 +642,13 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 24px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .view-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
@@ -579,16 +698,62 @@ onUnmounted(() => {
 
 .rule-form {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   align-items: end;
 }
 .rule-form__field--wide {
-  grid-column: span 2;
+  grid-column: auto;
+}
+@media (min-width: 600px) {
+  .rule-form {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+  .rule-form__field--wide {
+    grid-column: span 2;
+  }
 }
 .rule-form__submit {
   display: flex;
   align-items: flex-end;
+}
+.rule-settings {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 4px 20px;
+  width: 100%;
+  min-width: 0;
+}
+.rule-settings__ai {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+.rule-setting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  font-size: var(--text-body, 0.9rem);
+  color: var(--color-text);
+  cursor: pointer;
+}
+.rule-setting input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-accent);
+}
+.rule-setting input:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.rule-setting__disclosure {
+  margin: 0;
+  font-size: var(--text-label);
+  line-height: 1.5;
+  color: var(--color-dim);
 }
 
 .select,
@@ -635,6 +800,7 @@ onUnmounted(() => {
 }
 .rule-item {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -648,6 +814,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 .rule-item__expr {
   font-size: var(--text-body, 0.9rem);
@@ -664,6 +831,13 @@ onUnmounted(() => {
   border: 1px solid var(--color-line);
   border-radius: 999px;
   padding: 1px 8px;
+}
+.rule-item__ai {
+  font-size: var(--text-caption, 0.75rem);
+  color: var(--color-dim);
+}
+.rule-item__ai--on {
+  color: var(--color-success);
 }
 
 .alert-list {
@@ -714,6 +888,8 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  flex: 1;
+  min-width: 0;
 }
 .alert-item__msg {
   margin: 0;
@@ -731,6 +907,7 @@ onUnmounted(() => {
 /* ── cadence badge ─────────────────────────────────────────────────────── */
 .view-header__actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 14px;
 }
@@ -740,7 +917,7 @@ onUnmounted(() => {
   gap: 6px;
   font-size: var(--text-label);
   color: var(--color-dim);
-  white-space: nowrap;
+  flex-wrap: wrap;
 }
 .cadence__dot {
   width: 7px;
@@ -767,6 +944,8 @@ onUnmounted(() => {
 /* ── inline rule edit ──────────────────────────────────────────────────── */
 .rule-item__actions {
   display: flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   gap: 8px;
   flex: none;
 }
@@ -780,12 +959,15 @@ onUnmounted(() => {
 .rule-edit .select {
   width: auto;
   min-width: 120px;
+  max-width: 100%;
 }
 .rule-edit__threshold {
   width: 96px;
 }
 .rule-edit__actions {
   display: flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   gap: 8px;
   margin-left: auto;
 }
@@ -800,12 +982,16 @@ onUnmounted(() => {
 }
 .trend-controls {
   display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
   align-items: center;
   gap: 12px;
 }
 .trend-controls__server {
-  width: auto;
-  min-width: 160px;
+  width: min(240px, 100%);
+  min-width: 0;
+  max-width: 100%;
 }
 .trend-range {
   display: inline-flex;

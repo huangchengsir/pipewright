@@ -167,6 +167,15 @@ func (s *service) Get(ctx context.Context, projectID string) (*Config, error) {
 	return s.createDefault(ctx, projectID)
 }
 
+// GetStored reads saved state without generating defaults or filling credential fields.
+func (s *service) GetStored(ctx context.Context, projectID string) (*Config, error) {
+	cfg, err := s.load(ctx, projectID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return cfg, err
+}
+
 // fillSourceDefaults 为 git_source 任务预填项目绑定的仓库/分支/凭据(仅当对应字段为空,
 // 不覆盖用户显式覆盖)并补上「仓库 · 分支」卡片摘要。展示层补全:让源节点直观显示项目源码;
 // 项目信息读取失败则静默跳过,不阻断流水线返回。

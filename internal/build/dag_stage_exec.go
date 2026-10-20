@@ -264,7 +264,7 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 					// 构建依赖缓存(#61):执行前恢复(暖构建)、成功后保存(best-effort,缓存问题绝不让构建失败)。
 					// 任务级 timeout/retry(#63):零值时 runScriptStepWithOpts 退化为单次无超时执行(旧行为)。
 					b.restoreJobCache(ctx, jrep, jb, r.Trigger.Branch, workspace, defaultBuildCache(settings))
-					if err := b.scriptEvidenceBuilder(jsink).runScriptStepWithOpts(ctx, jsink, 0, step, workspace); err != nil {
+					if err := b.scriptEvidenceBuilder(jsink).runScriptStepWithOpts(ctx, jsink, 0, step, workspace, parseCacheConfig(jb, defaultBuildCache(settings))); err != nil {
 						_ = rep.JobDone(ctx, jb.ID, run.StepFailed)
 						return err // ErrBuildFailed / run.ErrCanceled
 					}
@@ -587,7 +587,7 @@ func (b *Builder) runScriptJobIsolated(
 		step.Resource.Network = svcNetwork
 	}
 	b.restoreJobCache(ctx, rep, jb, r.Trigger.Branch, ws, defaultBuildCache(settings))
-	if err := b.scriptEvidenceBuilder(sink).runScriptStepWithOpts(ctx, sink, 0, step, ws); err != nil {
+	if err := b.scriptEvidenceBuilder(sink).runScriptStepWithOpts(ctx, sink, 0, step, ws, parseCacheConfig(jb, defaultBuildCache(settings))); err != nil {
 		return nil, err // ErrBuildFailed / run.ErrCanceled
 	}
 	b.saveJobCache(ctx, rep, jb, r.Trigger.Branch, ws, defaultBuildCache(settings))
@@ -797,6 +797,8 @@ func (b *Builder) runBuildImageJob(ctx context.Context, sink run.StepSink, rep d
 
 	cacheable := cfg.ArtifactType == pipeline.ArtifactJAR || cfg.ArtifactType == pipeline.ArtifactDist
 	if cacheable {
+		cc := parseCacheConfig(jb, defaultBuildCache(settings))
+		cfg.Cache = pipeline.Cache{Enabled: cc.enabled, Paths: cc.paths}
 		b.restoreJobCache(ctx, rep, jb, branch, workspace, defaultBuildCache(settings))
 	}
 	localTag, art, berr := b.build(ctx, sink, 0, proj, cfg, workspace, commitTag, imageTag)
@@ -806,6 +808,9 @@ func (b *Builder) runBuildImageJob(ctx context.Context, sink run.StepSink, rep d
 		}
 		_ = rep.Log(ctx, streamStderr, fmt.Sprintf("构建节点「%s」失败:%v", jb.Name, berr))
 		return ErrBuildFailed
+	}
+	if ctx.Err() != nil {
+		return run.ErrCanceled
 	}
 	if cacheable {
 		b.saveJobCache(ctx, rep, jb, branch, workspace, defaultBuildCache(settings))

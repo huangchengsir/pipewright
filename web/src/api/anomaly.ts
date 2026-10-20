@@ -30,6 +30,7 @@ export interface AnomalyRule {
   /** Null = global (applies to all servers); otherwise scoped to that server. */
   serverId: string | null
   enabled: boolean
+  aiAnalysisEnabled: boolean
   createdAt: string
 }
 
@@ -40,6 +41,18 @@ export interface CreateAnomalyRuleInput {
   /** Omit / null for a global rule. */
   serverId?: string | null
   enabled?: boolean
+  aiAnalysisEnabled?: boolean
+}
+
+export interface AnomalyAnalysis {
+  status: 'pending' | 'ready' | 'unavailable'
+  reason: string
+  hypothesis: string
+  confidence: string
+  alternateCauses: string[]
+  fixSuggestions: string[]
+  evidence: { line: number; text: string }[]
+  generatedAt: string
 }
 
 export interface AnomalyAlert {
@@ -55,6 +68,8 @@ export interface AnomalyAlert {
   message: string
   /** RFC3339 timestamp of the alert. */
   at: string
+  aiAnalysisEnabled: boolean
+  analysis: AnomalyAnalysis | null
 }
 
 export interface ListAlertsParams {
@@ -62,21 +77,33 @@ export interface ListAlertsParams {
   limit?: number
 }
 
+function normalizeRule(rule: AnomalyRule): AnomalyRule {
+  return { ...rule, aiAnalysisEnabled: rule.aiAnalysisEnabled ?? false }
+}
+
+function normalizeAlert(alert: AnomalyAlert): AnomalyAlert {
+  return {
+    ...alert,
+    aiAnalysisEnabled: alert.aiAnalysisEnabled ?? false,
+    analysis: alert.analysis ?? null,
+  }
+}
+
 export async function listAnomalyRules(): Promise<AnomalyRule[]> {
   const res = await http.get<{ items: AnomalyRule[] }>('/api/anomaly/rules')
-  return res.items
+  return res.items.map(normalizeRule)
 }
 
 export async function createAnomalyRule(input: CreateAnomalyRuleInput): Promise<AnomalyRule> {
-  return http.post<AnomalyRule>('/api/anomaly/rules', input)
+  return normalizeRule(await http.post<AnomalyRule>('/api/anomaly/rules', input))
 }
 
-/** Update a rule in full (metric/operator/threshold/scope/enabled). Needs CSRF. */
+/** Update a rule; omitted AI settings are preserved by the server. Needs CSRF. */
 export async function updateAnomalyRule(
   id: string,
   input: CreateAnomalyRuleInput,
 ): Promise<AnomalyRule> {
-  return http.patch<AnomalyRule>(`/api/anomaly/rules/${id}`, input)
+  return normalizeRule(await http.patch<AnomalyRule>(`/api/anomaly/rules/${id}`, input))
 }
 
 export async function deleteAnomalyRule(id: string): Promise<void> {
@@ -113,7 +140,7 @@ export async function getMetricsHistory(serverId: string, hours: number): Promis
 /** Run detection now: evaluate all enabled rules; returns the alerts created this run. */
 export async function checkAnomaly(): Promise<AnomalyAlert[]> {
   const res = await http.post<{ alerts: AnomalyAlert[] }>('/api/anomaly/check')
-  return res.alerts
+  return res.alerts.map(normalizeAlert)
 }
 
 export async function listAnomalyAlerts(params: ListAlertsParams = {}): Promise<AnomalyAlert[]> {
@@ -122,5 +149,5 @@ export async function listAnomalyAlerts(params: ListAlertsParams = {}): Promise<
   if (params.limit != null) qs.set('limit', String(params.limit))
   const suffix = qs.toString() ? `?${qs.toString()}` : ''
   const res = await http.get<{ alerts: AnomalyAlert[] }>(`/api/anomaly/alerts${suffix}`)
-  return res.alerts
+  return res.alerts.map(normalizeAlert)
 }

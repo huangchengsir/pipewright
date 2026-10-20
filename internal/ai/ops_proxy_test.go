@@ -40,7 +40,7 @@ func opsLoopbackProxy(t *testing.T, secure bool, target, upstream, auth string, 
 			defer transport.CloseIdleConnections()
 			response, err := transport.RoundTrip(request)
 			if err != nil {
-				t.Error("fixture forward failed")
+				t.Errorf("fixture forward failed: %v", err)
 				w.WriteHeader(http.StatusBadGateway)
 				return
 			}
@@ -95,6 +95,12 @@ func opsProxyFixture(t *testing.T, originTLS, proxyTLS bool, originHost string) 
 	requests, tunnels := &atomic.Int32{}, &atomic.Int32{}
 	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
+		// Consume the upload before replying on a Connection: close request.
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			t.Errorf("fixture request body failed: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
 		if r.Header.Get("Proxy-Authorization") != "" {
 			t.Error("proxy credentials reached the provider")
 		}

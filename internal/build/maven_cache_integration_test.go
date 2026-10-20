@@ -2,6 +2,7 @@ package build
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,7 +16,42 @@ import (
 	"github.com/huangchengsir/pipewright/internal/run"
 )
 
+func TestMavenCacheFixtureJavaVersions(t *testing.T) {
+	for _, java8 := range []bool{false, true} {
+		t.Run(fmt.Sprintf("java8=%t", java8), func(t *testing.T) {
+			workspace := t.TempDir()
+			cloner := &mavenFixtureCloner{java8: java8}
+			if _, err := cloner.Clone(context.Background(), "", "", "", "", "", workspace); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(filepath.Join(workspace, "backend", "pom.xml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var pom struct {
+				Properties struct {
+					Release string `xml:"maven.compiler.release"`
+					Source  string `xml:"maven.compiler.source"`
+					Target  string `xml:"maven.compiler.target"`
+				} `xml:"properties"`
+				BootVersion string `xml:"dependencies>dependency>version"`
+			}
+			if err := xml.Unmarshal(data, &pom); err != nil {
+				t.Fatal(err)
+			}
+			if java8 {
+				if pom.Properties.Release != "" || pom.Properties.Source != "8" || pom.Properties.Target != "8" || pom.BootVersion != "2.7.18" {
+					t.Fatalf("invalid JDK 8 fixture: %+v", pom)
+				}
+			} else if pom.Properties.Release != "17" || pom.BootVersion != "3.3.5" {
+				t.Fatalf("default fixture changed: %+v", pom)
+			}
+		})
+	}
+}
+
 // Opt-in: this downloads public Maven dependencies and runs disposable containers.
+// Run with -run '^TestRealMavenCacheOfflineReuse$' -timeout=45m for both execution modes.
 func TestRealMavenCacheOfflineReuse(t *testing.T) {
 	if os.Getenv("PIPEWRIGHT_TEST_MAVEN_CACHE") != "1" {
 		t.Skip("set PIPEWRIGHT_TEST_MAVEN_CACHE=1 on an authorized Docker test machine")
@@ -27,6 +63,7 @@ func TestRealMavenCacheOfflineReuse(t *testing.T) {
 	if image == "" {
 		image = "maven:3.9-eclipse-temurin-21"
 	}
+	java8 := os.Getenv("PIPEWRIGHT_TEST_MAVEN_JAVA") == "8"
 	for _, mode := range []string{"grouped_explicit", "dag_inherited"} {
 		t.Run(mode, func(t *testing.T) {
 			cacheRoot := t.TempDir()
@@ -35,9 +72,10 @@ func TestRealMavenCacheOfflineReuse(t *testing.T) {
 				t.Fatal(err)
 			}
 			cache := &realMavenCache{store: store}
-			cloner := &mavenFixtureCloner{}
-			driver := &shellDriver{bin: "docker", cmdr: execCommander{}, copyWorkspace: true,
-				workspaceReconcileAfter: time.Now().Add(24 * time.Hour)}
+			cloner := &mavenFixtureCloner{java8: java8}
+			commands := &cacheAcceptanceCommander{Commander: execCommander{}}
+			driver := &realMavenNetworkDriver{shellDriver: &shellDriver{bin: "docker", cmdr: commands, copyWorkspace: true,
+				workspaceReconcileAfter: time.Now().Add(24 * time.Hour)}}
 			b := newDAGTestBuilder(driver, cloner)
 			b.buildCache = cache
 			settings := &pipeline.Settings{Build: pipeline.BuildConfig{Vars: []pipeline.BuildVar{
@@ -54,12 +92,21 @@ func TestRealMavenCacheOfflineReuse(t *testing.T) {
 					name, flags = "offline_warm", "-o "
 				}
 				t.Run(name, func(t *testing.T) {
+					driver.offline = iteration == 1
+					firstCall := len(commands.creates)
+					versionCheck := ""
+					if java8 {
+						versionCheck = "java -version 2>&1 | grep 'version \"1.8.'\n"
+					}
 					job := scriptJobWithConfig("Maven real cache", image,
-						"mvn "+flags+"-B -DskipTests package\n"+
+						"java -version\nmvn -version\n"+versionCheck+
+							"test ! -e target\n"+
+							"mvn "+flags+"-B -DskipTests package\n"+
 							"test -s target/maven-cache-acceptance-1.0.0.jar\n"+
+							"jar tf target/maven-cache-acceptance-1.0.0.jar | grep 'local/pipewright/CacheApplication.class'\n"+
 							"echo MAVEN_CACHE_ARTIFACT_OK", map[string]any{
 							"workDir": "backend", "memory": "512m", "cpu": "1",
-							"timeoutSeconds": 360, "artifactPath": "backend/target/maven-cache-acceptance-1.0.0.jar",
+							"timeoutSeconds": 600, "artifactPath": "backend/target/maven-cache-acceptance-1.0.0.jar",
 						})
 					job.ID, job.Type = "maven", "build_backend"
 					if mode == "grouped_explicit" {
@@ -73,7 +120,7 @@ func TestRealMavenCacheOfflineReuse(t *testing.T) {
 						after.ID, after.Needs = "after", []string{"maven"}
 						stage.Jobs = append(stage.Jobs, after)
 					}
-					ctx, cancel := context.WithTimeout(context.Background(), 390*time.Second)
+					ctx, cancel := context.WithTimeout(context.Background(), 630*time.Second)
 					defer cancel()
 					report := newPushReport()
 					err := NewStageExecutor(b, nil)(ctx, &run.Run{ID: name,
@@ -101,8 +148,23 @@ func TestRealMavenCacheOfflineReuse(t *testing.T) {
 					if iteration == 1 && (strings.Contains(logs, "Downloading from") || strings.Contains(logs, "Downloaded from")) {
 						t.Fatal("offline warm build unexpectedly downloaded dependencies")
 					}
-					t.Logf("copy-workspace %s: Maven success, cacheHit=%t, dependencyFiles=%d, dependencyBytes=%d, jarBytes=%d",
-						name, cache.hits[iteration], cache.files, cache.bytes, report.arts[0].SizeBytes)
+					if iteration == 1 && !strings.Contains(logs, "--network none") {
+						t.Fatal("offline warm build did not disable the toolchain network")
+					}
+					wantCalls := 1
+					if mode == "dag_inherited" {
+						wantCalls = 2
+					}
+					if err := validateCacheAcceptanceCreates(commands.creates[firstCall:], driver.offline, wantCalls); err != nil {
+						t.Fatal(err)
+					}
+					for _, line := range report.logs {
+						if strings.HasPrefix(line, "maven: openjdk version ") || strings.HasPrefix(line, "maven: Java version:") || strings.HasPrefix(line, "maven: Apache Maven ") {
+							t.Logf("runtime: %s", line)
+						}
+					}
+					t.Logf("copy-workspace %s: Maven success, java8=%t, networkNone=%t, cacheHit=%t, dependencyFiles=%d, dependencyBytes=%d, jarBytes=%d",
+						name, java8, driver.offline, cache.hits[iteration], cache.files, cache.bytes, report.arts[0].SizeBytes)
 				})
 				if t.Failed() {
 					return
@@ -119,21 +181,42 @@ func TestRealMavenCacheOfflineReuse(t *testing.T) {
 	}
 }
 
-type mavenFixtureCloner struct{ workspaces []string }
+type realMavenNetworkDriver struct {
+	*shellDriver
+	offline bool
+}
+
+func (d *realMavenNetworkDriver) RunToolchain(ctx context.Context, image, hostDir, workdir string, env, cmd []string, res pipeline.Resource, onLine func(string, string)) (int, error) {
+	if d.offline {
+		res.Network = "none"
+	}
+	return d.shellDriver.RunToolchain(ctx, image, hostDir, workdir, env, cmd, res, onLine)
+}
+
+type mavenFixtureCloner struct {
+	workspaces []string
+	java8      bool
+}
 
 func (c *mavenFixtureCloner) Clone(_ context.Context, _, _, _, _, _, ws string) (*CloneResolved, error) {
 	c.workspaces = append(c.workspaces, ws)
+	compilerProperties := "<maven.compiler.release>17</maven.compiler.release>"
+	bootVersion := "3.3.5"
+	if c.java8 {
+		compilerProperties = "<maven.compiler.source>8</maven.compiler.source><maven.compiler.target>8</maven.compiler.target>"
+		bootVersion = "2.7.18"
+	}
 	files := map[string]string{
-		"backend/pom.xml": `<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>
+		"backend/pom.xml": fmt.Sprintf(`<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>
 <groupId>local.pipewright</groupId><artifactId>maven-cache-acceptance</artifactId><version>1.0.0</version>
-<properties><maven.compiler.release>17</maven.compiler.release><project.build.sourceEncoding>UTF-8</project.build.sourceEncoding></properties>
-<dependencies><dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter</artifactId><version>3.3.5</version></dependency></dependencies>
+<properties>%s<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding></properties>
+<dependencies><dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter</artifactId><version>%s</version></dependency></dependencies>
 <build><plugins>
 <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-resources-plugin</artifactId><version>3.3.1</version></plugin>
 <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.13.0</version></plugin>
 <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><version>3.2.5</version></plugin>
 <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-jar-plugin</artifactId><version>3.4.2</version></plugin>
-</plugins></build></project>`,
+</plugins></build></project>`, compilerProperties, bootVersion),
 		"backend/src/main/java/local/pipewright/CacheApplication.java": `package local.pipewright;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;

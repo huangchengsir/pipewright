@@ -17,7 +17,8 @@ it in the client's private credential configuration, not source control.
 This first integration requires an MCP client supporting **Streamable HTTP**
 and a manually configured **Authorization: Bearer** header. OAuth discovery and
 stdio are not implemented. Client configuration syntax varies. For clients
-accepting an `mcpServers` configuration, the connection is:
+accepting an `mcpServers` configuration, such as Claude Code's project-root
+`.mcp.json`, the connection is:
 
 ```json
 {
@@ -32,6 +33,23 @@ accepting an `mcpServers` configuration, the connection is:
   }
 }
 ```
+
+Codex uses `~/.codex/config.toml` instead of that JSON format:
+
+```toml
+[mcp_servers.pipewright]
+url = "https://pipewright.example.com/mcp"
+http_headers = { Authorization = "Bearer <MCP_TOKEN>" }
+```
+
+Replace the placeholder only in private client configuration. Never commit a
+real token in `.mcp.json`, `config.toml`, or another shared file. Codex also
+supports `bearer_token_env_var = "PIPEWRIGHT_MCP_TOKEN"` instead of
+`http_headers`; set that environment variable before launching the client,
+with only the token value (no `Bearer ` prefix).
+The settings page displays both client formats and copies each separately.
+See the [Codex MCP documentation](https://developers.openai.com/codex/mcp/)
+and [Claude Code MCP documentation](https://code.claude.com/docs/en/mcp).
 
 VS Code uses `servers` instead of `mcpServers` in `.vscode/mcp.json`; use a
 private input variable for the token rather than a literal committed value.
@@ -98,6 +116,9 @@ MCP 与本体同进程、同端口启动，入口为 `/mcp`。在「设置 > MCP
 默认只读；需要触发已有流水线时显式开启触发权限。人工审批仍由人操作。令牌仅
 显示一次，支持 1 至 30 天有效期及即时撤销。首次接入使用支持 Streamable HTTP
 与手动 Bearer 配置的客户端，不要求另部署 MCP 服务。
+「客户端配置」同时列出 Claude Code 的 `.mcp.json`（JSON）和 Codex 的
+`~/.codex/config.toml`（TOML），可分别复制。示例始终保留 `<MCP_TOKEN>`，
+不会自动填入真实令牌；仅在私有客户端配置中替换，不能提交到代码仓库。
 
 重复请求使用同一个 `requestId`，不要因为断线或超时换一个 ID 重发部署。运行结束后
 逐服务器检查部署结果；镜像产物仅作为候选版本，不能冒充目标机当前版本。MCP 不

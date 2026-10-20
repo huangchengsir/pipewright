@@ -49,12 +49,26 @@ describe('MCP settings', () => {
     expect(w.text()).not.toContain('one-time-secret')
     expect(w.text()).toContain('Bearer <MCP_TOKEN>')
   })
+  it.each(['claude', 'codex'])('copies the %s example through the settings clipboard handler', async (client) => {
+    const w = render(); await flushPromises()
+    const panel = w.get(`[data-client="${client}"]`)
+    const config = panel.get('pre').text()
+    await panel.get('button').trigger('click'); await flushPromises()
+    expect(mocks.copy).toHaveBeenCalledExactlyOnceWith(config, expect.any(Function))
+    expect(config).toContain('<MCP_TOKEN>')
+  })
   it('creates read-only by default and clears the one-time secret when closed', async () => {
     const spy = vi.spyOn(Storage.prototype, 'setItem')
     const w = render(); await flushPromises(); await fill(w)
     await w.get('form').trigger('submit'); await flushPromises()
     expect(mocks.create).toHaveBeenCalledWith({ name: 'new client', projectIds: ['p1'], canTrigger: false, expiresInDays: 7 })
     expect(w.findComponent(MCPTokenSecret).props('token')).toBe('one-time-secret')
+    const examples = w.findAll('.mcp-config pre')
+    expect(examples).toHaveLength(2)
+    for (const pre of examples) {
+      expect(pre.text()).toContain('<MCP_TOKEN>')
+      expect(pre.text()).not.toContain('one-time-secret')
+    }
     w.findComponent(MCPTokenSecret).vm.$emit('close'); await flushPromises()
     expect(w.findComponent(MCPTokenSecret).props('token')).toBe('')
     expect(w.text()).not.toContain('one-time-secret')

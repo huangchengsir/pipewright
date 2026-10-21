@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -155,6 +156,80 @@ func validateHostShell(shell string) (string, error) {
 		return "", errors.New("非法 shell(不在允许白名单内)")
 	}
 	return shell, nil
+}
+
+// V2's start barrier prevents an upstream-only upgrade from opening a PTY.
+// Keep it on a separate URL so protocol frames can never enter a legacy shell.
+func makeTerminalV2Handler(svc target.Service, aud audit.Recorder, container bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil {
+			writeError(w, 503, "internal", "服务器服务未初始化")
+			return
+		}
+		id, cid := chi.URLParam(r, "id"), chi.URLParam(r, "containerId")
+		var shell string
+		var err error
+		if container {
+			shell, err = validateContainerTarget(cid, r.URL.Query().Get("shell"))
+		} else {
+			shell, err = validateHostShell(r.URL.Query().Get("shell"))
+		}
+		if err != nil {
+			writeError(w, 400, "invalid_shell", "shell 非法")
+			return
+		}
+		if _, err = svc.Get(r.Context(), id); err != nil {
+			writeServerError(w, err)
+			return
+		}
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: originPatterns(r)})
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		conn.SetReadLimit(256)
+		startCtx, startCancel := context.WithTimeout(r.Context(), 5*time.Second)
+		typ, data, err := conn.Read(startCtx)
+		startCancel()
+		var start struct {
+			Type string `json:"type"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.DisallowUnknownFields()
+		decodeErr := decoder.Decode(&start)
+		var trailing any
+		if err != nil || typ != websocket.MessageText || decodeErr != nil || start.Type != "start" || decoder.Decode(&trailing) != io.EOF {
+			_ = conn.Close(websocket.StatusPolicyViolation, "terminal start required")
+			return
+		}
+		conn.SetReadLimit(wsReadLimit)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		timer := time.AfterFunc(15*time.Second, cancel)
+		cmd := []string{shell}
+		action := audit.ActionServerTerminal
+		detail := map[string]any{"shell": shell, "target": "host"}
+		if container {
+			cmd = buildContainerExecCmd(cid, shell)
+			action = audit.ActionContainerTerminal
+			detail = map[string]any{"shell": shell, "containerId": cid}
+		}
+		sess, err := svc.ExecInteractive(ctx, id, cmd)
+		timer.Stop()
+		if err != nil {
+			_ = conn.Close(websocket.StatusInternalError, truncateWSReason(humanTerminalError(terminalLocale(r), err)))
+			return
+		}
+		defer sess.Close()
+		recordAudit(r.Context(), aud, audit.Entry{Actor: auditActor, Action: action, TargetType: audit.TargetServer, TargetID: id, Detail: detail, IP: clientIP(r)})
+		readyCtx, readyCancel := context.WithTimeout(ctx, 5*time.Second)
+		err = conn.Write(readyCtx, websocket.MessageText, []byte(`{"type":"ready"}`))
+		readyCancel()
+		if err != nil {
+			return
+		}
+		pumpTerminal(ctx, cancel, conn, sess)
+	}
 }
 
 // makeServerTerminalHandler 返回 GET /api/servers/{id}/terminal handler —— **主机 shell** 终端

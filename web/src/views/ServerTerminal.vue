@@ -58,6 +58,7 @@ const shell = ref<TerminalShell>(
 )
 
 type ConnState = 'idle' | 'connecting' | 'connected' | 'closed' | 'error'
+const terminalTransport = ref<'websocket' | 'http'>('websocket')
 const connState = ref<ConnState>('idle')
 const statusMsg = ref('')
 const latencyMs = ref<number | null>(null)
@@ -280,7 +281,6 @@ const term = shallowRef<XTerm | null>(null)
 const fitAddon = shallowRef<XFitAddon | null>(null)
 const conn = shallowRef<TerminalConnection | null>(null)
 let resizeObserver: ResizeObserver | null = null
-const decoder = new TextDecoder()
 
 /** 剪贴板是否可用(安全上下文:localhost / https)。 */
 const clipboardOK = typeof navigator !== 'undefined' && !!navigator.clipboard && window.isSecureContext
@@ -443,6 +443,7 @@ function promptInitScript(): string {
 
 async function connect(): Promise<void> {
   disconnect()
+  terminalTransport.value = 'websocket'
 
   const t = await ensureTerm()
   // reset() 而非 clear():clear 会保留当前 prompt 行,重连时新会话 prompt 接在旧
@@ -456,6 +457,7 @@ async function connect(): Promise<void> {
   const startedAt = performance.now()
 
   const handlers: TerminalHandlers = {
+      onTransport(transport) { terminalTransport.value = transport },
       onOpen() {
         connState.value = 'connected'
         statusMsg.value = ''
@@ -466,7 +468,7 @@ async function connect(): Promise<void> {
         conn.value?.send(promptInitScript())
       },
       onData(chunk) {
-        t.write(decoder.decode(chunk, { stream: true }))
+        return new Promise<void>(resolve => t.write(chunk, resolve))
       },
       onClose(reason) {
         if (connState.value === 'connecting') {
@@ -697,6 +699,7 @@ onBeforeUnmount(() => {
         <div class="term-status">
           <span class="s">⟢ <b>{{ isContainer ? tg('serverTerminal.containerLabel', { label: containerLabel }) : serverName }}</b></span>
           <span v-if="latencyMs !== null && connState === 'connected'" class="s">{{ tg('serverTerminal.latency') }} <b>{{ latencyMs }}ms</b></span>
+          <span v-if="connState === 'connected' && terminalTransport === 'http'" class="s">{{ tg('serverTerminal.compatibilityMode') }}</span>
           <span class="s"><kbd>⌘C</kbd> {{ tg('serverTerminal.copy') }}</span>
           <span class="s"><kbd>⌘V</kbd> {{ tg('serverTerminal.paste') }}</span>
           <span class="s"><kbd>^C</kbd> {{ tg('serverTerminal.interrupt') }}</span>
@@ -788,7 +791,8 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 0 20px;
+  /* Reserve room for App's fixed language picker without covering controls. */
+  padding: 0 150px 0 20px;
   height: 58px;
   flex: none;
   position: relative;
@@ -807,6 +811,7 @@ onBeforeUnmount(() => {
 }
 .brand {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 10px;
   font-weight: 700;
@@ -827,6 +832,10 @@ onBeforeUnmount(() => {
   box-shadow: 0 4px 16px oklch(66% 0.155 258 / 0.5), inset 0 1px 0 oklch(100% 0 0 / 0.25);
 }
 .crumb {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--color-faint);
   font-size: 0.82rem;
 }
@@ -840,6 +849,7 @@ onBeforeUnmount(() => {
 
 /* 会话信息:连体段控件 */
 .seg {
+  flex-shrink: 0;
   display: flex;
   align-items: stretch;
   background: oklch(12% 0.004 270);
@@ -900,6 +910,7 @@ onBeforeUnmount(() => {
 }
 
 .live {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -934,6 +945,7 @@ onBeforeUnmount(() => {
 }
 
 .tbtn {
+  flex-shrink: 0;
   font: inherit;
   font-size: 0.8rem;
   font-weight: 600;
@@ -1343,6 +1355,9 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 880px) {
+  .crumb {
+    display: none;
+  }
   /* Narrow screens give the assistant the main area; closing restores the terminal. */
   .main.ai-open {
     grid-template-columns: 1fr;
@@ -1359,6 +1374,20 @@ onBeforeUnmount(() => {
     max-width: 120px;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+}
+
+@media (max-width: 640px) {
+  .top {
+    gap: 8px;
+    padding-left: 12px;
+  }
+  .brand {
+    font-size: 0;
+    gap: 0;
+  }
+  .seg .cell:first-child {
+    display: none;
   }
 }
 

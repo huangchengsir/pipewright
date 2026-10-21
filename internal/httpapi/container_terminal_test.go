@@ -17,6 +17,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/auth"
 	"github.com/huangchengsir/pipewright/internal/mask"
 	"github.com/huangchengsir/pipewright/internal/target"
+	"github.com/huangchengsir/pipewright/internal/terminalhttp"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
@@ -191,8 +192,10 @@ func setupTerminalAPI(t *testing.T, dialer target.SSHDialer) (*httptest.Server, 
 	v := vault.New(st.DB, testMasterKey())
 	rec := audit.New(st.DB, mask.NewMasker(), nil)
 	tsvc := target.New(st.DB, v, dialer)
+	terminalManager := terminalhttp.New()
+	t.Cleanup(terminalManager.Close)
 	srv := httptest.NewServer(New(testWebFSAuth(), svc,
-		WithVault(v), WithServers(tsvc), WithAudit(rec)))
+		WithVault(v), WithServers(tsvc), WithAudit(rec), WithTerminalHTTP(terminalManager)))
 	t.Cleanup(srv.Close)
 
 	client := newTestClient(t)

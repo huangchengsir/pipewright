@@ -1,4 +1,8 @@
 export default {
+  compatibilityMode: 'HTTP 兼容模式',
+  transportUpdateRequired: '终端兼容协议不可用，请更新 Pipewright 后重试',
+  inputUncertain: '输入结果不确定，终端已关闭；请检查命令执行结果后重新连接',
+  readyTimeout: '等待 SSH 终端就绪超时',
   serverFallback: '服务器',
   titleConnecting: '连接中 · ',
   titleDisconnected: '⚠ 已断开 · ',

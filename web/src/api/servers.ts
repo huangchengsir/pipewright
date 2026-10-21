@@ -14,7 +14,7 @@
  * latency / output, or a human-readable error — never the secret.
  */
 
-import { http } from './http'
+import { http, HttpError } from './http'
 import { t, currentLocale } from '../i18n'
 
 export interface Server {
@@ -364,7 +364,8 @@ export type TerminalShell =
 
 export interface TerminalHandlers {
   /** A chunk of terminal output (stdout+stderr merged) arrived from the container. */
-  onData: (chunk: Uint8Array) => void
+  onData: (chunk: Uint8Array) => void | Promise<void>
+  onTransport?: (transport: 'websocket' | 'http') => void
   /** The socket opened and the remote PTY is live. */
   onOpen?: () => void
   /** The socket closed (remote session ended or transport dropped). `reason` is human-readable. */
@@ -432,48 +433,199 @@ export function openServerTerminal(
 
 /** Shared WS wiring for both host-shell and container terminals (path is the only difference). */
 function openTerminalWS(path: string, handlers: TerminalHandlers): TerminalConnection {
+  const split = path.indexOf('?')
+  const base = split < 0 ? path : path.slice(0, split)
+  const query = split < 0 ? '' : path.slice(split)
+  const shell = new URLSearchParams(query).get('shell') ?? undefined
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const url = `${proto}//${location.host}${path}`
-
-  const ws = new WebSocket(url)
-  ws.binaryType = 'arraybuffer'
-  let closed = false
-
-  ws.onopen = () => {
-    handlers.onOpen?.()
+  let state: 'upgrade' | 'starting' | 'ws' | 'http' | 'closed' = 'upgrade'
+  const isClosed = (): boolean => state === 'closed'
+  let socket: WebSocket | undefined
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let sessionID: string | undefined
+  let seq = 0
+  let queuedBytes = 0
+  let writing = false
+  let inputEnded = false
+  const queue: Array<{ data?: Uint8Array; cols?: number; rows?: number }> = []
+  const controller = new AbortController()
+  const request = async <T>(method: 'GET' | 'POST', url: string, body?: unknown): Promise<T> => {
+    const call = new AbortController()
+    const abort = (): void => call.abort()
+    controller.signal.addEventListener('abort', abort, { once: true })
+    if (controller.signal.aborted) call.abort()
+    const deadline = setTimeout(abort, 20000)
+    try {
+      const options = { signal: call.signal, throwOnUnauthorized: true }
+      return await (method === 'GET' ? http.get<T>(url, options) : http.post<T>(url, body, options))
+    } finally { clearTimeout(deadline); controller.signal.removeEventListener('abort', abort) }
   }
-  ws.onmessage = (ev: MessageEvent) => {
-    if (ev.data instanceof ArrayBuffer) {
-      handlers.onData(new Uint8Array(ev.data))
-    } else if (typeof ev.data === 'string') {
-      handlers.onData(new TextEncoder().encode(ev.data))
+  const encoder = new TextEncoder()
+  const bytesToBase64 = (data: Uint8Array): string => {
+    let raw = ''
+    for (const byte of data) raw += String.fromCharCode(byte)
+    return btoa(raw)
+  }
+  const removeSession = (): void => {
+    if (!sessionID) return
+    const id = sessionID
+    sessionID = undefined
+    void http.delete(`${base}/sessions/${id}`, { throwOnUnauthorized: true, keepalive: true }).catch(() => {})
+  }
+  const stop = (reason?: string): void => {
+    if (state === 'closed') return
+    state = 'closed'
+    clearTimeout(timer)
+    controller.abort()
+    queue.length = 0
+    queuedBytes = 0
+    try { socket?.close() } catch { /* already closed */ }
+    removeSession()
+    if (reason) handlers.onClose?.(reason)
+  }
+  const explain = (err: unknown, creating = false): string => {
+    if (creating && err instanceof HttpError && [404, 405, 501].includes(err.status) && !err.apiError) {
+      return t('serverTerminal.transportUpdateRequired')
+    }
+    return err instanceof Error ? err.message : t('labels.terminalSessionEnded')
+  }
+  const flush = async (): Promise<void> => {
+    if (writing || state !== 'http' || !sessionID) return
+    writing = true
+    try {
+      while (queue.length && state === 'http' && sessionID) {
+        const item = queue.shift()!
+        queuedBytes -= item.data?.byteLength ?? 0
+        await request('POST', `${base}/sessions/${sessionID}/input`, {
+          seq: ++seq,
+          ...(item.data ? { data: bytesToBase64(item.data) } : { cols: item.cols, rows: item.rows }),
+        })
+      }
+    } catch (err) {
+      if (!isClosed() && err instanceof HttpError && err.status === 410 && err.apiError?.code === 'terminal_ended') {
+        // EOF can precede a queued resize/input. Nothing was written: stop the
+        // queue, but let poll render the remaining output before closing.
+        inputEnded = true
+        queue.length = 0
+        queuedBytes = 0
+      } else if (!isClosed()) stop(t('serverTerminal.inputUncertain'))
+    } finally { writing = false }
+  }
+  const enqueue = (item: { data?: Uint8Array; cols?: number; rows?: number }): void => {
+    if (state !== 'http' || !sessionID || inputEnded) return
+    const size = item.data?.byteLength ?? 0
+    if (queuedBytes + size > 256 * 1024 || queue.length >= 1024) { stop(t('serverTerminal.inputUncertain')); return }
+    // Coalesce adjacent unsent events without changing input/resize order.
+    const last = queue[queue.length - 1]
+    if (!item.data && last && !last.data) queue[queue.length - 1] = item
+    else if (item.data && last?.data && last.data.byteLength + size <= 16 * 1024) {
+      // Batch keys waiting on a round trip without crossing a resize barrier.
+      const joined = new Uint8Array(last.data.byteLength + size)
+      joined.set(last.data)
+      joined.set(item.data, last.data.byteLength)
+      last.data = joined
+      queuedBytes += size
+    } else { queue.push(item); queuedBytes += size }
+    void flush()
+  }
+  const poll = async (): Promise<void> => {
+    let after = 0
+    let failures = 0
+    while (state === 'http' && sessionID) {
+      try {
+        const out = await request<{ data: string; next: number; closed: boolean; reason: string }>(
+          'GET', `${base}/sessions/${sessionID}?after=${after}`,
+        )
+        if (state !== 'http') return
+        failures = 0
+        if (!Number.isSafeInteger(out.next) || out.next < after) throw new Error('Invalid terminal cursor')
+        const data = Uint8Array.from(atob(out.data), c => c.charCodeAt(0))
+        if (out.next !== after + data.length) throw new Error('Invalid terminal output')
+        if (data.length) await handlers.onData(data)
+        if (state !== 'http') return
+        after = out.next // ACK only after xterm consumed the bytes.
+        if (out.closed) { stop(out.reason || t('labels.terminalSessionEnded')); return }
+      } catch (err) {
+        if (isClosed()) return
+        if (err instanceof HttpError && (err.status === 0 || err.status === 408 || err.status === 504) && failures++ < 2) {
+          await new Promise<void>(resolve => {
+            const finish = (): void => {
+              clearTimeout(retry)
+              controller.signal.removeEventListener('abort', finish)
+              resolve()
+            }
+            const retry = setTimeout(finish, 250 * failures)
+            controller.signal.addEventListener('abort', finish, { once: true })
+            if (controller.signal.aborted) finish()
+          })
+          continue
+        }
+        stop(explain(err)); return
+      }
     }
   }
-  ws.onclose = (ev: CloseEvent) => {
-    if (closed) return
-    closed = true
-    handlers.onClose?.(ev.reason || t('labels.terminalSessionEnded'))
+  const fallback = async (): Promise<void> => {
+    if (state !== 'upgrade') return
+    state = 'http' // Lock first: a late onopen must never send start.
+    clearTimeout(timer)
+    try { socket?.close() } catch { /* connecting */ }
+    try {
+      const requestId = Array.from(globalThis.crypto.getRandomValues(new Uint8Array(24)), n => n.toString(16).padStart(2, '0')).join('')
+      const created = await request<{ id: string }>('POST', `${base}/sessions`, { requestId, shell })
+      if (typeof created?.id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(created.id)) {
+        throw new Error(t('serverTerminal.transportUpdateRequired'))
+      }
+      sessionID = created.id
+      if (state !== 'http') { removeSession(); return }
+      handlers.onTransport?.('http')
+      handlers.onOpen?.()
+      void poll()
+    } catch (err) { if (!isClosed()) stop(explain(err, true)) }
   }
-  ws.onerror = () => {
-    // The browser fires a generic error before close; defer the human message to onclose.
-  }
-
+  try {
+    socket = new WebSocket(`${proto}//${location.host}${base}/ws-v2${query}`)
+    socket.binaryType = 'arraybuffer'
+    timer = setTimeout(() => { void fallback() }, 3000)
+    socket.onopen = () => {
+      if (state !== 'upgrade') { socket?.close(); return }
+      state = 'starting' // Irreversible BEFORE send: never replay a started terminal.
+      clearTimeout(timer)
+      try { socket!.send(JSON.stringify({ type: 'start' })) } catch { stop(t('labels.terminalSessionEnded')); return }
+      timer = setTimeout(() => stop(t('serverTerminal.readyTimeout')), 15000)
+    }
+    socket.onmessage = ev => {
+      if (state === 'starting') {
+        if (typeof ev.data !== 'string') { stop(t('labels.terminalSessionEnded')); return }
+        try {
+          if ((JSON.parse(ev.data) as { type?: string }).type !== 'ready') throw new Error('ready')
+        } catch { stop(t('labels.terminalSessionEnded')); return }
+        state = 'ws'; clearTimeout(timer)
+        handlers.onTransport?.('websocket'); handlers.onOpen?.()
+      } else if (state === 'ws') {
+        if (ev.data instanceof ArrayBuffer) void handlers.onData(new Uint8Array(ev.data))
+        else if (typeof ev.data === 'string') void handlers.onData(encoder.encode(ev.data))
+      }
+    }
+    socket.onclose = ev => {
+      if (state === 'upgrade') { void fallback(); return }
+      if (state === 'starting' || state === 'ws') stop(ev.reason || t('labels.terminalSessionEnded'))
+    }
+    socket.onerror = () => { /* onclose or upgrade deadline selects the transport */ }
+  } catch { void fallback() }
   return {
-    send(data: string): void {
-      if (ws.readyState === WebSocket.OPEN) ws.send(data)
+    send(data): void {
+      if (state === 'ws') { socket?.send(data); return }
+      if (state !== 'http' || !sessionID) return
+      const bytes = encoder.encode(data)
+      for (let offset = 0; offset < bytes.length; offset += 16 * 1024) enqueue({ data: bytes.slice(offset, offset + 16 * 1024) })
     },
-    resize(cols: number, rows: number): void {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'resize', cols, rows }))
-      }
+    resize(cols, rows): void {
+      cols = Math.max(1, Math.min(1000, Math.floor(cols)))
+      rows = Math.max(1, Math.min(1000, Math.floor(rows)))
+      if (!Number.isFinite(cols) || !Number.isFinite(rows)) return
+      if (state === 'ws') socket?.send(JSON.stringify({ type: 'resize', cols, rows }))
+      else enqueue({ cols, rows })
     },
-    close(): void {
-      closed = true
-      try {
-        ws.close()
-      } catch {
-        // already closing/closed
-      }
-    },
+    close(): void { stop() },
   }
 }

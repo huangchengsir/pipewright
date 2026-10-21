@@ -26,6 +26,11 @@ export class HttpError extends Error {
   }
 }
 
+export interface HttpOptions extends RequestInit {
+  /** Terminal lifetimes must finish on 401 instead of awaiting navigation forever. */
+  throwOnUnauthorized?: boolean
+}
+
 /** Read a cookie value by name. Returns empty string if not found. */
 function getCookie(name: string): string {
   const match = document.cookie.split(';').find((c) => c.trim().startsWith(name + '='))
@@ -39,7 +44,7 @@ let redirectingToLogin = false
 
 async function request<T>(
   url: string,
-  options: RequestInit = {},
+  options: HttpOptions = {},
 ): Promise<T> {
   const method = (options.method ?? 'GET').toUpperCase()
   const headers = new Headers(options.headers)
@@ -89,7 +94,7 @@ async function request<T>(
     }
     // Return a never-resolving promise so callers don't see undefined
     if (url.startsWith('/api/ai/ops/')) throw new HttpError(401, null, 'Unauthorized')
-    return new Promise<never>(() => undefined)
+    if (!options.throwOnUnauthorized) return new Promise<never>(() => undefined)
   }
 
   if (response.status === 204) {
@@ -98,10 +103,19 @@ async function request<T>(
 
   let body: unknown
   const ct = response.headers.get('content-type') ?? ''
-  if (ct.includes('application/json')) {
-    body = await response.json()
-  } else {
-    body = await response.text()
+  try {
+    if (ct.includes('application/json')) {
+      body = await response.json()
+    } else {
+      body = await response.text()
+    }
+  } catch (err) {
+    // fetch resolves at headers, before the body is complete. Keep transport
+    // failures retryable for terminal reads; invalid JSON stays a payload error.
+    if (err instanceof TypeError || (typeof err === 'object' && err !== null && 'name' in err && err.name === 'AbortError')) {
+      throw new HttpError(0, null, err instanceof Error ? err.message : String(err))
+    }
+    throw err
   }
 
   if (!response.ok) {
@@ -124,10 +138,10 @@ async function request<T>(
 }
 
 export const http = {
-  get<T>(url: string, options?: RequestInit): Promise<T> {
+  get<T>(url: string, options?: HttpOptions): Promise<T> {
     return request<T>(url, { ...options, method: 'GET' })
   },
-  post<T>(url: string, data?: unknown, options?: RequestInit): Promise<T> {
+  post<T>(url: string, data?: unknown, options?: HttpOptions): Promise<T> {
     return request<T>(url, {
       ...options,
       method: 'POST',
@@ -148,7 +162,7 @@ export const http = {
       body: data !== undefined ? JSON.stringify(data) : undefined,
     })
   },
-  delete<T>(url: string, options?: RequestInit): Promise<T> {
+  delete<T>(url: string, options?: HttpOptions): Promise<T> {
     return request<T>(url, { ...options, method: 'DELETE' })
   },
 }

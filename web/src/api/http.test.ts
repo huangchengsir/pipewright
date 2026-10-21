@@ -41,6 +41,11 @@ describe('http client', () => {
     vi.unstubAllGlobals()
   })
 
+  it('terminal requests reject on 401 so their lifetime can end', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(401, { error: { code: 'unauthorized', message: 'expired' } }, false))
+    await expect(http.get('/api/servers/s/terminal/sessions/id?after=0', { throwOnUnauthorized: true })).rejects.toMatchObject({ status: 401 })
+  })
+
   it('sends GET without a body and parses JSON', async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, { username: 'admin' }))
     const data = await http.get<{ username: string }>('/api/auth/session')
@@ -120,6 +125,31 @@ describe('http client', () => {
       expect((err as HttpError).status).toBe(0)
       expect((err as HttpError).message).toBe('Failed to fetch')
     }
+  })
+
+  it.each([
+    new TypeError('body connection terminated'),
+    new DOMException('body deadline exceeded', 'AbortError'),
+  ])('wraps a body transport failure after successful headers: %s', async error => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"data":'))
+        controller.error(error)
+      },
+    })
+    fetchMock.mockResolvedValue(new Response(stream, {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    await expect(http.get('/api/servers/s/terminal/sessions/id?after=0')).rejects.toMatchObject({ status: 0 })
+  })
+
+  it('preserves malformed JSON as a payload error', async () => {
+    fetchMock.mockResolvedValue(new Response('{invalid', {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    await expect(http.get('/api/x')).rejects.toHaveProperty('name', 'SyntaxError')
   })
 
   it('reads a plain-text body when content-type is not JSON', async () => {

@@ -1,4 +1,8 @@
 export default {
+  compatibilityMode: 'HTTP compatibility mode',
+  transportUpdateRequired: 'Terminal protocol unavailable. Update Pipewright and retry.',
+  inputUncertain: 'Input result uncertain. Terminal closed; check the command outcome before reconnecting.',
+  readyTimeout: 'Timed out waiting for SSH terminal readiness',
   serverFallback: '伺服器',
   titleConnecting: '連線中 · ',
   titleDisconnected: '⚠ 已中斷 · ',

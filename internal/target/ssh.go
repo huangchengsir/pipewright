@@ -219,19 +219,29 @@ func (sshDialer) RunInteractive(ctx context.Context, addr string, cfg SSHConfig,
 		Timeout:         resolveTimeout(ctx),
 	}
 
-	d := net.Dialer{Timeout: clientCfg.Timeout}
-	conn, err := d.DialContext(ctx, "tcp", addr)
+	// During setup parent cancellation must interrupt even a blocked SSH channel
+	// request. After setup, only Session.Close owns transport teardown so it can
+	// send SIGKILL first. Detach inheritance and explicitly hand off cancellation.
+	creationCtx, cancelCreation := context.WithCancel(context.WithoutCancel(ctx))
+	parentForwarded := make(chan struct{})
+	stopParent := context.AfterFunc(ctx, func() { cancelCreation(); close(parentForwarded) })
+	defer stopParent()
+	creationExpired := make(chan struct{})
+	timer := time.AfterFunc(15*time.Second, func() { cancelCreation(); close(creationExpired) })
+	client, cleanup, err := dialSSH(creationCtx, addr, clientCfg)
 	if err != nil {
-		return nil, fmt.Errorf("%w", classifyDialErr(err))
+		timer.Stop()
+		cancelCreation()
+		return nil, err
 	}
-
-	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, clientCfg)
-	if err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("%w", classifyHandshakeErr(err))
-	}
-	client := ssh.NewClient(sshConn, chans, reqs)
-
+	established := false
+	defer func() {
+		timer.Stop()
+		if !established {
+			cancelCreation()
+			cleanup()
+		}
+	}()
 	session, err := client.NewSession()
 	if err != nil {
 		_ = client.Close()
@@ -267,7 +277,26 @@ func (sshDialer) RunInteractive(ctx context.Context, addr string, cfg SSHConfig,
 		return nil, fmt.Errorf("%w", ErrUnreachable)
 	}
 
+	if !timer.Stop() {
+		<-creationExpired
+	}
+	// Join a cancellation callback already in flight. If stopping wins, later
+	// parent cancellation is handled by the established-session watcher below.
+	if !stopParent() {
+		<-parentForwarded
+	}
+	creationErr := creationCtx.Err()
+	if creationErr == nil {
+		creationErr = ctx.Err()
+	}
+	if creationErr != nil {
+		_ = pw.Close()
+		_ = pr.Close()
+		return nil, creationErr
+	}
+	established = true
 	is := &interactiveSession{
+		cleanup: func() { cancelCreation(); cleanup() },
 		stdin:   stdin,
 		out:     pr,
 		outW:    pw,
@@ -298,6 +327,7 @@ func (sshDialer) RunInteractive(ctx context.Context, addr string, cfg SSHConfig,
 // interactiveSession 实现 target.Session:把 SSH PTY 会话包成双向 ReadWriteCloser + Resize。
 // Close 幂等(防 ctx 协程与调用方并发关 + 多次关)。
 type interactiveSession struct {
+	cleanup func()
 	stdin   io.WriteCloser
 	out     io.Reader // io.Pipe 读端(stdout+stderr 合流)
 	outW    io.Closer // io.Pipe 写端(Close 时一并关,解阻塞 Wait 协程外的 Read)
@@ -326,6 +356,19 @@ func (s *interactiveSession) Close() error {
 		if s.stop != nil {
 			close(s.stop)
 		}
+		// Give the remote process its best-effort kill signal before closing the
+		// transport. A peer that stops reading must not block Signal (or the
+		// subsequent channel close) indefinitely: closing the raw socket unblocks
+		// SSH's writer, and cleanup is safe when cancellation races this timer.
+		cleanup := func() {
+			if s.cleanup != nil {
+				s.cleanup()
+			} else {
+				_ = s.client.Close()
+			}
+		}
+		timer := time.AfterFunc(250*time.Millisecond, cleanup)
+		defer func() { timer.Stop(); cleanup() }()
 		// 先发 SIGKILL 杀远端 shell/容器 exec(否则远端进程驻留);忽略错误。
 		_ = s.session.Signal(ssh.SIGKILL)
 		_ = s.stdin.Close()

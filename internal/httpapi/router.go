@@ -41,6 +41,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/run"
 	"github.com/huangchengsir/pipewright/internal/runner"
 	"github.com/huangchengsir/pipewright/internal/target"
+	"github.com/huangchengsir/pipewright/internal/terminalhttp"
 	"github.com/huangchengsir/pipewright/internal/trigger"
 	"github.com/huangchengsir/pipewright/internal/vault"
 	"github.com/huangchengsir/pipewright/internal/version"
@@ -61,6 +62,7 @@ const contextKeySession contextKey = 1
 type Option func(*options)
 
 type options struct {
+	terminalHTTP     *terminalhttp.Manager
 	mcpHandler       http.Handler
 	mcpTokens        *auth.MCPTokenStore
 	opsChat          *opschat.Service
@@ -782,6 +784,15 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 自己 docker exec 自由探索(不绑死容器;很多服务器没 docker)。WS 升级,同源校验 + shell
 		// 白名单;审计 server_terminal。比 /servers/{id} 多一段,不会被吞。
 		ar.Get("/servers/{id}/terminal", makeServerTerminalHandler(sv, aud))
+		ar.Get("/servers/{id}/terminal/ws-v2", makeTerminalV2Handler(sv, aud, false))
+		ar.Get("/servers/{id}/containers/{containerId}/terminal/ws-v2", makeTerminalV2Handler(sv, aud, true))
+		for _, base := range []string{"/servers/{id}/terminal", "/servers/{id}/containers/{containerId}/terminal"} {
+			h := makeTerminalHTTPHandler(o.terminalHTTP, sv, aud, svc)
+			ar.Post(base+"/sessions", h)
+			ar.Get(base+"/sessions/{sid}", h)
+			ar.Post(base+"/sessions/{sid}/input", h)
+			ar.Delete(base+"/sessions/{sid}", h)
+		}
 		// 通知渠道(Story 5.1;FR-19)。nf 为 nil 时 handler 返回 503。
 		// GET(列表/详情)过 auth;POST/PUT/DELETE/test 为写方法,过 auth + CSRF。
 		// 敏感字段(SMTP 密码)加密入库、响应仅 hasPassword。test 须在 {id} 路由内单独注册。

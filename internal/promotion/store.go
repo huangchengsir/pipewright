@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/store"
 )
 
@@ -24,7 +25,7 @@ func NewStore(db *sql.DB) *Store { return &Store{db: db} }
 // GetChain 取某项目的环境链。未配置 → ErrChainNotConfigured。
 func (s *Store) GetChain(ctx context.Context, projectID string) (Chain, error) {
 	var chainJSON string
-	err := s.db.QueryRowContext(ctx,
+	err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT chain_json FROM project_environments WHERE project_id = ?`, projectID).Scan(&chainJSON)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -55,14 +56,17 @@ func (s *Store) SaveChain(ctx context.Context, projectID string, c Chain) (Chain
 		return Chain{}, fmt.Errorf("promotion: encode chain: %w", err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO project_environments (project_id, chain_json, updated_at)
+	err = configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+		_, writeErr := q.ExecContext(txctx,
+			`INSERT INTO project_environments (project_id, chain_json, updated_at)
 		 VALUES (?, ?, ?) `+
-			store.UpsertSuffix(store.DialectOf(s.db), []string{"project_id"}, []string{"chain_json", "updated_at"}),
-		projectID, string(raw), now,
-	)
+				store.UpsertSuffix(store.DialectOf(s.db), []string{"project_id"}, []string{"chain_json", "updated_at"}),
+			projectID, string(raw), now,
+		)
+		return writeErr
+	})
 	if err != nil {
-		if isForeignKeyErr(err) {
+		if isForeignKeyErr(err) || errors.Is(err, configstate.ErrNotFound) {
 			return Chain{}, ErrProjectNotFound
 		}
 		return Chain{}, fmt.Errorf("promotion: save chain: %w", err)
@@ -90,47 +94,47 @@ func (s *Store) SetVariables(ctx context.Context, projectID, env string, vars []
 		seen[vars[i].Key] = struct{}{}
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("promotion: begin set vars tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM environment_variables WHERE project_id = ? AND environment = ?`,
-		projectID, env); err != nil {
-		return fmt.Errorf("promotion: clear vars: %w", err)
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	for _, v := range vars {
-		value, credID := v.Value, ""
-		isSecret := 0
-		if v.Secret {
-			isSecret = 1
-			value = "" // secret 绝不存明文
-			credID = strings.TrimSpace(v.CredentialID)
+	err := configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+		if _, err := q.ExecContext(txctx,
+			`DELETE FROM environment_variables WHERE project_id = ? AND environment = ?`,
+			projectID, env); err != nil {
+			return fmt.Errorf("promotion: clear vars: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO environment_variables
+		now := time.Now().UTC().Format(time.RFC3339)
+		for _, v := range vars {
+			value, credID := v.Value, ""
+			isSecret := 0
+			if v.Secret {
+				isSecret = 1
+				value = "" // secret 绝不存明文
+				credID = strings.TrimSpace(v.CredentialID)
+			}
+			if _, err := q.ExecContext(txctx,
+				`INSERT INTO environment_variables
 			   (id, project_id, environment, var_key, value, is_secret, credential_id, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			uuid.NewString(), projectID, env, v.Key, value, isSecret, credID, now,
-		); err != nil {
-			if isForeignKeyErr(err) {
-				return ErrProjectNotFound
+				uuid.NewString(), projectID, env, v.Key, value, isSecret, credID, now,
+			); err != nil {
+				if isForeignKeyErr(err) {
+					return ErrProjectNotFound
+				}
+				return fmt.Errorf("promotion: insert var: %w", err)
 			}
-			return fmt.Errorf("promotion: insert var: %w", err)
 		}
+		return nil
+	})
+	if errors.Is(err, configstate.ErrNotFound) {
+		return ErrProjectNotFound
 	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("promotion: commit set vars: %w", err)
+	if err != nil {
+		return err
 	}
 	return nil
 }
 
 // ListVariables 取某项目某环境的全部变量(掩码视图:secret 仅 credentialId,绝无明文)。
 func (s *Store) ListVariables(ctx context.Context, projectID, env string) ([]Variable, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT var_key, value, is_secret, credential_id
 		 FROM environment_variables WHERE project_id = ? AND environment = ?
 		 ORDER BY var_key ASC`, projectID, env)
@@ -166,7 +170,7 @@ type rawVariable struct {
 
 // loadRawVariables 取某环境全部变量的内部形状(供 Resolver 解密注入)。
 func (s *Store) loadRawVariables(ctx context.Context, projectID, env string) ([]rawVariable, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT var_key, value, is_secret, credential_id
 		 FROM environment_variables WHERE project_id = ? AND environment = ?
 		 ORDER BY var_key ASC`, projectID, env)
@@ -192,7 +196,7 @@ func (s *Store) loadRawVariables(ctx context.Context, projectID, env string) ([]
 // currentEnvForRun 返回某源运行已晋级到的「最高」环境(按链序)。
 // 无任何 promoted 记录 → 空串(尚未晋级)。
 func (s *Store) currentEnvForRun(ctx context.Context, runID string, c Chain) (string, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT target_environment FROM run_promotions
 		 WHERE source_run_id = ? AND status = ?`, runID, StatusPromoted)
 	if err != nil {
@@ -221,7 +225,7 @@ func (s *Store) currentEnvForRun(ctx context.Context, runID string, c Chain) (st
 // hasActivePromotion 报告某源运行到某环境是否已有 pending/promoted 记录(防重复晋级/并发重入)。
 func (s *Store) hasActivePromotion(ctx context.Context, runID, env string) (bool, error) {
 	var n int
-	err := s.db.QueryRowContext(ctx,
+	err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT COUNT(1) FROM run_promotions
 		 WHERE source_run_id = ? AND target_environment = ? AND status IN (?, ?)`,
 		runID, env, StatusPending, StatusPromoted).Scan(&n)
@@ -288,7 +292,7 @@ func (s *Store) queryRecords(ctx context.Context, clause, arg string) ([]Record,
 	if !strings.Contains(clause, "ORDER BY") {
 		q += " ORDER BY created_at ASC, id ASC"
 	}
-	rows, err := s.db.QueryContext(ctx, q, arg)
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx, q, arg)
 	if err != nil {
 		return nil, fmt.Errorf("promotion: query records: %w", err)
 	}

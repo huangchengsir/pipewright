@@ -16,6 +16,8 @@ import {
   type ParamType,
 } from '../api/parameters'
 import { HttpError } from '../api/http'
+import { configRevisionOf } from '../api/configRevision'
+import { useProjectConfigRevisionParticipant } from '../composables/useProjectConfigRevisions'
 
 const props = defineProps<{
   projectId: string
@@ -41,6 +43,14 @@ const rows = ref<Row[]>([])
 const saveSubmitting = ref(false)
 const saveBanner = ref('')
 const saveSuccess = ref(false)
+const configRevision = ref<string>()
+const revisionSync = useProjectConfigRevisionParticipant({
+  projectId: () => props.projectId,
+  read: () => configRevision.value,
+  advance: (_from, to) => { configRevision.value = to },
+  ready: () => loadState.value === 'idle' && !saveSubmitting.value,
+  reload: load,
+})
 
 let ridSeq = 0
 function toRow(d: ParamDef): Row {
@@ -56,13 +66,23 @@ function toRow(d: ParamDef): Row {
   }
 }
 
+let loadGeneration = 0
 async function load(): Promise<void> {
-  loadState.value = 'loading'
+  const generation = ++loadGeneration
+  const id = props.projectId
+  const initial = revisionSync.isInitialRead(id)
+  if (!initial) loadState.value = 'loading'
   loadError.value = ''
   try {
-    rows.value = (await getParameters(props.projectId)).map(toRow)
+    const definitions = await getParameters(id)
+    if (id !== props.projectId || generation !== loadGeneration) return
+    if (initial && !revisionSync.canAcceptInitialRead()) return
+    configRevision.value = configRevisionOf(definitions)
+    rows.value = definitions.map(toRow)
     loadState.value = 'idle'
   } catch (err) {
+    if (id !== props.projectId || generation !== loadGeneration) return
+    if (initial) return
     loadState.value = 'error'
     loadError.value = err instanceof HttpError ? err.message : t('projectPanels.parameters.errLoad')
   }
@@ -86,6 +106,8 @@ function onTypeChange(row: Row): void {
 }
 
 async function handleSave(): Promise<void> {
+  const id = props.projectId
+  const previousRevision = configRevision.value
   clearBanner()
   const defs: ParamDef[] = rows.value.map((r) => ({
     key: r.key.trim(),
@@ -100,10 +122,15 @@ async function handleSave(): Promise<void> {
   }))
   saveSubmitting.value = true
   try {
-    rows.value = (await saveParameters(props.projectId, defs)).map(toRow)
+    const definitions = await saveParameters(id, defs, configRevision.value)
+    if (id !== props.projectId) return
+    revisionSync.committed(previousRevision, definitions, id)
+    configRevision.value = configRevisionOf(definitions)
+    rows.value = definitions.map(toRow)
     saveSuccess.value = true
     saveBanner.value = t('projectPanels.parameters.savedOk')
   } catch (err) {
+    if (id !== props.projectId) return
     saveSuccess.value = false
     saveBanner.value =
       err instanceof HttpError

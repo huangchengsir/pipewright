@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"strings"
 	"time"
 
@@ -187,7 +188,7 @@ func (s *service) fillSourceDefaults(ctx context.Context, projectID string, spec
 			return
 		}
 		loaded = true
-		_ = s.db.QueryRowContext(ctx,
+		_ = configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 			`SELECT repo_url, default_branch, credential_id FROM projects WHERE id = ?`, projectID,
 		).Scan(&repoURL, &branch, &credID)
 	}
@@ -247,12 +248,18 @@ func (s *service) Save(ctx context.Context, projectID string, spec Spec) (*Confi
 	}
 
 	nowStr := time.Now().UTC().Format(time.RFC3339)
-	_, err = s.db.ExecContext(ctx,
-		`UPDATE pipeline_configs
+	err = configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+		_, writeErr := q.ExecContext(txctx,
+			`UPDATE pipeline_configs
 		 SET spec_json = ?, spec_yaml = ?, status = ?, updated_at = ?, saved_at = ?
 		 WHERE project_id = ?`,
-		string(specJSON), renderedYAML, statusDraft, nowStr, nowStr, projectID,
-	)
+			string(specJSON), renderedYAML, statusDraft, nowStr, nowStr, projectID,
+		)
+		return writeErr
+	})
+	if errors.Is(err, configstate.ErrNotFound) {
+		return nil, ErrProjectNotFound
+	}
 	if err != nil {
 		return nil, fmt.Errorf("pipeline: update config: %w", err)
 	}
@@ -268,7 +275,7 @@ func (s *service) load(ctx context.Context, projectID string) (*Config, error) {
 		updatedStr string
 		savedStr   sql.NullString
 	)
-	err := s.db.QueryRowContext(ctx,
+	err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT spec_json, spec_yaml, status, updated_at, saved_at
 		 FROM pipeline_configs WHERE project_id = ?`, projectID,
 	).Scan(&specJSON, &specYAML, &status, &updatedStr, &savedStr)
@@ -329,14 +336,17 @@ func (s *service) createDefault(ctx context.Context, projectID string) (*Config,
 
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO pipeline_configs (project_id, spec_json, spec_yaml, status, created_at, updated_at)
+	err = configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+		_, writeErr := q.ExecContext(txctx,
+			`INSERT INTO pipeline_configs (project_id, spec_json, spec_yaml, status, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?) `+
-			store.DoNothingSuffix(store.DialectOf(s.db), []string{"project_id"}),
-		projectID, string(specJSON), renderedYAML, statusDraft, nowStr, nowStr,
-	)
+				store.DoNothingSuffix(store.DialectOf(s.db), []string{"project_id"}),
+			projectID, string(specJSON), renderedYAML, statusDraft, nowStr, nowStr,
+		)
+		return writeErr
+	})
 	if err != nil {
-		if isForeignKeyErr(err) {
+		if isForeignKeyErr(err) || errors.Is(err, configstate.ErrNotFound) {
 			return nil, ErrProjectNotFound
 		}
 		return nil, fmt.Errorf("pipeline: insert default config: %w", err)
@@ -356,7 +366,7 @@ func (s *service) createDefault(ctx context.Context, projectID string) (*Config,
 // 仓库信息读取失败时退化为通用摘要(不阻断惰性默认生成)。
 func (s *service) sourceSummary(ctx context.Context, projectID string) (string, error) {
 	var repoURL, defaultBranch string
-	err := s.db.QueryRowContext(ctx,
+	err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT repo_url, default_branch FROM projects WHERE id = ?`, projectID,
 	).Scan(&repoURL, &defaultBranch)
 	if err != nil {

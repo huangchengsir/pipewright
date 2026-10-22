@@ -14,6 +14,8 @@ import { useI18n } from 'vue-i18n'
 import { getChain, saveChain, type ChainTarget } from '../api/chain'
 import { listProjects, type Project } from '../api/projects'
 import { HttpError } from '../api/http'
+import { configRevisionOf } from '../api/configRevision'
+import { useProjectConfigRevisionParticipant } from '../composables/useProjectConfigRevisions'
 
 const props = defineProps<{
   projectId: string
@@ -54,6 +56,14 @@ const rows = ref<ChainRow[]>([])
 const saveSubmitting = ref(false)
 const saveBanner = ref('')
 const saveSuccess = ref(false)
+const configRevision = ref<string>()
+const revisionSync = useProjectConfigRevisionParticipant({
+  projectId: () => props.projectId,
+  read: () => configRevision.value,
+  advance: (_from, to) => { configRevision.value = to },
+  ready: () => loadState.value === 'idle' && !saveSubmitting.value,
+  reload: load,
+})
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -62,6 +72,7 @@ function makeRow(): ChainRow {
 }
 
 function applyConfig(cfg: { downstream: ChainTarget[] }): void {
+  configRevision.value = configRevisionOf(cfg)
   rows.value = cfg.downstream.map((t) => ({
     _key: ++_keySeq,
     downstreamProjectId: t.downstreamProjectId,
@@ -96,19 +107,27 @@ function onProjectChange(row: ChainRow): void {
 
 // ─── Load ──────────────────────────────────────────────────────────────────────
 
+let loadGeneration = 0
 async function load(): Promise<void> {
-  loadState.value = 'loading'
+  const generation = ++loadGeneration
+  const id = props.projectId
+  const initial = revisionSync.isInitialRead(id)
+  if (!initial) loadState.value = 'loading'
   loadError.value = ''
   try {
     // Load both in parallel — project list is shared data we don't cache locally.
     const [chainCfg, projects] = await Promise.all([
-      getChain(props.projectId),
+      getChain(id),
       listProjects(),
     ])
+    if (id !== props.projectId || generation !== loadGeneration) return
+    if (initial && !revisionSync.canAcceptInitialRead()) return
     allProjects.value = projects
     applyConfig(chainCfg)
     loadState.value = 'idle'
   } catch (err) {
+    if (id !== props.projectId || generation !== loadGeneration) return
+    if (initial) return
     loadState.value = 'error'
     loadError.value = err instanceof HttpError ? err.message : t('projectPanels.chain.errLoad')
   }
@@ -117,6 +136,8 @@ async function load(): Promise<void> {
 // ─── Save ──────────────────────────────────────────────────────────────────────
 
 async function handleSave(): Promise<void> {
+  const id = props.projectId
+  const previousRevision = configRevision.value
   // Validate all rows before submitting.
   let hasError = false
   for (const row of rows.value) {
@@ -131,18 +152,20 @@ async function handleSave(): Promise<void> {
   saveSuccess.value = false
   saveSubmitting.value = true
   try {
-    applyConfig(
-      await saveChain(props.projectId, {
+    const config = await saveChain(id, {
         downstream: rows.value.map((r) => ({
           downstreamProjectId: r.downstreamProjectId,
           branch: r.branch.trim(),
           enabled: r.enabled,
         })),
-      }),
-    )
+      }, configRevision.value)
+    if (id !== props.projectId) return
+    revisionSync.committed(previousRevision, config, id)
+    applyConfig(config)
     saveSuccess.value = true
     saveBanner.value = t('projectPanels.chain.savedOk')
   } catch (err) {
+    if (id !== props.projectId) return
     saveSuccess.value = false
     if (err instanceof HttpError) {
       const code = err.apiError?.code

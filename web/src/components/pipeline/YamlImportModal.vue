@@ -11,17 +11,27 @@
  *
  * Validation errors (422) are shown inline with the server's human-readable, secret-free message.
  */
-import { computed, ref } from 'vue'
+import { computed, ref, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { importPipeline, type PipelineDTO } from '../../api/pipeline'
 import { HttpError } from '../../api/http'
+import { useProjectConfigCommit } from '../../composables/useProjectConfigRevisions'
 
 const props = defineProps<{
   projectId: string
+  baseRevision?: string
   beforeReplace?: () => Promise<boolean>
 }>()
 
 const { t } = useI18n()
+const initialRevision = props.baseRevision
+const initialProjectId = props.projectId
+const publishCommit = useProjectConfigCommit()
+let generation = 0
+let alive = true
+watch(() => props.projectId, () => { generation++ })
+onBeforeUnmount(() => { alive = false; generation++ })
+const current = (ticket: number, id: string) => alive && ticket === generation && id === props.projectId
 
 const emit = defineEmits<{
   (e: 'close'): void
@@ -82,15 +92,16 @@ function handleError(err: unknown): void {
 
 async function runPreview(): Promise<PipelineDTO | null> {
   const projectId = props.projectId
+  const ticket = generation
   errorMsg.value = ''
   busy.value = 'preview'
   try {
     const dto = await importPipeline(projectId, yamlText.value, false)
-    if (projectId !== props.projectId) return null
+    if (!current(ticket, projectId)) return null
     previewedStageCount.value = dto.stages.length
     return dto
   } catch (err) {
-    if (projectId === props.projectId) handleError(err)
+    if (current(ticket, projectId)) handleError(err)
     previewedStageCount.value = null
     return null
   } finally {
@@ -125,20 +136,23 @@ async function onApplyToCanvas(): Promise<void> {
 
 /** 导入并保存:解析 + 持久化 + 重载。 */
 async function onImportAndSave(): Promise<void> {
+  if (props.projectId !== initialProjectId) { errorMsg.value = t('mcpConfig.reloadRequired'); return }
   if (locked.value) return
   const projectId = props.projectId
+  const ticket = generation
   replacing.value = true
   errorMsg.value = ''
   try {
     if (props.beforeReplace && !await props.beforeReplace()) return
-    if (projectId !== props.projectId) return
+    if (!current(ticket, projectId)) return
     busy.value = 'save'
-    const dto = await importPipeline(projectId, yamlText.value, true)
-    if (projectId !== props.projectId) return
+    const dto = initialRevision ? await importPipeline(projectId, yamlText.value, true, initialRevision) : await importPipeline(projectId, yamlText.value, true)
+    if (!current(ticket, projectId)) return
+    publishCommit(projectId, initialRevision, dto)
     emit('saved', dto)
     emit('close')
   } catch (err) {
-    if (projectId === props.projectId) handleError(err)
+    if (current(ticket, projectId)) handleError(err)
   } finally {
     busy.value = null
     replacing.value = false

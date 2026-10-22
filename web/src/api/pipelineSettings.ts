@@ -11,6 +11,7 @@
  */
 
 import { http } from './http'
+import { configWriteOptions } from './configRevision'
 
 // ─── Enums (frozen) ──────────────────────────────────────────────────────────
 
@@ -118,6 +119,9 @@ export async function getSettings(projectId: string): Promise<SettingsDTO> {
 export async function saveSettings(
   projectId: string,
   input: SaveSettingsInput,
+  expectedRevision?: string,
 ): Promise<SettingsDTO> {
-  return http.put<SettingsDTO>(`/api/projects/${projectId}/pipeline/settings`, input)
+  return expectedRevision
+    ? http.put<SettingsDTO>(`/api/projects/${projectId}/pipeline/settings`, input, configWriteOptions(expectedRevision))
+    : http.put<SettingsDTO>(`/api/projects/${projectId}/pipeline/settings`, input)
 }

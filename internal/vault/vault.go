@@ -10,6 +10,7 @@
 package vault
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"unicode"
 
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 )
 
 // 凭据类型枚举(DB 存 snake_case 字串;JSON camelCase 字段)。
@@ -171,11 +173,21 @@ func (s *service) Create(in CreateInput) (*Credential, error) {
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
 
-	_, err = s.db.Exec(
-		`INSERT INTO credentials (id, name, type, scope, username, ciphertext, masked_value, last_used_at, created_at, updated_at)
+	err = configstate.WithWriteTx(context.Background(), s.db, func(q configstate.DBTX) error {
+		ctx := context.Background()
+		if err := configstate.LockEpochs(ctx, q, s.db, configstate.EpochSecrets); err != nil {
+			return err
+		}
+		_, err := q.ExecContext(ctx,
+			`INSERT INTO credentials (id, name, type, scope, username, ciphertext, masked_value, last_used_at, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
-		id, in.Name, in.Type, in.Scope, strings.TrimSpace(in.Username), sealed, masked, nowStr, nowStr,
-	)
+			id, in.Name, in.Type, in.Scope, strings.TrimSpace(in.Username), sealed, masked, nowStr, nowStr,
+		)
+		if err != nil {
+			return err
+		}
+		return configstate.BumpEpoch(ctx, q, configstate.EpochSecrets)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("vault: insert credential: %w", err)
 	}
@@ -394,40 +406,51 @@ func (s *service) Update(id string, in UpdateInput) (*Credential, error) {
 	}
 
 	nowStr := time.Now().UTC().Format(time.RFC3339)
-	var result sql.Result
-	if rotate {
-		result, err = s.db.Exec(
-			`UPDATE credentials SET name = ?, scope = ?, username = ?, ciphertext = ?, masked_value = ?, updated_at = ?
-			 WHERE id = ? AND name = ? AND scope = ? AND username = ? AND ciphertext = ?`,
-			name, scope, username, newSealed, masked, nowStr, id, oldName, oldScope, oldUsername, oldSealed,
-		)
-	} else {
-		result, err = s.db.Exec(
-			`UPDATE credentials SET name = ?, scope = ?, username = ?, updated_at = ?
-			 WHERE id = ? AND name = ? AND scope = ? AND username = ? AND ciphertext = ?`,
-			name, scope, username, nowStr, id, oldName, oldScope, oldUsername, oldSealed,
-		)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("vault: update credential: %w", err)
-	}
-	if n, err := result.RowsAffected(); err != nil {
-		return nil, fmt.Errorf("vault: update credential result: %w", err)
-	} else if n == 0 {
-		// MySQL may report zero affected rows for a matching no-op update.
-		expected := oldSealed
+	err = configstate.WithWriteTx(context.Background(), s.db, func(q configstate.DBTX) error {
+		ctx := context.Background()
+		if err := configstate.LockEpochs(ctx, q, s.db, configstate.EpochSecrets); err != nil {
+			return err
+		}
+		var result sql.Result
+		var err error
 		if rotate {
-			expected = newSealed
+			result, err = q.ExecContext(ctx,
+				`UPDATE credentials SET name = ?, scope = ?, username = ?, ciphertext = ?, masked_value = ?, updated_at = ?
+			 WHERE id = ? AND name = ? AND scope = ? AND username = ? AND ciphertext = ?`,
+				name, scope, username, newSealed, masked, nowStr, id, oldName, oldScope, oldUsername, oldSealed,
+			)
+		} else {
+			result, err = q.ExecContext(ctx,
+				`UPDATE credentials SET name = ?, scope = ?, username = ?, updated_at = ?
+			 WHERE id = ? AND name = ? AND scope = ? AND username = ? AND ciphertext = ?`,
+				name, scope, username, nowStr, id, oldName, oldScope, oldUsername, oldSealed,
+			)
 		}
-		var matches int
-		if err := s.db.QueryRow(`SELECT COUNT(*) FROM credentials
+		if err != nil {
+			return fmt.Errorf("vault: update credential: %w", err)
+		}
+		if n, err := result.RowsAffected(); err != nil {
+			return fmt.Errorf("vault: update credential result: %w", err)
+		} else if n == 0 {
+			// MySQL may report zero affected rows for a matching no-op update.
+			expected := oldSealed
+			if rotate {
+				expected = newSealed
+			}
+			var matches int
+			if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM credentials
 			WHERE id = ? AND name = ? AND scope = ? AND username = ? AND ciphertext = ?`,
-			id, name, scope, username, expected).Scan(&matches); err != nil {
-			return nil, fmt.Errorf("vault: check update result: %w", err)
+				id, name, scope, username, expected).Scan(&matches); err != nil {
+				return fmt.Errorf("vault: check update result: %w", err)
+			}
+			if matches == 0 {
+				return ErrConflict
+			}
 		}
-		if matches == 0 {
-			return nil, ErrConflict
-		}
+		return configstate.BumpEpoch(ctx, q, configstate.EpochSecrets)
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	// 回读完整视图(含 last_used_at/created_at)。
@@ -440,27 +463,36 @@ func (s *service) Delete(id string) error {
 	}
 	// 在用守卫:被流水线配置 secret 引用的凭据不可删,否则悬挂引用使该项目配置再不可保存。
 	// pipeline_settings 的引用以 JSON 存(无外键),此处显式 LIKE 检查;credentialId 为 UUID,
-	// 无子串歧义。表不存在(迁移未应用)时 QueryRow 报错,跳过此检查、退回普通删除。
-	var refCount int
-	if err := s.db.QueryRow(
-		`SELECT COUNT(*) FROM pipeline_settings WHERE build_json LIKE ? OR environments_json LIKE ? OR steps_json LIKE ?`,
-		"%"+id+"%", "%"+id+"%", "%"+id+"%",
-	).Scan(&refCount); err == nil && refCount > 0 {
-		return ErrCredentialInUse
-	}
-	res, err := s.db.Exec(`DELETE FROM credentials WHERE id = ?`, id)
-	if err != nil {
-		// projects.credential_id 等外键(ON DELETE RESTRICT)引用 → 约束错误,映射为在用。
-		if isConstraintErr(err) {
+	// 无子串歧义。引用检查、删除和目录版本在同一短事务内，检查失败时关闭写入。
+	return configstate.WithWriteTx(context.Background(), s.db, func(q configstate.DBTX) error {
+		ctx := context.Background()
+		if err := configstate.LockEpochs(ctx, q, s.db, configstate.EpochSecrets); err != nil {
+			return err
+		}
+		var refCount int
+		if err := q.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM pipeline_settings WHERE build_json LIKE ? OR environments_json LIKE ? OR steps_json LIKE ?`,
+			"%"+id+"%", "%"+id+"%", "%"+id+"%",
+		).Scan(&refCount); err != nil {
+			return fmt.Errorf("vault: check credential references: %w", err)
+		}
+		if refCount > 0 {
 			return ErrCredentialInUse
 		}
-		return fmt.Errorf("vault: delete credential: %w", err)
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+		res, err := q.ExecContext(ctx, `DELETE FROM credentials WHERE id = ?`, id)
+		if err != nil {
+			// projects.credential_id 等外键(ON DELETE RESTRICT)引用 → 约束错误,映射为在用。
+			if isConstraintErr(err) {
+				return ErrCredentialInUse
+			}
+			return fmt.Errorf("vault: delete credential: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return ErrNotFound
+		}
+		return configstate.BumpEpoch(ctx, q, configstate.EpochSecrets)
+	})
 }
 
 // isConstraintErr 判断错误是否为 SQLite 约束失败(外键/RESTRICT 等;modernc 文本匹配)。

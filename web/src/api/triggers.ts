@@ -14,6 +14,7 @@
  */
 
 import { http } from './http'
+import { configWriteOptions } from './configRevision'
 
 // ─── Domain types ─────────────────────────────────────────────────────────────
 
@@ -79,10 +80,13 @@ export async function getTrigger(projectId: string): Promise<TriggerConfig> {
 export async function saveTrigger(
   projectId: string,
   input: SaveTriggerInput,
+  expectedRevision?: string,
 ): Promise<TriggerConfig> {
-  return http.put<TriggerConfig>(`/api/projects/${projectId}/trigger`, input)
+  return expectedRevision
+    ? http.put<TriggerConfig>(`/api/projects/${projectId}/trigger`, input, configWriteOptions(expectedRevision))
+    : http.put<TriggerConfig>(`/api/projects/${projectId}/trigger`, input)
 }
 
-export async function resetSecret(projectId: string): Promise<SecretResetResult> {
-  return http.post<SecretResetResult>(`/api/projects/${projectId}/trigger/secret/reset`)
+export async function resetSecret(projectId: string, expectedRevision?: string): Promise<SecretResetResult> {
+  return expectedRevision ? http.post<SecretResetResult>(`/api/projects/${projectId}/trigger/secret/reset`, undefined, configWriteOptions(expectedRevision)) : http.post<SecretResetResult>(`/api/projects/${projectId}/trigger/secret/reset`)
 }

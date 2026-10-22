@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"strings"
 	"time"
 
@@ -180,12 +181,18 @@ func (s *service) Save(ctx context.Context, projectID string, in SaveInput) (*Co
 	}
 
 	nowStr := time.Now().UTC().Format(time.RFC3339)
-	_, err = s.db.ExecContext(ctx,
-		`UPDATE pipeline_triggers
+	err = configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+		_, writeErr := q.ExecContext(txctx,
+			`UPDATE pipeline_triggers
 		 SET events_json = ?, branch_mappings_json = ?, unmatched_policy = ?, path_filters_json = ?, updated_at = ?
 		 WHERE project_id = ?`,
-		string(eventsJSON), string(mappingsJSON), policy, string(pathFiltersJSON), nowStr, projectID,
-	)
+			string(eventsJSON), string(mappingsJSON), policy, string(pathFiltersJSON), nowStr, projectID,
+		)
+		return writeErr
+	})
+	if errors.Is(err, configstate.ErrNotFound) {
+		return nil, ErrProjectNotFound
+	}
 	if err != nil {
 		return nil, fmt.Errorf("trigger: update config: %w", err)
 	}
@@ -204,10 +211,15 @@ func (s *service) ResetSecret(ctx context.Context, projectID string) (*ResetResu
 	}
 
 	nowStr := time.Now().UTC().Format(time.RFC3339)
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE pipeline_triggers SET webhook_secret_ciphertext = ?, updated_at = ? WHERE project_id = ?`,
-		sealed, nowStr, projectID,
-	)
+	var res sql.Result
+	err = configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+		var writeErr error
+		res, writeErr = q.ExecContext(txctx,
+			`UPDATE pipeline_triggers SET webhook_secret_ciphertext = ?, updated_at = ? WHERE project_id = ?`,
+			sealed, nowStr, projectID,
+		)
+		return writeErr
+	})
 	if err != nil {
 		return nil, fmt.Errorf("trigger: rotate secret: %w", err)
 	}
@@ -230,7 +242,7 @@ func (s *service) load(ctx context.Context, projectID string) (*Config, string, 
 		updatedStr      string
 	)
 	cfg.ProjectID = projectID
-	err := s.db.QueryRowContext(ctx,
+	err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT webhook_token, webhook_secret_ciphertext, events_json, branch_mappings_json,
 		        unmatched_policy, path_filters_json, created_at, updated_at
 		 FROM pipeline_triggers WHERE project_id = ?`, projectID,
@@ -303,15 +315,20 @@ func (s *service) createDefault(ctx context.Context, projectID string) (*Config,
 	nowStr := now.Format(time.RFC3339)
 	// 并发首访同项目时,第二个 INSERT 会撞 project_id 主键 → ON CONFLICT DO NOTHING
 	// 避免 500;无论本次是否真正插入,随后统一 load 当前权威行(防双方各持不同 token/密钥)。
-	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO pipeline_triggers
+	var res sql.Result
+	err = configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+		var writeErr error
+		res, writeErr = q.ExecContext(txctx,
+			`INSERT INTO pipeline_triggers
 		   (project_id, webhook_token, webhook_secret_ciphertext, events_json, branch_mappings_json, unmatched_policy, created_at, updated_at)
 		 VALUES (?, ?, ?, '{"push":false,"tag":false,"pullRequest":false,"release":false}', '[]', ?, ?, ?) `+
-			store.DoNothingSuffix(store.DialectOf(s.db), []string{"project_id"}),
-		projectID, token, sealed, PolicyRecord, nowStr, nowStr,
-	)
+				store.DoNothingSuffix(store.DialectOf(s.db), []string{"project_id"}),
+			projectID, token, sealed, PolicyRecord, nowStr, nowStr,
+		)
+		return writeErr
+	})
 	if err != nil {
-		if isForeignKeyErr(err) {
+		if isForeignKeyErr(err) || errors.Is(err, configstate.ErrNotFound) {
 			return nil, ErrProjectNotFound
 		}
 		return nil, fmt.Errorf("trigger: insert default config: %w", err)
@@ -344,7 +361,7 @@ func (s *service) createDefault(ctx context.Context, projectID string) (*Config,
 // ensureProjectExists 校验项目存在(触发配置依附项目;惰性建默认前先确认)。
 func (s *service) ensureProjectExists(ctx context.Context, projectID string) error {
 	var one int
-	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM projects WHERE id = ?`, projectID).Scan(&one)
+	err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx, `SELECT 1 FROM projects WHERE id = ?`, projectID).Scan(&one)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrProjectNotFound

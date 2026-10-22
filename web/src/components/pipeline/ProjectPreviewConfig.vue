@@ -22,6 +22,9 @@ import {
 } from '../../api/previewEnvs'
 import { listDnsProviders, type DnsProvider } from '../../api/dnsProviders'
 import { HttpError } from '../../api/http'
+import { configRevisionOf } from '../../api/configRevision'
+import { useProjectConfigRevisionParticipant } from '../../composables/useProjectConfigRevisions'
+import type { PipelineSaveContext } from '../../composables/usePipelineDraftSave'
 import { useToast } from '../../composables/useToast'
 import AppSelect from '../ui/AppSelect.vue'
 
@@ -43,8 +46,16 @@ const dnsProviderId = ref('')
 const baseDomain = ref('')
 const providers = ref<DnsProvider[]>([])
 const persistedDraft = shallowRef('')
+const configRevision = ref<string>()
 const ready = computed(() => loadState.value === 'idle' && persistedDraft.value !== '')
 const dirty = computed(() => ready.value && JSON.stringify(buildPayload()) !== persistedDraft.value)
+const revisionSync = useProjectConfigRevisionParticipant({
+  projectId: () => props.projectId,
+  read: () => configRevision.value,
+  advance: (_from, to) => { configRevision.value = to },
+  ready: () => ready.value && !saving.value,
+  reload: load,
+})
 
 function buildPayload(): PreviewConfig {
   return {
@@ -68,21 +79,26 @@ const enabledConfigInvalid = computed(
   () => enabled.value && (dnsProviderId.value.length === 0 || !baseDomainValid.value),
 )
 
+let loadGeneration = 0
 async function load(): Promise<void> {
+  const generation = ++loadGeneration
   const id = props.projectId
-  loadState.value = 'loading'
+  const initial = revisionSync.isInitialRead(id)
+  if (!initial) loadState.value = 'loading'
   loadError.value = ''
   try {
     const [cfg, provs] = await Promise.all([
       getPreviewConfig(id),
       listDnsProviders().catch(() => [] as DnsProvider[]),
     ])
-    if (id !== props.projectId) return
+    if (id !== props.projectId || generation !== loadGeneration) return
+    if (initial && !revisionSync.canAcceptInitialRead()) return
     providers.value = provs
     applyConfig(cfg)
     loadState.value = 'idle'
   } catch (err) {
-    if (id !== props.projectId) return
+    if (id !== props.projectId || generation !== loadGeneration) return
+    if (initial) return
     loadState.value = 'error'
     loadError.value =
       err instanceof HttpError
@@ -110,19 +126,26 @@ function validate(): boolean {
 }
 
 function applyConfig(cfg: PreviewConfig): void {
+  configRevision.value = configRevisionOf(cfg)
   enabled.value = cfg.enabled
   dnsProviderId.value = cfg.dnsProviderId
   baseDomain.value = cfg.baseDomain
   persistedDraft.value = JSON.stringify(buildPayload())
 }
 
-async function save(): Promise<boolean> {
+async function save(context?: PipelineSaveContext): Promise<boolean> {
   if (!ready.value || saving.value || !validate()) return false
+  const id = props.projectId
   saving.value = true
   try {
     const body = buildPayload()
     const snapshot = JSON.stringify(body)
-    const updated = await setPreviewConfig(props.projectId, body)
+    const revision = context?.baseRevision ?? configRevision.value
+    const updated = revision ? await setPreviewConfig(id, body, revision) : await setPreviewConfig(id, body)
+    if (id !== props.projectId) return false
+    revisionSync.committed(revision, updated, id)
+    const committedRevision = configRevisionOf(updated)
+    if (committedRevision) { configRevision.value = committedRevision; context?.onCommitted(committedRevision) }
     if (JSON.stringify(buildPayload()) === snapshot) applyConfig(updated)
     else persistedDraft.value = JSON.stringify({
       projectId: updated.projectId,
@@ -146,7 +169,8 @@ async function save(): Promise<boolean> {
 }
 
 function handleSave(): void { if (canSave.value) void save() }
-defineExpose({ ready, dirty, saving, validate, save })
+function advanceConfigRevision(from: string, to: string): void { if (configRevision.value === from) configRevision.value = to }
+defineExpose({ ready, dirty, saving, validate, save, configRevision, advanceConfigRevision })
 
 // 例:pr-42-myproj.preview.example.com —— 让用户直观看到链接形态。
 const examplePreview = computed(() => {

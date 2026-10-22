@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"strings"
 	"time"
 
@@ -299,12 +300,18 @@ func (s *settingsService) Save(ctx context.Context, projectID string, in Setting
 	}
 
 	nowStr := time.Now().UTC().Format(time.RFC3339)
-	_, err = s.db.ExecContext(ctx,
-		`UPDATE pipeline_settings
+	err = configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+		_, writeErr := q.ExecContext(txctx,
+			`UPDATE pipeline_settings
 		 SET build_json = ?, environments_json = ?, steps_json = ?, updated_at = ?
 		 WHERE project_id = ?`,
-		string(buildJSON), string(envsJSON), string(stepsJSON), nowStr, projectID,
-	)
+			string(buildJSON), string(envsJSON), string(stepsJSON), nowStr, projectID,
+		)
+		return writeErr
+	})
+	if errors.Is(err, configstate.ErrNotFound) {
+		return nil, ErrProjectNotFound
+	}
 	if err != nil {
 		return nil, fmt.Errorf("pipeline: update settings: %w", err)
 	}
@@ -336,7 +343,7 @@ func (s *settingsService) loadStored(ctx context.Context, projectID string) (*Se
 		stepsJSON  string
 		updatedStr string
 	)
-	err := s.db.QueryRowContext(ctx,
+	err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT build_json, environments_json, steps_json, updated_at
 		 FROM pipeline_settings WHERE project_id = ?`, projectID,
 	).Scan(&buildJSON, &envsJSON, &stepsJSON, &updatedStr)
@@ -395,14 +402,17 @@ func (s *settingsService) createDefault(ctx context.Context, projectID string) (
 
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO pipeline_settings (project_id, build_json, environments_json, created_at, updated_at)
+	err = configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+		_, writeErr := q.ExecContext(txctx,
+			`INSERT INTO pipeline_settings (project_id, build_json, environments_json, created_at, updated_at)
 		 VALUES (?, ?, '[]', ?, ?) `+
-			store.DoNothingSuffix(store.DialectOf(s.db), []string{"project_id"}),
-		projectID, string(buildJSON), nowStr, nowStr,
-	)
+				store.DoNothingSuffix(store.DialectOf(s.db), []string{"project_id"}),
+			projectID, string(buildJSON), nowStr, nowStr,
+		)
+		return writeErr
+	})
 	if err != nil {
-		if isForeignKeyErr(err) {
+		if isForeignKeyErr(err) || errors.Is(err, configstate.ErrNotFound) {
 			return nil, ErrProjectNotFound
 		}
 		return nil, fmt.Errorf("pipeline: insert default settings: %w", err)
@@ -721,7 +731,7 @@ func (s *settingsService) maskedFor(ctx context.Context, credID string) (string,
 		return genericMask, nil
 	}
 	var masked string
-	err := s.db.QueryRowContext(ctx,
+	err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT masked_value FROM credentials WHERE id = ?`, credID,
 	).Scan(&masked)
 	if err != nil {

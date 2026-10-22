@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"strings"
 	"time"
 
@@ -75,7 +76,7 @@ type service struct {
 func NewService(db *sql.DB) Service { return &service{db: db} }
 
 func (s *service) Get(ctx context.Context, projectID string) (*Config, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT downstream_project_id, branch, enabled
 		   FROM project_chain_targets
 		  WHERE project_id = ?
@@ -142,39 +143,39 @@ func (s *service) Save(ctx context.Context, projectID string, targets []Target) 
 	}
 
 	// 全量替换:删旧整写,单事务(避免半写)。
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("chain: begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM project_chain_targets WHERE project_id = ?`, projectID); err != nil {
-		return nil, fmt.Errorf("chain: delete old targets: %w", err)
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	for _, t := range clean {
-		enabled := 0
-		if t.Enabled {
-			enabled = 1
+	err := configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+		if _, err := q.ExecContext(txctx,
+			`DELETE FROM project_chain_targets WHERE project_id = ?`, projectID); err != nil {
+			return fmt.Errorf("chain: delete old targets: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO project_chain_targets
+		now := time.Now().UTC().Format(time.RFC3339)
+		for _, t := range clean {
+			enabled := 0
+			if t.Enabled {
+				enabled = 1
+			}
+			if _, err := q.ExecContext(txctx,
+				`INSERT INTO project_chain_targets
 			   (id, project_id, downstream_project_id, branch, enabled, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			uuid.NewString(), projectID, t.DownstreamProjectID, t.Branch, enabled, now, now,
-		); err != nil {
-			return nil, fmt.Errorf("chain: insert target: %w", err)
+				uuid.NewString(), projectID, t.DownstreamProjectID, t.Branch, enabled, now, now,
+			); err != nil {
+				return fmt.Errorf("chain: insert target: %w", err)
+			}
 		}
+		return nil
+	})
+	if errors.Is(err, configstate.ErrNotFound) {
+		return nil, ErrProjectNotFound
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("chain: commit: %w", err)
+	if err != nil {
+		return nil, err
 	}
 	return s.Get(ctx, projectID)
 }
 
 func (s *service) ListEnabled(ctx context.Context, projectID string) ([]Target, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT downstream_project_id, branch
 		   FROM project_chain_targets
 		  WHERE project_id = ? AND enabled = 1
@@ -198,7 +199,7 @@ func (s *service) ListEnabled(ctx context.Context, projectID string) ([]Target, 
 // ensureProjectExists 校验项目存在(上游 / 下游共用)。
 func (s *service) ensureProjectExists(ctx context.Context, projectID string) error {
 	var one int
-	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM projects WHERE id = ?`, projectID).Scan(&one)
+	err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx, `SELECT 1 FROM projects WHERE id = ?`, projectID).Scan(&one)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrProjectNotFound

@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/store"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
@@ -184,6 +185,11 @@ func (s *service) Save(ctx context.Context, in SaveInput) (*Config, error) {
 		return nil, err
 	}
 
+	// 预处理和本地加密均在锁外；短事务重新核对目录版本，避免沿用并发轮换前的密钥。
+	epoch, err := configstate.ReadEpoch(ctx, configstate.Queryer(ctx, s.db), configstate.EpochSecrets)
+	if err != nil {
+		return nil, err
+	}
 	// 读既有行(判 apiKey 保留语义 + budget 兜底);无行视为空默认。
 	existing, existingSealed, err := s.load(ctx)
 	if err != nil {
@@ -234,14 +240,30 @@ func (s *service) Save(ctx context.Context, in SaveInput) (*Config, error) {
 
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 	// 单例 upsert:首存 INSERT(id=1),已存 ON CONFLICT 更新各列(created_at 保留)。
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO ai_config
+	err = configstate.WithWriteTxContext(ctx, s.db, func(txctx context.Context, q configstate.DBTX) error {
+		if err := configstate.LockEpochs(txctx, q, s.db, configstate.EpochSecrets); err != nil {
+			return err
+		}
+		currentEpoch, err := configstate.ReadEpoch(txctx, q, configstate.EpochSecrets)
+		if err != nil {
+			return err
+		}
+		if currentEpoch != epoch {
+			return configstate.ErrConflict
+		}
+		_, err = q.ExecContext(txctx,
+			`INSERT INTO ai_config
 		   (id, provider, base_url, model, api_key_ciphertext, budget_json, enabled, created_at, updated_at)
 		 VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?) `+
-			store.UpsertSuffix(store.DialectOf(s.db), []string{"id"},
-				[]string{"provider", "base_url", "model", "api_key_ciphertext", "budget_json", "enabled", "updated_at"}),
-		provider, baseURL, strings.TrimSpace(in.Model), sealed, string(budgetJSON), enabled, nowStr, nowStr,
-	)
+				store.UpsertSuffix(store.DialectOf(s.db), []string{"id"},
+					[]string{"provider", "base_url", "model", "api_key_ciphertext", "budget_json", "enabled", "updated_at"}),
+			provider, baseURL, strings.TrimSpace(in.Model), sealed, string(budgetJSON), enabled, nowStr, nowStr,
+		)
+		if err != nil {
+			return err
+		}
+		return configstate.BumpEpoch(txctx, q, configstate.EpochSecrets)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("ai: upsert config: %w", err)
 	}
@@ -420,7 +442,7 @@ func (s *service) load(ctx context.Context) (*Config, []byte, error) {
 		createdStr string
 		updatedStr string
 	)
-	err := s.db.QueryRowContext(ctx,
+	err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT provider, base_url, model, api_key_ciphertext, budget_json, enabled, created_at, updated_at
 		 FROM ai_config WHERE id = 1`,
 	).Scan(&provider, &baseURL, &model, &sealed, &budgetJSON, &enabledInt, &createdStr, &updatedStr)

@@ -9,7 +9,7 @@
  *
  * Templates carry no plaintext secret (credentials remain vault references in 2-4 settings).
  */
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   listTemplates,
@@ -19,15 +19,25 @@ import {
 } from '../../api/templates'
 import type { PipelineDTO, PipelineStage } from '../../api/pipeline'
 import { HttpError } from '../../api/http'
+import { useProjectConfigCommit } from '../../composables/useProjectConfigRevisions'
 
 const props = defineProps<{
   projectId: string
+  baseRevision?: string
   /** Current canvas stages — snapshotted when saving as a template. */
   stages: PipelineStage[]
   beforeReplace?: () => Promise<boolean>
 }>()
 
 const { t } = useI18n()
+const initialRevision = props.baseRevision
+const initialProjectId = props.projectId
+const publishCommit = useProjectConfigCommit()
+let generation = 0
+let alive = true
+watch(() => props.projectId, () => { generation++ })
+onBeforeUnmount(() => { alive = false; generation++ })
+const current = (ticket: number, id: string) => alive && ticket === generation && id === props.projectId
 
 const emit = defineEmits<{
   (e: 'close'): void
@@ -59,6 +69,7 @@ async function loadTemplates(): Promise<void> {
 }
 
 async function doApply(): Promise<void> {
+  if (props.projectId !== initialProjectId) { errorMsg.value = t('mcpConfig.reloadRequired'); return }
   if (applying.value) return
   if (!selectedId.value) {
     errorMsg.value = t('pipelinePanels.tplSelectFirst')
@@ -68,15 +79,17 @@ async function doApply(): Promise<void> {
   errorMsg.value = ''
   const templateId = selectedId.value
   const projectId = props.projectId
+  const ticket = generation
   try {
     if (!(props.beforeReplace ? await props.beforeReplace() : window.confirm(t('pipelinePanels.tplConfirmApply')))) return
-    if (projectId !== props.projectId) return
-    const dto = await applyTemplate(projectId, templateId)
-    if (projectId !== props.projectId) return
+    if (!current(ticket, projectId)) return
+    const dto = initialRevision ? await applyTemplate(projectId, templateId, initialRevision) : await applyTemplate(projectId, templateId)
+    if (!current(ticket, projectId)) return
+    publishCommit(projectId, initialRevision, dto)
     emit('applied', dto)
     emit('close')
   } catch (err: unknown) {
-    if (projectId !== props.projectId) return
+    if (!current(ticket, projectId)) return
     errorMsg.value = err instanceof HttpError ? err.apiError?.message ?? t('pipelinePanels.tplApplyFailed') : t('pipelinePanels.tplApplyFailed')
   } finally {
     applying.value = false

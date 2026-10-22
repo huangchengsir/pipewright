@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"regexp"
 	"strconv"
 	"strings"
@@ -88,7 +89,7 @@ func (s *parameterService) Get(ctx context.Context, projectID string) (*Paramete
 		defsJSON string
 		updated  string
 	)
-	err := s.db.QueryRowContext(ctx,
+	err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT defs_json, updated_at FROM project_parameters WHERE project_id = ?`,
 		strings.TrimSpace(projectID),
 	).Scan(&defsJSON, &updated)
@@ -122,12 +123,18 @@ func (s *parameterService) Save(ctx context.Context, projectID string, defs []Pa
 		return nil, fmt.Errorf("run: marshal parameter defs: %w", err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO project_parameters (project_id, defs_json, created_at, updated_at)
+	err = configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+		_, writeErr := q.ExecContext(txctx,
+			`INSERT INTO project_parameters (project_id, defs_json, created_at, updated_at)
 		 VALUES (?, ?, ?, ?) `+
-			store.UpsertSuffix(store.DialectOf(s.db), []string{"project_id"}, []string{"defs_json", "updated_at"}),
-		projectID, string(blob), now, now,
-	)
+				store.UpsertSuffix(store.DialectOf(s.db), []string{"project_id"}, []string{"defs_json", "updated_at"}),
+			projectID, string(blob), now, now,
+		)
+		return writeErr
+	})
+	if errors.Is(err, configstate.ErrNotFound) {
+		return nil, ErrParamProjectNotFound
+	}
 	if err != nil {
 		if isForeignKeyErr(err) {
 			return nil, ErrParamProjectNotFound

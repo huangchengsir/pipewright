@@ -10,6 +10,8 @@ import { useI18n } from 'vue-i18n'
 import { getRunner, saveRunner } from '../api/runner'
 import { listServers, type Server } from '../api/servers'
 import { HttpError } from '../api/http'
+import { configRevisionOf } from '../api/configRevision'
+import { useProjectConfigRevisionParticipant } from '../composables/useProjectConfigRevisions'
 
 const props = defineProps<{ projectId: string }>()
 
@@ -24,31 +26,54 @@ const selected = ref('') // '' = 本地构建
 const saveSubmitting = ref(false)
 const saveBanner = ref('')
 const saveSuccess = ref(false)
+const configRevision = ref<string>()
+const revisionSync = useProjectConfigRevisionParticipant({
+  projectId: () => props.projectId,
+  read: () => configRevision.value,
+  advance: (_from, to) => { configRevision.value = to },
+  ready: () => loadState.value === 'idle' && !saveSubmitting.value,
+  reload: load,
+})
 
+let loadGeneration = 0
 async function load(): Promise<void> {
-  loadState.value = 'loading'
+  const generation = ++loadGeneration
+  const id = props.projectId
+  const initial = revisionSync.isInitialRead(id)
+  if (!initial) loadState.value = 'loading'
   loadError.value = ''
   try {
-    const [cfg, srv] = await Promise.all([getRunner(props.projectId), listServers().catch(() => [])])
+    const [cfg, srv] = await Promise.all([getRunner(id), listServers().catch(() => [])])
+    if (id !== props.projectId || generation !== loadGeneration) return
+    if (initial && !revisionSync.canAcceptInitialRead()) return
+    configRevision.value = configRevisionOf(cfg)
     selected.value = cfg.runnerServerId
     servers.value = srv
     loadState.value = 'idle'
   } catch (err) {
+    if (id !== props.projectId || generation !== loadGeneration) return
+    if (initial) return
     loadState.value = 'error'
     loadError.value = err instanceof HttpError ? err.message : t('projectPanels.runner.errLoad')
   }
 }
 
 async function handleSave(): Promise<void> {
+  const id = props.projectId
+  const previousRevision = configRevision.value
   saveBanner.value = ''
   saveSuccess.value = false
   saveSubmitting.value = true
   try {
-    const cfg = await saveRunner(props.projectId, selected.value)
+    const cfg = await saveRunner(id, selected.value, configRevision.value)
+    if (id !== props.projectId) return
+    revisionSync.committed(previousRevision, cfg, id)
+    configRevision.value = configRevisionOf(cfg)
     selected.value = cfg.runnerServerId
     saveSuccess.value = true
     saveBanner.value = selected.value ? t('projectPanels.runner.setRemote') : t('projectPanels.runner.setLocal')
   } catch (err) {
+    if (id !== props.projectId) return
     saveSuccess.value = false
     saveBanner.value =
       err instanceof HttpError ? (err.apiError?.message ?? t('projectPanels.runner.errSaveFailed')) : t('projectPanels.runner.errSaveRetry')

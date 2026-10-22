@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/huangchengsir/pipewright/internal/auth"
 	"github.com/huangchengsir/pipewright/internal/previewenv"
@@ -15,6 +16,13 @@ import (
 func setupPreviewServer(t *testing.T) (*httptest.Server, *http.Client, string) {
 	t.Helper()
 	st := testStoreAuth(t)
+	stamp := time.Now().UTC().Format(time.RFC3339)
+	if _, err := st.DB.Exec(`INSERT INTO credentials(id,name,type,scope,ciphertext,masked_value,created_at,updated_at) VALUES ('preview-test','fixture','git_token','',?,'masked',?,?)`, []byte{0}, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.Exec(`INSERT INTO projects(id,name,repo_url,default_branch,credential_id,created_at,updated_at) VALUES ('p1','fixture','https://example.invalid/repo','main','preview-test',?,?)`, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
 	svc := auth.NewService(st.DB, nil)
 	if err := svc.Bootstrap("admin", "testpass"); err != nil {
 		t.Fatalf("bootstrap: %v", err)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/huangchengsir/pipewright/internal/storetest"
 )
@@ -47,6 +48,13 @@ func (f *fakeRouteDeleter) DeleteRoute(_ context.Context, routeID string) error 
 func newTestSvc(t *testing.T) (*service, *fakeAllocator, *fakeRouteDeleter) {
 	t.Helper()
 	db := storetest.OpenDB(t)
+	stamp := time.Now().UTC().Format(time.RFC3339)
+	if _, err := db.Exec(`INSERT INTO credentials(id,name,type,scope,ciphertext,masked_value,created_at,updated_at) VALUES ('preview-fixture','fixture','git_token','',?,'masked',?,?)`, []byte{0}, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO projects(id,name,repo_url,default_branch,credential_id,created_at,updated_at) VALUES ('p1','fixture','https://example.invalid/repo','main','preview-fixture',?,?)`, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
 	svc := New(db)
 	alloc := &fakeAllocator{}
 	del := &fakeRouteDeleter{}
@@ -226,8 +234,8 @@ func TestProvisionNonPRNoOp(t *testing.T) {
 }
 
 func TestProvisionNoAllocatorNoOp(t *testing.T) {
-	db := storetest.OpenDB(t)
-	svc := New(db) // 不装配 allocator
+	svc, _, _ := newTestSvc(t)
+	svc.SetAllocator(nil)
 	ctx := context.Background()
 	enablePreview(t, svc, "p1")
 	env, err := svc.Provision(ctx, ProvisionInput{

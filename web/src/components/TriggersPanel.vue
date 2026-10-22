@@ -20,6 +20,9 @@ import {
   type SaveTriggerInput,
 } from '../api/triggers'
 import { HttpError } from '../api/http'
+import { configRevisionOf } from '../api/configRevision'
+import { useProjectConfigRevisionParticipant } from '../composables/useProjectConfigRevisions'
+import type { PipelineSaveContext } from '../composables/usePipelineDraftSave'
 import CronPanel from './CronPanel.vue'
 import EnvironmentsPanel from './EnvironmentsPanel.vue'
 import ConcurrencyPanel from './ConcurrencyPanel.vue'
@@ -165,10 +168,15 @@ function closeResetModal(): void {
 }
 
 async function confirmReset(): Promise<void> {
+  const id = props.projectId
+  const previousRevision = configRevision.value
   resetSubmitting.value = true
   resetBanner.value = ''
   try {
-    const result = await resetSecret(props.projectId)
+    const result = previousRevision ? await resetSecret(id, previousRevision) : await resetSecret(id)
+    if (id !== props.projectId) return
+    revisionSync.committed(previousRevision, result, id)
+    configRevision.value = configRevisionOf(result)
     webhookSecretMasked.value = result.webhookSecretMasked
     revealedSecret.value = result.webhookSecret
     resetModalOpen.value = false
@@ -215,6 +223,14 @@ function onPatternInput(row: MappingRow): void {
 // ─── Save ─────────────────────────────────────────────────────────────────────
 
 const saveSubmitting = ref(false)
+const configRevision = ref<string>()
+const revisionSync = useProjectConfigRevisionParticipant({
+  projectId: () => props.projectId,
+  read: () => configRevision.value,
+  advance: (_from, to) => { configRevision.value = to },
+  ready: () => ready.value && !saveSubmitting.value && !resetSubmitting.value,
+  reload: loadTrigger,
+})
 const saveBanner = ref('')
 const saveSuccess = ref(false)
 let saveSuccessTimer: ReturnType<typeof setTimeout> | null = null
@@ -234,8 +250,9 @@ function validate(): boolean {
   return !hasError
 }
 
-async function save(): Promise<boolean> {
+async function save(context?: PipelineSaveContext): Promise<boolean> {
   if (!ready.value || saveSubmitting.value) return false
+  const id = props.projectId
   saveBanner.value = ''
   saveSuccess.value = false
   if (!validate()) return false
@@ -245,7 +262,12 @@ async function save(): Promise<boolean> {
   try {
     const payload = buildPayload()
     const snapshot = JSON.stringify(payload)
-    const updated = await saveTrigger(props.projectId, payload)
+    const revision = context?.baseRevision ?? configRevision.value
+    const updated = revision ? await saveTrigger(id, payload, revision) : await saveTrigger(id, payload)
+    if (id !== props.projectId) return false
+    revisionSync.committed(revision, updated, id)
+    const committedRevision = configRevisionOf(updated)
+    if (committedRevision) { configRevision.value = committedRevision; context?.onCommitted(committedRevision) }
     if (JSON.stringify(buildPayload()) === snapshot) applyConfig(updated)
     else persistedDraft.value = JSON.stringify({
       events: updated.events,
@@ -277,7 +299,8 @@ function handleSave(): void {
   if (!props.disabled) void save()
 }
 
-defineExpose({ ready, dirty, saving: saveSubmitting, validate, save })
+function advanceConfigRevision(from: string, to: string): void { if (configRevision.value === from) configRevision.value = to }
+defineExpose({ ready, dirty, saving: saveSubmitting, validate, save, configRevision, advanceConfigRevision, reload: loadTrigger })
 watch(dirty, (changed) => { if (changed) saveSuccess.value = false })
 onUnmounted(() => {
   if (saveSuccessTimer) clearTimeout(saveSuccessTimer)
@@ -287,6 +310,7 @@ onUnmounted(() => {
 // ─── Data loading ─────────────────────────────────────────────────────────────
 
 function applyConfig(config: TriggerConfig): void {
+  configRevision.value = configRevisionOf(config)
   webhookUrl.value            = config.webhookUrl
   webhookSecretMasked.value   = config.webhookSecretMasked
   eventPush.value             = config.events.push
@@ -306,19 +330,24 @@ function applyConfig(config: TriggerConfig): void {
   persistedDraft.value = JSON.stringify(buildPayload())
 }
 
+let loadGeneration = 0
 async function loadTrigger(): Promise<void> {
+  const generation = ++loadGeneration
   const id = props.projectId
-  loadState.value = 'loading'
+  const initial = revisionSync.isInitialRead(id)
+  if (!initial) loadState.value = 'loading'
   loadError.value = ''
   revealedSecret.value = null
 
   try {
     const config = await getTrigger(id)
-    if (id !== props.projectId) return
+    if (id !== props.projectId || generation !== loadGeneration) return
+    if (initial && !revisionSync.canAcceptInitialRead()) return
     applyConfig(config)
     loadState.value = 'idle'
   } catch (err) {
-    if (id !== props.projectId) return
+    if (id !== props.projectId || generation !== loadGeneration) return
+    if (initial) return
     if (err instanceof HttpError) {
       if (err.status === 0) {
         loadError.value = t('projectPanels.triggers.errSaveConnect')

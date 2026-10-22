@@ -531,6 +531,7 @@ func applySelectedMappings(ctx context.Context, svc trigger.Service, projectID s
 	_, err = svc.Save(ctx, projectID, trigger.SaveInput{
 		Events:          cur.Events,
 		BranchMappings:  merged,
+		PathFilters:     cur.PathFilters,
 		UnmatchedPolicy: cur.UnmatchedPolicy,
 	})
 	return err

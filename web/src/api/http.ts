@@ -7,8 +7,9 @@
  * - Parses the canonical error envelope { error: { code, message } }.
  */
 
-import { currentLocale } from '../i18n'
+import { currentLocale, t } from '../i18n'
 import { resetOpsAuth } from '../utils/opsAuth'
+import { bindConfigRevision } from './configRevision'
 
 export interface ApiError {
   code: string
@@ -16,6 +17,7 @@ export interface ApiError {
 }
 
 export class HttpError extends Error {
+  configPartialSave = false
   constructor(
     public readonly status: number,
     public readonly apiError: ApiError | null,
@@ -127,14 +129,19 @@ async function request<T>(
         apiError = e as ApiError
       }
     }
-    throw new HttpError(
+    if (apiError && ['config_revision_required', 'precondition_required', 'revision_conflict', 'snapshot_stale'].includes(apiError.code)) {
+      apiError = { ...apiError, message: t('mcpConfig.reloadRequired') }
+    }
+    const error = new HttpError(
       response.status,
       apiError,
       apiError?.message ?? `HTTP ${response.status}`,
     )
+    error.configPartialSave = response.headers.get('X-Config-Partial-Save') === 'true'
+    throw error
   }
 
-  return body as T
+  return bindConfigRevision(body as T, response.headers.get('X-Config-Revision'))
 }
 
 export const http = {

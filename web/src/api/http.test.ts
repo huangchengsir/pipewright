@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { http, HttpError } from './http'
+import { configRevisionOf } from './configRevision'
 
 /** Build a minimal Response-like object the wrapper understands. */
 function jsonResponse(status: number, body: unknown, ok = status < 400): Response {
@@ -55,6 +56,20 @@ describe('http client', () => {
     expect(url).toBe('/api/auth/session')
     expect(init.method).toBe('GET')
     expect(init.credentials).toBe('same-origin')
+  })
+  it('binds revision headers to the returned snapshot without upgrading an older DTO', async () => {
+    const response = (revision: string) => new Response('{"stages":[]}', { headers: { 'Content-Type': 'application/json', 'X-Config-Revision': revision } })
+    fetchMock.mockResolvedValueOnce(response('cfg-10')).mockResolvedValueOnce(response('cfg-11'))
+    const original = await http.get('/api/projects/p/pipeline')
+    const later = await http.get('/api/projects/p/pipeline')
+    expect(configRevisionOf(original)).toBe('cfg-10')
+    expect(configRevisionOf(later)).toBe('cfg-11')
+    expect(JSON.stringify(original)).toBe('{"stages":[]}')
+  })
+  it('preserves an authoritative partial-save indication without retrying a write', async () => {
+    fetchMock.mockResolvedValue(new Response('{"error":{"code":"revision_conflict","message":"conflict"}}', { status: 409, headers: { 'Content-Type': 'application/json', 'X-Config-Partial-Save': 'true' } }))
+    await expect(http.post('/api/projects/p/pipeline/ai-apply', {})).rejects.toMatchObject({ status: 409, configPartialSave: true })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('sets Content-Type application/json for POST with a body', async () => {

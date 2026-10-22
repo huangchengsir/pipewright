@@ -66,6 +66,14 @@ func prStatusHookFixture(t *testing.T) (*int32, string, string, project.Service,
 	if err != nil {
 		t.Fatalf("run.Create: %v", err)
 	}
+	// No worker is installed in this fixture. Finish and release the queued
+	// admission before exercising a configuration toggle between completed runs.
+	if _, err := runSvc.Cancel(context.Background(), r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := runSvc.SetDeployTerminal(context.Background(), r.ID, run.StatusSuccess); err != nil {
+		t.Fatal(err)
+	}
 
 	reporter := prstatus.NewReporter(srv.Client()).WithBaseURLs(srv.URL, srv.URL)
 	return &hits, r.ID, projID, projSvc, reporter, runSvc, v

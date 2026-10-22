@@ -10,6 +10,7 @@
  */
 
 import { http } from './http'
+import { configWriteOptions } from './configRevision'
 
 export interface ConcurrencyConfig {
   /** Simultaneous run limit; 0 = no project-level limit. */
@@ -27,6 +28,7 @@ export async function getConcurrency(projectId: string): Promise<ConcurrencyConf
 export async function saveConcurrency(
   projectId: string,
   input: SaveConcurrencyInput,
+  expectedRevision?: string,
 ): Promise<ConcurrencyConfig> {
-  return http.put<ConcurrencyConfig>(`/api/projects/${projectId}/concurrency`, input)
+  return expectedRevision ? http.put<ConcurrencyConfig>(`/api/projects/${projectId}/concurrency`, input, configWriteOptions(expectedRevision)) : http.put<ConcurrencyConfig>(`/api/projects/${projectId}/concurrency`, input)
 }

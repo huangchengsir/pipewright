@@ -13,6 +13,8 @@ import { useI18n } from 'vue-i18n'
 import { getConcurrency, saveConcurrency } from '../api/concurrency'
 import { validateConcurrency, CONCURRENCY_MAX } from '../api/concurrency.helpers'
 import { HttpError } from '../api/http'
+import { configRevisionOf } from '../api/configRevision'
+import { useProjectConfigRevisionParticipant } from '../composables/useProjectConfigRevisions'
 
 const props = defineProps<{
   projectId: string
@@ -31,22 +33,40 @@ const saveSubmitting = ref(false)
 const saveBanner = ref('')
 const saveSuccess = ref(false)
 const validationError = ref('')
+const configRevision = ref<string>()
+const revisionSync = useProjectConfigRevisionParticipant({
+  projectId: () => props.projectId,
+  read: () => configRevision.value,
+  advance: (_from, to) => { configRevision.value = to },
+  ready: () => loadState.value === 'idle' && !saveSubmitting.value,
+  reload: load,
+})
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function applyConfig(cfg: { maxConcurrent: number }): void {
+  configRevision.value = configRevisionOf(cfg)
   maxConcurrent.value = cfg.maxConcurrent
 }
 
 // ─── Load ──────────────────────────────────────────────────────────────────────
 
+let loadGeneration = 0
 async function load(): Promise<void> {
-  loadState.value = 'loading'
+  const generation = ++loadGeneration
+  const id = props.projectId
+  const initial = revisionSync.isInitialRead(id)
+  if (!initial) loadState.value = 'loading'
   loadError.value = ''
   try {
-    applyConfig(await getConcurrency(props.projectId))
+    const config = await getConcurrency(id)
+    if (id !== props.projectId || generation !== loadGeneration) return
+    if (initial && !revisionSync.canAcceptInitialRead()) return
+    applyConfig(config)
     loadState.value = 'idle'
   } catch (err) {
+    if (id !== props.projectId || generation !== loadGeneration) return
+    if (initial) return
     loadState.value = 'error'
     loadError.value = err instanceof HttpError ? err.message : t('projectPanels.concurrency.errLoad')
   }
@@ -77,6 +97,8 @@ function stepUp(): void {
 // ─── Save ──────────────────────────────────────────────────────────────────────
 
 async function handleSave(): Promise<void> {
+  const id = props.projectId
+  const previousRevision = configRevision.value
   validationError.value = validateConcurrency(maxConcurrent.value)
   if (validationError.value) return
 
@@ -84,12 +106,14 @@ async function handleSave(): Promise<void> {
   saveSuccess.value = false
   saveSubmitting.value = true
   try {
-    applyConfig(
-      await saveConcurrency(props.projectId, { maxConcurrent: maxConcurrent.value }),
-    )
+    const config = await saveConcurrency(id, { maxConcurrent: maxConcurrent.value }, configRevision.value)
+    if (id !== props.projectId) return
+    revisionSync.committed(previousRevision, config, id)
+    applyConfig(config)
     saveSuccess.value = true
     saveBanner.value = t('projectPanels.concurrency.savedOk')
   } catch (err) {
+    if (id !== props.projectId) return
     saveSuccess.value = false
     if (err instanceof HttpError) {
       saveBanner.value =

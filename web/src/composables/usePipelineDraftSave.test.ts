@@ -1,7 +1,7 @@
 import { defineComponent, h, reactive } from 'vue'
 import { mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { usePipelineDraftSave, type PipelineDraftParticipant } from './usePipelineDraftSave'
+import { usePipelineDraftSave, type PipelineDraftParticipant, type PipelineSaveContext } from './usePipelineDraftSave'
 
 vi.mock('vue-router', () => ({ onBeforeRouteLeave: vi.fn(), onBeforeRouteUpdate: vi.fn() }))
 
@@ -29,6 +29,39 @@ function participant(scope: string) {
 afterEach(() => { wrapper?.unmount(); wrapper = undefined })
 
 describe('usePipelineDraftSave outcomes', () => {
+  it('chains acknowledged revisions across blocks without re-reading stale form payloads', async () => {
+    const seen: Array<string | undefined> = []
+    const make = (scope: string, nextRevision: string) => {
+      const part = reactive({
+        scopes: [scope], ready: true, dirty: true, saving: false, configRevision: 'cfg-1',
+        advanceConfigRevision(from: string, to: string) { if (part.configRevision === from) part.configRevision = to },
+        async save(context?: PipelineSaveContext) {
+          seen.push(context?.baseRevision)
+          context?.onCommitted(nextRevision)
+          part.configRevision = nextRevision
+          part.dirty = false
+          return true
+        },
+      })
+      return part
+    }
+    const canvas = make('canvas', 'cfg-2')
+    const settings = make('vars', 'cfg-3')
+    const save = setup([canvas, settings])
+    expect(await save.save()).toBe(true)
+    expect(seen).toEqual(['cfg-1', 'cfg-2'])
+    expect(canvas.configRevision).toBe('cfg-3')
+    expect(settings.configRevision).toBe('cfg-3')
+  })
+  it('rejects mixed read revisions before any partial write', async () => {
+    const first = { ...participant('canvas'), configRevision: 'cfg-1' }
+    const second = { ...participant('vars'), configRevision: 'cfg-2' }
+    const save = setup([first, second])
+    expect(await save.save()).toBe(false)
+    expect(first.save).not.toHaveBeenCalled()
+    expect(second.save).not.toHaveBeenCalled()
+    expect(save.outcome.value).toEqual({ state: 'error', completedScopes: [], failedScopes: ['canvas', 'vars'], reason: 'revision_mismatch' })
+  })
   it.each(['false', 'throw'])('records acknowledged scopes when a later participant returns %s', async (failure) => {
     const canvas = participant('canvas')
     const settings = participant('vars')

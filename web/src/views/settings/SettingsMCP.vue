@@ -106,6 +106,7 @@ onBeforeUnmount(() => { alive = false; epoch++; clearSecret(); if (timer) clearI
       <div class="mcp-connection"><span>{{ t('settingsMCP.endpoint') }}</span><code class="mcp-endpoint">{{ endpoint }}</code><AppTooltip :content="t('settingsMCP.copy')"><button class="mcp-copy" :aria-label="t('settingsMCP.copy')" @click="copy(endpoint)"><Copy aria-hidden="true" /></button></AppTooltip></div>
       <dl class="mcp-protocol"><div><dt>{{ t('settingsMCP.transport') }}</dt><dd>Streamable HTTP</dd></div><div><dt>{{ t('settingsMCP.authorization') }}</dt><dd>Bearer</dd></div></dl>
       <p class="mcp-privacy">{{ t('settingsMCP.privacy') }}</p>
+      <p class="mcp-privacy"><a href="/mcp/config-maintenance">{{ t('mcpConfig.maintenanceTitle') }}</a></p>
       <MCPClientConfig :endpoint="endpoint" @copy="copy" />
     </section>
     <section class="mcp-section" aria-labelledby="mcp-create-title">

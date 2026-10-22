@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"strings"
 )
 
@@ -34,7 +35,7 @@ func (r *EnvironmentResolver) ResolveEnv(ctx context.Context, projectID, branch 
 	}
 
 	var mappingsJSON string
-	err := r.db.QueryRowContext(ctx,
+	err := configstate.Queryer(ctx, r.db).QueryRowContext(ctx,
 		`SELECT branch_mappings_json FROM pipeline_triggers WHERE project_id = ?`, projectID,
 	).Scan(&mappingsJSON)
 	if err != nil || strings.TrimSpace(mappingsJSON) == "" {

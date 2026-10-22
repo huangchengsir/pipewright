@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/store"
 )
 
@@ -127,7 +128,9 @@ type service struct {
 
 	// envResolver 可选:手动/定时/串联触发未显式带环境时,据项目分支映射补解析环境
 	// (与 webhook 路径对齐)。nil(纯单测 Service / 未注入)时 Create 不补解析,行为不变。
-	envResolver EnvResolver
+	envResolver       EnvResolver
+	configInitializer func(context.Context, string) error
+	activityOwner     string
 }
 
 // setEnqueue 由 WorkerPool 注入调度回调(Create 入库后调用)。
@@ -153,6 +156,13 @@ func WithEnvResolver(r EnvResolver) Option {
 	return func(s *service) { s.envResolver = r }
 }
 
+// WithConfigInitializer stores missing pipeline defaults before the queued run
+// and its activity hold become visible. It must use the transaction in ctx and
+// must not perform network calls or reveal credentials.
+func WithConfigInitializer(fn func(context.Context, string) error) Option {
+	return func(s *service) { s.configInitializer = fn }
+}
+
 // New 构造运行 Service。db 经参数化 SQL 触库;事件总线用于 SSE 推送(不轮询 DB)。
 // 不做任何重活(无 init() 副作用,避免抬高空载内存)。
 func New(db *sql.DB, opts ...Option) Service {
@@ -161,9 +171,10 @@ func New(db *sql.DB, opts ...Option) Service {
 
 func newService(db *sql.DB, opts ...Option) *service {
 	s := &service{
-		db:      db,
-		bus:     newBus(),
-		cancels: make(map[string]context.CancelFunc),
+		db:            db,
+		bus:           newBus(),
+		cancels:       make(map[string]context.CancelFunc),
+		activityOwner: uuid.NewString(),
 	}
 	for _, o := range opts {
 		o(s)
@@ -189,28 +200,6 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 		return nil, err
 	}
 
-	// 分支留空 → 取项目默认分支(手动触发可不填:项目已知默认分支,系统自动解析)。
-	if strings.TrimSpace(trigger.Branch) == "" {
-		var defaultBranch string
-		if qerr := s.db.QueryRowContext(ctx,
-			`SELECT default_branch FROM projects WHERE id = ?`, projectID).Scan(&defaultBranch); qerr == nil {
-			trigger.Branch = strings.TrimSpace(defaultBranch)
-		}
-	}
-
-	// 环境补解析(#56):手动 / 定时 / 串联触发未显式带环境时,据项目分支映射(与 webhook 同一套
-	// glob 匹配)解析出环境名 + 目标服务器。否则 resolveRegistry(settings, env="") → nil → build_image
-	// 不知推哪个 registry(部署节点 pull 不到镜像)、环境 envVars / targetServerIds 也全落空。
-	// webhook 路径已显式带 ResolvedEnvironment → 此处跳过(不二次解析,与既有行为字节级一致)。
-	if strings.TrimSpace(trigger.ResolvedEnvironment) == "" && s.envResolver != nil {
-		if env, servers := s.envResolver.ResolveEnv(ctx, projectID, trigger.Branch); env != "" {
-			trigger.ResolvedEnvironment = env
-			if len(trigger.ResolvedTargetServerIDs) == 0 {
-				trigger.ResolvedTargetServerIDs = servers
-			}
-		}
-	}
-
 	tt := trigger.Type
 	if tt != TriggerWebhook && tt != TriggerManual && tt != TriggerSchedule && tt != TriggerChain {
 		tt = TriggerManual
@@ -221,17 +210,6 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 	chainDepth := trigger.ChainDepth
 	if chainDepth < 0 {
 		chainDepth = 0
-	}
-
-	// 解析出的目标元数据(webhook 分支映射)持久化为运行内部列;手动触发为空/[]。
-	// 这些列**不**进入冻结 run-detail DTO 输出,仅供 Epic 4 的 targets 消费。
-	targetIDs := trigger.ResolvedTargetServerIDs
-	if targetIDs == nil {
-		targetIDs = []string{}
-	}
-	targetIDsJSON, err := json.Marshal(targetIDs)
-	if err != nil {
-		return nil, fmt.Errorf("run: marshal resolved target server ids: %w", err)
 	}
 
 	// 参数化运行参数(Story 8-11):空 → {}。
@@ -246,57 +224,82 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 
 	now := time.Now().UTC()
 	id := uuid.NewString()
-	var insert interface {
-		ExecContext(context.Context, string, ...any) (sql.Result, error)
-	} = s.db
-	var tx *sql.Tx
-	if idempotent {
-		tx, err = s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return nil, err
+	err = configstate.WithWriteTxContext(ctx, s.db, func(txctx context.Context, q configstate.DBTX) error {
+		if err := configstate.LockEpochs(txctx, q, s.db, configstate.EpochPolicy, configstate.EpochSecrets, configstate.EpochExecutor); err != nil {
+			return err
 		}
-		defer tx.Rollback()
-		_, err = tx.ExecContext(ctx, `INSERT INTO mcp_run_requests (scope, request_id, fingerprint, run_id) VALUES (?, ?, ?, ?)`, trigger.IdempotencyScope, trigger.IdempotencyKey, trigger.IdempotencyFingerprint, id)
-		if err != nil {
-			_ = tx.Rollback()
-			if store.IsUniqueErr(err) {
-				original, found, loadErr := s.idempotentRun(ctx, trigger)
-				if !found && loadErr == nil {
-					loadErr = ErrIdempotencyUnavailable
-				}
-				return original, loadErr
+		if _, err := configstate.LockProject(txctx, q, s.db, projectID); err != nil {
+			return err
+		}
+		if s.configInitializer != nil {
+			if err := s.configInitializer(txctx, projectID); err != nil {
+				return err
 			}
-			return nil, err
 		}
-		insert = tx
-	}
-	_, err = insert.ExecContext(ctx,
-		`INSERT INTO pipeline_runs
+		if strings.TrimSpace(trigger.Branch) == "" {
+			if err := q.QueryRowContext(txctx, `SELECT default_branch FROM projects WHERE id = ?`, projectID).Scan(&trigger.Branch); err != nil {
+				return err
+			}
+			trigger.Branch = strings.TrimSpace(trigger.Branch)
+		}
+		if strings.TrimSpace(trigger.ResolvedEnvironment) == "" && s.envResolver != nil {
+			if env, servers := s.envResolver.ResolveEnv(txctx, projectID, trigger.Branch); env != "" {
+				trigger.ResolvedEnvironment = env
+				if len(trigger.ResolvedTargetServerIDs) == 0 {
+					trigger.ResolvedTargetServerIDs = servers
+				}
+			}
+		}
+		targetIDs := trigger.ResolvedTargetServerIDs
+		if targetIDs == nil {
+			targetIDs = []string{}
+		}
+		targetIDsJSON, err := json.Marshal(targetIDs)
+		if err != nil {
+			return err
+		}
+		if idempotent {
+			if _, err := q.ExecContext(txctx, `INSERT INTO mcp_run_requests (scope, request_id, fingerprint, run_id) VALUES (?, ?, ?, ?)`, trigger.IdempotencyScope, trigger.IdempotencyKey, trigger.IdempotencyFingerprint, id); err != nil {
+				return err
+			}
+		}
+		_, err = q.ExecContext(txctx,
+			`INSERT INTO pipeline_runs
 		   (id, project_id, status, trigger_type, trigger_branch, trigger_commit, trigger_actor,
 		    resolved_environment, resolved_target_server_ids, params_json,
 		    chain_source_run_id, chain_depth, created_at, started_at, finished_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
-		id, projectID, StatusQueued, tt, trigger.Branch, trigger.Commit, trigger.Actor,
-		trigger.ResolvedEnvironment, string(targetIDsJSON), string(paramsJSON),
-		strings.TrimSpace(trigger.ChainSourceRunID), chainDepth,
-		now.Format(time.RFC3339),
-	)
+			id, projectID, StatusQueued, tt, trigger.Branch, trigger.Commit, trigger.Actor,
+			trigger.ResolvedEnvironment, string(targetIDsJSON), string(paramsJSON),
+			strings.TrimSpace(trigger.ChainSourceRunID), chainDepth,
+			now.Format(time.RFC3339),
+		)
+		if err != nil {
+			return err
+		}
+		_, err = configstate.AcquireActivityTx(txctx, q, s.db, configstate.Activity{ID: id, ProjectID: projectID, RunID: id, OwnerEpoch: s.activityOwner, Kind: "run", Phase: "queued"})
+		return err
+	})
 	if err != nil {
-		if isForeignKeyErr(err) {
+		if idempotent && store.IsUniqueErr(err) {
+			original, found, loadErr := s.idempotentRun(ctx, trigger)
+			if !found && loadErr == nil {
+				loadErr = ErrIdempotencyUnavailable
+			}
+			return original, loadErr
+		}
+		if isForeignKeyErr(err) || errors.Is(err, configstate.ErrNotFound) {
 			return nil, ErrProjectNotFound
 		}
 		return nil, fmt.Errorf("run: insert run: %w", err)
 	}
-	if tx != nil {
-		if err := tx.Commit(); err != nil {
-			return nil, err
-		}
-		// Once committed, finish the single enqueue attempt even if the caller
-		// disconnects. The tombstone already prevents any subsequent re-enqueue.
-		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cancel()
-		ctx = finishCtx
+	if err := configstate.StartActivityReaders(id, s.activityOwner); err != nil {
+		return nil, err
 	}
+	// Finish the single dispatch attempt after commit, including caller disconnect.
+	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	ctx = finishCtx
 
 	created, err := s.Get(ctx, id)
 	if err != nil {
@@ -331,8 +334,11 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 	}
 	if fn != nil {
 		if err := fn(id); err != nil {
-			// 入队失败(队列满/已停机):删除孤儿 queued 记录,失败返回避免留下永不调度的运行。
-			_, _ = s.db.ExecContext(ctx, `DELETE FROM pipeline_runs WHERE id = ? AND status = ?`, id, StatusQueued)
+			if errors.Is(err, ErrQueueFull) || errors.Is(err, ErrPoolStopped) {
+				if rejectErr := s.discardRejectedRun(ctx, created); rejectErr != nil {
+					return created, rejectErr
+				}
+			}
 			return nil, err
 		}
 	}
@@ -341,25 +347,34 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 
 // Definitive rejection keeps the request tombstone, but cannot leave work queued forever.
 func (s *service) rejectDispatch(ctx context.Context, created *Run) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
 	finished := time.Now().UTC()
-	res, err := tx.ExecContext(ctx, `UPDATE pipeline_runs SET status = ?, finished_at = ? WHERE id = ? AND status = ?`, StatusFailed, finished.Format(time.RFC3339), created.ID, StatusQueued)
+	rejected := false
+	err := configstate.WithWriteTxContext(ctx, s.db, func(txctx context.Context, q configstate.DBTX) error {
+		if _, err := s.lockRunProject(txctx, q, created.ID); err != nil {
+			return err
+		}
+		res, err := q.ExecContext(txctx, `UPDATE pipeline_runs SET status = ?, finished_at = ? WHERE id = ? AND status = ?`, StatusFailed, finished.Format(time.RFC3339), created.ID, StatusQueued)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil || n == 0 {
+			return err
+		}
+		if _, err := q.ExecContext(txctx, `UPDATE mcp_run_requests SET dispatch_state = 'rejected' WHERE run_id = ?`, created.ID); err != nil {
+			return err
+		}
+		if err := s.releaseQueuedActivityTx(txctx, q, created.ID); err != nil {
+			return err
+		}
+		rejected = true
+		return nil
+	})
 	if err != nil {
 		return err
 	}
-	n, err := res.RowsAffected()
-	if err != nil || n == 0 {
-		return err // A caller which already started work is not a definite rejection.
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE mcp_run_requests SET dispatch_state = 'rejected' WHERE run_id = ?`, created.ID); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return err
+	if !rejected {
+		return nil
 	}
 	created.Status = StatusFailed
 	created.FinishedAt = &finished
@@ -640,7 +655,15 @@ func (s *service) Cancel(ctx context.Context, id string) (*Run, error) {
 	}
 
 	// 尚未被 worker 取走(queued):直接置 failed(queued→failed 合法转移)。
-	if err := s.transition(ctx, id, StatusQueued, StatusFailed, true); err != nil {
+	if err := configstate.WithWriteTxContext(ctx, s.db, func(txctx context.Context, q configstate.DBTX) error {
+		if _, err := s.lockRunProject(txctx, q, id); err != nil {
+			return err
+		}
+		if err := s.transition(txctx, id, StatusQueued, StatusFailed, true); err != nil {
+			return err
+		}
+		return s.releaseQueuedActivityTx(txctx, q, id)
+	}); err != nil {
 		// 竞态:worker 恰好取走/已落终态 → 重查当前状态,绝不把 ErrInvalidTransition 透传到 HTTP(避免 500)。
 		if errors.Is(err, ErrInvalidTransition) {
 			// 仍在执行 → 退化为「运行中取消」语义。
@@ -886,7 +909,7 @@ func (s *service) transition(ctx context.Context, id, from, to string, requireFr
 		args = append(args, from)
 	}
 
-	res, err := s.db.ExecContext(ctx, q, args...)
+	res, err := configstate.Queryer(ctx, s.db).ExecContext(ctx, q, args...)
 	if err != nil {
 		return fmt.Errorf("run: transition: %w", err)
 	}
@@ -894,7 +917,10 @@ func (s *service) transition(ctx context.Context, id, from, to string, requireFr
 	if n == 0 {
 		return ErrInvalidTransition
 	}
-	s.bus.publish(Event{Kind: EventStatus, RunID: id, Status: to})
+	publish := func() { s.bus.publish(Event{Kind: EventStatus, RunID: id, Status: to}) }
+	if !configstate.AfterCommit(ctx, publish) {
+		publish()
+	}
 	return nil
 }
 

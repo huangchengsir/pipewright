@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/artifactstore"
 	"github.com/huangchengsir/pipewright/internal/run"
 	"github.com/huangchengsir/pipewright/internal/target"
@@ -144,8 +145,9 @@ type service struct {
 	diagnoseSem chan struct{}
 	// artStore 是制品库(Story 8-16):非 nil 时部署 release 类「已归档」产物会取真字节经 SSH 上传到
 	// 目标机;nil 或产物非归档 → 旧占位路径(向后兼容)。由 main 注入(WithArtifactStore)。
-	artStore *artifactstore.Store
-	batchDB  *sql.DB
+	artStore      *artifactstore.Store
+	batchDB       *sql.DB
+	activityOwner string
 }
 
 // Option 配置 deploy.Service(如注入诊断钩子)。
@@ -176,9 +178,10 @@ func WithBatchDB(db *sql.DB) Option { return func(s *service) { s.batchDB = db }
 // 不做任何重活(无 init() 副作用,避免抬高空载内存)。
 func New(targetSvc target.Service, runSvc run.Service, opts ...Option) Service {
 	s := &service{
-		targets:     targetSvc,
-		runs:        runSvc,
-		diagnoseSem: make(chan struct{}, maxConcurrentDiagnoses),
+		targets:       targetSvc,
+		runs:          runSvc,
+		diagnoseSem:   make(chan struct{}, maxConcurrentDiagnoses),
+		activityOwner: uuid.NewString(),
 	}
 	for _, o := range opts {
 		o(s)
@@ -211,7 +214,9 @@ func (s *service) seedDiagnosisOnFailure(ctx context.Context, runID, status stri
 		default:
 			return // 已达上限:跳过自动诊断,不阻断部署结果返回。
 		}
+		done := retainDiagnosticActivity(ctx)
 		go func() {
+			defer done()
 			defer func() { <-s.diagnoseSem }()
 			defer func() { _ = recover() }()
 			hook(context.WithoutCancel(ctx), runID)
@@ -220,6 +225,11 @@ func (s *service) seedDiagnosisOnFailure(ctx context.Context, runID, status stri
 }
 
 func (s *service) Deploy(ctx context.Context, in DeployInput) ([]TargetResult, error) {
+	ctx, done, activityErr := s.beginActivity(ctx, in.RunID)
+	if activityErr != nil {
+		return nil, activityErr
+	}
+	defer done()
 	ctx, policyErr := withUploadPolicy(ctx, in.Config)
 	if policyErr != nil {
 		return nil, policyErr
@@ -319,6 +329,11 @@ func (s *service) Deploy(ctx context.Context, in DeployInput) ([]TargetResult, e
 
 // DeployForStage 见接口注释:流水线 deploy_ssh 节点的中途部署(不校验 run 状态、不置终态)。
 func (s *service) DeployForStage(ctx context.Context, runID string, serverIDs []string, cfg map[string]string, strategy string) ([]TargetResult, error) {
+	ctx, done, activityErr := s.beginActivity(ctx, runID)
+	if activityErr != nil {
+		return nil, activityErr
+	}
+	defer done()
 	ctx, policyErr := withUploadPolicy(ctx, cfg)
 	if policyErr != nil {
 		return nil, policyErr
@@ -482,6 +497,11 @@ func pickStageArtifact(arts []run.Artifact, prefer string) *run.Artifact {
 
 // RetryFailed 仅重试该 run 当前 failed/rolled_back 的目标(Story 4.5;FR-13)。见 Service 接口注释。
 func (s *service) RetryFailed(ctx context.Context, in RetryInput) ([]TargetResult, error) {
+	ctx, done, activityErr := s.beginActivity(ctx, in.RunID)
+	if activityErr != nil {
+		return nil, activityErr
+	}
+	defer done()
 	ctx, policyErr := withUploadPolicy(ctx, in.Config)
 	if policyErr != nil {
 		return nil, policyErr

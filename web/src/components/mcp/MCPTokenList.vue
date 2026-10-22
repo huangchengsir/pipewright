@@ -19,7 +19,13 @@ function date(value: string) { const d = new Date(value); return Number.isFinite
       <thead><tr><th>{{ t('settingsMCP.name') }}</th><th>{{ t('settingsMCP.projects') }}</th><th>{{ t('settingsMCP.authorization') }}</th><th>{{ t('settingsMCP.expires') }}</th><th>{{ t('settingsMCP.status') }}</th><th class="mcp-actions"><span class="mcp-sr">{{ t('settingsMCP.revoke') }}</span></th></tr></thead>
       <tbody><tr v-for="row in rows" :key="row.token.id" :data-token-id="row.token.id">
         <td><strong>{{ row.token.name }}</strong><small>{{ t('settingsMCP.created') }} {{ date(row.token.createdAt) }}</small></td>
-        <td>{{ row.projects }}</td><td>{{ t(row.token.canTrigger ? 'settingsMCP.triggerPermission' : 'settingsMCP.readOnly') }}</td><td>{{ date(row.token.expiresAt) }}</td>
+        <td>{{ row.projects }}</td><td>
+          {{ t(row.token.configGrants?.length ? (row.token.canTrigger ? 'mcpConfig.runtimeTrigger' : 'mcpConfig.runtimeRead') : (row.token.canTrigger ? 'settingsMCP.triggerPermission' : 'settingsMCP.readOnly')) }}
+          <small v-for="grant in row.token.configGrants" :key="grant.projectId" class="mcp-grant-summary">
+            {{ projectNames[grant.projectId] ?? grant.projectId }}:
+            {{ [grant.read && t('mcpConfig.read'), grant.propose && t('mcpConfig.propose'), grant.apply && t('mcpConfig.apply')].filter(Boolean).join(' · ') }}
+          </small>
+        </td><td>{{ date(row.token.expiresAt) }}</td>
         <td><span class="mcp-status" :class="`mcp-status--${row.state}`">{{ t(`settingsMCP.${row.state}`) }}</span></td>
         <td class="mcp-actions"><AppTooltip :content="t('settingsMCP.revoke')"><button type="button" class="mcp-icon-button" :disabled="!!row.token.revokedAt || revoking === row.token.id" :aria-label="t('settingsMCP.revoke')" @click="emit('revoke', row.token)"><Ban aria-hidden="true" /></button></AppTooltip></td>
       </tr></tbody>

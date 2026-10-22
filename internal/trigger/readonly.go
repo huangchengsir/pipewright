@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"strings"
 )
 
@@ -15,7 +16,7 @@ func ResolveExistingEnv(ctx context.Context, db *sql.DB, projectID, branch strin
 		return "", nil, nil
 	}
 	var raw string
-	err := db.QueryRowContext(ctx, `SELECT branch_mappings_json FROM pipeline_triggers WHERE project_id = ?`, projectID).Scan(&raw)
+	err := configstate.Queryer(ctx, db).QueryRowContext(ctx, `SELECT branch_mappings_json FROM pipeline_triggers WHERE project_id = ?`, projectID).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil, nil
 	}

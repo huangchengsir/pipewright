@@ -1,21 +1,56 @@
 <script setup lang="ts">
-import { computed, reactive } from 'vue'
+import { computed, reactive, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NSelect } from 'naive-ui'
 import { Plus } from '@vicons/tabler'
 import AppButton from '../ui/AppButton.vue'
 import FormField from '../ui/FormField.vue'
-import type { CreateMCPToken } from '../../api/mcp'
+import { MCP_CONFIG_SECTIONS, MCP_CONFIG_OPERATIONS, type CreateMCPToken, type MCPConfigGrant, type MCPConfigSection, type MCPConfigOperation } from '../../api/mcp'
 
 const props = defineProps<{ projects: { id: string; name: string }[]; busy: boolean; error: string }>()
 const emit = defineEmits<{ create: [input: CreateMCPToken] }>()
 const { t } = useI18n()
 const form = reactive<CreateMCPToken>({ name: '', projectIds: [], canTrigger: false, expiresInDays: 7 })
+const grants = reactive<Record<string, MCPConfigGrant>>({})
 const options = computed(() => props.projects.map(p => ({ label: p.name, value: p.id })))
-const valid = computed(() => form.name.trim().length > 0 && form.name.trim().length <= 80 && form.projectIds.length > 0 && form.projectIds.length <= 32 && Number.isInteger(form.expiresInDays) && form.expiresInDays >= 1 && form.expiresInDays <= 30)
+const selectedProjects = computed(() => props.projects.filter(p => form.projectIds.includes(p.id)))
+const sectionOptions = computed(() => MCP_CONFIG_SECTIONS.map(value => ({ value, label: t(`mcpConfig.sections.${value}`) })))
+const operationSection: Record<MCPConfigOperation, MCPConfigSection> = {
+  'project.set_name': 'project', 'project.set_default_branch': 'project',
+  'stage.rename': 'pipeline', 'job.rename': 'pipeline', 'step.set_limits': 'step_limits', 'build.set': 'build',
+}
+function operationOptions(id: string) {
+  return MCP_CONFIG_OPERATIONS.filter(op => grants[id]?.sections.includes(operationSection[op])).map(value => ({ value, label: t(`mcpConfig.operations.${value.replaceAll('.', '_')}`) }))
+}
+const activeGrants = computed(() => form.projectIds.map(id => grants[id]).filter((grant): grant is MCPConfigGrant => !!grant?.read))
+const valid = computed(() => form.name.trim().length > 0 && form.name.trim().length <= 80 && form.projectIds.length > 0 && form.projectIds.length <= 32 && Number.isInteger(form.expiresInDays) && form.expiresInDays >= 1 && form.expiresInDays <= 30 && activeGrants.value.every(g => g.sections.length > 0 && (!g.propose || g.operations.length > 0)))
+watch(() => [...form.projectIds], ids => {
+  for (const id of Object.keys(grants)) if (!ids.includes(id)) delete grants[id]
+  for (const id of ids) if (!grants[id]) grants[id] = { projectId: id, read: false, propose: false, apply: false, sections: [], operations: [] }
+}, { flush: 'sync' })
+function setPermission(id: string, permission: 'read' | 'propose' | 'apply', event: Event) {
+  const grant = grants[id]
+  if (!grant || props.busy) return
+  const checked = (event.target as HTMLInputElement).checked
+  if (permission === 'read') {
+    grant.read = checked
+    grant.sections = checked ? [...MCP_CONFIG_SECTIONS] : []
+    if (!checked) { grant.propose = false; grant.apply = false; grant.operations = [] }
+  } else if (permission === 'propose' && grant.read) {
+    grant.propose = checked
+    grant.operations = checked ? operationOptions(id).map(op => op.value) : []
+    if (!checked) grant.apply = false
+  } else if (permission === 'apply' && grant.propose) grant.apply = checked
+}
+function setSections(id: string, values: MCPConfigSection[]) {
+  if (props.busy) return
+  const grant = grants[id]
+  grant.sections = values
+  grant.operations = grant.operations.filter(op => values.includes(operationSection[op]))
+}
 function submit() {
   if (props.busy || !valid.value) return
-  emit('create', { ...form, name: form.name.trim(), projectIds: [...form.projectIds] })
+  emit('create', { ...form, name: form.name.trim(), projectIds: [...form.projectIds], ...(activeGrants.value.length ? { configGrants: activeGrants.value.map(g => ({ ...g, sections: [...g.sections], operations: [...g.operations] })) } : {}) })
 }
 </script>
 
@@ -35,6 +70,27 @@ function submit() {
       <AppButton type="submit" variant="primary" :loading="busy" :disabled="!valid"><Plus class="mcp-icon" aria-hidden="true" />{{ t('settingsMCP.create') }}</AppButton>
     </div>
     <p v-if="form.canTrigger" class="mcp-warning" role="note">{{ t('settingsMCP.triggerWarning') }}</p>
+    <fieldset v-if="selectedProjects.length" class="mcp-config-grants" :disabled="busy" aria-describedby="mcp-config-grants-hint">
+      <legend>{{ t('mcpConfig.permissionsTitle') }}</legend>
+      <p id="mcp-config-grants-hint" class="mcp-grants-hint">{{ t('mcpConfig.permissionsHint') }}</p>
+      <div v-for="project in selectedProjects" :key="project.id" class="mcp-project-grant" :data-config-project="project.id">
+        <strong>{{ project.name }}</strong>
+        <div class="mcp-grant-toggles">
+          <label><input type="checkbox" :checked="grants[project.id]?.read" :disabled="busy" data-permission="read" @change="setPermission(project.id, 'read', $event)" />{{ t('mcpConfig.read') }}</label>
+          <label><input type="checkbox" :checked="grants[project.id]?.propose" :disabled="busy || !grants[project.id]?.read" data-permission="propose" @change="setPermission(project.id, 'propose', $event)" />{{ t('mcpConfig.propose') }}</label>
+          <label><input type="checkbox" :checked="grants[project.id]?.apply" :disabled="busy || !grants[project.id]?.propose" data-permission="apply" @change="setPermission(project.id, 'apply', $event)" />{{ t('mcpConfig.apply') }}</label>
+        </div>
+        <div v-if="grants[project.id]?.read" class="mcp-grant-ranges">
+          <FormField :label="t('mcpConfig.allowedSections')" :field-id="`mcp-sections-${project.id}`" required>
+            <NSelect :value="grants[project.id].sections" multiple :options="sectionOptions" :disabled="busy" :input-props="{ id: `mcp-sections-${project.id}`, 'aria-label': t('mcpConfig.allowedSections') }" @update:value="setSections(project.id, $event)" />
+          </FormField>
+          <FormField v-if="grants[project.id].propose" :label="t('mcpConfig.allowedOperations')" :field-id="`mcp-operations-${project.id}`" required>
+            <NSelect v-model:value="grants[project.id].operations" multiple :options="operationOptions(project.id)" :disabled="busy" :input-props="{ id: `mcp-operations-${project.id}`, 'aria-label': t('mcpConfig.allowedOperations') }" />
+          </FormField>
+        </div>
+      </div>
+      <p v-if="activeGrants.some(g => g.apply)" class="mcp-grants-hint" role="note">{{ t('mcpConfig.applyPermissionHint') }}</p>
+    </fieldset>
     <p v-if="error" class="mcp-error" role="alert">{{ error }}</p>
   </form>
 </template>
@@ -52,5 +108,16 @@ function submit() {
 .mcp-warning, .mcp-error { grid-column: 1 / -1; margin: 0; font-size: var(--text-label); overflow-wrap: anywhere; }
 .mcp-warning { color: var(--color-dim); }
 .mcp-error { color: var(--color-danger, #bd2538); }
+.mcp-config-grants { grid-column: 1 / -1; min-width: 0; margin: 0; padding: 16px; border: 1px solid var(--color-border-strong); border-radius: var(--rounded); }
+.mcp-config-grants legend { padding: 0 6px; color: var(--color-text); font-size: var(--text-label); font-weight: 600; }
+.mcp-grants-hint { margin: 0; color: var(--color-dim); font-size: var(--text-label); line-height: 1.6; }
+.mcp-project-grant { padding: 14px 0; border-bottom: 1px solid var(--color-border); }
+.mcp-project-grant:last-of-type { border-bottom: 0; }
+.mcp-project-grant > strong { display: block; overflow-wrap: anywhere; font-size: var(--text-label); }
+.mcp-grant-toggles { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 8px; }
+.mcp-grant-toggles label { display: inline-flex; gap: 8px; align-items: center; min-height: 44px; font-size: var(--text-label); cursor: pointer; }
+.mcp-grant-toggles input { accent-color: var(--color-primary); }
+.mcp-grant-ranges { display: grid; gap: 16px; padding-top: 8px; }
+@media (min-width: 720px) { .mcp-grant-ranges { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
 @media (max-width: 640px) { .mcp-form { grid-template-columns: minmax(0, 1fr); } .mcp-form__lower { gap: 14px; } .mcp-form__lower > :last-child { margin-left: 0; } }
 </style>

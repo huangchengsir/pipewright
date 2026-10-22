@@ -23,6 +23,9 @@ import { listServers, type Server } from '../api/servers'
 import { listChannels, type NotificationChannel } from '../api/notifications'
 import { getValidation, type ValidationDTO, type IssueScope } from '../api/pipelineValidation'
 import { HttpError } from '../api/http'
+import type { AIApplyResponse } from '../api/aiGenerate'
+import { bindConfigRevision, configRevisionOf } from '../api/configRevision'
+import { provideProjectConfigRevisions } from '../composables/useProjectConfigRevisions'
 import PipelineCanvas from '../components/pipeline/PipelineCanvas.vue'
 import PipelineSaveStatus from '../components/pipeline/PipelineSaveStatus.vue'
 import PipelineGuide from '../components/onboarding/PipelineGuide.vue'
@@ -37,7 +40,7 @@ import YamlImportModal from '../components/pipeline/YamlImportModal.vue'
 import TemplatePickerModal from '../components/pipeline/TemplatePickerModal.vue'
 import PacPreviewModal from '../components/pipeline/PacPreviewModal.vue'
 import ProjectPreviewConfig from '../components/pipeline/ProjectPreviewConfig.vue'
-import { usePipelineDraftSave, type PipelineDraftParticipant, type PipelineSaveState } from '../composables/usePipelineDraftSave'
+import { usePipelineDraftSave, type PipelineDraftParticipant, type PipelineSaveContext, type PipelineSaveState } from '../composables/usePipelineDraftSave'
 import { useConfirm } from '../composables/useConfirm'
 
 // ─── Route ────────────────────────────────────────────────────────────────────
@@ -48,6 +51,9 @@ const route  = useRoute()
 const router = useRouter()
 
 const projectId = computed(() => route.params.id as string)
+const revisionCoordinator = provideProjectConfigRevisions(() => projectId.value)
+const initialTouched = ref(false)
+function markInitialEdit(): void { initialTouched.value = true }
 
 // ─── Tabs ─────────────────────────────────────────────────────────────────────
 
@@ -110,17 +116,22 @@ function applyPipeline(dto: PipelineDTO): void {
   editStages.value = JSON.parse(JSON.stringify(dto.stages)) as PipelineStage[]
 }
 
+let pipelineLoadGeneration = 0
 async function loadPipeline(): Promise<void> {
+  const generation = ++pipelineLoadGeneration
   const id = projectId.value
-  loadState.value = 'loading'
+  const initial = pipelineRevisionSync.isInitialRead(id)
+  if (!initial) loadState.value = 'loading'
   loadError.value = ''
   try {
     const dto = await getPipeline(id)
-    if (id !== projectId.value) return
+    if (id !== projectId.value || generation !== pipelineLoadGeneration) return
+    if (initial && !pipelineRevisionSync.canAcceptInitialRead()) return
     applyPipeline(dto)
     loadState.value = 'idle'
   } catch (err) {
-    if (id !== projectId.value) return
+    if (id !== projectId.value || generation !== pipelineLoadGeneration) return
+    if (initial) return
     if (err instanceof HttpError) {
       if (err.status === 0) {
         loadError.value = t('projectPipeline.errNoServer')
@@ -159,9 +170,12 @@ function applySettings(dto: SettingsDTO): void {
   editEnvs.value  = JSON.parse(JSON.stringify(dto.environments)) as Environment[]
 }
 
+let settingsLoadGeneration = 0
 async function loadSettings(): Promise<void> {
+  const generation = ++settingsLoadGeneration
   const id = projectId.value
-  settingsLoadState.value = 'loading'
+  const initial = settingsRevisionSync.isInitialRead(id)
+  if (!initial) settingsLoadState.value = 'loading'
   try {
     const [dto, creds, srvs, chs] = await Promise.all([
       getSettings(id),
@@ -169,27 +183,35 @@ async function loadSettings(): Promise<void> {
       listServers().catch(() => [] as Server[]),
       listChannels().catch(() => [] as NotificationChannel[]),
     ])
-    if (id !== projectId.value) return
+    if (id !== projectId.value || generation !== settingsLoadGeneration) return
+    if (initial && !settingsRevisionSync.canAcceptInitialRead()) return
     applySettings(dto)
     credentials.value = creds
     servers.value = srvs
     channels.value = chs
     settingsLoadState.value = 'idle'
   } catch {
-    if (id !== projectId.value) return
+    if (id !== projectId.value || generation !== settingsLoadGeneration) return
+    if (initial) return
     settingsLoadState.value = 'error'
   }
 }
 
 function handleBuildUpdate(build: BuildConfig): void {
+  markInitialEdit()
   editBuild.value = build
 }
 
 function handleEnvsUpdate(envs: Environment[]): void {
+  markInitialEdit()
   editEnvs.value = envs
 }
 
 watch(projectId, () => {
+  initialTouched.value = false
+  aiWizardOpen.value = false
+  yamlImportOpen.value = false
+  templateModalOpen.value = false
   project.value = null
   pipeline.value = null
   settings.value = null
@@ -204,6 +226,7 @@ onMounted(() => { void loadProject(); void loadPipeline(); void loadSettings() }
 // ─── Canvas update ────────────────────────────────────────────────────────────
 
 function handleCanvasUpdate(stages: PipelineStage[]): void {
+  markInitialEdit()
   editStages.value = stages
 }
 
@@ -212,6 +235,9 @@ function handleCanvasUpdate(stages: PipelineStage[]): void {
 const triggersRef = ref<InstanceType<typeof TriggersPanel> | null>(null)
 const previewRef = ref<InstanceType<typeof ProjectPreviewConfig> | null>(null)
 const confirm = useConfirm()
+const pipelineRevisionSync = revisionCoordinator.register({ projectId: () => projectId.value, read: () => configRevisionOf(pipeline.value), advance: (_from, to) => bindConfigRevision(pipeline.value, to), ready: () => loadState.value === 'idle' && !!pipeline.value, reload: loadPipeline })
+const settingsRevisionSync = revisionCoordinator.register({ projectId: () => projectId.value, read: () => configRevisionOf(settings.value), advance: (_from, to) => bindConfigRevision(settings.value, to), ready: () => settingsLoadState.value === 'idle' && !!settings.value, reload: loadSettings })
+const projectRevisionSync = revisionCoordinator.register({ projectId: () => projectId.value, read: () => configRevisionOf(project.value), advance: (_from, to) => bindConfigRevision(project.value, to), ready: () => !!project.value, reload: loadProject })
 
 function triggerParticipant(part: PipelineDraftParticipant | null, scope: string): PipelineDraftParticipant | null {
   if (!part) return null
@@ -220,13 +246,15 @@ function triggerParticipant(part: PipelineDraftParticipant | null, scope: string
     ready: part.ready,
     dirty: part.dirty,
     saving: part.saving,
+    get configRevision() { return part.configRevision },
+    advanceConfigRevision: (from, to) => part.advanceConfigRevision?.(from, to),
     validate: () => {
       const valid = part.validate?.() ?? true
       if (!valid) setTab('triggers')
       return valid
     },
-    save: async () => {
-      const saved = await part.save()
+    save: async (context) => {
+      const saved = await part.save(context)
       if (!saved) setTab('triggers')
       return saved
     },
@@ -241,6 +269,8 @@ const draftSave = usePipelineDraftSave({
       dirty: stagesDirty.value,
       saving: false,
       saveEvenIfClean: true,
+      get configRevision() { return configRevisionOf(pipeline.value) },
+      advanceConfigRevision: (from, to) => { if (configRevisionOf(pipeline.value) === from) bindConfigRevision(pipeline.value, to) },
       save: saveStagesDraft,
     },
     {
@@ -253,6 +283,8 @@ const draftSave = usePipelineDraftSave({
       ready: settingsLoadState.value === 'idle' && !!editBuild.value,
       dirty: settingsDirty.value,
       saving: false,
+      get configRevision() { return configRevisionOf(settings.value) },
+      advanceConfigRevision: (from, to) => { if (configRevisionOf(settings.value) === from) bindConfigRevision(settings.value, to) },
       save: saveSettingsDraft,
     },
     triggerParticipant(triggersRef.value, 'triggers'),
@@ -265,7 +297,7 @@ const draftSave = usePipelineDraftSave({
     variant: 'danger',
   }),
 })
-const saveSubmitting = draftSave.busy
+const saveSubmitting = computed(() => draftSave.busy.value || revisionCoordinator.aligning.value)
 const guideDirty = draftSave.dirty
 const saveBanner     = ref('')
 const tabDirty = computed<Record<TabKey, boolean>>(() => ({
@@ -374,7 +406,7 @@ async function handleSave(): Promise<void> {
     if (!await draftSave.save()) {
       // Acknowledged writes with newer local edits are pending, not a failed save.
       if (draftSave.outcome.value?.state === 'error' || draftSave.outcome.value?.state === 'partial') {
-        saveBanner.value = t('projectPipeline.errSaveFailedRetry')
+        saveBanner.value = draftSave.outcome.value.reason === 'revision_mismatch' ? t('mcpConfig.reloadRequired') : t('projectPipeline.errSaveFailedRetry')
       }
       return
     }
@@ -392,9 +424,16 @@ async function handleSave(): Promise<void> {
   }
 }
 
-async function saveStagesDraft(): Promise<boolean> {
+async function saveStagesDraft(context?: PipelineSaveContext): Promise<boolean> {
+  const id = projectId.value
   const snapshot = JSON.stringify(editStages.value)
-  const dto = await savePipeline(projectId.value, { stages: JSON.parse(snapshot) as PipelineStage[] })
+  const revision = context?.baseRevision ?? configRevisionOf(pipeline.value)
+  const payload = { stages: JSON.parse(snapshot) as PipelineStage[] }
+  const dto = revision ? await savePipeline(id, payload, revision) : await savePipeline(id, payload)
+  if (id !== projectId.value) return false
+  revisionCoordinator.commit(id, revision, dto)
+  const committedRevision = configRevisionOf(dto)
+  if (committedRevision) context?.onCommitted(committedRevision)
   if (JSON.stringify(editStages.value) === snapshot && JSON.stringify(dto.stages) !== snapshot) applyPipeline(dto)
   else {
     pipeline.value = dto
@@ -403,11 +442,18 @@ async function saveStagesDraft(): Promise<boolean> {
   return true
 }
 
-async function saveSettingsDraft(): Promise<boolean> {
+async function saveSettingsDraft(context?: PipelineSaveContext): Promise<boolean> {
+  const id = projectId.value
   const payload = buildSettingsPayload()
   if (!payload) return false
   const snapshot = JSON.stringify({ build: editBuild.value, environments: editEnvs.value })
-  const dto = await saveSettings(projectId.value, JSON.parse(JSON.stringify(payload)) as SaveSettingsInput)
+  const revision = context?.baseRevision ?? configRevisionOf(settings.value)
+  const input = JSON.parse(JSON.stringify(payload)) as SaveSettingsInput
+  const dto = revision ? await saveSettings(id, input, revision) : await saveSettings(id, input)
+  if (id !== projectId.value) return false
+  revisionCoordinator.commit(id, revision, dto)
+  const committedRevision = configRevisionOf(dto)
+  if (committedRevision) context?.onCommitted(committedRevision)
   if (JSON.stringify({ build: editBuild.value, environments: editEnvs.value }) === snapshot) applySettings(dto)
   else settings.value = dto
   credentials.value = await listCredentials().catch(() => credentials.value)
@@ -455,8 +501,11 @@ async function confirmStageReplacement(): Promise<boolean> {
 }
 
 /** Templates persist only stages; keep unrelated settings drafts intact. */
-async function handleTemplateApplied(): Promise<void> {
-  await loadPipeline()
+async function handleTemplateApplied(dto?: PipelineDTO): Promise<void> {
+  const id = projectId.value
+  if (dto) { pipelineLoadGeneration++; applyPipeline(dto); loadState.value = 'idle' }
+  else await loadPipeline()
+  if (id !== projectId.value) return
   void guideRef.value?.refresh()
   if (activeTab.value !== 'canvas') setTab('canvas')
   draftSave.resetOutcome()
@@ -469,26 +518,34 @@ async function handleTemplateApplied(): Promise<void> {
  * We jump to the canvas tab so the change is visible.
  */
 function handleImportPreview(dto: PipelineDTO): void {
-  pipeline.value = dto
+  // Parsing YAML is not a read of the persisted editing baseline.
+  pipeline.value = bindConfigRevision({ ...dto }, configRevisionOf(pipeline.value))
   editStages.value = JSON.parse(JSON.stringify(dto.stages)) as PipelineStage[]
   if (activeTab.value !== 'canvas') setTab('canvas')
 }
 
 /** The modal persisted stages only; preserve variable and environment drafts. */
-async function handleImportSaved(): Promise<void> {
-  await loadPipeline()
+async function handleImportSaved(dto?: PipelineDTO): Promise<void> {
+  const id = projectId.value
+  if (dto) { pipelineLoadGeneration++; applyPipeline(dto); loadState.value = 'idle' }
+  else await loadPipeline()
+  if (id !== projectId.value) return
   void guideRef.value?.refresh()
   if (activeTab.value !== 'canvas') setTab('canvas')
   draftSave.resetOutcome()
   scheduleValidation(400)
 }
 
-/** Called by AIGenerateWizard after a successful apply. Reload all data. */
-async function handleAIApplied(): Promise<void> {
-  await Promise.all([loadPipeline(), loadSettings()])
+/** Reload changed blocks before they can save; unchanged drafts retain their buffers. */
+async function handleAIApplied(result?: AIApplyResponse): Promise<void> {
+  const id = projectId.value
+  await Promise.all([
+    ...(!result || result.applied.spec ? [loadPipeline()] : []),
+    ...(!result || result.applied.settings ? [loadSettings()] : []),
+    ...(!result || result.applied.triggers ? [triggersRef.value?.reload()] : []),
+  ])
+  if (id !== projectId.value) return
   void guideRef.value?.refresh()
-  // Trigger TriggersPanel to refresh — it is self-loading, close+reopen is the
-  // simplest approach; alternatively emit a key-change or use a triggerKey ref.
   scheduleValidation(400)
 }
 
@@ -565,14 +622,19 @@ watch(activeTab, () => { scheduleValidation() })
 const project = ref<Project | null>(null)
 const projectName = computed(() => project.value?.name ?? String(route.params.id))
 
+let projectLoadGeneration = 0
 async function loadProject(): Promise<void> {
+  const generation = ++projectLoadGeneration
   const id = projectId.value
+  const initial = projectRevisionSync.isInitialRead(id)
   try {
     const all = await listProjects()
-    if (id !== projectId.value) return
+    if (id !== projectId.value || generation !== projectLoadGeneration) return
+    if (initial && !projectRevisionSync.canAcceptInitialRead()) return
     project.value = all.find((p) => p.id === id) ?? null
   } catch {
-    if (id !== projectId.value) return
+    if (id !== projectId.value || generation !== projectLoadGeneration) return
+    if (initial) return
     project.value = null // 面包屑回退显示 ID,不阻断编辑器
   }
 }
@@ -590,16 +652,22 @@ const pacDefaultBranch = computed(() => project.value?.defaultBranch ?? '')
 
 async function togglePac(next: boolean): Promise<void> {
   if (!project.value || pacToggling.value) return
+  const id = projectId.value
   pacToggling.value = true
   pacError.value = ''
-  const prev = project.value.pacEnabled
-  project.value = { ...project.value, pacEnabled: next } // optimistic
+  const previousProject = project.value
+  const revision = configRevisionOf(previousProject)
+  project.value = bindConfigRevision({ ...project.value, pacEnabled: next }, revision) // optimistic
   try {
-    const updated = await updateProject(projectId.value, { pacEnabled: next })
+    const updated = revision ? await updateProject(id, { pacEnabled: next }, revision) : await updateProject(id, { pacEnabled: next })
+    if (id !== projectId.value) return
+    revisionCoordinator.commit(id, revision, updated)
     project.value = updated
     void guideRef.value?.refresh()
   } catch {
-    project.value = { ...project.value, pacEnabled: prev } // rollback
+    if (id !== projectId.value) return
+    // Another same-page commit may have advanced the project while this request failed.
+    project.value = bindConfigRevision({ ...project.value!, pacEnabled: previousProject.pacEnabled }, configRevisionOf(project.value))
     pacError.value = t('projectPipeline.pacToggleFailed')
   } finally {
     pacToggling.value = false
@@ -614,24 +682,30 @@ const prStatusError = ref('')
 
 async function togglePrStatus(next: boolean): Promise<void> {
   if (!project.value || prStatusToggling.value) return
+  const id = projectId.value
   prStatusToggling.value = true
   prStatusError.value = ''
-  const prev = project.value.prStatusEnabled
-  project.value = { ...project.value, prStatusEnabled: next } // optimistic
+  const previousProject = project.value
+  const revision = configRevisionOf(previousProject)
+  project.value = bindConfigRevision({ ...project.value, prStatusEnabled: next }, revision) // optimistic
   try {
-    const updated = await updateProject(projectId.value, { prStatusEnabled: next })
+    const updated = revision ? await updateProject(id, { prStatusEnabled: next }, revision) : await updateProject(id, { prStatusEnabled: next })
+    if (id !== projectId.value) return
+    revisionCoordinator.commit(id, revision, updated)
     project.value = updated
   } catch {
-    project.value = { ...project.value, prStatusEnabled: prev } // rollback
+    if (id !== projectId.value) return
+    project.value = bindConfigRevision({ ...project.value!, prStatusEnabled: previousProject.prStatusEnabled }, configRevisionOf(project.value))
     prStatusError.value = t('projectPipeline.prStatusToggleFailed')
   } finally {
     prStatusToggling.value = false
   }
 }
+revisionCoordinator.synchronizeInitial(() => !initialTouched.value && !stagesDirty.value && !settingsDirty.value && !triggersRef.value?.dirty && !previewRef.value?.dirty && !draftSave.busy.value)
 </script>
 
 <template>
-  <div class="pipeline-root">
+  <div class="pipeline-root" @input.capture="markInitialEdit" @change.capture="markInitialEdit" @click.capture="markInitialEdit">
 
     <!-- ─── Top bar ────────────────────────────────────────────────────────── -->
     <header class="pipeline-top">
@@ -949,6 +1023,7 @@ async function togglePrStatus(next: boolean): Promise<void> {
     <AIGenerateWizard
       v-if="aiWizardOpen"
       :project-id="projectId"
+      :base-revision="configRevisionOf(pipeline)"
       @close="aiWizardOpen = false"
       @applied="handleAIApplied"
     />
@@ -957,6 +1032,7 @@ async function togglePrStatus(next: boolean): Promise<void> {
     <YamlImportModal
       v-if="yamlImportOpen"
       :project-id="projectId"
+      :base-revision="configRevisionOf(pipeline)"
       :before-replace="confirmStageReplacement"
       @close="yamlImportOpen = false"
       @preview="handleImportPreview"
@@ -967,6 +1043,7 @@ async function togglePrStatus(next: boolean): Promise<void> {
     <TemplatePickerModal
       v-if="templateModalOpen"
       :project-id="projectId"
+      :base-revision="configRevisionOf(pipeline)"
       :stages="editStages"
       :before-replace="confirmStageReplacement"
       @close="templateModalOpen = false"

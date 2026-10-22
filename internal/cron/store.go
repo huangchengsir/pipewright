@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"strings"
 	"time"
 
@@ -58,7 +59,7 @@ func (s *service) Get(ctx context.Context, projectID string) (*Config, error) {
 		expr, branch, updated string
 		enabled               int
 	)
-	err := s.db.QueryRowContext(ctx,
+	err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT expression, branch, enabled, updated_at FROM project_crons WHERE project_id = ?`,
 		projectID,
 	).Scan(&expr, &branch, &enabled, &updated)
@@ -90,13 +91,19 @@ func (s *service) Save(ctx context.Context, projectID string, in SaveInput) (*Co
 	if in.Enabled {
 		enabled = 1
 	}
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO project_crons (project_id, expression, branch, enabled, created_at, updated_at)
+	err := configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+		_, writeErr := q.ExecContext(txctx,
+			`INSERT INTO project_crons (project_id, expression, branch, enabled, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?) `+
-			store.UpsertSuffix(store.DialectOf(s.db), []string{"project_id"},
-				[]string{"expression", "branch", "enabled", "updated_at"}),
-		projectID, expr, branch, enabled, now, now,
-	)
+				store.UpsertSuffix(store.DialectOf(s.db), []string{"project_id"},
+					[]string{"expression", "branch", "enabled", "updated_at"}),
+			projectID, expr, branch, enabled, now, now,
+		)
+		return writeErr
+	})
+	if errors.Is(err, configstate.ErrNotFound) {
+		return nil, ErrProjectNotFound
+	}
 	if err != nil {
 		if isForeignKeyErr(err) {
 			return nil, ErrProjectNotFound
@@ -108,7 +115,7 @@ func (s *service) Save(ctx context.Context, projectID string, in SaveInput) (*Co
 
 // ListEnabled 实现 Store:返回所有启用且表达式非空的定时配置(供调度器扫描)。
 func (s *service) ListEnabled(ctx context.Context) ([]Entry, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT project_id, expression, branch FROM project_crons WHERE enabled = 1 AND expression <> ''`)
 	if err != nil {
 		return nil, fmt.Errorf("cron: list enabled: %w", err)

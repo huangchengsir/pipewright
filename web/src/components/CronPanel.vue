@@ -14,6 +14,8 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getCron, saveCron, type CronConfig } from '../api/cron'
 import { HttpError } from '../api/http'
+import { configRevisionOf } from '../api/configRevision'
+import { useProjectConfigRevisionParticipant } from '../composables/useProjectConfigRevisions'
 
 const props = defineProps<{
   projectId: string
@@ -34,6 +36,14 @@ const nextRun = ref('')
 const saveSubmitting = ref(false)
 const saveBanner = ref('')
 const saveSuccess = ref(false)
+const configRevision = ref<string>()
+const revisionSync = useProjectConfigRevisionParticipant({
+  projectId: () => props.projectId,
+  read: () => configRevision.value,
+  advance: (_from, to) => { configRevision.value = to },
+  ready: () => loadState.value === 'idle' && !saveSubmitting.value,
+  reload: load,
+})
 
 // ─── Quick-pick presets (5-field 分 时 日 月 周) ───────────────────────────────
 const presets = computed<ReadonlyArray<{ label: string; expr: string }>>(() => [
@@ -53,19 +63,29 @@ const nextRunLabel = computed<string>(() => {
 })
 
 function applyConfig(c: CronConfig): void {
+  configRevision.value = configRevisionOf(c)
   enabled.value = c.enabled
   expression.value = c.expression
   branch.value = c.branch
   nextRun.value = c.nextRun
 }
 
+let loadGeneration = 0
 async function load(): Promise<void> {
-  loadState.value = 'loading'
+  const generation = ++loadGeneration
+  const id = props.projectId
+  const initial = revisionSync.isInitialRead(id)
+  if (!initial) loadState.value = 'loading'
   loadError.value = ''
   try {
-    applyConfig(await getCron(props.projectId))
+    const config = await getCron(id)
+    if (id !== props.projectId || generation !== loadGeneration) return
+    if (initial && !revisionSync.canAcceptInitialRead()) return
+    applyConfig(config)
     loadState.value = 'idle'
   } catch (err) {
+    if (id !== props.projectId || generation !== loadGeneration) return
+    if (initial) return
     loadState.value = 'error'
     loadError.value = err instanceof HttpError ? err.message : t('projectPanels.cron.errLoad')
   }
@@ -79,6 +99,8 @@ function pickPreset(expr: string): void {
 }
 
 async function handleSave(): Promise<void> {
+  const id = props.projectId
+  const previousRevision = configRevision.value
   saveBanner.value = ''
   saveSuccess.value = false
   // Client guard mirrors backend: enabling requires a non-empty expression.
@@ -88,16 +110,18 @@ async function handleSave(): Promise<void> {
   }
   saveSubmitting.value = true
   try {
-    applyConfig(
-      await saveCron(props.projectId, {
+    const config = await saveCron(id, {
         expression: expression.value.trim(),
         branch: branch.value.trim(),
         enabled: enabled.value,
-      }),
-    )
+      }, configRevision.value)
+    if (id !== props.projectId) return
+    revisionSync.committed(previousRevision, config, id)
+    applyConfig(config)
     saveSuccess.value = true
     saveBanner.value = t('projectPanels.cron.savedOk')
   } catch (err) {
+    if (id !== props.projectId) return
     saveSuccess.value = false
     if (err instanceof HttpError) {
       saveBanner.value =

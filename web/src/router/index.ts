@@ -34,6 +34,8 @@ const SettingsVault = () => import('../views/settings/SettingsVault.vue')
 const SettingsDnsProviders = () => import('../views/settings/SettingsDnsProviders.vue')
 const SettingsAccount = () => import('../views/settings/SettingsAccount.vue')
 const SettingsMCP = () => import('../views/settings/SettingsMCP.vue')
+const MCPConfigReview = () => import('../views/MCPConfigReview.vue')
+const MCPConfigMaintenance = () => import('../views/MCPConfigMaintenance.vue')
 // Story 4-1: target server registry + shared SSH layer (FR-14)
 const SettingsServers = () => import('../views/settings/SettingsServers.vue')
 // Story 5-1: notification channels (FR-19)
@@ -105,6 +107,8 @@ const router = createRouter({
         // Story 1-7: first-run onboarding guide (inside shell, auth-required)
         { path: 'onboarding', name: 'onboarding', component: Onboarding, meta: { title: '快速上手' } },
         { path: 'projects', name: 'projects', component: Projects, meta: { title: '项目' } },
+        { path: 'mcp/config-drafts/:id/review', name: 'mcp-config-review', component: MCPConfigReview, meta: { title: 'MCP 配置审阅' } },
+        { path: 'mcp/config-maintenance', name: 'mcp-config-maintenance', component: MCPConfigMaintenance, meta: { title: 'MCP 配置维护' } },
         // Story 2-2: 4-tab pipeline editor (primary config entry point)
         { path: 'projects/:id/pipeline', name: 'project-pipeline', component: ProjectPipeline, meta: { title: '流水线' } },
         // Story 2-3: backward-compat standalone triggers page

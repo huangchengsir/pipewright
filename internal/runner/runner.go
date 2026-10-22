@@ -10,6 +10,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"strings"
 	"time"
 
@@ -57,7 +58,7 @@ func New(db *sql.DB, servers ServerExister) Service {
 
 func (s *service) Get(ctx context.Context, projectID string) (*Config, error) {
 	cfg := &Config{ProjectID: projectID}
-	row := s.db.QueryRowContext(ctx, `SELECT runner_server_id FROM project_runners WHERE project_id = ?`, projectID)
+	row := configstate.Queryer(ctx, s.db).QueryRowContext(ctx, `SELECT runner_server_id FROM project_runners WHERE project_id = ?`, projectID)
 	switch err := row.Scan(&cfg.RunnerServerID); {
 	case errors.Is(err, sql.ErrNoRows):
 		return cfg, nil // 无配置 = 本地构建
@@ -72,7 +73,7 @@ func (s *service) Save(ctx context.Context, projectID, runnerServerID string) (*
 
 	// 校验项目存在。
 	var exists int
-	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM projects WHERE id = ?`, projectID).Scan(&exists); err != nil {
+	if err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx, `SELECT 1 FROM projects WHERE id = ?`, projectID).Scan(&exists); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrProjectNotFound
 		}
@@ -84,11 +85,17 @@ func (s *service) Save(ctx context.Context, projectID, runnerServerID string) (*
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.db.ExecContext(ctx, `
+	err := configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+		_, writeErr := q.ExecContext(txctx, `
 		INSERT INTO project_runners (project_id, runner_server_id, created_at, updated_at)
 		VALUES (?, ?, ?, ?) `+
-		store.UpsertSuffix(store.DialectOf(s.db), []string{"project_id"}, []string{"runner_server_id", "updated_at"}),
-		projectID, runnerServerID, now, now)
+			store.UpsertSuffix(store.DialectOf(s.db), []string{"project_id"}, []string{"runner_server_id", "updated_at"}),
+			projectID, runnerServerID, now, now)
+		return writeErr
+	})
+	if errors.Is(err, configstate.ErrNotFound) {
+		return nil, ErrProjectNotFound
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -15,6 +16,7 @@ import (
 // projectDTO 是项目对外响应体(冻结契约;camelCase;无明文/无密文)。
 // lastRunStatus / targetServers 本期为占位(null / []),数据由后续 story 填。
 type projectDTO struct {
+	ConfigRevision  string   `json:"configRevision,omitempty"`
 	ID              string   `json:"id"`
 	Name            string   `json:"name"`
 	RepoURL         string   `json:"repoUrl"`
@@ -31,7 +33,12 @@ type projectDTO struct {
 
 // toProjectDTO 把领域 Project 转为契约 DTO。
 func toProjectDTO(p *project.Project) projectDTO {
+	revision := ""
+	if p.ConfigRevision > 0 {
+		revision = fmt.Sprintf("cfg-%d", p.ConfigRevision)
+	}
 	return projectDTO{
+		ConfigRevision:  revision,
 		ID:              p.ID,
 		Name:            p.Name,
 		RepoURL:         p.RepoURL,

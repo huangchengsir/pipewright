@@ -13,7 +13,7 @@
  *   applied      → parent should reload pipeline / settings / triggers
  */
 
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   aiGenerate,
@@ -22,8 +22,10 @@ import {
   type AIProposal,
   type AIProposalStage,
   type AIProposalBranchMapping,
+  type AIApplyResponse,
 } from '../../api/aiGenerate'
 import { HttpError } from '../../api/http'
+import { useProjectConfigCommit } from '../../composables/useProjectConfigRevisions'
 import AppButton from '../ui/AppButton.vue'
 import AppBanner from '../ui/AppBanner.vue'
 import SkeletonBlock from '../ui/SkeletonBlock.vue'
@@ -32,14 +34,23 @@ import SkeletonBlock from '../ui/SkeletonBlock.vue'
 
 const props = defineProps<{
   projectId: string
+  baseRevision?: string
 }>()
 
 const emit = defineEmits<{
   close: []
-  applied: []
+  applied: [result: AIApplyResponse]
 }>()
 
 const { t } = useI18n()
+const initialRevision = props.baseRevision
+const initialProjectId = props.projectId
+const publishCommit = useProjectConfigCommit()
+let generation = 0
+let alive = true
+let closeTimer: ReturnType<typeof setTimeout> | undefined
+const current = (ticket: number, id: string) => alive && ticket === generation && id === props.projectId
+onBeforeUnmount(() => { alive = false; generation++; clearTimeout(closeTimer) })
 
 // ─── State machine ────────────────────────────────────────────────────────────
 
@@ -112,6 +123,8 @@ function deselectAll(): void {
 // ─── Generate ─────────────────────────────────────────────────────────────────
 
 async function generate(): Promise<void> {
+  const ticket = generation
+  const projectId = props.projectId
   phase.value         = 'generating'
   generateError.value = ''
   applyError.value    = ''
@@ -119,15 +132,17 @@ async function generate(): Promise<void> {
   response.value      = null
 
   try {
-    const res = await aiGenerate(props.projectId, {
+    const res = await aiGenerate(projectId, {
       nlSupplement: nlSupplement.value.trim() || undefined,
     })
+    if (!current(ticket, projectId)) return
     response.value = res
     if (res.available && res.proposal) {
       initSelections(res.proposal)
     }
     phase.value = 'result'
   } catch (err) {
+    if (!current(ticket, projectId)) return
     if (err instanceof HttpError) {
       generateError.value = err.apiError?.message ?? t('pipelinePanels.wizRequestFailed', { status: err.status })
     } else {
@@ -140,26 +155,33 @@ async function generate(): Promise<void> {
 // ─── Apply ────────────────────────────────────────────────────────────────────
 
 async function apply(): Promise<void> {
-  if (!response.value?.proposal) return
+  if (props.projectId !== initialProjectId) { applyError.value = t('mcpConfig.reloadRequired'); return }
+  if (!response.value?.proposal || phase.value === 'applying') return
+  const ticket = generation
+  const projectId = props.projectId
   phase.value      = 'applying'
   applyError.value = ''
 
   try {
-    await aiApply(props.projectId, {
+    const input = {
       proposal: response.value.proposal,
       selections: {
         stageIds: [...selectedStageIds.value],
         build: buildSelected.value,
         branchMappingIds: [...selectedMappingIds.value],
       },
-    })
+    }
+    const result = initialRevision ? await aiApply(projectId, input, initialRevision) : await aiApply(projectId, input)
+    if (!current(ticket, projectId)) return
+    publishCommit(projectId, initialRevision, result)
     applySuccess.value = true
-    emit('applied')
+    emit('applied', result)
     // Brief pause then close so user sees the success state
-    setTimeout(() => { emit('close') }, 1200)
+    closeTimer = setTimeout(() => { if (current(ticket, projectId)) emit('close') }, 1200)
   } catch (err) {
+    if (!current(ticket, projectId)) return
     if (err instanceof HttpError) {
-      applyError.value = err.apiError?.message ?? t('pipelinePanels.wizApplyFailed', { status: err.status })
+      applyError.value = err.configPartialSave ? t('mcpConfig.partialSaved') : err.apiError?.message ?? t('pipelinePanels.wizApplyFailed', { status: err.status })
     } else {
       applyError.value = t('pipelinePanels.wizNetworkError')
     }
@@ -202,6 +224,8 @@ function kindLabel(kind: string): string {
 
 // Reset when re-opened
 watch(() => props.projectId, () => {
+  generation++
+  clearTimeout(closeTimer)
   phase.value = 'idle'
   nlSupplement.value = ''
   response.value = null

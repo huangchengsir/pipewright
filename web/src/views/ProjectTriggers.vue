@@ -4,18 +4,23 @@
  * The trigger form logic has been extracted to TriggersPanel.vue (Story 2-2).
  * This wrapper preserves the original route for existing links/bookmarks.
  */
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import TriggersPanel from '../components/TriggersPanel.vue'
+import { provideProjectConfigRevisions } from '../composables/useProjectConfigRevisions'
 
 const route = useRoute()
 const { t } = useI18n()
 const projectId = computed(() => route.params.id as string)
+const touched = ref(false)
+const revisions = provideProjectConfigRevisions(() => projectId.value)
+watch(projectId, () => { touched.value = false })
+revisions.synchronizeInitial(() => !touched.value)
 </script>
 
 <template>
-  <div class="triggers-root">
+  <div class="triggers-root" @input.capture="touched = true" @change.capture="touched = true" @click.capture="touched = true">
     <!-- ─── Page header ─────────────────────────────────────────────────── -->
     <header class="page-header">
       <div class="page-header-text">
@@ -29,7 +34,7 @@ const projectId = computed(() => route.params.id as string)
       </div>
     </header>
 
-    <TriggersPanel :project-id="projectId" />
+    <TriggersPanel :project-id="projectId" :disabled="revisions.aligning.value" />
   </div>
 </template>
 

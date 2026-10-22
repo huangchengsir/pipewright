@@ -780,20 +780,7 @@ func (b *Builder) resolveChannel(ctx context.Context, ref string) (id, name stri
 // 并记来源 ID,供并行/跨阶段推送选择。其它产物(jar/dist)直接 emit。
 // 边界:docker build 上下文沿用工作区根(子目录上下文 = 后续);buildCommand 覆盖工具链默认命令 = 后续。
 func (b *Builder) runBuildImageJob(ctx context.Context, sink run.StepSink, rep dagrun.StageReporter, jb pipeline.Job, stageName string, proj *project.Project, settings *pipeline.Settings, envName, branch, workspace, commitTag string, hasPushJob bool, imageTag, stageID string) error {
-	cfg := pipeline.BuildConfig{
-		Model:          cfgString(jb.Config, "buildModel"),
-		DockerfilePath: cfgString(jb.Config, "dockerfilePath"),
-		Context:        cfgString(jb.Config, "context"),
-		Toolchain:      pipeline.Toolchain{Language: cfgString(jb.Config, "toolchainLanguage"), Version: cfgString(jb.Config, "toolchainVersion")},
-		ArtifactType:   cfgString(jb.Config, "artifactType"),
-		Vars:           projectBuildVars(settings, envName),
-	}
-	if cfg.ArtifactType == "" {
-		cfg.ArtifactType = pipeline.ArtifactImage
-	}
-	if cfg.Model == "" {
-		cfg.Model = pipeline.BuildModelDockerfile
-	}
+	cfg := configBuildConfig(jb, projectBuildVars(settings, envName))
 
 	cacheable := cfg.ArtifactType == pipeline.ArtifactJAR || cfg.ArtifactType == pipeline.ArtifactDist
 	if cacheable {

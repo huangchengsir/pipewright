@@ -9,6 +9,7 @@
  */
 
 import { http } from './http'
+import { configWriteOptions } from './configRevision'
 
 // ─── Generate DTO (frozen) ────────────────────────────────────────────────────
 
@@ -122,7 +123,9 @@ export async function aiGenerate(
 export async function aiApply(
   projectId: string,
   input: AIApplyInput,
+  expectedRevision?: string,
 ): Promise<AIApplyResponse> {
+  if (expectedRevision) return http.post<AIApplyResponse>(`/api/projects/${projectId}/pipeline/ai-apply`, input, configWriteOptions(expectedRevision))
   return http.post<AIApplyResponse>(
     `/api/projects/${projectId}/pipeline/ai-apply`,
     input,

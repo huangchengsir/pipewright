@@ -10,6 +10,7 @@
  */
 
 import { http } from './http'
+import { bindConfigRevision, configRevisionOf, configWriteOptions } from './configRevision'
 import { t } from '../i18n'
 
 export type ParamType = 'string' | 'choice' | 'boolean' | 'number'
@@ -29,12 +30,12 @@ interface ParametersResponse {
 
 export async function getParameters(projectId: string): Promise<ParamDef[]> {
   const res = await http.get<ParametersResponse>(`/api/projects/${projectId}/parameters`)
-  return res.parameters ?? []
+  return bindConfigRevision(res.parameters ?? [], configRevisionOf(res))
 }
 
-export async function saveParameters(projectId: string, parameters: ParamDef[]): Promise<ParamDef[]> {
-  const res = await http.put<ParametersResponse>(`/api/projects/${projectId}/parameters`, { parameters })
-  return res.parameters ?? []
+export async function saveParameters(projectId: string, parameters: ParamDef[], expectedRevision?: string): Promise<ParamDef[]> {
+  const res = expectedRevision ? await http.put<ParametersResponse>(`/api/projects/${projectId}/parameters`, { parameters }, configWriteOptions(expectedRevision)) : await http.put<ParametersResponse>(`/api/projects/${projectId}/parameters`, { parameters })
+  return bindConfigRevision(res.parameters ?? [], configRevisionOf(res))
 }
 
 /**

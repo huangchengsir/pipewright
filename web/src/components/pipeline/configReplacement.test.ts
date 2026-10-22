@@ -2,14 +2,59 @@ import { describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import YamlImportModal from './YamlImportModal.vue'
 import TemplatePickerModal from './TemplatePickerModal.vue'
+import AIGenerateWizard from './AIGenerateWizard.vue'
 import { importPipeline } from '../../api/pipeline'
 import { applyTemplate, listTemplates } from '../../api/templates'
+import { aiApply, aiGenerate } from '../../api/aiGenerate'
+
+const callbacks = vi.hoisted(() => ({ committed: vi.fn() }))
+vi.mock('../../composables/useProjectConfigRevisions', () => ({ useProjectConfigCommit: () => callbacks.committed }))
+vi.mock('../../api/aiGenerate', () => ({ aiApply: vi.fn(), aiGenerate: vi.fn() }))
 
 vi.mock('../../api/pipeline', () => ({ importPipeline: vi.fn() }))
 vi.mock('../../api/templates', () => ({ applyTemplate: vi.fn(), listTemplates: vi.fn(), createTemplate: vi.fn() }))
 const dto = { projectId: 'p', stages: [], yaml: '', status: 'draft', updatedAt: '' }
 
 describe('configuration replacement guards', () => {
+  it.each(['import', 'template'])('ignores a late %s result after leaving and returning to the original project', async source => {
+    callbacks.committed.mockClear()
+    let finish!: (value: typeof dto) => void
+    const pending = new Promise<typeof dto>(resolve => { finish = resolve })
+    vi.mocked(importPipeline).mockReturnValue(pending)
+    vi.mocked(applyTemplate).mockReturnValue(pending)
+    vi.mocked(listTemplates).mockResolvedValue([{ id: 'tpl', name: 'Template', description: '', stageCount: 1, createdAt: '', updatedAt: '' }])
+    const wrapper = source === 'import'
+      ? mount(YamlImportModal, { props: { projectId: 'a', baseRevision: 'cfg-1', beforeReplace: async () => true } })
+      : mount(TemplatePickerModal, { props: { projectId: 'a', baseRevision: 'cfg-1', stages: [], beforeReplace: async () => true } })
+    await flushPromises()
+    if (source === 'import') {
+      await wrapper.get('textarea').setValue('version: 1')
+      await wrapper.findAll('button').find(button => button.text() === '导入并保存')!.trigger('click')
+    } else await wrapper.get('.btn-primary').trigger('click')
+    await flushPromises()
+    await wrapper.setProps({ projectId: 'b' }); await wrapper.setProps({ projectId: 'a' })
+    finish(dto); await flushPromises()
+    expect(callbacks.committed).not.toHaveBeenCalled()
+    expect(wrapper.emitted(source === 'import' ? 'saved' : 'applied')).toBeUndefined()
+    expect(wrapper.emitted('close')).toBeUndefined()
+    wrapper.unmount()
+  })
+  it.each(['navigate', 'unmount'])('does not publish a stale AI apply commit after %s', async action => {
+    callbacks.committed.mockClear()
+    vi.mocked(aiGenerate).mockResolvedValue({ available: true, reason: '', analysis: { cloned: false, language: '', languageVersion: '', buildTool: '', hasDockerfile: false, artifactHint: '', signals: [] }, proposal: { stages: [], build: { model: 'dockerfile', toolchain: { language: '', version: '' }, artifactType: 'image', dockerfilePath: 'Dockerfile' }, branchMappings: [], rationale: '' } })
+    let finish!: (value: { applied: { spec: boolean; settings: boolean; triggers: boolean } }) => void
+    vi.mocked(aiApply).mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const wrapper = mount(AIGenerateWizard, { props: { projectId: 'a', baseRevision: 'cfg-1' }, global: { stubs: { RouterLink: true } } })
+    await wrapper.findAll('.wiz-footer button').find(button => button.text().includes('生成配置'))!.trigger('click'); await flushPromises()
+    await wrapper.findAll('.wiz-footer button').find(button => button.text().includes('应用所选'))!.trigger('click'); await flushPromises()
+    if (action === 'navigate') { await wrapper.setProps({ projectId: 'b' }); await wrapper.setProps({ projectId: 'a' }) }
+    else wrapper.unmount()
+    finish({ applied: { spec: true, settings: true, triggers: true } }); await flushPromises()
+    expect(callbacks.committed).not.toHaveBeenCalled()
+    expect(wrapper.emitted('applied')).toBeUndefined()
+    expect(wrapper.emitted('close')).toBeUndefined()
+    if (action === 'navigate') wrapper.unmount()
+  })
   it.each(['预览校验', '导入并保存'])('ignores an old project YAML failure: %s', async (label) => {
     let reject!: (error: Error) => void
     vi.mocked(importPipeline).mockClear().mockImplementation(() => new Promise((_, fail) => { reject = fail }))

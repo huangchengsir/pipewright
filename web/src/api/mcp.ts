@@ -1,5 +1,19 @@
 import { http } from './http'
 
+export const MCP_CONFIG_SECTIONS = ['project', 'pipeline', 'build', 'step_limits', 'source_and_impact'] as const
+export const MCP_CONFIG_OPERATIONS = ['project.set_name', 'project.set_default_branch', 'stage.rename', 'job.rename', 'step.set_limits', 'build.set'] as const
+export type MCPConfigSection = typeof MCP_CONFIG_SECTIONS[number]
+export type MCPConfigOperation = typeof MCP_CONFIG_OPERATIONS[number]
+
+export interface MCPConfigGrant {
+  projectId: string
+  read: boolean
+  propose: boolean
+  apply: boolean
+  sections: MCPConfigSection[]
+  operations: MCPConfigOperation[]
+}
+
 export interface MCPToken {
   id: string
   name: string
@@ -8,6 +22,8 @@ export interface MCPToken {
   createdAt: string
   expiresAt: string
   revokedAt: string | null
+  configGrants?: MCPConfigGrant[]
+  authzRevision?: number
 }
 
 export interface CreateMCPToken {
@@ -15,6 +31,7 @@ export interface CreateMCPToken {
   projectIds: string[]
   canTrigger: boolean
   expiresInDays: number
+  configGrants?: MCPConfigGrant[]
 }
 
 export async function listMCPTokens(): Promise<MCPToken[]> {

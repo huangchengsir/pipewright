@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"strings"
 	"time"
 
@@ -65,7 +66,7 @@ func (s *concurrencyService) Get(ctx context.Context, projectID string) (*Concur
 		maxc    int
 		updated string
 	)
-	err := s.db.QueryRowContext(ctx,
+	err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT max_concurrent, updated_at FROM project_concurrency WHERE project_id = ?`,
 		strings.TrimSpace(projectID),
 	).Scan(&maxc, &updated)
@@ -85,12 +86,18 @@ func (s *concurrencyService) Save(ctx context.Context, projectID string, maxConc
 		return nil, ErrInvalidConcurrency
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO project_concurrency (project_id, max_concurrent, created_at, updated_at)
+	err := configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+		_, writeErr := q.ExecContext(txctx,
+			`INSERT INTO project_concurrency (project_id, max_concurrent, created_at, updated_at)
 		 VALUES (?, ?, ?, ?) `+
-			store.UpsertSuffix(store.DialectOf(s.db), []string{"project_id"}, []string{"max_concurrent", "updated_at"}),
-		projectID, maxConcurrent, now, now,
-	)
+				store.UpsertSuffix(store.DialectOf(s.db), []string{"project_id"}, []string{"max_concurrent", "updated_at"}),
+			projectID, maxConcurrent, now, now,
+		)
+		return writeErr
+	})
+	if errors.Is(err, configstate.ErrNotFound) {
+		return nil, ErrConcProjectNotFound
+	}
 	if err != nil {
 		if isForeignKeyErr(err) {
 			return nil, ErrConcProjectNotFound

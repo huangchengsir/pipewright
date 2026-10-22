@@ -7,7 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	secretmask "github.com/huangchengsir/pipewright/internal/mask"
+	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/storetest"
 )
 
 func TestRegisterMaskSecretsBoundedContextAndNoUsage(t *testing.T) {
@@ -58,6 +61,26 @@ func TestRegisterMaskSecretsFailsClosed(t *testing.T) {
 					secret = strings.Repeat("x", 65536)
 				}
 				credential, err := v.Create(CreateInput{Name: "fixture", Type: TypeGitToken, Secret: secret})
+				if kind == "large" && storetest.Dialect() == store.MySQL {
+					// MySQL BLOB rejects a value this large before it can reach the
+					// per-value registration guard. Assert the actual storage boundary;
+					// SQLite below exercises the guard on a persistable oversized row.
+					var mysqlErr *mysql.MySQLError
+					if !errors.As(err, &mysqlErr) || mysqlErr.Number != 1406 {
+						t.Fatalf("expected MySQL oversized-value rejection, got %v", err)
+					}
+					if strings.Contains(err.Error(), secret) {
+						t.Fatal("oversized secret leaked in storage error")
+					}
+					var count int
+					if err := db.QueryRow(`SELECT COUNT(*) FROM credentials`).Scan(&count); err != nil || count != 0 {
+						t.Fatalf("rejected secret persisted: count=%d err=%v", count, err)
+					}
+					if err := RegisterMaskSecrets(context.Background(), v, secretmask.NewMasker()); err != nil {
+						t.Fatal("rejected insert left an unsafe vault state", err)
+					}
+					return
+				}
 				if err != nil {
 					t.Fatal(err)
 				}

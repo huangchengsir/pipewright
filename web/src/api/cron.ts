@@ -11,6 +11,7 @@
  */
 
 import { http } from './http'
+import { configWriteOptions } from './configRevision'
 
 export interface CronConfig {
   /** 5-field cron expression (分 时 日 月 周); empty = unset. */
@@ -33,6 +34,6 @@ export async function getCron(projectId: string): Promise<CronConfig> {
   return http.get<CronConfig>(`/api/projects/${projectId}/cron`)
 }
 
-export async function saveCron(projectId: string, input: SaveCronInput): Promise<CronConfig> {
-  return http.put<CronConfig>(`/api/projects/${projectId}/cron`, input)
+export async function saveCron(projectId: string, input: SaveCronInput, expectedRevision?: string): Promise<CronConfig> {
+  return expectedRevision ? http.put<CronConfig>(`/api/projects/${projectId}/cron`, input, configWriteOptions(expectedRevision)) : http.put<CronConfig>(`/api/projects/${projectId}/cron`, input)
 }

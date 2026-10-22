@@ -10,6 +10,7 @@
  */
 
 import { http } from './http'
+import { configWriteOptions } from './configRevision'
 
 // ─── Domain types (frozen DTO shape) ─────────────────────────────────────────
 
@@ -131,8 +132,11 @@ export async function getPipeline(projectId: string): Promise<PipelineDTO> {
 export async function savePipeline(
   projectId: string,
   input: SavePipelineInput,
+  expectedRevision?: string,
 ): Promise<PipelineDTO> {
-  return http.put<PipelineDTO>(`/api/projects/${projectId}/pipeline`, input)
+  return expectedRevision
+    ? http.put<PipelineDTO>(`/api/projects/${projectId}/pipeline`, input, configWriteOptions(expectedRevision))
+    : http.put<PipelineDTO>(`/api/projects/${projectId}/pipeline`, input)
 }
 
 // ─── Pipeline-as-code import / preview (FR-8-12) ──────────────────────────────
@@ -150,6 +154,8 @@ export async function importPipeline(
   projectId: string,
   yaml: string,
   save = false,
+  expectedRevision?: string,
 ): Promise<PipelineDTO> {
+  if (save && expectedRevision) return http.post<PipelineDTO>(`/api/projects/${projectId}/pipeline/import`, { yaml, save }, configWriteOptions(expectedRevision))
   return http.post<PipelineDTO>(`/api/projects/${projectId}/pipeline/import`, { yaml, save })
 }

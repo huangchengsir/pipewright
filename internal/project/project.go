@@ -14,6 +14,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"time"
 
 	"github.com/google/uuid"
@@ -56,11 +57,12 @@ const (
 
 // Project 是项目领域模型。绝不含凭据明文,只持 credentialId 引用。
 type Project struct {
-	ID            string
-	Name          string
-	RepoURL       string
-	DefaultBranch string
-	CredentialID  string
+	ConfigRevision int64
+	ID             string
+	Name           string
+	RepoURL        string
+	DefaultBranch  string
+	CredentialID   string
 	// CredentialName 是冗余只读展示名(join credentials),便于列表展示;非持久列。
 	CredentialName string
 	// PacEnabled 是「流水线即代码」开关(GitOps · FR-8-12):开启后运行时按运行分支读仓库根
@@ -218,11 +220,17 @@ func (s *service) Create(ctx context.Context, in CreateInput) (*Project, error) 
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
 
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO projects (id, name, repo_url, default_branch, credential_id, created_at, updated_at)
+	err = configstate.WithWriteTxContext(ctx, s.db, func(txctx context.Context, q configstate.DBTX) error {
+		_, writeErr := q.ExecContext(txctx,
+			`INSERT INTO projects (id, name, repo_url, default_branch, credential_id, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id, in.Name, in.RepoURL, defaultBranch, in.CredentialID, nowStr, nowStr,
-	)
+			id, in.Name, in.RepoURL, defaultBranch, in.CredentialID, nowStr, nowStr,
+		)
+		if writeErr != nil {
+			return writeErr
+		}
+		return configstate.EnsureProject(txctx, q, s.db, id)
+	})
 	if err != nil {
 		// 外键失败(凭据在校验后被删等竞态)归为凭据不存在;其余为内部错误。
 		if isForeignKeyErr(err) {
@@ -260,16 +268,17 @@ func (s *service) ListPaged(ctx context.Context, page, pageSize int) (*ListResul
 	page, pageSize = normalizePage(page, pageSize)
 
 	var total int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM projects`).Scan(&total); err != nil {
+	if err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx, `SELECT COUNT(1) FROM projects`).Scan(&total); err != nil {
 		return nil, fmt.Errorf("project: count: %w", err)
 	}
 
 	offset := (page - 1) * pageSize
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT p.id, p.name, p.repo_url, p.default_branch, p.credential_id,
-		        COALESCE(c.name, ''), p.pac_enabled, p.pr_status_enabled, p.created_at, p.updated_at
+		        COALESCE(c.name, ''), p.pac_enabled, p.pr_status_enabled, p.created_at, p.updated_at, COALESCE(cv.revision,1)
 		 FROM projects p
 		 LEFT JOIN credentials c ON c.id = p.credential_id
+ LEFT JOIN project_config_versions cv ON cv.project_id=p.id
 		 ORDER BY p.created_at DESC, p.id
 		 LIMIT ? OFFSET ?`,
 		pageSize, offset,
@@ -294,11 +303,12 @@ func (s *service) ListPaged(ctx context.Context, page, pageSize int) (*ListResul
 }
 
 func (s *service) Get(ctx context.Context, id string) (*Project, error) {
-	row := s.db.QueryRowContext(ctx,
+	row := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT p.id, p.name, p.repo_url, p.default_branch, p.credential_id,
-		        COALESCE(c.name, ''), p.pac_enabled, p.pr_status_enabled, p.created_at, p.updated_at
+		        COALESCE(c.name, ''), p.pac_enabled, p.pr_status_enabled, p.created_at, p.updated_at, COALESCE(cv.revision,1)
 		 FROM projects p
 		 LEFT JOIN credentials c ON c.id = p.credential_id
+ LEFT JOIN project_config_versions cv ON cv.project_id=p.id
 		 WHERE p.id = ?`, id,
 	)
 	p, err := scanProject(row)
@@ -312,91 +322,141 @@ func (s *service) Get(ctx context.Context, id string) (*Project, error) {
 }
 
 func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Project, error) {
-	// 先取当前行(需 repo_url + credential_id 以便在改绑凭据时重做校验)。
-	var name, repoURL, defaultBranch, credentialID string
-	var pacInt, prStatusInt int
-	err := s.db.QueryRowContext(ctx,
-		`SELECT name, repo_url, default_branch, credential_id, pac_enabled, pr_status_enabled FROM projects WHERE id = ?`, id,
-	).Scan(&name, &repoURL, &defaultBranch, &credentialID, &pacInt, &prStatusInt)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("project: load: %w", err)
-	}
-	pacEnabled := pacInt != 0
-	prStatusEnabled := prStatusInt != 0
-
-	if in.Name != nil {
-		if *in.Name == "" {
-			return nil, ErrEmptyName
-		}
-		name = *in.Name
-	}
-	if in.DefaultBranch != nil {
-		defaultBranch = *in.DefaultBranch
+	// External credential validation must precede the configuration transaction.
+	if in.Name != nil && *in.Name == "" {
+		return nil, ErrEmptyName
 	}
 	if in.CredentialID != nil {
 		if *in.CredentialID == "" {
 			return nil, ErrEmptyCredentialID
 		}
-		// 改绑凭据:用新凭据对(可能也已更新的)仓库做 ls-remote 校验。
-		if _, err := s.probe(ctx, repoURL, *in.CredentialID); err != nil {
+		current, err := s.Get(ctx, id)
+		if err != nil {
 			return nil, err
 		}
-		credentialID = *in.CredentialID
-	}
-	if in.PacEnabled != nil {
-		pacEnabled = *in.PacEnabled
-	}
-	if in.PRStatusEnabled != nil {
-		prStatusEnabled = *in.PRStatusEnabled
-	}
-
-	pacInt = 0
-	if pacEnabled {
-		pacInt = 1
-	}
-	prStatusInt = 0
-	if prStatusEnabled {
-		prStatusInt = 1
-	}
-	nowStr := time.Now().UTC().Format(time.RFC3339)
-	_, err = s.db.ExecContext(ctx,
-		`UPDATE projects SET name = ?, default_branch = ?, credential_id = ?, pac_enabled = ?, pr_status_enabled = ?, updated_at = ? WHERE id = ?`,
-		name, defaultBranch, credentialID, pacInt, prStatusInt, nowStr, id,
-	)
-	if err != nil {
-		if isForeignKeyErr(err) {
-			return nil, ErrCredentialNotFound
+		if _, err := s.probe(ctx, current.RepoURL, *in.CredentialID); err != nil {
+			return nil, err
 		}
-		return nil, fmt.Errorf("project: update: %w", err)
 	}
-	return s.Get(ctx, id)
+	var out *Project
+	err := configstate.MutateProject(ctx, s.db, id, func(txctx context.Context, q configstate.DBTX) error {
+		current, err := s.Get(txctx, id)
+		if err != nil {
+			return err
+		}
+		if in.Name != nil {
+			current.Name = *in.Name
+		}
+		if in.DefaultBranch != nil {
+			current.DefaultBranch = *in.DefaultBranch
+		}
+		if in.CredentialID != nil {
+			current.CredentialID = *in.CredentialID
+		}
+		if in.PacEnabled != nil {
+			current.PacEnabled = *in.PacEnabled
+		}
+		if in.PRStatusEnabled != nil {
+			current.PRStatusEnabled = *in.PRStatusEnabled
+		}
+		current.UpdatedAt = time.Now().UTC()
+		_, err = q.ExecContext(txctx, `UPDATE projects SET name=?, default_branch=?, credential_id=?, pac_enabled=?, pr_status_enabled=?, updated_at=? WHERE id=?`, current.Name, current.DefaultBranch, current.CredentialID, current.PacEnabled, current.PRStatusEnabled, current.UpdatedAt.Format(time.RFC3339), id)
+		if err != nil && isForeignKeyErr(err) {
+			return ErrCredentialNotFound
+		}
+		if err != nil {
+			return err
+		}
+		out, err = s.Get(txctx, id)
+		return err
+	})
+	if errors.Is(err, configstate.ErrNotFound) {
+		return nil, ErrNotFound
+	}
+	if err == nil && out != nil {
+		out.ConfigRevision++
+	}
+	return out, err
 }
 
 func (s *service) Delete(ctx context.Context, id string) error {
-	// 拒绝删除有进行中运行(queued/running)的项目。自包含在本包查 pipeline_runs(不改 run 包)。
-	var active int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(1) FROM pipeline_runs WHERE project_id = ? AND status IN ('queued','running')`,
-		id,
-	).Scan(&active); err != nil {
-		return fmt.Errorf("project: check active runs: %w", err)
+	var revision int64
+	err := configstate.WithWriteTxContext(ctx, s.db, func(txctx context.Context, q configstate.DBTX) error {
+		if err := configstate.LockEpochs(txctx, q, s.db, configstate.EpochPolicy, configstate.EpochSecrets, configstate.EpochExecutor); err != nil {
+			return err
+		}
+		ids := []string{id}
+		rows, err := q.QueryContext(txctx, `SELECT DISTINCT project_id FROM project_chain_targets WHERE downstream_project_id=?`, id)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var upstream string
+			if err := rows.Scan(&upstream); err != nil {
+				rows.Close()
+				return err
+			}
+			ids = append(ids, upstream)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+		if err := configstate.LockProjects(txctx, q, s.db, ids...); err != nil {
+			return err
+		}
+		for _, pid := range ids {
+			if err := configstate.CheckIdle(txctx, q, pid); err != nil {
+				if errors.Is(err, configstate.ErrBusy) {
+					return ErrProjectHasActiveRuns
+				}
+				return err
+			}
+		}
+		rev, err := configstate.ReadRevision(txctx, q, id)
+		if err != nil {
+			return err
+		}
+		if err := configstate.CheckExpected(txctx, rev); err != nil {
+			return err
+		}
+		seen := map[string]bool{id: true}
+		for _, pid := range ids {
+			if seen[pid] {
+				continue
+			}
+			seen[pid] = true
+			v, err := configstate.ReadRevision(txctx, q, pid)
+			if err != nil {
+				return err
+			}
+			if _, err = configstate.BumpRevision(txctx, q, pid, v); err != nil {
+				return err
+			}
+		}
+		if err := configstate.MarkDeleted(txctx, q, id, rev); err != nil {
+			return err
+		}
+		r, err := q.ExecContext(txctx, `DELETE FROM projects WHERE id=?`, id)
+		if err != nil {
+			return err
+		}
+		n, err := r.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return ErrNotFound
+		}
+		revision = rev + 1
+		return nil
+	})
+	if errors.Is(err, configstate.ErrNotFound) {
+		err = ErrNotFound
 	}
-	if active > 0 {
-		return ErrProjectHasActiveRuns
-	}
-
-	res, err := s.db.ExecContext(ctx, `DELETE FROM projects WHERE id = ?`, id)
-	if err != nil {
-		return fmt.Errorf("project: delete: %w", err)
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	configstate.RecordMutation(ctx, revision, err)
+	return err
 }
 
 func (s *service) TestClone(ctx context.Context, repoURL, credentialID string) (*TestCloneResult, error) {
@@ -425,7 +485,7 @@ func scanProject(sc scanner) (*Project, error) {
 	var pacInt, prStatusInt int
 	if err := sc.Scan(
 		&p.ID, &p.Name, &p.RepoURL, &p.DefaultBranch, &p.CredentialID,
-		&p.CredentialName, &pacInt, &prStatusInt, &createdStr, &updatedStr,
+		&p.CredentialName, &pacInt, &prStatusInt, &createdStr, &updatedStr, &p.ConfigRevision,
 	); err != nil {
 		return nil, err
 	}

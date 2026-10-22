@@ -21,6 +21,7 @@ import TypedRunParams from '../components/TypedRunParams.vue'
 import CredentialSelect from '../components/projects/CredentialSelect.vue'
 import { getParameters, validateParamValues, type ParamDef } from '../api/parameters'
 import { HttpError } from '../api/http'
+import { configRevisionOf } from '../api/configRevision'
 import { selectCreatedOnboardingProject } from '../composables/useOnboarding'
 
 // ─── i18n ─────────────────────────────────────────────────────────────────────
@@ -441,7 +442,8 @@ async function handleRenameSubmit(): Promise<void> {
 
   try {
     if (repairCredential.value) input.credentialId = renameCredentialId.value
-    const updated = await updateProject(renamingProject.value.id, input)
+    const revision = configRevisionOf(renamingProject.value)
+    const updated = revision ? await updateProject(renamingProject.value.id, input, revision) : await updateProject(renamingProject.value.id, input)
     projects.value = projects.value.map((p) => (p.id === updated.id ? updated : p))
     renameModalOpen.value = false
     renamingProject.value = null
@@ -486,7 +488,9 @@ async function confirmDelete(): Promise<void> {
   const id = deletingProject.value.id
 
   try {
-    await deleteProject(id)
+    const revision = configRevisionOf(deletingProject.value)
+    if (revision) await deleteProject(id, revision)
+    else await deleteProject(id)
     projects.value = projects.value.filter((p) => p.id !== id)
     deleteModalOpen.value = false
     deletingProject.value = null

@@ -376,6 +376,8 @@ func (p *WorkerPool) release(projectID string) {
 // execute 执行单次运行的完整生命周期:queued→running→(Runner)→终态。
 // 全程 recover:单 run panic 不连累 worker/其它 run(结果独立)。
 func (p *WorkerPool) execute(runID string) {
+	readers := p.svc.newActivityReaders(runID)
+	defer readers.done()
 	// 每 run 独立可取消上下文(派生自池 ctx),注册取消句柄供 Service.Cancel 传播。
 	runCtx, cancel := context.WithCancel(p.ctx)
 	p.svc.mu.Lock()
@@ -388,15 +390,7 @@ func (p *WorkerPool) execute(runID string) {
 		p.svc.mu.Unlock()
 	}()
 
-	// per-run 脱敏器:有工厂则按 run 构建(登记该 run 真实凭据),否则用静态 masker。构建一次、
-	// 该 run 全部日志行复用(避免每行重解析/解密)。
-	logMasker := p.logMasker
-	if p.logMaskerFunc != nil {
-		if m := p.logMaskerFunc(runCtx, runID); m != nil {
-			logMasker = m
-		}
-	}
-	sink := &dbStepSink{svc: p.svc, runID: runID, masker: logMasker}
+	sink := &dbStepSink{svc: p.svc, runID: runID, masker: p.logMasker}
 
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -411,7 +405,7 @@ func (p *WorkerPool) execute(runID string) {
 	}()
 
 	// queued → running(CAS:若已被取消为 failed 则放弃)。
-	if err := p.svc.transition(runCtx, runID, StatusQueued, StatusRunning, true); err != nil {
+	if err := p.svc.claimRunActivity(runCtx, runID); err != nil {
 		if errors.Is(err, ErrInvalidTransition) {
 			return // 已被取消/非队列态:跳过。
 		}
@@ -429,6 +423,13 @@ func (p *WorkerPool) execute(runID string) {
 		p.svc.failToTerminal(runID)
 		sink.reconcile(StatusFailed)
 		return
+	}
+	// Configuration readers start only after the queued hold has been claimed.
+	readers.arm()
+	if p.logMaskerFunc != nil {
+		if m := p.logMaskerFunc(runCtx, runID); m != nil {
+			sink.masker = m
+		}
 	}
 
 	r, err := p.svc.Get(runCtx, runID)
@@ -450,6 +451,7 @@ func (p *WorkerPool) execute(runID string) {
 	// ——观测方(SSE/轮询/waitForStatus)在 run 终态与步骤校正之间读到悬挂步骤。
 	sink.reconcile(final)
 	sink.persistExecution()
+	p.svc.updateRunActivity(runID, "finalizing", false)
 	// 用后台 ctx 落终态:取消场景下派生 ctx 已 Done,仍须持久化终态。
 	if err := p.svc.transition(context.Background(), runID, StatusRunning, final, false); err != nil {
 		log.Printf("[run] run %s: to %s failed: %v", runID, final, err)
@@ -463,13 +465,13 @@ func (p *WorkerPool) execute(runID string) {
 	// 这些 failed 非真实执行失败,自动诊断会误触发——白打 LLM + 解密 key,且诊断「被取消的 run」无意义。
 	// (手动诊断仍可在详情页触发;真实失败的 runCtx.Err()==nil 不受影响。)
 	if final == StatusFailed && p.diagnoseHook != nil && runCtx.Err() == nil {
-		p.runDiagnoseHook(runID)
+		p.runDiagnoseHook(runID, readers.add())
 	}
 
 	// run 落任意终态后触发 best-effort 通知(Story 5.2;已注入钩子时)。绝不阻断 run 终态:
 	// 在独立 goroutine + recover 中调用,钩子失败仅记日志。未配路由的事件由 Router 内部保证不发送。
 	if p.notifyHook != nil {
-		p.runNotifyHook(runID, final)
+		p.runNotifyHook(runID, final, readers.add())
 	}
 }
 
@@ -478,17 +480,19 @@ func (p *WorkerPool) execute(runID string) {
 //
 // 并发有界(NFR-4):经 diagnoseSem 信号量限流;try-acquire 失败(已达上限)则跳过本次自动诊断
 // 并记日志——best-effort 语义不变,用户仍可在详情页手动触发诊断。
-func (p *WorkerPool) runDiagnoseHook(runID string) {
+func (p *WorkerPool) runDiagnoseHook(runID string, onDone ...func()) {
 	select {
 	case p.diagnoseSem <- struct{}{}:
 		// 取得槽位,继续。
 	default:
+		completed(onDone)
 		log.Printf("[run] run %s: auto-diagnose skipped (并发上限 %d 已满);手动诊断仍可用", runID, maxConcurrentDiagnoses)
 		return
 	}
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
+		defer completed(onDone)
 		defer func() { <-p.diagnoseSem }() // 释放槽位
 		defer func() {
 			if rec := recover(); rec != nil {
@@ -504,17 +508,19 @@ func (p *WorkerPool) runDiagnoseHook(runID string) {
 //
 // 通知本身经 Router 已是 best-effort(单渠道失败续发、未配路由不发);此处再套独立 goroutine +
 // recover,确保「构 Payload / 调 RouteEvent」任何环节出错都不冒泡阻断 run 终态(NFR-10)。
-func (p *WorkerPool) runNotifyHook(runID, finalStatus string) {
+func (p *WorkerPool) runNotifyHook(runID, finalStatus string, onDone ...func()) {
 	// 并发有界(NFR-4;P8):try-acquire,满则跳过本次通知(best-effort 语义不变)。
 	select {
 	case p.notifySem <- struct{}{}:
 	default:
+		completed(onDone)
 		log.Printf("[run] run %s: notify skipped (并发上限 %d 已满)", runID, maxConcurrentNotifies)
 		return
 	}
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
+		defer completed(onDone)
 		defer func() { <-p.notifySem }() // 释放槽位
 		defer func() {
 			if rec := recover(); rec != nil {

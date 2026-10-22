@@ -14,6 +14,7 @@
  */
 
 import { http } from './http'
+import { configWriteOptions } from './configRevision'
 import type { PipelineStage, PipelineDTO, SavePipelineInput } from './pipeline'
 
 /** List item — metadata + stage count only (lighter than the full spec). */
@@ -64,6 +65,6 @@ export async function deleteTemplate(id: string): Promise<void> {
 }
 
 /** Apply a template's stages onto a project's pipeline; returns the resulting pipeline. */
-export async function applyTemplate(projectId: string, templateId: string): Promise<PipelineDTO> {
-  return http.post<PipelineDTO>(`/api/projects/${projectId}/pipeline/apply-template`, { templateId })
+export async function applyTemplate(projectId: string, templateId: string, expectedRevision?: string): Promise<PipelineDTO> {
+  return expectedRevision ? http.post<PipelineDTO>(`/api/projects/${projectId}/pipeline/apply-template`, { templateId }, configWriteOptions(expectedRevision)) : http.post<PipelineDTO>(`/api/projects/${projectId}/pipeline/apply-template`, { templateId })
 }

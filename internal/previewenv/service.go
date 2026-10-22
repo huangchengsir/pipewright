@@ -3,6 +3,7 @@ package previewenv
 import (
 	"context"
 	"database/sql"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"log"
 	"strings"
 	"time"
@@ -113,7 +114,7 @@ func (s *service) SetConfig(ctx context.Context, in Config) (*Config, error) {
 			return nil, ErrConfigInvalidBaseDomain
 		}
 	}
-	if err := s.store.upsertConfig(ctx, in); err != nil {
+	if err := configstate.MutateProject(ctx, s.store.db, in.ProjectID, func(txctx context.Context, _ configstate.DBTX) error { return s.store.upsertConfig(txctx, in) }); err != nil {
 		return nil, err
 	}
 	return s.store.getConfig(ctx, in.ProjectID)

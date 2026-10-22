@@ -11,6 +11,7 @@
  */
 
 import { http } from './http'
+import { configWriteOptions } from './configRevision'
 
 export interface ChainTarget {
   /** The downstream project's ID. */
@@ -36,6 +37,7 @@ export async function getChain(projectId: string): Promise<ChainConfig> {
 export async function saveChain(
   projectId: string,
   input: SaveChainInput,
+  expectedRevision?: string,
 ): Promise<ChainConfig> {
-  return http.put<ChainConfig>(`/api/projects/${projectId}/chain`, input)
+  return expectedRevision ? http.put<ChainConfig>(`/api/projects/${projectId}/chain`, input, configWriteOptions(expectedRevision)) : http.put<ChainConfig>(`/api/projects/${projectId}/chain`, input)
 }

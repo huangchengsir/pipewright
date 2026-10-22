@@ -29,6 +29,8 @@ import (
 	"github.com/huangchengsir/pipewright/internal/buildcache"
 	"github.com/huangchengsir/pipewright/internal/chain"
 	"github.com/huangchengsir/pipewright/internal/config"
+	"github.com/huangchengsir/pipewright/internal/configdraft"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/cron"
 	"github.com/huangchengsir/pipewright/internal/dagrun"
 	"github.com/huangchengsir/pipewright/internal/deploy"
@@ -173,7 +175,20 @@ func main() {
 	// 注入分支→环境解析器(#56):手动/定时/串联触发未显式带环境时,据项目分支映射补解析
 	// 环境 + 目标服务器,与 webhook 接收路径一致(否则 build_image 不知推哪个 registry、
 	// 部署节点 pull 不到镜像)。复用 trigger 包同一套 matchBranch glob。
-	runSvc := run.New(st.DB, run.WithEnvResolver(trigger.NewEnvironmentResolver(st.DB)))
+	runSvc := run.New(st.DB, run.WithEnvResolver(trigger.NewEnvironmentResolver(st.DB)), run.WithConfigInitializer(func(ctx context.Context, projectID string) error {
+		for _, service := range []any{pipelineSvc, pipelineSettingsSvc} {
+			initializer, ok := service.(interface {
+				EnsureStoredDefault(context.Context, string) error
+			})
+			if !ok {
+				return configstate.ErrInvalid
+			}
+			if err := initializer.EnsureStoredDefault(ctx, projectID); err != nil {
+				return err
+			}
+		}
+		return nil
+	}))
 	// DORA 指标只读聚合(FR-8-15):同一 *service 实现暴露为 MetricsService,无新连接/新表。
 	doraMetricsSvc := run.NewMetricsService(runSvc)
 
@@ -599,19 +614,37 @@ func main() {
 	// state CSRF 短期内存绑会话。master key 未配置时涉及密钥的操作降级为明确错误(不 panic)。
 	oauthSvc := oauth.New(st.DB, credVault, &http.Client{Timeout: 10 * time.Second})
 
+	registerConfigSecrets := func(ctx context.Context) error {
+		if err := vault.RegisterMaskSecrets(ctx, credVault, auditMasker); err != nil {
+			return err
+		}
+		if registrar, ok := ai.NewOpsModel(aiSvc, auditMasker).(interface{ RegisterSecrets(context.Context) error }); ok {
+			return registrar.RegisterSecrets(ctx)
+		}
+		return nil
+	}
+	configRuntime := configdraft.RuntimeInfo{RunnerMode: "dag", ExecutorKind: "local_docker", Available: onboardingCapabilities.Runtime == onboarding.RuntimeAvailable, PACOverride: onboardingCapabilities.RepositoryOverride}
+	if onboardingCapabilities.Legacy {
+		configRuntime.RunnerMode = "legacy"
+	}
+	configApplyEnabled := strings.TrimSpace(os.Getenv("PIPEWRIGHT_MCP_CONFIG_APPLY")) == "1"
+	configDrafts := configdraft.New(st.DB, &configdraft.Options{
+		Runtime: configRuntime, ApplyEnabled: configApplyEnabled,
+		PrepareSecrets: func(ctx context.Context) (func(string) string, error) {
+			if err := registerConfigSecrets(ctx); err != nil {
+				return nil, err
+			}
+			return auditMasker.Scrub, nil
+		},
+		AuthorizeAdmin:     httpapi.ConfigAdminAuthorizer(st.DB),
+		RevalidateApprover: httpapi.ConfigApproverVerifier(st.DB),
+		AppendAudit: func(ctx context.Context, q configstate.DBTX, e audit.Entry) error {
+			return audit.AppendLocalTx(ctx, q, auditMasker, e)
+		},
+	})
 	mcpTokens := auth.NewMCPTokenStore(st.DB)
 	mcpHandler, err := httpapi.NewMCPHandler(mcpTokens, pmcp.Dependencies{
-		Projects: projectSvc, Pipelines: pipelineSvc, Runs: runSvc,
-		Parameters: parameterSvc, Audit: auditRec, Masker: auditMasker,
-		RegisterSecrets: func(ctx context.Context) error {
-			if err := vault.RegisterMaskSecrets(ctx, credVault, auditMasker); err != nil {
-				return err
-			}
-			if registrar, ok := ai.NewOpsModel(aiSvc, auditMasker).(interface{ RegisterSecrets(context.Context) error }); ok {
-				return registrar.RegisterSecrets(ctx)
-			}
-			return nil
-		},
+		Projects: projectSvc, Pipelines: pipelineSvc, Runs: runSvc, Parameters: parameterSvc, Audit: auditRec, Masker: auditMasker, Configs: configDrafts, RegisterSecrets: registerConfigSecrets,
 	}, httpapi.MCPHTTPOptions{AllowedHosts: strings.Split(os.Getenv("PIPEWRIGHT_MCP_ALLOWED_HOSTS"), ",")})
 	if err != nil {
 		log.Fatalf("configure MCP: %v", err)
@@ -623,7 +656,7 @@ func main() {
 	go terminalManager.Run(terminalCtx)
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithOnboarding(onboarding.New(st.DB, onboardingCapabilities)), httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithTerminalHTTP(terminalManager), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc), httpapi.WithOpsChat(opsChatSvc), httpapi.WithMCP(mcpHandler, mcpTokens)),
+		Handler:           httpapi.New(webFS, authSvc, httpapi.WithOnboarding(onboarding.New(st.DB, onboardingCapabilities)), httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithTerminalHTTP(terminalManager), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc), httpapi.WithOpsChat(opsChatSvc), httpapi.WithMCP(mcpHandler, mcpTokens), httpapi.WithConfigManagement(st.DB, configDrafts, configApplyEnabled)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;

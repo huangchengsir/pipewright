@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"time"
 
 	"github.com/google/uuid"
@@ -78,7 +79,7 @@ func (s *Store) listActive(ctx context.Context) ([]PreviewEnv, error) {
 
 // get 读取单条预览环境;不存在 → ErrNotFound。
 func (s *Store) get(ctx context.Context, id string) (*PreviewEnv, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+envColumns+` FROM preview_envs WHERE id = ?`, id)
+	row := configstate.Queryer(ctx, s.db).QueryRowContext(ctx, `SELECT `+envColumns+` FROM preview_envs WHERE id = ?`, id)
 	e, err := scanEnv(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -91,7 +92,7 @@ func (s *Store) get(ctx context.Context, id string) (*PreviewEnv, error) {
 
 // getActiveByPR 取某项目某 PR 的 active 预览环境;不存在 → ErrNotFound。
 func (s *Store) getActiveByPR(ctx context.Context, projectID string, prNumber int) (*PreviewEnv, error) {
-	row := s.db.QueryRowContext(ctx,
+	row := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT `+envColumns+` FROM preview_envs WHERE project_id = ? AND pr_number = ? AND status = ?`,
 		projectID, prNumber, StatusActive)
 	e, err := scanEnv(row)
@@ -106,7 +107,7 @@ func (s *Store) getActiveByPR(ctx context.Context, projectID string, prNumber in
 
 // getByPR 取某项目某 PR 的任意预览环境(不论状态);不存在 → ErrNotFound。
 func (s *Store) getByPR(ctx context.Context, projectID string, prNumber int) (*PreviewEnv, error) {
-	row := s.db.QueryRowContext(ctx,
+	row := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT `+envColumns+` FROM preview_envs WHERE project_id = ? AND pr_number = ?`,
 		projectID, prNumber)
 	e, err := scanEnv(row)
@@ -121,7 +122,7 @@ func (s *Store) getByPR(ctx context.Context, projectID string, prNumber int) (*P
 
 // insert 落库一条新预览环境。(project_id, pr_number) 唯一冲突由调用方先查后 upsert 规避。
 func (s *Store) insert(ctx context.Context, e *PreviewEnv) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`INSERT INTO preview_envs (`+envColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.ID, e.ProjectID, e.PipelineID, e.PRNumber, e.Branch, e.ServerID, e.RouteID, e.Subdomain,
 		e.Status, fmtTime(&e.CreatedAt), fmtTimePtr(e.ReclaimedAt))
@@ -139,7 +140,7 @@ var ErrUniqueViolation = errors.New("previewenv: duplicate project/pr")
 
 // updateOnRedeploy 在同一 PR 重新部署时刷新环境(路由/子域名/分支/服务器/状态回 active),不重复建行。
 func (s *Store) updateOnRedeploy(ctx context.Context, id, routeID, subdomain, branch, serverID, pipelineID string) error {
-	res, err := s.db.ExecContext(ctx,
+	res, err := configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`UPDATE preview_envs
 		   SET route_id = ?, subdomain = ?, branch = ?, server_id = ?, pipeline_id = ?, status = ?, reclaimed_at = ''
 		 WHERE id = ?`,
@@ -155,7 +156,7 @@ func (s *Store) updateOnRedeploy(ctx context.Context, id, routeID, subdomain, br
 
 // markReclaimed 把某环境标记为已回收(记录回收时刻)。
 func (s *Store) markReclaimed(ctx context.Context, id string, now time.Time) error {
-	res, err := s.db.ExecContext(ctx,
+	res, err := configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`UPDATE preview_envs SET status = ?, reclaimed_at = ? WHERE id = ?`,
 		StatusReclaimed, fmtTime(&now), id)
 	if err != nil {
@@ -171,7 +172,7 @@ func (s *Store) markReclaimed(ctx context.Context, id string, now time.Time) err
 
 // getConfig 读取某项目预览配置;无 → (nil, nil)(调用方回退零值)。
 func (s *Store) getConfig(ctx context.Context, projectID string) (*Config, error) {
-	row := s.db.QueryRowContext(ctx,
+	row := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT project_id, enabled, dns_provider_id, base_domain FROM preview_configs WHERE project_id = ?`, projectID)
 	var (
 		c       Config
@@ -195,7 +196,7 @@ func (s *Store) upsertConfig(ctx context.Context, c Config) error {
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	// 先尝试 UPDATE,影响 0 行再 INSERT(两方言一致,不依赖 ON CONFLICT / ON DUPLICATE 语法差异)。
-	res, err := s.db.ExecContext(ctx,
+	res, err := configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`UPDATE preview_configs SET enabled = ?, dns_provider_id = ?, base_domain = ?, updated_at = ? WHERE project_id = ?`,
 		enabled, c.DNSProviderID, c.BaseDomain, now, c.ProjectID)
 	if err != nil {
@@ -204,14 +205,14 @@ func (s *Store) upsertConfig(ctx context.Context, c Config) error {
 	if n, _ := res.RowsAffected(); n > 0 {
 		return nil
 	}
-	_, err = s.db.ExecContext(ctx,
+	_, err = configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`INSERT INTO preview_configs (project_id, enabled, dns_provider_id, base_domain, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		c.ProjectID, enabled, c.DNSProviderID, c.BaseDomain, now, now)
 	if err != nil {
 		if store.IsUniqueErr(err) {
 			// 并发插入冲突:回退再 UPDATE 一次(幂等收敛)。
-			_, uerr := s.db.ExecContext(ctx,
+			_, uerr := configstate.Queryer(ctx, s.db).ExecContext(ctx,
 				`UPDATE preview_configs SET enabled = ?, dns_provider_id = ?, base_domain = ?, updated_at = ? WHERE project_id = ?`,
 				enabled, c.DNSProviderID, c.BaseDomain, now, c.ProjectID)
 			return uerr

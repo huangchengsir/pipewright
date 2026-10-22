@@ -5,6 +5,7 @@ package httpapi
 import (
 	"context"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +24,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/auth"
 	"github.com/huangchengsir/pipewright/internal/chain"
+	"github.com/huangchengsir/pipewright/internal/configdraft"
 	"github.com/huangchengsir/pipewright/internal/cron"
 	"github.com/huangchengsir/pipewright/internal/deploy"
 	"github.com/huangchengsir/pipewright/internal/dnsprovider"
@@ -62,55 +64,58 @@ const contextKeySession contextKey = 1
 type Option func(*options)
 
 type options struct {
-	terminalHTTP     *terminalhttp.Manager
-	mcpHandler       http.Handler
-	mcpTokens        *auth.MCPTokenStore
-	opsChat          *opschat.Service
-	onboarding       onboardingStatusReader
-	vault            vault.Vault
-	projects         project.Service
-	triggers         trigger.Service
-	cron             cron.Service
-	chain            chain.Service
-	concurrency      run.ConcurrencyService
-	parameters       run.ParameterService
-	pipelines        pipeline.Service
-	pipelineSettings pipeline.SettingsService
-	runs             run.Service
-	runSub           runSubscriber
-	feedback         run.FeedbackService
-	secretSource     *RunSecretSource
-	receiver         *trigger.Receiver
-	audit            audit.Recorder
-	account          accountService
-	aiSettings       ai.Service
-	aiAnalyzer       ai.RepoAnalyzer
-	runDiffer        ai.RunDiffer
-	sourceReader     SourceReader
-	refsLister       RefsLister
-	runnerConfig     runner.Service
-	servers          target.Service
-	notifications    notify.Service
-	deployer         deploy.Service
-	anomaly          anomaly.Service
-	anomalyInterval  int // 后台定时检测间隔(秒);0=已关闭。供前端显示节奏。
-	anomalyCooldown  int // 同条件告警去重冷却窗口(秒)。
-	metricsHistory   metrics.Service
-	oauth            oauth.Service
-	approvalCoord    *approval.Coordinator
-	approvalStore    *approval.Store
-	approvalSigner   *approval.Signer
-	promotionStore   *promotion.Store
-	environments     *environments.Service
-	doraMetrics      run.MetricsService
-	templates        library.TemplateService
-	varGroups        library.VarGroupService
-	customNodes      library.CustomNodeService
-	artifactStore    *artifactstore.Store
-	retention        *retention.Service
-	proxy            proxy.Service
-	dnsProviders     dnsprovider.Service
-	previewEnvs      PreviewService
+	configDB           *sql.DB
+	configDrafts       *configdraft.Service
+	configRequireMatch bool
+	terminalHTTP       *terminalhttp.Manager
+	mcpHandler         http.Handler
+	mcpTokens          *auth.MCPTokenStore
+	opsChat            *opschat.Service
+	onboarding         onboardingStatusReader
+	vault              vault.Vault
+	projects           project.Service
+	triggers           trigger.Service
+	cron               cron.Service
+	chain              chain.Service
+	concurrency        run.ConcurrencyService
+	parameters         run.ParameterService
+	pipelines          pipeline.Service
+	pipelineSettings   pipeline.SettingsService
+	runs               run.Service
+	runSub             runSubscriber
+	feedback           run.FeedbackService
+	secretSource       *RunSecretSource
+	receiver           *trigger.Receiver
+	audit              audit.Recorder
+	account            accountService
+	aiSettings         ai.Service
+	aiAnalyzer         ai.RepoAnalyzer
+	runDiffer          ai.RunDiffer
+	sourceReader       SourceReader
+	refsLister         RefsLister
+	runnerConfig       runner.Service
+	servers            target.Service
+	notifications      notify.Service
+	deployer           deploy.Service
+	anomaly            anomaly.Service
+	anomalyInterval    int // 后台定时检测间隔(秒);0=已关闭。供前端显示节奏。
+	anomalyCooldown    int // 同条件告警去重冷却窗口(秒)。
+	metricsHistory     metrics.Service
+	oauth              oauth.Service
+	approvalCoord      *approval.Coordinator
+	approvalStore      *approval.Store
+	approvalSigner     *approval.Signer
+	promotionStore     *promotion.Store
+	environments       *environments.Service
+	doraMetrics        run.MetricsService
+	templates          library.TemplateService
+	varGroups          library.VarGroupService
+	customNodes        library.CustomNodeService
+	artifactStore      *artifactstore.Store
+	retention          *retention.Service
+	proxy              proxy.Service
+	dnsProviders       dnsprovider.Service
+	previewEnvs        PreviewService
 }
 
 // WithMCP adds the embedded Bearer-authenticated MCP route and admin token management.
@@ -460,6 +465,10 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Use(func(next http.Handler) http.Handler {
 			return requireCSRF(next)
 		})
+		if o.configDB != nil {
+			ar.Use(configRevisionMiddleware(o.configDB, o.configRequireMatch))
+			mountConfigManagement(ar, o.configDB, o.configDrafts)
+		}
 		mountOpsChat(ar, o.opsChat, svc)
 
 		// 审计 Recorder(Story 1.4):传给既有敏感操作 handler,业务成功后追加审计行。

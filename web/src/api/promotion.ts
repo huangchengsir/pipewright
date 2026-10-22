@@ -20,6 +20,7 @@
  */
 
 import { http } from './http'
+import { configWriteOptions } from './configRevision'
 
 // ─── Domain types ─────────────────────────────────────────────────────────────
 
@@ -97,7 +98,9 @@ export async function getEnvironments(projectId: string): Promise<EnvironmentsRe
 export async function saveEnvironments(
   projectId: string,
   input: SaveEnvironmentsInput,
+  expectedRevision?: string,
 ): Promise<{ environments: EnvStage[] }> {
+  if (expectedRevision) return http.put<{ environments: EnvStage[] }>(`/api/projects/${projectId}/environments`, input, configWriteOptions(expectedRevision))
   return http.put<{ environments: EnvStage[] }>(
     `/api/projects/${projectId}/environments`,
     input,

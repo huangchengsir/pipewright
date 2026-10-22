@@ -22,6 +22,7 @@
  */
 
 import { http } from './http'
+import { configWriteOptions } from './configRevision'
 
 /** Lifecycle of an ephemeral preview environment. */
 export type PreviewEnvStatus = 'active' | 'reclaimed'
@@ -84,6 +85,8 @@ export async function getPreviewConfig(projectId: string): Promise<PreviewConfig
 }
 
 /** Update a project's preview-environment config. Returns the persisted config. */
-export async function setPreviewConfig(projectId: string, body: PreviewConfig): Promise<PreviewConfig> {
-  return http.put<PreviewConfig>(`/api/projects/${encodeURIComponent(projectId)}/preview-config`, body)
+export async function setPreviewConfig(projectId: string, body: PreviewConfig, expectedRevision?: string): Promise<PreviewConfig> {
+  return expectedRevision
+    ? http.put<PreviewConfig>(`/api/projects/${encodeURIComponent(projectId)}/preview-config`, body, configWriteOptions(expectedRevision))
+    : http.put<PreviewConfig>(`/api/projects/${encodeURIComponent(projectId)}/preview-config`, body)
 }

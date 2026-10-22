@@ -166,6 +166,11 @@ func (s *service) DeployBatch(ctx context.Context, in BatchInput) (*BatchResult,
 	if s.batchDB == nil {
 		return nil, ErrBatchInvalid
 	}
+	ctx, done, activityErr := s.beginActivity(ctx, in.RunID)
+	if activityErr != nil {
+		return nil, activityErr
+	}
+	defer done()
 	payload, _ := json.Marshal(in.Items)
 	digest := fmt.Sprintf("%x", sha256.Sum256(payload))
 	if existing, err := s.batchByKey(ctx, in.RunID, in.IdempotencyKey); err == nil {
@@ -305,6 +310,11 @@ func (s *service) restartBatch(ctx context.Context, runID, batchID, selected str
 	if s.batchDB == nil {
 		return nil, ErrBatchNotFound
 	}
+	ctx, done, activityErr := s.beginActivity(ctx, runID)
+	if activityErr != nil {
+		return nil, activityErr
+	}
+	defer done()
 	b, err := s.GetBatch(ctx, runID, batchID)
 	if err != nil {
 		return nil, err

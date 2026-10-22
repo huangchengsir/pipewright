@@ -22,6 +22,8 @@ import {
 } from '../api/promotion'
 import { validateEnvName, findDuplicateEnvName } from '../api/promotion.helpers'
 import { HttpError } from '../api/http'
+import { configRevisionOf } from '../api/configRevision'
+import { useProjectConfigRevisionParticipant } from '../composables/useProjectConfigRevisions'
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -127,6 +129,14 @@ function onNameInput(row: EnvRow): void {
 const saveSubmitting = ref(false)
 const saveBanner = ref('')
 const saveSuccess = ref(false)
+const configRevision = ref<string>()
+const revisionSync = useProjectConfigRevisionParticipant({
+  projectId: () => props.projectId,
+  read: () => configRevision.value,
+  advance: (_from, to) => { configRevision.value = to },
+  ready: () => loadState.value === 'idle' && !saveSubmitting.value,
+  reload: loadEnvironments,
+})
 let saveSuccessTimer: ReturnType<typeof setTimeout> | null = null
 
 function showSaveSuccess(): void {
@@ -158,6 +168,8 @@ function flushVarDrafts(): void {
 }
 
 async function handleSave(): Promise<void> {
+  const id = props.projectId
+  const previousRevision = configRevision.value
   // Validate all env names
   let hasError = false
   for (const row of envRows.value) {
@@ -200,14 +212,18 @@ async function handleSave(): Promise<void> {
   }
 
   try {
-    const res = await saveEnvironments(props.projectId, {
+    const res = await saveEnvironments(id, {
       environments: stages,
       variables: Object.keys(variables).length > 0 ? variables : undefined,
-    })
+    }, configRevision.value)
+    if (id !== props.projectId) return
+    revisionSync.committed(previousRevision, res, id)
     // Update from server response
+    configRevision.value = configRevisionOf(res)
     applyChain(res.environments, variablesByEnv.value)
     showSaveSuccess()
   } catch (err) {
+    if (id !== props.projectId) return
     if (err instanceof HttpError) {
       if (err.status === 0) {
         saveBanner.value = t('projectPanels.environments.errConnect')
@@ -239,14 +255,23 @@ function applyChain(
   variablesByEnv.value = vars
 }
 
+let loadGeneration = 0
 async function loadEnvironments(): Promise<void> {
-  loadState.value = 'loading'
+  const generation = ++loadGeneration
+  const id = props.projectId
+  const initial = revisionSync.isInitialRead(id)
+  if (!initial) loadState.value = 'loading'
   loadError.value = ''
   try {
-    const res = await getEnvironments(props.projectId)
+    const res = await getEnvironments(id)
+    if (id !== props.projectId || generation !== loadGeneration) return
+    if (initial && !revisionSync.canAcceptInitialRead()) return
+    configRevision.value = configRevisionOf(res)
     applyChain(res.environments, res.variables)
     loadState.value = 'idle'
   } catch (err) {
+    if (id !== props.projectId || generation !== loadGeneration) return
+    if (initial) return
     if (err instanceof HttpError) {
       if (err.status === 0) {
         loadError.value = t('projectPanels.environments.errLoadConnect')

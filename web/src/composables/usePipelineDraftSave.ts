@@ -1,14 +1,21 @@
 import { computed, onMounted, onUnmounted, readonly, shallowRef } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
 
+export interface PipelineSaveContext {
+  baseRevision?: string
+  onCommitted: (revision: string) => void
+}
+
 export interface PipelineDraftParticipant {
   readonly scopes?: readonly string[]
   readonly ready: boolean
   readonly dirty: boolean
   readonly saving: boolean
   readonly saveEvenIfClean?: boolean
+  readonly configRevision?: string
+  advanceConfigRevision?: (from: string, to: string) => void
   validate?: () => boolean
-  save: () => Promise<boolean>
+  save: (context?: PipelineSaveContext) => Promise<boolean>
 }
 
 export type PipelineSaveState = 'saved' | 'dirty' | 'loading' | 'saving' | 'error' | 'partial' | 'unavailable'
@@ -17,6 +24,7 @@ export interface PipelineSaveOutcome {
   state: 'saved' | 'dirty' | 'error' | 'partial' | 'unavailable'
   completedScopes: string[]
   failedScopes: string[]
+  reason?: 'revision_mismatch'
 }
 
 export function usePipelineDraftSave(options: {
@@ -49,6 +57,13 @@ export function usePipelineDraftSave(options: {
     }
     const pending = readyParts.filter((part) => part.dirty)
     pending.push(...readyParts.filter((part) => !part.dirty && part.saveEvenIfClean))
+    // Every pending form must have been read from the same aggregate baseline.
+    // A later unrelated GET cannot silently upgrade a stale editing buffer.
+    let currentRevision = pending.find(part => part.configRevision)?.configRevision
+    if (currentRevision && pending.some(part => part.configRevision !== currentRevision)) {
+      outcome.value = { state: 'error', completedScopes: [], failedScopes: pending.flatMap(part => [...(part.scopes ?? [])]), reason: 'revision_mismatch' }
+      return false
+    }
     saving.value = true
     outcome.value = null
     const completedScopes: string[] = []
@@ -65,7 +80,19 @@ export function usePipelineDraftSave(options: {
       for (const part of pending) {
         // Capture labels with the payload's scope, before acknowledgement clears dirty state.
         currentScopes = [...(part.scopes ?? [])]
-        if (!await part.save()) {
+        const context: PipelineSaveContext = {
+          baseRevision: currentRevision,
+          onCommitted: (revision) => {
+            const previous = currentRevision
+            currentRevision = revision
+            if (previous) {
+              for (const other of readyParts) {
+                if (other.configRevision === previous) other.advanceConfigRevision?.(previous, revision)
+              }
+            }
+          },
+        }
+        if (!await part.save(context)) {
           recordFailure()
           return false
         }

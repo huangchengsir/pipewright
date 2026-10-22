@@ -11,6 +11,7 @@ import PipelineSaveStatus from '../components/pipeline/PipelineSaveStatus.vue'
 import ValidationPanel from '../components/pipeline/ValidationPanel.vue'
 import { i18n } from '../i18n'
 import { http, HttpError } from '../api/http'
+import { bindConfigRevision } from '../api/configRevision'
 import type { PipelineDTO, PipelineStage } from '../api/pipeline'
 import type { SettingsDTO } from '../api/pipelineSettings'
 import type { TriggerConfig } from '../api/triggers'
@@ -19,7 +20,7 @@ import type { ValidationDTO } from '../api/pipelineValidation'
 
 vi.mock('../api/http', async (importOriginal) => ({
   ...await importOriginal<typeof import('../api/http')>(),
-  http: { get: vi.fn(), put: vi.fn(), post: vi.fn() },
+  http: { get: vi.fn(), put: vi.fn(), post: vi.fn(), patch: vi.fn() },
 }))
 vi.mock('../composables/useToast', () => ({
   useToast: () => ({ success: vi.fn(), error: vi.fn() }),
@@ -71,7 +72,7 @@ const ReplacementModalStub = defineComponent({
   setup: () => () => h('div'),
 })
 
-async function render(tab = 'canvas', realCanvas = false): Promise<VueWrapper> {
+async function render(tab = 'canvas', realCanvas = false, realConfigCards = false, realReplacements = false): Promise<VueWrapper> {
   router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -88,10 +89,10 @@ async function render(tab = 'canvas', realCanvas = false): Promise<VueWrapper> {
       stubs: {
         ...(realCanvas ? {} : { PipelineCanvas: CanvasStub }),
         PipelineGuide: true, RiskAnnotationPanel: true, ValidationPanel: true,
-        CronPanel: true, EnvironmentsPanel: true, ParametersPanel: true,
-        ConcurrencyPanel: true, ChainPanel: true, RunnerPanel: true,
+        CronPanel: !realConfigCards, EnvironmentsPanel: true, ParametersPanel: true,
+        ConcurrencyPanel: !realConfigCards, ChainPanel: true, RunnerPanel: true,
         AppSelect: true,
-        YamlImportModal: ReplacementModalStub, TemplatePickerModal: ReplacementModalStub,
+        ...(realReplacements ? {} : { YamlImportModal: ReplacementModalStub, TemplatePickerModal: ReplacementModalStub }),
       },
     },
   })
@@ -138,6 +139,42 @@ function isGuarded(): boolean {
 
 function saveStatus() {
   return wrapper!.findComponent(PipelineSaveStatus)
+}
+
+function versionedRequests(lazyDefaults = false, alwaysChanging = false) {
+  let revision = 1
+  const reads = new Map<string, number>()
+  const configPaths = ['pipeline', 'pipeline/settings', 'trigger', 'preview-config', 'cron', 'concurrency'].map(path => `${prefix}/${path}`)
+  const normalGet = vi.mocked(http.get).getMockImplementation()!
+  const normalPut = vi.mocked(http.put).getMockImplementation()!
+  let project = { id: 'p1', name: 'Project', repoUrl: 'https://example.test/repo', pacEnabled: false, prStatusEnabled: false }
+  vi.mocked(http.get).mockImplementation(async url => {
+    if (url === '/api/projects') return [{ ...project, configRevision: `cfg-${revision}` }]
+    const value = url === `${prefix}/cron` ? { enabled: false, expression: '', branch: '', nextRun: '' }
+      : url === `${prefix}/concurrency` ? { maxConcurrent: 0 } : await normalGet(url)
+    if (!configPaths.includes(url)) return value
+    const count = (reads.get(url) ?? 0) + 1
+    reads.set(url, count)
+    if (alwaysChanging || (lazyDefaults && count === 1)) revision++
+    return bindConfigRevision(value, `cfg-${revision}`)
+  })
+  function accept(options?: RequestInit) {
+    expect(new Headers(options?.headers).get('If-Match')).toBe(`cfg-${revision}`)
+    revision++
+  }
+  vi.mocked(http.put).mockImplementation(async (url, input, options) => {
+    accept(options)
+    const value = url === `${prefix}/cron` ? { ...(input as object), nextRun: '' }
+      : url === `${prefix}/concurrency` ? input : await normalPut(url, input, options)
+    return bindConfigRevision(value, `cfg-${revision}`)
+  })
+  vi.mocked(http.patch).mockImplementation(async (url, input, options) => {
+    expect(url).toBe(prefix)
+    accept(options)
+    project = { ...project, ...(input as object) }
+    return { ...project, configRevision: `cfg-${revision}` }
+  })
+  return { reads, current: () => `cfg-${revision}`, accept }
 }
 
 beforeEach(() => {
@@ -197,6 +234,140 @@ afterEach(() => {
 })
 
 describe('ProjectPipeline draft save scope (#190/#193)', () => {
+  it.each(['import', 'template', 'ai'])('loads the actual %s result before another versioned save', async source => {
+    const versions = versionedRequests()
+    const normalGet = vi.mocked(http.get).getMockImplementation()!
+    vi.mocked(http.get).mockImplementation((url, options) => url === '/api/templates'
+      ? Promise.resolve({ templates: [{ id: 'tpl', name: 'Template', description: '', stageCount: 1 }] }) : normalGet(url, options))
+    const replacement: PipelineStage[] = [{ id: 'replacement', name: 'Applied stages', kind: 'build', jobs: [] }]
+    vi.mocked(http.post).mockImplementation(async (url, _input, options) => {
+      if (url === `${prefix}/pipeline/ai-generate`) return {
+        available: true, reason: '', analysis: { cloned: false, language: 'Go', languageVersion: '', buildTool: '', hasDockerfile: false, artifactHint: '', signals: [] },
+        proposal: { stages: replacement, build: { model: 'dockerfile', toolchain: { language: '', version: '' }, artifactType: 'image', dockerfilePath: 'Generatedfile' }, branchMappings: [], rationale: 'Generated proposal' },
+      }
+      versions.accept(options)
+      storedPipeline.stages = replacement
+      if (url === `${prefix}/pipeline/ai-apply`) {
+        storedSettings.build.dockerfilePath = 'Generatedfile'
+        storedTrigger.events.push = true
+        return bindConfigRevision({ applied: { spec: true, settings: true, triggers: true } }, versions.current())
+      }
+      expect([`${prefix}/pipeline/import`, `${prefix}/pipeline/apply-template`]).toContain(url)
+      return bindConfigRevision(clone(storedPipeline), versions.current())
+    })
+    await render('canvas', false, false, true)
+    const label = i18n.global.t(source === 'import' ? 'projectPipeline.importYaml' : source === 'template' ? 'projectPipeline.templates' : 'projectPipeline.aiGenerate')
+    await wrapper!.findAll('.top-btn').find(button => button.text() === label)!.trigger('click'); await flushPromises()
+    if (source === 'template') await wrapper!.get('.scrim .btn-primary').trigger('click')
+    else if (source === 'import') {
+      await wrapper!.get('.yi-modal textarea').setValue('version: 1')
+      await wrapper!.findAll('.yi-modal button').find(button => button.text() === '导入并保存')!.trigger('click')
+    } else {
+      await wrapper!.findAll('.wiz-footer button').find(button => button.text().includes(i18n.global.t('pipelinePanels.wizGenerateConfig')))!.trigger('click'); await flushPromises()
+      await wrapper!.findAll('.wiz-footer button').find(button => button.text() === i18n.global.t('pipelinePanels.wizApplySelected'))!.trigger('click')
+    }
+    await flushPromises()
+    expect(wrapper!.findComponent(CanvasStub).props('stages')).toEqual(replacement)
+    if (source === 'ai') {
+      expect(wrapper!.findComponent(VarsCacheTab).props('build').dockerfilePath).toBe('Generatedfile')
+      expect(versions.reads.get(`${prefix}/trigger`)).toBe(2)
+      expect(wrapper!.findComponent(TriggersPanel).vm.dirty).toBe(false)
+    }
+    await wrapper!.findAll('.pac-switch')[1].trigger('click'); await flushPromises()
+    await editVariable(); await clickSave()
+    expect(storedPipeline.stages).toEqual(replacement)
+    expect(http.put).toHaveBeenCalledTimes(2)
+    expect(saveStatus().props('state')).toBe('saved')
+  })
+  it('re-reads lazy defaults once before the first pristine multi-block save', async () => {
+    const versions = versionedRequests(true)
+    await render('vars')
+    for (const path of ['pipeline', 'pipeline/settings', 'trigger', 'preview-config']) expect(versions.reads.get(`${prefix}/${path}`)).toBe(2)
+    await editVariable(); await clickSave()
+    expect(http.put).toHaveBeenCalledTimes(2)
+    expect(saveStatus().props('state')).toBe('saved')
+  })
+  it.each([0, 1])('propagates acknowledged saves to project switch %s and its result back to drafts', async index => {
+    versionedRequests()
+    await render('vars'); await editVariable(); await clickSave()
+    await switchTab('canvas')
+    await wrapper!.findAll('.pac-switch')[index].trigger('click'); await flushPromises()
+    expect(http.patch).toHaveBeenCalledTimes(1)
+    expect(wrapper!.find('.pac-bar-err').exists()).toBe(false)
+    wrapper!.findComponent(CanvasStub).vm.$emit('update', [{ id: 's', name: 'Changed', kind: 'build', jobs: [] }])
+    await clickSave()
+    expect(http.put).toHaveBeenCalledTimes(3)
+    expect(saveStatus().props('state')).toBe('saved')
+  })
+  it('advances all same-baseline drafts after a project switch before their first save', async () => {
+    versionedRequests()
+    await render()
+    await wrapper!.findAll('.pac-switch')[1].trigger('click'); await flushPromises()
+    await editVariable(); await editTrigger()
+    await wrapper!.findComponent(ProjectPreviewConfig).find('.pvc__in').setValue('preview.example.com')
+    await clickSave()
+    expect(http.put).toHaveBeenCalledTimes(4)
+    expect(saveStatus().props('state')).toBe('saved')
+  })
+  it('retains a newer same-page commit when an overlapping project switch is rejected', async () => {
+    versionedRequests()
+    const normalPatch = vi.mocked(http.patch).getMockImplementation()!
+    let failPac!: (reason: HttpError) => void
+    vi.mocked(http.patch).mockImplementation((url, input, options) => (input as { pacEnabled?: boolean }).pacEnabled
+      ? new Promise((_resolve, reject) => { failPac = reject }) : normalPatch(url, input, options))
+    await render()
+    await wrapper!.findAll('.pac-switch')[0].trigger('click')
+    await wrapper!.findAll('.pac-switch')[1].trigger('click'); await flushPromises()
+    failPac(new HttpError(409, { code: 'revision_conflict', message: 'Reload' }, 'Reload')); await flushPromises()
+    expect(wrapper!.findAll('.pac-switch')[0].attributes('aria-checked')).toBe('false')
+    expect(wrapper!.findAll('.pac-switch')[1].attributes('aria-checked')).toBe('true')
+    await editVariable(); await clickSave()
+    expect(http.put).toHaveBeenCalledTimes(2)
+    expect(saveStatus().props('state')).toBe('saved')
+  })
+  it('propagates a child-card commit to sibling cards, project switches and draft saves', async () => {
+    versionedRequests()
+    await render('triggers', false, true)
+    await wrapper!.get('#conc-input').setValue(2)
+    await wrapper!.get('.conc-save button').trigger('click'); await flushPromises()
+    await wrapper!.get('.cron-save button').trigger('click'); await flushPromises()
+    expect(http.put).toHaveBeenCalledTimes(2)
+    await switchTab('canvas')
+    await wrapper!.findAll('.pac-switch')[1].trigger('click'); await flushPromises()
+    await editVariable(); await clickSave()
+    expect(http.patch).toHaveBeenCalledTimes(1)
+    expect(http.put).toHaveBeenCalledTimes(4)
+    expect(saveStatus().props('state')).toBe('saved')
+  })
+  it('never replaces user edits with a late initialization re-read', async () => {
+    versionedRequests(true)
+    const normalGet = vi.mocked(http.get).getMockImplementation()!
+    let count = 0
+    let finish!: () => void
+    vi.mocked(http.get).mockImplementation(async (url, options) => {
+      const value = await normalGet(url, options)
+      if (url === `${prefix}/pipeline/settings` && ++count === 2) return new Promise(resolve => { finish = () => resolve(value) })
+      return value
+    })
+    await render('vars')
+    const build = clone(wrapper!.findComponent(VarsCacheTab).props('build'))
+    build.vars = [{ id: 'new', key: 'NAME', value: 'persisted', secret: false }]
+    wrapper!.findComponent(VarsCacheTab).vm.$emit('update', build)
+    finish(); await flushPromises()
+    expect((wrapper!.get('input[aria-label="变量值"]').element as HTMLInputElement).value).toBe('persisted')
+    await clickSave()
+    expect(storedSettings.build.vars[0].value).toBe('persisted')
+    expect(saveStatus().props('state')).toBe('saved')
+  })
+  it('bounds pristine snapshot retries when configuration keeps changing', async () => {
+    const versions = versionedRequests(false, true)
+    await render()
+    for (const path of ['pipeline', 'pipeline/settings', 'trigger', 'preview-config']) expect(versions.reads.get(`${prefix}/${path}`)).toBe(3)
+    await editVariable()
+    await clickSave()
+    expect(http.put).not.toHaveBeenCalled()
+    expect(wrapper!.text()).toContain('重新加载')
+  })
   it('derives image auto-push uncertainty from edited environment registries', async () => {
     await render()
     const canvas = wrapper!.findComponent(CanvasStub)

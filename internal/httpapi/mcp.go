@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/huangchengsir/pipewright/internal/audit"
@@ -108,6 +109,10 @@ func NewMCPHandler(tokens *auth.MCPTokenStore, d pmcp.Dependencies, opts MCPHTTP
 			return
 		}
 		// Legacy protocol batches can dispatch many concurrent tools in one HTTP slot.
+		if !utf8.Valid(body) {
+			writeError(w, http.StatusBadRequest, "mcp_invalid_request", "Invalid MCP request")
+			return
+		}
 		if trimmed := bytes.TrimSpace(body); len(trimmed) > 0 && trimmed[0] == '[' {
 			writeError(w, http.StatusBadRequest, "mcp_batch_denied", "MCP batch requests are not supported")
 			return
@@ -199,10 +204,11 @@ func NewMCPTokenHandlers(tokens *auth.MCPTokenStore, rec audit.Recorder) MCPToke
 				return
 			}
 			var in struct {
-				Name          string   `json:"name"`
-				ProjectIDs    []string `json:"projectIds"`
-				CanTrigger    bool     `json:"canTrigger"`
-				ExpiresInDays *int     `json:"expiresInDays"`
+				Name          string                `json:"name"`
+				ProjectIDs    []string              `json:"projectIds"`
+				CanTrigger    bool                  `json:"canTrigger"`
+				ExpiresInDays *int                  `json:"expiresInDays"`
+				ConfigGrants  []auth.MCPConfigGrant `json:"configGrants,omitempty"`
 			}
 			dec := json.NewDecoder(bytes.NewReader(body))
 			dec.DisallowUnknownFields()
@@ -218,7 +224,7 @@ func NewMCPTokenHandlers(tokens *auth.MCPTokenStore, rec audit.Recorder) MCPToke
 				writeError(w, http.StatusUnprocessableEntity, "invalid_token_input", "TTL must be 1 to 30 days")
 				return
 			}
-			plaintext, item, err := tokens.Create(r.Context(), auth.MCPTokenInput{Name: in.Name, ProjectIDs: in.ProjectIDs, CanTrigger: in.CanTrigger, ExpiresInDays: days})
+			plaintext, item, err := tokens.Create(r.Context(), auth.MCPTokenInput{Name: in.Name, ProjectIDs: in.ProjectIDs, CanTrigger: in.CanTrigger, ExpiresInDays: days, ConfigGrants: in.ConfigGrants})
 			if err != nil {
 				status := http.StatusInternalServerError
 				code := "internal"

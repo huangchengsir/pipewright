@@ -13,6 +13,7 @@
  */
 
 import { http } from './http'
+import { configWriteOptions } from './configRevision'
 
 export type RunStatus =
   | '成功'
@@ -24,6 +25,7 @@ export type RunStatus =
 
 export interface Project {
   id: string
+  configRevision?: string
   name: string
   repoUrl: string
   defaultBranch: string
@@ -90,12 +92,16 @@ export async function testClone(input: TestCloneInput): Promise<TestCloneResult>
   return http.post<TestCloneResult>('/api/projects/test-clone', input)
 }
 
-export async function updateProject(id: string, input: UpdateProjectInput): Promise<Project> {
-  return http.patch<Project>(`/api/projects/${id}`, input)
+export async function updateProject(id: string, input: UpdateProjectInput, expectedRevision?: string): Promise<Project> {
+  return expectedRevision
+    ? http.patch<Project>(`/api/projects/${id}`, input, configWriteOptions(expectedRevision))
+    : http.patch<Project>(`/api/projects/${id}`, input)
 }
 
-export async function deleteProject(id: string): Promise<void> {
-  return http.delete<void>(`/api/projects/${id}`)
+export async function deleteProject(id: string, expectedRevision?: string): Promise<void> {
+  return expectedRevision
+    ? http.delete<void>(`/api/projects/${id}`, configWriteOptions(expectedRevision))
+    : http.delete<void>(`/api/projects/${id}`)
 }
 
 /** One stage's summary from a previewed `.pipewright.yml` (no secrets). */

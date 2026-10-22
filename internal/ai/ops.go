@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -22,6 +23,19 @@ import (
 )
 
 const opsEnvelopeBytes = 64 << 10
+
+// Distinguishes local preflight rejection from an ambiguous dispatched request.
+// Wrapped original errors remain available to the existing operations callers.
+var errOpsNotDispatched = errors.New("ai: ops request not dispatched")
+
+type opsPreflightError struct{ cause error }
+
+func (e *opsPreflightError) Error() string {
+	return errOpsNotDispatched.Error() + ": " + e.cause.Error()
+}
+func (e *opsPreflightError) Unwrap() error        { return e.cause }
+func (e *opsPreflightError) Is(target error) bool { return target == errOpsNotDispatched }
+func opsNotDispatched(err error) error            { return &opsPreflightError{cause: err} }
 
 type opsModel struct {
 	service     *service
@@ -443,8 +457,18 @@ func (m *opsModel) analysisPrompt(in opschat.AnalysisRequest) (string, error) {
 }
 
 func (m *opsModel) chat(ctx context.Context, cfg *Config, key, prompt string, limit int) (string, error) {
+	text, err := m.chatWithDispatch(ctx, cfg, key, prompt, limit)
+	var local *opsPreflightError
+	if errors.As(err, &local) {
+		// Keep the existing operations API's exact preflight error identities.
+		err = local.cause
+	}
+	return text, err
+}
+
+func (m *opsModel) chatWithDispatch(ctx context.Context, cfg *Config, key, prompt string, limit int) (string, error) {
 	if len(prompt) > 32<<10 {
-		return "", opschat.ErrQuota
+		return "", opsNotDispatched(opschat.ErrQuota)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -454,7 +478,7 @@ func (m *opsModel) chat(ctx context.Context, cfg *Config, key, prompt string, li
 	}
 	destination, err := opsResolve(ctx, base, m.lookupIP)
 	if err != nil {
-		return "", opschat.ErrUnavailable
+		return "", opsNotDispatched(opschat.ErrUnavailable)
 	}
 	var endpoint string
 	body := map[string]any{"model": cfg.Model, "messages": []map[string]string{{"role": "user", "content": prompt}}}
@@ -468,14 +492,15 @@ func (m *opsModel) chat(ctx context.Context, cfg *Config, key, prompt string, li
 	case ProviderOllama:
 		endpoint = apiEndpoint(cfg.Provider, base, "chat")
 		body["stream"] = false
+		body["options"] = map[string]int{"num_predict": 4096}
 	default:
-		return "", opschat.ErrUnavailable
+		return "", opsNotDispatched(opschat.ErrUnavailable)
 	}
 	opsRequestCompatibility(cfg, base, body)
 	raw, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
 	if err != nil {
-		return "", opsFailure("invalid_response", 0)
+		return "", opsNotDispatched(opsFailure("invalid_response", 0))
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if cfg.Provider == ProviderClaude {

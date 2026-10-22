@@ -85,6 +85,8 @@ var (
 	ErrNotCancelable = errors.New("run: not cancelable")
 	// ErrInvalidStatus 表示筛选/写入的状态枚举非法。
 	ErrInvalidStatus = errors.New("run: invalid status")
+	// ErrInvalidCommit rejects values that cannot be full checked-out SHA-1 evidence.
+	ErrInvalidCommit = errors.New("run: invalid resolved commit")
 	// ErrQueueFull 表示调度队列已满(突发创建过多),入队失败但 run 已入库。
 	ErrQueueFull = errors.New("run: schedule queue full")
 	// ErrPoolStopped 表示 worker pool 已停机,无法入队。
@@ -157,10 +159,15 @@ type Run struct {
 	ProjectName   string // 冗余只读展示名(join projects),非持久列
 	Status        string
 	Trigger       Trigger
-	Steps         []Step
-	CreatedAt     time.Time
-	StartedAt     *time.Time
-	FinishedAt    *time.Time
+	// ResolvedCommitSHA is the first full commit confirmed by a checkout, never a
+	// guessed expansion of Trigger.Commit. A conflict makes it unsuitable as a
+	// single source revision for this run; the original evidence is retained.
+	ResolvedCommitSHA      string
+	ResolvedCommitConflict bool
+	Steps                  []Step
+	CreatedAt              time.Time
+	StartedAt              *time.Time
+	FinishedAt             *time.Time
 
 	// FailureLog 是失败日志原文(脱敏前;桩 runner 合成,3-3/3-6 落地换真实日志)。
 	// 空串 = 无失败日志。**绝不**原样出网:出网前必过 mask.Masker(诊断在 ai 层脱敏)。

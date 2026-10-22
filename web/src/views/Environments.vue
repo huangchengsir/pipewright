@@ -30,6 +30,7 @@ import EmptyState from '../components/ui/EmptyState.vue'
 import SkeletonBlock from '../components/ui/SkeletonBlock.vue'
 import StatusBadge from '../components/ui/StatusBadge.vue'
 import AppSelect from '../components/ui/AppSelect.vue'
+import ReleaseGuardPanel from '../components/run/ReleaseGuardPanel.vue'
 
 type LoadState = 'idle' | 'loading' | 'error'
 
@@ -283,6 +284,13 @@ onMounted(() => {
                   {{ a.type }}:{{ a.name }}
                 </span>
               </div>
+              <ReleaseGuardPanel
+                :run-id="dep.runId"
+                :project-id="projectId"
+                :environment="tl.environment"
+                :has-deployment-targets="dep.targets.length > 0"
+                compact
+              />
             </div>
           </li>
         </ol>

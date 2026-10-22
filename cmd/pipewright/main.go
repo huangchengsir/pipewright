@@ -34,6 +34,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/cron"
 	"github.com/huangchengsir/pipewright/internal/dagrun"
 	"github.com/huangchengsir/pipewright/internal/deploy"
+	"github.com/huangchengsir/pipewright/internal/deployattempt"
 	"github.com/huangchengsir/pipewright/internal/dnsprovider"
 	"github.com/huangchengsir/pipewright/internal/environments"
 	"github.com/huangchengsir/pipewright/internal/httpapi"
@@ -52,6 +53,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/promotion"
 	"github.com/huangchengsir/pipewright/internal/proxy"
 	"github.com/huangchengsir/pipewright/internal/prstatus"
+	"github.com/huangchengsir/pipewright/internal/releaseguard"
 	"github.com/huangchengsir/pipewright/internal/repocache"
 	"github.com/huangchengsir/pipewright/internal/retention"
 	"github.com/huangchengsir/pipewright/internal/run"
@@ -364,7 +366,29 @@ func main() {
 	}
 
 	// 部署服务(提前到 dag 装配前构造,供 deploy_ssh 流水线节点注入)。Story 4.6 诊断钩子复用 7-2。
-	deploySvc := deploy.New(targetSvc, runSvc, deploy.WithDiagnoseHook(httpapi.NewDiagnoseHook(runSvc, aiSvc, secretSrc)), deploy.WithArtifactStore(artStore), deploy.WithBatchDB(st.DB))
+	attemptLedger := deployattempt.New(st.DB)
+	if err := attemptLedger.RecoverInterrupted(context.Background()); err != nil {
+		log.Fatalf("recover deployment receipts: %v", err)
+	}
+	var guardObserver releaseguard.Observer
+	if limited, ok := targetSvc.(target.LimitedExecutor); ok {
+		guardObserver = &releaseguard.DockerObserver{Executor: limited, Masker: opsMasker}
+	}
+	compareGuardSource := func(ctx context.Context, projectID, baseSHA, currentSHA string) releaseguard.SourceComparison {
+		if repoCache == nil {
+			return releaseguard.SourceComparison{Available: false, Reason: "source_cache_unavailable", Files: []releaseguard.SourceFileChange{}}
+		}
+		p, err := projectSvc.Get(ctx, projectID)
+		if err != nil {
+			return releaseguard.SourceComparison{Available: false, Reason: "source_project_unavailable", Files: []releaseguard.SourceFileChange{}}
+		}
+		return repoCache.CompareLocal(ctx, p.RepoURL, baseSHA, currentSHA)
+	}
+	guardSvc, err := releaseguard.New(releaseguard.Options{DB: st.DB, Ledger: attemptLedger, Runs: runSvc, Targets: targetSvc, Observer: guardObserver, ResolveImageTarget: deploy.ObservationImageTarget, CompareSource: compareGuardSource, Model: ai.NewReleaseGuardModel(aiSvc, opsMasker), Masker: opsMasker})
+	if err != nil {
+		log.Fatalf("initialize release guard: %v", err)
+	}
+	deploySvc := deploy.New(targetSvc, runSvc, deploy.WithDiagnoseHook(httpapi.NewDiagnoseHook(runSvc, aiSvc, secretSrc)), deploy.WithArtifactStore(artStore), deploy.WithBatchDB(st.DB), deploy.WithAttemptLedger(attemptLedger), deploy.WithImageObserver(guardSvc))
 	if recovery, ok := deploySvc.(interface{ RecoverInterruptedBatches(context.Context) error }); ok {
 		if err := recovery.RecoverInterruptedBatches(context.Background()); err != nil {
 			log.Fatalf("recover deploy batches: %v", err)
@@ -536,7 +560,7 @@ func main() {
 	// 运行数据保留清理器:按 retention_config 策略定期裁剪过期终态运行(连带其日志/步骤/产物),
 	// 防止无限增长撑爆磁盘。默认策略 enabled=0(不删);用户在设置里开启并配条数/天数后生效。
 	retentionSvc := retention.NewService(st.DB)
-	retentionSweeper := retention.NewSweeper(retentionSvc, time.Hour)
+	retentionSweeper := retention.NewSweeper(guardRetentionPruner{runs: retentionSvc, guards: guardSvc}, time.Hour)
 	retentionSweeper.Start(context.Background())
 	log.Printf("[retention] 保留清理器已启动(每小时一扫;策略默认关,需在设置开启)")
 
@@ -656,7 +680,7 @@ func main() {
 	go terminalManager.Run(terminalCtx)
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithOnboarding(onboarding.New(st.DB, onboardingCapabilities)), httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithTerminalHTTP(terminalManager), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc), httpapi.WithOpsChat(opsChatSvc), httpapi.WithMCP(mcpHandler, mcpTokens), httpapi.WithConfigManagement(st.DB, configDrafts, configApplyEnabled)),
+		Handler:           httpapi.New(webFS, authSvc, httpapi.WithOnboarding(onboarding.New(st.DB, onboardingCapabilities)), httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithTerminalHTTP(terminalManager), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithReleaseGuard(guardSvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc), httpapi.WithOpsChat(opsChatSvc), httpapi.WithMCP(mcpHandler, mcpTokens), httpapi.WithConfigManagement(st.DB, configDrafts, configApplyEnabled)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;
@@ -733,6 +757,11 @@ func main() {
 	<-ctx.Done()
 	stop()
 	log.Printf("shutting down…")
+	guardCtx, guardCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := guardSvc.Close(guardCtx); err != nil {
+		log.Printf("[releaseguard] worker shutdown did not converge before deadline")
+	}
+	guardCancel()
 	if opsChatSvc != nil {
 		opsCtx, opsCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		if err := opsChatSvc.Close(opsCtx); err != nil {
@@ -752,6 +781,22 @@ func main() {
 	previewSweeper.Stop()
 	pool.Stop(shutdownCtx)
 	log.Printf("[run] worker pool stopped")
+}
+
+// Reuse the existing maintenance cadence; guard cleanup never creates a new
+// service, runs a probe, or depends on source run retention remaining enabled.
+type guardRetentionPruner struct {
+	runs   retention.Pruner
+	guards *releaseguard.Service
+}
+
+func (p guardRetentionPruner) Prune(ctx context.Context, now time.Time) (int, error) {
+	n, runErr := p.runs.Prune(ctx, now)
+	var guardErr error
+	if p.guards != nil {
+		guardErr = p.guards.Purge(ctx)
+	}
+	return n, errors.Join(runErr, guardErr)
 }
 
 // envDurationSeconds 读取 name 环境变量(整数秒)为 time.Duration;未设/非法 → def。

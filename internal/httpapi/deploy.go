@@ -1,13 +1,16 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/deploy"
+	"github.com/huangchengsir/pipewright/internal/releaseguard"
 	"github.com/huangchengsir/pipewright/internal/run"
 )
 
@@ -72,7 +75,8 @@ type deployRequest struct {
 	HealthCheck  *healthCheckDTO   `json:"healthCheck"`
 	// Strategy 是部署策略(Story 8-8 / FR-8-8):rolling(默认)| canary | blue_green。
 	// 空 / 未知 → rolling。金丝雀批量经 deployConfig["canaryCount"|"canaryPercent"] 透传。
-	Strategy string `json:"strategy"`
+	Strategy     string                   `json:"strategy"`
+	ReleaseGuard *releaseguard.StartInput `json:"releaseGuard,omitempty"`
 }
 
 // toHealthCheck 把请求 DTO 映射为领域 HealthCheck(nil / type=none → nil,跳过健康检查)。
@@ -93,6 +97,7 @@ func toHealthCheck(h *healthCheckDTO) *deploy.HealthCheck {
 // deployResponse 是 POST /api/runs/{id}/deploy 响应体:本期同步执行,返回填好的 targets 数组。
 type deployResponse struct {
 	Targets []targetDTO `json:"targets"`
+	GuardID string      `json:"guardId,omitempty"`
 }
 
 // makeDeployRunHandler 返回 POST /api/runs/{id}/deploy handler(认证 + CSRF)。
@@ -102,7 +107,7 @@ type deployResponse struct {
 //
 // run 不存在 → 404;run 非成功 / 无该产物 / 服务器不存在 / 未指定服务器 → 422(人读)。
 // **部署执行失败不 500**:每机 status=failed 记录,整体 200(由 deploy.Deploy 保证不上抛执行错误)。
-func makeDeployRunHandler(svc deploy.Service, runSvc run.Service) http.HandlerFunc {
+func makeDeployRunHandler(svc deploy.Service, runSvc run.Service, guards *releaseguard.Service, aud audit.Recorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if svc == nil || runSvc == nil {
 			writeError(w, http.StatusServiceUnavailable, "internal", "部署服务未初始化")
@@ -110,14 +115,44 @@ func makeDeployRunHandler(svc deploy.Service, runSvc run.Service) http.HandlerFu
 		}
 		id := chi.URLParam(r, "id")
 
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
 		var req deployRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := guardDecode(w, r, &req, false); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
 			return
 		}
+		ctx := r.Context()
+		guardID := ""
+		if req.ReleaseGuard != nil {
+			if guards == nil {
+				guardError(w, releaseguard.ErrUnavailable)
+				return
+			}
+			rn, err := runSvc.Get(ctx, id)
+			if err != nil {
+				writeRunError(w, err)
+				return
+			}
+			var report *releaseguard.Report
+			parameters := releaseguard.DeploymentParameters{Strategy: req.Strategy}
+			if req.HealthCheck != nil {
+				h := req.HealthCheck
+				parameters.HealthCheck = &releaseguard.HealthGateInput{Type: h.Type, URL: h.URL, Command: h.Command, Retries: h.Retries, IntervalSeconds: h.IntervalSeconds, TimeoutSeconds: h.TimeoutSeconds}
+			}
+			ctx, report, err = guards.Attached(ctx, rn.ProjectID, *req.ReleaseGuard, id, req.ArtifactID, req.ServerIDs, req.DeployConfig, parameters)
+			if err != nil {
+				guardError(w, err)
+				return
+			}
+			guardID = report.ID
+			guardAudit(r, aud, "release_guard_attach", guardID, rn.ProjectID)
+			defer func() {
+				cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+				defer cancel()
+				guards.FinishAttached(cleanup, guardID)
+			}()
+		}
 
-		results, err := svc.Deploy(r.Context(), deploy.DeployInput{
+		results, err := svc.Deploy(ctx, deploy.DeployInput{
 			RunID:       id,
 			ArtifactID:  req.ArtifactID,
 			ServerIDs:   req.ServerIDs,
@@ -138,10 +173,10 @@ func makeDeployRunHandler(svc deploy.Service, runSvc run.Service) http.HandlerFu
 			for i := range results {
 				out = append(out, targetResultToDTO(results[i]))
 			}
-			writeJSON(w, http.StatusOK, deployResponse{Targets: out})
+			writeJSON(w, http.StatusOK, deployResponse{Targets: out, GuardID: guardID})
 			return
 		}
-		writeJSON(w, http.StatusOK, deployResponse{Targets: toTargetDTOs(targets)})
+		writeJSON(w, http.StatusOK, deployResponse{Targets: toTargetDTOs(targets), GuardID: guardID})
 	}
 }
 

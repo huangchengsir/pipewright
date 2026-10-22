@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/huangchengsir/pipewright/internal/deployattempt"
 	"github.com/huangchengsir/pipewright/internal/run"
 	"github.com/huangchengsir/pipewright/internal/target"
 )
@@ -263,6 +264,7 @@ func (s *service) deployBlueGreenImage(ctx context.Context, servers []*target.Se
 		for i, srv := range servers {
 			if staged[i] {
 				results[i] = abortedResult(srv, "蓝绿:预备(pull)阶段其它机失败,已中止本机切换(旧容器仍在跑)")
+				s.imageEvent(ctx, states[i], deployattempt.Aborted, "not_run", "fleet_preparation_failed")
 			}
 		}
 		return results

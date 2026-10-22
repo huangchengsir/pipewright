@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/artifactstore"
+	"github.com/huangchengsir/pipewright/internal/deployattempt"
 	"github.com/huangchengsir/pipewright/internal/run"
 	"github.com/huangchengsir/pipewright/internal/target"
 )
@@ -148,6 +149,8 @@ type service struct {
 	artStore      *artifactstore.Store
 	batchDB       *sql.DB
 	activityOwner string
+	attempts      deployattempt.Writer
+	imageObserver ImageObserver
 }
 
 // Option 配置 deploy.Service(如注入诊断钩子)。
@@ -284,6 +287,12 @@ func (s *service) Deploy(ctx context.Context, in DeployInput) ([]TargetResult, e
 	// 4) 按**部署策略**执行(Story 8-8 / FR-8-8):rolling(默认,= 4-5 并行扇出)| canary | blue_green。
 	// 每机独立 goroutine + recover,有界信号量(cap 4)防同时打爆 N 台;单机 panic/失败不连累其它机;
 	// 结果按输入顺序独立收集。策略仅改机群编排(分批门控 / 统一切换),不改单机执行语义。
+	if artifact.Type == run.ArtifactImage {
+		ctx, err = s.beginAttempt(ctx, in.RunID, "deploy")
+		if err != nil {
+			return nil, err
+		}
+	}
 	strategy := NormalizeStrategy(in.Strategy)
 	var results []TargetResult
 	paused := false
@@ -377,6 +386,13 @@ func (s *service) DeployForStage(ctx context.Context, runID string, serverIDs []
 		servers = append(servers, srv)
 	}
 
+	if artifact.Type == run.ArtifactImage {
+		var err error
+		ctx, err = s.beginAttempt(ctx, runID, "stage")
+		if err != nil {
+			return nil, err
+		}
+	}
 	results := s.deployWithStrategy(ctx, servers, *artifact, cfg, nil, NormalizeStrategy(strategy))
 
 	// 持久化每机结果(填 run-detail targets slot);**不置 run 终态**(dag 调度器控制)。
@@ -581,6 +597,12 @@ func (s *service) RetryFailed(ctx context.Context, in RetryInput) ([]TargetResul
 	}
 
 	// 6) 对这些机并行重跑 deployOne(复用产物 + 配置)。
+	if artifact.Type == run.ArtifactImage {
+		ctx, err = s.beginAttempt(ctx, in.RunID, "retry")
+		if err != nil {
+			return nil, err
+		}
+	}
 	retried := s.deployFanout(ctx, servers, *artifact, in.Config, in.HealthCheck)
 
 	// 7) **逐目标 upsert**:只更新被重试目标对应行,**保留**本次未重试的成功目标(别用整批删的 SaveDeployTargets)。

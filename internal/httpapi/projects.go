@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/project"
+	"github.com/huangchengsir/pipewright/internal/releaseguard"
 )
 
 // projectDTO 是项目对外响应体(冻结契约;camelCase;无明文/无密文)。
@@ -208,14 +209,23 @@ func makeUpdateProjectHandler(svc project.Service, aud audit.Recorder) http.Hand
 
 // makeDeleteProjectHandler 返回 DELETE /api/projects/{id} handler。
 // 删除成功后追加 project_delete 审计。
-func makeDeleteProjectHandler(svc project.Service, aud audit.Recorder) http.HandlerFunc {
+func makeDeleteProjectHandler(svc project.Service, aud audit.Recorder, guards *releaseguard.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if svc == nil {
 			writeError(w, http.StatusServiceUnavailable, "internal", "项目服务未初始化")
 			return
 		}
 		id := chi.URLParam(r, "id")
+		if guards != nil {
+			if err := guards.BeginProjectDeletion(r.Context(), id); err != nil {
+				guardError(w, err)
+				return
+			}
+		}
 		if err := svc.Delete(r.Context(), id); err != nil {
+			if guards != nil {
+				guards.CancelProjectDeletion(id)
+			}
 			writeProjectError(w, err)
 			return
 		}
@@ -226,6 +236,12 @@ func makeDeleteProjectHandler(svc project.Service, aud audit.Recorder) http.Hand
 			TargetID:   id,
 			IP:         clientIP(r),
 		})
+		if guards != nil {
+			if err := guards.DeleteProjectRecords(r.Context(), id); err != nil {
+				guardError(w, err)
+				return
+			}
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

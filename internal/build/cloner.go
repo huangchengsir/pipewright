@@ -38,8 +38,10 @@ type Cloner struct {
 // NewCloner 构造生产 Cloner(严格 SSRF 收口)。
 func NewCloner() *Cloner { return &Cloner{} }
 
-// CloneResolved 是克隆结果:实际检出的 commit 短 sha(供产物 tag/引用),空则未解析出。
+// CloneResolved records the checked-out HEAD. CommitFull is source evidence;
+// CommitShort is only for existing artifact tags and display.
 type CloneResolved struct {
+	CommitFull  string
 	CommitShort string
 }
 
@@ -98,9 +100,12 @@ func (c *Cloner) Clone(ctx context.Context, repoURL, username, token, branch, co
 		if cerr := wt.Checkout(&gogit.CheckoutOptions{Hash: hash, Force: true}); cerr != nil {
 			return nil, ErrCloneFailed
 		}
-		resolved.CommitShort = shortSHA(commit)
-	} else if head, herr := repo.Head(); herr == nil {
-		resolved.CommitShort = shortSHA(head.Hash().String())
+	}
+	// Read HEAD after checkout rather than trusting the requested commit/ref.
+	// Missing historical/checkout evidence must never be expanded from a short SHA.
+	if head, herr := repo.Head(); herr == nil {
+		resolved.CommitFull = head.Hash().String()
+		resolved.CommitShort = shortSHA(resolved.CommitFull)
 	}
 	return resolved, nil
 }

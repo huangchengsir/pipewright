@@ -16,7 +16,7 @@ import (
 )
 
 // This fixture binds only loopback and never runs an OS command or accesses a credential.
-func stalledLimitedSSH(t *testing.T, phase string) (string, <-chan struct{}, <-chan struct{}) {
+func stalledLimitedSSH(t *testing.T, phase string, deadline bool) (string, <-chan struct{}, <-chan struct{}) {
 	t.Helper()
 	_, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -81,11 +81,27 @@ func stalledLimitedSSH(t *testing.T, phase string) (string, <-chan struct{}, <-c
 				_ = conn.Wait()
 				return
 			}
-			_ = request.Reply(true, nil)
-			// Exceed the SSH channel window so the client must drain before we signal.
-			_, _ = io.WriteString(stream, strings.Repeat("stdout-line\n", 327680))
-			_, _ = io.WriteString(stream.Stderr(), strings.Repeat("stderr-line\n", 8192))
-			close(reached) // Drain excess output, then stall without EOF or exit status.
+			if err := request.Reply(true, nil); err != nil {
+				return
+			}
+			if deadline {
+				// The deadline starts before handshake. Reaching output proves exec
+				// was acknowledged, but does not promise all output arrived in time.
+				close(reached)
+			}
+			// The cancel branch must drain more than the SSH channel window before
+			// cancellation. A failed write must not masquerade as a drained stream.
+			stdout := strings.Repeat("stdout-line\n", 327680)
+			if n, err := io.WriteString(stream, stdout); err != nil || n != len(stdout) {
+				return
+			}
+			stderr := strings.Repeat("stderr-line\n", 8192)
+			if n, err := io.WriteString(stream.Stderr(), stderr); err != nil || n != len(stderr) {
+				return
+			}
+			if !deadline {
+				close(reached) // All excess output drained; now stall without EOF.
+			}
 			_ = conn.Wait()
 			return
 		}
@@ -99,7 +115,7 @@ func TestRunLimitedLoopbackStallsCancelAndGoroutinesConverge(t *testing.T) {
 		for _, phase := range []string{"handshake", "channel", "exec", "output"} {
 			for _, timeout := range []bool{false, true} {
 				t.Run(phase+map[bool]string{false: "/cancel", true: "/deadline"}[timeout], func(t *testing.T) {
-					addr, reached, serverDone := stalledLimitedSSH(t, phase)
+					addr, reached, serverDone := stalledLimitedSSH(t, phase, timeout)
 					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 					if timeout {
 						cancel()
@@ -133,8 +149,13 @@ func TestRunLimitedLoopbackStallsCancelAndGoroutinesConverge(t *testing.T) {
 						if !errors.Is(got.err, want) {
 							t.Fatalf("stalled transport returned %v, want %v", got.err, want)
 						}
-						if phase == "output" && (got.res == nil || !got.res.Truncated || len(got.res.Stdout)+len(got.res.Stderr) > 1024) {
-							t.Fatal("stalled output exceeded bounded capture", got.res)
+						if phase == "output" {
+							if got.res == nil || len(got.res.Stdout)+len(got.res.Stderr) > 1024 {
+								t.Fatal("stalled output exceeded bounded capture", got.res)
+							}
+							if !timeout && !got.res.Truncated {
+								t.Fatal("drained excess output was not marked truncated", got.res)
+							}
 						}
 					case <-time.After(time.Second):
 						t.Fatal("RunLimited retained a blocked transport goroutine")

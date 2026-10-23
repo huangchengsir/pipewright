@@ -36,7 +36,10 @@ import {
   type HealthCheckInput,
   type DeployStrategy,
   type ApprovalRecord,
+  type DeployRunInput,
 } from '../api/runs'
+import type { ReleaseGuardBinding } from '../api/releaseGuard'
+import { guardReportLocation } from '../api/releaseGuard'
 import { listServers, type Server } from '../api/servers'
 import { HttpError } from '../api/http'
 import DiagnosisPanel from '../components/run/DiagnosisPanel.vue'
@@ -50,6 +53,8 @@ import DeployTargets from '../components/run/DeployTargets.vue'
 import RunDagView from '../components/run/RunDagView.vue'
 import PromotionPanel from '../components/run/PromotionPanel.vue'
 import BatchDeployPanel from '../components/run/BatchDeployPanel.vue'
+import ReleaseGuardPanel from '../components/run/ReleaseGuardPanel.vue'
+import ReleaseGuardAttach from '../components/run/ReleaseGuardAttach.vue'
 
 // ─── route ────────────────────────────────────────────────────────────────────
 
@@ -144,6 +149,11 @@ const selectedServerIds = ref<string[]>([])
 const deploying = ref(false)
 const deployError = ref('')
 const showDeployPanel = ref(false)
+const attachedGuard = ref<{ enabled: boolean; ready: boolean; binding?: ReleaseGuardBinding }>({ enabled: false, ready: false })
+const attachedGuardReset = ref(0)
+const deployOutcomeUnknown = ref(false)
+const deployedGuardId = ref('')
+const selectedArtifactIsImage = computed(() => run.value?.artifacts.some(artifact => artifact.id === selectedArtifactId.value && artifact.type === 'image') ?? false)
 
 // ─── deploy-time health gate (Story 4-3 / FR-12) ─────────────────────────────
 // 部署后健康门控:type none(默认,跳过)/ http(curl 探测)/ command(命令探测)。
@@ -290,32 +300,43 @@ const canDeploy = computed(
     !!selectedArtifactId.value &&
     selectedServerIds.value.length > 0 &&
     healthCheckValid.value &&
+    (!selectedArtifactIsImage.value || !attachedGuard.value.enabled || attachedGuard.value.ready) &&
+    !deployOutcomeUnknown.value &&
     !deploying.value,
 )
 
+const currentDeployInput = computed<DeployRunInput>(() => ({
+  artifactId: selectedArtifactId.value,
+  serverIds: [...selectedServerIds.value],
+  deployConfig: buildDeployConfig(),
+  healthCheck: buildHealthCheck(),
+  strategy: deployStrategy.value,
+}))
+
 async function handleDeploy(): Promise<void> {
   if (!run.value || !canDeploy.value) return
+  const guardBinding = selectedArtifactIsImage.value ? attachedGuard.value.binding : undefined
   deploying.value = true
   deployError.value = ''
   try {
     const res = await deployRun(run.value.id, {
-      artifactId: selectedArtifactId.value,
-      serverIds: [...selectedServerIds.value],
-      deployConfig: buildDeployConfig(),
-      healthCheck: buildHealthCheck(),
-      strategy: deployStrategy.value,
+      ...currentDeployInput.value,
+      ...(guardBinding ? { releaseGuard: { ...guardBinding } } : {}),
     })
     // 同步执行:用返回的 targets 直接填 slot(与 run-detail 同源形状)。
     run.value = { ...run.value, targets: res.targets, status: deriveStatus(res.targets) }
     showDeployPanel.value = false
     selectedServerIds.value = []
+    deployedGuardId.value = res.guardId ?? ''
   } catch (err) {
+    if (guardBinding && err instanceof HttpError && (err.status === 0 || err.status >= 500)) deployOutcomeUnknown.value = true
     if (err instanceof HttpError) {
-      deployError.value = err.apiError?.message ?? t('runDetail.deployFailed', { status: err.status })
+      deployError.value = deployOutcomeUnknown.value ? t('releaseGuard.attachedOutcomeUnknown') : err.apiError?.message ?? t('runDetail.deployFailed', { status: err.status })
     } else {
       deployError.value = t('runDetail.deployRequestFailed')
     }
   } finally {
+    attachedGuardReset.value++
     deploying.value = false
   }
 }
@@ -1114,6 +1135,16 @@ function nodeClass(status: StepStatus): string {
                 </div>
 
                 <!-- 部署错误 -->
+                <ReleaseGuardAttach
+                  v-if="selectedArtifactIsImage"
+                  :project-id="run.projectId"
+                  :run-id="run.id"
+                  :input="currentDeployInput"
+                  :disabled="deploying || deployOutcomeUnknown"
+                  :reset-key="attachedGuardReset"
+                  @change="attachedGuard = $event"
+                />
+
                 <div v-if="deployError" class="banner banner--error" role="alert">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                     <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
@@ -1324,6 +1355,15 @@ function nodeClass(status: StepStatus): string {
 
       </div>
       <!-- END detail-card -->
+
+      <RouterLink v-if="deployedGuardId" :to="guardReportLocation(run.projectId, deployedGuardId)">{{ t('releaseGuard.viewReport') }} →</RouterLink>
+      <ReleaseGuardPanel
+        :run-id="run.id"
+        :project-id="run.projectId"
+        :has-deployment-targets="!!run.targets?.length"
+        :refresh-key="JSON.stringify(run.targets ?? [])"
+        :run-active="['queued', 'running', 'waiting_approval'].includes(run.status)"
+      />
 
       <BatchDeployPanel
         v-if="run.artifacts.length > 0 && ['success', 'partial_failed', 'failed'].includes(run.status)"

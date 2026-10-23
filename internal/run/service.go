@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -79,8 +80,9 @@ type Service interface {
 	// run 不存在不报错(返回空切片);由 HTTP 层据 run 存在性决定 404(仿 GetLogs 语义)。
 	ListArtifacts(ctx context.Context, runID string) ([]Artifact, error)
 
-	// SetCommit 回写本次运行实际检出的 commit 短 SHA(克隆解析出后由执行器调用)。
-	// 触发时未指定 commit(手动触发常见)→ 这里补上真实 commit,供运行详情展示。run 不存在 → ErrNotFound。
+	// SetCommit records a full checked-out SHA, retaining short trigger display.
+	// The first SHA is retained; a different later checkout marks a lasting conflict.
+	// Empty is a no-op; malformed/short values return ErrInvalidCommit.
 	SetCommit(ctx context.Context, id, commit string) error
 
 	// SaveTestReport 持久化一条测试报告汇总(Story 8-6 / FR-8-6)。
@@ -456,7 +458,7 @@ func (s *service) Get(ctx context.Context, id string) (*Run, error) {
 		        pr.chain_source_run_id, pr.chain_depth,
 		        pr.resolved_environment, pr.resolved_target_server_ids,
 		        pr.spec_source, pr.spec_source_ref, pr.spec_source_file, pr.spec_source_fallback,
-		        COALESCE(mr.dispatch_state, '')
+		        COALESCE(mr.dispatch_state, ''), pr.resolved_commit_sha, pr.resolved_commit_conflict
 		 FROM pipeline_runs pr
 		 LEFT JOIN projects p ON p.id = pr.project_id
 		 LEFT JOIN mcp_run_requests mr ON mr.run_id = pr.id
@@ -468,7 +470,7 @@ func (s *service) Get(ctx context.Context, id string) (*Run, error) {
 		&r.Trigger.ChainSourceRunID, &r.Trigger.ChainDepth,
 		&r.Trigger.ResolvedEnvironment, &targetIDsJSON,
 		&r.SpecSource.Source, &r.SpecSource.Ref, &r.SpecSource.File, &r.SpecSource.Fallback,
-		&r.DispatchState)
+		&r.DispatchState, &r.ResolvedCommitSHA, &r.ResolvedCommitConflict)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -595,7 +597,8 @@ func (s *service) List(ctx context.Context, f ListFilter) (*ListResult, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT pr.id, pr.project_id, COALESCE(p.name, ''), pr.status,
 		        pr.trigger_type, pr.trigger_branch, pr.trigger_commit, pr.trigger_actor,
-		        pr.created_at, pr.started_at, pr.finished_at
+		        pr.created_at, pr.started_at, pr.finished_at,
+		        pr.resolved_commit_sha, pr.resolved_commit_conflict
 		 FROM pipeline_runs pr
 		 LEFT JOIN projects p ON p.id = pr.project_id`+clause+`
 		 ORDER BY pr.created_at DESC, pr.id DESC
@@ -615,7 +618,8 @@ func (s *service) List(ctx context.Context, f ListFilter) (*ListResult, error) {
 		)
 		if err := rows.Scan(&r.ID, &r.ProjectID, &r.ProjectName, &r.Status,
 			&r.Trigger.Type, &r.Trigger.Branch, &r.Trigger.Commit, &r.Trigger.Actor,
-			&createdStr, &startedStr, &finishStr); err != nil {
+			&createdStr, &startedStr, &finishStr,
+			&r.ResolvedCommitSHA, &r.ResolvedCommitConflict); err != nil {
 			return nil, fmt.Errorf("run: scan run: %w", err)
 		}
 		if r.CreatedAt, err = time.Parse(time.RFC3339, createdStr); err != nil {
@@ -719,19 +723,35 @@ func (s *service) LastSuccessfulRun(ctx context.Context, projectID, branch strin
 	return s.Get(ctx, id)
 }
 
-// SetFailureLog 持久化某次运行的失败日志原文(脱敏前)。参数化 SQL;不存在 → ErrNotFound。
+// SetCommit atomically records checkout evidence. The assignment order also
+// preserves the original SHA under MySQL's left-to-right UPDATE semantics.
 func (s *service) SetCommit(ctx context.Context, id, commit string) error {
-	commit = strings.TrimSpace(commit)
+	commit = strings.ToLower(strings.TrimSpace(commit))
 	if commit == "" {
 		return nil // 无解析结果 → 不动(保持触发时的值/空)
 	}
+	if len(commit) != 40 {
+		return ErrInvalidCommit
+	}
+	if _, err := hex.DecodeString(commit); err != nil {
+		return ErrInvalidCommit
+	}
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE pipeline_runs SET trigger_commit = ? WHERE id = ?`, commit, id)
+		`UPDATE pipeline_runs SET
+		 resolved_commit_conflict = CASE
+		   WHEN resolved_commit_sha <> '' AND resolved_commit_sha <> ? THEN 1
+		   ELSE resolved_commit_conflict END,
+		 trigger_commit = CASE
+		   WHEN resolved_commit_sha = '' OR resolved_commit_sha = ? THEN ?
+		   ELSE trigger_commit END,
+		 resolved_commit_sha = CASE
+		   WHEN resolved_commit_sha = '' THEN ? ELSE resolved_commit_sha END
+		 WHERE id = ?`, commit, commit, commit[:7], commit, id)
 	if err != nil {
 		return fmt.Errorf("run: set commit: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
+		return ErrNotFound // store enables MySQL ClientFoundRows for idempotent updates.
 	}
 	return nil
 }

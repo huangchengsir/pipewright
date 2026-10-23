@@ -51,6 +51,7 @@ const ProjectTriggers = () => import('../views/ProjectTriggers.vue')
 // Story 7-4: read-only code browsing (FR-4) — Monaco dynamic-imported, off the main bundle
 const ProjectCode = () => import('../views/ProjectCode.vue')
 const RunDetail = () => import('../views/RunDetail.vue')
+const ReleaseGuardReport = () => import('../views/ReleaseGuardReport.vue')
 // Story 1-6: living styleguide (public — no auth required for dev browsing)
 const StatesShowcase = () => import('../views/StatesShowcase.vue')
 // 自定义节点工作室:路由级聚焦低代码编辑页(shell 外全屏,进出经路由)
@@ -119,6 +120,7 @@ const router = createRouter({
         // FR-8-13: 复用库(流水线模板 + 变量组)
         { path: 'library', name: 'library', component: Library, meta: { title: '复用库' } },
         { path: 'runs/:id', name: 'run-detail', component: RunDetail, meta: { title: '运行详情' } },
+        { path: 'projects/:projectId/release-guards/:guardId', name: 'release-guard-report', component: ReleaseGuardReport, meta: { title: '发布护航报告' } },
         // FR-8-15: DORA 指标仪表盘(只读聚合;projectId / window 经 query 即状态)
         { path: 'metrics/dora', name: 'dora', component: DoraDashboard, meta: { title: 'DORA 指标' } },
 

@@ -115,6 +115,12 @@ func (s *service) ContinueDeploy(ctx context.Context, in ContinueInput) ([]Targe
 	if strategy == StrategyInteractive {
 		strategy = StrategyRolling // 续发不再二次暂停。
 	}
+	if artifact.Type == run.ArtifactImage {
+		ctx, err = s.beginAttempt(ctx, in.RunID, "continue")
+		if err != nil {
+			return nil, err
+		}
+	}
 	res := s.deployWithStrategy(ctx, servers, *artifact, in.Config, in.HealthCheck, strategy)
 
 	return s.upsertAndRecompute(ctx, in.RunID, res, existing)

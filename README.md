@@ -344,6 +344,14 @@ single static binary (cmd/pipewright)
 └── web/                      Vue 3 frontend (embedded via go:embed)
 ```
 
+## Release Guard
+
+Manually observe a Docker image deployment for 5, 10 or 15 minutes from the run
+detail or environment history. Reports keep deployment attempts, container
+identity, sampled runtime checks and local change investigations separate from
+the pipeline result. Optional AI explanations require a preview and explicit
+confirmation for each shared snapshot. See [release guard guide](docs/release-guard.md).
+
 ## MCP Integration
 
 MCP runs inside Pipewright on the same port at `/mcp`. Create project-scoped,

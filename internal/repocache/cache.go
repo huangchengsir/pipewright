@@ -188,9 +188,10 @@ func (c *Cache) checkoutFromMirror(ctx context.Context, mirror, branch, commit, 
 		if cerr := wt.Checkout(&gogit.CheckoutOptions{Hash: plumbing.NewHash(commit), Force: true}); cerr != nil {
 			return nil, cerr
 		}
-		resolved.CommitShort = shortSHA(commit)
-	} else if head, herr := repo.Head(); herr == nil {
-		resolved.CommitShort = shortSHA(head.Hash().String())
+	}
+	if head, herr := repo.Head(); herr == nil {
+		resolved.CommitFull = head.Hash().String()
+		resolved.CommitShort = shortSHA(resolved.CommitFull)
 	}
 	return resolved, nil
 }

@@ -207,9 +207,9 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 			}
 			if resolved != nil && resolved.CommitShort != "" {
 				commitTag = resolved.CommitShort
-				if b.recordCommit != nil {
-					b.recordCommit(ctx, r.ID, resolved.CommitShort)
-				}
+			}
+			if resolved != nil && resolved.CommitFull != "" && b.recordCommit != nil {
+				b.recordCommit(ctx, r.ID, resolved.CommitFull)
 			}
 			// 跨阶段产物传递:把上游阶段已归档的 jar/dist 真字节恢复回本阶段新工作区的原相对路径,
 			// 使「构建/打包/部署」拆成独立串行阶段时,下游(如 build_image)仍能拿到上游产物。
@@ -543,9 +543,9 @@ func (b *Builder) cloneJobWorkspace(ctx context.Context, r *run.Run, proj *proje
 	commitTag := "latest"
 	if resolved != nil && resolved.CommitShort != "" {
 		commitTag = resolved.CommitShort
-		if b.recordCommit != nil {
-			b.recordCommit(ctx, r.ID, resolved.CommitShort) // 同一 commit;并发重复记录幂等无害
-		}
+	}
+	if resolved != nil && resolved.CommitFull != "" && b.recordCommit != nil {
+		b.recordCommit(ctx, r.ID, resolved.CommitFull)
 	}
 	// 跨阶段 + 阶段内上游 job 产物:把本 run 已归档的 jar/dist 真字节恢复进本 job 工作区原相对路径。
 	b.restorePriorArtifacts(ctx, r, ws, rep)
@@ -670,6 +670,9 @@ func (b *Builder) runDeployJobWithEnvironment(ctx context.Context, rep dagrun.St
 	_ = rep.Log(ctx, streamStdout, fmt.Sprintf("→ SSH 部署本次产物到服务器 %s(策略 %s)…", strings.Join(serverIDs, ", "), stratLabel))
 	// 把目标机真实执行的命令 + stdout/stderr 实时回流到本部署步骤日志(脱敏由 sink 侧 Masker 兜底)。
 	dctx := deploy.WithCmdLog(ctx, func(stream, text string) { _ = rep.Log(ctx, stream, text) })
+	if len(stages) > 0 {
+		dctx = deploy.WithSourceStage(dctx, stages[0].ID)
+	}
 	run.RecordExecution(rep, run.ExecutionReal)
 	results, err := b.deployer.DeployForStage(dctx, runID, serverIDs, cfg, strategy)
 	if err != nil {

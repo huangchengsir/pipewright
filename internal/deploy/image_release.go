@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/huangchengsir/pipewright/internal/deployattempt"
 	"github.com/huangchengsir/pipewright/internal/run"
 	"github.com/huangchengsir/pipewright/internal/target"
 )
@@ -28,6 +29,7 @@ type imageState struct {
 	ref       string   // 本次新镜像 ref(repo:tag / image id)
 	prevImage string   // 切换前容器所用镜像(回滚目标;"" = 无上一容器,首次部署)
 	runArgs   []string // docker run 的附加参数(端口映射 / env 等;由 cfg 解析,参数自由)
+	receipt   *imageReceipt
 }
 
 var deploymentImageDigest = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -125,19 +127,32 @@ func dockerRunCmd(name string, runArgs []string, ref string) []string {
 func (s *service) stageImageOne(ctx context.Context, srv *target.Server, a run.Artifact, cfg map[string]string) (imageState, string, bool) {
 	ref, err := imageDeploymentReference(a)
 	st := imageState{name: imageContainerName(a, cfg), ref: ref, runArgs: imageRunArgs(cfg)}
+	defer func() {
+		if rec := recover(); rec != nil {
+			s.imageEvent(ctx, st, deployattempt.OutcomeUnknown, "not_run", "preparation_interrupted")
+			panic(rec)
+		}
+	}()
 	if err != nil {
 		return st, err.Error(), false
 	}
 	if st.ref == "" {
 		return st, "image 产物缺少 reference(repo:tag 或镜像 id)", false
 	}
+	if err := s.startImageReceipt(ctx, srv, a, &st); err != nil {
+		return st, "部署身份账本不可用,未执行远端部署", false
+	}
 	execCtx := ctx
 
 	// 探测当前同名容器所用镜像(供回滚);无容器 / 读失败 → 空(首次部署,无可回滚)。
 	st.prevImage = s.readContainerImage(execCtx, srv.ID, st.name)
+	if st.receipt != nil {
+		st.receipt.previous = cleanPreviousImage(st.prevImage)
+	}
 
 	// 仅 pull,不动旧容器(零中断预备)。
 	if failMsg, ok := s.runStep(execCtx, srv.ID, [][]string{{"docker", "pull", st.ref}}); !ok {
+		s.imageEvent(ctx, st, deployattempt.DeployFailed, "not_run", "pull_failed")
 		return st, failMsg, false
 	}
 	return st, "", true
@@ -162,22 +177,64 @@ func (s *service) deployImageOne(ctx context.Context, srv *target.Server, a run.
 // modeLabel 仅用于成功文案区分编排策略("蓝绿" / 空=滚动/金丝雀);回滚文案策略无关。
 func (s *service) activateImageOne(ctx context.Context, srv *target.Server, a run.Artifact, hc *HealthCheck, st imageState, started time.Time, modeLabel string) TargetResult {
 	res := TargetResult{ServerID: srv.ID, ServerName: srv.Name, StartedAt: started}
+	defer func() {
+		if rec := recover(); rec != nil {
+			s.imageEvent(ctx, st, deployattempt.OutcomeUnknown, "not_run", "activation_interrupted")
+			panic(rec)
+		}
+	}()
 	execCtx := ctx
+	// Persist intent before the existing rm/run side effects. No new remote
+	// inspect/read is added merely because identity receipts are enabled.
+	s.beforeImage(ctx, st)
+	if !s.imageEvent(ctx, st, deployattempt.ActivationStarted, "not_run", "") {
+		return finishFailed(res, "部署身份账本不可用,未切换容器")
+	}
 
 	// 切换:移除同名旧容器(幂等)→ 后台起新镜像容器(带 cfg 解析的端口 / run 参数)。
 	swap := [][]string{
 		{"docker", "rm", "-f", st.name},
 		dockerRunCmd(st.name, st.runArgs, st.ref),
 	}
-	if failMsg, ok := s.runStep(execCtx, srv.ID, swap); !ok {
-		// 起新容器失败:尽力回滚到上一镜像(与健康失败同语义),避免目标机被留在坏状态。
-		return s.rollbackImage(execCtx, srv, res, st, failMsg)
+	for i, cmd := range swap {
+		out, err := s.exec(execCtx, srv.ID, cmd)
+		if err != nil || out != nil && out.ExitCode != 0 {
+			msg := humanExecError(err)
+			if err == nil {
+				msg = fmt.Sprintf("部署命令退出码 %d:%s", out.ExitCode, truncate(strings.TrimSpace(out.Stderr)))
+			}
+			if err != nil {
+				s.imageEvent(ctx, st, deployattempt.OutcomeUnknown, "not_run", "activation_transport_error")
+			}
+			return s.rollbackImage(execCtx, srv, res, st, msg)
+		}
+		if i == 1 && st.receipt != nil {
+			id := ""
+			if out != nil {
+				id = strings.TrimSpace(out.Stdout)
+			}
+			if deployattempt.ValidContainerID(id) {
+				st.receipt.actual.ContainerID = id
+				if s.imageEvent(ctx, st, deployattempt.Activated, "not_run", "") {
+					s.afterImage(ctx, st)
+				}
+			} else {
+				st.receipt.unknown = true
+				s.imageEvent(ctx, st, deployattempt.OutcomeUnknown, "not_run", "container_id_unavailable")
+			}
+		}
 	}
 
 	// 切后健康门控;失败触发回滚到上一镜像。
 	if hc.enabled() {
 		if herr := s.runHealthCheck(execCtx, srv.ID, hc); herr != nil {
+			if st.receipt != nil {
+				st.receipt.gate = "failed"
+			}
 			return s.rollbackImage(execCtx, srv, res, st, herr.Error())
+		}
+		if st.receipt != nil {
+			st.receipt.gate = "passed"
 		}
 	}
 
@@ -189,6 +246,11 @@ func (s *service) activateImageOne(ctx context.Context, srv *target.Server, a ru
 		res.Message = fmt.Sprintf("image %s部署完成 → 容器 %s(%s)", modeLabel, st.name, st.ref)
 	}
 	res.FinishedAt = &finish
+	gate := "not_run"
+	if hc.enabled() {
+		gate = "passed"
+	}
+	s.imageEvent(ctx, st, deployattempt.Succeeded, gate, "")
 	return res
 }
 
@@ -199,19 +261,28 @@ func (s *service) rollbackImage(ctx context.Context, srv *target.Server, res Tar
 	defer cancel()
 	finish := time.Now().UTC()
 	res.FinishedAt = &finish
+	gate := "not_run"
+	if st.receipt != nil && st.receipt.gate != "" {
+		gate = st.receipt.gate
+	}
 	if st.prevImage == "" {
 		res.Status = run.TargetFailed
 		res.Message = fmt.Sprintf("健康检查失败且无上一镜像可回滚(首次部署):%s", healthMsg)
+		s.imageEvent(ctx, st, deployattempt.DeployFailed, gate, "rollback_unavailable")
 		return res
 	}
 	var rbErr error
-	for _, cmd := range [][]string{
+	for i, cmd := range [][]string{
 		{"docker", "rm", "-f", st.name},
 		dockerRunCmd(st.name, st.runArgs, st.prevImage),
 	} {
-		if _, e := s.execChecked(ctx, srv.ID, cmd); e != nil {
+		out, e := s.execChecked(ctx, srv.ID, cmd)
+		if e != nil {
 			rbErr = e
 			break
+		}
+		if i == 1 && st.receipt != nil && out != nil && deployattempt.ValidContainerID(strings.TrimSpace(out.Stdout)) {
+			st.receipt.rollbackContainerID = strings.TrimSpace(out.Stdout)
 		}
 	}
 	res.Status = run.TargetRolledBack
@@ -219,24 +290,36 @@ func (s *service) rollbackImage(ctx context.Context, srv *target.Server, res Tar
 		res.Status = run.TargetFailed
 		res.Message = fmt.Sprintf("健康检查失败,已尝试回滚容器 %s → 上一镜像 %s,但回滚命令失败:%s(健康原因:%s)",
 			st.name, st.prevImage, humanExecError(rbErr), healthMsg)
+		s.imageEvent(ctx, st, deployattempt.OutcomeUnknown, gate, "rollback_failed")
 		return res
 	}
 	res.Message = fmt.Sprintf("健康检查失败,已回滚容器 %s → 上一镜像 %s(健康原因:%s)", st.name, st.prevImage, healthMsg)
+	s.imageEvent(ctx, st, deployattempt.RolledBack, gate, "existing_rollback_completed")
 	return res
 }
 
 // fleetRollbackImageOne 把一台「本机切换成功、但机群其它机失败」的容器回滚到上一镜像(蓝绿机群级原子性)。
 func (s *service) fleetRollbackImageOne(ctx context.Context, srv *target.Server, st imageState, res *TargetResult) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			s.imageEvent(ctx, st, deployattempt.OutcomeUnknown, "not_run", "fleet_rollback_interrupted")
+			panic(rec)
+		}
+	}()
 	execCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), policyFrom(ctx).command)
 	defer cancel()
 	var rbErr error
-	for _, cmd := range [][]string{
+	for i, cmd := range [][]string{
 		{"docker", "rm", "-f", st.name},
 		dockerRunCmd(st.name, st.runArgs, st.prevImage),
 	} {
-		if _, e := s.execChecked(execCtx, srv.ID, cmd); e != nil {
+		out, e := s.execChecked(execCtx, srv.ID, cmd)
+		if e != nil {
 			rbErr = e
 			break
+		}
+		if i == 1 && st.receipt != nil && out != nil && deployattempt.ValidContainerID(strings.TrimSpace(out.Stdout)) {
+			st.receipt.rollbackContainerID = strings.TrimSpace(out.Stdout)
 		}
 	}
 	finish := time.Now().UTC()
@@ -245,9 +328,11 @@ func (s *service) fleetRollbackImageOne(ctx context.Context, srv *target.Server,
 	if rbErr != nil {
 		res.Status = run.TargetFailed
 		res.Message = "蓝绿:其它机切换失败,本机尝试回滚到上一镜像但回滚命令失败:" + humanExecError(rbErr)
+		s.imageEvent(ctx, st, deployattempt.OutcomeUnknown, "not_run", "fleet_rollback_failed")
 		return
 	}
 	res.Message = "蓝绿:其它机切换失败,本机已回滚到上一镜像(机群级原子性:要么全切要么全退)"
+	s.imageEvent(ctx, st, deployattempt.RolledBack, "not_run", "existing_fleet_rollback_completed")
 }
 
 // readContainerImage 读同名容器当前所用镜像(docker inspect);无容器 / 读失败 → ""。

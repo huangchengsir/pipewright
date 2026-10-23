@@ -39,6 +39,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/promotion"
 	"github.com/huangchengsir/pipewright/internal/proxy"
+	"github.com/huangchengsir/pipewright/internal/releaseguard"
 	"github.com/huangchengsir/pipewright/internal/retention"
 	"github.com/huangchengsir/pipewright/internal/run"
 	"github.com/huangchengsir/pipewright/internal/runner"
@@ -97,6 +98,7 @@ type options struct {
 	servers            target.Service
 	notifications      notify.Service
 	deployer           deploy.Service
+	releaseGuard       *releaseguard.Service
 	anomaly            anomaly.Service
 	anomalyInterval    int // 后台定时检测间隔(秒);0=已关闭。供前端显示节奏。
 	anomalyCooldown    int // 同条件告警去重冷却窗口(秒)。
@@ -474,6 +476,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 审计 Recorder(Story 1.4):传给既有敏感操作 handler,业务成功后追加审计行。
 		// 为 nil 时 handler 跳过审计(不阻断业务)。
 		aud := o.audit
+		mountReleaseGuard(ar, o.releaseGuard, svc, aud)
 		mcpTokens := NewMCPTokenHandlers(o.mcpTokens, aud)
 		ar.Get("/settings/mcp/tokens", mcpTokens.List)
 		ar.Post("/settings/mcp/tokens", mcpTokens.Create)
@@ -504,7 +507,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Post("/projects", makeCreateProjectHandler(p, aud))
 		ar.Post("/projects/test-clone", makeTestCloneHandler(p))
 		ar.Patch("/projects/{id}", makeUpdateProjectHandler(p, aud))
-		ar.Delete("/projects/{id}", makeDeleteProjectHandler(p, aud))
+		ar.Delete("/projects/{id}", makeDeleteProjectHandler(p, aud, o.releaseGuard))
 
 		// 触发设置与分支映射(Story 2.3)。t 为 nil 时 handler 返回 503。
 		// secret/reset 须在通用 trigger 路由之外单独注册;均过 auth + 写方法 CSRF。
@@ -596,7 +599,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// SSH 部署执行(Story 4.2 / FR-10):认证 + CSRF(写方法)。dep 为 nil → 503。
 		// 取 run + 产物 + 服务器 → deploy.Deploy(逐机经 SSH 执行部署命令,array 不拼 shell)
 		// → 据结果更新 run 终态 → 返回填好的 targets。部署执行失败不 500(每机 status=failed)。
-		ar.Post("/runs/{id}/deploy", makeDeployRunHandler(o.deployer, rs))
+		ar.Post("/runs/{id}/deploy", makeDeployRunHandler(o.deployer, rs, o.releaseGuard, aud))
 		ar.Post("/runs/{id}/deploy/batches", makeCreateDeployBatchHandler(o.deployer, aud))
 		ar.Get("/runs/{id}/deploy/batches", makeListDeployBatchesHandler(o.deployer))
 		ar.Get("/runs/{id}/deploy/batches/{batchId}", makeGetDeployBatchHandler(o.deployer))

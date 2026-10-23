@@ -120,7 +120,7 @@ func WithImageGC(enabled bool) BuilderOption {
 	return func(b *Builder) { b.disableImageGC = !enabled }
 }
 
-// WithCommitRecorder 注入「回写实际检出 commit 到 run」的回调(由 main 接 run.Service.SetCommit)。
+// WithCommitRecorder records the full checked-out commit (run.Service.SetCommit).
 // 克隆解析出 commit 后调用,补全运行详情里的 COMMIT 字段(触发未指定 commit 时尤其有用)。
 func WithCommitRecorder(fn func(ctx context.Context, runID, commit string)) BuilderOption {
 	return func(b *Builder) { b.recordCommit = fn }
@@ -243,8 +243,8 @@ func (b *Builder) Run(ctx context.Context, r *run.Run, sink run.StepSink) error 
 		_ = sink.Log(ctx, streamStderr, 0, "源码克隆失败(鉴权/网络/ref 不存在或被 SSRF 拒绝)")
 		return b.failStep(ctx, sink, 0, "源码克隆失败:"+cerr.Error())
 	}
-	if resolved != nil && resolved.CommitShort != "" && b.recordCommit != nil {
-		b.recordCommit(ctx, r.ID, resolved.CommitShort)
+	if resolved != nil && resolved.CommitFull != "" && b.recordCommit != nil {
+		b.recordCommit(ctx, r.ID, resolved.CommitFull)
 	}
 	commitTag := resolved.CommitShort
 	if commitTag == "" {

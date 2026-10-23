@@ -97,8 +97,8 @@ func (b *Builder) runStageRemote(ctx context.Context, r *run.Run, stage pipeline
 		_ = rep.Log(ctx, streamStderr, "源码克隆失败(鉴权/网络/ref 不存在或被 SSRF 拒绝)")
 		return ErrBuildFailed
 	}
-	if resolved != nil && resolved.CommitShort != "" && b.recordCommit != nil {
-		b.recordCommit(ctx, r.ID, resolved.CommitShort)
+	if resolved != nil && resolved.CommitFull != "" && b.recordCommit != nil {
+		b.recordCommit(ctx, r.ID, resolved.CommitFull)
 	}
 
 	// 2) 打包工作区 → 经 SSH 传到远程并解包。

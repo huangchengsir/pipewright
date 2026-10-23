@@ -193,13 +193,22 @@ func TestPersistenceFailureAfterMutationConvergesWithoutRedispatch(t *testing.T)
 			case <-time.After(time.Second):
 				t.Fatal("mutation did not run")
 			}
-			// Outlast one three-attempt persistence loop; reconciliation must finish.
-			time.Sleep(350 * time.Millisecond)
-			if _, err := db.Exec("DROP TRIGGER fail_result"); err != nil {
-				t.Fatal(err)
+			if phase != "result_save" {
+				// Outlast one three-attempt persistence loop; reconciliation must finish.
+				time.Sleep(350 * time.Millisecond)
+				if _, err := db.Exec("DROP TRIGGER fail_result"); err != nil {
+					t.Fatal(err)
+				}
 			}
+			// For result_save, keep succeeded writes failing until reconciliation
+			// saves unknown; a fixed sleep can expire before result persistence.
 			snap := waitRun(t, s, c.ID, r.ID, Succeeded, Unknown, Failed)
 			waitJobs(t, s)
+			if phase == "result_save" {
+				if _, err := db.Exec("DROP TRIGGER fail_result"); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if snap.Session.ActiveRunID != "" || f.countMutation() != 1 || !s.Capabilities().Available {
 				t.Fatal("worker did not converge locally", snap.Session, f.countMutation())
 			}

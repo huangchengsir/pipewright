@@ -451,10 +451,12 @@ export interface DeployRunInput {
   // Optional rollout strategy (Story 8-8). Omit/'rolling' ⇒ identical to prior
   // behavior. Canary batch size flows via deployConfig.canaryCount/canaryPercent.
   strategy?: DeployStrategy
+  releaseGuard?: { planId: string; planHash: string; idempotencyKey: string }
 }
 
 export interface DeployRunResponse {
   targets: DeployTarget[]
+  guardId?: string
 }
 
 export function deployRun(id: string, input: DeployRunInput): Promise<DeployRunResponse> {

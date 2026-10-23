@@ -77,6 +77,14 @@ func TestMirrorCloneCheckoutAndIncremental(t *testing.T) {
 	if res.CommitShort != mainShort {
 		t.Fatalf("CommitShort = %q, want %q", res.CommitShort, mainShort)
 	}
+	sourceRepo, err := gogit.PlainOpen(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := sourceRepo.Head()
+	if err != nil || res.CommitFull != head.Hash().String() {
+		t.Fatalf("cached checkout full SHA=%q, head=%v err=%v", res.CommitFull, head, err)
+	}
 	if _, err := os.Stat(filepath.Join(ws1, "README.md")); err != nil {
 		t.Fatalf("工作区应含 README.md: %v", err)
 	}
@@ -90,11 +98,42 @@ func TestMirrorCloneCheckoutAndIncremental(t *testing.T) {
 
 	// 第二次 Clone:走**增量 fetch**(镜像已存在),应能拿到新 commit 的内容。
 	ws2 := filepath.Join(t.TempDir(), "ws2")
-	if _, err := c.Clone(ctx, src, "", "", "master", "", ws2); err != nil {
+	updated, err := c.Clone(ctx, src, "", "", "master", "", ws2)
+	if err != nil {
 		t.Fatalf("Clone2: %v", err)
+	}
+	updatedSource, err := gogit.PlainOpen(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatedHead, err := updatedSource.Head()
+	if err != nil || updated.CommitFull != updatedHead.Hash().String() || updated.CommitFull == res.CommitFull {
+		t.Fatalf("incremental clone full SHA=%q, head=%v err=%v", updated.CommitFull, updatedHead, err)
 	}
 	if _, err := os.Stat(filepath.Join(ws2, "v2.txt")); err != nil {
 		t.Fatalf("增量 fetch 后工作区应含新增 v2.txt(说明镜像增量更新了): %v", err)
+	}
+}
+
+func TestCachedCheckoutRecordsRequestedCommitHEAD(t *testing.T) {
+	src, _ := makeSourceRepo(t)
+	repo, err := gogit.PlainOpen(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	requested := head.Hash().String()
+	addCommit(t, src, "later.txt", "later source")
+	workspace := filepath.Join(t.TempDir(), "pinned")
+	resolved, err := newTestCache(t).Clone(context.Background(), src, "", "", "master", requested, workspace)
+	if err != nil || resolved.CommitFull != requested || resolved.CommitShort != requested[:7] {
+		t.Fatalf("pinned cached checkout=%+v err=%v", resolved, err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "later.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("checkout must match the requested older commit: %v", err)
 	}
 }
 

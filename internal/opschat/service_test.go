@@ -441,16 +441,24 @@ func waitRun(t *testing.T, s *Service, id, run string, statuses ...string) *Snap
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		snap, err := s.Snapshot(context.Background(), id)
-		if err != nil {
+		// SQLite has one connection. Repeatedly decrypting and projecting the
+		// full history while polling can delay the worker we are waiting for.
+		var current string
+		err := s.db.QueryRowContext(context.Background(), "SELECT status FROM ops_chat_runs WHERE session_id=? AND id=?", id, run).Scan(&current)
+		if err != nil && err != sql.ErrNoRows {
 			t.Fatal(err)
 		}
-		for _, r := range snap.Runs {
-			if r.ID == run {
-				for _, status := range statuses {
-					if r.Status == status {
-						return snap
-					}
+		for _, status := range statuses {
+			if current != status {
+				continue
+			}
+			snap, err := s.Snapshot(context.Background(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, r := range snap.Runs {
+				if r.ID == run && r.Status == status {
+					return snap
 				}
 			}
 		}

@@ -1,18 +1,94 @@
 package releaseguard
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
 	"testing"
+	"text/template"
 	"time"
 
 	"github.com/huangchengsir/pipewright/internal/deployattempt"
 	"github.com/huangchengsir/pipewright/internal/mask"
 	"github.com/huangchengsir/pipewright/internal/target"
 )
+
+// Exercise the actual Go templates against Docker-shaped maps. Returning
+// prebuilt projection JSON from a fake executor would miss missing-key errors
+// raised by Docker before a projection can reach the collector decoder.
+func renderDockerProjection(t *testing.T, projection string, facts map[string]any) string {
+	t.Helper()
+	tmpl, err := template.New("inspect").Option("missingkey=error").Funcs(template.FuncMap{
+		"json": func(value any) (string, error) {
+			body, err := json.Marshal(value)
+			return string(body), err
+		},
+	}).Parse(projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err = tmpl.Execute(&out, facts); err != nil {
+		t.Fatal(err)
+	}
+	if !json.Valid(out.Bytes()) {
+		t.Fatalf("template did not render valid JSON: %s", out.Bytes())
+	}
+	return out.String()
+}
+
+func TestCollectorRendersOptionalDockerFieldsWithStrictMissingKeys(t *testing.T) {
+	for _, health := range []string{"missing", "null", "healthy", "starting", "unhealthy"} {
+		for _, variant := range []string{"missing", "", "v8"} {
+			t.Run(health+"/variant="+variant, func(t *testing.T) {
+				v := ruleSnapshot()
+				state := map[string]any{
+					"StartedAt": v.StartedAt, "FinishedAt": v.FinishedAt,
+					"Running": true, "OOMKilled": false, "ExitCode": 0,
+				}
+				wantHealth := ""
+				if health == "null" {
+					state["Health"] = nil
+				} else if health != "missing" {
+					state["Health"] = map[string]any{"Status": health, "Log": "DO_NOT_PROJECT_HEALTH_OUTPUT"}
+					wantHealth = health
+				}
+				container := map[string]any{
+					"Id": v.ContainerID, "Created": v.CreatedAt, "State": state,
+					"Image": v.ConfigID, "RestartCount": 0,
+					"Config": map[string]any{"Image": v.DeclaredImage, "Env": []string{"SECRET=DO_NOT_PROJECT_ENV"}},
+				}
+				image := map[string]any{"RepoDigests": v.RepoDigests, "Os": "linux", "Architecture": "arm64"}
+				wantVariant := ""
+				if variant != "missing" {
+					image["Variant"] = variant
+					wantVariant = variant
+				}
+				f := &collectorExecutor{fn: func(i int, _ context.Context, args []string) (*target.LimitedResult, error) {
+					facts := container
+					if i == 1 {
+						facts = image
+					}
+					text := renderDockerProjection(t, args[4], facts)
+					if strings.Contains(text, "DO_NOT_PROJECT") {
+						t.Fatal("optional fields broadened the inspect projection")
+					}
+					return &target.LimitedResult{Stdout: text}, nil
+				}}
+				got := (&DockerObserver{Executor: f}).Inspect(context.Background(), target.ConnectionSnapshot{}, ruleContainer)
+				if got.Outcome != "ok" || !got.ImageAvailable || !got.Running || got.ContainerID != ruleContainer || got.Health != wantHealth || got.Platform.Variant != wantVariant || got.Platform.Architecture != "arm64" {
+					t.Fatalf("strict Docker projection not decoded: %+v", got)
+				}
+				if len(f.calls) != 2 {
+					t.Fatalf("expected container and image projections, got %d calls", len(f.calls))
+				}
+			})
+		}
+	}
+}
 
 type collectorCall struct {
 	args     []string
@@ -144,6 +220,35 @@ func TestCollectorMissingContainerAndErrorsAreDistinct(t *testing.T) {
 			body, _ := json.Marshal(v)
 			if v.Outcome != tc.want || strings.Contains(string(body), "DO_NOT_LEAK") || strings.Contains(string(body), tc.stderr) && tc.stderr != "" {
 				t.Fatalf("outcome=%+v raw=%s", v, body)
+			}
+		})
+	}
+}
+
+func TestCollectorMissingContainerAllowsOnlyWhitespaceStdout(t *testing.T) {
+	missing := "Error response from daemon: No such container: " + ruleContainer + "\n"
+	for _, tc := range []struct {
+		name, stdout, stderr, want string
+	}{
+		{"empty stdout", "", missing, "not_found"},
+		{"Docker newline stdout", "\n", missing, "not_found"},
+		{"whitespace stdout", " \t\r\n", missing, "not_found"},
+		{"nonwhite stdout", "{}\n", missing, "unavailable"},
+		{"diagnostic stdout", "warning\n", missing, "unavailable"},
+		{"wrong full ID", "\n", "Error response from daemon: No such container: " + strings.Repeat("f", 64) + "\n", "unavailable"},
+		{"partial requested ID", "\n", "Error response from daemon: No such container: " + ruleContainer[:12] + "\n", "unavailable"},
+		{"extra stderr diagnostic", "\n", missing + "permission denied\n", "unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &collectorExecutor{fn: func(int, context.Context, []string) (*target.LimitedResult, error) {
+				return &target.LimitedResult{ExitCode: 1, Stdout: tc.stdout, Stderr: tc.stderr}, nil
+			}}
+			v := (&DockerObserver{Executor: f}).Inspect(context.Background(), target.ConnectionSnapshot{}, ruleContainer)
+			if v.Outcome != tc.want || v.ImageAvailable || len(f.calls) != 1 {
+				t.Fatalf("missing container outcome=%+v calls=%d", v, len(f.calls))
+			}
+			if tc.want == "not_found" && v.Reason != "container_not_found" {
+				t.Fatalf("missing container reason=%q", v.Reason)
 			}
 		})
 	}

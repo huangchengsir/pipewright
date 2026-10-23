@@ -33,8 +33,11 @@ func (d *DockerObserver) Capture(ctx context.Context, id string) (target.Connect
 	return d.Executor.Capture(ctx, id)
 }
 
-const containerProjection = `{"containerId":{{json .Id}},"createdAt":{{json .Created}},"startedAt":{{json .State.StartedAt}},"finishedAt":{{json .State.FinishedAt}},"configId":{{json .Image}},"declaredImage":{{json .Config.Image}},"running":{{json .State.Running}},"oomKilled":{{json .State.OOMKilled}},"exitCode":{{json .State.ExitCode}},"restartCount":{{json .RestartCount}},"health":{{if .State.Health}}{{json .State.Health.Status}}{{else}}""{{end}}}`
-const imageProjection = `{"repoDigests":{{json .RepoDigests}},"os":{{json .Os}},"architecture":{{json .Architecture}},"variant":{{if .Variant}}{{json .Variant}}{{else}}""{{end}}}`
+// Docker's template renderer rejects missing map keys even in an if action.
+// Health and Variant are optional API fields; index safely handles their absence
+// while required identity/state fields retain strict field access.
+const containerProjection = `{"containerId":{{json .Id}},"createdAt":{{json .Created}},"startedAt":{{json .State.StartedAt}},"finishedAt":{{json .State.FinishedAt}},"configId":{{json .Image}},"declaredImage":{{json .Config.Image}},"running":{{json .State.Running}},"oomKilled":{{json .State.OOMKilled}},"exitCode":{{json .State.ExitCode}},"restartCount":{{json .RestartCount}},"health":{{with index .State "Health"}}{{json .Status}}{{else}}""{{end}}}`
+const imageProjection = `{"repoDigests":{{json .RepoDigests}},"os":{{json .Os}},"architecture":{{json .Architecture}},"variant":{{with index . "Variant"}}{{json .}}{{else}}""{{end}}}`
 
 var containerName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 var configDigest = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -148,7 +151,7 @@ func (d *DockerObserver) inspect(ctx context.Context, s target.ConnectionSnapsho
 		return v
 	}
 	if res.ExitCode != 0 {
-		if res.Stdout == "" && dockerContainerMissing(res.Stderr, id) {
+		if strings.TrimSpace(res.Stdout) == "" && dockerContainerMissing(res.Stderr, id) {
 			v.Outcome = "not_found"
 			v.Reason = "container_not_found"
 		}

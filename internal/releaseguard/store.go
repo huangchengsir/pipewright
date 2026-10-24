@@ -92,7 +92,7 @@ func (s *Service) save(ctx context.Context, d *document, kind string, e *Evidenc
 			return ErrInvalid
 		}
 		nextBytes := d.Private.EvidenceBytes + len(b)
-		failure := e.Kind == "runtime" && d.Report.VerificationResult != nil && *d.Report.VerificationResult == "failed"
+		failure := (e.Kind == "runtime" || e.Kind == "deployment_health_gate") && d.Report.VerificationResult != nil && *d.Report.VerificationResult == "failed"
 		if nextBytes > maxEvidenceBytes || (nextBytes > regularEvidenceBytes && !failure) {
 			return ErrCapacity
 		}

@@ -1,4 +1,8 @@
-export default { collectLogs: '이 인스턴스에서 제한된 로그 수집', collectLogsHint: '관찰 구간 내 허용된 짧은 발췌만 로컬 수집합니다. 모델 공유 허가가 아닙니다.',
+export default {
+  localImageId: "로컬 Docker Image ID",
+  localImagePending: "빌드 후 시작 전에 Image ID 고정",
+  localImageScope: "이 대상 호스트의 이미지 동일성만 확인합니다. 레지스트리 digest나 다른 호스트의 출처를 증명하지 않습니다.",
+ collectLogs: '이 인스턴스에서 제한된 로그 수집', collectLogsHint: '관찰 구간 내 허용된 짧은 발췌만 로컬 수집합니다. 모델 공유 허가가 아닙니다.',
   noBaseline: '검증된 배포 전 기준선이 없습니다.', verifiedBaseline: '배포 직전 기준선을 검증했습니다.', reviewPrior: '범위 내 증거와 이전 배포를 직접 확인하세요.', sourceDiffMissing: '소스 차이는 수집하지 않았습니다.',
   attached: '이번 배포 관찰', attachedDescription: '계획 검토만으로 배포나 원격 수집을 실행하지 않습니다. 기존 배포 버튼으로 배포하면서 검토한 관찰을 추가합니다. 배포 전 표본이 없어도 배포를 차단하지 않습니다.',
   usePlan: '이 계획 사용', attachedChanged: '배포 설정이 바뀌었습니다. 계획을 다시 미리 보고 검토하세요.', attachedReady: '계획을 검토했습니다. 기존 배포 작업에 이번 관찰을 추가합니다.', attachedReviewRequired: '관찰을 켠 배포 전에는 만료되지 않은 계획을 검토하세요.',
@@ -43,5 +47,5 @@ export default { collectLogs: '이 인스턴스에서 제한된 로그 수집', 
   result: { passed: '기본 실행 검사 통과', failed: '검증 실패', insufficient: '증거 부족', uncertain: '검증 불확실', pending: '결론 없음', not_applicable: '해당 없음' },
   execution: { prepared: '준비됨', queued: '대기 중', binding: 'ID 연결 중', observing: '관찰 중', stopping: '중지 처리 중', completed: '종료됨', stopped: '중지됨', interrupted: '중단됨', blocked: '차단됨', tool_error: '수집 오류', expired: '만료됨', unknown: '상태 불명' },
   attribution: { not_investigated: '조사 전', candidate_relation: '연관 후보', undetermined: '미정' },
-  conditions: { version: '이미지 버전', image_identity: '이미지 ID', identity: '컨테이너 ID', liveness: '표본 생존 상태', running: '실행 상태', restarts: '재시작 횟수', restart: '재시작 횟수', oom: 'OOM 상태', docker_health: '기존 Docker 상태', health: '기존 Docker 상태', coverage: '표본 수집률' },
+  conditions: { deployment_completion: "최종 배포 결과", deployment_health_gate: "배포 시 상태 검사", version: '이미지 버전', image_identity: '이미지 ID', identity: '컨테이너 ID', liveness: '표본 생존 상태', running: '실행 상태', restarts: '재시작 횟수', restart: '재시작 횟수', oom: 'OOM 상태', docker_health: '기존 Docker 상태', health: '기존 Docker 상태', coverage: '표본 수집률' },
 }

@@ -115,7 +115,10 @@ func (s *service) ContinueDeploy(ctx context.Context, in ContinueInput) ([]Targe
 	if strategy == StrategyInteractive {
 		strategy = StrategyRolling // 续发不再二次暂停。
 	}
-	if artifact.Type == run.ArtifactImage {
+	if err := s.validateLocalDockerRuntime(*artifact, in.Config, strategy); err != nil {
+		return nil, err
+	}
+	if artifact.Type == run.ArtifactImage || LocalDockerEnabled(in.Config) {
 		ctx, err = s.beginAttempt(ctx, in.RunID, "continue")
 		if err != nil {
 			return nil, err

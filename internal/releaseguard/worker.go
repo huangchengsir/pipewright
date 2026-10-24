@@ -216,6 +216,13 @@ func (s *Service) work(ctx context.Context, project, id string) {
 			}
 		}
 		if allDone {
+			for i := range d.Report.Targets {
+				if err := s.deploymentFactsLocked(ctx, d, &d.Report.Targets[i], false); err != nil {
+					s.finishLocked(context.Background(), d, "tool_error", "deployment_evidence_unavailable")
+					s.mu.Unlock()
+					return
+				}
+			}
 			s.finishLocked(context.Background(), d, "completed", "observation_window_ended")
 			s.mu.Unlock()
 			return
@@ -417,6 +424,7 @@ func (s *Service) sample(ctx context.Context, project, id, targetID string) {
 		e := Evidence{TargetID: targetID, Kind: "runtime", EventAt: v.CollectedAt, CollectedAt: s.now().UTC(), Reason: safeReason(v.Reason), Truncated: v.Truncated, Summary: "typed_runtime_sample", Value: v}
 		if err = s.recordSampleLocked(ctx, d, t, v, &e); err != nil {
 			if old, loadErr := s.load(context.Background(), project, id); loadErr == nil {
+				retainDeploymentHealthFailure(old, d)
 				reason := "evidence_persistence_unavailable"
 				if errors.Is(err, ErrCapacity) {
 					reason = "evidence_capacity_reached"
@@ -432,6 +440,9 @@ func (s *Service) sample(ctx context.Context, project, id, targetID string) {
 }
 
 func (s *Service) recordSampleLocked(ctx context.Context, d *document, t *TargetObservation, v RuntimeSnapshot, e *Evidence) error {
+	if err := s.deploymentFactsLocked(ctx, d, t, false); err != nil {
+		return err
+	}
 	e.ID = newEvidenceID()
 	unknownHealth := t.HealthRequired == nil
 	applySample(t, v, e.ID, v.CollectedAt, time.Duration(d.Report.Plan.DurationSeconds)*time.Second, 30*time.Second)

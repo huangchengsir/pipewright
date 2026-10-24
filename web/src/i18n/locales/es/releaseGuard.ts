@@ -1,4 +1,8 @@
-export default { collectLogs: 'Recoger registros limitados en esta instancia', collectLogsHint: 'Solo se recogen fragmentos permitidos de la ventana. No autoriza compartirlos con el modelo.',
+export default {
+  localImageId: "Image ID de Docker local",
+  localImagePending: "Image ID se fijará tras compilar, antes de iniciar",
+  localImageScope: "Verifica la identidad solo en este servidor. No es un digest de registro ni prueba de procedencia en otro servidor.",
+ collectLogs: 'Recoger registros limitados en esta instancia', collectLogsHint: 'Solo se recogen fragmentos permitidos de la ventana. No autoriza compartirlos con el modelo.',
   noBaseline: 'No hay referencia previa verificada.', verifiedBaseline: 'Referencia inmediatamente previa verificada.', reviewPrior: 'Revisa manualmente las evidencias del alcance y el despliegue anterior.', sourceDiffMissing: 'No se recogieron diferencias del código fuente.',
   attached: 'Observar este despliegue', attachedDescription: 'Revisar el plan no despliega ni recoge datos remotos. El botón de despliegue original añade la observación revisada. La falta de muestra previa no bloquea el despliegue.',
   usePlan: 'Usar este plan', attachedChanged: 'La configuración cambió. Genera y revisa otra vista previa.', attachedReady: 'Plan revisado. La acción de despliegue original incluirá esta observación.', attachedReviewRequired: 'Revisa un plan vigente antes de desplegar con observación.',
@@ -43,5 +47,5 @@ export default { collectLogs: 'Recoger registros limitados en esta instancia', c
   result: { passed: 'Comprobaciones básicas superadas', failed: 'Verificación fallida', insufficient: 'Evidencias insuficientes', uncertain: 'Verificación incierta', pending: 'Sin conclusión', not_applicable: 'No corresponde' },
   execution: { prepared: 'Preparada', queued: 'En cola', binding: 'Vinculando identidad', observing: 'Observando', stopping: 'Deteniendo', completed: 'Finalizada', stopped: 'Detenida', interrupted: 'Interrumpida', blocked: 'Bloqueada', tool_error: 'Error de recogida', expired: 'Caducada', unknown: 'Desconocida' },
   attribution: { not_investigated: 'Sin investigar', candidate_relation: 'Asociación candidata', undetermined: 'Sin determinar' },
-  conditions: { version: 'Versión de imagen', image_identity: 'Identidad de imagen', identity: 'Identidad del contenedor', liveness: 'Actividad por muestreo', running: 'Estado de ejecución', restarts: 'Número de reinicios', restart: 'Número de reinicios', oom: 'Estado OOM', docker_health: 'Salud Docker existente', health: 'Salud Docker existente', coverage: 'Cobertura de muestras' },
+  conditions: { deployment_completion: "Resultado final del despliegue", deployment_health_gate: "Control de salud del despliegue", version: 'Versión de imagen', image_identity: 'Identidad de imagen', identity: 'Identidad del contenedor', liveness: 'Actividad por muestreo', running: 'Estado de ejecución', restarts: 'Número de reinicios', restart: 'Número de reinicios', oom: 'Estado OOM', docker_health: 'Salud Docker existente', health: 'Salud Docker existente', coverage: 'Cobertura de muestras' },
 }

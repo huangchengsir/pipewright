@@ -8,6 +8,7 @@ import { useOpsAutoScroll } from '../../composables/useOpsAutoScroll'
 import { useConfirm } from '../../composables/useConfirm'
 import { useToast } from '../../composables/useToast'
 import { copyText } from '../../utils/clipboard'
+import { utf8Bytes } from '../../api/opsChat'
 import { onOpsAuthReset, opsAuthEpoch } from '../../utils/opsAuth'
 import CopyTextDialog from './CopyTextDialog.vue'
 import AiOpsSessionList from './AiOpsSessionList.vue'
@@ -20,6 +21,7 @@ const props = withDefaults(
     active?: boolean
     initialServerIds?: string[]
     context?: string
+    terminalEpoch?: string
   }>(),
   { active: true, initialServerIds: () => [], context: 'containers' },
 )
@@ -71,11 +73,15 @@ watch(
 const historyOpen = shallowRef(false),
   manualCopy = shallowRef<string | null>(null)
 let disposed = false
+const terminalWaiters=new Set<()=>void>()
 const unAuthCopy = onOpsAuthReset(() => {
   manualCopy.value = null
+  terminalReference.value = null
+  for(const cancel of terminalWaiters)cancel()
 })
 onBeforeUnmount(() => {
   disposed = true
+  for(const cancel of terminalWaiters)cancel()
   manualCopy.value = null
   unAuthCopy()
 })
@@ -202,7 +208,105 @@ function terminal(id: string): void {
   )
 }
 onBeforeRouteLeave(async () => !props.active || (await leave()))
-defineExpose({ close })
+// Terminal references are deliberately excluded from the autosaved draft.
+const terminalReference = shallowRef<{ text: string; binding: string } | null>(
+  null,
+)
+function terminalTarget(): string | null {
+  if (
+    !props.terminalEpoch ||
+    loading.value ||
+    busy.value ||
+    pending.value ||
+    session.value?.activeRunId ||
+    session.value?.serverIds?.length !== 1 ||
+    session.value.serverIds[0] !== props.initialServerIds[0]
+  )
+    return null
+  return JSON.stringify([
+    props.terminalEpoch,
+    session.value.id,
+    session.value.serverIds,
+    capabilities.value?.provider,
+  ])
+}
+watch(
+  () =>
+    JSON.stringify([
+      props.terminalEpoch,
+      session.value?.id,
+      session.value?.serverIds,
+      capabilities.value?.provider,
+    ]),
+  () => {
+    terminalReference.value = null
+  },
+  { flush: 'sync' },
+)
+function prepareTerminal(epoch: string, auth: number): Promise<string | null> {
+  return new Promise((resolve) => {
+    let stop = () => {},
+      timer: ReturnType<typeof setTimeout> | undefined
+    const finish = (target: string | null) => {
+      stop()
+      clearTimeout(timer)
+      terminalWaiters.delete(cancel)
+      resolve(target)
+    }
+    const cancel = () => finish(null)
+    const check = () => {
+      if (disposed || props.terminalEpoch !== epoch || auth !== opsAuthEpoch())
+        return finish(null)
+      const target = terminalTarget()
+      if (target) finish(target)
+      else if (!loading.value && error.value) finish(null)
+    }
+    terminalWaiters.add(cancel)
+    stop = watch(
+      () => [
+        props.terminalEpoch,
+        session.value,
+        capabilities.value,
+        loading.value,
+        busy.value,
+        pending.value,
+        session.value?.activeRunId,
+        terminalTarget(),
+        error.value,
+      ],
+      check,
+      { flush: 'post' },
+    )
+    timer = setTimeout(cancel, 5000)
+    check()
+  })
+}
+function attachTerminal(text: string, binding: string): boolean {
+  if (
+    binding !== terminalTarget() ||
+    utf8Bytes([draft.value, text].filter(Boolean).join('\n\n')) > 8192
+  )
+    return false
+  terminalReference.value = { text, binding }
+  return true
+}
+async function send(): Promise<boolean> {
+  const reference = terminalReference.value
+  if (!reference) return chat.send()
+  const valid = () =>
+    !disposed &&
+    reference === terminalReference.value &&
+    reference.binding === terminalTarget()
+  if (!valid()) {
+    terminalReference.value = null
+    return false
+  }
+  const accepted = await chat.send({ text: reference.text, valid })
+  if (accepted || pending.value) terminalReference.value = null
+  return accepted
+}
+defineExpose({ close, terminalTarget, prepareTerminal, attachTerminal })
+
 </script>
 <template>
   <aside class="ops-panel" data-testid="ops-panel">
@@ -321,9 +425,16 @@ defineExpose({ close })
         />
       </div>
     </div>
+    <div v-if="terminalReference" class="ops-section terminal-reference" data-testid="terminal-reference">
+      <strong>{{t('serverTerminal.referenceAttached')}}</strong>
+      <p>{{t('serverTerminal.referenceNotice')}}</p>
+      <pre>{{terminalReference.text}}</pre>
+      <button class="ops-btn" type="button" @click="terminalReference=null">{{t('serverTerminal.removeReference')}}</button>
+    </div>
     <AiOpsComposer
       class="ops-composer"
       :draft="draft"
+      :context-text="terminalReference?.text"
       :draft-status="draftStatus"
       :tools="tools"
       :disabled="disabled"
@@ -332,7 +443,7 @@ defineExpose({ close })
       :has-targets="!!session?.serverIds?.length"
       :pending="!!pending"
       @edit="chat.editDraft"
-      @send="chat.send"
+      @send="send"
       @tool="chat.tool"
       @stop="stop"
       @save="chat.flush"
@@ -349,6 +460,9 @@ defineExpose({ close })
 </template>
 <style scoped src="./opsChat.css"></style>
 <style scoped>
+.terminal-reference{flex:0 1 auto;max-height:25%;overflow:auto;border-top:1px solid var(--color-border)}
+.terminal-reference p{font-size:12px;line-height:1.5;color:var(--color-dim)}
+.terminal-reference pre{font:12px/1.5 var(--font-mono);white-space:pre-wrap;overflow-wrap:anywhere}
 .ops-panel {
   container: ops-panel / size;
   overflow: hidden;

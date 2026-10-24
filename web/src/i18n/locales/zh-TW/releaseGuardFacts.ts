@@ -1,4 +1,20 @@
 export default {
+  deploymentEvidenceUnavailable: "部署帳本已記錄失敗，但護航證據尚未確認儲存；保留失敗結論，不引用未儲存的證據。",
+
+  deploymentCompletionPending: "部署尚未完成，正在等待此次部署的最終回執。",
+  deploymentCompleted: "已讀取此次部署成功的最終回執。",
+  deploymentOutcomeUnavailable: "未取得此次部署的成功回執，尚無法核實結果。",
+  deploymentHealthGateFailed: "部署時的健康檢查已記錄失敗；這與持續 Docker 健康狀態分別判斷。",
+  deploymentHealthGate: "部署時健康檢查",
+
+  localImageMatched: "實際容器使用此次啟動前固定的本機 Image ID。",
+  localImageUnexpected: "就緒截止後確認容器使用其他本機映像。",
+  localImageUnavailable: "無法核實本機映像身分。",
+  localImageInvalid: "本機映像身分或啟動前固定證據無效。",
+  localImagePending: "建置後、啟動前記錄預期本機映像；目前計畫尚無 Image ID。",
+  localImageFixed: "已在啟動前固定本機 Image ID。",
+  expectedImage: "預期映像身分",
+
   healthConditionChanged: "Docker 健康檢查條件已變更，不能視為原條件下的複驗。",
   healthComparisonUnknown: "無法核實原報告的健康條件，不能宣稱條件相同。",
   identityMissing: "缺少可核實的容器或連線身分。",

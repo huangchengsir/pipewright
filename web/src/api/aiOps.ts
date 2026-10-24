@@ -10,6 +10,7 @@
  */
 
 import { http } from './http'
+import type { Provider } from './opsChat'
 
 /** 命令风险等级(对齐命令卡左色条:safe=cyan / write=amber / danger=red)。 */
 export type CommandRisk = 'safe' | 'write' | 'danger'
@@ -68,9 +69,10 @@ export async function explainCommand(
 export async function completeCommand(
   partial: string,
   context: CommandContext = {},
+  provider: Provider,
   signal?: AbortSignal,
 ): Promise<CompleteCommandResponse> {
-  return http.post<CompleteCommandResponse>('/api/ai/complete', { partial, context }, { signal })
+  return http.post<CompleteCommandResponse>('/api/ai/complete', { partial, context, confirmed: true, provider }, { signal, throwOnUnauthorized: true })
 }
 
 export interface GenerateComposeResponse {
@@ -85,4 +87,20 @@ export interface GenerateComposeResponse {
 /** 中文需求 → docker-compose.yml(容器管理「AI 生成 compose」)。 */
 export async function generateCompose(nl: string): Promise<GenerateComposeResponse> {
   return http.post<GenerateComposeResponse>('/api/ai/compose', { nl })
+}
+
+export interface TerminalPreview {
+  values: string[]
+  provider: Provider
+}
+/** Local-only redaction. Never dispatches a model request or persists the input. */
+export function previewTerminal(
+  values: string[],
+  signal?: AbortSignal,
+): Promise<TerminalPreview> {
+  return http.post<TerminalPreview>(
+    '/api/ai/terminal-preview',
+    { values },
+    { signal, throwOnUnauthorized: true },
+  )
 }

@@ -88,15 +88,19 @@ func normalizeExecutionLimits(l ExecutionLimits) (ExecutionLimits, error) {
 }
 
 func (s *service) ExecLimited(ctx context.Context, approved ConnectionSnapshot, cmd []string, limits ExecutionLimits) (*LimitedResult, error) {
+	return s.execApproved(ctx, approved, cmd, limits, 30*time.Second, 64, 16<<10)
+}
+
+func (s *service) execApproved(ctx context.Context, approved ConnectionSnapshot, cmd []string, limits ExecutionLimits, maximum time.Duration, maxArgs, maxArgBytes int) (*LimitedResult, error) {
 	limits, err := normalizeExecutionLimits(limits)
 	if err != nil {
 		return nil, err
 	}
-	if len(cmd) == 0 || len(cmd) > 64 {
+	if len(cmd) == 0 || len(cmd) > maxArgs {
 		return nil, errors.New("target: invalid command")
 	}
 	for _, arg := range cmd {
-		if len(arg) > 16<<10 || strings.ContainsRune(arg, 0) {
+		if len(arg) > maxArgBytes || strings.ContainsRune(arg, 0) {
 			return nil, errors.New("target: invalid command")
 		}
 	}
@@ -104,37 +108,49 @@ func (s *service) ExecLimited(ctx context.Context, approved ConnectionSnapshot, 
 	if !ok {
 		return nil, ErrLimitedUnavailable
 	}
+	ctx, cancel := context.WithTimeout(ctx, maximum)
+	defer cancel()
+	var result *LimitedResult
+	err = s.withApprovedSSH(ctx, approved, func(addr string, cfg SSHConfig) error {
+		var runErr error
+		result, runErr = runner.RunLimited(ctx, addr, cfg, cmd, limits)
+		return runErr
+	})
+	return result, err
+}
+
+func (s *service) withApprovedSSH(ctx context.Context, approved ConnectionSnapshot, use func(string, SSHConfig) error) error {
 	current, err := s.Capture(ctx, approved.Server.ID)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if approved.Fingerprint() != current.Fingerprint() {
-		return nil, ErrTargetChanged
+		return ErrTargetChanged
 	}
 	if s.vault == nil {
-		return nil, ErrVaultUnconfigured
+		return ErrVaultUnconfigured
 	}
 	var sealed []byte
 	err = s.db.QueryRowContext(ctx, "SELECT ciphertext FROM credentials WHERE id = ?", approved.Server.CredentialID).Scan(&sealed)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrCredentialNotFound
+		return ErrCredentialNotFound
 	}
 	if err != nil {
-		return nil, ErrAuth
+		return ErrAuth
 	}
 	version := sha256.Sum256(sealed)
 	if hex.EncodeToString(version[:]) != approved.CredentialVersion {
-		return nil, ErrTargetChanged
+		return ErrTargetChanged
 	}
 	plaintext, err := s.vault.OpenSecret(sealed)
 	if err != nil {
 		switch {
 		case errors.Is(err, vault.ErrVaultUnconfigured):
-			return nil, ErrVaultUnconfigured
+			return ErrVaultUnconfigured
 		case errors.Is(err, vault.ErrNotFound):
-			return nil, ErrCredentialNotFound
+			return ErrCredentialNotFound
 		default:
-			return nil, ErrAuth
+			return ErrAuth
 		}
 	}
 	defer func() {
@@ -151,11 +167,8 @@ func (s *service) ExecLimited(ctx context.Context, approved ConnectionSnapshot, 
 	}
 	secret = ""
 	defer func() { cfg.Password = ""; cfg.PrivateKey = "" }()
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	// Use the approved address, not another lookup after validation.
 	addr := net.JoinHostPort(approved.Server.Host, strconv.Itoa(approved.Server.Port))
-	return runner.RunLimited(ctx, addr, cfg, cmd, limits)
+	return use(addr, cfg)
 }
 
 // A shared budget bounds stdout and stderr while SSH drains both concurrently.
@@ -220,6 +233,14 @@ func (b *outputBudget) result() *LimitedResult {
 }
 
 func (sshDialer) RunLimited(ctx context.Context, addr string, cfg SSHConfig, cmd []string, limits ExecutionLimits) (*LimitedResult, error) {
+	return runLimitedInput(ctx, addr, cfg, cmd, nil, limits)
+}
+
+func (sshDialer) RunLimitedWithStdin(ctx context.Context, addr string, cfg SSHConfig, cmd []string, stdin io.Reader, limits ExecutionLimits) (*LimitedResult, error) {
+	return runLimitedInput(ctx, addr, cfg, cmd, stdin, limits)
+}
+
+func runLimitedInput(ctx context.Context, addr string, cfg SSHConfig, cmd []string, stdin io.Reader, limits ExecutionLimits) (*LimitedResult, error) {
 	limits, err := normalizeExecutionLimits(limits)
 	if err != nil {
 		return nil, err
@@ -256,6 +277,7 @@ func (sshDialer) RunLimited(ctx context.Context, addr string, cfg SSHConfig, cmd
 	budget := &outputBudget{remaining: limits.Bytes, maxLines: limits.Lines}
 	session.Stdout = budgetWriter{budget: budget}
 	session.Stderr = budgetWriter{budget: budget, stderr: true}
+	session.Stdin = stdin
 	runErr := runWithContext(ctx, session, quoteArgs(cmd))
 	res := budget.result()
 	if runErr == nil {

@@ -145,11 +145,15 @@ func (s *Service) Prepare(ctx context.Context, project string, in PrepareInput) 
 			} else {
 				pt.Limitations = append(pt.Limitations, "activation_receipt_missing")
 			}
+			if deployattempt.ValidLocalExpected(t.ExpectedImage) && !localActivationRecorded(t, pt.ContainerID) {
+				pt.Availability = "identity_unavailable"
+				pt.Limitations = appendUnique(pt.Limitations, "activation_receipt_missing")
+			}
 			if pt.ConnectionFingerprint == "" {
 				pt.Availability = "identity_unavailable"
 				pt.Limitations = append(pt.Limitations, "deployment_connection_identity_unavailable")
 			}
-			if t.ExpectedImage.DigestKind == deployattempt.DigestConfig || t.ExpectedImage.Digest == "" {
+			if (t.ExpectedImage.DigestKind == deployattempt.DigestConfig && !deployattempt.ValidLocalExpected(t.ExpectedImage)) || t.ExpectedImage.Digest == "" {
 				pt.Availability = "unsupported"
 				pt.Limitations = append(pt.Limitations, "repository_digest_unavailable")
 			}
@@ -182,14 +186,11 @@ func (s *Service) Prepare(ctx context.Context, project string, in PrepareInput) 
 				break
 			}
 		}
-		if a == nil || a.Type != "image" {
+		if a == nil {
 			return nil, ErrInvalid
 		}
 		repo, _ := a.Metadata["digestRepository"].(string)
 		dg, _ := a.Metadata["digest"].(string)
-		if repo == "" || !configDigest.MatchString(dg) {
-			return nil, ErrUnavailable
-		}
 		name := in.DeployConfig["containerName"]
 		if name == "" {
 			name = a.Name
@@ -201,6 +202,16 @@ func (s *Service) Prepare(ctx context.Context, project string, in PrepareInput) 
 			if e != nil {
 				return nil, ErrInvalid
 			}
+		}
+		localPending := pendingLocalExpected(expected)
+		if localPending {
+			if (a.Type != run.ArtifactArchive && a.Type != run.ArtifactDist) || in.DeployConfig["localDocker"] != "true" || in.Strategy == "blue_green" {
+				return nil, ErrInvalid
+			}
+		} else if a.Type != run.ArtifactImage {
+			return nil, ErrInvalid
+		} else if expected.IdentitySource != "" || expected.Repository == "" || !configDigest.MatchString(expected.Digest) || expected.DigestKind == deployattempt.DigestConfig {
+			return nil, ErrUnavailable
 		}
 		if !containerName.MatchString(name) {
 			return nil, ErrInvalid
@@ -215,7 +226,11 @@ func (s *Service) Prepare(ctx context.Context, project string, in PrepareInput) 
 			if e != nil {
 				return nil, ErrNotFound
 			}
-			p.Targets = append(p.Targets, PlanTarget{ID: id, ServerID: id, ServerName: srv.Name, ContainerName: name, WorkloadKey: deployattempt.WorkloadKey(project, p.Environment, id, name), ExpectedImage: expected, Availability: "available", Limitations: []string{"runtime_identity_pending_activation"}})
+			limitations := []string{"runtime_identity_pending_activation"}
+			if localPending {
+				limitations = append(limitations, "local_image_identity_pending_build")
+			}
+			p.Targets = append(p.Targets, PlanTarget{ID: id, ServerID: id, ServerName: srv.Name, ContainerName: name, WorkloadKey: deployattempt.WorkloadKey(project, p.Environment, id, name), ExpectedImage: expected, Availability: "available", Limitations: limitations})
 		}
 		p.ConfigHash = configHash(in.RunID, in.ArtifactID, in.ServerIDs, in.DeployConfig, DeploymentParameters{in.Strategy, in.HealthCheck})
 		if s.observer == nil {
@@ -297,6 +312,9 @@ func (s *Service) startLocked(ctx context.Context, project string, in StartInput
 	d := &document{Report: Report{ID: uuid.NewString(), ProjectID: project, RunID: p.RunID, AttemptID: p.AttemptID, Plan: *p, ExecutionStatus: "binding", AttributionStatus: "not_investigated", CreatedAt: now, StartedAt: &now, IdentityTrust: "host_identity_unverified", Targets: []TargetObservation{}, Timeline: []TimelineItem{}, Investigation: Investigation{BaselineStatus: "unavailable", Candidates: []Candidate{}, Limitations: []string{"temporal_relation_is_not_causation", "source_diff_not_collected"}}, EvidenceExpiresAt: now.Add(7 * 24 * time.Hour), ParentGuardID: p.ParentGuardID, Comparison: Comparison{SameConditions: true, Changes: []string{}}, EngineVersion: EngineVersion}, Private: privateState{Bindings: map[string]target.ConnectionSnapshot{}, LastLogs: map[string]time.Time{}, LogBytes: map[string]int{}, Schedule: map[string]time.Time{}}}
 	for _, pt := range p.Targets {
 		to := TargetObservation{PlanTarget: pt, Conditions: []Condition{}, Deadline: now.Add(120 * time.Second)}
+		if attached {
+			condition(&to, "deployment_completion", "pending", "deployment_completion_pending", "")
+		}
 		if pt.Availability != "available" {
 			to.Terminated = true
 		}

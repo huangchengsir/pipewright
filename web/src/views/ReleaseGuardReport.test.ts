@@ -89,6 +89,37 @@ describe("release guard report", () => {
     expect(api.get).toHaveBeenCalledTimes(reads);
     expect(api.stop).toHaveBeenCalledTimes(1);
   });
+  it("shows the pinned local image on observed targets while preserving the original pending plan", async () => {
+    const report = guardReport();
+    const pending = { reference: "", repository: "", digest: "", digestKind: "config_id", identitySource: "script_pre_activation" };
+    report.plan.targets[0].expectedImage = pending;
+    report.targets[0].expectedImage = { ...pending, digest: `sha256:${"b".repeat(64)}` };
+    report.targets[0].conditions = [{ name: "version", result: "passed", reason: "local_config_id_matched", evidenceIds: [] }];
+    api.get.mockResolvedValue(report);
+    const wrapper = page();
+    await flushPromises();
+    expect(wrapper.get(".guard-target").text()).toContain(`sha256:${"b".repeat(64)}`);
+    expect(wrapper.get(".guard-target").text()).toContain("启动前固定的本地 Image ID");
+    expect(wrapper.get(".guard-plan-targets").text()).toContain("构建后、启动前固定 Image ID");
+    expect(wrapper.get(".guard-plan-targets").text()).not.toContain("registry.test/app@");
+    wrapper.unmount();
+  });
+  it("explains incomplete deployment and recorded deployment health failure separately from runtime health", async () => {
+    const report = guardReport();
+    report.targets[0].conditions = [
+      { name: "deployment_completion", result: "pending", reason: "deployment_completion_pending", evidenceIds: [] },
+      { name: "deployment_health_gate", result: "failed", reason: "deployment_health_gate_failed", evidenceIds: [] },
+    ];
+    api.get.mockResolvedValue(report);
+    const wrapper = page();
+    await flushPromises();
+    expect(wrapper.get(".guard-target").text()).toContain("部署最终结果");
+    expect(wrapper.get(".guard-target").text()).toContain("等待本次部署的最终回执");
+    expect(wrapper.get(".guard-target").text()).toContain("部署时健康门控");
+    expect(wrapper.get(".guard-target").text()).toContain("持续 Docker 健康状态分别判断");
+    expect(wrapper.get(".guard-verdict").attributes("data-result")).toBe("failed");
+    wrapper.unmount();
+  });
   it("never fetches expired evidence or substitutes summaries as evidence", async () => {
     api.get.mockResolvedValue(guardReport({ evidenceExpired: true }));
     const wrapper = page();

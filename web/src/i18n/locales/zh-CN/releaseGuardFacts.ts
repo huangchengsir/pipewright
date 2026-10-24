@@ -1,4 +1,20 @@
 export default {
+  deploymentEvidenceUnavailable: "部署账本已记录失败，但护航证据保存未获确认；失败结论保留，不引用未保存的证据。",
+
+  deploymentCompletionPending: "部署尚未完成，等待本次部署的最终回执。",
+  deploymentCompleted: "已读取本次部署成功的最终回执。",
+  deploymentOutcomeUnavailable: "未取得本次部署的成功回执，结果尚不能核实。",
+  deploymentHealthGateFailed: "部署时的健康门控已记录失败；这与持续 Docker 健康状态分别判断。",
+  deploymentHealthGate: "部署时健康门控",
+
+  localImageMatched: "实际容器使用了本次启动前固定的本地 Image ID。",
+  localImageUnexpected: "就绪截止后确认容器使用了其他本地镜像。",
+  localImageUnavailable: "本地镜像身份无法核实。",
+  localImageInvalid: "本地镜像身份或启动前固定证据无效。",
+  localImagePending: "构建后、启动前记录预期本地镜像；当前计划尚未含 Image ID。",
+  localImageFixed: "已在启动前固定本地 Image ID。",
+  expectedImage: "预期镜像身份",
+
   healthConditionChanged: "Docker 健康检查条件已变化，不能视为原条件下的复验。",
   healthComparisonUnknown: "无法核实原报告的健康条件，不能宣称条件相同。",
   identityMissing: "缺少可核实的容器或连接身份。",

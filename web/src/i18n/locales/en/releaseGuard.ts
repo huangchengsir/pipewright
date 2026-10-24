@@ -1,4 +1,8 @@
-export default { collectLogs: 'Collect bounded logs on this instance', collectLogsHint: 'Only allowed excerpts within the observation window are collected locally. This does not authorize model sharing.',
+export default {
+  localImageId: "Local Docker Image ID",
+  localImagePending: "Image ID will be pinned after build, before start",
+  localImageScope: "Verifies image identity on this target host only. This is not a registry digest or proof of provenance on another host.",
+ collectLogs: 'Collect bounded logs on this instance', collectLogsHint: 'Only allowed excerpts within the observation window are collected locally. This does not authorize model sharing.',
   noBaseline: 'No verified predeployment baseline.', verifiedBaseline: 'Immediate predeployment baseline verified.', reviewPrior: 'Review the scoped evidence and the prior deployment manually.', sourceDiffMissing: 'Source differences were not collected.',
   attached: 'Observe this deployment', attachedDescription: 'Reviewing this plan does not deploy or collect remote data. The original deployment button performs the deployment and attaches the reviewed observation. A missing predeployment sample does not block deployment.',
   usePlan: 'Use this plan', attachedChanged: 'Deployment settings changed. Preview and review a new plan.', attachedReady: 'Plan reviewed. The original deployment action will include this observation.', attachedReviewRequired: 'Review an unexpired plan before deploying with observation enabled.',
@@ -43,5 +47,5 @@ export default { collectLogs: 'Collect bounded logs on this instance', collectLo
   result: { passed: 'Basic runtime checks passed', failed: 'Verification failed', insufficient: 'Insufficient evidence', uncertain: 'Verification uncertain', pending: 'No conclusion yet', not_applicable: 'Not applicable' },
   execution: { prepared: 'Prepared', queued: 'Queued', binding: 'Binding identity', observing: 'Observing', stopping: 'Stopping', completed: 'Completed', stopped: 'Stopped', interrupted: 'Interrupted', blocked: 'Blocked', tool_error: 'Collection error', expired: 'Expired', unknown: 'Unknown' },
   attribution: { not_investigated: 'Not investigated', candidate_relation: 'Possible association', undetermined: 'Undetermined' },
-  conditions: { version: 'Image version', image_identity: 'Image identity', identity: 'Container identity', liveness: 'Sampled liveness', running: 'Running state', restarts: 'Restart count', restart: 'Restart count', oom: 'OOM state', docker_health: 'Existing Docker health', health: 'Existing Docker health', coverage: 'Sample coverage' },
+  conditions: { deployment_completion: "Final deployment outcome", deployment_health_gate: "Deployment-time health gate", version: 'Image version', image_identity: 'Image identity', identity: 'Container identity', liveness: 'Sampled liveness', running: 'Running state', restarts: 'Restart count', restart: 'Restart count', oom: 'OOM state', docker_health: 'Existing Docker health', health: 'Existing Docker health', coverage: 'Sample coverage' },
 }

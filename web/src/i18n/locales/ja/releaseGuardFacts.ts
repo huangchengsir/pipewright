@@ -1,4 +1,20 @@
 export default {
+  deploymentEvidenceUnavailable: "デプロイ台帳に失敗は記録されていますが、検証証拠の保存は未確認です。未保存の証拠を参照せず、失敗の結論を保持します。",
+
+  deploymentCompletionPending: "デプロイは未完了です。今回の最終記録を待っています。",
+  deploymentCompleted: "今回のデプロイ成功の最終記録を取得しました。",
+  deploymentOutcomeUnavailable: "今回の成功記録がなく、デプロイ結果を確認できません。",
+  deploymentHealthGateFailed: "デプロイ時のヘルス検査は失敗を記録しました。継続的な Docker ヘルスとは別に判定します。",
+  deploymentHealthGate: "デプロイ時のヘルス検査",
+
+  localImageMatched: "コンテナは今回の起動前に固定したローカル Image ID を使用しています。",
+  localImageUnexpected: "起動準備期限後に異なるローカルイメージが確認されました。",
+  localImageUnavailable: "ローカルイメージの同一性を確認できません。",
+  localImageInvalid: "ローカルイメージまたは起動前の固定証拠が無効です。",
+  localImagePending: "ビルド後、起動前に期待イメージを記録します。この計画にはまだ Image ID がありません。",
+  localImageFixed: "起動前にローカル Image ID を固定しました。",
+  expectedImage: "期待するイメージの識別情報",
+
   healthConditionChanged:
     "Docker ヘルスチェック条件が変更されました。元の条件での再検証ではありません。",
   healthComparisonUnknown:

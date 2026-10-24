@@ -121,6 +121,46 @@ const modelIs = (v: string) => (c: Record<string, string>) =>
   (c.buildModel || 'dockerfile') === v
 const probeIs = (v: string) => (c: Record<string, string>) =>
   (c.probeMode || 'http') === v
+const localDockerIsEnabled = (c: Record<string, string>) => c.localDocker === 'true' && ['archive', 'dist'].includes(c.artifactType)
+
+export const LOCAL_DOCKER_FIELDS: JobField[] = [
+  {
+    key: 'localDocker',
+    get label() { return t('pipelineJob.localDockerLabel') },
+    kind: 'select',
+    options: [
+      { value: '', get label() { return t('pipelineJob.localDockerDisabled') } },
+      { value: 'true', get label() { return t('pipelineJob.localDockerEnabled') } },
+    ],
+    get hint() { return t('pipelineJob.localDockerHint') },
+    when: (c) => ['archive', 'dist'].includes(c.artifactType) || c.localDocker === 'true',
+  },
+  {
+    key: 'localDockerPrepareCommand', get label() { return t('pipelineJob.localDockerPrepareLabel') },
+    kind: 'textarea', monospace: true,
+    get hint() { return t('pipelineJob.localDockerPrepareHint') }, when: localDockerIsEnabled,
+  },
+  {
+    key: 'localDockerBuildContext', get label() { return t('pipelineJob.localDockerContextLabel') },
+    kind: 'text', monospace: true, placeholder: '.',
+    get hint() { return t('pipelineJob.localDockerContextHint') }, when: localDockerIsEnabled,
+  },
+  {
+    key: 'localDockerDockerfile', get label() { return t('pipelineJob.localDockerDockerfileLabel') },
+    kind: 'text', monospace: true, placeholder: 'Dockerfile',
+    get hint() { return t('pipelineJob.localDockerDockerfileHint') }, when: localDockerIsEnabled,
+  },
+  {
+    key: 'localDockerBuildArgs', get label() { return t('pipelineJob.localDockerBuildArgsLabel') },
+    kind: 'textarea', monospace: true, placeholder: '["APP_ENV=production"]',
+    get hint() { return t('pipelineJob.localDockerBuildArgsHint') }, when: localDockerIsEnabled,
+  },
+  {
+    key: 'localDockerRunArgs', get label() { return t('pipelineJob.localDockerRunArgsLabel') },
+    kind: 'textarea', monospace: true, placeholder: '["--restart","unless-stopped"]',
+    get hint() { return t('pipelineJob.localDockerRunArgsHint') }, when: localDockerIsEnabled,
+  },
+]
 
 // ─── Per-type specs ──────────────────────────────────────────────────────────────
 
@@ -241,6 +281,7 @@ const DEPLOY_SSH_FIELDS: JobField[] = [
     get hint() { return t('pipelineJob.artifactSourceHint') },
     when: (c) => c.artifactType !== 'command',
   },
+  ...LOCAL_DOCKER_FIELDS,
   {
     key: 'deployPath',
     get label() { return t('pipelineJob.fieldDeployPathLabel') },
@@ -261,7 +302,7 @@ const DEPLOY_SSH_FIELDS: JobField[] = [
     monospace: true,
     placeholder: 'app',
     get hint() { return t('pipelineJob.fieldContainerNameHint') },
-    when: (c) => c.artifactType === 'image',
+    when: (c) => c.artifactType === 'image' || localDockerIsEnabled(c),
   },
   {
     key: 'ports',
@@ -270,7 +311,7 @@ const DEPLOY_SSH_FIELDS: JobField[] = [
     monospace: true,
     placeholder: '8080:80, 9000:9000',
     get hint() { return t('pipelineJob.fieldPortsHint') },
-    when: (c) => c.artifactType === 'image',
+    when: (c) => c.artifactType === 'image' || localDockerIsEnabled(c),
   },
   {
     key: 'runArgs',

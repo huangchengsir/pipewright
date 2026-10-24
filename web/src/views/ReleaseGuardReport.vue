@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import AppButton from '../components/ui/AppButton.vue'
+import GuardImageIdentity from '../components/run/GuardImageIdentity.vue'
 import ReleaseGuardPlan from '../components/run/ReleaseGuardPlan.vue'
 import ReleaseGuardInvestigation from '../components/run/ReleaseGuardInvestigation.vue'
 import ReleaseGuardAnalysis from '../components/run/ReleaseGuardAnalysis.vue'
@@ -439,6 +440,7 @@ onBeforeUnmount(() => {
           class="guard-target"
         >
           <h3>{{ target.serverName }}</h3>
+          <GuardImageIdentity v-if="target.expectedImage" :image="target.expectedImage" />
           <ul class="guard-condition-list">
             <li v-for="item in target.conditions" :key="item.name">
               <strong>{{ condition(item.name) }}</strong
@@ -593,14 +595,7 @@ onBeforeUnmount(() => {
         <ul class="guard-plan-targets">
           <li v-for="target in report.plan.targets" :key="target.id">
             <strong>{{ target.serverName }} / {{ target.containerName }}</strong
-            ><code
-              >{{ target.expectedImage.repository
-              }}{{
-                target.expectedImage.digest
-                  ? `@${target.expectedImage.digest}`
-                  : ''
-              }}</code
-            ><span>{{
+            ><GuardImageIdentity :image="target.expectedImage" /><span>{{
               t(
                 `releaseGuard.availability.${['available', 'identity_unavailable', 'unsupported'].includes(target.availability) ? target.availability : 'unsupported'}`,
               )

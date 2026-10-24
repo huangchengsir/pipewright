@@ -1,4 +1,20 @@
 export default {
+  deploymentEvidenceUnavailable: "Das Bereitstellungsprotokoll verzeichnet einen Fehler; die Speicherung der Nachweise ist unbestätigt. Der Fehler bleibt bestehen, ohne ungespeicherte Nachweise zu referenzieren.",
+
+  deploymentCompletionPending: "Bereitstellung noch nicht abgeschlossen; der abschließende Beleg steht aus.",
+  deploymentCompleted: "Der abschließende Erfolgsbeleg dieser Bereitstellung wurde gelesen.",
+  deploymentOutcomeUnavailable: "Kein Erfolgsbeleg vorhanden; das Ergebnis ist nicht verifiziert.",
+  deploymentHealthGateFailed: "Die Zustandsprüfung bei der Bereitstellung meldete einen Fehler. Sie wird getrennt vom laufenden Docker-Zustand bewertet.",
+  deploymentHealthGate: "Zustandsprüfung bei Bereitstellung",
+
+  localImageMatched: "Der Container verwendet die vor dieser Aktivierung fixierte lokale Image ID.",
+  localImageUnexpected: "Nach der Bereitschaftsfrist wurde ein anderes lokales Image bestätigt.",
+  localImageUnavailable: "Die lokale Image-Identität kann nicht geprüft werden.",
+  localImageInvalid: "Lokale Identität oder Beleg der Fixierung vor dem Start ist ungültig.",
+  localImagePending: "Das erwartete Image wird nach dem Build vor dem Start erfasst. Dieser Plan enthält noch keine Image ID.",
+  localImageFixed: "Die lokale Image ID wurde vor der Aktivierung fixiert.",
+  expectedImage: "Erwartete Image-Identität",
+
   healthConditionChanged:
     "Die Docker-Zustandsprüfung hat sich geändert; die ursprünglichen Bedingungen werden nicht erneut geprüft.",
   healthComparisonUnknown:

@@ -691,6 +691,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// risk 由领域层确定性复核(rm -rf/mkfs/dd/关机等无条件 danger),前端据此拦截直接执行。
 		ar.Post("/ai/command", makeAICommandHandler(aiSvc))
 		ar.Post("/ai/explain", makeAIExplainHandler(aiSvc))
+		ar.Post("/ai/terminal-preview", makeAITerminalPreviewHandler(aiSvc))
 		ar.Post("/ai/complete", makeAICompleteHandler(aiSvc)) // P2 智能补全(前缀→完整命令)
 		ar.Post("/ai/compose", makeAIComposeHandler(aiSvc))   // 中文 → docker-compose.yml
 

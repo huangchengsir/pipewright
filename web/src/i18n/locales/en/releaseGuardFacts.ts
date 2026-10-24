@@ -1,4 +1,20 @@
 export default {
+  deploymentEvidenceUnavailable: "The deployment ledger records failure, but guard evidence persistence is unconfirmed. The failure is retained without referencing unsaved evidence.",
+
+  deploymentCompletionPending: "Deployment has not finished; the final receipt for this deployment is pending.",
+  deploymentCompleted: "The final success receipt for this deployment was read.",
+  deploymentOutcomeUnavailable: "No success receipt was obtained for this deployment; its outcome is not verified.",
+  deploymentHealthGateFailed: "The deployment-time health gate recorded a failure. It is evaluated separately from ongoing Docker health.",
+  deploymentHealthGate: "Deployment-time health gate",
+
+  localImageMatched: "The container uses the local Image ID pinned before this activation.",
+  localImageUnexpected: "A different local image was confirmed after the readiness deadline.",
+  localImageUnavailable: "The local image identity cannot be verified.",
+  localImageInvalid: "The local image identity or preactivation pin evidence is invalid.",
+  localImagePending: "The expected local image is recorded after build, before start. This plan does not yet contain an Image ID.",
+  localImageFixed: "The local Image ID was pinned before activation.",
+  expectedImage: "Expected image identity",
+
   healthConditionChanged:
     "The Docker health-check condition changed; this is not revalidation under the original conditions.",
   healthComparisonUnknown:

@@ -31,6 +31,10 @@ const (
 	IdentityObserved        = "identity_observed"
 )
 
+// IdentityScriptPreActivation is recorded only after a server-local build has
+// produced an independently inspected image, before workload activation.
+const IdentityScriptPreActivation = "script_pre_activation"
+
 type Source struct {
 	RunID           string `json:"runId"`
 	StageID         string `json:"stageId"`
@@ -50,11 +54,12 @@ type Platform struct {
 // Repository digests and config IDs are deliberately separate. Unknown media
 // types and index-to-manifest mappings must remain unknown, never guessed.
 type ExpectedImage struct {
-	Reference  string   `json:"reference"`
-	Repository string   `json:"repository"`
-	Digest     string   `json:"digest"`
-	DigestKind string   `json:"digestKind"`
-	Platform   Platform `json:"platform"`
+	Reference      string   `json:"reference"`
+	Repository     string   `json:"repository"`
+	Digest         string   `json:"digest"`
+	DigestKind     string   `json:"digestKind"`
+	IdentitySource string   `json:"identitySource,omitempty"`
+	Platform       Platform `json:"platform"`
 }
 
 type ActualImage struct {

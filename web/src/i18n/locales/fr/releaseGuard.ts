@@ -1,4 +1,8 @@
-export default { collectLogs: 'Collecter des journaux limités dans cette instance', collectLogsHint: 'Seuls les courts extraits autorisés sont collectés localement. Cela n’autorise pas leur partage avec le modèle.',
+export default {
+  localImageId: "Image ID Docker local",
+  localImagePending: "Image ID fixé après construction et avant démarrage",
+  localImageScope: "Vérifie image sur cet hôte seulement. Ce résultat ne constitue ni un digest de registre ni une preuve de provenance sur un autre hôte.",
+ collectLogs: 'Collecter des journaux limités dans cette instance', collectLogsHint: 'Seuls les courts extraits autorisés sont collectés localement. Cela n’autorise pas leur partage avec le modèle.',
   noBaseline: 'Aucune référence préalable vérifiée.', verifiedBaseline: 'Référence immédiatement préalable vérifiée.', reviewPrior: 'Examinez manuellement les preuves du périmètre et le déploiement antérieur.', sourceDiffMissing: 'Les différences du code source n’ont pas été collectées.',
   attached: 'Observer ce déploiement', attachedDescription: 'L’examen du plan ne lance ni déploiement ni collecte distante. Le bouton de déploiement initial ajoute l’observation examinée. Une référence préalable manquante ne bloque pas le déploiement.',
   usePlan: 'Utiliser ce plan', attachedChanged: 'Les paramètres ont changé. Préparez et examinez un nouvel aperçu.', attachedReady: 'Plan examiné. L’action de déploiement initiale inclura cette observation.', attachedReviewRequired: 'Examinez un plan valide avant un déploiement avec observation.',
@@ -43,5 +47,5 @@ export default { collectLogs: 'Collecter des journaux limités dans cette instan
   result: { passed: 'Contrôles de base réussis', failed: 'Vérification échouée', insufficient: 'Preuves insuffisantes', uncertain: 'Vérification incertaine', pending: 'Pas encore de conclusion', not_applicable: 'Sans objet' },
   execution: { prepared: 'Préparée', queued: 'En attente', binding: 'Liaison d’identité', observing: 'Observation en cours', stopping: 'Arrêt en cours', completed: 'Terminée', stopped: 'Arrêtée', interrupted: 'Interrompue', blocked: 'Bloquée', tool_error: 'Erreur de collecte', expired: 'Expirée', unknown: 'Inconnue' },
   attribution: { not_investigated: 'Non investiguée', candidate_relation: 'Association possible', undetermined: 'Indéterminée' },
-  conditions: { version: 'Version de l’image', image_identity: 'Identité de l’image', identity: 'Identité du conteneur', liveness: 'Activité échantillonnée', running: 'État d’exécution', restarts: 'Nombre de redémarrages', restart: 'Nombre de redémarrages', oom: 'État OOM', docker_health: 'Santé Docker existante', health: 'Santé Docker existante', coverage: 'Couverture des échantillons' },
+  conditions: { deployment_completion: "Résultat final du déploiement", deployment_health_gate: "Contrôle de santé au déploiement", version: 'Version de l’image', image_identity: 'Identité de l’image', identity: 'Identité du conteneur', liveness: 'Activité échantillonnée', running: 'État d’exécution', restarts: 'Nombre de redémarrages', restart: 'Nombre de redémarrages', oom: 'État OOM', docker_health: 'Santé Docker existante', health: 'Santé Docker existante', coverage: 'Couverture des échantillons' },
 }

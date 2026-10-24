@@ -1,4 +1,8 @@
-export default { collectLogs: '在本執行個體收集有界日誌', collectLogsHint: '僅在本機收集觀察時段內允許的短片段，不代表同意向模型分享。',
+export default {
+  localImageId: "本機 Docker Image ID",
+  localImagePending: "建置完成、啟動前固定 Image ID",
+  localImageScope: "僅驗證此次目標主機的映像身分，並非倉庫 digest，也無法證明其他主機具有相同來源。",
+ collectLogs: '在本執行個體收集有界日誌', collectLogsHint: '僅在本機收集觀察時段內允許的短片段，不代表同意向模型分享。',
   noBaseline: '無已核實的發佈前基準。', verifiedBaseline: '發佈前即時基準已核實。', reviewPrior: '人工核對範圍內證據與先前部署。', sourceDiffMissing: '未收集原始碼差異。',
   attached: '隨本次部署護航', attachedDescription: '審閱計畫不會部署或收集遠端資料。仍由原部署按鈕執行發佈並附加已審閱觀察；發佈前樣本缺少不會阻擋部署。',
   usePlan: '使用此計畫', attachedChanged: '部署設定已變更，請重新預覽並審閱計畫。', attachedReady: '計畫已審閱，執行原部署操作時將附加本次觀察。', attachedReviewRequired: '啟用護航後，請先審閱未過期的計畫再執行部署。',
@@ -43,5 +47,5 @@ export default { collectLogs: '在本執行個體收集有界日誌', collectLog
   result: { passed: '基本執行檢查通過', failed: '驗證失敗', insufficient: '證據不足', uncertain: '驗證不確定', pending: '尚未形成結論', not_applicable: '不適用' },
   execution: { prepared: '已準備', queued: '排隊中', binding: '正在繫結身分', observing: '觀察中', stopping: '正在停止', completed: '已結束', stopped: '已停止', interrupted: '已中斷', blocked: '受阻', tool_error: '收集異常', expired: '已過期', unknown: '狀態未知' },
   attribution: { not_investigated: '尚未調查', candidate_relation: '候選關聯', undetermined: '未定' },
-  conditions: { version: '映像版本', image_identity: '映像身分', identity: '容器身分', liveness: '取樣存活', running: '執行狀態', restarts: '重新啟動次數', restart: '重新啟動次數', oom: 'OOM 狀態', docker_health: '既有 Docker 健康狀態', health: '既有 Docker 健康狀態', coverage: '取樣涵蓋率' },
+  conditions: { deployment_completion: "部署最終結果", deployment_health_gate: "部署時健康檢查", version: '映像版本', image_identity: '映像身分', identity: '容器身分', liveness: '取樣存活', running: '執行狀態', restarts: '重新啟動次數', restart: '重新啟動次數', oom: 'OOM 狀態', docker_health: '既有 Docker 健康狀態', health: '既有 Docker 健康狀態', coverage: '取樣涵蓋率' },
 }

@@ -99,7 +99,7 @@ func TestAICompleteHappyPath(t *testing.T) {
 	stub := &diagStubAI{completion: &ai.CompletionResult{Completion: "ls -la"}}
 	srv, client, csrf, _ := setupAIGenServer(t, stub, stubAnalyzer{res: ai.RepoAnalysis{Cloned: true}})
 
-	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/ai/complete", csrf, `{"partial":"ls","context":{"shell":"/bin/sh"}}`)
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/ai/complete", csrf, `{"partial":"ls","context":{"shell":"/bin/sh"},"confirmed":true,"provider":{"configHash":"confirmed-provider"}}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
@@ -115,7 +115,7 @@ func TestAICompleteDegradesNoAI(t *testing.T) {
 	stub := &diagStubAI{} // completion=nil → ErrAINotConfigured
 	srv, client, csrf, _ := setupAIGenServer(t, stub, stubAnalyzer{res: ai.RepoAnalysis{Cloned: true}})
 
-	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/ai/complete", csrf, `{"partial":"ls"}`)
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/ai/complete", csrf, `{"partial":"ls","confirmed":true,"provider":{"configHash":"confirmed-provider"}}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("AI 未配应 200, got %d", resp.StatusCode)
@@ -147,5 +147,20 @@ func TestAIExplainEmptyCommand(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("空 command 应 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestAICompleteRequiresPerRequestConfirmation(t *testing.T) {
+	stub := &diagStubAI{completion: &ai.CompletionResult{Completion: "ls -la"}}
+	srv, client, csrf, _ := setupAIGenServer(t, stub, stubAnalyzer{res: ai.RepoAnalysis{Cloned: true}})
+	for _, body := range []string{`{"partial":"ls"}`, `{"partial":"ls","confirmed":true}`, `{"partial":"ls","provider":{"configHash":"x"}}`} {
+		resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/ai/complete", csrf, body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusConflict {
+			t.Fatal(resp.StatusCode)
+		}
+		if resp.Header.Get("Cache-Control") != "no-store" {
+			t.Fatal("missing cache protection")
+		}
 	}
 }

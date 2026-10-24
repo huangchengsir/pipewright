@@ -323,6 +323,12 @@ function setField(key: string, value: string): void {
 
 function referenceWarning(field: JobField): string {
   const value = fieldValue(field.key)
+  if (fieldValue('localDocker') === 'true') {
+    if (field.key === 'localDocker' && !['archive', 'dist'].includes(fieldValue('artifactType'))) return t('pipelineJob.localDockerArtifactRequired')
+    if (['localDocker', 'restartCommand'].includes(field.key) && fieldValue('restartCommand').trim()) return t('pipelineJob.localDockerRestartConflict')
+    if (field.key === 'strategy' && ['blue_green', 'blue-green'].includes(value)) return t('pipelineJob.localDockerStrategyConflict')
+    if (field.key === 'containerName' && !value.trim()) return t('pipelineJob.localDockerContainerRequired')
+  }
   if (field.kind === 'server') {
     if (!value) return t('pipelineJob.serverRequired')
     if (props.servers && !props.servers.some((server) => server.id === value)) return t('pipelineJob.serverUnavailable')

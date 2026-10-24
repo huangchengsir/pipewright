@@ -1059,3 +1059,55 @@ describe('local ops lifecycle and concurrency', () => {
     expect(chat.error.value).toBe('ops_consent_changed')
   })
 })
+
+describe('terminal memory-only references', () => {
+  it('submits a reviewed reference without writing it into the autosaved draft', async () => {
+    await open()
+    chat.editDraft('my question')
+    await vi.advanceTimersByTimeAsync(501)
+    vi.mocked(opsApi.patch).mockClear()
+    expect(
+      await chat.send({
+        text: 'reviewed terminal reference',
+        valid: () => true,
+      }),
+    ).toBe(true)
+    expect(opsApi.turn).toHaveBeenCalledWith(
+      'chat',
+      expect.objectContaining({
+        text: 'my question\n\nreviewed terminal reference',
+      }),
+    )
+    expect(
+      vi
+        .mocked(opsApi.patch)
+        .mock.calls.every(
+          ([, body]) => !body.draft?.includes('terminal reference'),
+        ),
+    ).toBe(true)
+  })
+  it('rejects a reference that became stale during draft save', async () => {
+    await open()
+    chat.editDraft('question')
+    const saving = defer<Session>()
+    vi.mocked(opsApi.patch).mockReturnValueOnce(saving.promise)
+    let valid = true
+    const sending = chat.send({
+      text: 'old terminal reference',
+      valid: () => valid,
+    })
+    await flushPromises()
+    valid = false
+    saving.resolve({ ...session(), revision: 2, draft: 'question' })
+    expect(await sending).toBe(false)
+    expect(opsApi.turn).not.toHaveBeenCalled()
+  })
+  it('rejects combined UTF8 bytes exceeding the turn limit', async () => {
+    await open()
+    chat.editDraft('中'.repeat(2600))
+    expect(await chat.send({ text: '中'.repeat(200), valid: () => true })).toBe(
+      false,
+    )
+    expect(opsApi.turn).not.toHaveBeenCalled()
+  })
+})

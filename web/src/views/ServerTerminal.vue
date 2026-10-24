@@ -5,7 +5,7 @@
   · 终端复用 ContainerTerminal 的 xterm + WebSocket(openContainerTerminal:WS ↔ SSH → docker exec)。
   · 补齐**完整终端交互**(原弹窗缺口):选中即复制、⌘/Ctrl+C(有选区复制 / 无选区 SIGINT)、
     ⌘/Ctrl+V·Ctrl+Shift+V 粘贴、右键菜单(复制 / 粘贴 / 全选 / 清屏)、选区高亮对齐主题。
-  · 右栏 AI 助手:中文 → 命令卡;插入 = 写终端输入行,执行 = 发 PTY(danger 二次确认在面板内)。
+  · 右栏复用现有 AI 运维会话，选区先本地脱敏再显式引用；工具操作沿用既有审批。
 
   设计照 demos/ai-terminal-demo.html:Mission-control / 工程师驾驶舱,cyan=智能、JetBrains Mono 主角、
   氛围辉光 + 栅格、设计过的 hover/focus/active。安全上下文(localhost/https)才有剪贴板,失败优雅降级。
@@ -27,7 +27,10 @@ import {
 import AiOpsPanel from '../components/ops/AiOpsPanel.vue'
 import CopyTextDialog from '../components/ops/CopyTextDialog.vue'
 import { copyText } from '../utils/clipboard'
-import { completeCommand } from '../api/aiOps'
+import { completeCommand, previewTerminal, type TerminalPreview } from '../api/aiOps'
+import { onOpsAuthReset, opsAuthEpoch } from '../utils/opsAuth'
+import { utf8Bytes } from '../api/opsChat'
+import TerminalReviewDialog from '../components/ops/TerminalReviewDialog.vue'
 
 import type { Terminal as XTerm } from '@xterm/xterm'
 import type { FitAddon as XFitAddon } from '@xterm/addon-fit'
@@ -120,7 +123,7 @@ async function toggleAi(): Promise<void> {
 
 // ─── P2 智能补全:输入上方建议条 + Tab 接受 ─────────────────────────────────────────
 // 终端是裸 PTY,无现成「当前输入行」模型 —— 用 onData 跟踪用户键入(printable/退格/Enter/
-// Ctrl-C 重置)近似维护 lineBuffer;停顿 debounce 后先本地常用命令字典即时兜底,再 AI 增强。
+// Ctrl-C 重置)近似维护 lineBuffer；自动补全仅用本地字典，模型请求必须逐次预览确认。
 // 建议以「建议条」形式悬于输入上方(不动终端显示,稳健),Tab 接受发后缀到 PTY,Esc 忽略。
 const COMPLETE_KEY = 'pw-terminal-complete'
 function readComplete(): boolean {
@@ -141,7 +144,42 @@ function toggleComplete(): void {
   if (!completeEnabled.value) clearSuggestion()
 }
 
+const sensitive = ref(false)
+const connectionEpoch = ref(0)
+let disposed = false
+let actionSeq = 0
+const targetKey = computed(() =>
+  JSON.stringify([
+    serverId.value,
+    containerName.value,
+    containerId.value,
+    shell.value,
+  ]),
+)
+const sourceBinding = computed(
+  () => `${targetKey.value}:${connectionEpoch.value}:${sensitive.value}`,
+)
+const sourceLabel = computed(
+  () =>
+    `${serverName.value} · ${containerLabel.value || tg('serverTerminal.hostShell')} · ${shell.value}`,
+)
+interface Review {
+  kind: 'paste' | 'model' | 'selection'
+  text: string
+  raw?: string
+  source: string
+  binding: string
+  auth: number
+  values?: string[]
+  provider?: TerminalPreview['provider']
+  chatBinding?: string
+  busy: boolean
+  seq: number
+}
+const review = shallowRef<Review | null>(null)
+const reviewBusy = ref(false)
 let lineBuffer = ''
+
 const suggestion = ref('') // 补全后的完整命令(以 lineBuffer 开头);空=无建议
 const suggestionSuffix = computed(() =>
   suggestion.value.startsWith(lineBuffer) ? suggestion.value.slice(lineBuffer.length) : '',
@@ -206,17 +244,20 @@ function inAltScreen(): boolean {
 
 function scheduleComplete(): void {
   if (completeTimer) window.clearTimeout(completeTimer)
-  if (!completeEnabled.value) return
+  if (!completeEnabled.value || sensitive.value) return
   if (inAltScreen()) {
     clearSuggestion()
     return
   }
   const snapshot = lineBuffer
-  completeTimer = window.setTimeout(() => void fetchSuggestion(snapshot), 450)
+  completeTimer = window.setTimeout(() => {
+    completeTimer = null
+    void fetchSuggestion(snapshot)
+  }, 450)
 }
 
 async function fetchSuggestion(partial: string): Promise<void> {
-  if (!completeEnabled.value || connState.value !== 'connected' || inAltScreen()) {
+  if (!completeEnabled.value || sensitive.value || connState.value !== 'connected' || inAltScreen()) {
     clearSuggestion()
     return
   }
@@ -227,28 +268,12 @@ async function fetchSuggestion(partial: string): Promise<void> {
   // 即时本地兜底。
   const local = localComplete(partial)
   if (local) showSuggestion(local)
-  // AI 增强(可中断;未配则静默)。
-  completeAbort?.abort()
-  completeAbort = new AbortController()
-  try {
-    const res = await completeCommand(partial, aiContext.value, completeAbort.signal)
-    if (
-      partial === lineBuffer &&
-      res.available &&
-      res.completion &&
-      res.completion.startsWith(partial) &&
-      res.completion !== partial
-    ) {
-      showSuggestion(res.completion)
-    }
-  } catch {
-    /* 中断 / 失败:保留本地兜底建议 */
-  }
+
 }
 
 function acceptSuggestion(): void {
   const suffix = suggestionSuffix.value
-  if (!suffix) return
+  if (!suffix || sensitive.value || connState.value !== 'connected' || inAltScreen() || /[\x00-\x1f\x7f-\x9f\u2028\u2029]/u.test(suffix)) return
   conn.value?.send(suffix)
   lineBuffer = suggestion.value
   clearSuggestion()
@@ -256,24 +281,323 @@ function acceptSuggestion(): void {
 }
 
 // onData 跟踪输入行 + 转发到 PTY。
+let pasting = false
 function onTermData(data: string): void {
+  if (connState.value !== 'connected' || disposed || review.value) return
   conn.value?.send(data)
-  if (data === '\r' || data === '\n') {
+  clearSuggestion()
+  if (pasting || sensitive.value || inAltScreen()) {
     lineBuffer = ''
-    clearSuggestion()
-  } else if (data === '\x7f' || data === '\b') {
-    lineBuffer = lineBuffer.slice(0, -1)
-    scheduleComplete()
-  } else if (data === '\x03' || data === '\x15' || data === '\x1b' || data === '\t') {
-    lineBuffer = ''
-    clearSuggestion()
-  } else if (data.charCodeAt(0) >= 0x20 && !data.startsWith('\x1b')) {
+    return
+  }
+  if (data === '\x7f' || data === '\b') lineBuffer = lineBuffer.slice(0, -1)
+  else if (
+    !/[\x00-\x1f\x7f-\x9f\u2028\u2029]/u.test(data) &&
+    utf8Bytes(lineBuffer + data) <= 1024
+  )
     lineBuffer += data
-    scheduleComplete()
-  } else {
-    clearSuggestion()
+  else lineBuffer = ''
+  scheduleComplete()
+}
+function cancelReview(): void {
+  if (completeTimer !== null) window.clearTimeout(completeTimer)
+  completeTimer = null
+  actionSeq++
+  review.value = null
+  reviewBusy.value = false
+  completeAbort?.abort()
+  completeAbort = null
+}
+function invalidateInput(): void {
+  cancelReview()
+  lineBuffer = ''
+  clearSuggestion()
+  manualCopyText.value = null
+  if (completeTimer) window.clearTimeout(completeTimer)
+}
+function toggleSensitive(): void {
+  sensitive.value = !sensitive.value
+  invalidateInput()
+}
+function validReview(value: Review): boolean {
+  return (
+    !disposed &&
+    value.binding === sourceBinding.value &&
+    value.auth === opsAuthEpoch() &&
+    connState.value === 'connected'
+  )
+}
+function currentOperation(binding: string, auth: number, seq: number): boolean {
+  return (
+    !disposed &&
+    binding === sourceBinding.value &&
+    auth === opsAuthEpoch() &&
+    seq === actionSeq &&
+    connState.value === 'connected' &&
+    !sensitive.value
+  )
+}
+function showPaste(
+  text: string,
+  binding = sourceBinding.value,
+  auth = opsAuthEpoch(),
+): void {
+  if (
+    disposed ||
+    binding !== sourceBinding.value ||
+    auth !== opsAuthEpoch() ||
+    connState.value !== 'connected' ||
+    !text
+  )
+    return
+  if (utf8Bytes(text) > 65536) {
+    flashToast('paste', tg('serverTerminal.contentTooLarge'))
+    return
+  }
+  cancelReview()
+  lineBuffer = ''
+  clearSuggestion()
+  if (/[\x00-\x1f\x7f-\x9f\u2028\u2029]/u.test(text)) {
+    review.value = {
+      kind: 'paste',
+      raw: text,
+      text: text.replace(
+        /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/gu,
+        (c) => `⟦0x${c.charCodeAt(0).toString(16).padStart(2, '0')}⟧`,
+      ),
+      source: sourceLabel.value,
+      binding,
+      auth,
+      busy: false,
+      seq: actionSeq,
+    }
+  } else pasteText(text)
+}
+function pasteText(text: string): void {
+  if (connState.value !== 'connected') return
+  lineBuffer = ''
+  clearSuggestion()
+  pasting = true
+  try {
+    term.value?.paste(text)
+  } finally {
+    pasting = false
   }
 }
+function nativePaste(event: ClipboardEvent): void {
+  event.preventDefault()
+  event.stopImmediatePropagation()
+  showPaste(event.clipboardData?.getData('text/plain') ?? '')
+}
+async function openReview(kind: 'model' | 'selection'): Promise<void> {
+  if (
+    sensitive.value ||
+    connState.value !== 'connected' ||
+    (kind === 'model' && inAltScreen())
+  )
+    return
+  const text =
+    kind === 'model' ? lineBuffer : (term.value?.getSelection() ?? '')
+  if (!text.trim()) {
+    flashToast('copy', tg('serverTerminal.selectOutput'))
+    return
+  }
+  if (utf8Bytes(text) > (kind === 'model' ? 1024 : 8192)) {
+    flashToast('copy', tg('serverTerminal.contentTooLarge'))
+    return
+  }
+  if (kind === 'model' && /[\x00-\x1f\x7f-\x9f\u2028\u2029]/u.test(text)) return
+  cancelReview()
+  clearSuggestion()
+  const seq = actionSeq,
+    binding = sourceBinding.value,
+    auth = opsAuthEpoch()
+  const values = [
+    text,
+    serverId.value,
+    containerName.value,
+    containerId.value,
+    shell.value,
+    new Date().toISOString(),
+    serverName.value,
+  ]
+  let chatBinding: string | undefined
+  if (kind === 'selection') {
+    setAiOpen(true)
+    reviewBusy.value = true
+    await nextTick()
+    if (!currentOperation(binding, auth, seq)) return
+    chatBinding =
+      (await aiPanel.value?.prepareTerminal(binding, auth)) ?? undefined
+    if (!currentOperation(binding, auth, seq)) return
+    if (!chatBinding) {
+      reviewBusy.value = false
+      flashToast('copy', tg('serverTerminal.assistantNotReady'))
+      return
+    }
+  }
+  completeAbort = new AbortController()
+  reviewBusy.value = true
+  try {
+    const result = await previewTerminal(values, completeAbort.signal)
+    if (
+      !currentOperation(binding, auth, seq) ||
+      (kind === 'model' && text !== lineBuffer)
+    )
+      return
+    if (kind === 'model' && result.values[0] !== text) {
+      flashToast('copy', tg('serverTerminal.sensitiveRejected'))
+      return
+    }
+    if (kind === 'model' && !result.provider.configHash) {
+      flashToast('copy', tg('serverTerminal.modelUnavailable'))
+      return
+    }
+    review.value = {
+      kind,
+      text: result.values[0] ?? '',
+      values: result.values,
+      provider: result.provider,
+      source: [
+        `${result.values[6] ?? result.values[1]} (${result.values[1]})`,
+        result.values[2] || tg('serverTerminal.hostShell'),
+        result.values[4],
+        result.values[5],
+      ].join(' · '),
+      binding,
+      auth,
+      busy: false,
+      seq,
+      chatBinding,
+    }
+  } catch {
+    if (currentOperation(binding, auth, seq))
+      flashToast('copy', tg('serverTerminal.reviewFailed'))
+  } finally {
+    if (seq === actionSeq) reviewBusy.value = false
+  }
+}
+async function confirmReview(): Promise<void> {
+  const value = review.value
+  if (!value || value.busy) return
+  if (!validReview(value)) {
+    cancelReview()
+    return
+  }
+  if (value.kind === 'paste') {
+    cancelReview()
+    pasteText(value.raw ?? '')
+    return
+  }
+  if (sensitive.value) {
+    cancelReview()
+    return
+  }
+  value.busy = true
+  reviewBusy.value = true
+  const seq = value.seq
+  try {
+    if (value.kind === 'model') {
+      if (value.text !== lineBuffer || inAltScreen()) {
+        cancelReview()
+        return
+      }
+      const result = await completeCommand(
+        value.text,
+        { os: 'linux', shell: value.values?.[4], container: value.values?.[2] },
+        value.provider!,
+        completeAbort?.signal,
+      )
+      if (
+        review.value === value &&
+        currentOperation(value.binding, value.auth, seq) &&
+        value.text === lineBuffer &&
+        !inAltScreen() &&
+        result.available &&
+        result.completion.startsWith(lineBuffer) &&
+        !/[\x00-\x1f\x7f-\x9f\u2028\u2029]/u.test(result.completion)
+      ) {
+        cancelReview()
+        showSuggestion(result.completion)
+      }
+    } else {
+      if (
+        !value.chatBinding ||
+        value.chatBinding !== aiPanel.value?.terminalTarget()
+      ) {
+        cancelReview()
+        return
+      }
+      const result = await previewTerminal(
+        [value.text, ...(value.values ?? []).slice(1)],
+        completeAbort?.signal,
+      )
+      if (
+        review.value !== value ||
+        !currentOperation(value.binding, value.auth, seq) ||
+        value.chatBinding !== aiPanel.value?.terminalTarget()
+      )
+        return
+      if (result.values[0] !== value.text) {
+        value.text = result.values[0] ?? ''
+        flashToast('copy', tg('serverTerminal.redactedAgain'))
+        return
+      }
+      const text = `${tg('serverTerminal.referenceSource')}: ${value.source}\n${tg('serverTerminal.referenceUntrusted')}\n${JSON.stringify({ terminalSelection: result.values[0] })}`
+      if (aiPanel.value?.attachTerminal(text, value.chatBinding)) {
+        cancelReview()
+      } else flashToast('copy', tg('serverTerminal.contentTooLarge'))
+    }
+  } catch {
+    if (review.value === value && validReview(value))
+      flashToast('copy', tg('serverTerminal.reviewFailed'))
+    cancelReview()
+  } finally {
+    value.busy = false
+    if (seq === actionSeq) reviewBusy.value = false
+  }
+}
+const reviewTitle = computed(() =>
+  tg(
+    'serverTerminal.' +
+      (review.value?.kind === 'paste'
+        ? 'pasteReview'
+        : review.value?.kind === 'model'
+          ? 'modelReview'
+          : 'selectionReview'),
+  ),
+)
+const reviewNotice = computed(() =>
+  review.value?.kind === 'paste'
+    ? tg('serverTerminal.pasteNotice', {
+        n: (review.value.raw ?? '').split(/\r\n|\r|\n/u).length,
+      })
+    : review.value?.kind === 'model'
+      ? tg('serverTerminal.modelNotice', {
+          provider: review.value.provider?.provider,
+          model: review.value.provider?.model,
+        })
+      : tg('serverTerminal.selectionNotice'),
+)
+const unAuth = onOpsAuthReset(() => {
+  disconnect()
+  invalidateInput()
+})
+watch(
+  [targetKey],
+  () => {
+    disconnect()
+    server.value = null
+    void loadServer()
+  },
+  { flush: 'sync' },
+)
+watch(
+  () => aiOpen.value,
+  (open) => {
+    if (!open && review.value?.kind === 'selection') cancelReview()
+  },
+)
 
 // ─── xterm + ws wiring(复用 ContainerTerminal 思路) ─────────────────────────────
 const termHost = ref<HTMLElement | null>(null)
@@ -319,7 +643,7 @@ async function ensureTerm(): Promise<XTerm> {
   // ⌘/Ctrl+V·Ctrl+Shift+V 粘贴。返回 false = 吞掉不发 PTY;true = 交终端处理。
   t.attachCustomKeyEventHandler((e: KeyboardEvent): boolean => {
     if (e.type !== 'keydown') return true
-    // Tab:有 AI 建议时接受(发后缀,吞掉 Tab);无建议则透传给 shell 自带补全。
+    // Tab 接受当前本地或已确认模型建议；无建议时透传给 Shell。
     // 必须 preventDefault,否则浏览器原生 Tab 会把焦点移走(终端失焦,光标变空心)。
     if (e.key === 'Tab' && !e.metaKey && !e.ctrlKey && !e.altKey && suggestionSuffix.value) {
       e.preventDefault()
@@ -351,7 +675,6 @@ async function ensureTerm(): Promise<XTerm> {
       return false
     }
     if (mod && key === 'v') {
-      void pasteFromClipboard()
       return false
     }
     return true
@@ -369,6 +692,8 @@ async function ensureTerm(): Promise<XTerm> {
     }
   }
   await nextTick()
+  if(disposed){t.dispose();return t}
+  if(term.value){t.dispose();return term.value}
   // term.value / fitAddon.value 先就位,好让 refit() 在 open 后立即可用。
   term.value = t
   fitAddon.value = fit
@@ -445,7 +770,10 @@ async function connect(): Promise<void> {
   disconnect()
   terminalTransport.value = 'websocket'
 
+  const epoch=connectionEpoch.value, binding=targetKey.value, auth=opsAuthEpoch()
   const t = await ensureTerm()
+  const current=()=>!disposed && epoch===connectionEpoch.value && binding===targetKey.value && auth===opsAuthEpoch()
+  if(!current()) return
   // reset() 而非 clear():clear 会保留当前 prompt 行,重连时新会话 prompt 接在旧
   // 「sh-5.1# 」后面叠成「sh-5.1# sh-5.1# …」;reset 彻底清空缓冲区+光标归位。
   t.reset()
@@ -457,8 +785,9 @@ async function connect(): Promise<void> {
   const startedAt = performance.now()
 
   const handlers: TerminalHandlers = {
-      onTransport(transport) { terminalTransport.value = transport },
+      onTransport(transport) { if(current()) terminalTransport.value = transport },
       onOpen() {
+        if(!current()) return
         connState.value = 'connected'
         statusMsg.value = ''
         latencyMs.value = Math.round(performance.now() - startedAt)
@@ -468,9 +797,16 @@ async function connect(): Promise<void> {
         conn.value?.send(promptInitScript())
       },
       onData(chunk) {
-        return new Promise<void>(resolve => t.write(chunk, resolve))
+        if(!current()) return Promise.resolve()
+        return new Promise<void>(resolve => t.write(chunk, () => {
+          if(current() && inAltScreen()){lineBuffer='';clearSuggestion();if(review.value?.kind==='model')cancelReview()}
+          resolve()
+        }))
       },
       onClose(reason) {
+        if(!current()) return
+        connectionEpoch.value++;invalidateInput()
+        conn.value=null
         if (connState.value === 'connecting') {
           connState.value = 'error'
           statusMsg.value = reason || tg('serverTerminal.connectFailedDetail')
@@ -494,8 +830,10 @@ async function connect(): Promise<void> {
 }
 
 function disconnect(): void {
-  conn.value?.close()
-  conn.value = null
+  connectionEpoch.value++;invalidateInput()
+  const previous=conn.value
+  conn.value=null
+  previous?.close()
   lineBuffer = ''
   clearSuggestion()
   if (connState.value === 'connected' || connState.value === 'connecting') {
@@ -517,10 +855,24 @@ async function copySelection(): Promise<void> {
   if (!t) return
   const sel = t.getSelection()
   if (!sel) return
+  const binding = sourceBinding.value,
+    auth = opsAuthEpoch(),
+    seq = actionSeq
+  const allowed = () =>
+    !disposed &&
+    seq === actionSeq &&
+    binding === sourceBinding.value &&
+    auth === opsAuthEpoch()
   copying = true
   try {
-    if (await copyText(sel)) {
-      flashToast('copy', tg('serverTerminal.toastCopied'), tg('serverTerminal.charCount', { n: sel.length }))
+    const copied = await copyText(sel, allowed)
+    if (!allowed()) return
+    if (copied) {
+      flashToast(
+        'copy',
+        tg('serverTerminal.toastCopied'),
+        tg('serverTerminal.charCount', { n: sel.length }),
+      )
     } else {
       manualCopyText.value = sel
     }
@@ -531,21 +883,36 @@ async function copySelection(): Promise<void> {
 
 async function pasteFromClipboard(): Promise<void> {
   if (!clipboardOK) {
-    flashToast('paste', tg('serverTerminal.toastClipboardUnavailable'), tg('serverTerminal.toastClipboardSecureCtx'))
+    flashToast(
+      'paste',
+      tg('serverTerminal.toastClipboardUnavailable'),
+      tg('serverTerminal.toastClipboardSecureCtx'),
+    )
     return
   }
+  cancelReview()
+  const binding = sourceBinding.value,
+    auth = opsAuthEpoch(),
+    seq = actionSeq
+  const current = () =>
+    !disposed &&
+    binding === sourceBinding.value &&
+    auth === opsAuthEpoch() &&
+    seq === actionSeq &&
+    connState.value === 'connected'
   let text = ''
   try {
     text = await navigator.clipboard.readText()
   } catch {
-    flashToast('paste', tg('serverTerminal.toastClipboardDenied'), tg('serverTerminal.toastClipboardAllow'))
+    if (current())
+      flashToast(
+        'paste',
+        tg('serverTerminal.toastClipboardDenied'),
+        tg('serverTerminal.toastClipboardAllow'),
+      )
     return
   }
-  if (!text) return
-  conn.value?.send(text)
-  if (!text.includes('\n')) lineBuffer += text
-  clearSuggestion()
-  flashToast('paste', tg('serverTerminal.toastPasted'), tg('serverTerminal.charCount', { n: text.length }))
+  if (current()) showPaste(text, binding, auth)
 }
 
 // copyOnSelect:在终端里选完(mouseup)即复制当前选区。
@@ -604,21 +971,23 @@ function flashToast(kind: ToastKind, msg: string, sub = ''): void {
 }
 
 // ─── lifecycle ───────────────────────────────────────────────────────────────────
+async function loadServer():Promise<void> {
+ const id=serverId.value
+ try {const list=await listServers();if(!disposed && id===serverId.value)server.value=list.find(s=>s.id===id)??null}catch{/* metadata optional */}
+}
 onMounted(async () => {
   // 取服务器信息(顶栏 host 显示);失败不致命(host 退化为 id)。
-  try {
-    const list = await listServers()
-    server.value = list.find((s) => s.id === serverId.value) ?? null
-  } catch {
-    /* 列表失败:host 退化为 id,终端仍可连 */
-  }
+  await loadServer()
+  if(disposed)return
   await ensureTerm()
+  if(disposed)return
   document.addEventListener('click', closeCtxMenu)
   // 主机 shell:打开即连。
   void connect()
 })
 
 onBeforeUnmount(() => {
+  disposed=true;unAuth()
   document.removeEventListener('click', closeCtxMenu)
   if (completeTimer) window.clearTimeout(completeTimer)
   resizeObserver?.disconnect()
@@ -644,8 +1013,8 @@ onBeforeUnmount(() => {
           <span class="v">{{ isContainer ? `${containerLabel} @ ${hostLabel}` : hostLabel }}</span>
         </div>
         <div class="cell">
-          <span class="k">Shell</span>
-          <select v-model="shell" class="seg-select" aria-label="Shell">
+          <span class="k">{{tg('serverTerminal.nextShell')}}</span>
+          <select v-model="shell" class="seg-select" aria-label="Shell" :disabled="connState==='connected' || connState==='connecting'">
             <option v-for="s in allowedShells" :key="s" :value="s">{{ s }}</option>
           </select>
         </div>
@@ -680,12 +1049,19 @@ onBeforeUnmount(() => {
           <span class="tdot r" /><span class="tdot y" /><span class="tdot g" />
           <span class="name">{{ serverName }} · <b>{{ isContainer ? tg('serverTerminal.containerLabel', { label: containerLabel }) : tg('serverTerminal.hostShell') }}</b></span>
         </div>
+        <div class="terminal-actions">
+          <button type="button" :aria-pressed="sensitive" :class="{sensitive}" @click="toggleSensitive">{{tg(sensitive?'serverTerminal.sensitiveOn':'serverTerminal.sensitiveOff')}}</button>
+          <button type="button" :disabled="sensitive || reviewBusy || connState!=='connected'" @click="openReview('model')">{{tg('serverTerminal.modelComplete')}}</button>
+          <button type="button" :disabled="sensitive || reviewBusy || connState!=='connected'" @click="openReview('selection')">{{tg('serverTerminal.shareSelection')}}</button>
+          <span>{{tg('serverTerminal.newShellNotice')}}</span>
+        </div>
 
         <div
           ref="termHost"
           class="term-host"
           tabindex="0"
           :aria-label="tg('serverTerminal.terminalAria')"
+          @paste.capture="nativePaste"
           @mouseup="onTermMouseUp"
           @contextmenu="onTermContextMenu"
         />
@@ -712,7 +1088,7 @@ onBeforeUnmount(() => {
             :title="completeEnabled ? tg('serverTerminal.completeDisableTitle') : tg('serverTerminal.completeEnableTitle')"
             @click="toggleComplete"
           >
-            <span class="d" aria-hidden="true" /> {{ tg('serverTerminal.aiComplete') }} {{ completeEnabled ? tg('serverTerminal.on') : tg('serverTerminal.off') }}
+            <span class="d" aria-hidden="true" /> {{ tg('serverTerminal.localComplete') }} {{ completeEnabled ? tg('serverTerminal.on') : tg('serverTerminal.off') }}
           </button>
         </div>
       </section>
@@ -723,6 +1099,7 @@ onBeforeUnmount(() => {
         v-if="aiOpen"
         :initial-server-ids="[serverId]"
         :context="'terminal:'+serverId"
+        :terminal-epoch="sourceBinding"
         @collapse="setAiOpen(false)"
       />
     </div>
@@ -758,6 +1135,7 @@ onBeforeUnmount(() => {
       <button type="button" @click="ctxClear">{{ tg('serverTerminal.clearScreen') }}</button>
     </div>
 
+    <TerminalReviewDialog v-if="review" :title="reviewTitle" :notice="reviewNotice" :source="review.source" :text="review.text" :editable="review.kind==='selection'" :busy="reviewBusy" :confirm-label="tg(review.kind==='paste'?'serverTerminal.confirmPaste':review.kind==='model'?'serverTerminal.confirmModel':'serverTerminal.attachReference')" @update:text="review && (review.text=$event)" @close="cancelReview" @confirm="confirmReview" />
     <CopyTextDialog v-if="manualCopyText !== null" :text="manualCopyText" @close="manualCopyText = null" />
 
     <!-- toasts -->
@@ -772,6 +1150,11 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.terminal-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;border-bottom:1px solid var(--color-border);flex:none}
+.terminal-actions button{min-height:44px;padding:6px 10px;color:var(--color-text);background:transparent;border:1px solid var(--color-border-strong);border-radius:4px;font-size:13px;cursor:pointer}
+.terminal-actions button:disabled{opacity:.45;cursor:default}.terminal-actions button.sensitive{color:var(--color-amber);border-color:var(--color-amber)}
+.terminal-actions span{font-size:12px;color:var(--color-dim);line-height:1.5;flex:1;min-width:160px}.terminal-actions button:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px}
+
 .shell {
   position: fixed;
   inset: 0;
@@ -1400,4 +1783,10 @@ onBeforeUnmount(() => {
     animation: none;
   }
 }
+</style>
+
+<style scoped>
+.top{height:auto;min-height:58px;flex-wrap:wrap;padding-block:8px}.seg{max-width:100%;overflow:auto}.seg .v{max-width:40vw;overflow:hidden;text-overflow:ellipsis}.term-status{flex-wrap:wrap;gap:6px;min-height:36px;height:auto}.main{min-height:0}
+@media(min-width:900px){.top{flex-wrap:nowrap}.terminal-actions span{margin-left:8px}}
+@media(prefers-reduced-motion:reduce){.live .dot{animation:none}}
 </style>

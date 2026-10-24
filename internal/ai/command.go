@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/huangchengsir/pipewright/internal/mask"
+	"github.com/huangchengsir/pipewright/internal/opschat"
 )
 
 // 命令风险等级(命令级,与 risk.go 的脚本 finding 等级解耦;对齐前端命令卡左色条配色:
@@ -79,9 +80,10 @@ type CommandSuggestion struct {
 
 // CompleteCommandInput 是命令补全入参(P2 智能补全)。Partial 为用户已输入的命令前缀。
 type CompleteCommandInput struct {
-	Partial string
-	Context CommandContext
-	Masker  *mask.Masker
+	ExpectedProvider *opschat.ProviderInfo
+	Partial          string
+	Context          CommandContext
+	Masker           *mask.Masker
 }
 
 // CompletionResult 是补全结果。Completion 为补全后的完整命令(以 Partial 原样开头);
@@ -323,29 +325,63 @@ func (s *service) CompleteCommand(ctx context.Context, in CompleteCommandInput) 
 	if masker == nil {
 		masker = mask.NewMasker()
 	}
-	partial := in.Partial // 保留原样(含尾空格语义);仅做长度判断时 Trim
-	if strings.TrimSpace(partial) == "" {
-		return nil, fmt.Errorf("%w: 无补全前缀", ErrGenerateFailed)
+	partial := in.Partial
+	if !TerminalSingleLine(partial) || strings.TrimSpace(partial) == "" {
+		return nil, ErrTerminalSensitive
 	}
-
-	provider, baseURL, apiKey, err := s.resolveChatCreds(ctx)
+	var provider, baseURL, apiKey, model string
+	if in.ExpectedProvider != nil {
+		registered, err := s.terminalMasker(ctx)
+		if err != nil {
+			return nil, err
+		}
+		masker = registered
+		cfg, key, info, err := (&opsModel{service: s, masker: masker}).snapshot(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if *in.ExpectedProvider != info {
+			return nil, opschat.ErrConsent
+		}
+		provider, baseURL, apiKey, model = cfg.Provider, cfg.BaseURL, key, cfg.Model
+	} else {
+		var err error
+		provider, baseURL, apiKey, err = s.resolveChatCreds(ctx)
+		if err != nil {
+			return nil, err
+		}
+		masker.RegisterSecret(apiKey)
+		model = s.modelFor(ctx)
+	}
+	cleaned, err := ScrubTerminal(ctx, masker, partial)
 	if err != nil {
 		return nil, err
 	}
-
-	prompt := buildCompletePrompt(masker, partial, in.Context)
-	text, cerr := s.chatWithTokens(ctx, provider, baseURL, s.modelFor(ctx), apiKey, prompt, completeMaxTokens)
-	apiKey = ""
-	_ = apiKey
-	if cerr != nil {
-		return nil, cerr
+	if cleaned != partial {
+		return nil, ErrTerminalSensitive
 	}
-
-	// 取首个非空行作为补全(模型偶尔多行/带噪声);脱敏。
-	completion := masker.Scrub(firstLine(stripCodeFence(text)))
-	// 安全约束:补全必须以用户前缀原样开头,否则视为无效(避免替换用户已输入内容)。
-	if completion == "" || !strings.HasPrefix(completion, strings.TrimRight(partial, " ")) {
-		completion = partial
+	for _, value := range []string{in.Context.OS, in.Context.Shell, in.Context.Container, in.Context.Cwd} {
+		cleaned, err := ScrubTerminal(ctx, masker, value)
+		if err != nil {
+			return nil, err
+		}
+		if !TerminalSingleLine(value) || cleaned != value {
+			return nil, ErrTerminalSensitive
+		}
+	}
+	prompt := buildCompletePrompt(masker, partial, in.Context)
+	text, err := s.chatWithTokens(ctx, provider, baseURL, model, apiKey, prompt, completeMaxTokens)
+	apiKey = ""
+	if err != nil {
+		return nil, err
+	}
+	completion := strings.TrimSpace(stripCodeFence(text))
+	cleaned, err = ScrubTerminal(ctx, masker, completion)
+	if err != nil {
+		return nil, err
+	}
+	if !TerminalSingleLine(completion) || !strings.HasPrefix(completion, partial) || cleaned != completion {
+		completion = ""
 	}
 	return &CompletionResult{Completion: completion}, nil
 }

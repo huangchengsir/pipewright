@@ -724,6 +724,7 @@ export function useOpsChat(options: {
     input: Partial<Turn & Retry & Analysis>,
     sentText?: string,
     clientRequestId = requestId(),
+    stillValid?: () => boolean,
   ): Promise<boolean> {
     const t = token()
     const sentEditGeneration = userEditGeneration
@@ -741,6 +742,7 @@ export function useOpsChat(options: {
       return false
     if (
       !valid(t.g, t.auth) ||
+      (stillValid && !stillValid()) ||
       busy.value ||
       pending.value ||
       session.value?.activeRunId
@@ -759,8 +761,9 @@ export function useOpsChat(options: {
     return submitPending()
     } finally {preparing=false;if(!state.pending[t.id]&&!state.snapshot?.runs?.some(r=>r.clientRequestId===clientRequestId))state.optimistic=state.optimistic.filter(e=>e.requestId!==clientRequestId)}
   }
-  async function send(): Promise<boolean> {
-    const text = draft.value
+  async function send(context?: { text: string; valid: () => boolean }): Promise<boolean> {
+    if(context && !context.valid()) return false
+    const text = context ? [draft.value, context.text].filter(Boolean).join('\n\n') : draft.value
     if (!session.value?.serverIds?.length) return false
     if (
       !text.trim() ||
@@ -768,7 +771,7 @@ export function useOpsChat(options: {
       !capabilities.value?.modelAvailable
     )
       return false
-    return submit('turn', { text, analyzeResults:true, provider:capabilities.value.provider }, text)
+    return submit('turn', { text, analyzeResults:true, provider:capabilities.value.provider }, text, undefined, context?.valid)
   }
   async function tool(toolId: string, args: ToolArgs): Promise<boolean> {
     if (

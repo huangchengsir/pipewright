@@ -7,6 +7,7 @@ import AiOpsExecArgs from './AiOpsExecArgs.vue'
 import { isValidExecArgv, utf8Bytes, type Tool, type ToolArgs } from '../../api/opsChat'
 const props = defineProps<{
   draft: string
+  contextText?: string
   draftStatus: string
   tools: Tool[]
   disabled: boolean
@@ -158,8 +159,8 @@ function run(): void {
           pending ||
           !modelAvailable ||
           !hasTargets ||
-          !draft.trim() ||
-          utf8Bytes(draft) > 8192
+          (!draft.trim() && !contextText) ||
+          utf8Bytes([draft,contextText].filter(Boolean).join('\n\n')) > 8192
         "
         :title="t(hasTargets ? 'opsChat.send' : 'opsChat.noTargets')"
         :aria-label="t('opsChat.send')"

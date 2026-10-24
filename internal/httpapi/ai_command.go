@@ -9,6 +9,7 @@ import (
 
 	"github.com/huangchengsir/pipewright/internal/ai"
 	"github.com/huangchengsir/pipewright/internal/mask"
+	"github.com/huangchengsir/pipewright/internal/opschat"
 )
 
 // ai_command.go 是「AI 运维终端助手」HTTP 层(运维终端 P1 · 护城河 · AI moat)。
@@ -156,40 +157,73 @@ func makeAIComposeHandler(aiSvc ai.Service) http.HandlerFunc {
 // 未配 AI → 200 + available=false(前端退化为本地常用命令字典兜底)。
 func makeAICompleteHandler(aiSvc ai.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if aiSvc == nil {
-			writeError(w, http.StatusServiceUnavailable, "internal", "AI 命令助手未初始化")
-			return
-		}
-		ctx := r.Context()
-
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
+		w.Header().Set("Cache-Control", "no-store")
+		r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 		var req struct {
-			Partial string            `json:"partial"`
-			Context commandContextDTO `json:"context"`
+			Partial   string               `json:"partial"`
+			Context   commandContextDTO    `json:"context"`
+			Confirmed bool                 `json:"confirmed"`
+			Provider  opschat.ProviderInfo `json:"provider"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
+		if json.NewDecoder(r.Body).Decode(&req) != nil || strings.TrimSpace(req.Partial) == "" || !ai.TerminalSingleLine(req.Partial) {
+			writeError(w, 400, "bad_request", "补全前缀无效")
 			return
 		}
-		if strings.TrimSpace(req.Partial) == "" {
-			writeError(w, http.StatusBadRequest, "bad_request", "缺少补全前缀")
+		if !req.Confirmed || req.Provider.ConfigHash == "" {
+			writeError(w, 409, "consent_required", "请先预览并确认本次模型补全")
 			return
 		}
-
-		out, err := aiSvc.CompleteCommand(ctx, ai.CompleteCommandInput{
-			Partial: req.Partial,
-			Context: req.Context.toAI(),
-			Masker:  mask.NewMasker(),
-		})
+		if aiSvc == nil {
+			writeError(w, 503, "unavailable", "AI 命令助手未初始化")
+			return
+		}
+		out, err := aiSvc.CompleteCommand(r.Context(), ai.CompleteCommandInput{Partial: req.Partial, Context: req.Context.toAI(), ExpectedProvider: &req.Provider})
 		switch {
 		case err == nil:
-			writeJSON(w, http.StatusOK, completeCommandDTO{Available: true, Completion: out.Completion})
+			value := out.Completion
+			if !ai.TerminalSingleLine(value) || !strings.HasPrefix(value, req.Partial) {
+				value = ""
+			}
+			writeJSON(w, 200, completeCommandDTO{Available: true, Completion: value})
+		case errors.Is(err, opschat.ErrConsent):
+			writeError(w, 409, "consent_required", "模型配置已变化，请重新预览")
+		case errors.Is(err, ai.ErrTerminalSensitive):
+			writeError(w, 400, "sensitive_input", "请移除敏感内容或控制字符")
 		case errors.Is(err, ai.ErrAINotConfigured):
-			writeJSON(w, http.StatusOK, completeCommandDTO{Available: false})
+			writeJSON(w, 200, completeCommandDTO{Available: false})
 		default:
-			// 补全失败静默降级(前端有本地字典兜底):available=true + 空补全,不打扰用户。
-			writeJSON(w, http.StatusOK, completeCommandDTO{Available: true, Completion: ""})
+			writeError(w, 503, "unavailable", "模型补全不可用，请重新审阅后再试")
 		}
+	}
+}
+
+// Local-only preview: authenticated + CSRF; raw input is never persisted or logged.
+func makeAITerminalPreviewHandler(aiSvc ai.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		r.Body = http.MaxBytesReader(w, r.Body, 24<<10)
+		var req struct {
+			Values []string `json:"values"`
+		}
+		if json.NewDecoder(r.Body).Decode(&req) != nil {
+			writeError(w, 400, "bad_request", "预览格式无效")
+			return
+		}
+		service, ok := aiSvc.(ai.TerminalPreviewer)
+		if !ok {
+			writeError(w, 503, "unavailable", "本地脱敏不可用")
+			return
+		}
+		out, err := service.PreviewTerminal(r.Context(), req.Values)
+		if errors.Is(err, ai.ErrTerminalSensitive) {
+			writeError(w, 400, "bad_request", "预览内容超限或无效")
+			return
+		}
+		if err != nil {
+			writeError(w, 503, "unavailable", "本地脱敏不可用")
+			return
+		}
+		writeJSON(w, 200, out)
 	}
 }
 

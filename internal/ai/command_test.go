@@ -186,7 +186,7 @@ func TestCompleteCommand(t *testing.T) {
 	}
 }
 
-// TestCompleteCommandRejectsNonPrefix 验证补全不以前缀开头时丢弃(回退原前缀,绝不替换用户已输入)。
+// TestCompleteCommandRejectsNonPrefix 验证补全不以前缀开头时丢弃(不回显原前缀,绝不替换用户已输入)。
 func TestCompleteCommandRejectsNonPrefix(t *testing.T) {
 	srv := stubLLM(t, ProviderOpenAI, "rm -rf /") // 与前缀无关的越权输出
 	svc, _, _ := newService(t, srv.Client())
@@ -196,8 +196,8 @@ func TestCompleteCommandRejectsNonPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompleteCommand: %v", err)
 	}
-	if out.Completion != "ls -l" {
-		t.Fatalf("非前缀补全应回退原前缀,得 %q", out.Completion)
+	if out.Completion != "" {
+		t.Fatalf("非前缀补全应返回空建议,得 %q", out.Completion)
 	}
 }
 

@@ -1,6 +1,20 @@
 // Keep rule reasons distinct from user-provided excerpts. Unknown text remains
 // escaped by Vue; known fact codes receive local, user-facing descriptions.
 const facts: Record<string, string> = {
+  deployment_evidence_unavailable: "deploymentEvidenceUnavailable",
+  deployment_completion_pending: "deploymentCompletionPending",
+  deployment_completed: "deploymentCompleted",
+  deployment_outcome_unavailable: "deploymentOutcomeUnavailable",
+  deployment_health_gate_failed: "deploymentHealthGateFailed",
+  recorded_deployment_health_gate_failure: "deploymentHealthGateFailed",
+  deployment_health_gate: "deploymentHealthGate",
+  local_config_id_matched: "localImageMatched",
+  confirmed_unexpected_local_image: "localImageUnexpected",
+  local_image_identity_unavailable: "localImageUnavailable",
+  local_image_identity_invalid: "localImageInvalid",
+  local_image_identity_pending_build: "localImagePending",
+  local_image_fixed_before_activation: "localImageFixed",
+  expected_image: "expectedImage",
   container_identity_unavailable: "identityMissing",
   container_identity_incomplete: "identityMissing",
   activation_receipt_missing: "identityMissing",

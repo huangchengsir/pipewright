@@ -1,4 +1,8 @@
-export default { collectLogs: 'このインスタンス内で制限付きログを収集', collectLogsHint: '監視期間内の許可された短い抜粋のみローカル収集します。モデル共有の許可ではありません。',
+export default {
+  localImageId: "ローカル Docker Image ID",
+  localImagePending: "ビルド後、起動前に Image ID を固定",
+  localImageScope: "この対象ホスト上のイメージ同一性のみを検証します。レジストリ digest や別ホスト上の出所の証明ではありません。",
+ collectLogs: 'このインスタンス内で制限付きログを収集', collectLogsHint: '監視期間内の許可された短い抜粋のみローカル収集します。モデル共有の許可ではありません。',
   noBaseline: '検証済みのデプロイ前基準はありません。', verifiedBaseline: 'デプロイ直前の基準を検証済みです。', reviewPrior: '範囲内の証拠と以前のデプロイを手動で確認してください。', sourceDiffMissing: 'ソース差分は収集されていません。',
   attached: '今回のデプロイを監視', attachedDescription: '計画の確認だけではデプロイやリモート収集は行いません。元のデプロイボタンで実行し、確認済みの監視を追加します。事前サンプルがなくてもデプロイは続行します。',
   usePlan: 'この計画を使用', attachedChanged: 'デプロイ設定が変更されました。計画を再確認してください。', attachedReady: '確認済みです。元のデプロイ操作に今回の監視を追加します。', attachedReviewRequired: '監視付きデプロイの前に、有効期限内の計画を確認してください。',
@@ -43,5 +47,5 @@ export default { collectLogs: 'このインスタンス内で制限付きログ�
   result: { passed: '基本稼働検査に合格', failed: '検証失敗', insufficient: '証拠不足', uncertain: '検証結果不確定', pending: '結論未確定', not_applicable: '適用対象外' },
   execution: { prepared: '準備済み', queued: '待機中', binding: 'ID 確認中', observing: '監視中', stopping: '停止処理中', completed: '終了', stopped: '停止済み', interrupted: '中断', blocked: '実行不可', tool_error: '収集エラー', expired: '期限切れ', unknown: '状態不明' },
   attribution: { not_investigated: '未調査', candidate_relation: '関連の候補あり', undetermined: '不明' },
-  conditions: { version: 'イメージバージョン', image_identity: 'イメージ ID', identity: 'コンテナ ID', liveness: 'サンプル時点の生存', running: '実行状態', restarts: '再起動回数', restart: '再起動回数', oom: 'OOM 状態', docker_health: '既存 Docker ヘルス', health: '既存 Docker ヘルス', coverage: 'サンプルのカバレッジ' },
+  conditions: { deployment_completion: "デプロイの最終結果", deployment_health_gate: "デプロイ時のヘルス検査", version: 'イメージバージョン', image_identity: 'イメージ ID', identity: 'コンテナ ID', liveness: 'サンプル時点の生存', running: '実行状態', restarts: '再起動回数', restart: '再起動回数', oom: 'OOM 状態', docker_health: '既存 Docker ヘルス', health: '既存 Docker ヘルス', coverage: 'サンプルのカバレッジ' },
 }

@@ -12,6 +12,17 @@ import {
 } from './jobConfigSchema'
 
 describe('jobConfigSchema', () => {
+  it('limits the local Docker opt-in to archives and static directories and retains incompatible existing selections for correction', () => {
+    const fields = JOB_TYPE_SPECS.deploy_ssh.fields
+    const visible = (config: Record<string, string>) => fields.filter(field => !field.when || field.when(config)).map(field => field.key)
+    expect(visible({ artifactType: 'archive' })).toContain('localDocker')
+    expect(visible({ artifactType: 'dist' })).toContain('localDocker')
+    expect(visible({ artifactType: 'jar' })).not.toContain('localDocker')
+    expect(visible({ artifactType: 'image' })).not.toContain('localDocker')
+    expect(visible({ artifactType: 'archive' })).not.toContain('localDockerPrepareCommand')
+    expect(visible({ artifactType: 'archive', localDocker: 'true' })).toEqual(expect.arrayContaining(['localDockerPrepareCommand', 'localDockerDockerfile', 'containerName', 'ports']))
+    expect(visible({ artifactType: 'image', localDocker: 'true' })).toContain('localDocker')
+  })
   it('exposes a typed spec for every dropdown option', () => {
     for (const opt of JOB_TYPE_OPTIONS) {
       const spec = getJobTypeSpec(opt.value)

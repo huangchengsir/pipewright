@@ -1,4 +1,20 @@
 export default {
+  deploymentEvidenceUnavailable: "El registro del despliegue conserva el fallo, pero no se confirmó el guardado de pruebas. Se mantiene el fallo sin citar pruebas no guardadas.",
+
+  deploymentCompletionPending: "El despliegue no ha terminado; se espera su recibo final.",
+  deploymentCompleted: "Se obtuvo el recibo final de éxito de este despliegue.",
+  deploymentOutcomeUnavailable: "No se obtuvo el recibo de éxito; el resultado no está verificado.",
+  deploymentHealthGateFailed: "El control de salud durante el despliegue registró un fallo. Se evalúa aparte de la salud continua de Docker.",
+  deploymentHealthGate: "Control de salud del despliegue",
+
+  localImageMatched: "El contenedor usa el Image ID local fijado antes de esta activación.",
+  localImageUnexpected: "Se confirmó otra imagen local después del plazo de preparación.",
+  localImageUnavailable: "No se puede verificar la identidad de la imagen local.",
+  localImageInvalid: "La identidad local o la prueba de fijación previa no es válida.",
+  localImagePending: "Se registrará la imagen tras compilar, antes de iniciar. Este plan aún no incluye Image ID.",
+  localImageFixed: "Se fijó el Image ID local antes de activar.",
+  expectedImage: "Identidad de imagen esperada",
+
   healthConditionChanged:
     "La condición de salud de Docker cambió; no se verifican de nuevo las condiciones originales.",
   healthComparisonUnknown:

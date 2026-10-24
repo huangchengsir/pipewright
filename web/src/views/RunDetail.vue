@@ -55,6 +55,7 @@ import PromotionPanel from '../components/run/PromotionPanel.vue'
 import BatchDeployPanel from '../components/run/BatchDeployPanel.vue'
 import ReleaseGuardPanel from '../components/run/ReleaseGuardPanel.vue'
 import ReleaseGuardAttach from '../components/run/ReleaseGuardAttach.vue'
+import LocalDockerDeploymentFields from '../components/run/LocalDockerDeploymentFields.vue'
 
 // ─── route ────────────────────────────────────────────────────────────────────
 
@@ -154,6 +155,11 @@ const attachedGuardReset = ref(0)
 const deployOutcomeUnknown = ref(false)
 const deployedGuardId = ref('')
 const selectedArtifactIsImage = computed(() => run.value?.artifacts.some(artifact => artifact.id === selectedArtifactId.value && artifact.type === 'image') ?? false)
+const selectedArtifactType = computed(() => run.value?.artifacts.find(artifact => artifact.id === selectedArtifactId.value)?.type ?? '')
+const localDockerConfig = ref<Record<string, string>>({})
+const localDockerEligible = computed(() => ['archive', 'dist'].includes(selectedArtifactType.value))
+const localDockerSelected = computed(() => localDockerEligible.value && localDockerConfig.value.localDocker === 'true')
+const guardEligible = computed(() => selectedArtifactIsImage.value || localDockerSelected.value)
 
 // ─── deploy-time health gate (Story 4-3 / FR-12) ─────────────────────────────
 // 部署后健康门控:type none(默认,跳过)/ http(curl 探测)/ command(命令探测)。
@@ -194,6 +200,7 @@ const deployStrategyOptions = computed<ReadonlyArray<{ value: DeployStrategy; la
 // buildDeployConfig 据高级选项收敛 deployConfig;空字段不传(后端取默认)。
 function buildDeployConfig(): Record<string, string> | undefined {
   const cfg: Record<string, string> = {}
+  if (localDockerSelected.value) Object.assign(cfg, localDockerConfig.value)
   const base = releaseBase.value.trim()
   if (base) cfg.releaseBase = base
   const keep = clampInt(keepReleases.value, 1, 50, 1)
@@ -300,7 +307,8 @@ const canDeploy = computed(
     !!selectedArtifactId.value &&
     selectedServerIds.value.length > 0 &&
     healthCheckValid.value &&
-    (!selectedArtifactIsImage.value || !attachedGuard.value.enabled || attachedGuard.value.ready) &&
+    (!localDockerSelected.value || (!!localDockerConfig.value.containerName?.trim() && deployStrategy.value !== 'blue_green')) &&
+    (!guardEligible.value || !attachedGuard.value.enabled || attachedGuard.value.ready) &&
     !deployOutcomeUnknown.value &&
     !deploying.value,
 )
@@ -315,7 +323,7 @@ const currentDeployInput = computed<DeployRunInput>(() => ({
 
 async function handleDeploy(): Promise<void> {
   if (!run.value || !canDeploy.value) return
-  const guardBinding = selectedArtifactIsImage.value ? attachedGuard.value.binding : undefined
+  const guardBinding = guardEligible.value ? attachedGuard.value.binding : undefined
   deploying.value = true
   deployError.value = ''
   try {
@@ -1134,9 +1142,16 @@ function nodeClass(status: StepStatus): string {
                   </div>
                 </div>
 
+                <LocalDockerDeploymentFields
+                  v-if="localDockerEligible"
+                  v-model="localDockerConfig"
+                  :artifact-type="selectedArtifactType"
+                  :strategy="deployStrategy"
+                />
+
                 <!-- 部署错误 -->
                 <ReleaseGuardAttach
-                  v-if="selectedArtifactIsImage"
+                  v-if="guardEligible"
                   :project-id="run.projectId"
                   :run-id="run.id"
                   :input="currentDeployInput"

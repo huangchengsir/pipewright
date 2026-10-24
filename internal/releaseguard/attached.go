@@ -8,6 +8,28 @@ import (
 	"github.com/huangchengsir/pipewright/internal/deployattempt"
 )
 
+// A prepared script plan binds the build/run policy, not an image guessed from
+// a current container. Only the deployment's durable pre-activation target can
+// replace this placeholder with a complete local image expectation.
+func pendingLocalExpected(e deployattempt.ExpectedImage) bool {
+	return e.IdentitySource == deployattempt.IdentityScriptPreActivation && e.DigestKind == deployattempt.DigestConfig &&
+		e.Digest == "" && e.Reference == "" && e.Repository == "" && e.Platform == (deployattempt.Platform{})
+}
+
+func sameExpectedImage(a, b deployattempt.ExpectedImage) bool { return a == b }
+
+func localActivationRecorded(t deployattempt.Target, containerID string) bool {
+	for _, receipt := range t.Receipts {
+		a := receipt.ActualImage
+		if receipt.Kind == deployattempt.Activated && a.ContainerID == containerID && configDigest.MatchString(a.ConfigID) &&
+			platformPart.MatchString(a.Platform.OS) && platformPart.MatchString(a.Platform.Architecture) &&
+			(a.Platform.Variant == "" || platformPart.MatchString(a.Platform.Variant)) {
+			return true
+		}
+	}
+	return false
+}
+
 type attachedKey struct{}
 type attachedHandle struct{ project, id string }
 
@@ -84,9 +106,41 @@ func (s *Service) BeforeImageActivation(ctx context.Context, attemptID, targetID
 		return
 	}
 	var pID string
-	for _, p := range d.Report.Targets {
-		if p.WorkloadKey == t.WorkloadKey {
+	for i := range d.Report.Targets {
+		p := &d.Report.Targets[i]
+		if p.WorkloadKey == t.WorkloadKey && !p.Terminated && p.ContainerID == "" && p.ConnectionFingerprint == t.ConnectionFingerprint && t.ArtifactID == d.Report.Plan.ArtifactID {
 			pID = p.ID
+			if p.ExpectedImage.IdentitySource == deployattempt.IdentityScriptPreActivation && (t.Outcome != deployattempt.Started || len(t.Receipts) != 0) {
+				if pendingLocalExpected(p.ExpectedImage) {
+					p.Terminated = true
+					p.Limitations = appendUnique(p.Limitations, "local_image_identity_invalid")
+					_ = s.save(ctx, d, "local_image_identity_unavailable", nil)
+				}
+				s.mu.Unlock()
+				return
+			}
+			if pendingLocalExpected(p.ExpectedImage) {
+				if !deployattempt.ValidLocalExpected(t.ExpectedImage) {
+					p.Terminated = true
+					p.Limitations = appendUnique(p.Limitations, "local_image_identity_invalid")
+					_ = s.save(ctx, d, "local_image_identity_unavailable", nil)
+					s.mu.Unlock()
+					return
+				}
+				p.ExpectedImage = t.ExpectedImage
+				limitations := []string{}
+				for _, limitation := range p.Limitations {
+					if limitation != "local_image_identity_pending_build" {
+						limitations = append(limitations, limitation)
+					}
+				}
+				p.Limitations = limitations
+				e := Evidence{ID: newEvidenceID(), TargetID: p.ID, Kind: "expected_image", EventAt: t.CreatedAt, CollectedAt: s.now().UTC(), Reason: "local_image_fixed_before_activation", Summary: "server_local_build_identity", Value: t.ExpectedImage}
+				if s.save(ctx, d, "local_image_fixed_before_activation", &e) != nil {
+					s.mu.Unlock()
+					return
+				}
+			}
 			break
 		}
 	}
@@ -142,9 +196,14 @@ func (s *Service) AfterImageActivation(ctx context.Context, attemptID, targetID,
 		if p.WorkloadKey != t.WorkloadKey || p.ContainerID != "" {
 			continue
 		}
-		if p.ExpectedImage.Repository != t.ExpectedImage.Repository || p.ExpectedImage.Digest != t.ExpectedImage.Digest {
+		if p.ConnectionFingerprint != t.ConnectionFingerprint || t.ArtifactID != d.Report.Plan.ArtifactID || !sameExpectedImage(p.ExpectedImage, t.ExpectedImage) || pendingLocalExpected(p.ExpectedImage) {
 			p.Terminated = true
 			p.Limitations = appendUnique(p.Limitations, "deployment_did_not_match_plan")
+			break
+		}
+		if deployattempt.ValidLocalExpected(t.ExpectedImage) && !localActivationRecorded(*t, containerID) {
+			p.Terminated = true
+			p.Limitations = appendUnique(p.Limitations, "activation_receipt_missing")
 			break
 		}
 		old := p.ID
@@ -177,6 +236,10 @@ func (s *Service) FinishAttached(ctx context.Context, id string) {
 		return
 	}
 	for i := range d.Report.Targets {
+		if err := s.deploymentFactsLocked(context.Background(), d, &d.Report.Targets[i], true); err != nil {
+			s.finishLocked(context.Background(), d, "tool_error", "deployment_evidence_unavailable")
+			return
+		}
 		if d.Report.Targets[i].ContainerID == "" {
 			d.Report.Targets[i].Terminated = true
 			d.Report.Targets[i].Limitations = appendUnique(d.Report.Targets[i].Limitations, "activation_receipt_missing")

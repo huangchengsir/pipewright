@@ -1,4 +1,20 @@
 export default {
+  deploymentEvidenceUnavailable: "배포 기록에는 실패가 남아 있지만 검증 증거 저장은 확인되지 않았습니다. 저장되지 않은 증거를 참조하지 않고 실패 결론을 유지합니다.",
+
+  deploymentCompletionPending: "배포가 완료되지 않았습니다. 이번 배포의 최종 기록을 기다립니다.",
+  deploymentCompleted: "이번 배포의 최종 성공 기록을 확인했습니다.",
+  deploymentOutcomeUnavailable: "이번 배포의 성공 기록이 없어 결과를 확인할 수 없습니다.",
+  deploymentHealthGateFailed: "배포 시 상태 검사가 실패를 기록했습니다. 지속적인 Docker 상태와 별도로 판단합니다.",
+  deploymentHealthGate: "배포 시 상태 검사",
+
+  localImageMatched: "컨테이너가 이번 시작 전에 고정한 로컬 Image ID를 사용합니다.",
+  localImageUnexpected: "준비 기한이 지난 후 다른 로컬 이미지 사용이 확인되었습니다.",
+  localImageUnavailable: "로컬 이미지 동일성을 확인할 수 없습니다.",
+  localImageInvalid: "로컬 이미지 또는 시작 전 고정 증거가 잘못되었습니다.",
+  localImagePending: "빌드 후 시작 전에 예상 이미지를 기록합니다. 이 계획에는 아직 Image ID가 없습니다.",
+  localImageFixed: "시작 전에 로컬 Image ID를 고정했습니다.",
+  expectedImage: "예상 이미지 식별 정보",
+
   healthConditionChanged:
     "Docker 상태 점검 조건이 변경되어 기존 조건에서의 재검증이 아닙니다.",
   healthComparisonUnknown:

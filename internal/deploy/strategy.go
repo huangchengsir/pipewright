@@ -57,6 +57,13 @@ func NormalizeStrategy(s string) string {
 
 // deployWithStrategy 按策略调度多机部署。结果按 servers 输入顺序对齐(稳定可断言)。
 func (s *service) deployWithStrategy(ctx context.Context, servers []*target.Server, a run.Artifact, cfg map[string]string, hc *HealthCheck, strategy string) []TargetResult {
+	if err := s.validateLocalDockerRuntime(a, cfg, strategy); err != nil {
+		results := make([]TargetResult, len(servers))
+		for i, srv := range servers {
+			results[i] = abortedResult(srv, "本地 Docker 部署配置无效，未执行远端部署（蓝绿策略暂不支持）")
+		}
+		return results
+	}
 	switch strategy {
 	case StrategyCanary:
 		return s.deployCanary(ctx, servers, a, cfg, hc)

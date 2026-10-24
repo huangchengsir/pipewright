@@ -337,6 +337,8 @@ func makeAbortDeployHandler(svc deploy.Service, runSvc run.Service) http.Handler
 // 执行类失败由 deploy.Deploy 内化为每机 failed,不走此路径(整体 200)。
 func writeDeployError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, deploy.ErrInvalidLocalDockerConfig):
+		writeError(w, http.StatusUnprocessableEntity, "invalid_local_docker_config", "本地 Docker 部署配置无效；请检查归档、容器参数、构建路径及脚本冲突")
 	case errors.Is(err, deploy.ErrInvalidUploadPolicy):
 		writeError(w, http.StatusUnprocessableEntity, "invalid_upload_policy", err.Error())
 	case errors.Is(err, deploy.ErrBatchInvalid):

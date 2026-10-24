@@ -1,4 +1,20 @@
 export default {
+  deploymentEvidenceUnavailable: "Le registre de déploiement conserve un échec, mais la sauvegarde des preuves est incertaine. Cet échec reste établi sans citer de preuve non sauvegardée.",
+
+  deploymentCompletionPending: "Le déploiement est en cours ; son reçu final est attendu.",
+  deploymentCompleted: "Le reçu final de réussite de ce déploiement a été lu.",
+  deploymentOutcomeUnavailable: "Aucun reçu de réussite obtenu ; le résultat du déploiement reste non vérifié.",
+  deploymentHealthGateFailed: "Le contrôle de santé au déploiement a enregistré un échec. Il est évalué séparément de la santé continue de Docker.",
+  deploymentHealthGate: "Contrôle de santé au déploiement",
+
+  localImageMatched: "Le conteneur utilise le Image ID local fixé avant cette activation.",
+  localImageUnexpected: "Une autre image locale a été confirmée après le délai de préparation.",
+  localImageUnavailable: "Impossible de vérifier identité de image locale.",
+  localImageInvalid: "Identité locale ou preuve de fixation avant activation invalide.",
+  localImagePending: "Image attendue enregistrée après construction et avant démarrage. Ce plan ne contient pas encore de Image ID.",
+  localImageFixed: "Le Image ID local a été fixé avant activation.",
+  expectedImage: "Identité de image attendue",
+
   healthConditionChanged:
     "La condition de santé Docker a changé ; les conditions initiales ne sont pas revérifiées.",
   healthComparisonUnknown:

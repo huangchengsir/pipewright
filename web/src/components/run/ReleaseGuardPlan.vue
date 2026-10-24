@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppButton from '../ui/AppButton.vue'
+import GuardImageIdentity from './GuardImageIdentity.vue'
 import { HttpError } from '../../api/http'
 import { releaseGuardText } from '../../utils/releaseGuardText'
 import {
@@ -299,13 +300,7 @@ onBeforeUnmount(() => {
                   }}
                 </td>
                 <td>
-                  <code>{{
-                    target.expectedImage.repository &&
-                    target.expectedImage.digest
-                      ? `${target.expectedImage.repository}@${target.expectedImage.digest}`
-                      : target.expectedImage.reference ||
-                        t('releaseGuard.notProvided')
-                  }}</code>
+                  <GuardImageIdentity :image="target.expectedImage" />
                 </td>
                 <td>
                   {{ availability(target.availability) }}

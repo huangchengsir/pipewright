@@ -18,7 +18,7 @@ var (
 	ErrUnavailable = errors.New("releaseguard: capability unavailable")
 )
 
-const EngineVersion = "releaseguard-v1"
+const EngineVersion = "releaseguard-v2"
 
 type PrepareInput struct {
 	Mode            string            `json:"mode"`

@@ -1,4 +1,8 @@
-export default { collectLogs: 'Begrenzte Protokolle in dieser Instanz erfassen', collectLogsHint: 'Nur erlaubte kurze Auszüge im Beobachtungsfenster werden lokal erfasst. Dies erlaubt keine Modellfreigabe.',
+export default {
+  localImageId: "Lokale Docker Image ID",
+  localImagePending: "Image ID wird nach dem Build vor dem Start fixiert",
+  localImageScope: "Prüft die Image-Identität nur auf diesem Zielhost. Kein Registry-Digest und kein Herkunftsnachweis auf anderen Hosts.",
+ collectLogs: 'Begrenzte Protokolle in dieser Instanz erfassen', collectLogsHint: 'Nur erlaubte kurze Auszüge im Beobachtungsfenster werden lokal erfasst. Dies erlaubt keine Modellfreigabe.',
   noBaseline: 'Keine geprüfte Vergleichsbasis vor Bereitstellung.', verifiedBaseline: 'Unmittelbare Vorher-Probe geprüft.', reviewPrior: 'Prüfen Sie die Nachweise im Umfang und die vorherige Bereitstellung manuell.', sourceDiffMissing: 'Quellcodeunterschiede wurden nicht erfasst.',
   attached: 'Diese Bereitstellung beobachten', attachedDescription: 'Die Planprüfung startet weder Bereitstellung noch entfernte Erfassung. Die ursprüngliche Bereitstellungsschaltfläche fügt die geprüfte Beobachtung hinzu. Eine fehlende Vorher-Probe blockiert die Bereitstellung nicht.',
   usePlan: 'Diesen Plan verwenden', attachedChanged: 'Bereitstellungseinstellungen geändert. Erstellen und prüfen Sie eine neue Vorschau.', attachedReady: 'Plan geprüft. Die ursprüngliche Bereitstellung enthält diese Beobachtung.', attachedReviewRequired: 'Prüfen Sie einen gültigen Plan vor der Bereitstellung mit Beobachtung.',
@@ -43,5 +47,5 @@ export default { collectLogs: 'Begrenzte Protokolle in dieser Instanz erfassen',
   result: { passed: 'Grundprüfungen bestanden', failed: 'Prüfung fehlgeschlagen', insufficient: 'Unzureichende Nachweise', uncertain: 'Prüfung unklar', pending: 'Noch kein Ergebnis', not_applicable: 'Nicht zutreffend' },
   execution: { prepared: 'Vorbereitet', queued: 'In Warteschlange', binding: 'Identität wird gebunden', observing: 'Wird beobachtet', stopping: 'Wird gestoppt', completed: 'Abgeschlossen', stopped: 'Gestoppt', interrupted: 'Unterbrochen', blocked: 'Blockiert', tool_error: 'Erfassungsfehler', expired: 'Abgelaufen', unknown: 'Unbekannt' },
   attribution: { not_investigated: 'Nicht untersucht', candidate_relation: 'Möglicher Zusammenhang', undetermined: 'Unbestimmt' },
-  conditions: { version: 'Image-Version', image_identity: 'Image-Identität', identity: 'Containeridentität', liveness: 'Stichprobenstatus', running: 'Laufzustand', restarts: 'Neustartanzahl', restart: 'Neustartanzahl', oom: 'OOM-Zustand', docker_health: 'Vorhandener Docker-Health-Status', health: 'Vorhandener Docker-Health-Status', coverage: 'Stichprobenabdeckung' },
+  conditions: { deployment_completion: "Abschließendes Bereitstellungsergebnis", deployment_health_gate: "Zustandsprüfung bei Bereitstellung", version: 'Image-Version', image_identity: 'Image-Identität', identity: 'Containeridentität', liveness: 'Stichprobenstatus', running: 'Laufzustand', restarts: 'Neustartanzahl', restart: 'Neustartanzahl', oom: 'OOM-Zustand', docker_health: 'Vorhandener Docker-Health-Status', health: 'Vorhandener Docker-Health-Status', coverage: 'Stichprobenabdeckung' },
 }

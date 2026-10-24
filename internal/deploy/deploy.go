@@ -287,7 +287,10 @@ func (s *service) Deploy(ctx context.Context, in DeployInput) ([]TargetResult, e
 	// 4) 按**部署策略**执行(Story 8-8 / FR-8-8):rolling(默认,= 4-5 并行扇出)| canary | blue_green。
 	// 每机独立 goroutine + recover,有界信号量(cap 4)防同时打爆 N 台;单机 panic/失败不连累其它机;
 	// 结果按输入顺序独立收集。策略仅改机群编排(分批门控 / 统一切换),不改单机执行语义。
-	if artifact.Type == run.ArtifactImage {
+	if err := s.validateLocalDockerRuntime(*artifact, in.Config, in.Strategy); err != nil {
+		return nil, err
+	}
+	if artifact.Type == run.ArtifactImage || LocalDockerEnabled(in.Config) {
 		ctx, err = s.beginAttempt(ctx, in.RunID, "deploy")
 		if err != nil {
 			return nil, err
@@ -354,6 +357,9 @@ func (s *service) DeployForStage(ctx context.Context, runID string, serverIDs []
 	// 供「配置类」流水线用(如 frp 隧道:就地 upsert frpc.ini + reload)。与产物发布完全隔离——
 	// **真实产物部署(artifactType != command)绝不进此分支**,既有部署/策略/健康检查路径零影响。
 	if strings.TrimSpace(cfg["artifactType"]) == "command" {
+		if err := ValidateLocalDockerConfig(run.Artifact{Type: "command"}, cfg, strategy); err != nil {
+			return nil, err
+		}
 		if strings.TrimSpace(cfg["artifactSource"]) != "" {
 			return nil, ErrArtifactSourceInvalid
 		}
@@ -386,7 +392,10 @@ func (s *service) DeployForStage(ctx context.Context, runID string, serverIDs []
 		servers = append(servers, srv)
 	}
 
-	if artifact.Type == run.ArtifactImage {
+	if err := s.validateLocalDockerRuntime(*artifact, cfg, strategy); err != nil {
+		return nil, err
+	}
+	if artifact.Type == run.ArtifactImage || LocalDockerEnabled(cfg) {
 		var err error
 		ctx, err = s.beginAttempt(ctx, runID, "stage")
 		if err != nil {
@@ -597,7 +606,10 @@ func (s *service) RetryFailed(ctx context.Context, in RetryInput) ([]TargetResul
 	}
 
 	// 6) 对这些机并行重跑 deployOne(复用产物 + 配置)。
-	if artifact.Type == run.ArtifactImage {
+	if err := s.validateLocalDockerRuntime(*artifact, in.Config, ""); err != nil {
+		return nil, err
+	}
+	if artifact.Type == run.ArtifactImage || LocalDockerEnabled(in.Config) {
 		ctx, err = s.beginAttempt(ctx, in.RunID, "retry")
 		if err != nil {
 			return nil, err
@@ -692,6 +704,9 @@ func (s *service) deployFanout(ctx context.Context, servers []*target.Server, a 
 // 探测通过 → success(message 含"健康检查通过");重试耗尽仍失败 → failed + 人读 message。
 // 执行错误**不上抛**:映射为 status=failed + 人读 message(绝无明文密钥)。
 func (s *service) deployOne(ctx context.Context, srv *target.Server, a run.Artifact, cfg map[string]string, hc *HealthCheck) TargetResult {
+	if LocalDockerEnabled(cfg) {
+		return s.deployLocalDockerOne(ctx, srv, a, cfg, hc)
+	}
 	// dist / jar / archive 走「发布目录 + current 软链原子切换 + 健康门控 + 失败回滚」零停机模式(Story 4.4)。
 	if releaseModeArtifact(a) {
 		return s.deployReleaseOne(ctx, srv, a, cfg, hc)

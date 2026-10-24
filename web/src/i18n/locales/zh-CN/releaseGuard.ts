@@ -1,4 +1,8 @@
-export default { collectLogs: '在本实例采集有界日志', collectLogsHint: '仅在本地采集观察窗内允许的短片段，不代表同意向模型分享。',
+export default {
+  localImageId: "本地 Docker Image ID",
+  localImagePending: "构建后、启动前固定 Image ID",
+  localImageScope: "仅校验此次目标主机上的镜像身份，不是仓库 digest，也不能证明其他主机具有相同来源。",
+ collectLogs: '在本实例采集有界日志', collectLogsHint: '仅在本地采集观察窗内允许的短片段，不代表同意向模型分享。',
   noBaseline: '无已核实的发布前基线。', verifiedBaseline: '发布前即时基线已核实。', reviewPrior: '人工核对范围内证据与此前部署。', sourceDiffMissing: '未采集源码差异。',
   attached: '随本次部署护航', attachedDescription: '审阅计划不会部署或采集远程数据。仍由原部署按钮执行发布并附加已审阅观察；发布前样本缺失不阻断部署。',
   usePlan: '使用此计划', attachedChanged: '部署设置已变化，请重新预览并审阅计划。', attachedReady: '计划已审阅，执行原部署操作时将附加本次观察。', attachedReviewRequired: '启用护航后，请先审阅未过期的计划再执行部署。',
@@ -43,5 +47,5 @@ export default { collectLogs: '在本实例采集有界日志', collectLogsHint:
   result: { passed: '基础运行检查通过', failed: '验证失败', insufficient: '证据不足', uncertain: '验证不确定', pending: '尚未形成结论', not_applicable: '不适用' },
   execution: { prepared: '已准备', queued: '排队中', binding: '正在绑定身份', observing: '观察中', stopping: '正在停止', completed: '已结束', stopped: '已停止', interrupted: '已中断', blocked: '受阻', tool_error: '采集异常', expired: '已过期', unknown: '状态未知' },
   attribution: { not_investigated: '尚未调查', candidate_relation: '候选关联', undetermined: '未定' },
-  conditions: { version: '镜像版本', image_identity: '镜像身份', identity: '容器身份', liveness: '采样存活', running: '运行状态', restarts: '重启次数', restart: '重启次数', oom: 'OOM 状态', docker_health: '已有 Docker 健康状态', health: '已有 Docker 健康状态', coverage: '采样覆盖' },
+  conditions: { deployment_completion: "部署最终结果", deployment_health_gate: "部署时健康门控", version: '镜像版本', image_identity: '镜像身份', identity: '容器身份', liveness: '采样存活', running: '运行状态', restarts: '重启次数', restart: '重启次数', oom: 'OOM 状态', docker_health: '已有 Docker 健康状态', health: '已有 Docker 健康状态', coverage: '采样覆盖' },
 }

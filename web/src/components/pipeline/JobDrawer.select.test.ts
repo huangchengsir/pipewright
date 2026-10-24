@@ -17,6 +17,26 @@ const job: PipelineJob = {
 }
 
 describe('JobDrawer deployment select', () => {
+  it('opts in to local Docker without silently replacing the original script', async () => {
+    const archiveJob = { ...job, config: { artifactType: 'archive', restartCommand: 'docker build . && docker run app', custom: 'keep' } }
+    const wrapper = mount(JobDrawer, { props: { job: archiveJob, stage } })
+    try {
+      expect(wrapper.find('[data-config-key="localDockerPrepareCommand"]').exists()).toBe(false)
+      wrapper.get('[data-config-key="localDocker"]').findComponent(AppSelect).vm.$emit('update:modelValue', 'true')
+      await wrapper.vm.$nextTick()
+      const config = (wrapper.emitted('update')!.at(-1)![0] as PipelineJob).config
+      expect(config.localDocker).toBe('true')
+      expect(config.restartCommand).toBe(archiveJob.config.restartCommand)
+      expect(config.custom).toBe('keep')
+      expect(wrapper.find('[data-config-key="localDockerPrepareCommand"]').exists()).toBe(true)
+      expect(wrapper.find('[data-config-key="containerName"]').exists()).toBe(true)
+      expect(wrapper.text()).toContain('手动移除原重启脚本')
+      wrapper.get('[data-config-key="artifactType"]').findComponent(AppSelect).vm.$emit('update:modelValue', 'image')
+      await wrapper.vm.$nextTick()
+      expect(wrapper.get('[data-config-key="localDocker"]').text()).toContain('仅支持归档或静态目录产物')
+      expect((wrapper.emitted('update')!.at(-1)![0] as PipelineJob).config.localDocker).toBe('true')
+    } finally { wrapper.unmount() }
+  })
   it('distinguishes default cache inheritance from explicit empty node paths', async () => {
     const scriptJob = { ...job, type: 'script', config: { image: 'node:20', commands: 'npm ci' } }
     const wrapper = mount(JobDrawer, { props: { job: scriptJob, stage } })

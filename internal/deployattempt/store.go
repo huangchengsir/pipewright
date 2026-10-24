@@ -22,8 +22,19 @@ func New(db *sql.DB) *Store { return &Store{db: db} }
 var fullID = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var digest = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 var fullSHA = regexp.MustCompile(`^[a-f0-9]{40}(?:[a-f0-9]{24})?$`)
+var imagePlatformPart = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,31}$`)
 
 func ValidContainerID(id string) bool { return fullID.MatchString(id) }
+
+// ValidLocalExpected distinguishes a newly captured pre-activation local
+// image identity from legacy config IDs and repository/manifest identities.
+// A container inspection must never be used to populate this expectation.
+func ValidLocalExpected(e ExpectedImage) bool {
+	return e.IdentitySource == IdentityScriptPreActivation && e.DigestKind == DigestConfig &&
+		digest.MatchString(e.Digest) && e.Reference == e.Digest && e.Repository == "" &&
+		imagePlatformPart.MatchString(e.Platform.OS) && imagePlatformPart.MatchString(e.Platform.Architecture) &&
+		(e.Platform.Variant == "" || imagePlatformPart.MatchString(e.Platform.Variant))
+}
 
 // WorkloadKey isolates projects, explicit environment (including empty), server
 // records, and declared container roles across changing runtime generations.
@@ -61,6 +72,9 @@ func (s *Store) Begin(ctx context.Context, in BeginInput) (*Attempt, error) {
 func validateExpected(e ExpectedImage) bool {
 	if !safe(e.Reference, 1024) || !safe(e.Repository, 512) || !safe(e.Platform.OS, 32) || !safe(e.Platform.Architecture, 32) || !safe(e.Platform.Variant, 32) {
 		return false
+	}
+	if e.IdentitySource != "" {
+		return ValidLocalExpected(e)
 	}
 	switch e.DigestKind {
 	case DigestUnavailable:

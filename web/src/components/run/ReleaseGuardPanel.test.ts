@@ -1,6 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ReleaseGuardPanel from './ReleaseGuardPanel.vue'
+import ReleaseGuardPlan from './ReleaseGuardPlan.vue'
 import { deploymentAttempt } from '../../test/releaseGuardFixtures'
 
 const api = vi.hoisted(() => ({ list: vi.fn(), push: vi.fn() }))
@@ -78,6 +79,20 @@ describe('release guard attempt panel', () => {
       .find((button) => button.text() === '从现在观察')!
     expect(button.attributes('disabled')).toBeDefined()
     expect(wrapper.text()).toContain('缺少可绑定实际容器')
+    wrapper.unmount()
+  })
+  it('offers from-now observation for a recorded local image but keeps legacy local images blocked', async () => {
+    const local = deploymentAttempt()
+    local.targets[0].expectedImage = { reference: '', repository: '', digest: `sha256:${'b'.repeat(64)}`, digestKind: 'config_id', identitySource: 'script_pre_activation' }
+    const legacy = deploymentAttempt({ id: 'legacy-local' })
+    legacy.targets[0].expectedImage = { ...local.targets[0].expectedImage, identitySource: undefined }
+    api.list.mockResolvedValue({ items: [local, legacy] })
+    const wrapper = mount(ReleaseGuardPanel, { ...options, global: { stubs: { ...options.global.stubs, ReleaseGuardPlan: true } } })
+    await flushPromises()
+    expect(wrapper.get('[data-attempt-id="attempt-1"] button').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-attempt-id="legacy-local"] button').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-attempt-id="attempt-1"] button').trigger('click')
+    expect(wrapper.findComponent(ReleaseGuardPlan).props('attemptId')).toBe(local.id)
     wrapper.unmount()
   })
   it('never puts an attempt into another environment by matching its run', async () => {

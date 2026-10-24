@@ -651,7 +651,7 @@ func (b *Builder) runDeployJobWithEnvironment(ctx context.Context, rep dagrun.St
 	// 镜像产物部署参数(#51)透传:deploy.DeployForStage 经这些键挑镜像产物并组装
 	// `docker run`(artifactType=image 选镜像;containerName/ports/runArgs 驱动容器名与端口/运行参数)。
 	// 各值原样搬运(deploy 层 array 化、绝不拼 shell,守 AC-SEC-02);空值不入 cfg 保持默认。
-	for _, k := range []string{"artifactType", "artifactSource", "containerName", "ports", "runArgs", "commandTimeoutSeconds", "connectTimeoutSeconds", "uploadIdleTimeoutSeconds", "uploadTimeoutSeconds"} {
+	for _, k := range []string{"artifactType", "artifactSource", "containerName", "ports", "runArgs", "commandTimeoutSeconds", "connectTimeoutSeconds", "uploadIdleTimeoutSeconds", "uploadTimeoutSeconds", "localDocker", "localDockerPrepareCommand", "localDockerBuildContext", "localDockerDockerfile", "localDockerBuildArgs", "localDockerRunArgs"} {
 		if v := cfgString(jb.Config, k); v != "" {
 			cfg[k] = v
 		}
@@ -663,6 +663,10 @@ func (b *Builder) runDeployJobWithEnvironment(ctx context.Context, rep dagrun.St
 		}
 	}
 	strategy := cfgString(jb.Config, "strategy")
+	if err := deploy.ValidateLocalDockerConfig(run.Artifact{Type: cfg["artifactType"]}, cfg, strategy); err != nil {
+		_ = rep.Log(ctx, streamStderr, "本地 Docker 部署配置无效，请检查产物类型、构建路径及脚本冲突")
+		return ErrBuildFailed
+	}
 	stratLabel := strategy
 	if stratLabel == "" {
 		stratLabel = "rolling(默认)"

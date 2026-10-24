@@ -45,6 +45,22 @@ func VersionMatch(t PlanTarget, v RuntimeSnapshot) string {
 	if v.Outcome != "ok" || !v.ImageAvailable || v.Truncated || !configDigest.MatchString(e.Digest) {
 		return "insufficient"
 	}
+	if e.DigestKind == deployattempt.DigestConfig {
+		if !deployattempt.ValidLocalExpected(e) || !configDigest.MatchString(v.ConfigID) ||
+			!platformPart.MatchString(v.Platform.OS) || !platformPart.MatchString(v.Platform.Architecture) || (v.Platform.Variant != "" && !platformPart.MatchString(v.Platform.Variant)) {
+			return "insufficient"
+		}
+		if e.Digest != v.ConfigID {
+			return "failed"
+		}
+		if e.Platform != v.Platform {
+			return "insufficient"
+		}
+		return "passed"
+	}
+	if e.IdentitySource != "" {
+		return "insufficient"
+	}
 	switch e.DigestKind {
 	case deployattempt.DigestManifest, deployattempt.DigestIndex, deployattempt.DigestRepositoryUnknown:
 	default:
@@ -181,10 +197,18 @@ func applySample(t *TargetObservation, v RuntimeSnapshot, evidenceID string, at 
 	}
 	matched := VersionMatch(t.PlanTarget, v)
 	if matched == "passed" {
-		condition(t, "version", "passed", "repository_digest_matched", evidenceID)
+		reason := "repository_digest_matched"
+		if t.ExpectedImage.DigestKind == deployattempt.DigestConfig {
+			reason = "local_config_id_matched"
+		}
+		condition(t, "version", "passed", reason, evidenceID)
 	}
 	if matched == "failed" && (t.ReadyAt != nil || !at.Before(t.Deadline)) {
-		condition(t, "version", "failed", "confirmed_previous_version", evidenceID)
+		reason := "confirmed_previous_version"
+		if t.ExpectedImage.DigestKind == deployattempt.DigestConfig {
+			reason = "confirmed_unexpected_local_image"
+		}
+		condition(t, "version", "failed", reason, evidenceID)
 	}
 	if t.ReadyAt == nil && v.Running && matched == "passed" && !at.After(t.Deadline) {
 		ready := at

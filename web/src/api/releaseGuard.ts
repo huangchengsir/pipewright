@@ -12,6 +12,7 @@ export interface GuardImage {
   repository: string
   digest: string
   digestKind: string
+  identitySource?: string
 }
 export interface GuardSummary {
   id: string
@@ -86,6 +87,7 @@ export interface GuardReport {
     serverId: string
     serverName: string
     containerId: string
+    expectedImage?: GuardImage
     verificationResult: VerificationResult
     coverage: {
       expectedSamples: number
@@ -355,13 +357,15 @@ export function guardIsActive(status: string): boolean {
   return activeStatuses.has(status)
 }
 export function attemptHasIdentity(attempt: DeploymentAttempt): boolean {
-  return attempt.targets.some((target) =>
-    target.receipts.some(
+  return attempt.targets.some((target) => {
+    if (target.expectedImage.digestKind === 'config_id' &&
+      (target.expectedImage.identitySource !== 'script_pre_activation' || !/^sha256:[a-f0-9]{64}$/i.test(target.expectedImage.digest))) return false
+    return target.receipts.some(
       (receipt) =>
         receipt.kind === 'activated' &&
         /^[a-f0-9]{64}$/i.test(receipt.actualImage?.containerId ?? ''),
-    ),
-  )
+    )
+  })
 }
 export function guardReportLocation(projectId: string, guardId: string) {
   return { name: 'release-guard-report', params: { projectId, guardId } }

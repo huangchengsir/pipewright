@@ -93,6 +93,24 @@ describe('release guard plan review', () => {
     expect(api.start).not.toHaveBeenCalled()
     wrapper.unmount()
   })
+  it('reviews a local build pending identity honestly while preserving the explicit attached confirmation', async () => {
+    const plan = guardPlan({ mode: 'attached', attemptId: '', artifactId: 'archive-1' })
+    plan.targets[0].containerId = ''
+    plan.targets[0].expectedImage = { reference: '', repository: '', digest: '', digestKind: 'config_id', identitySource: 'script_pre_activation' }
+    plan.targets[0].limitations = ['local_image_identity_pending_build']
+    api.preview.mockResolvedValue(plan)
+    const wrapper = mount(ReleaseGuardPlan, { props: { projectId: 'project-1', attachedInput: { runId: 'run-1', artifactId: 'archive-1', serverIds: ['server-1'], deployConfig: { localDocker: 'true', containerName: 'blogback' } } } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('本地 Docker Image ID')
+    expect(wrapper.text()).toContain('当前计划尚未含 Image ID')
+    expect(wrapper.text()).not.toContain('registry.test/app@')
+    const confirm = wrapper.findAll('button').find(button => button.text() === '使用此计划')!
+    expect(confirm.attributes('disabled')).toBeUndefined()
+    expect(api.start).not.toHaveBeenCalled()
+    await confirm.trigger('click')
+    expect(wrapper.emitted('prepared')).toHaveLength(1)
+    wrapper.unmount()
+  })
   it('keeps local log collection separate from model sharing and freezes an explicit opt-in', async () => {
     const wrapper = panel()
     await flushPromises()

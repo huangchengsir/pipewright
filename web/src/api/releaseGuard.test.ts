@@ -47,4 +47,14 @@ describe('release guard client boundaries', () => {
       { signal: controller.signal },
     )
   })
+  it('enables local receipts only with a full image identity frozen before activation', () => {
+    const attempt = deploymentAttempt()
+    attempt.targets[0].expectedImage = { reference: '', repository: '', digest: `sha256:${'b'.repeat(64)}`, digestKind: 'config_id', identitySource: 'script_pre_activation' }
+    expect(attemptHasIdentity(attempt)).toBe(true)
+    delete attempt.targets[0].expectedImage.identitySource
+    expect(attemptHasIdentity(attempt)).toBe(false)
+    attempt.targets[0].expectedImage.identitySource = 'script_pre_activation'
+    attempt.targets[0].expectedImage.digest = 'sha256:short'
+    expect(attemptHasIdentity(attempt)).toBe(false)
+  })
 })

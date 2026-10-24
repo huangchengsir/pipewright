@@ -102,6 +102,13 @@ func expectedImage(a run.Artifact, ref string) deployattempt.ExpectedImage {
 // as deployment, using local metadata only. It grants no inspection or execute
 // capability and does not mutate the artifact or configuration map.
 func ObservationImageTarget(a run.Artifact, cfg map[string]string) (string, deployattempt.ExpectedImage, error) {
+	if LocalDockerEnabled(cfg) {
+		c, err := parseLocalDocker(a, cfg, "")
+		if err != nil || !isStoredArtifact(a) || (artifactFormat(a) != "tar.gz" && artifactFormat(a) != "file") {
+			return "", deployattempt.ExpectedImage{}, ErrInvalidLocalDockerConfig
+		}
+		return c.name, deployattempt.ExpectedImage{DigestKind: deployattempt.DigestConfig, IdentitySource: deployattempt.IdentityScriptPreActivation}, nil
+	}
 	if a.Type != run.ArtifactImage {
 		return "", deployattempt.ExpectedImage{}, errors.New("deploy: image artifact required")
 	}
@@ -116,6 +123,10 @@ func ObservationImageTarget(a run.Artifact, cfg map[string]string) (string, depl
 }
 
 func (s *service) startImageReceipt(ctx context.Context, srv *target.Server, a run.Artifact, st *imageState) error {
+	return s.startImageReceiptWithExpected(ctx, srv, a, st, expectedImage(a, st.ref))
+}
+
+func (s *service) startImageReceiptWithExpected(ctx context.Context, srv *target.Server, a run.Artifact, st *imageState, expected deployattempt.ExpectedImage) error {
 	if s.attempts == nil {
 		return nil
 	}
@@ -138,7 +149,7 @@ func (s *service) startImageReceipt(ctx context.Context, srv *target.Server, a r
 			fingerprint = snap.Fingerprint()
 		}
 	}
-	t, err := s.attempts.StartTarget(ctx, attempt.ID, deployattempt.TargetInput{ArtifactID: a.ID, ArtifactName: a.Name, ServerID: srv.ID, ServerName: srv.Name, ContainerName: st.name, ConnectionFingerprint: fingerprint, ExpectedImage: expectedImage(a, st.ref)})
+	t, err := s.attempts.StartTarget(ctx, attempt.ID, deployattempt.TargetInput{ArtifactID: a.ID, ArtifactName: a.Name, ServerID: srv.ID, ServerName: srv.Name, ContainerName: st.name, ConnectionFingerprint: fingerprint, ExpectedImage: expected})
 	if err != nil {
 		return err
 	}

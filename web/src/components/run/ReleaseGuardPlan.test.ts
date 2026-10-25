@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ReleaseGuardPlan from './ReleaseGuardPlan.vue'
 import { guardPlan, guardReport } from '../../test/releaseGuardFixtures'
 import { HttpError } from '../../api/http'
+import { i18n, setLocale } from '../../i18n'
 
 const api = vi.hoisted(() => ({ preview: vi.fn(), start: vi.fn() }))
 vi.mock('../../api/releaseGuard', async (importOriginal) => ({
@@ -24,6 +25,7 @@ function startButton(wrapper: ReturnType<typeof panel>) {
 describe('release guard plan review', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    setLocale('zh-CN')
     api.preview.mockImplementation((_project, input) =>
       Promise.resolve(
         guardPlan({
@@ -33,6 +35,25 @@ describe('release guard plan review', () => {
       ),
     )
     api.start.mockResolvedValue(guardReport())
+  })
+  afterEach(() => setLocale('zh-CN'))
+  it('retranslates a retained plan error without preparing or starting again', async () => {
+    api.preview.mockRejectedValueOnce(new HttpError(500, null, 'unavailable'))
+    const wrapper = panel()
+    await flushPromises()
+    const chinese = wrapper.get('.guard-error').text()
+    setLocale('de')
+    await flushPromises()
+    expect(wrapper.get('.guard-error').text()).toBe(
+      i18n.global.t('releaseGuard.requestFailed'),
+    )
+    expect(wrapper.get('.guard-error').text()).not.toBe(chinese)
+    expect((wrapper.get('select').element as HTMLSelectElement).value).toBe(
+      '600',
+    )
+    expect(api.preview).toHaveBeenCalledTimes(1)
+    expect(api.start).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
   it('previews metadata only, discloses gaps, and starts only after explicit confirmation', async () => {
     const wrapper = panel()
@@ -94,17 +115,39 @@ describe('release guard plan review', () => {
     wrapper.unmount()
   })
   it('reviews a local build pending identity honestly while preserving the explicit attached confirmation', async () => {
-    const plan = guardPlan({ mode: 'attached', attemptId: '', artifactId: 'archive-1' })
+    const plan = guardPlan({
+      mode: 'attached',
+      attemptId: '',
+      artifactId: 'archive-1',
+    })
     plan.targets[0].containerId = ''
-    plan.targets[0].expectedImage = { reference: '', repository: '', digest: '', digestKind: 'config_id', identitySource: 'script_pre_activation' }
+    plan.targets[0].expectedImage = {
+      reference: '',
+      repository: '',
+      digest: '',
+      digestKind: 'config_id',
+      identitySource: 'script_pre_activation',
+    }
     plan.targets[0].limitations = ['local_image_identity_pending_build']
     api.preview.mockResolvedValue(plan)
-    const wrapper = mount(ReleaseGuardPlan, { props: { projectId: 'project-1', attachedInput: { runId: 'run-1', artifactId: 'archive-1', serverIds: ['server-1'], deployConfig: { localDocker: 'true', containerName: 'blogback' } } } })
+    const wrapper = mount(ReleaseGuardPlan, {
+      props: {
+        projectId: 'project-1',
+        attachedInput: {
+          runId: 'run-1',
+          artifactId: 'archive-1',
+          serverIds: ['server-1'],
+          deployConfig: { localDocker: 'true', containerName: 'blogback' },
+        },
+      },
+    })
     await flushPromises()
     expect(wrapper.text()).toContain('本地 Docker Image ID')
     expect(wrapper.text()).toContain('当前计划尚未含 Image ID')
     expect(wrapper.text()).not.toContain('registry.test/app@')
-    const confirm = wrapper.findAll('button').find(button => button.text() === '使用此计划')!
+    const confirm = wrapper
+      .findAll('button')
+      .find((button) => button.text() === '使用此计划')!
     expect(confirm.attributes('disabled')).toBeUndefined()
     expect(api.start).not.toHaveBeenCalled()
     await confirm.trigger('click')

@@ -104,10 +104,19 @@ const settingsItem: NavItem = {
 }
 
 function isActive(item: NavItem): boolean {
+  const section = route.meta.navSection
+  if (typeof section === 'string' && [...navItems, settingsItem].some((entry) => entry.name === section)) {
+    return item.name === section
+  }
   if (item.name === 'overview') {
     return route.name === 'overview'
   }
   return route.path.startsWith(item.to)
+}
+function isCurrent(item: NavItem): boolean {
+  return isActive(item) && ![...navItems, settingsItem].some((candidate) =>
+    candidate.to.length > item.to.length && isActive(candidate),
+  )
 }
 
 // 侧栏展开/收起:固定按钮切换,状态持久化到 localStorage(刷新/重开保持)。
@@ -139,7 +148,7 @@ function toggleExpanded(): void {
             class="nav-item"
             :class="{ 'nav-item--active': isActive(item) }"
             :aria-label="t(item.ariaKey)"
-            :aria-current="isActive(item) ? 'page' : undefined"
+            :aria-current="isCurrent(item) ? 'page' : undefined"
           >
             <n-icon class="nav-icon" :component="item.icon" :size="20" />
             <span class="nav-label">{{ t(item.labelKey) }}</span>
@@ -156,7 +165,7 @@ function toggleExpanded(): void {
         class="nav-item"
         :class="{ 'nav-item--active': isActive(settingsItem) }"
         :aria-label="t(settingsItem.ariaKey)"
-        :aria-current="isActive(settingsItem) ? 'page' : undefined"
+        :aria-current="isCurrent(settingsItem) ? 'page' : undefined"
       >
         <n-icon class="nav-icon" :component="settingsItem.icon" :size="20" />
         <span class="nav-label">{{ t(settingsItem.labelKey) }}</span>
@@ -465,5 +474,6 @@ function toggleExpanded(): void {
 }
 @media (max-width: 900px) {
   .main-inner:has(.pipeline-root) { padding-left: 12px; padding-right: 12px; }
+  .main-inner:has(.guard-report) { padding-left: 12px; padding-right: 12px; }
 }
 </style>

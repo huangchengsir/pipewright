@@ -4,6 +4,7 @@ import english from './locales/en/releaseGuard'
 import englishFacts from './locales/en/releaseGuardFacts'
 import englishAnalysis from './locales/en/releaseGuardAnalysis'
 import englishInvestigation from './locales/en/releaseGuardInvestigation'
+import englishPresentation from './locales/en/releaseGuardPresentation'
 
 const modules = import.meta.glob<{ default: Record<string, unknown> }>(
   './locales/*/releaseGuard.ts',
@@ -20,6 +21,9 @@ const analysisModules = import.meta.glob<{ default: Record<string, unknown> }>(
 const investigationModules = import.meta.glob<{
   default: Record<string, unknown>
 }>('./locales/*/releaseGuardInvestigation.ts', { eager: true })
+const presentationModules = import.meta.glob<{
+  default: Record<string, unknown>
+}>('./locales/*/releaseGuardPresentation.ts', { eager: true })
 function leaves(value: unknown, prefix = ''): Array<[string, string]> {
   return typeof value === 'string'
     ? [[prefix, value]]
@@ -28,12 +32,34 @@ function leaves(value: unknown, prefix = ''): Array<[string, string]> {
       )
 }
 describe('release guard locales', () => {
+  it('describes source and deployment provenance without mislabeling it as a missing container', () => {
+    for (const key of [
+      'resolvedSourceUnavailable',
+      'sourceRunUnavailable',
+      'sourceRevisionConflict',
+      'sourceRevisionNotConfirmed',
+      'currentDeploymentIdentityUnavailable',
+      'deploymentHistoryUnavailable',
+    ] as const) {
+      const text = englishPresentation.reasons[key]
+      expect(text).toMatch(/source|commit|deployment/i)
+      expect(text).not.toMatch(/container/i)
+      for (const [locale, messages] of Object.entries(presentationModules)) {
+        const reasons = messages.default.reasons as Record<string, unknown>
+        expect(typeof reasons[key], `${locale}:${key}`).toBe('string')
+        expect(String(reasons[key]).length, `${locale}:${key}`).toBeGreaterThan(
+          0,
+        )
+      }
+    }
+  })
   it('provides matching, compilable local messages in all eight supported languages', () => {
     for (const [group, reference] of [
       [modules, english],
       [factModules, englishFacts],
       [analysisModules, englishAnalysis],
       [investigationModules, englishInvestigation],
+      [presentationModules, englishPresentation],
     ] as const) {
       const keys = leaves(reference)
         .map(([key]) => key)

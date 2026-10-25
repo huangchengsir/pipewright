@@ -7,10 +7,17 @@ import {
   investigateReleaseGuard,
   type GuardReport,
 } from '../../api/releaseGuard'
-import { releaseGuardText } from '../../utils/releaseGuardText'
+import {
+  guardDate,
+  guardNumber,
+  guardPresentationText,
+} from '../../utils/guardEvidencePresentation'
 
 const props = defineProps<{ report: GuardReport }>()
-const emit = defineEmits<{ updated: [report: GuardReport] }>()
+const emit = defineEmits<{
+  updated: [report: GuardReport]
+  locateEvidence: [id: string]
+}>()
 const { t, locale } = useI18n()
 const busy = ref(false)
 const error = ref('')
@@ -18,12 +25,10 @@ let generation = 0
 let alive = true
 let controller: AbortController | undefined
 function fact(value: string): string {
-  return releaseGuardText(value, (key) => t(key))
+  return guardPresentationText(value, t)
 }
 function when(value?: string): string {
-  return value
-    ? new Date(value).toLocaleString(locale.value)
-    : t('releaseGuard.notProvided')
+  return guardDate(value, locale.value, t)
 }
 async function update(): Promise<void> {
   if (busy.value || props.report.evidenceExpired) return
@@ -41,28 +46,30 @@ async function update(): Promise<void> {
     if (!alive || ticket !== generation || request.signal.aborted) return
     if (report.id !== id || report.projectId !== projectId)
       throw new Error('Mismatched report identity')
+    if (
+      !Number.isSafeInteger(report.eventsCursor) ||
+      report.eventsCursor < props.report.eventsCursor
+    ) {
+      error.value = 'releaseGuardInvestigation.changed'
+      return
+    }
     emit('updated', report)
   } catch (cause) {
     if (!alive || ticket !== generation || request.signal.aborted) return
     error.value =
       cause instanceof HttpError && cause.status === 409
-        ? t('releaseGuardInvestigation.changed')
-        : cause instanceof HttpError
-          ? (cause.apiError?.message ?? t('releaseGuard.requestFailed'))
-          : t('releaseGuard.requestFailed')
+        ? 'releaseGuardInvestigation.changed'
+        : 'releaseGuard.requestFailed'
   } finally {
     if (alive && ticket === generation) busy.value = false
   }
 }
-watch(
-  () => [props.report.id, props.report.projectId],
-  () => {
-    generation++
-    controller?.abort()
-    busy.value = false
-    error.value = ''
-  },
-)
+watch([() => props.report.id, () => props.report.projectId], () => {
+  generation++
+  controller?.abort()
+  busy.value = false
+  error.value = ''
+})
 onBeforeUnmount(() => {
   alive = false
   generation++
@@ -82,7 +89,7 @@ onBeforeUnmount(() => {
       >
     </div>
     <p v-if="error" class="guard-investigation-error" role="alert">
-      {{ error }}
+      {{ t(error) }}
     </p>
     <p
       v-if="report.investigation.status === 'stale'"
@@ -110,17 +117,27 @@ onBeforeUnmount(() => {
       >
         <strong>{{
           report.targets.find((target) => target.id === baseline.targetId)
-            ?.serverName || baseline.targetId
+            ?.serverName || t('releaseGuardPresentation.unknownTarget')
         }}</strong>
         <p>{{ fact(baseline.status) }}</p>
         <p v-if="baseline.evidenceId">
-          <code>{{ baseline.evidenceId }}</code>
+          <a
+            href="#guard-evidence-section"
+            @click.prevent="emit('locateEvidence', baseline.evidenceId)"
+            >{{
+              t('releaseGuardPresentation.evidenceReference', {
+                n: guardNumber(1, locale),
+              })
+            }}</a
+          >
         </p>
         <p v-if="baseline.priorAttemptId">
           {{ t('releaseGuard.attempt') }}
           <code>{{ baseline.priorAttemptId }}</code> ·
           {{
-            t('releaseGuardInvestigation.age', { seconds: baseline.ageSeconds })
+            t('releaseGuardInvestigation.age', {
+              seconds: guardNumber(baseline.ageSeconds, locale),
+            })
           }}
         </p>
         <RouterLink
@@ -137,7 +154,7 @@ onBeforeUnmount(() => {
             <code>{{ candidate.attemptId }}</code> ·
             {{
               t('releaseGuardInvestigation.age', {
-                seconds: candidate.ageSeconds,
+                seconds: guardNumber(candidate.ageSeconds, locale),
               })
             }}
             <RouterLink
@@ -164,7 +181,7 @@ onBeforeUnmount(() => {
       >
         <strong>{{
           report.targets.find((target) => target.id === comparison.targetId)
-            ?.serverName || comparison.targetId
+            ?.serverName || t('releaseGuardPresentation.unknownTarget')
         }}</strong>
         <p v-if="comparison.available">
           <code>{{ comparison.baseSha }}</code> →
@@ -176,7 +193,12 @@ onBeforeUnmount(() => {
         <p v-if="comparison.reason">{{ fact(comparison.reason) }}</p>
         <ul v-if="comparison.available">
           <li v-for="file in comparison.files" :key="file.path">
-            <code>{{ file.path }}</code> · {{ file.status }}
+            <code>{{ file.path }}</code> ·
+            {{
+              t(
+                `releaseGuardPresentation.fileStatus.${['added', 'modified', 'deleted', 'renamed', 'copied'].includes(file.status) ? file.status : 'unknown'}`,
+              )
+            }}
           </li>
         </ul>
         <p v-if="comparison.truncated" class="guard-investigation-muted">

@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppButton from '../ui/AppButton.vue'
+import { guardDate, guardNumber } from '../../utils/guardEvidencePresentation'
 import { HttpError } from '../../api/http'
 import {
   listGuardAnalyses,
@@ -13,6 +14,7 @@ import {
 } from '../../api/releaseGuard'
 
 const props = defineProps<{ report: GuardReport }>()
+const emit = defineEmits<{ locateEvidence: [id: string] }>()
 const { t, locale } = useI18n()
 const includeRuntime = ref(false)
 const includeLogs = ref(false)
@@ -59,7 +61,7 @@ const snapshotTargets = computed(() => {
         .map(
           (id) =>
             props.report.targets.find((target) => target.id === id)
-              ?.serverName ?? id,
+              ?.serverName ?? t('releaseGuardPresentation.unknownTarget'),
         )
         .join(', ') || t('releaseGuard.notProvided')
     )
@@ -106,7 +108,7 @@ const canSend = computed(() => {
   )
 })
 function when(value: string): string {
-  return new Date(value).toLocaleString(locale.value)
+  return guardDate(value, locale.value, t)
 }
 function state(value: string): string {
   return t(
@@ -123,10 +125,7 @@ function reason(value: string): string {
     value === 'unknown'
   )
     return t('releaseGuardAnalysis.unknown')
-  return value
-}
-function evidenceLink(value: string): string {
-  return `#guard-evidence-${encodeURIComponent(value)}`
+  return t('releaseGuardPresentation.unconfirmed')
 }
 function save(item: GuardAnalysis): void {
   if (item.guardId !== props.report.id)
@@ -158,7 +157,7 @@ async function revoke(): Promise<void> {
       save(response)
   } catch (cause) {
     if (alive && ticket === generation && !request.signal.aborted)
-      error.value = t('releaseGuard.requestFailed')
+      error.value = 'releaseGuard.requestFailed'
   } finally {
     if (alive && ticket === generation) revoking.value = false
   }
@@ -196,10 +195,7 @@ async function load(): Promise<void> {
       readTicket === readGeneration &&
       !request.signal.aborted
     )
-      error.value =
-        cause instanceof HttpError
-          ? (cause.apiError?.message ?? t('releaseGuard.requestFailed'))
-          : t('releaseGuard.requestFailed')
+      error.value = 'releaseGuard.requestFailed'
   } finally {
     if (alive && ticket === generation && readTicket === readGeneration)
       loading.value = false
@@ -261,18 +257,14 @@ async function perform(action: 'preview' | 'send'): Promise<void> {
         cause.status >= 500)
     ) {
       if (snapshot) save({ ...snapshot, status: 'unknown', reason: 'unknown' })
-      error.value = t('releaseGuardAnalysis.unknown')
+      error.value = 'releaseGuardAnalysis.unknown'
     } else if (cause instanceof HttpError && cause.status === 409) {
       if (snapshot && action === 'send') save({ ...snapshot, stale: true })
-      error.value = t('releaseGuardAnalysis.changed')
+      error.value = 'releaseGuardAnalysis.changed'
     } else if (cause instanceof HttpError && cause.status === 503) {
       missingProvider.value = true
-      error.value = t('releaseGuardAnalysis.noProvider')
-    } else
-      error.value =
-        cause instanceof HttpError
-          ? (cause.apiError?.message ?? t('releaseGuard.requestFailed'))
-          : t('releaseGuard.requestFailed')
+      error.value = 'releaseGuardAnalysis.noProvider'
+    } else error.value = 'releaseGuard.requestFailed'
   } finally {
     if (alive && ticket === generation) busy.value = false
   }
@@ -284,7 +276,7 @@ watch([includeRuntime, includeLogs], () => {
   confirmed.value = false
 })
 watch(
-  () => [props.report.id, props.report.projectId],
+  [() => props.report.id, () => props.report.projectId],
   () => {
     generation++
     readGeneration++
@@ -345,7 +337,7 @@ onBeforeUnmount(() => {
     <header>
       <div>
         <h3>{{ t('releaseGuardAnalysis.title') }}</h3>
-        <p>{{ t('releaseGuardAnalysis.optional') }}</p>
+        <p>{{ t('releaseGuardPresentation.snapshotScope') }}</p>
       </div>
       <AppButton :disabled="busy" :loading="loading" @click="load">{{
         t('common.refresh')
@@ -379,7 +371,7 @@ onBeforeUnmount(() => {
     <p v-if="unresolved" class="guard-analysis-notice">
       {{ t('releaseGuardAnalysis.unknown') }}
     </p>
-    <p v-if="error" class="guard-analysis-error" role="alert">{{ error }}</p>
+    <p v-if="error" class="guard-analysis-error" role="alert">{{ t(error) }}</p>
     <RouterLink v-if="missingProvider" :to="{ name: 'settings-ai' }">{{
       t('releaseGuardAnalysis.openSettings')
     }}</RouterLink>
@@ -415,9 +407,7 @@ onBeforeUnmount(() => {
               ? t('releaseGuardAnalysis.runtime')
               : ''
           }}
-          {{
-            selected.input.includeLogs ? t('releaseGuardAnalysis.logs') : ''
-          }}
+          {{ selected.input.includeLogs ? t('releaseGuardAnalysis.logs') : '' }}
           · {{ snapshotTargets }}
         </dd>
         <dt>{{ t('releaseGuard.observationWindow') }}</dt>
@@ -490,10 +480,22 @@ onBeforeUnmount(() => {
               t('releaseGuard.notProvided')
             }}</span
             ><a
-              v-for="id in candidate.supportingEvidenceIds"
+              v-for="(id, index) in candidate.supportingEvidenceIds"
               :key="id"
-              :href="evidenceLink(id)"
-              >{{ id }}
+              href="#guard-evidence-section"
+              :aria-label="
+                t('releaseGuardPresentation.citationLabel', {
+                  candidate: candidate.title,
+                  context: t('releaseGuard.supportingEvidence'),
+                  n: guardNumber(index + 1, locale),
+                })
+              "
+              @click.prevent="emit('locateEvidence', id)"
+              >{{
+                t('releaseGuardPresentation.evidenceReference', {
+                  n: guardNumber(index + 1, locale),
+                })
+              }}
             </a>
           </p>
           <p>
@@ -502,10 +504,22 @@ onBeforeUnmount(() => {
               t('releaseGuard.notProvided')
             }}</span
             ><a
-              v-for="id in candidate.counterEvidenceIds"
+              v-for="(id, index) in candidate.counterEvidenceIds"
               :key="id"
-              :href="evidenceLink(id)"
-              >{{ id }}
+              href="#guard-evidence-section"
+              :aria-label="
+                t('releaseGuardPresentation.citationLabel', {
+                  candidate: candidate.title,
+                  context: t('releaseGuard.counterEvidence'),
+                  n: guardNumber(index + 1, locale),
+                })
+              "
+              @click.prevent="emit('locateEvidence', id)"
+              >{{
+                t('releaseGuardPresentation.evidenceReference', {
+                  n: guardNumber(index + 1, locale),
+                })
+              }}
             </a>
           </p>
           <ul>
@@ -518,15 +532,16 @@ onBeforeUnmount(() => {
           </p>
         </article>
       </section>
+      <details>
+        <summary>{{ t('releaseGuardPresentation.technicalDetails') }}</summary>
+        <pre>{{ JSON.stringify(selected, null, 2) }}</pre>
+      </details>
     </article>
   </section>
 </template>
 
 <style scoped>
 .guard-analysis {
-  border-top: 1px solid var(--color-border);
-  margin-top: 24px;
-  padding-top: 24px;
   display: grid;
   gap: 14px;
 }
@@ -659,6 +674,9 @@ ul {
 }
 a {
   color: var(--color-primary);
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
 }
 @media (min-width: 700px) {
   dl {
@@ -666,6 +684,34 @@ a {
   }
   dd {
     margin: 0;
+  }
+}
+@media (max-width: 900px) {
+  header {
+    flex-wrap: wrap;
+  }
+  header > div {
+    min-width: 0;
+  }
+  .guard-analysis-scope {
+    display: grid;
+    gap: 8px;
+  }
+  label {
+    min-height: 44px;
+    align-items: flex-start;
+    padding-block: 10px;
+    line-height: 1.6;
+  }
+  label input {
+    margin-top: 3px;
+  }
+  .guard-analysis-snapshot {
+    padding: 12px;
+  }
+  .guard-analysis :deep(.app-btn) {
+    max-width: 100%;
+    word-break: keep-all;
   }
 }
 </style>

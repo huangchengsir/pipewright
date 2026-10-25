@@ -3,7 +3,7 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import type { GuardImage } from "../../api/releaseGuard";
 
-const props = defineProps<{ image: GuardImage }>();
+const props = defineProps<{ image: GuardImage; compact?: boolean }>();
 const { t } = useI18n();
 const local = computed(() => props.image.digestKind === "config_id");
 const value = computed(() => {
@@ -22,7 +22,11 @@ const value = computed(() => {
     <span v-if="local" class="guard-image-identity__kind">{{
       t("releaseGuard.localImageId")
     }}</span>
-    <code v-if="value">{{ value }}</code>
+    <details v-if="value && local && compact">
+      <summary>{{ t("releaseGuardPresentation.technicalDetails") }}</summary>
+      <code>{{ value }}</code>
+    </details>
+    <code v-else-if="value">{{ value }}</code>
     <span v-else>{{
       local
         ? t("releaseGuard.localImagePending")
@@ -51,5 +55,22 @@ const value = computed(() => {
   color: var(--color-dim);
   font-size: 0.75rem;
   line-height: 1.5;
+}
+summary {
+  cursor: pointer;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  color: var(--color-primary);
+  font-size: 0.8rem;
+}
+summary:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+@media (max-width: 900px) {
+  summary {
+    min-height: 44px;
+  }
 }
 </style>

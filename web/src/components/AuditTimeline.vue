@@ -41,6 +41,10 @@ const ACTION_META: Record<string, ActionMeta> = {
   project_update: { dot: 'cfg', verb: 'verbUpdate', noun: 'nounProject' },
   project_delete: { dot: 'del', verb: 'verbDelete', noun: 'nounProject' },
   run_trigger_manual: { dot: 'use', verb: 'verbTrigger', noun: 'nounRun' },
+  'oauth_credential.authorize': { dot: 'cfg', verb: 'verbAuthorizeOAuth', noun: 'nounOAuthCredential' },
+  'oauth_credential.reconnect': { dot: 'cfg', verb: 'verbReconnectOAuth', noun: 'nounOAuthCredential' },
+  selfupdate_submit: { dot: 'cfg', verb: 'verbSubmitUpgrade', noun: 'nounUpgrade' },
+  selfupdate_resume: { dot: 'cfg', verb: 'verbResumeUpgrade', noun: 'nounUpgrade' },
 }
 
 // Returns the dot category plus localized verb/noun for an action. Unknown
@@ -55,6 +59,23 @@ function meta(action: string): ActionMeta {
 // branch (for runs), else the target id. detail is already masked server-side.
 function objectLabel(e: AuditEntry): string {
   const d = e.detail ?? {}
+  if (e.action === 'oauth_credential.authorize' || e.action === 'oauth_credential.reconnect') {
+    switch (d['provider']) {
+      case 'gitee': return 'Gitee'
+      case 'github': return 'GitHub'
+      case 'gitlab': return 'GitLab'
+      case 'gitea': return 'Gitea'
+      case 'custom': return t('settingsVault.providerCustom')
+      default: return e.targetId || '—'
+    }
+  }
+  if (e.action === 'selfupdate_submit' || e.action === 'selfupdate_resume') {
+    const target = d['target']
+    // Match the updater's accepted version-tag format; other details retain
+    // the existing target-id fallback rather than becoming display text.
+    if (typeof target === 'string' && target.length <= 128 && target.trim() === target && /^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$/.test(target)) return target
+    return e.targetId || '—'
+  }
   const name = d['name']
   if (typeof name === 'string' && name) return name
   const branch = d['branch']

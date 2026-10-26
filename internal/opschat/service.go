@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/maintenance"
 	"strings"
 	"sync"
 	"time"
@@ -322,6 +323,11 @@ func (s *Service) Submit(ctx context.Context, id string, in TurnInput) (*Run, er
 	return s.enqueue(ctx, id, in.ClientRequestID, hash, runBody{Turn: in, Targets: snapshots, Provider: provider, AnalysisAuthorized: in.AnalyzeResults, Question: in.Text}, in.Revision)
 }
 func (s *Service) enqueue(ctx context.Context, id, request, hash string, body runBody, revision int64) (*Run, error) {
+	release, admissionErr := maintenance.Enter(ctx, s.db, "ops_submit")
+	if admissionErr != nil {
+		return nil, admissionErr
+	}
+	defer release()
 	for _, snap := range body.Targets {
 		encoded, e := json.Marshal(snap)
 		if e != nil || len(encoded) > 8<<10 {

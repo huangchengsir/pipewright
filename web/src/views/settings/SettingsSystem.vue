@@ -10,13 +10,14 @@
 
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { getVersion, checkUpdate, applyUpdate } from '../../api/version'
+import { getVersion, checkUpdate } from '../../api/version'
 import type { VersionInfo, UpdateInfo } from '../../api/version'
 import { getRetentionConfig, setRetentionConfig, type RetentionConfig } from '../../api/retention'
 import { HttpError } from '../../api/http'
 import AppButton from '../../components/ui/AppButton.vue'
+import { useSelfUpdate } from '../../composables/useSelfUpdate'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 const version = ref<VersionInfo | null>(null)
 const versionError = ref('')
@@ -27,12 +28,25 @@ const update = ref<UpdateInfo | null>(null)
 const checkError = ref('')
 const showNotes = ref(false)
 
-// 一键自动更新状态机。
-type UpdatePhase = 'idle' | 'applying' | 'restarting' | 'manual' | 'error'
-const updatePhase = ref<UpdatePhase>('idle')
-const updateMsg = ref('')
-const dockerCommand = ref('')
+
+const { task, pending, connectionUnknown: taskUnknown, submitting, submissionError, canRecoverOriginal, recoverOriginal, manual, busy: taskBusy, canStart, start: startTask, resume: resumeTask, recheck: recheckTask } = useSelfUpdate()
+const updatePhase = computed<'idle' | 'applying' | 'restarting' | 'manual' | 'error'>(() => manual.value ? 'manual' : task.value?.state === 'restarting' ? 'restarting' : taskBusy.value ? 'applying' : 'idle')
+const updateMsg = computed(() => t('settingsSystem.manualUpgrade'))
+const dockerCommand = computed(() => manual.value?.command || '')
+const taskSubmitError = computed(() => submissionError.value ? submissionError.value.status ? t('settingsSystem.errUpdateStatus', { status: submissionError.value.status }) : t('settingsSystem.errUpdateRetry') : '')
 const copied = ref(false)
+const taskMessage = computed(() => {
+ const state = task.value?.state
+ if (task.value?.reason === 'installation_target_changed') return t('settingsSystem.taskTargetChanged')
+ if (task.value?.reason === 'readiness_unavailable') return t('settingsSystem.taskReadinessUnavailable')
+ if (state === 'ready_blocked') return t('settingsSystem.taskBlocked')
+ if (state === 'interrupted') return t('settingsSystem.taskInterrupted')
+ if (state === 'unknown' || state === 'restart_required') return t('settingsSystem.taskNoReplay')
+ if (state === 'failed') return t('settingsSystem.taskVerificationFailed')
+ return ''
+})
+function formatNumber(value: number) { return new Intl.NumberFormat(locale.value).format(value) }
+function reloadApplication() { window.location.reload() }
 
 const isDev = computed(() => {
   const v = version.value?.version ?? ''
@@ -69,7 +83,7 @@ function fmtDate(s: string): string {
   if (!s || s === 'unknown') return s
   const d = new Date(s)
   if (Number.isNaN(d.getTime())) return s
-  return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleString(locale.value, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
 async function loadVersion(): Promise<void> {
@@ -100,64 +114,9 @@ async function runCheck(): Promise<void> {
   }
 }
 
-// 一键自动更新:
-//  - binary 模式:后端下载+替换二进制后自重启 → 前端进入"重启中"并轮询 /version,
-//    版本变化即整页 reload 到新版。
-//  - docker 模式:后端返回升级命令,前端展示 + 复制(容器不能自换镜像)。
 async function runUpdate(): Promise<void> {
-  const from = update.value?.current ?? version.value?.version ?? ''
-  updatePhase.value = 'applying'
-  updateMsg.value = ''
-  dockerCommand.value = ''
-  try {
-    const res = await applyUpdate()
-    if (res.status === 'restarting') {
-      updatePhase.value = 'restarting'
-      updateMsg.value = res.message || t('settingsSystem.restartingToNew')
-      pollUntilRestarted(from)
-    } else if (res.status === 'manual' && res.mode === 'docker') {
-      updatePhase.value = 'manual'
-      dockerCommand.value = res.command ?? ''
-      updateMsg.value = res.message || ''
-    } else if (res.status === 'manual') {
-      updatePhase.value = 'manual'
-      updateMsg.value = res.message || t('settingsSystem.manualUpgrade')
-    } else if (res.status === 'uptodate') {
-      updatePhase.value = 'idle'
-      void runCheck()
-    } else {
-      updatePhase.value = 'error'
-      updateMsg.value = res.message || t('settingsSystem.updateFailed')
-    }
-  } catch (err) {
-    updatePhase.value = 'error'
-    updateMsg.value =
-      err instanceof HttpError ? (err.apiError?.message ?? t('settingsSystem.errUpdateStatus', { status: err.status })) : t('settingsSystem.errUpdateRetry')
-  }
-}
-
-// 轮询 /version,直到版本号与旧版不同(新进程已起),然后整页刷新加载新版前端。
-function pollUntilRestarted(from: string): void {
-  let tries = 0
-  const timer = window.setInterval(async () => {
-    tries++
-    try {
-      const v = await getVersion()
-      if (v.version && v.version !== from) {
-        window.clearInterval(timer)
-        window.location.reload()
-        return
-      }
-    } catch {
-      // 重启窗口内连接会短暂失败,忽略重试。
-    }
-    if (tries > 40) {
-      // ~60s 仍未起来:停止轮询,提示手动刷新(更新已就位,可能需手动重启)。
-      window.clearInterval(timer)
-      updatePhase.value = 'error'
-      updateMsg.value = t('settingsSystem.restartTimeout')
-    }
-  }, 1500)
+ if (pending.value) { await startTask(pending.value.target); return }
+ if (update.value?.latest && canStart.value) await startTask(update.value.latest)
 }
 
 async function copyCommand(): Promise<void> {
@@ -265,6 +224,35 @@ onMounted(() => {
       </dl>
     </article>
 
+    <article v-if="task || taskUnknown || pending || taskSubmitError" class="sys-panel" aria-labelledby="upgrade-task-title" data-testid="upgrade-task">
+      <h3 id="upgrade-task-title" class="sys-title">{{ t('settingsSystem.taskTitle') }}</h3>
+      <p v-if="taskSubmitError" class="sys-inline-err" role="alert">{{ taskSubmitError }}</p>
+      <p v-if="taskUnknown" role="status">{{ t('settingsSystem.taskConnectionUnknown') }}</p>
+      <template v-if="task">
+        <p role="status"><strong>{{ t('settingsSystem.taskStates.' + task.state) }}</strong> · {{ task.from }} → {{ task.target }}</p>
+        <p v-if="taskMessage">{{ taskMessage }}</p>
+        <template v-if="task.state === 'downloading' || task.bytes > 0">
+          <progress v-if="task.total > 0" :value="task.bytes" :max="task.total" :aria-label="t('settingsSystem.taskDownloadProgress')" />
+          <p>{{ t('settingsSystem.taskProgress', { downloaded: formatNumber(task.bytes), total: task.total > 0 ? formatNumber(task.total) : t('settingsSystem.taskSizeUnknown') }) }}</p>
+        </template>
+        <ul v-if="task.blockers?.length">
+          <li v-for="blocker in task.blockers" :key="blocker.kind">{{ t('settingsSystem.taskBlockers.' + blocker.kind, { count: formatNumber(blocker.count) }) }}</li>
+        </ul>
+        <p v-if="task.state === 'ready_blocked'">{{ t('settingsSystem.taskWorkPreserved') }}</p>
+        <div class="sys-upgrade-actions">
+          <AppButton v-if="(task.state === 'interrupted' || task.state === 'ready_blocked') && !canRecoverOriginal" :loading="taskBusy" :disabled="taskBusy" @click="resumeTask">{{ t(task.state === 'ready_blocked' ? 'settingsSystem.taskContinue' : 'settingsSystem.taskResume') }}</AppButton>
+          <AppButton v-if="task.state === 'completed'" @click="reloadApplication">{{ t('settingsSystem.taskReload') }}</AppButton>
+        </div>
+        <details><summary>{{ t('settingsSystem.taskDetails') }}</summary><p>{{ task.id }} · {{ task.repository }} · {{ task.platform }}</p><p class="sys-notes">{{ task.asset }}
+{{ task.sha256 }}</p><p>{{ fmtDate(task.updatedAt) }}</p></details>
+      </template>
+      <div class="sys-upgrade-actions">
+        <AppButton variant="ghost" @click="recheckTask">{{ t('settingsSystem.taskRecheck') }}</AppButton>
+        <AppButton v-if="canRecoverOriginal" :loading="submitting" :disabled="submitting" @click="recoverOriginal">{{ t('settingsSystem.taskOriginalRequest') }}</AppButton>
+      </div>
+    </article>
+
+
     <!-- 仅当有新版时:强调升级卡 -->
     <transition name="sys-rise">
       <article v-if="hasUpdate" class="sys-upgrade">
@@ -285,7 +273,7 @@ onMounted(() => {
             <AppButton
               variant="primary"
               :loading="updatePhase === 'applying' || updatePhase === 'restarting'"
-              :disabled="updatePhase === 'restarting'"
+              :disabled="!canStart"
               @click="runUpdate"
             >
               {{ updatePhase === 'applying' ? t('settingsSystem.preparing') : updatePhase === 'restarting' ? t('settingsSystem.restarting') : t('settingsSystem.updateNow') }}
@@ -301,7 +289,7 @@ onMounted(() => {
         <transition name="sys-rise">
           <div v-if="updatePhase === 'restarting'" class="sys-update-state sys-update-state--busy" role="status">
             <span class="sys-spinner-dark" aria-hidden="true" />
-            <span>{{ t('settingsSystem.reconnecting', { msg: updateMsg }) }}</span>
+            <span>{{ t('settingsSystem.taskStates.restarting') }}</span>
           </div>
           <div v-else-if="updatePhase === 'manual'" class="sys-update-state sys-update-state--manual">
             <p class="sys-update-state-msg">{{ updateMsg }}</p>

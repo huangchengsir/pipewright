@@ -20,6 +20,12 @@ export default {
     verbAdd: '接入',
     verbTrigger: '手动触发',
     verbDefault: '操作',
+    verbAuthorizeOAuth: '已授权 ',
+    verbReconnectOAuth: '已发起重新授权 ',
+    verbSubmitUpgrade: '已提交 ',
+    verbResumeUpgrade: '已继续 ',
+    nounOAuthCredential: 'OAuth 凭据',
+    nounUpgrade: '版本升级',
     // 操作对象
     nounCredential: '凭据',
     nounWebhookSecret: 'webhook 签名密钥',

@@ -8,19 +8,21 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/huangchengsir/pipewright/internal/audit"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 // credentialDTO 是凭据对外响应体(冻结契约;camelCase;无明文/无密文)。
 type credentialDTO struct {
-	ID          string  `json:"id"`
-	Name        string  `json:"name"`
-	Type        string  `json:"type"`
-	Scope       string  `json:"scope"`
-	Username    string  `json:"username"`
-	MaskedValue string  `json:"maskedValue"`
-	LastUsedAt  *string `json:"lastUsedAt"` // RFC3339 或 null
-	CreatedAt   string  `json:"createdAt"`
+	ID          string           `json:"id"`
+	Name        string           `json:"name"`
+	Type        string           `json:"type"`
+	Scope       string           `json:"scope"`
+	Username    string           `json:"username"`
+	MaskedValue string           `json:"maskedValue"`
+	LastUsedAt  *string          `json:"lastUsedAt"` // RFC3339 或 null
+	CreatedAt   string           `json:"createdAt"`
+	OAuth       *vault.OAuthInfo `json:"oauth,omitempty"`
 }
 
 // toDTO 把领域 Credential 转为契约 DTO。
@@ -39,12 +41,23 @@ func toDTO(c *vault.Credential) credentialDTO {
 		MaskedValue: c.MaskedValue,
 		LastUsedAt:  lastUsed,
 		CreatedAt:   c.CreatedAt.UTC().Format(time.RFC3339),
+		OAuth:       c.OAuth,
 	}
 }
 
 // writeVaultError 把领域错误映射为契约错误码/状态码;绝不回显明文/密文。
 func writeVaultError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, configstate.ErrMaintenance):
+		writeError(w, 503, "system_installing", "System installation is in progress")
+	case errors.Is(err, vault.ErrOAuthReauthorize), errors.Is(err, vault.ErrOAuthIdentity):
+		writeError(w, 409, "oauth_reauthorization_required", "OAuth authorization must be renewed")
+	case errors.Is(err, vault.ErrOAuthUncertain):
+		writeError(w, 409, "oauth_refresh_uncertain", "OAuth result is uncertain; reconnect explicitly")
+	case errors.Is(err, vault.ErrOAuthBusy), errors.Is(err, vault.ErrGitLeaseRequired):
+		writeError(w, 409, "oauth_credential_busy", "OAuth credential is in use")
+	case errors.Is(err, vault.ErrOAuthDetachRequired):
+		writeError(w, 409, "oauth_detach_required", "Confirm disconnecting OAuth before replacing its secret")
 	case errors.Is(err, vault.ErrVaultUnconfigured):
 		writeError(w, http.StatusServiceUnavailable, "vault_unconfigured", "保险库未配置 master key")
 	case errors.Is(err, vault.ErrNotFound):
@@ -146,20 +159,22 @@ func makeUpdateCredentialHandler(v vault.Vault, aud audit.Recorder) http.Handler
 		id := chi.URLParam(r, "id")
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		var req struct {
-			Name     *string `json:"name"`
-			Scope    *string `json:"scope"`
-			Username *string `json:"username"`
-			Secret   *string `json:"secret"`
+			Name        *string `json:"name"`
+			Scope       *string `json:"scope"`
+			Username    *string `json:"username"`
+			Secret      *string `json:"secret"`
+			DetachOAuth bool    `json:"detachOAuth"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
 			return
 		}
 		cred, err := v.Update(id, vault.UpdateInput{
-			Name:     req.Name,
-			Scope:    req.Scope,
-			Username: req.Username,
-			Secret:   req.Secret,
+			Name:        req.Name,
+			Scope:       req.Scope,
+			Username:    req.Username,
+			Secret:      req.Secret,
+			DetachOAuth: req.DetachOAuth,
 		})
 		if err != nil {
 			writeVaultError(w, err)

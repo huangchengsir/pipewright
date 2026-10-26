@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/maintenance"
 	"log"
 	"strings"
 	"time"
@@ -156,6 +157,12 @@ func (s *service) analyzeAlert(ctx context.Context, alert Alert, snapshot Server
 		s.analysisMu.Unlock()
 		s.analysisWG.Done()
 	}()
+	release, admissionErr := maintenance.Enter(ctx, s.db, "alert_analysis")
+	if admissionErr != nil {
+		s.finishAnalysis(alert, unavailableAnalysis("AI 分析不可用，原始告警照常发送"))
+		return
+	}
+	defer release()
 	defer func() {
 		if recover() != nil {
 			result = unavailableAnalysis("AI 分析失败，原始告警照常发送")

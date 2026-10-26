@@ -21,6 +21,7 @@ package pacloader
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
 
@@ -76,6 +77,12 @@ type GitAuthRevealer interface {
 	GetGitAuth(credentialID string) (username, token string, err error)
 }
 
+type gitAuthAcquirer interface {
+	AcquireGitAuth(context.Context, string) (string, string, func(), error)
+}
+
+var ErrCredentialUnavailable = errors.New("pacloader: managed Git credential unavailable")
+
 // BlobFetcher 按 ref 读仓库单文件内容(由 httpapi.SourceReader 适配)。
 // degraded=true 表示克隆失败的降级响应(非「真实空文件」),装饰器据此回退。
 type BlobFetcher interface {
@@ -106,6 +113,9 @@ func (l *Loader) Get(ctx context.Context, projectID, branch string) (*pipeline.C
 	if ok {
 		return cfg, SpecSource{FromRepo: true, Ref: refOrReason, File: DefaultFile}, nil
 	}
+	if refOrReason == "credential_unavailable" {
+		return nil, SpecSource{FallbackReason: refOrReason}, ErrCredentialUnavailable
+	}
 	inner, err := l.inner.Get(ctx, projectID)
 	return inner, SpecSource{FromRepo: false, FallbackReason: refOrReason}, err
 }
@@ -133,11 +143,21 @@ func (l *Loader) tryOverride(ctx context.Context, projectID, branch string) (cfg
 
 	// 取仓库凭据明文(进程内取用即弃;取不到不致命 → 空 token 尝试公开仓库)。
 	username, token := "", ""
-	if l.tokens != nil && strings.TrimSpace(info.CredentialID) != "" {
-		if u, t, terr := l.tokens.GetGitAuth(info.CredentialID); terr == nil {
-			username, token = u, t
+	release := func() {}
+	if l.tokens != nil {
+		if acquirer, ok := l.tokens.(gitAuthAcquirer); ok {
+			u, t, done, err := acquirer.AcquireGitAuth(ctx, info.CredentialID)
+			if err != nil {
+				return nil, "credential_unavailable", false
+			}
+			username, token, release = u, t, done
+		} else if strings.TrimSpace(info.CredentialID) != "" {
+			if u, t, terr := l.tokens.GetGitAuth(info.CredentialID); terr == nil {
+				username, token = u, t
+			}
 		}
 	}
+	defer release()
 
 	// 优先用本次运行分支取 YAML(feature 分支改 YAML 即对该分支生效);分支为空退化为默认分支。
 	ref := strings.TrimSpace(branch)

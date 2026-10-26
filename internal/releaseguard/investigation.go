@@ -3,6 +3,7 @@ package releaseguard
 import (
 	"context"
 	"encoding/json"
+	"github.com/huangchengsir/pipewright/internal/maintenance"
 	"path"
 	"regexp"
 	"sort"
@@ -35,6 +36,11 @@ func investigationInput(r Report) string {
 // Investigate is an explicit, local-only evidence investigation. No remote
 // observer or model is called. The shared deadline applies to all targets.
 func (s *Service) Investigate(ctx context.Context, project, id string) (*Report, error) {
+	release, admissionErr := maintenance.Enter(ctx, s.db, "guard_investigation")
+	if admissionErr != nil {
+		return nil, admissionErr
+	}
+	defer release()
 	s.mu.Lock()
 	if s.closed || s.deleting[project] {
 		s.mu.Unlock()

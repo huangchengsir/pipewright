@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/maintenance"
 	"github.com/huangchengsir/pipewright/internal/store"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
@@ -29,6 +31,9 @@ var (
 	ErrAppNotConfigured = errors.New("oauth: provider app not configured or disabled")
 	// ErrExchangeFailed 表示 code→token 兑换或取用户信息失败(人读,绝无 secret/token)。
 	ErrExchangeFailed = errors.New("oauth: exchange failed")
+	// Invalid state remains an identity rejection while preserving the existing
+	// callback's invalid_state reason for expired, forged, or replayed states.
+	ErrInvalidState = fmt.Errorf("oauth: invalid state: %w", vault.ErrOAuthIdentity)
 )
 
 // AppConfig 是对外可见的 OAuth 应用配置视图:client_secret 仅掩码 + configured 标志,绝无明文。
@@ -57,6 +62,9 @@ type SaveAppInput struct {
 type TokenResult struct {
 	AccessToken string
 	Login       string
+	AccountID   string
+	Tokens      vault.OAuthTokens
+	Binding     vault.OAuthBinding
 }
 
 // Service 定义 OAuth 领域对外接口。
@@ -87,6 +95,7 @@ type service struct {
 	// Optional in-process test adapters; production uses the system resolver/dialer.
 	lookupIP    func(context.Context, string) ([]net.IPAddr, error)
 	dialContext func(context.Context, string, string) (net.Conn, error)
+	lifecycle   *lifecycle
 }
 
 // New 构造 Service。
@@ -103,7 +112,9 @@ func New(db *sql.DB, v vault.Vault, client *http.Client) Service {
 	if guarded.Timeout <= 0 || guarded.Timeout > 10*time.Second {
 		guarded.Timeout = 10 * time.Second
 	}
-	return &service{db: db, vault: v, client: &guarded, states: newStateStore()}
+	s := &service{db: db, vault: v, client: &guarded, states: newStateStore()}
+	s.initLifecycle()
+	return s
 }
 
 func (s *service) IssueState(sessionID string) (string, error) { return s.states.issue(sessionID) }
@@ -194,14 +205,23 @@ func (s *service) SaveApp(ctx context.Context, in SaveAppInput) (*AppConfig, err
 		enabled = 1
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO oauth_apps
+	err = configstate.WithWriteTx(ctx, s.db, func(q configstate.DBTX) error {
+		if err := configstate.LockEpochs(ctx, q, s.db, configstate.EpochSecrets); err != nil {
+			return err
+		}
+		_, err := q.ExecContext(ctx,
+			`INSERT INTO oauth_apps
 		   (provider, client_id, client_secret_ciphertext, base_url, enabled, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?) `+
-			store.UpsertSuffix(store.DialectOf(s.db), []string{"provider"},
-				[]string{"client_id", "client_secret_ciphertext", "base_url", "enabled", "updated_at"}),
-		provider, clientID, sealed, baseURL, enabled, now, now,
-	)
+				store.UpsertSuffix(store.DialectOf(s.db), []string{"provider"},
+					[]string{"client_id", "client_secret_ciphertext", "base_url", "enabled", "updated_at"}),
+			provider, clientID, sealed, baseURL, enabled, now, now,
+		)
+		if err != nil {
+			return err
+		}
+		return configstate.BumpEpoch(ctx, q, configstate.EpochSecrets)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("oauth: upsert app: %w", err)
 	}
@@ -239,6 +259,11 @@ func (s *service) AuthorizeURL(ctx context.Context, provider, state, redirectURI
 }
 
 func (s *service) Exchange(ctx context.Context, provider, code, redirectURI string) (*TokenResult, error) {
+	release, err := maintenance.Enter(ctx, s.db, "oauth_exchange")
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	prov, clientID, sealed, baseURL, enabled, _, err := s.loadApp(ctx, provider)
@@ -262,95 +287,67 @@ func (s *service) Exchange(ctx context.Context, provider, code, redirectURI stri
 		return nil, err
 	}
 
-	accessToken, err := s.requestToken(ctx, endpoints, clientID, secret, code, redirectURI)
+	form := url.Values{"client_id": {clientID}, "client_secret": {secret}, "code": {code}, "grant_type": {"authorization_code"}, "redirect_uri": {redirectURI}}
+	tokens, err := s.requestTokens(ctx, endpoints, form)
 	// 明文 secret 用完即弃。
 	secret = ""
 	if err != nil {
 		return nil, err
 	}
 
-	login, err := s.requestUser(ctx, endpoints, accessToken)
+	login, accountID, err := s.requestIdentity(ctx, endpoints, tokens.AccessToken)
 	if err != nil {
 		return nil, err
 	}
-	return &TokenResult{AccessToken: accessToken, Login: login}, nil
+	return &TokenResult{AccessToken: tokens.AccessToken, Login: login, AccountID: accountID, Tokens: tokens, Binding: vault.OAuthBinding{Provider: prov, Issuer: issuerOf(endpoints.TokenURL), ClientID: clientID, RedirectURI: redirectURI, AppRevision: vault.OAuthAppRevision(clientID, baseURL, sealed, enabled), AccountID: accountID, Login: login}}, nil
 }
 
-// requestToken POST code→token 到 provider tokenURL,取回 access_token(绝不日志 secret/token)。
-func (s *service) requestToken(ctx context.Context, p Provider, clientID, clientSecret, code, redirectURI string) (string, error) {
-	form := url.Values{}
-	form.Set("client_id", clientID)
-	form.Set("client_secret", clientSecret)
-	form.Set("code", code)
-	form.Set("grant_type", "authorization_code")
-	form.Set("redirect_uri", redirectURI)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.TokenURL, strings.NewReader(form.Encode()))
-	if err != nil {
-		return "", ErrExchangeFailed
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	// GitHub 默认回表单编码,显式要 JSON;其余平台本就回 JSON,加这头无害。
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := s.request(req)
-	if err != nil {
-		return "", ErrExchangeFailed
-	}
-	defer func() { _ = resp.Body.Close() }()
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, (1<<16)+1))
-	if readErr != nil || len(body) > 1<<16 {
-		return "", ErrExchangeFailed
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", ErrExchangeFailed
-	}
-
-	var parsed struct {
-		AccessToken string `json:"access_token"`
-		Error       string `json:"error"`
-	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return "", ErrExchangeFailed
-	}
-	if parsed.AccessToken == "" || parsed.Error != "" {
-		// 兑换失败(如 code 失效):人读错误,绝不回 provider 原文(可能含敏感细节)。
-		return "", ErrExchangeFailed
-	}
-	return parsed.AccessToken, nil
-}
-
-// requestUser 用 access_token 拉 userURL 取登录名(绝不日志 token)。
-func (s *service) requestUser(ctx context.Context, p Provider, accessToken string) (string, error) {
+func (s *service) requestIdentity(ctx context.Context, p Provider, accessToken string) (string, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.UserURL, nil)
 	if err != nil {
-		return "", ErrExchangeFailed
+		return "", "", ErrExchangeFailed
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := s.request(req)
 	if err != nil {
-		return "", ErrExchangeFailed
+		return "", "", ErrExchangeFailed
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, (1<<16)+1))
 	if readErr != nil || len(body) > 1<<16 {
-		return "", ErrExchangeFailed
+		return "", "", ErrExchangeFailed
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", ErrExchangeFailed
+		return "", "", ErrExchangeFailed
 	}
 
 	var m map[string]any
-	if err := json.Unmarshal(body, &m); err != nil {
-		return "", ErrExchangeFailed
+	dec := json.NewDecoder(strings.NewReader(string(body)))
+	dec.UseNumber()
+	if err := dec.Decode(&m); err != nil {
+		return "", "", ErrExchangeFailed
+	}
+	var extra any
+	if dec.Decode(&extra) != io.EOF {
+		return "", "", ErrExchangeFailed
 	}
 	login := p.parseLogin(m)
 	if login == "" {
-		return "", ErrExchangeFailed
+		return "", "", ErrExchangeFailed
 	}
-	return login, nil
+	if len(login) > 256 || strings.ContainsAny(login, "\r\n\x00") {
+		return "", "", ErrExchangeFailed
+	}
+	accountID := ""
+	if id, exists := m["id"]; exists {
+		accountID, err = vault.ParseAccountID(id)
+		if err != nil {
+			return "", "", ErrExchangeFailed
+		}
+	}
+	return login, accountID, nil
 }
 
 // loadApp 读单个 provider 的应用行;返回 (provider, clientID, sealedSecret, baseURL, enabled, updatedAt, err)。

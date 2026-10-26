@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
@@ -452,15 +453,25 @@ func TestCommandDeploymentReadinessRequiresCommand(t *testing.T) {
 }
 
 func TestMatrixReadinessUsesEffectiveRunnerPlan(t *testing.T) {
-	db, svc := fixture(t)
-	project(t, db, "p", stamp)
-	sp := spec()
-	sp.Stages[1].Matrix = map[string][]string{"os": {"linux"}}
-	sp.Stages[1].Post = []pipeline.PostStep{{Condition: pipeline.PostAlways, Image: "alpine", Commands: []string{"true"}}}
-	config(t, db, "p", sp, true)
-	out := svc.Status(context.Background(), "p")
-	if out.Pipeline.State != "needs_configuration" || !hasIssue(out, "no_tasks", pipeline.ScopeCanvas) {
-		t.Fatal(out)
+	for _, hasPost := range []bool{false, true} {
+		t.Run(fmt.Sprintf("hasPost=%t", hasPost), func(t *testing.T) {
+			db, svc := fixture(t)
+			project(t, db, "p", stamp)
+			sp := spec()
+			sp.Stages[1].Matrix = map[string][]string{"os": {"linux"}}
+			if hasPost {
+				sp.Stages[1].Post = []pipeline.PostStep{{Condition: pipeline.PostAlways, Image: "alpine", Commands: []string{"true"}}}
+			}
+			config(t, db, "p", sp, true)
+			out := svc.Status(context.Background(), "p")
+			if hasPost {
+				if out.Pipeline.State != "ready" || hasIssue(out, "no_tasks", pipeline.ScopeCanvas) {
+					t.Fatal(out)
+				}
+			} else if out.Pipeline.State != "needs_configuration" || !hasIssue(out, "no_tasks", pipeline.ScopeCanvas) {
+				t.Fatal(out)
+			}
+		})
 	}
 }
 

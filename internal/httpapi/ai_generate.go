@@ -184,12 +184,12 @@ func makeAIGenerateHandler(d aiGenerateDeps) http.HandlerFunc {
 		}
 
 		// 取仓库克隆 token(进程内取用即弃);取不到不致命 → 以空 token 尝试(多走降级)。
-		username, token := "", ""
-		if d.vault != nil && strings.TrimSpace(proj.CredentialID) != "" {
-			if auth, terr := d.vault.GetGitAuth(proj.CredentialID); terr == nil {
-				username, token = auth.Username, auth.Token
-			}
+		username, token, releaseGit, authErr := acquireRequestGitAuth(r.Context(), d.vault, proj.CredentialID)
+		if authErr != nil {
+			writeVaultError(w, authErr)
+			return
 		}
+		defer releaseGit()
 
 		analysis := d.analyzer.Analyze(ctx, proj.RepoURL, username, token)
 		token = "" // 明文用完即弃

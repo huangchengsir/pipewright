@@ -23,6 +23,8 @@ type shellDriver struct {
 	copyWorkspace           bool
 	workspaceReconcileMu    sync.Mutex
 	workspaceReconcileAfter time.Time
+	serviceContainers       sync.Map // logical name -> exact CID created by this driver
+	serviceNetworks         sync.Map // logical name -> exact network ID created by this driver
 }
 
 func (d *shellDriver) Binary() string { return d.bin }

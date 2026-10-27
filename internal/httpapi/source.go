@@ -262,16 +262,16 @@ type sourceDeps struct {
 
 // resolveSourceContext 取项目(repoUrl + 默认分支 + 凭据 token)与规范化 ref/path。
 // 项目不存在 → 404 project_not_found;path 穿越 → 400 invalid_path。已写错误响应时返回 ok=false。
-func (d sourceDeps) resolveSourceContext(w http.ResponseWriter, r *http.Request) (repoURL, username, token, ref, cleanPath string, ok bool) {
+func (d sourceDeps) resolveSourceContext(w http.ResponseWriter, r *http.Request) (repoURL, username, token, ref, cleanPath string, releaseGit func(), ok bool) {
 	id := chi.URLParam(r, "id")
 	proj, err := d.projects.Get(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, project.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "project_not_found", "项目不存在")
-			return "", "", "", "", "", false
+			return "", "", "", "", "", func() {}, false
 		}
 		writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
-		return "", "", "", "", "", false
+		return "", "", "", "", "", func() {}, false
 	}
 
 	ref = strings.TrimSpace(r.URL.Query().Get("ref"))
@@ -282,17 +282,17 @@ func (d sourceDeps) resolveSourceContext(w http.ResponseWriter, r *http.Request)
 	cleanPath, valid := cleanRelPath(r.URL.Query().Get("path"))
 	if !valid {
 		writeError(w, http.StatusBadRequest, "invalid_path", "路径非法或越出仓库根")
-		return "", "", "", "", "", false
+		return "", "", "", "", "", func() {}, false
 	}
 
 	// 取仓库凭据(进程内取用即弃);取不到不致命 → 空 token 尝试(私有仓库会走克隆失败降级)。
-	username, token = "", ""
-	if d.vault != nil && strings.TrimSpace(proj.CredentialID) != "" {
-		if auth, terr := d.vault.GetGitAuth(proj.CredentialID); terr == nil {
-			username, token = auth.Username, auth.Token
-		}
+	username, token, releaseGit, authErr := acquireRequestGitAuth(r.Context(), d.vault, proj.CredentialID)
+	if authErr != nil {
+		writeVaultError(w, authErr)
+		return "", "", "", "", "", func() {}, false
 	}
-	return proj.RepoURL, username, token, ref, cleanPath, true
+
+	return proj.RepoURL, username, token, ref, cleanPath, releaseGit, true
 }
 
 // makeSourceTreeHandler 返回 GET /api/projects/{id}/source/tree?ref=&path= handler(认证;只读)。
@@ -303,11 +303,12 @@ func makeSourceTreeHandler(d sourceDeps) http.HandlerFunc {
 			writeError(w, http.StatusServiceUnavailable, "internal", "源码读取所需服务未初始化")
 			return
 		}
-		repoURL, username, token, ref, cleanPath, ok := d.resolveSourceContext(w, r)
+		repoURL, username, token, ref, cleanPath, releaseGit, ok := d.resolveSourceContext(w, r)
 		if !ok {
 			return
 		}
 
+		defer releaseGit()
 		tree, err := d.reader.Tree(r.Context(), repoURL, username, token, ref, cleanPath)
 		if err != nil {
 			if errors.Is(err, errSourcePathNotFound) {
@@ -332,15 +333,17 @@ func makeSourceBlobHandler(d sourceDeps) http.HandlerFunc {
 			writeError(w, http.StatusServiceUnavailable, "internal", "源码读取所需服务未初始化")
 			return
 		}
-		repoURL, username, token, ref, cleanPath, ok := d.resolveSourceContext(w, r)
+		repoURL, username, token, ref, cleanPath, releaseGit, ok := d.resolveSourceContext(w, r)
 		if !ok {
 			return
 		}
 		if cleanPath == "" {
+			releaseGit()
 			writeError(w, http.StatusBadRequest, "invalid_path", "blob 需指定文件路径")
 			return
 		}
 
+		defer releaseGit()
 		blob, err := d.reader.Blob(r.Context(), repoURL, username, token, ref, cleanPath)
 		if err != nil {
 			switch {

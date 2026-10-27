@@ -3,7 +3,7 @@
 # 直接包装 GoReleaser 已交叉编译好的二进制(避免每架构重跑前端构建)。
 
 # ---- 前端构建 ----
-FROM node:22-alpine AS web
+FROM node:22.23.4-alpine AS web
 WORKDIR /app/web
 COPY web/package.json web/package-lock.json ./
 RUN npm config set registry https://registry.npmmirror.com && npm ci
@@ -11,7 +11,7 @@ COPY web/ ./
 RUN npm run build
 
 # ---- Go 静态构建 ----
-FROM golang:1.26-alpine AS build
+FROM golang:1.26.10-alpine AS build
 ENV CGO_ENABLED=0 \
     GOPROXY=https://goproxy.cn,direct \
     GOSUMDB=off \

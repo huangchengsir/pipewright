@@ -53,7 +53,15 @@ func NewPRStatusHook(
 		if !ok {
 			return // 不支持的代码平台
 		}
-		token := revealPRToken(v, proj.CredentialID)
+		if v == nil || strings.TrimSpace(proj.CredentialID) == "" {
+			return
+		}
+		auth, release, err := vault.AcquireGitAuth(ctx, v, proj.CredentialID)
+		if err != nil {
+			return
+		}
+		defer release()
+		token := auth.Token
 		if token == "" {
 			return // 无可用凭据
 		}
@@ -70,18 +78,6 @@ func NewPRStatusHook(
 		}
 		log.Printf("[prstatus] 已回写 %s %s/%s @ %s = %s", target.Platform, target.Owner, target.Repo, shortSHA(commit), state)
 	}
-}
-
-// revealPRToken 取项目凭据明文(失败/未配 → 空,best-effort)。
-func revealPRToken(v vault.Vault, credID string) string {
-	if v == nil || strings.TrimSpace(credID) == "" {
-		return ""
-	}
-	tok, err := v.Reveal(credID)
-	if err != nil {
-		return ""
-	}
-	return tok
 }
 
 func prDescription(finalStatus string) string {

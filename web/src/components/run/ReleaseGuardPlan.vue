@@ -4,7 +4,10 @@ import { useI18n } from 'vue-i18n'
 import AppButton from '../ui/AppButton.vue'
 import GuardImageIdentity from './GuardImageIdentity.vue'
 import { HttpError } from '../../api/http'
-import { releaseGuardText } from '../../utils/releaseGuardText'
+import {
+  guardDate,
+  guardPresentationText,
+} from '../../utils/guardEvidencePresentation'
 import {
   previewGuardPlan,
   startReleaseGuard,
@@ -115,10 +118,7 @@ async function preview(): Promise<void> {
     now.value = Date.now()
   } catch (cause) {
     if (alive && ticket === generation && !request.signal.aborted)
-      error.value =
-        cause instanceof HttpError
-          ? (cause.apiError?.message ?? t('releaseGuard.requestFailed'))
-          : t('releaseGuard.requestFailed')
+      error.value = 'releaseGuard.requestFailed'
   } finally {
     if (alive && ticket === generation) loading.value = false
   }
@@ -145,10 +145,8 @@ async function start(): Promise<void> {
     if (!alive || request.signal.aborted) return
     outcomeUnknown.value = cause instanceof HttpError && cause.status === 0
     error.value = outcomeUnknown.value
-      ? t('releaseGuard.startUnknown')
-      : cause instanceof HttpError
-        ? (cause.apiError?.message ?? t('releaseGuard.requestFailed'))
-        : t('releaseGuard.requestFailed')
+      ? 'releaseGuard.startUnknown'
+      : 'releaseGuard.requestFailed'
     emit('refresh')
   } finally {
     if (alive) starting.value = false
@@ -185,7 +183,7 @@ function keydown(event: KeyboardEvent): void {
   }
 }
 function when(value: string): string {
-  return new Date(value).toLocaleString(locale.value)
+  return guardDate(value, locale.value, t)
 }
 function availability(value: string): string {
   return t(
@@ -193,7 +191,7 @@ function availability(value: string): string {
   )
 }
 function fact(value: string): string {
-  return releaseGuardText(value, (key) => t(key))
+  return guardPresentationText(value, t)
 }
 watch([duration, includeLogs], () => void preview())
 onMounted(async () => {
@@ -280,7 +278,7 @@ onBeforeUnmount(() => {
       >
       <p class="guard-muted">{{ t('releaseGuard.collectLogsHint') }}</p>
       <p v-if="loading" role="status">{{ t('releaseGuard.previewing') }}</p>
-      <p v-if="error" class="guard-error" role="alert">{{ error }}</p>
+      <p v-if="error" class="guard-error" role="alert">{{ t(error) }}</p>
       <template v-if="plan">
         <div class="guard-table-wrap">
           <table class="guard-table">

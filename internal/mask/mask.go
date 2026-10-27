@@ -60,6 +60,16 @@ func (m *Masker) RegisterSecret(s string) {
 	if len(s) < minSecretLen {
 		return
 	}
+	m.RegisterExactSecret(s)
+}
+
+// RegisterExactSecret registers a value known to be a credential at its use
+// boundary. Unlike heuristic registration, even a short configured secret must
+// be hidden before a command can echo it.
+func (m *Masker) RegisterExactSecret(s string) {
+	if m == nil || s == "" {
+		return
+	}
 	m.mu.Lock()
 	if m.secrets == nil {
 		m.secrets = make(map[string]struct{})

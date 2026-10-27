@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/maintenance"
 	"time"
 )
 
@@ -115,6 +116,11 @@ func (s *Service) ReissueConfirmation(ctx context.Context, id, run string) (*Con
 	return &view, err
 }
 func (s *Service) Confirm(ctx context.Context, id string, in ConfirmInput) (*Run, error) {
+	release, admissionErr := maintenance.Enter(ctx, s.db, "ops_confirm")
+	if admissionErr != nil {
+		return nil, admissionErr
+	}
+	defer release()
 	if err := s.registerSecrets(); err != nil {
 		return nil, err
 	}

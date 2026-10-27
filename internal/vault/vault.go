@@ -60,6 +60,7 @@ type Credential struct {
 	MaskedValue string
 	LastUsedAt  *time.Time
 	CreatedAt   time.Time
+	OAuth       *OAuthInfo
 }
 
 // CreateInput 是创建凭据的入参(含明文 secret,不被持久化为明文)。
@@ -76,10 +77,11 @@ type CreateInput struct {
 // UpdateInput 是更新凭据的入参;指针字段为 nil 表示不修改。
 // 给 Secret 即轮换密钥(重新加密)。
 type UpdateInput struct {
-	Name     *string
-	Scope    *string
-	Username *string
-	Secret   *string
+	Name        *string
+	Scope       *string
+	Username    *string
+	Secret      *string
+	DetachOAuth bool
 }
 
 type GitAuth struct {
@@ -233,6 +235,11 @@ func (s *service) List() ([]Credential, error) {
 		if err := s.registryView(&creds[i]); err != nil {
 			return nil, err
 		}
+		info, err := OAuthView(context.Background(), s.db, creds[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		creds[i].OAuth = info
 	}
 	return creds, nil
 }
@@ -263,6 +270,17 @@ func (s *service) Get(id string) (string, error) {
 func (s *service) GetGitAuth(id string) (GitAuth, error) {
 	if !s.configured() {
 		return GitAuth{}, ErrVaultUnconfigured
+	}
+	if binding, err := readOAuth(context.Background(), s.db, id); err != nil {
+		return GitAuth{}, err
+	} else if binding != nil {
+		return GitAuth{}, ErrGitLeaseRequired
+	}
+	var authorizationClaims int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM oauth_authorizations WHERE credential_id=?", id).Scan(&authorizationClaims); err != nil {
+		return GitAuth{}, err
+	} else if authorizationClaims > 0 {
+		return GitAuth{}, ErrGitLeaseRequired
 	}
 	var username, credType string
 	var sealed []byte
@@ -412,6 +430,9 @@ func (s *service) Update(id string, in UpdateInput) (*Credential, error) {
 			return err
 		}
 		var result sql.Result
+		if err := checkOAuthMutation(ctx, q, id, rotate || (in.Username != nil && username != oldUsername), in.DetachOAuth); err != nil {
+			return err
+		}
 		var err error
 		if rotate {
 			result, err = q.ExecContext(ctx,
@@ -468,6 +489,11 @@ func (s *service) Delete(id string) error {
 		ctx := context.Background()
 		if err := configstate.LockEpochs(ctx, q, s.db, configstate.EpochSecrets); err != nil {
 			return err
+		}
+		if n, err := oauthUses(ctx, q, id); err != nil {
+			return err
+		} else if n > 0 {
+			return ErrOAuthBusy
 		}
 		var refCount int
 		if err := q.QueryRowContext(ctx,
@@ -534,6 +560,11 @@ func (s *service) getView(id string) (*Credential, error) {
 	if err := s.registryView(c); err != nil {
 		return nil, err
 	}
+	info, err := OAuthView(context.Background(), s.db, c.ID)
+	if err != nil {
+		return nil, err
+	}
+	c.OAuth = info
 	return c, nil
 }
 

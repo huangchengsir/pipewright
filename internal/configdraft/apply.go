@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/maintenance"
 	"reflect"
 	"time"
 
@@ -48,6 +49,11 @@ func operationView(x *operationRow) *OperationResult {
 	return v
 }
 func (s *Service) Apply(ctx context.Context, tokenID string, in ApplyRequest) (*OperationResult, error) {
+	release, admissionErr := maintenance.Enter(ctx, s.db, "config_apply")
+	if admissionErr != nil {
+		return nil, admissionErr
+	}
+	defer release()
 	if !s.opts.ApplyEnabled {
 		return nil, ErrDisabled
 	}

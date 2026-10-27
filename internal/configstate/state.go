@@ -184,6 +184,9 @@ func validPhase(p string) bool {
 	return p == "queued" || p == "executing" || p == "finalizing" || p == "cleanup_unknown"
 }
 func AcquireActivityTx(ctx context.Context, q DBTX, db *sql.DB, in Activity) (*Activity, error) {
+	if err := CheckMaintenanceAdmission(ctx, q); err != nil {
+		return nil, err
+	}
 	if in.ProjectID == "" || in.OwnerEpoch == "" || in.Kind == "" || !validPhase(in.Phase) {
 		return nil, ErrInvalid
 	}

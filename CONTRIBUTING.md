@@ -30,8 +30,8 @@ By participating you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md)
 
 | 工具 / Tool | 版本 / Version |
 |---|---|
-| Go | 见 `go.mod`(当前 1.26+)/ see `go.mod` (currently 1.26+) |
-| Node.js | 20 LTS+ |
+| Go | 1.26 维护线最新安全修补版（≥1.26.10）；语言最低版本见 `go.mod` / latest patched 1.26 release (≥1.26.10); minimum language version in `go.mod` |
+| Node.js | 22 LTS（≥22.12）或 24 LTS / 22 LTS (≥22.12) or 24 LTS |
 | npm | 随 Node 附带 / bundled with Node |
 | Docker | 隔离构建相关功能需要 / required for isolated-build features |
 

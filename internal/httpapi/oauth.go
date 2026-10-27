@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/oauth"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
@@ -141,6 +142,16 @@ func makeOAuthAuthorizeHandler(svc oauth.Service) http.HandlerFunc {
 			return
 		}
 		// 用会话 token 作绑定身份(state 与发起授权的会话绑死,防 CSRF)。
+		if lifecycle, ok := svc.(oauth.Lifecycle); ok {
+			redirectURI := requestOrigin(r) + "/api/oauth/" + url.PathEscape(provider) + "/callback"
+			authURL, err := lifecycle.BeginAuthorization(r.Context(), sess.Token, provider, redirectURI, "", 0, false)
+			if err != nil {
+				writeOAuthError(w, err)
+				return
+			}
+			http.Redirect(w, r, authURL, http.StatusFound)
+			return
+		}
 		state, err := svc.IssueState(sess.Token)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
@@ -159,7 +170,7 @@ func makeOAuthAuthorizeHandler(svc oauth.Service) http.HandlerFunc {
 // makeOAuthCallbackHandler 返回 GET /api/oauth/{provider}/callback handler(认证;豁免 CSRF,靠 state 校验)。
 // 验 state(绑会话)→ Exchange(code→token→login)→ vault.Create 存 git_token 凭据 →
 // 302 跳回 /settings/vault?connected={provider}&account={login};任一步失败 → 跳回 oauth_error(人读,无 secret)。
-func makeOAuthCallbackHandler(svc oauth.Service, v vaultCreator) http.HandlerFunc {
+func makeOAuthCallbackHandler(svc oauth.Service, v vaultCreator, aud ...audit.Recorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		provider := chi.URLParam(r, "provider")
 		if svc == nil {
@@ -174,6 +185,18 @@ func makeOAuthCallbackHandler(svc oauth.Service, v vaultCreator) http.HandlerFun
 		q := r.URL.Query()
 		code := q.Get("code")
 		state := q.Get("state")
+		if lifecycle, ok := svc.(oauth.Lifecycle); ok {
+			redirectURI := requestOrigin(r) + "/api/oauth/" + url.PathEscape(provider) + "/callback"
+			id, login, err := lifecycle.CompleteAuthorization(r.Context(), sess.Token, provider, state, code, redirectURI)
+			if err != nil {
+				redirectVaultError(w, r, provider, oauthErrorReason(err))
+				return
+			}
+			recordAudit(r.Context(), oauthAudit(aud), audit.Entry{Actor: auditActor, Action: "oauth_credential.authorize", TargetType: audit.TargetCredential, TargetID: id, Detail: map[string]any{"provider": provider, "result": "authorized"}, IP: clientIP(r)})
+			dest := "/settings/vault?connected=" + url.QueryEscape(provider) + "&account=" + url.QueryEscape(login)
+			http.Redirect(w, r, dest, http.StatusFound)
+			return
+		}
 
 		// state CSRF 校验:必须匹配本会话发起的 state(一次性消费),否则拒绝。
 		if !svc.ConsumeState(state, sess.Token) {
@@ -220,6 +243,18 @@ func makeOAuthCallbackHandler(svc oauth.Service, v vaultCreator) http.HandlerFun
 // oauthErrorReason 把领域错误映射为人读、无 secret 的跳回原因码。
 func oauthErrorReason(err error) string {
 	switch {
+	case errors.Is(err, oauth.ErrInvalidState):
+		return "invalid_state"
+	case errors.Is(err, vault.ErrOAuthReauthorize):
+		return "reauthorization_required"
+	case errors.Is(err, vault.ErrOAuthIdentity):
+		return "identity_changed"
+	case errors.Is(err, vault.ErrOAuthUncertain):
+		return "exchange_uncertain"
+	case errors.Is(err, vault.ErrOAuthBusy):
+		return "credential_busy"
+	case errors.Is(err, vault.ErrConflict):
+		return "credential_changed"
 	case errors.Is(err, oauth.ErrAppNotConfigured):
 		return "app_not_configured"
 	case errors.Is(err, oauth.ErrVaultUnconfigured):
@@ -229,6 +264,64 @@ func oauthErrorReason(err error) string {
 	default:
 		return "exchange_failed"
 	}
+}
+
+// Reconnecting an existing ID changes its authorization. It is an authenticated
+// POST with CSRF, not a side-effecting link or an unbound callback query.
+func makeOAuthReconnectHandler(svc oauth.Service, aud ...audit.Recorder) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		lifecycle, ok := svc.(oauth.Lifecycle)
+		if !ok {
+			writeError(w, 503, "oauth_unavailable", "OAuth unavailable")
+			return
+		}
+		sess, ok := sessionFromContext(r.Context())
+		if !ok || sess == nil {
+			writeError(w, 401, "unauthorized", "Authentication required")
+			return
+		}
+		var in struct {
+			Provider string `json:"provider"`
+			Revision int64  `json:"revision"`
+			Adopt    bool   `json:"adoptExisting"`
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 4096)
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if dec.Decode(&in) != nil {
+			writeError(w, 400, "bad_request", "Invalid authorization request")
+			return
+		}
+		if in.Revision < 0 {
+			writeError(w, 400, "bad_request", "Invalid credential revision")
+			return
+		}
+		switch in.Provider {
+		case "gitee", "github", "gitlab", "custom", "gitea":
+		default:
+			writeError(w, 400, "invalid_provider", "Invalid OAuth provider")
+			return
+		}
+		redirect := requestOrigin(r) + "/api/oauth/" + url.PathEscape(in.Provider) + "/callback"
+		target, err := lifecycle.BeginAuthorization(r.Context(), sess.Token, in.Provider, redirect, chi.URLParam(r, "id"), in.Revision, in.Adopt)
+		if err != nil {
+			if errors.Is(err, oauth.ErrAppNotConfigured) || errors.Is(err, oauth.ErrInvalidProvider) {
+				writeOAuthError(w, err)
+			} else {
+				writeVaultError(w, err)
+			}
+			return
+		}
+		recordAudit(r.Context(), oauthAudit(aud), audit.Entry{Actor: auditActor, Action: "oauth_credential.reconnect", TargetType: audit.TargetCredential, TargetID: chi.URLParam(r, "id"), Detail: map[string]any{"provider": in.Provider, "result": "authorization_requested"}, IP: clientIP(r)})
+		writeJSON(w, 200, map[string]string{"authorizeUrl": target})
+	}
+}
+
+func oauthAudit(recorders []audit.Recorder) audit.Recorder {
+	if len(recorders) == 0 {
+		return nil
+	}
+	return recorders[0]
 }
 
 // redirectVaultError 302 跳回保险库设置页并带人读、无 secret 的 oauth_error 原因码。

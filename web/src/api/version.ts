@@ -8,7 +8,7 @@
  * 由 UI 优雅降级渲染。
  */
 
-import { http } from './http'
+import { http, type HttpOptions } from './http'
 
 export interface VersionInfo {
   version: string
@@ -32,11 +32,13 @@ export interface UpdateInfo {
 /** 一键自动更新结果。binary 模式成功后进程会自重启;docker 模式返回升级命令。 */
 export interface UpdateResult {
   mode: 'binary' | 'docker' | ''
-  status: 'restarting' | 'manual' | 'uptodate' | 'error'
+  status: 'accepted' | 'restarting' | 'manual' | 'uptodate' | 'error'
   from: string
   to: string
   message: string
   command?: string
+  taskId?: string
+  task?: UpgradeTask
 }
 
 export function getVersion(): Promise<VersionInfo> {
@@ -51,3 +53,14 @@ export function checkUpdate(): Promise<UpdateInfo> {
 export function applyUpdate(): Promise<UpdateResult> {
   return http.post<UpdateResult>('/api/version/update')
 }
+
+export type UpgradeState = 'accepted' | 'checking' | 'downloading' | 'verifying' | 'extracting' | 'installing' | 'restarting' | 'completed' | 'failed' | 'interrupted' | 'ready_blocked' | 'restart_required' | 'unknown'
+export interface UpgradeTask {
+ id: string; requestId: string; repository: string; target: string; from: string; platform: string; asset: string; sha256: string; binarySha256?: string
+ state: UpgradeState; reason?: string; bytes: number; total: number; createdAt: string; updatedAt: string
+ blockers?: { kind: 'terminal_sessions' | 'admitted_work' | 'runs' | 'activity_holds' | 'guards' | 'config_operations' | 'ops_runs'; count: number }[]
+}
+export function getCurrentUpdateTask(options?: HttpOptions): Promise<UpgradeTask | null> { return http.get('/api/version/update-tasks/current', { ...options, throwOnUnauthorized: true }) }
+export function getUpdateTask(id: string, options?: HttpOptions): Promise<UpgradeTask> { return http.get('/api/version/update-tasks/' + encodeURIComponent(id), { ...options, throwOnUnauthorized: true }) }
+export function startUpdateTask(input: { requestId: string; target: string }): Promise<UpdateResult> { return http.post('/api/version/update-tasks', input, { throwOnUnauthorized: true }) }
+export function resumeUpdateTask(id: string, requestId: string): Promise<UpgradeTask> { return http.post('/api/version/update-tasks/' + encodeURIComponent(id) + '/resume', { requestId }, { throwOnUnauthorized: true }) }

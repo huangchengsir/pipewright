@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/huangchengsir/pipewright/internal/buildcache"
+	"github.com/huangchengsir/pipewright/internal/mask"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/run"
 	"github.com/huangchengsir/pipewright/internal/vault"
@@ -231,17 +232,22 @@ func TestVariablesDeduplicateBeforeSecretResolution(t *testing.T) {
 				pipewrightEnvVar(),
 			}
 			var env []string
+			masker := mask.NewMasker()
+			ctx := mask.WithSecretRegistrar(context.Background(), masker.RegisterSecret)
 			if boundary == "build" {
-				plain, secret := b.buildArgs(vars)
+				plain, secret := b.buildArgs(ctx, vars)
 				env = append(plain, secret...)
 			} else {
-				env = b.buildEnv(vars)
+				env = b.buildEnv(ctx, vars)
 			}
 			if !reflect.DeepEqual(envMap(t, env), map[string]string{"PLAIN": "last", "SECRET": "revealed", "PIPEWRIGHT_ENV": pipewrightEnvVar().Value}) {
 				t.Fatalf("unexpected effective variables: %v", env)
 			}
 			if !reflect.DeepEqual(v.ids, []string{"winner", "missing"}) {
 				t.Fatalf("revealed overridden secret: %v", v.ids)
+			}
+			if masker.Scrub("revealed") != mask.Placeholder {
+				t.Fatal("resolved secret reached dispatch without local mask registration")
 			}
 		})
 	}

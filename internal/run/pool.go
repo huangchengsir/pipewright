@@ -431,6 +431,9 @@ func (p *WorkerPool) execute(runID string) {
 			sink.masker = m
 		}
 	}
+	if sink.masker != nil {
+		runCtx = mask.WithSecretRegistrar(runCtx, sink.masker.RegisterExactSecret)
+	}
 
 	r, err := p.svc.Get(runCtx, runID)
 	if err != nil {

@@ -58,12 +58,12 @@ func makeListRefsHandler(projects project.Service, v vault.Vault, lister RefsLis
 		}
 
 		// 取仓库凭据(进程内即用即弃);取不到不致命 → 空 token(公开仓库可成,私有走拉取失败)。
-		username, token := "", ""
-		if v != nil && strings.TrimSpace(proj.CredentialID) != "" {
-			if auth, terr := v.GetGitAuth(proj.CredentialID); terr == nil {
-				username, token = auth.Username, auth.Token
-			}
+		username, token, releaseGit, authErr := acquireRequestGitAuth(r.Context(), v, proj.CredentialID)
+		if authErr != nil {
+			writeVaultError(w, authErr)
+			return
 		}
+		defer releaseGit()
 
 		refs, lerr := lister.ListRefs(r.Context(), proj.RepoURL, username, token)
 		token = "" //nolint:ineffassign // 尽早清明文引用
@@ -122,12 +122,12 @@ func makeListCommitsHandler(projects project.Service, v vault.Vault, lister Refs
 			}
 		}
 
-		username, token := "", ""
-		if v != nil && strings.TrimSpace(proj.CredentialID) != "" {
-			if auth, terr := v.GetGitAuth(proj.CredentialID); terr == nil {
-				username, token = auth.Username, auth.Token
-			}
+		username, token, releaseGit, authErr := acquireRequestGitAuth(r.Context(), v, proj.CredentialID)
+		if authErr != nil {
+			writeVaultError(w, authErr)
+			return
 		}
+		defer releaseGit()
 		commits, lerr := lister.ListCommits(r.Context(), proj.RepoURL, username, token, ref, limit)
 		token = ""
 		_ = token

@@ -2,8 +2,14 @@ package build
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/huangchengsir/pipewright/internal/dagrun"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
@@ -24,48 +30,119 @@ import (
 type ServiceRunner interface {
 	CreateNetwork(ctx context.Context, network string, onLine func(stream, line string)) (int, error)
 	RemoveNetwork(ctx context.Context, network string, onLine func(stream, line string)) (int, error)
-	// RunService 以 detached 容器起一个服务:`run -d --name <containerName> --network <network>
-	// --network-alias <alias> [-e K=V...] [-p host:ctr...] <image>`。返回退出码。
+	// RunService creates a service container, confirms its CID, then starts it.
+	// Network alias, environment and fixed host ports retain their declared values.
 	RunService(ctx context.Context, containerName, alias, image, network string, env, ports []string, onLine func(stream, line string)) (int, error)
-	// StopService 强制删除服务容器(`rm -f <containerName>`)。返回退出码。
+	// StopService removes only the confirmed CID owned by this driver.返回退出码。
 	StopService(ctx context.Context, containerName string, onLine func(stream, line string)) (int, error)
 }
 
 // ─── shellDriver 实现 ServiceRunner ──────────────────────────────────────────
 
-func (d *shellDriver) CreateNetwork(ctx context.Context, network string, onLine func(stream, line string)) (int, error) {
-	args := []string{"network", "create", network}
-	emitCmd(onLine, d.bin, args)
-	return d.cmdr.Stream(ctx, d.bin, args, "", onLine)
-}
+const serviceOwnerLabel = "io.pipewright.service.owner"
 
-func (d *shellDriver) RemoveNetwork(ctx context.Context, network string, onLine func(stream, line string)) (int, error) {
-	args := []string{"network", "rm", network}
-	emitCmd(onLine, d.bin, args)
-	return d.cmdr.Stream(ctx, d.bin, args, "", onLine)
-}
+var serviceObjectID = regexp.MustCompile("^[a-f0-9]{64}$")
 
-func (d *shellDriver) RunService(ctx context.Context, containerName, alias, image, network string, env, ports []string, onLine func(stream, line string)) (int, error) {
-	args := []string{"run", "-d", "--name", containerName, "--network", network, "--network-alias", alias}
-	display := []string{"run", "-d", "--name", containerName, "--network", network, "--network-alias", alias}
+func serviceOutput(onLine func(string, string), stdout, stderr string) {
+	if onLine == nil {
+		return
+	}
+	for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
+		if line != "" {
+			onLine("stdout", line)
+		}
+	}
+	for _, line := range strings.Split(strings.TrimSpace(stderr), "\n") {
+		if line != "" {
+			onLine("stderr", line)
+		}
+	}
+}
+func (d *shellDriver) CreateNetwork(ctx context.Context, network string, onLine func(string, string)) (int, error) {
+	owner := rand.Text()
+	args := []string{"network", "create", "--label", serviceOwnerLabel + "=" + owner, network}
+	emitCmd(onLine, d.bin, args)
+	out, stderr, code, err := d.cmdr.Run(ctx, d.bin, args, "")
+	serviceOutput(onLine, out, stderr)
+	id := strings.TrimSpace(out)
+	if err == nil && code == 0 && ctx.Err() == nil && serviceObjectID.MatchString(id) {
+		d.serviceNetworks.Store(network, id)
+		return 0, nil
+	}
+	// A named successful Podman receipt is supported, but a lost/error receipt
+	// never causes a second create or a subsequent service start.
+	named := err == nil && code == 0 && ctx.Err() == nil && id == network
+	return d.reconcileServiceCreate(ctx, "network", network, owner, named)
+}
+func (d *shellDriver) RemoveNetwork(ctx context.Context, network string, onLine func(string, string)) (int, error) {
+	value, ok := d.serviceNetworks.Load(network)
+	if !ok {
+		return -1, errors.New("build: service network ownership unavailable")
+	}
+	id := value.(string)
+	args := []string{"network", "rm", id}
+	emitCmd(onLine, d.bin, args)
+	code, err := d.cmdr.Stream(ctx, d.bin, args, "", onLine)
+	if err == nil && code == 0 {
+		d.serviceNetworks.CompareAndDelete(network, id)
+	}
+	return code, err
+}
+func (d *shellDriver) RunService(ctx context.Context, containerName, alias, image, network string, env, ports []string, onLine func(string, string)) (int, error) {
+	net, ok := d.serviceNetworks.Load(network)
+	if !ok {
+		return -1, errors.New("build: service network ownership unavailable")
+	}
+	owner := rand.Text()
+	args := []string{"create", "--name", containerName, "--network", net.(string), "--network-alias", alias, "--label", serviceOwnerLabel + "=" + owner}
+	display := append([]string(nil), args...)
 	for _, kv := range env {
 		args = append(args, "-e", kv)
-		display = append(display, "-e", maskKV(kv)) // 服务 env 可能含口令:回显只列 key
+		display = append(display, "-e", maskKV(kv))
 	}
-	for _, p := range ports {
-		args = append(args, "-p", p)
-		display = append(display, "-p", p)
+	for _, port := range ports {
+		args = append(args, "-p", port)
+		display = append(display, "-p", port)
 	}
 	args = append(args, image)
 	display = append(display, image)
 	emitCmd(onLine, d.bin, display)
-	return d.cmdr.Stream(ctx, d.bin, args, "", onLine)
+	out, stderr, code, err := d.cmdr.Run(ctx, d.bin, args, "")
+	serviceOutput(onLine, out, stderr)
+	id := strings.TrimSpace(out)
+	if err != nil || code != 0 || ctx.Err() != nil || !serviceObjectID.MatchString(id) {
+		return d.reconcileServiceCreate(ctx, "container", containerName, owner, false)
+	}
+	d.serviceContainers.Store(containerName, id)
+	start := []string{"start", id}
+	emitCmd(onLine, d.bin, start)
+	code, err = d.cmdr.Stream(ctx, d.bin, start, "", onLine)
+	if err != nil || code != 0 {
+		// A failed start (for example an occupied fixed host port) still leaves a
+		// created container. Remove only the exact CID returned by this create.
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		if c, e := d.StopService(cleanup, containerName, nil); e != nil || c != 0 {
+			if onLine != nil {
+				onLine("stderr", "service cleanup incomplete for newly created container "+id)
+			}
+		}
+	}
+	return code, err
 }
-
-func (d *shellDriver) StopService(ctx context.Context, containerName string, onLine func(stream, line string)) (int, error) {
-	args := []string{"rm", "-f", containerName}
+func (d *shellDriver) StopService(ctx context.Context, containerName string, onLine func(string, string)) (int, error) {
+	value, ok := d.serviceContainers.Load(containerName)
+	if !ok {
+		return -1, errors.New("build: service container ownership unavailable")
+	}
+	id := value.(string)
+	args := []string{"rm", "-f", id}
 	emitCmd(onLine, d.bin, args)
-	return d.cmdr.Stream(ctx, d.bin, args, "", onLine)
+	code, err := d.cmdr.Stream(ctx, d.bin, args, "", onLine)
+	if err == nil && code == 0 {
+		d.serviceContainers.CompareAndDelete(containerName, id)
+	}
+	return code, err
 }
 
 // ─── 执行器集成 ──────────────────────────────────────────────────────────────
@@ -76,7 +153,12 @@ func stageNetworkName(runID, stageID string) string {
 	if len(short) > 8 {
 		short = short[:8]
 	}
-	return "pw-svc-" + sanitizeDockerName(short+"-"+stageID)
+	readable := sanitizeDockerName(short + "-" + stageID)
+	if len(readable) > 48 {
+		readable = readable[:48]
+	}
+	sum := sha256.Sum256([]byte(runID + "\x00" + stageID))
+	return "pw-svc-" + readable + "-" + hex.EncodeToString(sum[:8])
 }
 
 // sanitizeDockerName 把任意串净化为 docker 名安全(仅字母数字下划线连字符;空 → x)。
@@ -118,9 +200,13 @@ func (b *Builder) startStageServices(ctx context.Context, r *run.Run, stage pipe
 			_ = rep.Log(ctx, streamStderr, fmt.Sprintf("旁挂服务「%s」启动失败(code=%d):%v", sv.Name, code, err))
 			// 拆除已起的服务 + 网络,避免泄漏。
 			for _, c := range started {
-				_, _ = runner.StopService(context.WithoutCancel(ctx), c, nil)
+				if cleanupCode, cleanupErr := runner.StopService(context.WithoutCancel(ctx), c, nil); cleanupErr != nil || cleanupCode != 0 {
+					_ = rep.Log(context.WithoutCancel(ctx), streamStderr, fmt.Sprintf("清理已启动旁挂服务失败(best-effort, code=%d):%v", cleanupCode, cleanupErr))
+				}
 			}
-			_, _ = runner.RemoveNetwork(context.WithoutCancel(ctx), network, nil)
+			if cleanupCode, cleanupErr := runner.RemoveNetwork(context.WithoutCancel(ctx), network, nil); cleanupErr != nil || cleanupCode != 0 {
+				_ = rep.Log(context.WithoutCancel(ctx), streamStderr, fmt.Sprintf("清理服务网络失败(best-effort, code=%d):%v", cleanupCode, cleanupErr))
+			}
 			return "", false
 		}
 		started = append(started, cname)
@@ -136,12 +222,12 @@ func (b *Builder) stopStageServices(ctx context.Context, r *run.Run, stage pipel
 	}
 	for _, sv := range stage.Services {
 		cname := network + "-" + sv.Name
-		if _, err := runner.StopService(ctx, cname, nil); err != nil {
-			_ = rep.Log(ctx, streamStderr, fmt.Sprintf("清理旁挂服务「%s」失败(best-effort):%v", sv.Name, err))
+		if code, err := runner.StopService(ctx, cname, nil); err != nil || code != 0 {
+			_ = rep.Log(ctx, streamStderr, fmt.Sprintf("清理旁挂服务「%s」失败(best-effort, code=%d):%v", sv.Name, code, err))
 		}
 	}
-	if _, err := runner.RemoveNetwork(ctx, network, nil); err != nil {
-		_ = rep.Log(ctx, streamStderr, fmt.Sprintf("清理服务网络失败(best-effort):%v", err))
+	if code, err := runner.RemoveNetwork(ctx, network, nil); err != nil || code != 0 {
+		_ = rep.Log(ctx, streamStderr, fmt.Sprintf("清理服务网络失败(best-effort, code=%d):%v", code, err))
 	}
 }
 

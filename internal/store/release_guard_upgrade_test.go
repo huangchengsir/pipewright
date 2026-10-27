@@ -51,7 +51,7 @@ func TestReleaseGuardUpgradePreservesLegacyWithoutInventedEvidence(t *testing.T)
 				t.Fatal("reopen migration replay", err)
 			}
 			var count int
-			if err = s.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil || count != 57 {
+			if err = s.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil || count != 59 {
 				t.Fatal(count, err)
 			}
 			for _, table := range []string{"deployment_attempts", "deployment_attempt_targets", "deployment_attempt_receipts", "release_guard_plans", "release_guards", "release_guard_evidence", "release_guard_events", "release_guard_analyses"} {

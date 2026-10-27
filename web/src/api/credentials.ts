@@ -25,6 +25,15 @@ export interface Credential {
   maskedValue: string
   lastUsedAt: string | null
   createdAt: string
+  oauth?: {
+    managed: boolean
+    provider: 'gitee' | 'github' | 'gitlab' | 'gitea' | 'custom'
+    account: string
+    status: 'active' | 'refreshing' | 'refresh_unavailable' | 'reauthorization_required' | 'refresh_uncertain'
+    expiresAt: string | null
+    refreshable: boolean
+    revision: number
+  }
 }
 
 export interface CreateCredentialInput {
@@ -42,6 +51,15 @@ export interface UpdateCredentialInput {
   username?: string
   /** Providing secret rotates the key. */
   secret?: string
+  detachOAuth?: boolean
+}
+
+export async function reconnectOAuthCredential(id: string, input: {
+  provider: string
+  revision: number
+  adoptExisting: boolean
+}): Promise<{ authorizeUrl: string }> {
+  return http.post<{ authorizeUrl: string }>(`/api/credentials/${id}/oauth/reconnect`, input)
 }
 
 export async function listCredentials(): Promise<Credential[]> {

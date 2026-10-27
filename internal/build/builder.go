@@ -10,6 +10,7 @@ import (
 
 	"github.com/huangchengsir/pipewright/internal/artifactstore"
 	"github.com/huangchengsir/pipewright/internal/deploy"
+	"github.com/huangchengsir/pipewright/internal/mask"
 	"github.com/huangchengsir/pipewright/internal/notify"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
@@ -233,9 +234,7 @@ func (b *Builder) Run(ctx context.Context, r *run.Run, sink run.StepSink) error 
 	}
 	defer func() { _ = os.RemoveAll(workspace) }() // 宿主零污染
 
-	auth := b.revealGitAuth(proj.CredentialID)
-	resolved, cerr := b.cloner.Clone(ctx, proj.RepoURL, auth.Username, auth.Token, r.Trigger.Branch, r.Trigger.Commit, workspace)
-	auth = vault.GitAuth{}
+	resolved, cerr := b.cloneWithGitAuth(ctx, proj, r, workspace)
 	if cerr != nil {
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return b.cancelAt(ctx, sink, 0)
@@ -407,7 +406,7 @@ func (b *Builder) build(ctx context.Context, sink run.StepSink, ordinal int, pro
 
 	switch cfg.ArtifactType {
 	case pipeline.ArtifactImage:
-		buildArgs, secretArgs := b.buildArgs(cfg.Vars)
+		buildArgs, secretArgs := b.buildArgs(ctx, cfg.Vars)
 		// image 产物:无论 model A/B 都要求 Dockerfile(模型 B 对 image 退化为 Dockerfile)。
 		dockerfile := strings.TrimSpace(cfg.DockerfilePath)
 		if dockerfile == "" {
@@ -459,7 +458,7 @@ func (b *Builder) build(ctx context.Context, sink run.StepSink, ordinal int, pro
 		if image == "" {
 			return "", nil, fmt.Errorf("未指定工具链镜像(toolchain.language/version)")
 		}
-		env := b.buildEnv(cfg.Vars) // 工具链构建经 -e 注入(secret 回显只列 key)
+		env := b.buildEnv(ctx, cfg.Vars) // 工具链构建经 -e 注入(secret 回显只列 key)
 		buildCmd := toolchainBuildCmd(cfg.ArtifactType)
 		if b.buildCache != nil && cfg.ArtifactType == pipeline.ArtifactJAR {
 			buildCmd = mavenCacheCommand(buildCmd, "/src", parseCacheConfig(pipeline.Job{}, cfg.Cache))
@@ -513,8 +512,8 @@ func (d *scriptEvidenceDriver) RunToolchain(ctx context.Context, image, workspac
 
 // buildArgs 把构建变量拆成非 secret(明文 K=V)与 secret(vault.Reveal 明文 K=V)。
 // secret 明文即取即用,登记进 Masker 的脱敏由 sink 侧兜底;本包仅注入子进程不回显值。
-func (b *Builder) buildArgs(vars []pipeline.BuildVar) (plain []string, secret []string) {
-	for _, v := range b.resolveBuildVars(vars) {
+func (b *Builder) buildArgs(ctx context.Context, vars []pipeline.BuildVar) (plain []string, secret []string) {
+	for _, v := range b.resolveBuildVars(ctx, vars) {
 		kv := v.Key + "=" + v.Value
 		if v.Secret {
 			secret = append(secret, kv)
@@ -525,15 +524,15 @@ func (b *Builder) buildArgs(vars []pipeline.BuildVar) (plain []string, secret []
 	return plain, secret
 }
 
-func (b *Builder) buildEnv(vars []pipeline.BuildVar) []string {
+func (b *Builder) buildEnv(ctx context.Context, vars []pipeline.BuildVar) []string {
 	var env []string
-	for _, v := range b.resolveBuildVars(vars) {
+	for _, v := range b.resolveBuildVars(ctx, vars) {
 		env = append(env, v.Key+"="+v.Value)
 	}
 	return env
 }
 
-func (b *Builder) resolveBuildVars(vars []pipeline.BuildVar) []pipeline.BuildVar {
+func (b *Builder) resolveBuildVars(ctx context.Context, vars []pipeline.BuildVar) []pipeline.BuildVar {
 	// Choose the last declaration before revealing secrets; a missing winner
 	// must not revive an earlier value with lower precedence.
 	last := make(map[string]int, len(vars))
@@ -553,6 +552,7 @@ func (b *Builder) resolveBuildVars(vars []pipeline.BuildVar) []pipeline.BuildVar
 			if err != nil || pt == "" {
 				continue
 			}
+			mask.RegisterContextSecret(ctx, pt)
 			v.Value = pt
 		}
 		resolved = append(resolved, v)
@@ -572,15 +572,20 @@ func (b *Builder) revealToken(credID string) string {
 	return pt
 }
 
-func (b *Builder) revealGitAuth(credID string) vault.GitAuth {
-	if credID == "" || b.vault == nil {
-		return vault.GitAuth{}
-	}
-	auth, err := b.vault.GetGitAuth(credID)
+// cloneWithGitAuth retains the managed generation until Clone has really returned.
+func (b *Builder) cloneWithGitAuth(ctx context.Context, proj *project.Project, r *run.Run, destination string) (*CloneResolved, error) {
+	auth, release, err := vault.AcquireGitAuth(ctx, b.vault, proj.CredentialID)
 	if err != nil {
-		return vault.GitAuth{}
+		if vault.IsManagedGitError(err) || ctx.Err() != nil {
+			return nil, err
+		}
+		auth, release, err = vault.AcquireGitAuth(ctx, b.vault, "")
+		if err != nil {
+			return nil, err
+		}
 	}
-	return auth
+	defer release()
+	return b.cloner.Clone(ctx, proj.RepoURL, auth.Username, auth.Token, r.Trigger.Branch, r.Trigger.Commit, destination)
 }
 
 // revealRegistryCred 取仓库凭据明文并解析为 user/password。凭据约定以 "user:password" 存储;

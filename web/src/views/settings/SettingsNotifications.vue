@@ -288,7 +288,8 @@ function validate(): boolean {
       ok = false
     }
     const port = Number(form.smtpPort)
-    if (!form.smtpPort.trim() || Number.isNaN(port) || port <= 0) {
+    const smtpPortStr = String(form.smtpPort).trim()
+    if (!smtpPortStr || Number.isNaN(port) || port <= 0) {
       fieldErrors.smtpPort = t('settingsNotifications.valPortInvalid')
       ok = false
     }

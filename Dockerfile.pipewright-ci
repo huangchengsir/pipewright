@@ -1,0 +1,5 @@
+FROM docker:27-cli AS docker-cli
+# Docker: The CLI image contains /usr/local/bin/docker
+
+FROM ghcr.io/huangchengsir/pipewright:latest
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker

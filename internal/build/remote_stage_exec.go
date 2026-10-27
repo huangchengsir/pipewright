@@ -26,7 +26,6 @@ import (
 	"github.com/huangchengsir/pipewright/internal/dagrun"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/run"
-	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 // RunnerLookup 解析某项目的远程 runner 服务器 id(空/false = 本地构建)。runner.Service 即满足。
@@ -87,9 +86,7 @@ func (b *Builder) runStageRemote(ctx context.Context, r *run.Run, stage pipeline
 	}
 	defer func() { _ = os.RemoveAll(workspace) }()
 
-	auth := b.revealGitAuth(proj.CredentialID)
-	resolved, cerr := b.cloner.Clone(ctx, proj.RepoURL, auth.Username, auth.Token, r.Trigger.Branch, r.Trigger.Commit, workspace)
-	auth = vault.GitAuth{}
+	resolved, cerr := b.cloneWithGitAuth(ctx, proj, r, workspace)
 	if cerr != nil {
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return run.ErrCanceled
@@ -154,7 +151,7 @@ func markRemoteOmissions(stage pipeline.Stage, rep dagrun.StageReporter, failed 
 // runScriptOnDriver 用给定 driver(本地或远程)跑一条 script 步骤;remoteWS 为容器挂载的工作区(远程机上的路径)。
 // 与 runScriptStep 同语义(env 注入、workdir、多行 set -e 脚本、array 不拼 host shell),只是 driver 可注入。
 func (b *Builder) runScriptOnDriver(ctx context.Context, driver Driver, onLine func(stream, line string), step pipeline.PipelineStep, remoteWS string) error {
-	plain, secretEnv := b.buildArgs(step.Env)
+	plain, secretEnv := b.buildArgs(ctx, step.Env)
 	env := append(plain, secretEnv...)
 
 	workdir := scriptWorkspaceMount

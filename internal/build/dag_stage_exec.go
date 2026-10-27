@@ -18,7 +18,6 @@ import (
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/run"
-	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 // dag_stage_exec.go 是 DAG 调度器(dagrun)的**真实阶段执行器**(Epic 8 · Story 8-2)。
@@ -134,7 +133,7 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 
 		needsBuild := len(scriptJobs) > 0 || len(buildImageJobs) > 0
 		// 没有任何可执行节点(script/build_image/deploy_ssh/notify)且无 post → 诚实占位放行。
-		if !needsBuild && !hasPushJob && len(deployJobs) == 0 && len(notifyJobs) == 0 && len(stage.Post) == 0 {
+		if !needsBuild && !hasPushJob && len(deployJobs) == 0 && len(notifyJobs) == 0 && len(stage.Post) == 0 && len(stage.Services) == 0 {
 			for _, jb := range stage.Jobs {
 				_ = rep.JobRunning(ctx, jb.ID)
 				jr := rep.JobReporter(jb.ID)
@@ -195,9 +194,7 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 			workspace = ws
 			defer func() { _ = os.RemoveAll(workspace) }() // 宿主零污染
 
-			auth := b.revealGitAuth(proj.CredentialID)
-			resolved, cerr := b.cloner.Clone(ctx, proj.RepoURL, auth.Username, auth.Token, r.Trigger.Branch, r.Trigger.Commit, workspace)
-			auth = vault.GitAuth{}
+			resolved, cerr := b.cloneWithGitAuth(ctx, proj, r, workspace)
 			if cerr != nil {
 				if errors.Is(ctx.Err(), context.Canceled) {
 					return run.ErrCanceled
@@ -223,7 +220,7 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 			// 阶段结束(成败/取消)拆除。驱动不支持容器网络能力 → 直接失败(不在缺依赖下假跑)。
 			// 两条执行路径(DAG / 类型分组)共用,故提到分支之前。
 			var svcNetwork string
-			if needsBuild && len(stage.Services) > 0 {
+			if len(stage.Services) > 0 {
 				net, ok := b.startStageServices(ctx, r, stage, rep)
 				if !ok {
 					return ErrBuildFailed
@@ -529,9 +526,7 @@ func (b *Builder) cloneJobWorkspace(ctx context.Context, r *run.Run, proj *proje
 	}
 	cleanup := func() { _ = os.RemoveAll(ws) }
 
-	auth := b.revealGitAuth(proj.CredentialID)
-	resolved, cerr := b.cloner.Clone(ctx, proj.RepoURL, auth.Username, auth.Token, r.Trigger.Branch, r.Trigger.Commit, ws)
-	auth = vault.GitAuth{}
+	resolved, cerr := b.cloneWithGitAuth(ctx, proj, r, ws)
 	if cerr != nil {
 		cleanup()
 		if errors.Is(ctx.Err(), context.Canceled) {

@@ -292,8 +292,11 @@ func makeServerTerminalHandler(svc target.Service, aud audit.Recorder) http.Hand
 //
 // 任一方向出错/结束都 cancel,使另一方向的阻塞读/写解除,随后 defer 关 WS + 关 SSH 会话(不泄漏)。
 func pumpTerminal(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, sess target.Session) {
+	outputDone := make(chan struct{})
+	defer func() { cancel(); _ = sess.Close(); conn.CloseNow(); <-outputDone }()
 	// SSH PTY → WS。
 	go func() {
+		defer close(outputDone)
 		defer cancel()
 		buf := make([]byte, ptyReadChunk)
 		for {

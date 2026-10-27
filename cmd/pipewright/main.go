@@ -7,6 +7,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/maintenance"
+	"github.com/huangchengsir/pipewright/internal/selfupdate"
 	"io/fs"
 	"log"
 	"net/http"
@@ -67,6 +69,12 @@ import (
 )
 
 func main() {
+	if restart := runPlatform(); restart != nil {
+		restart()
+	}
+}
+
+func runPlatform() (restart func()) {
 	// --version / -v:在任何配置加载、存储打开等副作用之前处理,纯查询即打印退出。
 	for _, a := range os.Args[1:] {
 		if a == "--version" || a == "-version" || a == "-v" {
@@ -86,6 +94,20 @@ func main() {
 		log.Fatalf("store: %v", err)
 	}
 	defer func() { _ = st.Close() }()
+	restartRequests := make(chan struct{}, 1)
+	selfUpdater, updateInitErr := selfupdate.New(st.DB, selfupdate.Options{RequestRestart: func() error {
+		select {
+		case restartRequests <- struct{}{}:
+			return nil
+		default:
+			return selfupdate.ErrConflict
+		}
+	}})
+	if updateInitErr != nil {
+		log.Printf("[update] durable updater unavailable")
+	} else {
+		defer selfUpdater.Close()
+	}
 
 	// 启动期 fail-fast:内嵌前端必须含 index.html,否则运行期白屏(空/错误 web/dist 也能编过)。
 	webFS := root.WebFS()
@@ -125,6 +147,8 @@ func main() {
 		log.Printf("[vault] 警告:master key 配置无效(%v),凭据保险库不可用。", err)
 	}
 	credVault := vault.New(st.DB, masterKey)
+	oauthSvc := oauth.New(st.DB, credVault, &http.Client{Timeout: 10 * time.Second})
+	credVault = oauth.ManagedVault(oauthSvc, credVault)
 
 	// 审批链接签名器(「从通知直接审批」):用 master key 做 HMAC 签发/校验审批 token。
 	// master key 缺失 → 禁用态(不签链接、公开页不可用),功能优雅关闭。
@@ -636,7 +660,6 @@ func main() {
 	// OAuth 应用 client_secret(密文入库);OAuth 拿到的 access_token 经 vault.Create 存成 git_token 凭据,
 	// 之后克隆/构建直接复用(无需改克隆逻辑)。Exchange 兑换用带超时的注入 HTTP 客户端(~10s);
 	// state CSRF 短期内存绑会话。master key 未配置时涉及密钥的操作降级为明确错误(不 panic)。
-	oauthSvc := oauth.New(st.DB, credVault, &http.Client{Timeout: 10 * time.Second})
 
 	registerConfigSecrets := func(ctx context.Context) error {
 		if err := vault.RegisterMaskSecrets(ctx, credVault, auditMasker); err != nil {
@@ -673,14 +696,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("configure MCP: %v", err)
 	}
-	terminalManager := terminalhttp.New()
+	terminalManager := terminalhttp.NewWithAdmission(func(ctx context.Context) (func(), error) { return maintenance.Enter(ctx, st.DB, "terminal_pty") })
 	defer terminalManager.Close()
 	terminalCtx, stopTerminal := context.WithCancel(context.Background())
 	defer stopTerminal()
 	go terminalManager.Run(terminalCtx)
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithOnboarding(onboarding.New(st.DB, onboardingCapabilities)), httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithTerminalHTTP(terminalManager), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithReleaseGuard(guardSvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc), httpapi.WithOpsChat(opsChatSvc), httpapi.WithMCP(mcpHandler, mcpTokens), httpapi.WithConfigManagement(st.DB, configDrafts, configApplyEnabled)),
+		Handler:           httpapi.New(webFS, authSvc, httpapi.WithSelfUpdate(selfUpdater), httpapi.WithOnboarding(onboarding.New(st.DB, onboardingCapabilities)), httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithTerminalHTTP(terminalManager), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithReleaseGuard(guardSvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc), httpapi.WithOpsChat(opsChatSvc), httpapi.WithMCP(mcpHandler, mcpTokens), httpapi.WithConfigManagement(st.DB, configDrafts, configApplyEnabled)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;
@@ -692,6 +715,9 @@ func main() {
 	// 优雅停机:SIGINT/SIGTERM 后 Shutdown,放行在途请求并让 defer st.Close() 生效。
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if selfUpdater != nil {
+		selfUpdater.Start(ctx)
+	}
 
 	// 异常检测定时器(Story 6.5 增强):周期性 Check → 命中产告警 + best-effort 通知(去重已在服务内)。
 	// 间隔 env PIPEWRIGHT_ANOMALY_INTERVAL(秒)覆盖,默认 60s;置 "0" 关闭定时(仍可手动「立即检测」)。
@@ -754,7 +780,20 @@ func main() {
 		}
 	}()
 
-	<-ctx.Done()
+	select {
+	case <-ctx.Done():
+	case <-restartRequests:
+		restart = func() {
+			if err := version.Reexec(); err != nil {
+				log.Printf("[update] restart failed; manual restart required")
+				reopened, e := store.OpenWithConfig(store.OpenConfig{Driver: dbDriver, DSN: dbDSN})
+				if e == nil {
+					defer reopened.Close()
+					selfUpdater.RecordRestartFailure(context.Background(), reopened.DB)
+				}
+			}
+		}
+	}
 	stop()
 	log.Printf("shutting down…")
 	guardCtx, guardCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -781,6 +820,7 @@ func main() {
 	previewSweeper.Stop()
 	pool.Stop(shutdownCtx)
 	log.Printf("[run] worker pool stopped")
+	return
 }
 
 // Reuse the existing maintenance cadence; guard cleanup never creates a new
@@ -844,6 +884,14 @@ func (r pacGitAuthResolver) GetGitAuth(credentialID string) (string, string, err
 		return "", "", err
 	}
 	return auth.Username, auth.Token, nil
+}
+
+func (r pacGitAuthResolver) AcquireGitAuth(ctx context.Context, id string) (string, string, func(), error) {
+	auth, release, err := vault.AcquireGitAuth(ctx, r.vault, id)
+	if err != nil {
+		return "", "", nil, err
+	}
+	return auth.Username, auth.Token, release, nil
 }
 
 // pacBlobFetcher adapts SourceReader for pacloader without exposing credentials.

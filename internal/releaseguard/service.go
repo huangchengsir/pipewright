@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/maintenance"
 	"regexp"
 	"sort"
 	"strings"
@@ -263,6 +264,11 @@ func (s *Service) Start(ctx context.Context, project string, in StartInput) (*Re
 }
 
 func (s *Service) startLocked(ctx context.Context, project string, in StartInput, attached bool) (*Report, error) {
+	release, admissionErr := maintenance.Enter(ctx, s.db, "guard_start")
+	if admissionErr != nil {
+		return nil, admissionErr
+	}
+	defer release()
 	if !validKey.MatchString(in.IdempotencyKey) || in.PlanID == "" || in.PlanHash == "" {
 		return nil, ErrInvalid
 	}

@@ -78,12 +78,12 @@ func makePacPreviewHandler(d sourceDeps) http.HandlerFunc {
 		}
 
 		// 取仓库凭据(进程内取用即弃;取不到不致命 → 空 token 试公开仓库,与 pacloader 一致)。
-		username, token := "", ""
-		if d.vault != nil && strings.TrimSpace(proj.CredentialID) != "" {
-			if auth, terr := d.vault.GetGitAuth(proj.CredentialID); terr == nil {
-				username, token = auth.Username, auth.Token
-			}
+		username, token, releaseGit, authErr := acquireRequestGitAuth(r.Context(), d.vault, proj.CredentialID)
+		if authErr != nil {
+			writeVaultError(w, authErr)
+			return
 		}
+		defer releaseGit()
 
 		blob, berr := d.reader.Blob(r.Context(), proj.RepoURL, username, token, ref, pacPreviewFile)
 		if berr != nil {

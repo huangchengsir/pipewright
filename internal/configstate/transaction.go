@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/huangchengsir/pipewright/internal/completedrefs"
 	"github.com/huangchengsir/pipewright/internal/store"
 )
 
@@ -85,6 +86,9 @@ func withTx(ctx context.Context, db *sql.DB, readOnly bool, fn func(DBTX) error)
 			return ErrReadOnly
 		}
 		return fn(b.q)
+	}
+	if !readOnly {
+		completedrefs.Flush(ctx, db)
 	}
 	var q DBTX
 	var commit func() error

@@ -355,6 +355,8 @@ describe('existing terminal input boundaries (no SSH/model)', () => {
     const connect = button('Connect')
     await connect.trigger('click')
     await connect.trigger('click')
+    // Lazy xterm/CSS imports settle asynchronously under Vitest 4.
+    await vi.dynamicImportSettled()
     await flushPromises()
     expect(m.open).toHaveBeenCalledTimes(1)
     expect(m.connections).toHaveLength(1)

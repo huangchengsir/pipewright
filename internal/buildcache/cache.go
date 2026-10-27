@@ -92,8 +92,12 @@ func (s *Store) Restore(ctx context.Context, key string, _ []string, workspace s
 	if strings.TrimSpace(workspace) == "" {
 		return false, errors.New("buildcache: empty workspace")
 	}
-	archive := s.pathFor(key)
-	f, err := os.Open(archive)
+	root, err := os.OpenRoot(s.root)
+	if err != nil {
+		return false, nil
+	}
+	defer root.Close()
+	f, err := root.Open(s.relPathFor(key))
 	if err != nil {
 		return false, nil // 未命中 → 冷构建(不致命)
 	}
@@ -131,16 +135,23 @@ func (s *Store) Save(ctx context.Context, key string, paths []string, workspace 
 		return ErrNoPayload
 	}
 
-	dest := s.pathFor(key)
-	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+	root, err := os.OpenRoot(s.root)
+	if err != nil {
+		return fmt.Errorf("buildcache: open root: %w", err)
+	}
+	defer root.Close()
+	dest := s.relPathFor(key)
+	if err := root.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 		return fmt.Errorf("buildcache: mkdir shard: %w", err)
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(dest), ".save-*")
+	if err := validExistingTarget(root, dest); err != nil {
+		return err
+	}
+	tmp, tmpName, err := createRootTemp(root, filepath.Dir(dest), ".save-", 0o600)
 	if err != nil {
 		return fmt.Errorf("buildcache: temp: %w", err)
 	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }() // 成功路径已 rename 走,Remove 无害
+	defer root.Remove(tmpName)
 
 	payload, err := writeTarGz(ctx, tmp, workspace, clean)
 	if err != nil {
@@ -157,7 +168,7 @@ func (s *Store) Save(ctx context.Context, key string, paths []string, workspace 
 		return ErrNoPayload
 	}
 	// 原子覆盖(rename 覆盖同名,Save 同 key 即最新依赖快照胜出)。
-	if err := os.Rename(tmpName, dest); err != nil {
+	if err := root.Rename(tmpName, dest); err != nil {
 		return fmt.Errorf("buildcache: commit: %w", err)
 	}
 	return nil
@@ -168,16 +179,22 @@ func (s *Store) Has(key string) bool {
 	if s == nil || strings.TrimSpace(key) == "" {
 		return false
 	}
-	_, err := os.Stat(s.pathFor(key))
-	return err == nil
+	root, err := os.OpenRoot(s.root)
+	if err != nil {
+		return false
+	}
+	defer root.Close()
+	info, err := root.Stat(s.relPathFor(key))
+	return err == nil && info.Mode().IsRegular()
 }
 
 // pathFor 把缓存 key 折成分片归档路径:<root>/<keyhash 前 2 位>/<keyhash>.tgz。
 // key 经 SHA-256 → 64 位 hex,既杜绝路径穿越(key 任意字符都安全)又分片防单目录文件过多。
-func (s *Store) pathFor(key string) string {
+func (s *Store) pathFor(key string) string { return filepath.Join(s.root, s.relPathFor(key)) }
+func (s *Store) relPathFor(key string) string {
 	sum := sha256.Sum256([]byte(key))
 	h := hex.EncodeToString(sum[:])
-	return filepath.Join(s.root, h[:2], h+".tgz")
+	return filepath.Join(h[:2], h+".tgz")
 }
 
 // DeriveKey 推导确定性缓存 key:分支 + 工作区内命中的 lockfile 们的内容 hash(+ 可选 user 模板)。
@@ -214,6 +231,11 @@ func lockfilesDigest(workspace string) string {
 	if ws == "" {
 		return "none"
 	}
+	root, err := os.OpenRoot(ws)
+	if err != nil {
+		return "none"
+	}
+	defer root.Close()
 	dirs := []string{"."}
 	dirs = append(dirs, "frontend", "backend", "web", "server", "app", "api")
 
@@ -229,8 +251,7 @@ func lockfilesDigest(workspace string) string {
 			if seen[rel] {
 				continue
 			}
-			full := filepath.Join(ws, rel)
-			h, ok := fileContentHash(full)
+			h, ok := fileContentHash(root, rel)
 			if !ok {
 				continue
 			}
@@ -253,16 +274,16 @@ func lockfilesDigest(workspace string) string {
 }
 
 // fileContentHash 算文件内容的 sha256 hex(目录/不可读 → false)。
-func fileContentHash(path string) (string, bool) {
-	fi, err := os.Stat(path)
-	if err != nil || fi.IsDir() {
-		return "", false
-	}
-	f, err := os.Open(path)
+func fileContentHash(root *os.Root, name string) (string, bool) {
+	f, err := root.Open(name)
 	if err != nil {
 		return "", false
 	}
-	defer func() { _ = f.Close() }()
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return "", false
+	}
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", false
@@ -280,6 +301,9 @@ func cleanRelPaths(paths []string) []string {
 			continue
 		}
 		clean := filepath.Clean(p)
+		if _, err := archiveLocalName(filepath.ToSlash(clean)); err != nil {
+			continue
+		}
 		if filepath.IsAbs(clean) || strings.HasPrefix(clean, "/") || strings.HasPrefix(clean, "\\") || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 			continue
 		}

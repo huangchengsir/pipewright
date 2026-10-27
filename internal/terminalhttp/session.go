@@ -74,13 +74,21 @@ type entry struct {
 }
 
 type Manager struct {
-	mu      sync.Mutex
-	entries map[string]*entry
-	keys    map[string]*entry
-	closed  bool
+	admit     func(context.Context) (func(), error)
+	mu        sync.Mutex
+	entries   map[string]*entry
+	keys      map[string]*entry
+	closed    bool
+	lifetimes sync.WaitGroup
 }
 
 func New() *Manager { return &Manager{entries: make(map[string]*entry), keys: make(map[string]*entry)} }
+
+func NewWithAdmission(admit func(context.Context) (func(), error)) *Manager {
+	m := New()
+	m.admit = admit
+	return m
+}
 
 // Run is explicitly owned by the composition root, never by the router.
 func (m *Manager) Run(ctx context.Context) {
@@ -119,20 +127,15 @@ func (m *Manager) sweep(now time.Time) {
 func (m *Manager) Close() {
 	m.mu.Lock()
 	m.closed = true
-	entries := make([]*entry, 0, len(m.entries))
 	for _, e := range m.entries {
-		entries = append(entries, e)
 		e.mu.Lock()
 		e.finishLocked("session ended")
 		e.mu.Unlock()
 	}
 	m.mu.Unlock()
-	// Cancellation unblocks the production opener, including SSH channel setup.
-	// Wait for its result so shutdown cannot outlive a newly returned PTY.
-	for _, e := range entries {
-		<-e.ready
-		<-e.closeDone
-	}
+	// Join the entire admitted lifetime, including failed opening, actual output
+	// reader exit and release bookkeeping. Swept entries are still included.
+	m.lifetimes.Wait()
 }
 func (e *entry) wakeLocked() { close(e.notify); e.notify = make(chan struct{}) }
 func (e *entry) finishLocked(reason string) {
@@ -208,8 +211,18 @@ func (m *Manager) Create(ctx context.Context, owner, scope, requestID, descripti
 		m.mu.Unlock()
 		return "", ErrLimit
 	}
+	release := func() {}
+	if m.admit != nil {
+		var err error
+		release, err = m.admit(ctx)
+		if err != nil {
+			m.mu.Unlock()
+			return "", err
+		}
+	}
 	raw := make([]byte, 24)
 	if _, err := rand.Read(raw); err != nil {
+		release()
 		m.mu.Unlock()
 		return "", err
 	}
@@ -218,6 +231,7 @@ func (m *Manager) Create(ctx context.Context, owner, scope, requestID, descripti
 	e := &entry{owner: owner, scope: scope, key: key, id: hex.EncodeToString(raw), digest: digest, ready: make(chan struct{}), notify: make(chan struct{}), closeDone: make(chan struct{}), ctx: sessionCtx, cancel: cancel, last: now, progress: now}
 	m.entries[e.id] = e
 	m.keys[key] = e
+	m.lifetimes.Add(1) // Add under mu; Close forbids all later admissions.
 	m.mu.Unlock()
 	// The creation timer cancels the lifetime context only while opening. Stopping
 	// it after success preserves the established session's independent lifetime.
@@ -249,9 +263,11 @@ func (m *Manager) Create(ctx context.Context, owner, scope, requestID, descripti
 	close(e.ready)
 	e.mu.Unlock()
 	if err != nil {
+		defer m.lifetimes.Done()
+		release()
 		return "", err
 	}
-	go e.read()
+	go func() { defer m.lifetimes.Done(); defer func() { <-e.closeDone; release() }(); e.read() }()
 	return e.id, nil
 }
 func (m *Manager) lookup(owner, scope, id string) (*entry, error) {

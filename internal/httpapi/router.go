@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/selfupdate"
 	"io/fs"
 	"net/http"
 	"path"
@@ -65,6 +66,7 @@ const contextKeySession contextKey = 1
 type Option func(*options)
 
 type options struct {
+	selfUpdate         *selfupdate.Service
 	configDB           *sql.DB
 	configDrafts       *configdraft.Service
 	configRequireMatch bool
@@ -119,6 +121,8 @@ type options struct {
 	dnsProviders       dnsprovider.Service
 	previewEnvs        PreviewService
 }
+
+func WithSelfUpdate(s *selfupdate.Service) Option { return func(o *options) { o.selfUpdate = s } }
 
 // WithMCP adds the embedded Bearer-authenticated MCP route and admin token management.
 func WithMCP(handler http.Handler, tokens *auth.MCPTokenStore) Option {
@@ -421,8 +425,6 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 
 	// 更新检查器:进程级单例,内含 TTL 缓存(跨请求复用,避免反复点击打爆 GitHub 限流)。
 	updateChecker := version.NewChecker()
-	// 自更新串行闸:同一时刻仅允许一个更新进行。
-	updateInflight := newUpdateGate()
 
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
@@ -467,6 +469,9 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Use(func(next http.Handler) http.Handler {
 			return requireCSRF(next)
 		})
+		if o.selfUpdate != nil {
+			ar.Use(updateAdmissionMiddleware(o.selfUpdate))
+		}
 		if o.configDB != nil {
 			ar.Use(configRevisionMiddleware(o.configDB, o.configRequireMatch))
 			mountConfigManagement(ar, o.configDB, o.configDrafts)
@@ -486,7 +491,11 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Get("/version/check", makeCheckUpdateHandler(updateChecker))
 		ar.Get("/onboarding/status", makeOnboardingStatusHandler(o.onboarding))
 		// 一键自动更新:鉴权 + CSRF(写操作);binary 自替换+重启,docker 返回升级命令。
-		ar.Post("/version/update", makeSelfUpdateHandler(updateChecker, updateInflight))
+		ar.Post("/version/update", makeSelfUpdateHandler(updateChecker, o.selfUpdate, aud))
+		ar.Post("/version/update-tasks", makeUpdateTaskStartHandler(o.selfUpdate, aud))
+		ar.Get("/version/update-tasks/current", makeUpdateTaskGetHandler(o.selfUpdate, true))
+		ar.Get("/version/update-tasks/{taskId}", makeUpdateTaskGetHandler(o.selfUpdate, false))
+		ar.Post("/version/update-tasks/{taskId}/resume", makeUpdateTaskResumeHandler(o.selfUpdate, aud))
 
 		// 审计查询(Story 1.4):只读 + 认证保护 + 分页 + 过滤。
 		ar.Get("/audit", makeListAuditHandler(aud))
@@ -910,7 +919,8 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Get("/oauth/apps", makeListOAuthAppsHandler(oa))
 		ar.Put("/oauth/apps/{provider}", makeSaveOAuthAppHandler(oa))
 		ar.Get("/oauth/{provider}/authorize", makeOAuthAuthorizeHandler(oa))
-		ar.Get("/oauth/{provider}/callback", makeOAuthCallbackHandler(oa, v))
+		ar.Get("/oauth/{provider}/callback", makeOAuthCallbackHandler(oa, v, aud))
+		ar.Post("/credentials/{id}/oauth/reconnect", makeOAuthReconnectHandler(oa, aud))
 
 		// DORA 四指标只读聚合(FR-8-15):部署频率 / 变更前置时长 / 变更失败率 / MTTR。
 		// 对既有运行数据做纯聚合(无新表、无副作用)。GET 只读 → 过 auth、豁免 CSRF。

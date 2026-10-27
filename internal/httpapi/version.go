@@ -1,132 +1,263 @@
 package httpapi
 
 import (
-	"log"
-	"net/http"
-	"time"
-
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/go-chi/chi/v5"
+	"github.com/huangchengsir/pipewright/internal/audit"
+	"github.com/huangchengsir/pipewright/internal/selfupdate"
 	"github.com/huangchengsir/pipewright/internal/version"
+	"io"
+	"net/http"
+	"strings"
 )
 
-// makeCheckUpdateHandler 处理 GET /api/version/check:查询 GitHub 最新发布并与当前版本比对。
-// 检查失败(网络/限流)不返 5xx —— 而是 200 + UpdateInfo.CheckError,让前端稳定渲染降级态。
 func makeCheckUpdateHandler(checker *version.Checker) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		info := checker.Check(r.Context())
-		writeJSON(w, http.StatusOK, info)
-	}
+	return func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, checker.Check(r.Context())) }
 }
 
-// updateResult 是 POST /api/version/update 的返回。
 type updateResult struct {
-	Mode    string `json:"mode"`              // binary | docker
-	Status  string `json:"status"`            // restarting | manual | uptodate | error
-	From    string `json:"from"`              // 当前版本
-	To      string `json:"to"`                // 目标版本
-	Message string `json:"message"`           // 给用户的说明
-	Command string `json:"command,omitempty"` // docker 模式的升级命令
+	Mode    string           `json:"mode"`
+	Status  string           `json:"status"`
+	From    string           `json:"from"`
+	To      string           `json:"to"`
+	Message string           `json:"message"`
+	Command string           `json:"command,omitempty"`
+	TaskID  string           `json:"taskId,omitempty"`
+	Task    *selfupdate.Task `json:"task,omitempty"`
 }
 
-// makeSelfUpdateHandler 处理 POST /api/version/update:执行一键自动更新。
-//
-//   - binary 模式(裸机/install.sh):下载新版二进制 + 校验和核验 + 原子替换当前可执行文件,
-//     回完响应后用新二进制 re-exec 自重启(同 PID 重新绑定端口,短暂不可用,前端轮询 /version 重连)。
-//   - docker 模式:容器不能替换自身镜像,返回精确升级命令供用户执行。
-//
-// 串行化:同一时刻只允许一个更新在进行。
-func makeSelfUpdateHandler(checker *version.Checker, inflight *updateGate) http.HandlerFunc {
+func manualUpdate(w http.ResponseWriter, s *selfupdate.Service) bool {
+	mode, can := version.Mode(), version.CanSelfReplace()
+	if s != nil {
+		mode, can = s.Capabilities()
+	}
+	if mode == version.ModeDocker {
+		writeJSON(w, 200, updateResult{Mode: "docker", Status: "manual", Command: version.DockerUpgradeCommand()})
+		return true
+	}
+	if !can {
+		writeJSON(w, 200, updateResult{Mode: "binary", Status: "manual"})
+		return true
+	}
+	return false
+}
+func updateError(w http.ResponseWriter, e error) {
+	code, status := "update_unavailable", http.StatusServiceUnavailable
+	if errors.Is(e, selfupdate.ErrInvalid) {
+		code, status = "bad_request", 400
+	}
+	if errors.Is(e, selfupdate.ErrConflict) {
+		code, status = "update_conflict", 409
+	}
+	if errors.Is(e, selfupdate.ErrNotFound) {
+		code, status = "not_found", 404
+	}
+	writeError(w, status, code, "升级任务暂不可用，请核对原任务状态")
+}
+func auditUpdate(r *http.Request, a audit.Recorder, t *selfupdate.Task, action string) {
+	if a == nil || t == nil {
+		return
+	}
+	actor := auditActor
+	_ = a.Record(r.Context(), audit.Entry{Actor: actor, Action: action, TargetType: "selfupdate_task", TargetID: t.ID, Detail: map[string]any{"target": t.Target, "state": t.State}})
+}
+func decodeUpdate(w http.ResponseWriter, r *http.Request, v any) bool {
+	return decodeUpdateBody(w, r, v, false)
+}
+func decodeUpdateBody(w http.ResponseWriter, r *http.Request, v any, allowEmpty bool) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	d := json.NewDecoder(r.Body)
+	d.DisallowUnknownFields()
+	if e := d.Decode(v); e != nil {
+		if allowEmpty && e == io.EOF {
+			return true
+		}
+		writeError(w, 400, "bad_request", "请求格式错误")
+		return false
+	}
+	if d.Decode(new(any)) != io.EOF {
+		writeError(w, 400, "bad_request", "请求格式错误")
+		return false
+	}
+	return true
+}
+func makeUpdateTaskStartHandler(s *selfupdate.Service, a audit.Recorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !inflight.tryAcquire() {
-			writeJSON(w, http.StatusConflict, updateResult{Status: "error", Message: "已有更新正在进行"})
+		if manualUpdate(w, s) {
 			return
 		}
-		// binary 成功路径会 re-exec(不返回),故仅在非成功路径释放。
-		release := inflight.release
-
-		info := checker.Check(r.Context())
-		res := updateResult{From: info.Current, To: info.Latest}
-
+		if s == nil {
+			updateError(w, selfupdate.ErrUnavailable)
+			return
+		}
+		var in selfupdate.Request
+		if !decodeUpdate(w, r, &in) {
+			return
+		}
+		t, e := s.Submit(r.Context(), in)
+		if e != nil {
+			updateError(w, e)
+			return
+		}
+		auditUpdate(r, a, t, "selfupdate_submit")
+		writeJSON(w, 202, updateResult{Mode: "binary", Status: "accepted", From: t.From, To: t.Target, TaskID: t.ID, Task: t})
+	}
+}
+func makeSelfUpdateHandler(c *version.Checker, s *selfupdate.Service, a audit.Recorder) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if manualUpdate(w, s) {
+			return
+		}
+		if s == nil {
+			updateError(w, selfupdate.ErrUnavailable)
+			return
+		}
+		info := c.Check(r.Context())
 		if info.CheckError != "" {
-			release()
-			res.Status, res.Message = "error", info.CheckError
-			writeJSON(w, http.StatusBadGateway, res)
+			updateError(w, selfupdate.ErrUnavailable)
 			return
 		}
 		if !info.UpdateAvailable {
-			release()
-			res.Status, res.Message = "uptodate", "已是最新版本"
-			writeJSON(w, http.StatusOK, res)
+			writeJSON(w, 200, updateResult{Status: "uptodate", From: info.Current, To: info.Latest})
 			return
 		}
-
-		// Docker:不能自换镜像,给升级命令。
-		if version.Mode() == version.ModeDocker {
-			release()
-			res.Mode, res.Status = "docker", "manual"
-			res.Command = version.DockerUpgradeCommand()
-			res.Message = "Docker 部署无法在容器内替换自身镜像。请在宿主执行升级命令(数据卷保留,新版自动迁移)。"
-			writeJSON(w, http.StatusOK, res)
+		// Empty legacy requests are permanently bound to the same instance/target task.
+		sum := sha256.Sum256([]byte(info.Latest))
+		in := selfupdate.Request{Target: info.Latest}
+		if !decodeUpdateBody(w, r, &in, true) {
 			return
 		}
-
-		res.Mode = "binary"
-		if !version.CanSelfReplace() {
-			release()
-			res.Status = "manual"
-			res.Message = "当前平台不支持替换运行中的程序,请手动下载新版替换。"
-			writeJSON(w, http.StatusOK, res)
+		if in.Target != info.Latest {
+			updateError(w, selfupdate.ErrConflict)
 			return
 		}
-
-		// 下载 + 校验 + 替换二进制。失败则释放并报错(进程仍跑旧版,不影响服务)。
-		if err := checker.ApplyBinaryUpdate(r.Context(), info.Latest); err != nil {
-			release()
-			res.Status, res.Message = "error", err.Error()
-			writeJSON(w, http.StatusInternalServerError, res)
-			return
-		}
-
-		// 替换成功:先把响应发回(并 flush),再延迟 re-exec,给前端时间进入"等待重启"态。
-		res.Status = "restarting"
-		res.Message = "新版本已就位,正在重启…"
-		writeJSON(w, http.StatusOK, res)
-		if f, ok := w.(http.Flusher); ok {
-			f.Flush()
-		}
-		log.Printf("[update] %s → %s 已就位,即将 re-exec 重启", info.Current, info.Latest)
-		go func() {
-			time.Sleep(700 * time.Millisecond) // 让响应抵达客户端
-			if err := version.Reexec(); err != nil {
-				log.Printf("[update] re-exec 失败(新版已就位,请手动重启): %v", err)
-				release()
+		if in.RequestID == "" {
+			if existing, e := s.ForTarget(r.Context(), info.Latest); e == nil {
+				writeJSON(w, 202, updateResult{Mode: "binary", Status: "accepted", From: existing.From, To: existing.Target, TaskID: existing.ID, Task: existing})
+				return
 			}
-		}()
+			in.RequestID = fmt.Sprintf("legacy-%x", sum)
+		}
+		t, e := s.Submit(r.Context(), in)
+		if e != nil {
+			updateError(w, e)
+			return
+		}
+		auditUpdate(r, a, t, "selfupdate_submit")
+		writeJSON(w, 202, updateResult{Mode: "binary", Status: "accepted", From: t.From, To: t.Target, TaskID: t.ID, Task: t})
+	}
+}
+func makeUpdateTaskGetHandler(s *selfupdate.Service, current bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s == nil {
+			if version.Mode() == version.ModeDocker || !version.CanSelfReplace() {
+				writeJSON(w, 200, nil)
+			} else {
+				updateError(w, selfupdate.ErrUnavailable)
+			}
+			return
+		}
+		var t *selfupdate.Task
+		var e error
+		if current {
+			t, e = s.Current(r.Context())
+		} else {
+			t, e = s.Get(r.Context(), chi.URLParam(r, "taskId"))
+		}
+		if current && errors.Is(e, selfupdate.ErrNotFound) {
+			writeJSON(w, 200, nil)
+			return
+		}
+		if e != nil {
+			updateError(w, e)
+			return
+		}
+		writeJSON(w, 200, t)
+	}
+}
+func makeUpdateTaskResumeHandler(s *selfupdate.Service, a audit.Recorder) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s == nil {
+			updateError(w, selfupdate.ErrUnavailable)
+			return
+		}
+		var in struct {
+			RequestID string `json:"requestId"`
+		}
+		if !decodeUpdate(w, r, &in) {
+			return
+		}
+		t, e := s.Resume(r.Context(), chi.URLParam(r, "taskId"), in.RequestID)
+		if e != nil {
+			updateError(w, e)
+			return
+		}
+		auditUpdate(r, a, t, "selfupdate_resume")
+		writeJSON(w, 202, t)
+	}
+}
+func updateAdmissionMiddleware(s *selfupdate.Service) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.Path
+			websocket := strings.EqualFold(r.Header.Get("Upgrade"), "websocket") && strings.Contains(path, "/terminal")
+			write := r.Method != "GET" && r.Method != "HEAD" && r.Method != "OPTIONS"
+			cleanup := updateCompletionRoute(r.Method, path)
+			control := r.Method == http.MethodPost && (path == "/api/version/update" || path == "/api/version/update-tasks" || updateRouteMatches(path, "/api/version/update-tasks/_/resume"))
+			if (!write && !websocket) || cleanup || control {
+				next.ServeHTTP(w, r)
+				return
+			}
+			kind := "http_work"
+			if websocket {
+				kind = "terminal_pty"
+			}
+			release, e := s.Admit(r.Context(), kind)
+			if e != nil {
+				writeError(w, 503, "maintenance", "系统正在安装升级，请稍后重试")
+				return
+			}
+			defer release()
+			next.ServeHTTP(w, r)
+		})
 	}
 }
 
-// updateGate 串行化自更新:同一时刻仅一个进行中。
-type updateGate struct {
-	ch chan struct{}
-}
-
-func newUpdateGate() *updateGate {
-	g := &updateGate{ch: make(chan struct{}, 1)}
-	g.ch <- struct{}{}
-	return g
-}
-
-func (g *updateGate) tryAcquire() bool {
-	select {
-	case <-g.ch:
-		return true
-	default:
+func updateRouteMatches(path, pattern string) bool {
+	got, want := strings.Split(path, "/"), strings.Split(pattern, "/")
+	if len(got) != len(want) {
 		return false
 	}
-}
-
-func (g *updateGate) release() {
-	select {
-	case g.ch <- struct{}{}:
-	default:
+	for i, part := range want {
+		if part == "_" {
+			if got[i] == "" || got[i] == "." || got[i] == ".." {
+				return false
+			}
+		} else if got[i] != part {
+			return false
+		}
 	}
+	return true
+}
+func updateCompletionRoute(method, path string) bool {
+	if method == http.MethodPost {
+		for _, pattern := range []string{
+			"/api/runs/_/cancel",
+			"/api/projects/_/release-guards/_/stop",
+			"/api/ai/ops/sessions/_/runs/_/cancel",
+			"/api/servers/_/terminal/sessions/_/input",
+			"/api/servers/_/containers/_/terminal/sessions/_/input",
+		} {
+			if updateRouteMatches(path, pattern) {
+				return true
+			}
+		}
+	}
+	if method == http.MethodDelete {
+		return updateRouteMatches(path, "/api/servers/_/terminal/sessions/_") || updateRouteMatches(path, "/api/servers/_/containers/_/terminal/sessions/_")
+	}
+	return false
 }

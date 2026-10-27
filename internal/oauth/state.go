@@ -16,6 +16,7 @@ const stateTTL = 10 * time.Minute
 type stateEntry struct {
 	sessionID string
 	expiresAt time.Time
+	bound     *authorizationState
 }
 
 // stateStore 是 OAuth state 的短期内存存储(CSRF 防护)。
@@ -42,6 +43,12 @@ func newStateStore() *stateStore {
 
 // issue 生成并登记一个绑定 sessionID 的随机 state,返回供放进 authorize URL。
 func (s *stateStore) issue(sessionID string) (string, error) {
+	return s.issueEntry(sessionID, nil)
+}
+func (s *stateStore) issueBound(sessionID string, bound authorizationState) (string, error) {
+	return s.issueEntry(sessionID, &bound)
+}
+func (s *stateStore) issueEntry(sessionID string, bound *authorizationState) (string, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
 		return "", err
@@ -51,28 +58,39 @@ func (s *stateStore) issue(sessionID string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.gcLocked()
-	s.entries[state] = stateEntry{sessionID: sessionID, expiresAt: s.now().Add(stateTTL)}
+	s.entries[state] = stateEntry{sessionID: sessionID, expiresAt: s.now().Add(stateTTL), bound: bound}
 	return state, nil
 }
 
 // consume 校验并一次性消费 state:存在 + 未过期 + 绑定会话匹配 → true(并删除);否则 false。
 // 用常量时间比较 sessionID(防时序侧信道)。
 func (s *stateStore) consume(state, sessionID string) bool {
+	_, ok := s.take(state, sessionID)
+	return ok
+}
+func (s *stateStore) consumeBound(state, sessionID string) (authorizationState, bool) {
+	e, ok := s.take(state, sessionID)
+	if !ok || e.bound == nil {
+		return authorizationState{}, false
+	}
+	return *e.bound, true
+}
+func (s *stateStore) take(state, sessionID string) (stateEntry, bool) {
 	if state == "" {
-		return false
+		return stateEntry{}, false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.entries[state]
 	if !ok {
-		return false
+		return stateEntry{}, false
 	}
 	// 无论结果如何都消费掉这条 state(一次性,防重放)。
 	delete(s.entries, state)
 	if s.now().After(e.expiresAt) {
-		return false
+		return stateEntry{}, false
 	}
-	return subtle.ConstantTimeCompare([]byte(e.sessionID), []byte(sessionID)) == 1
+	return e, subtle.ConstantTimeCompare([]byte(e.sessionID), []byte(sessionID)) == 1
 }
 
 // gcLocked 惰性清理过期项(调用方须持锁)。

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/maintenance"
 	"io"
 	"strings"
 	"time"
@@ -234,6 +235,11 @@ func (s *Service) PreviewAnalysis(ctx context.Context, project, guard string, in
 }
 
 func (s *Service) SendAnalysis(ctx context.Context, project, guard, id string, in SendAnalysisInput) (*Analysis, error) {
+	release, admissionErr := maintenance.Enter(ctx, s.db, "guard_analysis")
+	if admissionErr != nil {
+		return nil, admissionErr
+	}
+	defer release()
 	s.mu.Lock()
 	r, err := s.Snapshot(ctx, project, guard)
 	if err != nil {

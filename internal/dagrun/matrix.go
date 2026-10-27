@@ -2,6 +2,7 @@ package dagrun
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -92,21 +93,36 @@ func buildCell(st pipeline.Stage, cell map[string]string, needs []string) pipeli
 	for axis, val := range cell {
 		env[pipeline.MatrixEnvKey(axis)] = val
 	}
-	jobs := make([]pipeline.Job, 0, len(st.Jobs))
-	for _, jb := range st.Jobs {
-		jobs = append(jobs, cloneJobWithMatrixEnv(jb, env, cellSuffixFromCell(cell)))
+	suffix := cellSuffixFromCell(cell)
+	jobIDs := make(map[string]string, len(st.Jobs))
+	for _, job := range st.Jobs {
+		jobIDs[job.ID] = job.ID + "__" + suffix
 	}
-	return pipeline.Stage{
-		ID:           cellID(st.ID, cell),
-		Name:         st.Name + " " + cellLabel(cell),
-		Kind:         st.Kind,
-		Needs:        needs,
-		AllowFailure: st.AllowFailure,
-		When:         st.When,
-		Gate:         st.Gate,
-		// Matrix 故意清空:cell 已是展开后的具体实例,不可再被二次展开。
-		Jobs: jobs,
+	cp := st
+	cp.ID, cp.Name, cp.Matrix = cellID(st.ID, cell), st.Name+" "+cellLabel(cell), nil
+	cp.Needs = append([]string(nil), needs...)
+	cp.When.Branches = append([]string(nil), st.When.Branches...)
+	cp.When.Events = append([]string(nil), st.When.Events...)
+	cp.Jobs = make([]pipeline.Job, len(st.Jobs))
+	for i, job := range st.Jobs {
+		cp.Jobs[i] = cloneJobWithMatrixEnv(job, env, suffix)
+		cp.Jobs[i].Needs = append([]string(nil), job.Needs...)
+		for j, id := range cp.Jobs[i].Needs {
+			if scoped, ok := jobIDs[id]; ok {
+				cp.Jobs[i].Needs[j] = scoped
+			}
+		}
 	}
+	cp.Post = append([]pipeline.PostStep(nil), st.Post...)
+	for i := range cp.Post {
+		cp.Post[i].Commands = append([]string(nil), st.Post[i].Commands...)
+	}
+	cp.Services = append([]pipeline.ServiceSpec(nil), st.Services...)
+	for i := range cp.Services {
+		cp.Services[i].Env = append([]string(nil), st.Services[i].Env...)
+		cp.Services[i].Ports = append([]string(nil), st.Services[i].Ports...)
+	}
+	return cp
 }
 
 // cellLabel 返回供展示的 cell 标签,如 `[go=1.21, os=linux]`(轴字典序)。
@@ -123,24 +139,66 @@ func cellLabel(cell map[string]string) string {
 	return "[" + strings.Join(parts, ", ") + "]"
 }
 
-// cloneJobWithMatrixEnv 深拷贝 job(含 Config 浅拷贝足够——只新增键),写入 __matrixEnv,
-// 并给 job id 追加 cell 后缀以保证全局唯一(同阶段多 cell 的同名 job 不撞 id)。
+// cloneJobWithMatrixEnv copies validated JSON-compatible configuration,
+// including typed maps/slices used by internal callers, before adding cell env.
 func cloneJobWithMatrixEnv(jb pipeline.Job, env map[string]string, suffix string) pipeline.Job {
 	cfg := make(map[string]any, len(jb.Config)+1)
 	for k, v := range jb.Config {
-		cfg[k] = v
+		if v == nil {
+			cfg[k] = nil
+		} else {
+			cfg[k] = cloneMatrixValue(reflect.ValueOf(v)).Interface()
+		}
 	}
-	// 拷贝一份 env,避免多 job 共享同一 map 引用。
 	envCopy := make(map[string]string, len(env))
 	for k, v := range env {
 		envCopy[k] = v
 	}
 	cfg[matrixEnvConfigKey] = envCopy
 	jb.Config = cfg
+	jb.Needs = append([]string(nil), jb.Needs...)
 	if suffix != "" {
-		jb.ID = jb.ID + "__" + suffix
+		jb.ID += "__" + suffix
 	}
 	return jb
+}
+func cloneMatrixValue(v reflect.Value) reflect.Value {
+	switch v.Kind() {
+	case reflect.Interface:
+		if v.IsNil() {
+			return v
+		}
+		cp := reflect.New(v.Type()).Elem()
+		cp.Set(cloneMatrixValue(v.Elem()))
+		return cp
+	case reflect.Map:
+		if v.IsNil() {
+			return v
+		}
+		cp := reflect.MakeMapWithSize(v.Type(), v.Len())
+		it := v.MapRange()
+		for it.Next() {
+			cp.SetMapIndex(it.Key(), cloneMatrixValue(it.Value()))
+		}
+		return cp
+	case reflect.Slice:
+		if v.IsNil() {
+			return v
+		}
+		cp := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
+		for i := 0; i < v.Len(); i++ {
+			cp.Index(i).Set(cloneMatrixValue(v.Index(i)))
+		}
+		return cp
+	case reflect.Array:
+		cp := reflect.New(v.Type()).Elem()
+		for i := 0; i < v.Len(); i++ {
+			cp.Index(i).Set(cloneMatrixValue(v.Index(i)))
+		}
+		return cp
+	default:
+		return v
+	}
 }
 
 // cartesian 返回矩阵所有轴的笛卡尔积(每个 cell = axis→值 的一种取值组合)。

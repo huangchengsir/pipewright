@@ -30,19 +30,20 @@ func TestExtractRejectsTraversal(t *testing.T) {
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// 防穿越:前导 ../ 被锚到工作区根后中和,绝不写到工作区外(无论解包成功与否)。
-	_, _ = extractTarGz(context.Background(), bytes.NewReader(buf.Bytes()), dest)
-	if _, serr := os.Stat(filepath.Join(filepath.Dir(dest), "escape.txt")); !os.IsNotExist(serr) {
-		t.Errorf("escape file written outside workspace (err=%v)", serr)
+	if _, err := extractTarGz(context.Background(), bytes.NewReader(buf.Bytes()), dest); err == nil {
+		t.Fatal("parent path must be rejected")
 	}
-	// 条目应落在工作区内(中和为 dest/escape.txt),内容完整。
-	if got, rerr := os.ReadFile(filepath.Join(dest, "escape.txt")); rerr != nil || string(got) != "pwned" {
-		t.Errorf("entry not neutralized into workspace: got=%q err=%v", got, rerr)
+	if _, err := os.Stat(filepath.Join(filepath.Dir(dest), "escape.txt")); !os.IsNotExist(err) {
+		t.Fatalf("outside path created: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(dest, "escape.txt")); !os.IsNotExist(err) {
+		t.Fatalf("unsafe name was silently rewritten: %v", err)
+	}
+
 }
 
-// 显式绝对路径条目(/etc/x)也被锚回工作区内,不写到真实绝对路径。
-func TestExtractNeutralizesAbsolutePath(t *testing.T) {
+// Absolute archive names are rejected rather than silently rewritten.
+func TestExtractRejectsAbsolutePath(t *testing.T) {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
@@ -54,12 +55,13 @@ func TestExtractNeutralizesAbsolutePath(t *testing.T) {
 
 	dest := filepath.Join(t.TempDir(), "ws")
 	_ = os.MkdirAll(dest, 0o755)
-	if _, err := extractTarGz(context.Background(), bytes.NewReader(buf.Bytes()), dest); err != nil {
-		t.Fatalf("extract: %v", err)
+	if _, err := extractTarGz(context.Background(), bytes.NewReader(buf.Bytes()), dest); err == nil {
+		t.Fatal("absolute name must be rejected")
 	}
-	if _, rerr := os.Stat(filepath.Join(dest, "abs", "file.txt")); rerr != nil {
-		t.Errorf("absolute entry not anchored into workspace: %v", rerr)
+	if _, err := os.Stat(filepath.Join(dest, "abs", "file.txt")); !os.IsNotExist(err) {
+		t.Fatalf("absolute entry was rewritten: %v", err)
 	}
+
 }
 
 // Restore 遇损坏归档 → 当未命中处理(false,nil),不让构建失败。

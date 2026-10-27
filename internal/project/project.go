@@ -176,7 +176,7 @@ func (s *service) probe(ctx context.Context, repoURL, credentialID string) (stri
 	if s.vault == nil {
 		return "", ErrVaultUnconfigured
 	}
-	auth, err := s.vault.GetGitAuth(credentialID)
+	auth, release, err := vault.AcquireGitAuth(ctx, s.vault, credentialID)
 	if err != nil {
 		switch {
 		case errors.Is(err, vault.ErrVaultUnconfigured):
@@ -188,6 +188,7 @@ func (s *service) probe(ctx context.Context, repoURL, credentialID string) (stri
 			return "", ErrCredentialError
 		}
 	}
+	defer release()
 	if auth.Type != "" {
 		ssh := gitauth.IsSSH(repoURL)
 		if (ssh && auth.Type != vault.TypeSSHKey && auth.Type != vault.TypeSSHPassword) ||

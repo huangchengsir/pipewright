@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/maintenance"
 	"sort"
 	"strings"
 	"time"
@@ -449,6 +450,12 @@ func (s *Service) convergeRun(id, run, status string, onlyWorking bool) error {
 	}, 50)
 }
 func (s *Service) work(parent context.Context, id, run string) {
+	release, admissionErr := maintenance.Enter(parent, s.db, "ops_worker")
+	if admissionErr != nil {
+		s.failRun(id, run, Interrupted)
+		return
+	}
+	defer release()
 	defer func() {
 		if err := s.convergeRun(id, run, Failed, true); err != nil {
 			s.fenceWorker()

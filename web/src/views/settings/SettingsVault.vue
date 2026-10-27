@@ -6,6 +6,7 @@ import {
   updateCredential,
   deleteCredential,
   revealCredential,
+  reconnectOAuthCredential,
 } from '../../api/credentials'
 import type { Credential, CredentialType, CreateCredentialInput, UpdateCredentialInput } from '../../api/credentials'
 import { HttpError } from '../../api/http'
@@ -67,12 +68,55 @@ const editRevealing = ref(false)
 
 // ─── OAuth connect (enabled providers only) ──────────────────────────────────
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const toast = useToast()
 const route = useRoute()
 const router = useRouter()
 
 const oauthApps = ref<OAuthApp[]>([])
+const reconnecting = ref<Credential | null>(null)
+const reconnectProvider = ref('')
+const adoptOAuth = ref(false)
+const reconnectBusy = ref(false)
+const reconnectError = ref('')
+const detachOAuth = ref(false)
+const editingManaged = computed(() => credentials.value.find(c => c.id === editingId.value)?.oauth?.managed === true)
+
+function oauthExpiry(value: string | null): string {
+  const date = value ? new Date(value) : null
+  if (!date || !Number.isFinite(date.getTime())) return t('settingsVault.oauthUnknownExpiry')
+  return new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+}
+function openReconnect(credential: Credential): void {
+  reconnecting.value = credential
+  reconnectProvider.value = credential.oauth?.provider || ''
+  adoptOAuth.value = false
+  reconnectError.value = ''
+}
+function closeReconnect(): void {
+  if (reconnectBusy.value) return
+  reconnecting.value = null
+}
+async function confirmReconnect(): Promise<void> {
+  const credential = reconnecting.value
+  if (!credential || !reconnectProvider.value || (!credential.oauth?.managed && !adoptOAuth.value) || reconnectBusy.value) return
+  reconnectBusy.value = true
+  reconnectError.value = ''
+  try {
+    const result = await reconnectOAuthCredential(credential.id, {
+      provider: reconnectProvider.value,
+      revision: credential.oauth?.revision ?? 0,
+      adoptExisting: !credential.oauth?.managed && adoptOAuth.value,
+    })
+    const destination = new URL(result.authorizeUrl, window.location.origin)
+    if (!['http:', 'https:'].includes(destination.protocol) || destination.username || destination.password) throw new Error('invalid authorization URL')
+    window.location.href = destination.toString()
+  } catch {
+    reconnectError.value = 'settingsVault.oauthReconnectError'
+  } finally {
+    reconnectBusy.value = false
+  }
+}
 
 const PROVIDER_LABELS = computed<Record<OAuthProvider, string>>(() => ({
   gitee: 'Gitee',
@@ -130,7 +174,14 @@ function handleOAuthCallback(): void {
     void loadCredentials()
     clearOAuthQuery()
   } else if (typeof oauthError === 'string' && oauthError) {
-    toast.error(t('settingsVault.toastConnectError'), { detail: oauthError })
+    const lifecycleErrors: Record<string, string> = {
+      identity_changed: 'settingsVault.oauthReconnectError',
+      credential_changed: 'settingsVault.oauthReconnectError',
+      credential_busy: 'settingsVault.oauthReconnectError',
+      exchange_uncertain: 'settingsVault.oauthState_refresh_uncertain',
+      reauthorization_required: 'settingsVault.oauthState_reauthorization_required',
+    }
+    toast.error(t('settingsVault.toastConnectError'), { detail: lifecycleErrors[oauthError] ? t(lifecycleErrors[oauthError]!) : oauthError })
     clearOAuthQuery()
   }
 }
@@ -141,6 +192,7 @@ function clearOAuthQuery(): void {
   delete query.connected
   delete query.account
   delete query.oauth_error
+  delete query.credential
   void router.replace({ query })
 }
 
@@ -221,6 +273,7 @@ function openAddModal(): void {
 }
 
 function openEditModal(c: Credential): void {
+  detachOAuth.value = false
   modalMode.value = 'edit'
   editingId.value = c.id
   // secret is intentionally blank — user must re-enter to rotate
@@ -271,6 +324,10 @@ function validateForm(): boolean {
 
 async function handleFormSubmit(): Promise<void> {
   if (!validateForm()) return
+  if (editingManaged.value && form.value.secret && !detachOAuth.value) {
+    formBanner.value = t('settingsVault.oauthDetachConfirm')
+    return
+  }
   formSubmitting.value = true
   formBanner.value = ''
   try {
@@ -293,6 +350,7 @@ async function handleFormSubmit(): Promise<void> {
       // Only include secret if user typed something (rotation)
       if (form.value.secret) {
         payload.secret = form.value.secret
+        if (editingManaged.value) payload.detachOAuth = detachOAuth.value
       }
       const updated = await updateCredential(editingId.value, payload)
       credentials.value = credentials.value.map((c) =>
@@ -530,6 +588,11 @@ async function toggleEditReveal(): Promise<void> {
           <div class="cred-name">
             <strong class="cred-label">{{ cred.name }}</strong>
             <span class="cred-mask mono" :title="t('settingsVault.maskTitle')" :aria-label="t('settingsVault.maskAria', { value: cred.maskedValue })">{{ cred.maskedValue }}</span>
+            <div v-if="cred.oauth" class="oauth-lifecycle" data-testid="oauth-lifecycle">
+              <span>{{ cred.oauth.provider }} · {{ cred.oauth.account }} · {{ t(`settingsVault.oauthState_${cred.oauth.status}`) }}</span>
+              <span>{{ t('settingsVault.oauthExpiry') }}: {{ oauthExpiry(cred.oauth.expiresAt) }}</span>
+              <span>{{ t(cred.oauth.refreshable ? 'settingsVault.oauthRefreshAvailable' : 'settingsVault.oauthRefreshUnavailable') }}</span>
+            </div>
           </div>
 
           <!-- Type label -->
@@ -557,6 +620,7 @@ async function toggleEditReveal(): Promise<void> {
 
           <!-- Actions -->
           <span class="cred-ops">
+            <button v-if="cred.type === 'git_token' || cred.type === 'git_http'" type="button" class="btn-secondary oauth-reconnect" @click="openReconnect(cred)">{{ t('settingsVault.oauthReconnect') }}</button>
             <!-- Edit -->
             <button
               class="op-btn"
@@ -712,6 +776,7 @@ async function toggleEditReveal(): Promise<void> {
             <input
               id="cred-username"
               v-model="form.username"
+			  :readonly="editingManaged"
               class="field-input"
               type="text"
               :placeholder="t('settingsVault.gitUsernamePlaceholder')"
@@ -750,6 +815,7 @@ async function toggleEditReveal(): Promise<void> {
 
             <!-- Current plaintext, read-only — shown only while explicitly revealed -->
             <div v-if="modalMode === 'edit' && editRevealed !== null" class="current-secret mono">{{ editRevealed }}</div>
+            <label v-if="editingManaged" class="oauth-detach"><input v-model="detachOAuth" type="checkbox" />{{ t('settingsVault.oauthDetachConfirm') }}</label>
 <!-- SSH 私钥是多行 PEM/OpenSSH 文本:必须用 textarea,单行 <input> 会按 HTML 规范清除换行
                  → 私钥结构破坏、ssh.ParsePrivateKey 失败「凭据不是可用的 SSH 私钥」。令牌/镜像仓库仍用
                  password input(单行密文 + 掩码输入)。 -->
@@ -887,9 +953,29 @@ async function toggleEditReveal(): Promise<void> {
       </div>
     </div>
   </Teleport>
+  <Teleport to="body">
+    <div v-if="reconnecting" class="modal-scrim" role="dialog" aria-modal="true" :aria-label="t('settingsVault.oauthReconnect')" tabindex="-1" @click.self="closeReconnect" @keydown.esc="closeReconnect">
+      <div class="modal modal--sm">
+        <div class="modal-head"><div><h3 class="modal-title">{{ t('settingsVault.oauthReconnect') }}</h3><p class="modal-sub">{{ reconnecting.name }}</p></div></div>
+        <div class="modal-body oauth-reconnect-body">
+          <p>{{ t(reconnecting.oauth?.managed ? 'settingsVault.oauthReconnectNotice' : 'settingsVault.oauthAdoptNotice') }}</p>
+          <label v-if="!reconnecting.oauth?.managed">{{ t('settingsVault.oauthProvider') }}
+            <select v-model="reconnectProvider" data-testid="oauth-provider"><option disabled value="">{{ t('settingsVault.oauthChooseProvider') }}</option><option v-for="app in connectableProviders" :key="app.provider" :value="app.provider">{{ PROVIDER_LABELS[app.provider] }}</option></select>
+          </label>
+          <label v-if="!reconnecting.oauth?.managed" class="oauth-detach"><input v-model="adoptOAuth" data-testid="oauth-adopt" type="checkbox" />{{ t('settingsVault.oauthAdoptConfirm') }}</label>
+          <p v-if="reconnectError" role="alert">{{ t(reconnectError) }}</p>
+        </div>
+        <div class="modal-footer modal-footer--standalone"><button type="button" class="btn-secondary" :disabled="reconnectBusy" @click="closeReconnect">{{ t('settingsVault.cancel') }}</button><button type="button" class="btn-primary" data-testid="oauth-confirm-reconnect" :disabled="reconnectBusy || !reconnectProvider || (!reconnecting.oauth?.managed && !adoptOAuth)" @click="confirmReconnect">{{ t('settingsVault.oauthContinue') }}</button></div>
+      </div>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
+.oauth-lifecycle { display: grid; gap: 4px; color: var(--color-dim); font-size: 11px; overflow-wrap: anywhere; }
+.oauth-reconnect-body { display: grid; gap: 14px; }
+.oauth-reconnect-body select { display: block; width: 100%; margin-top: 6px; padding: 8px; color: var(--color-text); background: var(--color-inset); border: 1px solid var(--color-border); border-radius: 6px; }
+.oauth-detach { display: flex; align-items: start; gap: 8px; font-size: 12px; line-height: 1.6; }
 /* ─── layout ──────────────────────────────────────────────────────────────── */
 .vault-root {
   display: flex;
@@ -1140,7 +1226,7 @@ async function toggleEditReveal(): Promise<void> {
 /* ─── credential table ────────────────────────────────────────────────────── */
 .cred-row {
   display: grid;
-  grid-template-columns: 30px minmax(200px, 1.4fr) 100px 1fr 120px 96px;
+  grid-template-columns: 30px minmax(200px, 1.4fr) 100px minmax(0, 1fr) 120px minmax(12rem, max-content);
   align-items: center;
   gap: 14px;
   padding: 12px 18px;
@@ -1258,7 +1344,9 @@ async function toggleEditReveal(): Promise<void> {
   border: 1px solid var(--color-border);
   border-radius: 6px;
   padding: 2px 7px;
-  white-space: nowrap;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .scope-tag--all {
@@ -1274,8 +1362,9 @@ async function toggleEditReveal(): Promise<void> {
 .cred-time {
   font-size: 0.74rem;
   color: var(--color-faint);
-  white-space: nowrap;
+  white-space: normal;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 5px;
 }
@@ -1297,11 +1386,29 @@ async function toggleEditReveal(): Promise<void> {
 /* ─── action buttons ──────────────────────────────────────────────────────── */
 .cred-ops {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 5px;
+  min-width: 0;
+}
+
+.cred-ops .oauth-reconnect {
+  flex: 0 1 auto;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  min-height: 28px;
+  padding: 4px 8px;
+  justify-content: center;
+  font-size: 0.74rem;
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .op-btn {
+  flex: 0 0 28px;
   width: 28px;
   height: 26px;
   border: 1px solid var(--color-border);
@@ -1825,6 +1932,33 @@ async function toggleEditReveal(): Promise<void> {
 }
 
 /* ─── reduced motion ──────────────────────────────────────────────────────── */
+@media (max-width: 1100px) {
+  .cred-row {
+    grid-template-columns: 30px minmax(0, 1fr);
+    align-items: start;
+    row-gap: 8px;
+  }
+
+  .cred-row--head {
+    display: none;
+  }
+
+  .cred-name {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .cred-type,
+  .cred-scope,
+  .cred-time {
+    grid-column: 2;
+  }
+
+  .cred-ops {
+    grid-column: 1 / -1;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

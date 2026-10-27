@@ -1,0 +1,10 @@
+# Phase 1: Obtain the static binary of nerdctl
+FROM alpine:3.20 AS nerdctl-builder
+RUN apk add --no-cache curl tar && \
+    NERDCTL_VERSION="2.0.3" && \
+    curl -sSL "https://github.com/containerd/nerdctl/releases/download/v${NERDCTL_VERSION}/nerdctl-${NERDCTL_VERSION}-linux-amd64.tar.gz" \
+    | tar -xz -C /usr/local/bin nerdctl
+
+# Phase 2: Based on the official image, only copy the binaries into it
+FROM ghcr.io/huangchengsir/pipewright:latest
+COPY --from=nerdctl-builder /usr/local/bin/nerdctl /usr/local/bin/nerdctl

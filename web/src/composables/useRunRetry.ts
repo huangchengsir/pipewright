@@ -40,7 +40,6 @@ export function useRunRetry(runId: Ref<string>) {
   let generation = 0
   let planGeneration = 0
   let controller: AbortController | undefined
-  let timer: ReturnType<typeof setInterval> | undefined
   let refreshing = false
   let disposed = false
 
@@ -168,7 +167,7 @@ export function useRunRetry(runId: Ref<string>) {
   }, { immediate: true })
   // Refresh terminal attempts too: cleanup, other tabs and reconciliation may
   // change recovery eligibility without emitting an old run's terminal SSE.
-  timer = setInterval(() => { void refresh(); if (pending.value && !request.value) void queryOriginal() }, 4000)
+  const timer = setInterval(() => { void refresh(); if (pending.value && !request.value) void queryOriginal() }, 4000)
   onBeforeUnmount(() => { disposed = true; generation++; planGeneration++; controller?.abort(); if (timer) clearInterval(timer) })
   return { context, contextError, attempts, historyPage, plan, error, planLoading, submitting, querying, reconciling, pending, request, reconcileReasons, selected, rebuild, failedNodes, isHead, unresolved, refresh, openPlan, preview, submit, queryOriginal, reconcile, setHistoryPage }
 }

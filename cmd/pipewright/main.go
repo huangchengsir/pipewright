@@ -60,6 +60,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/retention"
 	"github.com/huangchengsir/pipewright/internal/run"
 	"github.com/huangchengsir/pipewright/internal/runner"
+	"github.com/huangchengsir/pipewright/internal/runretry"
 	"github.com/huangchengsir/pipewright/internal/store"
 	"github.com/huangchengsir/pipewright/internal/target"
 	"github.com/huangchengsir/pipewright/internal/terminalhttp"
@@ -217,6 +218,11 @@ func runPlatform() (restart func()) {
 	}))
 	// DORA 指标只读聚合(FR-8-15):同一 *service 实现暴露为 MetricsService,无新连接/新表。
 	doraMetricsSvc := run.NewMetricsService(runSvc)
+	retryBindings := &nodeRetryBindings{db: st.DB, runs: runSvc, projects: projectSvc, settings: pipelineSettingsSvc}
+	retrySvc := newNodeRetryService(st.DB, credVault, retryBindings)
+	if err := retrySvc.ReconcileStartup(context.Background()); err != nil {
+		log.Fatalf("recover node retries: local ledger unavailable")
+	}
 
 	// 装配人工审批门协调器 + 持久层(Story 8-4):DAG 调度到 Gate 阶段时阻塞等待批准/拒绝。
 	// 协调器为进程内(零持久状态);记录落 run_approvals 供 UI/审计/重启清理。
@@ -301,6 +307,7 @@ func runPlatform() (restart func()) {
 	// 目标服务器(SSH 执行层)+ 远程构建 runner 配置(FR-8-14 续):项目可指定一台 server 作远程构建机,
 	// 配置后该项目构建下沉到远程执行(控制机本地克隆 → 经 SSH 传工作区 → 远程容器跑;token 只在控制机)。
 	targetSvc := target.New(st.DB, credVault, nil)
+	retryBindings.targets = targetSvc
 	// Assistant sessions use a separate, local-only recorder and masker.
 	opsMasker := mask.NewMasker()
 	if masterKey != nil {
@@ -321,6 +328,7 @@ func runPlatform() (restart func()) {
 		}
 	}
 	runnerSvc := runner.New(st.DB, targetExister{targetSvc})
+	retryBindings.runners = runnerSvc
 
 	// 制品库(Story 8-16 / FR-8-16):构建后把 jar/dist 真字节归档,部署时取真字节上传目标机
 	// (否则只有占位 reference,jar/dist 无法真正部署)。默认落 DB 同级 artifacts/,可经
@@ -333,6 +341,7 @@ func runPlatform() (restart func()) {
 		}
 		if as, aerr := artifactstore.New(artDir); aerr == nil {
 			artStore = as
+			retryBindings.artifacts = as
 			log.Printf("[artifact] 制品库已启用(归档 jar/dist 真字节供部署):%s", artDir)
 		} else {
 			log.Printf("[artifact] 警告:制品库不可用(%v),jar/dist 部署退回占位引用", aerr)
@@ -412,7 +421,8 @@ func runPlatform() (restart func()) {
 	if err != nil {
 		log.Fatalf("initialize release guard: %v", err)
 	}
-	deploySvc := deploy.New(targetSvc, runSvc, deploy.WithDiagnoseHook(httpapi.NewDiagnoseHook(runSvc, aiSvc, secretSrc)), deploy.WithArtifactStore(artStore), deploy.WithBatchDB(st.DB), deploy.WithAttemptLedger(attemptLedger), deploy.WithImageObserver(guardSvc))
+	deploySvc := deploy.New(targetSvc, runSvc, deploy.WithDiagnoseHook(httpapi.NewDiagnoseHook(runSvc, aiSvc, secretSrc)), deploy.WithArtifactStore(artStore), deploy.WithBatchDB(st.DB), deploy.WithAttemptLedger(attemptLedger), deploy.WithImageObserver(guardSvc), deploy.WithRetryLedger(retrySvc))
+	retryBindings.targetVerifier = deploy.RetryTargetVerifier(deploySvc)
 	if recovery, ok := deploySvc.(interface{ RecoverInterruptedBatches(context.Context) error }); ok {
 		if err := recovery.RecoverInterruptedBatches(context.Background()); err != nil {
 			log.Fatalf("recover deploy batches: %v", err)
@@ -442,6 +452,15 @@ func runPlatform() (restart func()) {
 		if b, berr := build.NewBuilder(projectSvc, pipelineSettingsSvc, credVault, build.WithArtifactStore(artStore), build.WithArtifactLister(runSvc.ListArtifacts), build.WithImageGC(os.Getenv("PIPEWRIGHT_NO_IMAGE_GC") != "1"), build.WithCommitRecorder(func(ctx context.Context, runID, commit string) { _ = runSvc.SetCommit(ctx, runID, commit) }), build.WithStageDeployer(deploySvc), build.WithStageNotifier(notifySvc), clonerOpt, buildCacheOpt); berr == nil {
 			// runSvc 作测试报告持久层注入(Story 8-6 / FR-8-6):script 步骤产报告 → 解析 →
 			// 落库 → 质量门禁裁决(不过则阶段失败,阻断下游部署)。
+			retryBindings.real = true
+			retryBindings.imageVerifier = b.ValidateCheckpointImage
+			retryBindings.releaseImage = b.ReleaseCheckpointImage
+			retryBindings.resourceVerifier = func(ctx context.Context, ref runretry.ResourceRef) (bool, error) {
+				if ref.ServerID != "" {
+					return build.VerifyRemoteResource(ctx, targetSvc, ref)
+				}
+				return b.VerifyResource(ctx, ref)
+			}
 			dagOpts = append(dagOpts, dagrun.WithStageExecutor(build.NewStageExecutorWithRunner(b, runSvc, runnerSvc, targetSvc)))
 			onboardingCapabilities.Runtime = onboarding.RuntimeAvailable
 			log.Printf("[run] DAG 调度执行器已启用(默认;阶段按 needs 编排,真按 UI 可视化流水线 stages 执行;script 类型 job 在隔离容器真实执行,CLI=%s;PIPEWRIGHT_RUNNER=legacy 可回退旧版固定流程)", b.DriverBinary())
@@ -464,6 +483,7 @@ func runPlatform() (restart func()) {
 			pacBlobFetcher{httpapi.NewSourceReader()},
 			pacGlobalOverride,
 		)}
+		retryBindings.loader = specLoader
 		if pacGlobalOverride {
 			log.Printf("[pac] 全局强开:.pipewright.yml 覆盖对所有项目生效(PIPEWRIGHT_PAC_RUNTIME=1;无视每项目开关)")
 		}
@@ -503,13 +523,13 @@ func runPlatform() (restart func()) {
 	// 历史全局开关 PIPEWRIGHT_PR_STATUS=1 保留为**全局强开**:无视每项目开关,对所有项目回写(向后兼容)。
 	// API base 可经 env 覆盖(GitHub/Gitee 企业版自托管;空则用公有云默认),无论是否全局强开均生效。
 	// best-effort:失败仅记日志,不阻断 run 终态。
-	terminalHook := httpapi.NewNotifyHook(runSvc, notifySvc, secretSrc)
+	terminalHook := retryTerminalOnce(retrySvc, "notify:completion", true, false, httpapi.NewNotifyHook(runSvc, notifySvc, secretSrc, retrySvc))
 	prStatusGlobalOverride := strings.EqualFold(strings.TrimSpace(os.Getenv("PIPEWRIGHT_PR_STATUS")), "1")
 	reporter := prstatus.NewReporter(&http.Client{Timeout: 10 * time.Second}).WithBaseURLs(
 		strings.TrimSpace(os.Getenv("PIPEWRIGHT_PR_STATUS_GITHUB_BASE")),
 		strings.TrimSpace(os.Getenv("PIPEWRIGHT_PR_STATUS_GITEE_BASE")))
-	prHook := httpapi.NewPRStatusHook(runSvc, projectSvc, credVault, reporter,
-		strings.TrimSpace(os.Getenv("PIPEWRIGHT_PUBLIC_URL")), prStatusGlobalOverride)
+	prHook := retryTerminalOnce(retrySvc, "prstatus:completion", true, false, httpapi.NewPRStatusHook(runSvc, projectSvc, credVault, reporter,
+		strings.TrimSpace(os.Getenv("PIPEWRIGHT_PUBLIC_URL")), prStatusGlobalOverride))
 	notify := terminalHook
 	terminalHook = func(ctx context.Context, runID, finalStatus string) {
 		notify(ctx, runID, finalStatus)
@@ -531,7 +551,7 @@ func runPlatform() (restart func()) {
 			log.Printf("[chain] 警告:PIPEWRIGHT_CHAIN_MAX_DEPTH=%q 非法(须为正整数),用默认 %d", v, chain.DefaultMaxDepth)
 		}
 	}
-	chainHook := chain.NewHook(chainSvc, runSvc, chainMaxDepth)
+	chainHook := retryTerminalOnce(retrySvc, "chain:success", false, true, chain.NewHook(chainSvc, runSvc, chainMaxDepth))
 	priorTerminal := terminalHook
 	terminalHook = func(ctx context.Context, runID, finalStatus string) {
 		priorTerminal(ctx, runID, finalStatus)
@@ -540,7 +560,7 @@ func runPlatform() (restart func()) {
 
 	// Per-PR 预览环境分配钩子(R4 E4.1):run 落 success 且属于某 PR、其项目开启预览 → 分配预览域名。
 	// best-effort + recover-safe:任何前置不满足 / 分配失败一律静默或仅记日志,绝不阻断 run 终态。
-	previewHook := httpapi.NewPreviewProvisionHook(runSvc, previewSvc, proxySvc, targetSvc)
+	previewHook := retryTerminalOnce(retrySvc, "preview:success", false, true, httpapi.NewPreviewProvisionHook(runSvc, previewSvc, proxySvc, targetSvc))
 	beforePreview := terminalHook
 	terminalHook = func(ctx context.Context, runID, finalStatus string) {
 		beforePreview(ctx, runID, finalStatus)
@@ -561,6 +581,7 @@ func runPlatform() (restart func()) {
 
 	pool := run.NewWorkerPool(runSvc,
 		append(runnerOpts,
+			run.WithRetryRuntime(retrySvc),
 			run.WithDiagnoseHook(httpapi.NewDiagnoseHook(runSvc, aiSvc, secretSrc)),
 			// per-run 日志脱敏:每个 run 构建登记了该 run 真实凭据的 Masker(红线修)。
 			run.WithLogMaskerFunc(secretSrc.MaskerForRun),
@@ -584,7 +605,12 @@ func runPlatform() (restart func()) {
 	// 运行数据保留清理器:按 retention_config 策略定期裁剪过期终态运行(连带其日志/步骤/产物),
 	// 防止无限增长撑爆磁盘。默认策略 enabled=0(不删);用户在设置里开启并配条数/天数后生效。
 	retentionSvc := retention.NewService(st.DB)
-	retentionSweeper := retention.NewSweeper(guardRetentionPruner{runs: retentionSvc, guards: guardSvc}, time.Hour)
+	retentionSweeper := retention.NewSweeper(guardRetentionPruner{runs: retentionSvc, guards: guardSvc, retries: retrySvc, releaseImage: func(ctx context.Context, image runretry.ImageRef) error {
+		if retryBindings.releaseImage == nil {
+			return runretry.ErrUnavailable
+		}
+		return retryBindings.releaseImage(ctx, image)
+	}}, time.Hour)
 	retentionSweeper.Start(context.Background())
 	log.Printf("[retention] 保留清理器已启动(每小时一扫;策略默认关,需在设置开启)")
 
@@ -703,7 +729,7 @@ func runPlatform() (restart func()) {
 	go terminalManager.Run(terminalCtx)
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithSelfUpdate(selfUpdater), httpapi.WithOnboarding(onboarding.New(st.DB, onboardingCapabilities)), httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithTerminalHTTP(terminalManager), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithReleaseGuard(guardSvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc), httpapi.WithOpsChat(opsChatSvc), httpapi.WithMCP(mcpHandler, mcpTokens), httpapi.WithConfigManagement(st.DB, configDrafts, configApplyEnabled)),
+		Handler:           httpapi.New(webFS, authSvc, httpapi.WithSelfUpdate(selfUpdater), httpapi.WithOnboarding(onboarding.New(st.DB, onboardingCapabilities)), httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithRunRetry(retrySvc), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithTerminalHTTP(terminalManager), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithReleaseGuard(guardSvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc), httpapi.WithOpsChat(opsChatSvc), httpapi.WithMCP(mcpHandler, mcpTokens), httpapi.WithConfigManagement(st.DB, configDrafts, configApplyEnabled)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;
@@ -826,8 +852,10 @@ func runPlatform() (restart func()) {
 // Reuse the existing maintenance cadence; guard cleanup never creates a new
 // service, runs a probe, or depends on source run retention remaining enabled.
 type guardRetentionPruner struct {
-	runs   retention.Pruner
-	guards *releaseguard.Service
+	runs         retention.Pruner
+	guards       *releaseguard.Service
+	retries      *runretry.Service
+	releaseImage func(context.Context, runretry.ImageRef) error
 }
 
 func (p guardRetentionPruner) Prune(ctx context.Context, now time.Time) (int, error) {
@@ -836,7 +864,18 @@ func (p guardRetentionPruner) Prune(ctx context.Context, now time.Time) (int, er
 	if p.guards != nil {
 		guardErr = p.guards.Purge(ctx)
 	}
-	return n, errors.Join(runErr, guardErr)
+	var retryErr error
+	if p.retries != nil {
+		if service, ok := p.runs.(*retention.Service); ok {
+			cfg, err := service.GetConfig(ctx)
+			if err != nil {
+				retryErr = err
+			} else if cfg.Enabled && (cfg.KeepPerProject > 0 || cfg.MaxAgeDays > 0) {
+				_, retryErr = p.retries.PruneOrphans(ctx, now, p.releaseImage)
+			}
+		}
+	}
+	return n, errors.Join(runErr, guardErr, retryErr)
 }
 
 // envDurationSeconds 读取 name 环境变量(整数秒)为 time.Duration;未设/非法 → def。

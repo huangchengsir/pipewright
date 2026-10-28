@@ -7,6 +7,9 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { RunStep, StepStatus } from '../../api/runs'
+import type { RetryContext } from '../../api/runRetry'
+import { sourceLogLocation } from '../../api/runRetry'
+import AppButton from '../ui/AppButton.vue'
 
 const { t } = useI18n()
 
@@ -14,9 +17,12 @@ const props = defineProps<{
   steps: RunStep[]
   /** 当前选中的步骤序号(用于高亮 + 过滤日志);null = 全部。 */
   selected?: number | null
+  recovery?: RetryContext | null
 }>()
 
-const emit = defineEmits<{ select: [ordinal: number | null] }>()
+const emit = defineEmits<{ select: [ordinal: number | null]; retry: [nodeKeys: string[]] }>()
+function retryNode(stepId: string) { return props.recovery?.nodes.find(n => n.attemptStepId === stepId) }
+function isReused(stepId: string) { return retryNode(stepId)?.decision.action === 'reuse' }
 
 interface NodeRow {
   step: RunStep
@@ -35,7 +41,6 @@ function aggregate(nodes: NodeRow[]): StepStatus {
   if (ss.some((s) => s === 'running')) return 'running'
   if (ss.length > 0 && ss.every((s) => s === 'success')) return 'success'
   if (ss.length > 0 && ss.every((s) => s === 'skipped')) return 'skipped'
-  if (ss.some((s) => s === 'success')) return 'success'
   return 'pending'
 }
 
@@ -116,9 +121,16 @@ function formatDuration(ms: number | null): string {
             </div>
             <div class="step-info">
               <span class="step-name">{{ n.step.name }}</span>
-              <span v-if="n.step.durationMs !== null" class="step-dur mono">{{ formatDuration(n.step.durationMs) }}</span>
+              <span v-if="n.step.durationMs !== null && !isReused(n.step.id)" class="step-dur mono">{{ formatDuration(n.step.durationMs) }}</span>
             </div>
           </button>
+          <span v-if="isReused(n.step.id)" class="step-origin">
+            {{ t('runRetry.reused') }}
+            <RouterLink v-if="sourceLogLocation(retryNode(n.step.id)!)" :to="sourceLogLocation(retryNode(n.step.id)!)!">{{ t('runRetry.sourceLogs') }}</RouterLink>
+            <RouterLink v-else-if="retryNode(n.step.id)?.decision.sourceAttemptId" :to="{ name: 'run-detail', params: { id: retryNode(n.step.id)!.decision.sourceAttemptId } }">{{ t('runRetry.fromRun', { id: retryNode(n.step.id)!.decision.sourceAttemptId!.slice(0, 8) }) }}</RouterLink>
+          </span>
+          <AppButton v-if="retryNode(n.step.id)?.decision.status === 'failed'" class="step-retry" @click="emit('retry', [retryNode(n.step.id)!.node.key])">{{ t('runRetry.retryNode') }}</AppButton>
+          <AppButton v-else-if="n.step.status === 'failed' && !recovery" class="step-retry" @click="emit('retry', [])">{{ t('runRetry.viewRecovery') }}</AppButton>
         </li>
       </template>
     </ul>
@@ -126,6 +138,12 @@ function formatDuration(ms: number | null): string {
 </template>
 
 <style scoped>
+.steps li:has(.step-retry) { display: flex; flex-wrap: wrap; gap: 4px; }
+.steps li:has(.step-retry) .step-row { flex: 1 1 160px; min-width: 0; }
+.step-retry { min-height: 44px; white-space: normal; }
+.step-row { min-height: 44px; }
+.step-origin { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; color: var(--color-dim); }
+.step-origin a { display: inline-flex; align-items: center; min-height: 44px; color: var(--color-primary); }
 /* 左栏粘顶:终端很长时步骤选择器跟随视口,不在左侧留一大片死白。 */
 .step-list {
   position: sticky;

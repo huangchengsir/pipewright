@@ -29,6 +29,9 @@ func (d *shellDriver) reconcileServiceCreate(parent context.Context, kind, name,
 		return failure("create outcome and ownership unconfirmed")
 	}
 	id := fields[0]
+	if err := d.serviceCreated(ctx, name, id); err != nil {
+		return failure("ownership persistence unavailable")
+	}
 	if kind == "network" {
 		d.serviceNetworks.Store(name, id)
 	} else {

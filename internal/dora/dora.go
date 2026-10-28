@@ -26,6 +26,9 @@
 //	                              无任何「失败后恢复」配对 → 0(未定义,优雅降级)。
 //
 // 本包不依赖 internal/run(避免循环 / 抬高耦合):调用方把运行投影成本包的 Record 切片。
+// Recovery policy: deployment/failure/lead-time counts use original runs only.
+// Recoveries are separate attempts; confirmed success closes only a matching
+// outstanding logical failure, grouped by project. Inherited step time is never new work.
 package dora
 
 import (
@@ -46,6 +49,7 @@ const (
 // 只取计算必需的字段:终态判定靠 Status + FinishedAt;前置时长靠 CommitTime/CreatedAt + FinishedAt。
 // 非终态运行(queued/running/...)由 FinishedAt==nil 自然排除,无需调用方预过滤。
 type Record struct {
+	RunID, ProjectID, LogicalRunID, SourceRunID, ExecutionKind string
 	// Status 是运行状态(success|failed|partial_failed|rolled_back|其它非终态)。
 	Status string
 	// CreatedAt 是入队时刻(必有);CommitTime 不可得时作提交时间代理。
@@ -76,6 +80,9 @@ const (
 //
 // 时长类指标以秒(float64)表达;无样本时为 0(调用方据 *Count==0 区分「真 0」与「无数据」)。
 type Metrics struct {
+	// Recovery attempts do not inflate deployment, failure or lead-time counts.
+	RecoveryAttempts     int
+	SuccessfulRecoveries int
 	// WindowDays 是统计窗口天数(>0)。
 	WindowDays float64
 	// TotalDeployments 是窗口内终态运行(部署)总数。
@@ -123,7 +130,7 @@ func isTerminalDeployment(r Record) bool {
 	if r.FinishedAt == nil {
 		return false
 	}
-	return r.Status == statusSuccess || isFailure(r.Status)
+	return r.ExecutionKind != "recovery" && (r.Status == statusSuccess || isFailure(r.Status))
 }
 
 // Compute 对一组运行投影计算窗口内的 DORA 四指标。
@@ -141,6 +148,12 @@ func Compute(records []Record, windowDays float64) Metrics {
 	// 仅保留终态部署。
 	deploys := make([]Record, 0, len(records))
 	for _, r := range records {
+		if r.ExecutionKind == "recovery" && r.FinishedAt != nil && (r.Status == statusSuccess || isFailure(r.Status)) {
+			m.RecoveryAttempts++
+			if r.Status == statusSuccess {
+				m.SuccessfulRecoveries++
+			}
+		}
 		if isTerminalDeployment(r) {
 			deploys = append(deploys, r)
 		}
@@ -178,7 +191,13 @@ func Compute(records []Record, windowDays float64) Metrics {
 	}
 
 	// MTTR:按完成时间排序,逐段「失败 → 下一次成功」配对。
-	restoreTimes := mttrRestoreSeconds(deploys)
+	restoreEvents := append([]Record(nil), deploys...)
+	for _, r := range records {
+		if r.ExecutionKind == "recovery" && r.Status == statusSuccess && r.FinishedAt != nil {
+			restoreEvents = append(restoreEvents, r)
+		}
+	}
+	restoreTimes := mttrRestoreSeconds(restoreEvents)
 	m.MTTRSampleCount = len(restoreTimes)
 	m.MTTRSeconds = median(restoreTimes)
 
@@ -205,24 +224,44 @@ func mttrRestoreSeconds(deploys []Record) []float64 {
 	})
 
 	out := []float64{}
-	var failStart *time.Time
-	for i := range ordered {
-		r := ordered[i]
-		if isFailure(r.Status) {
-			if failStart == nil {
-				ft := *r.FinishedAt
-				failStart = &ft
+	type incident struct {
+		start time.Time
+		roots map[string]bool
+	}
+	pending := map[string]*incident{}
+	for _, r := range ordered {
+		root := r.LogicalRunID
+		if root == "" {
+			root = r.RunID
+		}
+		active := pending[r.ProjectID]
+		if isFailure(r.Status) && r.ExecutionKind != "recovery" {
+			if active == nil {
+				active = &incident{start: *r.FinishedAt, roots: map[string]bool{}}
+				pending[r.ProjectID] = active
 			}
+			active.roots[root] = true
 			continue
 		}
-		// 成功:若处于失败段中,结算恢复时长。
-		if r.Status == statusSuccess && failStart != nil {
-			if d := r.FinishedAt.Sub(*failStart).Seconds(); d >= 0 {
-				out = append(out, d)
-			}
-			failStart = nil
+		if r.Status != statusSuccess || active == nil {
+			continue
 		}
+		if r.ExecutionKind == "recovery" {
+			// An old/unrelated recovery cannot close another logical failure.
+			if root == "" || !active.roots[root] {
+				continue
+			}
+			delete(active.roots, root)
+			if len(active.roots) > 0 {
+				continue
+			}
+		}
+		if d := r.FinishedAt.Sub(active.start).Seconds(); d >= 0 {
+			out = append(out, d)
+		}
+		delete(pending, r.ProjectID)
 	}
+
 	return out
 }
 

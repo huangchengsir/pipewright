@@ -24,6 +24,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/dag"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/runretry"
 )
 
 // SpecLoader 加载某项目「在某运行分支上」的流水线配置。
@@ -166,7 +167,23 @@ func New(loader SpecLoader, opts ...Option) *Runner {
 // StepSink 非并发安全约定:本 Runner 用单一 mutex 串行化所有 sink 调用,即便阶段并行执行,
 // 对 sink 的 Plan/StepRunning/StepDone/Log/EmitArtifact 也互斥,安全复用既有持久化管道。
 func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error {
-	cfg, src, err := r.loader.Get(ctx, rn.ProjectID, rn.Trigger.Branch)
+	var cfg *pipeline.Config
+	var src SpecSource
+	var err error
+	ex, recovering := runretry.ExecutionFrom(ctx)
+	if recovering {
+		snapshot := ex.Snapshot()
+		cfg = &pipeline.Config{Spec: snapshot.Spec}
+		src = SpecSource{FromRepo: snapshot.Source.Kind == "repo", Ref: snapshot.Source.Ref, File: snapshot.Source.File, FallbackReason: snapshot.Source.Fallback}
+		copyRun := *rn
+		copyRun.Trigger.Type, copyRun.Trigger.Branch = snapshot.Trigger.Type, snapshot.Trigger.Branch
+		copyRun.Trigger.Commit, copyRun.Trigger.Params = snapshot.Trigger.Commit, snapshot.Trigger.Params
+		copyRun.Trigger.ResolvedEnvironment = snapshot.Trigger.Environment
+		copyRun.Trigger.ResolvedTargetServerIDs = snapshot.Trigger.TargetServerIDs
+		rn = &copyRun
+	} else {
+		cfg, src, err = r.loader.Get(ctx, rn.ProjectID, rn.Trigger.Branch)
+	}
 	if err != nil {
 		return fmt.Errorf("dagrun: load pipeline spec: %w", err)
 	}
@@ -176,7 +193,15 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 	// 矩阵展开(P1):把声明了 Matrix 的阶段在纯调度层展开成笛卡尔积的并行 cell 子阶段,
 	// 并重映射 needs(下游等所有 cell)。无 matrix 阶段时原样返回。展开后阶段集作为后续
 	// 建图 / stageByID / 上报 / 执行的权威集——不改 dag 的并发与失败语义。
-	stages := ExpandMatrix(cfg.Spec.Stages)
+	var stages []pipeline.Stage
+	if recovering {
+		stages, err = ex.Snapshot().ExecutionStages()
+		if err != nil {
+			return err
+		}
+	} else {
+		stages = ExpandMatrix(cfg.Spec.Stages)
+	}
 	if len(stages) == 0 {
 		// 无阶段:声明零步,直接成功(与既有空流水线语义一致)。
 		_ = sink.Plan(ctx, nil)
@@ -184,6 +209,18 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 	}
 
 	graph, err := BuildGraph(stages)
+	if recovering {
+		var nodes []dag.Node
+		deps := ex.Snapshot().Compiled.Dependencies
+		for _, st := range stages {
+			needs, ok := deps[st.ID]
+			if !ok {
+				return runretry.ErrUnavailable
+			}
+			nodes = append(nodes, dag.Node{ID: st.ID, Needs: append([]string(nil), needs...), AllowFailure: st.AllowFailure})
+		}
+		graph, err = dag.New(nodes)
+	}
 	if err != nil {
 		return fmt.Errorf("dagrun: build graph: %w", err)
 	}
@@ -199,6 +236,8 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 	jobOrdinals := make(map[string]map[string]int, len(order))
 	stageFirstOrd := make(map[string]int, len(order))
 	ord := 0
+	seeded := make(map[int]bool)
+	initial := dag.Result{}
 	for _, id := range order {
 		st := stageByID[id]
 		stageFirstOrd[id] = ord
@@ -211,10 +250,53 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 		}
 		for _, jb := range st.Jobs {
 			m[jb.ID] = ord
-			decls = append(decls, run.StepDecl{Name: jb.Name, Stage: st.Name})
+			decl := run.StepDecl{Name: jb.Name, Stage: st.Name}
+			if recovering {
+				n, ok := ex.Node(id, jb.ID)
+				if !ok {
+					return runretry.ErrInvalid
+				}
+				decl.LogicalNodeKey = n.Key
+				d := ex.Decision(n)
+				if d.Action != "execute" {
+					decl.SeedStatus = d.Status
+					if decl.SeedStatus != run.StepSuccess && decl.SeedStatus != run.StepFailed {
+						decl.SeedStatus = run.StepSkipped
+					}
+					seeded[ord] = true
+				}
+			}
+			decls = append(decls, decl)
 			ord++
 		}
 		jobOrdinals[id] = m
+		if recovering {
+			active, failed, skipped := false, false, false
+			for _, jb := range st.Jobs {
+				n, _ := ex.Node(id, jb.ID)
+				d := ex.Decision(n)
+				active = active || d.Action == "execute"
+				failed = failed || d.Status == run.StepFailed || d.Action == "blocked"
+				skipped = skipped || d.Action == "skip"
+			}
+			for _, control := range []string{"init", "gate", "services", "jobs_done", "cleanup", "barrier"} {
+				if n, ok := ex.ControlNode(id, control); ok {
+					d := ex.Decision(n)
+					active = active || d.Action == "control"
+					failed = failed || d.Status == run.StepFailed || d.Status == "outcome_unknown"
+					skipped = skipped || d.Status == run.StepSkipped
+				}
+			}
+			if !active {
+				status := dag.StatusSuccess
+				if failed {
+					status = dag.StatusFailed
+				} else if skipped {
+					status = dag.StatusSkipped
+				}
+				initial[id] = dag.NodeResult{Status: status}
+			}
+		}
 	}
 
 	var mu sync.Mutex // 串行化对 sink 的全部调用(阶段/节点可能并行)
@@ -240,18 +322,43 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 
 	result := graph.Schedule(ctx, func(ctx context.Context, stageID string) error {
 		stage := stageByID[stageID]
-		rep := &stageReporter{sink: tap, mu: &mu, jobOrd: jobOrdinals[stageID], firstOrd: stageFirstOrd[stageID]}
+		rep := &stageReporter{sink: tap, mu: &mu, jobOrd: jobOrdinals[stageID], firstOrd: stageFirstOrd[stageID], seeded: seeded}
 		// 条件执行(Story 8-5):when 不满足 → 整阶段所有节点 skipped(非失败),其下游照「未成功」跳过。
 		if !stage.When.Matches(rn.Trigger.Branch, rn.Trigger.Type) {
 			_ = rep.Log(ctx, "stdout", fmt.Sprintf(
 				"阶段「%s」条件不满足(分支=%q 触发=%q),跳过", stage.Name, rn.Trigger.Branch, rn.Trigger.Type))
+			if recovering {
+				if err := recordUnstartedStageSkip(context.WithoutCancel(ctx), ex, stage.ID, "condition_skipped"); err != nil {
+					return err
+				}
+			}
 			rep.finishRemaining(ctx, run.StepSkipped)
 			return dag.ErrSkip
 		}
 		// 人工审批门(Story 8-4):进入该阶段前阻塞等待批准。run 状态由 gate 置 waiting_approval。
 		if stage.Gate && r.gate != nil {
+			var gateNode runretry.NodeRef
+			if recovering {
+				var ok bool
+				gateNode, ok = ex.ControlNode(stageID, "gate")
+				if !ok {
+					return runretry.ErrInvalid
+				}
+				if err := ex.Begin(ctx, gateNode); err != nil {
+					return err
+				}
+			}
 			_ = rep.Log(ctx, "stdout", fmt.Sprintf("⏸ 阶段「%s」等待人工审批…", stage.Name))
 			approved, gerr := r.gate(ctx, rn, stage)
+			if recovering {
+				status := run.StepSuccess
+				if !approved || gerr != nil {
+					status = run.StepFailed
+				}
+				if err := ex.Control(context.WithoutCancel(ctx), gateNode, runretry.Outcome{Status: status, ExecutionMode: "real", ExternalOutcome: "verified", Complete: true, Reusable: true}); err != nil && !errors.Is(err, runretry.ErrCheckpoint) {
+					return err
+				}
+			}
 			if gerr != nil {
 				_ = rep.Log(ctx, "stderr", fmt.Sprintf("审批门中断:%v", gerr))
 				rep.finishRemaining(ctx, run.StepFailed)
@@ -274,12 +381,21 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 		}
 		rep.finishRemaining(ctx, sweep)
 		return execErr
-	}, dag.Options{MaxConcurrency: maxc})
+	}, dag.Options{MaxConcurrency: maxc, Initial: initial})
 
 	// 被跳过/取消(从未进入执行)的阶段:其全部节点 step 记为 skipped,避免悬挂 pending。
 	for id, nr := range result {
 		if nr.Status == dag.StatusSkipped || nr.Status == dag.StatusCanceled {
-			rep := &stageReporter{sink: tap, mu: &mu, jobOrd: jobOrdinals[id], firstOrd: stageFirstOrd[id]}
+			if recovering {
+				reason := "dependency_skipped"
+				if nr.Status == dag.StatusCanceled {
+					reason = "canceled_before_start"
+				}
+				if err := recordUnstartedStageSkip(context.WithoutCancel(ctx), ex, id, reason); err != nil {
+					return err
+				}
+			}
+			rep := &stageReporter{sink: tap, mu: &mu, jobOrd: jobOrdinals[id], firstOrd: stageFirstOrd[id], seeded: seeded}
 			rep.finishRemaining(ctx, run.StepSkipped)
 		}
 	}
@@ -292,6 +408,26 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 			_ = lockedSink(func() error { return sink.SetFailureLog(ctx, fl) })
 		}
 		return fmt.Errorf("dagrun: pipeline failed (%v)", summarize(result))
+	}
+	return nil
+}
+
+// recordUnstartedStageSkip writes only known not-started nodes owned by this
+// attempt. Inherited/failed/unknown records remain untouched; selecting a later
+// repair can execute affected dependency-skipped nodes through a fresh plan.
+func recordUnstartedStageSkip(ctx context.Context, ex runretry.Execution, stage, reason string) error {
+	for _, n := range ex.Snapshot().Compiled.Nodes {
+		if n.ExecutionStageID != stage {
+			continue
+		}
+		d := ex.Decision(n)
+		if d.Status != "pending" || (d.Action != "execute" && d.Action != "control") {
+			continue
+		}
+		err := runretry.RecordUnstartedSkip(ctx, n, reason)
+		if err != nil && !errors.Is(err, runretry.ErrCheckpoint) {
+			return err
+		}
 	}
 	return nil
 }
@@ -332,6 +468,7 @@ type stageReporter struct {
 	jobOrd   map[string]int // jobID → 全局 step ordinal
 	firstOrd int            // 阶段级日志/产物归位的 step ordinal
 	done     map[string]bool
+	seeded   map[int]bool // inherited results have no current-attempt timing
 }
 
 func (s *stageReporter) RecordExecution(mode string) {
@@ -357,7 +494,7 @@ func (s *stageReporter) JobRunning(ctx context.Context, jobID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ord, ok := s.jobOrd[jobID]
-	if !ok {
+	if !ok || s.seeded[ord] {
 		return nil
 	}
 	return s.sink.StepRunning(ctx, ord)
@@ -367,7 +504,7 @@ func (s *stageReporter) JobDone(ctx context.Context, jobID, status string) error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ord, ok := s.jobOrd[jobID]
-	if !ok {
+	if !ok || s.seeded[ord] {
 		return nil
 	}
 	if s.done == nil {
@@ -393,7 +530,7 @@ func (s *stageReporter) finishRemaining(ctx context.Context, status string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for jobID, ord := range s.jobOrd {
-		if s.done[jobID] {
+		if s.done[jobID] || s.seeded[ord] {
 			continue
 		}
 		if s.done == nil {
@@ -464,19 +601,10 @@ func summarize(res dag.Result) map[dag.Status]int { return res.Counts() }
 //
 // 返回的图已通过 dag.New 的构造校验(存在性 / 自指 / 环);spec 保存时也已校验过,此处兜底。
 func BuildGraph(stages []pipeline.Stage) (*dag.Graph, error) {
-	anyNeeds := false
-	for _, st := range stages {
-		if len(st.Needs) > 0 {
-			anyNeeds = true
-			break
-		}
-	}
+	dependencies := pipeline.StageDependencies(stages)
 	nodes := make([]dag.Node, 0, len(stages))
-	for i, st := range stages {
-		needs := st.Needs
-		if !anyNeeds && i > 0 {
-			needs = []string{stages[i-1].ID} // 线性退化
-		}
+	for _, st := range stages {
+		needs := dependencies[st.ID]
 		nodes = append(nodes, dag.Node{ID: st.ID, Needs: needs, AllowFailure: st.AllowFailure})
 	}
 	return dag.New(nodes)

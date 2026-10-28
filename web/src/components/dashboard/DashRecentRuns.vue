@@ -72,7 +72,7 @@ function fmtAgo(rfc: string): string {
             <span class="run-dot" aria-hidden="true" />
             {{ t(`runStatus.${r.status}`) }}
           </span>
-          <span class="run-project">{{ r.projectName }}</span>
+          <span class="run-project">{{ r.projectName }} <small v-if="r.executionKind === 'recovery'">{{ t('runRetry.attempt', { n: r.attemptNumber ?? 1 }) }}</small></span>
           <span class="run-trigger">{{ r.trigger?.branch ?? '' }}</span>
           <span class="run-dur">{{ fmtDuration(r.durationMs) }}</span>
           <span class="run-ago">{{ fmtAgo(r.createdAt) }}</span>

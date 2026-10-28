@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"strconv"
@@ -243,14 +242,14 @@ func (sshDialer) RunLimitedWithStdin(ctx context.Context, addr string, cfg SSHCo
 func runLimitedInput(ctx context.Context, addr string, cfg SSHConfig, cmd []string, stdin io.Reader, limits ExecutionLimits) (*LimitedResult, error) {
 	limits, err := normalizeExecutionLimits(limits)
 	if err != nil {
-		return nil, err
+		return nil, NotStarted(err)
 	}
 	if err := limitedContextErr(ctx); err != nil {
-		return nil, err
+		return nil, NotStarted(err)
 	}
 	auth, err := authMethods(cfg)
 	if err != nil {
-		return nil, err
+		return nil, NotStarted(err)
 	}
 	clientCfg := &ssh.ClientConfig{
 		User: cfg.User, Auth: auth,
@@ -260,18 +259,18 @@ func runLimitedInput(ctx context.Context, addr string, cfg SSHConfig, cmd []stri
 	client, cleanup, err := dialSSH(ctx, addr, clientCfg)
 	if err != nil {
 		if ctxErr := limitedContextErr(ctx); ctxErr != nil {
-			return nil, ctxErr
+			return nil, NotStarted(ctxErr)
 		}
-		return nil, err
+		return nil, NotStarted(err)
 	}
 	defer cleanup()
 	defer func() { _ = client.Close() }()
 	session, err := client.NewSession()
 	if err != nil {
 		if ctxErr := limitedContextErr(ctx); ctxErr != nil {
-			return nil, ctxErr
+			return nil, NotStarted(ctxErr)
 		}
-		return nil, ErrUnreachable
+		return nil, NotStarted(ErrUnreachable)
 	}
 	defer func() { _ = session.Close() }()
 	budget := &outputBudget{remaining: limits.Bytes, maxLines: limits.Lines}
@@ -289,12 +288,12 @@ func runLimitedInput(ctx context.Context, addr string, cfg SSHConfig, cmd []stri
 		return res, nil
 	}
 	if ctxErr := limitedContextErr(ctx); ctxErr != nil {
-		return res, ctxErr
+		return res, OutcomeUnknown(ctxErr)
 	}
 	if errors.Is(runErr, io.EOF) {
-		return res, ErrUnreachable
+		return res, OutcomeUnknown(ErrUnreachable)
 	}
-	return res, fmt.Errorf("%w", ErrUnreachable)
+	return res, runErr
 }
 
 func limitedContextErr(ctx context.Context) error {

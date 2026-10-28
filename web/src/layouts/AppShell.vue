@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
-import { ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -119,12 +119,33 @@ function isCurrent(item: NavItem): boolean {
   )
 }
 
-// 侧栏展开/收起:固定按钮切换,状态持久化到 localStorage(刷新/重开保持)。
+// Desktop keeps the existing preference. Compact navigation is temporary so
+// opening a phone-sized viewport never overwrites the desktop rail choice.
 const STORAGE_KEY = 'pipewright_sidebar_expanded'
-const expanded = ref(localStorage.getItem(STORAGE_KEY) === '1')
+const desktopExpanded = ref(localStorage.getItem(STORAGE_KEY) === '1')
+const compactMedia = window.matchMedia('(max-width: 767px)')
+const compactViewport = ref(compactMedia.matches)
+const compactExpanded = ref(false)
+const expanded = computed(() => compactViewport.value ? compactExpanded.value : desktopExpanded.value)
+function syncViewport(): void {
+  if (compactViewport.value === compactMedia.matches) return
+  compactViewport.value = compactMedia.matches
+  compactExpanded.value = false
+}
+onMounted(() => {
+  syncViewport()
+  compactMedia.addEventListener('change', syncViewport)
+})
+onBeforeUnmount(() => compactMedia.removeEventListener('change', syncViewport))
 function toggleExpanded(): void {
-  expanded.value = !expanded.value
-  localStorage.setItem(STORAGE_KEY, expanded.value ? '1' : '0')
+  // Consult the live query too, in case activation precedes its change event.
+  syncViewport()
+  if (compactViewport.value) {
+    compactExpanded.value = !compactExpanded.value
+    return
+  }
+  desktopExpanded.value = !desktopExpanded.value
+  localStorage.setItem(STORAGE_KEY, desktopExpanded.value ? '1' : '0')
 }
 </script>
 
@@ -411,10 +432,12 @@ function toggleExpanded(): void {
 /* 边缘切换:骑在侧栏右缘、与品牌行齐平的圆形按钮。随 --rail-width 平移(展开/收起都跟手)。 */
 .rail-edge-toggle {
   position: absolute;
-  top: 23px; /* 与顶部品牌 mark 垂直居中对齐 */
-  left: calc(var(--rail-width) - 13px); /* 圆心落在 rail 右缘分割线上 */
-  width: 26px;
-  height: 26px;
+  /* Compact hit area fits the existing top gutter, clear of the brand and the
+     main content which starts below64px. Desktop keeps its original geometry. */
+  top: 14px;
+  left: var(--rail-width);
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   display: grid;
   place-items: center;
@@ -471,6 +494,14 @@ function toggleExpanded(): void {
 }
 .has-onboarding .main-inner {
   padding-bottom: max(var(--main-pad-bottom), 132px);
+}
+@media (min-width: 768px) {
+  .rail-edge-toggle {
+    top: 23px;
+    left: calc(var(--rail-width) - 13px);
+    width: 26px;
+    height: 26px;
+  }
 }
 @media (max-width: 900px) {
   .main-inner:has(.pipeline-root) { padding-left: 12px; padding-right: 12px; }

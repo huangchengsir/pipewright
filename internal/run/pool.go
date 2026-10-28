@@ -391,6 +391,26 @@ func (p *WorkerPool) execute(runID string) {
 	}()
 
 	sink := &dbStepSink{svc: p.svc, runID: runID, masker: p.logMasker}
+	runnerEntered := false
+	defer func() {
+		if !runnerEntered && p.svc.retryRuntime != nil {
+			if restorer, ok := p.svc.retryRuntime.(interface {
+				RestoreBeforeRunner(context.Context, string, string) error
+			}); ok {
+				reason := "preparation_failed"
+				if runCtx.Err() != nil {
+					reason = "cancelled_before_start"
+				}
+				proofCtx, proofCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				proofErr := restorer.RestoreBeforeRunner(proofCtx, runID, reason)
+				proofCancel()
+				if proofErr != nil {
+					log.Printf("[run] run %s: no-start recovery proof unavailable", runID)
+				}
+			}
+		}
+		p.svc.completeRetryAttempt(runID)
+	}()
 
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -443,7 +463,15 @@ func (p *WorkerPool) execute(runID string) {
 		return
 	}
 
-	runErr := p.runner.Run(runCtx, r, sink)
+	runCtx, err = p.svc.prepareRetryAttempt(runCtx, runID)
+	var runErr error
+	if err != nil {
+		// No external work starts if a recovery cannot open its original inputs.
+		runErr = err
+	} else {
+		runnerEntered = true
+		runErr = p.runner.Run(runCtx, r, sink)
+	}
 
 	final := StatusSuccess
 	if runErr != nil {
@@ -546,6 +574,7 @@ type dbStepSink struct {
 	stages       []string // 各 step 所属阶段名(节点级分组;与 names/stepIDs 同序)
 	// masker 在日志行落库/出网前脱敏(AC-SEC-04);nil 则不脱敏(纯单测可省)。
 	masker *mask.Masker
+	seeded []bool
 }
 
 func (d *dbStepSink) RecordExecution(mode string) { d.evidence.RecordExecution(mode) }
@@ -566,20 +595,40 @@ func (d *dbStepSink) Plan(ctx context.Context, steps []StepDecl) error {
 	d.names = make([]string, len(steps))
 	d.stages = make([]string, len(steps))
 	d.stepIDs = make([]string, len(steps))
+	d.seeded = make([]bool, len(steps))
 	for i, st := range steps {
 		d.names[i] = st.Name
 		d.stages[i] = st.Stage
+		status := StepPending
+		if st.SeedStatus != "" {
+			switch st.SeedStatus {
+			case StepSuccess, StepFailed, StepSkipped:
+				status = st.SeedStatus
+				d.seeded[i] = true
+			default:
+				return fmt.Errorf("run: invalid inherited step status")
+			}
+		}
 		id := uuid.NewString()
 		d.stepIDs[i] = id
 		_, err := d.svc.db.ExecContext(ctx,
 			`INSERT INTO run_steps (id, run_id, name, stage, status, ordinal, started_at, finished_at)
 			 VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)`,
-			id, d.runID, st.Name, st.Stage, StepPending, i,
+			id, d.runID, st.Name, st.Stage, status, i,
 		)
 		if err != nil {
 			return fmt.Errorf("run: insert step: %w", err)
 		}
-		d.publish(i, StepPending, nil, nil)
+		if st.LogicalNodeKey != "" && d.svc.retryRuntime != nil {
+			if err := d.svc.retryRuntime.BindStep(ctx, d.runID, st.LogicalNodeKey, id, i); err != nil {
+				retry, checkErr := d.svc.retryRuntime.IsRetry(ctx, d.runID)
+				if retry || checkErr != nil {
+					return fmt.Errorf("run: recovery step binding unavailable")
+				}
+				log.Printf("[run] run %s: recovery step evidence unavailable", d.runID)
+			}
+		}
+		d.publish(i, status, nil, nil)
 	}
 	return nil
 }
@@ -587,6 +636,9 @@ func (d *dbStepSink) Plan(ctx context.Context, steps []StepDecl) error {
 func (d *dbStepSink) StepRunning(ctx context.Context, ordinal int) error {
 	if ordinal < 0 || ordinal >= len(d.stepIDs) {
 		return fmt.Errorf("run: step ordinal out of range: %d", ordinal)
+	}
+	if ordinal < len(d.seeded) && d.seeded[ordinal] {
+		return fmt.Errorf("run: inherited step cannot be executed")
 	}
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
@@ -609,6 +661,9 @@ func (d *dbStepSink) StepDone(ctx context.Context, ordinal int, status string) e
 	case StepSuccess, StepFailed, StepSkipped:
 	default:
 		return fmt.Errorf("run: invalid step terminal status: %s", status)
+	}
+	if ordinal < len(d.seeded) && d.seeded[ordinal] {
+		return fmt.Errorf("run: inherited step cannot be executed")
 	}
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)

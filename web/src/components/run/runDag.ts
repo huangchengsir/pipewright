@@ -15,11 +15,48 @@
 import type { RunStep, StepStatus } from '../../api/runs'
 import type { PipelineStage } from '../../api/pipeline'
 import { t } from '../../i18n'
+import type { RetryContext } from '../../api/runRetry'
+import { retryNodeLabel } from '../../api/runRetry'
+
+/** Exact frozen identities only. Never join a recovery node by display name. */
+export function buildFrozenRunStages(context: RetryContext, steps: ReadonlyArray<RunStep>): RunStage[] {
+  const byStage = new Map<string, RunStage>()
+  const nodes = new Map(context.graph.nodes.map(n => [n.key, n]))
+  const actual = new Map(steps.map(s => [s.id, s]))
+  for (const item of context.nodes) {
+    const n = item.node
+    let stage = byStage.get(n.executionStageId)
+    if (!stage) {
+      stage = { id: n.executionStageId, name: context.graph.stages?.find(s => s.id === n.executionStageId)?.name ?? n.stageId, needs: [], steps: [], status: 'pending', gate: false, blocked: false, matrixAxes: n.axes ?? undefined }
+      byStage.set(stage.id, stage)
+    }
+    stage.gate ||= n.controlKey === 'gate'
+    const source = item.attemptStepId ? actual.get(item.attemptStepId) : undefined
+    const status = item.decision.status
+    const displayStatus: StepStatus = status === 'outcome_unknown' ? 'failed' : ['pending', 'running', 'waiting_approval', 'success', 'failed', 'skipped'].includes(status ?? '') ? status as StepStatus : 'pending'
+    const reused = item.decision.action === 'reuse'
+    stage.steps.push({ id: n.key, name: retryNodeLabel(n), status: displayStatus, startedAt: reused ? null : source?.startedAt ?? null, finishedAt: reused ? null : source?.finishedAt ?? null, durationMs: reused ? null : source?.durationMs ?? null })
+  }
+  for (const edge of context.graph.edges) {
+    const from = nodes.get(edge.from)?.executionStageId; const to = nodes.get(edge.to)?.executionStageId
+    if (from && to && from !== to) {
+      const stage = byStage.get(to)
+      if (stage && !stage.needs.includes(from)) stage.needs.push(from)
+    }
+  }
+  for (const stage of byStage.values()) {
+    stage.status = deriveStageStatus(stage.steps)
+    stage.hasBlockedNodes = context.nodes.some(n => n.node.executionStageId === stage.id && n.decision.action === 'blocked')
+  }
+  return topoSort([...byStage.values()])
+}
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 /** A stage rendered in the DAG — one column. */
 export interface RunStage {
+  matrixAxes?: Record<string, string>
+  hasBlockedNodes?: boolean
   id: string
   name: string
   /** Upstream stage IDs (declared needs). Empty array = no explicit deps. */

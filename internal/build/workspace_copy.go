@@ -2,6 +2,7 @@ package build
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
+	"github.com/huangchengsir/pipewright/internal/runretry"
 )
 
 const copiedWorkspaceLabel = "io.pipewright.workspace-copy=v1"
@@ -73,13 +75,28 @@ func toolchainWorkspaceMount(workdir string) string {
 
 // Docker cp crosses the client/daemon filesystem boundary without host bind paths.
 func (d *shellDriver) runCopiedWorkspace(ctx context.Context, image, hostDir, workdir string, env, cmd []string, res pipeline.Resource, onLine func(string, string)) (resultCode int, resultErr error) {
-	d.reconcileCopiedWorkspaces(onLine)
+	_, captured := runretry.ExecutionFrom(ctx)
+	if !captured {
+		d.reconcileCopiedWorkspaces(onLine)
+	}
 	if err := ctx.Err(); err != nil {
 		return -1, err
 	}
 	name := "pipewright-build-" + uuid.NewString()
+	var owned ownedService
+	if captured {
+		var err error
+		owned, err = d.startOwnedResource(ctx, "workspace_container", name, rand.Text())
+		if err != nil {
+			return -1, err
+		}
+		d.serviceEvidence.Store(name, owned)
+	}
 	mount := toolchainWorkspaceMount(workdir)
 	args := []string{"create", "--name", name, "--label", copiedWorkspaceLabel, "--mount", "type=volume,destination=" + mount + ",volume-nocopy", "-w", workdir}
+	if captured {
+		args = append(args, "--label", serviceOwnerLabel+"="+owned.ref.Owner)
+	}
 	display := append([]string(nil), args...)
 	for _, flag := range []struct{ key, value string }{{"--cpus", res.CPU}, {"--memory", res.Memory}, {"--network", res.Network}} {
 		if value := strings.TrimSpace(flag.value); value != "" {
@@ -97,8 +114,23 @@ func (d *shellDriver) runCopiedWorkspace(ctx context.Context, image, hostDir, wo
 	display = append(display, cmd...)
 	// Removal also runs after cancellation; only this random per-job name is targeted.
 	defer func() {
-		cleanup, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		// Keep the immutable execution/node ownership so StopService can commit
+		// the verified removal to the same encrypted resource ledger. Cancellation
+		// must not skip cleanup, but dropping values would leave a stale active
+		// record after the exact owned container has actually been removed.
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 		defer cancel()
+		if captured {
+			if _, known := d.serviceContainers.Load(name); !known {
+				return
+			}
+			if code, err := d.StopService(cleanup, name, nil); err != nil || code != 0 {
+				if onLine != nil {
+					onLine("stderr", "恢复工具链容器清理未核验，活动归属保留")
+				}
+			}
+			return
+		}
 		for attempt := 0; attempt < 2; attempt++ {
 			_, _, code, err := d.cmdr.Run(cleanup, d.bin, []string{"rm", "-f", "-v", name}, "")
 			if err == nil && code == 0 {
@@ -117,10 +149,24 @@ func (d *shellDriver) runCopiedWorkspace(ctx context.Context, image, hostDir, wo
 	}()
 	emitCmd(onLine, d.bin, display)
 	if code, err := d.cmdr.Stream(ctx, d.bin, args, "", onLine); err != nil || code != 0 {
+		if captured {
+			d.serviceCreateFailed(context.WithoutCancel(ctx), name, err, code)
+		}
 		if ctx.Err() != nil {
 			return -1, ctx.Err()
 		}
 		return code, err
+	}
+	if captured {
+		absent, id, err := d.inspectOwned(ctx, owned.ref)
+		if err != nil || absent {
+			d.serviceCreateFailed(context.WithoutCancel(ctx), name, nil, 0)
+			return -1, runretry.ErrUnknown
+		}
+		d.serviceContainers.Store(name, id)
+		if err = d.serviceCreated(ctx, name, id); err != nil {
+			return -1, err
+		}
 	}
 	copyArgs := []string{"cp", "-a", filepath.Clean(hostDir) + string(filepath.Separator) + ".", name + ":" + mount}
 	emitCmd(onLine, d.bin, copyArgs)

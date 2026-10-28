@@ -17,6 +17,7 @@ import (
 // MetricsRecord 是计算 DORA 所需的单条运行投影(精简,只取聚合必需列)。
 // 与 dora.Record 字段对齐但解耦(run 包不 import dora;httpapi 层做映射)。
 type MetricsRecord struct {
+	RunID, ProjectID, LogicalRunID, SourceRunID, ExecutionKind string
 	// Status 是运行状态(success|failed|partial_failed|rolled_back|其它非终态)。
 	Status string
 	// CreatedAt 是入队时刻(必有;dora 层在无 commit 时间时作前置时长的提交代理)。
@@ -40,11 +41,11 @@ func (s *service) MetricsRecords(ctx context.Context, projectID string, since ti
 	where := []string{}
 	args := []any{}
 	if pid := strings.TrimSpace(projectID); pid != "" {
-		where = append(where, "project_id = ?")
+		where = append(where, "r.project_id = ?")
 		args = append(args, pid)
 	}
 	if !since.IsZero() {
-		where = append(where, "created_at >= ?")
+		where = append(where, "r.created_at >= ?")
 		args = append(args, since.UTC().Format(time.RFC3339))
 	}
 	clause := ""
@@ -53,9 +54,9 @@ func (s *service) MetricsRecords(ctx context.Context, projectID string, since ti
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT status, created_at, finished_at
-		 FROM pipeline_runs`+clause+`
-		 ORDER BY created_at ASC, id ASC`, args...)
+		`SELECT r.status,r.created_at,r.finished_at,r.id,r.project_id,COALESCE(a.root_id,r.id),COALESCE(a.parent_id,''),COALESCE(a.execution_kind,'original')
+		 FROM pipeline_runs r LEFT JOIN run_retry_attempts a ON a.run_id=r.id`+clause+`
+		 ORDER BY r.created_at ASC,r.id ASC`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("run: query metrics records: %w", err)
 	}
@@ -68,7 +69,7 @@ func (s *service) MetricsRecords(ctx context.Context, projectID string, since ti
 			createdStr string
 			finishStr  sql.NullString
 		)
-		if err := rows.Scan(&rec.Status, &createdStr, &finishStr); err != nil {
+		if err := rows.Scan(&rec.Status, &createdStr, &finishStr, &rec.RunID, &rec.ProjectID, &rec.LogicalRunID, &rec.SourceRunID, &rec.ExecutionKind); err != nil {
 			return nil, fmt.Errorf("run: scan metrics record: %w", err)
 		}
 		t, perr := time.Parse(time.RFC3339, createdStr)

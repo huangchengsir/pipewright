@@ -27,7 +27,7 @@ func (s *service) beginActivity(ctx context.Context, runID string) (context.Cont
 	if s.batchDB == nil {
 		return ctx, func() {}, nil
 	}
-	if a, ok := ctx.Value(deployActivityKey{}).(*deployActivity); ok && a.svc == s && a.runID == runID {
+	if a, ok := ctx.Value(deployActivityKey{}).(*deployActivity); ok && a.svc.activityOwner == s.activityOwner && a.runID == runID {
 		if done, ok := a.retain(); ok {
 			return ctx, done, nil
 		}
@@ -115,6 +115,18 @@ func (a *deployActivity) done() {
 	err := configstate.WithWriteTxContext(ctx, a.svc.batchDB, func(txctx context.Context, q configstate.DBTX) error {
 		if _, err := configstate.LockProject(txctx, q, a.svc.batchDB, a.projectID); err != nil {
 			return err
+		}
+		if a.svc.retry != nil {
+			if err := a.svc.retry.MarkReaderExit(txctx, a.runID, a.id, a.svc.activityOwner); err != nil {
+				return err
+			}
+			drained, err := a.svc.retry.ResourcesDrained(txctx, a.runID)
+			if err != nil {
+				return err
+			}
+			if !drained {
+				return configstate.SetActivityPhaseTx(txctx, q, a.id, a.svc.activityOwner, "cleanup_unknown")
+			}
 		}
 		return configstate.ReleaseActivityTx(txctx, q, a.id, a.svc.activityOwner)
 	})

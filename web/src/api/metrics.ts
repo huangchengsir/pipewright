@@ -49,6 +49,8 @@ export interface DoraMetricsBlock {
 }
 
 export interface DoraMetrics {
+  recoveryAttempts?: number
+  successfulRecoveries?: number
   /** Normalized window label, e.g. "30d". */
   window: string
   windowDays: number

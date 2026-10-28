@@ -2,6 +2,7 @@ package build
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/runretry"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
@@ -357,6 +359,17 @@ func (b *Builder) Run(ctx context.Context, r *run.Run, sink run.StepSink) error 
 
 // resolve 取该 run 的项目 + 构建配置(经注入服务)。任一依赖缺失即返回错误(诚实失败)。
 func (b *Builder) resolve(ctx context.Context, r *run.Run) (*project.Project, *pipeline.Settings, error) {
+	if ex, ok := runretry.ExecutionFrom(ctx); ok {
+		s := ex.Snapshot()
+		var p project.Project
+		var settings pipeline.Settings
+		pb, pe := json.Marshal(s.Project)
+		sb, se := json.Marshal(s.Settings)
+		if pe != nil || se != nil || json.Unmarshal(pb, &p) != nil || json.Unmarshal(sb, &settings) != nil || p.ID != r.ProjectID {
+			return nil, nil, runretry.ErrUnavailable
+		}
+		return &p, &settings, nil
+	}
 	if b.projects == nil || b.settings == nil {
 		return nil, nil, errors.New("builder 依赖未装配")
 	}
@@ -585,7 +598,21 @@ func (b *Builder) cloneWithGitAuth(ctx context.Context, proj *project.Project, r
 		}
 	}
 	defer release()
-	return b.cloner.Clone(ctx, proj.RepoURL, auth.Username, auth.Token, r.Trigger.Branch, r.Trigger.Commit, destination)
+	commit := r.Trigger.Commit
+	ex, hasExecution := runretry.ExecutionFrom(ctx)
+	if hasExecution && ex.Snapshot().CommitSHA != "" {
+		commit = ex.Snapshot().CommitSHA
+	}
+	resolved, err := b.cloner.Clone(ctx, proj.RepoURL, auth.Username, auth.Token, r.Trigger.Branch, commit, destination)
+	if err == nil && hasExecution {
+		if resolved == nil || resolved.CommitFull == "" {
+			return nil, runretry.ErrUnavailable
+		}
+		if err := ex.BindCommit(ctx, resolved.CommitFull); err != nil {
+			return nil, err
+		}
+	}
+	return resolved, err
 }
 
 // revealRegistryCred 取仓库凭据明文并解析为 user/password。凭据约定以 "user:password" 存储;
@@ -616,6 +643,9 @@ func (b *Builder) locateFileArtifact(artifactType, slug, workspace string, onLin
 				Type: run.ArtifactJar, Name: slug, Reference: filepath.Base(p), SizeBytes: size,
 				Metadata: map[string]any{"builder": b.driver.Binary(), "path": filepath.Base(p)},
 			}
+			if relative, err := filepath.Rel(workspace, p); err == nil {
+				art.Metadata["workspacePath"] = filepath.ToSlash(relative)
+			}
 			// 制品库:把 jar 真字节归档,reference 改存句柄(供部署取真字节);未配则保持占位。
 			b.storeJarBytes(art, p, onLine)
 			return art
@@ -629,7 +659,7 @@ func (b *Builder) locateFileArtifact(artifactType, slug, workspace string, onLin
 				onLine(streamStdout, "产物目录:"+d+"/("+itoa(size)+" bytes)")
 				art := &run.Artifact{
 					Type: run.ArtifactDist, Name: slug + "-dist", Reference: d + "/", SizeBytes: size,
-					Metadata: map[string]any{"builder": b.driver.Binary(), "path": d + "/"},
+					Metadata: map[string]any{"builder": b.driver.Binary(), "path": d + "/", "workspacePath": d},
 				}
 				// 制品库:把 dist 目录打 tar.gz 归档,reference 改存句柄;未配则保持占位。
 				b.storeDistDir(art, full, onLine)

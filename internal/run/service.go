@@ -133,6 +133,7 @@ type service struct {
 	envResolver       EnvResolver
 	configInitializer func(context.Context, string) error
 	activityOwner     string
+	retryRuntime      RetryRuntime
 }
 
 // setEnqueue 由 WorkerPool 注入调度回调(Create 入库后调用)。
@@ -458,10 +459,11 @@ func (s *service) Get(ctx context.Context, id string) (*Run, error) {
 		        pr.chain_source_run_id, pr.chain_depth,
 		        pr.resolved_environment, pr.resolved_target_server_ids,
 		        pr.spec_source, pr.spec_source_ref, pr.spec_source_file, pr.spec_source_fallback,
-		        COALESCE(mr.dispatch_state, ''), pr.resolved_commit_sha, pr.resolved_commit_conflict
+		        COALESCE(mr.dispatch_state, ''), pr.resolved_commit_sha, pr.resolved_commit_conflict, COALESCE(rr.execution_kind,'original'),COALESCE(rr.root_id,pr.id),COALESCE(rr.parent_id,''),COALESCE(rr.initiator,''),COALESCE(rr.revision,1)
 		 FROM pipeline_runs pr
 		 LEFT JOIN projects p ON p.id = pr.project_id
 		 LEFT JOIN mcp_run_requests mr ON mr.run_id = pr.id
+		 LEFT JOIN run_retry_attempts rr ON rr.run_id=pr.id
 		 WHERE pr.id = ?`, id,
 	).Scan(&r.ProjectID, &r.ProjectName, &r.Status,
 		&r.Trigger.Type, &r.Trigger.Branch, &r.Trigger.Commit, &r.Trigger.Actor,
@@ -470,7 +472,7 @@ func (s *service) Get(ctx context.Context, id string) (*Run, error) {
 		&r.Trigger.ChainSourceRunID, &r.Trigger.ChainDepth,
 		&r.Trigger.ResolvedEnvironment, &targetIDsJSON,
 		&r.SpecSource.Source, &r.SpecSource.Ref, &r.SpecSource.File, &r.SpecSource.Fallback,
-		&r.DispatchState, &r.ResolvedCommitSHA, &r.ResolvedCommitConflict)
+		&r.DispatchState, &r.ResolvedCommitSHA, &r.ResolvedCommitConflict, &r.ExecutionKind, &r.LogicalRunID, &r.SourceRunID, &r.RetryInitiator, &r.AttemptNumber)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -598,9 +600,10 @@ func (s *service) List(ctx context.Context, f ListFilter) (*ListResult, error) {
 		`SELECT pr.id, pr.project_id, COALESCE(p.name, ''), pr.status,
 		        pr.trigger_type, pr.trigger_branch, pr.trigger_commit, pr.trigger_actor,
 		        pr.created_at, pr.started_at, pr.finished_at,
-		        pr.resolved_commit_sha, pr.resolved_commit_conflict
+		        pr.resolved_commit_sha, pr.resolved_commit_conflict, COALESCE(rr.execution_kind,'original'),COALESCE(rr.root_id,pr.id),COALESCE(rr.parent_id,''),COALESCE(rr.initiator,''),COALESCE(rr.revision,1)
 		 FROM pipeline_runs pr
-		 LEFT JOIN projects p ON p.id = pr.project_id`+clause+`
+		 LEFT JOIN projects p ON p.id = pr.project_id
+		 LEFT JOIN run_retry_attempts rr ON rr.run_id=pr.id`+clause+`
 		 ORDER BY pr.created_at DESC, pr.id DESC
 		 LIMIT ? OFFSET ?`, listArgs...)
 	if err != nil {
@@ -619,7 +622,7 @@ func (s *service) List(ctx context.Context, f ListFilter) (*ListResult, error) {
 		if err := rows.Scan(&r.ID, &r.ProjectID, &r.ProjectName, &r.Status,
 			&r.Trigger.Type, &r.Trigger.Branch, &r.Trigger.Commit, &r.Trigger.Actor,
 			&createdStr, &startedStr, &finishStr,
-			&r.ResolvedCommitSHA, &r.ResolvedCommitConflict); err != nil {
+			&r.ResolvedCommitSHA, &r.ResolvedCommitConflict, &r.ExecutionKind, &r.LogicalRunID, &r.SourceRunID, &r.RetryInitiator, &r.AttemptNumber); err != nil {
 			return nil, fmt.Errorf("run: scan run: %w", err)
 		}
 		if r.CreatedAt, err = time.Parse(time.RFC3339, createdStr); err != nil {
@@ -691,6 +694,8 @@ func (s *service) Cancel(ctx context.Context, id string) (*Run, error) {
 		}
 		return nil, err
 	}
+	s.completeRetryAttempt(id)
+	s.settleRetryAttempt(id)
 	return s.Get(ctx, id)
 }
 

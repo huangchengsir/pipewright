@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/huangchengsir/pipewright/internal/pipeline"
+	"github.com/huangchengsir/pipewright/internal/runretry"
 )
 
 // shellDriver 是默认 Driver:shell 到探测出的容器 CLI(bin),所有命令经 Commander 以 array 执行。
@@ -25,6 +26,7 @@ type shellDriver struct {
 	workspaceReconcileAfter time.Time
 	serviceContainers       sync.Map // logical name -> exact CID created by this driver
 	serviceNetworks         sync.Map // logical name -> exact network ID created by this driver
+	serviceEvidence         sync.Map // logical name -> private resource receipt
 }
 
 func (d *shellDriver) Binary() string { return d.bin }
@@ -96,6 +98,9 @@ func (d *shellDriver) RunToolchain(ctx context.Context, image, hostDir, workdir 
 	display = append(display, image)
 	display = append(display, cmd...)
 
+	if _, captured := runretry.ExecutionFrom(ctx); captured {
+		return d.runOwnedToolchain(ctx, args, display, onLine)
+	}
 	emitCmd(onLine, d.bin, display)
 	return d.cmdr.Stream(ctx, d.bin, args, "", onLine)
 }

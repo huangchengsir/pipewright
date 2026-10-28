@@ -148,10 +148,18 @@ type Step struct {
 type StepDecl struct {
 	Name  string
 	Stage string
+	// LogicalNodeKey belongs to the frozen retry manifest, never a display name.
+	LogicalNodeKey string
+	// SeedStatus projects an inherited result without claiming fresh execution.
+	// Empty means pending. Seeded steps never receive current-attempt timings.
+	SeedStatus string
 }
 
 // Run 是一次流水线运行的领域模型。Steps 按 Ordinal 升序。
 type Run struct {
+	// Public provenance does not decrypt manifests or change frozen trigger context.
+	ExecutionKind, LogicalRunID, SourceRunID, RetryInitiator string
+	AttemptNumber                                            int64
 	// Only populated by idempotent Create; unknown must never cause re-enqueue.
 	DispatchState string
 	ID            string

@@ -13,7 +13,7 @@
   reduced-motion:跳过脉冲/入场/流光;所有动效均有媒体查询降级。
 -->
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -56,6 +56,9 @@ import BatchDeployPanel from '../components/run/BatchDeployPanel.vue'
 import ReleaseGuardPanel from '../components/run/ReleaseGuardPanel.vue'
 import ReleaseGuardAttach from '../components/run/ReleaseGuardAttach.vue'
 import LocalDockerDeploymentFields from '../components/run/LocalDockerDeploymentFields.vue'
+import RunRetryPanel from '../components/run/RunRetryPanel.vue'
+import AppButton from '../components/ui/AppButton.vue'
+import { useRunRetry } from '../composables/useRunRetry'
 
 // ─── route ────────────────────────────────────────────────────────────────────
 
@@ -63,17 +66,38 @@ const { t, locale } = useI18n()
 const route  = useRoute()
 const router = useRouter()
 const runId  = computed(() => route.params.id as string)
+const recovery = useRunRetry(runId)
+const retryPanel = ref<InstanceType<typeof RunRetryPanel> | null>(null)
+let runGeneration = 0
+let runController: AbortController | undefined
+function openRetry(keys: string[]) { void retryPanel.value?.show(keys.length === 1 ? keys[0] : undefined, keys.length ? 'plan' : 'details'); if (keys.length) void recovery.openPlan(keys) }
+function openNodeLogs(keys: string[], stageName: string) { void retryPanel.value?.showLogs(keys, stageName) }
+function openRetryHistory() { retryPanel.value?.showHistory() }
+function openAllFailed() { openRetry(recovery.failedNodes.value.map(n => n.node.key)) }
+function openAttempt(id: string) { void router.push({ name: 'run-detail', params: { id } }) }
 
 // ─── load state ──────────────────────────────────────────────────────────────
 
 type LoadState = 'loading' | 'idle' | 'error'
 
 const loadState = ref<LoadState>('loading')
-const loadError = ref('')
+const loadFailure = ref<{ kind: 'notFound' | 'status' | 'network'; status?: number; id?: string } | null>(null)
+const loadError = computed(() => !loadFailure.value ? '' : loadFailure.value.kind === 'notFound' ? t('runDetail.runNotFound', { id: loadFailure.value.id }) : loadFailure.value.kind === 'status' ? t('runDetail.loadFailed', { status: loadFailure.value.status }) : t('runDetail.loadRequestFailed'))
 const run = ref<RunDetail | null>(null)
 
 // 选中的步骤序号(点击步骤详情切换「单步日志」过滤);null = 全部步骤。
 const selectedStepOrdinal = ref<number | null>(null)
+function selectSourceLog() {
+  if (run.value?.id !== runId.value) return
+  const ordinal = Number(route.query.step)
+  selectedStepOrdinal.value = typeof route.query.step === 'string' && Number.isSafeInteger(ordinal) && ordinal >= 0 && run.value.steps[ordinal]?.id === route.query.stepId ? ordinal : null
+}
+watch(() => [route.query.step, route.query.stepId], selectSourceLog)
+function clearSourceLog() {
+  selectedStepOrdinal.value = null
+  const query = { ...route.query }; delete query.step; delete query.stepId
+  void router.replace({ query })
+}
 
 // ─── cancel state ─────────────────────────────────────────────────────────────
 
@@ -82,19 +106,22 @@ const cancelError = ref('')
 
 async function handleCancel(): Promise<void> {
   if (cancelling.value) return
+  const gen = runGeneration; const id = runId.value
   cancelling.value = true
   cancelError.value = ''
   try {
-    const updated = await cancelRun(runId.value)
+    const updated = await cancelRun(id)
+    if (gen !== runGeneration) return
     run.value = updated
   } catch (err) {
+    if (gen !== runGeneration) return
     if (err instanceof HttpError) {
       cancelError.value = err.apiError?.message ?? t('runDetail.cancelFailed', { status: err.status })
     } else {
       cancelError.value = t('runDetail.cancelRequestFailed')
     }
   } finally {
-    cancelling.value = false
+    if (gen === runGeneration) cancelling.value = false
   }
 }
 
@@ -106,10 +133,13 @@ const approving = ref(false)
 const approvalError = ref('')
 
 async function loadApprovals(): Promise<void> {
+  const gen = runGeneration; const id = runId.value
   try {
-    const { items } = await listApprovals(runId.value)
+    const { items } = await listApprovals(id)
+    if (gen !== runGeneration) return
     pendingApproval.value = items.find((a) => a.status === 'pending') ?? null
   } catch {
+    if (gen !== runGeneration) return
     pendingApproval.value = null
   }
 }
@@ -117,22 +147,27 @@ async function loadApprovals(): Promise<void> {
 async function decideApproval(approve: boolean): Promise<void> {
   const stage = pendingApproval.value
   if (!stage || approving.value) return
+  const gen = runGeneration; const id = runId.value
   approving.value = true
   approvalError.value = ''
   try {
-    if (approve) await approveStage(runId.value, stage.stageId)
-    else await rejectStage(runId.value, stage.stageId)
+    if (approve) await approveStage(id, stage.stageId)
+    else await rejectStage(id, stage.stageId)
+    if (gen !== runGeneration) return
     pendingApproval.value = null
     // status flips via SSE (waiting_approval → running → terminal); refresh run + approvals.
-    run.value = await getRun(runId.value)
+    const fresh = await getRun(id, { signal: runController?.signal })
+    if (gen !== runGeneration) return
+    run.value = fresh
     await loadApprovals()
   } catch (err) {
+    if (gen !== runGeneration) return
     approvalError.value =
       err instanceof HttpError
         ? (err.apiError?.message ?? t('runDetail.actionFailed', { status: err.status }))
         : t('runDetail.approvalRequestFailed')
   } finally {
-    approving.value = false
+    if (gen === runGeneration) approving.value = false
   }
 }
 
@@ -323,6 +358,7 @@ const currentDeployInput = computed<DeployRunInput>(() => ({
 
 async function handleDeploy(): Promise<void> {
   if (!run.value || !canDeploy.value) return
+  const gen = runGeneration
   const guardBinding = guardEligible.value ? attachedGuard.value.binding : undefined
   deploying.value = true
   deployError.value = ''
@@ -331,12 +367,14 @@ async function handleDeploy(): Promise<void> {
       ...currentDeployInput.value,
       ...(guardBinding ? { releaseGuard: { ...guardBinding } } : {}),
     })
+    if (gen !== runGeneration) return
     // 同步执行:用返回的 targets 直接填 slot(与 run-detail 同源形状)。
     run.value = { ...run.value, targets: res.targets, status: deriveStatus(res.targets) }
     showDeployPanel.value = false
     selectedServerIds.value = []
     deployedGuardId.value = res.guardId ?? ''
   } catch (err) {
+    if (gen !== runGeneration) return
     if (guardBinding && err instanceof HttpError && (err.status === 0 || err.status >= 500)) deployOutcomeUnknown.value = true
     if (err instanceof HttpError) {
       deployError.value = deployOutcomeUnknown.value ? t('releaseGuard.attachedOutcomeUnknown') : err.apiError?.message ?? t('runDetail.deployFailed', { status: err.status })
@@ -344,8 +382,7 @@ async function handleDeploy(): Promise<void> {
       deployError.value = t('runDetail.deployRequestFailed')
     }
   } finally {
-    attachedGuardReset.value++
-    deploying.value = false
+    if (gen === runGeneration) { attachedGuardReset.value++; deploying.value = false }
   }
 }
 
@@ -368,6 +405,7 @@ const retryError = ref('')
 
 async function handleRetryFailed(): Promise<void> {
   if (!run.value || retrying.value) return
+  const gen = runGeneration
   // 复用产物:优先上次部署选中的;否则回退首个产物(刷新页面后表单态丢失的兜底)。
   const artifactId = selectedArtifactId.value || run.value.artifacts[0]?.id || ''
   if (!artifactId) {
@@ -383,15 +421,17 @@ async function handleRetryFailed(): Promise<void> {
       deployConfig: buildDeployConfig(),
       healthCheck: buildHealthCheck(),
     })
+    if (gen !== runGeneration) return
     run.value = { ...run.value, targets: res.targets, status: deriveStatus(res.targets) }
   } catch (err) {
+    if (gen !== runGeneration) return
     if (err instanceof HttpError) {
       retryError.value = err.apiError?.message ?? t('runDetail.retryFailed', { status: err.status })
     } else {
       retryError.value = t('runDetail.retryRequestFailed')
     }
   } finally {
-    retrying.value = false
+    if (gen === runGeneration) retrying.value = false
   }
 }
 
@@ -407,6 +447,7 @@ const pendingCount = computed(() => (run.value?.targets ?? []).filter((t) => t.s
 
 async function handleContinueDeploy(): Promise<void> {
   if (!run.value || batchBusy.value) return
+  const gen = runGeneration
   const artifactId = selectedArtifactId.value || run.value.artifacts[0]?.id || ''
   if (!artifactId) {
     batchError.value = t('runDetail.noArtifactContinue')
@@ -420,44 +461,52 @@ async function handleContinueDeploy(): Promise<void> {
       deployConfig: buildDeployConfig(),
       healthCheck: buildHealthCheck(),
     })
+    if (gen !== runGeneration) return
     run.value = { ...run.value, targets: res.targets, status: deriveStatus(res.targets) }
   } catch (err) {
+    if (gen !== runGeneration) return
     batchError.value = err instanceof HttpError ? (err.apiError?.message ?? t('runDetail.continueFailed', { status: err.status })) : t('runDetail.continueRequestFailed')
   } finally {
-    batchBusy.value = false
+    if (gen === runGeneration) batchBusy.value = false
   }
 }
 
 async function handleAbortDeploy(): Promise<void> {
   if (!run.value || batchBusy.value) return
+  const gen = runGeneration
   batchBusy.value = true
   batchError.value = ''
   try {
     const res = await abortDeploy(run.value.id)
+    if (gen !== runGeneration) return
     run.value = { ...run.value, targets: res.targets, status: deriveStatus(res.targets) }
   } catch (err) {
+    if (gen !== runGeneration) return
     batchError.value = err instanceof HttpError ? (err.apiError?.message ?? t('runDetail.abortFailed', { status: err.status })) : t('runDetail.abortRequestFailed')
   } finally {
-    batchBusy.value = false
+    if (gen === runGeneration) batchBusy.value = false
   }
 }
 
 // ─── data loading ─────────────────────────────────────────────────────────────
 
 async function loadRun(): Promise<void> {
+  const gen = runGeneration; const id = runId.value
   loadState.value = 'loading'
-  loadError.value = ''
+  loadFailure.value = null
   try {
-    run.value = await getRun(runId.value)
+    const fresh = await getRun(id, { signal: runController?.signal })
+    if (gen !== runGeneration) return
+    run.value = fresh
+    selectSourceLog()
     loadState.value = 'idle'
     if (run.value.status === 'waiting_approval') void loadApprovals()
   } catch (err) {
+    if (gen !== runGeneration) return
     if (err instanceof HttpError) {
-      loadError.value = err.status === 404
-        ? t('runDetail.runNotFound', { id: runId.value })
-        : (err.apiError?.message ?? t('runDetail.loadFailed', { status: err.status }))
+      loadFailure.value = err.status === 404 ? { kind: 'notFound', id } : err.status === 0 ? { kind: 'network' } : { kind: 'status', status: err.status }
     } else {
-      loadError.value = t('runDetail.loadRequestFailed')
+      loadFailure.value = { kind: 'network' }
     }
     loadState.value = 'error'
   }
@@ -470,8 +519,10 @@ async function loadRun(): Promise<void> {
 // reload. A periodic silent refresh keeps commit + steps (with stage) + status
 // current during execution; SSE still drives live log tailing.
 async function silentRefresh(): Promise<void> {
+  const gen = runGeneration; const id = runId.value
   try {
-    const fresh = await getRun(runId.value)
+    const fresh = await getRun(id, { signal: runController?.signal })
+    if (gen !== runGeneration) return
     run.value = fresh
     if (fresh.status === 'waiting_approval') void loadApprovals()
   } catch {
@@ -490,8 +541,11 @@ let refreshTimer: ReturnType<typeof setInterval> | null = null
 
 function startSse(): void {
   if (cleanupSse) return
-  cleanupSse = subscribeRunEvents(runId.value, {
+  const gen = runGeneration; const id = runId.value
+  cleanupSse = subscribeRunEvents(id, {
     onStatus({ status }) {
+      if (gen !== runGeneration || id !== runId.value) return
+      void recovery.refresh()
       if (!run.value) return
       run.value = { ...run.value, status }
       // Approval gate (8-4): load pending stage when blocked; clear once resumed.
@@ -505,6 +559,8 @@ function startSse(): void {
       }
     },
     onStep({ step }) {
+      if (gen !== runGeneration || id !== runId.value) return
+      void recovery.refresh()
       if (!run.value) return
       const steps = run.value.steps.map((s) => (s.id === step.id ? { ...s, ...step } : s))
       run.value = { ...run.value, steps }
@@ -544,15 +600,22 @@ watch(
   },
 )
 
-onMounted(async () => {
-  await loadRun()
-  const s = run.value?.status
-  if (s === 'running' || s === 'queued' || s === 'waiting_approval') {
-    startSse()
-  }
-})
+watch(runId, () => {
+  runGeneration++; runController?.abort(); runController = new AbortController(); stopSse()
+  run.value = null; selectedStepOrdinal.value = null; pendingApproval.value = null
+  loadFailure.value = null; cancelError.value = ''; approvalError.value = ''; deployError.value = ''
+  showDeployPanel.value = false; deploying.value = false; cancelling.value = false; approving.value = false
+  retrying.value = false; retryError.value = ''; batchBusy.value = false; batchError.value = ''
+  selectedArtifactId.value = ''; selectedServerIds.value = []; deployedGuardId.value = ''; deployOutcomeUnknown.value = false
+  attachedGuard.value = { enabled: false, ready: false }; attachedGuardReset.value++
+  localDockerConfig.value = {}; showAdvanced.value = false; releaseBase.value = ''; keepReleases.value = 1
+  hcType.value = 'none'; hcUrl.value = ''; hcCommand.value = ''; hcRetries.value = 3; hcIntervalSeconds.value = 3; hcTimeoutSeconds.value = 5
+  commandTimeoutSeconds.value = 60; connectTimeoutSeconds.value = 15; uploadIdleTimeoutSeconds.value = 120; uploadTimeoutSeconds.value = 0
+  deployStrategy.value = 'rolling'; canaryCount.value = 1
+  void loadRun()
+}, { immediate: true })
 
-onUnmounted(() => { stopSse() })
+onUnmounted(() => { runGeneration++; runController?.abort(); stopSse() })
 
 // ─── Status config (fixed six-word set) ──────────────────────────────────────
 
@@ -662,6 +725,8 @@ function nodeClass(status: StepStatus): string {
       </span>
     </div>
 
+    <RunRetryPanel v-if="(loadState === 'idle' && run) || recovery.pending.value" :key="runId" ref="retryPanel" :state="recovery" :run-id="runId" :steps="run?.steps" :run-status="run?.status" :source-run-id="run?.sourceRunId" :attempt-number="run?.attemptNumber" @accepted="openAttempt" @full-logs="clearSourceLog" />
+
     <!-- ─── Loading skeleton ─────────────────────────────────────────────── -->
     <template v-if="loadState === 'loading'">
       <div class="detail-loading" aria-busy="true" :aria-label="t('runDetail.loadingAria')">
@@ -688,6 +753,8 @@ function nodeClass(status: StepStatus): string {
 
     <!-- ─── Run detail ───────────────────────────────────────────────────── -->
     <template v-else-if="loadState === 'idle' && run">
+
+      <p v-if="selectedStepOrdinal !== null" class="source-log-selection" aria-live="polite">{{ t('run.stepDetails') }}: {{ run.steps[selectedStepOrdinal]?.name }} <button type="button" class="btn-secondary" @click="clearSourceLog">{{ t('run.allLogs') }}</button></p>
 
       <!-- Detail card wrapper -->
       <div class="detail-card">
@@ -813,6 +880,10 @@ function nodeClass(status: StepStatus): string {
             <span class="meta-key">{{ t('runDetail.metaDuration') }}</span>
             <span class="meta-val mono">{{ formatDuration(run.durationMs) }}</span>
           </div>
+          <div v-if="recovery.context.value || recovery.attempts.value?.items.length" class="meta-item meta-recovery">
+            <AppButton variant="ghost" class="retry-history-entry" @click="openRetryHistory">{{ t('runRetry.runHistory') }}</AppButton>
+            <AppButton v-if="recovery.failedNodes.value.length > 1" variant="ghost" class="retry-all-entry" @click="openAllFailed">{{ t('runRetry.retryAll') }}</AppButton>
+          </div>
         </div>
 
         <!-- ══════════════════════════════════════════════════════════════
@@ -832,12 +903,14 @@ function nodeClass(status: StepStatus): string {
                 :project-id="run.projectId"
                 :steps="run.steps"
                 :run-status="run.status"
+                :recovery="recovery.context.value"
+                @retry="openRetry" @logs="openNodeLogs"
               />
             </div>
 
             <!-- Two-column layout: 步骤详情(点击单步看其日志) + 实时日志终端 -->
             <div class="running-body">
-              <RunStepList :steps="run.steps" :selected="selectedStepOrdinal" @select="selectedStepOrdinal = $event" />
+              <RunStepList :steps="run.steps" :selected="selectedStepOrdinal" :recovery="recovery.context.value" @retry="openRetry" @select="selectedStepOrdinal = $event" />
               <div class="slot-log-live" role="region" :aria-label="t('runDetail.liveLogAria')">
                 <RunTerminal :run-id="run.id" :live="true" :filter-ordinal="selectedStepOrdinal" />
               </div>
@@ -856,6 +929,8 @@ function nodeClass(status: StepStatus): string {
                 :project-id="run.projectId"
                 :steps="run.steps"
                 :run-status="run.status"
+                :recovery="recovery.context.value"
+                @retry="openRetry" @logs="openNodeLogs"
               />
             </div>
 
@@ -908,7 +983,7 @@ function nodeClass(status: StepStatus): string {
 
             <!-- 步骤详情(点击单步看其日志)+ 历史日志回放(2 列;步骤完成后仍可见) -->
             <div class="running-body">
-              <RunStepList :steps="run.steps" :selected="selectedStepOrdinal" @select="selectedStepOrdinal = $event" />
+              <RunStepList :steps="run.steps" :selected="selectedStepOrdinal" :recovery="recovery.context.value" @retry="openRetry" @select="selectedStepOrdinal = $event" />
               <div class="log-history" role="region" :aria-label="t('runDetail.historyLogAria')">
                 <RunTerminal :run-id="run.id" :live="false" :filter-ordinal="selectedStepOrdinal" />
               </div>
@@ -1202,6 +1277,8 @@ function nodeClass(status: StepStatus): string {
                 :project-id="run.projectId"
                 :steps="run.steps"
                 :run-status="run.status"
+                :recovery="recovery.context.value"
+                @retry="openRetry" @logs="openNodeLogs"
               />
             </div>
 
@@ -1224,7 +1301,7 @@ function nodeClass(status: StepStatus): string {
             <!-- 失败日志证据(只读历史回放,Story 3-6)。在 AI 诊断面板之上;
                  不属于 7-2 的 DiagnosisPanel slot,二者共存。 -->
             <div class="log-history" role="region" :aria-label="t('runDetail.failedLogAria')">
-              <RunTerminal :run-id="run.id" :live="false" />
+              <RunTerminal :run-id="run.id" :live="false" :filter-ordinal="selectedStepOrdinal" />
             </div>
 
             <!--
@@ -1262,6 +1339,8 @@ function nodeClass(status: StepStatus): string {
                 :project-id="run.projectId"
                 :steps="run.steps"
                 :run-status="run.status"
+                :recovery="recovery.context.value"
+                @retry="openRetry" @logs="openNodeLogs"
               />
             </div>
 
@@ -1275,7 +1354,7 @@ function nodeClass(status: StepStatus): string {
 
             <!-- 历史日志回放(只读,Story 3-6) -->
             <div class="log-history" role="region" :aria-label="t('runDetail.historyLogAria')">
-              <RunTerminal :run-id="run.id" :live="false" />
+              <RunTerminal :run-id="run.id" :live="false" :filter-ordinal="selectedStepOrdinal" />
             </div>
 
             <!--
@@ -1356,12 +1435,14 @@ function nodeClass(status: StepStatus): string {
                 :project-id="run.projectId"
                 :steps="run.steps"
                 :run-status="run.status"
+                :recovery="recovery.context.value"
+                @retry="openRetry" @logs="openNodeLogs"
               />
             </div>
 
             <!-- 历史日志回放(只读,Story 3-6) -->
             <div class="log-history" role="region" :aria-label="t('runDetail.historyLogAria')">
-              <RunTerminal :run-id="run.id" :live="false" />
+              <RunTerminal :run-id="run.id" :live="false" :filter-ordinal="selectedStepOrdinal" />
             </div>
 
           </div>
@@ -1395,6 +1476,10 @@ function nodeClass(status: StepStatus): string {
 </template>
 
 <style scoped>
+.meta-recovery { flex-wrap: wrap; gap: 8px; }
+.meta-recovery :deep(.app-btn) { min-height: 44px; height: auto; white-space: normal; text-align: left; }
+.source-log-selection { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0 0 16px; color: var(--color-dim); }
+.source-log-selection button { min-height: 44px; }
 /* ─── approval gate (Story 8-4) ──────────────────────────────────────────── */
 .approval-gate {
   display: flex;

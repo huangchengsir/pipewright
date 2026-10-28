@@ -7,6 +7,8 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { RunStep, StepStatus } from '../../api/runs'
+import type { RetryContext } from '../../api/runRetry'
+import AppButton from '../ui/AppButton.vue'
 
 const { t } = useI18n()
 
@@ -14,9 +16,12 @@ const props = defineProps<{
   steps: RunStep[]
   /** 当前选中的步骤序号(用于高亮 + 过滤日志);null = 全部。 */
   selected?: number | null
+  recovery?: RetryContext | null
 }>()
 
-const emit = defineEmits<{ select: [ordinal: number | null] }>()
+const emit = defineEmits<{ select: [ordinal: number | null]; retry: [nodeKeys: string[]] }>()
+function retryNode(stepId: string) { return props.recovery?.nodes.find(n => n.attemptStepId === stepId) }
+function isReused(stepId: string) { return retryNode(stepId)?.decision.action === 'reuse' }
 
 interface NodeRow {
   step: RunStep
@@ -35,7 +40,6 @@ function aggregate(nodes: NodeRow[]): StepStatus {
   if (ss.some((s) => s === 'running')) return 'running'
   if (ss.length > 0 && ss.every((s) => s === 'success')) return 'success'
   if (ss.length > 0 && ss.every((s) => s === 'skipped')) return 'skipped'
-  if (ss.some((s) => s === 'success')) return 'success'
   return 'pending'
 }
 
@@ -115,10 +119,13 @@ function formatDuration(ms: number | null): string {
               </svg>
             </div>
             <div class="step-info">
-              <span class="step-name">{{ n.step.name }}</span>
-              <span v-if="n.step.durationMs !== null" class="step-dur mono">{{ formatDuration(n.step.durationMs) }}</span>
+              <span class="step-name" :title="n.step.name">{{ n.step.name }}</span>
+              <span v-if="n.step.durationMs !== null && !isReused(n.step.id)" class="step-dur mono">{{ formatDuration(n.step.durationMs) }}</span>
             </div>
           </button>
+          <span v-if="isReused(n.step.id)" class="step-origin">{{ t('runRetry.reusedShort') }}</span>
+          <AppButton v-if="['failed', 'outcome_unknown'].includes(retryNode(n.step.id)?.decision.status ?? '')" class="step-retry" :title="t('runRetry.retryNode')" @click="emit('retry', [retryNode(n.step.id)!.node.key])">{{ t('runRetry.retryShort') }}</AppButton>
+          <AppButton v-else-if="n.step.status === 'failed' && !recovery" class="step-retry" :title="t('runRetry.viewRecovery')" @click="emit('retry', [])">{{ t('runRetry.retryShort') }}</AppButton>
         </li>
       </template>
     </ul>
@@ -126,6 +133,11 @@ function formatDuration(ms: number | null): string {
 </template>
 
 <style scoped>
+.steps li:has(.step-row) { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.steps li:has(.step-row) .step-row { flex: 1 1 0; min-width: 0; padding-left: 4px; padding-right: 4px; gap: 6px; }
+.step-retry { min-height: 44px; height: auto; max-width: 104px; padding: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; display: block; }
+.step-row { min-height: 44px; }
+.step-origin { flex-shrink: 0; max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--color-dim); }
 /* 左栏粘顶:终端很长时步骤选择器跟随视口,不在左侧留一大片死白。 */
 .step-list {
   position: sticky;

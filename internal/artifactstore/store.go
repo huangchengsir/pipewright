@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // 领域错误。错误体不含字节内容 / 绝对路径外的敏感信息。
@@ -31,7 +32,8 @@ var (
 
 // Store 是内容寻址磁盘制品库。零依赖;并发安全(Put 经临时文件 + 原子 rename;Open 只读)。
 type Store struct {
-	root string
+	root        string
+	commitLocks [256]sync.Mutex
 }
 
 // New 构造制品库,root 不存在则创建(0700:产物可能含敏感构建输出,限本用户)。
@@ -67,19 +69,46 @@ func (s *Store) Put(r io.Reader) (key string, size int64, err error) {
 		return "", 0, fmt.Errorf("artifactstore: close temp: %w", err)
 	}
 
-	key = hex.EncodeToString(h.Sum(nil))
+	digest := h.Sum(nil)
+	key = hex.EncodeToString(digest)
+	s.commitLocks[digest[0]].Lock()
+	defer s.commitLocks[digest[0]].Unlock()
 	dest := s.pathFor(key)
 	if err = os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 		return "", 0, fmt.Errorf("artifactstore: mkdir shard: %w", err)
 	}
 	// 已存在(同内容)→ 直接复用,不重复写(去重)。
-	if _, statErr := os.Stat(dest); statErr == nil {
-		return key, size, nil
+	if _, statErr := os.Lstat(dest); statErr == nil {
+		if sameCASObject(dest, key, size) {
+			return key, size, nil
+		}
+		return "", 0, errors.New("artifactstore: existing object integrity invalid")
 	}
 	if err = os.Rename(tmpName, dest); err != nil {
+		// Windows does not replace an existing destination. Another producer can
+		// atomically commit the same CAS object between Stat and Rename; accept
+		// that winner only after verifying its actual immutable bytes.
+		if sameCASObject(dest, key, size) {
+			return key, size, nil
+		}
 		return "", 0, fmt.Errorf("artifactstore: commit: %w", err)
 	}
 	return key, size, nil
+}
+
+func sameCASObject(p, key string, size int64) bool {
+	info, err := os.Lstat(p)
+	if err != nil || !info.Mode().IsRegular() || info.Size() != size {
+		return false
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return false
+	}
+	h := sha256.New()
+	n, readErr := io.Copy(h, io.LimitReader(f, size+1))
+	closeErr := f.Close()
+	return readErr == nil && closeErr == nil && n == size && hex.EncodeToString(h.Sum(nil)) == key
 }
 
 // Open 按句柄打开产物只读流(调用方负责 Close)。句柄非法 → ErrInvalidKey;不存在 → ErrNotFound。

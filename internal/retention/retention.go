@@ -16,7 +16,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"time"
 )
 
@@ -102,10 +102,7 @@ func (s *Service) Prune(ctx context.Context, now time.Time) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	if err := s.deleteRuns(ctx, ids); err != nil {
-		return 0, err
-	}
-	return len(ids), nil
+	return s.deleteRuns(ctx, ids)
 }
 
 // prunableIDs 计算应删除的终态运行 id:超出每项目保留条数 或 早于年龄阈值。
@@ -154,7 +151,8 @@ func (s *Service) prunableIDs(ctx context.Context, cfg Config, now time.Time) ([
 var nonCascadeChildTables = []string{"run_logs", "deploy_targets"}
 
 // deleteRuns 分批在事务内删除运行:先删非级联子表,再删 run(级联其余子表)。
-func (s *Service) deleteRuns(ctx context.Context, ids []string) error {
+func (s *Service) deleteRuns(ctx context.Context, ids []string) (int, error) {
+	deleted := 0
 	const batch = 500
 	for start := 0; start < len(ids); start += batch {
 		end := start + batch
@@ -162,37 +160,85 @@ func (s *Service) deleteRuns(ctx context.Context, ids []string) error {
 			end = len(ids)
 		}
 		chunk := ids[start:end]
-		if err := s.deleteChunk(ctx, chunk); err != nil {
-			return err
+		n, err := s.deleteChunk(ctx, chunk)
+		deleted += n
+		if err != nil {
+			return deleted, err
 		}
 	}
-	return nil
+	return deleted, nil
 }
 
-func (s *Service) deleteChunk(ctx context.Context, ids []string) error {
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		args[i] = id
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("retention: begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	for _, tbl := range nonCascadeChildTables {
-		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM `+tbl+` WHERE run_id IN (`+placeholders+`)`, args...); err != nil {
-			return fmt.Errorf("retention: delete %s: %w", tbl, err)
+func (s *Service) deleteChunk(ctx context.Context, ids []string) (int, error) {
+	deleted := 0
+	err := configstate.WithWriteTxContext(ctx, s.db, func(txctx context.Context, q configstate.DBTX) error {
+		if err := configstate.LockEpochs(txctx, q, s.db, configstate.EpochPolicy, configstate.EpochSecrets, configstate.EpochExecutor); err != nil {
+			return err
 		}
+		for _, id := range ids {
+			var project, status string
+			err := q.QueryRowContext(txctx, "SELECT project_id,status FROM pipeline_runs WHERE id=?", id).Scan(&project, &status)
+			if err == sql.ErrNoRows {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if status != "success" && status != "failed" {
+				continue
+			}
+			if _, err := configstate.LockProject(txctx, q, s.db, project); err != nil {
+				return err
+			}
+			var holds int
+			err = q.QueryRowContext(txctx, `SELECT
+			 (SELECT COUNT(*) FROM project_activity WHERE run_id=? AND released_at IS NULL)+
+			 (SELECT COUNT(*) FROM run_retry_refs WHERE producer_attempt_id=? AND owner_attempt_id<>? AND released_at IS NULL)+
+			 (SELECT COUNT(*) FROM run_retry_nodes WHERE attempt_id=? AND status IN ('running','outcome_unknown'))+
+			 (SELECT COUNT(*) FROM run_retry_dispatch WHERE attempt_id=? AND state IN ('pending','dispatching','accepted','running','outcome_unknown'))+
+			 (SELECT COUNT(*) FROM run_retry_resources WHERE attempt_id=? AND state<>'drained')+
+			 (SELECT COUNT(*) FROM run_retry_external_targets WHERE attempt_id=? AND state IN ('running','outcome_unknown'))+
+			 (SELECT COUNT(*) FROM run_retry_lineages WHERE active_attempt_id=?)`, id, id, id, id, id, id, id, id).Scan(&holds)
+			if err != nil {
+				return err
+			}
+			if holds > 0 {
+				// Inactive pins keep source metadata, not unbounded heavy logs.
+				var pins int
+				if err = q.QueryRowContext(txctx, "SELECT COUNT(*) FROM run_retry_refs WHERE producer_attempt_id=? AND owner_attempt_id<>? AND released_at IS NULL", id, id).Scan(&pins); err != nil {
+					return err
+				}
+				if pins > 0 && holds == pins {
+					if _, err = q.ExecContext(txctx, "DELETE FROM run_logs WHERE run_id=?", id); err != nil {
+						return err
+					}
+				}
+				continue
+			}
+			for _, table := range nonCascadeChildTables {
+				if _, err = q.ExecContext(txctx, "DELETE FROM "+table+" WHERE run_id=?", id); err != nil {
+					return err
+				}
+			}
+			result, err := q.ExecContext(txctx, "DELETE FROM pipeline_runs WHERE id=? AND status IN ('success','failed')", id)
+			if err != nil {
+				return err
+			}
+			n, err := result.RowsAffected()
+			if err != nil {
+				return err
+			}
+			deleted += int(n)
+			if n > 0 {
+				if _, err = q.ExecContext(txctx, "UPDATE run_retry_refs SET released_at=? WHERE owner_attempt_id=? AND released_at IS NULL", time.Now().UnixMilli(), id); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM pipeline_runs WHERE id IN (`+placeholders+`)`, args...); err != nil {
-		return fmt.Errorf("retention: delete runs: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("retention: commit: %w", err)
-	}
-	return nil
+	return deleted, nil
 }

@@ -154,6 +154,7 @@ func (s *service) startImageReceiptWithExpected(ctx context.Context, srv *target
 		return err
 	}
 	st.receipt = &imageReceipt{target: t, actual: deployattempt.ActualImage{RepoDigests: []string{}}}
+	recordRecoveryImage(ctx, t, nil, st.receipt.actual, "target_started")
 	return nil
 }
 
@@ -170,11 +171,13 @@ func (s *service) imageEvent(ctx context.Context, st imageState, kind, gate, rea
 	}
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	_, err := s.attempts.AppendReceipt(cleanup, r.target.ID, deployattempt.Receipt{Kind: kind, ActualImage: r.actual, PreviousImageReference: r.previous, RollbackContainerID: r.rollbackContainerID, HealthGate: gate, Reason: reason})
+	stored, err := s.attempts.AppendReceipt(cleanup, r.target.ID, deployattempt.Receipt{Kind: kind, ActualImage: r.actual, PreviousImageReference: r.previous, RollbackContainerID: r.rollbackContainerID, HealthGate: gate, Reason: reason})
 	if err == nil {
+		recordRecoveryImage(cleanup, r.target, stored, r.actual, kind)
 		return true
 	}
 	r.unknown = true
+	recordRecoveryImage(cleanup, r.target, nil, r.actual, deployattempt.OutcomeUnknown)
 	log.Printf("[deploy] deployment receipt unavailable for target %s", r.target.ID)
 	// A durable activation_started entry already signals an uncertain outcome
 	// if this best-effort unknown write also fails. Never replay remote work.

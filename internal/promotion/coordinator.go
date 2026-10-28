@@ -2,8 +2,10 @@ package promotion
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 )
 
 // RunInfo 是晋级编排所需的源运行最小信息(由 RunLookup 提供)。
@@ -84,75 +86,70 @@ func (c *Coordinator) Promote(ctx context.Context, runID, target, actor string) 
 		return nil, ErrRunNotSuccessful
 	}
 
-	chain, err := c.store.GetChain(ctx, info.ProjectID)
-	if err != nil {
-		return nil, err
-	}
-
-	curEnv, err := c.store.currentEnvForRun(ctx, runID, chain)
-	if err != nil {
-		return nil, err
-	}
-
-	// target 留空 → 取下一级。给定 target 时:先校验它在链上,再(在防跳级前)查重复——
-	// 这样「重新晋级一个已达环境」明确报 ErrAlreadyPromoted(而非误报 ErrSkipEnv)。
-	if target == "" {
-		target, err = chain.nextTarget(curEnv)
-		if err != nil {
-			return nil, err
+	var rec Record
+	var gated bool
+	err = configstate.WithWriteTxContext(ctx, c.store.db, func(tx context.Context, q configstate.DBTX) error {
+		if e := configstate.LockEpochs(tx, q, c.store.db, configstate.EpochPolicy, configstate.EpochSecrets, configstate.EpochExecutor); e != nil {
+			return e
 		}
-	} else if chain.IndexOf(target) < 0 {
-		return nil, ErrUnknownEnv
-	}
-
-	active, err := c.store.hasActivePromotion(ctx, runID, target)
+		if _, e := configstate.LockProject(tx, q, c.store.db, info.ProjectID); e != nil {
+			return e
+		}
+		var project, status string
+		if e := q.QueryRowContext(tx, "SELECT project_id,status FROM pipeline_runs WHERE id=?", runID).Scan(&project, &status); e != nil {
+			if errors.Is(e, sql.ErrNoRows) {
+				return ErrRunNotFound
+			}
+			return e
+		}
+		if project != info.ProjectID || status != SuccessStatus {
+			return ErrRunNotSuccessful
+		}
+		chain, e := c.store.GetChain(tx, info.ProjectID)
+		if e != nil {
+			return e
+		}
+		curEnv, e := c.store.currentEnvForRun(tx, runID, chain)
+		if e != nil {
+			return e
+		}
+		if target == "" {
+			target, e = chain.nextTarget(curEnv)
+			if e != nil {
+				return e
+			}
+		} else if chain.IndexOf(target) < 0 {
+			return ErrUnknownEnv
+		}
+		active, e := c.store.hasActivePromotion(tx, runID, target)
+		if e != nil {
+			return e
+		}
+		if active {
+			return ErrAlreadyPromoted
+		}
+		if e = chain.validateTarget(curEnv, target); e != nil {
+			return e
+		}
+		gated = chain.Gated(target)
+		state := StatusPromoted
+		stage := ""
+		if gated {
+			state = StatusPending
+			stage = promotionStageKey(runID, target)
+		}
+		rec = Record{ProjectID: info.ProjectID, SourceRunID: runID, FromEnvironment: curEnv, TargetEnvironment: target, Status: state, ApprovalStage: stage, PromotedBy: actor}
+		rec.ID, e = c.store.createRecord(tx, rec)
+		return e
+	})
 	if err != nil {
 		return nil, err
 	}
-	if active {
-		return nil, ErrAlreadyPromoted
-	}
-
-	// 防跳级/越尾:target 须恰为「当前已达环境的下一级」。
-	if err := chain.validateTarget(curEnv, target); err != nil {
-		return nil, err
-	}
-
-	gated := chain.Gated(target)
 	if !gated {
-		rec := Record{
-			ProjectID:         info.ProjectID,
-			SourceRunID:       runID,
-			FromEnvironment:   curEnv,
-			TargetEnvironment: target,
-			Status:            StatusPromoted,
-			PromotedBy:        actor,
-		}
-		id, cerr := c.store.createRecord(ctx, rec)
-		if cerr != nil {
-			return nil, cerr
-		}
-		rec.ID = id
-		rec.Status = StatusPromoted
 		return &PromoteResult{Record: rec, Approved: true}, nil
 	}
-
-	// gated 目标:无 Gate 装配 → fail-closed(登记 rejected,绝不擅自放行)。
-	stageKey := promotionStageKey(runID, target)
-	rec := Record{
-		ProjectID:         info.ProjectID,
-		SourceRunID:       runID,
-		FromEnvironment:   curEnv,
-		TargetEnvironment: target,
-		Status:            StatusPending,
-		ApprovalStage:     stageKey,
-		PromotedBy:        actor,
-	}
-	id, cerr := c.store.createRecord(ctx, rec)
-	if cerr != nil {
-		return nil, cerr
-	}
-	rec.ID = id
+	id := rec.ID
+	stageKey := rec.ApprovalStage
 
 	if c.gate == nil {
 		_ = c.store.decideRecord(ctx, id, StatusRejected, "no_gate")

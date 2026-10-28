@@ -3,6 +3,7 @@ package deploy
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -97,6 +98,7 @@ func TestLocalDockerConfigFitsPinnedCommandArgumentBudget(t *testing.T) {
 }
 
 type localDockerFixture struct {
+	db       *sql.DB
 	svc      Service
 	targets  *stubTarget
 	ledger   *deployattempt.Store
@@ -167,7 +169,7 @@ func newLocalDockerFixture(t *testing.T, format string) *localDockerFixture {
 		t.Fatal(err)
 	}
 	artifactID := artifact.ID
-	f := &localDockerFixture{targets: &stubTarget{}, ledger: deployattempt.New(db), observer: &imageObserverFixture{}, imageID: "sha256:" + strings.Repeat("a", 64), actualID: "sha256:" + strings.Repeat("a", 64), cid: strings.Repeat("b", 64), old: strings.Repeat("c", 64)}
+	f := &localDockerFixture{db: db, targets: &stubTarget{}, ledger: deployattempt.New(db), observer: &imageObserverFixture{}, imageID: "sha256:" + strings.Repeat("a", 64), actualID: "sha256:" + strings.Repeat("a", 64), cid: strings.Repeat("b", 64), old: strings.Repeat("c", 64)}
 	srv := seedServer(t, f.targets, "test-node")
 	f.in = DeployInput{RunID: runID, ArtifactID: artifactID, ServerIDs: []string{srv.ID}, Config: localDockerTestConfig()}
 	f.pinned = &localDockerTestTarget{stubTarget: f.targets}

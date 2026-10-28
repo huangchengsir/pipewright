@@ -31,7 +31,7 @@ type sshDialer struct{}
 func (sshDialer) Run(ctx context.Context, addr string, cfg SSHConfig, cmd []string) (*ExecResult, error) {
 	auth, err := authMethods(cfg)
 	if err != nil {
-		return nil, err
+		return nil, NotStarted(err)
 	}
 
 	clientCfg := &ssh.ClientConfig{
@@ -44,14 +44,14 @@ func (sshDialer) Run(ctx context.Context, addr string, cfg SSHConfig, cmd []stri
 
 	client, cleanup, err := dialSSH(ctx, addr, clientCfg)
 	if err != nil {
-		return nil, err
+		return nil, NotStarted(err)
 	}
 	defer cleanup()
 	defer func() { _ = client.Close() }()
 
 	session, err := client.NewSession()
 	if err != nil {
-		return nil, fmt.Errorf("%w", ErrUnreachable)
+		return nil, NotStarted(ErrUnreachable)
 	}
 	defer func() { _ = session.Close() }()
 
@@ -77,7 +77,7 @@ func (sshDialer) Run(ctx context.Context, addr string, cfg SSHConfig, cmd []stri
 		if errors.Is(runErr, context.DeadlineExceeded) || errors.Is(runErr, context.Canceled) {
 			return nil, runErr
 		}
-		return nil, fmt.Errorf("%w", ErrUnreachable)
+		return nil, runErr
 	}
 	res.ExitCode = 0
 	return res, nil
@@ -88,7 +88,7 @@ func (sshDialer) Run(ctx context.Context, addr string, cfg SSHConfig, cmd []stri
 func (sshDialer) RunWithStdin(ctx context.Context, addr string, cfg SSHConfig, cmd []string, stdin io.Reader) (*ExecResult, error) {
 	auth, err := authMethods(cfg)
 	if err != nil {
-		return nil, err
+		return nil, NotStarted(err)
 	}
 	clientCfg := &ssh.ClientConfig{
 		User:            cfg.User,
@@ -98,14 +98,14 @@ func (sshDialer) RunWithStdin(ctx context.Context, addr string, cfg SSHConfig, c
 	}
 	client, cleanup, err := dialSSH(ctx, addr, clientCfg)
 	if err != nil {
-		return nil, err
+		return nil, NotStarted(err)
 	}
 	defer cleanup()
 	defer func() { _ = client.Close() }()
 
 	session, err := client.NewSession()
 	if err != nil {
-		return nil, fmt.Errorf("%w", ErrUnreachable)
+		return nil, NotStarted(ErrUnreachable)
 	}
 	defer func() { _ = session.Close() }()
 
@@ -125,7 +125,7 @@ func (sshDialer) RunWithStdin(ctx context.Context, addr string, cfg SSHConfig, c
 		if errors.Is(runErr, context.DeadlineExceeded) || errors.Is(runErr, context.Canceled) {
 			return nil, runErr
 		}
-		return nil, fmt.Errorf("%w", ErrUnreachable)
+		return nil, runErr
 	}
 	res.ExitCode = 0
 	return res, nil
@@ -406,15 +406,29 @@ func (s *streamReadCloser) Close() error {
 
 // runWithContext 在 session 上跑 cmd,并让 ctx 取消/超时能中断阻塞的 Run。
 func runWithContext(ctx context.Context, session *ssh.Session, cmd string) error {
+	if err := ctx.Err(); err != nil {
+		return NotStarted(err)
+	}
+	// A Start request may have reached the peer even when its reply is lost.
+	if err := session.Start(cmd); err != nil {
+		return OutcomeUnknown(ErrUnreachable)
+	}
 	done := make(chan error, 1)
-	go func() { done <- session.Run(cmd) }()
+	go func() { done <- session.Wait() }()
 	select {
 	case <-ctx.Done():
 		// dialSSH closes the socket, unblocking Run and its output pumps.
 		<-done
-		return ctx.Err()
+		return OutcomeUnknown(ctx.Err())
 	case err := <-done:
-		return err
+		if err == nil {
+			return nil
+		}
+		var exited *ssh.ExitError
+		if errors.As(err, &exited) {
+			return err
+		}
+		return OutcomeUnknown(ErrUnreachable)
 	}
 }
 

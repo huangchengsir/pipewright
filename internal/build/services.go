@@ -14,6 +14,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/dagrun"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/target"
 )
 
 // services.go 实现阶段「旁挂服务」(P1 · 对标 GitLab services / Woodpecker services)。
@@ -60,6 +61,11 @@ func serviceOutput(onLine func(string, string), stdout, stderr string) {
 }
 func (d *shellDriver) CreateNetwork(ctx context.Context, network string, onLine func(string, string)) (int, error) {
 	owner := rand.Text()
+	evidence, recordErr := d.startOwnedResource(ctx, "network", network, owner)
+	if recordErr != nil {
+		return -1, recordErr
+	}
+	d.serviceEvidence.Store(network, evidence)
 	args := []string{"network", "create", "--label", serviceOwnerLabel + "=" + owner, network}
 	emitCmd(onLine, d.bin, args)
 	out, stderr, code, err := d.cmdr.Run(ctx, d.bin, args, "")
@@ -67,26 +73,24 @@ func (d *shellDriver) CreateNetwork(ctx context.Context, network string, onLine 
 	id := strings.TrimSpace(out)
 	if err == nil && code == 0 && ctx.Err() == nil && serviceObjectID.MatchString(id) {
 		d.serviceNetworks.Store(network, id)
+		if err := d.serviceCreated(ctx, network, id); err != nil {
+			return -1, err
+		}
 		return 0, nil
 	}
 	// A named successful Podman receipt is supported, but a lost/error receipt
 	// never causes a second create or a subsequent service start.
 	named := err == nil && code == 0 && ctx.Err() == nil && id == network
+	if !named {
+		d.serviceCreateFailed(ctx, network, err, code)
+		if target.IsNotStarted(err) {
+			return code, err
+		}
+	}
 	return d.reconcileServiceCreate(ctx, "network", network, owner, named)
 }
 func (d *shellDriver) RemoveNetwork(ctx context.Context, network string, onLine func(string, string)) (int, error) {
-	value, ok := d.serviceNetworks.Load(network)
-	if !ok {
-		return -1, errors.New("build: service network ownership unavailable")
-	}
-	id := value.(string)
-	args := []string{"network", "rm", id}
-	emitCmd(onLine, d.bin, args)
-	code, err := d.cmdr.Stream(ctx, d.bin, args, "", onLine)
-	if err == nil && code == 0 {
-		d.serviceNetworks.CompareAndDelete(network, id)
-	}
-	return code, err
+	return d.removeOwnedService(ctx, network, "network", onLine)
 }
 func (d *shellDriver) RunService(ctx context.Context, containerName, alias, image, network string, env, ports []string, onLine func(string, string)) (int, error) {
 	net, ok := d.serviceNetworks.Load(network)
@@ -94,6 +98,11 @@ func (d *shellDriver) RunService(ctx context.Context, containerName, alias, imag
 		return -1, errors.New("build: service network ownership unavailable")
 	}
 	owner := rand.Text()
+	evidence, recordErr := d.startOwnedResource(ctx, "container", containerName, owner)
+	if recordErr != nil {
+		return -1, recordErr
+	}
+	d.serviceEvidence.Store(containerName, evidence)
 	args := []string{"create", "--name", containerName, "--network", net.(string), "--network-alias", alias, "--label", serviceOwnerLabel + "=" + owner}
 	display := append([]string(nil), args...)
 	for _, kv := range env {
@@ -111,9 +120,16 @@ func (d *shellDriver) RunService(ctx context.Context, containerName, alias, imag
 	serviceOutput(onLine, out, stderr)
 	id := strings.TrimSpace(out)
 	if err != nil || code != 0 || ctx.Err() != nil || !serviceObjectID.MatchString(id) {
+		d.serviceCreateFailed(ctx, containerName, err, code)
+		if target.IsNotStarted(err) {
+			return code, err
+		}
 		return d.reconcileServiceCreate(ctx, "container", containerName, owner, false)
 	}
 	d.serviceContainers.Store(containerName, id)
+	if err := d.serviceCreated(ctx, containerName, id); err != nil {
+		return -1, err
+	}
 	start := []string{"start", id}
 	emitCmd(onLine, d.bin, start)
 	code, err = d.cmdr.Stream(ctx, d.bin, start, "", onLine)
@@ -130,19 +146,8 @@ func (d *shellDriver) RunService(ctx context.Context, containerName, alias, imag
 	}
 	return code, err
 }
-func (d *shellDriver) StopService(ctx context.Context, containerName string, onLine func(string, string)) (int, error) {
-	value, ok := d.serviceContainers.Load(containerName)
-	if !ok {
-		return -1, errors.New("build: service container ownership unavailable")
-	}
-	id := value.(string)
-	args := []string{"rm", "-f", id}
-	emitCmd(onLine, d.bin, args)
-	code, err := d.cmdr.Stream(ctx, d.bin, args, "", onLine)
-	if err == nil && code == 0 {
-		d.serviceContainers.CompareAndDelete(containerName, id)
-	}
-	return code, err
+func (d *shellDriver) StopService(ctx context.Context, name string, onLine func(string, string)) (int, error) {
+	return d.removeOwnedService(ctx, name, "container", onLine)
 }
 
 // ─── 执行器集成 ──────────────────────────────────────────────────────────────

@@ -118,6 +118,24 @@ func (s *service) updateRunActivity(runID, phase string, release bool) {
 			return err
 		}
 		if release {
+			if rr, ok := s.retryRuntime.(interface {
+				MarkReaderExit(context.Context, string, string, string) error
+			}); ok {
+				if err := rr.MarkReaderExit(txctx, runID, runID, s.activityOwner); err != nil {
+					return err
+				}
+			}
+			if rr, ok := s.retryRuntime.(interface {
+				ResourcesDrained(context.Context, string) (bool, error)
+			}); ok {
+				drained, err := rr.ResourcesDrained(txctx, runID)
+				if err != nil {
+					return err
+				}
+				if !drained {
+					return configstate.SetActivityPhaseTx(txctx, q, runID, s.activityOwner, "cleanup_unknown")
+				}
+			}
 			return configstate.ReleaseActivityTx(txctx, q, runID, s.activityOwner)
 		}
 		return configstate.SetActivityPhaseTx(txctx, q, runID, s.activityOwner, phase)
@@ -125,7 +143,12 @@ func (s *service) updateRunActivity(runID, phase string, release bool) {
 	if err != nil {
 		log.Printf("[run] activity for run %s retained after %s: %v", runID, phase, err)
 	} else if release {
+		var active int
+		if checkErr := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM project_activity WHERE activity_id=? AND released_at IS NULL", runID).Scan(&active); checkErr != nil || active != 0 {
+			return
+		}
 		configstate.ForgetActivityReaders(runID, s.activityOwner)
+		s.settleRetryAttempt(runID)
 	}
 }
 

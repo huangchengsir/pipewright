@@ -24,6 +24,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/artifactstore"
 	"github.com/huangchengsir/pipewright/internal/deployattempt"
 	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/runretry"
 	"github.com/huangchengsir/pipewright/internal/target"
 )
 
@@ -90,12 +91,15 @@ type RetryInput struct {
 
 // TargetResult 是一台目标机的部署结果(与 run.DeployTarget 同形,供 HTTP 层映射回 DTO)。
 type TargetResult struct {
-	ServerID   string
-	ServerName string
-	Status     string // run.Target* 枚举:success | failed | …
-	Message    string // 人读摘要(绝无明文密钥)
-	StartedAt  time.Time
-	FinishedAt *time.Time
+	OutcomeUnknown  bool
+	OperationID     string
+	SourceAttemptID string
+	ServerID        string
+	ServerName      string
+	Status          string // run.Target* 枚举:success | failed | …
+	Message         string // 人读摘要(绝无明文密钥)
+	StartedAt       time.Time
+	FinishedAt      *time.Time
 }
 
 // Service 定义部署执行对外接口(冻结点由 httpapi 层 DTO 承载;本接口可演进)。
@@ -151,6 +155,7 @@ type service struct {
 	activityOwner string
 	attempts      deployattempt.Writer
 	imageObserver ImageObserver
+	retry         *runretry.Service
 }
 
 // Option 配置 deploy.Service(如注入诊断钩子)。
@@ -341,6 +346,9 @@ func (s *service) Deploy(ctx context.Context, in DeployInput) ([]TargetResult, e
 
 // DeployForStage 见接口注释:流水线 deploy_ssh 节点的中途部署(不校验 run 状态、不置终态)。
 func (s *service) DeployForStage(ctx context.Context, runID string, serverIDs []string, cfg map[string]string, strategy string) ([]TargetResult, error) {
+	if _, ok := runretry.NodeFrom(ctx); ok && s.retry != nil && ctx.Value(retryBypassKey{}) == nil {
+		return s.deployRecoveryStage(ctx, runID, serverIDs, cfg, strategy)
+	}
 	ctx, done, activityErr := s.beginActivity(ctx, runID)
 	if activityErr != nil {
 		return nil, activityErr

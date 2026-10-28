@@ -85,6 +85,9 @@ type RunFunc func(ctx context.Context, id string) error
 type Options struct {
 	// MaxConcurrency 是同时执行的节点数上限;<=0 表示不限(取节点总数)。
 	MaxConcurrency int
+	// Initial contains verified terminal results from an earlier attempt. These
+	// nodes are never dispatched; their original result still gates descendants.
+	Initial Result
 }
 
 // 构造期错误。
@@ -254,6 +257,15 @@ func (g *Graph) Schedule(ctx context.Context, run RunFunc, opts Options) Result 
 
 	launch := func(id string) {
 		go func() {
+			if prior, ok := opts.Initial[id]; ok {
+				switch prior.Status {
+				case StatusSuccess, StatusFailed, StatusSkipped, StatusCanceled:
+					finCh <- fin{id, prior.Status, prior.Err}
+				default:
+					finCh <- fin{id, StatusFailed, errors.New("dag: invalid initial result")}
+				}
+				return
+			}
 			// 取并发令牌前先看取消,避免无谓占位。
 			select {
 			case sem <- struct{}{}:

@@ -450,7 +450,7 @@ function isFailedStatus(status: RunStatus): boolean {
 
             <!-- Project name + run ID -->
             <div class="col-project">
-              <span class="project-name">{{ run.projectName }}</span>
+              <span class="project-name">{{ run.projectName }} <small v-if="run.executionKind === 'recovery'">{{ t('runRetry.attempt', { n: run.attemptNumber ?? 1 }) }}</small></span>
               <span class="run-id mono">#{{ shortId(run.id) }}</span>
             </div>
 

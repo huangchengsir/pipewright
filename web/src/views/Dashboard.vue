@@ -100,10 +100,9 @@ async function load(isRefresh = false): Promise<void> {
 }
 
 // ─── KPI 派生 ───────────────────────────────────────────────
+const originalTerminalRuns = computed(() => runs.value.filter(r => r.executionKind !== 'recovery' && ['success', 'failed', 'partial_failed', 'rolled_back'].includes(r.status)))
 const successRate = computed<number | null>(() => {
-  const terminal = runs.value.filter((r) =>
-    ['success', 'failed', 'partial_failed', 'rolled_back'].includes(r.status),
-  )
+  const terminal = originalTerminalRuns.value
   if (!terminal.length) return null
   const ok = terminal.filter((r) => r.status === 'success').length
   return Math.round((ok / terminal.length) * 100)
@@ -116,7 +115,7 @@ const kpis = computed(() => [
   {
     label: t('dashboard.kpiSuccess'),
     value: successRate.value === null ? '—' : `${successRate.value}%`,
-    suffix: successRate.value === null ? '' : t('dashboard.kpiSuccessSuffix'),
+    suffix: successRate.value === null ? '' : t('runRetry.originalSamples', { count: originalTerminalRuns.value.length }),
     to: '/runs',
     accent: successRate.value === null ? 'neutral' : successRate.value >= 90 ? 'ok' : successRate.value >= 70 ? 'warn' : 'err',
   },

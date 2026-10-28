@@ -6,7 +6,7 @@
  * this client does not render their content — only preserves shape.
  */
 
-import { http } from './http'
+import { http, type HttpOptions } from './http'
 
 // ─── Status vocabulary (fixed six-word set; do not alias) ────────────────────
 
@@ -143,6 +143,11 @@ export interface ArtifactDTO {
 // ─── Run Detail (frozen DTO contract — do not change shape) ─────────────────
 
 export interface RunDetail {
+  executionKind?: string
+  logicalRunId?: string
+  sourceRunId?: string
+  retryInitiator?: string
+  attemptNumber?: number
   id: string
   projectId: string
   projectName: string
@@ -167,6 +172,11 @@ export interface RunDetail {
 // ─── Run list item (compact; no steps/targets/diagnosis) ────────────────────
 
 export interface RunListItem {
+  executionKind?: string
+  logicalRunId?: string
+  sourceRunId?: string
+  retryInitiator?: string
+  attemptNumber?: number
   id: string
   projectId: string
   projectName: string
@@ -205,8 +215,8 @@ export function listRuns(params: ListRunsParams = {}): Promise<RunListResponse> 
   return http.get<RunListResponse>(`/api/runs${query ? `?${query}` : ''}`)
 }
 
-export function getRun(id: string): Promise<RunDetail> {
-  return http.get<RunDetail>(`/api/runs/${id}`)
+export function getRun(id: string, options?: HttpOptions): Promise<RunDetail> {
+  return http.get<RunDetail>(`/api/runs/${id}`, options)
 }
 
 export function cancelRun(id: string): Promise<RunDetail> {
@@ -603,6 +613,7 @@ export function subscribeRunEvents(runId: string, handlers: SseHandlers): () => 
       if (closed) return
       getRun(runId)
         .then((run) => {
+          if (closed) return
           // Synthesize a status event from polled data
           handlers.onStatus({ runId, status: run.status })
           // Synthesize step events

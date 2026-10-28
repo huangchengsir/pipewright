@@ -62,7 +62,9 @@ type promotionGate struct {
 func (g promotionGate) Await(ctx context.Context, stageID string, info promotion.GateInfo) (bool, string, error) {
 	key := approval.Key(g.runID, stageID)
 	stageName := "晋级到「" + info.TargetEnvironment + "」"
-	_ = g.store.CreatePending(ctx, g.runID, stageID, stageName)
+	if err := g.store.CreatePending(ctx, g.runID, stageID, stageName); err != nil {
+		return false, "", err
+	}
 	ch := g.coord.Wait(key)
 	defer g.coord.Cancel(key)
 

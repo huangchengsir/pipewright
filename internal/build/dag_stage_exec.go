@@ -18,6 +18,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/runretry"
 )
 
 // dag_stage_exec.go 是 DAG 调度器(dagrun)的**真实阶段执行器**(Epic 8 · Story 8-2)。
@@ -102,6 +103,9 @@ func isBuildImageJob(jobType string) bool {
 // reportSink 可选(nil = 不持久化测试报告,但质量门禁阻断仍生效;Story 8-6 / FR-8-6)。
 func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecutor {
 	return func(ctx context.Context, r *run.Run, stage pipeline.Stage, rep dagrun.StageReporter) (stageErr error) {
+		if ex, ok := runretry.ExecutionFrom(ctx); ok {
+			return b.runRecoveryStage(ctx, r, stage, rep, reportSink, ex)
+		}
 		images := &stageImageArtifacts{}
 		defer func() {
 			if stageErr != nil {
@@ -519,6 +523,19 @@ func (b *Builder) runStageJobsDAG(
 // cloneJobWorkspace 为单个 job 克隆一份独立的临时工作区(并发安全),并恢复本 run 已归档的上游产物。
 // 返回 (workspace, commitTag, cleanup, err);调用方务必在用完后调用 cleanup()。失败时已自行清理。
 func (b *Builder) cloneJobWorkspace(ctx context.Context, r *run.Run, proj *project.Project, rep dagrun.StageReporter) (string, string, func(), error) {
+	if shared := recoveryShared(ctx); shared != "" {
+		if err := b.restoreNodeInputs(ctx, shared); err != nil {
+			return "", "", func() {}, err
+		}
+		tag := "latest"
+		if ex, ok := runretry.ExecutionFrom(ctx); ok {
+			sha := ex.Snapshot().CommitSHA
+			if len(sha) >= 7 {
+				tag = sha[:7]
+			}
+		}
+		return shared, tag, func() {}, nil
+	}
 	ws, mkErr := mkTempWorkspace()
 	if mkErr != nil {
 		_ = rep.Log(ctx, streamStderr, "创建临时工作区失败:"+mkErr.Error())
@@ -543,7 +560,14 @@ func (b *Builder) cloneJobWorkspace(ctx context.Context, r *run.Run, proj *proje
 		b.recordCommit(ctx, r.ID, resolved.CommitFull)
 	}
 	// 跨阶段 + 阶段内上游 job 产物:把本 run 已归档的 jar/dist 真字节恢复进本 job 工作区原相对路径。
-	b.restorePriorArtifacts(ctx, r, ws, rep)
+	if frame, ok := ctx.Value(recoveryNodeContextKey{}).(recoveryNodeContext); ok && frame.strict {
+		if err := b.restoreNodeInputs(ctx, ws); err != nil {
+			cleanup()
+			return "", "", func() {}, err
+		}
+	} else {
+		b.restorePriorArtifacts(ctx, r, ws, rep)
+	}
 	return ws, commitTag, cleanup, nil
 }
 
@@ -568,6 +592,7 @@ func (b *Builder) runScriptJobIsolated(
 		return nil, err
 	}
 	defer cleanup()
+	before := scanRecoveryWorkspace(ctx, ws)
 
 	step, verr := scriptStepFromJob(jb)
 	if verr != nil {
@@ -592,6 +617,9 @@ func (b *Builder) runScriptJobIsolated(
 	}
 	if rerr := collectStageReport(ctx, reportSink, r, stage, ws, rep); rerr != nil {
 		return out, rerr // 质量门禁阻断
+	}
+	if recorder, ok := rep.(interface{ recordWorkspace(bool) }); ok {
+		recorder.recordWorkspace(workspaceIncomplete(ctx, ws, before, rep))
 	}
 	return out, nil
 }
@@ -631,6 +659,7 @@ func (b *Builder) runDeployJobWithEnvironment(ctx context.Context, rep dagrun.St
 	}
 	serverIDs := deployServerIDs(jb, settings, envName)
 	if len(serverIDs) == 0 {
+		recordDeploymentNotDispatched(rep)
 		_ = rep.Log(ctx, streamStderr, fmt.Sprintf("部署节点「%s」无目标服务器(serverId 空且所选环境无有效目标)", jb.Name))
 		return ErrBuildFailed
 	}
@@ -653,12 +682,14 @@ func (b *Builder) runDeployJobWithEnvironment(ctx context.Context, rep dagrun.St
 	}
 	if len(stages) > 0 {
 		if err := b.preferPublishedImage(ctx, runID, cfg, stages[0], jb); err != nil {
+			recordDeploymentNotDispatched(rep)
 			_ = rep.Log(ctx, streamStderr, err.Error())
 			return ErrBuildFailed
 		}
 	}
 	strategy := cfgString(jb.Config, "strategy")
 	if err := deploy.ValidateLocalDockerConfig(run.Artifact{Type: cfg["artifactType"]}, cfg, strategy); err != nil {
+		recordDeploymentNotDispatched(rep)
 		_ = rep.Log(ctx, streamStderr, "本地 Docker 部署配置无效，请检查产物类型、构建路径及脚本冲突")
 		return ErrBuildFailed
 	}
@@ -673,13 +704,41 @@ func (b *Builder) runDeployJobWithEnvironment(ctx context.Context, rep dagrun.St
 		dctx = deploy.WithSourceStage(dctx, stages[0].ID)
 	}
 	run.RecordExecution(rep, run.ExecutionReal)
+	recordExternalOutcome(rep, "unknown")
 	results, err := b.deployer.DeployForStage(dctx, runID, serverIDs, cfg, strategy)
+	if recorder, ok := rep.(interface {
+		recordTargets([]runretry.TargetReceipt)
+	}); ok {
+		var receipts []runretry.TargetReceipt
+		for _, result := range results {
+			source := result.SourceAttemptID
+			if source == "" {
+				source = runID
+			}
+			receipts = append(receipts, runretry.TargetReceipt{ServerID: result.ServerID, Status: result.Status, OperationID: result.OperationID, SourceAttemptID: source})
+		}
+		recorder.recordTargets(receipts)
+	}
 	if err != nil {
+		if errors.Is(err, deploy.ErrNotDispatched) && len(results) == 0 {
+			recordDeploymentNotDispatched(rep)
+		}
+		for _, result := range results {
+			if result.OutcomeUnknown {
+				recordExternalOutcome(rep, "unknown")
+			}
+		}
 		_ = rep.Log(ctx, streamStderr, "部署失败:"+err.Error())
 		return ErrBuildFailed
 	}
 	failed := false
+	if len(results) == len(serverIDs) {
+		recordExternalOutcome(rep, "verified")
+	}
 	for _, dr := range results {
+		if dr.OutcomeUnknown {
+			recordExternalOutcome(rep, "unknown")
+		}
 		line := fmt.Sprintf("· %s:%s — %s", dr.ServerName, dr.Status, dr.Message)
 		if dr.Status == "success" {
 			_ = rep.Log(ctx, streamStdout, line)
@@ -746,6 +805,7 @@ func (b *Builder) runNotifyJob(ctx context.Context, rep dagrun.StageReporter, jb
 	attempted := false
 	nctx := notify.WithDeliveryObserver(ctx, func() {
 		attempted = true
+		recordExternalOutcome(rep, "unknown")
 		run.RecordExecution(rep, run.ExecutionReal)
 	})
 	err := b.notifier.SendVia(nctx, chID, payload)
@@ -755,6 +815,9 @@ func (b *Builder) runNotifyJob(ctx context.Context, rep dagrun.StageReporter, jb
 	if err != nil {
 		_ = rep.Log(ctx, streamStderr, "通知发送失败(best-effort):"+err.Error())
 		return
+	}
+	if attempted {
+		recordExternalOutcome(rep, "verified")
 	}
 	_ = rep.Log(ctx, streamStdout, "· 已发通知 → 渠道「"+chName+"」")
 }
@@ -844,6 +907,9 @@ func (b *Builder) runBuildImageJob(ctx context.Context, sink run.StepSink, rep d
 	art.Metadata["sourceStageId"] = stageID
 	art.Metadata["sourceJob"] = jb.Name
 	art.Metadata["sourceJobId"] = jb.ID
+	if _, declared := art.Metadata["declarationIndex"]; !declared {
+		art.Metadata["declarationIndex"] = 0
+	}
 	if art.Type == run.ArtifactImage {
 		art.Metadata["localReference"] = localTag
 		art.Metadata["commitTag"] = commitTag
@@ -1185,6 +1251,7 @@ type reporterSink struct {
 }
 
 func (s *reporterSink) RecordExecution(mode string) { run.RecordExecution(s.rep, mode) }
+func (s *reporterSink) delivery(outcome string)     { recordExternalOutcome(s.rep, outcome) }
 
 func (s *reporterSink) Plan(context.Context, []run.StepDecl) error          { return nil }
 func (s *reporterSink) StepRunning(context.Context, int) error              { return nil }

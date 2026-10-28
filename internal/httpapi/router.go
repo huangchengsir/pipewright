@@ -85,6 +85,7 @@ type options struct {
 	pipelines          pipeline.Service
 	pipelineSettings   pipeline.SettingsService
 	runs               run.Service
+	runRetry           runRetryService
 	runSub             runSubscriber
 	feedback           run.FeedbackService
 	secretSource       *RunSecretSource
@@ -586,6 +587,13 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		rs := o.runs
 		ar.Get("/runs", makeListRunsHandler(rs))
 		ar.Get("/runs/{id}", makeGetRunHandler(rs))
+		ar.Get("/runs/{id}/retry-plan", makeRunRetryPlanHandler(rs, o.runRetry))
+		ar.Post("/runs/{id}/retry-plan", makeRunRetryPlanHandler(rs, o.runRetry))
+		ar.Get("/runs/{id}/retry-context", makeRunRetryContextHandler(rs, o.runRetry))
+		ar.Get("/runs/{id}/retry-requests/{requestId}", makeRunRetryRequestHandler(o.runRetry))
+		ar.Get("/runs/{id}/attempts", makeRunRetryAttemptsHandler(rs, o.runRetry))
+		ar.Post("/runs/{id}/retry", makeRunRetrySubmitHandler(rs, o.runRetry, svc, aud))
+		ar.Post("/runs/{id}/retry-reconcile", makeRunRetryReconcileHandler(rs, o.runRetry, svc, aud))
 		ar.Get("/runs/{id}/events", makeRunEventsHandler(rs, o.runSub))
 		// 历史日志拉取 / 分页(Story 3.6):只读 + 认证;sinceSeq 分页;complete=终态。
 		ar.Get("/runs/{id}/logs", makeRunLogsHandler(rs))

@@ -56,6 +56,15 @@ func ForgetActivityReaders(id, owner string) {
 	}
 }
 
+// ActivityReadersExited exposes only a boolean runtime fact, not an evidence
+// token. A database row, elapsed time or a new process cannot manufacture it.
+func ActivityReadersExited(id, owner string) bool {
+	localReaders.Lock()
+	defer localReaders.Unlock()
+	v := localReaders.items[id]
+	return v != nil && v.owner == owner && !v.active && v.evidence != ""
+}
+
 func readerEvidenceSnapshot() map[string]readerEvidence {
 	localReaders.Lock()
 	defer localReaders.Unlock()

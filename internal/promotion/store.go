@@ -198,7 +198,7 @@ func (s *Store) loadRawVariables(ctx context.Context, projectID, env string) ([]
 func (s *Store) currentEnvForRun(ctx context.Context, runID string, c Chain) (string, error) {
 	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT target_environment FROM run_promotions
-		 WHERE source_run_id = ? AND status = ?`, runID, StatusPromoted)
+		 WHERE COALESCE((SELECT a.root_id FROM run_retry_attempts a WHERE a.run_id=run_promotions.source_run_id),source_run_id)=COALESCE((SELECT a.root_id FROM run_retry_attempts a WHERE a.run_id=?),?) AND status = ?`, runID, runID, StatusPromoted)
 	if err != nil {
 		return "", fmt.Errorf("promotion: query promoted envs: %w", err)
 	}
@@ -227,8 +227,8 @@ func (s *Store) hasActivePromotion(ctx context.Context, runID, env string) (bool
 	var n int
 	err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT COUNT(1) FROM run_promotions
-		 WHERE source_run_id = ? AND target_environment = ? AND status IN (?, ?)`,
-		runID, env, StatusPending, StatusPromoted).Scan(&n)
+		 WHERE COALESCE((SELECT a.root_id FROM run_retry_attempts a WHERE a.run_id=run_promotions.source_run_id),source_run_id)=COALESCE((SELECT a.root_id FROM run_retry_attempts a WHERE a.run_id=?),?) AND target_environment = ? AND status IN (?, ?)`,
+		runID, runID, env, StatusPending, StatusPromoted).Scan(&n)
 	if err != nil {
 		return false, fmt.Errorf("promotion: check active promotion: %w", err)
 	}
@@ -243,7 +243,7 @@ func (s *Store) createRecord(ctx context.Context, rec Record) (string, error) {
 	if rec.Status == StatusPromoted || rec.Status == StatusRejected {
 		decided = now
 	}
-	_, err := s.db.ExecContext(ctx,
+	_, err := configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`INSERT INTO run_promotions
 		   (id, project_id, source_run_id, from_environment, target_environment,
 		    status, approval_stage, promoted_by, created_at, decided_at)
@@ -264,8 +264,8 @@ func (s *Store) createRecord(ctx context.Context, rec Record) (string, error) {
 func (s *Store) decideRecord(ctx context.Context, id, status, by string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE run_promotions SET status = ?, decided_at = ?, promoted_by = ? WHERE id = ?`,
-		status, now, by, id)
+		`UPDATE run_promotions SET status = ?, decided_at = ?, promoted_by = ? WHERE id = ? AND status = ?`,
+		status, now, by, id, StatusPending)
 	if err != nil {
 		return fmt.Errorf("promotion: decide record: %w", err)
 	}
@@ -277,7 +277,7 @@ func (s *Store) decideRecord(ctx context.Context, id, status, by string) error {
 
 // ListRecordsForRun 返回某源运行的全部晋级记录(按 created_at 升序)。
 func (s *Store) ListRecordsForRun(ctx context.Context, runID string) ([]Record, error) {
-	return s.queryRecords(ctx, `WHERE source_run_id = ?`, runID)
+	return s.queryRecords(ctx, `WHERE COALESCE((SELECT a.root_id FROM run_retry_attempts a WHERE a.run_id=run_promotions.source_run_id),source_run_id)=COALESCE((SELECT a.root_id FROM run_retry_attempts a WHERE a.run_id=?),?)`, runID, runID)
 }
 
 // ListRecordsForProject 返回某项目的全部晋级记录(按 created_at 降序,最近在前)。
@@ -285,14 +285,14 @@ func (s *Store) ListRecordsForProject(ctx context.Context, projectID string) ([]
 	return s.queryRecords(ctx, `WHERE project_id = ? ORDER BY created_at DESC, id DESC`, projectID)
 }
 
-func (s *Store) queryRecords(ctx context.Context, clause, arg string) ([]Record, error) {
+func (s *Store) queryRecords(ctx context.Context, clause string, args ...any) ([]Record, error) {
 	q := `SELECT id, project_id, source_run_id, from_environment, target_environment,
 	             status, approval_stage, promoted_by, created_at, decided_at
 	      FROM run_promotions ` + clause
 	if !strings.Contains(clause, "ORDER BY") {
 		q += " ORDER BY created_at ASC, id ASC"
 	}
-	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx, q, arg)
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("promotion: query records: %w", err)
 	}

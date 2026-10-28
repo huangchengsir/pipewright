@@ -1,10 +1,9 @@
 <!--
   RunDagView — DAG topology view for pipeline run details (FR-8-8).
 
-  Data source: fetches GET /api/projects/{projectId}/pipeline to obtain the stage
-  graph (stages with needs), then maps run.steps onto those stages by name.
-  Falls back to linear chain when no stage declares needs, or when the pipeline
-  spec is unavailable (network error, 404).
+  Captured runs use the immutable recovery graph and exact logical node keys.
+  Historical runs display their recorded steps with an incomplete-topology
+  explanation. Today's project configuration is never used to infer identity.
 
   Features:
   - SVG bezier edge overlay (same technique as PipelineCanvas.vue)
@@ -27,11 +26,12 @@ import {
 import { useI18n } from 'vue-i18n'
 import { localizeName } from '../../lib/pipelineLabels'
 import type { RunStep, StepStatus } from '../../api/runs'
-import type { PipelineStage } from '../../api/pipeline'
-import { getPipeline } from '../../api/pipeline'
-import { HttpError } from '../../api/http'
+import type { RetryContext, RetryPlannedNode } from '../../api/runRetry'
+import { retryNodeLabel } from '../../api/runRetry'
+import AppButton from '../ui/AppButton.vue'
 import {
   buildRunStages,
+  buildFrozenRunStages,
   buildDagEdges,
   topoSort,
   type RunStage,
@@ -42,49 +42,38 @@ const { t } = useI18n()
 // ─── Props ───────────────────────────────────────────────────────────────────
 
 const props = defineProps<{
-  /** Project ID to fetch the pipeline spec from. */
+  /** Kept for existing callers; topology never loads mutable project config. */
   projectId: string
   /** Steps from the live run (reactive — updates via SSE). */
   steps: RunStep[]
   /** Run status string (for edge color cues). */
   runStatus: string
+  recovery?: RetryContext | null
 }>()
+const emit = defineEmits<{ retry: [nodeKeys: string[]]; logs: [nodeKeys: string[], stageName: string] }>()
 
 // ─── Pipeline spec loading ────────────────────────────────────────────────────
 
-const pipelineStages = ref<PipelineStage[]>([])
-const specLoading = ref(true)
-const specError = ref(false)
-
-async function loadSpec(): Promise<void> {
-  specLoading.value = true
-  specError.value = false
-  try {
-    const dto = await getPipeline(props.projectId)
-    pipelineStages.value = dto.stages
-  } catch (err) {
-    // Graceful fallback — we'll render a linear DAG from steps alone.
-    // 404 = project has no pipeline spec yet; other errors treated same way.
-    if (!(err instanceof HttpError) || err.status !== 404) {
-      specError.value = true
-    }
-    pipelineStages.value = []
-  } finally {
-    specLoading.value = false
-  }
-}
-
-onMounted(() => { void loadSpec() })
+const specLoading = ref(false)
+const specError = computed(() => !props.recovery)
 
 // ─── Derived DAG stages ───────────────────────────────────────────────────────
 
 const dagStages = computed<RunStage[]>(() => {
   if (specLoading.value) return []
-  return topoSort(buildRunStages(props.steps, pipelineStages.value, props.runStatus))
+  if (props.recovery) return buildFrozenRunStages(props.recovery, props.steps)
+  return topoSort(buildRunStages(props.steps, [], props.runStatus))
 })
 
-const dagEdges = computed(() => buildDagEdges(dagStages.value))
-
+const dagEdges = computed(() => props.recovery ? dagStages.value.flatMap(s => s.needs.map(from => ({ from, to: s.id }))) : buildDagEdges(dagStages.value))
+function recoveryNode(key: string): RetryPlannedNode | undefined { return props.recovery?.nodes.find(n => n.node.key === key) }
+const systemExpanded = ref(new Set<string>())
+function quietSystem(step: RunStep) { const n = recoveryNode(step.id); return !!n?.node.controlKey && n.decision.status === 'success' }
+function logKeys(stage: RunStage) { return stage.steps.filter(step => { const n = recoveryNode(step.id); return !n?.node.controlKey || ['failed', 'outcome_unknown'].includes(n.decision.status ?? '') }).map(step => step.id) }
+function quietCount(stage: RunStage) { return stage.steps.filter(quietSystem).length }
+function visibleSteps(stage: RunStage) { return stage.steps.filter(step => !quietSystem(step) || systemExpanded.value.has(stage.id)) }
+function toggleSystem(stageId: string) { const next = new Set(systemExpanded.value); if (next.has(stageId)) next.delete(stageId); else next.add(stageId); systemExpanded.value = next; void nextTick(measureEdges) }
+function nodeStatus(step: RunStep) { const n = recoveryNode(step.id); return n?.decision.action === 'reuse' ? t('runRetry.reusedShort') : n?.decision.status === 'outcome_unknown' ? t('runRetry.unknownShort') : n?.decision.action === 'blocked' ? t('runRetry.blockedShort') : step.status === 'waiting_approval' ? t('runStatus.waiting_approval') : stageVis(step.status).label }
 // ─── Expandable step rows ─────────────────────────────────────────────────────
 
 /** Set of stage IDs whose steps are expanded. */
@@ -107,7 +96,7 @@ watch(
   (stages) => {
     const s = new Set(expanded.value)
     for (const stage of stages) {
-      if (stage.status === 'running' || stage.status === 'failed') {
+      if (stage.status === 'running' || stage.status === 'failed' || stage.hasBlockedNodes) {
         s.add(stage.id)
       }
     }
@@ -251,7 +240,7 @@ function edgeClass(status: string): string {
           <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
           <path d="M12 9v4M12 17h.01"/>
         </svg>
-        {{ t('run.specLoadFailed') }}
+        {{ t('runRetry.legacyGraph') }}
       </div>
 
       <!-- DAG canvas: horizontally scrollable -->
@@ -303,6 +292,7 @@ function edgeClass(status: string): string {
 
               <!-- Stage name -->
               <span class="stage-name">{{ localizeName(stage.name) }}</span>
+              <span v-if="stage.matrixAxes && Object.keys(stage.matrixAxes).length" class="stage-axes">{{ Object.entries(stage.matrixAxes).map(([key, value]) => `${key}=${value}`).join(', ') }}</span>
 
               <!-- Status badge:据 stage 聚合状态(含 blocked=未执行)显式给文字 + 配色,
                    收起态也一眼看出失败/未执行,不再只靠小圆点。pending 不冗余展示。 -->
@@ -345,6 +335,7 @@ function edgeClass(status: string): string {
 
             <!-- Step count summary (always visible) -->
             <div class="stage-summary">
+              <span v-if="stage.hasBlockedNodes" class="stage-blocked-note">{{ t('runRetry.blocked') }}</span>
               <!-- blocked(整轮失败,本阶段零 step → 没机会跑)不展示「0 步骤」,直接给未执行语义。 -->
               <span v-if="stage.blocked" class="stage-blocked-note">{{ t('run.blockedNote') }}</span>
               <template v-else>
@@ -365,8 +356,9 @@ function edgeClass(status: string): string {
               role="list"
             >
               <li
-                v-for="step in stage.steps"
+                v-for="step in visibleSteps(stage)"
                 :key="step.id"
+                :data-logical-node-key="recovery ? step.id : undefined"
                 class="step-row"
                 :class="`step-row--${step.status}`"
                 role="listitem"
@@ -397,11 +389,13 @@ function edgeClass(status: string): string {
                   </svg>
                 </span>
 
-                <!-- Step name -->
-                <span class="step-name">{{ step.name }}</span>
-
-                <!-- Step duration -->
-                <span v-if="step.durationMs !== null" class="step-dur mono">{{ formatDuration(step.durationMs) }}</span>
+                <span class="step-name" :title="step.name">{{ step.name }}</span>
+                <span class="node-mark" :title="nodeStatus(step)">{{ nodeStatus(step) }}</span>
+                <AppButton v-if="['failed', 'outcome_unknown'].includes(recoveryNode(step.id)?.decision.status ?? '')" class="node-retry" :title="t('runRetry.retryNode')" @click="emit('retry', [step.id])">{{ t('runRetry.retryShort') }}</AppButton>
+                <AppButton v-else-if="step.status === 'failed' && !recoveryNode(step.id)" class="node-retry" :title="t('runRetry.viewRecovery')" @click="emit('retry', [])">{{ t('runRetry.retryShort') }}</AppButton>
+              </li>
+              <li v-if="quietCount(stage)" class="system-steps">
+                <AppButton variant="ghost" :aria-expanded="systemExpanded.has(stage.id)" @click="toggleSystem(stage.id)">{{ t('runRetry.systemSteps', { n: quietCount(stage) }) }}</AppButton>
               </li>
             </ul>
 
@@ -413,6 +407,9 @@ function edgeClass(status: string): string {
             <div v-else-if="stage.steps.length === 0" class="stage-empty">
               {{ t('run.noSteps') }}
             </div>
+            <footer v-if="logKeys(stage).length" class="node-log-entry">
+              <AppButton variant="ghost" class="node-logs" :aria-label="`${stage.name} · ${t('runRetry.nodeLogs')}`" @click="emit('logs', logKeys(stage), localizeName(stage.name))">{{ t('runRetry.nodeLogs') }}</AppButton>
+            </footer>
           </article>
         </div>
       </div>
@@ -422,6 +419,13 @@ function edgeClass(status: string): string {
 </template>
 
 <style scoped>
+.node-log-entry { display: flex; justify-content: flex-end; padding: 4px 12px 12px; }
+.node-mark { max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; font-size: 12px; color: var(--color-dim); }
+.node-logs, .node-retry { min-height: 44px; height: auto; padding: 6px 8px; flex-shrink: 0; max-width: 104px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.system-steps :deep(.app-btn) { min-height: 44px; height: auto; }
+.stage-toggle { min-height: 44px; min-width: 44px; }
+.stage-head:has(.stage-axes) { flex-wrap: wrap; }
+.stage-axes { width: 100%; color: var(--color-dim); font: 13px var(--font-mono); overflow-wrap: anywhere; }
 /* ─── root ─────────────────────────────────────────────────────────────────── */
 .dag-root {
   display: flex;
@@ -541,7 +545,7 @@ function edgeClass(status: string): string {
 
 /* ─── stage card ───────────────────────────────────────────────────────────── */
 .dag-stage-card {
-  width: 200px;
+  width: 360px;
   flex-shrink: 0;
   background: var(--color-card);
   border: 1px solid var(--color-border);

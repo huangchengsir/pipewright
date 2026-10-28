@@ -227,7 +227,10 @@ func (p *localDockerPinnedTarget) Exec(ctx context.Context, id string, cmd []str
 	}
 	out, err := p.executor.ExecPinned(ctx, p.snapshot, cmd, target.ExecutionLimits{Bytes: 64 << 10, Lines: 1000})
 	if err != nil || out == nil {
-		return nil, errors.New("deploy: pinned local Docker operation unavailable")
+		if err != nil {
+			return nil, err
+		}
+		return nil, target.OutcomeUnknown(target.ErrLimitedUnavailable)
 	}
 	if len(cmd) >= 4 && cmd[0] == "sh" && cmd[1] == "-c" && cmd[3] == "pw-local-docker" {
 		// Build/preparation output is untrusted and can contain credentials. It
@@ -255,6 +258,9 @@ func (s *service) execLocalDocker(ctx context.Context, serverID, label string, c
 	cmdLogFrom(ctx)(cmdStreamStdout, "[local-docker] "+label)
 	out, err := s.targets.Exec(ctx, serverID, cmd)
 	if err != nil || out == nil || out.ExitCode != 0 {
+		if err != nil {
+			return out, err
+		}
 		return out, errors.New("deploy: local Docker operation failed")
 	}
 	return out, nil
@@ -382,7 +388,9 @@ func (s *service) deployLocalDockerOne(ctx context.Context, srv *target.Server, 
 		}
 	}
 	start := []string{"docker", "run", "-d", "--pull=never", "--name", c.name,
-		"--label", "pipewright.run=" + a.RunID, "--label", "pipewright.server=" + srv.ID,
+		// Activation ownership follows its durable current attempt. The artifact
+		// keeps the original producer RunID/ID when a recovery reuses its bytes.
+		"--label", "pipewright.run=" + st.receipt.target.Source.RunID, "--label", "pipewright.server=" + srv.ID,
 		"--label", "pipewright.deployment-target=" + st.receipt.target.ID}
 	start = append(start, c.runArgs...)
 	start = append(start, st.ref)

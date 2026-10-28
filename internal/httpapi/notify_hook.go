@@ -11,6 +11,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/approval"
 	"github.com/huangchengsir/pipewright/internal/notify"
 	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/runretry"
 )
 
 // NewNotifyHook 把 run.Service + notify.Service 适配为 run.WorkerPool 的 best-effort 通知钩子
@@ -27,7 +28,11 @@ import (
 //   - rolled_back    → rollback
 //
 // 其余终态/非终态不映射任何事件(不发)。
-func NewNotifyHook(runs run.Service, notifySvc notify.Service, secretSrc *RunSecretSource) func(ctx context.Context, runID, finalStatus string) {
+type RetryNoticeSource interface {
+	Identity(context.Context, string) (runretry.Identity, error)
+}
+
+func NewNotifyHook(runs run.Service, notifySvc notify.Service, secretSrc *RunSecretSource, recovery ...RetryNoticeSource) func(ctx context.Context, runID, finalStatus string) {
 	return func(ctx context.Context, runID, finalStatus string) {
 		if runs == nil || notifySvc == nil {
 			return
@@ -72,6 +77,15 @@ func NewNotifyHook(runs run.Service, notifySvc notify.Service, secretSrc *RunSec
 		}
 		if durationMs > 0 {
 			vars.DurationMs = strconv.FormatInt(durationMs, 10)
+		}
+		if len(recovery) > 0 && recovery[0] != nil {
+			if identity, err := recovery[0].Identity(hookCtx, runID); err == nil && identity.ExecutionKind == "recovery" {
+				vars.ExecutionKind = identity.ExecutionKind
+				vars.LogicalRunID = identity.LogicalRunID
+				vars.SourceRunID = identity.SourceRunID
+				vars.AttemptNumber = strconv.FormatInt(identity.Revision, 10)
+				vars.RetryInitiator = notify.MaskErrorSummary(maskerFor(hookCtx, secretSrc, runID).Scrub(identity.Initiator))
+			}
 		}
 
 		// 按项目维度路由(Story 5.4):projectID 有项目级路由 → 整体覆盖(只走项目级);否则回退

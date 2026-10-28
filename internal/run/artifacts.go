@@ -46,14 +46,16 @@ func isValidArtifactType(t string) bool {
 //   - SizeBytes : 字节数(未知 = 0)。
 //   - Metadata  : 自由 KV(digest/path/stub 等);nil 视为空。
 type Artifact struct {
-	ID        string
-	RunID     string
-	Type      string
-	Name      string
-	Reference string
-	SizeBytes int64
-	Metadata  map[string]any
-	CreatedAt time.Time
+	SourceRunID   string
+	SourceNodeKey string
+	ID            string
+	RunID         string
+	Type          string
+	Name          string
+	Reference     string
+	SizeBytes     int64
+	Metadata      map[string]any
+	CreatedAt     time.Time
 }
 
 // encodeMetadata 把产物 metadata 序列化为可入库 JSON(nil/空 → "{}")。
@@ -123,7 +125,7 @@ func (s *service) AddArtifact(ctx context.Context, a Artifact) (*Artifact, error
 // 无产物 → 空切片)。created_at 为 RFC3339 秒精度,同秒插入相等 → 用 id(UUID,唯一确定)
 // 破并列,保证产物先后稳定确定(跨 SQLite/MySQL 一致;MySQL 无 rowid 伪列)。run 不存在不报错
 // (返回空切片);HTTP 层据 run 存在性决定 404(仿 GetLogs 语义)。参数化 SQL。
-func (s *service) ListArtifacts(ctx context.Context, runID string) ([]Artifact, error) {
+func (s *service) listOwnArtifacts(ctx context.Context, runID string) ([]Artifact, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, run_id, type, name, reference, size_bytes, metadata_json, created_at
 		 FROM run_artifacts WHERE run_id = ? ORDER BY created_at ASC, id ASC`, runID)

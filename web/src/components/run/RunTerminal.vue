@@ -63,6 +63,8 @@ const loadState = ref<LoadState>('loading')
 const loadError = ref('')
 
 let cleanupSse: (() => void) | null = null
+let generation = 0
+let disposed = false
 
 function stopSse(): void {
   if (cleanupSse) {
@@ -72,27 +74,31 @@ function stopSse(): void {
 }
 
 async function bootstrap(): Promise<void> {
+  const gen = ++generation; const id = props.runId; const live = props.live
   loadState.value = 'loading'
   loadError.value = ''
 
-  if (props.live) {
+  if (live) {
     // Live mode: SSE handles both history replay (on connect) and live tail.
     // We don't pre-pull via REST to avoid double-fetching history — but if the
     // SSE connection drops, subscribeRunEvents falls back to polling getRun,
     // which does not carry logs; so we also seed once from getRunLogs to be
     // robust to a missed replay, relying on seq de-dup to avoid duplicates.
     try {
-      const initial = await getRunLogs(props.runId, 0)
+      const initial = await getRunLogs(id, 0)
+      if (gen !== generation || disposed) return
       ingest(initial.lines)
     } catch {
       // Non-fatal: SSE replay will still deliver history. Swallow silently.
     }
+    if (gen !== generation || disposed) return
     loadState.value = 'streaming'
-    cleanupSse = subscribeRunEvents(props.runId, {
+    cleanupSse = subscribeRunEvents(id, {
       // status/step are owned by the parent view; here we only consume logs.
       onStatus() {},
       onStep() {},
       onLog(line) {
+        if (gen !== generation || disposed) return
         ingest([line])
         scheduleAutoScroll()
       },
@@ -104,7 +110,8 @@ async function bootstrap(): Promise<void> {
       // Drain pages until complete (logs endpoint paginates large logs).
       // Guard against a non-advancing cursor to avoid an infinite loop.
       for (let guard = 0; guard < 10_000; guard++) {
-        const page = await getRunLogs(props.runId, sinceSeq)
+        const page = await getRunLogs(id, sinceSeq)
+        if (gen !== generation || disposed) return
         ingest(page.lines)
         if (page.complete || page.nextSeq <= sinceSeq) break
         if (page.lines.length === 0) break
@@ -113,6 +120,7 @@ async function bootstrap(): Promise<void> {
       loadState.value = 'done'
       scheduleAutoScroll()
     } catch (err) {
+      if (gen !== generation || disposed) return
       loadError.value = err instanceof Error ? err.message : t('run.logLoadFailed')
       loadState.value = 'error'
     }
@@ -120,7 +128,7 @@ async function bootstrap(): Promise<void> {
 }
 
 onMounted(bootstrap)
-onUnmounted(stopSse)
+onUnmounted(() => { disposed = true; generation++; stopSse() })
 
 // Re-bootstrap if the run flips identity or live⇄terminal (status transition).
 watch(

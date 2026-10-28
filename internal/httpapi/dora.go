@@ -54,6 +54,8 @@ type doraTrendPointDTO struct {
 // 四个核心指标既给「裸值」字段(deploymentFrequency/leadTimeSeconds/changeFailureRate/mttrSeconds,
 // 便于直接消费),又在 metrics 块给「值+分档+样本数」的完整形态(前端卡片)。
 type doraResponseDTO struct {
+	RecoveryAttempts     int `json:"recoveryAttempts"`
+	SuccessfulRecoveries int `json:"successfulRecoveries"`
 	// 窗口与计数。
 	Window                string `json:"window"`
 	WindowDays            int    `json:"windowDays"`
@@ -115,7 +117,8 @@ func makeDoraMetricsHandler(ms run.MetricsService) http.HandlerFunc {
 		doraRecords := make([]dora.Record, 0, len(records))
 		for _, rec := range records {
 			doraRecords = append(doraRecords, dora.Record{
-				Status:     rec.Status,
+				Status: rec.Status,
+				RunID:  rec.RunID, ProjectID: rec.ProjectID, LogicalRunID: rec.LogicalRunID, SourceRunID: rec.SourceRunID, ExecutionKind: rec.ExecutionKind,
 				CreatedAt:  rec.CreatedAt,
 				FinishedAt: rec.FinishedAt,
 				// CommitTime 暂不可得(运行模型未持久化提交时间);dora 层回退用 CreatedAt 作代理。
@@ -143,6 +146,7 @@ func toDoraResponse(m dora.Metrics, trend []dora.TrendPoint, windowLabel string,
 	}
 
 	return doraResponseDTO{
+		RecoveryAttempts: m.RecoveryAttempts, SuccessfulRecoveries: m.SuccessfulRecoveries,
 		Window:                     windowLabel,
 		WindowDays:                 windowDays,
 		ProjectID:                  projectID,

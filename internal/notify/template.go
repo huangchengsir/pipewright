@@ -61,15 +61,16 @@ type UpdateTemplateInput struct {
 //   - DurationMs:耗时毫秒(字符串化);RunID:运行 ID。
 //   - ErrorSummary:失败摘要(已尽力脱敏;绝无明文 secret)。
 type TemplateVars struct {
-	Project      string
-	Branch       string
-	Commit       string
-	Status       string
-	Event        string
-	DurationMs   string
-	RunID        string
-	ErrorSummary string
-	AIAnalysis   string // Sanitized monitoring analysis, included only with anomaly notifications.
+	ExecutionKind, LogicalRunID, SourceRunID, AttemptNumber, RetryInitiator string
+	Project                                                                 string
+	Branch                                                                  string
+	Commit                                                                  string
+	Status                                                                  string
+	Event                                                                   string
+	DurationMs                                                              string
+	RunID                                                                   string
+	ErrorSummary                                                            string
+	AIAnalysis                                                              string // Sanitized monitoring analysis, included only with anomaly notifications.
 	// ActionURL 是一次性操作链接(目前用于 approval_required 事件的签名审批链接);
 	// 空 = 该事件无操作链接。渲染时占位名 {{actionUrl}};并透出到 Payload.Fields["审批链接"]/正文。
 	ActionURL string
@@ -81,7 +82,8 @@ type TemplateVars struct {
 // asMap 把 TemplateVars 展开为占位名 → 值的映射(冻结占位名)。
 func (v TemplateVars) asMap() map[string]string {
 	return map[string]string{
-		"project":      v.Project,
+		"project":       v.Project,
+		"executionKind": v.ExecutionKind, "logicalRunId": v.LogicalRunID, "sourceRunId": v.SourceRunID, "attemptNumber": v.AttemptNumber, "retryInitiator": v.RetryInitiator,
 		"branch":       v.Branch,
 		"commit":       v.Commit,
 		"status":       v.Status,
@@ -271,7 +273,7 @@ func (s *service) RenderPayload(ctx context.Context, event, channelID string, va
 	tpl := s.matchTemplate(ctx, event, channelID)
 	if tpl == nil {
 		// 无匹配模板:回平台默认(行为向后兼容 5-2)。
-		return withAlertAnalysis(event, s.defaultPayload(ctx, event, vars), vars)
+		return withRecoveryNotice(withAlertAnalysis(event, s.defaultPayload(ctx, event, vars), vars), vars)
 	}
 
 	m := vars.asMap()
@@ -283,7 +285,7 @@ func (s *service) RenderPayload(ctx context.Context, event, channelID string, va
 		title = s.defaultPayload(ctx, event, vars).Title
 	}
 	// 自定义模板正文是用户文本(不翻译),但 Lang 仍要带上,供飞书/邮件本地化字段标签与标题。
-	return withAlertAnalysis(event, Payload{Title: title, Body: body, Fields: varsFields(vars), Lang: s.notifyLanguage(ctx)}, vars)
+	return withRecoveryNotice(withAlertAnalysis(event, Payload{Title: title, Body: body, Fields: varsFields(vars), Lang: s.notifyLanguage(ctx)}, vars), vars)
 }
 
 func withAlertAnalysis(event string, p Payload, vars TemplateVars) Payload {

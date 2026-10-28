@@ -28,16 +28,21 @@ type runSubscriber interface {
 
 // runDetailDTO 是 GET /api/runs/{id} 响应体(冻结)。
 type runDetailDTO struct {
-	ID          string      `json:"id"`
-	ProjectID   string      `json:"projectId"`
-	ProjectName string      `json:"projectName"`
-	Status      string      `json:"status"`
-	Trigger     triggerInfo `json:"trigger"`
-	Steps       []stepDTO   `json:"steps"`
-	CreatedAt   string      `json:"createdAt"`
-	StartedAt   *string     `json:"startedAt"`
-	FinishedAt  *string     `json:"finishedAt"`
-	DurationMs  *int64      `json:"durationMs"`
+	ExecutionKind  string      `json:"executionKind,omitempty"`
+	LogicalRunID   string      `json:"logicalRunId,omitempty"`
+	SourceRunID    string      `json:"sourceRunId,omitempty"`
+	RetryInitiator string      `json:"retryInitiator,omitempty"`
+	AttemptNumber  int64       `json:"attemptNumber,omitempty"`
+	ID             string      `json:"id"`
+	ProjectID      string      `json:"projectId"`
+	ProjectName    string      `json:"projectName"`
+	Status         string      `json:"status"`
+	Trigger        triggerInfo `json:"trigger"`
+	Steps          []stepDTO   `json:"steps"`
+	CreatedAt      string      `json:"createdAt"`
+	StartedAt      *string     `json:"startedAt"`
+	FinishedAt     *string     `json:"finishedAt"`
+	DurationMs     *int64      `json:"durationMs"`
 	// 配置来源(GitOps 配置来源可见性 · Slice 2):本次运行由仓库 `.pipewright.yml`("repo")还是
 	// 库内网页配置("stored")驱动;""=未记录(老运行)。SpecSourceRef/File 在 repo 来源时有值;
 	// SpecSourceFallback 在 stored 来源且「本想用仓库但回退」时记原因(no_file|invalid_yaml|…)。
@@ -73,13 +78,18 @@ type stepDTO struct {
 
 // runListItemDTO 是 GET /api/runs 列表行(精简;不含 steps/targets/diagnosis)。
 type runListItemDTO struct {
-	ID          string      `json:"id"`
-	ProjectID   string      `json:"projectId"`
-	ProjectName string      `json:"projectName"`
-	Status      string      `json:"status"`
-	Trigger     triggerInfo `json:"trigger"`
-	CreatedAt   string      `json:"createdAt"`
-	DurationMs  *int64      `json:"durationMs"`
+	ExecutionKind  string      `json:"executionKind,omitempty"`
+	LogicalRunID   string      `json:"logicalRunId,omitempty"`
+	SourceRunID    string      `json:"sourceRunId,omitempty"`
+	RetryInitiator string      `json:"retryInitiator,omitempty"`
+	AttemptNumber  int64       `json:"attemptNumber,omitempty"`
+	ID             string      `json:"id"`
+	ProjectID      string      `json:"projectId"`
+	ProjectName    string      `json:"projectName"`
+	Status         string      `json:"status"`
+	Trigger        triggerInfo `json:"trigger"`
+	CreatedAt      string      `json:"createdAt"`
+	DurationMs     *int64      `json:"durationMs"`
 }
 
 type runListDTO struct {
@@ -141,6 +151,7 @@ func toRunDetailDTO(r *run.Run, artifacts []run.Artifact, targets []run.DeployTa
 	}
 
 	return runDetailDTO{
+		ExecutionKind: r.ExecutionKind, LogicalRunID: r.LogicalRunID, SourceRunID: r.SourceRunID, RetryInitiator: r.RetryInitiator, AttemptNumber: r.AttemptNumber,
 		ID:          r.ID,
 		ProjectID:   r.ProjectID,
 		ProjectName: r.ProjectName,
@@ -165,6 +176,7 @@ func toRunDetailDTO(r *run.Run, artifacts []run.Artifact, targets []run.DeployTa
 
 func toRunListItemDTO(r *run.Run) runListItemDTO {
 	return runListItemDTO{
+		ExecutionKind: r.ExecutionKind, LogicalRunID: r.LogicalRunID, SourceRunID: r.SourceRunID, RetryInitiator: r.RetryInitiator, AttemptNumber: r.AttemptNumber,
 		ID:          r.ID,
 		ProjectID:   r.ProjectID,
 		ProjectName: r.ProjectName,

@@ -206,6 +206,9 @@ onMounted(() => {
           <span class="dora-summary__num dora-summary__num--bad">{{ data.failedDeployments }}</span>
           <span class="dora-summary__lbl">{{ t('doraDashboard.summaryFailed') }}</span>
         </div>
+        <div v-if="data.recoveryAttempts !== undefined" class="dora-summary__stat">
+          <span class="dora-summary__lbl">{{ t('runRetry.recoveryCount', { count: data.recoveryAttempts, success: data.successfulRecoveries ?? 0 }) }}</span>
+        </div>
       </div>
 
       <!-- 4 metric cards (bento-ish 2×2; wide screens 4-up) -->
@@ -257,7 +260,7 @@ onMounted(() => {
       </div>
 
       <p class="dora-note">
-        {{ t('doraDashboard.noteLead') }}<strong>{{ t('doraDashboard.noteEmphasis') }}</strong>{{ t('doraDashboard.noteTrail') }}
+        {{ t('runRetry.doraPolicy') }}<strong>{{ t('doraDashboard.noteEmphasis') }}</strong>{{ t('doraDashboard.noteTrail') }}
       </p>
     </template>
   </div>

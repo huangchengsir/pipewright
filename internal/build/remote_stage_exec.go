@@ -26,6 +26,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/dagrun"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/runretry"
 )
 
 // RunnerLookup 解析某项目的远程 runner 服务器 id(空/false = 本地构建)。runner.Service 即满足。
@@ -44,9 +45,26 @@ type remoteExec interface {
 func NewStageExecutorWithRunner(b *Builder, reportSink TestReportSink, lookup RunnerLookup, tgt remoteExec) dagrun.StageExecutor {
 	local := NewStageExecutor(b, reportSink)
 	if lookup == nil || tgt == nil {
-		return local
+		return func(ctx context.Context, r *run.Run, stage pipeline.Stage, rep dagrun.StageReporter) error {
+			if ex, ok := runretry.ExecutionFrom(ctx); ok && len(ex.Snapshot().RunnerRefs) > 0 {
+				return runretry.ErrUnavailable
+			}
+			return local(ctx, r, stage, rep)
+		}
 	}
 	return func(ctx context.Context, r *run.Run, stage pipeline.Stage, rep dagrun.StageReporter) error {
+		if ex, ok := runretry.ExecutionFrom(ctx); ok {
+			serverID := ex.Snapshot().RunnerRefs["serverId"]
+			if serverID == "" {
+				serverID = ex.Snapshot().RunnerRefs["runner"]
+			}
+			if serverID == "" {
+				return local(ctx, r, stage, rep)
+			}
+			copyBuilder := *b
+			copyBuilder.driver = &recoveryRemoteDriver{Driver: NewRemoteDriver(tgt, serverID, "docker"), target: tgt, serverID: serverID}
+			return copyBuilder.runRecoveryStage(ctx, r, stage, rep, reportSink, ex)
+		}
 		if serverID, ok := lookup.RunnerFor(ctx, r.ProjectID); ok && strings.TrimSpace(serverID) != "" {
 			return b.runStageRemote(ctx, r, stage, rep, serverID, tgt)
 		}

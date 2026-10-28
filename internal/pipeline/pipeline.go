@@ -82,12 +82,15 @@ type Job struct {
 // 一旦有阶段声明 needs,则严格按声明的 DAG 调度(见 dagrun 适配)。AllowFailure 为 true 时,
 // 该阶段失败仍放行下游(自身仍记 failed)。Needs 在保存时校验:引用必须存在、不可自指、不可成环。
 type Stage struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	Kind         string   `json:"kind"`
-	Needs        []string `json:"needs,omitempty"`
-	AllowFailure bool     `json:"allowFailure,omitempty"`
-	When         When     `json:"when,omitempty"`
+	// MatrixParentID is compiler-only identity. Sibling cells belong to the
+	// same original stage and never form an implicit linear chain.
+	MatrixParentID string   `json:"-"`
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	Kind           string   `json:"kind"`
+	Needs          []string `json:"needs,omitempty"`
+	AllowFailure   bool     `json:"allowFailure,omitempty"`
+	When           When     `json:"when,omitempty"`
 	// Gate 为 true 时,进入该阶段前需人工审批(Story 8-4):运行阻塞、状态置 waiting_approval,
 	// 批准→继续,拒绝→该阶段失败(运行终止)。
 	Gate bool `json:"gate,omitempty"`

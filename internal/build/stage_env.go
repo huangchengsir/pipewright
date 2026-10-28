@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/huangchengsir/pipewright/internal/dagrun"
+	"github.com/huangchengsir/pipewright/internal/mask"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 )
 
@@ -53,6 +54,7 @@ func captureStageEnv(ctx context.Context, rep dagrun.StageReporter, workspace st
 		if !isEnvKey(key) {
 			continue
 		}
+		mask.RegisterContextSecret(ctx, t[i+1:])
 		out = append(out, pipeline.BuildVar{Key: key, Value: t[i+1:]})
 	}
 	if len(out) > 0 && rep != nil {

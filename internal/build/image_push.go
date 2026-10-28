@@ -230,8 +230,12 @@ func (b *Builder) pushImageTarget(ctx context.Context, sink run.StepSink, ordina
 	if ctx.Err() != nil {
 		return "", "", run.ErrCanceled
 	}
+	recordExternalOutcome(sink, "unknown")
 	code, err = b.driver.Push(ctx, target.reference, onLine)
 	if err != nil || code != 0 {
+		if code >= 0 && ctx.Err() == nil {
+			recordExternalOutcome(sink, "verified")
+		}
 		if ctx.Err() != nil {
 			return "", "", run.ErrCanceled
 		}
@@ -247,6 +251,7 @@ func (b *Builder) pushImageTarget(ctx context.Context, sink run.StepSink, ordina
 	if err != nil || !imageManifestDigest.MatchString(digest) {
 		return "", "", errors.New("pushed image repository digest unavailable")
 	}
+	recordExternalOutcome(sink, "verified")
 	return target.reference, digest, nil
 }
 

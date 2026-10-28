@@ -57,6 +57,7 @@ import ReleaseGuardPanel from '../components/run/ReleaseGuardPanel.vue'
 import ReleaseGuardAttach from '../components/run/ReleaseGuardAttach.vue'
 import LocalDockerDeploymentFields from '../components/run/LocalDockerDeploymentFields.vue'
 import RunRetryPanel from '../components/run/RunRetryPanel.vue'
+import AppButton from '../components/ui/AppButton.vue'
 import { useRunRetry } from '../composables/useRunRetry'
 
 // ─── route ────────────────────────────────────────────────────────────────────
@@ -69,7 +70,10 @@ const recovery = useRunRetry(runId)
 const retryPanel = ref<InstanceType<typeof RunRetryPanel> | null>(null)
 let runGeneration = 0
 let runController: AbortController | undefined
-function openRetry(keys: string[]) { retryPanel.value?.show(); if (keys.length) void recovery.openPlan(keys) }
+function openRetry(keys: string[]) { void retryPanel.value?.show(keys.length === 1 ? keys[0] : undefined, keys.length ? 'plan' : 'details'); if (keys.length) void recovery.openPlan(keys) }
+function openNodeLogs(keys: string[], stageName: string) { void retryPanel.value?.showLogs(keys, stageName) }
+function openRetryHistory() { retryPanel.value?.showHistory() }
+function openAllFailed() { openRetry(recovery.failedNodes.value.map(n => n.node.key)) }
 function openAttempt(id: string) { void router.push({ name: 'run-detail', params: { id } }) }
 
 // ─── load state ──────────────────────────────────────────────────────────────
@@ -721,7 +725,7 @@ function nodeClass(status: StepStatus): string {
       </span>
     </div>
 
-    <RunRetryPanel v-if="(loadState === 'idle' && run) || recovery.pending.value" ref="retryPanel" :state="recovery" :source-run-id="run?.sourceRunId" :attempt-number="run?.attemptNumber" @accepted="openAttempt" />
+    <RunRetryPanel v-if="(loadState === 'idle' && run) || recovery.pending.value" :key="runId" ref="retryPanel" :state="recovery" :run-id="runId" :steps="run?.steps" :run-status="run?.status" :source-run-id="run?.sourceRunId" :attempt-number="run?.attemptNumber" @accepted="openAttempt" @full-logs="clearSourceLog" />
 
     <!-- ─── Loading skeleton ─────────────────────────────────────────────── -->
     <template v-if="loadState === 'loading'">
@@ -876,6 +880,10 @@ function nodeClass(status: StepStatus): string {
             <span class="meta-key">{{ t('runDetail.metaDuration') }}</span>
             <span class="meta-val mono">{{ formatDuration(run.durationMs) }}</span>
           </div>
+          <div v-if="recovery.context.value || recovery.attempts.value?.items.length" class="meta-item meta-recovery">
+            <AppButton variant="ghost" class="retry-history-entry" @click="openRetryHistory">{{ t('runRetry.runHistory') }}</AppButton>
+            <AppButton v-if="recovery.failedNodes.value.length > 1" variant="ghost" class="retry-all-entry" @click="openAllFailed">{{ t('runRetry.retryAll') }}</AppButton>
+          </div>
         </div>
 
         <!-- ══════════════════════════════════════════════════════════════
@@ -896,7 +904,7 @@ function nodeClass(status: StepStatus): string {
                 :steps="run.steps"
                 :run-status="run.status"
                 :recovery="recovery.context.value"
-                @retry="openRetry"
+                @retry="openRetry" @logs="openNodeLogs"
               />
             </div>
 
@@ -922,7 +930,7 @@ function nodeClass(status: StepStatus): string {
                 :steps="run.steps"
                 :run-status="run.status"
                 :recovery="recovery.context.value"
-                @retry="openRetry"
+                @retry="openRetry" @logs="openNodeLogs"
               />
             </div>
 
@@ -1270,7 +1278,7 @@ function nodeClass(status: StepStatus): string {
                 :steps="run.steps"
                 :run-status="run.status"
                 :recovery="recovery.context.value"
-                @retry="openRetry"
+                @retry="openRetry" @logs="openNodeLogs"
               />
             </div>
 
@@ -1332,7 +1340,7 @@ function nodeClass(status: StepStatus): string {
                 :steps="run.steps"
                 :run-status="run.status"
                 :recovery="recovery.context.value"
-                @retry="openRetry"
+                @retry="openRetry" @logs="openNodeLogs"
               />
             </div>
 
@@ -1428,7 +1436,7 @@ function nodeClass(status: StepStatus): string {
                 :steps="run.steps"
                 :run-status="run.status"
                 :recovery="recovery.context.value"
-                @retry="openRetry"
+                @retry="openRetry" @logs="openNodeLogs"
               />
             </div>
 
@@ -1468,6 +1476,8 @@ function nodeClass(status: StepStatus): string {
 </template>
 
 <style scoped>
+.meta-recovery { flex-wrap: wrap; gap: 8px; }
+.meta-recovery :deep(.app-btn) { min-height: 44px; height: auto; white-space: normal; text-align: left; }
 .source-log-selection { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0 0 16px; color: var(--color-dim); }
 .source-log-selection button { min-height: 44px; }
 /* ─── approval gate (Story 8-4) ──────────────────────────────────────────── */

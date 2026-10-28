@@ -9,9 +9,9 @@ import { HttpError } from '../api/http'
 const api = vi.hoisted(() => ({ get: vi.fn(), subscribe: vi.fn(), approvals: vi.fn(), context: vi.fn(), attempts: vi.fn(), plan: vi.fn(), request: vi.fn() }))
 vi.mock('../api/runs', async original => ({ ...(await original<typeof import('../api/runs')>()), getRun: api.get, subscribeRunEvents: api.subscribe, listApprovals: api.approvals }))
 vi.mock('../api/runRetry', async original => ({ ...(await original<typeof import('../api/runRetry')>()), getRetryContext: api.context, getRetryAttempts: api.attempts, getRetryPlan: api.plan, getRetryRequest: api.request }))
-const Dag = defineComponent({ props: ['projectId', 'steps', 'runStatus', 'recovery'], emits: ['retry'], template: '<button class="dag-retry" @click="$emit(\'retry\', [\'b\'])">Retry {{runStatus}}</button>' })
+const Dag = defineComponent({ props: ['projectId', 'steps', 'runStatus', 'recovery'], emits: ['retry', 'logs'], template: '<div><button class="dag-retry" @click="$emit(\'retry\', [\'b\'])">Retry {{runStatus}}</button><button class="dag-logs" @click="$emit(\'logs\', [\'a\', \'b\'], \'Original build\')">Logs</button></div>' })
 const Terminal = defineComponent({ props: ['runId', 'live', 'filterOrdinal'], template: '<div class="test-terminal">{{runId}}/{{filterOrdinal}}</div>' })
-const stubs = { RunDagView: Dag, RunTerminal: Terminal, RunStepList: true, DiagnosisPanel: true, SuccessFailDiff: true, ArtifactList: true, TestReportPanel: true, DeployTargets: true, PromotionPanel: true, BatchDeployPanel: true, ReleaseGuardPanel: true, ReleaseGuardAttach: true, LocalDockerDeploymentFields: true, AppSelect: true }
+const stubs = { Teleport: true, RunDagView: Dag, RunTerminal: Terminal, RunStepList: true, DiagnosisPanel: true, SuccessFailDiff: true, ArtifactList: true, TestReportPanel: true, DeployTargets: true, PromotionPanel: true, BatchDeployPanel: true, ReleaseGuardPanel: true, ReleaseGuardAttach: true, LocalDockerDeploymentFields: true, AppSelect: true }
 const stops: ReturnType<typeof vi.fn>[] = []
 let wrappers: VueWrapper[] = []
 function run(id: string, status: RunStatus = 'running'): RunDTO {
@@ -24,13 +24,35 @@ async function render(path = '/runs/root') {
 }
 function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>(r => { resolve = r }); return { resolve, promise } }
 describe('existing RunDetail recovery integration', () => {
+  it('opens node logs in the existing panel without requesting a retry plan', async () => {
+    const original = run('root', 'failed'); original.steps = ['a', 'b'].map(id => ({ id: `step-${id}`, name: id, status: 'failed', startedAt: null, finishedAt: null, durationMs: null }))
+    api.get.mockResolvedValue(original); const { wrapper, router } = await render()
+    await wrapper.findComponent(Dag).get('.dag-logs').trigger('click'); await flushPromises()
+    expect(wrapper.get('[role=dialog] h2').text()).toBe('Original build'); expect(wrapper.findAll('[role=tab]')).toHaveLength(2)
+    expect(wrapper.findAllComponents(Terminal).some(t => t.props('runId') === 'root' && t.props('filterOrdinal') === 1)).toBe(true)
+    expect(api.plan).not.toHaveBeenCalled()
+    await router.push('/runs/child'); await flushPromises()
+    expect(wrapper.find('[role=dialog]').exists()).toBe(false)
+  })
+
   beforeEach(() => { vi.useFakeTimers(); vi.clearAllMocks(); localStorage.clear(); sessionStorage.clear(); stops.length = 0; api.get.mockImplementation(async (id: string) => run(id)); api.subscribe.mockImplementation(() => { const stop = vi.fn(); stops.push(stop); return stop }); api.approvals.mockResolvedValue({ items: [] }); api.context.mockImplementation(async (id: string) => retryContext({ attemptRunId: id, headAttemptId: id })); api.attempts.mockResolvedValue({ items: [], total: 0, page: 1 }); api.plan.mockResolvedValue(retryPlan()) })
   afterEach(() => { wrappers.forEach(w => w.unmount()); wrappers = []; vi.useRealTimers() })
   it.each<RunStatus>(['running', 'queued', 'success', 'failed', 'partial_failed', 'rolled_back', 'waiting_approval'])('exposes a frozen node plan in the %s branch', async status => {
     api.get.mockResolvedValue(run('root', status)); const { wrapper } = await render()
     const dag = wrapper.findComponent(Dag); expect(dag.exists()).toBe(true); expect(dag.props('recovery').attemptRunId).toBe('root')
-    await dag.get('button').trigger('click'); await flushPromises(); expect(api.plan).toHaveBeenCalledWith('root', ['b'], [], expect.any(Object))
+    expect(wrapper.find('[role=dialog]').exists()).toBe(false)
+    await dag.get('.dag-retry').trigger('click'); await flushPromises(); expect(api.plan).toHaveBeenCalledWith('root', ['b'], [], expect.any(Object))
     expect(wrapper.findAll('.retry-panel')).toHaveLength(1)
+  })
+  it('closes node details on a reused route and keeps history behind the metadata entry', async () => {
+    const { wrapper, router } = await render()
+    expect(wrapper.find('.retry-panel').exists()).toBe(false)
+    await wrapper.get('.retry-history-entry').trigger('click'); await flushPromises()
+    expect(wrapper.get('[role=dialog] h2').text()).toBe('运行尝试历史'); expect(api.plan).not.toHaveBeenCalled()
+    await router.push('/runs/child'); await flushPromises()
+    expect(wrapper.find('[role=dialog]').exists()).toBe(false)
+    await wrapper.findComponent(Dag).get('.dag-retry').trigger('click'); await flushPromises()
+    expect(wrapper.get('[role=dialog] h2').text()).toBe('b')
   })
   it('reuses the route component while rejecting an old detail response', async () => {
     const old = deferred<RunDTO>(); api.get.mockImplementation((id: string) => id === 'root' ? old.promise : Promise.resolve(run(id)))
@@ -57,6 +79,16 @@ describe('existing RunDetail recovery integration', () => {
     expect(wrapper.findComponent(Terminal).props('filterOrdinal')).toBe(7)
     await router.push('/runs/root?step=9&stepId=source-9'); await flushPromises(); expect(wrapper.findComponent(Terminal).props('filterOrdinal')).toBe(9)
     await router.push('/runs/root?step=7&stepId=wrong-row'); await flushPromises(); expect(wrapper.findComponent(Terminal).props('filterOrdinal')).toBeNull()
+  })
+  it('clears a locally selected step when opening complete logs for the same run', async () => {
+    const original = run('root', 'success'); original.steps = ['a', 'b'].map(id => ({ id: `step-${id}`, name: id, status: 'success', startedAt: null, finishedAt: null, durationMs: null }))
+    api.get.mockResolvedValue(original); const { wrapper, router } = await render()
+    wrapper.findComponent({ name: 'RunStepList' }).vm.$emit('select', 0); await flushPromises()
+    expect(wrapper.findComponent(Terminal).props('filterOrdinal')).toBe(0); expect(router.currentRoute.value.query).toEqual({})
+    await wrapper.findComponent(Dag).get('.dag-logs').trigger('click'); await flushPromises()
+    await wrapper.get('.retry-log-step > a').trigger('click'); await flushPromises()
+    expect(wrapper.find('[role=dialog]').exists()).toBe(false)
+    expect(wrapper.findComponent(Terminal).props('filterOrdinal')).toBeNull(); expect(api.plan).not.toHaveBeenCalled()
   })
   it('keeps the normal run readable when recovery metadata is unavailable', async () => {
     api.context.mockRejectedValue(new Error('unavailable private evidence')); api.attempts.mockRejectedValue(new Error('unavailable'))

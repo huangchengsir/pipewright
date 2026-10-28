@@ -27,7 +27,7 @@ import { useI18n } from 'vue-i18n'
 import { localizeName } from '../../lib/pipelineLabels'
 import type { RunStep, StepStatus } from '../../api/runs'
 import type { RetryContext, RetryPlannedNode } from '../../api/runRetry'
-import { retryNodeLabel, sourceLogLocation } from '../../api/runRetry'
+import { retryNodeLabel } from '../../api/runRetry'
 import AppButton from '../ui/AppButton.vue'
 import {
   buildRunStages,
@@ -50,7 +50,7 @@ const props = defineProps<{
   runStatus: string
   recovery?: RetryContext | null
 }>()
-const emit = defineEmits<{ retry: [nodeKeys: string[]] }>()
+const emit = defineEmits<{ retry: [nodeKeys: string[]]; logs: [nodeKeys: string[], stageName: string] }>()
 
 // ─── Pipeline spec loading ────────────────────────────────────────────────────
 
@@ -67,13 +67,13 @@ const dagStages = computed<RunStage[]>(() => {
 
 const dagEdges = computed(() => props.recovery ? dagStages.value.flatMap(s => s.needs.map(from => ({ from, to: s.id }))) : buildDagEdges(dagStages.value))
 function recoveryNode(key: string): RetryPlannedNode | undefined { return props.recovery?.nodes.find(n => n.node.key === key) }
-function dependencies(key: string): string[] {
-  return props.recovery?.graph.edges.filter(e => e.to === key && e.kind === 'control').map(e => {
-    const n = props.recovery?.graph.nodes.find(n => n.key === e.from)
-    return n ? retryNodeLabel(n) : e.from
-  }) ?? []
-}
-
+const systemExpanded = ref(new Set<string>())
+function quietSystem(step: RunStep) { const n = recoveryNode(step.id); return !!n?.node.controlKey && n.decision.status === 'success' }
+function logKeys(stage: RunStage) { return stage.steps.filter(step => { const n = recoveryNode(step.id); return !n?.node.controlKey || ['failed', 'outcome_unknown'].includes(n.decision.status ?? '') }).map(step => step.id) }
+function quietCount(stage: RunStage) { return stage.steps.filter(quietSystem).length }
+function visibleSteps(stage: RunStage) { return stage.steps.filter(step => !quietSystem(step) || systemExpanded.value.has(stage.id)) }
+function toggleSystem(stageId: string) { const next = new Set(systemExpanded.value); if (next.has(stageId)) next.delete(stageId); else next.add(stageId); systemExpanded.value = next; void nextTick(measureEdges) }
+function nodeStatus(step: RunStep) { const n = recoveryNode(step.id); return n?.decision.action === 'reuse' ? t('runRetry.reusedShort') : n?.decision.status === 'outcome_unknown' ? t('runRetry.unknownShort') : n?.decision.action === 'blocked' ? t('runRetry.blockedShort') : step.status === 'waiting_approval' ? t('runStatus.waiting_approval') : stageVis(step.status).label }
 // ─── Expandable step rows ─────────────────────────────────────────────────────
 
 /** Set of stage IDs whose steps are expanded. */
@@ -356,7 +356,7 @@ function edgeClass(status: string): string {
               role="list"
             >
               <li
-                v-for="step in stage.steps"
+                v-for="step in visibleSteps(stage)"
                 :key="step.id"
                 :data-logical-node-key="recovery ? step.id : undefined"
                 class="step-row"
@@ -389,23 +389,13 @@ function edgeClass(status: string): string {
                   </svg>
                 </span>
 
-                <!-- Step name -->
-                <span class="step-name">{{ step.name }}</span>
-                <AppButton v-if="step.status === 'failed' && !recoveryNode(step.id)" class="node-retry" @click="emit('retry', [])">{{ t('runRetry.viewRecovery') }}</AppButton>
-
-                <div v-if="recoveryNode(step.id)" class="node-recovery">
-                  <span v-if="recoveryNode(step.id)?.node.controlKey" class="node-origin">{{ t('runRetry.controlNode') }}</span>
-                  <span v-if="recoveryNode(step.id)?.decision.action === 'reuse'" class="node-origin">{{ t('runRetry.reused') }}</span>
-                  <span v-if="recoveryNode(step.id)?.decision.action === 'blocked'" class="node-origin">{{ t('runRetry.blocked') }}</span>
-                  <RouterLink v-if="sourceLogLocation(recoveryNode(step.id)!) && recoveryNode(step.id)?.decision.action === 'reuse'" :to="sourceLogLocation(recoveryNode(step.id)!)!">{{ t('runRetry.sourceLogs') }}</RouterLink>
-                  <RouterLink v-else-if="recoveryNode(step.id)?.decision.action === 'reuse' && recoveryNode(step.id)?.decision.sourceAttemptId" :to="{ name: 'run-detail', params: { id: recoveryNode(step.id)!.decision.sourceAttemptId } }">{{ t('runRetry.fromRun', { id: recoveryNode(step.id)!.decision.sourceAttemptId!.slice(0, 8) }) }}</RouterLink>
-                  <span v-if="dependencies(step.id).length" class="node-needs">{{ t('runRetry.dependsOn', { names: dependencies(step.id).join(', ') }) }}</span>
-                  <span v-if="recoveryNode(step.id)?.decision.status === 'outcome_unknown'" class="node-origin">{{ t('runRetry.unknown') }}</span>
-                  <AppButton v-if="recoveryNode(step.id)?.decision.status === 'failed'" class="node-retry" @click="emit('retry', [step.id])">{{ t('runRetry.retryNode') }}</AppButton>
-                </div>
-
-                <!-- Step duration -->
-                <span v-if="step.durationMs !== null" class="step-dur mono">{{ formatDuration(step.durationMs) }}</span>
+                <span class="step-name" :title="step.name">{{ step.name }}</span>
+                <span class="node-mark" :title="nodeStatus(step)">{{ nodeStatus(step) }}</span>
+                <AppButton v-if="['failed', 'outcome_unknown'].includes(recoveryNode(step.id)?.decision.status ?? '')" class="node-retry" :title="t('runRetry.retryNode')" @click="emit('retry', [step.id])">{{ t('runRetry.retryShort') }}</AppButton>
+                <AppButton v-else-if="step.status === 'failed' && !recoveryNode(step.id)" class="node-retry" :title="t('runRetry.viewRecovery')" @click="emit('retry', [])">{{ t('runRetry.retryShort') }}</AppButton>
+              </li>
+              <li v-if="quietCount(stage)" class="system-steps">
+                <AppButton variant="ghost" :aria-expanded="systemExpanded.has(stage.id)" @click="toggleSystem(stage.id)">{{ t('runRetry.systemSteps', { n: quietCount(stage) }) }}</AppButton>
               </li>
             </ul>
 
@@ -417,6 +407,9 @@ function edgeClass(status: string): string {
             <div v-else-if="stage.steps.length === 0" class="stage-empty">
               {{ t('run.noSteps') }}
             </div>
+            <footer v-if="logKeys(stage).length" class="node-log-entry">
+              <AppButton variant="ghost" class="node-logs" :aria-label="`${stage.name} · ${t('runRetry.nodeLogs')}`" @click="emit('logs', logKeys(stage), localizeName(stage.name))">{{ t('runRetry.nodeLogs') }}</AppButton>
+            </footer>
           </article>
         </div>
       </div>
@@ -426,11 +419,10 @@ function edgeClass(status: string): string {
 </template>
 
 <style scoped>
-.node-recovery { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: 100%; font-size: 13px; overflow-wrap: anywhere; }
-.node-recovery a { color: var(--color-primary); min-height: 44px; display: inline-flex; align-items: center; }
-.node-origin, .node-needs { color: var(--color-dim); }
-.node-retry { min-height: 44px; white-space: normal; }
-.step-row:has(.node-recovery) { flex-wrap: wrap; }
+.node-log-entry { display: flex; justify-content: flex-end; padding: 4px 12px 12px; }
+.node-mark { max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; font-size: 12px; color: var(--color-dim); }
+.node-logs, .node-retry { min-height: 44px; height: auto; padding: 6px 8px; flex-shrink: 0; max-width: 104px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.system-steps :deep(.app-btn) { min-height: 44px; height: auto; }
 .stage-toggle { min-height: 44px; min-width: 44px; }
 .stage-head:has(.stage-axes) { flex-wrap: wrap; }
 .stage-axes { width: 100%; color: var(--color-dim); font: 13px var(--font-mono); overflow-wrap: anywhere; }
@@ -553,7 +545,7 @@ function edgeClass(status: string): string {
 
 /* ─── stage card ───────────────────────────────────────────────────────────── */
 .dag-stage-card {
-  width: 200px;
+  width: 360px;
   flex-shrink: 0;
   background: var(--color-card);
   border: 1px solid var(--color-border);

@@ -51,7 +51,7 @@ onBeforeUnmount(() => { alive = false; generation++; controller?.abort() })
 <template>
   <section class="operation-panel" aria-labelledby="operation-panel-title">
     <h2 id="operation-panel-title">{{ t('mcpConfig.operationTitle') }}</h2>
-    <p>{{ t('mcpConfig.operationHint') }}</p>
+    <p class="operation-summary">{{ t('mcpConfig.operationSummary') }}</p><details class="operation-details"><summary>{{ t('mcpConfig.maintenanceDetails') }}</summary><p>{{ t('mcpConfig.operationHint') }}</p></details>
     <form class="operation-lookup" @submit.prevent="lookup"><label for="mcp-operation-id">{{ t('mcpConfig.operationId') }}</label><input id="mcp-operation-id" v-model="operationId" maxlength="128" autocomplete="off" :disabled="fencing" /><AppButton type="submit" :loading="loading" :disabled="fencing || !operationId.trim()">{{ t('mcpConfig.operationLookup') }}</AppButton></form>
     <p v-if="error" role="alert" class="operation-error">{{ error }}</p>
     <template v-if="result">
@@ -64,17 +64,22 @@ onBeforeUnmount(() => { alive = false; generation++; controller?.abort() })
 </template>
 
 <style scoped>
-.operation-panel { padding: 24px 0; margin-top: 24px; border-top: 1px solid var(--color-border-strong); }
-h2 { margin: 0 0 12px; font-size: 20px; }
-p { line-height: 1.7; color: var(--color-dim); font-size: 14px; max-width: 75ch; }
-.operation-lookup { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
-label { width: 100%; font-size: 14px; }
-input { width: 100%; min-width: 0; height: 44px; border: 1px solid var(--color-border-strong); background: var(--color-inset); color: var(--color-text); padding: 8px 12px; border-radius: var(--rounded); font: 16px var(--font-mono); }
-input:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
-dl { display: flex; flex-wrap: wrap; gap: 20px; margin: 20px 0; }
-dt { font-size: 13px; color: var(--color-dim); margin-bottom: 6px; } dd { margin: 0; overflow-wrap: anywhere; }
-code { font-family: var(--font-mono); font-size: 13px; }
+.operation-panel { padding: 16px 18px; margin: 16px 0 18px; border: 1px solid var(--color-border); border-radius: 9px; background: var(--color-card); min-width: 0; }
+h2 { margin: 0 0 8px; font-size: 14px; overflow-wrap: anywhere; }
+p { line-height: 1.65; color: var(--color-dim); font-size: 12px; max-width: 80ch; }
+.operation-summary { margin: 0 0 10px; }
+.operation-details { font-size: 12px; line-height: 1.65; color: var(--color-dim); margin: 8px 0 12px; }
+.operation-details > summary { cursor: pointer; min-height: 28px; width: fit-content; }
+.operation-details p { margin: 7px 0; }
+.operation-lookup { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+label { width: 100%; font-size: 12px; }
+input { width: 100%; min-width: 0; height: 44px; border: 1px solid var(--color-border); background: var(--color-inset); color: var(--color-text); padding: 8px 10px; border-radius: 6px; font: 16px var(--font-mono); }
+input:focus-visible, summary:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+dl { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 14px 0; }
+dt { font-size: 11px; color: var(--color-dim); margin-bottom: 5px; } dd { margin: 0; overflow-wrap: anywhere; font-size: 12px; }
+code { font-family: var(--font-mono); font-size: 12px; }
 .operation-error { color: var(--color-red); }
-:deep(.app-btn) { min-height: 44px; }
-@media(min-width:640px) { input { width: min(100%, 480px); } }
+:deep(.app-btn) { min-height: var(--settings-action-height, 34px); height: var(--settings-action-height, 34px); }
+@media (min-width: 640px) { input { width: min(100%, 440px); height: 36px; font-size: 13px; } }
+@media (max-width: 639px) { .operation-panel { padding: 16px; } .operation-details > summary { min-height: 44px; align-content: center; } :deep(.app-btn) { min-height: 44px; } }
 </style>

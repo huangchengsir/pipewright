@@ -137,5 +137,12 @@ export default {
     "authorization": "Autorisation",
     "policy": "Politique",
     "sourceApplicability": "Source d’exécution"
-  }
+  },
+  "technicalDetails": "Détails techniques",
+  "reviewScope": "Portée des effets et de la validation",
+  "maintenanceSummary": "Vérifiez les opérations de configuration non confirmées avant de décider comment les terminer.",
+  "maintenanceDetails": "Limites et détails du traitement",
+  "maintenanceReady": "Un enregistrement de fin correspondant est disponible. Vérifiez-le avant de terminer l’activité.",
+  "maintenanceNeedsReview": "La fin de l’opération initiale n’est pas confirmée. Cet enregistrement est conservé.",
+  "operationSummary": "Si une réponse est perdue, vérifiez l’opération initiale avant de décider de l’isoler."
 }

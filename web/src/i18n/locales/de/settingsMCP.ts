@@ -33,5 +33,10 @@ export default {
   "revokeTitle": "Zugriffstoken widerrufen?",
   "revokeBody": "Clients mit „{name}“ können keine weiteren Aufrufe durchführen.",
   "projectLimit": "Höchstens 32 Projekte. Nicht ausgewählte Projekte sind nicht zugänglich.",
-  "privacy": "MCP ruft kein Modell auf. Externe KI-Clients können Abfrageergebnisse an ihre Modelle senden. Sensible Deployment-Daten nur mit vertrauenswürdigen Clients teilen."
+  "privacy": "MCP ruft kein Modell auf. Externe KI-Clients können Abfrageergebnisse an ihre Modelle senden. Sensible Deployment-Daten nur mit vertrauenswürdigen Clients teilen.",
+  "accessScopeTitle": "Zugriffsgrenzen",
+  "scopedAccess": "Der Zugriff ist auf autorisierte Projekte begrenzt",
+  "separateApproval": "Das Anwenden erfordert eine separate Freigabe des konkreten Entwurfs",
+  "triggerAccess": "Pipeline-Ausführung benötigt eine separate Berechtigung",
+  "privacyTitle": "Hinweise zu Daten und Clients"
 }

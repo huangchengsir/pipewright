@@ -33,5 +33,10 @@ export default {
   "revokeTitle": "¿Revocar el token?",
   "revokeBody": "Los clientes que utilicen «{name}» ya no podrán realizar llamadas.",
   "projectLimit": "Hasta 32 proyectos. Los no seleccionados no serán accesibles.",
-  "privacy": "MCP no llama a ningún modelo. Los clientes de IA externos pueden enviar los resultados a sus modelos. Comparte datos sensibles de despliegue solo con clientes de confianza."
+  "privacy": "MCP no llama a ningún modelo. Los clientes de IA externos pueden enviar los resultados a sus modelos. Comparte datos sensibles de despliegue solo con clientes de confianza.",
+  "accessScopeTitle": "Límites de acceso",
+  "scopedAccess": "El acceso se limita a los proyectos autorizados",
+  "separateApproval": "Aplicar la configuración requiere aprobar por separado el borrador exacto",
+  "triggerAccess": "Ejecutar pipelines requiere un permiso independiente",
+  "privacyTitle": "Información sobre datos y clientes"
 }

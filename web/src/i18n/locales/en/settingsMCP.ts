@@ -33,5 +33,10 @@ export default {
   "revokeTitle": "Revoke access token?",
   "revokeBody": "Clients using “{name}” will no longer be able to call tools.",
   "projectLimit": "Up to 32 projects. Unselected projects are not accessible.",
-  "privacy": "MCP does not call a model. External AI clients may send query results to their models. Share sensitive deployment data only with trusted clients."
+  "privacy": "MCP does not call a model. External AI clients may send query results to their models. Share sensitive deployment data only with trusted clients.",
+  "accessScopeTitle": "Access boundaries",
+  "scopedAccess": "Access is limited to authorized projects",
+  "separateApproval": "Applying configuration needs separate approval of the exact draft",
+  "triggerAccess": "Pipeline triggers need a separate permission",
+  "privacyTitle": "Data and client details"
 }

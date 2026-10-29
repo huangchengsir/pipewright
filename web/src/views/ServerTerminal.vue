@@ -1150,10 +1150,10 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.terminal-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;border-bottom:1px solid var(--color-border);flex:none}
-.terminal-actions button{min-height:44px;padding:6px 10px;color:var(--color-text);background:transparent;border:1px solid var(--color-border-strong);border-radius:4px;font-size:13px;cursor:pointer}
+.terminal-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:8px 14px;border-bottom:1px solid var(--color-border);flex:none}
+.terminal-actions button{min-height:32px;padding:5px 10px;color:var(--color-text);background:transparent;border:1px solid var(--color-border-strong);border-radius:6px;font-size:13px;cursor:pointer;line-height:1.4}
 .terminal-actions button:disabled{opacity:.45;cursor:default}.terminal-actions button.sensitive{color:var(--color-amber);border-color:var(--color-amber)}
-.terminal-actions span{font-size:12px;color:var(--color-dim);line-height:1.5;flex:1;min-width:160px}.terminal-actions button:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px}
+.terminal-actions span{font-size:12px;color:var(--color-dim);line-height:1.5;flex:1;min-width:180px}.terminal-actions button:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px}
 
 .shell {
   position: fixed;
@@ -1164,8 +1164,6 @@ onBeforeUnmount(() => {
   overflow: hidden;
   color: var(--color-text);
   background:
-    radial-gradient(1200px 600px at 18% -10%, oklch(66% 0.155 258 / 0.1), transparent 60%),
-    radial-gradient(900px 500px at 100% 8%, oklch(82% 0.1 205 / 0.07), transparent 55%),
     var(--color-canvas);
 }
 
@@ -1173,46 +1171,38 @@ onBeforeUnmount(() => {
 .top {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
   /* Reserve room for App's fixed language picker without covering controls. */
-  padding: 0 150px 0 20px;
-  height: 58px;
+  padding: 8px 150px 8px 16px;
+  height: auto;
   flex: none;
   position: relative;
   border-bottom: 1px solid var(--color-border);
-  background: linear-gradient(180deg, oklch(17% 0.006 268), oklch(14% 0.004 270));
-}
-.top::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--color-primary), var(--color-cyan), transparent);
-  opacity: 0.5;
+  background: var(--color-card);
+  min-height:54px;
+  flex-wrap:wrap;padding-block:8px;
 }
 .brand {
   display: flex;
   flex-shrink: 0;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   font-weight: 700;
-  font-size: 1.02rem;
+  font-size: 14px;
   letter-spacing: 0.01em;
 }
 .brand .logo {
   width: 28px;
   height: 28px;
-  border-radius: 8px;
+  border-radius: 7px;
   display: grid;
   place-items: center;
   font-family: var(--font-mono);
   font-size: 0.78rem;
   font-weight: 700;
   color: #fff;
-  background: linear-gradient(145deg, oklch(72% 0.15 256), var(--color-primary));
-  box-shadow: 0 4px 16px oklch(66% 0.155 258 / 0.5), inset 0 1px 0 oklch(100% 0 0 / 0.25);
+  background: var(--color-primary);
+  box-shadow: none;
 }
 .crumb {
   min-width: 0;
@@ -1237,16 +1227,17 @@ onBeforeUnmount(() => {
   align-items: stretch;
   background: oklch(12% 0.004 270);
   border: 1px solid var(--color-border-strong);
-  border-radius: 11px;
-  overflow: hidden;
-  box-shadow: inset 0 1px 0 oklch(100% 0 0 / 0.04);
+  border-radius: 7px;
+  overflow: auto;
+  box-shadow: none;
+  max-width:100%;
 }
 .seg .cell {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 13px;
-  height: 38px;
+  gap: 6px;
+  padding: 0 10px;
+  height: 34px;
   font-size: 0.8rem;
   border-right: 1px solid var(--color-border);
 }
@@ -1263,6 +1254,9 @@ onBeforeUnmount(() => {
   font-family: var(--font-mono);
   color: var(--color-text);
   font-size: 0.8rem;
+  max-width:40vw;
+  overflow:hidden;
+  text-overflow:ellipsis;
 }
 .seg-input {
   width: 96px;
@@ -1330,15 +1324,16 @@ onBeforeUnmount(() => {
 .tbtn {
   flex-shrink: 0;
   font: inherit;
-  font-size: 0.8rem;
+  font-size: 13px;
   font-weight: 600;
-  border-radius: 9px;
-  padding: 8px 14px;
+  border-radius: 6px;
+  padding: 5px 11px;
   cursor: pointer;
   border: 1px solid var(--color-border-strong);
   background: oklch(100% 0 0 / 0.03);
   color: var(--color-dim);
   transition: border-color var(--duration-fast), color var(--duration-fast), background var(--duration-fast);
+  min-height:34px;
 }
 .tbtn:hover:not(:disabled) {
   border-color: var(--color-line-strong);
@@ -1371,7 +1366,7 @@ onBeforeUnmount(() => {
   transition: grid-template-columns var(--duration-normal, 300ms) var(--ease-out-expo);
 }
 .main.ai-open {
-  grid-template-columns: minmax(0, 1.78fr) minmax(360px, 0.86fr);
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
 }
 
 /* 收起态唤起 tab:右侧边缘竖向 pill,cyan 辉光,点击滑出 AI 助手 */
@@ -1425,28 +1420,20 @@ onBeforeUnmount(() => {
   overflow: hidden;
   position: relative;
   border-right: 1px solid var(--color-border);
-  background: radial-gradient(900px 420px at 30% -5%, oklch(66% 0.155 258 / 0.06), transparent 55%), #08080b;
-}
-.term-wrap::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.5;
-  background-image: linear-gradient(oklch(100% 0 0 / 0.015) 1px, transparent 1px);
-  background-size: 100% 28px;
+  background: var(--color-term, #08080b);
 }
 .term-bar {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 16px;
-  height: 40px;
+  padding: 6px 14px;
+  height: auto;
   flex: none;
   border-bottom: 1px solid var(--color-border);
   background: oklch(10% 0.004 270);
   position: relative;
   z-index: 1;
+  min-height:34px;
 }
 .tdot {
   width: 11px;
@@ -1468,6 +1455,8 @@ onBeforeUnmount(() => {
   color: var(--color-faint);
   font-family: var(--font-mono);
   font-size: 0.76rem;
+  min-width:0;
+  overflow-wrap:anywhere;
 }
 .term-bar .name b {
   color: oklch(90% 0.09 195);
@@ -1477,7 +1466,7 @@ onBeforeUnmount(() => {
 .term-host {
   flex: 1;
   min-height: 0;
-  padding: 14px 16px 6px;
+  padding: 12px 14px 6px;
   overflow: hidden;
   position: relative;
   z-index: 1;
@@ -1506,16 +1495,18 @@ onBeforeUnmount(() => {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 16px;
-  height: 32px;
-  padding: 0 16px;
+  gap: 6px 12px;
+  height: auto;
+  padding: 6px 14px;
   z-index: 1;
   border-top: 1px solid var(--color-border);
   background: oklch(10% 0.004 270);
   color: var(--color-faint);
   font-size: 0.72rem;
   font-family: var(--font-mono);
-  overflow: hidden;
+  overflow: visible;
+  min-height:34px;
+  flex-wrap:wrap;
 }
 .term-status .s {
   display: flex;
@@ -1544,6 +1535,7 @@ onBeforeUnmount(() => {
   cursor: pointer;
   white-space: nowrap;
   transition: color var(--duration-fast), border-color var(--duration-fast), background var(--duration-fast);
+  min-height:24px;
 }
 .ai-toggle .d {
   width: 6px;
@@ -1619,11 +1611,11 @@ onBeforeUnmount(() => {
   z-index: 50;
   min-width: 184px;
   padding: 6px;
-  border-radius: 12px;
+  border-radius: 8px;
   background: oklch(18% 0.006 268 / 0.96);
   backdrop-filter: blur(12px);
   border: 1px solid var(--color-border-strong);
-  box-shadow: 0 18px 48px oklch(0% 0 0 / 0.5), inset 0 1px 0 oklch(100% 0 0 / 0.05);
+  box-shadow: 0 8px 24px oklch(0% 0 0 / 0.3);
   animation: ctxin 0.12s ease-out;
 }
 @keyframes ctxin {
@@ -1646,11 +1638,12 @@ onBeforeUnmount(() => {
   color: var(--color-dim);
   background: none;
   border: none;
-  border-radius: 7px;
-  padding: 8px 11px;
+  border-radius: 6px;
+  padding: 6px 10px;
   cursor: pointer;
   text-align: left;
   transition: background var(--duration-fast), color var(--duration-fast);
+  min-height:32px;
 }
 .ctx button:hover:not(:disabled) {
   background: var(--color-cyan-soft);
@@ -1764,6 +1757,7 @@ onBeforeUnmount(() => {
   .top {
     gap: 8px;
     padding-left: 12px;
+    padding:52px 12px 10px;
   }
   .brand {
     font-size: 0;
@@ -1772,6 +1766,12 @@ onBeforeUnmount(() => {
   .seg .cell:first-child {
     display: none;
   }
+  .tbtn, .terminal-actions button, .ai-toggle, .ctx button{min-height:44px}
+  .seg .cell{min-height:44px}
+  .seg-select{font-size:16px}
+  .terminal-actions{padding:8px 12px}
+  .terminal-actions span{flex-basis:100%;min-width:0}
+  .term-bar, .term-status{padding-inline:12px}
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1783,10 +1783,6 @@ onBeforeUnmount(() => {
     animation: none;
   }
 }
-</style>
-
-<style scoped>
-.top{height:auto;min-height:58px;flex-wrap:wrap;padding-block:8px}.seg{max-width:100%;overflow:auto}.seg .v{max-width:40vw;overflow:hidden;text-overflow:ellipsis}.term-status{flex-wrap:wrap;gap:6px;min-height:36px;height:auto}.main{min-height:0}
 @media(min-width:900px){.top{flex-wrap:nowrap}.terminal-actions span{margin-left:8px}}
 @media(prefers-reduced-motion:reduce){.live .dot{animation:none}}
 </style>

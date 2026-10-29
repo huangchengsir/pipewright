@@ -376,9 +376,9 @@ function maskFor(row: VarRow): string {
   border: 1px solid var(--color-border-strong);
   background: var(--color-inset);
   color: var(--color-text);
-  border-radius: 8px;
+  border-radius: 6px;
   padding: 0 10px;
-  font-size: 0.79rem;
+  font-size: 13px;
   width: 100%;
 }
 .vk:focus, .vv:focus, .vsel:focus { outline: none; border-color: var(--color-primary); box-shadow: 0 0 0 3px var(--color-primary-soft); }
@@ -420,11 +420,11 @@ function maskFor(row: VarRow): string {
 .addrow { display: flex; gap: 8px; padding: 12px 18px; flex-wrap: wrap; }
 .addbtn {
   display: inline-flex; align-items: center; gap: 6px;
-  font-size: 0.79rem; font-weight: 500;
+  font-size: 13px; font-weight: 500;
   color: var(--color-primary);
   background: transparent;
   border: 1px dashed var(--color-border-strong);
-  border-radius: 8px;
+  border-radius: 6px;
   padding: 7px 12px;
   cursor: pointer;
   font-family: var(--font-sans);
@@ -437,9 +437,9 @@ function maskFor(row: VarRow): string {
 /* ─── Cache ──────────────────────────────────────────────────────────────── */
 .cache-toggle { display: flex; align-items: center; gap: 14px; padding: 14px 18px; border-bottom: 1px solid var(--color-border); }
 .sw {
-  width: 40px; height: 23px;
+  width: 44px; height: 34px;
   border-radius: 100px;
-  background: var(--color-primary);
+  background: transparent;
   position: relative;
   cursor: pointer;
   flex: none;
@@ -447,9 +447,23 @@ function maskFor(row: VarRow): string {
   padding: 0;
   transition: background-color var(--duration-fast);
 }
-.sw-knob { position: absolute; top: 2.5px; left: 19px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: left var(--duration-fast); }
-.sw--off { background: var(--color-border-strong); }
-.sw--off .sw-knob { left: 2.5px; }
+.sw::before {
+  content: '';
+  position: absolute;
+  width: 40px;
+  height: 23px;
+  left: calc(50% - 20px);
+  top: calc(50% - 11.5px);
+  border-radius: 999px;
+  background: var(--color-primary);
+  transition: inherit;
+  pointer-events: none;
+}
+.sw-knob { position: absolute; top: calc(50% - 9px); left: 21px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: left var(--duration-fast); }
+.sw--off::before {
+  background: var(--color-border-strong);
+}
+.sw--off .sw-knob { left: 4.5px; }
 .sw:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 .cache-tx b { font-size: 0.83rem; font-weight: 500; }
 .cache-tx span { display: block; font-size: 0.73rem; color: var(--color-faint); margin-top: 2px; }
@@ -457,4 +471,25 @@ function maskFor(row: VarRow): string {
 .cache-paths { padding: 14px 18px; transition: opacity var(--duration-fast); }
 .cache-paths--off { opacity: 0.5; }
 .cache-area { height: auto; padding: 8px 11px; line-height: 1.6; resize: vertical; }
+@media (max-width: 640px) {
+
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+    min-height: 44px;
+    font-size: 16px;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+
+  button {
+    min-height: 44px;
+  }
+
+  .vrow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .vdel {
+    min-width: 44px;
+  }
+}
 </style>

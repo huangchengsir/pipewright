@@ -6,6 +6,11 @@ import AppShell from './AppShell.vue'
 import productRouter from '../router'
 
 describe('explicit report navigation ownership', () => {
+  it.each(['mcp-config-review', 'mcp-config-maintenance'])('declares settings ownership for %s without changing its URL', name => {
+    const record = productRouter.getRoutes().find(item => item.name === name)!
+    expect(record.path).toBe(name === 'mcp-config-review' ? '/mcp/config-drafts/:id/review' : '/mcp/config-maintenance')
+    expect(record.meta.navSection).toBe('settings')
+  })
   it('declares runs ownership on the unchanged product report URL', () => {
     const record = productRouter
       .getRoutes()
@@ -22,6 +27,8 @@ describe('explicit report navigation ownership', () => {
           component: { template: '<div />' },
           meta: { navSection: 'runs' },
         },
+        { path: '/mcp/config-drafts/:id/review', component: { template: '<div />' }, meta: { navSection: 'settings' } },
+        { path: '/mcp/config-maintenance', component: { template: '<div />' }, meta: { navSection: 'settings' } },
         { path: '/projects/:id', component: { template: '<div />' } },
         {
           path: '/runs/:id',
@@ -53,6 +60,10 @@ describe('explicit report navigation ownership', () => {
     expect(selected()).toEqual(['/settings/notifications'])
     // Preserve the existing visual path fallback while exposing one current page.
     expect(wrapper.findAll('.nav-item--active')).toHaveLength(2)
+    await router.push('/mcp/config-drafts/draft/review')
+    expect(selected()).toEqual(['/settings'])
+    await router.push('/mcp/config-maintenance')
+    expect(selected()).toEqual(['/settings'])
     await router.push('/settings/ai')
     expect(selected()).toEqual(['/settings'])
     wrapper.unmount()

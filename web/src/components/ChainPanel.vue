@@ -358,16 +358,17 @@ watch(() => props.projectId, load)
 <style scoped>
 .config-card {
   border: 1px solid var(--color-border);
-  border-radius: var(--rounded-lg, 12px);
+  border-radius: 8px;
   background: var(--color-card);
   overflow: hidden;
 }
 .card-head {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   padding: 14px 16px;
   border-bottom: 1px solid var(--color-border);
+  flex-wrap: wrap;
 }
 .card-icon {
   display: grid;
@@ -379,7 +380,7 @@ watch(() => props.projectId, load)
   color: var(--color-primary);
   flex: none;
 }
-.card-title { font-size: 0.92rem; font-weight: 650; color: var(--color-text); }
+.card-title { font-size: 14px; font-weight: 650; color: var(--color-text); }
 .card-sub { font-size: 0.76rem; color: var(--color-faint); flex: 1; min-width: 0; }
 
 .card-body { display: flex; flex-direction: column; }
@@ -478,22 +479,37 @@ watch(() => props.projectId, load)
 /* ─── Enabled toggle ──────────────────────────────────────────────────────── */
 .chain-toggle {
   position: relative;
-  width: 34px;
-  height: 19px;
+  width: 44px;
+  height: 34px;
   border-radius: 10px;
-  background: var(--color-border-strong);
+  background: transparent;
   border: none;
   cursor: pointer;
   flex: none;
   transition: background-color var(--duration-fast);
+  padding: 0;
 }
-.chain-toggle--on { background: var(--color-primary); }
+.chain-toggle::before {
+  content: '';
+  position: absolute;
+  width: 34px;
+  height: 19px;
+  left: calc(50% - 17px);
+  top: calc(50% - 9.5px);
+  border-radius: 999px;
+  background: var(--color-border-strong);
+  transition: inherit;
+  pointer-events: none;
+}
+.chain-toggle--on::before {
+  background: var(--color-primary);
+}
 .chain-toggle:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 .chain-toggle:disabled { opacity: 0.45; cursor: not-allowed; }
 .chain-toggle-knob {
   position: absolute;
-  top: 2px;
-  left: 2px;
+  top: calc(50% - 7.5px);
+  left: 7px;
   width: 15px;
   height: 15px;
   border-radius: 50%;
@@ -503,7 +519,6 @@ watch(() => props.projectId, load)
   pointer-events: none;
 }
 .chain-toggle--on .chain-toggle-knob { transform: translateX(15px); }
-@media (prefers-reduced-motion: reduce) { .chain-toggle, .chain-toggle-knob { transition: none; } }
 .chain-toggle-label { font-size: 0.75rem; font-weight: 600; color: var(--color-dim); }
 
 /* ─── Delete button ───────────────────────────────────────────────────────── */
@@ -603,7 +618,7 @@ watch(() => props.projectId, load)
   font-weight: 600;
   border-radius: var(--rounded);
   cursor: pointer;
-  box-shadow: 0 5px 16px var(--color-primary-soft);
+  box-shadow: none;
   transition: background-color var(--duration-fast), transform var(--duration-fast);
   white-space: nowrap;
 }
@@ -621,5 +636,26 @@ watch(() => props.projectId, load)
   flex-shrink: 0;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .spinner { animation: none; border-top-color: currentColor; } }
+@media (max-width: 640px) {
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+    min-height: 44px;
+    font-size: 16px;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+  button {
+    min-height: 44px;
+    white-space: normal;
+  }
+  .chain-header {
+    display: none;
+  }
+  .chain-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .row-del-btn {
+    min-width: 44px;
+  }
+}
+@media (prefers-reduced-motion: reduce) { .chain-toggle, .chain-toggle-knob { transition: none; } .spinner { animation: none; border-top-color: currentColor; } }
 </style>

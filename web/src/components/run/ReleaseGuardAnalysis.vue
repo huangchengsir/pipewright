@@ -343,7 +343,7 @@ onBeforeUnmount(() => {
         t('common.refresh')
       }}</AppButton>
     </header>
-    <p class="guard-analysis-notice">
+    <p class="guard-analysis-muted">
       {{ t('releaseGuardAnalysis.defaultOff') }}
     </p>
     <div class="guard-analysis-scope">
@@ -686,7 +686,7 @@ a {
     margin: 0;
   }
 }
-@media (max-width: 900px) {
+@media (max-width: 639px) {
   header {
     flex-wrap: wrap;
   }
@@ -712,6 +712,30 @@ a {
   .guard-analysis :deep(.app-btn) {
     max-width: 100%;
     word-break: keep-all;
+  }
+}
+@media (min-width: 640px) {
+  :is(h3, h4) {
+    font-size: 14px;
+  }
+  :is(p, label, select, li) {
+    font-size: 13px;
+  }
+  :is(summary, label, select, a) {
+    min-height: 34px;
+  }
+  .guard-analysis :deep(.app-btn) {
+    min-height: 34px;
+    height: auto;
+    padding-block: 6px;
+    font-size: 13px;
+    white-space: normal;
+  }
+}
+@media (max-width: 639px) {
+  :is(input:not([type='checkbox']):not([type='radio']), select, textarea) {
+    font-size: 16px;
+    min-height: 44px;
   }
 }
 </style>

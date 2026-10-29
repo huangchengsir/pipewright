@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import MCPClientConfig from './MCPClientConfig.vue'
 
 const endpoint = 'http://127.0.0.1:18090/mcp'
 
 describe('MCP client configurations', () => {
-  it('shows both clients by default with their distinct file formats', () => {
+  it('selects one client at a time while retaining both exact file formats', () => {
     const w = mount(MCPClientConfig, { props: { endpoint } })
     expect(w.get('details').attributes('open')).toBeDefined()
+    expect(w.get('[data-client-tab="codex"]').attributes('aria-selected')).toBe('true')
+    expect(w.get('[data-client="codex"]').attributes('hidden')).toBeUndefined()
+    expect(w.get('[data-client="claude"]').attributes('hidden')).toBeDefined()
+    const codex = w.get('[data-client="codex"] pre').text()
+    expect(codex.split(String.fromCharCode(10))).toHaveLength(3)
+    expect(codex).not.toContain(String.fromCharCode(92) + 'n')
     expect(w.get('[data-client="claude"]').text()).toContain('.mcp.json')
     expect(w.get('[data-client="codex"]').text()).toContain('~/.codex/config.toml')
     expect(JSON.parse(w.get('[data-client="claude"] pre').text())).toEqual({
@@ -21,11 +27,37 @@ describe('MCP client configurations', () => {
 
   it.each(['claude', 'codex'])('copies only the %s configuration', async (client) => {
     const w = mount(MCPClientConfig, { props: { endpoint } })
+    await w.get(`[data-client-tab="${client}"]`).trigger('click')
     const panel = w.get(`[data-client="${client}"]`)
+    expect(panel.attributes('hidden')).toBeUndefined()
     const config = panel.get('pre').text()
     expect(panel.get('button').attributes('aria-label')).toContain(client === 'claude' ? 'Claude Code' : 'Codex')
     await panel.get('button').trigger('click')
     expect(w.emitted('copy')).toEqual([[config]])
+    w.unmount()
+  })
+
+
+  it('links tabs and panels and supports roving focus with arrows, Home and End', async () => {
+    const w = mount(MCPClientConfig, { props: { endpoint }, attachTo: document.body })
+    const codex = w.get('[data-client-tab="codex"]')
+    const claude = w.get('[data-client-tab="claude"]')
+    for (const tab of [codex, claude]) {
+      const panel = w.get(`#${tab.attributes('aria-controls')}`)
+      expect(panel.attributes('aria-labelledby')).toBe(tab.attributes('id'))
+    }
+    await codex.trigger('keydown', { key: 'ArrowRight' }); await flushPromises()
+    expect(document.activeElement).toBe(claude.element)
+    expect(claude.attributes('aria-selected')).toBe('true')
+    expect(codex.attributes('tabindex')).toBe('-1')
+    await claude.trigger('keydown', { key: 'ArrowRight' }); await flushPromises()
+    expect(codex.attributes('aria-selected')).toBe('true')
+    await codex.trigger('keydown', { key: 'End' }); await flushPromises()
+    expect(claude.attributes('aria-selected')).toBe('true')
+    await claude.trigger('keydown', { key: 'Home' }); await flushPromises()
+    expect(codex.attributes('aria-selected')).toBe('true')
+    await codex.trigger('keydown', { key: 'ArrowLeft' }); await flushPromises()
+    expect(claude.attributes('aria-selected')).toBe('true')
     w.unmount()
   })
 

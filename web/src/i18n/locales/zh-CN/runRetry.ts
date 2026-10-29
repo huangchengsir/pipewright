@@ -19,7 +19,7 @@ export default {
   "retryAll": "查看所有失败节点的计划",
   "viewRecovery": "查看恢复信息",
   "legacyGraph": "历史步骤视图：未获取当时的完整拓扑，不据此判断恢复范围。",
-  "legacyUnavailable": "尚无可用的原始恢复证据。请补齐所需输入；修改配置或源码后，应创建新的完整运行。",
+  "legacyUnavailable": "暂时无法核验此运行的节点重试条件。",
   "attempt": "第 {n} 次尝试",
   "fromRun": "来自运行 {id}",
   "latestAttempt": "查看最新尝试",

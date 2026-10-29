@@ -21,7 +21,7 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-height: 36px;
+  min-height: 34px;
   border: 1px solid var(--color-border-strong);
   border-radius: 6px;
   padding: 6px 10px;
@@ -43,13 +43,13 @@
   outline-offset: 2px;
 }
 .ops-btn svg {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   flex: none;
 }
 .ops-icon {
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
   padding: 0;
   flex: none;
 }
@@ -81,7 +81,7 @@
   background: var(--color-inset);
   color: var(--color-text);
   font: inherit;
-  padding: 9px 10px;
+  padding: 8px 10px;
 }
 .ops-input::placeholder {
   color: var(--color-dim);
@@ -89,7 +89,7 @@
 }
 .ops-section {
   border-bottom: 1px solid var(--color-border);
-  padding: 12px 16px;
+  padding: 10px 14px;
   min-width: 0;
 }
 .ops-pre {
@@ -125,5 +125,9 @@
   }
   .ops-section {
     padding: 10px 12px;
+  }
+  .ops-input {
+    font-size: 16px;
+    min-height: 44px;
   }
 }

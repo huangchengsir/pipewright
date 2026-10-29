@@ -823,7 +823,7 @@ function configSummary(ch: NotificationChannel): string {
 </script>
 
 <template>
-  <div class="nt-root">
+  <div class="nt-root settings-page">
     <!-- ─── section header ──────────────────────────────────────────────────── -->
     <div class="section-head">
       <div class="section-head-text">
@@ -1735,7 +1735,7 @@ function configSummary(ch: NotificationChannel): string {
 .nt-root {
   display: flex;
   flex-direction: column;
-  gap: var(--card-gap);
+  gap: var(--settings-page-gap);
 }
 
 /* ─── notification language ───────────────────────────────────────────────── */
@@ -1770,8 +1770,10 @@ function configSummary(ch: NotificationChannel): string {
   background: var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-sans);
-  font-size: var(--text-body);
+  font-size: var(--settings-text-size);
   cursor: pointer;
+
+  min-height: var(--settings-control-height);
 }
 .nt-lang-select:focus-visible {
   outline: 2px solid var(--color-primary);
@@ -1788,14 +1790,14 @@ function configSummary(ch: NotificationChannel): string {
 .section-head-text { flex: 1; }
 
 .section-title {
-  font-size: 1.12rem;
+  font-size: var(--settings-title-size);
   font-weight: 600;
   letter-spacing: -0.01em;
   color: var(--color-text);
 }
 
 .section-desc {
-  font-size: 0.82rem;
+  font-size: var(--settings-text-size);
   color: var(--color-faint);
   margin-top: 4px;
   max-width: 70ch;
@@ -1840,7 +1842,7 @@ function configSummary(ch: NotificationChannel): string {
   background: var(--color-card);
   border: 1px solid var(--color-border);
   border-radius: var(--rounded-card);
-  box-shadow: var(--shadow);
+  box-shadow: none;
   overflow: hidden;
 }
 
@@ -1857,7 +1859,7 @@ function configSummary(ch: NotificationChannel): string {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 13px 18px;
+  padding: var(--settings-panel-header);
   border-bottom: 1px solid var(--color-border);
   font-size: 0.86rem;
   font-weight: 600;
@@ -1887,11 +1889,16 @@ function configSummary(ch: NotificationChannel): string {
   padding: 4px;
   border-radius: var(--rounded-sm);
   transition: color var(--duration-fast), background-color var(--duration-fast);
+
+  min-height: var(--settings-action-height);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .editor-close:hover { color: var(--color-text); background: var(--color-inset); }
 
-.panel-body { padding: 18px; }
+.panel-body { padding: var(--settings-panel-padding); }
 
 /* ─── skeleton ────────────────────────────────────────────────────────────── */
 .skel-body {
@@ -1920,7 +1927,7 @@ function configSummary(ch: NotificationChannel): string {
 .config-form {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: var(--settings-form-gap);
 }
 
 .config-grid {
@@ -1931,7 +1938,7 @@ function configSummary(ch: NotificationChannel): string {
 
 .field-label {
   display: block;
-  font-size: 0.78rem;
+  font-size: var(--settings-label-size);
   font-weight: 500;
   color: var(--color-dim);
   margin-bottom: 8px;
@@ -2018,14 +2025,14 @@ function configSummary(ch: NotificationChannel): string {
 /* ─── field input ─────────────────────────────────────────────────────────── */
 .field-input {
   width: 100%;
-  height: 38px;
+  height: var(--settings-control-height);
   background: var(--color-inset);
   border: 1px solid var(--color-border);
   border-radius: var(--rounded);
   padding: 0 12px;
   color: var(--color-text);
   font-family: var(--font-sans);
-  font-size: 0.86rem;
+  font-size: var(--settings-text-size);
   transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
 }
 
@@ -2071,25 +2078,41 @@ function configSummary(ch: NotificationChannel): string {
 
 .toggle-track {
   position: relative;
-  width: 40px;
-  height: 22px;
+  width: 44px;
+  height: 34px;
   border-radius: var(--rounded-full);
-  background: var(--color-border-strong);
+  background: transparent;
   border: none;
   cursor: pointer;
   flex-shrink: 0;
   margin-top: 2px;
   transition: background-color var(--duration-normal);
+  padding: 0;
+}
+
+.toggle-track::before {
+  content: '';
+  position: absolute;
+  width: 40px;
+  height: 22px;
+  left: calc(50% - 20px);
+  top: calc(50% - 11px);
+  border-radius: 999px;
+  background: var(--color-border-strong);
+  transition: inherit;
+  pointer-events: none;
 }
 
 .toggle-track:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 .toggle-track:disabled { opacity: 0.4; cursor: not-allowed; }
-.toggle-track--on { background: var(--color-primary); }
+.toggle-track--on::before {
+  background: var(--color-primary);
+}
 
 .toggle-thumb {
   position: absolute;
-  top: 3px;
-  left: 3px;
+  top: calc(50% - 8px);
+  left: 5px;
   width: 16px;
   height: 16px;
   border-radius: var(--rounded-full);
@@ -2136,7 +2159,7 @@ function configSummary(ch: NotificationChannel): string {
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  padding: 48px 24px;
+  padding: var(--settings-empty-padding);
   text-align: center;
   background: var(--color-card);
   border: 1px dashed var(--color-border-strong);
@@ -2187,7 +2210,7 @@ function configSummary(ch: NotificationChannel): string {
   background: var(--color-card);
   border: 1px solid var(--color-border);
   border-radius: var(--rounded-card);
-  box-shadow: var(--shadow);
+  box-shadow: none;
   transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
 }
 
@@ -2377,7 +2400,7 @@ function configSummary(ch: NotificationChannel): string {
   background: var(--color-card);
   border: 1px solid var(--color-border);
   border-radius: var(--rounded-card);
-  box-shadow: var(--shadow);
+  box-shadow: none;
   transition: border-color var(--duration-fast);
 }
 

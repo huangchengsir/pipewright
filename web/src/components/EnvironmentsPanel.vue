@@ -622,7 +622,6 @@ onMounted(loadEnvironments)
   0%   { background-position: 200% center; }
   100% { background-position: -200% center; }
 }
-@media (prefers-reduced-motion: reduce) { .ep-skel { animation: none; background: var(--color-inset); } }
 .ep-skel--title { height: 16px; width: 38%; }
 .ep-skel--row   { height: 40px; width: 100%; }
 
@@ -639,14 +638,14 @@ onMounted(loadEnvironments)
   from { opacity: 0; transform: translateY(13px); }
   to   { opacity: 1; transform: none; }
 }
-@media (prefers-reduced-motion: reduce) { .config-card { animation: none; } }
 
 .card-head {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 14px 18px;
+  gap: 8px;
+  padding: 13px 16px;
   border-bottom: 1px solid var(--color-border);
+  flex-wrap: wrap;
 }
 .card-icon {
   width: 22px;
@@ -659,7 +658,7 @@ onMounted(loadEnvironments)
   flex-shrink: 0;
 }
 .card-title {
-  font-size: 0.88rem;
+  font-size: 14px;
   font-weight: 600;
   color: var(--color-text);
 }
@@ -811,20 +810,35 @@ onMounted(loadEnvironments)
 /* Gated toggle */
 .gate-toggle {
   position: relative;
-  width: 34px;
-  height: 18px;
+  width: 44px;
+  height: 34px;
   border-radius: var(--rounded-full);
-  background: var(--color-border-strong);
+  background: transparent;
   border: none;
   cursor: pointer;
   flex-shrink: 0;
   transition: background-color var(--duration-fast);
+  padding: 0;
 }
-.gate-toggle--on { background: var(--color-amber); }
+.gate-toggle::before {
+  content: '';
+  position: absolute;
+  width: 34px;
+  height: 18px;
+  left: calc(50% - 17px);
+  top: calc(50% - 9px);
+  border-radius: 999px;
+  background: var(--color-border-strong);
+  transition: inherit;
+  pointer-events: none;
+}
+.gate-toggle--on::before {
+  background: var(--color-amber);
+}
 .gate-toggle-knob {
   position: absolute;
-  top: 2px;
-  left: 2px;
+  top: calc(50% - 7px);
+  left: 7px;
   width: 14px;
   height: 14px;
   border-radius: var(--rounded-full);
@@ -834,7 +848,6 @@ onMounted(loadEnvironments)
   box-shadow: 0 1px 3px oklch(0% 0 0 / 0.3);
 }
 .gate-toggle--on .gate-toggle-knob { transform: translateX(16px); }
-@media (prefers-reduced-motion: reduce) { .gate-toggle, .gate-toggle-knob { transition: none; } }
 .gate-label { font-size: 0.75rem; color: var(--color-dim); white-space: nowrap; }
 
 /* Vars toggle button */
@@ -1061,7 +1074,7 @@ onMounted(loadEnvironments)
   font-weight: 600;
   border-radius: var(--rounded);
   cursor: pointer;
-  box-shadow: 0 5px 16px var(--color-primary-soft);
+  box-shadow: none;
   transition: background-color var(--duration-fast), transform var(--duration-fast);
   white-space: nowrap;
 }
@@ -1079,7 +1092,33 @@ onMounted(loadEnvironments)
   flex-shrink: 0;
 }
 @keyframes ep-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .ep-spinner { animation: none; border-top-color: currentColor; } }
 
 .mono { font-family: var(--font-mono); }
+
+@media (max-width: 640px) {
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+    min-height: 44px;
+    font-size: 16px;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+  button {
+    min-height: 44px;
+    white-space: normal;
+  }
+  .chain-table-head {
+    display: none;
+  }
+  .chain-row-main {
+    grid-template-columns: 32px minmax(0, 1fr);
+    gap: 10px;
+  }
+  .chain-row-main > :not(:first-child) {
+    grid-column: 2;
+  }
+  .var-row {
+    flex-wrap: wrap;
+  }
+}
+@media (prefers-reduced-motion: reduce) { .ep-skel { animation: none; background: var(--color-inset); } .config-card { animation: none; } .gate-toggle, .gate-toggle-knob { transition: none; } .ep-spinner { animation: none; border-top-color: currentColor; } }
 </style>

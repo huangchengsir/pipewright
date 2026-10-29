@@ -4,7 +4,7 @@ import { flushPromises, mount, RouterLinkStub } from '@vue/test-utils'
 import RunRetryPanel from './RunRetryPanel.vue'
 import type { useRunRetry } from '../../composables/useRunRetry'
 import { retryContext, retryNode, retryPlan, retryRequest } from '../../test/runRetryFixtures'
-import { i18n, setLocale } from '../../i18n'
+import { i18n, setLocale, SUPPORTED_LOCALES } from '../../i18n'
 function state() {
   const context = ref(retryContext()); const plan = ref(retryPlan({ rebuildGroups: [{ nodeIds: ['a'], consumerIds: ['b'], reasonCode: 'workspace_rebuild_required' }], warnings: [{ code: 'side_effect_reexecute', nodeKey: 'c' }] }))
   const value = { context, plan, contextError: ref(''), error: ref(''), planLoading: ref(false), submitting: ref(false), querying: ref(false), reconciling: ref(false), pending: ref(null), request: ref(null), attempts: ref({ page: 1, total: 1, items: [{ runId: 'root', revision: 1, status: 'failed', executionKind: 'original', outcomeUnknown: false, createdAt: '' }] }), failedNodes: computed(() => context.value.nodes.filter(n => n.decision.status === 'failed')), isHead: ref(true), rebuild: ref<string[]>([]), reconcileReasons: ref([]), preview: vi.fn(), openPlan: vi.fn(), queryOriginal: vi.fn(), reconcile: vi.fn(), submit: vi.fn().mockResolvedValue(retryRequest()), setHistoryPage: vi.fn() }
@@ -177,5 +177,47 @@ describe('precise node terminal logs and retained recovery interactions', () => 
     expect(wrapper.get('.retry-closed-error').text()).toContain(i18n.global.t('runRetry.reasons.retry_not_found'))
     expect(s.submit).not.toHaveBeenCalled(); expect(s.openPlan).not.toHaveBeenCalled()
     wrapper.unmount()
+  })
+})
+
+
+describe('legacy log feedback separation', () => {
+  it.each(['unauthorized', 'csrf_invalid', 'retry_connection_unknown', 'retry_unavailable', 'retry_maintenance'])('keeps actionable %s context errors visible in log mode without recommending replay', async code => {
+    const s = state(); s.failedNodes = computed(() => []); s.context.value = null; s.contextError.value = code
+    const wrapper = mount(RunRetryPanel, { props: { state: s }, global: { stubs: { RouterLink: RouterLinkStub, Teleport: true } } })
+    await (wrapper.vm as unknown as { showLogs: (key: string) => Promise<void> }).showLogs('step'); await flushPromises()
+    expect(wrapper.get('.retry-unavailable [role=alert]').text()).toBe(i18n.global.t(`runRetry.reasons.${code}`))
+    expect(wrapper.text()).not.toContain(i18n.global.t('runRetry.legacyUnavailable'))
+    expect(s.submit).not.toHaveBeenCalled(); expect(s.openPlan).not.toHaveBeenCalled(); wrapper.unmount()
+  })
+  it('keeps a canonical evidence-unavailable response quiet only in ordinary logs', async () => {
+    const s = state(); s.failedNodes = computed(() => []); s.context.value = null; s.contextError.value = 'retry_evidence_unavailable'
+    const wrapper = mount(RunRetryPanel, { props: { state: s }, global: { stubs: { RouterLink: RouterLinkStub, Teleport: true } } })
+    const vm = wrapper.vm as unknown as { showLogs: (key: string) => Promise<void>; show: () => Promise<void> }
+    await vm.showLogs('step'); await flushPromises(); expect(wrapper.find('.retry-unavailable').exists()).toBe(false)
+    await vm.show(); await flushPromises(); expect(wrapper.get('.retry-unavailable').text()).toContain(i18n.global.t('runRetry.reasons.retry_evidence_unavailable'))
+    expect(s.submit).not.toHaveBeenCalled(); wrapper.unmount()
+  })
+  it('keeps ordinary legacy node logs clear and retains the recovery explanation outside logs', async () => {
+    const s = state(); s.failedNodes = computed(() => []); s.context.value = null; s.contextError.value = 'manifest_missing'
+    const wrapper = mount(RunRetryPanel, { props: { state: s, runId: 'root', steps: [{ id: 'old-step', name: 'checkout', status: 'success', startedAt: null, finishedAt: null, durationMs: null }] }, global: { stubs: { RunTerminal: { template: '<div class="legacy-output">checked out</div>' }, RouterLink: RouterLinkStub, Teleport: true } } })
+    const vm = wrapper.vm as unknown as { showLogs: (key: string) => Promise<void>; show: (key?: string) => Promise<void> }
+    await vm.showLogs('old-step'); await flushPromises()
+    expect(wrapper.get('.legacy-output').text()).toBe('checked out')
+    expect(wrapper.find('.retry-unavailable').exists()).toBe(false); expect(wrapper.find('.retry-warning').exists()).toBe(false)
+    await vm.show(); await flushPromises()
+    expect(wrapper.get('.retry-unavailable details').attributes('open')).toBeUndefined()
+    expect(wrapper.get('.retry-unavailable').text()).toContain(i18n.global.t('runRetry.reasons.manifest_missing'))
+    for (const { code } of SUPPORTED_LOCALES) { setLocale(code); await flushPromises(); expect(wrapper.get('.retry-unavailable').text()).not.toContain('runRetry.'); expect(wrapper.get('.retry-unavailable').text()).toContain(i18n.global.t('runRetry.legacyUnavailable')) }
+    expect(s.submit).not.toHaveBeenCalled(); expect(s.openPlan).not.toHaveBeenCalled(); wrapper.unmount()
+  })
+  it('retains unresolved requests and real operation errors even when recovery context is absent', async () => {
+    const s = state(); s.failedNodes = computed(() => []); s.context.value = null; s.contextError.value = 'manifest_missing'; s.error.value = 'retry_conflict'; s.pending.value = { runId: 'root', requestId: 'original' }
+    const wrapper = mount(RunRetryPanel, { props: { state: s }, global: { stubs: { RouterLink: RouterLinkStub, Teleport: true } } })
+    await (wrapper.vm as unknown as { showLogs: (key: string) => Promise<void> }).showLogs('missing'); await flushPromises()
+    expect(wrapper.find('.retry-unavailable').exists()).toBe(false)
+    expect(wrapper.get('[role="alert"]').text()).toContain(i18n.global.t('runRetry.reasons.retry_conflict'))
+    expect(wrapper.text()).toContain(i18n.global.t('runRetry.queryOriginal')); expect(s.pending.value?.requestId).toBe('original')
+    expect(s.submit).not.toHaveBeenCalled(); wrapper.unmount()
   })
 })

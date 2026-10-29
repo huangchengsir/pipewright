@@ -19,7 +19,7 @@ export default {
   "retryAll": "すべての失敗ノードを計画",
   "viewRecovery": "復旧情報を表示",
   "legacyGraph": "履歴の手順です。当時の完全な構成がないため、復旧範囲は判断できません。",
-  "legacyUnavailable": "元の復旧証拠がありません。必要な入力を補うか、コードや設定の変更後に新規実行してください。",
+  "legacyUnavailable": "この実行ではノード再試行の条件を確認できませんでした。",
   "attempt": "試行 {n}",
   "fromRun": "実行 {id} から",
   "latestAttempt": "最新の試行を表示",

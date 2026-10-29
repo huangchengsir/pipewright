@@ -1,4 +1,6 @@
 export default {
+  "taskHistory": "最近升级",
+  "upgradeSteps": {"download": "下载", "verify": "校验", "install": "安装", "restart": "重启"},
   "taskTargetChanged": "程序文件已被其他操作更改，本次安装已停止。请核对当前版本后重新检查更新。",
   "taskReadinessUnavailable": "暂时无法确认安装条件。现有工作继续，请刷新状态后明确继续。",
 

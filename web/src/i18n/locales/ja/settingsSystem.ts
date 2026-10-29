@@ -1,4 +1,6 @@
 export default {
+  "taskHistory": "最近のアップグレード",
+  "upgradeSteps": {"download": "ダウンロード", "verify": "検証", "install": "インストール", "restart": "再起動"},
   "taskTargetChanged": "実行ファイルが他の操作で変更されたため、インストールを停止しました。現在のバージョンを確認してから更新を再確認してください。",
   "taskReadinessUnavailable": "インストール条件を確認できません。既存の処理は継続します。状態を更新し、明示的に続行してください。",
 

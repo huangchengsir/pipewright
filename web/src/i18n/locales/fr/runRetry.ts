@@ -19,7 +19,7 @@ export default {
   "retryAll": "Planifier tous les nœuds en échec",
   "viewRecovery": "Voir la reprise",
   "legacyGraph": "Étapes historiques : la topologie initiale complète manque et ne permet pas de déterminer la reprise.",
-  "legacyUnavailable": "Les preuves initiales manquent. Fournissez les entrées requises ou lancez une nouvelle exécution complète après modification.",
+  "legacyUnavailable": "Les conditions de relance des nœuds n’ont pas pu être vérifiées pour cette exécution.",
   "attempt": "Tentative {n}",
   "fromRun": "Depuis l’exécution {id}",
   "latestAttempt": "Voir la dernière tentative",

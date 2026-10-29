@@ -19,7 +19,7 @@ export default {
   "retryAll": "Alle fehlgeschlagenen Knoten planen",
   "viewRecovery": "Wiederaufnahme anzeigen",
   "legacyGraph": "Historische Schritte: Die ursprüngliche vollständige Topologie fehlt. Daraus lässt sich kein Wiederaufnahmeumfang ableiten.",
-  "legacyUnavailable": "Ursprüngliche Nachweise fehlen. Ergänzen Sie die Eingaben oder starten Sie nach Code- oder Konfigurationsänderungen einen vollständigen neuen Lauf.",
+  "legacyUnavailable": "Die Voraussetzungen für die Knotenwiederholung konnten für diesen Lauf nicht geprüft werden.",
   "attempt": "Versuch {n}",
   "fromRun": "Aus Lauf {id}",
   "latestAttempt": "Letzten Versuch anzeigen",

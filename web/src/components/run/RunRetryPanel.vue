@@ -11,6 +11,7 @@ const props = defineProps<{ state: ReturnType<typeof useRunRetry>; sourceRunId?:
 const emit = defineEmits<{ accepted: [runId: string]; fullLogs: [] }>()
 const { t, te } = useI18n()
 const { context, contextError, plan, error, planLoading, submitting, querying, reconciling, pending, request, attempts, failedNodes, isHead, selected, rebuild, reconcileReasons } = props.state
+const evidenceUnavailable = computed(() => ['manifest_missing', 'snapshot_unavailable', 'retry_evidence_unavailable'].includes(contextError.value))
 const open = ref(false)
 const mode = ref<'details' | 'plan' | 'history' | 'logs'>('details')
 const nodeKey = ref<string>()
@@ -185,7 +186,11 @@ async function confirmPlan() { const result = await props.state.submit(); if (re
       <p v-if="mode === 'history'" class="retry-muted">{{ t('runRetry.historyNote') }}</p>
       <p v-if="mode === 'history' && !attempts?.items.length" class="retry-muted">{{ t('runRetry.none') }}</p>
       <AppButton v-if="mode !== 'history' && mode !== 'logs' && !focusedNode && failedNodes.length" class="retry-all" :disabled="!!pending || submitting" @click="retryAll">{{ t('runRetry.retryAll') }}</AppButton>
-      <p v-if="!context && contextError" class="retry-warning">{{ t('runRetry.legacyUnavailable') }} {{ reason(contextError) }}</p>
+      <div v-if="!context && contextError && (mode !== 'logs' || !evidenceUnavailable)" class="retry-unavailable">
+        <p v-if="evidenceUnavailable">{{ t('runRetry.legacyUnavailable') }}</p>
+        <p v-else role="alert">{{ reason(contextError) }}</p>
+        <details v-if="evidenceUnavailable"><summary>{{ t('runRetry.technical') }}</summary><p>{{ reason(contextError) }}</p></details>
+      </div>
       <div v-if="context && mode === 'plan'" class="retry-source">
         <span>{{ t('runRetry.frozenSource') }}</span><code>{{ context.commitSha || t('runRetry.unboundSource') }}</code>
         <span>{{ t('runRetry.revision', { n: context.revision }) }}</span>
@@ -253,59 +258,389 @@ async function confirmPlan() { const result = await props.state.submit(); if (re
 </template>
 
 <style scoped>
-.retry-overlay { position: fixed; inset: 0; z-index: 8000; display: grid; place-items: center; padding: 16px; background: rgb(0 0 0 / 55%); }
-.retry-panel { box-sizing: border-box; width: min(640px, 100%); max-height: calc(100dvh - 32px); overflow: auto; overscroll-behavior: contain; padding: 20px; border: 1px solid var(--color-border-strong); border-radius: var(--rounded); background: var(--color-card); color: var(--color-text); font-family: var(--font-sans); font-size: 16px; min-width: 0; box-shadow: var(--shadow-modal); overflow-wrap: anywhere; }
-.retry-panel--plan { width: min(960px, 100%); }
-.retry-panel--logs { width: min(900px, 100%); }
-.retry-panel--history { width: min(560px, 100%); }
-.retry-panel h2 { font-size: 20px; margin: 0; letter-spacing: -.02em; line-height: 1.4; }
-.retry-panel h3, .retry-panel legend { font-size: 16px; font-weight: 600; margin: 0 0 12px; }
-.retry-panel p { margin: 8px 0; line-height: 1.6; }
-.retry-header, .retry-actions, .retry-request { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.retry-header { align-items: flex-start; }
-.retry-header > div { flex: 1 1 200px; min-width: 0; }
-.retry-panel .retry-eyebrow { color: var(--color-dim); font-size: 13px; margin: 0 0 8px; }
-.retry-close { flex: 0 0 auto; }
-.retry-content { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--color-border); }
-.retry-log-view { display: grid; grid-template-columns: minmax(88px, 24%) minmax(0, 1fr); gap: 12px; min-width: 0; }
-.retry-log-tabs { display: flex; flex-direction: column; gap: 4px; min-width: 0; max-height: 62dvh; overflow: auto; padding-right: 4px; border-right: 1px solid var(--color-border); }
-.retry-log-tabs button { display: flex; flex-direction: column; justify-content: center; gap: 4px; min-width: 0; width: 100%; min-height: 52px; padding: 8px; text-align: left; background: transparent; border: 1px solid transparent; border-radius: var(--rounded); font-family: var(--font-sans); font-size: 16px; color: var(--color-text); cursor: pointer; }
-.retry-log-tabs button[aria-selected="true"] { background: var(--color-primary-soft); border-color: var(--color-primary); }
-.retry-log-tabs button:focus-visible, .retry-log-step:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
-.retry-log-tab-name { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.retry-log-tab-status { font-size: 12px; color: var(--color-dim); }
-.retry-log-step { min-width: 0; }
-.retry-log-status strong { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
-.retry-log-status { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
-.retry-log-surface { min-width: 0; }
-.retry-log-surface :deep(.term), .retry-log-surface :deep(.term-scroll) { background: #000; color: #f5f5f5; }
-.retry-log-surface :deep(.term-text), .retry-log-surface :deep(.term-line--err .term-text) { color: #f5f5f5; }
-.retry-log-surface :deep(.term-label), .retry-log-surface :deep(.term-ln), .retry-log-surface :deep(.term-count), .retry-log-surface :deep(.term-state) { color: #bec3cc; }
-.retry-node-evidence summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
-.retry-closed-error { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--color-amber); font-size: 14px; margin-bottom: 16px; }
-.retry-node-detail { padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid var(--color-border); }
-.retry-node-detail > a { margin-right: 16px; }
-.retry-groups { display: grid; gap: 16px; margin: 20px 0; }
-.retry-groups section, .retry-controls { padding: 16px; background: var(--color-card-2); border: 1px solid var(--color-border); border-radius: var(--rounded); min-width: 0; }
-.retry-panel ul { list-style: none; padding: 0; margin: 0; }
-.retry-panel li { padding: 8px 0; overflow-wrap: anywhere; }
-.retry-groups li + li { border-top: 1px solid var(--color-border); }
-.retry-groups strong, .retry-groups .retry-muted { display: block; }
-.retry-muted, .retry-note, .retry-source, .retry-header p { color: var(--color-dim); }
-.retry-panel a, .retry-request-summary a { color: var(--color-primary); display: inline-flex; align-items: center; min-height: 44px; overflow-wrap: anywhere; }
-.retry-panel :deep(.app-btn), .retry-request-summary :deep(.app-btn) { min-height: 44px; max-width: 100%; white-space: normal; height: auto; padding-top: 8px; padding-bottom: 8px; }
-.retry-panel a:focus-visible, .retry-panel input:focus-visible, .retry-panel summary:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; }
-.retry-warning { padding: 12px; color: var(--color-amber); background: var(--color-amber-soft); border-left: 3px solid var(--color-amber); overflow-wrap: anywhere; }
-.retry-panel .retry-warning { padding-left: 12px; }
-.retry-source { display: flex; flex-direction: column; gap: 8px; overflow-wrap: anywhere; }
-.retry-rebuild { border: 1px solid var(--color-border); padding: 16px; margin: 16px 0; border-radius: var(--rounded); min-width: 0; }
-.retry-rebuild label { display: flex; align-items: center; gap: 12px; min-height: 44px; cursor: pointer; line-height: 1.5; }
-.retry-rebuild input { width: 20px; height: 20px; flex-shrink: 0; accent-color: var(--color-primary); }
-.retry-controls, .retry-history, .retry-actions, .retry-technical { margin-top: 16px; }
-.retry-history li { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.retry-technical summary { min-height: 44px; cursor: pointer; display: flex; align-items: center; }
-.retry-technical dd { margin: 8px 0; overflow-wrap: anywhere; }
-.retry-request-summary { margin: 0 0 16px; padding: 8px 12px; border-left: 2px solid var(--color-amber); background: var(--color-card-2); color: var(--color-dim); font-size: 14px; overflow-wrap: anywhere; }
-code { font-family: var(--font-mono); font-size: 13px; overflow-wrap: anywhere; }
-@media (min-width: 900px) { .retry-groups { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.retry-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 8000;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 55%);
+}
+.retry-panel {
+  box-sizing: border-box;
+  width: min(640px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 20px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--rounded);
+  background: var(--color-card);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  min-width: 0;
+  box-shadow: var(--shadow-modal);
+  overflow-wrap: anywhere;
+}
+.retry-panel--plan {
+  width: min(960px, 100%);
+}
+.retry-panel--logs {
+  width: min(900px, 100%);
+}
+.retry-panel--history {
+  width: min(560px, 100%);
+}
+.retry-panel h2 {
+  font-size: 18px;
+  margin: 0;
+  letter-spacing: -0.02em;
+  line-height: 1.4;
+}
+.retry-panel h3,
+.retry-panel legend {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0 0 12px;
+}
+.retry-panel p {
+  margin: 8px 0;
+  line-height: 1.6;
+}
+.retry-header,
+.retry-actions,
+.retry-request {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.retry-header {
+  align-items: flex-start;
+}
+.retry-header > div {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.retry-panel .retry-eyebrow {
+  color: var(--color-dim);
+  font-size: 13px;
+  margin: 0 0 8px;
+}
+.retry-close {
+  flex: 0 0 auto;
+}
+.retry-content {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border);
+}
+.retry-log-view {
+  display: grid;
+  grid-template-columns: minmax(88px, 24%) minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+}
+.retry-log-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  max-height: 62dvh;
+  overflow: auto;
+  padding-right: 4px;
+  border-right: 1px solid var(--color-border);
+}
+.retry-log-tabs button {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--rounded);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  color: var(--color-text);
+  cursor: pointer;
+}
+.retry-log-tabs button[aria-selected='true'] {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+}
+.retry-log-tabs button:focus-visible,
+.retry-log-step:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+.retry-log-tab-name {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.retry-log-tab-status {
+  font-size: 12px;
+  color: var(--color-dim);
+}
+.retry-log-step {
+  min-width: 0;
+}
+.retry-log-status strong {
+  flex: 1 1 180px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.retry-log-status {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.retry-log-surface {
+  min-width: 0;
+}
+.retry-log-surface :deep(.term),
+.retry-log-surface :deep(.term-scroll) {
+  background: #000;
+  color: #f5f5f5;
+}
+.retry-log-surface :deep(.term-text),
+.retry-log-surface :deep(.term-line--err .term-text) {
+  color: #f5f5f5;
+}
+.retry-log-surface :deep(.term-label),
+.retry-log-surface :deep(.term-ln),
+.retry-log-surface :deep(.term-count),
+.retry-log-surface :deep(.term-state) {
+  color: #bec3cc;
+}
+.retry-node-evidence summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+.retry-closed-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-amber);
+  font-size: 14px;
+  margin-bottom: 16px;
+}
+.retry-node-detail {
+  padding-bottom: 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--color-border);
+}
+.retry-node-detail > a {
+  margin-right: 16px;
+}
+.retry-groups {
+  display: grid;
+  gap: 16px;
+  margin: 20px 0;
+}
+.retry-groups section,
+.retry-controls {
+  padding: 16px;
+  background: var(--color-card-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded);
+  min-width: 0;
+}
+.retry-panel ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.retry-panel li {
+  padding: 8px 0;
+  overflow-wrap: anywhere;
+}
+.retry-groups li + li {
+  border-top: 1px solid var(--color-border);
+}
+.retry-groups strong,
+.retry-groups .retry-muted {
+  display: block;
+}
+.retry-muted,
+.retry-note,
+.retry-source,
+.retry-header p {
+  color: var(--color-dim);
+}
+.retry-panel a,
+.retry-request-summary a {
+  color: var(--color-primary);
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  overflow-wrap: anywhere;
+}
+.retry-panel :deep(.app-btn),
+.retry-request-summary :deep(.app-btn) {
+  min-height: 44px;
+  max-width: 100%;
+  white-space: normal;
+  height: auto;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+.retry-panel a:focus-visible,
+.retry-panel input:focus-visible,
+.retry-panel summary:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+.retry-warning {
+  padding: 12px;
+  color: var(--color-amber);
+  background: var(--color-amber-soft);
+  border-left: 3px solid var(--color-amber);
+  overflow-wrap: anywhere;
+}
+.retry-panel .retry-warning {
+  padding-left: 12px;
+}
+.retry-source {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+.retry-rebuild {
+  border: 1px solid var(--color-border);
+  padding: 16px;
+  margin: 16px 0;
+  border-radius: var(--rounded);
+  min-width: 0;
+}
+.retry-rebuild label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  cursor: pointer;
+  line-height: 1.5;
+}
+.retry-rebuild input {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  accent-color: var(--color-primary);
+}
+.retry-controls,
+.retry-history,
+.retry-actions,
+.retry-technical {
+  margin-top: 16px;
+}
+.retry-history li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.retry-technical summary {
+  min-height: 44px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+}
+.retry-technical dd {
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+}
+.retry-request-summary {
+  margin: 0 0 16px;
+  padding: 8px 12px;
+  border-left: 2px solid var(--color-amber);
+  background: var(--color-card-2);
+  color: var(--color-dim);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+@media (min-width: 900px) {
+  .retry-groups {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+.retry-unavailable {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-dim);
+}
+.retry-unavailable summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  color: var(--color-primary);
+}
+@media (min-width: 640px) {
+  .retry-panel {
+    font-size: 13px;
+    padding: 20px;
+  }
+  .retry-panel h2 {
+    font-size: 17px;
+  }
+  .retry-panel h3,
+  .retry-panel legend {
+    font-size: 14px;
+  }
+  .retry-panel .retry-eyebrow {
+    font-size: 12px;
+    margin-bottom: 4px;
+  }
+  .retry-content {
+    margin-top: 16px;
+    padding-top: 16px;
+  }
+  .retry-log-view {
+    grid-template-columns: minmax(140px, 22%) minmax(0, 1fr);
+    gap: 16px;
+  }
+  .retry-log-tabs button {
+    font-size: 13px;
+    padding: 7px 10px;
+    gap: 2px;
+  }
+  .retry-panel a,
+  .retry-node-evidence summary,
+  .retry-technical summary,
+  .retry-unavailable summary,
+  .retry-rebuild label {
+    min-height: 34px;
+  }
+  .retry-panel :deep(.app-btn),
+  .retry-request-summary :deep(.app-btn) {
+    min-height: 34px;
+    padding-block: 6px;
+    font-size: 13px;
+  }
+  .retry-groups {
+    gap: 12px;
+    margin: 16px 0;
+  }
+}
 </style>

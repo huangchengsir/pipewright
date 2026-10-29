@@ -51,11 +51,27 @@ describe('MCP settings', () => {
   })
   it.each(['claude', 'codex'])('copies the %s example through the settings clipboard handler', async (client) => {
     const w = render(); await flushPromises()
+    await w.get(`[data-client-tab="${client}"]`).trigger('click')
     const panel = w.get(`[data-client="${client}"]`)
     const config = panel.get('pre').text()
     await panel.get('button').trigger('click'); await flushPromises()
     expect(mocks.copy).toHaveBeenCalledExactlyOnceWith(config, expect.any(Function))
     expect(config).toContain('<MCP_TOKEN>')
+  })
+  it('opens creation explicitly without remounting or losing its draft', async () => {
+    const w = render(); await flushPromises()
+    const details = w.get('.mcp-create').element as HTMLDetailsElement
+    expect(details.open).toBe(false)
+    expect(w.findComponent(MCPTokenForm).exists()).toBe(true)
+    const open = w.get('.mcp-list-actions').findAllComponents(AppButton).find((button: VueWrapper) => button.classes().includes('app-btn--primary'))!
+    await open.trigger('click'); await flushPromises()
+    expect(details.open).toBe(true)
+    await w.get('#mcp-name').setValue('retained draft')
+    details.open = false
+    await open.trigger('click'); await flushPromises()
+    expect((w.get('#mcp-name').element as HTMLInputElement).value).toBe('retained draft')
+    expect(mocks.create).not.toHaveBeenCalled()
+    expect(mocks.revoke).not.toHaveBeenCalled()
   })
   it('creates read-only by default and clears the one-time secret when closed', async () => {
     const spy = vi.spyOn(Storage.prototype, 'setItem')

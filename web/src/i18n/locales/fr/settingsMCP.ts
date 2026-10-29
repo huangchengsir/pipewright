@@ -33,5 +33,10 @@ export default {
   "revokeTitle": "Révoquer le jeton d’accès ?",
   "revokeBody": "Les clients utilisant « {name} » ne pourront plus effectuer d’appels.",
   "projectLimit": "32 projets maximum. Les projets non sélectionnés ne sont pas accessibles.",
-  "privacy": "MCP n’appelle pas de modèle. Les clients IA externes peuvent transmettre les résultats à leurs modèles. Ne partagez les données sensibles qu’avec des clients de confiance."
+  "privacy": "MCP n’appelle pas de modèle. Les clients IA externes peuvent transmettre les résultats à leurs modèles. Ne partagez les données sensibles qu’avec des clients de confiance.",
+  "accessScopeTitle": "Limites d’accès",
+  "scopedAccess": "L’accès se limite aux projets autorisés",
+  "separateApproval": "L’application nécessite une approbation distincte du brouillon exact",
+  "triggerAccess": "Le déclenchement des pipelines exige une autorisation distincte",
+  "privacyTitle": "Informations sur les données et les clients"
 }

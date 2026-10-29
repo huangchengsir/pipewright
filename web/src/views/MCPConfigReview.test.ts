@@ -20,6 +20,13 @@ function approveButton(wrapper: VueWrapper) { return wrapper.get('.review-approv
 async function acknowledge(wrapper: VueWrapper) { await wrapper.get('.review-ack input').setValue(true) }
 
 describe('MCP configuration review', () => {
+  it('keeps the exact project and draft identity visible before acknowledgement', async () => {
+    const wrapper = render(); await flushPromises()
+    expect(wrapper.get('.review-identity').text()).toContain('project-1')
+    expect(wrapper.get('.review-identity').text()).toContain('draft-1')
+    expect(wrapper.get('.review-identity').element.closest('details')).toBeNull()
+    expect(mocks.approve).not.toHaveBeenCalled()
+  })
   beforeEach(() => {
     vi.resetAllMocks()
     mocks.route = reactive({ params: { id: 'draft-1' } })
@@ -39,6 +46,17 @@ describe('MCP configuration review', () => {
     expect(mocks.approve).not.toHaveBeenCalled()
     await acknowledge(wrapper)
     expect(approveButton(wrapper).attributes('disabled')).toBeUndefined()
+  })
+  it('folds technical metadata while keeping the diff, trigger impact and approval boundary', async () => {
+    const wrapper = render(); await flushPromises()
+    const details = wrapper.findAll('details')
+    expect(details.length).toBeGreaterThanOrEqual(2)
+    expect(details.every(detail => !(detail.element as HTMLDetailsElement).open)).toBe(true)
+    expect(wrapper.get('.review-summary').text()).toContain('有效')
+    expect(wrapper.get('.review-values').text()).toContain('Original')
+    expect(wrapper.get('.review-values').text()).toContain('Updated')
+    expect(wrapper.get('.review-trigger-impact').text()).toContain('已有定时任务')
+    expect(mocks.approve).not.toHaveBeenCalled()
   })
   it('approves only the shown immutable binding and never applies configuration', async () => {
     const wrapper = render(); await flushPromises(); await acknowledge(wrapper)

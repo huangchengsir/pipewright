@@ -8,13 +8,15 @@
  * - 开发态(version=dev)永不误报更新,药丸显示「开发构建」。
  */
 
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getVersion, checkUpdate } from '../../api/version'
 import type { VersionInfo, UpdateInfo } from '../../api/version'
 import { getRetentionConfig, setRetentionConfig, type RetentionConfig } from '../../api/retention'
 import { HttpError } from '../../api/http'
 import AppButton from '../../components/ui/AppButton.vue'
+import ProgressBar from '../../components/ui/ProgressBar.vue'
+import UpgradeSteps from '../../components/system/UpgradeSteps.vue'
 import { useSelfUpdate } from '../../composables/useSelfUpdate'
 
 const { t, locale } = useI18n()
@@ -35,6 +37,27 @@ const updateMsg = computed(() => t('settingsSystem.manualUpgrade'))
 const dockerCommand = computed(() => manual.value?.command || '')
 const taskSubmitError = computed(() => submissionError.value ? submissionError.value.status ? t('settingsSystem.errUpdateStatus', { status: submissionError.value.status }) : t('settingsSystem.errUpdateRetry') : '')
 const copied = ref(false)
+const completedTask = computed(() => task.value?.state === 'completed' ? task.value : null)
+const visibleTask = computed(() => task.value?.state !== 'completed' ? task.value : null)
+const downloadBytes = computed(() => Number.isFinite(task.value?.bytes) && task.value!.bytes >= 0 ? Math.floor(task.value!.bytes) : null)
+const downloadTotal = computed(() => Number.isFinite(task.value?.total) && task.value!.total > 0 ? Math.floor(task.value!.total) : null)
+const downloadPercent = computed(() => downloadBytes.value !== null && downloadTotal.value !== null && downloadTotal.value > 0
+  ? Math.round(Math.min(100, Math.max(0, downloadBytes.value / downloadTotal.value * 100)) * 10) / 10 : undefined)
+let versionGeneration = 0
+let disposed = false
+const refreshedTasks = new Set<string>()
+const completionObserved = ref(false)
+watch(() => task.value ? { id: task.value.id, state: task.value.state } : null, (next, previous) => {
+  if (next?.id !== previous?.id) completionObserved.value = false
+  if (!next || next.id !== previous?.id || next.state !== 'completed' ||
+    !['accepted', 'checking', 'downloading', 'verifying', 'extracting', 'installing', 'restarting'].includes(previous.state) || refreshedTasks.has(next.id)) return
+  completionObserved.value = true
+  refreshedTasks.add(next.id)
+  update.value = null
+  checkState.value = 'idle'
+  void loadVersion()
+})
+onBeforeUnmount(() => { disposed = true; versionGeneration++ })
 const taskMessage = computed(() => {
  const state = task.value?.state
  if (task.value?.reason === 'installation_target_changed') return t('settingsSystem.taskTargetChanged')
@@ -87,10 +110,14 @@ function fmtDate(s: string): string {
 }
 
 async function loadVersion(): Promise<void> {
+  const generation = ++versionGeneration
   try {
-    version.value = await getVersion()
+    const value = await getVersion()
+    if (disposed || generation !== versionGeneration) return
+    version.value = value
+    versionError.value = ''
   } catch {
-    versionError.value = t('settingsSystem.errReadVersion')
+    if (!disposed && generation === versionGeneration) versionError.value = t('settingsSystem.errReadVersion')
   }
 }
 
@@ -173,12 +200,13 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="sys" aria-labelledby="sys-heading">
+  <section class="sys settings-page" aria-labelledby="sys-heading">
     <header class="sys-head">
       <h2 id="sys-heading" class="sys-title">{{ t('settingsSystem.title') }}</h2>
       <p class="sys-sub">{{ t('settingsSystem.subtitle') }}</p>
     </header>
 
+    <p class="sys-completion-status" role="status" aria-live="polite" aria-atomic="true">{{ completionObserved && completedTask ? t('settingsSystem.taskStates.completed') : '' }}</p>
     <!-- 版本面板 -->
     <article class="sys-panel">
       <span class="sys-accent" aria-hidden="true" />
@@ -222,26 +250,35 @@ onMounted(() => {
           <dd :class="{ mono: m.mono }">{{ m.value }}</dd>
         </div>
       </dl>
+      <details v-if="completedTask" :key="completedTask.id" class="sys-history" data-testid="upgrade-history">
+        <summary><span class="sys-history-dot" aria-hidden="true" /><strong>{{ t('settingsSystem.taskHistory') }}</strong><span>{{ completedTask.from }} → {{ completedTask.target }}</span></summary>
+        <p>{{ t('settingsSystem.taskStates.completed') }} · {{ fmtDate(completedTask.updatedAt) }}</p>
+        <p class="sys-task-identity">{{ completedTask.id }} · {{ completedTask.repository }} · {{ completedTask.platform }}</p>
+        <pre class="sys-notes">{{ completedTask.asset }}
+{{ completedTask.sha256 }}</pre>
+        <AppButton @click="reloadApplication">{{ t('settingsSystem.taskReload') }}</AppButton>
+      </details>
     </article>
 
-    <article v-if="task || taskUnknown || pending || taskSubmitError" class="sys-panel" aria-labelledby="upgrade-task-title" data-testid="upgrade-task">
+    <article v-if="visibleTask || taskUnknown || pending || taskSubmitError" class="sys-panel" aria-labelledby="upgrade-task-title" data-testid="upgrade-task">
       <h3 id="upgrade-task-title" class="sys-title">{{ t('settingsSystem.taskTitle') }}</h3>
       <p v-if="taskSubmitError" class="sys-inline-err" role="alert">{{ taskSubmitError }}</p>
       <p v-if="taskUnknown" role="status">{{ t('settingsSystem.taskConnectionUnknown') }}</p>
-      <template v-if="task">
+      <template v-if="visibleTask && task">
         <p role="status"><strong>{{ t('settingsSystem.taskStates.' + task.state) }}</strong> · {{ task.from }} → {{ task.target }}</p>
         <p v-if="taskMessage">{{ taskMessage }}</p>
-        <template v-if="task.state === 'downloading' || task.bytes > 0">
-          <progress v-if="task.total > 0" :value="task.bytes" :max="task.total" :aria-label="t('settingsSystem.taskDownloadProgress')" />
-          <p>{{ t('settingsSystem.taskProgress', { downloaded: formatNumber(task.bytes), total: task.total > 0 ? formatNumber(task.total) : t('settingsSystem.taskSizeUnknown') }) }}</p>
-        </template>
+        <UpgradeSteps :state="task.state" />
+        <div v-if="task.state === 'downloading'" class="sys-download">
+          <ProgressBar :value="downloadPercent" :label="t('settingsSystem.taskDownloadProgress')" />
+          <p v-if="downloadBytes !== null">{{ t('settingsSystem.taskProgress', { downloaded: formatNumber(downloadBytes), total: downloadTotal !== null ? formatNumber(downloadTotal) : t('settingsSystem.taskSizeUnknown') }) }}</p>
+          <p v-else>{{ t('settingsSystem.taskDownloadProgress') }}</p>
+        </div>
         <ul v-if="task.blockers?.length">
           <li v-for="blocker in task.blockers" :key="blocker.kind">{{ t('settingsSystem.taskBlockers.' + blocker.kind, { count: formatNumber(blocker.count) }) }}</li>
         </ul>
         <p v-if="task.state === 'ready_blocked'">{{ t('settingsSystem.taskWorkPreserved') }}</p>
-        <div class="sys-upgrade-actions">
+        <div v-if="(task.state === 'interrupted' || task.state === 'ready_blocked') && !canRecoverOriginal" class="sys-upgrade-actions">
           <AppButton v-if="(task.state === 'interrupted' || task.state === 'ready_blocked') && !canRecoverOriginal" :loading="taskBusy" :disabled="taskBusy" @click="resumeTask">{{ t(task.state === 'ready_blocked' ? 'settingsSystem.taskContinue' : 'settingsSystem.taskResume') }}</AppButton>
-          <AppButton v-if="task.state === 'completed'" @click="reloadApplication">{{ t('settingsSystem.taskReload') }}</AppButton>
         </div>
         <details><summary>{{ t('settingsSystem.taskDetails') }}</summary><p>{{ task.id }} · {{ task.repository }} · {{ task.platform }}</p><p class="sys-notes">{{ task.asset }}
 {{ task.sha256 }}</p><p>{{ fmtDate(task.updatedAt) }}</p></details>
@@ -364,24 +401,27 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.sys-completion-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .sys {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  max-width: 680px;
+  max-width: 760px;
+  min-width: 0;
+  font-size: var(--settings-text-size, 13px);
 }
 
 .sys-head {
   margin-bottom: var(--space-1);
 }
 .sys-title {
-  font-size: var(--text-h2);
+  font-size: var(--settings-title-size, 18px);
   font-weight: 700;
   letter-spacing: -0.01em;
   color: var(--color-text);
 }
 .sys-sub {
-  font-size: var(--text-body);
+  font-size: var(--settings-text-size, 13px);
   color: var(--color-faint);
   margin-top: 2px;
 }
@@ -397,14 +437,19 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px -16px rgba(0, 0, 0, 0.18);
+  box-shadow: none;
 }
 /* 顶部品牌强调条 */
 .sys-accent {
   position: absolute;
   inset: 0 0 auto 0;
-  height: 3px;
-  background: linear-gradient(90deg, var(--color-primary), var(--color-primary-press) 60%, transparent);
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    var(--color-primary),
+    var(--color-primary-press) 60%,
+    transparent
+  );
 }
 
 /* hero */
@@ -426,7 +471,11 @@ onMounted(() => {
   border-radius: var(--rounded, 10px);
   display: grid;
   place-items: center;
-  background: linear-gradient(140deg, var(--color-primary), var(--color-primary-press));
+  background: linear-gradient(
+    140deg,
+    var(--color-primary),
+    var(--color-primary-press)
+  );
   color: #fff;
   font-family: var(--font-mono);
   font-weight: 700;
@@ -441,13 +490,13 @@ onMounted(() => {
   min-width: 0;
 }
 .sys-brand-name {
-  font-size: var(--text-body);
+  font-size: var(--settings-text-size, 13px);
   font-weight: 700;
   color: var(--color-text);
   letter-spacing: -0.01em;
 }
 .sys-brand-tag {
-  font-size: var(--text-micro);
+  font-size: 12px;
   color: var(--color-faint);
 }
 
@@ -457,7 +506,7 @@ onMounted(() => {
   align-items: center;
   gap: 6px;
   flex: none;
-  font-size: var(--text-micro);
+  font-size: 12px;
   font-weight: 600;
   padding: 4px 10px 4px 8px;
   border-radius: 999px;
@@ -522,7 +571,7 @@ onMounted(() => {
   gap: 3px;
 }
 .sys-version-cap {
-  font-size: var(--text-micro);
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -560,14 +609,14 @@ onMounted(() => {
   min-width: 0;
 }
 .sys-meta-item dt {
-  font-size: var(--text-micro);
+  font-size: 12px;
   color: var(--color-faint);
   text-transform: uppercase;
   letter-spacing: 0.07em;
 }
 .sys-meta-item dd {
   margin: 0;
-  font-size: var(--text-caption);
+  font-size: 12px;
   color: var(--color-text-soft);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -579,7 +628,7 @@ onMounted(() => {
 }
 
 .sys-inline-err {
-  font-size: var(--text-caption);
+  font-size: 12px;
   color: var(--color-danger);
   margin: -4px 0 0;
 }
@@ -613,14 +662,13 @@ onMounted(() => {
   color: #fff;
   flex: none;
   box-shadow: 0 6px 16px -4px var(--color-primary-soft);
-  animation: sys-bob 2.4s ease-in-out infinite;
 }
 .sys-upgrade-meta {
   flex: 1;
   min-width: 0;
 }
 .sys-upgrade-title {
-  font-size: var(--text-body);
+  font-size: var(--settings-text-size, 13px);
   font-weight: 700;
   color: var(--color-text);
   letter-spacing: -0.01em;
@@ -634,7 +682,7 @@ onMounted(() => {
 }
 .sys-vtag {
   font-family: var(--font-mono);
-  font-size: var(--text-micro);
+  font-size: 12px;
   font-weight: 600;
   padding: 2px 8px;
   border-radius: 6px;
@@ -654,7 +702,7 @@ onMounted(() => {
   font-weight: 700;
 }
 .sys-pubdate {
-  font-size: var(--text-micro);
+  font-size: 12px;
   color: var(--color-faint);
 }
 
@@ -662,7 +710,8 @@ onMounted(() => {
 .sys-upgrade-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  flex-wrap: wrap;
   flex: none;
 }
 .sys-cta-ghost {
@@ -688,7 +737,7 @@ onMounted(() => {
   gap: 8px;
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-md);
-  font-size: var(--text-caption);
+  font-size: 12px;
   border: 1px solid transparent;
 }
 .sys-update-state--busy {
@@ -741,7 +790,7 @@ onMounted(() => {
 .sys-cmd code {
   flex: 1;
   font-family: var(--font-mono);
-  font-size: var(--text-micro);
+  font-size: 12px;
   color: var(--color-text);
   overflow-x: auto;
   white-space: nowrap;
@@ -749,7 +798,7 @@ onMounted(() => {
 .sys-cmd-copy {
   flex: none;
   padding: 4px 10px;
-  font-size: var(--text-micro);
+  font-size: 12px;
   font-weight: 600;
   color: var(--color-primary);
   background: var(--color-card);
@@ -801,7 +850,7 @@ onMounted(() => {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
-  font-size: var(--text-micro);
+  font-size: 12px;
   line-height: 1.6;
   color: var(--color-text-soft);
   white-space: pre-wrap;
@@ -810,16 +859,30 @@ onMounted(() => {
 
 /* ── 动效 ───────────────────────────────── */
 @keyframes sys-blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
 }
 @keyframes sys-pulse {
-  0% { box-shadow: 0 0 0 0 var(--color-primary-soft); }
-  100% { box-shadow: 0 0 0 6px transparent; }
+  0% {
+    box-shadow: 0 0 0 0 var(--color-primary-soft);
+  }
+  100% {
+    box-shadow: 0 0 0 6px transparent;
+  }
 }
 @keyframes sys-bob {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-3px); }
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
 }
 .sys-rise-enter-active,
 .sys-rise-leave-active {
@@ -854,7 +917,7 @@ onMounted(() => {
   margin: 0 0 4px;
 }
 .rt-sub {
-  font-size: 0.82rem;
+  font-size: 13px;
   color: var(--color-faint);
   margin: 0;
   max-width: 52ch;
@@ -862,28 +925,48 @@ onMounted(() => {
 .rt-switch {
   position: relative;
   flex: none;
-  width: 40px;
-  height: 22px;
+  width: 44px;
+  height: 36px;
   border-radius: 999px;
   border: none;
   cursor: pointer;
-  background: var(--color-border);
+  background: transparent;
+}
+.rt-switch::before {
+  content: '';
+  position: absolute;
+  width: 40px;
+  height: 22px;
+  left: 2px;
+  top: calc(50% - 11px);
+  border-radius: 999px;
+  background: var(--color-border-strong);
   transition: background var(--duration-fast);
 }
-.rt-switch--on { background: var(--color-primary); }
-.rt-switch:disabled { opacity: 0.55; cursor: default; }
-.rt-switch:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.rt-switch--on::before {
+  background: var(--color-primary);
+}
+.rt-switch:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.rt-switch:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
 .rt-switch-knob {
   position: absolute;
-  top: 3px;
-  left: 3px;
+  top: calc(50% - 8px);
+  left: 5px;
   width: 16px;
   height: 16px;
   border-radius: 50%;
   background: #fff;
   transition: transform var(--duration-fast);
 }
-.rt-switch--on .rt-switch-knob { transform: translateX(18px); }
+.rt-switch--on .rt-switch-knob {
+  transform: translateX(18px);
+}
 
 .rt-fields {
   display: flex;
@@ -892,7 +975,9 @@ onMounted(() => {
   margin-top: 18px;
   transition: opacity var(--duration-fast);
 }
-.rt-fields--off { opacity: 0.5; }
+.rt-fields--off {
+  opacity: 0.5;
+}
 .rt-field {
   display: flex;
   flex-direction: column;
@@ -900,23 +985,29 @@ onMounted(() => {
   min-width: 180px;
 }
 .rt-label {
-  font-size: 0.82rem;
+  font-size: 13px;
   font-weight: 500;
   color: var(--color-dim);
 }
 .rt-input {
-  width: 120px;
+  width: 140px;
+  min-height: var(--settings-control-height, 36px);
   padding: 7px 10px;
   border: 1px solid var(--color-border);
   border-radius: 8px;
   background: var(--color-surface);
   color: var(--color-text);
-  font-size: 0.9rem;
+  font-size: var(--settings-text-size, 13px);
 }
-.rt-input:focus { outline: 2px solid var(--color-primary); outline-offset: -1px; }
-.rt-input:disabled { opacity: 0.6; }
+.rt-input:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -1px;
+}
+.rt-input:disabled {
+  opacity: 0.6;
+}
 .rt-hint {
-  font-size: 0.74rem;
+  font-size: 12px;
   color: var(--color-faint);
 }
 .rt-warn {
@@ -933,6 +1024,108 @@ onMounted(() => {
   gap: 12px;
   margin-top: 18px;
 }
-.rt-saved { font-size: 0.82rem; color: var(--color-ok, #18a058); }
-.rt-err { font-size: 0.82rem; color: var(--color-danger, #e5484d); }
+.rt-saved {
+  font-size: 13px;
+  color: var(--color-ok, #18a058);
+}
+.rt-err {
+  font-size: 13px;
+  color: var(--color-danger, #e5484d);
+}
+.sys-task-identity {
+  overflow-wrap: anywhere;
+  color: var(--color-dim);
+  font: 12px/1.6 var(--font-mono);
+}
+.sys-download {
+  display: grid;
+  gap: 8px;
+}
+.sys-download p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-dim);
+}
+.sys-history {
+  border-top: 1px solid var(--color-border);
+  padding-top: 8px;
+}
+.sys-history summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  min-height: 36px;
+  cursor: pointer;
+  color: var(--color-dim);
+  font-size: 12px;
+}
+.sys-history summary strong {
+  font-weight: 500;
+  color: var(--color-text);
+}
+.sys-history-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--color-green);
+}
+.sys-history summary::after {
+  content: '⌄';
+  margin-left: auto;
+}
+.sys-history[open] summary::after {
+  transform: rotate(180deg);
+}
+.sys-history p {
+  margin: 10px 0;
+}
+.sys :is(summary, .sys-notes-toggle, .sys-cmd-copy):focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+.sys :deep(.app-btn) {
+  height: auto;
+  min-height: var(--settings-action-height, 34px);
+  padding-block: 6px;
+  font-size: var(--settings-text-size, 13px);
+  white-space: normal;
+}
+@media (max-width: 639px) {
+  .sys-panel,
+  .sys-upgrade {
+    padding: 16px;
+  }
+  .sys-upgrade-head {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .sys-upgrade-actions {
+    flex-wrap: wrap;
+  }
+  .sys-history summary,
+  .sys summary,
+  .sys-notes-toggle,
+  .sys-cmd-copy {
+    min-height: 44px;
+  }
+  .rt-fields {
+    gap: 16px;
+  }
+  .rt-field {
+    min-width: 0;
+    flex: 1 1 160px;
+  }
+  .rt-input {
+    max-width: 100%;
+    font-size: 16px;
+  }
+  .rt-actions {
+    flex-wrap: wrap;
+  }
+  .rt-switch {
+    min-width: 44px;
+  }
+}
 </style>

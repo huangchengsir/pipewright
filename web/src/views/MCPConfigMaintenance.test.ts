@@ -11,12 +11,32 @@ function render() { const wrapper = mount(MCPConfigMaintenance); wrappers.push(w
 describe('MCP configuration maintenance', () => {
   beforeEach(() => { vi.resetAllMocks(); mocks.get.mockResolvedValue({ executorEpoch: 2, items: [item()], truncated: false }); mocks.recover.mockResolvedValue({}) })
   afterEach(() => { for (const wrapper of wrappers.splice(0)) wrapper.unmount() })
+  it('distinguishes same-project activity records before opening technical details', async () => {
+    mocks.get.mockResolvedValue({ executorEpoch: 2, items: [item(), item({ activityId: 'activity-2', runId: 'run-2' })], truncated: false })
+    const wrapper = render(); await flushPromises()
+    const identities = wrapper.findAll('.maintenance-identity')
+    expect(identities).toHaveLength(2); expect(identities[0].text()).toContain('activity-1')
+    expect(identities[1].text()).toContain('activity-2'); expect(identities[1].text()).toContain('run-2')
+    expect(identities.every(el => el.element.closest('details') === null)).toBe(true)
+    expect(mocks.recover).not.toHaveBeenCalled()
+  })
   it('keeps unsupported legacy or external activity read-only with clear maintenance instructions', async () => {
     const wrapper = render(); await flushPromises()
     expect(wrapper.text()).toContain('保持停写')
     expect(wrapper.text()).toContain('旧控制进程已退出')
     expect(wrapper.text()).toContain('其他实例或外部交接状态仍不可验证')
     expect(wrapper.find('[data-activity-id] button').exists()).toBe(false)
+    expect(mocks.recover).not.toHaveBeenCalled()
+  })
+  it('shows a short blocked state and retains full limits in collapsed details', async () => {
+    const wrapper = render(); await flushPromises()
+    const activity = wrapper.get('[data-activity-id]')
+    expect(activity.get('.maintenance-warning').text()).toContain('当前记录会保留')
+    const details = activity.get('details')
+    expect((details.element as HTMLDetailsElement).open).toBe(false)
+    expect(details.text()).toContain('保持停写')
+    expect(details.text()).toContain('其他实例或外部交接状态仍不可验证')
+    expect(details.text()).toContain('owner-1')
     expect(mocks.recover).not.toHaveBeenCalled()
   })
   it.each([{ recoverable: true }, { recoverable: false, evidenceId: 'evidence-1' }, { recoverable: true, evidenceId: 'evidence-1', digest: '' }])('requires all server proof fields before exposing recovery: %j', async (proof) => {

@@ -19,7 +19,7 @@ export default {
   "retryAll": "Plan all failed nodes",
   "viewRecovery": "View recovery details",
   "legacyGraph": "Historical steps: the original full topology is unavailable; this view cannot determine recovery scope.",
-  "legacyUnavailable": "Original recovery evidence is unavailable. Supply the missing inputs, or create a full new run after changing code or configuration.",
+  "legacyUnavailable": "Node retry requirements could not be verified for this run.",
   "attempt": "Attempt {n}",
   "fromRun": "From run {id}",
   "latestAttempt": "View latest attempt",

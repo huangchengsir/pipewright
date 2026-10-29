@@ -1,4 +1,6 @@
 export default {
+  "taskHistory": "Dernière mise à niveau",
+  "upgradeSteps": {"download": "Télécharger", "verify": "Vérifier", "install": "Installer", "restart": "Redémarrer"},
   "taskTargetChanged": "Une autre opération a modifié l’exécutable. L’installation est arrêtée ; vérifiez la version actuelle avant de rechercher une mise à jour.",
   "taskReadinessUnavailable": "Les conditions d’installation restent inconnues. Le travail continue ; actualisez l’état avant de continuer explicitement.",
 

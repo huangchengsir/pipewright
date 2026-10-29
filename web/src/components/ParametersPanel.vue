@@ -230,10 +230,10 @@ watch(() => props.projectId, load)
 </template>
 
 <style scoped>
-.config-card { border: 1px solid var(--color-border); border-radius: var(--rounded-lg, 12px); background: var(--color-card); overflow: hidden; }
-.card-head { display: flex; align-items: center; gap: 9px; padding: 14px 16px; border-bottom: 1px solid var(--color-border); }
+.config-card { border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-card); overflow: hidden; }
+.card-head { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--color-border); flex-wrap: wrap; }
 .card-icon { display: grid; place-items: center; width: 26px; height: 26px; border-radius: var(--rounded-md); background: var(--color-primary-soft); color: var(--color-primary); flex: none; }
-.card-title { font-size: 0.92rem; font-weight: 650; color: var(--color-text); }
+.card-title { font-size: 14px; font-weight: 650; color: var(--color-text); }
 .card-sub { font-size: 0.76rem; color: var(--color-faint); flex: 1; min-width: 0; }
 .card-body--pad { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 
@@ -289,7 +289,7 @@ watch(() => props.projectId, load)
   border: none; background: var(--color-primary); color: #fff;
   font-family: var(--font-sans); font-size: 0.83rem; font-weight: 600;
   border-radius: var(--rounded); cursor: pointer;
-  box-shadow: 0 5px 16px var(--color-primary-soft);
+  box-shadow: none;
   transition: background-color var(--duration-fast), transform var(--duration-fast); white-space: nowrap;
 }
 .btn-primary:hover:not(:disabled) { background: var(--color-primary-press); transform: translateY(-1px); }
@@ -297,4 +297,11 @@ watch(() => props.projectId, load)
 .spinner { display: inline-block; width: 13px; height: 13px; border: 2px solid rgba(255,255,255,0.35); border-top-color: #fff; border-radius: var(--rounded-full); animation: spin 0.7s linear infinite; flex-shrink: 0; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; border-top-color: currentColor; } }
+@media (max-width: 640px) {
+ input:not([type="checkbox"]):not([type="radio"]), select, textarea { min-height: 44px; font-size: 16px; min-width: 0; box-sizing: border-box; }
+ button { min-height: 44px; white-space: normal; }
+ .def-grid { grid-template-columns: minmax(0, 1fr); }
+ .def-fld--type { width: 100%; }
+ .def-fld--grow { grid-column: auto; }
+ .def-del { min-width: 44px; } }
 </style>

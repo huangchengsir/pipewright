@@ -137,5 +137,12 @@ export default {
     "authorization": "Authorization",
     "policy": "Policy",
     "sourceApplicability": "Execution source"
-  }
+  },
+  "technicalDetails": "Technical details",
+  "reviewScope": "Impact and validation scope",
+  "maintenanceSummary": "Review unconfirmed configuration operations before deciding how to close them.",
+  "maintenanceDetails": "Handling limits and details",
+  "maintenanceReady": "A matching exit record is available. Review it before closing the activity.",
+  "maintenanceNeedsReview": "The original operation has not been confirmed as ended. This record is kept.",
+  "operationSummary": "When a response is lost, check the original operation before deciding whether to fence it."
 }

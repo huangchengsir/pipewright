@@ -1,4 +1,6 @@
 export default {
+  "taskHistory": "최근 업그레이드",
+  "upgradeSteps": {"download": "다운로드", "verify": "검증", "install": "설치", "restart": "재시작"},
   "taskTargetChanged": "다른 작업이 실행 파일을 변경하여 설치가 중지되었습니다. 현재 버전을 확인한 후 업데이트를 다시 확인하세요.",
   "taskReadinessUnavailable": "설치 조건을 확인할 수 없습니다. 기존 작업은 계속됩니다. 상태를 새로 고친 후 명시적으로 계속하세요.",
 

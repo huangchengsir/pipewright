@@ -19,7 +19,7 @@ export default {
   "retryAll": "Planificar todos los nodos fallidos",
   "viewRecovery": "Ver recuperación",
   "legacyGraph": "Pasos históricos: no hay topología original completa para determinar el alcance de recuperación.",
-  "legacyUnavailable": "Faltan pruebas originales. Aporta las entradas necesarias o inicia una ejecución completa tras cambiar código o configuración.",
+  "legacyUnavailable": "No se pudieron verificar los requisitos para reintentar nodos en esta ejecución.",
   "attempt": "Intento {n}",
   "fromRun": "De la ejecución {id}",
   "latestAttempt": "Ver último intento",

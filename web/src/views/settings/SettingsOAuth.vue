@@ -264,7 +264,7 @@ function relativeTime(iso: string | null): string {
 </script>
 
 <template>
-  <div class="oauth-root">
+  <div class="oauth-root settings-page">
     <!-- ─── section header ──────────────────────────────────────────────────── -->
     <div class="section-head">
       <div class="section-head-text">
@@ -441,7 +441,7 @@ function relativeTime(iso: string | null): string {
 .oauth-root {
   display: flex;
   flex-direction: column;
-  gap: var(--card-gap);
+  gap: var(--settings-page-gap);
 }
 
 /* ─── section header ──────────────────────────────────────────────────────── */
@@ -456,14 +456,14 @@ function relativeTime(iso: string | null): string {
 }
 
 .section-title {
-  font-size: 1.12rem;
+  font-size: var(--settings-title-size);
   font-weight: 600;
   letter-spacing: -0.01em;
   color: var(--color-text);
 }
 
 .section-desc {
-  font-size: 0.82rem;
+  font-size: var(--settings-text-size);
   color: var(--color-faint);
   margin-top: 4px;
   max-width: 70ch;
@@ -548,7 +548,7 @@ function relativeTime(iso: string | null): string {
   background: var(--color-card);
   border: 1px solid var(--color-border);
   border-radius: var(--rounded-card);
-  box-shadow: var(--shadow);
+  box-shadow: none;
   overflow: hidden;
 }
 
@@ -565,7 +565,7 @@ function relativeTime(iso: string | null): string {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 13px 18px;
+  padding: var(--settings-panel-header);
   border-bottom: 1px solid var(--color-border);
 }
 
@@ -582,18 +582,18 @@ function relativeTime(iso: string | null): string {
 }
 
 .ph-label {
-  font-size: 0.9rem;
+  font-size: var(--settings-panel-title-size);
   font-weight: 600;
   color: var(--color-text);
 }
 
 .ph-desc {
-  font-size: 0.74rem;
+  font-size: var(--settings-label-size);
   color: var(--color-faint);
 }
 
 .panel-body {
-  padding: 18px;
+  padding: var(--settings-panel-padding);
 }
 
 /* ─── skeleton ────────────────────────────────────────────────────────────── */
@@ -622,7 +622,7 @@ function relativeTime(iso: string | null): string {
 .config-form {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--settings-form-gap);
 }
 
 .field {
@@ -632,7 +632,7 @@ function relativeTime(iso: string | null): string {
 }
 
 .field-label {
-  font-size: 0.78rem;
+  font-size: var(--settings-label-size);
   font-weight: 500;
   color: var(--color-dim);
 }
@@ -644,14 +644,14 @@ function relativeTime(iso: string | null): string {
 
 .field-input {
   width: 100%;
-  height: 38px;
+  height: var(--settings-control-height);
   background: var(--color-inset);
   border: 1px solid var(--color-border);
   border-radius: var(--rounded);
   padding: 0 12px;
   color: var(--color-text);
   font-family: var(--font-sans);
-  font-size: 0.86rem;
+  font-size: var(--settings-text-size);
   transition:
     border-color var(--duration-fast),
     box-shadow var(--duration-fast);
@@ -686,13 +686,13 @@ function relativeTime(iso: string | null): string {
 }
 
 .field-error {
-  font-size: 0.76rem;
+  font-size: var(--settings-help-size);
   color: var(--color-red);
   line-height: 1.4;
 }
 
 .field-hint {
-  font-size: 0.74rem;
+  font-size: var(--settings-help-size);
   color: var(--color-faint);
   line-height: 1.4;
 }
@@ -734,15 +734,29 @@ function relativeTime(iso: string | null): string {
 
 .toggle-track {
   position: relative;
-  width: 40px;
-  height: 22px;
+  width: 44px;
+  height: 34px;
   border-radius: var(--rounded-full);
-  background: var(--color-border-strong);
+  background: transparent;
   border: none;
   cursor: pointer;
   flex-shrink: 0;
   margin-top: 1px;
   transition: background-color var(--duration-normal);
+  padding: 0;
+}
+
+.toggle-track::before {
+  content: '';
+  position: absolute;
+  width: 40px;
+  height: 22px;
+  left: calc(50% - 20px);
+  top: calc(50% - 11px);
+  border-radius: 999px;
+  background: var(--color-border-strong);
+  transition: inherit;
+  pointer-events: none;
 }
 
 .toggle-track:focus-visible {
@@ -755,14 +769,14 @@ function relativeTime(iso: string | null): string {
   cursor: not-allowed;
 }
 
-.toggle-track--on {
+.toggle-track--on::before {
   background: var(--color-primary);
 }
 
 .toggle-thumb {
   position: absolute;
-  top: 3px;
-  left: 3px;
+  top: calc(50% - 8px);
+  left: 5px;
   width: 16px;
   height: 16px;
   border-radius: var(--rounded-full);

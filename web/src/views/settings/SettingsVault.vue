@@ -438,7 +438,7 @@ async function toggleEditReveal(): Promise<void> {
 
 <template>
   <!-- ─── section header ──────────────────────────────────────────────────── -->
-  <div class="vault-root">
+  <div class="vault-root settings-page">
     <div class="section-head">
       <div class="section-head-text">
         <h2 class="section-title">{{ t('settingsVault.title') }}</h2>
@@ -660,7 +660,7 @@ async function toggleEditReveal(): Promise<void> {
   <Teleport to="body">
     <div
       v-if="modalOpen"
-      class="modal-scrim"
+      class="modal-scrim settings-dialog"
       role="dialog"
       :aria-label="modalMode === 'add' ? t('settingsVault.addCredential') : t('settingsVault.editCredential')"
       aria-modal="true"
@@ -883,7 +883,7 @@ async function toggleEditReveal(): Promise<void> {
   <Teleport to="body">
     <div
       v-if="deleteModalOpen && deletingCredential"
-      class="modal-scrim"
+      class="modal-scrim settings-dialog"
       role="dialog"
       :aria-label="t('settingsVault.deleteConfirmAria')"
       aria-modal="true"
@@ -954,7 +954,7 @@ async function toggleEditReveal(): Promise<void> {
     </div>
   </Teleport>
   <Teleport to="body">
-    <div v-if="reconnecting" class="modal-scrim" role="dialog" aria-modal="true" :aria-label="t('settingsVault.oauthReconnect')" tabindex="-1" @click.self="closeReconnect" @keydown.esc="closeReconnect">
+    <div v-if="reconnecting" class="modal-scrim settings-dialog" role="dialog" aria-modal="true" :aria-label="t('settingsVault.oauthReconnect')" tabindex="-1" @click.self="closeReconnect" @keydown.esc="closeReconnect">
       <div class="modal modal--sm">
         <div class="modal-head"><div><h3 class="modal-title">{{ t('settingsVault.oauthReconnect') }}</h3><p class="modal-sub">{{ reconnecting.name }}</p></div></div>
         <div class="modal-body oauth-reconnect-body">
@@ -980,7 +980,7 @@ async function toggleEditReveal(): Promise<void> {
 .vault-root {
   display: flex;
   flex-direction: column;
-  gap: var(--card-gap);
+  gap: var(--settings-page-gap);
 }
 
 .section-head {
@@ -994,14 +994,14 @@ async function toggleEditReveal(): Promise<void> {
 }
 
 .section-title {
-  font-size: 1.12rem;
+  font-size: var(--settings-title-size);
   font-weight: 600;
   letter-spacing: -0.01em;
   color: var(--color-text);
 }
 
 .section-desc {
-  font-size: 0.82rem;
+  font-size: var(--settings-text-size);
   color: var(--color-faint);
   margin-top: 4px;
   max-width: 68ch;
@@ -1013,7 +1013,7 @@ async function toggleEditReveal(): Promise<void> {
   background: var(--color-card);
   border: 1px solid var(--color-border);
   border-radius: var(--rounded-card);
-  box-shadow: var(--shadow);
+  box-shadow: none;
   padding: 16px 18px;
   animation: panel-in 0.45s var(--ease-out-expo) both;
 }
@@ -1112,7 +1112,7 @@ async function toggleEditReveal(): Promise<void> {
   background: var(--color-card);
   border: 1px solid var(--color-border);
   border-radius: var(--rounded-card);
-  box-shadow: var(--shadow);
+  box-shadow: none;
   overflow: hidden;
   animation: panel-in 0.45s var(--ease-out-expo) both;
 }
@@ -1130,7 +1130,7 @@ async function toggleEditReveal(): Promise<void> {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 13px 18px;
+  padding: var(--settings-panel-header);
   border-bottom: 1px solid var(--color-border);
   font-size: 0.86rem;
   font-weight: 600;
@@ -1193,7 +1193,7 @@ async function toggleEditReveal(): Promise<void> {
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  padding: 48px 32px;
+  padding: var(--settings-empty-padding);
   text-align: center;
 }
 
@@ -1481,13 +1481,13 @@ async function toggleEditReveal(): Promise<void> {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 34px;
+  height: var(--settings-action-height);
   padding: 0 15px;
   border: none;
   background: var(--color-primary);
   color: #fff;
   font-family: var(--font-sans);
-  font-size: 0.83rem;
+  font-size: var(--settings-label-size);
   font-weight: 600;
   border-radius: var(--rounded);
   cursor: pointer;
@@ -1498,6 +1498,8 @@ async function toggleEditReveal(): Promise<void> {
     box-shadow var(--duration-fast);
   white-space: nowrap;
   flex-shrink: 0;
+
+  min-height: var(--settings-action-height);
 }
 
 .btn-primary:hover:not(:disabled) {
@@ -1520,19 +1522,21 @@ async function toggleEditReveal(): Promise<void> {
 .btn-secondary {
   display: inline-flex;
   align-items: center;
-  height: 34px;
+  height: var(--settings-action-height);
   padding: 0 15px;
   background: var(--color-card-2);
   color: var(--color-text);
   border: 1px solid var(--color-border-strong);
   font-family: var(--font-sans);
-  font-size: 0.83rem;
+  font-size: var(--settings-label-size);
   font-weight: 500;
   border-radius: var(--rounded);
   cursor: pointer;
   transition:
     border-color var(--duration-fast),
     background-color var(--duration-fast);
+
+  min-height: var(--settings-action-height);
 }
 
 .btn-secondary:hover:not(:disabled) {
@@ -1625,7 +1629,7 @@ async function toggleEditReveal(): Promise<void> {
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  padding: 20px 20px 16px;
+  padding: var(--settings-dialog-header);
   border-bottom: 1px solid var(--color-border);
 }
 
@@ -1646,7 +1650,7 @@ async function toggleEditReveal(): Promise<void> {
 }
 
 .modal-title {
-  font-size: 1rem;
+  font-size: var(--settings-dialog-title-size);
   font-weight: 600;
   color: var(--color-text);
   margin-top: 2px;
@@ -1654,7 +1658,7 @@ async function toggleEditReveal(): Promise<void> {
 }
 
 .modal-sub {
-  font-size: 0.78rem;
+  font-size: var(--settings-help-size);
   color: var(--color-faint);
   margin-top: 3px;
   line-height: 1.4;
@@ -1696,14 +1700,14 @@ async function toggleEditReveal(): Promise<void> {
 }
 
 .modal-form {
-  padding: 20px;
+  padding: var(--settings-dialog-padding);
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--settings-form-gap);
 }
 
 .modal-body {
-  padding: 20px;
+  padding: var(--settings-dialog-padding);
 }
 
 .modal-footer {
@@ -1716,7 +1720,7 @@ async function toggleEditReveal(): Promise<void> {
 /* Footer as a direct child of .modal (no padded wrapper) — give it surround padding
    so the buttons don't hug the modal's bottom/right edge. */
 .modal-footer--standalone {
-  padding: 4px 20px 20px;
+  padding: var(--settings-dialog-footer);
 }
 
 /* ─── form fields ─────────────────────────────────────────────────────────── */
@@ -1727,7 +1731,7 @@ async function toggleEditReveal(): Promise<void> {
 }
 
 .field-label {
-  font-size: 0.78rem;
+  font-size: var(--settings-label-size);
   font-weight: 500;
   color: var(--color-dim);
 }
@@ -1800,14 +1804,14 @@ async function toggleEditReveal(): Promise<void> {
 
 .field-input {
   width: 100%;
-  height: 38px;
+  height: var(--settings-control-height);
   background: var(--color-inset);
   border: 1px solid var(--color-border);
   border-radius: var(--rounded);
   padding: 0 12px;
   color: var(--color-text);
   font-family: var(--font-sans);
-  font-size: 0.86rem;
+  font-size: var(--settings-text-size);
   transition:
     border-color var(--duration-fast),
     box-shadow var(--duration-fast);
@@ -1844,13 +1848,13 @@ async function toggleEditReveal(): Promise<void> {
 }
 
 .field-error {
-  font-size: 0.76rem;
+  font-size: var(--settings-help-size);
   color: var(--color-red);
   line-height: 1.4;
 }
 
 .field-hint {
-  font-size: 0.74rem;
+  font-size: var(--settings-help-size);
   color: var(--color-faint);
   line-height: 1.4;
 }

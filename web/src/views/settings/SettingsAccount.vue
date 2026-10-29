@@ -171,7 +171,7 @@ onMounted(loadSessions)
 </script>
 
 <template>
-  <div class="account">
+  <div class="account settings-page">
     <!-- Identity -->
     <section class="acct-card" aria-labelledby="acct-identity-h">
       <header class="acct-card__h">
@@ -317,7 +317,7 @@ onMounted(loadSessions)
 .account {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: var(--settings-page-gap);
   max-width: 720px;
 }
 
@@ -325,19 +325,19 @@ onMounted(loadSessions)
   background: var(--color-card);
   border: 1px solid var(--color-border);
   border-radius: var(--rounded-card);
-  box-shadow: var(--shadow);
-  padding: 20px 22px;
+  box-shadow: none;
+  padding: var(--settings-panel-padding);
 }
 .acct-card__h {
   margin-bottom: 16px;
 }
 .acct-card__title {
-  font-size: 1rem;
+  font-size: var(--settings-panel-title-size);
   font-weight: 600;
   color: var(--color-text);
 }
 .acct-card__sub {
-  font-size: 0.79rem;
+  font-size: var(--settings-text-size);
   color: var(--color-faint);
   margin-top: 4px;
   line-height: 1.5;
@@ -376,7 +376,7 @@ onMounted(loadSessions)
 .acct-form {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--settings-form-gap);
 }
 .acct-form__actions {
   display: flex;
@@ -386,14 +386,14 @@ onMounted(loadSessions)
 
 .field-input {
   width: 100%;
-  height: 40px;
+  height: var(--settings-control-height);
   background: var(--color-inset);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--rounded);
   padding: 0 13px;
   color: var(--color-text);
   font-family: var(--font-sans);
-  font-size: 0.9rem;
+  font-size: var(--settings-text-size);
   transition:
     border-color var(--duration-fast, 150ms),
     box-shadow var(--duration-fast, 150ms);

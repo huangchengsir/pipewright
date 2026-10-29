@@ -19,7 +19,7 @@ export default {
   "retryAll": "查看所有失敗節點的計畫",
   "viewRecovery": "查看恢復資訊",
   "legacyGraph": "歷史步驟檢視：缺少當時完整拓撲，不據此判斷恢復範圍。",
-  "legacyUnavailable": "尚無可用的原始恢復證據。請補齊輸入；修改設定或原始碼後，應建立新的完整執行。",
+  "legacyUnavailable": "暫時無法核驗此執行的節點重試條件。",
   "attempt": "第 {n} 次嘗試",
   "fromRun": "來自執行 {id}",
   "latestAttempt": "查看最新嘗試",

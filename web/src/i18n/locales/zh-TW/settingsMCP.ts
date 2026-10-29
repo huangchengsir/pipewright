@@ -33,5 +33,10 @@ export default {
   "revokeTitle": "撤銷存取權杖？",
   "revokeBody": "撤銷後，使用「{name}」的用戶端將無法繼續呼叫。",
   "projectLimit": "最多 32 個專案；未選專案不會取得存取權限。",
-  "privacy": "MCP 本身不呼叫模型。外部 AI 用戶端可能將查詢結果傳給其模型；敏感部署資料請僅交給可信任的用戶端。"
+  "privacy": "MCP 本身不呼叫模型。外部 AI 用戶端可能將查詢結果傳給其模型；敏感部署資料請僅交給可信任的用戶端。",
+  "accessScopeTitle": "存取範圍",
+  "scopedAccess": "僅可存取已授權的專案",
+  "separateApproval": "套用設定仍須個別核准具體草案",
+  "triggerAccess": "觸發流水線需要另外授權",
+  "privacyTitle": "資料與用戶端說明"
 }

@@ -1,4 +1,6 @@
 export default {
+  "taskHistory": "Recent upgrade",
+  "upgradeSteps": {"download": "Download", "verify": "Verify", "install": "Install", "restart": "Restart"},
   "taskTargetChanged": "The executable changed outside this task. Installation stopped; verify the current version before checking for updates again.",
   "taskReadinessUnavailable": "Installation readiness could not be confirmed. Existing work continues; refresh the status before explicitly continuing.",
 

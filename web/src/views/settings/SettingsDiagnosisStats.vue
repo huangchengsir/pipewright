@@ -68,7 +68,7 @@ onMounted(load)
 </script>
 
 <template>
-  <section class="ds" aria-labelledby="ds-heading">
+  <section class="ds settings-page" aria-labelledby="ds-heading">
     <header class="ds-head">
       <div>
         <h2 id="ds-heading" class="ds-title">{{ t('settingsDiagnosisStats.title') }}</h2>
@@ -191,7 +191,7 @@ onMounted(load)
 .ds {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: var(--settings-page-gap);
 }
 
 .ds-head {
@@ -202,14 +202,14 @@ onMounted(load)
 }
 
 .ds-title {
-  font-size: 1.05rem;
+  font-size: var(--settings-title-size);
   font-weight: 700;
   letter-spacing: -0.01em;
   color: var(--color-text);
 }
 
 .ds-sub {
-  font-size: 0.8rem;
+  font-size: var(--settings-text-size);
   color: var(--color-faint);
   line-height: 1.5;
   margin-top: 4px;
@@ -220,7 +220,7 @@ onMounted(load)
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.78rem;
+  font-size: var(--settings-label-size);
   font-weight: 600;
   color: var(--color-dim);
   background: var(--color-card);
@@ -230,6 +230,8 @@ onMounted(load)
   cursor: pointer;
   flex-shrink: 0;
   transition: color var(--duration-fast), border-color var(--duration-fast);
+
+  min-height: var(--settings-action-height);
 }
 
 .ds-refresh:hover:not(:disabled) {
@@ -268,7 +270,7 @@ onMounted(load)
 @media (prefers-reduced-motion: reduce) { .ds-spinner { animation: none; } }
 
 .ds-retry {
-  font-size: 0.8rem;
+  font-size: var(--settings-label-size);
   font-weight: 600;
   color: var(--color-cyan);
   background: none;
@@ -276,6 +278,11 @@ onMounted(load)
   border-radius: var(--rounded);
   padding: 6px 14px;
   cursor: pointer;
+
+  min-height: var(--settings-action-height);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* empty */

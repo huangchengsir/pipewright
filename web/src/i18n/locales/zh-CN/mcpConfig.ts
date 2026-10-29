@@ -137,5 +137,12 @@ export default {
     "authorization": "授权",
     "policy": "策略",
     "sourceApplicability": "执行来源"
-  }
+  },
+  "technicalDetails": "技术详情",
+  "reviewScope": "影响与验证范围",
+  "maintenanceSummary": "核对待确认的配置操作，再决定如何收尾。",
+  "maintenanceDetails": "处理边界与详情",
+  "maintenanceReady": "已有匹配的结束记录，可核对后结束活动。",
+  "maintenanceNeedsReview": "尚不能确认原操作已结束，当前记录会保留。",
+  "operationSummary": "响应丢失时，先核对原操作，再决定是否隔离。"
 }

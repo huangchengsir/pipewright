@@ -327,7 +327,7 @@ async function handleTest(s: Server): Promise<void> {
 </script>
 
 <template>
-  <div class="servers-root">
+  <div class="servers-root settings-page">
     <ContainerAiPanel v-if="aiTargets !== null" context="servers" :initial-server-ids="aiTargets" @close="aiTargets = null" />
     <!-- ─── section header ──────────────────────────────────────────────────── -->
     <div class="section-head">
@@ -421,7 +421,7 @@ async function handleTest(s: Server): Promise<void> {
     </div>
 
     <!-- ─── add / edit modal ──────────────────────────────────────────────────── -->
-    <div v-if="modalOpen" class="modal-backdrop" @click.self="closeModal">
+    <div v-if="modalOpen" class="modal-backdrop settings-dialog" @click.self="closeModal">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="server-modal-title">
         <h3 id="server-modal-title" class="modal-title">
           {{ modalMode === 'add' ? t('settingsServers.addServer') : t('settingsServers.editServer') }}
@@ -475,7 +475,7 @@ async function handleTest(s: Server): Promise<void> {
     </div>
 
     <!-- ─── delete confirm modal ──────────────────────────────────────────────── -->
-    <div v-if="deleteModalOpen" class="modal-backdrop" @click.self="closeDeleteModal">
+    <div v-if="deleteModalOpen" class="modal-backdrop settings-dialog" @click.self="closeDeleteModal">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="server-del-title">
         <h3 id="server-del-title" class="modal-title">{{ t('settingsServers.deleteServer') }}</h3>
         <div v-if="deleteBanner" class="banner banner--error" role="alert">{{ deleteBanner }}</div>
@@ -494,7 +494,7 @@ async function handleTest(s: Server): Promise<void> {
     </div>
 
     <!-- ─── service logs modal (Story 6-2, FR-16) ─────────────────────────────── -->
-    <div v-if="logsModalOpen" class="modal-backdrop" @click.self="closeLogsModal">
+    <div v-if="logsModalOpen" class="modal-backdrop settings-dialog" @click.self="closeLogsModal">
       <div class="modal modal--wide" role="dialog" aria-modal="true" aria-labelledby="server-logs-title">
         <div class="logs-modal-head">
           <h3 id="server-logs-title" class="modal-title">
@@ -514,7 +514,7 @@ async function handleTest(s: Server): Promise<void> {
     </div>
 
     <!-- ─── service operations modal (Story 6-3, FR-17) ───────────────────────── -->
-    <div v-if="opsModalOpen" class="modal-backdrop" @click.self="closeOpsModal">
+    <div v-if="opsModalOpen" class="modal-backdrop settings-dialog" @click.self="closeOpsModal">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="server-ops-title">
         <div class="logs-modal-head">
           <h3 id="server-ops-title" class="modal-title">
@@ -539,7 +539,7 @@ async function handleTest(s: Server): Promise<void> {
 .servers-root {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: var(--settings-page-gap);
 }
 
 .section-head {
@@ -550,13 +550,13 @@ async function handleTest(s: Server): Promise<void> {
 }
 
 .section-title {
-  font-size: var(--text-heading);
+  font-size: var(--settings-title-size);
   font-weight: 600;
   color: var(--color-text);
 }
 
 .section-desc {
-  font-size: var(--text-label);
+  font-size: var(--settings-text-size);
   color: var(--color-faint);
   margin-top: 6px;
   max-width: 60ch;
@@ -568,7 +568,7 @@ async function handleTest(s: Server): Promise<void> {
   align-items: center;
   gap: 6px;
   padding: 8px 14px;
-  font-size: var(--text-label);
+  font-size: var(--settings-label-size);
   font-weight: 600;
   color: #fff;
   background: var(--color-primary);
@@ -577,6 +577,8 @@ async function handleTest(s: Server): Promise<void> {
   cursor: pointer;
   white-space: nowrap;
   transition: filter var(--duration-fast);
+
+  min-height: var(--settings-action-height);
 }
 .btn-primary:hover:not(:disabled) {
   filter: brightness(1.08);
@@ -588,7 +590,7 @@ async function handleTest(s: Server): Promise<void> {
 
 .btn-ghost {
   padding: 6px 12px;
-  font-size: var(--text-label);
+  font-size: var(--settings-label-size);
   font-weight: 500;
   color: var(--color-dim);
   background: transparent;
@@ -599,6 +601,11 @@ async function handleTest(s: Server): Promise<void> {
     color var(--duration-fast),
     border-color var(--duration-fast),
     background var(--duration-fast);
+
+  min-height: var(--settings-action-height);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .btn-ghost:hover:not(:disabled) {
   color: var(--color-text);
@@ -657,7 +664,7 @@ async function handleTest(s: Server): Promise<void> {
 .panel-head {
   display: flex;
   justify-content: space-between;
-  padding: 12px 18px;
+  padding: var(--settings-panel-header);
   font-size: var(--text-label);
   font-weight: 600;
   color: var(--color-dim);
@@ -688,7 +695,7 @@ async function handleTest(s: Server): Promise<void> {
 }
 
 .empty-row {
-  padding: 28px 18px;
+  padding: var(--settings-empty-padding);
   text-align: center;
   font-size: var(--text-label);
   color: var(--color-faint);
@@ -704,6 +711,8 @@ async function handleTest(s: Server): Promise<void> {
   gap: 16px;
   padding: 16px 18px;
   border-bottom: 1px solid var(--color-border);
+
+  flex-wrap: wrap;
 }
 .server-row:last-child {
   border-bottom: none;
@@ -755,7 +764,10 @@ async function handleTest(s: Server): Promise<void> {
 .server-actions {
   display: flex;
   gap: 8px;
-  flex-shrink: 0;
+  flex-shrink: 1;
+
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 /* modal */
@@ -775,7 +787,7 @@ async function handleTest(s: Server): Promise<void> {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  padding: 24px;
+  padding: var(--settings-dialog-padding);
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -796,12 +808,12 @@ async function handleTest(s: Server): Promise<void> {
   margin-top: -8px;
 }
 .modal-title {
-  font-size: var(--text-heading);
+  font-size: var(--settings-dialog-title-size);
   font-weight: 600;
   color: var(--color-text);
 }
 .modal-text {
-  font-size: var(--text-label);
+  font-size: var(--settings-text-size);
   color: var(--color-dim);
   line-height: 1.5;
 }
@@ -829,25 +841,27 @@ async function handleTest(s: Server): Promise<void> {
   width: 96px;
 }
 .field-label {
-  font-size: var(--text-label);
+  font-size: var(--settings-label-size);
   font-weight: 500;
   color: var(--color-dim);
 }
 .field-input {
   padding: 8px 12px;
-  font-size: var(--text-body);
+  font-size: var(--settings-text-size);
   color: var(--color-text);
   background: var(--color-bg, var(--color-surface));
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   transition: border-color var(--duration-fast);
+
+  min-height: var(--settings-control-height);
 }
 .field-input:focus {
   outline: none;
   border-color: var(--color-primary);
 }
 .field-error {
-  font-size: var(--text-label);
+  font-size: var(--settings-help-size);
   color: var(--color-danger, #d4503e);
 }
 </style>

@@ -137,5 +137,12 @@ export default {
     "authorization": "Autorización",
     "policy": "Política",
     "sourceApplicability": "Fuente de ejecución"
-  }
+  },
+  "technicalDetails": "Detalles técnicos",
+  "reviewScope": "Alcance del impacto y la validación",
+  "maintenanceSummary": "Revise las operaciones de configuración pendientes antes de decidir cómo cerrarlas.",
+  "maintenanceDetails": "Límites de actuación y detalles",
+  "maintenanceReady": "Hay un registro de finalización coincidente. Revíselo antes de cerrar la actividad.",
+  "maintenanceNeedsReview": "No se ha confirmado que la operación original haya terminado. Se conserva este registro.",
+  "operationSummary": "Si se pierde una respuesta, consulte la operación original antes de decidir si aislarla."
 }

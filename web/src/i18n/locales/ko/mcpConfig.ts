@@ -137,5 +137,12 @@ export default {
     "authorization": "권한",
     "policy": "정책",
     "sourceApplicability": "실행 소스"
-  }
+  },
+  "technicalDetails": "기술 세부 정보",
+  "reviewScope": "영향 및 검증 범위",
+  "maintenanceSummary": "확인되지 않은 설정 작업을 검토한 후 종료 방법을 결정하세요.",
+  "maintenanceDetails": "처리 범위 및 세부 정보",
+  "maintenanceReady": "일치하는 종료 기록이 있습니다. 확인 후 활동을 종료할 수 있습니다.",
+  "maintenanceNeedsReview": "원래 작업의 종료가 아직 확인되지 않았습니다. 이 기록은 유지됩니다.",
+  "operationSummary": "응답이 유실되면 격리 여부를 결정하기 전에 원래 작업을 확인하세요."
 }

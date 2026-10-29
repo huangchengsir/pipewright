@@ -109,55 +109,57 @@ function key(event: KeyboardEvent) {
   width: min(720px, 100%);
   max-height: calc(100dvh - 32px);
   overflow: auto;
-  padding: 20px;
+  padding: 18px;
   background: var(--color-card, #15151c);
   color: var(--color-text, #e6e6ea);
   border: 1px solid var(--color-border-strong, #45454f);
   border-radius: 8px;
 }
 h2 {
-  font-size: 20px;
-  margin: 0 0 12px;
+  font-size: 16px;
+  margin: 0 0 8px;
 }
 p {
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
 .source {
   font-family: var(--font-mono);
   color: var(--color-primary, #7fe3f0);
+  font-size: 12px;
 }
 textarea {
   box-sizing: border-box;
   width: 100%;
-  min-height: 180px;
-  height: 30dvh;
-  padding: 12px;
+  min-height: 132px;
+  height: clamp(132px, 26dvh, 280px);
+  padding: 10px;
   background: var(--color-inset, #08080b);
   color: inherit;
   border: 1px solid var(--color-border-strong, #45454f);
-  border-radius: 4px;
+  border-radius: 6px;
   resize: vertical;
-  font: 16px/1.5 var(--font-mono);
+  font: 13px/1.6 var(--font-mono);
   tab-size: 4;
 }
 footer {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 16px;
+  margin-top: 14px;
   flex-wrap: wrap;
 }
 button {
-  min-height: 44px;
-  padding: 8px 16px;
+  min-height: 34px;
+  padding: 6px 12px;
   border: 1px solid var(--color-border-strong, #45454f);
-  border-radius: 4px;
+  border-radius: 6px;
   background: transparent;
   color: inherit;
   font: inherit;
   cursor: pointer;
+  font-size: 13px;
 }
 button[data-confirm] {
   border-color: var(--color-primary, #7fe3f0);
@@ -170,5 +172,16 @@ button:focus-visible,
 textarea:focus-visible {
   outline: 2px solid var(--color-primary, #7fe3f0);
   outline-offset: 2px;
+}
+@media (max-width: 640px) {
+  .terminal-review {
+    padding: 16px;
+  }
+  textarea {
+    font-size: 16px;
+  }
+  button {
+    min-height: 44px;
+  }
 }
 </style>

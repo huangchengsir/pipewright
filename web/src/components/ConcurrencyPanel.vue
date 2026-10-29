@@ -242,16 +242,17 @@ watch(() => props.projectId, load)
 <style scoped>
 .config-card {
   border: 1px solid var(--color-border);
-  border-radius: var(--rounded-lg, 12px);
+  border-radius: 8px;
   background: var(--color-card);
   overflow: hidden;
 }
 .card-head {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   padding: 14px 16px;
   border-bottom: 1px solid var(--color-border);
+  flex-wrap: wrap;
 }
 .card-icon {
   display: grid;
@@ -263,7 +264,7 @@ watch(() => props.projectId, load)
   color: var(--color-primary);
   flex: none;
 }
-.card-title { font-size: 0.92rem; font-weight: 650; color: var(--color-text); }
+.card-title { font-size: 14px; font-weight: 650; color: var(--color-text); }
 .card-sub { font-size: 0.76rem; color: var(--color-faint); flex: 1; min-width: 0; }
 
 .card-body--pad { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
@@ -385,7 +386,7 @@ watch(() => props.projectId, load)
   font-weight: 600;
   border-radius: var(--rounded);
   cursor: pointer;
-  box-shadow: 0 5px 16px var(--color-primary-soft);
+  box-shadow: none;
   transition: background-color var(--duration-fast), transform var(--duration-fast);
   white-space: nowrap;
 }
@@ -404,4 +405,16 @@ watch(() => props.projectId, load)
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; border-top-color: currentColor; } }
+@media (max-width: 640px) {
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+    min-height: 44px;
+    font-size: 16px;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+  button {
+    min-height: 44px;
+    white-space: normal;
+  }
+}
 </style>

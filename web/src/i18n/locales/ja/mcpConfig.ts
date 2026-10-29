@@ -137,5 +137,12 @@ export default {
     "authorization": "権限",
     "policy": "ポリシー",
     "sourceApplicability": "実行元"
-  }
+  },
+  "technicalDetails": "技術的な詳細",
+  "reviewScope": "影響と検証の範囲",
+  "maintenanceSummary": "未確認の設定操作を確認してから、終了方法を判断してください。",
+  "maintenanceDetails": "処理の範囲と詳細",
+  "maintenanceReady": "一致する終了記録があります。確認してからアクティビティを終了できます。",
+  "maintenanceNeedsReview": "元の操作の終了は確認できていません。この記録は保持されます。",
+  "operationSummary": "応答が失われた場合は、隔離するか判断する前に元の操作を確認してください。"
 }

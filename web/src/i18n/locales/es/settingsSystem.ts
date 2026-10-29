@@ -1,4 +1,6 @@
 export default {
+  "taskHistory": "Última actualización",
+  "upgradeSteps": {"download": "Descargar", "verify": "Verificar", "install": "Instalar", "restart": "Reiniciar"},
   "taskTargetChanged": "Otra operación cambió el ejecutable. Se detuvo la instalación; comprueba la versión actual antes de buscar actualizaciones de nuevo.",
   "taskReadinessUnavailable": "No se pudo confirmar si se puede instalar. El trabajo actual continúa; actualiza el estado antes de continuar explícitamente.",
 

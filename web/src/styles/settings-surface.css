@@ -1,0 +1,82 @@
+/* Settings-only density. Teleported dialogs opt in separately. */
+.settings-page,
+.settings-dialog {
+  --settings-title-size: 20px;
+  --settings-panel-title-size: 14px;
+  --settings-text-size: 16px;
+  --settings-label-size: 14px;
+  --settings-help-size: 12px;
+  --settings-control-height: 44px;
+  --settings-action-height: 44px;
+  --settings-page-gap: 18px;
+  --settings-form-gap: 16px;
+  --settings-panel-padding: 18px;
+  --settings-panel-header: 14px 18px;
+  --settings-dialog-title-size: 16px;
+  --settings-dialog-padding: 18px;
+  --settings-dialog-header: 16px 18px;
+  --settings-dialog-footer: 12px 18px;
+  --settings-empty-padding: 32px 20px;
+  min-width: 0;
+}
+
+.settings-page :is(.section-head, .section-head-text, .panel, .panel-body, .field, .config-form, .acct-card),
+.settings-dialog :is(.modal, .modal-form, .field, .field-row) {
+  min-width: 0;
+}
+
+.settings-page :is(.section-title, .section-desc, .ph-label, .panel-head, .server-name),
+.settings-dialog :is(.modal-title, .modal-sub, .modal-text, .field-label) {
+  overflow-wrap: anywhere;
+}
+
+.settings-page :is(.section-head, .panel-head, .panel-footer, .server-actions),
+.settings-dialog :is(.modal-actions, .modal-footer) {
+  flex-wrap: wrap;
+}
+
+.settings-dialog .modal {
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.settings-page :is(button, input, select, textarea):focus-visible,
+.settings-dialog :is(button, input, select, textarea):focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+@media (min-width: 640px) {
+  .settings-page,
+  .settings-dialog {
+    --settings-title-size: 18px;
+    --settings-text-size: 13px;
+    --settings-label-size: 13px;
+    --settings-control-height: 36px;
+    --settings-action-height: 34px;
+    --settings-page-gap: 20px;
+  }
+}
+
+@media (max-width: 639px) {
+  .settings-page :is(input:not([type='checkbox']):not([type='radio']), select, textarea),
+  .settings-dialog :is(input:not([type='checkbox']):not([type='radio']), select, textarea) {
+    font-size: 16px;
+    min-height: 44px;
+  }
+
+  .settings-page :is(button, .app-btn, .seg-item, .connect-btn),
+  .settings-dialog :is(button, .app-btn, .seg-item) {
+    min-height: 44px;
+  }
+
+  .settings-page .op-btn,
+  .settings-dialog .modal-close {
+    min-width: 44px;
+  }
+
+  .settings-page .server-actions {
+    width: 100%;
+  }
+}

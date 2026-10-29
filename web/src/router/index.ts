@@ -108,8 +108,8 @@ const router = createRouter({
         // Story 1-7: first-run onboarding guide (inside shell, auth-required)
         { path: 'onboarding', name: 'onboarding', component: Onboarding, meta: { title: '快速上手' } },
         { path: 'projects', name: 'projects', component: Projects, meta: { title: '项目' } },
-        { path: 'mcp/config-drafts/:id/review', name: 'mcp-config-review', component: MCPConfigReview, meta: { title: 'MCP 配置审阅' } },
-        { path: 'mcp/config-maintenance', name: 'mcp-config-maintenance', component: MCPConfigMaintenance, meta: { title: 'MCP 配置维护' } },
+        { path: 'mcp/config-drafts/:id/review', name: 'mcp-config-review', component: MCPConfigReview, meta: { title: 'MCP 配置审阅', navSection: 'settings' } },
+        { path: 'mcp/config-maintenance', name: 'mcp-config-maintenance', component: MCPConfigMaintenance, meta: { title: 'MCP 配置维护', navSection: 'settings' } },
         // Story 2-2: 4-tab pipeline editor (primary config entry point)
         { path: 'projects/:id/pipeline', name: 'project-pipeline', component: ProjectPipeline, meta: { title: '流水线' } },
         // Story 2-3: backward-compat standalone triggers page

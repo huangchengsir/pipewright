@@ -1,4 +1,6 @@
 export default {
+  "taskHistory": "Letztes Upgrade",
+  "upgradeSteps": {"download": "Laden", "verify": "Prüfen", "install": "Installieren", "restart": "Neustart"},
   "taskTargetChanged": "Eine andere Aktion hat die Programmdatei geändert. Die Installation wurde angehalten. Prüfen Sie die aktuelle Version vor einer erneuten Updatesuche.",
   "taskReadinessUnavailable": "Die Installationsbereitschaft konnte nicht bestätigt werden. Laufende Arbeit wird fortgesetzt. Aktualisieren Sie den Status, bevor Sie ausdrücklich fortfahren.",
 

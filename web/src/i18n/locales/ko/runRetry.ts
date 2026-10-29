@@ -19,7 +19,7 @@ export default {
   "retryAll": "실패한 모든 노드 계획",
   "viewRecovery": "복구 정보 보기",
   "legacyGraph": "이전 단계 보기입니다. 원래 전체 토폴로지가 없어 복구 범위를 판단할 수 없습니다.",
-  "legacyUnavailable": "원래 복구 근거가 없습니다. 누락된 입력을 보완하거나 코드·설정 변경 후 새 전체 실행을 만드세요.",
+  "legacyUnavailable": "이 실행의 노드 재시도 조건을 확인할 수 없습니다.",
   "attempt": "시도 {n}",
   "fromRun": "실행 {id}에서",
   "latestAttempt": "최신 시도 보기",

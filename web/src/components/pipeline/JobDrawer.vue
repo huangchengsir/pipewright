@@ -812,20 +812,21 @@ async function confirmSave(): Promise<void> {
   padding: 2px;
   background: var(--color-inset);
   border: 1px solid var(--color-border);
-  border-radius: var(--rounded-full);
+  border-radius: 6px;
 }
 
 .view-tab {
   padding: 3px 10px;
   background: none;
   border: none;
-  border-radius: var(--rounded-full);
+  border-radius: 4px;
   color: var(--color-faint);
   font: inherit;
-  font-size: 0.72rem;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   transition: color var(--duration-fast), background-color var(--duration-fast);
+  min-height: 30px;
 }
 
 .view-tab:hover {
@@ -879,7 +880,7 @@ async function confirmSave(): Promise<void> {
   padding: 8px 10px;
   background: var(--color-inset);
   border: 1px solid var(--color-border-strong);
-  border-radius: var(--rounded);
+  border-radius: 6px;
   cursor: pointer;
   text-align: left;
   transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
@@ -904,7 +905,7 @@ async function confirmSave(): Promise<void> {
 }
 
 .type-trigger-name {
-  font-size: 0.86rem;
+  font-size: 13px;
   font-weight: 600;
   color: var(--color-text);
 }
@@ -926,9 +927,9 @@ async function confirmSave(): Promise<void> {
 
 .field-hint {
   margin: 5px 0 0;
-  font-size: 0.72rem;
+  font-size: 12px;
   color: var(--color-faint);
-  line-height: 1.4;
+  line-height: 1.5;
 }
 
 .drawer-textarea {
@@ -1031,6 +1032,7 @@ async function confirmSave(): Promise<void> {
   font-weight: 600;
   cursor: pointer;
   transition: border-color var(--duration-fast), color var(--duration-fast);
+  min-height: 34px;
 }
 
 .reuse-btn:hover {
@@ -1051,7 +1053,7 @@ async function confirmSave(): Promise<void> {
   padding: 12px;
   background: var(--color-inset);
   border: 1px solid var(--color-border-strong);
-  border-radius: var(--rounded);
+  border-radius: 6px;
 }
 
 .reuse-panel-title {
@@ -1085,10 +1087,11 @@ async function confirmSave(): Promise<void> {
   padding: 6px 14px;
   border-radius: var(--rounded);
   font: inherit;
-  font-size: 0.8rem;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   transition: opacity var(--duration-fast), background-color var(--duration-fast);
+  min-height: 34px;
 }
 
 .reuse-cancel {
@@ -1116,4 +1119,8 @@ async function confirmSave(): Promise<void> {
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+@media (max-width: 640px) {
+ .view-tab, .type-trigger, .reuse-btn, .reuse-cancel, .reuse-confirm { min-height: 44px; }
+ .view-switch { flex-wrap: wrap; } }
 </style>

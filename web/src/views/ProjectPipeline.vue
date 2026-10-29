@@ -1083,8 +1083,8 @@ revisionCoordinator.synchronizeInitial(() => !initialTouched.value && !stagesDir
   .pipeline-root .tab-panels { overflow: visible; }
   .pipeline-root .tab-panel { height: auto; min-height: 400px; overflow: visible; }
   .pipeline-root :deep(.vp) { width: 100%; border-left: 0; border-top: 1px solid var(--color-border); max-height: 420px; }
-  .pipeline-root .tab-strip { overflow-x: auto; flex: none; }
-  .pipeline-root .tab-btn { flex: none; white-space: nowrap; }
+  .pipeline-root .tab-strip { overflow-x: visible; flex: none; }
+  .pipeline-root .tab-btn { flex: none; white-space: normal; }
   .pipeline-root .pac-bar { flex-wrap: wrap; padding: 12px; }
   .pipeline-root .pac-bar-text { flex-basis: 100%; min-width: 0; }
   .pipeline-root .pac-bar-title { flex-wrap: wrap; }
@@ -1095,8 +1095,8 @@ revisionCoordinator.synchronizeInitial(() => !initialTouched.value && !stagesDir
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 14px;
-  padding: 14px 28px 12px;
+  gap: 12px;
+  padding: 14px 20px 12px;
   border-bottom: 1px solid var(--color-border);
   flex: none;
 }
@@ -1128,7 +1128,7 @@ revisionCoordinator.synchronizeInitial(() => !initialTouched.value && !stagesDir
 .crumb-cur { color: var(--color-text); font-weight: 500; overflow-wrap: anywhere; }
 
 .pipeline-title {
-  font-size: 1.06rem;
+  font-size: 18px;
   font-weight: 700;
   letter-spacing: 0;
   color: var(--color-text);
@@ -1155,7 +1155,7 @@ revisionCoordinator.synchronizeInitial(() => !initialTouched.value && !stagesDir
   flex-wrap: wrap;
   justify-content: flex-end;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   flex: 1 1 520px;
   min-width: 0;
 }
@@ -1163,13 +1163,13 @@ revisionCoordinator.synchronizeInitial(() => !initialTouched.value && !stagesDir
 .top-btn {
   min-height: 34px;
   max-width: 100%;
-  font-size: 0.83rem;
+  font-size: 13px;
   font-weight: 500;
   border: 1px solid var(--color-border-strong);
   background: var(--color-card-2);
   color: var(--color-text);
-  border-radius: var(--rounded);
-  padding: 0 14px;
+  border-radius: 6px;
+  padding: 0 12px;
   cursor: pointer;
   transition: border-color var(--duration-fast), background-color var(--duration-fast), transform var(--duration-fast);
   display: inline-flex;
@@ -1206,12 +1206,12 @@ revisionCoordinator.synchronizeInitial(() => !initialTouched.value && !stagesDir
   color: #fff;
   border-color: transparent;
   font-weight: 600;
-  box-shadow: 0 5px 16px var(--color-primary-soft);
+  box-shadow: none;
 }
 
 .top-btn--save:hover:not(:disabled) {
   background: var(--color-primary-press);
-  transform: translateY(-1px);
+  transform: none;
 }
 
 .top-btn--save:disabled {
@@ -1284,7 +1284,7 @@ revisionCoordinator.synchronizeInitial(() => !initialTouched.value && !stagesDir
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  padding: 0 28px;
+  padding: 0 20px;
   border-bottom: 1px solid var(--color-border);
   flex: none;
 }
@@ -1296,9 +1296,9 @@ revisionCoordinator.synchronizeInitial(() => !initialTouched.value && !stagesDir
   gap: 6px;
   min-width: 0;
   overflow-wrap: anywhere;
-  font-size: 0.84rem;
+  font-size: 13px;
   color: var(--color-faint);
-  padding: 12px 14px;
+  padding: 10px 12px;
   cursor: pointer;
   border: none;
   background: none;
@@ -1306,6 +1306,7 @@ revisionCoordinator.synchronizeInitial(() => !initialTouched.value && !stagesDir
   margin-bottom: -1px;
   font-family: var(--font-sans);
   transition: color var(--duration-fast), border-color var(--duration-fast);
+  min-height: 38px;
 }
 
 .tab-dirty-marker { width: 8px; flex: none; visibility: hidden; color: var(--color-amber); font-weight: 700; }
@@ -1317,7 +1318,14 @@ revisionCoordinator.synchronizeInitial(() => !initialTouched.value && !stagesDir
   .pipeline-top-actions { justify-content: flex-start; flex-basis: 100%; }
   .top-btn { min-height: 44px; padding: 6px 10px; }
   .tab-strip { padding: 0 12px; }
-  .tab-btn { flex: 1 1 calc(50% - 4px); padding: 10px 6px; }
+  .tab-btn { flex: 1 1 calc(50% - 4px); padding: 10px 6px; min-height: 44px; }
+  .pac-preview-btn {
+    min-height: 44px;
+  }
+  .pac-switch {
+    min-height: 44px;
+    min-width: 44px;
+  }
 }
 
 .tab-btn:hover { color: var(--color-dim); }
@@ -1335,7 +1343,7 @@ revisionCoordinator.synchronizeInitial(() => !initialTouched.value && !stagesDir
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 10px 28px;
+  padding: 10px 20px;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface-2, var(--color-surface));
   flex: none;
@@ -1346,7 +1354,7 @@ revisionCoordinator.synchronizeInitial(() => !initialTouched.value && !stagesDir
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-size: 0.86rem;
+  font-size: 13px;
   font-weight: 500;
   color: var(--color-text);
 }
@@ -1393,21 +1401,37 @@ revisionCoordinator.synchronizeInitial(() => !initialTouched.value && !stagesDir
 .pac-switch {
   position: relative;
   flex: none;
-  width: 40px;
-  height: 22px;
+  width: 44px;
+  height: 34px;
   border-radius: 999px;
   border: none;
   cursor: pointer;
-  background: var(--color-border);
+  background: transparent;
   transition: background var(--duration-fast);
+  padding: 0;
 }
-.pac-switch--on { background: var(--color-primary); }
+
+.pac-switch::before {
+  content: '';
+  position: absolute;
+  width: 40px;
+  height: 22px;
+  left: calc(50% - 20px);
+  top: calc(50% - 11px);
+  border-radius: 999px;
+  background: var(--color-border);
+  transition: inherit;
+  pointer-events: none;
+}
+.pac-switch--on::before {
+  background: var(--color-primary);
+}
 .pac-switch:disabled { opacity: 0.55; cursor: default; }
 .pac-switch:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 .pac-switch-knob {
   position: absolute;
-  top: 3px;
-  left: 3px;
+  top: calc(50% - 8px);
+  left: 5px;
   width: 16px;
   height: 16px;
   border-radius: 50%;
@@ -1548,10 +1572,6 @@ revisionCoordinator.synchronizeInitial(() => !initialTouched.value && !stagesDir
   100% { background-position: -200% center; }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .skel { animation: none; background: var(--color-inset); }
-}
-
 .skel--stage-head { height: 18px; width: 80%; }
 .skel--card       { height: 62px; width: 100%; border-radius: 12px; }
 
@@ -1608,6 +1628,36 @@ revisionCoordinator.synchronizeInitial(() => !initialTouched.value && !stagesDir
   margin-top: 4px;
 }
 
+/* Independent configuration saves keep their own protocol and use secondary styling. */
+.pipeline-root :deep(:is(.cron-save, .runner-save, .conc-save, .chain-save, .save-row, .save-bar) > .btn-primary),
+.pipeline-root :deep(.ep-save-bar > .ep-btn-primary),
+.pipeline-root :deep(.pvc__foot > .pvc__save) {
+  min-height: 34px;
+  height: auto;
+  padding: 6px 12px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  background: var(--color-card);
+  color: var(--color-text);
+  font: 13px/1.5 var(--font-sans);
+  box-shadow: none;
+  cursor: pointer;
+}
+.pipeline-root :deep(:is(.cron-save, .runner-save, .conc-save, .chain-save, .save-row, .save-bar) > .btn-primary:hover:not(:disabled)),
+.pipeline-root :deep(.ep-save-bar > .ep-btn-primary:hover:not(:disabled)),
+.pipeline-root :deep(.pvc__foot > .pvc__save:hover:not(:disabled)) {
+  background: var(--color-card-2);
+  border-color: var(--color-primary);
+}
+@media (max-width: 639px) {
+  .pipeline-root :deep(input:not([type='checkbox']):not([type='radio'])),
+  .pipeline-root :deep(select),
+  .pipeline-root :deep(textarea) { min-height: 44px; font-size: 16px; }
+  .pipeline-root :deep(:is(.cron-save, .runner-save, .conc-save, .chain-save, .save-row, .save-bar) > .btn-primary),
+  .pipeline-root :deep(.ep-save-bar > .ep-btn-primary),
+  .pipeline-root :deep(.pvc__foot > .pvc__save) { min-height: 44px; }
+}
+
 /* ─── Spinner ────────────────────────────────────────────────────────────── */
 .spinner {
   display: inline-block;
@@ -1623,6 +1673,7 @@ revisionCoordinator.synchronizeInitial(() => !initialTouched.value && !stagesDir
 @keyframes spin { to { transform: rotate(360deg); } }
 
 @media (prefers-reduced-motion: reduce) {
+  .skel { animation: none; background: var(--color-inset); }
   .spinner { animation: none; border-top-color: currentColor; }
 }
 </style>

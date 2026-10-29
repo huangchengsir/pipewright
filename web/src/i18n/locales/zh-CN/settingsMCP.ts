@@ -33,5 +33,10 @@ export default {
   "revokeTitle": "撤销访问令牌？",
   "revokeBody": "撤销后，使用「{name}」的客户端将无法继续调用。",
   "projectLimit": "最多 32 个项目；未选项目不会获得访问权限。",
-  "privacy": "MCP 本身不调用模型。外部 AI 客户端可能将查询结果发给其模型；敏感部署数据请仅交给受信任的客户端。"
+  "privacy": "MCP 本身不调用模型。外部 AI 客户端可能将查询结果发给其模型；敏感部署数据请仅交给受信任的客户端。",
+  "accessScopeTitle": "访问边界",
+  "scopedAccess": "访问仅限已授权项目",
+  "separateApproval": "应用配置需单独批准具体草案",
+  "triggerAccess": "触发流水线需要单独授权",
+  "privacyTitle": "数据与客户端说明"
 }

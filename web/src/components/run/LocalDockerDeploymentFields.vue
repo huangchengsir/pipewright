@@ -93,7 +93,7 @@ function update(key: string, value: string): void {
 }
 legend {
   font-weight: 600;
-  font-size: 0.85rem;
+  font-size: 16px;
 }
 label {
   display: grid;
@@ -108,14 +108,14 @@ input,
 textarea {
   box-sizing: border-box;
   width: 100%;
-  min-height: 40px;
+  min-height: 44px;
   padding: 8px;
   border: 1px solid var(--color-border-strong);
   border-radius: var(--rounded);
   background: var(--color-card-2);
   color: var(--color-text);
   font-family: var(--font-mono);
-  font-size: 0.85rem;
+  font-size: 16px;
 }
 textarea {
   resize: vertical;
@@ -125,5 +125,15 @@ p {
   color: var(--color-amber);
   font-size: 0.8rem;
   line-height: 1.5;
+}
+@media (min-width: 640px) {
+  input,
+  textarea {
+    min-height: 36px;
+    font-size: 13px;
+  }
+  legend {
+    font-size: 14px;
+  }
 }
 </style>

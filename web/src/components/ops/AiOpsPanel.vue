@@ -460,7 +460,7 @@ defineExpose({ close, terminalTarget, prepareTerminal, attachTerminal })
 </template>
 <style scoped src="./opsChat.css"></style>
 <style scoped>
-.terminal-reference{flex:0 1 auto;max-height:25%;overflow:auto;border-top:1px solid var(--color-border)}
+.terminal-reference{flex:0 1 auto;max-height:22%;overflow:auto;border-top:1px solid var(--color-border)}
 .terminal-reference p{font-size:12px;line-height:1.5;color:var(--color-dim)}
 .terminal-reference pre{font:12px/1.5 var(--font-mono);white-space:pre-wrap;overflow-wrap:anywhere}
 .ops-panel {
@@ -476,6 +476,8 @@ defineExpose({ close, terminalTarget, prepareTerminal, attachTerminal })
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   overflow: hidden;
+  font-size:13px;
+  line-height:1.5;
 }
 .ops-feedback {
   flex: 0 1 auto;
@@ -505,6 +507,7 @@ defineExpose({ close, terminalTarget, prepareTerminal, attachTerminal })
   overflow: auto;
   overscroll-behavior: contain;
   overflow-anchor: none;
+  padding-inline:2px;
 }
 .ops-scroll-content {
   display: flow-root;

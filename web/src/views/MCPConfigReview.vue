@@ -7,6 +7,7 @@ import AppButton from '../components/ui/AppButton.vue'
 import { HttpError } from '../api/http'
 import { approveMCPConfigDraft, getMCPConfigReview, type MCPConfigReview } from '../api/mcpConfig'
 import { MCP_CONFIG_OPERATIONS } from '../api/mcp'
+import '../styles/settings-surface.css'
 
 const route = useRoute()
 const { t, locale } = useI18n()
@@ -109,7 +110,7 @@ onBeforeUnmount(() => { alive = false; generation++; controller?.abort(); clearI
 </script>
 
 <template>
-  <main class="config-review" aria-labelledby="config-review-title">
+  <main class="config-review settings-page" aria-labelledby="config-review-title">
     <header class="review-header">
       <div><p class="review-eyebrow">MCP</p><h1 id="config-review-title">{{ t('mcpConfig.title') }}</h1><p class="review-lede">{{ t('mcpConfig.subtitle') }}</p></div>
       <AppButton :loading="loading" :disabled="approving" @click="load"><Refresh class="review-icon" aria-hidden="true" />{{ t('common.refresh') }}</AppButton>
@@ -117,15 +118,19 @@ onBeforeUnmount(() => { alive = false; generation++; controller?.abort(); clearI
     <p v-if="error" class="review-notice review-notice--error" role="alert">{{ error }}</p>
     <p v-if="loading" class="review-loading" role="status">{{ t('mcpConfig.loading') }}</p>
     <template v-if="review">
-      <dl class="review-meta">
-        <div><dt>{{ t('mcpConfig.project') }}</dt><dd><code>{{ review.projectId }}</code></dd></div>
-        <div><dt>{{ t('mcpConfig.draft') }}</dt><dd><code>{{ review.draftId }}</code></dd></div>
-        <div><dt>{{ t('mcpConfig.baseRevision') }}</dt><dd><code>{{ review.baseRevision }}</code></dd></div>
-        <div><dt>{{ t('mcpConfig.policyVersion') }}</dt><dd><code>{{ review.policyVersion }}</code></dd></div>
-        <div><dt>{{ t('mcpConfig.expires') }}</dt><dd>{{ date(review.expiresAt) }}</dd></div>
-        <div><dt>{{ t('settingsMCP.status') }}</dt><dd>{{ state(expired ? 'expired' : review.state) }}</dd></div>
-      </dl>
-      <div class="review-notice" role="note"><ShieldCheck class="review-icon" aria-hidden="true" /><div><p>{{ t('mcpConfig.hiddenPreserved') }}</p><p>{{ t('mcpConfig.notExecuted') }}</p><p>{{ t('mcpConfig.triggerImpact') }}</p></div></div>
+      <p class="review-identity"><span>{{ t('mcpConfig.project') }} · <code>{{ review.projectId }}</code></span><span>{{ t('mcpConfig.draft') }} · <code>{{ review.draftId }}</code></span></p>
+      <div class="review-summary"><span class="review-status">{{ state(expired ? 'expired' : review.state) }}</span><span>{{ t('mcpConfig.expires') }} · {{ date(review.expiresAt) }}</span></div>
+      <details class="review-details">
+        <summary>{{ t('mcpConfig.technicalDetails') }}</summary>
+        <dl class="review-meta">
+          <div><dt>{{ t('mcpConfig.project') }}</dt><dd><code>{{ review.projectId }}</code></dd></div>
+          <div><dt>{{ t('mcpConfig.draft') }}</dt><dd><code>{{ review.draftId }}</code></dd></div>
+          <div><dt>{{ t('mcpConfig.baseRevision') }}</dt><dd><code>{{ review.baseRevision }}</code></dd></div>
+          <div><dt>{{ t('mcpConfig.policyVersion') }}</dt><dd><code>{{ review.policyVersion }}</code></dd></div>
+        </dl>
+      </details>
+      <details class="review-details review-context"><summary>{{ t('mcpConfig.reviewScope') }}</summary><div class="review-notice" role="note"><ShieldCheck class="review-icon" aria-hidden="true" /><div><p>{{ t('mcpConfig.hiddenPreserved') }}</p><p>{{ t('mcpConfig.notExecuted') }}</p></div></div></details>
+      <p class="review-trigger-impact">{{ t('mcpConfig.triggerImpact') }}</p>
       <p v-if="!complete" class="review-notice review-notice--error" role="alert">{{ t('mcpConfig.incomplete') }}</p>
       <p v-if="expired" class="review-notice review-notice--error" role="alert">{{ t('mcpConfig.reasonExpired') }}</p>
       <p v-else-if="review.state === 'invalidated'" class="review-notice review-notice--error" role="alert">{{ t('mcpConfig.reasonConflict') }}</p>
@@ -157,46 +162,56 @@ onBeforeUnmount(() => { alive = false; generation++; controller?.abort(); clearI
 </template>
 
 <style scoped>
-.config-review { width: 100%; max-width: 1040px; padding: 24px 16px 48px; margin: 0 auto; min-width: 0; color: var(--color-text); }
-.review-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
-.review-eyebrow { margin: 0 0 6px; color: var(--color-primary); font: 600 12px var(--font-mono); letter-spacing: .06em; }
-h1 { margin: 0; font-size: 26px; line-height: 1.25; letter-spacing: -.02em; }
-.review-lede { max-width: 65ch; margin: 12px 0 0; color: var(--color-dim); line-height: 1.65; }
-.review-icon { width: 18px; height: 18px; flex: 0 0 auto; }
-.review-meta { margin: 0 0 24px; display: grid; gap: 18px; padding: 20px; border: 1px solid var(--color-border-strong); border-radius: var(--rounded); background: var(--color-card); }
-.review-meta dt, .review-checks dt { color: var(--color-dim); font-size: var(--text-label); margin-bottom: 5px; }
+.review-identity { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 8px 0 12px; color: var(--color-dim); font-size: 12px; overflow-wrap: anywhere; }
+.config-review { width: 100%; max-width: 1120px; padding: 0 0 32px; margin: 0 auto; min-width: 0; color: var(--color-text); font-size: var(--settings-text-size, 13px); }
+.review-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; flex-wrap: wrap; }
+.review-header > div { min-width: 0; }
+.review-header :deep(.app-btn) { height: var(--settings-action-height, 34px); }
+.review-eyebrow { margin: 0 0 5px; color: var(--color-primary); font: 600 11px var(--font-mono); }
+h1 { margin: 0; font-size: 20px; line-height: 1.35; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.review-lede { max-width: 72ch; margin: 7px 0 0; color: var(--color-dim); line-height: 1.6; font-size: var(--settings-label-size, 13px); }
+.review-icon { width: 16px; height: 16px; flex: 0 0 auto; }
+.review-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; font-size: 12px; color: var(--color-dim); margin: 0 0 12px; }
+.review-status { color: var(--color-primary); background: var(--color-primary-soft); border-radius: 4px; padding: 3px 7px; }
+.review-details { margin: 10px 0; color: var(--color-dim); font-size: 12px; }
+.review-details > summary { min-height: 28px; cursor: pointer; width: fit-content; }
+.review-details > summary:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.review-meta { margin: 8px 0 14px; display: grid; gap: 12px; padding: 14px 16px; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-card); }
+.review-meta dt, .review-checks dt { color: var(--color-dim); font-size: 12px; margin-bottom: 5px; }
 .review-meta dd, .review-checks dd { margin: 0; overflow-wrap: anywhere; }
 code, pre { font-family: var(--font-mono); }
 .review-meta code { font-size: 12px; }
-.review-notice { display: flex; align-items: flex-start; gap: 12px; padding: 16px; margin: 16px 0; background: var(--color-inset); border-left: 3px solid var(--color-border-strong); font-size: 14px; line-height: 1.65; }
+.review-notice { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; margin: 10px 0; background: var(--color-inset); border: 1px solid var(--color-border); border-radius: 6px; font-size: 12px; line-height: 1.65; }
 .review-notice p { margin: 0; }
-.review-notice p + p { margin-top: 6px; }
-.review-notice--error { color: var(--color-red); border-left-color: var(--color-red); background: var(--color-red-soft); }
-.review-loading { padding: 36px 0; color: var(--color-dim); }
-.review-section { margin: 28px 0; }
-h2 { display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; margin: 0 0 16px; font-size: 18px; }
-h2 > span { color: var(--color-dim); font-size: 13px; font-weight: 400; }
-.review-change { border-top: 1px solid var(--color-border-strong); padding: 18px 0; }
+.review-notice p + p { margin-top: 5px; }
+.review-notice--error { color: var(--color-red); border-color: var(--color-red-soft); background: var(--color-red-soft); }
+.review-trigger-impact { color: var(--color-dim); font-size: 12px; line-height: 1.6; margin: 10px 0 18px; }
+.review-loading { padding: 24px 0; color: var(--color-dim); }
+.review-section { margin: 18px 0; padding: 16px 18px; border: 1px solid var(--color-border); border-radius: 9px; background: var(--color-card); }
+h2 { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px; margin: 0 0 14px; font-size: 14px; }
+h2 > span { color: var(--color-dim); font-size: 12px; font-weight: 400; }
+.review-change { border-top: 1px solid var(--color-border); padding: 14px 0 0; }
+.review-change + .review-change { margin-top: 14px; }
 .review-change > header { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
-h3 { margin: 0; font-size: 15px; font-weight: 600; }
-.review-change header code { color: var(--color-dim); font-size: 12px; overflow-wrap: anywhere; }
-.review-field { margin: 10px 0; color: var(--color-dim); font-size: 13px; }
-.review-impact { margin: 0 0 12px; color: var(--color-amber); font-size: 13px; line-height: 1.6; }
-.review-values { display: grid; gap: 8px; }
-.review-values > div { padding: 12px 14px; background: var(--color-inset); border: 1px solid var(--color-border); border-radius: var(--rounded); min-width: 0; }
-.review-values span { font-size: 12px; color: var(--color-dim); }
-.review-values pre { margin: 8px 0 0; color: var(--color-text); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.6; }
-.review-values .review-value--after { border-left: 3px solid var(--color-primary); }
-.review-checks { display: grid; gap: 14px; margin: 0; }
-.review-checks > div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--color-border); }
+h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.review-change header code { color: var(--color-dim); font-size: 11px; overflow-wrap: anywhere; }
+.review-field { margin: 8px 0; color: var(--color-dim); font-size: 12px; }
+.review-impact { margin: 0 0 10px; color: var(--color-amber); font-size: 12px; line-height: 1.6; }
+.review-values { display: grid; gap: 10px; }
+.review-values > div { padding: 11px 12px; background: var(--color-inset); border: 1px solid var(--color-border); border-radius: 6px; min-width: 0; }
+.review-values span { font-size: 11px; color: var(--color-dim); }
+.review-values pre { margin: 7px 0 0; color: var(--color-text); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.65; }
+.review-values .review-value--after { border-inline-start: 2px solid var(--color-primary); }
+.review-checks { display: grid; gap: 10px; margin: 0; }
+.review-checks > div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-bottom: 9px; border-bottom: 1px solid var(--color-border); font-size: 12px; }
 .review-checks dt { margin: 0; }
-.review-issues { color: var(--color-amber); font-size: 14px; line-height: 1.7; padding-left: 20px; }
-.review-approval { padding: 22px 0 0; border-top: 1px solid var(--color-border-strong); }
-.review-approval > p { font-size: 14px; color: var(--color-dim); line-height: 1.65; max-width: 72ch; }
+.review-issues { color: var(--color-amber); font-size: 13px; line-height: 1.6; padding-left: 18px; }
+.review-approval { padding: 16px 18px; border: 1px solid var(--color-border); border-radius: 9px; background: var(--color-card); }
+.review-approval > p { font-size: 12px; color: var(--color-dim); line-height: 1.65; max-width: 80ch; }
 .review-approval > .review-approved { color: var(--color-green); }
-.review-ack { display: flex; gap: 10px; align-items: flex-start; padding: 16px 0; font-size: 16px; line-height: 1.6; cursor: pointer; }
-.review-ack input { margin: 5px 0 0; accent-color: var(--color-primary); width: 18px; height: 18px; flex-shrink: 0; }
-.review-approve-button { width: 100%; min-height: 44px; }
-@media (min-width: 640px) { .config-review { padding: 32px 28px 64px; } .review-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); } .review-values { grid-template-columns: repeat(2, minmax(0, 1fr)); } .review-approve-button { width: auto; } }
-@media (min-width: 1000px) { .review-meta { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.review-ack { display: flex; gap: 8px; align-items: flex-start; padding: 12px 0; font-size: 13px; line-height: 1.6; cursor: pointer; }
+.review-ack input { margin: 3px 0 0; accent-color: var(--color-primary); width: 16px; height: 16px; flex-shrink: 0; }
+.review-approve-button { width: 100%; min-height: var(--settings-action-height, 34px); height: var(--settings-action-height, 34px); }
+@media (min-width: 640px) { .review-meta, .review-values { grid-template-columns: repeat(2, minmax(0, 1fr)); } .review-approve-button { width: auto; } }
+@media (max-width: 639px) { .review-ack { min-height: 44px; font-size: 14px; } .review-details > summary { min-height: 44px; align-content: center; } .review-section, .review-approval { padding: 16px; } }
 </style>

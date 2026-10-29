@@ -724,10 +724,9 @@ const displayWebhookUrl = computed(() => {
   from { opacity: 0; transform: translateY(13px); }
   to   { opacity: 1; transform: none; }
 }
-@media (prefers-reduced-motion: reduce) { .config-card { animation: none; } }
-.card-head { display: flex; align-items: center; gap: 9px; padding: 14px 18px; border-bottom: 1px solid var(--color-border); }
+.card-head { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--color-border); flex-wrap: wrap; }
 .card-icon { width: 22px; height: 22px; border-radius: 6px; background: var(--color-primary-soft); color: var(--color-primary); display: grid; place-items: center; flex-shrink: 0; }
-.card-title { font-size: 0.88rem; font-weight: 600; color: var(--color-text); }
+.card-title { font-size: 14px; font-weight: 600; color: var(--color-text); }
 .card-sub { margin-left: 6px; font-size: 0.75rem; color: var(--color-faint); font-weight: 400; }
 .card-body { padding: 0; }
 .card-body--pad { padding: 16px 18px; }
@@ -758,12 +757,28 @@ const displayWebhookUrl = computed(() => {
 .event-row:last-child { border-bottom: none; }
 .event-row:not(.event-row--always-on):hover { background: var(--color-inset); }
 .event-row--always-on { opacity: 0.65; }
-.ev-toggle { position: relative; width: 36px; height: 20px; border-radius: var(--rounded-full); background: var(--color-border-strong); border: none; cursor: pointer; flex-shrink: 0; transition: background-color var(--duration-fast); display: block; }
-.ev-toggle--on { background: var(--color-primary); }
-.ev-toggle--always-on { background: var(--color-primary); cursor: not-allowed; }
-.ev-toggle-knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: var(--rounded-full); background: #fff; transition: transform var(--duration-fast); pointer-events: none; box-shadow: 0 1px 4px oklch(0% 0 0 / 0.35); }
+.ev-toggle { position: relative; width: 44px; height: 34px; border-radius: var(--rounded-full); background: transparent; border: none; cursor: pointer; flex-shrink: 0; transition: background-color var(--duration-fast); display: block; padding: 0; }
+.ev-toggle::before {
+  content: '';
+  position: absolute;
+  width: 36px;
+  height: 20px;
+  left: calc(50% - 18px);
+  top: calc(50% - 10px);
+  border-radius: 999px;
+  background: var(--color-border-strong);
+  transition: inherit;
+  pointer-events: none;
+}
+.ev-toggle--on::before {
+  background: var(--color-primary);
+}
+.ev-toggle--always-on { cursor: not-allowed; }
+.ev-toggle--always-on::before {
+  background: var(--color-primary);
+}
+.ev-toggle-knob { position: absolute; top: calc(50% - 8px); left: 6px; width: 16px; height: 16px; border-radius: var(--rounded-full); background: #fff; transition: transform var(--duration-fast); pointer-events: none; box-shadow: 0 1px 4px oklch(0% 0 0 / 0.35); }
 .ev-toggle--on .ev-toggle-knob, .ev-toggle--always-on .ev-toggle-knob { transform: translateX(16px); }
-@media (prefers-reduced-motion: reduce) { .ev-toggle, .ev-toggle-knob { transition: none; } }
 .ev-text { display: flex; flex-direction: column; gap: 2px; }
 .ev-name { font-size: 0.84rem; font-weight: 500; color: var(--color-text); }
 .ev-desc { font-size: 0.75rem; color: var(--color-faint); line-height: 1.4; }
@@ -806,7 +821,7 @@ const displayWebhookUrl = computed(() => {
 
 /* ─── Save bar ────────────────────────────────── */
 .save-bar { display: flex; justify-content: flex-start; padding-bottom: 8px; }
-.btn-primary { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 16px; border: none; background: var(--color-primary); color: #fff; font-family: var(--font-sans); font-size: 0.83rem; font-weight: 600; border-radius: var(--rounded); cursor: pointer; box-shadow: 0 5px 16px var(--color-primary-soft); transition: background-color var(--duration-fast), transform var(--duration-fast); white-space: nowrap; }
+.btn-primary { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 16px; border: none; background: var(--color-primary); color: #fff; font-family: var(--font-sans); font-size: 0.83rem; font-weight: 600; border-radius: var(--rounded); cursor: pointer; box-shadow: none; transition: background-color var(--duration-fast), transform var(--duration-fast); white-space: nowrap; }
 .btn-primary:hover:not(:disabled) { background: var(--color-primary-press); transform: translateY(-1px); }
 .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; transform: none; box-shadow: none; }
 
@@ -815,7 +830,6 @@ const displayWebhookUrl = computed(() => {
 .skel-card { background: var(--color-card); border: 1px solid var(--color-border); border-radius: var(--rounded-card); padding: 18px; display: flex; flex-direction: column; gap: 14px; }
 .skel { display: block; background: linear-gradient(90deg, var(--color-inset) 0%, oklch(100% 0 0 / 0.06) 50%, var(--color-inset) 100%); background-size: 200% 100%; border-radius: var(--rounded-md); animation: shimmer 1.4s ease-in-out infinite; }
 @keyframes shimmer { 0% { background-position: 200% center; } 100% { background-position: -200% center; } }
-@media (prefers-reduced-motion: reduce) { .skel { animation: none; background: var(--color-inset); } }
 .skel--title { height: 16px; width: 40%; }
 .skel--row   { height: 38px; width: 100%; }
 
@@ -830,7 +844,6 @@ const displayWebhookUrl = computed(() => {
 @keyframes scrim-in { from { opacity: 0; } to { opacity: 1; } }
 .modal { width: 100%; max-width: 440px; background: var(--color-card); border: 1px solid var(--color-border-strong); border-radius: var(--rounded-xl); box-shadow: var(--shadow-modal); overflow: hidden; animation: modal-in 0.35s var(--ease-out-expo) both; }
 @keyframes modal-in { from { opacity: 0; transform: translateY(14px) scale(0.98); } to { opacity: 1; transform: none; } }
-@media (prefers-reduced-motion: reduce) { .modal-scrim { animation: none; } .modal { animation: none; } }
 .modal-head { display: flex; align-items: flex-start; gap: 12px; padding: 20px 20px 16px; border-bottom: 1px solid var(--color-border); }
 .modal-icon { width: 36px; height: 36px; border-radius: var(--rounded-lg); display: grid; place-items: center; flex-shrink: 0; }
 .modal-icon--warn { background: var(--color-amber-soft); color: var(--color-amber); border: 1px solid var(--color-amber-line); }
@@ -853,5 +866,33 @@ const displayWebhookUrl = computed(() => {
 .spinner { display: inline-block; width: 13px; height: 13px; border: 2px solid rgba(255, 255, 255, 0.35); border-top-color: #fff; border-radius: var(--rounded-full); animation: spin 0.7s linear infinite; flex-shrink: 0; }
 .spinner--red { border-color: oklch(69% 0.17 22 / 0.3); border-top-color: var(--color-red); }
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .spinner { animation: none; border-top-color: currentColor; } }
+@media (max-width: 640px) {
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+    min-height: 44px;
+    font-size: 16px;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+  button {
+    min-height: 44px;
+    white-space: normal;
+  }
+  .webhook-row, .map-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .map-header {
+    display: none;
+  }
+  .event-row {
+    grid-template-columns: 40px minmax(0, 1fr) auto;
+  }
+  .segmented {
+    flex-wrap: wrap;
+  }
+  .url-text {
+    overflow-wrap: anywhere;
+    height: auto;
+  }
+}
+@media (prefers-reduced-motion: reduce) { .config-card { animation: none; } .ev-toggle, .ev-toggle-knob { transition: none; } .skel { animation: none; background: var(--color-inset); } .modal-scrim { animation: none; } .modal { animation: none; } .spinner { animation: none; border-top-color: currentColor; } }
 </style>

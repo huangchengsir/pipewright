@@ -137,5 +137,12 @@ export default {
     "authorization": "授權",
     "policy": "原則",
     "sourceApplicability": "執行來源"
-  }
+  },
+  "technicalDetails": "技術詳情",
+  "reviewScope": "影響與驗證範圍",
+  "maintenanceSummary": "核對待確認的設定操作，再決定如何收尾。",
+  "maintenanceDetails": "處理範圍與詳情",
+  "maintenanceReady": "已有相符的結束記錄，核對後可結束活動。",
+  "maintenanceNeedsReview": "尚無法確認原操作已結束，目前記錄會保留。",
+  "operationSummary": "回應遺失時，先核對原操作，再決定是否隔離。"
 }

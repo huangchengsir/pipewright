@@ -141,12 +141,6 @@
   outline-offset: 2px;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .job-card:hover {
-    transform: none;
-  }
-}
-
 .job-card-top {
   display: flex;
   align-items: center;
@@ -284,13 +278,6 @@
   to { stroke-dashoffset: -14; }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .conn-flow {
-    animation: none;
-    opacity: 0;
-  }
-}
-
 /* ─── Add stage button ────────────────────────────────────────────────────── */
 .add-stage-btn {
   width: 150px;
@@ -321,7 +308,7 @@
 
 /* ─── Job drawer ──────────────────────────────────────────────────────────── */
 .job-drawer {
-  width: 360px;
+  width: 340px;
   flex: none;
   border-left: 1px solid var(--color-border);
   background: var(--color-card);
@@ -329,6 +316,7 @@
   display: flex;
   flex-direction: column;
   animation: drawer-slide 0.22s var(--ease-out-expo) both;
+  min-width: 0;
 }
 
 @keyframes drawer-slide {
@@ -336,16 +324,12 @@
   to   { opacity: 1; transform: none; }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .job-drawer { animation: none; }
-}
-
 .drawer-head {
-  padding: 15px 18px;
+  padding: 13px 16px;
   border-bottom: 1px solid var(--color-border);
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex: none;
 }
 
@@ -361,7 +345,7 @@
 }
 
 .drawer-title {
-  font-size: 0.92rem;
+  font-size: 14px;
   font-weight: 600;
   color: var(--color-text);
   flex: 1;
@@ -380,8 +364,8 @@
 }
 
 .drawer-close {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   border-radius: 7px;
   border: none;
   background: transparent;
@@ -404,7 +388,7 @@
 }
 
 .drawer-section {
-  padding: 14px 18px;
+  padding: 14px 16px;
   border-bottom: 1px solid var(--color-border);
 }
 
@@ -413,12 +397,12 @@
 }
 
 .drawer-section-label {
-  font-size: 0.72rem;
+  font-size: 12px;
   color: var(--color-faint);
   font-weight: 600;
   margin-bottom: 9px;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .drawer-field {
@@ -430,7 +414,7 @@
 }
 
 .drawer-field-label {
-  font-size: 0.76rem;
+  font-size: 13px;
   color: var(--color-dim);
   margin-bottom: 5px;
 }
@@ -445,8 +429,10 @@
   padding: 0 11px;
   color: var(--color-text);
   font: inherit;
-  font-size: 0.84rem;
+  font-size: 13px;
   transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .drawer-input:focus,
@@ -468,7 +454,7 @@
 /* ─── KV config editor ───────────────────────────────────────────────────── */
 .kv-row {
   display: grid;
-  grid-template-columns: 1fr 1fr 22px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 28px;
   gap: 6px;
   align-items: center;
   margin-bottom: 6px;
@@ -486,6 +472,8 @@
   font-size: 0.8rem;
   font-family: var(--font-mono);
   transition: border-color var(--duration-fast);
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .kv-input:focus {
@@ -495,8 +483,8 @@
 }
 
 .kv-del {
-  width: 22px;
-  height: 22px;
+  width: 28px;
+  height: 28px;
   display: grid;
   place-items: center;
   background: none;
@@ -533,6 +521,7 @@
   cursor: pointer;
   margin-top: 4px;
   transition: border-color var(--duration-fast), background-color var(--duration-fast);
+  min-height: 32px;
 }
 
 .kv-add-btn:hover {
@@ -595,4 +584,41 @@
   color: var(--color-dim);
   line-height: 1.7;
   white-space: pre;
+}
+
+@media (max-width: 640px) {
+  .job-drawer {
+    max-width: 100%;
+  }
+  .drawer-close {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .drawer-input, .drawer-select, .kv-input {
+    min-height: 44px;
+    font-size: 16px;
+  }
+  .drawer-input.drawer-textarea {
+    height: auto;
+  }
+  .kv-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 44px;
+  }
+  .kv-del, .kv-add-btn {
+    min-height: 44px;
+  }
+  .kv-del {
+    width: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .job-card:hover {
+    transform: none;
+  }
+  .conn-flow {
+    animation: none;
+    opacity: 0;
+  }
+  .job-drawer { animation: none; }
 }

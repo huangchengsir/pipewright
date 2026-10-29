@@ -137,5 +137,12 @@ export default {
     "authorization": "Autorisierung",
     "policy": "Richtlinie",
     "sourceApplicability": "Ausführungsquelle"
-  }
+  },
+  "technicalDetails": "Technische Details",
+  "reviewScope": "Auswirkungen und Prüfumfang",
+  "maintenanceSummary": "Prüfen Sie unbestätigte Konfigurationsvorgänge, bevor Sie über deren Abschluss entscheiden.",
+  "maintenanceDetails": "Grenzen und Details der Bearbeitung",
+  "maintenanceReady": "Ein passender Beendigungsnachweis liegt vor. Prüfen Sie ihn vor dem Abschluss der Aktivität.",
+  "maintenanceNeedsReview": "Das Ende des ursprünglichen Vorgangs ist nicht bestätigt. Dieser Eintrag bleibt erhalten.",
+  "operationSummary": "Bei verlorener Antwort zuerst den ursprünglichen Vorgang prüfen und erst dann über eine Sperre entscheiden."
 }

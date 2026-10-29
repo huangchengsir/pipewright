@@ -35,21 +35,22 @@ function date(value: string) { const d = new Date(value); return Number.isFinite
 
 <style scoped>
 .mcp-table-wrap { position: relative; min-width: 0; max-width: 100%; overflow-x: auto; }
-.mcp-table { width: 100%; border-collapse: collapse; table-layout: fixed; min-width: 640px; font-size: var(--text-label); }
+.mcp-table { width: 100%; border-collapse: collapse; table-layout: fixed; min-width: 640px; font-size: var(--settings-label-size, 13px); }
 .mcp-table th { color: var(--color-dim); font-weight: 500; text-align: left; }
-.mcp-table th, .mcp-table td { padding: 12px 10px; border-bottom: 1px solid var(--color-border); vertical-align: middle; overflow-wrap: anywhere; }
+.mcp-table th, .mcp-table td { padding: 10px; border-bottom: 1px solid var(--color-border); vertical-align: middle; overflow-wrap: anywhere; }
 .mcp-table th:first-child, .mcp-table td:first-child { padding-left: 0; width: 23%; }
 .mcp-table th:nth-child(2) { width: 25%; }
 .mcp-table strong { font-weight: 600; }
 .mcp-table small { display: block; color: var(--color-faint); font-size: 11px; margin-top: 5px; }
-.mcp-actions { width: 48px; text-align: right !important; }
+.mcp-actions { width: 48px; text-align: end; }
 .mcp-icon-button { width: 30px; height: 30px; border: 1px solid var(--color-border); border-radius: 6px; color: var(--color-dim); background: var(--color-surface, transparent); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
 .mcp-icon-button svg { width: 16px; height: 16px; }
 .mcp-icon-button:hover:not(:disabled) { color: #bd2538; border-color: #bd2538; }
 .mcp-icon-button:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 .mcp-icon-button:disabled { opacity: .4; cursor: default; }
 .mcp-status { display: inline-block; padding: 3px 6px; border-radius: 4px; font-size: 11px; color: var(--color-dim); background: var(--color-inset); white-space: nowrap; }
-.mcp-status--active { color: #168343; background: #e5f5eb; }
+.mcp-status--active { color: var(--color-green); background: var(--color-green-soft); }
 .mcp-empty { color: var(--color-faint); font-size: var(--text-body); padding: 16px 0; }
 .mcp-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+@media (max-width: 639px), (pointer: coarse) { .mcp-icon-button { width: 44px; height: 44px; } .mcp-actions { width: 56px; } }
 </style>

@@ -464,7 +464,7 @@ p.eg-hint { margin: 0 0 8px; }
 .server-row:hover:not(.server-row--disabled) { background: var(--color-inset); }
 .server-row input { width: 16px; height: 16px; margin: 0; accent-color: var(--color-primary); }
 .server-row input:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
-.server-name, .server-host, .server-status { overflow-wrap: anywhere; font-size: 0.79rem; }
+.server-name, .server-host, .server-status { overflow-wrap: anywhere; font-size: 13px; }
 .server-name { color: var(--color-text); }
 .server-host { color: var(--color-faint); }
 .server-status, .field-warning { color: var(--color-amber); }
@@ -476,9 +476,9 @@ p.eg-hint { margin: 0 0 8px; }
   border: 1px solid var(--color-border-strong);
   background: var(--color-inset);
   color: var(--color-text);
-  border-radius: 8px;
+  border-radius: 6px;
   padding: 0 10px;
-  font-size: 0.79rem;
+  font-size: 13px;
   width: 100%;
 }
 .eg-input:focus, .ev-k:focus, .ev-v:focus, .ev-sel:focus { outline: none; border-color: var(--color-primary); box-shadow: 0 0 0 3px var(--color-primary-soft); }
@@ -525,11 +525,11 @@ p.eg-hint { margin: 0 0 8px; }
 .addrow { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
 .addbtn {
   display: inline-flex; align-items: center; gap: 6px;
-  font-size: 0.79rem; font-weight: 500;
+  font-size: 13px; font-weight: 500;
   color: var(--color-primary);
   background: transparent;
   border: 1px dashed var(--color-border-strong);
-  border-radius: 8px;
+  border-radius: 6px;
   padding: 7px 12px;
   cursor: pointer;
   font-family: var(--font-sans);
@@ -551,4 +551,15 @@ p.eg-hint { margin: 0 0 8px; }
 }
 .sec-note svg { color: var(--color-cyan); flex: none; }
 .sec-note b { color: var(--color-dim); font-weight: 600; }
+@media (max-width: 640px) {
+
+ input:not([type="checkbox"]):not([type="radio"]), select, textarea { min-height: 44px; font-size: 16px; min-width: 0; box-sizing: border-box; }
+
+ button { min-height: 44px; }
+
+ .server-row { grid-template-columns: 16px minmax(0, 1fr); min-height: 44px; }
+
+ .server-host { grid-column: 2; }
+
+ .ev-del { min-width: 44px; } }
 </style>

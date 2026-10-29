@@ -62,16 +62,16 @@ const icon = computed(() => working.value ? Loader
   align-items: flex-start;
   gap: 8px;
   flex: none;
-  padding: 9px 28px;
+  padding: 9px 20px;
   min-height: 38px;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-inset);
   color: var(--color-dim);
-  font-size: 0.78rem;
+  font-size: 12px;
   line-height: 1.5;
 }
 .save-status-icon { width: 16px; height: 16px; flex: none; margin-top: 1px; }
-.save-status-content { display: flex; flex-wrap: wrap; gap: 2px 16px; min-width: 0; overflow-wrap: anywhere; }
+.save-status-content { display: flex; flex-wrap: wrap; gap: 3px 14px; min-width: 0; overflow-wrap: anywhere; }
 .save-status-title { font-weight: 600; }
 .save-status-completed { color: var(--color-green); }
 .save-status-pending { color: var(--color-amber); }

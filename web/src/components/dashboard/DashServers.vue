@@ -21,7 +21,7 @@ interface Row {
   id: string
   name: string
   host: string
-  reachable: boolean
+  reachable: boolean | null
   error: string
   load: string
   memPct: number | null
@@ -39,7 +39,7 @@ const rows = computed<Row[]>(() =>
       id: s.id,
       name: s.name,
       host: s.host,
-      reachable: m?.reachable ?? false,
+      reachable: m?.reachable ?? null,
       error: m?.error ?? '',
       load: m?.cpu?.loadavg1 != null ? m.cpu.loadavg1.toFixed(2) : '—',
       memPct: mem && mem.totalBytes > 0 ? Math.round((mem.usedBytes / mem.totalBytes) * 100) : null,
@@ -78,12 +78,12 @@ function tone(pct: number | null): string {
     <p v-else-if="!rows.length" class="card-empty">{{ t('dash.serversEmpty') }}</p>
 
     <div v-else class="srv-grid">
-      <article v-for="r in rows" :key="r.id" class="srv-card" :class="{ down: !r.reachable }">
+      <article v-for="r in rows" :key="r.id" class="srv-card" :class="{ down: r.reachable === false }">
         <div class="srv-top">
           <span class="srv-name">{{ r.name }}</span>
-          <span class="srv-state" :class="r.reachable ? 'up' : 'down'">
+          <span class="srv-state" :class="r.reachable === null ? 'unknown' : r.reachable ? 'up' : 'down'">
             <span class="srv-dot" aria-hidden="true" />
-            {{ r.reachable ? t('dash.online') : t('dash.offline') }}
+            {{ r.reachable === null ? t('runExperience.unknown') : r.reachable ? t('dash.online') : t('dash.offline') }}
           </span>
         </div>
         <div class="srv-host">{{ r.host }}</div>
@@ -101,7 +101,7 @@ function tone(pct: number | null): string {
           </div>
           <div class="srv-load">{{ t('dash.load') }} <strong>{{ r.load }}</strong></div>
         </template>
-        <p v-else class="srv-err">{{ r.error || t('dash.unreachable') }}</p>
+        <p v-else-if="r.reachable === false" class="srv-err">{{ r.error || t('dash.unreachable') }}</p>
       </article>
     </div>
   </section>

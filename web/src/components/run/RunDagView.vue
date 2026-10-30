@@ -823,4 +823,25 @@ function edgeClass(status: string): string {
   color: var(--color-red);
   opacity: 0.85;
 }
+@media (max-width: 760px) {
+  .dag-root {
+    min-width: 0;
+    max-width: 100%;
+    container-type: inline-size;
+  }
+  .dag-canvas {
+    width: 100%;
+    min-width: 0;
+  }
+  .dag-stage-card {
+    width: min(320px, calc(100cqw - 8px));
+    box-sizing: border-box;
+  }
+  .dag-flow {
+    gap: 28px;
+  }
+  .step-row {
+    gap: 5px;
+  }
+}
 </style>

@@ -504,6 +504,8 @@ function toggleExpanded(): void {
   }
 }
 @media (max-width: 900px) {
+  .main-inner:has(.run-detail-root),
+  .main-inner:has(.runs-root),
   .main-inner:has(.pipeline-root) { padding-left: 12px; padding-right: 12px; }
   .main-inner:has(.guard-report),
   .main-inner:has(.settings-page) { padding-left: 12px; padding-right: 12px; }

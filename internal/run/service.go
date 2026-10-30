@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/configstate"
@@ -553,6 +554,9 @@ func (s *service) loadSteps(ctx context.Context, runID string) ([]Step, error) {
 }
 
 func (s *service) List(ctx context.Context, f ListFilter) (*ListResult, error) {
+	if utf8.RuneCountInString(f.Query) > 200 || !utf8.ValidString(f.Query) {
+		return nil, ErrInvalidFilter
+	}
 	if f.Status != "" && !isValidStatus(f.Status) {
 		return nil, ErrInvalidStatus
 	}
@@ -581,6 +585,20 @@ func (s *service) List(ctx context.Context, f ListFilter) (*ListResult, error) {
 	if f.Status != "" {
 		where = append(where, "pr.status = ?")
 		args = append(args, f.Status)
+	}
+	if query := strings.TrimSpace(f.Query); query != "" {
+		// Explicit ESCAPE works on SQLite and MySQL; wildcard characters remain literal.
+		pattern := "%" + strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(query) + "%"
+		where = append(where, "(LOWER(pr.id) LIKE LOWER(?) ESCAPE '!' OR LOWER(pr.trigger_branch) LIKE LOWER(?) ESCAPE '!' OR LOWER(pr.trigger_commit) LIKE LOWER(?) ESCAPE '!' OR LOWER(pr.resolved_commit_sha) LIKE LOWER(?) ESCAPE '!')")
+		args = append(args, pattern, pattern, pattern, pattern)
+	}
+	if !f.After.IsZero() {
+		where = append(where, "pr.created_at >= ?")
+		boundary := f.After.UTC()
+		if boundary.Nanosecond() != 0 {
+			boundary = boundary.Truncate(time.Second).Add(time.Second)
+		}
+		args = append(args, boundary.Format(time.RFC3339))
 	}
 	clause := ""
 	if len(where) > 0 {

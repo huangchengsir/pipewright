@@ -19,6 +19,7 @@
 -->
 <script setup lang="ts">
 import { ref, computed, shallowRef, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { findLogMatches, highlightLogLine } from './logSearch'
 import { useI18n } from 'vue-i18n'
 import {
   getRunLogs,
@@ -115,7 +116,7 @@ async function bootstrap(): Promise<void> {
         ingest(page.lines)
         if (page.complete || page.nextSeq <= sinceSeq) break
         if (page.lines.length === 0) break
-        sinceSeq = page.nextSeq
+        sinceSeq = page.lines.reduce((max, line) => Math.max(max, line.seq), sinceSeq)
       }
       loadState.value = 'done'
       scheduleAutoScroll()
@@ -154,7 +155,8 @@ function onScroll(): void {
   const el = scrollEl.value
   if (!el) return
   const distance = el.scrollHeight - el.scrollTop - el.clientHeight
-  stickToBottom.value = distance <= BOTTOM_EPS
+  const viewingTail = windowStart.value + CHUNK_SIZE >= visibleLines.value.length
+  stickToBottom.value = viewingTail && distance <= BOTTOM_EPS
 }
 
 let scrollQueued = false
@@ -173,7 +175,8 @@ function scheduleAutoScroll(): void {
 function jumpToBottom(): void {
   stickToBottom.value = true
   const el = scrollEl.value
-  if (el) el.scrollTop = el.scrollHeight
+  windowStart.value = Math.max(0, visibleLines.value.length - CHUNK_SIZE)
+  void nextTick(() => { if (el) el.scrollTop = el.scrollHeight })
 }
 
 // 仅展示当前所选步骤的日志(filterOrdinal 为 null = 全部)。
@@ -185,40 +188,178 @@ const visibleLines = computed(() =>
 const hasLines = computed(() => visibleLines.value.length > 0)
 const showFollowButton = computed(() => !stickToBottom.value && hasLines.value)
 
-// ─── [MASKED] segmentation ─────────────────────────────────────────────────────
-// Split a line into plain + masked segments so [MASKED] can be highlighted
-// without dangerouslySetInnerHTML. Pure rendering of backend-provided markers.
-
-interface Segment {
-  text: string
-  masked: boolean
+// Search and excerpts always use the current run + step's already redacted lines.
+const searchQuery = ref("");
+const wrapLines = ref(false);
+const selectedStart = ref("");
+const selectedEnd = ref("");
+const copyMessage = ref("");
+const manualCopy = ref("");
+const manualCopyEl = ref<HTMLTextAreaElement | null>(null);
+let copyGeneration = 0;
+watch([selectedStart, selectedEnd], () => {
+  copyGeneration++;
+  copyMessage.value = "";
+  manualCopy.value = "";
+});
+const CHUNK_SIZE = 500;
+const windowStart = ref(0);
+const renderedLines = computed(() =>
+  visibleLines.value.slice(windowStart.value, windowStart.value + CHUNK_SIZE),
+);
+const searchResult = computed(() => findLogMatches(visibleLines.value, searchQuery.value))
+const hits = computed(() => searchResult.value.hits)
+const hitsBySeq = computed(() => {
+  const grouped = new Map<number, typeof hits.value>()
+  for (const hit of hits.value) { const group = grouped.get(hit.seq) ?? []; group.push(hit); grouped.set(hit.seq, group) }
+  return grouped
+})
+const activeHit = ref(-1);
+const activeSeq = ref<number | null>(null);
+async function reveal(index: number, hitIndex?: number): Promise<void> {
+  const line = visibleLines.value[index]
+  if (!line) return
+  const runId = props.runId, ordinal = props.filterOrdinal, query = searchQuery.value
+  stickToBottom.value = false; activeSeq.value = line.seq
+  if (index < windowStart.value || index >= windowStart.value + CHUNK_SIZE) windowStart.value = Math.floor(index / CHUNK_SIZE) * CHUNK_SIZE
+  await nextTick()
+  if (disposed || props.runId !== runId || props.filterOrdinal !== ordinal || searchQuery.value !== query || (hitIndex != null && activeHit.value !== hitIndex)) return
+  const el = scrollEl.value
+  const target = hitIndex == null ? el?.querySelector<HTMLElement>(`[data-log-seq="${line.seq}"]`) : el?.querySelector<HTMLElement>(`[data-log-hit="${hitIndex}"]`)
+  if (!el || !target) return
+  const rect = target.getBoundingClientRect(), bounds = el.getBoundingClientRect()
+  el.scrollTop += rect.top - bounds.top - 16
+  if (rect.left < bounds.left + 40 || rect.right > bounds.right - 16) el.scrollLeft += rect.left - bounds.left - 40
 }
-
-const MASK_TOKEN = '[MASKED]'
-
-function segments(text: string): Segment[] {
-  if (!text.includes(MASK_TOKEN)) return [{ text, masked: false }]
-  const out: Segment[] = []
-  let rest = text
-  let idx = rest.indexOf(MASK_TOKEN)
-  while (idx !== -1) {
-    if (idx > 0) out.push({ text: rest.slice(0, idx), masked: false })
-    out.push({ text: MASK_TOKEN, masked: true })
-    rest = rest.slice(idx + MASK_TOKEN.length)
-    idx = rest.indexOf(MASK_TOKEN)
+function moveHit(delta: number): void {
+  if (!hits.value.length) return;
+  activeHit.value =
+    (activeHit.value + delta + hits.value.length) % hits.value.length;
+  const hit = hits.value[activeHit.value];
+  if (hit) void reveal(hit.index, activeHit.value);
+}
+watch(wrapLines, () => { const hit = hits.value[activeHit.value]; if (hit) void reveal(hit.index, activeHit.value) })
+watch(searchQuery, () => {
+  activeHit.value = -1;
+  activeSeq.value = null;
+  if (hits.value.length) moveHit(1);
+});
+function locateError(): void {
+  const index = visibleLines.value.findIndex(
+    (l) =>
+      l.stream === "stderr" ||
+      /\b(error|fail(?:ed|ure)?|fatal|exception)\b|\bexit(?:ed)?(?: code| status)?[:= ]+[1-9]\d*/i.test(
+        l.text,
+      ),
+  );
+  if (index >= 0) void reveal(index);
+  else copyMessage.value = t("runExperience.noErrorOutput");
+}
+function changeChunk(delta: number): void {
+  stickToBottom.value = false;
+  windowStart.value = Math.max(
+    0,
+    Math.min(
+      Math.max(0, visibleLines.value.length - 1),
+      windowStart.value + delta * CHUNK_SIZE,
+    ),
+  );
+  void nextTick(() => {
+    if (scrollEl.value) scrollEl.value.scrollTop = 0;
+  });
+}
+function selectLine(seq: number, shift: boolean): void {
+  if (shift && selectedStart.value) selectedEnd.value = String(seq);
+  else {
+    selectedStart.value = String(seq);
+    selectedEnd.value = String(seq);
   }
-  if (rest.length > 0) out.push({ text: rest, masked: false })
-  return out
+  copyMessage.value = "";
+  manualCopy.value = "";
 }
+function selected(seq: number): boolean {
+  if (!selectedStart.value || !selectedEnd.value) return false;
+  return (
+    seq >= Math.min(Number(selectedStart.value), Number(selectedEnd.value)) &&
+    seq <= Math.max(Number(selectedStart.value), Number(selectedEnd.value))
+  );
+}
+async function copyExcerpt(): Promise<void> {
+  const generation = ++copyGeneration;
+  copyMessage.value = "";
+  manualCopy.value = "";
+  const first = Number(selectedStart.value),
+    last = Number(selectedEnd.value);
+  if (
+    !Number.isSafeInteger(first) ||
+    !Number.isSafeInteger(last) ||
+    !visibleLines.value.some((l) => l.seq === first) ||
+    !visibleLines.value.some((l) => l.seq === last)
+  ) {
+    copyMessage.value = t("runExperience.selectLines");
+    return;
+  }
+  const excerpt = visibleLines.value.filter(
+    (l) => l.seq >= Math.min(first, last) && l.seq <= Math.max(first, last),
+  );
+  const text = excerpt.map((l) => `${l.seq}: ${l.text}`).join("\n");
+  if (excerpt.length > 500 || text.length > 64000) {
+    copyMessage.value = t("runExperience.copyLimit");
+    return;
+  }
+  try {
+    if (!navigator.clipboard?.writeText)
+      throw new Error("clipboard unavailable");
+    await navigator.clipboard.writeText(text);
+    if (generation === copyGeneration && !disposed)
+      copyMessage.value = t("runExperience.copied");
+  } catch {
+    if (generation !== copyGeneration || disposed) return;
+    manualCopy.value = text;
+    copyMessage.value = t("runExperience.manualCopy");
+    await nextTick();
+    manualCopyEl.value?.focus();
+    manualCopyEl.value?.select();
+  }
+}
+watch(
+  () => [props.runId, props.filterOrdinal] as const,
+  () => {
+    copyGeneration++;
+    searchQuery.value = "";
+    selectedStart.value = "";
+    selectedEnd.value = "";
+    manualCopy.value = "";
+    copyMessage.value = "";
+    windowStart.value = 0;
+    activeHit.value = -1;
+    activeSeq.value = null;
+    stickToBottom.value = true;
+  },
+);
+watch(
+  () => visibleLines.value.length,
+  (length) => {
+    if (props.live && stickToBottom.value)
+      windowStart.value = Math.max(0, length - CHUNK_SIZE);
+  },
+);
+
+function segments(line: RunLogLine) { return highlightLogLine(line.text, hitsBySeq.value.get(line.seq) ?? []) }
 
 // Stable line key — seq is unique per run.
 function lineKey(line: RunLogLine): number {
-  return line.seq
+  return line.seq;
 }
 </script>
 
 <template>
-  <div class="term" :class="{ 'term--live': props.live }" role="region" :aria-label="t('run.terminalRegion')">
+  <div
+    class="term"
+    :class="{ 'term--live': props.live, 'term--wrap': wrapLines }"
+    role="region"
+    :aria-label="t('run.terminalRegion')"
+  >
     <!-- Terminal chrome bar -->
     <div class="term-bar">
       <span class="term-dots" aria-hidden="true">
@@ -226,7 +367,7 @@ function lineKey(line: RunLogLine): number {
         <span class="term-dot term-dot--y" />
         <span class="term-dot term-dot--g" />
       </span>
-      <span class="term-label">{{ t('run.runLog') }}</span>
+      <span class="term-label">{{ t("run.runLog") }}</span>
       <span
         v-if="props.live && loadState === 'streaming'"
         class="term-live"
@@ -235,9 +376,115 @@ function lineKey(line: RunLogLine): number {
         <span class="term-live-dot" aria-hidden="true" />
         LIVE
       </span>
-      <span class="term-count mono" v-if="hasLines">{{ t('run.lineCount', { n: visibleLines.length }) }}</span>
+      <span class="term-count mono" v-if="hasLines">{{
+        t("run.lineCount", { n: visibleLines.length })
+      }}</span>
     </div>
 
+    <div
+      class="term-tools"
+      role="group"
+      :aria-label="t('runExperience.logTools')"
+    >
+      <label class="term-search"
+        ><span class="sr-only">{{ t(props.filterOrdinal == null ? "runExperience.searchAllLogs" : "runExperience.searchLogs") }}</span
+        ><input
+          v-model="searchQuery"
+          maxlength="200"
+          type="search"
+          :placeholder="t(props.filterOrdinal == null ? 'runExperience.searchAllLogs' : 'runExperience.searchLogs')"
+          @keydown.enter.prevent="moveHit($event.shiftKey ? -1 : 1)"
+      /></label>
+      <span class="term-hits" role="status">{{
+        t("runExperience.hits", {
+          n: hits.length ? activeHit + 1 : 0,
+          total: hits.length,
+        })
+      }}</span>
+      <button
+        type="button"
+        :disabled="!hits.length"
+        :aria-label="t('runExperience.previousMatch')"
+        @click="moveHit(-1)"
+      >
+        ↑</button
+      ><button
+        type="button"
+        :disabled="!hits.length"
+        :aria-label="t('runExperience.nextMatch')"
+        @click="moveHit(1)"
+      >
+        ↓
+      </button>
+      <button class="term-action" type="button" @click="locateError">
+        {{ t("runExperience.locateError") }}
+      </button>
+      <button
+        class="term-action"
+        type="button"
+        :aria-pressed="wrapLines"
+        @click="wrapLines = !wrapLines"
+      >
+        {{ t("runExperience.wrap") }}
+      </button>
+    </div>
+    <p v-if="searchResult.queryTooLong" class="term-search-limit" role="status">{{ t('runExperience.queryTooLong', { n: 200 }) }}</p>
+    <p v-else-if="searchResult.truncated" class="term-search-limit" role="status">{{ t('runExperience.hitsLimited', { n: hits.length }) }}</p>
+    <div class="term-tools term-excerpt">
+      <label
+        >{{ t("runExperience.fromSeq")
+        }}<input
+          v-model="selectedStart"
+          type="number"
+          min="1"
+          :aria-label="t('runExperience.fromSeq')"
+      /></label>
+      <label
+        >{{ t("runExperience.toSeq")
+        }}<input
+          v-model="selectedEnd"
+          type="number"
+          min="1"
+          :aria-label="t('runExperience.toSeq')"
+      /></label>
+      <button type="button" @click="copyExcerpt">
+        {{ t("runExperience.copyExcerpt") }}
+      </button>
+      <span v-if="copyMessage" class="term-copy-status" role="status">{{
+        copyMessage
+      }}</span>
+    </div>
+    <textarea
+      v-if="manualCopy"
+      ref="manualCopyEl"
+      class="term-manual"
+      readonly
+      :value="manualCopy"
+      :aria-label="t('runExperience.manualCopy')"
+    />
+    <div v-if="visibleLines.length > CHUNK_SIZE" class="term-tools term-pages">
+      <button
+        type="button"
+        :disabled="windowStart === 0"
+        @click="changeChunk(-1)"
+      >
+        {{ t("runExperience.previous") }}
+      </button>
+      <span>{{
+        t("runExperience.logRange", {
+          from: windowStart + 1,
+          to: Math.min(windowStart + CHUNK_SIZE, visibleLines.length),
+          total: visibleLines.length,
+        })
+      }}</span>
+      <button
+        type="button"
+        :disabled="windowStart + CHUNK_SIZE >= visibleLines.length"
+        @click="changeChunk(1)"
+      >
+        {{ t("runExperience.next") }}
+      </button>
+    </div>
     <!-- Log surface — 封顶 56vh,框内纵向滚动;实时 tail 框内贴底跟随 -->
     <div
       ref="scrollEl"
@@ -250,36 +497,53 @@ function lineKey(line: RunLogLine): number {
     >
       <!-- Loading -->
       <div v-if="loadState === 'loading'" class="term-state mono">
-        {{ t('run.loadingLog') }}
+        {{ t("run.loadingLog") }}
       </div>
 
       <!-- Error (terminal-mode fetch failure) -->
-      <div v-else-if="loadState === 'error'" class="term-state term-state--err mono">
-        {{ loadError || t('run.logLoadFailed') }}
+      <div
+        v-else-if="loadState === 'error'"
+        class="term-state term-state--err mono"
+      >
+        {{ loadError || t("run.logLoadFailed") }}
       </div>
 
       <!-- Empty -->
-      <div
-        v-else-if="!hasLines"
-        class="term-state mono"
-      >
-        <template v-if="props.live">{{ t('run.waitingLog') }}</template>
-        <template v-else>{{ t('run.noLogRecords') }}</template>
+      <div v-else-if="!hasLines" class="term-state mono">
+        <template v-if="props.live">{{ t("run.waitingLog") }}</template>
+        <template v-else>{{ t("run.noLogRecords") }}</template>
       </div>
 
       <!-- Lines -->
-      <ol v-else class="term-lines" :aria-label="t('run.totalLinesAria', { n: visibleLines.length })">
+      <ol
+        v-else
+        class="term-lines"
+        :aria-label="t('run.totalLinesAria', { n: visibleLines.length })"
+      >
         <li
-          v-for="line in visibleLines"
+          v-for="line in renderedLines"
           :key="lineKey(line)"
           class="term-line"
-          :class="{ 'term-line--err': line.stream === 'stderr' }"
+          :class="{
+            'term-line--err': line.stream === 'stderr',
+            'term-line--active': line.seq === activeSeq,
+            'term-line--selected': selected(line.seq),
+          }"
+          :data-log-seq="line.seq"
         >
-          <span class="term-ln mono" aria-hidden="true">{{ line.seq }}</span>
+          <button
+            class="term-ln mono"
+            type="button"
+            :aria-label="t('runExperience.selectSeq', { n: line.seq })"
+            :aria-pressed="selected(line.seq)"
+            @click="selectLine(line.seq, $event.shiftKey)"
+          >
+            {{ line.seq }}
+          </button>
           <span class="term-text mono">
-            <template v-for="(seg, i) in segments(line.text)" :key="i">
-              <span v-if="seg.masked" class="term-masked" :title="t('run.maskedTitle')">{{ seg.text }}</span>
-              <template v-else>{{ seg.text }}</template>
+            <template v-for="(segment, i) in segments(line)" :key="i">
+              <mark v-if="segment.hitIndex != null" class="term-match" :class="{ 'term-match--active': segment.hitIndex === activeHit }" :data-log-hit="segment.hitIndex"><template v-for="(part, j) in segment.parts" :key="j"><span v-if="part.masked" class="term-masked" :title="t('run.maskedTitle')">{{ part.text }}</span><template v-else>{{ part.text }}</template></template></mark>
+              <template v-else><template v-for="(part, j) in segment.parts" :key="j"><span v-if="part.masked" class="term-masked" :title="t('run.maskedTitle')">{{ part.text }}</span><template v-else>{{ part.text }}</template></template></template>
             </template>
           </span>
         </li>
@@ -294,10 +558,18 @@ function lineKey(line: RunLogLine): number {
       @click="jumpToBottom"
       :aria-label="t('run.jumpToLatest')"
     >
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
+      <svg
+        width="13"
+        height="13"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2.2"
+        aria-hidden="true"
+      >
         <path d="M12 5v14M19 12l-7 7-7-7" />
       </svg>
-      {{ t('run.jumpToBottom') }}
+      {{ t("run.jumpToBottom") }}
     </button>
   </div>
 </template>
@@ -540,4 +812,182 @@ function lineKey(line: RunLogLine): number {
   .term-follow { transition: border-color var(--duration-fast); }
   .term-follow:hover { transform: none; }
 }
+.term {
+  min-width: 0;
+  max-width: 100%;
+  container-type: inline-size;
+}
+.term-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 7px 10px;
+  background: #111318;
+  border-bottom: 1px solid #2b3039;
+  color: #c3c9d2;
+  font-size: 12px;
+}
+.term-tools input,
+.term-tools button {
+  min-height: 30px;
+  background: #191c23;
+  color: #e6e9ef;
+  border: 1px solid #3b4351;
+  border-radius: 5px;
+  font: inherit;
+  padding: 3px 8px;
+}
+.term-tools button {
+  cursor: pointer;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.term-tools button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.term-tools button:focus-visible,
+.term-tools input:focus-visible {
+  outline: 2px solid #78a8ff;
+  outline-offset: 2px;
+}
+.term-tools button[aria-pressed="true"] {
+  border-color: #78a8ff;
+  color: #9fc4ff;
+}
+.term-search {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+.term-search input {
+  width: 100%;
+}
+.term-hits {
+  font-variant-numeric: tabular-nums;
+}
+.term-excerpt label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.term-excerpt input {
+  width: 75px;
+  min-width: 0;
+}
+.term-copy-status {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.term-pages {
+  justify-content: space-between;
+}
+.term-manual {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100px;
+  background: #111318;
+  color: #eef1f6;
+  font-family: var(--font-mono);
+  padding: 10px;
+  border: 1px solid #78a8ff;
+}
+.term-ln {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  min-height: 20px;
+}
+.term-ln:hover {
+  color: #9fc4ff;
+}
+.term-line--active {
+  box-shadow: inset 3px 0 #78a8ff;
+  background: #1b2b42;
+}
+.term-line--selected {
+  background: #20354b;
+}
+.term-match {
+  background: #dcc065;
+  color: #151515;
+  border-radius: 2px;
+}
+.term--wrap .term-lines {
+  min-width: 0;
+  width: 100%;
+}
+.term--wrap .term-line,
+.term--wrap .term-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+@media (max-width: 600px) {
+  .term-tools input {
+    font-size: 16px;
+  }
+  .term-tools button {
+    min-height: 44px;
+  }
+  .term-excerpt label {
+    font-size: 11px;
+  }
+  .term-line {
+    padding-left: 8px;
+    padding-right: 8px;
+    gap: 8px;
+  }
+}
+
+@container (max-width:300px) {
+  .term-hits { flex: 0 0 auto; white-space: nowrap; }
+  .term-action { padding-inline: 6px; }
+  .term-excerpt {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .term-excerpt label {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+    min-width: 0;
+    font-size: 11px;
+  }
+  .term-excerpt input {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 36px;
+  }
+  .term-excerpt button,
+  .term-copy-status {
+    grid-column: 1/-1;
+  }
+  .term-action {
+    flex: 1 1 calc(50% - 6px);
+  }
+  .term-search {
+    flex-basis: 100%;
+  }
+  .term-hits {
+    flex: 1;
+  }
+}
+.term-match--active {outline:2px solid #91bbff;outline-offset:1px;background:#ffcc58;}
+.term-search-limit {margin:0;padding:6px 10px;background:#111318;color:#e4c87c;font-size:11px;}
 </style>

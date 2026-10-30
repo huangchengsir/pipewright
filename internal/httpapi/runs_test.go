@@ -296,3 +296,28 @@ func TestSSEReadsStatusEvent(t *testing.T) {
 		t.Fatal("应读到至少一个 status 事件")
 	}
 }
+
+func TestRunListSearchAndPageSizeValidation(t *testing.T) {
+	srv, client, csrf, projectID, svc := setupRunServer(t)
+	for i := 0; i < 3; i++ {
+		if _, err := svc.Create(context.Background(), projectID, run.Trigger{Type: run.TriggerManual, Branch: "unique-find"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	response := doJSON(t, client, http.MethodGet, srv.URL+"/api/runs?q=unique-find&pageSize=1&page=2", csrf, "")
+	defer response.Body.Close()
+	var result runListDTO
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != 200 || result.Total != 3 || len(result.Items) != 1 || result.Page != 2 {
+		t.Fatalf("search/pageSize ignored: %#v status=%d", result, response.StatusCode)
+	}
+	for _, q := range []string{"pageSize=0", "pageSize=101", "pageSize=x", "after=invalid", "q=" + strings.Repeat("x", 201)} {
+		response := doJSON(t, client, http.MethodGet, srv.URL+"/api/runs?"+q, csrf, "")
+		_ = response.Body.Close()
+		if response.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s: expected 400 got %d", q, response.StatusCode)
+		}
+	}
+}

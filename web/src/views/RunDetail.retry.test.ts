@@ -104,4 +104,26 @@ describe('existing RunDetail recovery integration', () => {
     expect(wrapper.get('.retry-request a').attributes('href')).toBe('/runs/retained-child')
     expect(api.request).toHaveBeenCalledWith('root', 'retained-request', expect.any(Object))
   })
+  it('carries the filtered list context through producer complete logs and exact source-step links', async () => {
+    const back = '/runs?status=failed&q=release&page=2'
+    api.get.mockImplementation(async (id: string) => { const value = run(id, 'failed'); value.steps = id === 'producer' ? Array.from({ length: 10 }, (_, i) => ({ id: `source-${i}`, name: `Source ${i}`, status: 'failed', startedAt: null, finishedAt: null, durationMs: null })) : ['a', 'b'].map(id => ({ id: `step-${id}`, name: id, status: 'failed', startedAt: null, finishedAt: null, durationMs: null })); return value })
+    api.context.mockImplementation(async (id: string) => { const c = retryContext({ attemptRunId: id, headAttemptId: id }); c.nodes[0].decision.action = 'reuse'; c.nodes[0].decision.sourceAttemptId = 'producer'; c.nodes[0].sourceStepId = 'source-7'; c.nodes[0].sourceOrdinal = 7; return c })
+    const { wrapper, router } = await render('/runs/root?returnTo=' + encodeURIComponent(back))
+    await wrapper.findComponent(Dag).get('.dag-logs').trigger('click'); await flushPromises(); await wrapper.findAll('[role=tab]')[0].trigger('click'); await flushPromises()
+    const source = wrapper.find('.retry-node-evidence').findAll('a').find(a => (a.attributes('href') ?? '').includes('stepId='))!
+    const href = source.attributes('href') ?? ''
+    expect(href).not.toBe('')
+    const sourceURL = new URL(href, 'https://pipewright.invalid')
+    expect(sourceURL.searchParams.get('step')).toBe('7'); expect(sourceURL.searchParams.get('stepId')).toBe('source-7'); expect(sourceURL.searchParams.get('returnTo')).toBe(back)
+    await wrapper.get('.retry-log-step > a').trigger('click'); await flushPromises()
+    expect(router.currentRoute.value.params.id).toBe('producer'); expect(router.currentRoute.value.query.returnTo).toBe(back)
+    await wrapper.get('.back-btn').trigger('click'); await flushPromises(); expect(router.currentRoute.value.fullPath).toBe(back)
+  })
+  it('retains the validated list return path when navigating to an accepted attempt', async () => {
+    const back = '/runs?status=failed&page=2'
+    const { wrapper, router } = await render('/runs/root?returnTo=' + encodeURIComponent(back))
+    wrapper.findComponent({ name: 'RunRetryPanel' }).vm.$emit('accepted', 'child'); await flushPromises()
+    expect(router.currentRoute.value.params.id).toBe('child'); expect(router.currentRoute.value.query.returnTo).toBe(back)
+  })
+
 })

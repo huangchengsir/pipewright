@@ -1,87 +1,253 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
-import { listRuns, triggerManual, type RunListItem, type RunStatus, type RunDetail, type ListRunsParams, type TriggerManualInput } from '../api/runs'
-import RunParamsEditor from '../components/RunParamsEditor.vue'
-import TypedRunParams from '../components/TypedRunParams.vue'
-import { getParameters, validateParamValues, type ParamDef } from '../api/parameters'
-import { listProjects, type Project } from '../api/projects'
-import { HttpError } from '../api/http'
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import { useI18n } from "vue-i18n";
+import { useRouter, useRoute, onBeforeRouteLeave } from "vue-router";
+import {
+  saveRunListPosition,
+  restoreRunListPosition,
+  clearRunListPosition,
+} from "../lib/runListContext";
+import {
+  listRuns,
+  triggerManual,
+  type RunListItem,
+  type RunStatus,
+  type RunDetail,
+  type ListRunsParams,
+  type TriggerManualInput,
+} from "../api/runs";
+import RunParamsEditor from "../components/RunParamsEditor.vue";
+import TypedRunParams from "../components/TypedRunParams.vue";
+import {
+  getParameters,
+  validateParamValues,
+  type ParamDef,
+} from "../api/parameters";
+import { listProjects, type Project } from "../api/projects";
+import { HttpError } from "../api/http";
 
-const { t } = useI18n()
+const { t } = useI18n();
 
 // ─── router ───────────────────────────────────────────────────────────────────
 
-const router = useRouter()
+const router = useRouter();
+const route = useRoute();
 
+function runHref(id: string): string {
+  return router.resolve({
+    name: "run-detail",
+    params: { id },
+    query: { returnTo: route.fullPath },
+  }).href;
+}
+function openRun(event: MouseEvent, id: string): void {
+  if (
+    event.button !== 0 ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.shiftKey ||
+    event.altKey
+  )
+    return;
+  event.preventDefault();
+  goToDetail(id);
+}
 function goToDetail(id: string): void {
-  void router.push({ name: 'run-detail', params: { id } })
+  saveRunListPosition(route.fullPath, id);
+  void router.push({
+    name: "run-detail",
+    params: { id },
+    query: { returnTo: route.fullPath },
+  });
 }
 
 // ─── load state ──────────────────────────────────────────────────────────────
 
-type LoadState = 'idle' | 'loading' | 'error'
+type LoadState = "idle" | "loading" | "error";
 
-const loadState = ref<LoadState>('idle')
-const loadError = ref('')
-const runs = ref<RunListItem[]>([])
-const totalRuns = ref(0)
+const loadState = ref<LoadState>("idle");
+const loadError = ref("");
+const runs = ref<RunListItem[]>([]);
+const totalRuns = ref(0);
 
 // ─── filters ─────────────────────────────────────────────────────────────────
 
-const statusFilter = ref<RunStatus | 'all'>('all')
+const statusFilter = ref<RunStatus | "all">("all");
 
-const STATUS_FILTER_OPTIONS: Array<RunStatus | 'all'> = [
-  'all',
-  'running',
-  'success',
-  'failed',
-  'partial_failed',
-  'rolled_back',
-  'queued',
-]
+const STATUS_FILTER_OPTIONS: Array<RunStatus | "all"> = [
+  "all",
+  "running",
+  "success",
+  "failed",
+  "partial_failed",
+  "rolled_back",
+  "queued",
+  "waiting_approval",
+];
 
 // 筛选标签:'all' 用本页 key;其余复用全局 runStatus.* 状态文案。
-function filterLabel(value: RunStatus | 'all'): string {
-  return value === 'all' ? t('runs.filterAll') : t(`runStatus.${value}`)
+function filterLabel(value: RunStatus | "all"): string {
+  return value === "all" ? t("runs.filterAll") : t(`runStatus.${value}`);
 }
 
 // ─── data loading ─────────────────────────────────────────────────────────────
 
+const projectFilter = ref("");
+const queryFilter = ref("");
+const periodFilter = ref("all");
+const afterFilter = ref("");
+const currentPage = ref(1);
+const PAGE_SIZE = 20;
+const totalPages = computed(() =>
+  Math.max(1, Math.ceil(totalRuns.value / PAGE_SIZE)),
+);
+const hasFilters = computed(
+  () =>
+    statusFilter.value !== "all" ||
+    projectFilter.value !== "" ||
+    queryFilter.value !== "" ||
+    afterFilter.value !== "",
+);
+let appliedQuery: Record<string, string> = {};
+let requestGeneration = 0;
+let listAbort: AbortController | null = null;
+let disposed = false;
+function readQuery(): void {
+  const q = route.query;
+  statusFilter.value = STATUS_FILTER_OPTIONS.includes(q.status as RunStatus)
+    ? (q.status as RunStatus)
+    : "all";
+  projectFilter.value = typeof q.projectId === "string" ? q.projectId : "";
+  queryFilter.value = typeof q.q === "string" ? q.q.slice(0, 200) : "";
+  periodFilter.value = ["1", "7", "30"].includes(String(q.period))
+    ? String(q.period)
+    : "all";
+  afterFilter.value =
+    typeof q.after === "string" && Number.isFinite(Date.parse(q.after))
+      ? new Date(q.after).toISOString()
+      : "";
+  if (!afterFilter.value) periodFilter.value = "all";
+  if (afterFilter.value && periodFilter.value === "all")
+    periodFilter.value = "custom";
+  currentPage.value = /^\d+$/.test(String(q.page))
+    ? Math.min(100000, Math.max(1, Number(q.page)))
+    : 1;
+  appliedQuery = queryFromInputs();
+}
+function queryFromInputs(): Record<string, string> {
+  const query: Record<string, string> = {};
+  if (statusFilter.value !== "all") query.status = statusFilter.value;
+  if (projectFilter.value) query.projectId = projectFilter.value;
+  if (queryFilter.value.trim()) query.q = queryFilter.value.trim();
+  if (afterFilter.value) {
+    query.after = afterFilter.value;
+    query.period = periodFilter.value;
+  }
+  return query;
+}
+function navigatePage(page: number, replace = false, submit = false): void {
+  const query = submit ? queryFromInputs() : { ...appliedQuery };
+  if (page > 1) query.page = String(page);
+  const target = router.resolve({ name: "runs", query }).fullPath;
+  clearRunListPosition(target);
+  if (target === route.fullPath) {
+    if (submit) readQuery();
+    void loadRuns();
+    return;
+  }
+  void (replace
+    ? router.replace({ name: "runs", query })
+    : router.push({ name: "runs", query }));
+}
+function onFilterChange(): void {
+  navigatePage(1, false, true);
+}
+function onPeriodChange(): void {
+  afterFilter.value =
+    periodFilter.value === "all"
+      ? ""
+      : new Date(
+          Date.now() - Number(periodFilter.value) * 86400000,
+        ).toISOString();
+  onFilterChange();
+}
+function clearFilters(): void {
+  statusFilter.value = "all";
+  projectFilter.value = "";
+  queryFilter.value = "";
+  periodFilter.value = "all";
+  afterFilter.value = "";
+  navigatePage(1, false, true);
+}
 async function loadRuns(): Promise<void> {
-  loadState.value = 'loading'
-  loadError.value = ''
+  const gen = ++requestGeneration;
+  listAbort?.abort();
+  listAbort = new AbortController();
+  const path = route.fullPath;
+  loadState.value = "loading";
+  loadError.value = "";
   try {
-    const params: ListRunsParams = {}
-    if (statusFilter.value !== 'all') params.status = statusFilter.value
-    const res = await listRuns(params)
-    runs.value = res.items
-    totalRuns.value = res.total
-    loadState.value = 'idle'
-  } catch (err) {
-    if (err instanceof HttpError) {
-      loadError.value = err.status === 0
-        ? t('runs.errNoServer')
-        : (err.apiError?.message ?? t('runs.errLoadFailedCode', { n: err.status }))
-    } else {
-      loadError.value = t('runs.errLoadFailedRetry')
+    const params: ListRunsParams = {
+      page: currentPage.value,
+      pageSize: PAGE_SIZE,
+    };
+    if (appliedQuery.status) params.status = appliedQuery.status as RunStatus;
+    if (appliedQuery.projectId) params.projectId = appliedQuery.projectId;
+    if (appliedQuery.q) params.q = appliedQuery.q;
+    if (appliedQuery.after) params.after = appliedQuery.after;
+    const res = await listRuns(params, { signal: listAbort.signal });
+    if (gen !== requestGeneration || disposed) return;
+    runs.value = res.items;
+    totalRuns.value = res.total;
+    loadState.value = "idle";
+    if (currentPage.value > totalPages.value) {
+      navigatePage(totalPages.value, true);
+      return;
     }
-    loadState.value = 'error'
+    await restoreRunListPosition(
+      path,
+      () => !disposed && route.fullPath === path,
+    );
+  } catch (err) {
+    if (gen !== requestGeneration || disposed) return;
+    loadError.value =
+      err instanceof HttpError
+        ? err.status === 0
+          ? t("runs.errNoServer")
+          : (err.apiError?.message ??
+            t("runs.errLoadFailedCode", { n: err.status }))
+        : t("runs.errLoadFailedRetry");
+    loadState.value = "error";
   }
 }
-
-onMounted(() => { void loadRuns() })
-
-function onFilterChange(): void {
-  void loadRuns()
-}
+watch(
+  () => route.fullPath,
+  () => {
+    readQuery();
+    void loadRuns();
+  },
+  { immediate: true },
+);
+onBeforeRouteLeave(() => {
+  const focused = document.activeElement as HTMLElement | null;
+  if (focused?.dataset.runId)
+    saveRunListPosition(route.fullPath, focused.dataset.runId);
+});
+onUnmounted(() => {
+  disposed = true;
+  requestGeneration++;
+  listAbort?.abort();
+});
+onMounted(() => {
+  void loadProjectsForTrigger();
+});
 
 // ─── manual trigger modal ─────────────────────────────────────────────────────
 
 const triggerModalOpen    = ref(false)
 const projects            = ref<Project[]>([])
 const projectsLoading     = ref(false)
+const projectsLoadError = ref(false)
 const triggerForm         = ref({ projectId: '', branch: '', commit: '' })
 const triggerParams       = ref<Record<string, string>>({})
 const triggerDefs         = ref<ParamDef[]>([])
@@ -97,10 +263,11 @@ const selectedProject = computed<Project | undefined>(() =>
 async function loadProjectsForTrigger(): Promise<void> {
   if (projects.value.length > 0) return
   projectsLoading.value = true
+  projectsLoadError.value = false
   try {
     projects.value = await listProjects()
   } catch {
-    // non-fatal — user will see empty dropdown
+    projectsLoadError.value = true
   } finally {
     projectsLoading.value = false
   }
@@ -177,7 +344,7 @@ async function handleTriggerSubmit(): Promise<void> {
 
     const run: RunDetail = await triggerManual(triggerForm.value.projectId, input)
     triggerModalOpen.value = false
-    void router.push(`/runs/${run.id}`)
+    goToDetail(run.id)
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
@@ -317,6 +484,69 @@ function isFailedStatus(status: RunStatus): boolean {
       <button class="banner-retry" @click="loadRuns">↻ {{ t('runs.retry') }}</button>
     </div>
 
+    <form class="run-query" @submit.prevent="onFilterChange">
+      <label
+        ><span>{{ t("runs.colProject") }}</span
+        ><select v-model="projectFilter" @change="onFilterChange">
+          <option value="">{{ t("runExperience.allProjects") }}</option>
+          <option
+            v-if="
+              projectFilter && !projects.some((p) => p.id === projectFilter)
+            "
+            :value="projectFilter"
+          >
+            {{ projectFilter }}
+          </option>
+          <option v-for="p in projects" :key="p.id" :value="p.id">
+            {{ p.name }}
+          </option>
+        </select></label
+      >
+      <label
+        ><span>{{ t("runExperience.period") }}</span
+        ><select v-model="periodFilter" @change="onPeriodChange">
+          <option value="all">{{ t("runExperience.allTime") }}</option>
+          <option v-if="periodFilter === 'custom'" value="custom">
+            {{
+              t("runExperience.sinceDate", { date: afterFilter.slice(0, 10) })
+            }}
+          </option>
+          <option v-for="n in [1, 7, 30]" :key="n" :value="String(n)">
+            {{ t("runExperience.lastDays", { n }) }}
+          </option>
+        </select></label
+      >
+      <label class="run-query-search"
+        ><span>{{ t("runExperience.search") }}</span
+        ><input
+          v-model="queryFilter"
+          type="search"
+          maxlength="200"
+          :placeholder="t('runExperience.queryHint')"
+      /></label>
+      <button class="btn-secondary" type="submit">
+        {{ t("runExperience.search") }}
+      </button>
+      <button
+        v-if="hasFilters"
+        class="banner-retry"
+        type="button"
+        @click="clearFilters"
+      >
+        {{ t("runs.clearFilter") }}
+      </button>
+    </form>
+    <p v-if="projectsLoadError" class="query-warning" role="status">
+      {{ t("runExperience.projectOptionsError") }}
+      <button
+        type="button"
+        class="banner-retry"
+        :disabled="projectsLoading"
+        @click="loadProjectsForTrigger"
+      >
+        {{ t("runs.retry") }}
+      </button>
+    </p>
     <!-- ─── Filter bar ───────────────────────────────────────────────────── -->
     <div class="filter-bar" role="group" :aria-label="t('runs.filterAriaLabel')">
       <button
@@ -325,6 +555,7 @@ function isFailedStatus(status: RunStatus): boolean {
         type="button"
         class="filter-tab"
         :class="{ 'filter-tab--active': statusFilter === opt }"
+        :aria-pressed="statusFilter === opt"
         @click="statusFilter = opt; onFilterChange()"
       >{{ filterLabel(opt) }}</button>
     </div>
@@ -374,13 +605,13 @@ function isFailedStatus(status: RunStatus): boolean {
         </div>
         <p class="empty-label">{{ t('runs.empty') }}</p>
         <p class="empty-hint">
-          <template v-if="statusFilter !== 'all'">{{ t('runs.emptyFiltered') }}</template>
+          <template v-if="hasFilters">{{ t('runs.emptyFiltered') }}</template>
           <template v-else>{{ t('runs.emptyHint') }}</template>
         </p>
         <button
-          v-if="statusFilter !== 'all'"
+          v-if="hasFilters"
           class="btn-secondary"
-          @click="statusFilter = 'all'; onFilterChange()"
+          @click="clearFilters"
         >{{ t('runs.clearFilter') }}</button>
       </div>
     </template>
@@ -412,20 +643,19 @@ function isFailedStatus(status: RunStatus): boolean {
           </div>
 
           <!-- Run rows -->
-          <div
+          <a
             v-for="run in group.items"
+            :href="runHref(run.id)"
             :key="run.id"
             class="run-row"
+            :data-run-id="run.id"
             :class="{
               'run-row--failed': isFailedStatus(run.status),
               'run-row--running': run.status === 'running',
             }"
-            role="row"
-            tabindex="0"
-            :aria-label="t('runs.rowAria', { id: shortId(run.id), status: t(`runStatus.${run.status}`) })"
-            @click="goToDetail(run.id)"
-            @keydown.enter="goToDetail(run.id)"
-            @keydown.space.prevent="goToDetail(run.id)"
+
+            :aria-label="`${run.projectName} · ${t('runs.rowAria', { id: shortId(run.id), status: t(`runStatus.${run.status}`) })}`"
+            @click="openRun($event, run.id)"
           >
             <!-- Status pill -->
             <div class="col-status">
@@ -491,14 +721,31 @@ function isFailedStatus(status: RunStatus): boolean {
               class="run-row-progress"
               aria-hidden="true"
             />
-          </div>
+          </a>
         </template>
       </div>
 
-      <!-- Pagination placeholder (Story 3.1 scope) -->
-      <div class="pagination-placeholder" :aria-label="t('runs.paginationAria')">
-        <span class="pagination-hint">{{ t('runs.paginationHint', { n: totalRuns }) }}</span>
-      </div>
+      <nav class="run-pagination" :aria-label="t('runExperience.pagination')">
+        <span>{{
+          t("runExperience.pageOf", { page: currentPage, total: totalPages })
+        }}</span>
+        <button
+          class="btn-secondary"
+          type="button"
+          :disabled="currentPage <= 1"
+          @click="navigatePage(currentPage - 1)"
+        >
+          {{ t("runExperience.previous") }}
+        </button>
+        <button
+          class="btn-secondary"
+          type="button"
+          :disabled="currentPage >= totalPages"
+          @click="navigatePage(currentPage + 1)"
+        >
+          {{ t("runExperience.next") }}
+        </button>
+      </nav>
     </template>
   </div>
 
@@ -1476,5 +1723,125 @@ function isFailedStatus(status: RunStatus): boolean {
 
 @media (prefers-reduced-motion: reduce) {
   .spinner { animation: none; border-top-color: currentColor; }
+}
+.run-row {
+  text-decoration: none;
+  color: inherit;
+}
+.query-warning {
+  font-size: 0.75rem;
+  color: var(--color-dim);
+  margin: 0;
+}
+.run-query {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.run-query label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 0.75rem;
+  color: var(--color-text-soft);
+  min-width: 0;
+}
+.run-query input,
+.run-query select {
+  height: 36px;
+  min-width: 0;
+  width: 100%;
+  padding: 0 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-card);
+  color: var(--color-text);
+  font: inherit;
+}
+.run-query label:not(.run-query-search) {
+  flex: 0 1 180px;
+}
+.run-query-search {
+  flex: 1 1 240px;
+}
+.run-pagination {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+  font-size: 0.8rem;
+  color: var(--color-text-soft);
+}
+.table-head,
+.run-row {
+  grid-template-columns: 108px minmax(140px, 1fr) minmax(
+      115px,
+      160px
+    ) 110px 70px 85px 90px;
+}
+@media (max-width: 1100px) {
+  .table-head,
+  .run-row {
+    grid-template-columns: 108px minmax(120px, 1fr) minmax(
+        100px,
+        140px
+      ) 80px 70px;
+  }
+  .col-trigger,
+  .col-action,
+  .table-head .th:nth-child(4),
+  .table-head .th:nth-child(7) {
+    display: none;
+  }
+}
+@media (max-width: 760px) {
+  .table-head {
+    display: none;
+  }
+  .run-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 12px;
+    padding: 12px;
+  }
+  .col-project {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .col-status {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .col-branch {
+    grid-column: 1;
+    grid-row: 2;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .col-time {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .col-dur {
+    display: none;
+  }
+  .run-query label:not(.run-query-search) {
+    flex: 1 1 120px;
+  }
+  .run-query-search {
+    flex-basis: 100%;
+  }
+  .run-query input,
+  .run-query select {
+    height: 44px;
+    font-size: 16px;
+  }
+  .run-pagination button {
+    min-height: 44px;
+  }
 }
 </style>

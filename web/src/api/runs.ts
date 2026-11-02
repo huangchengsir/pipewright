@@ -197,6 +197,8 @@ export interface RunListResponse {
 // ─── List params ─────────────────────────────────────────────────────────────
 
 export interface ListRunsParams {
+  q?: string
+  after?: string
   projectId?: string
   status?: RunStatus
   page?: number
@@ -205,14 +207,16 @@ export interface ListRunsParams {
 
 // ─── API calls ───────────────────────────────────────────────────────────────
 
-export function listRuns(params: ListRunsParams = {}): Promise<RunListResponse> {
+export function listRuns(params: ListRunsParams = {}, options?: HttpOptions): Promise<RunListResponse> {
   const qs = new URLSearchParams()
+  if (params.q) qs.set('q', params.q)
+  if (params.after) qs.set('after', params.after)
   if (params.projectId) qs.set('projectId', params.projectId)
   if (params.status) qs.set('status', params.status)
   if (params.page !== undefined) qs.set('page', String(params.page))
   if (params.pageSize !== undefined) qs.set('pageSize', String(params.pageSize))
   const query = qs.toString()
-  return http.get<RunListResponse>(`/api/runs${query ? `?${query}` : ''}`)
+  return http.get<RunListResponse>(`/api/runs${query ? `?${query}` : ''}`, options)
 }
 
 export function getRun(id: string, options?: HttpOptions): Promise<RunDetail> {

@@ -22,7 +22,7 @@ export default {
   unknownError: 'Unbekannter Fehler',
 
   sessionsTitle: 'Aktive Sitzungen',
-  sessionsSub: 'Serverseitige Sitzungen (7-tägiger gleitender Ablauf). Widerrufe eine Sitzung, um das entsprechende Gerät sofort abzumelden.',
+  sessionsSub: "Passwortsitzungen verlängern sich um 7 Tage; externe Anmeldesitzungen dauern höchstens 24 Stunden. Sitzungen lassen sich einzeln beenden.",
   errLoadSessions: 'Sitzungen können nicht geladen werden',
   retry: 'Erneut versuchen',
   emptyTitle: 'Keine aktiven Sitzungen',

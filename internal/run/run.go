@@ -85,6 +85,7 @@ var (
 	ErrNotCancelable = errors.New("run: not cancelable")
 	// ErrInvalidStatus 表示筛选/写入的状态枚举非法。
 	ErrInvalidStatus = errors.New("run: invalid status")
+	ErrInvalidFilter = errors.New("run: invalid list filter")
 	// ErrInvalidCommit rejects values that cannot be full checked-out SHA-1 evidence.
 	ErrInvalidCommit = errors.New("run: invalid resolved commit")
 	// ErrQueueFull 表示调度队列已满(突发创建过多),入队失败但 run 已入库。
@@ -243,10 +244,12 @@ type Diagnosis struct {
 
 // ListFilter 是运行列表筛选/分页入参(零值合理:不筛选、首页)。
 type ListFilter struct {
-	ProjectID string // 空 = 不按项目筛选
-	Status    string // 空 = 不按状态筛选
-	Page      int    // 1-based;<1 视为 1
-	PageSize  int    // <1 时用默认页大小
+	Query     string    // literal branch, commit or run ID substring; at most 200 runes
+	After     time.Time // inclusive UTC creation boundary; zero means all time
+	ProjectID string    // 空 = 不按项目筛选
+	Status    string    // 空 = 不按状态筛选
+	Page      int       // 1-based;<1 视为 1
+	PageSize  int       // <1 时用默认页大小
 }
 
 // ListResult 是分页列表结果。

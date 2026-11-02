@@ -92,6 +92,9 @@ func TestStageExecutorDispatchesToRemote(t *testing.T) {
 		}
 		if len(c) >= 2 && c[0] == "docker" && c[1] == "run" {
 			sawDockerRun = true
+			if !contains(c, "--entrypoint=") {
+				t.Fatal("remote script inherited image ENTRYPOINT", c)
+			}
 		}
 	}
 	if !sawUntar || !sawDockerRun {

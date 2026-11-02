@@ -22,7 +22,7 @@ export default {
   unknownError: '未知錯誤',
 
   sessionsTitle: '活躍工作階段',
-  sessionsSub: '伺服器端工作階段(7 天滑動過期)。可中斷任意工作階段立即登出對應裝置。',
+  sessionsSub: "密碼工作階段可滑動續期 7 天；第三方登入最長 24 小時。可個別登出任一工作階段。",
   errLoadSessions: '無法載入工作階段',
   retry: '重試',
   emptyTitle: '尚無活躍工作階段',

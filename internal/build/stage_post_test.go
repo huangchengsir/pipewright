@@ -12,12 +12,14 @@ import (
 // postRecDriver 记录每次 RunToolchain 的镜像(按调用序),并可让指定镜像返回非零(失败)。
 type postRecDriver struct {
 	images    []string
+	opts      []ToolchainRunOptions
 	failImage string
 }
 
 func (d *postRecDriver) Binary() string { return "fake" }
-func (d *postRecDriver) RunToolchain(_ context.Context, image, _, _ string, _ []string, _ []string, _ pipeline.Resource, _ func(string, string)) (int, error) {
+func (d *postRecDriver) RunToolchain(_ context.Context, image, _, _ string, _ []string, _ []string, _ pipeline.Resource, opts ToolchainRunOptions, _ func(string, string)) (int, error) {
 	d.images = append(d.images, image)
+	d.opts = append(d.opts, opts)
 	if image == d.failImage {
 		return 1, nil
 	}
@@ -75,6 +77,11 @@ func TestStagePostOnSuccess(t *testing.T) {
 	}
 	if contains(drv.images, "post-fail") {
 		t.Errorf("成功时 on_failure 不应跑;images=%v", drv.images)
+	}
+	for i, opts := range drv.opts {
+		if !opts.ClearEntrypoint {
+			t.Fatalf("script/post %s inherited ENTRYPOINT", drv.images[i])
+		}
 	}
 	// 顺序:job 先于 post。
 	if drv.images[0] != "job-img" {

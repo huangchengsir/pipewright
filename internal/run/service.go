@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/configstate"
@@ -553,6 +555,9 @@ func (s *service) loadSteps(ctx context.Context, runID string) ([]Step, error) {
 }
 
 func (s *service) List(ctx context.Context, f ListFilter) (*ListResult, error) {
+	if utf8.RuneCountInString(f.Query) > 200 || !utf8.ValidString(f.Query) {
+		return nil, ErrInvalidFilter
+	}
 	if f.Status != "" && !isValidStatus(f.Status) {
 		return nil, ErrInvalidStatus
 	}
@@ -581,6 +586,31 @@ func (s *service) List(ctx context.Context, f ListFilter) (*ListResult, error) {
 	if f.Status != "" {
 		where = append(where, "pr.status = ?")
 		args = append(args, f.Status)
+	}
+	if query := strings.TrimSpace(f.Query); query != "" {
+		// Match ASCII case-insensitively and non-ASCII literally on both stores.
+		// MySQL ID/commit columns are ASCII: convert operands before Unicode matching.
+		if store.DialectOf(s.db) == store.MySQL {
+			pattern := literalASCIIRegexp(query)
+			predicates := make([]string, 0, 4)
+			for _, column := range []string{"pr.id", "pr.trigger_branch", "pr.trigger_commit", "pr.resolved_commit_sha"} {
+				predicates = append(predicates, "REGEXP_LIKE(CONVERT("+column+" USING utf8mb4) COLLATE utf8mb4_bin, CONVERT(? USING utf8mb4) COLLATE utf8mb4_bin, 'c')")
+				args = append(args, pattern)
+			}
+			where = append(where, "("+strings.Join(predicates, " OR ")+")")
+		} else {
+			pattern := "%" + strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(query) + "%"
+			where = append(where, "(LOWER(pr.id) LIKE LOWER(?) ESCAPE '!' OR LOWER(pr.trigger_branch) LIKE LOWER(?) ESCAPE '!' OR LOWER(pr.trigger_commit) LIKE LOWER(?) ESCAPE '!' OR LOWER(pr.resolved_commit_sha) LIKE LOWER(?) ESCAPE '!')")
+			args = append(args, pattern, pattern, pattern, pattern)
+		}
+	}
+	if !f.After.IsZero() {
+		where = append(where, "pr.created_at >= ?")
+		boundary := f.After.UTC()
+		if boundary.Nanosecond() != 0 {
+			boundary = boundary.Truncate(time.Second).Add(time.Second)
+		}
+		args = append(args, boundary.Format(time.RFC3339))
 	}
 	clause := ""
 	if len(where) > 0 {
@@ -997,3 +1027,27 @@ func parseNullTime(ns sql.NullString) (*time.Time, error) {
 
 // isForeignKeyErr 判断错误是否为外键约束失败(modernc sqlite 文本含 FOREIGN KEY)。
 func isForeignKeyErr(err error) bool { return store.IsForeignKeyErr(err) }
+
+// literalASCIIRegexp never accepts a user-supplied regex. Only ASCII letters get
+// fixed case pairs; all other runes are quoted literals. Query length is bounded
+// before this helper, and there are no repetitions or user-controlled operators.
+func literalASCIIRegexp(query string) string {
+	var pattern strings.Builder
+	for _, char := range query {
+		switch {
+		case char >= 'a' && char <= 'z':
+			pattern.WriteRune('[')
+			pattern.WriteRune(char)
+			pattern.WriteRune(char - 'a' + 'A')
+			pattern.WriteRune(']')
+		case char >= 'A' && char <= 'Z':
+			pattern.WriteRune('[')
+			pattern.WriteRune(char + 'a' - 'A')
+			pattern.WriteRune(char)
+			pattern.WriteRune(']')
+		default:
+			pattern.WriteString(regexp.QuoteMeta(string(char)))
+		}
+	}
+	return pattern.String()
+}

@@ -99,6 +99,9 @@ func TestNodeRetryCapturesActualSourceAndReusesFrozenManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if snapshot.ScriptEntrypointMode != runretry.ScriptEntrypointClearV1 {
+		t.Fatal("new capture did not freeze explicit script contract")
+	}
 	if snapshot.Source.Kind != "repo" || snapshot.Source.Ref != "feature" || snapshot.Trigger.Params["VERSION"] != "frozen" || snapshot.RunnerRefs["credential/git"] != "git_token" {
 		t.Fatalf("source binding=%+v", snapshot.Source)
 	}
@@ -117,6 +120,9 @@ func TestNodeRetryCapturesActualSourceAndReusesFrozenManifest(t *testing.T) {
 	}
 	if ex.Snapshot().Spec.Stages[0].Jobs[0].Config["commands"] != "PRIVATE_ORIGINAL_COMMAND" || loader.calls != 1 {
 		t.Fatal("manifest reloaded current configuration")
+	}
+	if ex.Snapshot().ScriptEntrypointMode != runretry.ScriptEntrypointClearV1 {
+		t.Fatal("prepared capture lost script contract")
 	}
 	var cipher []byte
 	if err = st.DB.QueryRow("SELECT ciphertext FROM run_retry_manifests WHERE root_id=?", current.ID).Scan(&cipher); err != nil {

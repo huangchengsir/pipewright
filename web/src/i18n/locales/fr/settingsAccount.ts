@@ -22,7 +22,7 @@ export default {
   unknownError: 'Erreur inconnue',
 
   sessionsTitle: 'Sessions actives',
-  sessionsSub: 'Sessions côté serveur (expiration glissante de 7 jours). Révoquez toute session pour déconnecter immédiatement l’appareil correspondant.',
+  sessionsSub: "Les sessions par mot de passe se renouvellent pour 7 jours ; les sessions externes durent au maximum 24 heures. Vous pouvez les fermer individuellement.",
   errLoadSessions: 'Impossible de charger les sessions',
   retry: 'Réessayer',
   emptyTitle: 'Aucune session active',

@@ -121,9 +121,8 @@ func makeContainerTerminalHandler(svc target.Service, aud audit.Recorder) http.H
 
 		// 开 PTY 交互会话(docker exec -it <id> <shell>)。失败 → 以 WS close 帧人读告知,不泄密。
 		cmd := buildContainerExecCmd(containerID, shell)
-		// PTY 会话生命周期独立于单次 HTTP 请求 ctx(r.Context() 在 hijack 后不可靠),
-		// 用自管理 ctx,WS 关闭时 cancel 收尾。
-		sessCtx, cancel := context.WithCancel(context.Background())
+		// The authenticated request context carries the session revocation lease.
+		sessCtx, cancel := context.WithCancel(r.Context())
 		defer cancel()
 
 		sess, err := svc.ExecInteractive(sessCtx, id, cmd)
@@ -203,7 +202,7 @@ func makeTerminalV2Handler(svc target.Service, aud audit.Recorder, container boo
 			return
 		}
 		conn.SetReadLimit(wsReadLimit)
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(r.Context())
 		defer cancel()
 		timer := time.AfterFunc(15*time.Second, cancel)
 		cmd := []string{shell}
@@ -262,7 +261,7 @@ func makeServerTerminalHandler(svc target.Service, aud audit.Recorder) http.Hand
 		}
 		conn.SetReadLimit(wsReadLimit)
 
-		sessCtx, cancel := context.WithCancel(context.Background())
+		sessCtx, cancel := context.WithCancel(r.Context())
 		defer cancel()
 
 		// 主机 shell:cmd 仅为 [shell](array,无拼接)。

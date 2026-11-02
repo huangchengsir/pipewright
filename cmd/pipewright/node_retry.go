@@ -173,7 +173,7 @@ func (b *nodeRetryBindings) capture(ctx context.Context, id string) (runretry.Sn
 	if source.FromRepo {
 		kind = "repo"
 	}
-	snap := runretry.Snapshot{SchemaVersion: runretry.SchemaVersion, ProjectID: r.ProjectID, Spec: cfg.Spec,
+	snap := runretry.Snapshot{SchemaVersion: runretry.SchemaVersion, ScriptEntrypointMode: runretry.ScriptEntrypointClearV1, ProjectID: r.ProjectID, Spec: cfg.Spec,
 		Project: projectMap, Settings: settingsMap, RequestedRef: r.Trigger.Branch,
 		Trigger: runretry.Trigger{Type: r.Trigger.Type, Branch: r.Trigger.Branch, Commit: r.Trigger.Commit, Actor: r.Trigger.Actor,
 			Environment: r.Trigger.ResolvedEnvironment, TargetServerIDs: r.Trigger.ResolvedTargetServerIDs, Params: r.Trigger.Params,

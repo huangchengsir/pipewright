@@ -208,6 +208,23 @@ Maven 脚本或工具链构建启用 `.m2/repository`（或 `.m2`）缓存后，
 | `PIPEWRIGHT_METRICS_SAMPLE_INTERVAL` | 服务器指标采样间隔(秒,趋势图数据源);`0` 关闭采样 | `60` |
 | `PIPEWRIGHT_METRICS_RETENTION_DAYS` | 指标样本保留天数 | `7` |
 
+## 第三方登录
+
+在“设置 → 账户 → 第三方登录”为现有管理员配置 GitHub、GitLab.com、Gitee、Google 和 Microsoft。默认显示五个入口，显隐保存在实例中；隐藏不会停用登录、解绑账号或撤销会话。账号密码登录始终保留。
+
+1. 将 PIPEWRIGHT_PUBLIC_URL 设为实例的 HTTPS 基址。在所选平台创建独立的登录应用，从账户设置复制固定回调地址；不要复用仓库 OAuth 应用。
+2. 在账户设置保存 Client ID 和 Client Secret，验证当前 Pipewright 密码，再授权并明确确认返回的账号。身份按平台不可变标识匹配，不按邮箱自动关联，也不开放公开注册。
+3. 使用最小权限：GitHub 不需要仓库权限；GitLab 使用 read_user；Gitee 使用 user_info，须明确选择服务端代码授权或已验证支持的 S256；Google、Microsoft 使用 openid profile。Microsoft 可选择个人、组织或指定租户账号。
+4. 停用或解绑会撤销该来源的 Pipewright 会话；更换应用、租户或协议设置需提供新密钥并重新绑定。密钥只写不回显，不保存提供商 access/refresh token。第三方会话最长24小时；敏感设置要求最近5分钟内验证过密码。
+
+升级前一并备份数据库和保险库主密钥。回退旧版二进制前，须停用所有第三方登录，并核对非 password 会话已物理清除；不能通过删除数据库或主密钥回退。反向代理访问日志应省略回调查询参数，应用无法控制上游日志。保存配置不等于完成真实账号验证，每个平台配置独立应用后应实际登录验收。
+
+PIPEWRIGHT_AUTH_ALLOW_HTTP_LOOPBACK=1 仅供隔离本地测试使用，允许明确配置的 HTTP 回环基址，不会开放外部 HTTP 地址；正常部署不设置此项。
+
+## 脚本容器执行
+
+新运行中的自定义脚本节点及已支持的脚本后置步骤会清空镜像 ENTRYPOINT，再通过 `sh -c` / `set -e` 执行，覆盖本地、复制工作区及远程 runner 的脚本路径。镜像必须自带 `sh`；平台不会安装 shell，也不会失败后换一种启动方式再执行。镜像 ENTRYPOINT 中的初始化将被跳过，必要初始化应放入脚本。普通工具链构建、旁挂服务和部署容器仍继承镜像 ENTRYPOINT。历史节点重试保留原始冻结契约；要应用新行为，请发起新的完整运行。无需新增 YAML 字段。
+
 ## 流水线即代码(GitOps)
 
 把流水线结构写进仓库的 `.pipewright.yml`,**跟代码同源、走 PR 评审、按分支演进**——不再依赖画布配置的隐式漂移。
@@ -353,3 +370,5 @@ MIT — 见 [LICENSE](LICENSE)。
 <div align="center">
 <sub>Pipewright —— 把 CI、部署与运维装进一个二进制。</sub>
 </div>
+
+第三方登录依赖的许可与声明见 THIRD_PARTY_NOTICES。

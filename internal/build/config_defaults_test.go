@@ -42,7 +42,7 @@ func (d *defaultsDriver) Build(_ context.Context, _, _, _ string, plain, secret 
 	d.record(defaultsCall{kind: "build", env: append([]string(nil), plain...), secret: append([]string(nil), secret...)})
 	return d.code, nil
 }
-func (d *defaultsDriver) RunToolchain(_ context.Context, image, ws, _ string, env, _ []string, _ pipeline.Resource, _ func(string, string)) (int, error) {
+func (d *defaultsDriver) RunToolchain(_ context.Context, image, ws, _ string, env, _ []string, _ pipeline.Resource, _ ToolchainRunOptions, _ func(string, string)) (int, error) {
 	d.record(defaultsCall{kind: "toolchain", image: image, env: append([]string(nil), env...)})
 	if image == "producer" {
 		if err := os.WriteFile(filepath.Join(ws, pipewrightEnvFileName), []byte(d.outputs), 0o600); err != nil {

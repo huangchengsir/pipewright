@@ -69,7 +69,7 @@ func TestRecoveryCopiedWorkspacePreservesLedgerContextDuringCleanup(t *testing.T
 				c.resources.foreign = true
 			}
 			d := &shellDriver{bin: "docker", cmdr: c, copyWorkspace: true, workspaceReconcileAfter: time.Now().Add(time.Hour)}
-			code, runErr := d.RunToolchain(ctx, "fixture", t.TempDir(), "/workspace", nil, []string{"true"}, pipeline.Resource{}, nil)
+			code, runErr := d.RunToolchain(ctx, "fixture", t.TempDir(), "/workspace", nil, []string{"true"}, pipeline.Resource{}, ToolchainRunOptions{}, nil)
 			if mode == "success" && (runErr != nil || code != 0) {
 				t.Fatal(code, runErr)
 			}

@@ -7,6 +7,7 @@ RUN mkdir -p /data && chown 65532:65532 /data
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY pipewright /pipewright
+COPY LICENSE THIRD_PARTY_NOTICES /licenses/
 COPY --from=prep --chown=65532:65532 /data /data
 # 工作目录设为 /data:sqlite(pipewright.db)与相对路径产物默认落此,持久化卷一挂即生效。
 WORKDIR /data

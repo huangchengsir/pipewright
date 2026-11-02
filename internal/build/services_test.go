@@ -20,7 +20,7 @@ type svcDriver struct {
 }
 
 func (d *svcDriver) Binary() string { return "fake" }
-func (d *svcDriver) RunToolchain(_ context.Context, _, _, _ string, _ []string, _ []string, res pipeline.Resource, _ func(string, string)) (int, error) {
+func (d *svcDriver) RunToolchain(_ context.Context, _, _, _ string, _ []string, _ []string, res pipeline.Resource, _ ToolchainRunOptions, _ func(string, string)) (int, error) {
 	d.scriptNetwork = res.Network
 	return 0, nil
 }

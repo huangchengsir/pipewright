@@ -13,6 +13,8 @@ const props = defineProps<{
   alerts: AnomalyAlert[]
   diagnosis: DiagnosisStats | null
   loading: boolean
+  alertsUnavailable?: boolean
+  diagnosisUnavailable?: boolean
 }>()
 
 const router = useRouter()
@@ -49,7 +51,7 @@ function fmtAgo(rfc: string): string {
 
     <template v-else>
       <!-- 异常告警 -->
-      <div class="al-block">
+      <div v-if="!alertsUnavailable" class="al-block">
         <div class="al-sub">{{ t('dash.resourceAnomalies') }}</div>
         <p v-if="!recent.length" class="al-none">{{ t('dash.noAnomalies') }}</p>
         <ul v-else class="al-list" role="list">
@@ -63,7 +65,7 @@ function fmtAgo(rfc: string): string {
       </div>
 
       <!-- AI 诊断准确率 -->
-      <div class="al-block diag">
+      <div v-if="!diagnosisUnavailable" class="al-block diag">
         <div class="al-sub">{{ t('dash.aiDiagLoop') }}</div>
         <div v-if="(diagnosis?.totalFeedback ?? 0) === 0" class="al-none">{{ t('dash.noDiagFeedback') }}</div>
         <div v-else class="diag-row">

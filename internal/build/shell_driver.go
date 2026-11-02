@@ -66,9 +66,9 @@ func (d *shellDriver) Build(ctx context.Context, contextDir, dockerfile, localTa
 	return d.cmdr.Stream(ctx, d.bin, args, "", onLine)
 }
 
-func (d *shellDriver) RunToolchain(ctx context.Context, image, hostDir, workdir string, env []string, cmd []string, res pipeline.Resource, onLine func(stream, line string)) (int, error) {
+func (d *shellDriver) RunToolchain(ctx context.Context, image, hostDir, workdir string, env []string, cmd []string, res pipeline.Resource, opts ToolchainRunOptions, onLine func(stream, line string)) (int, error) {
 	if d.copyWorkspace {
-		return d.runCopiedWorkspace(ctx, image, hostDir, workdir, env, cmd, res, onLine)
+		return d.runCopiedWorkspace(ctx, image, hostDir, workdir, env, cmd, res, opts, onLine)
 	}
 	mount := toolchainWorkspaceMount(workdir)
 	// docker run --rm -v hostDir:workdir -w workdir [--cpus N] [--memory M] [-e K=V...] image cmd...
@@ -92,6 +92,10 @@ func (d *shellDriver) RunToolchain(ctx context.Context, image, hostDir, workdir 
 	for _, kv := range env {
 		args = append(args, "-e", kv)
 		display = append(display, "-e", maskKV(kv)) // 环境变量可能含 secret:回显只列 key
+	}
+	if opts.ClearEntrypoint {
+		args = append(args, "--entrypoint=")
+		display = append(display, "--entrypoint=")
 	}
 	args = append(args, image)
 	args = append(args, cmd...)

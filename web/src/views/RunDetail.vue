@@ -14,6 +14,7 @@
 -->
 <script setup lang="ts">
 import { ref, computed, onUnmounted, watch } from 'vue'
+import { safeRunListReturn, runDetailLocation } from '../lib/runListContext'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -74,7 +75,7 @@ function openRetry(keys: string[]) { void retryPanel.value?.show(keys.length ===
 function openNodeLogs(keys: string[], stageName: string) { void retryPanel.value?.showLogs(keys, stageName) }
 function openRetryHistory() { retryPanel.value?.showHistory() }
 function openAllFailed() { openRetry(recovery.failedNodes.value.map(n => n.node.key)) }
-function openAttempt(id: string) { void router.push({ name: 'run-detail', params: { id } }) }
+function openAttempt(id: string) { void router.push(runDetailLocation(id, route.query.returnTo)) }
 
 // ─── load state ──────────────────────────────────────────────────────────────
 
@@ -692,7 +693,9 @@ function formatDateTime(iso: string | null): string {
 }
 
 function goBack(): void {
-  void router.push({ name: 'runs' })
+  const target = safeRunListReturn(route.query.returnTo)
+  if (window.history.state?.back === target) router.back()
+  else void router.push(target)
 }
 
 // ─── Computed step status for skewer node style ───────────────────────────────
@@ -725,7 +728,7 @@ function nodeClass(status: StepStatus): string {
       </span>
     </div>
 
-    <RunRetryPanel v-if="(loadState === 'idle' && run) || recovery.pending.value" :key="runId" ref="retryPanel" :state="recovery" :run-id="runId" :steps="run?.steps" :run-status="run?.status" :source-run-id="run?.sourceRunId" :attempt-number="run?.attemptNumber" @accepted="openAttempt" @full-logs="clearSourceLog" />
+    <RunRetryPanel v-if="(loadState === 'idle' && run) || recovery.pending.value" :key="runId" ref="retryPanel" :state="recovery" :return-to="typeof route.query.returnTo === 'string' ? safeRunListReturn(route.query.returnTo) : undefined" :run-id="runId" :steps="run?.steps" :run-status="run?.status" :source-run-id="run?.sourceRunId" :attempt-number="run?.attemptNumber" @accepted="openAttempt" @full-logs="clearSourceLog" />
 
     <!-- ─── Loading skeleton ─────────────────────────────────────────────── -->
     <template v-if="loadState === 'loading'">
@@ -2689,4 +2692,38 @@ function nodeClass(status: StepStatus): string {
 .batch-btn--go { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
 .batch-btn--go:hover:not(:disabled) { background: var(--color-primary-press, var(--color-primary)); transform: translateY(-1px); }
 .batch-btn--abort:hover:not(:disabled) { border-color: var(--color-danger, #dc2626); color: var(--color-danger, #dc2626); }
+@media (max-width: 760px) {
+  .run-detail-root,
+  .detail-card {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .detail-head,
+  .meta-strip {
+    padding: 12px;
+  }
+  .state-section {
+    padding: 12px;
+    gap: 14px;
+  }
+  .dag-section {
+    padding: 10px;
+    min-width: 0;
+  }
+  .running-body,
+  .success-body,
+  .failed-body,
+  .slot-log-live {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .meta-item {
+    min-width: 0;
+    flex: 1 1 110px;
+    padding-right: 8px;
+  }
+  .meta-val {
+    overflow-wrap: anywhere;
+  }
+}
 </style>

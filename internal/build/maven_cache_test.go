@@ -62,6 +62,9 @@ func TestMavenCacheExecutionMatrix(t *testing.T) {
 					if err := NewStageExecutor(b, nil)(context.Background(), &run.Run{ProjectID: "p1"}, defaultsStage(mode, jb), newPushReport()); err != nil {
 						t.Fatal(err)
 					}
+					if d.gotOpts.ClearEntrypoint != (kind == "script") {
+						t.Fatal("entrypoint policy inferred from cache shell instead of node type", d.gotOpts)
+					}
 					if tc.want {
 						if len(d.gotCmd) < 5 || d.gotCmd[3] != "pipewright-maven-cache" || !strings.Contains(d.gotCmd[2], root+"/.m2/repository") || !reflect.DeepEqual(d.gotCmd[4:], original) {
 							t.Fatalf("Maven did not receive root-relative default and original command: %v", d.gotCmd)
@@ -151,7 +154,7 @@ type mavenPayloadDriver struct {
 
 func (*mavenPayloadDriver) Binary() string { return "fixture" }
 
-func (d *mavenPayloadDriver) RunToolchain(_ context.Context, _, ws, workdir string, _ []string, cmd []string, _ pipeline.Resource, _ func(string, string)) (int, error) {
+func (d *mavenPayloadDriver) RunToolchain(_ context.Context, _, ws, workdir string, _ []string, cmd []string, _ pipeline.Resource, _ ToolchainRunOptions, _ func(string, string)) (int, error) {
 	d.t.Helper()
 	root := toolchainWorkspaceMount(workdir)
 	if len(cmd) < 5 || !strings.Contains(cmd[2], root+"/.m2/repository") {
@@ -257,7 +260,7 @@ type cancelMavenDriver struct {
 
 func (*cancelMavenDriver) Binary() string { return "fixture" }
 
-func (d *cancelMavenDriver) RunToolchain(context.Context, string, string, string, []string, []string, pipeline.Resource, func(string, string)) (int, error) {
+func (d *cancelMavenDriver) RunToolchain(context.Context, string, string, string, []string, []string, pipeline.Resource, ToolchainRunOptions, func(string, string)) (int, error) {
 	d.cancel()
 	return 0, nil // Cancellation must win even over an apparently successful driver.
 }

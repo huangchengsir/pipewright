@@ -3,11 +3,12 @@ import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { useRunRetry } from '../../composables/useRunRetry'
 import { retryNodeLabel, sourceLogLocation, type RetryReason } from '../../api/runRetry'
+import { runDetailLocation } from '../../lib/runListContext'
 import AppButton from '../ui/AppButton.vue'
 import RunTerminal from './RunTerminal.vue'
 import type { RunStep } from '../../api/runs'
 
-const props = defineProps<{ state: ReturnType<typeof useRunRetry>; sourceRunId?: string; attemptNumber?: number; runId?: string; steps?: RunStep[]; runStatus?: string }>()
+const props = defineProps<{ state: ReturnType<typeof useRunRetry>; returnTo?: string; sourceRunId?: string; attemptNumber?: number; runId?: string; steps?: RunStep[]; runStatus?: string }>()
 const emit = defineEmits<{ accepted: [runId: string]; fullLogs: [] }>()
 const { t, te } = useI18n()
 const { context, contextError, plan, error, planLoading, submitting, querying, reconciling, pending, request, attempts, failedNodes, isHead, selected, rebuild, reconcileReasons } = props.state
@@ -47,6 +48,10 @@ const logSource = computed(() => {
   if (!Number.isInteger(ordinal) || ordinal < 0 || !stepId || props.steps?.[ordinal]?.id !== stepId) return null
   return { runId: props.runId, ordinal, stepId, live: props.runStatus === 'running' }
 })
+function sourceLogTarget(node: Parameters<typeof sourceLogLocation>[0]) {
+  const location = sourceLogLocation(node)
+  return location ? runDetailLocation(location.params.id, props.returnTo, location.query) : null
+}
 const fullLogRunId = computed(() => focusedNode.value?.decision.action === 'reuse' ? focusedNode.value.decision.sourceAttemptId ?? props.runId : props.runId)
 function showLogs(keys: string[] | string, stageName = '') {
   logNodeKeys.value = [...new Set(typeof keys === 'string' ? [keys] : keys)]
@@ -118,7 +123,7 @@ async function confirmPlan() { const result = await props.state.submit(); if (re
 <template>
   <div v-if="pending" class="retry-request retry-request-summary" role="status" aria-live="polite">
     <span>{{ request?.state === 'outcome_unknown' ? t('runRetry.unknown') : request ? t('runRetry.requestAccepted') : t('runRetry.verifyingOriginal') }}</span>
-    <RouterLink @click="close" v-if="request?.attemptRunId" :to="{ name: 'run-detail', params: { id: request.attemptRunId } }">{{ t('runRetry.openAttempt') }}</RouterLink>
+    <RouterLink @click="close" v-if="request?.attemptRunId" :to="runDetailLocation(request.attemptRunId, returnTo)">{{ t('runRetry.openAttempt') }}</RouterLink>
     <AppButton v-else :loading="querying" @click="state.queryOriginal">{{ t('runRetry.queryOriginal') }}</AppButton>
     <AppButton variant="ghost" @click="show()">{{ t('runRetry.viewRecovery') }}</AppButton>
   </div>
@@ -133,16 +138,16 @@ async function confirmPlan() { const result = await props.state.submit(); if (re
       <div>
         <p class="retry-eyebrow">{{ mode === 'history' ? t('runRetry.runHistory') : mode === 'logs' ? t('runRetry.nodeLogs') : t('runRetry.nodeRecovery') }}</p>
         <h2 id="retry-dialog-title" ref="heading" tabindex="-1">{{ title }}</h2>
-        <p v-if="sourceRunId && mode !== 'details' && mode !== 'logs'">{{ t('runRetry.attempt', { n: attemptNumber ?? context?.revision ?? 1 }) }} · <RouterLink @click="close" :to="{ name: 'run-detail', params: { id: sourceRunId } }">{{ t('runRetry.fromRun', { id: sourceRunId.slice(0, 8) }) }}</RouterLink></p>
+        <p v-if="sourceRunId && mode !== 'details' && mode !== 'logs'">{{ t('runRetry.attempt', { n: attemptNumber ?? context?.revision ?? 1 }) }} · <RouterLink @click="close" :to="runDetailLocation(sourceRunId, returnTo)">{{ t('runRetry.fromRun', { id: sourceRunId.slice(0, 8) }) }}</RouterLink></p>
       </div>
       <AppButton class="retry-close" @click="close">{{ t('runRetry.close') }}</AppButton>
     </header>
-    <p v-if="context && !isHead" class="retry-warning" role="status">{{ t('runRetry.superseded') }} <RouterLink @click="close" :to="{ name: 'run-detail', params: { id: context.headAttemptId } }">{{ t('runRetry.latestAttempt') }}</RouterLink></p>
+    <p v-if="context && !isHead" class="retry-warning" role="status">{{ t('runRetry.superseded') }} <RouterLink @click="close" :to="runDetailLocation(context.headAttemptId, returnTo)">{{ t('runRetry.latestAttempt') }}</RouterLink></p>
     <p v-if="context?.outcomeUnknown" class="retry-warning">{{ t('runRetry.unknown') }}</p>
     <div v-if="pending" class="retry-request" aria-live="polite">
       <p>{{ request?.state === 'outcome_unknown' ? t('runRetry.unknown') : request ? t('runRetry.requestAccepted') : t('runRetry.verifyingOriginal') }}</p>
       <code>{{ pending.requestId }}</code>
-      <RouterLink @click="close" v-if="request?.attemptRunId" :to="{ name: 'run-detail', params: { id: request.attemptRunId } }">{{ t('runRetry.openAttempt') }}</RouterLink>
+      <RouterLink @click="close" v-if="request?.attemptRunId" :to="runDetailLocation(request.attemptRunId, returnTo)">{{ t('runRetry.openAttempt') }}</RouterLink>
       <AppButton v-else :loading="querying" @click="state.queryOriginal">{{ t('runRetry.queryOriginal') }}</AppButton>
     </div>
     <div class="retry-content">
@@ -163,11 +168,11 @@ async function confirmPlan() { const result = await props.state.submit(); if (re
           <RunTerminal :key="`${logSource.runId}:${logSource.stepId}`" :run-id="logSource.runId" :live="logSource.live" :filter-ordinal="logSource.ordinal" />
         </div>
         <p v-else class="retry-muted">{{ t('runRetry.nodeLogsUnavailable') }}</p>
-        <RouterLink v-if="fullLogRunId" @click="openFullLogs" :to="{ name: 'run-detail', params: { id: fullLogRunId } }">{{ t('runRetry.fullLogs') }}</RouterLink>
+        <RouterLink v-if="fullLogRunId" @click="openFullLogs" :to="runDetailLocation(fullLogRunId, returnTo)">{{ t('runRetry.fullLogs') }}</RouterLink>
         <details v-if="focusedNode" class="retry-node-evidence">
           <summary>{{ t('runRetry.viewRecovery') }}</summary>
-          <p v-if="focusedNode.decision.sourceAttemptId"><RouterLink @click="close" :to="{ name: 'run-detail', params: { id: focusedNode.decision.sourceAttemptId } }">{{ t('runRetry.fromRun', { id: focusedNode.decision.sourceAttemptId.slice(0, 8) }) }}</RouterLink></p>
-          <RouterLink v-if="sourceLogLocation(focusedNode)" @click="close" :to="sourceLogLocation(focusedNode)!">{{ t('runRetry.sourceLogs') }}</RouterLink>
+          <p v-if="focusedNode.decision.sourceAttemptId"><RouterLink @click="close" :to="runDetailLocation(focusedNode.decision.sourceAttemptId, returnTo)">{{ t('runRetry.fromRun', { id: focusedNode.decision.sourceAttemptId.slice(0, 8) }) }}</RouterLink></p>
+          <RouterLink v-if="sourceLogTarget(focusedNode)" @click="close" :to="sourceLogTarget(focusedNode)!">{{ t('runRetry.sourceLogs') }}</RouterLink>
           <p v-for="(r, index) in focusedNode.decision.reasons ?? []" :key="index">{{ detail(r) }}</p>
           <p v-if="focusedNode.reasonCode">{{ reason(focusedNode.reasonCode) }}</p>
           <p v-if="dependencies(nodeKey).length">{{ t('runRetry.dependsOn', { names: dependencies(nodeKey).join(', ') }) }}</p>
@@ -177,8 +182,8 @@ async function confirmPlan() { const result = await props.state.submit(); if (re
       <section v-if="focusedNode && mode !== 'logs'" class="retry-node-detail">
         <p><strong>{{ focusedNode.decision.action === 'reuse' ? t('runRetry.reused') : focusedNode.decision.action === 'blocked' ? t('runRetry.blocked') : statusLabel(focusedNode.decision.status) }}</strong></p>
         <p v-if="focusedNode.node.controlKey" class="retry-muted">{{ t('runRetry.controlNode') }}</p>
-        <RouterLink @click="close" v-if="focusedNode.decision.sourceAttemptId" :to="{ name: 'run-detail', params: { id: focusedNode.decision.sourceAttemptId } }">{{ t('runRetry.fromRun', { id: focusedNode.decision.sourceAttemptId.slice(0, 8) }) }}</RouterLink>
-        <RouterLink @click="close" v-if="sourceLogLocation(focusedNode)" :to="sourceLogLocation(focusedNode)!">{{ t('runRetry.sourceLogs') }}</RouterLink>
+        <RouterLink @click="close" v-if="focusedNode.decision.sourceAttemptId" :to="runDetailLocation(focusedNode.decision.sourceAttemptId, returnTo)">{{ t('runRetry.fromRun', { id: focusedNode.decision.sourceAttemptId.slice(0, 8) }) }}</RouterLink>
+        <RouterLink @click="close" v-if="sourceLogTarget(focusedNode)" :to="sourceLogTarget(focusedNode)!">{{ t('runRetry.sourceLogs') }}</RouterLink>
         <p v-for="(r, index) in focusedNode.decision.reasons ?? []" :key="index">{{ detail(r) }}</p>
         <p v-if="focusedNode.reasonCode">{{ reason(focusedNode.reasonCode) }}</p>
         <AppButton class="retry-focused" v-if="mode !== 'plan' && ['failed', 'outcome_unknown'].includes(focusedNode.decision.status ?? '')" :disabled="!!pending || submitting" @click="retryFocused">{{ t('runRetry.retryNode') }}</AppButton>
@@ -208,7 +213,7 @@ async function confirmPlan() { const result = await props.state.submit(); if (re
                 <strong>{{ retryNodeLabel(item.node) }}</strong>
                 <span v-if="item.node.controlKey" class="retry-muted">{{ t('runRetry.controlNode') }}</span>
                 <span v-if="item.decision.sourceAttemptId" class="retry-muted">{{ t('runRetry.fromRun', { id: item.decision.sourceAttemptId.slice(0, 8) }) }}</span>
-                <RouterLink @click="close" v-if="group.key === 'reuse' && sourceLogLocation(item)" :to="sourceLogLocation(item)!">{{ t('runRetry.sourceLogs') }}</RouterLink>
+                <RouterLink @click="close" v-if="group.key === 'reuse' && sourceLogTarget(item)" :to="sourceLogTarget(item)!">{{ t('runRetry.sourceLogs') }}</RouterLink>
                 <p v-for="(r, index) in item.decision.reasons ?? []" :key="index">{{ detail(r) }}</p>
                 <p v-if="item.reasonCode">{{ reason(item.reasonCode) }}</p>
               </li>
@@ -244,7 +249,7 @@ async function confirmPlan() { const result = await props.state.submit(); if (re
       <section v-if="mode === 'history' && attempts?.items.length" class="retry-history">
         <h3>{{ t('runRetry.runHistory') }}</h3>
         <ul><li v-for="attempt in attempts.items" :key="attempt.runId">
-          <RouterLink @click="close" :to="{ name: 'run-detail', params: { id: attempt.runId } }">{{ t('runRetry.attempt', { n: attempt.revision }) }} · {{ attempt.runId.slice(0, 8) }}</RouterLink>
+          <RouterLink @click="close" :to="runDetailLocation(attempt.runId, returnTo)">{{ t('runRetry.attempt', { n: attempt.revision }) }} · {{ attempt.runId.slice(0, 8) }}</RouterLink>
           <span>{{ attempt.outcomeUnknown ? t('runRetry.unknown') : t(`runStatus.${attempt.status}`) }}</span>
           <span v-if="attempt.initiator">{{ attempt.initiator }}</span>
         </li></ul>

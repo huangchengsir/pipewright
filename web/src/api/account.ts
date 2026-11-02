@@ -3,7 +3,7 @@
  *
  * POST   /api/account/password        → 204  (needs CSRF)
  *   { currentPassword, newPassword }
- *   401 invalid_current_password · 422 weak_password
+ *   422 invalid_current_password · 422 weak_password
  *   On success the server revokes every OTHER session (current token kept).
  * GET    /api/account/sessions        → { sessions: Session[] }
  *   id = sha256 prefix of the token — the raw token is NEVER returned.
@@ -21,6 +21,9 @@ export interface Session {
   expiresAt: string
   /** True for the session that issued this request. */
   current: boolean
+  source?: string
+  provider?: string
+  absoluteExpiresAt?: string
 }
 
 export interface ChangePasswordInput {

@@ -125,7 +125,7 @@ func TestNewRemoteDriverUsesRemoteCommander(t *testing.T) {
 	}
 	// 触发一次 RunToolchain:应经远程机执行 `docker run ...`(命令打到 srv-1);
 	// 资源规格(cpu/memory)应透传为 --cpus/--memory 投到远程 docker。
-	_, err := drv.RunToolchain(context.Background(), "node:20", "/ws", "/src", nil, []string{"sh", "-c", "npm ci"}, pipeline.Resource{CPU: "2", Memory: "1g"}, func(string, string) {})
+	_, err := drv.RunToolchain(context.Background(), "node:20", "/ws", "/src", nil, []string{"sh", "-c", "npm ci"}, pipeline.Resource{CPU: "2", Memory: "1g"}, ToolchainRunOptions{}, func(string, string) {})
 	if err != nil {
 		t.Fatalf("RunToolchain err: %v", err)
 	}

@@ -113,6 +113,15 @@ func makeTerminalHTTPHandler(m *terminalhttp.Manager, svc target.Service, aud au
 				terminalHTTPError(w, r, err)
 				return
 			}
+			if leaser, ok := authSvc.(interface {
+				Lease(context.Context, *auth.Session) (context.Context, context.CancelFunc)
+			}); ok {
+				if session, valid := sessionFromContext(r.Context()); valid {
+					ctx, release := leaser.Lease(context.Background(), session)
+					m.BindAuthorization(ctx, owner, scope, sid, release)
+				}
+			}
+
 			terminalJSON(w, map[string]string{"id": sid})
 			return
 		}

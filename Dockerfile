@@ -37,6 +37,7 @@ RUN mkdir -p /data
 # ---- 运行镜像 ----
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /pipewright /pipewright
+COPY --from=build /app/LICENSE /app/THIRD_PARTY_NOTICES /licenses/
 COPY --from=build --chown=65532:65532 /data /data
 # 工作目录设为 /data:sqlite(pipewright.db)与相对路径产物默认落此,持久化卷一挂即生效。
 WORKDIR /data

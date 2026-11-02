@@ -68,7 +68,7 @@ type mavenArtifactFixtureDriver struct {
 
 func (*mavenArtifactFixtureDriver) Binary() string { return "fixture" }
 
-func (d *mavenArtifactFixtureDriver) RunToolchain(_ context.Context, _, workspace, workdir string, env, cmd []string, _ pipeline.Resource, _ func(string, string)) (int, error) {
+func (d *mavenArtifactFixtureDriver) RunToolchain(_ context.Context, _, workspace, workdir string, env, cmd []string, _ pipeline.Resource, _ ToolchainRunOptions, _ func(string, string)) (int, error) {
 	d.workspaces = append(d.workspaces, workspace)
 	d.onRun(workspace, workdir, env, cmd)
 	return 0, nil

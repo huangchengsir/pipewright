@@ -178,11 +178,12 @@ func TestMixedPlanPreparationFailureAndCancelConvergeQueuedCalls(t *testing.T) {
 func TestHistoricalPublicFieldsRefreshRotatedSecretsWithoutChangingHistory(t *testing.T) {
 	for _, endpoint := range []string{"Get", "List", "Snapshot", "Entries", "Events"} {
 		t.Run(endpoint, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
 			f := executor()
 			m := &registeringModel{fakeModel: model(), key: "old-provider-key"}
 			s, v, db := fixture(t, f, m)
+			// Start the operation budget after database migration and service setup.
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
 			m.masker, m.db = s.masker, db
 			secret, providerSecret := "future-vault-key", "future-provider-key"
 			text := "historical " + secret + " " + providerSecret

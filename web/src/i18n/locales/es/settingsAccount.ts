@@ -22,7 +22,7 @@ export default {
   unknownError: 'Error desconocido',
 
   sessionsTitle: 'Sesiones activas',
-  sessionsSub: 'Sesiones del lado del servidor (caducidad deslizante de 7 días). Revoca cualquier sesión para cerrar la del dispositivo correspondiente al instante.',
+  sessionsSub: "Las sesiones con contraseña se renuevan por 7 días; las externas duran hasta 24 horas. Puedes cerrar cada sesión por separado.",
   errLoadSessions: 'No se pueden cargar las sesiones',
   retry: 'Reintentar',
   emptyTitle: 'No hay sesiones activas',

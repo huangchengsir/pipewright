@@ -79,7 +79,7 @@ type retryCountingDriver struct {
 }
 
 func (d *retryCountingDriver) Binary() string { return "fixture" }
-func (d *retryCountingDriver) RunToolchain(_ context.Context, _ string, ws, _ string, env, cmd []string, _ pipeline.Resource, onLine func(string, string)) (int, error) {
+func (d *retryCountingDriver) RunToolchain(_ context.Context, _ string, ws, _ string, env, cmd []string, _ pipeline.Resource, opts ToolchainRunOptions, onLine func(string, string)) (int, error) {
 	name := strings.TrimSpace(strings.TrimPrefix(cmd[2], "set -e\n"))
 	for _, v := range env {
 		if strings.HasPrefix(v, "MATRIX_OS=") {
@@ -574,6 +574,7 @@ type retryRemoteFixture struct {
 	counts     map[string]int
 	fail       bool
 	servers    []string
+	commands   [][]string
 	workspaces map[string]string
 }
 
@@ -586,6 +587,7 @@ func (f *retryRemoteFixture) Exec(_ context.Context, server string, args []strin
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.servers = append(f.servers, server)
+	f.commands = append(f.commands, append([]string(nil), args...))
 	if len(args) == 2 && args[0] == "cat" && args[1] == "/proc/sys/kernel/random/boot_id" {
 		return &target.ExecResult{Stdout: "12345678-1234-1234-1234-123456789abc"}, nil
 	}

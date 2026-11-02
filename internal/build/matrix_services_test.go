@@ -129,7 +129,7 @@ type matrixOutputDriver struct {
 	seen []string
 }
 
-func (d *matrixOutputDriver) RunToolchain(_ context.Context, image, hostDir, _ string, env []string, _ []string, _ pipeline.Resource, _ func(string, string)) (int, error) {
+func (d *matrixOutputDriver) RunToolchain(_ context.Context, image, hostDir, _ string, env []string, _ []string, _ pipeline.Resource, _ ToolchainRunOptions, _ func(string, string)) (int, error) {
 	values := map[string]string{}
 	for _, s := range env {
 		if i := strings.IndexByte(s, '='); i >= 0 {
@@ -174,7 +174,7 @@ type matrixLifecycleDriver struct {
 	cancel    context.CancelFunc
 }
 
-func (d *matrixLifecycleDriver) RunToolchain(ctx context.Context, image, _, _ string, _ []string, _ []string, _ pipeline.Resource, _ func(string, string)) (int, error) {
+func (d *matrixLifecycleDriver) RunToolchain(ctx context.Context, image, _, _ string, _ []string, _ []string, _ pipeline.Resource, _ ToolchainRunOptions, _ func(string, string)) (int, error) {
 	d.images = append(d.images, image)
 	if image == "body" && d.cancel != nil {
 		d.cancel()
@@ -229,7 +229,7 @@ type matrixCleanupExitDriver struct {
 	failBody, failStart bool
 }
 
-func (d *matrixCleanupExitDriver) RunToolchain(context.Context, string, string, string, []string, []string, pipeline.Resource, func(string, string)) (int, error) {
+func (d *matrixCleanupExitDriver) RunToolchain(context.Context, string, string, string, []string, []string, pipeline.Resource, ToolchainRunOptions, func(string, string)) (int, error) {
 	if d.failBody {
 		return 23, nil
 	}

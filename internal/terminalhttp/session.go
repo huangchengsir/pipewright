@@ -71,6 +71,7 @@ type entry struct {
 	seq                   int64
 	inputHash             [32]byte
 	polling               bool
+	authorizationBound    bool
 }
 
 type Manager struct {
@@ -505,4 +506,30 @@ func (m *Manager) Delete(owner, scope, id string) error {
 	e.base = e.sent
 	e.mu.Unlock()
 	return nil
+}
+
+// BindAuthorization retains one authorization lease for the detached PTY lifetime.
+// It closes the browser terminal only; it makes no claim about remote jobs.
+func (m *Manager) BindAuthorization(ctx context.Context, owner, scope, id string, release context.CancelFunc) {
+	e, err := m.lookup(owner, scope, id)
+	if err != nil {
+		release()
+		return
+	}
+	e.mu.Lock()
+	if e.authorizationBound {
+		e.mu.Unlock()
+		release()
+		return
+	}
+	e.authorizationBound = true
+	e.mu.Unlock()
+	go func() {
+		defer release()
+		select {
+		case <-ctx.Done():
+			_ = m.Delete(owner, scope, id)
+		case <-e.closeDone:
+		}
+	}()
 }

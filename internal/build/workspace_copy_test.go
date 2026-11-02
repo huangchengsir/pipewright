@@ -83,7 +83,7 @@ func TestCopiedWorkspaceCleanupFailureIsReported(t *testing.T) {
 	c := &workspaceCommander{t: t, fail: "rm"}
 	d := &shellDriver{bin: "docker", cmdr: c, copyWorkspace: true}
 	var logs strings.Builder
-	code, err := d.RunToolchain(context.Background(), "alpine", t.TempDir(), "/workspace", nil, []string{"true"}, pipeline.Resource{}, func(_, line string) { logs.WriteString(line) })
+	code, err := d.RunToolchain(context.Background(), "alpine", t.TempDir(), "/workspace", nil, []string{"true"}, pipeline.Resource{}, ToolchainRunOptions{}, func(_, line string) { logs.WriteString(line) })
 	if code == 0 || err == nil || !strings.Contains(logs.String(), "cleanup failed") {
 		t.Fatalf("code=%d err=%v log=%s", code, err, logs.String())
 	}
@@ -112,7 +112,7 @@ func TestCopiedWorkspaceLateCancellationPreservesOriginal(t *testing.T) {
 				c.cancelAt, c.cancelFailure = "copy-back", true
 			}
 			d := &shellDriver{bin: "docker", cmdr: c, copyWorkspace: true}
-			_, err := d.RunToolchain(ctx, "alpine", ws, "/workspace", nil, []string{"true"}, pipeline.Resource{}, nil)
+			_, err := d.RunToolchain(ctx, "alpine", ws, "/workspace", nil, []string{"true"}, pipeline.Resource{}, ToolchainRunOptions{}, nil)
 			if !errors.Is(err, context.Canceled) {
 				t.Fatal(err)
 			}
@@ -204,7 +204,7 @@ func TestCopiedWorkspaceLifecycle(t *testing.T) {
 			c := &workspaceCommander{t: t, exit: exit}
 			d := &shellDriver{bin: "docker", cmdr: c, copyWorkspace: true}
 			var logs strings.Builder
-			code, err := d.RunToolchain(context.Background(), "maven:21", ws, "/workspace/backend", []string{"TOKEN=very-secret"}, []string{"sh", "-c", "mvn package"}, pipeline.Resource{CPU: "1", Memory: "512m", Network: "services"}, func(_, line string) { logs.WriteString(line) })
+			code, err := d.RunToolchain(context.Background(), "maven:21", ws, "/workspace/backend", []string{"TOKEN=very-secret"}, []string{"sh", "-c", "mvn package"}, pipeline.Resource{CPU: "1", Memory: "512m", Network: "services"}, ToolchainRunOptions{}, func(_, line string) { logs.WriteString(line) })
 			if err != nil || code != exit {
 				t.Fatalf("code=%d err=%v", code, err)
 			}
@@ -243,7 +243,7 @@ func TestCopiedWorkspaceFailures(t *testing.T) {
 		t.Run(failure, func(t *testing.T) {
 			c := &workspaceCommander{t: t, fail: failure}
 			d := &shellDriver{bin: "docker", cmdr: c, copyWorkspace: true}
-			code, err := d.RunToolchain(context.Background(), "alpine", t.TempDir(), "/workspace", nil, []string{"true"}, pipeline.Resource{}, nil)
+			code, err := d.RunToolchain(context.Background(), "alpine", t.TempDir(), "/workspace", nil, []string{"true"}, pipeline.Resource{}, ToolchainRunOptions{}, nil)
 			if code == 0 && err == nil {
 				t.Fatal("false success")
 			}
@@ -259,7 +259,7 @@ func TestCopiedWorkspaceCanceled(t *testing.T) {
 	defer cancel()
 	c := &workspaceCommander{t: t, cancel: cancel}
 	d := &shellDriver{bin: "docker", cmdr: c, copyWorkspace: true}
-	_, err := d.RunToolchain(ctx, "alpine", t.TempDir(), "/workspace", nil, []string{"true"}, pipeline.Resource{}, nil)
+	_, err := d.RunToolchain(ctx, "alpine", t.TempDir(), "/workspace", nil, []string{"true"}, pipeline.Resource{}, ToolchainRunOptions{}, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
@@ -277,7 +277,7 @@ func TestCopiedWorkspaceInvalidState(t *testing.T) {
 	for _, state := range []string{"garbage", `{"Status":"running","ExitCode":0}`} {
 		c := &workspaceCommander{t: t, state: state}
 		d := &shellDriver{bin: "docker", cmdr: c, copyWorkspace: true}
-		code, err := d.RunToolchain(context.Background(), "alpine", t.TempDir(), "/workspace", nil, []string{"true"}, pipeline.Resource{}, nil)
+		code, err := d.RunToolchain(context.Background(), "alpine", t.TempDir(), "/workspace", nil, []string{"true"}, pipeline.Resource{}, ToolchainRunOptions{}, nil)
 		if code == 0 || err == nil {
 			t.Fatal("invalid state accepted")
 		}
@@ -287,7 +287,7 @@ func TestCopiedWorkspaceInvalidState(t *testing.T) {
 func TestToolchainSubdirectoryKeepsMountRoot(t *testing.T) {
 	c := newFakeCommander()
 	d := &shellDriver{bin: "docker", cmdr: c}
-	_, err := d.RunToolchain(context.Background(), "alpine", "/source", "/workspace/backend", nil, []string{"true"}, pipeline.Resource{}, nil)
+	_, err := d.RunToolchain(context.Background(), "alpine", "/source", "/workspace/backend", nil, []string{"true"}, pipeline.Resource{}, ToolchainRunOptions{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

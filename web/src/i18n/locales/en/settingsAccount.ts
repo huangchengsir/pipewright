@@ -22,7 +22,7 @@ export default {
   unknownError: 'Unknown error',
 
   sessionsTitle: 'Active sessions',
-  sessionsSub: 'Server-side sessions (7-day sliding expiry). Revoke any session to sign out the corresponding device immediately.',
+  sessionsSub: "Password sessions renew for 7 days; third-party sessions last up to 24 hours. Revoke sessions individually.",
   errLoadSessions: 'Unable to load sessions',
   retry: 'Retry',
   emptyTitle: 'No active sessions',

@@ -6,6 +6,8 @@ import { login } from '../api/auth'
 import { HttpError } from '../api/http'
 import { onboardingLoginTarget } from '../composables/useOnboarding'
 import { useSessionStore } from '../stores/session'
+import PlatformLoginEntry from '../components/auth/PlatformLoginEntry.vue'
+import { useLoginViewport } from '../composables/useLoginViewport'
 
 const router = useRouter()
 const route = useRoute()
@@ -175,10 +177,13 @@ onBeforeUnmount(() => {
   if (onResize) window.removeEventListener('resize', onResize)
   if (onPointerMove) window.removeEventListener('pointermove', onPointerMove)
 })
+
+const platformSpace = ref(0)
+const { overflow: platformOverflow, minHeight: platformMinHeight, cardTop: platformCardTop } = useLoginViewport(cardShell, platformSpace)
 </script>
 
 <template>
-  <div class="login-page">
+  <div class="login-page" :class="{ 'login-page--overflow': platformOverflow }" :style="{ '--login-scroll-height': platformMinHeight, '--login-card-top': platformCardTop }">
     <!-- animated aurora background -->
     <div class="aurora" aria-hidden="true">
       <span class="blob b1" />
@@ -327,6 +332,7 @@ onBeforeUnmount(() => {
             </button>
           </form>
         </div>
+        <PlatformLoginEntry @space="platformSpace = $event" />
       </div>
     </div>
 
@@ -967,4 +973,10 @@ onBeforeUnmount(() => {
     font-size: 26px;
   }
 }
+</style>
+
+<style scoped>
+.login-page--overflow { overflow-y: auto; overscroll-behavior: contain; }
+.login-page--overflow .wrap { min-height: var(--login-scroll-height); align-items: flex-start; padding-top: var(--login-card-top); }
+.login-page--overflow .trust { position: relative; bottom: auto; padding: 12px 16px 20px; }
 </style>

@@ -22,7 +22,7 @@ export default {
   unknownError: '未知错误',
 
   sessionsTitle: '活跃会话',
-  sessionsSub: '服务端会话(7 天滑动过期)。可注销任意会话立即登出对应设备。',
+  sessionsSub: "密码会话可滑动续期 7 天；第三方登录最长 24 小时。可单独退出任一会话。",
   errLoadSessions: '无法加载会话',
   retry: '重试',
   emptyTitle: '暂无活跃会话',

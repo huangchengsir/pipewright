@@ -196,6 +196,8 @@ func writeRunError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "project_not_found", "项目不存在")
 	case errors.Is(err, run.ErrNotCancelable):
 		writeError(w, http.StatusConflict, "run_not_cancelable", "运行已结束,无法取消")
+	case errors.Is(err, run.ErrInvalidFilter):
+		writeError(w, http.StatusBadRequest, "invalid_filter", "搜索条件不合法")
 	case errors.Is(err, run.ErrInvalidStatus):
 		writeError(w, http.StatusBadRequest, "invalid_status", "状态筛选值非法")
 	default:
@@ -224,10 +226,29 @@ func makeListRunsHandler(svc run.Service) http.HandlerFunc {
 			}
 			page = p
 		}
+		pageSize := 0
+		if v := q.Get("pageSize"); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 || n > 100 {
+				writeError(w, http.StatusBadRequest, "invalid_page_size", "pageSize 必须为 1–100")
+				return
+			}
+			pageSize = n
+		}
+		var after time.Time
+		if v := q.Get("after"); v != "" {
+			parsed, err := time.Parse(time.RFC3339, v)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_after", "after 必须为 RFC3339 时间")
+				return
+			}
+			after = parsed
+		}
 		res, err := svc.List(r.Context(), run.ListFilter{
 			ProjectID: q.Get("projectId"),
-			Status:    q.Get("status"),
-			Page:      page,
+			Query:     q.Get("q"), After: after, PageSize: pageSize,
+			Status: q.Get("status"),
+			Page:   page,
 		})
 		if err != nil {
 			writeRunError(w, err)

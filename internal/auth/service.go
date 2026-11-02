@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 )
 
@@ -58,13 +59,24 @@ type Service struct {
 	db       *sql.DB
 	sessions *SessionStore
 	lockout  *LockoutManager
+	leaseMu  sync.Mutex
+	leases   map[uint64]sessionLease
+	leaseSeq uint64
+	clock    Clock
 }
 
 // NewService 构造 Service;clock 为 nil 时使用 RealClock。
 func NewService(db *sql.DB, clock Clock) *Service {
+	if clock == nil {
+		clock = RealClock{}
+	}
+	sessions := NewSessionStore(db)
+	sessions.clock = clock
 	return &Service{
 		db:       db,
-		sessions: NewSessionStore(db),
+		sessions: sessions,
+		clock:    clock,
+		leases:   make(map[uint64]sessionLease),
 		lockout:  NewLockoutManager(clock),
 	}
 }
@@ -151,10 +163,34 @@ func (s *Service) Login(username, password string) (*Session, error) {
 	}
 
 	// 认证成功:创建会话(Guard 已重置计数)。
-	sess, err := s.sessions.Create()
+	tx, err := s.db.Begin()
 	if err != nil {
-		return nil, fmt.Errorf("auth: create session: %w", err)
+		return nil, err
 	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`UPDATE admin_user SET security_generation=security_generation WHERE id=1`); err != nil {
+		return nil, err
+	}
+	var currentHash string
+	if err = tx.QueryRow(`SELECT password_hash FROM admin_user WHERE id=1`).Scan(&currentHash); err != nil {
+		return nil, err
+	}
+	if subtle.ConstantTimeCompare([]byte(currentHash), []byte(storedHash)) != 1 {
+		return nil, ErrInvalidCredentials
+	}
+	sess, err := NewSession(s.clock.Now().UTC(), "password", 0, 0)
+	if err != nil {
+		return nil, err
+	}
+	verified := s.clock.Now().UTC()
+	sess.PasswordVerifiedAt = &verified
+	if err = InsertSession(tx, sess); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+
 	return sess, nil
 }
 
@@ -191,7 +227,11 @@ func (s *Service) Verify(token string) (*Session, error) {
 
 // Logout 删除会话。
 func (s *Service) Logout(token string) error {
-	return s.sessions.Delete(token)
+	err := s.sessions.Delete(token)
+	if err == nil {
+		s.NotifyRevokedToken(token)
+	}
+	return err
 }
 
 // ChangePassword 校验当前口令 → 更新为新 argon2id 哈希 → 删除除当前会话外的所有会话。
@@ -201,49 +241,53 @@ func (s *Service) Logout(token string) error {
 //
 // 与当前口令相同的新口令也允许(不强制不同)。
 func (s *Service) ChangePassword(current, newPassword, currentToken string) error {
-	// 当前会话 token 必须存在(requireAuth 已保证 cookie 在;空 token 属异常状态)。
-	// 守住此前提,避免后续 DeleteOthers("") 误删全部会话(含当前)。
 	if currentToken == "" {
 		return ErrInvalidCurrentPassword
 	}
-	// 强度校验先行(无需触 argon2,避免无谓内存分配)。
 	if len(newPassword) < minPasswordLen {
 		return ErrWeakPassword
 	}
-
-	var storedHash string
-	err := s.db.QueryRow(`SELECT password_hash FROM admin_user WHERE id = 1`).Scan(&storedHash)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrInvalidCurrentPassword
-		}
-		return fmt.Errorf("auth: query admin hash: %w", err)
+	var old string
+	if e := s.db.QueryRow(`SELECT password_hash FROM admin_user WHERE id=1`).Scan(&old); e != nil {
+		return ErrInvalidCurrentPassword
 	}
-
-	ok, err := VerifyPassword(current, storedHash)
+	ok, err := s.verifyPasswordLimited(current, old)
 	if err != nil {
-		return fmt.Errorf("auth: verify current password: %w", err)
+		return err
 	}
 	if !ok {
 		return ErrInvalidCurrentPassword
 	}
-
-	newHash, err := HashPassword(newPassword)
+	hash, err := HashPassword(newPassword)
 	if err != nil {
-		return fmt.Errorf("auth: hash new password: %w", err)
+		return err
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	if _, err := s.db.Exec(
-		`UPDATE admin_user SET password_hash = ?, updated_at = ? WHERE id = 1`,
-		newHash, now,
-	); err != nil {
-		return fmt.Errorf("auth: update password hash: %w", err)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
 	}
-
-	// 改口令后使其它会话失效(当前 token 保留,用户不掉线)。
-	if _, err := s.sessions.DeleteOthers(currentToken); err != nil {
-		return fmt.Errorf("auth: revoke other sessions: %w", err)
+	defer tx.Rollback()
+	result, err := tx.Exec(`UPDATE admin_user SET password_hash=?,updated_at=?,security_generation=security_generation+1 WHERE id=1 AND password_hash=? AND EXISTS(SELECT 1 FROM sessions WHERE token=?)`, hash, s.clock.Now().UTC().Format(time.RFC3339), old, currentToken)
+	if err != nil {
+		return err
 	}
+	n, _ := result.RowsAffected()
+	if n != 1 {
+		return ErrInvalidCurrentPassword
+	}
+	if _, err = tx.Exec(`DELETE FROM sessions WHERE token<>?`, currentToken); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`UPDATE sessions SET password_verified_at=? WHERE token=?`, s.clock.Now().UTC().Format(time.RFC3339), currentToken); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`UPDATE login_flows SET status='invalidated',verifier_cipher=NULL,candidate_cipher=NULL WHERE status IN ('created','processing','candidate')`); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	s.notifyOthers(currentToken)
 	return nil
 }
 
@@ -261,5 +305,6 @@ func (s *Service) RevokeSession(id string) error {
 	if n == 0 {
 		return ErrSessionNotFound
 	}
+	s.notifyID(id)
 	return nil
 }

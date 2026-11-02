@@ -126,6 +126,12 @@ func exitCodeOf(err error) int {
 
 // Driver 抽象「容器 CLI 能力」:构建、打标、推送、登录、取镜像 digest/size。
 // 默认实现 shellDriver shell 到探测出的 binary;命令一律 array,经 Commander 执行。
+// ToolchainRunOptions controls the container invocation, not the pipeline schema.
+// The zero value inherits the image entrypoint; only explicit script execution clears it.
+type ToolchainRunOptions struct {
+	ClearEntrypoint bool
+}
+
 type Driver interface {
 	// Binary 返回选中的容器 CLI 名(docker/nerdctl/podman),供日志展示(不含路径)。
 	Binary() string
@@ -136,7 +142,8 @@ type Driver interface {
 	// RunToolchain 模型 B:用工具链镜像挂载工作区跑构建命令产 jar/dist。
 	// image=工具链镜像:版本;workdir=容器内挂载点;hostDir=宿主工作区;cmd=构建命令 array。
 	// res 为可选容器资源规格(cpu/memory → docker run --cpus/--memory);零值=不限(向后兼容)。
-	RunToolchain(ctx context.Context, image, hostDir, workdir string, env []string, cmd []string, res pipeline.Resource, onLine func(stream, line string)) (int, error)
+	// opts is explicit: generic toolchain builds inherit ENTRYPOINT; script callers clear it.
+	RunToolchain(ctx context.Context, image, hostDir, workdir string, env []string, cmd []string, res pipeline.Resource, opts ToolchainRunOptions, onLine func(stream, line string)) (int, error)
 	// Tag 给 localTag 打远端 remoteTag(推送前)。
 	Tag(ctx context.Context, localTag, remoteTag string, onLine func(stream, line string)) (int, error)
 	// Login 经 --password-stdin 登录仓库(password 经 stdin,**绝不**进 argv/日志)。

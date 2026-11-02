@@ -99,6 +99,9 @@ func (s *Service) load(ctx context.Context, runID string) (lineage, error) {
 	if e = q.QueryRowContext(ctx, "SELECT commit_sha,conflicted FROM run_retry_sources WHERE root_id=?", l.root).Scan(&l.snapshot.CommitSHA, &l.sourceConflict); e != nil && !errors.Is(e, sql.ErrNoRows) {
 		return l, e
 	}
+	if _, err := l.snapshot.ClearScriptEntrypoint(); err != nil {
+		return l, ErrUnavailable
+	}
 	if l.snapshot.Compiled == nil || l.snapshot.Compiled.Version != SchemaVersion {
 		return l, ErrUnavailable
 	}
@@ -132,6 +135,9 @@ func (s *Service) SaveManifest(ctx context.Context, runID string, snap Snapshot)
 		snap.SchemaVersion = SchemaVersion
 	}
 	if snap.SchemaVersion != SchemaVersion {
+		return ErrInvalid
+	}
+	if _, err := snap.ClearScriptEntrypoint(); err != nil {
 		return ErrInvalid
 	}
 	if snap.CommitSHA != "" && !fullSHA(snap.CommitSHA) {

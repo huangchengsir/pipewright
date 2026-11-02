@@ -257,11 +257,11 @@ type languageCacheNetworkDriver struct {
 	offline bool
 }
 
-func (d *languageCacheNetworkDriver) RunToolchain(ctx context.Context, image, hostDir, workdir string, env, cmd []string, res pipeline.Resource, onLine func(string, string)) (int, error) {
+func (d *languageCacheNetworkDriver) RunToolchain(ctx context.Context, image, hostDir, workdir string, env, cmd []string, res pipeline.Resource, opts ToolchainRunOptions, onLine func(string, string)) (int, error) {
 	if d.offline {
 		res.Network = "none"
 	}
-	return d.shellDriver.RunToolchain(ctx, image, hostDir, workdir, env, cmd, res, onLine)
+	return d.shellDriver.RunToolchain(ctx, image, hostDir, workdir, env, cmd, res, opts, onLine)
 }
 
 // Observe the argv actually sent to Docker, not the driver's input resource struct.

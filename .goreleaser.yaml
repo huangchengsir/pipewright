@@ -43,6 +43,7 @@ archives:
     files:
       - README.md
       - LICENSE
+      - THIRD_PARTY_NOTICES
       - SECURITY.md
 
 checksum:
@@ -81,6 +82,9 @@ dockers:
     goos: linux
     goarch: amd64
     dockerfile: Dockerfile.goreleaser
+    extra_files:
+      - LICENSE
+      - THIRD_PARTY_NOTICES
     use: buildx
     image_templates:
       - "ghcr.io/huangchengsir/pipewright:{{ .Version }}-amd64"
@@ -95,6 +99,9 @@ dockers:
     goos: linux
     goarch: arm64
     dockerfile: Dockerfile.goreleaser
+    extra_files:
+      - LICENSE
+      - THIRD_PARTY_NOTICES
     use: buildx
     image_templates:
       - "ghcr.io/huangchengsir/pipewright:{{ .Version }}-arm64"

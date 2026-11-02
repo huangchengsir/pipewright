@@ -24,6 +24,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/artifactstore"
 	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/auth"
+	"github.com/huangchengsir/pipewright/internal/authlogin"
 	"github.com/huangchengsir/pipewright/internal/chain"
 	"github.com/huangchengsir/pipewright/internal/configdraft"
 	"github.com/huangchengsir/pipewright/internal/cron"
@@ -66,6 +67,7 @@ const contextKeySession contextKey = 1
 type Option func(*options)
 
 type options struct {
+	platformLogin      *authlogin.Service
 	selfUpdate         *selfupdate.Service
 	configDB           *sql.DB
 	configDrafts       *configdraft.Service
@@ -441,14 +443,19 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 	r.Get("/version", handleVersion)
 
 	svc := authn
+	policy := authCookiePolicy{}
+	if o.platformLogin != nil {
+		policy.Secure = o.platformLogin.SecureCookies()
+	}
+	mountPlatformPublic(r, o.platformLogin)
 
 	// Auth 端点:登录/登出/会话探测(见冻结契约)。
 	r.Route("/api/auth", func(ar chi.Router) {
-		ar.Post("/login", makeLoginHandler(svc))
-		ar.Get("/session", makeSessionHandler(svc))
+		ar.Post("/login", makeLoginHandler(svc, policy))
+		ar.Get("/session", makeSessionHandler(svc, policy))
 		// 登出属写操作:先认证后 CSRF。
 		ar.Post("/logout", func(w http.ResponseWriter, r *http.Request) {
-			requireAuth(svc, requireCSRF(makeLogoutHandler(svc))).ServeHTTP(w, r)
+			requireAuth(svc, requireCSRF(makeLogoutHandler(svc, policy))).ServeHTTP(w, r)
 		})
 	})
 
@@ -477,6 +484,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 			ar.Use(configRevisionMiddleware(o.configDB, o.configRequireMatch))
 			mountConfigManagement(ar, o.configDB, o.configDrafts)
 		}
+		mountPlatformAccount(ar, o.platformLogin, svc, o.audit)
 		mountOpsChat(ar, o.opsChat, svc)
 
 		// 审计 Recorder(Story 1.4):传给既有敏感操作 handler,业务成功后追加审计行。
@@ -999,6 +1007,17 @@ func requireAuth(svc auth.Authenticator, next http.Handler) http.Handler {
 			return
 		}
 		ctx := context.WithValue(r.Context(), contextKeySession, sess)
+		if leaser, ok := svc.(interface {
+			Lease(context.Context, *auth.Session) (context.Context, context.CancelFunc)
+		}); ok {
+			leased, release := leaser.Lease(ctx, sess)
+			defer release()
+			ctx = leased
+			if strings.Contains(r.Header.Get("Accept"), "text/event-stream") || strings.EqualFold(r.Header.Get("Upgrade"), "websocket") || strings.HasSuffix(r.URL.Path, "/events") || strings.HasSuffix(r.URL.Path, "/stream") {
+				stopWrite := context.AfterFunc(ctx, func() { _ = http.NewResponseController(w).SetWriteDeadline(time.Now()) })
+				defer stopWrite()
+			}
+		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -1043,7 +1062,7 @@ func requireCSRF(next http.Handler) http.Handler {
 
 // makeLoginHandler 返回 POST /api/auth/login handler。
 // 登录端点豁免 CSRF(此时尚无会话);但受锁定限制。
-func makeLoginHandler(svc auth.Authenticator) http.HandlerFunc {
+func makeLoginHandler(svc auth.Authenticator, policies ...authCookiePolicy) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if svc == nil {
 			writeError(w, http.StatusServiceUnavailable, "no_auth", "认证服务未初始化")
@@ -1078,7 +1097,7 @@ func makeLoginHandler(svc auth.Authenticator) http.HandlerFunc {
 		}
 
 		// 设置 HttpOnly 会话 cookie(Secure 在 TLS 时自动加)。
-		secure := r.TLS != nil
+		secure := cookieSecure(r, policies)
 		http.SetCookie(w, &http.Cookie{
 			Name:     cookieSession,
 			Value:    sess.Token,
@@ -1109,7 +1128,7 @@ func makeLoginHandler(svc auth.Authenticator) http.HandlerFunc {
 
 // makeSessionHandler 返回 GET /api/auth/session handler。
 // 此端点本身不要求登录(用于前端探测会话状态)。
-func makeSessionHandler(svc auth.Authenticator) http.HandlerFunc {
+func makeSessionHandler(svc auth.Authenticator, policies ...authCookiePolicy) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if svc == nil {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "请先登录")
@@ -1130,7 +1149,7 @@ func makeSessionHandler(svc auth.Authenticator) http.HandlerFunc {
 			return
 		}
 		// 续期 CSRF cookie。
-		secure := r.TLS != nil
+		secure := cookieSecure(r, policies)
 		http.SetCookie(w, &http.Cookie{
 			Name:     cookieCsrf,
 			Value:    sess.CSRFToken,
@@ -1151,26 +1170,16 @@ func makeSessionHandler(svc auth.Authenticator) http.HandlerFunc {
 
 // makeLogoutHandler 返回 POST /api/auth/logout handler。
 // 已由调用方套了 requireAuth + requireCSRF。
-func makeLogoutHandler(svc auth.Authenticator) http.HandlerFunc {
+func makeLogoutHandler(svc auth.Authenticator, policies ...authCookiePolicy) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if cookie, err := r.Cookie(cookieSession); err == nil && svc != nil {
 			_ = svc.Logout(cookie.Value)
 		}
-		// 清除两个 cookie(Max-Age=-1)。
-		http.SetCookie(w, &http.Cookie{
-			Name:    cookieSession,
-			Value:   "",
-			Path:    "/",
-			MaxAge:  -1,
-			Expires: time.Unix(0, 0),
-		})
-		http.SetCookie(w, &http.Cookie{
-			Name:    cookieCsrf,
-			Value:   "",
-			Path:    "/",
-			MaxAge:  -1,
-			Expires: time.Unix(0, 0),
-		})
+		policy := authCookiePolicy{}
+		if len(policies) > 0 {
+			policy = policies[0]
+		}
+		clearAuthCookies(w, r, policy)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

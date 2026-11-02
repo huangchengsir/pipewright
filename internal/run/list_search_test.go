@@ -103,10 +103,30 @@ func TestListSearchSameUnicodeAndASCII(t *testing.T) {
 	for _, tc := range []struct {
 		q    string
 		want int
-	}{{"Ä", 1}, {"İ", 1}, {"中文", 1}, {"FEATURE/", 2}} {
+	}{{"Ä", 1}, {"ä", 0}, {"İ", 1}, {"i", 0}, {"中文", 1}, {"FEATURE/", 2}} {
 		result, err := svc.List(ctx, ListFilter{Query: tc.q})
 		if err != nil || result.Total != tc.want {
 			t.Fatalf("query %q want %d got %#v %v", tc.q, tc.want, result, err)
+		}
+	}
+}
+
+func TestListSearchMetacharactersAreLiteral(t *testing.T) {
+	db := testDB(t)
+	svc := New(db)
+	project := seedProject(t, db)
+	ctx := context.Background()
+	target := `literal.[a]+(b)?*{2}|^$\pattern_%!`
+	if _, err := svc.Create(ctx, project, Trigger{Type: TriggerManual, Branch: target}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Create(ctx, project, Trigger{Type: TriggerManual, Branch: "literal-other"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{target, `.[a]+(b)?*{2}|^$`, `\pattern_%!`, "LITERAL."} {
+		result, err := svc.List(ctx, ListFilter{Query: query})
+		if err != nil || result.Total != 1 {
+			t.Fatalf("literal metacharacter query %q: %#v %v", query, result, err)
 		}
 	}
 }

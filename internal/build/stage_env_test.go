@@ -56,7 +56,7 @@ type envEmitDriver struct {
 }
 
 func (d *envEmitDriver) Binary() string { return "fake" }
-func (d *envEmitDriver) RunToolchain(_ context.Context, _, hostDir, _ string, env []string, _ []string, _ pipeline.Resource, _ func(string, string)) (int, error) {
+func (d *envEmitDriver) RunToolchain(_ context.Context, _, hostDir, _ string, env []string, _ []string, _ pipeline.Resource, _ ToolchainRunOptions, _ func(string, string)) (int, error) {
 	d.calls++
 	if d.calls == 1 {
 		_ = os.WriteFile(filepath.Join(hostDir, pipewrightEnvFileName), []byte("VERSION=1.2.3\n"), 0o644)

@@ -223,6 +223,23 @@ Maven script/toolchain builds with an enabled `.m2/repository` (or `.m2`) cache 
 | `PIPEWRIGHT_METRICS_SAMPLE_INTERVAL` | Server metrics sampling interval in seconds (source of the trend charts); `0` disables sampling | `60` |
 | `PIPEWRIGHT_METRICS_RETENTION_DAYS` | How many days of metric samples to keep | `7` |
 
+## Platform sign-in
+
+Settings → Account → Third-party sign-in configures GitHub, GitLab.com, Gitee, Google, and Microsoft sign-in for the existing administrator. All five entries are shown by default. Visibility is saved for the instance; hiding an entry does not disable sign-in, unlink an account, or revoke sessions. Password sign-in remains available.
+
+1. Set PIPEWRIGHT_PUBLIC_URL to the instance's HTTPS origin. Create a dedicated sign-in application at the selected provider and copy the fixed callback URL from Account settings. Keep repository OAuth applications separate.
+2. Save its Client ID and Client Secret in Account settings, verify the current Pipewright password, then authorize and explicitly confirm the returned account. Matching uses the provider's immutable identity, never an email address. There is no public registration.
+3. Use minimum permissions: GitHub needs no repository scope; GitLab uses read_user; Gitee uses user_info and requires an explicit confidential-code or verified S256 mode; Google and Microsoft use openid profile. Microsoft supports personal, organization, or a specific tenant's accounts.
+4. Disable or unlink a provider to revoke its Pipewright sessions. Changing application, tenant, or protocol settings requires a new secret and linking again. Secrets are write-only; provider access and refresh tokens are not stored. Platform sessions have a 24-hour absolute limit; sensitive settings require a password verified within five minutes.
+
+Keep the database and vault master key backed up together before upgrading. Before reverting to an older binary, disable all platform sign-ins and verify no non-password session rows remain. Do not delete the database or key as a rollback. Proxy access logs should omit callback query parameters; the application cannot control upstream logging. Configuration alone does not verify a provider account: complete a real sign-in after setting up each dedicated application.
+
+PIPEWRIGHT_AUTH_ALLOW_HTTP_LOOPBACK=1 permits only an explicitly configured HTTP loopback origin for isolated local testing. It does not enable HTTP on external addresses; leave it unset for normal deployments.
+
+## Script container execution
+
+New runs execute custom script jobs and existing script post steps with the image ENTRYPOINT cleared and `sh -c` / `set -e`. This applies to local, copied-workspace, and remote-runner script execution. Images must contain `sh`; the platform does not install a shell or fall back to a second invocation. Initialization in the image ENTRYPOINT is skipped, so put any required initialization in the script. Ordinary toolchain builds, sidecar services, and deployment containers continue to inherit their image ENTRYPOINT. Historical node retries retain the original captured behavior; start a new full run to use the new script contract. No new YAML field is required.
+
 ## Pipeline as code (GitOps)
 
 Commit your pipeline structure to `.pipewright.yml` in the repo — **same source of truth as your code, reviewable in a PR, evolving per branch** — instead of relying on implicit drift in the canvas.
@@ -377,3 +394,5 @@ MIT — see [LICENSE](LICENSE).
 <div align="center">
 <sub>Pipewright — CI, deployment, and ops in a single binary.</sub>
 </div>
+
+Third-party platform sign-in notices: see THIRD_PARTY_NOTICES.

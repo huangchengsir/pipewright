@@ -69,7 +69,7 @@ func TestScriptStepSuccessEmitsStepAndLogs(t *testing.T) {
 		t.Fatalf("应有 1 次 docker run, got %d", len(runs))
 	}
 	joined := strings.Join(runs[0], " ")
-	if !strings.Contains(joined, "golang:1.23") || !strings.Contains(joined, "sh -c") {
+	if !strings.Contains(joined, "golang:1.23") || !strings.Contains(joined, "sh -c") || !strings.Contains(joined, "--entrypoint= golang:1.23") {
 		t.Fatalf("应经隔离容器 sh -c 跑脚本: %v", runs[0])
 	}
 	if !strings.Contains(joined, scriptWorkspaceMount) {

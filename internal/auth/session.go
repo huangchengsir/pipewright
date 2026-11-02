@@ -25,55 +25,75 @@ var ErrSessionNotFound = errors.New("auth: session not found or expired")
 
 // Session 代表一个服务端会话。
 type Session struct {
-	Token      string
-	CSRFToken  string
-	CreatedAt  time.Time
-	ExpiresAt  time.Time
-	LastSeenAt time.Time
+	Token              string
+	CSRFToken          string
+	CreatedAt          time.Time
+	ExpiresAt          time.Time
+	LastSeenAt         time.Time
+	AuthSource         string
+	ProviderGeneration int64
+	IdentityGeneration int64
+	AbsoluteExpiresAt  *time.Time
+	PasswordVerifiedAt *time.Time
 }
 
 // SessionStore 操作 sessions 表。
 type SessionStore struct {
-	db *sql.DB
+	db    *sql.DB
+	clock Clock
 }
 
 // NewSessionStore 构造 SessionStore。
 func NewSessionStore(db *sql.DB) *SessionStore {
-	return &SessionStore{db: db}
+	return &SessionStore{db: db, clock: RealClock{}}
 }
 
 // Create 创建新会话并持久化到 DB。返回 Session(含 Token 与 CSRFToken)。
 func (ss *SessionStore) Create() (*Session, error) {
+	now := ss.clock.Now().UTC()
+	s, err := NewSession(now, "password", 0, 0)
+	if err != nil {
+		return nil, err
+	}
+	s.PasswordVerifiedAt = &now
+	if err := InsertSession(ss.db, s); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// NewSession builds a random local session; external credentials never become tokens.
+func NewSession(now time.Time, source string, providerGeneration, identityGeneration int64) (*Session, error) {
 	token, err := randHex(tokenBytes)
 	if err != nil {
-		return nil, fmt.Errorf("auth: generate session token: %w", err)
+		return nil, err
 	}
-	csrfToken, err := randHex(tokenBytes)
+	csrf, err := randHex(tokenBytes)
 	if err != nil {
-		return nil, fmt.Errorf("auth: generate csrf token: %w", err)
+		return nil, err
 	}
-	now := time.Now().UTC()
-	exp := now.Add(sessionTTL)
+	s := &Session{Token: token, CSRFToken: csrf, CreatedAt: now, LastSeenAt: now, ExpiresAt: now.Add(sessionTTL), AuthSource: source, ProviderGeneration: providerGeneration, IdentityGeneration: identityGeneration}
+	if source != "password" {
+		end := now.Add(24 * time.Hour)
+		s.AbsoluteExpiresAt = &end
+		s.ExpiresAt = end
+	}
+	return s, nil
+}
 
-	_, err = ss.db.Exec(
-		`INSERT INTO sessions (token, csrf_token, created_at, expires_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		token,
-		csrfToken,
-		now.Format(time.RFC3339),
-		exp.Format(time.RFC3339),
-		now.Format(time.RFC3339),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("auth: persist session: %w", err)
+type SessionExecutor interface {
+	Exec(string, ...any) (sql.Result, error)
+}
+
+func InsertSession(db SessionExecutor, s *Session) error {
+	_, err := db.Exec(`INSERT INTO sessions(token,csrf_token,created_at,expires_at,last_seen_at,auth_source,provider_generation,identity_generation,absolute_expires_at,password_verified_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, s.Token, s.CSRFToken, s.CreatedAt.UTC().Format(time.RFC3339), s.ExpiresAt.UTC().Format(time.RFC3339), s.LastSeenAt.UTC().Format(time.RFC3339), s.AuthSource, s.ProviderGeneration, s.IdentityGeneration, optionalStamp(s.AbsoluteExpiresAt), optionalStamp(s.PasswordVerifiedAt))
+	return err
+}
+func optionalStamp(t *time.Time) any {
+	if t == nil {
+		return nil
 	}
-	return &Session{
-		Token:      token,
-		CSRFToken:  csrfToken,
-		CreatedAt:  now,
-		ExpiresAt:  exp,
-		LastSeenAt: now,
-	}, nil
+	return t.UTC().Format(time.RFC3339)
 }
 
 // Get 按 token 查找会话;不存在或已过期返回 ErrSessionNotFound。
@@ -81,11 +101,12 @@ func (ss *SessionStore) Create() (*Session, error) {
 func (ss *SessionStore) Get(token string) (*Session, error) {
 	var s Session
 	var createdStr, expiresStr, lastSeenStr string
+	var absolute, verified sql.NullString
 	err := ss.db.QueryRow(
-		`SELECT token, csrf_token, created_at, expires_at, last_seen_at
+		`SELECT token, csrf_token, created_at, expires_at, last_seen_at,auth_source,provider_generation,identity_generation,absolute_expires_at,password_verified_at
 		 FROM sessions WHERE token = ?`,
 		token,
-	).Scan(&s.Token, &s.CSRFToken, &createdStr, &expiresStr, &lastSeenStr)
+	).Scan(&s.Token, &s.CSRFToken, &createdStr, &expiresStr, &lastSeenStr, &s.AuthSource, &s.ProviderGeneration, &s.IdentityGeneration, &absolute, &verified)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrSessionNotFound
@@ -103,8 +124,35 @@ func (ss *SessionStore) Get(token string) (*Session, error) {
 		return nil, fmt.Errorf("auth: parse last_seen_at: %w", err)
 	}
 
-	now := time.Now().UTC()
-	if now.After(s.ExpiresAt) {
+	if absolute.Valid {
+		t, e := time.Parse(time.RFC3339, absolute.String)
+		if e != nil {
+			return nil, ErrSessionNotFound
+		}
+		s.AbsoluteExpiresAt = &t
+	}
+	if verified.Valid {
+		t, e := time.Parse(time.RFC3339, verified.String)
+		if e != nil {
+			return nil, ErrSessionNotFound
+		}
+		s.PasswordVerifiedAt = &t
+	}
+	if s.AuthSource != "password" {
+		var enabled bool
+		var pg, ig int64
+		e := ss.db.QueryRow(`SELECT p.enabled,p.auth_generation,i.identity_generation FROM login_provider_settings p JOIN login_identities i ON i.provider=p.provider WHERE p.provider=?`, s.AuthSource).Scan(&enabled, &pg, &ig)
+		if e != nil && !errors.Is(e, sql.ErrNoRows) {
+			return nil, e
+		}
+		if e != nil || !enabled || pg != s.ProviderGeneration || ig != s.IdentityGeneration {
+			_, _ = ss.db.Exec(`DELETE FROM sessions WHERE token=?`, token)
+			return nil, ErrSessionNotFound
+		}
+	}
+
+	now := ss.clock.Now().UTC()
+	if !now.Before(s.ExpiresAt) || (s.AbsoluteExpiresAt != nil && !now.Before(*s.AbsoluteExpiresAt)) {
 		// 惰性清理过期会话。
 		_, _ = ss.db.Exec(`DELETE FROM sessions WHERE token = ?`, token)
 		return nil, ErrSessionNotFound
@@ -117,6 +165,9 @@ func (ss *SessionStore) Get(token string) (*Session, error) {
 	// 不影响滑动过期语义。
 	if now.Sub(s.LastSeenAt) >= sessionRefreshInterval {
 		newExp := now.Add(sessionTTL)
+		if s.AbsoluteExpiresAt != nil && newExp.After(*s.AbsoluteExpiresAt) {
+			newExp = *s.AbsoluteExpiresAt
+		}
 		if _, err := ss.db.Exec(
 			`UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE token = ?`,
 			now.Format(time.RFC3339), newExp.Format(time.RFC3339), token,
@@ -131,7 +182,7 @@ func (ss *SessionStore) Get(token string) (*Session, error) {
 // PurgeExpired 删除所有已过期会话,返回删除行数。
 // 在启动时调用一次以清理 DB 中惰性删除遗漏的过期会话。
 func (ss *SessionStore) PurgeExpired() (int64, error) {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := ss.clock.Now().UTC().Format(time.RFC3339)
 	res, err := ss.db.Exec(`DELETE FROM sessions WHERE expires_at < ?`, now)
 	if err != nil {
 		return 0, fmt.Errorf("auth: purge expired sessions: %w", err)
@@ -161,19 +212,21 @@ func SessionID(token string) string {
 
 // SessionMeta 是会话的对外只读元数据(用于列表;不含原 token)。
 type SessionMeta struct {
-	ID         string // token 的 sha256 hex 前缀
-	CreatedAt  time.Time
-	LastSeenAt time.Time
-	ExpiresAt  time.Time
-	Current    bool // 是否为当前请求所属会话
+	ID                string // token 的 sha256 hex 前缀
+	CreatedAt         time.Time
+	LastSeenAt        time.Time
+	ExpiresAt         time.Time
+	AuthSource        string
+	AbsoluteExpiresAt *time.Time
+	Current           bool // 是否为当前请求所属会话
 }
 
 // List 返回所有未过期会话的元数据(不含原 token)。currentToken 用于标识 current。
 // 按 created_at DESC 排序(最新在前)。
 func (ss *SessionStore) List(currentToken string) ([]SessionMeta, error) {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := ss.clock.Now().UTC().Format(time.RFC3339)
 	rows, err := ss.db.Query(
-		`SELECT token, created_at, last_seen_at, expires_at
+		`SELECT token, created_at, last_seen_at, expires_at,auth_source,absolute_expires_at
 		 FROM sessions WHERE expires_at >= ? ORDER BY created_at DESC`,
 		now,
 	)
@@ -185,11 +238,19 @@ func (ss *SessionStore) List(currentToken string) ([]SessionMeta, error) {
 	currentID := SessionID(currentToken)
 	var out []SessionMeta
 	for rows.Next() {
-		var token, createdStr, lastSeenStr, expiresStr string
-		if err := rows.Scan(&token, &createdStr, &lastSeenStr, &expiresStr); err != nil {
+		var token, createdStr, lastSeenStr, expiresStr, source string
+		var absolute sql.NullString
+		if err := rows.Scan(&token, &createdStr, &lastSeenStr, &expiresStr, &source, &absolute); err != nil {
 			return nil, fmt.Errorf("auth: scan session: %w", err)
 		}
-		m := SessionMeta{ID: SessionID(token)}
+		m := SessionMeta{ID: SessionID(token), AuthSource: source}
+		if absolute.Valid {
+			t, e := time.Parse(time.RFC3339, absolute.String)
+			if e != nil {
+				return nil, e
+			}
+			m.AbsoluteExpiresAt = &t
+		}
 		if m.CreatedAt, err = time.Parse(time.RFC3339, createdStr); err != nil {
 			return nil, fmt.Errorf("auth: parse created_at: %w", err)
 		}

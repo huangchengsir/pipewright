@@ -1,9 +1,11 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -21,11 +23,14 @@ type accountService interface {
 
 // sessionDTO 是活跃会话对外响应体(冻结契约;**绝不含原始 token**)。
 type sessionDTO struct {
-	ID         string `json:"id"` // token 的 sha256 前缀(非原 token)
-	CreatedAt  string `json:"createdAt"`
-	LastSeenAt string `json:"lastSeenAt"`
-	ExpiresAt  string `json:"expiresAt"`
-	Current    bool   `json:"current"`
+	ID                string `json:"id"` // token 的 sha256 前缀(非原 token)
+	CreatedAt         string `json:"createdAt"`
+	LastSeenAt        string `json:"lastSeenAt"`
+	ExpiresAt         string `json:"expiresAt"`
+	Current           bool   `json:"current"`
+	Source            string `json:"source,omitempty"`
+	Provider          string `json:"provider,omitempty"`
+	AbsoluteExpiresAt string `json:"absoluteExpiresAt,omitempty"`
 }
 
 // sessionListDTO 是会话列表响应体。
@@ -34,13 +39,21 @@ type sessionListDTO struct {
 }
 
 func toSessionDTO(m auth.SessionMeta) sessionDTO {
-	return sessionDTO{
+	out := sessionDTO{
 		ID:         m.ID,
 		CreatedAt:  m.CreatedAt.UTC().Format(time.RFC3339),
 		LastSeenAt: m.LastSeenAt.UTC().Format(time.RFC3339),
 		ExpiresAt:  m.ExpiresAt.UTC().Format(time.RFC3339),
 		Current:    m.Current,
 	}
+	out.Source = m.AuthSource
+	if m.AuthSource != "password" {
+		out.Provider = m.AuthSource
+	}
+	if m.AbsoluteExpiresAt != nil {
+		out.AbsoluteExpiresAt = m.AbsoluteExpiresAt.UTC().Format(time.RFC3339)
+	}
+	return out
 }
 
 // currentSessionToken 从请求 cookie 取当前会话 token(已过 requireAuth,cookie 必在)。
@@ -73,11 +86,17 @@ func makeChangePasswordHandler(svc accountService, aud audit.Recorder) http.Hand
 
 		token := currentSessionToken(r)
 		err := svc.ChangePassword(req.CurrentPassword, req.NewPassword, token)
+		var locked *auth.ErrLockedOut
 		switch {
 		case err == nil:
 			// continue
 		case errors.Is(err, auth.ErrInvalidCurrentPassword):
 			writeError(w, http.StatusUnauthorized, "invalid_current_password", "当前口令错误")
+			return
+		case errors.As(err, &locked):
+			retry := max(1, int((locked.RetryAfter+time.Second-1)/time.Second))
+			w.Header().Set("Retry-After", strconv.Itoa(retry))
+			writeError(w, http.StatusTooManyRequests, "locked_out", "口令验证次数过多，请稍后重试")
 			return
 		case errors.Is(err, auth.ErrWeakPassword):
 			writeError(w, http.StatusUnprocessableEntity, "weak_password", "新口令至少 8 位")
@@ -143,7 +162,10 @@ func makeRevokeSessionHandler(svc accountService, aud audit.Recorder) http.Handl
 			return
 		}
 
-		recordAudit(r.Context(), aud, audit.Entry{
+		// Revoking the current session cancels its lease; the successful audit must survive it.
+		auditCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+		defer cancel()
+		recordAudit(auditCtx, aud, audit.Entry{
 			Actor:      auditActor,
 			Action:     audit.ActionSessionRevoke,
 			TargetType: audit.TargetSession,

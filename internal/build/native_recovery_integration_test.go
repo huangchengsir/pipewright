@@ -47,7 +47,7 @@ func (d *nativeRetryDriver) Push(ctx context.Context, ref string, line func(stri
 	return d.shellDriver.Push(ctx, ref, line)
 }
 
-func (d *nativeRetryDriver) RunToolchain(ctx context.Context, image, host, work string, env, cmd []string, res pipeline.Resource, line func(string, string)) (int, error) {
+func (d *nativeRetryDriver) RunToolchain(ctx context.Context, image, host, work string, env, cmd []string, res pipeline.Resource, opts ToolchainRunOptions, line func(string, string)) (int, error) {
 	key := ""
 	if len(cmd) > 2 {
 		if m := nativeNodeMarker.FindStringSubmatch(cmd[2]); len(m) == 2 {
@@ -83,7 +83,7 @@ func (d *nativeRetryDriver) RunToolchain(ctx context.Context, image, host, work 
 	}
 	env = append(append([]string(nil), env...), "PW_NATIVE_FAIL="+flag)
 	counted := false
-	return d.shellDriver.RunToolchain(ctx, image, host, work, env, cmd, res, func(stream, text string) {
+	return d.shellDriver.RunToolchain(ctx, image, host, work, env, cmd, res, opts, func(stream, text string) {
 		if stream == "stdout" && (text == "NR_EXEC:"+strings.Split(key, "/")[0] || key == "jarbuild" && strings.Contains(text, "Building jar:")) && !counted {
 			d.mu.Lock()
 			d.counts[key]++

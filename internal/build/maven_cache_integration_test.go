@@ -186,11 +186,11 @@ type realMavenNetworkDriver struct {
 	offline bool
 }
 
-func (d *realMavenNetworkDriver) RunToolchain(ctx context.Context, image, hostDir, workdir string, env, cmd []string, res pipeline.Resource, onLine func(string, string)) (int, error) {
+func (d *realMavenNetworkDriver) RunToolchain(ctx context.Context, image, hostDir, workdir string, env, cmd []string, res pipeline.Resource, opts ToolchainRunOptions, onLine func(string, string)) (int, error) {
 	if d.offline {
 		res.Network = "none"
 	}
-	return d.shellDriver.RunToolchain(ctx, image, hostDir, workdir, env, cmd, res, onLine)
+	return d.shellDriver.RunToolchain(ctx, image, hostDir, workdir, env, cmd, res, opts, onLine)
 }
 
 type mavenFixtureCloner struct {

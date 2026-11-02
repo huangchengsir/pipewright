@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -587,10 +588,21 @@ func (s *service) List(ctx context.Context, f ListFilter) (*ListResult, error) {
 		args = append(args, f.Status)
 	}
 	if query := strings.TrimSpace(f.Query); query != "" {
-		// Explicit ESCAPE works on SQLite and MySQL; wildcard characters remain literal.
-		pattern := "%" + strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(query) + "%"
-		where = append(where, "(LOWER(pr.id) LIKE LOWER(?) ESCAPE '!' OR LOWER(pr.trigger_branch) LIKE LOWER(?) ESCAPE '!' OR LOWER(pr.trigger_commit) LIKE LOWER(?) ESCAPE '!' OR LOWER(pr.resolved_commit_sha) LIKE LOWER(?) ESCAPE '!')")
-		args = append(args, pattern, pattern, pattern, pattern)
+		// Match ASCII case-insensitively and non-ASCII literally on both stores.
+		// MySQL ID/commit columns are ASCII: convert operands before Unicode matching.
+		if store.DialectOf(s.db) == store.MySQL {
+			pattern := literalASCIIRegexp(query)
+			predicates := make([]string, 0, 4)
+			for _, column := range []string{"pr.id", "pr.trigger_branch", "pr.trigger_commit", "pr.resolved_commit_sha"} {
+				predicates = append(predicates, "REGEXP_LIKE(CONVERT("+column+" USING utf8mb4) COLLATE utf8mb4_bin, CONVERT(? USING utf8mb4) COLLATE utf8mb4_bin, 'c')")
+				args = append(args, pattern)
+			}
+			where = append(where, "("+strings.Join(predicates, " OR ")+")")
+		} else {
+			pattern := "%" + strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(query) + "%"
+			where = append(where, "(LOWER(pr.id) LIKE LOWER(?) ESCAPE '!' OR LOWER(pr.trigger_branch) LIKE LOWER(?) ESCAPE '!' OR LOWER(pr.trigger_commit) LIKE LOWER(?) ESCAPE '!' OR LOWER(pr.resolved_commit_sha) LIKE LOWER(?) ESCAPE '!')")
+			args = append(args, pattern, pattern, pattern, pattern)
+		}
 	}
 	if !f.After.IsZero() {
 		where = append(where, "pr.created_at >= ?")
@@ -1015,3 +1027,27 @@ func parseNullTime(ns sql.NullString) (*time.Time, error) {
 
 // isForeignKeyErr 判断错误是否为外键约束失败(modernc sqlite 文本含 FOREIGN KEY)。
 func isForeignKeyErr(err error) bool { return store.IsForeignKeyErr(err) }
+
+// literalASCIIRegexp never accepts a user-supplied regex. Only ASCII letters get
+// fixed case pairs; all other runes are quoted literals. Query length is bounded
+// before this helper, and there are no repetitions or user-controlled operators.
+func literalASCIIRegexp(query string) string {
+	var pattern strings.Builder
+	for _, char := range query {
+		switch {
+		case char >= 'a' && char <= 'z':
+			pattern.WriteRune('[')
+			pattern.WriteRune(char)
+			pattern.WriteRune(char - 'a' + 'A')
+			pattern.WriteRune(']')
+		case char >= 'A' && char <= 'Z':
+			pattern.WriteRune('[')
+			pattern.WriteRune(char + 'a' - 'A')
+			pattern.WriteRune(char)
+			pattern.WriteRune(']')
+		default:
+			pattern.WriteString(regexp.QuoteMeta(string(char)))
+		}
+	}
+	return pattern.String()
+}

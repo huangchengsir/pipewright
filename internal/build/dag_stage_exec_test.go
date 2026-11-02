@@ -52,17 +52,19 @@ type recordingDriver struct {
 	gotWork   string
 	gotEnv    []string
 	gotRes    pipeline.Resource
+	gotOpts   ToolchainRunOptions
 	callCount int
 }
 
 func (d *recordingDriver) Binary() string { return "fake" }
-func (d *recordingDriver) RunToolchain(_ context.Context, image, _, workdir string, env []string, cmd []string, res pipeline.Resource, onLine func(stream, line string)) (int, error) {
+func (d *recordingDriver) RunToolchain(_ context.Context, image, _, workdir string, env []string, cmd []string, res pipeline.Resource, opts ToolchainRunOptions, onLine func(stream, line string)) (int, error) {
 	d.callCount++
 	d.gotImage = image
 	d.gotCmd = cmd
 	d.gotWork = workdir
 	d.gotEnv = env
 	d.gotRes = res
+	d.gotOpts = opts
 	for _, l := range d.emit {
 		onLine("stdout", l)
 	}
@@ -219,7 +221,7 @@ type flakyDriver struct {
 }
 
 func (d *flakyDriver) Binary() string { return "fake" }
-func (d *flakyDriver) RunToolchain(ctx context.Context, _, _, _ string, _ []string, _ []string, _ pipeline.Resource, _ func(string, string)) (int, error) {
+func (d *flakyDriver) RunToolchain(ctx context.Context, _, _, _ string, _ []string, _ []string, _ pipeline.Resource, _ ToolchainRunOptions, _ func(string, string)) (int, error) {
 	d.calls++
 	if d.block > 0 {
 		select {
@@ -326,7 +328,7 @@ type imgDriver struct {
 }
 
 func (d *imgDriver) Binary() string { return "fake" }
-func (d *imgDriver) RunToolchain(context.Context, string, string, string, []string, []string, pipeline.Resource, func(string, string)) (int, error) {
+func (d *imgDriver) RunToolchain(context.Context, string, string, string, []string, []string, pipeline.Resource, ToolchainRunOptions, func(string, string)) (int, error) {
 	return 0, nil
 }
 func (d *imgDriver) Build(_ context.Context, contextDir, dockerfile, _ string, _, _ []string, _ func(string, string)) (int, error) {
@@ -580,7 +582,7 @@ type orderDriver struct {
 }
 
 func (d *orderDriver) Binary() string { return "fake" }
-func (d *orderDriver) RunToolchain(ctx context.Context, image, _, _ string, _ []string, _ []string, _ pipeline.Resource, onLine func(string, string)) (int, error) {
+func (d *orderDriver) RunToolchain(ctx context.Context, image, _, _ string, _ []string, _ []string, _ pipeline.Resource, opts ToolchainRunOptions, onLine func(string, string)) (int, error) {
 	if d.block > 0 {
 		select {
 		case <-time.After(d.block):

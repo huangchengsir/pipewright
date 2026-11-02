@@ -27,7 +27,7 @@ type recoveryRemoteDriver struct {
 	resources map[string]remoteResource
 }
 
-func (d *recoveryRemoteDriver) RunToolchain(ctx context.Context, image, hostDir, workdir string, env, cmd []string, res pipeline.Resource, onLine func(string, string)) (code int, runErr error) {
+func (d *recoveryRemoteDriver) RunToolchain(ctx context.Context, image, hostDir, workdir string, env, cmd []string, res pipeline.Resource, opts ToolchainRunOptions, onLine func(string, string)) (code int, runErr error) {
 	n, ok := runretry.NodeFrom(ctx)
 	if !ok {
 		return -1, runretry.ErrInvalid
@@ -132,7 +132,7 @@ func (d *recoveryRemoteDriver) RunToolchain(ctx context.Context, image, hostDir,
 		}
 	}
 	before, beforeOK := d.workspaceState(ctx, remoteWS)
-	code, runErr = d.Driver.RunToolchain(ctx, image, remoteWS, workdir, env, cmd, res, onLine)
+	code, runErr = d.Driver.RunToolchain(ctx, image, remoteWS, workdir, env, cmd, res, opts, onLine)
 	if code < 0 && runErr != nil {
 		if r, ok := ctx.Value(recoveryReporterContextKey{}).(*recoveryReporter); ok {
 			r.external = "unknown"

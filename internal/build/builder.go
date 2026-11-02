@@ -477,7 +477,7 @@ func (b *Builder) build(ctx context.Context, sink run.StepSink, ordinal int, pro
 			buildCmd = mavenCacheCommand(buildCmd, "/src", parseCacheConfig(pipeline.Job{}, cfg.Cache))
 		}
 		run.RecordExecution(sink, run.ExecutionReal)
-		code, err := b.driver.RunToolchain(ctx, image, workspace, "/src", env, buildCmd, pipeline.Resource{}, onLine)
+		code, err := b.driver.RunToolchain(ctx, image, workspace, "/src", env, buildCmd, pipeline.Resource{}, ToolchainRunOptions{}, onLine)
 		if err != nil && code < 0 {
 			return "", nil, fmt.Errorf("构建器无法启动")
 		}
@@ -518,9 +518,9 @@ type scriptEvidenceDriver struct {
 	sink run.StepSink
 }
 
-func (d *scriptEvidenceDriver) RunToolchain(ctx context.Context, image, workspace, workdir string, env, cmd []string, res pipeline.Resource, onLine func(string, string)) (int, error) {
+func (d *scriptEvidenceDriver) RunToolchain(ctx context.Context, image, workspace, workdir string, env, cmd []string, res pipeline.Resource, opts ToolchainRunOptions, onLine func(string, string)) (int, error) {
 	run.RecordExecution(d.sink, run.ExecutionReal)
-	return d.Driver.RunToolchain(ctx, image, workspace, workdir, env, cmd, res, onLine)
+	return d.Driver.RunToolchain(ctx, image, workspace, workdir, env, cmd, res, opts, onLine)
 }
 
 // buildArgs 把构建变量拆成非 secret(明文 K=V)与 secret(vault.Reveal 明文 K=V)。

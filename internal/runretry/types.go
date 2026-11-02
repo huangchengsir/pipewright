@@ -13,6 +13,10 @@ import (
 
 const SchemaVersion = 1
 
+// ScriptEntrypointClearV1 pins the explicit shell contract for new lineages.
+// A missing mode is the historical image-entrypoint contract, never an implicit upgrade.
+const ScriptEntrypointClearV1 = "clear-v1"
+
 var (
 	ErrNotFound    = errors.New("runretry: not found")
 	ErrInvalid     = errors.New("runretry: invalid input")
@@ -48,18 +52,33 @@ type Trigger struct {
 // Snapshot is encrypted as a whole. Only credential references belong here,
 // never resolved passwords/tokens. Arbitrary settings/params remain private.
 type Snapshot struct {
-	Compiled      *FrozenGraph      `json:"compiled,omitempty"`
-	SchemaVersion int               `json:"schemaVersion"`
-	ProjectID     string            `json:"projectId"`
-	Spec          pipeline.Spec     `json:"spec"`
-	Project       map[string]any    `json:"project,omitempty"`
-	Settings      map[string]any    `json:"settings,omitempty"`
-	Trigger       Trigger           `json:"trigger"`
-	Source        ConfigSource      `json:"source"`
-	RunnerRefs    map[string]string `json:"runnerRefs,omitempty"`
-	RequestedRef  string            `json:"requestedRef"`
-	CommitSHA     string            `json:"commitSha,omitempty"`
+	Compiled             *FrozenGraph      `json:"compiled,omitempty"`
+	SchemaVersion        int               `json:"schemaVersion"`
+	ScriptEntrypointMode string            `json:"scriptEntrypointMode,omitempty"`
+	ProjectID            string            `json:"projectId"`
+	Spec                 pipeline.Spec     `json:"spec"`
+	Project              map[string]any    `json:"project,omitempty"`
+	Settings             map[string]any    `json:"settings,omitempty"`
+	Trigger              Trigger           `json:"trigger"`
+	Source               ConfigSource      `json:"source"`
+	RunnerRefs           map[string]string `json:"runnerRefs,omitempty"`
+	RequestedRef         string            `json:"requestedRef"`
+	CommitSHA            string            `json:"commitSha,omitempty"`
 }
+
+// ClearScriptEntrypoint interprets only policies understood by this executor.
+// Keep the empty historical value stable for old snapshots and their digests.
+func (s Snapshot) ClearScriptEntrypoint() (bool, error) {
+	switch s.ScriptEntrypointMode {
+	case "":
+		return false, nil
+	case ScriptEntrypointClearV1:
+		return true, nil
+	default:
+		return false, ErrUnavailable
+	}
+}
+
 type FrozenGraph struct {
 	Version       int                 `json:"version"`
 	Nodes         []NodeRef           `json:"nodes"`

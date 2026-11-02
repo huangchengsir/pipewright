@@ -22,7 +22,7 @@ export default {
   unknownError: '알 수 없는 오류',
 
   sessionsTitle: '활성 세션',
-  sessionsSub: '서버 측 세션(7일 슬라이딩 만료). 세션을 해지하면 해당 기기를 즉시 로그아웃할 수 있습니다.',
+  sessionsSub: "비밀번호 세션은 7일씩 갱신되며 외부 계정 세션은 최대 24시간입니다. 세션을 개별적으로 종료할 수 있습니다.",
   errLoadSessions: '세션을 불러올 수 없습니다',
   retry: '다시 시도',
   emptyTitle: '활성 세션 없음',

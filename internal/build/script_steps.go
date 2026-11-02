@@ -9,6 +9,7 @@ import (
 
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/runretry"
 )
 
 // script_steps.go 是「自定义脚本步骤」执行器(Epic 8 地基 · Story 8-2)。
@@ -72,7 +73,11 @@ func (b *Builder) runScriptStep(ctx context.Context, sink run.StepSink, ordinal 
 		cmd = mavenCacheCommand(cmd, scriptWorkspaceMount, cache[0])
 	}
 
-	code, err := b.driver.RunToolchain(ctx, step.Image, workspace, workdir, env, cmd, step.Resource, onLine)
+	opts, err := scriptRunOptions(ctx)
+	if err != nil {
+		return err
+	}
+	code, err := b.driver.RunToolchain(ctx, step.Image, workspace, workdir, env, cmd, step.Resource, opts, onLine)
 	if err != nil && code < 0 {
 		// 容器无法启动(镜像拉取失败/CLI 不可用等);ctx 取消时 code<0 但 ctx.Err 命中,由调用方归一。
 		if errors.Is(ctx.Err(), context.Canceled) {
@@ -87,6 +92,20 @@ func (b *Builder) runScriptStep(ctx context.Context, sink run.StepSink, ordinal 
 		return ErrBuildFailed
 	}
 	return nil
+}
+
+// scriptRunOptions keeps the execution contract of a captured lineage immutable.
+// Fresh scripts clear ENTRYPOINT; historical captures with no policy retain it.
+func scriptRunOptions(ctx context.Context) (ToolchainRunOptions, error) {
+	opts := ToolchainRunOptions{ClearEntrypoint: true}
+	if ex, captured := runretry.ExecutionFrom(ctx); captured {
+		clear, err := ex.Snapshot().ClearScriptEntrypoint()
+		if err != nil {
+			return ToolchainRunOptions{}, err
+		}
+		opts.ClearEntrypoint = clear
+	}
+	return opts, nil
 }
 
 // runScriptStepWithOpts 在 runScriptStep 之上叠加「任务级超时 + 失败重试」(P0 引擎能力)。

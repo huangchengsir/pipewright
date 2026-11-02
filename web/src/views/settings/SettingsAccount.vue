@@ -13,6 +13,8 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import FormField from '../../components/ui/FormField.vue'
+import SettingsPlatformLogin from '../../components/auth/SettingsPlatformLogin.vue'
+import { PLATFORM_NAMES, isPlatformProvider } from '../../api/platformLogin'
 import AppButton from '../../components/ui/AppButton.vue'
 import EmptyState from '../../components/ui/EmptyState.vue'
 import SkeletonBlock from '../../components/ui/SkeletonBlock.vue'
@@ -28,7 +30,7 @@ import {
   type Session,
 } from '../../api/account'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const toast = useToast()
 const confirm = useConfirm()
 const router = useRouter()
@@ -88,6 +90,10 @@ async function onSubmitPassword(): Promise<void> {
     if (err instanceof HttpError) {
       if (err.apiError?.code === 'invalid_current_password') {
         currentError.value = t('settingsAccount.errCurrentWrong')
+        return
+      }
+      if (err.status === 429 && err.apiError?.code === 'locked_out') {
+        currentError.value = t('platformLogin.rateLimited')
         return
       }
       if (err.apiError?.code === 'weak_password') {
@@ -151,7 +157,7 @@ async function onRevoke(s: Session): Promise<void> {
 function formatTime(iso: string): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
-  return d.toLocaleString('zh-CN', {
+  return d.toLocaleString(locale.value, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -186,6 +192,8 @@ onMounted(loadSessions)
         </div>
       </div>
     </section>
+
+    <SettingsPlatformLogin :current-source="sessions.find(s => s.current)?.source" @changed="loadSessions" />
 
     <!-- Change password -->
     <section class="acct-card" aria-labelledby="acct-pw-h">
@@ -288,9 +296,11 @@ onMounted(loadSessions)
             <div class="acct-session__top">
               <span class="acct-session__id mono">{{ s.id }}</span>
               <span v-if="s.current" class="acct-session__current">{{ t('settingsAccount.currentSession') }}</span>
+              <span v-if="s.provider && isPlatformProvider(s.provider)" class="acct-session__provider">{{ t('platformLogin.sessionProvider', { provider: PLATFORM_NAMES[s.provider] }) }}</span>
             </div>
             <div class="acct-session__meta">
               {{ t('settingsAccount.sessionMeta', { created: formatTime(s.createdAt), lastSeen: formatTime(s.lastSeenAt) }) }}
+              <span v-if="s.absoluteExpiresAt"> · {{ t('platformLogin.sessionExpires', { time: formatTime(s.absoluteExpiresAt) }) }}</span>
             </div>
           </div>
           <div class="acct-session__act">
@@ -457,6 +467,7 @@ onMounted(loadSessions)
 }
 .acct-session__top {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 9px;
 }
@@ -494,4 +505,5 @@ onMounted(loadSessions)
   padding: 0;
   margin-left: 6px;
 }
+.acct-session__provider { color: var(--color-dim); font-size: 12px; overflow-wrap: anywhere; }
 </style>

@@ -74,7 +74,7 @@ func toolchainWorkspaceMount(workdir string) string {
 }
 
 // Docker cp crosses the client/daemon filesystem boundary without host bind paths.
-func (d *shellDriver) runCopiedWorkspace(ctx context.Context, image, hostDir, workdir string, env, cmd []string, res pipeline.Resource, onLine func(string, string)) (resultCode int, resultErr error) {
+func (d *shellDriver) runCopiedWorkspace(ctx context.Context, image, hostDir, workdir string, env, cmd []string, res pipeline.Resource, opts ToolchainRunOptions, onLine func(string, string)) (resultCode int, resultErr error) {
 	_, captured := runretry.ExecutionFrom(ctx)
 	if !captured {
 		d.reconcileCopiedWorkspaces(onLine)
@@ -107,6 +107,10 @@ func (d *shellDriver) runCopiedWorkspace(ctx context.Context, image, hostDir, wo
 	for _, value := range env {
 		args = append(args, "-e", value)
 		display = append(display, "-e", maskKV(value))
+	}
+	if opts.ClearEntrypoint {
+		args = append(args, "--entrypoint=")
+		display = append(display, "--entrypoint=")
 	}
 	args = append(args, image)
 	args = append(args, cmd...)

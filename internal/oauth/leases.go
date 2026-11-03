@@ -29,6 +29,9 @@ func (v *managedVault) RegisterMaskSecrets(ctx context.Context, masker *secretma
 }
 
 func (v *managedVault) AcquireGitAuth(ctx context.Context, id string) (vault.GitAuth, func(), error) {
+	if e := vault.ValidateGenericReference(id); e != nil {
+		return vault.GitAuth{}, func() {}, e
+	}
 	leave, err := maintenance.Enter(ctx, v.service.db, "git_operation")
 	if err != nil {
 		return vault.GitAuth{}, nil, err

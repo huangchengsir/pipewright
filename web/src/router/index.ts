@@ -33,6 +33,7 @@ const SettingsVault = () => import('../views/settings/SettingsVault.vue')
 // R3 / E3.1: DNS providers (Cloudflare / DNSPod / 阿里云 DNS) — unlocks DNS-01 wildcard + instant subdomains
 const SettingsDnsProviders = () => import('../views/settings/SettingsDnsProviders.vue')
 const SettingsAccount = () => import('../views/settings/SettingsAccount.vue')
+const SettingsKubernetes = () => import('../views/settings/SettingsKubernetes.vue')
 const SettingsMCP = () => import('../views/settings/SettingsMCP.vue')
 const MCPConfigReview = () => import('../views/MCPConfigReview.vue')
 const MCPConfigMaintenance = () => import('../views/MCPConfigMaintenance.vue')
@@ -154,6 +155,7 @@ const router = createRouter({
             // R3 / E3.1: DNS 提供商(DNS-01 通配符 + 一键分配子域名)
             { path: 'dns-providers', name: 'settings-dns-providers', component: SettingsDnsProviders, meta: { title: 'DNS 提供商' } },
             { path: 'account', name: 'settings-account', component: SettingsAccount, meta: { title: '账户设置' } },
+            { path: 'kubernetes', name: 'settings-kubernetes', component: SettingsKubernetes, meta: { title: 'Kubernetes' } },
             { path: 'mcp', name: 'settings-mcp', component: SettingsMCP, meta: { title: 'MCP' } },
             // 系统信息 + 一键检查更新
             { path: 'system', name: 'settings-system', component: SettingsSystem, meta: { title: '系统信息' } },

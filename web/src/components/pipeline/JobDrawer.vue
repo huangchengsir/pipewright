@@ -27,6 +27,7 @@ import JobTypeIcon from './JobTypeIcon.vue'
 import StepBuilder from './StepBuilder.vue'
 import StudioInstanceParams from './StudioInstanceParams.vue'
 import AppSelect from '../ui/AppSelect.vue'
+import KubernetesJobConfig from './KubernetesJobConfig.vue'
 import ImageProvenanceSummary from './ImageProvenanceSummary.vue'
 import ProjectSourceSummary from './ProjectSourceSummary.vue'
 import { imageSourceChoices, resolveImageSource } from './imageProvenance'
@@ -144,7 +145,7 @@ function pickViewMode(config: Record<string, string>): void {
 
 /** 步骤模式下,typed 表单只渲染「非步骤拥有」的字段(image/workDir/模板字段等)。 */
 const visibleFields = computed<JobField[]>(() => {
-  if (localType.value === 'git_source') return []
+  if (['git_source','deploy_kubernetes'].includes(localType.value)) return []
   if (!spec.value) return []
   return spec.value.fields.filter((f) => {
     if (f.when && !f.when(typedConfig.value)) return false
@@ -535,8 +536,9 @@ async function confirmSave(): Promise<void> {
       :has-legacy-overrides="Object.values(liveConfig).some((value) => !!value)"
     />
 
+    <KubernetesJobConfig class="drawer-section" v-if="localType === 'deploy_kubernetes'" :key="job.id" :config="liveConfig" :stages="stages ?? []" :stage="stage" :job="job" :project-id="project?.id" @update="typedConfig = $event; extraRows = []; flush()" />
     <!-- Typed config section (per-type form) -->
-    <div v-if="spec && localType !== 'git_source' && (!showShortlist || showStudioRaw)" class="drawer-section">
+    <div v-if="spec && !['git_source','deploy_kubernetes'].includes(localType) && (!showShortlist || showStudioRaw)" class="drawer-section">
       <div class="drawer-section-head">
         <div class="drawer-section-label">{{ spec.label }}{{ t('pipelineJob.configSuffix') }}</div>
         <div v-if="canUseStepBuilder && !showShortlist" class="view-switch" role="tablist" :aria-label="t('pipelineJob.configView')">
@@ -691,7 +693,7 @@ async function confirmSave(): Promise<void> {
     </div>
 
     <!-- Advanced raw KV (extras not covered by the schema) -->
-    <div class="drawer-section">
+    <div v-if="localType !== 'deploy_kubernetes'" class="drawer-section">
       <button
         class="advanced-toggle"
         :class="{ 'advanced-toggle--open': showAdvanced }"

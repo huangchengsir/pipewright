@@ -1,3 +1,4 @@
+// Kubernetes credentials have independent API/route lifecycle tests in KubernetesUI.test.ts.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { i18n, setLocale, SUPPORTED_LOCALES } from '../../i18n'
@@ -17,7 +18,7 @@ const credential = {
 let wrapper: VueWrapper | undefined
 beforeEach(() => { vi.clearAllMocks(); setLocale('zh-CN'); api.list.mockResolvedValue([credential]); api.reconnect.mockRejectedValue(new Error('unavailable')) })
 afterEach(() => { wrapper?.unmount(); setLocale('zh-CN') })
-function create() { wrapper = mount(SettingsVault, { global: { stubs: { Teleport: true, 'router-link': true } } }); return wrapper }
+function create() { wrapper = mount(SettingsVault, { global: { stubs: { KubeCredentials: true, Teleport: true, 'router-link': true } } }); return wrapper }
 
 describe('OAuth credential lifecycle', () => {
   it('shows declared state and unknown expiry without refreshing credentials', async () => {

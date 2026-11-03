@@ -21,7 +21,7 @@ JAR="${TMP}/jar.txt"
 ADMIN_PW="fs-e2e-admin-9z"
 MASTER_KEY="$(head -c 32 /dev/urandom | base64)"
 
-cleanup(){ [ -n "${SRV_PID:-}" ] && kill "$SRV_PID" 2>/dev/null; rm -rf "$TMP"; }
+cleanup(){ if [ -n "${SRV_PID:-}" ]; then kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null; fi; rm -rf -- "$TMP"; }
 trap cleanup EXIT
 
 echo "== 1. 构建真前端(go:embed)+ 真二进制 =="
@@ -30,7 +30,7 @@ go build -o "$BIN" ./cmd/pipewright || { echo "二进制构建失败"; exit 1; }
 echo "  ✅ 二进制 $(du -h "$BIN" | cut -f1)(含真前端 SPA)"
 
 echo "== 2. 起真后端 =="
-PIPEWRIGHT_ADDR=":${PORT}" PIPEWRIGHT_DB="$DB" PIPEWRIGHT_MASTER_KEY="$MASTER_KEY" \
+PIPEWRIGHT_ADDR=":${PORT}" PIPEWRIGHT_DB="$DB" PIPEWRIGHT_DATA_DIR="${TMP}/data" PIPEWRIGHT_MASTER_KEY="$MASTER_KEY" \
   PIPEWRIGHT_ADMIN_PASSWORD="$ADMIN_PW" PIPEWRIGHT_BUILDER=stub \
   "$BIN" >"${TMP}/server.log" 2>&1 &
 SRV_PID=$!

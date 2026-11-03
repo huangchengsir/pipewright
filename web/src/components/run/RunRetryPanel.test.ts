@@ -13,6 +13,24 @@ function state() {
 function render(s = state()) { const wrapper = mount(RunRetryPanel, { props: { state: s }, global: { stubs: { RouterLink: RouterLinkStub, Teleport: true } } }); (wrapper.vm as unknown as { show: (key?: string, view?: string) => void }).show(undefined, 'plan'); return { wrapper, s } }
 afterEach(() => setLocale('zh-CN'))
 describe('human-readable recovery plan', () => {
+  it('uses the exact Kubernetes recovery controls without duplicating generic recovery on node details', async () => {
+    const s = state(); s.context.value!.outcomeUnknown = true
+    s.context.value!.nodes[0].node.type = 'deploy_kubernetes'; s.context.value!.nodes[0].decision.action = 'execute'
+    const wrapper = mount(RunRetryPanel, { props: { state: s, runId: 'root' }, global: { stubs: { RouterLink: RouterLinkStub, Teleport: true, KubeOperationPanel: { template: '<div class="scoped-kube-recovery" />' } } } })
+    await (wrapper.vm as unknown as { show: (key?: string, mode?: string) => Promise<void> }).show('a', 'details'); await flushPromises()
+    expect(wrapper.find('.scoped-kube-recovery').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain(i18n.global.t('runRetry.reconcileNote'))
+    expect(wrapper.text()).not.toContain(i18n.global.t('runRetry.unknown'))
+    expect(s.reconcile).not.toHaveBeenCalled()
+    await (wrapper.vm as unknown as { showLogs: (keys: string[]) => Promise<void> }).showLogs(['a']); await flushPromises()
+    expect(wrapper.find('.retry-log-tabs').exists()).toBe(false)
+    expect(wrapper.get('#retry-log-panel').attributes('aria-labelledby')).toBe('retry-dialog-title')
+    await (wrapper.vm as unknown as { show: (key?: string, mode?: string) => Promise<void> }).show(undefined, 'history'); await flushPromises()
+    expect(wrapper.text()).toContain(i18n.global.t('runRetry.reconcileNote'))
+    expect(wrapper.find('.scoped-kube-recovery').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('keeps the default page clear and opens only the exact node without requesting a plan', async () => {
     const s = state(); s.context.value!.nodes[0].decision.action = 'reuse'; s.context.value!.nodes[0].sourceStepId = 'source-a'; s.context.value!.nodes[0].sourceOrdinal = 7
     const wrapper = mount(RunRetryPanel, { props: { state: s }, global: { stubs: { RouterLink: RouterLinkStub, Teleport: true } } })

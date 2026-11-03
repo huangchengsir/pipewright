@@ -10,8 +10,10 @@ import (
 	"strings"
 
 	"github.com/huangchengsir/pipewright/internal/artifactstore"
+	"github.com/huangchengsir/pipewright/internal/build"
 	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/dagrun"
+	"github.com/huangchengsir/pipewright/internal/kubernetes"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/run"
@@ -21,19 +23,21 @@ import (
 )
 
 type nodeRetryBindings struct {
-	db               *sql.DB
-	runs             run.Service
-	projects         project.Service
-	settings         pipeline.SettingsService
-	targets          target.Service
-	runners          runner.Service
-	loader           dagrun.SpecLoader
-	artifacts        *artifactstore.Store
-	real             bool
-	imageVerifier    func(context.Context, runretry.ImageRef) error
-	releaseImage     func(context.Context, runretry.ImageRef) error
-	targetVerifier   runretry.TargetVerifier
-	resourceVerifier runretry.ResourceVerifier
+	kubernetes           *kubernetes.Service
+	kubernetesController *kubernetes.Controller
+	db                   *sql.DB
+	runs                 run.Service
+	projects             project.Service
+	settings             pipeline.SettingsService
+	targets              target.Service
+	runners              runner.Service
+	loader               dagrun.SpecLoader
+	artifacts            *artifactstore.Store
+	real                 bool
+	imageVerifier        func(context.Context, runretry.ImageRef) error
+	releaseImage         func(context.Context, runretry.ImageRef) error
+	targetVerifier       runretry.TargetVerifier
+	resourceVerifier     runretry.ResourceVerifier
 }
 type retryArtifactBlobs struct{ bindings *nodeRetryBindings }
 
@@ -49,6 +53,26 @@ func newNodeRetryService(db *sql.DB, sealer runretry.Sealer, b *nodeRetryBinding
 		runretry.WithRejectedChild(run.RejectRetryQueued(b.runs)),
 		runretry.WithSnapshotProvider(b.capture), runretry.WithBlobStore(retryArtifactBlobs{b}),
 		runretry.WithPreflightCheck(b.preflight),
+		runretry.WithKubernetesVerifier(func(ctx context.Context, id string) (kubernetes.Operation, error) {
+			if b.kubernetes == nil || b.kubernetesController == nil {
+				return kubernetes.Operation{}, runretry.ErrUnavailable
+			}
+			o, e := b.kubernetes.GetOperation(ctx, id)
+			if e != nil {
+				return o, e
+			}
+			current, e := b.kubernetes.Authorize(ctx, o.Intent.Authorization.Target)
+			if e != nil {
+				return o, e
+			}
+			if !build.SameKubernetesTrust(o.Intent.Authorization, current) {
+				return o, kubernetes.ErrConflict
+			}
+			if o.Successful() {
+				return b.kubernetesController.VerifyReuse(ctx, id, o.IntentHash)
+			}
+			return o, nil
+		}),
 		runretry.WithAdmissionCheck(func(context.Context, configstate.DBTX, runretry.Snapshot) error {
 			if !b.real {
 				return runretry.ErrUnavailable
@@ -180,6 +204,9 @@ func (b *nodeRetryBindings) capture(ctx context.Context, id string) (runretry.Sn
 			ChainSourceRunID: r.Trigger.ChainSourceRunID, ChainDepth: r.Trigger.ChainDepth},
 		Source:     runretry.ConfigSource{Kind: kind, Ref: source.Ref, File: source.File, Fallback: source.FallbackReason},
 		RunnerRefs: map[string]string{"serverId": config.RunnerServerID}}
+	if err := build.FreezeKubernetesPolicy(ctx, b.kubernetes, &snap); err != nil {
+		return runretry.Snapshot{}, err
+	}
 	if len(r.ResolvedCommitSHA) == 40 && !r.ResolvedCommitConflict {
 		snap.CommitSHA = r.ResolvedCommitSHA
 	}
@@ -213,6 +240,9 @@ func (b *nodeRetryBindings) capture(ctx context.Context, id string) (runretry.Sn
 	}
 	q := configstate.Queryer(ctx, b.db)
 	for _, id := range sortedReferenceIDs(credentials) {
+		if strings.HasPrefix(id, "kcred_") {
+			continue
+		}
 		var kind string
 		err := q.QueryRowContext(ctx, "SELECT type FROM credentials WHERE id=?", id).Scan(&kind)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -247,6 +277,19 @@ func (b *nodeRetryBindings) preflight(ctx context.Context, snap runretry.Snapsho
 	}
 	if json.Unmarshal(data, &settings) != nil {
 		return nil, runretry.ErrUnavailable
+	}
+	for _, planned := range plan.Nodes {
+		if planned.Node.Type != pipeline.KubernetesJobType || (planned.Decision.Action != "execute" && planned.Decision.Action != "reuse") {
+			continue
+		}
+		frozen, ok := snap.Kubernetes[build.KubernetesBindingKey(planned.Node.ExecutionStageID, planned.Node.ExecutionJobID)]
+		if !ok || b.kubernetes == nil {
+			return []runretry.Reason{{Code: "kubernetes_authorization_unavailable", NodeKey: planned.Node.Key}}, nil
+		}
+		current, e := b.kubernetes.Authorize(ctx, frozen.Target)
+		if e != nil || !build.SameKubernetesTrust(frozen, current) || current.RequireApproval && !frozen.RequireApproval {
+			return []runretry.Reason{{Code: "kubernetes_authorization_changed", NodeKey: planned.Node.Key}}, nil
+		}
 	}
 	credentials, servers := map[string]bool{}, map[string]bool{}
 	active := false
@@ -359,6 +402,9 @@ func (b *nodeRetryBindings) preflight(ctx context.Context, snap runretry.Snapsho
 		}
 	}
 	for _, id := range sortedReferenceIDs(credentials) {
+		if strings.HasPrefix(id, "kcred_") {
+			continue
+		}
 		var current string
 		err := q.QueryRowContext(ctx, "SELECT type FROM credentials WHERE id=?", id).Scan(&current)
 		if errors.Is(err, sql.ErrNoRows) {

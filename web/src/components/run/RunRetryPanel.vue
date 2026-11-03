@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { useRunRetry } from '../../composables/useRunRetry'
 import { retryNodeLabel, sourceLogLocation, type RetryReason } from '../../api/runRetry'
 import { runDetailLocation } from '../../lib/runListContext'
 import AppButton from '../ui/AppButton.vue'
+import { kubeOperationLocation } from '../kubernetes/kubernetesEvidence'
+import KubeOperationPanel from '../kubernetes/KubeOperationPanel.vue'
 import RunTerminal from './RunTerminal.vue'
 import type { RunStep } from '../../api/runs'
 
@@ -29,6 +31,12 @@ const dialog = ref<HTMLElement | null>(null)
 let returnFocus: HTMLElement | null = null
 const focusedNode = computed(() => context.value?.nodes.find(n => n.node.key === nodeKey.value))
 const actualStep = computed(() => (props.steps ?? []).find(step => step.id === (focusedNode.value?.attemptStepId ?? nodeKey.value)))
+const kubeRetryBlocked = ref(true), kubePhaseLogs = ref<string[]>([])
+const isKube = computed(()=>focusedNode.value?.node.type === 'deploy_kubernetes')
+const kubeLocation = computed(()=>kubeOperationLocation(focusedNode.value,props.runId))
+const kubeSourceRun = computed(()=>kubeLocation.value?.runId || '')
+const kubeSourceNode = computed(()=>kubeLocation.value?.nodeId || '')
+watch(()=>[nodeKey.value,kubeSourceRun.value,open.value],()=>{kubeRetryBlocked.value=true;kubePhaseLogs.value=[]})
 const title = computed(() => mode.value === 'logs' && logStageName.value ? logStageName.value : focusedNode.value ? retryNodeLabel(focusedNode.value.node) : actualStep.value?.name ? actualStep.value.name : mode.value === 'history' ? t('runRetry.runHistory') : mode.value === 'plan' ? t('runRetry.retryAll') : t('runRetry.viewRecovery'))
 async function show(key?: string, view: 'details' | 'plan' | 'history' | 'logs' = 'details') {
   nodeKey.value = key; mode.value = view
@@ -143,7 +151,7 @@ async function confirmPlan() { const result = await props.state.submit(); if (re
       <AppButton class="retry-close" @click="close">{{ t('runRetry.close') }}</AppButton>
     </header>
     <p v-if="context && !isHead" class="retry-warning" role="status">{{ t('runRetry.superseded') }} <RouterLink @click="close" :to="runDetailLocation(context.headAttemptId, returnTo)">{{ t('runRetry.latestAttempt') }}</RouterLink></p>
-    <p v-if="context?.outcomeUnknown" class="retry-warning">{{ t('runRetry.unknown') }}</p>
+    <p v-if="context?.outcomeUnknown && !isKube" class="retry-warning">{{ t('runRetry.unknown') }}</p>
     <div v-if="pending" class="retry-request" aria-live="polite">
       <p>{{ request?.state === 'outcome_unknown' ? t('runRetry.unknown') : request ? t('runRetry.requestAccepted') : t('runRetry.verifyingOriginal') }}</p>
       <code>{{ pending.requestId }}</code>
@@ -151,23 +159,25 @@ async function confirmPlan() { const result = await props.state.submit(); if (re
       <AppButton v-else :loading="querying" @click="state.queryOriginal">{{ t('runRetry.queryOriginal') }}</AppButton>
     </div>
     <div class="retry-content">
-      <section v-if="mode === 'logs'" class="retry-log-view">
-        <div v-if="logTabs.length" class="retry-log-tabs" role="tablist" aria-orientation="vertical" :aria-label="t('runRetry.logSteps')">
+      <section v-if="mode === 'logs'" class="retry-log-view" :class="{ 'retry-log-view--kube': isKube && logTabs.length <= 1 }">
+        <div v-if="logTabs.length && (!isKube || logTabs.length > 1)" class="retry-log-tabs" role="tablist" aria-orientation="vertical" :aria-label="t('runRetry.logSteps')">
           <button v-for="(tab, index) in logTabs" :id="`retry-log-tab-${index}`" :key="tab.key" type="button" role="tab" :aria-selected="nodeKey === tab.key" aria-controls="retry-log-panel" :tabindex="nodeKey === tab.key ? 0 : -1" :title="tab.label" @click="selectLogTab(index)" @keydown="tabKeydown($event, index)">
             <span class="retry-log-tab-name">{{ tab.label }}</span>
             <span class="retry-log-tab-status">{{ tab.reused ? t('runRetry.reusedShort') : tab.status === 'outcome_unknown' ? t('runRetry.unknownShort') : statusLabel(tab.status) }}</span>
           </button>
         </div>
-        <div id="retry-log-panel" class="retry-log-step" role="tabpanel" :aria-labelledby="activeTabIndex >= 0 ? `retry-log-tab-${activeTabIndex}` : 'retry-dialog-title'" tabindex="0">
+        <div id="retry-log-panel" class="retry-log-step" :role="isKube && logTabs.length <= 1 ? 'region' : 'tabpanel'" :aria-labelledby="activeTabIndex >= 0 && (!isKube || logTabs.length > 1) ? `retry-log-tab-${activeTabIndex}` : 'retry-dialog-title'" tabindex="0">
         <div class="retry-log-status">
           <strong>{{ focusedNode ? retryNodeLabel(focusedNode.node) : actualStep?.name }}</strong>
           <span>{{ focusedNode?.decision.action === 'reuse' ? t('runRetry.reusedShort') : statusLabel(focusedNode?.decision.status ?? actualStep?.status) }}</span>
-          <AppButton v-if="focusedNode && ['failed', 'outcome_unknown'].includes(focusedNode.decision.status ?? '')" class="retry-focused" :disabled="!!pending || submitting" @click="retryFocused">{{ t('runRetry.retryNode') }}</AppButton>
+          <AppButton v-if="focusedNode && ['failed', 'outcome_unknown'].includes(focusedNode.decision.status ?? '')" class="retry-focused" :disabled="!!pending || submitting || (isKube && kubeRetryBlocked)" @click="retryFocused">{{ t('runRetry.retryNode') }}</AppButton>
         </div>
-        <div v-if="logSource" class="retry-log-surface">
-          <RunTerminal :key="`${logSource.runId}:${logSource.stepId}`" :run-id="logSource.runId" :live="logSource.live" :filter-ordinal="logSource.ordinal" />
+        <p v-if="isKube && !kubeLocation" class="kube-note">{{ t('kubernetes.noReceipt') }}</p>
+        <KubeOperationPanel v-if="isKube && kubeSourceRun && kubeSourceNode" :key="kubeSourceRun+':'+kubeSourceNode" :run-id="kubeSourceRun" :node-id="kubeSourceNode" :operation-id="kubeLocation?.operationId"  :phase-logs="kubePhaseLogs" @blocked="kubeRetryBlocked=$event"><template #default="{ phase }"><RunTerminal v-if="logSource" :key="`${logSource.runId}:${logSource.stepId}`" :run-id="logSource.runId" :live="logSource.live" :filter-ordinal="logSource.ordinal" :kubernetes-phase="phase" @kubernetes-phases="kubePhaseLogs=$event" /></template></KubeOperationPanel>
+        <div v-if="logSource && !isKube" class="retry-log-surface">
+          <RunTerminal :key="`${logSource.runId}:${logSource.stepId}`" :run-id="logSource.runId" :live="logSource.live" :filter-ordinal="logSource.ordinal" @kubernetes-phases="kubePhaseLogs=$event" />
         </div>
-        <p v-else class="retry-muted">{{ t('runRetry.nodeLogsUnavailable') }}</p>
+        <p v-else-if="!logSource" class="retry-muted">{{ t('runRetry.nodeLogsUnavailable') }}</p>
         <RouterLink v-if="fullLogRunId" @click="openFullLogs" :to="runDetailLocation(fullLogRunId, returnTo)">{{ t('runRetry.fullLogs') }}</RouterLink>
         <details v-if="focusedNode" class="retry-node-evidence">
           <summary>{{ t('runRetry.viewRecovery') }}</summary>
@@ -180,13 +190,15 @@ async function confirmPlan() { const result = await props.state.submit(); if (re
         </div>
       </section>
       <section v-if="focusedNode && mode !== 'logs'" class="retry-node-detail">
+        <p v-if="isKube && !kubeLocation" class="kube-note">{{ t('kubernetes.noReceipt') }}</p>
+        <KubeOperationPanel v-if="isKube && kubeSourceRun && kubeSourceNode" :key="kubeSourceRun+':'+kubeSourceNode" :run-id="kubeSourceRun" :node-id="kubeSourceNode" :operation-id="kubeLocation?.operationId" @blocked="kubeRetryBlocked=$event" />
         <p><strong>{{ focusedNode.decision.action === 'reuse' ? t('runRetry.reused') : focusedNode.decision.action === 'blocked' ? t('runRetry.blocked') : statusLabel(focusedNode.decision.status) }}</strong></p>
         <p v-if="focusedNode.node.controlKey" class="retry-muted">{{ t('runRetry.controlNode') }}</p>
         <RouterLink @click="close" v-if="focusedNode.decision.sourceAttemptId" :to="runDetailLocation(focusedNode.decision.sourceAttemptId, returnTo)">{{ t('runRetry.fromRun', { id: focusedNode.decision.sourceAttemptId.slice(0, 8) }) }}</RouterLink>
         <RouterLink @click="close" v-if="sourceLogTarget(focusedNode)" :to="sourceLogTarget(focusedNode)!">{{ t('runRetry.sourceLogs') }}</RouterLink>
         <p v-for="(r, index) in focusedNode.decision.reasons ?? []" :key="index">{{ detail(r) }}</p>
         <p v-if="focusedNode.reasonCode">{{ reason(focusedNode.reasonCode) }}</p>
-        <AppButton class="retry-focused" v-if="mode !== 'plan' && ['failed', 'outcome_unknown'].includes(focusedNode.decision.status ?? '')" :disabled="!!pending || submitting" @click="retryFocused">{{ t('runRetry.retryNode') }}</AppButton>
+        <AppButton class="retry-focused" v-if="mode !== 'plan' && ['failed', 'outcome_unknown'].includes(focusedNode.decision.status ?? '')" :disabled="!!pending || submitting || (isKube && kubeRetryBlocked)" @click="retryFocused">{{ t('runRetry.retryNode') }}</AppButton>
       </section>
       <p v-if="mode === 'history'" class="retry-muted">{{ t('runRetry.historyNote') }}</p>
       <p v-if="mode === 'history' && !attempts?.items.length" class="retry-muted">{{ t('runRetry.none') }}</p>
@@ -241,7 +253,7 @@ async function confirmPlan() { const result = await props.state.submit(); if (re
         </div>
         <details class="retry-technical"><summary>{{ t('runRetry.technical') }}</summary><dl><dt>{{ t('runRetry.manifest') }}</dt><dd><code>{{ plan.manifestFingerprint }}</code></dd><dt>{{ t('runRetry.planIdentity') }}</dt><dd><code>{{ plan.planFingerprint }}</code></dd></dl></details>
       </div>
-      <div v-if="context?.outcomeUnknown" class="retry-controls">
+      <div v-if="context?.outcomeUnknown && !isKube" class="retry-controls">
         <p>{{ t('runRetry.reconcileNote') }}</p>
         <AppButton :loading="reconciling" @click="state.reconcile">{{ t('runRetry.reconcile') }}</AppButton>
         <ul><li v-for="(r, index) in reconcileReasons" :key="index">{{ detail(r) }}</li></ul>
@@ -647,5 +659,10 @@ code {
     gap: 12px;
     margin: 16px 0;
   }
+}
+
+/* Kubernetes jobs are single-job stages; use the phase navigation once. */
+.retry-log-view.retry-log-view--kube {
+  grid-template-columns: minmax(0, 1fr);
 }
 </style>

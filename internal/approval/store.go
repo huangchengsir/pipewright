@@ -57,13 +57,16 @@ func (s *Store) CreatePending(ctx context.Context, runID, stageID, stageName str
 // Decide 记录一次决定(approved/rejected/其它如 timeout|canceled 走 status=rejected + decidedBy 标注)。
 func (s *Store) Decide(ctx context.Context, runID, stageID, status, decidedBy string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.db.ExecContext(ctx,
+	result, err := s.db.ExecContext(ctx,
 		`UPDATE run_approvals SET status = ?, decided_by = ?, decided_at = ?
 		 WHERE run_id = ? AND stage_id = ?`,
 		status, decidedBy, now, runID, stageID,
 	)
 	if err != nil {
 		return fmt.Errorf("approval: decide: %w", err)
+	}
+	if affected, e := result.RowsAffected(); e != nil || affected != 1 {
+		return fmt.Errorf("approval: decision was not persisted")
 	}
 	return nil
 }

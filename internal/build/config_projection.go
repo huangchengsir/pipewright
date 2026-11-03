@@ -181,7 +181,7 @@ func ConfigJobKind(t string) string {
 		return "build_image"
 	}
 	switch strings.TrimSpace(t) {
-	case "git_source", "push_image", "deploy_ssh", "deploy_frontend", "notify":
+	case "git_source", "push_image", "deploy_ssh", "deploy_frontend", "deploy_kubernetes", "notify":
 		return strings.TrimSpace(t)
 	}
 	return "unsupported"
@@ -201,6 +201,9 @@ func configBuildConfig(j pipeline.Job, vars []pipeline.BuildVar) pipeline.BuildC
 // ConfigExecutionIssues validates only fields actually used by the DAG executor.
 func ConfigExecutionIssues(spec pipeline.Spec) []pipeline.Issue {
 	var issues []pipeline.Issue
+	if pipeline.ValidateKubernetesStages(spec) != nil {
+		issues = append(issues, pipeline.Issue{Severity: pipeline.SeverityError, Code: "kubernetes_config_invalid"})
+	}
 	for _, st := range spec.Stages {
 		for _, j := range st.Jobs {
 			switch {

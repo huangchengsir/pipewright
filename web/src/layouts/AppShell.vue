@@ -22,6 +22,7 @@ import {
 } from '@vicons/tabler'
 import { NIcon } from 'naive-ui'
 import ThemeToggle from '../components/ThemeToggle.vue'
+import BrandIcon from '../components/BrandIcon.vue'
 import ContinueOnboarding from '../components/onboarding/ContinueOnboarding.vue'
 import { useOnboardingPreferences } from '../composables/useOnboarding'
 import { logout } from '../api/auth'
@@ -156,8 +157,8 @@ function toggleExpanded(): void {
       <!-- 顶部:品牌 -->
       <div class="rail-head">
         <router-link to="/" class="brand" :aria-label="t('nav.ariaBrandHome')">
-          <span class="brand-mark mono">p&gt;</span>
-          <span class="brand-name">Pipewright</span>
+          <BrandIcon class="brand-mark" />
+          <span class="brand-name">Pipe<span class="brand-name-accent">wright</span></span>
         </router-link>
       </div>
 
@@ -292,33 +293,33 @@ function toggleExpanded(): void {
 .brand-mark {
   width: 30px;
   height: 30px;
-  border-radius: var(--rounded);
-  background: var(--color-primary);
-  color: #fff;
-  display: grid;
-  place-items: center;
-  font-family: var(--font-mono);
-  font-weight: 700;
-  font-size: 0.78rem;
-  box-shadow: 0 4px 14px var(--color-primary-soft);
-  transition: box-shadow var(--duration-fast);
+  display: block;
+  filter: drop-shadow(0 4px 7px var(--color-primary-soft));
+  transition: filter var(--duration-fast);
   flex-shrink: 0;
 }
 .brand:hover .brand-mark {
-  box-shadow: 0 6px 20px var(--color-primary-soft);
+  filter: drop-shadow(0 6px 10px var(--color-primary-soft));
 }
 .brand-name {
-  font-size: var(--text-body);
+  font-family: var(--font-sans);
+  font-size: 1.125rem;
   font-weight: 700;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.045em;
+  line-height: 1.25;
   color: var(--color-text);
   white-space: nowrap;
   overflow: hidden;
   /* 收起时隐藏文字(无障碍名仍由 brand 的 aria-label 提供)。 */
   display: none;
 }
+.brand-name-accent {
+  color: var(--color-primary);
+  font-weight: 600;
+}
 .is-expanded .brand-name {
-  display: inline;
+  display: inline-flex;
+  align-items: baseline;
 }
 
 /* Nav list */

@@ -276,6 +276,36 @@ stages:
 
 > 也可用全局环境变量 `PIPEWRIGHT_PAC_RUNTIME=1` 对**所有项目**强制开启流水线即代码(无视各项目开关),供向后兼容 / 高级用户使用。
 
+### 脚本中的 Git 上下文
+
+使用真实 DAG 执行器的新运行中，`source` 阶段的 `git_source` 会确认并绑定实际检出的提交；下游脚本可在 `commands` 中通过 Shell 读取：
+
+- `PIPELINE_ID`：本次流水线运行 ID；重试生成新运行时使用新的 ID。
+- `DATETIME`：本次运行创建时间，UTC，格式为 `yyyy-MM-dd HH:mm:ss`。
+- `TIMESTAMP`：相同创建时间对应的 Unix 秒级时间戳。
+- `CI_COMMIT_TITLE`：实际检出提交信息的首行标题。
+- `CI_COMMIT_AUTHOR`：实际检出提交的作者名称，不包含邮箱。
+- `CI_COMMIT_SOURCE`：源码仓库地址，去除用户名、密码、查询参数和片段。
+- `CI_COMMIT_SHA`：完整提交 SHA。
+- `CI_COMMIT_ID`：SHA 前 7 位。 原 `CI_COMMIT_SHORT_SHA` 不再作为系统变量自动注入，已有脚本请改为使用 `CI_COMMIT_ID`。
+- `CI_COMMIT_REF_NAME`：运行选择的分支；未指定时使用项目默认分支，均未指定时可能为空。
+
+在下游 `script` 节点的 YAML 中可这样使用：
+
+```yaml
+script:
+  image: alpine:3
+  commands:
+    - |
+      printf 'run=%s time=%s timestamp=%s\n' "$PIPELINE_ID" "$DATETIME" "$TIMESTAMP"
+      printf 'source=%s ref=%s sha=%s short=%s\n' "$CI_COMMIT_SOURCE" "$CI_COMMIT_REF_NAME" "$CI_COMMIT_SHA" "$CI_COMMIT_ID"
+      printf 'title=%s author=%s\n' "$CI_COMMIT_TITLE" "$CI_COMMIT_AUTHOR"
+```
+
+上述系统变量不能被同名用户变量覆盖。运行 ID 和时间在单次运行的各节点间保持一致；Git 元数据来自源码阶段确认的提交，重试仍按原 SHA 读取。后续工作区按已绑定的 SHA 检出；源码解析、持久化或校验失败会阻止下游运行。源码阶段必须只包含一个 `git_source`，不能配置依赖、审批、允许失败、旁挂服务或 post；其他阶段必须直接或间接依赖它（所有阶段未配置 `needs` 时按原有顺序串行）。新运行和节点重试使用同一套变量契约，不区分版本；旧版 legacy 固定流程不提供此新增变量契约。远程 runner 的 post 和输出变量回采仍受现有能力限制。
+
+变量由脚本容器的 Shell 展开，并非任意 YAML 字段的模板替换；`push_image` 的 `${COMMIT_SHA}` 仍是原有 tag 字段专用模板。PAC 当前先按分支读取 YAML、再由源码节点确认提交，分支变化时二者不保证同一提交。节点级 `script.env` 目前虽可解析，但当前脚本执行器尚未读取该配置；请通过平台变量或脚本赋值，不要依赖其注入。
+
 ## 技术栈
 
 - **后端**:Go · Chi(路由)· modernc/sqlite(纯 Go,无 CGO)+ go-sql-driver/mysql · go-git(不依赖宿主 git)· NaCl secretbox(保险库)· argon2id + bcrypt · golang.org/x/crypto/ssh(免 Agent 部署)· coder/websocket(终端)· Caddy(在目标主机上编排,提供自动 HTTPS)

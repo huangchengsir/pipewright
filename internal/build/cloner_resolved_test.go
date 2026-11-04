@@ -51,6 +51,9 @@ func TestClonerFullCommitComesFromCheckedOutHEAD(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if !resolved.MetadataReady || resolved.CommitTitle != tc.content || resolved.CommitAuthor != "fixture" {
+				t.Fatalf("metadata=%+v", resolved)
+			}
 			if resolved.CommitFull != tc.want || resolved.CommitShort != tc.want[:7] {
 				t.Fatalf("resolved=%+v, want actual HEAD=%s", resolved, tc.want)
 			}

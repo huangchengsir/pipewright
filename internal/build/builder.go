@@ -59,7 +59,8 @@ type Builder struct {
 	disableImageGC bool
 	// recordCommit 在克隆解析出实际 commit 后回写到 run(触发未指定 commit 时补真实值)。
 	// nil 则不回写(向后兼容)。由 main 注入(WithCommitRecorder),解耦 build 对 run.Service 的直依赖。
-	recordCommit func(ctx context.Context, runID, commit string)
+	recordCommit     func(ctx context.Context, runID, commit string)
+	bindSourceCommit func(ctx context.Context, runID, commit string) error
 	// deployer/notifier:dag 里 deploy_ssh / notify 节点真实化所需(main 注入 deploy.Service / notify.Service)。
 	// nil → 该类节点退化为占位日志(向后兼容;非-dag Builder.Run 路径不用)。
 	deployer deploy.Service
@@ -121,6 +122,11 @@ func WithArtifactStore(s *artifactstore.Store) BuilderOption {
 // WithImageGC 开关「构建后清悬空镜像」(Story 8-17);默认开。传 false 关闭(如宿主另有镜像 GC 策略)。
 func WithImageGC(enabled bool) BuilderOption {
 	return func(b *Builder) { b.disableImageGC = !enabled }
+}
+
+// WithSourceCommitBinder persists a confirmed source commit and rejects conflicts.
+func WithSourceCommitBinder(fn func(context.Context, string, string) error) BuilderOption {
+	return func(b *Builder) { b.bindSourceCommit = fn }
 }
 
 // WithCommitRecorder records the full checked-out commit (run.Service.SetCommit).
@@ -599,16 +605,34 @@ func (b *Builder) cloneWithGitAuth(ctx context.Context, proj *project.Project, r
 	}
 	defer release()
 	commit := r.Trigger.Commit
+	source, active := run.SourceFromContext(ctx)
+	resolving, _ := ctx.Value(sourceResolveKey{}).(bool)
+	if active {
+		if source.CommitSHA == "" && !resolving {
+			return nil, run.ErrSourceUnavailable
+		}
+		if source.CommitSHA != "" {
+			commit = source.CommitSHA
+		}
+	}
 	ex, hasExecution := runretry.ExecutionFrom(ctx)
 	if hasExecution && ex.Snapshot().CommitSHA != "" {
 		commit = ex.Snapshot().CommitSHA
 	}
 	resolved, err := b.cloner.Clone(ctx, proj.RepoURL, auth.Username, auth.Token, r.Trigger.Branch, commit, destination)
+	if err == nil && active && source.CommitSHA != "" && (resolved == nil || !strings.EqualFold(resolved.CommitFull, source.CommitSHA)) {
+		return nil, run.ErrSourceUnavailable
+	}
 	if err == nil && hasExecution {
 		if resolved == nil || resolved.CommitFull == "" {
 			return nil, runretry.ErrUnavailable
 		}
 		if err := ex.BindCommit(ctx, resolved.CommitFull); err != nil {
+			return nil, err
+		}
+	}
+	if err == nil && active && !resolving {
+		if err := bindCheckoutSource(ctx, source.RefName, proj.RepoURL, resolved); err != nil {
 			return nil, err
 		}
 	}

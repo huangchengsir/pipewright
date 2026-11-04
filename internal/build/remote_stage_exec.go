@@ -65,6 +65,9 @@ func NewStageExecutorWithRunner(b *Builder, reportSink TestReportSink, lookup Ru
 			copyBuilder.driver = &recoveryRemoteDriver{Driver: NewRemoteDriver(tgt, serverID, "docker"), target: tgt, serverID: serverID}
 			return copyBuilder.runRecoveryStage(ctx, r, stage, rep, reportSink, ex)
 		}
+		if _, enabled := run.SourceFromContext(ctx); enabled && stage.Kind == pipeline.KindSource {
+			return local(ctx, r, stage, rep)
+		}
 		if serverID, ok := lookup.RunnerFor(ctx, r.ProjectID); ok && strings.TrimSpace(serverID) != "" {
 			return b.runStageRemote(ctx, r, stage, rep, serverID, tgt)
 		}
@@ -143,7 +146,7 @@ func (b *Builder) runStageRemote(ctx context.Context, r *run.Run, stage pipeline
 			_ = rep.Log(ctx, streamStderr, fmt.Sprintf("script job「%s」配置无效:%v", jb.Name, verr))
 			return ErrBuildFailed
 		}
-		step.Env = append(runParamsAsEnv(r.Trigger.Params), step.Env...)
+		step.Env = appendSourceEnv(ctx, r, append(runParamsAsEnv(r.Trigger.Params), step.Env...))
 		if err := b.runScriptOnDriver(ctx, driver, onLine, step, remoteWS); err != nil {
 			markRemoteOmissions(stage, rep, true)
 			return err

@@ -302,6 +302,9 @@ func (b *Builder) runRecoveryStage(ctx context.Context, r *run.Run, stage pipeli
 				external = recorder.external
 				return nil
 			case jb.Type == "git_source":
+				if _, enabled := run.SourceFromContext(nodeCtx); enabled {
+					return copyBuilder.resolveRunSource(nodeCtx, r)
+				}
 				ws, _, cleanup, e := copyBuilder.cloneJobWorkspace(nodeCtx, r, proj, recorder)
 				_ = ws
 				if e == nil {
@@ -548,7 +551,7 @@ func (b *Builder) runRecoveryPost(ctx context.Context, r *run.Run, stage pipelin
 					_ = finishControl(ctx, ex, n, run.StepFailed, "none", rep)
 					continue
 				}
-				step := pipeline.PipelineStep{Type: pipeline.StepTypeScript, Image: ps.Image, Commands: ps.Commands, WorkDir: ps.WorkDir, Env: runParamsAsEnv(r.Trigger.Params)}
+				step := pipeline.PipelineStep{Type: pipeline.StepTypeScript, Image: ps.Image, Commands: ps.Commands, WorkDir: ps.WorkDir, Env: appendSourceEnv(postCtx, r, runParamsAsEnv(r.Trigger.Params))}
 				if err := b.scriptEvidenceBuilder(&reporterSink{rep: rep}).runScriptStep(postCtx, &reporterSink{rep: rep}, 0, step, ws); err != nil {
 					status = run.StepFailed
 					_ = rep.Log(ctx, streamStderr, "阶段后置步骤未成功；保留业务阶段结果")

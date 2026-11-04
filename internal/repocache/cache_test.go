@@ -74,6 +74,9 @@ func TestMirrorCloneCheckoutAndIncremental(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Clone1: %v", err)
 	}
+	if !res.MetadataReady || res.CommitTitle != "c1" || res.CommitAuthor != "t" {
+		t.Fatalf("cached metadata=%+v", res)
+	}
 	if res.CommitShort != mainShort {
 		t.Fatalf("CommitShort = %q, want %q", res.CommitShort, mainShort)
 	}
@@ -129,7 +132,7 @@ func TestCachedCheckoutRecordsRequestedCommitHEAD(t *testing.T) {
 	addCommit(t, src, "later.txt", "later source")
 	workspace := filepath.Join(t.TempDir(), "pinned")
 	resolved, err := newTestCache(t).Clone(context.Background(), src, "", "", "master", requested, workspace)
-	if err != nil || resolved.CommitFull != requested || resolved.CommitShort != requested[:7] {
+	if err != nil || resolved.CommitFull != requested || resolved.CommitShort != requested[:7] || !resolved.MetadataReady || resolved.CommitTitle != "c1" || resolved.CommitAuthor != "t" {
 		t.Fatalf("pinned cached checkout=%+v err=%v", resolved, err)
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "later.txt")); !errors.Is(err, os.ErrNotExist) {

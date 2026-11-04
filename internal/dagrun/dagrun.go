@@ -121,10 +121,11 @@ var ErrGateRejected = errors.New("dagrun: approval gate rejected")
 
 // Runner 是 DAG 感知的 run.Runner 实现。
 type Runner struct {
-	loader      SpecLoader
-	exec        StageExecutor
-	gate        GateFunc
-	concurrency int
+	loader           SpecLoader
+	exec             StageExecutor
+	gate             GateFunc
+	concurrency      int
+	gitSourceContext bool
 }
 
 // Option 配置 Runner。
@@ -227,6 +228,17 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 
 	// 节点级:拓扑序决定阶段展示序;每个阶段内的 job 按声明序各占一个 step(ordinal 全局连续)。
 	// jobOrdinals[stageID] = 该阶段各 job 的全局 ordinal(jobID→ordinal);stageFirstOrd 供阶段级日志归位。
+	if r.gitSourceContext {
+		deps := pipeline.StageDependencies(stages)
+		if recovering {
+			deps = ex.Snapshot().Compiled.Dependencies
+		}
+		ctx, err = prepareGitSource(ctx, rn, stages, deps, recovering)
+		if err != nil {
+			return err
+		}
+	}
+
 	order := graph.TopoOrder()
 	stageByID := make(map[string]pipeline.Stage, len(stages))
 	for _, st := range stages {

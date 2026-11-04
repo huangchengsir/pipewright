@@ -41,8 +41,11 @@ func NewCloner() *Cloner { return &Cloner{} }
 // CloneResolved records the checked-out HEAD. CommitFull is source evidence;
 // CommitShort is only for existing artifact tags and display.
 type CloneResolved struct {
-	CommitFull  string
-	CommitShort string
+	CommitFull    string
+	CommitShort   string
+	CommitTitle   string
+	CommitAuthor  string
+	MetadataReady bool
 }
 
 // Clone 把 repoURL 在 ref(commit sha 优先,否则分支名;皆空则默认分支)上克隆到 destDir。
@@ -90,7 +93,6 @@ func (c *Cloner) Clone(ctx context.Context, repoURL, username, token, branch, co
 		return nil, ErrCloneFailed
 	}
 
-	resolved := &CloneResolved{}
 	if commit != "" {
 		wt, werr := repo.Worktree()
 		if werr != nil {
@@ -101,13 +103,28 @@ func (c *Cloner) Clone(ctx context.Context, repoURL, username, token, branch, co
 			return nil, ErrCloneFailed
 		}
 	}
-	// Read HEAD after checkout rather than trusting the requested commit/ref.
-	// Missing historical/checkout evidence must never be expanded from a short SHA.
-	if head, herr := repo.Head(); herr == nil {
-		resolved.CommitFull = head.Hash().String()
-		resolved.CommitShort = shortSHA(resolved.CommitFull)
+	return ResolveRepositoryHead(repo)
+}
+
+// ResolveRepositoryHead reads metadata from the checked-out immutable Git object.
+// Repository-cache checkouts use the same extraction logic.
+func ResolveRepositoryHead(repo *gogit.Repository) (*CloneResolved, error) {
+	head, err := repo.Head()
+	if err != nil {
+		return nil, ErrCloneFailed
 	}
-	return resolved, nil
+	commit, err := repo.CommitObject(head.Hash())
+	if err != nil {
+		return nil, ErrCloneFailed
+	}
+	title := strings.SplitN(strings.ReplaceAll(commit.Message, "\r\n", "\n"), "\n", 2)[0]
+	sha := head.Hash().String()
+	return &CloneResolved{
+		CommitFull: sha, CommitShort: shortSHA(sha),
+		CommitTitle:   strings.TrimSpace(strings.ReplaceAll(title, "\x00", "")),
+		CommitAuthor:  strings.TrimSpace(strings.ReplaceAll(commit.Author.Name, "\x00", "")),
+		MetadataReady: true,
+	}, nil
 }
 
 // IsRepoURLAllowed 是 validRepoURL 的导出包装(供 repocache 等复用同款 SSRF 收口,不重复实现)。

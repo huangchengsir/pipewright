@@ -52,8 +52,9 @@ type Trigger struct {
 // Snapshot is encrypted as a whole. Only credential references belong here,
 // never resolved passwords/tokens. Arbitrary settings/params remain private.
 type Snapshot struct {
-	Compiled             *FrozenGraph      `json:"compiled,omitempty"`
-	SchemaVersion        int               `json:"schemaVersion"`
+	Compiled      *FrozenGraph `json:"compiled,omitempty"`
+	SchemaVersion int          `json:"schemaVersion"`
+
 	ScriptEntrypointMode string            `json:"scriptEntrypointMode,omitempty"`
 	ProjectID            string            `json:"projectId"`
 	Spec                 pipeline.Spec     `json:"spec"`

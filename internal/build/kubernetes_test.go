@@ -139,11 +139,15 @@ func TestKubernetesBuilderPreparesOwnedApprovalFromStoredPush(t *testing.T) {
 	artifact := run.Artifact{ID: "push-artifact", RunID: "root", Type: run.ArtifactImage, Metadata: metadata}
 	ex := preparedKubernetesExecution{kubernetesSourceExecution: kubernetesSourceExecution{snapshot: snap, in: runretry.Inputs{Images: map[string]runretry.ImageRef{"push": {ArtifactID: artifact.ID, ProducerAttemptID: "root", ProducerNodeKey: "push-node", Metadata: metadata}}}}, node: runretry.NodeRef{Key: "kube-node", ExecutionStageID: "deploy", ExecutionJobID: "kube"}}
 	ctx = runretry.WithExecution(ctx, ex)
+	ctx = run.WithSourceContext(ctx, run.SourceContext{RefName: "main", CommitSHA: snap.CommitSHA, MetadataReady: true})
 	b := &Builder{artifactLister: func(context.Context, string) ([]run.Artifact, error) { return []run.Artifact{artifact}, nil }}
 	WithKubernetes(domain, kubernetes.NewController(domain, nil, "process_fixture"), "process_fixture")(b)
 	prepared, err := b.PrepareKubernetesStage(ctx, &run.Run{ID: "root"}, snap.Spec.Stages[1])
 	if err != nil {
 		t.Fatal(err)
+	}
+	if source, present := run.SourceFromContext(prepared.Context); !present || source.CommitSHA != snap.CommitSHA {
+		t.Fatal("Kubernetes preparation lost the Git source context")
 	}
 	if !prepared.RequireGate || prepared.Approve == nil || prepared.Context == nil {
 		t.Fatal("approval boundary not prepared")
@@ -152,7 +156,7 @@ func TestKubernetesBuilderPreparesOwnedApprovalFromStoredPush(t *testing.T) {
 	if err != nil || len(ops) != 1 {
 		t.Fatalf("operation not persisted: %v count=%d", err, len(ops))
 	}
-	if ops[0].OwnerEpoch != "process_fixture" || ops[0].ApprovedHash != "" || ops[0].Intent.Source.ArtifactID != artifact.ID {
+	if ops[0].OwnerEpoch != "process_fixture" || ops[0].ApprovedHash != "" || ops[0].Intent.Source.ArtifactID != artifact.ID || ops[0].Intent.Source.Commit != snap.CommitSHA {
 		t.Fatal("intent was not bound to the current owner and stored push")
 	}
 	if err = prepared.Approve(ctx); err != nil {

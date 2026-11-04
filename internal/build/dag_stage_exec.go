@@ -156,8 +156,19 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 				_ = rep.JobRunning(ctx, jb.ID)
 				jr := rep.JobReporter(jb.ID)
 				if strings.TrimSpace(jb.Type) == "git_source" {
-					for _, line := range gitSourceLogLines(jb, r) {
-						_ = jr.Log(ctx, streamStdout, line)
+					if _, enabled := run.SourceFromContext(ctx); enabled {
+						if err := b.resolveRunSource(ctx, r); err != nil {
+							_ = jr.Log(ctx, streamStderr, "source checkout or commit binding failed")
+							_ = rep.JobDone(ctx, jb.ID, run.StepFailed)
+							return err
+						}
+						source, _ := run.SourceFromContext(ctx)
+						_ = jr.Log(ctx, streamStdout, "confirmed source commit: "+source.CommitSHA)
+						_ = jr.Log(ctx, streamStdout, "source ref: "+source.RefName)
+					} else {
+						for _, line := range gitSourceLogLines(jb, r) {
+							_ = jr.Log(ctx, streamStdout, line)
+						}
 					}
 				} else {
 					if strings.TrimSpace(jb.Type) != "push_image" {
@@ -271,7 +282,7 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 					}
 					// 注入顺序:运行参数 → 上游 job 输出(carriedEnv)→ 流水线级变量(「变量与缓存」,
 					// 含 secret,vault 即取即用)→ 所选环境变量 → job 自身 env → PIPEWRIGHT_ENV(系统,末位防覆盖)。
-					step.Env = scriptEnv(settings, r.Trigger.ResolvedEnvironment, r.Trigger.Params, carriedEnv, step.Env)
+					step.Env = appendSourceEnv(ctx, r, scriptEnv(settings, r.Trigger.ResolvedEnvironment, r.Trigger.Params, carriedEnv, step.Env))
 					// 旁挂服务网络:脚本容器加入,按服务名互访。
 					if svcNetwork != "" {
 						step.Resource.Network = svcNetwork
@@ -616,7 +627,7 @@ func (b *Builder) runScriptJobIsolated(
 	// 注入顺序:运行参数 → 上游 job 输出 → 流水线级变量(「变量与缓存」,含 secret,vault 即取即用)
 	// → 所选环境变量 → job 自身 env(后者覆盖同名)。此前流水线级变量只注入镜像构建路径、不到 script 步骤(漏),
 	// 导致脚本节点拿不到「变量与缓存」里配的 secret(如发版的 GITHUB_TOKEN)。本修复补齐。
-	step.Env = scriptEnv(settings, r.Trigger.ResolvedEnvironment, r.Trigger.Params, upstreamEnv, step.Env)
+	step.Env = appendSourceEnv(ctx, r, scriptEnv(settings, r.Trigger.ResolvedEnvironment, r.Trigger.Params, upstreamEnv, step.Env))
 	if svcNetwork != "" {
 		step.Resource.Network = svcNetwork
 	}

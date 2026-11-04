@@ -296,6 +296,38 @@ stages:
 
 > You can also force pipeline-as-code on for **all projects** (ignoring the per-project toggle) via the global env var `PIPEWRIGHT_PAC_RUNTIME=1`, for back-compat / power users.
 
+### Git context in scripts
+
+For eligible graphs using the real DAG executor, the source stage's `git_source` confirms and binds the commit actually checked out. Downstream scripts can read these variables in `commands` through the shell:
+
+- `PIPELINE_ID`: the current pipeline run ID; a retry that creates a new run uses a new ID.
+- `DATETIME`: the current run's creation time in UTC, formatted as `yyyy-MM-dd HH:mm:ss`.
+- `TIMESTAMP`: the same creation time as a Unix timestamp in seconds.
+- `CI_COMMIT_TITLE`: the first line of the checked-out commit's message.
+- `CI_COMMIT_AUTHOR`: the checked-out commit's author name, without the email address.
+- `CI_COMMIT_SOURCE`: the repository URL with user information, query parameters, and the fragment removed.
+- `CI_COMMIT_SHA`: the full commit SHA.
+- `CI_COMMIT_ID`: the first seven characters of the SHA. Use this name for the system-provided short SHA; `CI_COMMIT_SHORT_SHA` is not a system variable.
+- `CI_COMMIT_REF_NAME`: the branch selected for the run; falls back to the project default branch, and may be empty if neither is specified.
+
+For example, in a downstream `script` job:
+
+```yaml
+script:
+  image: alpine:3
+  commands:
+    - |
+      printf 'run=%s time=%s timestamp=%s\n' "$PIPELINE_ID" "$DATETIME" "$TIMESTAMP"
+      printf 'source=%s ref=%s sha=%s short=%s\n' "$CI_COMMIT_SOURCE" "$CI_COMMIT_REF_NAME" "$CI_COMMIT_SHA" "$CI_COMMIT_ID"
+      printf 'title=%s author=%s\n' "$CI_COMMIT_TITLE" "$CI_COMMIT_AUTHOR"
+```
+
+User-defined variables cannot override these system variables when automatic Git context is enabled. Run ID and creation time remain consistent across nodes in one run. Git metadata comes from the commit confirmed by the source stage, and retries read metadata from the originally bound SHA. Later workspaces check out that SHA; source resolution, persistence, metadata, or checkout verification failures block downstream execution without switching to compatibility mode.
+
+Eligibility is checked before execution against the expanded graph, or the frozen graph on retry: exactly one source stage with one `git_source`, no source dependencies, approval gate, allow failure, sidecar services, or post steps, and every other stage depending on the source directly or indirectly. When no stages specify `needs`, the existing sequential dependencies apply. Other graphs run in **Git context compatibility mode** with their existing DAG behavior, including source gates/post/services, multiple jobs, source matrices, and independent branches. They receive one compatibility notice after the execution plan is recorded; automatic Git context and its variable contract are unavailable for those graphs. The runner and graph are unchanged. Kubernetes preparation, approvals, and retry authorization snapshots remain in effect in both modes. The legacy fixed pipeline does not provide the new variable contract. Remote runners retain their existing limitations on post steps and output-variable collection.
+
+Variables are expanded by the shell inside the script container, not substituted into arbitrary YAML fields. The `push_image` field's `${COMMIT_SHA}` remains a tag-specific template. PAC currently reads the YAML by branch before the source node confirms the commit; if the branch changes in between, the two are not guaranteed to reference the same commit. Node-level `script.env` can be parsed but is not yet consumed by the script executor; use platform variables or assignments in the script instead.
+
 ## Tech Stack
 
 - **Backend**: Go · Chi (routing) · modernc/sqlite (pure Go, no CGO) + go-sql-driver/mysql · go-git (no host git dependency) · NaCl secretbox (vault) · argon2id + bcrypt · golang.org/x/crypto/ssh (agentless deployment) · coder/websocket (terminals) · Caddy (orchestrated on target hosts for auto HTTPS)

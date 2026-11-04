@@ -179,7 +179,6 @@ func (c *Cache) checkoutFromMirror(ctx context.Context, mirror, branch, commit, 
 		return nil, err
 	}
 
-	resolved := &build.CloneResolved{}
 	if commit != "" {
 		wt, werr := repo.Worktree()
 		if werr != nil {
@@ -189,11 +188,7 @@ func (c *Cache) checkoutFromMirror(ctx context.Context, mirror, branch, commit, 
 			return nil, cerr
 		}
 	}
-	if head, herr := repo.Head(); herr == nil {
-		resolved.CommitFull = head.Hash().String()
-		resolved.CommitShort = shortSHA(resolved.CommitFull)
-	}
-	return resolved, nil
+	return build.ResolveRepositoryHead(repo)
 }
 
 // ListRefs 列出某仓库的分支与 tag(确保镜像最新后从本地镜像读;供前端下拉,不每次触网克隆)。

@@ -488,7 +488,19 @@ func runPlatform() (restart func()) {
 		// 「需要审批」通知 + 签名审批链接(signer/PUBLIC_URL 未配则跳过通知,门行为不变)。
 		approvalNotifier := httpapi.NewApprovalNotifier(notifySvc, approvalSigner, strings.TrimSpace(os.Getenv("PIPEWRIGHT_PUBLIC_URL")), runSvc)
 		dagOpts = append(dagOpts, dagrun.WithGate(httpapi.NewApprovalGate(runSvc, approvalCoord, approvalStore, approvalNotifier)))
-		if b, berr := build.NewBuilder(projectSvc, pipelineSettingsSvc, credVault, build.WithArtifactStore(artStore), build.WithArtifactLister(runSvc.ListArtifacts), build.WithImageGC(os.Getenv("PIPEWRIGHT_NO_IMAGE_GC") != "1"), build.WithCommitRecorder(func(ctx context.Context, runID, commit string) { _ = runSvc.SetCommit(ctx, runID, commit) }), build.WithStageDeployer(deploySvc), build.WithStageNotifier(notifySvc), build.WithKubernetes(kubernetesSvc, kubernetesController, kubernetesProcessOwner), clonerOpt, buildCacheOpt); berr == nil {
+		if b, berr := build.NewBuilder(projectSvc, pipelineSettingsSvc, credVault, build.WithArtifactStore(artStore), build.WithArtifactLister(runSvc.ListArtifacts), build.WithImageGC(os.Getenv("PIPEWRIGHT_NO_IMAGE_GC") != "1"), build.WithCommitRecorder(func(ctx context.Context, runID, commit string) { _ = runSvc.SetCommit(ctx, runID, commit) }), build.WithSourceCommitBinder(func(ctx context.Context, runID, commit string) error {
+			if err := runSvc.SetCommit(ctx, runID, commit); err != nil {
+				return err
+			}
+			saved, err := runSvc.Get(ctx, runID)
+			if err != nil {
+				return err
+			}
+			if saved.ResolvedCommitConflict || !strings.EqualFold(saved.ResolvedCommitSHA, commit) {
+				return run.ErrSourceUnavailable
+			}
+			return nil
+		}), build.WithStageDeployer(deploySvc), build.WithStageNotifier(notifySvc), build.WithKubernetes(kubernetesSvc, kubernetesController, kubernetesProcessOwner), clonerOpt, buildCacheOpt); berr == nil {
 			// runSvc 作测试报告持久层注入(Story 8-6 / FR-8-6):script 步骤产报告 → 解析 →
 			// 落库 → 质量门禁裁决(不过则阶段失败,阻断下游部署)。
 			retryBindings.real = true
@@ -500,7 +512,7 @@ func runPlatform() (restart func()) {
 				}
 				return b.VerifyResource(ctx, ref)
 			}
-			dagOpts = append(dagOpts, dagrun.WithStageExecutor(build.NewStageExecutorWithRunner(b, runSvc, runnerSvc, targetSvc)), dagrun.WithStagePreparation(b.PrepareKubernetesStage))
+			dagOpts = append(dagOpts, dagrun.WithGitSourceContext(), dagrun.WithStageExecutor(build.NewStageExecutorWithRunner(b, runSvc, runnerSvc, targetSvc)), dagrun.WithStagePreparation(b.PrepareKubernetesStage))
 			onboardingCapabilities.Runtime = onboarding.RuntimeAvailable
 			log.Printf("[run] DAG 调度执行器已启用(默认;阶段按 needs 编排,真按 UI 可视化流水线 stages 执行;script 类型 job 在隔离容器真实执行,CLI=%s;PIPEWRIGHT_RUNNER=legacy 可回退旧版固定流程)", b.DriverBinary())
 		} else {

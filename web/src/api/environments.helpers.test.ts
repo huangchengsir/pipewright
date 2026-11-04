@@ -71,3 +71,6 @@ describe('previousSuccess / canRollback', () => {
     expect(previousSuccess(tl)?.runId).toBe('target')
   })
 })
+
+
+describe('Kubernetes rollback boundaries',()=>{it('does not offer SSH rollback when either current or previous version includes Kubernetes',()=>{const base={environment:'prod',active:{runId:'current',active:true,status:'success',kubernetes:[{operationId:'op'}]},deployments:[{runId:'current',active:true,status:'success',kubernetes:[{operationId:'op'}]},{runId:'old',status:'success',active:false}]} as unknown as EnvironmentTimeline;expect(canRollback(base)).toBe(false);const previous={...base,active:{...base.active!,kubernetes:[]},deployments:[{...base.deployments[0],kubernetes:[]},{...base.deployments[1],kubernetes:base.active!.kubernetes}]};expect(canRollback(previous)).toBe(false)})})

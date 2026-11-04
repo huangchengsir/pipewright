@@ -227,62 +227,7 @@ func opsDecode(w http.ResponseWriter, r *http.Request, out any, optional bool) e
 }
 
 func opsJSON(raw []byte, out any) error {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || trimmed[0] != '{' || len(raw) > 64<<10 {
-		return opschat.ErrInvalid
-	}
-	d := json.NewDecoder(bytes.NewReader(raw))
-	d.UseNumber()
-	var walk func(int) error
-	walk = func(depth int) error {
-		if depth > 16 {
-			return opschat.ErrInvalid
-		}
-		t, err := d.Token()
-		if err != nil {
-			return err
-		}
-		if delim, ok := t.(json.Delim); ok {
-			switch delim {
-			case '{':
-				seen := map[string]bool{}
-				for d.More() {
-					k, e := d.Token()
-					if e != nil {
-						return e
-					}
-					key, ok := k.(string)
-					if !ok || seen[strings.ToLower(key)] {
-						return opschat.ErrInvalid
-					}
-					seen[strings.ToLower(key)] = true
-					if e = walk(depth + 1); e != nil {
-						return e
-					}
-				}
-			case '[':
-				for d.More() {
-					if e := walk(depth + 1); e != nil {
-						return e
-					}
-				}
-			default:
-				return opschat.ErrInvalid
-			}
-			_, err = d.Token()
-			return err
-		}
-		return nil
-	}
-	if err := walk(0); err != nil {
-		return opschat.ErrInvalid
-	}
-	if _, err := d.Token(); err != io.EOF {
-		return opschat.ErrInvalid
-	}
-	d = json.NewDecoder(bytes.NewReader(raw))
-	d.DisallowUnknownFields()
-	if d.Decode(out) != nil {
+	if strictObjectJSON(raw, out, 64<<10) != nil {
 		return opschat.ErrInvalid
 	}
 	return nil

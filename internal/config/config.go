@@ -19,6 +19,8 @@ const MasterKeyLen = 32
 type Config struct {
 	// Addr 是 HTTP 监听地址,如 ":8080"。
 	Addr string
+	// DataDir stores local controller identity and durable process journals.
+	DataDir string
 	// DBDriver 选择数据库后端:"sqlite"(默认)或 "mysql"。
 	DBDriver string
 	// DBDSN 是数据库连接串。mysql 必填(go-sql-driver DSN);
@@ -37,6 +39,7 @@ type Config struct {
 func Load() Config {
 	return Config{
 		Addr:          getenv("PIPEWRIGHT_ADDR", ":8080"),
+		DataDir:       getenv("PIPEWRIGHT_DATA_DIR", ".pipewright"),
 		DBDriver:      getenv("PIPEWRIGHT_DB_DRIVER", "sqlite"),
 		DBDSN:         os.Getenv("PIPEWRIGHT_DB_DSN"),
 		DBPath:        getenv("PIPEWRIGHT_DB", "pipewright.db"),

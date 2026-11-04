@@ -24,7 +24,7 @@ func knownNoDeploymentAction(n NodeRef, r nodeRecord, o Outcome, outcomeErr erro
 // reserved external action. Count all rows, including known-completed resources.
 func (s *Service) noOwnedNodeEffects(ctx context.Context, attempt, node string) error {
 	var count int
-	err := s.q(ctx).QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM run_retry_external_targets WHERE attempt_id=? AND node_key=?)+(SELECT COUNT(*) FROM run_retry_resources WHERE attempt_id=? AND node_key=?)`, attempt, node, attempt, node).Scan(&count)
+	err := s.q(ctx).QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM run_retry_external_targets WHERE attempt_id=? AND node_key=?)+(SELECT COUNT(*) FROM run_retry_resources WHERE attempt_id=? AND node_key=?)+(SELECT COUNT(*) FROM k8s_operations WHERE run_id=? AND node_id=?)`, attempt, node, attempt, node, attempt, node).Scan(&count)
 	if err != nil {
 		return err
 	}

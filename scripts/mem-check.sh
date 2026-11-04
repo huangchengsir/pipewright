@@ -8,12 +8,17 @@ PORT="${MEMCHECK_PORT:-18099}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-BIN="$(mktemp -t pipewright.XXXXXX)"
-DB="$(mktemp -u -t dtmem.XXXXXX).db" # -u: 只取名不创建,确保实际 DB 路径与名字一致(不泄漏临时文件)
+STATE="$(mktemp -d -t pipewright-mem.XXXXXX)"
+BIN="${STATE}/pipewright"
+DB="${STATE}/pipewright.db"
 PID=""
 cleanup() {
-  [ -n "$PID" ] && kill "$PID" 2>/dev/null || true
-  rm -f "$BIN" "$DB" "$DB"-wal "$DB"-shm
+  if [ -n "$PID" ]; then
+    kill "$PID" 2>/dev/null || true
+    wait "$PID" 2>/dev/null || true
+  fi
+  # STATE is the single directory created by mktemp above; no shared data paths.
+  rm -rf -- "$STATE"
 }
 trap cleanup EXIT
 
@@ -21,7 +26,7 @@ echo "==> building static binary"
 CGO_ENABLED=0 go build -o "$BIN" ./cmd/pipewright
 
 echo "==> starting on :$PORT"
-PIPEWRIGHT_ADDR=":$PORT" PIPEWRIGHT_DB="$DB" "$BIN" >/dev/null 2>&1 &
+PIPEWRIGHT_ADDR=":$PORT" PIPEWRIGHT_DB="$DB" PIPEWRIGHT_DATA_DIR="${STATE}/data" PIPEWRIGHT_ARTIFACT_DIR="${STATE}/artifacts" "$BIN" >/dev/null 2>&1 &
 PID=$!
 
 healthy=0

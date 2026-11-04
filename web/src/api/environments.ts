@@ -35,7 +35,10 @@ export interface EnvArtifact {
 }
 
 /** A single deployment event on an environment's timeline. */
+export interface EnvKubernetesTarget { operationId:string; sourceRunId:string; namespace:string; deployment:string; container:string; image:string; business:import('./kubernetes').KubeBusiness; cleanup:import('./kubernetes').KubeCleanup; adopted:boolean }
+
 export interface EnvDeployment {
+  kubernetes?: EnvKubernetesTarget[]
   runId: string
   status: EnvDeployStatus
   commit: string
@@ -73,9 +76,10 @@ export interface RollbackResult {
 }
 
 /** List per-environment deployment timelines for a project (most-recently-deployed env first). */
-export async function listEnvironmentDeployments(projectId: string): Promise<EnvironmentTimeline[]> {
+export async function listEnvironmentDeployments(projectId: string, signal?: AbortSignal): Promise<EnvironmentTimeline[]> {
   const res = await http.get<EnvironmentsResponse>(
     `/api/projects/${encodeURIComponent(projectId)}/environments/deployments`,
+    { signal },
   )
   return res.environments ?? []
 }

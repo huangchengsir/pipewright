@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/huangchengsir/pipewright/internal/dag"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
@@ -99,6 +100,9 @@ func StubStageExecutor(ctx context.Context, _ *run.Run, stage pipeline.Stage, re
 		return nil
 	}
 	for _, jb := range stage.Jobs {
+		if jb.Type == pipeline.KubernetesJobType {
+			return runretry.ErrUnavailable
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -116,6 +120,18 @@ func StubStageExecutor(ctx context.Context, _ *run.Run, stage pipeline.Stage, re
 // 决定后置回 running。dagrun 经此 hook 解耦,不直接 import run.Service / approval。
 type GateFunc func(ctx context.Context, r *run.Run, stage pipeline.Stage) (approved bool, err error)
 
+// StagePreparation freezes external write intent after upstream completion and
+// before requesting approval. Close finalizes an unexecuted prepared intent.
+type StagePreparation struct {
+	Context     context.Context
+	RequireGate bool
+	Approve     func(context.Context) error
+	Close       func(context.Context) error
+}
+type StagePrepareFunc func(context.Context, *run.Run, pipeline.Stage) (StagePreparation, error)
+
+func WithStagePreparation(f StagePrepareFunc) Option { return func(r *Runner) { r.prepare = f } }
+
 // ErrGateRejected 表示审批门被人工拒绝(该阶段失败 → 运行终止)。
 var ErrGateRejected = errors.New("dagrun: approval gate rejected")
 
@@ -124,6 +140,7 @@ type Runner struct {
 	loader           SpecLoader
 	exec             StageExecutor
 	gate             GateFunc
+	prepare          StagePrepareFunc
 	concurrency      int
 	gitSourceContext bool
 }
@@ -228,15 +245,13 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 
 	// 节点级:拓扑序决定阶段展示序;每个阶段内的 job 按声明序各占一个 step(ordinal 全局连续)。
 	// jobOrdinals[stageID] = 该阶段各 job 的全局 ordinal(jobID→ordinal);stageFirstOrd 供阶段级日志归位。
+	var sourceCompatibility string
 	if r.gitSourceContext {
 		deps := pipeline.StageDependencies(stages)
 		if recovering {
 			deps = ex.Snapshot().Compiled.Dependencies
 		}
-		ctx, err = prepareGitSource(ctx, rn, stages, deps, recovering)
-		if err != nil {
-			return err
-		}
+		ctx, sourceCompatibility = prepareGitSource(ctx, rn, stages, deps, recovering)
 	}
 
 	order := graph.TopoOrder()
@@ -327,12 +342,18 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 		return fmt.Errorf("dagrun: plan: %w", err)
 	}
 
+	if sourceCompatibility != "" {
+		_ = lockedSink(func() error {
+			return sink.Log(ctx, "stdout", stageFirstOrd[order[0]], gitSourceCompatibilityPrefix+sourceCompatibility+"; retaining existing DAG execution without automatic Git context")
+		})
+	}
+
 	maxc := r.concurrency
 	if maxc <= 0 {
 		maxc = len(order)
 	}
 
-	result := graph.Schedule(ctx, func(ctx context.Context, stageID string) error {
+	result := graph.Schedule(ctx, func(ctx context.Context, stageID string) (stageErr error) {
 		stage := stageByID[stageID]
 		rep := &stageReporter{sink: tap, mu: &mu, jobOrd: jobOrdinals[stageID], firstOrd: stageFirstOrd[stageID], seeded: seeded}
 		// 条件执行(Story 8-5):when 不满足 → 整阶段所有节点 skipped(非失败),其下游照「未成功」跳过。
@@ -346,6 +367,37 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 			}
 			rep.finishRemaining(ctx, run.StepSkipped)
 			return dag.ErrSkip
+		}
+		executorStarted := false
+		if recovering {
+			defer func() {
+				if stageErr != nil && !executorStarted {
+					stageErr = errors.Join(stageErr, recordKubernetesPreparationFailure(context.WithoutCancel(ctx), ex, stage))
+				}
+			}()
+		}
+		var prepared StagePreparation
+		if r.prepare != nil {
+			var prepareErr error
+			prepared, prepareErr = r.prepare(ctx, rn, stage)
+			if prepareErr != nil {
+				rep.finishRemaining(ctx, run.StepFailed)
+				return prepareErr
+			}
+			if prepared.Context != nil {
+				ctx = prepared.Context
+			}
+			if prepared.Close != nil {
+				defer func() {
+					clean, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+					defer cancel()
+					stageErr = errors.Join(stageErr, prepared.Close(clean))
+				}()
+			}
+			if prepared.RequireGate && (!stage.Gate || r.gate == nil) {
+				rep.finishRemaining(ctx, run.StepFailed)
+				return ErrGateRejected
+			}
 		}
 		// 人工审批门(Story 8-4):进入该阶段前阻塞等待批准。run 状态由 gate 置 waiting_approval。
 		if stage.Gate && r.gate != nil {
@@ -383,9 +435,16 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 			}
 			_ = rep.Log(ctx, "stdout", "✅ 审批通过,继续执行")
 		}
+		if prepared.Approve != nil {
+			if err := prepared.Approve(ctx); err != nil {
+				rep.finishRemaining(ctx, run.StepFailed)
+				return err
+			}
+		}
 		// 阶段执行体按节点(job)各自上报 running/done(见 build.NewStageExecutor)。执行器未显式
 		// 标记的节点由 finishRemaining 兜底:阶段成功→success(如 stub/占位节点);阶段失败→failed
 		// (执行器应已把真失败节点标 failed、上游跳过节点标 skipped;剩余未报的归并到失败结果)。
+		executorStarted = true
 		execErr := r.exec(ctx, rn, stage, rep)
 		sweep := run.StepSuccess
 		if execErr != nil {
@@ -620,4 +679,44 @@ func BuildGraph(stages []pipeline.Stage) (*dag.Graph, error) {
 		nodes = append(nodes, dag.Node{ID: st.ID, Needs: needs, AllowFailure: st.AllowFailure})
 	}
 	return dag.New(nodes)
+}
+
+func recordKubernetesPreparationFailure(ctx context.Context, ex runretry.Execution, stage pipeline.Stage) error {
+	if len(stage.Jobs) != 1 || stage.Jobs[0].Type != pipeline.KubernetesJobType {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	var result error
+	n, ok := ex.Node(stage.ID, stage.Jobs[0].ID)
+	if !ok {
+		return runretry.ErrUnavailable
+	}
+	if ex.Decision(n).Action == "execute" && ex.Decision(n).Status != "failed" {
+		if e := ex.Begin(ctx, n); e == nil {
+			result = errors.Join(result, ex.Finish(ctx, n, runretry.Outcome{Status: run.StepFailed, ExecutionMode: run.ExecutionReal, ExternalOutcome: "none", ReasonCode: "kubernetes_preparation_failed"}))
+		} else {
+			result = errors.Join(result, e)
+		}
+	}
+	for _, key := range []string{"init", "gate", "jobs_done", "cleanup", "barrier"} {
+		n, ok := ex.ControlNode(stage.ID, key)
+		if !ok {
+			continue
+		}
+		d := ex.Decision(n)
+		if d.Status != "pending" && d.Status != "" {
+			continue
+		}
+		if e := ex.Begin(ctx, n); e != nil {
+			result = errors.Join(result, e)
+			continue
+		}
+		status, external := run.StepFailed, "none"
+		if key == "cleanup" {
+			status, external = run.StepSuccess, "verified"
+		}
+		result = errors.Join(result, ex.Control(ctx, n, runretry.Outcome{Status: status, ExecutionMode: run.ExecutionReal, ExternalOutcome: external, Complete: status == run.StepSuccess, Reusable: status == run.StepSuccess}))
+	}
+	return result
 }

@@ -20,6 +20,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/kubernetes"
+	"github.com/huangchengsir/pipewright/internal/runretry"
 	"sort"
 	"strings"
 )
@@ -31,7 +33,8 @@ var (
 	// ErrEnvNotFound 表示该项目下无此环境的部署历史。
 	ErrEnvNotFound = errors.New("environments: environment has no deployment history")
 	// ErrNoRollbackTarget 表示该环境没有「上一次成功部署」可回滚(历史不足 / 仅一次成功)。
-	ErrNoRollbackTarget = errors.New("environments: no previous successful deployment to roll back to")
+	ErrNoRollbackTarget   = errors.New("environments: no previous successful deployment to roll back to")
+	ErrKubernetesRollback = errors.New("environments: kubernetes requires a new approved deployment")
 )
 
 // 部署聚合状态(据该次部署的全部 deploy_targets 归并)。
@@ -61,16 +64,17 @@ type Artifact struct {
 
 // Deployment 是某环境时间线上的一次部署事件(按环境聚合的核心单元)。
 type Deployment struct {
-	RunID       string          `json:"runId"`
-	Status      string          `json:"status"`      // success|partial_failed|failed(据 targets 归并)
-	Commit      string          `json:"commit"`      // 触发提交短 SHA(可空)
-	Branch      string          `json:"branch"`      // 触发分支
-	TriggeredBy string          `json:"triggeredBy"` // 触发者(展示;绝无敏感数据)
-	DeployedAt  string          `json:"deployedAt"`  // 该次部署最晚一台目标机结束时刻(RFC3339;未结束回退到开始时刻)
-	Active      bool            `json:"active"`      // 是否为该环境当前活跃版本(最近一次全成功)
-	Targets     []TargetSummary `json:"targets"`     // 每台目标机结果
-	Artifacts   []Artifact      `json:"artifacts"`   // 该 run 产物
-	ServerIDs   []string        `json:"-"`           // 该次部署涉及的目标机 id(供回滚重发;不出 JSON)
+	Kubernetes  []KubernetesTargetSummary `json:"kubernetes,omitempty"`
+	RunID       string                    `json:"runId"`
+	Status      string                    `json:"status"`      // success|partial_failed|failed(据 targets 归并)
+	Commit      string                    `json:"commit"`      // 触发提交短 SHA(可空)
+	Branch      string                    `json:"branch"`      // 触发分支
+	TriggeredBy string                    `json:"triggeredBy"` // 触发者(展示;绝无敏感数据)
+	DeployedAt  string                    `json:"deployedAt"`  // 该次部署最晚一台目标机结束时刻(RFC3339;未结束回退到开始时刻)
+	Active      bool                      `json:"active"`      // 是否为该环境当前活跃版本(最近一次全成功)
+	Targets     []TargetSummary           `json:"targets"`     // 每台目标机结果
+	Artifacts   []Artifact                `json:"artifacts"`   // 该 run 产物
+	ServerIDs   []string                  `json:"-"`           // 该次部署涉及的目标机 id(供回滚重发;不出 JSON)
 
 	envName string // 该部署所属环境(内部分组用;不出 JSON)
 }
@@ -84,7 +88,9 @@ type EnvironmentTimeline struct {
 
 // Service 是环境部署历史的只读聚合 + 回滚定位领域接口。
 type Service struct {
-	db *sql.DB
+	db                *sql.DB
+	kubernetes        *kubernetes.Service
+	kubernetesHistory func(context.Context, string) ([]runretry.KubernetesHistoryEntry, error)
 }
 
 // NewService 构造只读聚合 Service(纯参数化 SQL;无 init 副作用、不驻留)。
@@ -164,6 +170,11 @@ func (s *Service) ResolveRollback(ctx context.Context, projectID, env string) (R
 	tl, err := s.EnvironmentHistory(ctx, projectID, env, defaultHistoryLimit)
 	if err != nil {
 		return RollbackTarget{}, err
+	}
+	for _, d := range tl.Deployments {
+		if len(d.Kubernetes) > 0 {
+			return RollbackTarget{}, ErrKubernetesRollback
+		}
 	}
 	// 找当前活跃版本下标(最近一次全成功)。
 	activeIdx := -1
@@ -270,4 +281,24 @@ func aggregateTargetStatus(targets []TargetSummary) string {
 	default:
 		return DeployStatusPartialFailed
 	}
+}
+
+// Kubernetes deployments retain their target type; they never acquire a fake
+// serverId or enter the SSH rollback path.
+type KubernetesTargetSummary struct {
+	OperationID string                   `json:"operationId"`
+	SourceRunID string                   `json:"sourceRunId"`
+	Namespace   string                   `json:"namespace"`
+	Deployment  string                   `json:"deployment"`
+	Container   string                   `json:"container"`
+	Image       string                   `json:"image"`
+	Business    kubernetes.BusinessState `json:"business"`
+	Cleanup     kubernetes.CleanupState  `json:"cleanup"`
+	Adopted     bool                     `json:"adopted"`
+}
+
+func (s *Service) WithKubernetes(k *kubernetes.Service, h func(context.Context, string) ([]runretry.KubernetesHistoryEntry, error)) *Service {
+	s.kubernetes = k
+	s.kubernetesHistory = h
+	return s
 }

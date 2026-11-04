@@ -366,6 +366,9 @@ type OAuthAcquisition struct {
 // TryAcquire serializes admissions with refresh claims in both SQL dialects.
 // References are deleted only when the real operation has returned.
 func (r *OAuthRepository) TryAcquire(ctx context.Context, id, owner string, now time.Time) (OAuthAcquisition, error) {
+	if e := ValidateGenericReference(id); e != nil {
+		return OAuthAcquisition{}, e
+	}
 	var out OAuthAcquisition
 	err := configstate.WithWriteTx(ctx, r.db, func(q configstate.DBTX) error {
 		if e := configstate.LockEpochs(ctx, q, r.db, configstate.EpochSecrets); e != nil {

@@ -20,6 +20,7 @@
 <script setup lang="ts">
 import { ref, computed, shallowRef, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { findLogMatches, highlightLogLine } from './logSearch'
+import { kubePhaseEvidence, type KubePhase } from '../kubernetes/kubernetesEvidence'
 import { useI18n } from 'vue-i18n'
 import {
   getRunLogs,
@@ -35,7 +36,10 @@ const props = defineProps<{
   live: boolean
   /** 仅显示该步骤序号(stepOrdinal)的日志;null/undefined = 全部步骤。点步骤详情切换。 */
   filterOrdinal?: number | null
+  kubernetesPhase?: KubePhase
 }>()
+
+const emit = defineEmits<{ kubernetesPhases: [texts: string[]] }>()
 
 // ─── log buffer: seq-keyed, ascending ─────────────────────────────────────────
 // Map keeps insertion cheap and de-dupes by seq; we re-derive a sorted array
@@ -180,11 +184,21 @@ function jumpToBottom(): void {
 }
 
 // 仅展示当前所选步骤的日志(filterOrdinal 为 null = 全部)。
-const visibleLines = computed(() =>
+const nodeLines = computed(() =>
   props.filterOrdinal == null
     ? lines.value
     : lines.value.filter((l) => l.stepOrdinal === props.filterOrdinal),
 )
+watch(nodeLines, value => emit('kubernetesPhases', value.map(line=>line.text).filter(text=>text.startsWith('kubernetes '))), { immediate:true })
+const visibleLines = computed(() => {
+ if(!props.kubernetesPhase) return nodeLines.value
+ const selected=props.kubernetesPhase
+ const known=kubePhaseEvidence(nodeLines.value.map(line=>line.text))[selected]
+ return nodeLines.value.filter(line=>line.text.startsWith(`kubernetes ${selected}: `)).map(line=>{
+  const code=line.text.slice(`kubernetes ${selected}: `.length).trim()
+  return {...line,text:known.includes(code)?t('kubernetes.phaseCode.'+code):t('kubernetes.notRecordedHint')}
+ })
+})
 const hasLines = computed(() => visibleLines.value.length > 0)
 const showFollowButton = computed(() => !stickToBottom.value && hasLines.value)
 
@@ -323,7 +337,7 @@ async function copyExcerpt(): Promise<void> {
   }
 }
 watch(
-  () => [props.runId, props.filterOrdinal] as const,
+  () => [props.runId, props.filterOrdinal, props.kubernetesPhase] as const,
   () => {
     copyGeneration++;
     searchQuery.value = "";

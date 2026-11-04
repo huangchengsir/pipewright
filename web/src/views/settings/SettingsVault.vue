@@ -10,6 +10,7 @@ import {
 } from '../../api/credentials'
 import type { Credential, CredentialType, CreateCredentialInput, UpdateCredentialInput } from '../../api/credentials'
 import { HttpError } from '../../api/http'
+import KubeCredentials from '../../components/kubernetes/KubeCredentials.vue'
 import AuditTimeline from '../../components/AuditTimeline.vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -457,6 +458,8 @@ async function toggleEditReveal(): Promise<void> {
         {{ t('settingsVault.addCredential') }}
       </button>
     </div>
+
+    <KubeCredentials />
 
     <!-- ─── OAuth connect (only for enabled & configured providers) ────────── -->
     <div v-if="connectableProviders.length > 0" class="connect-panel">

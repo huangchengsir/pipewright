@@ -27,6 +27,13 @@ var ErrSourceUnavailable = errors.New("run: source context unavailable or confli
 func WithSourceContext(ctx context.Context, initial SourceContext) context.Context {
 	return context.WithValue(ctx, sourceKey{}, &sourceState{source: initial})
 }
+
+// WithoutSourceContext masks an inherited binding when a graph uses compatibility mode.
+// Other run-scoped values, including recovery and preparation, remain available.
+func WithoutSourceContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, sourceKey{}, struct{}{})
+}
+
 func SourceFromContext(ctx context.Context) (SourceContext, bool) {
 	state, ok := ctx.Value(sourceKey{}).(*sourceState)
 	if !ok {

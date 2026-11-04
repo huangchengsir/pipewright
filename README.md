@@ -150,6 +150,10 @@ Open **Settings → System** and click "Check for updates" to query the latest r
 - **Binary deployment**: click "Update now" to auto-download the new version + verify checksum + replace + restart (requires write permission to the binary file; installing to `$HOME/.local/bin` avoids sudo, and a root systemd service installed via `SETUP_SERVICE=1` also satisfies this).
 - **Docker deployment**: the container doesn't replace its own image; follow the prompt to run `docker compose pull && docker compose up -d` on the host (the data volume is preserved).
 
+### Kubernetes deployment
+
+Deploy an explicitly selected pushed image digest to one container of an existing Deployment through local Linux Docker or a pinned SSH executor. Protected credentials, exact target permissions, approval, rollout checks and read-only reconciliation are built in. Kubernetes jobs use a dedicated deployment stage; they do not execute arbitrary kubectl/Helm or use SSH rollback. See the [setup and operational guide](docs/kubernetes-deploy.md).
+
 ### Configuration (environment variables)
 
 A normal install only needs the first two (plus `PIPEWRIGHT_PUBLIC_URL` if you run behind a reverse proxy); everything else has a sane default.
@@ -161,6 +165,7 @@ A normal install only needs the first two (plus `PIPEWRIGHT_PUBLIC_URL` if you r
 | `PIPEWRIGHT_ADMIN_PASSWORD` | Admin password on first launch | none (must be set) |
 | `PIPEWRIGHT_MASTER_KEY` | Credential vault master key (base64-encoded 32 bytes); or use `PIPEWRIGHT_MASTER_KEY_FILE` to point to a file | vault disabled if unset |
 | `PIPEWRIGHT_ADDR` | HTTP listen address | `:8080` |
+| `PIPEWRIGHT_DATA_DIR` | Persistent process-identity directory for Kubernetes restart recovery; keep it stable across restarts | `.pipewright` |
 | `PIPEWRIGHT_PUBLIC_URL` | Externally reachable base URL (e.g. `https://ci.example.com`). Required for webhook callbacks, OAuth redirects, signed approval links in notifications, and PR status links | none |
 | `PIPEWRIGHT_ADMIN_USERNAME` | Admin username on first launch | `admin` |
 | `PIPEWRIGHT_TRUST_PROXY` | Trust the first `X-Forwarded-For` hop as the audit client IP (`1`/`true`/`yes`/`on`). Leave off unless a trusted reverse proxy sits in front — otherwise anyone can forge audit source IPs | off |
@@ -293,7 +298,7 @@ stages:
 
 ### Git context in scripts
 
-In new runs using the real DAG executor, the source stage's `git_source` confirms and binds the commit actually checked out. Downstream scripts can read these variables in `commands` through the shell:
+For eligible graphs using the real DAG executor, the source stage's `git_source` confirms and binds the commit actually checked out. Downstream scripts can read these variables in `commands` through the shell:
 
 - `PIPELINE_ID`: the current pipeline run ID; a retry that creates a new run uses a new ID.
 - `DATETIME`: the current run's creation time in UTC, formatted as `yyyy-MM-dd HH:mm:ss`.
@@ -302,7 +307,7 @@ In new runs using the real DAG executor, the source stage's `git_source` confirm
 - `CI_COMMIT_AUTHOR`: the checked-out commit's author name, without the email address.
 - `CI_COMMIT_SOURCE`: the repository URL with user information, query parameters, and the fragment removed.
 - `CI_COMMIT_SHA`: the full commit SHA.
-- `CI_COMMIT_ID`: the first seven characters of the SHA. `CI_COMMIT_SHORT_SHA` is no longer automatically injected as a system variable; update existing scripts to use `CI_COMMIT_ID`.
+- `CI_COMMIT_ID`: the first seven characters of the SHA. Use this name for the system-provided short SHA; `CI_COMMIT_SHORT_SHA` is not a system variable.
 - `CI_COMMIT_REF_NAME`: the branch selected for the run; falls back to the project default branch, and may be empty if neither is specified.
 
 For example, in a downstream `script` job:
@@ -317,7 +322,9 @@ script:
       printf 'title=%s author=%s\n' "$CI_COMMIT_TITLE" "$CI_COMMIT_AUTHOR"
 ```
 
-User-defined variables cannot override these system variables. Run ID and creation time remain consistent across nodes in one run. Git metadata comes from the commit confirmed by the source stage, and retries read metadata from the originally bound SHA. Later workspaces check out that SHA; source resolution, persistence, or verification failures block downstream execution. There must be exactly one source stage containing only one `git_source`; it cannot have dependencies, an approval gate, allow failure, sidecar services, or post steps. Every other stage must depend on it directly or indirectly (when no stages specify `needs`, stages run in their existing sequential order). New runs and node retries use the same variable contract, without separate versions; the legacy fixed pipeline does not provide this contract. Remote runners retain their existing limitations on post steps and output-variable collection.
+User-defined variables cannot override these system variables when automatic Git context is enabled. Run ID and creation time remain consistent across nodes in one run. Git metadata comes from the commit confirmed by the source stage, and retries read metadata from the originally bound SHA. Later workspaces check out that SHA; source resolution, persistence, metadata, or checkout verification failures block downstream execution without switching to compatibility mode.
+
+Eligibility is checked before execution against the expanded graph, or the frozen graph on retry: exactly one source stage with one `git_source`, no source dependencies, approval gate, allow failure, sidecar services, or post steps, and every other stage depending on the source directly or indirectly. When no stages specify `needs`, the existing sequential dependencies apply. Other graphs run in **Git context compatibility mode** with their existing DAG behavior, including source gates/post/services, multiple jobs, source matrices, and independent branches. They receive one compatibility notice after the execution plan is recorded; automatic Git context and its variable contract are unavailable for those graphs. The runner and graph are unchanged. Kubernetes preparation, approvals, and retry authorization snapshots remain in effect in both modes. The legacy fixed pipeline does not provide the new variable contract. Remote runners retain their existing limitations on post steps and output-variable collection.
 
 Variables are expanded by the shell inside the script container, not substituted into arbitrary YAML fields. The `push_image` field's `${COMMIT_SHA}` remains a tag-specific template. PAC currently reads the YAML by branch before the source node confirms the commit; if the branch changes in between, the two are not guaranteed to reference the same commit. Node-level `script.env` can be parsed but is not yet consumed by the script executor; use platform variables or assignments in the script instead.
 

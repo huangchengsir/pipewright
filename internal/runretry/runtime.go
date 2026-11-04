@@ -159,6 +159,27 @@ func (s *Service) Prepare(ctx context.Context, runID string) (context.Context, e
 		ex.decisions[n.Key] = Decision{Action: action, Status: r.status, SourceAttemptID: r.source, SourceNodeKey: r.sourceKey}
 		ex.nodes[n.Key] = n
 	}
+	if ex.IsRecovery() {
+		checked, err := s.kubernetesCheckContext(ctx, runID)
+		if err != nil {
+			return ctx, err
+		}
+		ctx = checked
+		if code, err := s.kubernetesBoundary(ctx, l.root); err != nil {
+			return ctx, err
+		} else if code != "" {
+			return ctx, ErrBlocked
+		}
+		for _, n := range l.graph.Nodes {
+			if n.Type != "deploy_kubernetes" || ex.decisions[n.Key].Action != "reuse" {
+				continue
+			}
+			o, err := s.outcome(ctx, l, n, rs[n.Key])
+			if err != nil || !s.kubernetesOutcomeChecked(ctx, o) {
+				return ctx, ErrUnavailable
+			}
+		}
+	}
 	if ex.IsRecovery() && s.preflight != nil {
 		plan := &Plan{}
 		for _, n := range l.graph.Nodes {
@@ -471,6 +492,9 @@ func (e *execution) Finish(ctx context.Context, n NodeRef, o Outcome) error {
 	}
 	err = configstate.WithWriteTxContext(ctx, e.svc.db, func(tx context.Context, q configstate.DBTX) error {
 		if err := e.svc.lock(tx, q, e.l); err != nil {
+			return err
+		}
+		if err := e.svc.validateKubernetesReceipt(tx, e.runID, n, o); err != nil {
 			return err
 		}
 		if o.DeploymentNotDispatched {

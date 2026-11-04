@@ -515,6 +515,9 @@ func normalizeSpec(in Spec) (Spec, error) {
 		return Spec{}, err
 	}
 
+	if err := ValidateKubernetesStages(out); err != nil {
+		return Spec{}, err
+	}
 	return out, nil
 }
 

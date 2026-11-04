@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"net"
 	"net/url"
 	"regexp"
@@ -452,7 +453,7 @@ func (b *Builder) runPushImageJob(ctx context.Context, r *run.Run, stage pipelin
 			if digest != "" {
 				meta["digest"] = digest
 			}
-			source.ID = ""
+			source.ID = uuid.NewString()
 			source.CreatedAt = time.Time{}
 			source.Reference, source.Metadata = remote, meta
 			if err := rep.EmitArtifact(ctx, source); err != nil {

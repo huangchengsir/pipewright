@@ -1,3 +1,4 @@
+// Kubernetes credentials have independent API/route lifecycle tests in KubernetesUI.test.ts.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import SettingsVault from './SettingsVault.vue'
@@ -39,7 +40,7 @@ vi.mock('vue-router', () => ({
 
 function mountVault() {
   return mount(SettingsVault, {
-    global: { stubs: { Teleport: true, 'router-link': true } },
+    global: { stubs: { KubeCredentials: true, Teleport: true, 'router-link': true } },
   })
 }
 

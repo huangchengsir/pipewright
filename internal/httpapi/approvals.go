@@ -36,7 +36,9 @@ type ApprovalNotifier func(ctx context.Context, projectID, projectName, runID, s
 func NewApprovalGate(runs run.Service, coord *approval.Coordinator, store *approval.Store, notifier ApprovalNotifier) dagrun.GateFunc {
 	return func(ctx context.Context, r *run.Run, stage pipeline.Stage) (bool, error) {
 		key := approval.Key(r.ID, stage.ID)
-		_ = store.CreatePending(ctx, r.ID, stage.ID, stage.Name)
+		if err := store.CreatePending(ctx, r.ID, stage.ID, stage.Name); err != nil {
+			return false, err
+		}
 		ch := coord.Wait(key)
 		defer coord.Cancel(key)
 
@@ -74,9 +76,13 @@ func NewApprovalGate(runs run.Service, coord *approval.Coordinator, store *appro
 			_ = runs.ResumeFromApproval(context.Background(), r.ID)
 			return false, fmt.Errorf("approval gate timed out after %s", defaultGateTimeout)
 		}
-		_ = store.Decide(context.Background(), r.ID, stage.ID, status, by)
+		if err := store.Decide(ctx, r.ID, stage.ID, status, by); err != nil {
+			return false, err
+		}
 		// 决定后置回 running,让 worker 在收尾时按 running→终态 落定。
-		_ = runs.ResumeFromApproval(context.Background(), r.ID)
+		if err := runs.ResumeFromApproval(ctx, r.ID); err != nil {
+			return false, err
+		}
 		return approved, nil
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/kubernetes"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"io"
 	"time"
@@ -52,19 +53,19 @@ type Trigger struct {
 // Snapshot is encrypted as a whole. Only credential references belong here,
 // never resolved passwords/tokens. Arbitrary settings/params remain private.
 type Snapshot struct {
-	Compiled      *FrozenGraph `json:"compiled,omitempty"`
-	SchemaVersion int          `json:"schemaVersion"`
-
-	ScriptEntrypointMode string            `json:"scriptEntrypointMode,omitempty"`
-	ProjectID            string            `json:"projectId"`
-	Spec                 pipeline.Spec     `json:"spec"`
-	Project              map[string]any    `json:"project,omitempty"`
-	Settings             map[string]any    `json:"settings,omitempty"`
-	Trigger              Trigger           `json:"trigger"`
-	Source               ConfigSource      `json:"source"`
-	RunnerRefs           map[string]string `json:"runnerRefs,omitempty"`
-	RequestedRef         string            `json:"requestedRef"`
-	CommitSHA            string            `json:"commitSha,omitempty"`
+	Kubernetes           map[string]kubernetes.Authorization `json:"kubernetes,omitempty"`
+	Compiled             *FrozenGraph                        `json:"compiled,omitempty"`
+	SchemaVersion        int                                 `json:"schemaVersion"`
+	ScriptEntrypointMode string                              `json:"scriptEntrypointMode,omitempty"`
+	ProjectID            string                              `json:"projectId"`
+	Spec                 pipeline.Spec                       `json:"spec"`
+	Project              map[string]any                      `json:"project,omitempty"`
+	Settings             map[string]any                      `json:"settings,omitempty"`
+	Trigger              Trigger                             `json:"trigger"`
+	Source               ConfigSource                        `json:"source"`
+	RunnerRefs           map[string]string                   `json:"runnerRefs,omitempty"`
+	RequestedRef         string                              `json:"requestedRef"`
+	CommitSHA            string                              `json:"commitSha,omitempty"`
 }
 
 // ClearScriptEntrypoint interprets only policies understood by this executor.
@@ -153,15 +154,24 @@ type Decision struct {
 	Status          string   `json:"status,omitempty"`
 	Reasons         []Reason `json:"reasons,omitempty"`
 }
+
+// KubernetesReference is a safe navigation projection of sealed checkpoint evidence.
+// Current business/cleanup facts must still be read from the operation endpoint.
+type KubernetesReference struct {
+	OperationID     string `json:"operationId"`
+	SourceAttemptID string `json:"sourceAttemptId"`
+	NodeKey         string `json:"nodeKey"`
+}
 type PlannedNode struct {
-	ReasonCode       string   `json:"reasonCode,omitempty"`
-	ExecutionStarted bool     `json:"executionStarted"`
-	Node             NodeRef  `json:"node"`
-	Decision         Decision `json:"decision"`
-	StepID           string   `json:"attemptStepId,omitempty"`
-	Ordinal          int      `json:"ordinal"`
-	SourceStepID     string   `json:"sourceStepId,omitempty"`
-	SourceOrdinal    int      `json:"sourceOrdinal"`
+	Kubernetes       *KubernetesReference `json:"kubernetes,omitempty"`
+	ReasonCode       string               `json:"reasonCode,omitempty"`
+	ExecutionStarted bool                 `json:"executionStarted"`
+	Node             NodeRef              `json:"node"`
+	Decision         Decision             `json:"decision"`
+	StepID           string               `json:"attemptStepId,omitempty"`
+	Ordinal          int                  `json:"ordinal"`
+	SourceStepID     string               `json:"sourceStepId,omitempty"`
+	SourceOrdinal    int                  `json:"sourceOrdinal"`
 }
 type Plan struct {
 	SchemaVersion       int            `json:"schemaVersion"`
@@ -245,6 +255,7 @@ type FileRef struct {
 	ProducerNodeKey   string         `json:"producerNodeKey"`
 }
 type ImageRef struct {
+	ArtifactID        string         `json:"artifactId,omitempty"`
 	Name              string         `json:"name,omitempty"`
 	Metadata          map[string]any `json:"metadata,omitempty"`
 	Ref               string         `json:"ref"`
@@ -261,6 +272,7 @@ type Inputs struct {
 	Images map[string]ImageRef `json:"images,omitempty"`
 }
 type Outcome struct {
+	Kubernetes *KubernetesReceipt `json:"kubernetes,omitempty"`
 	// DeploymentNotDispatched is private encrypted evidence, never an API DTO.
 	// Finish validates the deploy-only shape and absence of owned operations.
 	DeploymentNotDispatched bool            `json:"deploymentNotDispatched,omitempty"`
@@ -297,21 +309,22 @@ type SnapshotProvider func(context.Context, string) (Snapshot, error)
 type AdmissionCheck func(context.Context, configstate.DBTX, Snapshot) error
 type Option func(*Service)
 type Service struct {
-	db               *sql.DB
-	sealer           Sealer
-	blobs            BlobStore
-	child            ChildCreator
-	dispatch         Dispatch
-	reject           func(context.Context, string) error
-	provider         SnapshotProvider
-	admission        AdmissionCheck
-	owner            string
-	maxPayload       int
-	maxFileBytes     int64
-	imageVerifier    func(context.Context, ImageRef) error
-	preflight        func(context.Context, Snapshot, *Plan) ([]Reason, error)
-	resourceVerifier ResourceVerifier
-	targetVerifier   TargetVerifier
+	db                 *sql.DB
+	sealer             Sealer
+	blobs              BlobStore
+	child              ChildCreator
+	dispatch           Dispatch
+	reject             func(context.Context, string) error
+	provider           SnapshotProvider
+	admission          AdmissionCheck
+	owner              string
+	maxPayload         int
+	maxFileBytes       int64
+	imageVerifier      func(context.Context, ImageRef) error
+	preflight          func(context.Context, Snapshot, *Plan) ([]Reason, error)
+	resourceVerifier   ResourceVerifier
+	targetVerifier     TargetVerifier
+	kubernetesVerifier KubernetesVerifier
 }
 
 func WithImageVerifier(f func(context.Context, ImageRef) error) Option {
@@ -400,4 +413,15 @@ func PreviousOutcome(ctx context.Context, n NodeRef) (Outcome, string, error) {
 
 func WithPreflightCheck(f func(context.Context, Snapshot, *Plan) ([]Reason, error)) Option {
 	return func(s *Service) { s.preflight = f }
+}
+
+// KubernetesReceipt is typed encrypted checkpoint evidence. It is never an SSH
+// target/server receipt and names the original durable domain operation.
+type KubernetesReceipt struct {
+	OperationID     string                   `json:"operationId"`
+	SourceAttemptID string                   `json:"sourceAttemptId"`
+	IntentHash      string                   `json:"intentHash"`
+	Revision        int64                    `json:"revision"`
+	Business        kubernetes.BusinessState `json:"business"`
+	Cleanup         kubernetes.CleanupState  `json:"cleanup"`
 }

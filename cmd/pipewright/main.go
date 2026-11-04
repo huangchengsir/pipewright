@@ -41,6 +41,8 @@ import (
 	"github.com/huangchengsir/pipewright/internal/dnsprovider"
 	"github.com/huangchengsir/pipewright/internal/environments"
 	"github.com/huangchengsir/pipewright/internal/httpapi"
+	"github.com/huangchengsir/pipewright/internal/kubernetes"
+	"github.com/huangchengsir/pipewright/internal/kubernetesowner"
 	"github.com/huangchengsir/pipewright/internal/library"
 	"github.com/huangchengsir/pipewright/internal/mask"
 	pmcp "github.com/huangchengsir/pipewright/internal/mcp"
@@ -76,6 +78,8 @@ func main() {
 	}
 }
 
+var kubernetesProcessGuard *kubernetesowner.Guard
+
 func runPlatform() (restart func()) {
 	// --version / -v:在任何配置加载、存储打开等副作用之前处理,纯查询即打印退出。
 	for _, a := range os.Args[1:] {
@@ -86,6 +90,11 @@ func runPlatform() (restart func()) {
 	}
 
 	cfg := config.Load()
+	var ownerErr error
+	kubernetesProcessGuard, ownerErr = kubernetesowner.Acquire(filepath.Join(cfg.DataDir, "kubernetes-owner"))
+	if ownerErr != nil {
+		log.Fatalf("[kubernetes] controller owner lock unavailable; inspect local data directory")
+	}
 
 	dbDriver, dbDSN, err := cfg.StoreConfig()
 	if err != nil {
@@ -223,7 +232,8 @@ func runPlatform() (restart func()) {
 	}))
 	// DORA 指标只读聚合(FR-8-15):同一 *service 实现暴露为 MetricsService,无新连接/新表。
 	doraMetricsSvc := run.NewMetricsService(runSvc)
-	retryBindings := &nodeRetryBindings{db: st.DB, runs: runSvc, projects: projectSvc, settings: pipelineSettingsSvc}
+	kubernetesSvc := kubernetes.New(st.DB, credVault)
+	retryBindings := &nodeRetryBindings{db: st.DB, runs: runSvc, projects: projectSvc, settings: pipelineSettingsSvc, kubernetes: kubernetesSvc}
 	retrySvc := newNodeRetryService(st.DB, credVault, retryBindings)
 	if err := retrySvc.ReconcileStartup(context.Background()); err != nil {
 		log.Fatalf("recover node retries: local ledger unavailable")
@@ -240,7 +250,7 @@ func runPlatform() (restart func()) {
 
 	// 装配「环境一等公民」只读聚合服务(对标 GitLab environments):按环境聚合部署历史 +
 	// 一键回滚定位。纯查询既有表(pipeline_runs + deploy_targets + run_artifacts),零迁移、无副作用。
-	environmentsSvc := environments.NewService(st.DB)
+	environmentsSvc := environments.NewService(st.DB).WithKubernetes(kubernetesSvc, retrySvc.KubernetesHistory)
 
 	// 重启清理:进程重启会丢失内存等待者,把残留 waiting_approval 运行清为 failed(孤儿不可恢复)。
 	if n, err := runSvc.FailOrphanedRuns(context.Background()); err != nil {
@@ -312,6 +322,30 @@ func runPlatform() (restart func()) {
 	// 目标服务器(SSH 执行层)+ 远程构建 runner 配置(FR-8-14 续):项目可指定一台 server 作远程构建机,
 	// 配置后该项目构建下沉到远程执行(控制机本地克隆 → 经 SSH 传工作区 → 远程容器跑;token 只在控制机)。
 	targetSvc := target.New(st.DB, credVault, nil)
+	var privateSSH target.SecretExecutor
+	if transport, ok := targetSvc.(target.SecretExecutor); ok {
+		privateSSH = transport
+	}
+	kubernetesRuntime := kubernetes.NewRuntime(kubernetesSvc, kubernetes.NewTransportFactory("docker", privateSSH), func(ctx context.Context, id string, consume func(string, string) error) error {
+		var credentialType string
+		e := st.DB.QueryRowContext(ctx, "SELECT type FROM credentials WHERE id=?", id).Scan(&credentialType)
+		if e != nil || credentialType != vault.TypeRegistry {
+			return kubernetes.ErrDenied
+		}
+		plain, e := credVault.Reveal(id)
+		if e != nil {
+			return kubernetes.ErrDenied
+		}
+		user, password, ok := strings.Cut(plain, ":")
+		if !ok || user == "" || password == "" {
+			return kubernetes.ErrDenied
+		}
+		return consume(user, password)
+	})
+	kubernetesProcessOwner := kubernetesProcessGuard.Owner()
+	kubernetesController := kubernetes.NewController(kubernetesSvc, kubernetesRuntime, kubernetesProcessOwner)
+	retryBindings.kubernetesController = kubernetesController
+
 	retryBindings.targets = targetSvc
 	// Assistant sessions use a separate, local-only recorder and masker.
 	opsMasker := mask.NewMasker()
@@ -466,7 +500,7 @@ func runPlatform() (restart func()) {
 				return run.ErrSourceUnavailable
 			}
 			return nil
-		}), build.WithStageDeployer(deploySvc), build.WithStageNotifier(notifySvc), clonerOpt, buildCacheOpt); berr == nil {
+		}), build.WithStageDeployer(deploySvc), build.WithStageNotifier(notifySvc), build.WithKubernetes(kubernetesSvc, kubernetesController, kubernetesProcessOwner), clonerOpt, buildCacheOpt); berr == nil {
 			// runSvc 作测试报告持久层注入(Story 8-6 / FR-8-6):script 步骤产报告 → 解析 →
 			// 落库 → 质量门禁裁决(不过则阶段失败,阻断下游部署)。
 			retryBindings.real = true
@@ -478,7 +512,7 @@ func runPlatform() (restart func()) {
 				}
 				return b.VerifyResource(ctx, ref)
 			}
-			dagOpts = append(dagOpts, dagrun.WithGitSourceContext(), dagrun.WithStageExecutor(build.NewStageExecutorWithRunner(b, runSvc, runnerSvc, targetSvc)))
+			dagOpts = append(dagOpts, dagrun.WithGitSourceContext(), dagrun.WithStageExecutor(build.NewStageExecutorWithRunner(b, runSvc, runnerSvc, targetSvc)), dagrun.WithStagePreparation(b.PrepareKubernetesStage))
 			onboardingCapabilities.Runtime = onboarding.RuntimeAvailable
 			log.Printf("[run] DAG 调度执行器已启用(默认;阶段按 needs 编排,真按 UI 可视化流水线 stages 执行;script 类型 job 在隔离容器真实执行,CLI=%s;PIPEWRIGHT_RUNNER=legacy 可回退旧版固定流程)", b.DriverBinary())
 		} else {
@@ -609,6 +643,18 @@ func runPlatform() (restart func()) {
 			run.WithConcurrencyLimits(concurrencySvc),
 		)...,
 	)
+	recoveryCtx, recoveryCancel := context.WithTimeout(context.Background(), 90*time.Second)
+	if err := kubernetesController.RecoverSettled(recoveryCtx, kubernetesProcessGuard.DepartedOwners()); err != nil {
+		log.Printf("[kubernetes] previous controller recovery incomplete; affected holds remain blocked")
+	}
+	if settled, err := kubernetesSvc.SettledOwners(recoveryCtx, kubernetesProcessGuard.DepartedOwners()); err == nil {
+		if err = kubernetesProcessGuard.PruneDeparted(settled); err != nil {
+			log.Printf("[kubernetes] owner journal compaction incomplete; prior owners retained")
+		}
+	} else {
+		log.Printf("[kubernetes] owner settlement could not be verified; prior owners retained")
+	}
+	recoveryCancel()
 	pool.Start()
 	log.Printf("[run] worker pool started")
 
@@ -746,7 +792,7 @@ func runPlatform() (restart func()) {
 	go terminalManager.Run(terminalCtx)
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithSelfUpdate(selfUpdater), httpapi.WithOnboarding(onboarding.New(st.DB, onboardingCapabilities)), httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithRunRetry(retrySvc), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithPlatformLogin(platformLogin), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithTerminalHTTP(terminalManager), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithReleaseGuard(guardSvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc), httpapi.WithOpsChat(opsChatSvc), httpapi.WithMCP(mcpHandler, mcpTokens), httpapi.WithConfigManagement(st.DB, configDrafts, configApplyEnabled)),
+		Handler:           httpapi.New(webFS, authSvc, httpapi.WithSelfUpdate(selfUpdater), httpapi.WithKubernetes(kubernetesSvc, kubernetesController), httpapi.WithOnboarding(onboarding.New(st.DB, onboardingCapabilities)), httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithRunRetry(retrySvc), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithPlatformLogin(platformLogin), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithTerminalHTTP(terminalManager), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithReleaseGuard(guardSvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc), httpapi.WithOpsChat(opsChatSvc), httpapi.WithMCP(mcpHandler, mcpTokens), httpapi.WithConfigManagement(st.DB, configDrafts, configApplyEnabled)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;

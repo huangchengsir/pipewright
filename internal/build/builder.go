@@ -11,6 +11,7 @@ import (
 
 	"github.com/huangchengsir/pipewright/internal/artifactstore"
 	"github.com/huangchengsir/pipewright/internal/deploy"
+	"github.com/huangchengsir/pipewright/internal/kubernetes"
 	"github.com/huangchengsir/pipewright/internal/mask"
 	"github.com/huangchengsir/pipewright/internal/notify"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
@@ -47,11 +48,14 @@ const localTagPrefix = "pipewright"
 //
 // 真实日志/产物/失败日志全经传入的 run.StepSink 喂出,复用既有持久化/SSE/脱敏管道(3-1 地基)。
 type Builder struct {
-	projects project.Service
-	settings pipeline.SettingsService
-	vault    vault.Vault
-	driver   Driver
-	cloner   repoCloner
+	kubernetes           *kubernetes.Service
+	kubernetesController *kubernetes.Controller
+	kubernetesOwner      string
+	projects             project.Service
+	settings             pipeline.SettingsService
+	vault                vault.Vault
+	driver               Driver
+	cloner               repoCloner
 	// artStore 是制品库(Story 8-16):非 nil 时构建后把 jar/dist 真字节归档,产物 reference 改存句柄;
 	// nil 则保持旧行为(reference=文件名占位)。由 main 注入(WithArtifactStore)。
 	artStore *artifactstore.Store
@@ -927,4 +931,10 @@ func dirSize(root string) int64 {
 		return nil
 	})
 	return total
+}
+
+// WithKubernetes injects the isolated domain protocol. Missing wiring fails
+// closed; a Kubernetes node is never dispatched through the script/SSH adapter.
+func WithKubernetes(s *kubernetes.Service, c *kubernetes.Controller, owner string) BuilderOption {
+	return func(b *Builder) { b.kubernetes = s; b.kubernetesController = c; b.kubernetesOwner = owner }
 }

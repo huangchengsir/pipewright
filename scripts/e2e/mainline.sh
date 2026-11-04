@@ -23,7 +23,7 @@ ok(){ echo "  ✅ $1"; PASS=$((PASS+1)); }
 bad(){ echo "  ❌ $1"; FAIL=$((FAIL+1)); }
 note(){ echo "  ℹ️  $1"; }
 
-cleanup(){ [ -n "${SRV_PID:-}" ] && kill "$SRV_PID" 2>/dev/null; rm -rf "$TMP"; }
+cleanup(){ if [ -n "${SRV_PID:-}" ]; then kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null; fi; rm -rf -- "$TMP"; }
 trap cleanup EXIT
 
 echo "== 1. 编译真二进制 =="
@@ -33,7 +33,7 @@ fi
 ok "go build → $(du -h "$BIN" | cut -f1) 二进制"
 
 echo "== 2. 启动(真 DB 文件 + 真迁移 + stub builder)=="
-PIPEWRIGHT_ADDR=":${PORT}" PIPEWRIGHT_DB="$DB" PIPEWRIGHT_MASTER_KEY="$MASTER_KEY" \
+PIPEWRIGHT_ADDR=":${PORT}" PIPEWRIGHT_DB="$DB" PIPEWRIGHT_DATA_DIR="${TMP}/data" PIPEWRIGHT_MASTER_KEY="$MASTER_KEY" \
   PIPEWRIGHT_ADMIN_PASSWORD="$ADMIN_PW" PIPEWRIGHT_BUILDER=stub \
   "$BIN" >"${TMP}/server.log" 2>&1 &
 SRV_PID=$!

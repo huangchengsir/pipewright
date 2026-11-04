@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"os"
 	"path/filepath"
 	"sort"
@@ -272,6 +273,9 @@ func (b *Builder) runRecoveryStage(ctx context.Context, r *run.Run, stage pipeli
 		var outputs []pipeline.BuildVar
 		external := "none"
 		businessErr := func() error {
+			if jb.Type == pipeline.KubernetesJobType {
+				return copyBuilder.runKubernetesJob(nodeCtx, r, jb, recorder)
+			}
 			if _, remote := b.driver.(*recoveryRemoteDriver); remote && !isScriptJob(jb.Type) && jb.Type != "git_source" {
 				recorder.RecordExecution(run.ExecutionStub)
 				return nil
@@ -331,7 +335,7 @@ func (b *Builder) runRecoveryStage(ctx context.Context, r *run.Run, stage pipeli
 		envMu.Lock()
 		envOut[id] = outputs
 		envMu.Unlock()
-		outcome := runretry.Outcome{Status: status, ExecutionMode: recorder.mode, ExternalOutcome: external, Outputs: recorder.outputs, Targets: recorder.targets, Complete: businessErr == nil && !recorder.invalid, Reusable: businessErr == nil && !recorder.invalid, WorkspaceIncomplete: recorder.workspaceIncomplete, ReasonCode: recorder.reason, DeploymentNotDispatched: recorder.deploymentNotDispatched}
+		outcome := runretry.Outcome{Status: status, ExecutionMode: recorder.mode, ExternalOutcome: external, Outputs: recorder.outputs, Targets: recorder.targets, Complete: businessErr == nil && !recorder.invalid, Reusable: businessErr == nil && !recorder.invalid, WorkspaceIncomplete: recorder.workspaceIncomplete, ReasonCode: recorder.reason, DeploymentNotDispatched: recorder.deploymentNotDispatched, Kubernetes: recorder.kubernetes}
 		runretry.ApplyOutputPolicy(jb, &outcome, time.Now())
 		finishErr := checkpointWarning(context.WithoutCancel(nodeCtx), recorder, ex.Finish(context.WithoutCancel(nodeCtx), n, outcome))
 		_ = rep.JobDone(context.WithoutCancel(nodeCtx), id, status)
@@ -382,6 +386,7 @@ type recoveryReporter struct {
 	targets                      []runretry.TargetReceipt
 	reason                       string
 	deploymentNotDispatched      bool
+	kubernetes                   *runretry.KubernetesReceipt
 }
 
 func (r *recoveryReporter) noDeploymentDispatch() {
@@ -416,6 +421,9 @@ func recordExternalOutcome(rep any, outcome string) {
 	}
 }
 func (r *recoveryReporter) EmitArtifact(ctx context.Context, a run.Artifact) error {
+	if a.ID == "" {
+		a.ID = uuid.NewString()
+	}
 	if a.Metadata == nil {
 		a.Metadata = map[string]any{}
 	}
@@ -425,6 +433,7 @@ func (r *recoveryReporter) EmitArtifact(ctx context.Context, a run.Artifact) err
 		if err != nil {
 			r.invalid = true
 		} else {
+			identity.ArtifactID = a.ID
 			identity.Name = a.Name
 			identity.Metadata = a.Metadata
 			r.outputs.Images[r.node.Key] = identity
@@ -450,7 +459,12 @@ func (r *recoveryReporter) EmitArtifact(ctx context.Context, a run.Artifact) err
 			r.outputs.Files = append(r.outputs.Files, runretry.FileRef{Key: a.Reference, SHA256: a.Reference, Size: a.SizeBytes, Path: filepath.ToSlash(wp), Kind: kind, Name: a.Name, ArtifactType: a.Type, Metadata: a.Metadata})
 		}
 	}
-	return r.StageReporter.EmitArtifact(ctx, a)
+	if e := r.StageReporter.EmitArtifact(ctx, a); e != nil {
+		r.invalid = true
+		delete(r.outputs.Images, r.node.Key)
+		return e
+	}
+	return nil
 }
 func envVars(m map[string]string) []pipeline.BuildVar {
 	keys := make([]string, 0, len(m))
@@ -484,7 +498,7 @@ func artifactsFromInputs(in runretry.Inputs) []run.Artifact {
 		if v.Digest != "" {
 			metadata["digest"] = v.Digest
 		}
-		out = append(out, run.Artifact{Type: run.ArtifactImage, Name: v.Name, Reference: v.Ref, Metadata: metadata})
+		out = append(out, run.Artifact{ID: v.ArtifactID, RunID: v.ProducerAttemptID, SourceNodeKey: v.ProducerNodeKey, Type: run.ArtifactImage, Name: v.Name, Reference: v.Ref, Metadata: metadata})
 	}
 	return out
 }

@@ -53,3 +53,6 @@
 /_bmad-output/
 /.claude/
 /CLAUDE.md
+
+# Local controller identity / runtime journals (never source)
+/.pipewright/

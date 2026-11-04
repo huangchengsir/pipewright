@@ -145,6 +145,10 @@ make build          # 前端构建 → go:embed → 单个静态二进制 ./pipe
 - **二进制部署**:点「立即更新」即自动下载新版 + 校验和核验 + 替换 + 重启(需对二进制文件有写权限;装在 `$HOME/.local/bin` 免 sudo,或用 `SETUP_SERVICE=1` 装的 root systemd 服务亦满足)。
 - **Docker 部署**:容器不替换自身镜像,按提示在宿主执行 `docker compose pull && docker compose up -d`(数据卷保留)。
 
+### Kubernetes 部署
+
+通过本地 Linux Docker 或固定 SSH 执行节点，将明确选择的已推送镜像 digest 发布到已有 Deployment 的指定容器。支持独立受保护凭据、精确目标授权、审批、就绪检查与只读结果核对。节点独占一个部署阶段，不执行任意 kubectl/Helm，也不沿用 SSH 回滚。配置与运行要求见 [Kubernetes 部署指南](docs/kubernetes-deploy.md)。
+
 ### 配置(环境变量)
 
 正常安装只需前两个(若跑在反代后面再加 `PIPEWRIGHT_PUBLIC_URL`),其余都有合理默认值。
@@ -156,6 +160,7 @@ make build          # 前端构建 → go:embed → 单个静态二进制 ./pipe
 | `PIPEWRIGHT_ADMIN_PASSWORD` | 首次启动管理员口令 | 无(须设置) |
 | `PIPEWRIGHT_MASTER_KEY` | 凭据保险库主密钥(base64 的 32 字节);或用 `PIPEWRIGHT_MASTER_KEY_FILE` 指文件 | 未配则保险库禁用 |
 | `PIPEWRIGHT_ADDR` | HTTP 监听地址 | `:8080` |
+| `PIPEWRIGHT_DATA_DIR` | Kubernetes 重启恢复使用的持久进程身份目录，重启前后保持路径和内容稳定 | `.pipewright` |
 | `PIPEWRIGHT_PUBLIC_URL` | 外部可访问的基址(如 `https://ci.example.com`)。webhook 回调、OAuth 回跳、通知里的签名审批链接、PR 状态跳转链接都需要它 | 无 |
 | `PIPEWRIGHT_ADMIN_USERNAME` | 首次启动管理员用户名 | `admin` |
 | `PIPEWRIGHT_TRUST_PROXY` | 采信 `X-Forwarded-For` 首段作为审计来源 IP(`1`/`true`/`yes`/`on`)。除非前面确有可信反代,否则别开 —— 否则任意客户端都能伪造审计来源 IP | 关 |
@@ -278,7 +283,7 @@ stages:
 
 ### 脚本中的 Git 上下文
 
-使用真实 DAG 执行器的新运行中，`source` 阶段的 `git_source` 会确认并绑定实际检出的提交；下游脚本可在 `commands` 中通过 Shell 读取：
+使用真实 DAG 执行器且执行图符合条件时，`source` 阶段的 `git_source` 会确认并绑定实际检出的提交；下游脚本可在 `commands` 中通过 Shell 读取：
 
 - `PIPELINE_ID`：本次流水线运行 ID；重试生成新运行时使用新的 ID。
 - `DATETIME`：本次运行创建时间，UTC，格式为 `yyyy-MM-dd HH:mm:ss`。
@@ -287,7 +292,7 @@ stages:
 - `CI_COMMIT_AUTHOR`：实际检出提交的作者名称，不包含邮箱。
 - `CI_COMMIT_SOURCE`：源码仓库地址，去除用户名、密码、查询参数和片段。
 - `CI_COMMIT_SHA`：完整提交 SHA。
-- `CI_COMMIT_ID`：SHA 前 7 位。 原 `CI_COMMIT_SHORT_SHA` 不再作为系统变量自动注入，已有脚本请改为使用 `CI_COMMIT_ID`。
+- `CI_COMMIT_ID`：SHA 前 7 位。系统提供的短 SHA 使用此名称；`CI_COMMIT_SHORT_SHA` 不是系统变量。
 - `CI_COMMIT_REF_NAME`：运行选择的分支；未指定时使用项目默认分支，均未指定时可能为空。
 
 在下游 `script` 节点的 YAML 中可这样使用：
@@ -302,7 +307,9 @@ script:
       printf 'title=%s author=%s\n' "$CI_COMMIT_TITLE" "$CI_COMMIT_AUTHOR"
 ```
 
-上述系统变量不能被同名用户变量覆盖。运行 ID 和时间在单次运行的各节点间保持一致；Git 元数据来自源码阶段确认的提交，重试仍按原 SHA 读取。后续工作区按已绑定的 SHA 检出；源码解析、持久化或校验失败会阻止下游运行。源码阶段必须只包含一个 `git_source`，不能配置依赖、审批、允许失败、旁挂服务或 post；其他阶段必须直接或间接依赖它（所有阶段未配置 `needs` 时按原有顺序串行）。新运行和节点重试使用同一套变量契约，不区分版本；旧版 legacy 固定流程不提供此新增变量契约。远程 runner 的 post 和输出变量回采仍受现有能力限制。
+自动 Git 上下文启用时，上述系统变量不能被同名用户变量覆盖。运行 ID 和时间在单次运行的各节点间保持一致；Git 元数据来自源码阶段确认的提交，重试仍按原 SHA 读取。后续工作区按已绑定的 SHA 检出；源码解析、持久化、元数据或检出校验失败会阻止下游运行，不在运行中转入兼容模式。
+
+执行前按展开后的图判断资格，重试按冻结图判断：有且仅有一个源码阶段、只包含一个 `git_source`，源码阶段无前置依赖、审批、允许失败、旁挂服务或 post，其他阶段均直接或间接依赖源码阶段；所有阶段未配置 `needs` 时沿用原有顺序依赖。其他图进入 **Git 上下文兼容模式**，保留原 DAG 的审批、post/services、多 job、源码矩阵和独立分支等行为，在执行计划记录成功后提示一次；这些图不提供自动 Git 上下文及其新增变量契约，不切换运行器或修改依赖图。两种模式均保留 Kubernetes 准备、审批和重试授权快照。旧版 legacy 固定流程不提供此新增变量契约。远程 runner 的 post 和输出变量回采仍受现有能力限制。
 
 变量由脚本容器的 Shell 展开，并非任意 YAML 字段的模板替换；`push_image` 的 `${COMMIT_SHA}` 仍是原有 tag 字段专用模板。PAC 当前先按分支读取 YAML、再由源码节点确认提交，分支变化时二者不保证同一提交。节点级 `script.env` 目前虽可解析，但当前脚本执行器尚未读取该配置；请通过平台变量或脚本赋值，不要依赖其注入。
 

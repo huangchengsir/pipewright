@@ -103,6 +103,11 @@ func (s *Service) makePlan(ctx context.Context, l lineage, runID string, targets
 	if l.sourceConflict {
 		block("source_conflict")
 	}
+	if code, e := s.kubernetesBoundary(ctx, l.root); e != nil {
+		return nil, e
+	} else if code != "" {
+		block(code)
+	}
 	var unsafeTargets int
 	if err := s.q(ctx).QueryRowContext(ctx, "SELECT COUNT(*) FROM run_retry_external_targets WHERE root_id=? AND state IN ('running','outcome_unknown')", l.root).Scan(&unsafeTargets); err != nil {
 		return nil, err
@@ -214,7 +219,10 @@ func (s *Service) makePlan(ctx context.Context, l lineage, runID string, targets
 		}
 		r := records[k]
 		if r.status == "outcome_unknown" {
-			block("outcome_unknown")
+			original, verified := s.checkedKubernetesForNode(ctx, r.source, n.Key)
+			if n.Type != "deploy_kubernetes" || !verified || !original.Successful() {
+				block("outcome_unknown")
+			}
 		} else if r.status != "failed" {
 			return nil, ErrInvalid
 		}
@@ -275,7 +283,7 @@ func (s *Service) makePlan(ctx context.Context, l lineage, runID string, targets
 					previousSuccess = err == nil && prior.Status == "success"
 				}
 			}
-			if previousSuccess && (n.Type == "deploy_ssh" || n.Type == "deploy_frontend" || n.Type == "notify" || n.Type == "push_image") {
+			if previousSuccess && (n.Type == "deploy_ssh" || n.Type == "deploy_frontend" || n.Type == "deploy_kubernetes" || n.Type == "notify" || n.Type == "push_image") {
 				p.Warnings = append(p.Warnings, Reason{Code: "side_effect_reexecute", NodeKey: n.Key})
 			}
 		} else if r.status == "success" {
@@ -286,6 +294,8 @@ func (s *Service) makePlan(ctx context.Context, l lineage, runID string, targets
 				code = rebuildReason[n.Key]
 			} else if err != nil || !o.Complete || !o.Reusable {
 				code = "checkpoint_missing"
+			} else if n.Type == "deploy_kubernetes" && !s.kubernetesOutcomeChecked(ctx, o) {
+				code = "kubernetes_reuse_unverified"
 			} else if o.ExecutionMode == "stub" {
 				code = "execution_not_real"
 			} else if o.ExternalOutcome == "unknown" {
@@ -422,6 +432,10 @@ func (s *Service) Context(ctx context.Context, runID string) (*Context, error) {
 				} else {
 					pn.SourceStepID, pn.SourceOrdinal = id, ordinal
 				}
+			}
+			pn.Kubernetes, e = s.kubernetesReference(tx, l, runID, n, r)
+			if e != nil {
+				return e
 			}
 			out.Nodes = append(out.Nodes, pn)
 		}

@@ -12,6 +12,7 @@ import StageDrawer from './StageDrawer.vue'
 import JobTypePicker from './JobTypePicker.vue'
 import type { CustomNode } from '../../api/customNodes'
 import { jobTypeLabel, getJobTypeSpec } from './jobConfigSchema'
+import { insertKubernetesStage, isKubernetesStage } from './kubernetesConfig'
 import { hasAnyNeeds } from './stageDeps'
 import './pipeline.css'
 import { guideJobs, type GuideContext } from '../../composables/pipelineGuideState'
@@ -36,6 +37,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const kubernetesNotice = ref('')
 
 // ─── Unique ID helpers ────────────────────────────────────────────────────────
 
@@ -198,7 +200,11 @@ function onPickerSelect(type: string): void {
     }
     addJobToStage(p.stageId, newJob)
   } else {
-    updateJob(p.stageId, p.jobId, { type })
+    if (type === 'deploy_kubernetes') {
+      const stage = props.stages.find(s=>s.id===p.stageId)
+      if (!stage || !isKubernetesStage(stage)) { kubernetesNotice.value = t('kubernetes.separateStage'); closePicker(); return }
+      updateJob(p.stageId,p.jobId,{type,config:{timeoutSeconds:'300'},needs:undefined})
+    } else updateJob(p.stageId, p.jobId, { type })
   }
   closePicker()
 }
@@ -233,6 +239,15 @@ function onPickerSelectCustom(node: CustomNode): void {
 }
 
 function addJobToStage(stageId: string, newJob: PipelineJob): void {
+  kubernetesNotice.value = ''
+  const host = props.stages.find(s=>s.id===stageId)
+  if (newJob.type === 'deploy_kubernetes') {
+    emit('update',insertKubernetesStage(props.stages,stageId,newJob,`stg_${uid()}`,t('kubernetes.jobTitle')))
+    selectedJobId.value = newJob.id
+    return
+  }
+  if (host?.jobs.some(j=>j.type==='deploy_kubernetes')) { kubernetesNotice.value=t('kubernetes.separateStage'); return }
+
   const next = props.stages.map((s) =>
     s.id === stageId ? { ...s, jobs: [...s.jobs, newJob] } : s,
   )
@@ -356,6 +371,7 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
 
 <template>
   <div class="canvas-body" :class="{ 'canvas-body--guided': props.guideEnabled }">
+    <p v-if="kubernetesNotice" role="alert" class="kube-note">{{ kubernetesNotice }}</p>
     <!-- ─── Scrollable canvas ────────────────────────────────────────────── -->
     <div class="pipeline-canvas">
       <div ref="flowRef" class="pipeline-flow pipeline-flow--dag" role="list" :aria-label="t('pipelineCanvas.flowAriaLabel')">

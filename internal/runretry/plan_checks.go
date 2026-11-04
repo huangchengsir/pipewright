@@ -9,6 +9,11 @@ import (
 type planImageChecksKey struct{}
 
 func (s *Service) planCheckContext(ctx context.Context, id string) (context.Context, error) {
+	var err error
+	ctx, err = s.kubernetesCheckContext(ctx, id)
+	if err != nil {
+		return ctx, err
+	}
 	if _, ok := ctx.Value(planImageChecksKey{}).(map[string]bool); ok {
 		return ctx, nil
 	}

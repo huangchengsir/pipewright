@@ -1,0 +1,203 @@
+export default {
+  groups: {
+    resources: "Resources & delivery",
+    integrations: "Integrations & AI",
+    security: "Security & account",
+    system: "System & notifications",
+  },
+  close: "Close",
+  cancel: "Cancel",
+  confirm: "Confirm and continue",
+  save: "Save",
+  edit: "Edit",
+  delete: "Delete",
+  remove: "Remove",
+  name: "Name",
+  select: "Select…",
+  none: "None",
+  loading: "Loading…",
+  enabled: "Enabled",
+  disabled: "Disabled",
+  enable: "Enable",
+  disable: "Disable",
+  credentials: "Kubernetes credentials",
+  addCredential: "Add Kubernetes credential",
+  rotate: "Rotate credentials",
+  authentication: "Authentication",
+  serverToken: "Server and token",
+  context: "Context",
+  server: "API server URL",
+  ca: "CA certificate (PEM)",
+  token: "Access token",
+  tlsName: "TLS server name (optional)",
+  preview: "Check format",
+  credential: "Credential",
+  identity: "Technical details",
+  addConnection: "Add connection",
+  editConnection: "Edit connection",
+  emptyConnections: "Connect a cluster",
+  manageCredentials: "Manage cluster credentials",
+  grants: "Permitted targets",
+  addGrant: "Add permission",
+  grantTitle: "Configure target permission",
+  project: "Project",
+  environment: "Environment",
+  namespace: "Namespace",
+  deployment: "Deployment",
+  container: "Container",
+  containers: "Allowed containers",
+  executor: "Executor",
+  executors: "Allowed executors",
+  local: "Local Docker",
+  sshServer: "SSH server",
+  addSSH: "Add SSH executor",
+  hostKey: "SSH host fingerprint",
+  profile: "Tool profile",
+  toolImage: "Tool image (pinned digest)",
+  architecture: "Architecture",
+  kubectlPath: "kubectl path",
+  registryCredential: "Registry credential (optional)",
+  approvalRequired: "Release approval required",
+  approvalOptional: "Use pipeline approval policy",
+  probe: "Check connection",
+  replicas: "Ready replicas",
+  target: "Deployment target",
+  connection: "Cluster connection",
+  manageConnections: "Manage connections and permissions",
+  jobTitle: "Kubernetes deployment",
+  imageSource: "Image source",
+  more: "More options",
+  timeout: "Readiness timeout (seconds)",
+  passwordTitle: "Confirm your identity",
+  password: "Current account password",
+  unsaved: "Discard unsaved changes?",
+  discard: "Discard changes",
+  receipt: "Cluster deployment receipt",
+  reconcile: "Check cluster state",
+  retire: "End local tracking",
+  retired: "Tracking ended",
+  operation: "Operation ID",
+  sourceRun: "Source run",
+  intent: "Deployment intent hash",
+  revision: "Revision",
+  reason: "Diagnostic code",
+  phases: "Deployment steps",
+  recorded: "Recorded",
+  notRecorded: "Not recorded",
+  credentialsHint:
+    "Dedicated cluster authentication, separate from Git and SSH credentials.",
+  emptyCredentials: "No Kubernetes credentials configured.",
+  secretHint:
+    "Secrets are cleared after save or cancel. Rotation requires complete new credentials; plaintext reveal is unavailable.",
+  previewReady: "Format accepted; cluster connectivity has not been tested",
+  connectionsHint:
+    "Deploy to existing Deployments using trusted connections and explicit permissions.",
+  setupHint:
+    "Add credentials in the vault, then configure the tool image and permitted targets.",
+  grantHint:
+    "Allow only this project, environment, workload, containers and executor.",
+  emptyGrants:
+    "No permitted targets. Add a permission before checking or deploying.",
+  containersHint: "Separate names with commas. Wildcards are not allowed.",
+  hostKeyHint:
+    "Verify the SHA256 fingerprint through a trusted channel. Connections require an exact match.",
+  profileHint:
+    "Saving does not verify the tool. Check the connection to validate its runtime.",
+  probeHint:
+    "Read only the selected permitted target. No image update or deployment.",
+  probeReady: "Connection verified; target read",
+  jobDescription: "Update an existing Deployment image and wait for readiness.",
+  separateStage:
+    "A dedicated deployment stage is required, without matrices, parallel nodes or extra tasks. Use Add node to create it.",
+  noProjectGrant: "No permission for this project. Add one in settings first.",
+  staleTarget: "Previous target unavailable; review permissions",
+  unavailableChoice: "Previous selection unavailable",
+  imageSourceHint:
+    "Select an upstream Push image node. Its actual registry digest is used at runtime.",
+  noPushSource: "No upstream Push image node. Add and connect one first.",
+  passwordHint:
+    "This action requires your account password to have been verified within 5 minutes.",
+  unsavedBody: "Leaving clears the current form.",
+  deleteBody: "Delete “{name}”? Objects still in use cannot be deleted.",
+  noReceipt:
+    "No unique receipt for this node. Success and retry eligibility cannot be confirmed.",
+  retireBody:
+    "End local tracking to allow a new full release. This does not roll back the cluster or mark the original run successful.",
+  unknownHint:
+    "The deployment may have taken effect. Check first; do not submit it again.",
+  cleanupHint: "Tool container cleanup is unconfirmed; retry is blocked.",
+  historyHint:
+    "Checks do not rewrite the original run. A later run must validate the target again.",
+  notRecordedHint:
+    "No evidence for this step; it is not confirmed started or passed.",
+  noRollback:
+    "This history includes Kubernetes targets; SSH rollback is unavailable. Deploy the desired version through a new full pipeline run.",
+  adopted: "Source deployment revalidated and reused",
+  rolloutOnly:
+    "Only rollout readiness was checked, not ongoing release monitoring.",
+  phase: {
+    preflight: "Preflight",
+    update: "Update image",
+    rollout: "Wait for readiness",
+    cleanup: "Clean up tools",
+  },
+  phaseCode: {
+    patch_not_authorized:
+      "These cluster credentials cannot update this Deployment. Ask an administrator to review permissions. No update was sent.",
+    permission_check_unverified:
+      "Cluster deployment permissions could not be verified. Check connectivity and access-review configuration. No update was sent.",
+    preflight_started: "Checking permissions, tool runtime and target.",
+    image_update_dispatched:
+      "Image update request sent; the receipt determines the result.",
+    rollout_observing: "Observing target replica readiness.",
+    rollout_ready: "This observation confirmed workload readiness.",
+    cleanup_started: "Cleaning up this operation’s tool container.",
+    cleanup_verified: "Tool cleanup verified.",
+    cleanup_unverified: "Tool cleanup unconfirmed; inspect the receipt.",
+  },
+  business: {
+    not_dispatched: "Preparing deployment",
+    submitted: "Submitted, awaiting readiness",
+    ready: "Workload ready",
+    unchanged: "Already at this version, readiness verified",
+    failed: "Deployment incomplete",
+    superseded: "Target superseded by another change",
+    outcome_unknown: "Deployment outcome unconfirmed",
+  },
+  cleanup: {
+    pending: "Cleanup pending",
+    verified: "Cleanup verified",
+    blocked: "Cleanup blocked",
+  },
+  errors: {
+    invalid: "Invalid configuration. Check the fields.",
+    session: "Session expired. Sign in again.",
+    passwordRequired: "Verify your password again before this action.",
+    passwordInvalid: "Password verification failed. Check and retry.",
+    denied: "Connection or target is not authorized.",
+    missing: "Record not found. Refresh the list.",
+    conflict:
+      "Configuration changed elsewhere. Draft retained; refresh and review before saving.",
+    inUse:
+      "This record is still referenced by connections or runs and cannot be changed yet.",
+    held: "An unfinished deployment holds this target. Check the original operation first.",
+    ownerUnknown:
+      "Original executor exit is unconfirmed. Takeover and retry are blocked.",
+    runtime:
+      "Runtime safety checks failed. Review tool configuration and executor requirements.",
+    credentialUnavailable:
+      "Cluster credentials unavailable. Check the vault and connection.",
+    observation:
+      "Observation interrupted; outcome is unconfirmed. Review the original operation.",
+    unavailable:
+      "Execution service unavailable. Check connection requirements.",
+    uncertain:
+      "Result uncertain; repeat submission blocked. Refresh and inspect records. A matching name does not prove this creation succeeded.",
+    load: "Could not load data. Refresh to retry.",
+  },
+  readBack: "Read back records",
+  acknowledge: "Reviewed; end this edit",
+  readBackHint:
+    "Latest records loaded. Review identity and revision; this does not automatically determine the original request’s outcome.",
+  targetCount: "{n} deployment targets",
+};

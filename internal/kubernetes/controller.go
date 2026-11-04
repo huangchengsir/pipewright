@@ -24,6 +24,7 @@ type deploymentReader interface {
 }
 type deploymentWriter interface {
 	deploymentReader
+	CheckPatchAccess(context.Context) error
 	Patch(context.Context, Operation, []byte) ([]byte, error)
 }
 
@@ -221,6 +222,7 @@ func (c *Controller) Run(ctx context.Context, id, owner string, log PhaseLog) (o
 	work, cancel := context.WithTimeout(ctx, time.Duration(o.Intent.TimeoutSeconds)*time.Second)
 	defer cancel()
 	var w deploymentWriter
+	failureReason := "pre_dispatch_failed"
 	defer func() {
 		clean, done := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer done()
@@ -236,7 +238,7 @@ func (c *Controller) Run(ctx context.Context, id, owner string, log PhaseLog) (o
 			return
 		}
 		if runErr != nil && fresh.Business == NotDispatched {
-			fresh, e = c.store.FailBeforeDispatch(clean, id, owner, fresh.Revision, "pre_dispatch_failed")
+			fresh, e = c.store.FailBeforeDispatch(clean, id, owner, fresh.Revision, failureReason)
 			if e != nil {
 				runErr = errors.Join(runErr, e)
 			}
@@ -283,6 +285,19 @@ func (c *Controller) Run(ctx context.Context, id, owner string, log PhaseLog) (o
 	base := v.Receipt
 	unchanged := v.Image == o.Intent.Image
 	if !unchanged {
+		check, checked := context.WithTimeout(work, 10*time.Second)
+		e = w.CheckPatchAccess(check)
+		checked()
+		if e != nil {
+			switch {
+			case errors.Is(e, ErrPatchDenied):
+				failureReason = "patch_not_authorized"
+			case errors.Is(e, ErrAccessReview):
+				failureReason = "permission_check_unverified"
+			}
+			phase(log, "preflight", failureReason)
+			return o, e
+		}
 		patch, before, e := fixedPatch(o, v)
 		if e != nil {
 			return o, e

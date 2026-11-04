@@ -8,7 +8,11 @@ export const kubePhases = [
 ] as const;
 export type KubePhase = (typeof kubePhases)[number];
 const codes: Record<KubePhase, string[]> = {
-  preflight: ["preflight_started"],
+  preflight: [
+    "preflight_started",
+    "patch_not_authorized",
+    "permission_check_unverified",
+  ],
   update: ["image_update_dispatched"],
   rollout: ["rollout_observing", "rollout_ready"],
   cleanup: ["cleanup_started", "cleanup_verified", "cleanup_unverified"],

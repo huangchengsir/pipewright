@@ -128,6 +128,10 @@ export default {
     cleanup: "清理工具",
   },
   phaseCode: {
+    patch_not_authorized:
+      "目前叢集憑證無權更新此 Deployment，請聯絡管理員檢查授權。本次未送出更新。",
+    permission_check_unverified:
+      "無法確認叢集發佈權限，請檢查連線與權限檢查設定。本次未送出更新。",
     preflight_started: "開始檢查授權、工具環境與目標。",
     image_update_dispatched: "已傳送映像更新請求；最終結果以回執為準。",
     rollout_observing: "正在觀察目標副本是否就緒。",

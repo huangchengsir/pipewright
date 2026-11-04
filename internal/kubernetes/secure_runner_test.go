@@ -20,6 +20,14 @@ type fakePrivateDocker struct {
 	lostCreate, lateCreate, foreign, swap, core, volumes, wrongEngine, failCleanup bool
 	receivedCredential                                                             bool
 	calls                                                                          [][]string
+	reviewCount                                                                    int
+	reviewRequest                                                                  []byte
+	reviewResult                                                                   *target.SecretResult
+	reviewErr                                                                      error
+	afterReview                                                                    func()
+	deployment                                                                     []byte
+	patchResult                                                                    *target.SecretResult
+	patchErr                                                                       error
 }
 
 func (f *fakePrivateDocker) Snapshot() *target.ConnectionSnapshot       { return nil }
@@ -139,11 +147,33 @@ func (f *fakePrivateDocker) Docker(_ context.Context, args []string, in []byte) 
 			}
 			return fakeResult(map[string]any{"clientVersion": map[string]string{"major": "1", "minor": "34"}, "serverVersion": map[string]string{"major": "1", "minor": minor}}), nil
 		}
+		if strings.Contains(joined, " create --raw=") {
+			f.reviewCount++
+			f.reviewRequest = append([]byte(nil), in...)
+			if f.afterReview != nil {
+				f.afterReview()
+			}
+			if f.reviewResult != nil || f.reviewErr != nil {
+				return f.reviewResult, f.reviewErr
+			}
+			var review map[string]any
+			if json.Unmarshal(in, &review) != nil {
+				return nil, ErrTool
+			}
+			review["status"] = map[string]any{"allowed": true}
+			return fakeResult(review), nil
+		}
 		if strings.Contains(joined, " get deployment ") {
+			if f.deployment != nil {
+				return &target.SecretResult{Stdout: append([]byte(nil), f.deployment...)}, nil
+			}
 			return &target.SecretResult{Stdout: []byte(`{"kind":"Deployment","metadata":{"uid":"workload"}}`)}, nil
 		}
 		if strings.Contains(joined, " patch deployment ") {
 			f.patchCount++
+			if f.patchResult != nil || f.patchErr != nil {
+				return f.patchResult, f.patchErr
+			}
 			return &target.SecretResult{Stdout: []byte(`{"kind":"Deployment"}`)}, nil
 		}
 	}
@@ -429,6 +459,9 @@ func TestWriterPatchRequiresDurableFenceAndCannotRepeat(t *testing.T) {
 	o, _ = f.s.GetOperation(ctx, o.ID)
 	if _, e = w.Patch(ctx, o, nil); e != ErrConflict {
 		t.Fatal("write without durable fence", e)
+	}
+	if e = w.CheckPatchAccess(ctx); e != nil {
+		t.Fatal(e)
 	}
 	o, e = f.s.PrepareDispatch(ctx, o.ID, o.OwnerEpoch, o.Revision, before)
 	if e != nil {

@@ -139,6 +139,10 @@ export default {
     cleanup: "도구 정리",
   },
   phaseCode: {
+    patch_not_authorized:
+      "이 클러스터 자격 증명으로는 Deployment를 업데이트할 수 없습니다. 관리자에게 권한 확인을 요청하세요. 업데이트는 전송되지 않았습니다.",
+    permission_check_unverified:
+      "클러스터 배포 권한을 확인하지 못했습니다. 연결 및 권한 확인 설정을 점검하세요. 업데이트는 전송되지 않았습니다.",
     preflight_started: "권한, 도구 환경 및 대상 확인 시작.",
     image_update_dispatched:
       "이미지 업데이트 요청 전송. 최종 결과는 확인 정보로 판단합니다.",

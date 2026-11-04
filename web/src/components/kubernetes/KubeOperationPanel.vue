@@ -42,6 +42,20 @@ const evidence = computed(() => kubePhaseEvidence(props.phaseLogs ?? [])),
       ["ready", "unchanged"].includes(row.value.business) &&
       row.value.cleanup === "verified",
   );
+const noticeKey = computed(() => {
+  const operation = row.value;
+  if (operation?.business === "outcome_unknown")
+    return "kubernetes.unknownHint";
+  if (operation?.cleanup !== "verified") return "kubernetes.cleanupHint";
+  if (
+    operation.business === "failed" &&
+    ["patch_not_authorized", "permission_check_unverified"].includes(
+      operation.reasonCode,
+    )
+  )
+    return "kubernetes.phaseCode." + operation.reasonCode;
+  return "kubernetes.historyHint";
+});
 let controller = new AbortController(),
   seq = 0,
   alive = true;
@@ -63,7 +77,9 @@ async function load() {
     if (uncertain.value) readBack.value = true;
     // An authoritative empty result can represent a failure before operation creation.
     // Only permit opening the server-side retry plan; missing pinned or ambiguous evidence stays blocked.
-    const beforeOperation = !props.operationId && !data.some((op) => op.runId === run && op.nodeId === node);
+    const beforeOperation =
+      !props.operationId &&
+      !data.some((op) => op.runId === run && op.nodeId === node);
     emit("blocked", !beforeOperation && kubeBlocksRetry(row.value));
   } catch (e) {
     if (alive && !signal.aborted && n === seq) loadError.value = kubeError(e);
@@ -171,15 +187,7 @@ onBeforeUnmount(() => {
         {{ row.receipt.desiredReplicas }}
       </p>
       <p v-if="!success" class="kube-note">
-        {{
-          t(
-            row.business === "outcome_unknown"
-              ? "kubernetes.unknownHint"
-              : row.cleanup !== "verified"
-                ? "kubernetes.cleanupHint"
-                : "kubernetes.historyHint",
-          )
-        }}
+        {{ t(noticeKey) }}
       </p>
       <div class="kube-actions">
         <AppButton

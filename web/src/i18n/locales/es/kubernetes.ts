@@ -144,6 +144,10 @@ export default {
     cleanup: "Limpiar herramientas",
   },
   phaseCode: {
+    patch_not_authorized:
+      "Estas credenciales del clúster no permiten actualizar este Deployment. Pida a un administrador que revise los permisos. No se envió ninguna actualización.",
+    permission_check_unverified:
+      "No se pudieron verificar los permisos de despliegue en el clúster. Revise la conexión y la configuración de comprobación de permisos. No se envió ninguna actualización.",
     preflight_started: "Comprobando permisos, herramienta y destino.",
     image_update_dispatched:
       "Actualización enviada; el resultado se determina por la confirmación.",

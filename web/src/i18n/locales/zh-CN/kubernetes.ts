@@ -127,6 +127,10 @@ export default {
     cleanup: "清理工具",
   },
   phaseCode: {
+    patch_not_authorized:
+      "当前集群凭据无权更新此 Deployment，请联系管理员检查授权。本次未发送更新。",
+    permission_check_unverified:
+      "无法确认集群发布权限，请检查连接与权限检查配置。本次未发送更新。",
     preflight_started: "开始检查授权、工具环境与目标。",
     image_update_dispatched: "已发送镜像更新请求；最终结果以回执为准。",
     rollout_observing: "正在观察目标副本是否就绪。",

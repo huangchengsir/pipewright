@@ -101,3 +101,22 @@ describe("Kubernetes Context DTO to UI source mapping", () => {
     expect(kubeBlocksRetry(op({ business: "failed" }))).toBe(false);
   });
 });
+
+describe("Kubernetes permission evidence", () => {
+  it("accepts only known permission results in the preflight phase", () => {
+    expect(
+      kubePhaseEvidence([
+        "kubernetes preflight: patch_not_authorized",
+        "kubernetes preflight: permission_check_unverified",
+        "kubernetes update: patch_not_authorized",
+        "kubernetes preflight: untrusted_diagnostic",
+        "kubernetes preflight: patch_not_authorized",
+      ]),
+    ).toEqual({
+      preflight: ["patch_not_authorized", "permission_check_unverified"],
+      update: [],
+      rollout: [],
+      cleanup: [],
+    });
+  });
+});

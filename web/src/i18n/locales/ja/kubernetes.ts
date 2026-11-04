@@ -145,6 +145,10 @@ export default {
     cleanup: "ツールの削除",
   },
   phaseCode: {
+    patch_not_authorized:
+      "このクラスタ認証情報では Deployment を更新できません。管理者に権限の確認を依頼してください。更新は送信されていません。",
+    permission_check_unverified:
+      "クラスタへのデプロイ権限を確認できませんでした。接続と権限確認の設定を確認してください。更新は送信されていません。",
     preflight_started: "権限、ツール環境、対象の確認を開始。",
     image_update_dispatched:
       "イメージ更新を送信しました。最終結果は受信記録で確認します。",

@@ -18,7 +18,9 @@ Kubernetes 节点将本次流水线已推送的镜像更新到已有 Deployment 
 
 工具容器使用只读根文件系统、私有 tmpfs、固定 bridge 网络和受限资源，认证通过标准输入送入临时文件系统。当前环境验证要求没有活动 swap，也不能使用管道式 core dump。条件不满足会在传入认证之前拒绝执行；Pipewright 不会自动修改宿主策略。
 
-kubeconfig 只接受内嵌的认证与 CA，不执行 exec/auth-provider 插件，不读取外部证书、token 文件或代理配置，也不跳过 TLS 校验。首版仅更新已有、未暂停且副本数大于零的 Deployment，不执行任意 kubectl 命令、Helm 或 YAML apply。集群身份通常只需对指定 namespace 下的 Deployment 具有 get、patch 权限；应在目标集群确认实际 RBAC。
+kubeconfig 只接受内嵌的认证与 CA，不执行 exec/auth-provider 插件，不读取外部证书、token 文件或代理配置，也不跳过 TLS 校验。首版仅更新已有、未暂停且副本数大于零的 Deployment，不执行任意 kubectl 命令、Helm 或 YAML apply。集群身份需要对指定 namespace 下的 Deployment 具有 get、patch 权限。实际需要更新镜像时，节点还会通过 `authorization.k8s.io/v1` 的 `SelfSubjectAccessReview` 核对当前身份对该目标的 patch 权限；此授权检查不保存集群资源，不会修改 RBAC。Kubernetes 默认的 `system:basic-user` 角色通常允许已认证身份创建这种权限检查；定制集群需由管理员确认对应权限。
+
+权限检查明确拒绝时，运行在发送镜像更新前失败；检查服务不可用或响应无法验证时也停止发布，并提示“无法确认发布权限”。Pipewright 不会自动增加权限。检查允许后仍可能发生权限或集群状态变化：实际更新请求已经发出而结果不明时，仍显示“结果待核对”，不能据先前权限检查或错误文字认定请求从未提交。
 
 ## 查看结果与重试
 
@@ -45,3 +47,5 @@ Create a protected Kubernetes credential under Settings → Security & account �
 The node updates one existing Deployment container to this run’s pushed repository digest and waits for that deployment’s identity and rollout. It supports local Linux Docker and pinned SSH Docker; it does not run arbitrary kubectl, Helm or apply commands. The tool container needs a shell, compatible kubectl, a non-root UID and a fixed repository digest. Active swap or piped core-dump handling fails the credential-isolation preflight before secrets are sent. The application never changes host policy automatically.
 
 Business outcome and tool cleanup are separate. An unknown result must be reconciled read-only; never resend the update to infer success. A later verified result can be adopted by an explicit retry after the original run settles, retaining its original failure history. Retiring tracking releases only a verified local hold, without undoing Kubernetes changes. Kubernetes deployment history does not use SSH rollback. Keep `PIPEWRIGHT_DATA_DIR` persistent and do not delete its process-identity journal to bypass unresolved work.
+
+Before changing an image, the node submits a fixed, nonpersistent `SelfSubjectAccessReview` for `patch` on the exact Deployment. The identity therefore needs access to this authorization review API in addition to scoped Deployment `get` and `patch` permissions; Kubernetes normally supplies review access through `system:basic-user`, but custom RBAC must be checked by the administrator. A denied or unverifiable review stops the update before dispatch. Pipewright never changes RBAC automatically. Permission may change after this check, so an uncertain result from an actual PATCH still requires read-only reconciliation and is never automatically replayed.

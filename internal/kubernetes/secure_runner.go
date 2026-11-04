@@ -42,13 +42,14 @@ func NewRuntime(s *Service, factory TransportFactory, registry RegistryAuthSourc
 }
 
 type runtimeSession struct {
-	runtime         *Runtime
-	transport       PrivateTransport
-	lease           RuntimeLease
-	auth            Authorization
-	minor           int
-	mu              sync.Mutex
-	closed, patched bool
+	runtime             *Runtime
+	transport           PrivateTransport
+	lease               RuntimeLease
+	auth                Authorization
+	minor               int
+	mu                  sync.Mutex
+	closed, patched     bool
+	patchAccessVerified bool
 }
 type WriterSession struct{ s *runtimeSession }
 type ObserverSession struct{ s *runtimeSession }
@@ -567,6 +568,9 @@ func (w *WriterSession) Patch(ctx context.Context, prepared Operation, patch []b
 	}
 	if current.Revision != prepared.Revision || current.OwnerFenced || current.Retired || !current.DispatchFenced || current.Business != OutcomeUnknown || current.Receipt == nil {
 		return nil, ErrConflict
+	}
+	if !s.patchAccessVerified {
+		return nil, ErrAccessReview
 	}
 	if e = validateFixedPatch(current, patch); e != nil {
 		return nil, e

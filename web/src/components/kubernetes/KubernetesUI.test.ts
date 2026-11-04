@@ -351,13 +351,26 @@ describe("Kubernetes node config and operation evidence", () => {
     expect(w!.emitted("blocked")!.at(-1)).toEqual([false]);
     expect(m.observe).not.toHaveBeenCalled();
   });
-  it.each(["pinned", "ambiguous", "error"])("keeps %s missing evidence blocked", async (kind) => {
-    if (kind === "error") m.operations.mockRejectedValue(new Error("unavailable"));
-    else m.operations.mockResolvedValue(kind === "ambiguous" ? [operation, { ...operation, id: "second" }] : []);
-    await mountView(KubeOperationPanel, { runId: "source", nodeId: "node", ...(kind === "pinned" ? { operationId: "op" } : {}) });
-    expect(w!.emitted("blocked")!.at(-1)).toEqual([true]);
-    expect(m.observe).not.toHaveBeenCalled();
-  });
+  it.each(["pinned", "ambiguous", "error"])(
+    "keeps %s missing evidence blocked",
+    async (kind) => {
+      if (kind === "error")
+        m.operations.mockRejectedValue(new Error("unavailable"));
+      else
+        m.operations.mockResolvedValue(
+          kind === "ambiguous"
+            ? [operation, { ...operation, id: "second" }]
+            : [],
+        );
+      await mountView(KubeOperationPanel, {
+        runId: "source",
+        nodeId: "node",
+        ...(kind === "pinned" ? { operationId: "op" } : {}),
+      });
+      expect(w!.emitted("blocked")!.at(-1)).toEqual([true]);
+      expect(m.observe).not.toHaveBeenCalled();
+    },
+  );
   it("ignores an old source response after switching attempts", async () => {
     let resolve!: (rows: KubeOperation[]) => void;
     m.operations
@@ -403,4 +416,50 @@ describe("Kubernetes unsaved navigation", () => {
     );
     expect(w!.findAll("dialog[open]")).toHaveLength(1);
   });
+});
+
+describe("Kubernetes permission failure guidance", () => {
+  it.each(["patch_not_authorized", "permission_check_unverified"])(
+    "explains %s without submitting a request",
+    async (reasonCode) => {
+      m.operations.mockResolvedValue([
+        { ...operation, business: "failed", reasonCode },
+      ]);
+      await mountView(KubeOperationPanel, { runId: "source", nodeId: "node" });
+      expect(w!.get(".kube-note").text()).toContain(
+        "\u672c\u6b21\u672a\u53d1\u9001\u66f4\u65b0",
+      );
+      expect(m.observe).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    {
+      business: "outcome_unknown",
+      cleanup: "verified",
+      expected: "\u53d1\u5e03\u53ef\u80fd\u5df2\u751f\u6548",
+    },
+    {
+      business: "failed",
+      cleanup: "blocked",
+      expected:
+        "\u5de5\u5177\u5bb9\u5668\u7684\u6e05\u7406\u5c1a\u672a\u786e\u8ba4",
+    },
+  ])(
+    "keeps unresolved $business/$cleanup guidance above a reason code",
+    async (state) => {
+      m.operations.mockResolvedValue([
+        {
+          ...operation,
+          ...state,
+          reasonCode: "patch_not_authorized",
+        },
+      ]);
+      await mountView(KubeOperationPanel, { runId: "source", nodeId: "node" });
+      expect(w!.get(".kube-note").text()).toContain(state.expected);
+      expect(w!.get(".kube-note").text()).not.toContain(
+        "\u672c\u6b21\u672a\u53d1\u9001\u66f4\u65b0",
+      );
+      expect(w!.emitted("blocked")!.at(-1)).toEqual([true]);
+    },
+  );
 });

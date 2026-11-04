@@ -142,6 +142,10 @@ export default {
     cleanup: "Clean up tools",
   },
   phaseCode: {
+    patch_not_authorized:
+      "These cluster credentials cannot update this Deployment. Ask an administrator to review permissions. No update was sent.",
+    permission_check_unverified:
+      "Cluster deployment permissions could not be verified. Check connectivity and access-review configuration. No update was sent.",
     preflight_started: "Checking permissions, tool runtime and target.",
     image_update_dispatched:
       "Image update request sent; the receipt determines the result.",

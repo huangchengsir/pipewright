@@ -148,6 +148,10 @@ export default {
     cleanup: "Nettoyage des outils",
   },
   phaseCode: {
+    patch_not_authorized:
+      "Ces identifiants de cluster ne permettent pas de mettre à jour ce Deployment. Demandez à un administrateur de vérifier les droits. Aucune mise à jour n’a été envoyée.",
+    permission_check_unverified:
+      "Les droits de déploiement sur le cluster n’ont pas pu être vérifiés. Vérifiez la connexion et la configuration du contrôle des droits. Aucune mise à jour n’a été envoyée.",
     preflight_started:
       "Vérification des autorisations, de l’outil et de la cible.",
     image_update_dispatched:

@@ -17,6 +17,8 @@ type controlledSession struct {
 	reads                [][]byte
 	accepted             []byte
 	patchErr, errorClose error
+	reviews              int
+	reviewErr            error
 	patches              int
 	patch                []byte
 	cleaned              bool
@@ -31,6 +33,14 @@ func (s *controlledSession) GetDeployment(context.Context) ([]byte, error) {
 		s.reads = s.reads[1:]
 	}
 	return append([]byte(nil), r...), nil
+}
+func (s *controlledSession) CheckPatchAccess(ctx context.Context) error {
+	s.reviews++
+	live, err := s.f.s.GetOperation(ctx, s.operation.ID)
+	if err != nil || live.DispatchFenced || live.Business != NotDispatched {
+		s.t.Fatal("permission review followed dispatch fence", err)
+	}
+	return s.reviewErr
 }
 func (s *controlledSession) Patch(ctx context.Context, o Operation, p []byte) ([]byte, error) {
 	s.patches++
@@ -77,7 +87,7 @@ func TestControllerSingleCASAndHPAReadiness(t *testing.T) {
 	s.reads = [][]byte{deploymentJSON("registry.invalid/app/backend:old", "", "uid-one", 2, 2, 2, 2, "private"), deploymentJSON(o.Intent.Image, o.ID, "uid-one", 3, 3, 3, 3, "")}
 	s.accepted = deploymentJSON(o.Intent.Image, o.ID, "uid-one", 2, 3, 2, 1, "")
 	out, e := c.Run(context.Background(), o.ID, o.OwnerEpoch, nil)
-	if e != nil || !out.Successful() || !out.OwnerFenced || s.patches != 1 || !s.cleaned {
+	if e != nil || !out.Successful() || !out.OwnerFenced || s.patches != 1 || s.reviews != 1 || !s.cleaned {
 		t.Fatalf("out=%+v err=%v patches=%d", out, e, s.patches)
 	}
 	var patch []struct {
@@ -95,7 +105,7 @@ func TestControllerSameHealthyImageIsUnchanged(t *testing.T) {
 	c, _, o, s := setupController(t)
 	s.reads = [][]byte{deploymentJSON(o.Intent.Image, "other-operation", "uid-one", 2, 2, 2, 2, "")}
 	out, e := c.Run(context.Background(), o.ID, o.OwnerEpoch, nil)
-	if e != nil || out.Business != Unchanged || !out.Successful() || s.patches != 0 {
+	if e != nil || out.Business != Unchanged || !out.Successful() || s.patches != 0 || s.reviews != 0 {
 		t.Fatalf("out=%+v err=%v", out, e)
 	}
 }

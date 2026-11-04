@@ -146,6 +146,10 @@ export default {
     cleanup: "Werkzeuge bereinigen",
   },
   phaseCode: {
+    patch_not_authorized:
+      "Diese Cluster-Zugangsdaten dürfen dieses Deployment nicht aktualisieren. Bitten Sie einen Administrator, die Berechtigungen zu prüfen. Es wurde kein Update gesendet.",
+    permission_check_unverified:
+      "Die Berechtigung für die Cluster-Bereitstellung konnte nicht geprüft werden. Prüfen Sie die Verbindung und die Konfiguration der Berechtigungsprüfung. Es wurde kein Update gesendet.",
     preflight_started: "Berechtigungen, Werkzeug und Ziel werden geprüft.",
     image_update_dispatched:
       "Image-Aktualisierung gesendet; der Nachweis bestimmt das Ergebnis.",

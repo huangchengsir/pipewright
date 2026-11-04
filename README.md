@@ -150,6 +150,10 @@ Open **Settings → System** and click "Check for updates" to query the latest r
 - **Binary deployment**: click "Update now" to auto-download the new version + verify checksum + replace + restart (requires write permission to the binary file; installing to `$HOME/.local/bin` avoids sudo, and a root systemd service installed via `SETUP_SERVICE=1` also satisfies this).
 - **Docker deployment**: the container doesn't replace its own image; follow the prompt to run `docker compose pull && docker compose up -d` on the host (the data volume is preserved).
 
+### Kubernetes deployment
+
+Deploy an explicitly selected pushed image digest to one container of an existing Deployment through local Linux Docker or a pinned SSH executor. Protected credentials, exact target permissions, approval, rollout checks and read-only reconciliation are built in. Kubernetes jobs use a dedicated deployment stage; they do not execute arbitrary kubectl/Helm or use SSH rollback. See the [setup and operational guide](docs/kubernetes-deploy.md).
+
 ### Configuration (environment variables)
 
 A normal install only needs the first two (plus `PIPEWRIGHT_PUBLIC_URL` if you run behind a reverse proxy); everything else has a sane default.
@@ -161,6 +165,7 @@ A normal install only needs the first two (plus `PIPEWRIGHT_PUBLIC_URL` if you r
 | `PIPEWRIGHT_ADMIN_PASSWORD` | Admin password on first launch | none (must be set) |
 | `PIPEWRIGHT_MASTER_KEY` | Credential vault master key (base64-encoded 32 bytes); or use `PIPEWRIGHT_MASTER_KEY_FILE` to point to a file | vault disabled if unset |
 | `PIPEWRIGHT_ADDR` | HTTP listen address | `:8080` |
+| `PIPEWRIGHT_DATA_DIR` | Persistent process-identity directory for Kubernetes restart recovery; keep it stable across restarts | `.pipewright` |
 | `PIPEWRIGHT_PUBLIC_URL` | Externally reachable base URL (e.g. `https://ci.example.com`). Required for webhook callbacks, OAuth redirects, signed approval links in notifications, and PR status links | none |
 | `PIPEWRIGHT_ADMIN_USERNAME` | Admin username on first launch | `admin` |
 | `PIPEWRIGHT_TRUST_PROXY` | Trust the first `X-Forwarded-For` hop as the audit client IP (`1`/`true`/`yes`/`on`). Leave off unless a trusted reverse proxy sits in front — otherwise anyone can forge audit source IPs | off |

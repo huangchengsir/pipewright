@@ -106,6 +106,20 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 		if ex, ok := runretry.ExecutionFrom(ctx); ok {
 			return b.runRecoveryStage(ctx, r, stage, rep, reportSink, ex)
 		}
+		if kubernetesStage(stage) {
+			if len(stage.Jobs) != 1 {
+				return pipeline.ErrKubernetesConfig
+			}
+			j := stage.Jobs[0]
+			_ = rep.JobRunning(ctx, j.ID)
+			err := b.runKubernetesJob(ctx, r, j, rep.JobReporter(j.ID))
+			status := run.StepSuccess
+			if err != nil {
+				status = run.StepFailed
+			}
+			_ = rep.JobDone(context.WithoutCancel(ctx), j.ID, status)
+			return err
+		}
 		images := &stageImageArtifacts{}
 		defer func() {
 			if stageErr != nil {

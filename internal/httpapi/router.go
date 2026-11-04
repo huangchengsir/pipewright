@@ -32,6 +32,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/dnsprovider"
 	"github.com/huangchengsir/pipewright/internal/environments"
 	"github.com/huangchengsir/pipewright/internal/i18n"
+	"github.com/huangchengsir/pipewright/internal/kubernetes"
 	"github.com/huangchengsir/pipewright/internal/library"
 	"github.com/huangchengsir/pipewright/internal/metrics"
 	"github.com/huangchengsir/pipewright/internal/notify"
@@ -67,6 +68,8 @@ const contextKeySession contextKey = 1
 type Option func(*options)
 
 type options struct {
+	kubernetes         *kubernetes.Service
+	kubernetesObserver kubernetesObserver
 	platformLogin      *authlogin.Service
 	selfUpdate         *selfupdate.Service
 	configDB           *sql.DB
@@ -508,6 +511,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 
 		// 审计查询(Story 1.4):只读 + 认证保护 + 分页 + 过滤。
 		ar.Get("/audit", makeListAuditHandler(aud))
+		mountKubernetes(ar, o.kubernetes, o.kubernetesObserver, aud)
 
 		// 凭据保险库(Story 1.3)。v 为 nil 时 handler 返回 vault_unconfigured。
 		v := o.vault

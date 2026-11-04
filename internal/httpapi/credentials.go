@@ -47,6 +47,10 @@ func toDTO(c *vault.Credential) credentialDTO {
 
 // writeVaultError 把领域错误映射为契约错误码/状态码;绝不回显明文/密文。
 func writeVaultError(w http.ResponseWriter, err error) {
+	if errors.Is(err, vault.ErrProtectedCredential) {
+		writeError(w, 403, "protected_credential", "protected_credential")
+		return
+	}
 	switch {
 	case errors.Is(err, configstate.ErrMaintenance):
 		writeError(w, 503, "system_installing", "System installation is in progress")

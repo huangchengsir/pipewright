@@ -34,5 +34,5 @@ export function previousSuccess(tl: EnvironmentTimeline): EnvDeployment | null {
 
 /** Whether an environment can be rolled back: it has an active version and a prior successful deployment. */
 export function canRollback(tl: EnvironmentTimeline): boolean {
-  return previousSuccess(tl) !== null
+  return !tl.active?.kubernetes?.length && !previousSuccess(tl)?.kubernetes?.length && previousSuccess(tl) !== null
 }

@@ -46,6 +46,9 @@ func NewStageExecutorWithRunner(b *Builder, reportSink TestReportSink, lookup Ru
 	local := NewStageExecutor(b, reportSink)
 	if lookup == nil || tgt == nil {
 		return func(ctx context.Context, r *run.Run, stage pipeline.Stage, rep dagrun.StageReporter) error {
+			if kubernetesStage(stage) {
+				return local(ctx, r, stage, rep)
+			}
 			if ex, ok := runretry.ExecutionFrom(ctx); ok && len(ex.Snapshot().RunnerRefs) > 0 {
 				return runretry.ErrUnavailable
 			}
@@ -53,6 +56,9 @@ func NewStageExecutorWithRunner(b *Builder, reportSink TestReportSink, lookup Ru
 		}
 	}
 	return func(ctx context.Context, r *run.Run, stage pipeline.Stage, rep dagrun.StageReporter) error {
+		if kubernetesStage(stage) {
+			return local(ctx, r, stage, rep)
+		}
 		if ex, ok := runretry.ExecutionFrom(ctx); ok {
 			serverID := ex.Snapshot().RunnerRefs["serverId"]
 			if serverID == "" {

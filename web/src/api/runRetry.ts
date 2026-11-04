@@ -11,6 +11,7 @@ export interface RetryDecision {
   action: string; status?: string; sourceAttemptId?: string; sourceNodeKey?: string; reasons?: RetryReason[]
 }
 export interface RetryPlannedNode {
+  kubernetes?: { operationId:string; sourceAttemptId:string; nodeKey:string }
   node: RetryNode; decision: RetryDecision; reasonCode?: string; executionStarted: boolean
   attemptStepId?: string; ordinal: number; sourceStepId?: string; sourceOrdinal: number
 }

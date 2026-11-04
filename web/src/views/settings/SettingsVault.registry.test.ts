@@ -1,3 +1,4 @@
+// Kubernetes credentials have independent API/route lifecycle tests in KubernetesUI.test.ts.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import SettingsVault from './SettingsVault.vue'
@@ -44,7 +45,7 @@ describe('registry independent fields', () => {
       createdAt: new Date().toISOString(),
     })
     w = mount(SettingsVault, {
-      global: { stubs: { Teleport: true, 'router-link': true } },
+      global: { stubs: { KubeCredentials: true, Teleport: true, 'router-link': true } },
     })
     await flushPromises()
     const add = w.findAll('button').find((b) => b.text() === '添加凭据')!
@@ -70,7 +71,7 @@ describe('registry independent fields', () => {
   })
   it('rejects colon usernames before calling the API', async () => {
     w = mount(SettingsVault, {
-      global: { stubs: { Teleport: true, 'router-link': true } },
+      global: { stubs: { KubeCredentials: true, Teleport: true, 'router-link': true } },
     })
     await flushPromises()
     await w

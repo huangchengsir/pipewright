@@ -145,6 +145,10 @@ make build          # 前端构建 → go:embed → 单个静态二进制 ./pipe
 - **二进制部署**:点「立即更新」即自动下载新版 + 校验和核验 + 替换 + 重启(需对二进制文件有写权限;装在 `$HOME/.local/bin` 免 sudo,或用 `SETUP_SERVICE=1` 装的 root systemd 服务亦满足)。
 - **Docker 部署**:容器不替换自身镜像,按提示在宿主执行 `docker compose pull && docker compose up -d`(数据卷保留)。
 
+### Kubernetes 部署
+
+通过本地 Linux Docker 或固定 SSH 执行节点，将明确选择的已推送镜像 digest 发布到已有 Deployment 的指定容器。支持独立受保护凭据、精确目标授权、审批、就绪检查与只读结果核对。节点独占一个部署阶段，不执行任意 kubectl/Helm，也不沿用 SSH 回滚。配置与运行要求见 [Kubernetes 部署指南](docs/kubernetes-deploy.md)。
+
 ### 配置(环境变量)
 
 正常安装只需前两个(若跑在反代后面再加 `PIPEWRIGHT_PUBLIC_URL`),其余都有合理默认值。
@@ -156,6 +160,7 @@ make build          # 前端构建 → go:embed → 单个静态二进制 ./pipe
 | `PIPEWRIGHT_ADMIN_PASSWORD` | 首次启动管理员口令 | 无(须设置) |
 | `PIPEWRIGHT_MASTER_KEY` | 凭据保险库主密钥(base64 的 32 字节);或用 `PIPEWRIGHT_MASTER_KEY_FILE` 指文件 | 未配则保险库禁用 |
 | `PIPEWRIGHT_ADDR` | HTTP 监听地址 | `:8080` |
+| `PIPEWRIGHT_DATA_DIR` | Kubernetes 重启恢复使用的持久进程身份目录，重启前后保持路径和内容稳定 | `.pipewright` |
 | `PIPEWRIGHT_PUBLIC_URL` | 外部可访问的基址(如 `https://ci.example.com`)。webhook 回调、OAuth 回跳、通知里的签名审批链接、PR 状态跳转链接都需要它 | 无 |
 | `PIPEWRIGHT_ADMIN_USERNAME` | 首次启动管理员用户名 | `admin` |
 | `PIPEWRIGHT_TRUST_PROXY` | 采信 `X-Forwarded-For` 首段作为审计来源 IP(`1`/`true`/`yes`/`on`)。除非前面确有可信反代,否则别开 —— 否则任意客户端都能伪造审计来源 IP | 关 |

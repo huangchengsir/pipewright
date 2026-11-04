@@ -340,6 +340,11 @@ const DEPLOY_SSH_FIELDS: JobField[] = [
 ]
 
 export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
+  deploy_kubernetes: {
+    type: 'deploy_kubernetes', get label() { return t('kubernetes.jobTitle') }, get description() { return t('kubernetes.jobDescription') }, accent:'primary', category:'deploy',
+    fields: ['connectionId','credentialId','context','namespace','deployment','container','artifactSource','executor','timeoutSeconds'].map(key=>({key,label:key,kind:'text' as const})),
+    defaultConfig: {timeoutSeconds:'300'},
+  },
   git_source: {
     type: 'git_source',
     get label() { return t('pipelineJob.typeGitSourceLabel') },
@@ -687,6 +692,7 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
 
 /** Canonical, ordered list of pickable types (excludes the `custom` alias of `script`). */
 export const PICKABLE_TYPES: readonly string[] = [
+  'deploy_kubernetes',
   'git_source',
   'build_frontend',
   'build_backend',

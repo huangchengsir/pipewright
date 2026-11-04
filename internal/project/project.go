@@ -173,6 +173,9 @@ func validateCreate(in CreateInput) error {
 // probe 取凭据明文并对仓库做 ls-remote 校验;token 仅进程内存在,用完即弃。
 // 凭据不存在 → ErrCredentialNotFound;保险库未配置 → ErrVaultUnconfigured。
 func (s *service) probe(ctx context.Context, repoURL, credentialID string) (string, error) {
+	if e := vault.ValidateGenericReference(credentialID); e != nil {
+		return "", ErrCredentialError
+	}
 	if s.vault == nil {
 		return "", ErrVaultUnconfigured
 	}

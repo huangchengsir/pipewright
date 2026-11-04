@@ -11,7 +11,7 @@
   的 run;活跃版本 = 最近一次全机成功;回滚目标 = 活跃之前最近一次全机成功。
 -->
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -30,6 +30,7 @@ import EmptyState from '../components/ui/EmptyState.vue'
 import SkeletonBlock from '../components/ui/SkeletonBlock.vue'
 import StatusBadge from '../components/ui/StatusBadge.vue'
 import AppSelect from '../components/ui/AppSelect.vue'
+import '../styles/kubernetes.css'
 import ReleaseGuardPanel from '../components/run/ReleaseGuardPanel.vue'
 
 type LoadState = 'idle' | 'loading' | 'error'
@@ -75,13 +76,21 @@ function formatWhen(iso: string): string {
 
 // ─── load ─────────────────────────────────────────────────────────────────────
 
+let alive=true, loadGeneration=0, loadController=new AbortController()
+onBeforeUnmount(()=>{alive=false;loadGeneration++;loadController.abort()})
 async function load(): Promise<void> {
+  loadController.abort();loadController=new AbortController()
+  const signal=loadController.signal,generation=++loadGeneration,id=projectId.value
+  if(!id){timelines.value=[];loadState.value='idle';return}
   loadState.value = 'loading'
   loadError.value = ''
   try {
-    timelines.value = await listEnvironmentDeployments(projectId.value)
+    const data = await listEnvironmentDeployments(id,signal)
+    if(!alive||signal.aborted||generation!==loadGeneration)return
+    timelines.value = data
     loadState.value = 'idle'
   } catch (err) {
+    if(!alive||signal.aborted||generation!==loadGeneration)return
     if (err instanceof HttpError) {
       loadError.value =
         err.status === 0
@@ -96,21 +105,24 @@ async function load(): Promise<void> {
 
 async function loadProjects(): Promise<void> {
   try {
-    projects.value = await listProjects()
+    const data=await listProjects()
+    if(!alive)return
+    projects.value=data
     // 未选项目且有项目 → 默认选首个(环境历史强依赖某个项目)。
     if (!projectId.value && projects.value.length > 0) {
       setProject(projects.value[0].id)
     }
   } catch {
-    projects.value = []
+    if(alive)projects.value = []
   }
 }
 
 // ─── rollback ───────────────────────────────────────────────────────────────
 
 async function onRollback(tl: EnvironmentTimeline): Promise<void> {
+  const initiatingProject=projectId.value
   const prev = previousSuccess(tl)
-  if (!prev) return
+  if (!prev || !canRollback(tl)) return
   const ok = await confirm.open({
     title: t('environments.rollbackTitle', { env: tl.environment }),
     body: t('environments.rollbackBody', {
@@ -120,11 +132,12 @@ async function onRollback(tl: EnvironmentTimeline): Promise<void> {
     confirmLabel: t('environments.rollbackConfirm'),
     variant: 'danger',
   })
-  if (!ok) return
+  if (!ok || !alive || initiatingProject!==projectId.value) return
 
   rollingBack.value = tl.environment
   try {
-    const res = await rollbackEnvironment(projectId.value, tl.environment)
+    const res = await rollbackEnvironment(initiatingProject, tl.environment)
+    if(!alive||initiatingProject!==projectId.value)return
     const failed = res.targets.filter((tg) => tg.status === 'failed' || tg.status === 'rolled_back').length
     if (failed === 0) {
       toast.success(t('environments.toastRolledBack', { env: tl.environment }), {
@@ -137,13 +150,14 @@ async function onRollback(tl: EnvironmentTimeline): Promise<void> {
     }
     await load()
   } catch (err) {
+    if(!alive||initiatingProject!==projectId.value)return
     const msg =
       err instanceof HttpError
         ? (err.apiError?.message ?? t('environments.rollbackFailedStatus', { status: err.status }))
         : t('environments.rollbackFailedRetry')
     toast.error(t('environments.toastRollbackFailed', { env: tl.environment }), { detail: msg })
   } finally {
-    rollingBack.value = ''
+    if(alive && initiatingProject===projectId.value)rollingBack.value = ''
   }
 }
 
@@ -238,7 +252,7 @@ onMounted(() => {
               <span class="env-card__dot" aria-hidden="true">·</span>
               <span>{{ tl.active.triggeredBy || '—' }}</span>
               <span class="env-card__dot" aria-hidden="true">·</span>
-              <span>{{ t('environments.targetCount', { n: tl.active.targets.length }) }}</span>
+              <span>{{ t(tl.active.kubernetes?.length ? 'kubernetes.targetCount' : 'environments.targetCount', { n: tl.active.targets.length + (tl.active.kubernetes?.length ?? 0) }) }}</span>
             </div>
           </div>
 
@@ -253,6 +267,7 @@ onMounted(() => {
           </AppButton>
         </div>
 
+        <p v-if="tl.active?.kubernetes?.length || previousSuccess(tl)?.kubernetes?.length" class="kube-note">{{ t('kubernetes.noRollback') }}</p>
         <!-- Deployment timeline rail -->
         <ol class="env-timeline" :aria-label="t('environments.timelineAria', { env: tl.environment })">
           <li
@@ -284,6 +299,7 @@ onMounted(() => {
                   {{ a.type }}:{{ a.name }}
                 </span>
               </div>
+              <div v-for="target in dep.kubernetes ?? []" :key="target.operationId" class="kube-card kube-surface"><strong>Kubernetes · {{ target.namespace }}/{{ target.deployment }}</strong><p>{{ target.container }} · {{ t('kubernetes.business.'+target.business) }} · {{ t('kubernetes.cleanup.'+target.cleanup) }}</p><p><code>{{ target.image }}</code></p><p v-if="target.adopted" class="kube-muted">{{ t('kubernetes.adopted') }} <RouterLink :to="{name:'run-detail',params:{id:target.sourceRunId}}">{{ t('kubernetes.sourceRun') }}</RouterLink></p><p class="kube-muted">{{ t('kubernetes.rolloutOnly') }}</p></div>
               <ReleaseGuardPanel
                 :run-id="dep.runId"
                 :project-id="projectId"

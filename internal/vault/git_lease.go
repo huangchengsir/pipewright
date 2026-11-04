@@ -23,6 +23,9 @@ type GitAuthAcquirer interface {
 // AcquireGitAuth retains old test adapters while requiring managed production
 // credentials to hold a generation reference until the actual Git call ends.
 func AcquireGitAuth(ctx context.Context, v Vault, id string) (GitAuth, func(), error) {
+	if err := ValidateGenericReference(id); err != nil {
+		return GitAuth{}, func() {}, err
+	}
 	if v == nil {
 		return GitAuth{}, func() {}, nil
 	}

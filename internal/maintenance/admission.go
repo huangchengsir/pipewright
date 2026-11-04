@@ -53,9 +53,9 @@ func Fence(ctx context.Context, db *sql.DB, task string) error {
 		}
 		queries := []struct{ kind, sql string }{
 			{"terminal_sessions", "SELECT COUNT(*) FROM selfupdate_leases WHERE kind='terminal_pty'"},
-			{"admitted_work", "SELECT (SELECT COUNT(*) FROM selfupdate_leases WHERE kind<>'terminal_pty') + (SELECT COUNT(*) FROM oauth_credential_uses)"},
+			{"admitted_work", "SELECT (SELECT COUNT(*) FROM selfupdate_leases WHERE kind<>'terminal_pty') + (SELECT COUNT(*) FROM oauth_credential_uses) + (SELECT COUNT(*) FROM k8s_runtime_leases WHERE cleanup_state<>'verified')"},
 			{"runs", "SELECT COUNT(*) FROM pipeline_runs WHERE status IN ('queued','running','waiting_approval')"},
-			{"activity_holds", "SELECT COUNT(*) FROM project_activity WHERE released_at IS NULL"},
+			{"activity_holds", "SELECT (SELECT COUNT(*) FROM project_activity WHERE released_at IS NULL) + (SELECT COUNT(*) FROM k8s_workload_holds)"},
 			{"guards", "SELECT COUNT(*) FROM release_guards WHERE status IN ('queued','binding','observing','stopping')"},
 			{"config_operations", "SELECT COUNT(*) FROM mcp_config_operations WHERE state IN ('pending','unknown')"},
 			{"ops_runs", "SELECT COUNT(*) FROM ops_chat_runs WHERE status IN ('queued','planning','running','analyzing')"}}

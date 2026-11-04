@@ -658,6 +658,9 @@ func (s *settingsService) normalizeVars(in []BuildVar) ([]BuildVar, error) {
 // ensureCredentialExists 经保险库校验 credentialId 存在性(不泄漏明文)。
 // 保险库未配置 → ErrSettingsVaultUnconfigured;不存在 → ErrCredentialNotFound。
 func (s *settingsService) ensureCredentialExists(credID string) error {
+	if e := vault.ValidateGenericReference(credID); e != nil {
+		return ErrCredentialNotFound
+	}
 	if s.vault == nil {
 		return ErrSettingsVaultUnconfigured
 	}

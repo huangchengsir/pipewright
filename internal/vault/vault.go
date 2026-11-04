@@ -245,6 +245,9 @@ func (s *service) List() ([]Credential, error) {
 }
 
 func (s *service) Get(id string) (string, error) {
+	if err := ValidateGenericReference(id); err != nil {
+		return "", err
+	}
 	if !s.configured() {
 		return "", ErrVaultUnconfigured
 	}
@@ -268,6 +271,9 @@ func (s *service) Get(id string) (string, error) {
 
 // Reveal 同 Get 但**不更新 last_used_at**(供脱敏登记等只读取值场景)。
 func (s *service) GetGitAuth(id string) (GitAuth, error) {
+	if err := ValidateGenericReference(id); err != nil {
+		return GitAuth{}, err
+	}
 	if !s.configured() {
 		return GitAuth{}, ErrVaultUnconfigured
 	}
@@ -301,6 +307,9 @@ func (s *service) GetGitAuth(id string) (GitAuth, error) {
 }
 
 func (s *service) Reveal(id string) (string, error) {
+	if err := ValidateGenericReference(id); err != nil {
+		return "", err
+	}
 	if !s.configured() {
 		return "", ErrVaultUnconfigured
 	}
@@ -320,6 +329,9 @@ func (s *service) Reveal(id string) (string, error) {
 }
 
 func (s *service) Exists(id string) (bool, error) {
+	if err := ValidateGenericReference(id); err != nil {
+		return false, err
+	}
 	if !s.configured() {
 		return false, ErrVaultUnconfigured
 	}
@@ -335,6 +347,9 @@ func (s *service) Exists(id string) (bool, error) {
 }
 
 func (s *service) Update(id string, in UpdateInput) (*Credential, error) {
+	if err := ValidateGenericReference(id); err != nil {
+		return nil, err
+	}
 	if !s.configured() {
 		return nil, ErrVaultUnconfigured
 	}
@@ -479,6 +494,9 @@ func (s *service) Update(id string, in UpdateInput) (*Credential, error) {
 }
 
 func (s *service) Delete(id string) error {
+	if err := ValidateGenericReference(id); err != nil {
+		return err
+	}
 	if !s.configured() {
 		return ErrVaultUnconfigured
 	}
@@ -546,6 +564,9 @@ func (s *service) OpenSecret(sealed []byte) ([]byte, error) {
 
 // getView 回读单条凭据的掩码视图。
 func (s *service) getView(id string) (*Credential, error) {
+	if err := ValidateGenericReference(id); err != nil {
+		return nil, err
+	}
 	row := s.db.QueryRow(
 		`SELECT id, name, type, scope, username, masked_value, last_used_at, created_at
 		 FROM credentials WHERE id = ?`, id,

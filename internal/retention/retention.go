@@ -198,7 +198,13 @@ func (s *Service) deleteChunk(ctx context.Context, ids []string) (int, error) {
 			 (SELECT COUNT(*) FROM run_retry_dispatch WHERE attempt_id=? AND state IN ('pending','dispatching','accepted','running','outcome_unknown'))+
 			 (SELECT COUNT(*) FROM run_retry_resources WHERE attempt_id=? AND state<>'drained')+
 			 (SELECT COUNT(*) FROM run_retry_external_targets WHERE attempt_id=? AND state IN ('running','outcome_unknown'))+
-			 (SELECT COUNT(*) FROM run_retry_lineages WHERE active_attempt_id=?)`, id, id, id, id, id, id, id, id).Scan(&holds)
+			 (SELECT COUNT(*) FROM run_retry_lineages WHERE active_attempt_id=?)+
+             (SELECT COUNT(*) FROM k8s_operations o WHERE o.run_id=? AND
+               (o.owner_fenced=0 OR o.cleanup_state<>'verified' OR
+                (o.retired=0 AND o.business_state IN ('not_dispatched','submitted','outcome_unknown')) OR
+                EXISTS(SELECT 1 FROM k8s_workload_holds h WHERE h.operation_id=o.id) OR
+                EXISTS(SELECT 1 FROM k8s_runtime_leases l WHERE l.source_operation_id=o.id AND l.cleanup_state<>'verified')))
+             `, id, id, id, id, id, id, id, id, id).Scan(&holds)
 			if err != nil {
 				return err
 			}

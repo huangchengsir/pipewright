@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/runretry"
 	"sort"
+	"time"
 )
 
 // store.go 实现「按环境聚合部署历史」的只读查询(纯参数化 SQL,零迁移,JOIN 既有表):
@@ -33,8 +35,10 @@ func (s *Service) loadDeploymentsByEnv(ctx context.Context, projectID string) (m
 	defer func() { _ = rows.Close() }()
 
 	type acc struct {
-		dep    Deployment
-		latest string // 最晚目标机结束/开始时刻(决定部署时刻)
+		dep               Deployment
+		runStatus         string
+		kubernetesSuccess bool
+		latest            string // 最晚目标机结束/开始时刻(决定部署时刻)
 	}
 	byRun := map[string]*acc{}
 	runOrder := []string{}
@@ -79,6 +83,76 @@ func (s *Service) loadDeploymentsByEnv(ctx context.Context, projectID string) (m
 		return nil, nil, fmt.Errorf("environments: iterate deployments: %w", err)
 	}
 
+	if s.kubernetes != nil {
+		rows.Close()
+		refs := []runretry.KubernetesHistoryEntry{}
+		r, e := s.db.QueryContext(ctx, `SELECT o.run_id,o.id FROM k8s_operations o JOIN pipeline_runs r ON r.id=o.run_id WHERE r.project_id=? AND TRIM(r.resolved_environment)<>'' AND (o.dispatch_fenced=1 OR o.business_state='unchanged') ORDER BY o.created_at DESC LIMIT 500`, projectID)
+		if e != nil {
+			return nil, nil, e
+		}
+		for r.Next() {
+			var ref runretry.KubernetesHistoryEntry
+			if e = r.Scan(&ref.RunID, &ref.OperationID); e != nil {
+				r.Close()
+				return nil, nil, e
+			}
+			refs = append(refs, ref)
+		}
+		e = r.Err()
+		r.Close()
+		if e != nil {
+			return nil, nil, e
+		}
+		if s.kubernetesHistory != nil {
+			more, e := s.kubernetesHistory(ctx, projectID)
+			if e != nil {
+				return nil, nil, e
+			}
+			refs = append(refs, more...)
+		}
+		seen := map[string]bool{}
+		for _, ref := range refs {
+			key := ref.RunID + "/" + ref.OperationID
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			op, e := s.kubernetes.GetOperation(ctx, ref.OperationID)
+			if e != nil {
+				return nil, nil, e
+			}
+			var env, commit, branch, actor, runStatus string
+			if e = s.db.QueryRowContext(ctx, "SELECT resolved_environment,trigger_commit,trigger_branch,trigger_actor,status FROM pipeline_runs WHERE id=? AND project_id=?", ref.RunID, projectID).Scan(&env, &commit, &branch, &actor, &runStatus); e != nil {
+				return nil, nil, e
+			}
+			if env == "" {
+				continue
+			}
+			a, ok := byRun[ref.RunID]
+			if !ok {
+				a = &acc{dep: Deployment{RunID: ref.RunID, Commit: commit, Branch: branch, TriggeredBy: actor, Targets: []TargetSummary{}, Artifacts: []Artifact{}, ServerIDs: []string{}}}
+				a.dep.envName = env
+				byRun[ref.RunID] = a
+				runOrder = append(runOrder, ref.RunID)
+			}
+			target := op.Intent.Authorization.Target
+			a.dep.Kubernetes = append(a.dep.Kubernetes, KubernetesTargetSummary{OperationID: op.ID, SourceRunID: op.RunID, Namespace: target.Namespace, Deployment: target.Deployment, Container: target.Container, Image: op.Intent.Image, Business: op.Business, Cleanup: op.Cleanup, Adopted: op.RunID != ref.RunID})
+			// Reconciliation updates evidence, never the deployment chronology.
+			eventAt := op.CreatedAt
+			if op.Receipt != nil && op.Receipt.DeploymentAt > 0 {
+				eventAt = op.Receipt.DeploymentAt
+			}
+			when := time.UnixMilli(eventAt).UTC().Format(time.RFC3339)
+			if when > a.latest {
+				a.latest = when
+			}
+			a.runStatus = runStatus
+			a.kubernetesSuccess = a.kubernetesSuccess && op.Successful()
+			if len(a.dep.Kubernetes) == 1 {
+				a.kubernetesSuccess = op.Successful()
+			}
+		}
+	}
 	// 2) 为每个 run 补产物 + 归并状态 + 落部署时刻。
 	for _, runID := range runOrder {
 		a := byRun[runID]
@@ -88,6 +162,10 @@ func (s *Service) loadDeploymentsByEnv(ctx context.Context, projectID string) (m
 		}
 		a.dep.Artifacts = arts
 		a.dep.Status = aggregateTargetStatus(a.dep.Targets)
+		if len(a.dep.Kubernetes) > 0 {
+			a.dep.Status = kubernetesDeploymentStatus(a.runStatus, a.kubernetesSuccess, a.dep.Targets)
+		}
+
 		a.dep.DeployedAt = a.latest
 	}
 
@@ -138,4 +216,11 @@ func (s *Service) loadArtifacts(ctx context.Context, runID string) ([]Artifact, 
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+func kubernetesDeploymentStatus(runStatus string, allKubernetesReady bool, targets []TargetSummary) string {
+	if runStatus == "success" && allKubernetesReady && (len(targets) == 0 || aggregateTargetStatus(targets) == DeployStatusSuccess) {
+		return DeployStatusSuccess
+	}
+	return DeployStatusFailed
 }

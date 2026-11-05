@@ -262,6 +262,8 @@ export default {
   unnamedJob: '(unbenannter Job)',
   thisPipeline: 'diese Pipeline',
   closeDrawer: 'Panel schließen',
+  expandCommandEditor: 'Vergrößerten Befehlseditor öffnen',
+  commandEditorTitle: 'Ausführungsbefehle bearbeiten',
   basicInfo: 'Grundinformationen',
   jobNameLabel: 'Jobname',
   jobNamePlaceholder: 'z. B.: Isolierter Build',

@@ -3,8 +3,11 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/huangchengsir/pipewright/master/install.sh | sh
 #
-# 探测平台 → 从 GitHub Release 下载对应静态二进制 → 校验和核验 → 装到 /usr/local/bin。
+# 探测平台 → 从明确选择的 Release 来源下载原始静态二进制 → 校验和核验 → 装到 /usr/local/bin。
 # 可配环境变量:
+#   SOURCE          github(默认)或 gitee;不自动跨源回退。
+#   PIPEWRIGHT_GITEE_RELEASE_REPO  官方 Gitee 镜像的 owner/repo;SOURCE=gitee 必填且需 python3。
+#   PIPEWRIGHT_RELEASE_REPO       GitHub owner/repo;默认 huangchengsir/pipewright。
 #   VERSION         钉某版本(如 v1.2.3);缺省取 latest(API 被限流时自动退回重定向解析)。
 #   INSTALL_DIR     安装目录;缺省 /usr/local/bin(不可写时自动 sudo)。
 #   INSTALL_DOCKER  =1 时,Linux 下若缺 Docker 自动经官方 get.docker.com 安装(隔离构建/容器部署需要)。
@@ -20,7 +23,25 @@
 #   https://github.com/huangchengsir/pipewright/releases
 set -eu
 
-REPO="huangchengsir/pipewright"
+SOURCE="${SOURCE:-github}"
+case "$SOURCE" in
+ github) REPO="${PIPEWRIGHT_RELEASE_REPO:-huangchengsir/pipewright}" ;;
+ gitee)
+  REPO="${PIPEWRIGHT_GITEE_RELEASE_REPO:-}"
+  [ -n "$REPO" ] || { printf '%s\n' 'SOURCE=gitee 需要 PIPEWRIGHT_GITEE_RELEASE_REPO=owner/repo。' >&2; exit 1; }
+  command -v python3 >/dev/null 2>&1 || { printf '%s\n' 'SOURCE=gitee 需要 python3，用于严格核验镜像完成标记。' >&2; exit 1; }
+  ;;
+ *) printf '%s\n' 'SOURCE 只支持 github 或 gitee。' >&2; exit 1 ;;
+esac
+# 来源只接受仓库路径，不能注入任意下载主机、查询参数或相对路径。
+if ! printf '%s\n' "$REPO" | LC_ALL=C grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
+ printf '%s\n' 'Release 仓库必须是 owner/repo 格式。' >&2
+ exit 1
+fi
+RELEASE_OWNER="${REPO%%/*}"
+RELEASE_NAME="${REPO#*/}"
+case "$RELEASE_OWNER" in .|..) printf '%s\n' 'Release 仓库空间不能是相对路径。' >&2; exit 1 ;; esac
+case "$RELEASE_NAME" in .|..) printf '%s\n' 'Release 仓库名称不能是相对路径。' >&2; exit 1 ;; esac
 BIN="pipewright"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 SERVICE_INSTALLED=0
@@ -71,32 +92,220 @@ aarch64 | arm64) ARCH="arm64" ;;
 *) err "不支持的架构:$ARCH。" ;;
 esac
 
-# 版本:缺省取 latest release 的 tag_name。
-TAG="${VERSION:-}"
-if [ -z "$TAG" ]; then
-	info "查询最新版本…"
-	# 先走 API;若被限流(常见 403)或网络失败,退回 /releases/latest 的重定向解析,绕开 API。
-	TAG="$($DL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null |
-		grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/')"
-	if [ -z "$TAG" ] && command -v curl >/dev/null 2>&1; then
-		EFF="$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest" 2>/dev/null || true)"
-		case "$EFF" in */releases/tag/*) TAG="${EFF##*/tag/}" ;; esac
-	fi
-	[ -n "$TAG" ] || err "无法获取最新版本号(GitHub API 限流?可设 VERSION 环境变量钉版本)。"
-fi
-# 归档名用去掉前导 v 的版本号;下载路径用原始 tag。
-VER_NO_V="${TAG#v}"
-ARCHIVE="${BIN}_${VER_NO_V}_${OS}_${ARCH}.tar.gz"
-BASE="https://github.com/${REPO}/releases/download/${TAG}"
-
-info "安装 ${BIN} ${TAG}(${OS}/${ARCH})"
-
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-info "下载 ${ARCHIVE}…"
-$DL_O "${TMP}/${ARCHIVE}" "${BASE}/${ARCHIVE}" || err "下载失败:${BASE}/${ARCHIVE}"
-$DL_O "${TMP}/checksums.txt" "${BASE}/checksums.txt" || err "下载校验和失败。"
+# Gitee 只在管理员显式配置镜像后使用。Python 仅是该来源的解析依赖；
+# GitHub 路径保留原最小依赖。先严格验证完整发布，再下载对应归档。
+TAG="${VERSION:-}"
+if [ "$SOURCE" = "gitee" ]; then
+ info "检查 Gitee 镜像完整性…"
+ if ! TAG="$(python3 - "$REPO" "$TAG" "$OS" "$ARCH" "$TMP" <<'PY_GITEE_INSTALL'
+import hashlib
+import json
+from pathlib import Path
+import re
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+if sys.version_info < (3, 9):
+    print("SOURCE=gitee 需要 Python 3.9 或更高版本。", file=sys.stderr)
+    raise SystemExit(1)
+repo, requested_tag, osname, arch, temporary = sys.argv[1:]
+max_file = 100 * 1024 * 1024
+sha_pattern = re.compile(r"^[0-9a-f]{64}$")
+commit_pattern = re.compile(r"^[0-9a-f]{40}$")
+tag_pattern = re.compile(r"^v?[0-9]+\.[0-9]+\.[0-9]+$")
+
+class InvalidMirror(Exception):
+    pass
+
+class Redirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        parsed = urllib.parse.urlsplit(newurl)
+        if (parsed.scheme != "https" or parsed.hostname not in ("gitee.com", "foruda.gitee.com")
+                or parsed.port not in (None, 443) or parsed.username or parsed.password or parsed.fragment):
+            raise InvalidMirror("镜像下载发生了不允许的重定向")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+opener = urllib.request.build_opener(Redirects())
+# Absolute budget also covers pagination and slow-drip response bodies.
+deadline = time.monotonic() + 300
+
+def read(url, limit):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise InvalidMirror("镜像读取超过总时间限制")
+    req = urllib.request.Request(url, headers={"User-Agent": "pipewright-installer/1", "Accept-Encoding": "identity"})
+    with opener.open(req, timeout=min(30, remaining)) as response:
+        if response.status != 200:
+            raise InvalidMirror("镜像响应状态异常")
+        chunks = []
+        size = 0
+        while True:
+            if time.monotonic() >= deadline:
+                raise InvalidMirror("镜像读取超过总时间限制")
+            # read1 returns available bytes without waiting for a full chunk, so
+            # a slow stream cannot indefinitely defer the absolute budget check.
+            chunk = response.read1(min(65536, limit + 1 - size))
+            if not chunk:
+                return b"".join(chunks)
+            size += len(chunk)
+            if size > limit:
+                raise InvalidMirror("镜像文件超过大小限制")
+            chunks.append(chunk)
+
+
+def unique_object(pairs):
+    obj = {}
+    for key, value in pairs:
+        if key in obj:
+            raise InvalidMirror("镜像 JSON 含重复字段")
+        obj[key] = value
+    return obj
+
+def decode(raw):
+    return json.loads(raw, object_pairs_hook=unique_object)
+
+def version_key(tag):
+    parts = tag.removeprefix("v").split(".")
+    normalized = [part.lstrip("0") or "0" for part in parts]
+    return tuple((len(part), part) for part in normalized), tag
+
+
+def highest_stable_release(api):
+    selected = None
+    for page in range(1, 101):
+        releases = decode(read(f"{api}?page={page}&per_page=20", 1024 * 1024))
+        if not isinstance(releases, list) or len(releases) > 20:
+            raise InvalidMirror("镜像版本分页数据无效")
+        for item in releases:
+            if not isinstance(item, dict):
+                raise InvalidMirror("镜像版本分页数据无效")
+            for flag in ("prerelease", "draft"):
+                if flag in item and type(item[flag]) is not bool:
+                    raise InvalidMirror("镜像版本状态无效")
+            tag = item.get("tag_name", "")
+            if not isinstance(tag, str):
+                raise InvalidMirror("镜像版本名称无效")
+            if item.get("prerelease", False) or item.get("draft", False) or not tag_pattern.fullmatch(tag):
+                continue
+            if selected is None or version_key(tag) > version_key(selected["tag_name"]):
+                selected = item
+        if len(releases) < 20:
+            if selected is None:
+                raise InvalidMirror("镜像尚无正式版本")
+            return selected
+    # A full final page cannot prove the complete list has been read.
+    raise InvalidMirror("镜像版本分页尚未完整读取")
+
+
+try:
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) or any(part in (".", "..") for part in repo.split("/")):
+        raise InvalidMirror("镜像仓库路径无效")
+    if requested_tag and not tag_pattern.fullmatch(requested_tag):
+        raise InvalidMirror("Gitee 镜像仅支持固定的正式版 vX.Y.Z")
+    api = "https://gitee.com/api/v5/repos/" + repo + "/releases"
+    release = (decode(read(api + "/tags/" + requested_tag, 1024 * 1024))
+               if requested_tag else highest_stable_release(api))
+    if not isinstance(release, dict):
+        raise InvalidMirror("镜像版本信息无效")
+    tag = release.get("tag_name", "")
+    commit = release.get("target_commitish", "")
+    if (not isinstance(tag, str) or not tag_pattern.fullmatch(tag)
+            or requested_tag and tag != requested_tag or release.get("prerelease", False) is not False
+            or release.get("draft", False) is not False
+            or not isinstance(commit, str) or not commit_pattern.fullmatch(commit)):
+        raise InvalidMirror("镜像尚未提供可核验的正式版本")
+    version = tag.removeprefix("v")
+    expected_names = {f"pipewright_{version}_{platform}_{cpu}.{'zip' if platform == 'windows' else 'tar.gz'}"
+                      for platform in ("darwin", "linux", "windows") for cpu in ("amd64", "arm64")}
+    metadata = release.get("assets")
+    if not isinstance(metadata, list):
+        raise InvalidMirror("镜像缺少附件清单")
+    metadata_names = set()
+    for item in metadata:
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str) or item["name"] in metadata_names:
+            raise InvalidMirror("镜像附件清单无效")
+        metadata_names.add(item["name"])
+    if not expected_names.union({"checksums.txt", "pipewright-release.json"}).issubset(metadata_names):
+        raise InvalidMirror("镜像尚未同步完整，请稍后重试或明确选择其他来源")
+    base = f"https://gitee.com/{repo}/releases/download/{tag}/"
+    marker = decode(read(base + "pipewright-release.json", 64 * 1024))
+    if (not isinstance(marker, dict) or set(marker) != {"schemaVersion", "tag", "commit", "checksumsSha256", "assets"}
+            or type(marker["schemaVersion"]) is not int or marker["schemaVersion"] != 1
+            or marker["tag"] != tag or marker["commit"] != commit
+            or not isinstance(marker["checksumsSha256"], str) or not sha_pattern.fullmatch(marker["checksumsSha256"])
+            or not isinstance(marker["assets"], dict) or set(marker["assets"]) != expected_names
+            or any(not isinstance(v, str) or not sha_pattern.fullmatch(v) for v in marker["assets"].values())):
+        raise InvalidMirror("镜像完成标记无效或与版本身份不符")
+    checksum_raw = read(base + "checksums.txt", 1024 * 1024)
+    if hashlib.sha256(checksum_raw).hexdigest() != marker["checksumsSha256"]:
+        raise InvalidMirror("镜像校验文件与完成标记不符")
+    entries = {}
+    for line in checksum_raw.decode("utf-8").splitlines():
+        if not line.strip():
+            continue
+        fields = line.split()
+        if len(fields) != 2 or not sha_pattern.fullmatch(fields[0]):
+            raise InvalidMirror("镜像校验条目无效")
+        name = fields[1].removeprefix("*")
+        if name not in expected_names or name in entries:
+            raise InvalidMirror("镜像校验条目重复或包含其他版本")
+        entries[name] = fields[0]
+    if entries != marker["assets"]:
+        raise InvalidMirror("镜像原始六平台包的校验条目不完整")
+    archive = f"pipewright_{version}_{osname}_{arch}.{'zip' if osname == 'windows' else 'tar.gz'}"
+    raw = read(base + archive, max_file)
+    if hashlib.sha256(raw).hexdigest() != entries[archive]:
+        raise InvalidMirror("安装包校验和不匹配，原程序未替换")
+    destination = Path(temporary)
+    with (destination / archive).open("xb") as output:
+        output.write(raw)
+    with (destination / "checksums.txt").open("xb") as output:
+        output.write(checksum_raw)
+    print(tag)
+except InvalidMirror as exc:
+    print(str(exc), file=sys.stderr)
+    raise SystemExit(1)
+except Exception:
+    # 不显示 urllib 异常，避免泄露 CDN 签名查询参数。
+    print("Gitee 镜像读取失败；请检查配置、网络和镜像同步状态，未自动切换来源。", file=sys.stderr)
+    raise SystemExit(1)
+PY_GITEE_INSTALL
+ )"; then
+  err "Gitee 安装准备失败，原程序未替换。"
+ fi
+else
+ # 版本:缺省取 latest release 的 tag_name。
+ if [ -z "$TAG" ]; then
+  info "查询最新版本…"
+  # API 限流或网络失败时只回退同一来源的网页路由，不跨源选择版本。
+  TAG="$($DL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null |
+   grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/')"
+  if [ -z "$TAG" ] && command -v curl >/dev/null 2>&1; then
+   EFF="$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest" 2>/dev/null || true)"
+   case "$EFF" in */releases/tag/*) TAG="${EFF##*/tag/}" ;; esac
+  fi
+  [ -n "$TAG" ] || err "无法获取最新版本号(GitHub API 限流?可设 VERSION 环境变量钉版本)。"
+ fi
+fi
+# 路径只由已验证版本与平台组成；拒绝相对路径和 URL 控制字符。
+if ! printf '%s\n' "$TAG" | LC_ALL=C grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.-]+)?$'; then
+ err "版本号格式无效。"
+fi
+VER_NO_V="${TAG#v}"
+ARCHIVE="${BIN}_${VER_NO_V}_${OS}_${ARCH}.tar.gz"
+BASE="https://${SOURCE}.com/${REPO}/releases/download/${TAG}"
+info "安装 ${BIN} ${TAG}(${OS}/${ARCH}) · ${SOURCE}"
+if [ "$SOURCE" = "github" ]; then
+ info "下载 ${ARCHIVE}…"
+ $DL_O "${TMP}/${ARCHIVE}" "${BASE}/${ARCHIVE}" || err "下载失败:${BASE}/${ARCHIVE}"
+ $DL_O "${TMP}/checksums.txt" "${BASE}/checksums.txt" || err "下载校验和失败。"
+fi
 
 # 校验和核验:从 checksums.txt 取本归档的期望值,与实际比对。
 info "核验校验和…"
@@ -172,6 +381,12 @@ setup_service() {
 			echo '# Pipewright 运行配置(systemd EnvironmentFile);改后 systemctl restart pipewright 生效。'
 			echo "PIPEWRIGHT_ADDR=${ADDR}"
 			echo "PIPEWRIGHT_MASTER_KEY_FILE=${KEY_FILE}"
+   if [ "$SOURCE" = "gitee" ]; then
+    echo 'PIPEWRIGHT_UPDATE_SOURCE=gitee'
+    echo "PIPEWRIGHT_GITEE_RELEASE_REPO=${REPO}"
+   elif [ "$REPO" != "huangchengsir/pipewright" ]; then
+    echo "PIPEWRIGHT_RELEASE_REPO=${REPO}"
+   fi
 			if [ "$DB_DRIVER" = "mysql" ]; then
 				echo 'PIPEWRIGHT_DB_DRIVER=mysql'
 				echo "PIPEWRIGHT_DB_DSN=${PIPEWRIGHT_DB_DSN}"
@@ -238,6 +453,8 @@ maybe_setup_service() {
 	esac
 
 	[ "$do_svc" = "1" ] && setup_service
+	# Explicitly skipping service installation is a successful install.
+	return 0
 }
 
 # ── Docker 运行时检测 ────────────────────────────────────────────────

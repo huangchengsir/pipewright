@@ -25,6 +25,8 @@ jobs:
           if [ -n "$out" ]; then echo "gofmt needed:"; echo "$out"; exit 1; fi
       - run: go vet . ./cmd/... ./internal/...
       - run: go test . ./cmd/... ./internal/...
+      - name: installer and release mirror contracts
+        run: python3 -B -m unittest discover -s scripts/tests -p 'test_*.py' -v
       - name: static build
         run: CGO_ENABLED=0 go build -o pipewright ./cmd/pipewright
 

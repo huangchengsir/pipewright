@@ -69,7 +69,7 @@ It has since grown past that trio: publishing a deployed service on an HTTPS dom
 - **🤖 AI assist (optional, fully degradable)** — bring your own Claude / OpenAI / Ollama endpoint (API key encrypted in the vault). Automatic root-cause diagnosis when a build or deploy fails, with a 👍/👎 feedback loop and accuracy stats · repo analysis → generated pipeline draft · success-vs-failure commit diff · script risk annotation · natural-language→shell assistant and container diagnosis in the ops terminal. The core CI/CD path never depends on any of it (NFR-10).
 - **📈 Metrics** — the four DORA metrics (deployment frequency / lead time for changes / change failure rate / mean time to restore) out of the box, with Elite/High/Medium/Low performance bands.
 - **🧹 Housekeeping & platform** — configurable run-data retention sweeper (off by default; never touches in-flight runs) · SQLite (pure Go) or MySQL · 8 UI languages (zh-CN / zh-TW / en / ja / ko / de / fr / es) including server-side localization of API error messages.
-- **🔄 Update check + one-click self-update** — Settings → System checks GitHub for the latest release with semantic comparison; binary deployments can **auto-update with one click** from the UI (download + checksum verification + atomic replace + self-restart), while Docker deployments get the exact upgrade command.
+- **🔄 Update check + one-click self-update** — Settings → System checks the explicitly selected GitHub or configured Gitee source for the latest release with semantic comparison; binary deployments can **auto-update with one click** from the UI (download + checksum verification + atomic replace + self-restart), while Docker deployments get the exact upgrade command.
 
 > Security is non-negotiable: credentials stored as ciphertext only, commands arrayified against injection, outbound SSRF locked down, logs redacted.
 
@@ -81,7 +81,7 @@ Pick any of three form factors. The platform itself is a single static binary wi
 
 ### ① One-click script (Linux / macOS)
 
-Downloads the static binary for your platform from GitHub Releases and installs it to `/usr/local/bin` (with checksum verification + Docker detection):
+Downloads the static binary for your platform from GitHub Releases by default and installs it to `/usr/local/bin` (with checksum verification + Docker detection). `SOURCE=gitee` explicitly selects a configured official Gitee mirror; sources are never switched silently:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/huangchengsir/pipewright/master/install.sh | sh
@@ -108,6 +108,23 @@ SETUP_SERVICE=1 PIPEWRIGHT_DB_DRIVER=mysql \
   PIPEWRIGHT_DB_DSN='user:pw@tcp(host:3306)/pipewright?parseTime=true&charset=utf8mb4' \
   sh -c "$(curl -fsSL https://raw.githubusercontent.com/huangchengsir/pipewright/master/install.sh)"
 ```
+
+**Gitee binary source (opt-in):** obtain the same `install.sh` from the project's trusted source or a verified code mirror. Gitee installation additionally requires Python 3.9+ for strict release/JSON validation; GitHub installation keeps its original dependencies.
+
+```sh
+# Set this to the public mirror prepared by the Pipewright maintainer.
+# Do not substitute an arbitrary third-party download URL.
+SOURCE=gitee PIPEWRIGHT_GITEE_RELEASE_REPO=owner/pipewright VERSION=vX.Y.Z \
+  sh ./install.sh
+```
+
+A Gitee release is installable only after all six original platform archives,
+`checksums.txt`, and the final `pipewright-release.json` completion marker have
+been published consistently. An unavailable or partially synchronized mirror
+fails safely without changing the installed program. The installer does not
+create a mirror, obtain credentials, query geography, or fall back across sources.
+For a newly created systemd service, the configured mirror repository and initial
+Gitee source choice are written to the environment file; an existing environment file is preserved.
 
 > Windows users: download the `.zip` from [Releases](https://github.com/huangchengsir/pipewright/releases).
 
@@ -145,10 +162,59 @@ make build          # frontend build → go:embed → single static binary ./pip
 
 ### Updating
 
-Open **Settings → System** and click "Check for updates" to query the latest release; when a new version is available:
+Open **Settings → System**, choose the release source, and click "Check for updates".
+GitHub remains the default. Gitee is available only when the instance operator
+sets `PIPEWRIGHT_GITEE_RELEASE_REPO=owner/repository` to the maintainer's public
+mirror; changing a source does not make an incomplete mirror usable. A saved
+source choice applies to new checks and tasks. Gitee checks completely paginate the
+release list and select the highest stable semantic version, so backfilling an old
+release cannot downgrade the offered version. An incomplete page scan or incomplete
+highest stable release fails instead of silently selecting an older version.
+An interrupted task stays bound
+to its original source, repository, version and SHA256, including after restart.
+When a new version is available:
 
 - **Binary deployment**: click "Update now" to auto-download the new version + verify checksum + replace + restart (requires write permission to the binary file; installing to `$HOME/.local/bin` avoids sudo, and a root systemd service installed via `SETUP_SERVICE=1` also satisfies this).
 - **Docker deployment**: the container doesn't replace its own image; follow the prompt to run `docker compose pull && docker compose up -d` on the host (the data volume is preserved).
+
+### Maintaining the official Gitee release mirror
+
+This is an optional maintainer workflow, not a requirement for GitHub installs:
+
+1. Prepare a public Gitee repository. The sync script copies only the selected
+   already-published GitHub tag and its reachable Git objects into a temporary bare
+   repository, verifies the full commit, and pushes that single missing tag without
+   force. Existing tags must resolve to the same commit; branches are never changed.
+   Initial empty/private repository setup and publication are a separate operator step.
+2. Set the GitHub repository variable `GITEE_RELEASE_REPO` to its `owner/repo`
+   and the repository secret `GITEE_RELEASE_TOKEN` with permission to push tags,
+   manage its Releases/attachments, and read the token account's profile (`user_info`)
+   to obtain the correct HTTPS Git username. Never put the token in the product settings, a URL,
+   source files, logs, or a support conversation.
+3. After the normal `release` workflow succeeds, `gitee-release-mirror` copies
+   the exact original stable Release assets. It can also be explicitly dispatched
+   for an existing `vX.Y.Z` tag. Mirror jobs are serialized with up to 100 pending
+   runs (`queue: max`), retaining earlier pending releases within that bound.
+   No packages are rebuilt or new source versions
+   created; the exact selected published Git tag is copied only when missing.
+   No repositories/branches are created, and Docker/GHCR images are not mirrored.
+4. Synchronization verifies the original GitHub asset digests, stages a Gitee
+   prerelease, anonymously reads back all six packages and the original checksum
+   file, uploads the completion marker last, then publishes the stable mirror.
+   The script never overwrites mismatching remote files or an incomplete already
+   published mirror. Git credentials exist only in a scoped in-memory HTTP header
+   of the push subprocess; URL/argv, credential helpers and Git trace logs contain
+   no token. Git and Python 3.9+ must be available (both are included on the workflow
+   runner). After an uncertain push or upload, inspect the remote state and explicitly
+   rerun the same tag; the script reads identities first and reuses matching content.
+5. Verify the completed public mirror before configuring users' instances.
+   Plan account capacity and a documented version-retention policy separately;
+   this workflow never deletes old Releases or attachments automatically.
+
+A completion marker and checksums provide release completeness and byte-integrity
+checks under the selected source's trust. They are not independent cryptographic
+signatures or cross-source authentication. Gitee may restart a download from zero
+when its CDN does not supply a usable ETag or honor Range requests.
 
 ### Kubernetes deployment
 
@@ -170,6 +236,8 @@ A normal install only needs the first two (plus `PIPEWRIGHT_PUBLIC_URL` if you r
 | `PIPEWRIGHT_ADMIN_USERNAME` | Admin username on first launch | `admin` |
 | `PIPEWRIGHT_TRUST_PROXY` | Trust the first `X-Forwarded-For` hop as the audit client IP (`1`/`true`/`yes`/`on`). Leave off unless a trusted reverse proxy sits in front — otherwise anyone can forge audit source IPs | off |
 | `PIPEWRIGHT_RELEASE_REPO` | GitHub repo queried for update checks (change it for a fork) | `huangchengsir/pipewright` |
+| `PIPEWRIGHT_GITEE_RELEASE_REPO` | Explicit public Gitee release mirror (`owner/repository`); enables the Gitee source | unavailable when unset |
+| `PIPEWRIGHT_UPDATE_SOURCE` | Initial release source (`github` or `gitee`); applies only before an administrator saves a source preference; Gitee also requires its repository | `github` |
 | `PIPEWRIGHT_RUNTIME` | Set `docker` to declare a container deployment (affects self-update mode); otherwise auto-detected via `/.dockerenv` | auto-detect |
 | `PIPEWRIGHT_AUDIT_SINK` | Remote audit sink: an `http(s)://` endpoint, or any other value as a second local JSON Lines file path. Keeps audit records complete even if the local DB is wiped | none |
 

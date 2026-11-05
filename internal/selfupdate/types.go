@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"github.com/huangchengsir/pipewright/internal/maintenance"
+	"github.com/huangchengsir/pipewright/internal/releasesource"
 	"github.com/huangchengsir/pipewright/internal/version"
 	"net/http"
 	"os"
@@ -27,10 +28,15 @@ const (
 )
 
 type Request struct {
-	RequestID string `json:"requestId"`
-	Target    string `json:"target"`
+	Source    releasesource.ID `json:"source,omitempty"`
+	RequestID string           `json:"requestId"`
+	Target    string           `json:"target"`
 }
 type Task struct {
+	Source          releasesource.ID `json:"source"`
+	ReleaseCommit   string           `json:"releaseCommit,omitempty"`
+	ChecksumsSHA256 string           `json:"checksumsSha256,omitempty"`
+
 	BaseSHA256   string                `json:"baseSha256"`
 	Repository   string                `json:"repository"`
 	Blockers     []maintenance.Blocker `json:"blockers,omitempty"`
@@ -57,6 +63,8 @@ type storedTask struct {
 	ResumeID string `json:"resumeId"`
 }
 type Options struct {
+	Sources                                     *releasesource.Catalog
+	PreferredSource                             func(context.Context) (releasesource.ID, error)
 	Capabilities                                func() (version.DeploymentMode, bool)
 	Repository, Executable, Directory, Platform string
 	Client                                      *http.Client

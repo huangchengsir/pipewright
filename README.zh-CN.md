@@ -69,7 +69,7 @@
 - **🤖 AI 辅助(可选,完全可降级)** —— 自带 Claude / OpenAI / Ollama 端点(apiKey 密文入保险库)。构建/部署失败自动根因诊断 + 👍/👎 反馈飞轮与准确率统计 · 仓库分析 → 生成流水线草案 · 成功/失败提交差异 · 脚本风险标注 · 运维终端的自然语言→shell 助手与容器诊断。核心 CI/CD 路径完全不依赖它(NFR-10)。
 - **📈 度量** —— DORA 四指标(部署频率/变更前置时长/变更失败率/平均恢复时长)开箱即用,并给 Elite/High/Medium/Low 绩效分档。
 - **🧹 数据与平台** —— 运行数据保留清理器(默认关;绝不动在跑的运行)· SQLite(纯 Go)或 MySQL · 8 种界面语言(简中 / 繁中 / 英 / 日 / 韩 / 德 / 法 / 西),API 错误信息亦服务端本地化。
-- **🔄 检查 + 一键自更新** —— 设置→系统 一键查 GitHub 最新发布并语义比对;二进制部署可页面**一键自动更新**(下载 + 校验和核验 + 原子替换 + 自重启),Docker 部署给出精确升级命令。
+- **🔄 检查 + 一键自更新** —— 设置→系统 手动选择 GitHub 或已配置的 Gitee 来源，查询最新发布并语义比对;二进制部署可页面**一键自动更新**(下载 + 校验和核验 + 原子替换 + 自重启),Docker 部署给出精确升级命令。
 
 > 安全不可妥协:凭据仅以密文存储、命令 array 化防注入、出网 SSRF 收口、日志脱敏。
 
@@ -81,7 +81,7 @@
 
 ### ① 一键脚本(Linux / macOS)
 
-从 GitHub Release 下载对应平台的静态二进制装到 `/usr/local/bin`(含校验和核验 + Docker 检测):
+默认从 GitHub Release 下载对应平台的静态二进制装到 `/usr/local/bin`（含校验和核验 + Docker 检测）。`SOURCE=gitee` 显式选择已配置的官方镜像，不静默跨源回退：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/huangchengsir/pipewright/master/install.sh | sh
@@ -108,6 +108,16 @@ SETUP_SERVICE=1 PIPEWRIGHT_DB_DRIVER=mysql \
   PIPEWRIGHT_DB_DSN='user:pw@tcp(host:3306)/pipewright?parseTime=true&charset=utf8mb4' \
   sh -c "$(curl -fsSL https://raw.githubusercontent.com/huangchengsir/pipewright/master/install.sh)"
 ```
+
+**Gitee 二进制来源（按需配置）：**先从项目可信来源或已核验的代码镜像取得同一份 `install.sh`。Gitee 安装额外需要 Python 3.9+，用于严格核验版本和 JSON 完成标记；GitHub 路径保留原有依赖。
+
+```sh
+# 替换为维护者已经准备好的公开镜像仓库，不填第三方下载 URL。
+SOURCE=gitee PIPEWRIGHT_GITEE_RELEASE_REPO=owner/pipewright VERSION=vX.Y.Z \
+  sh ./install.sh
+```
+
+镜像必须完整提供六个平台的原始安装包、`checksums.txt` 以及最后上传的 `pipewright-release.json` 完成标记。镜像缺失或同步不完整时安装失败，旧程序保持。安装器不创建仓库、不获取凭据、不查询地域，也不自动切换来源。新建 systemd 服务时会保存镜像仓库和初始来源；已有环境文件不覆盖。
 
 > Windows 用户:到 [Releases](https://github.com/huangchengsir/pipewright/releases) 下载 `.zip`。
 
@@ -140,10 +150,22 @@ make build          # 前端构建 → go:embed → 单个静态二进制 ./pipe
 
 ### 更新
 
-打开 **设置 → 系统**,点「检查更新」查最新发布;有新版时:
+打开 **设置 → 系统**，手动选择来源后点「检查更新」。默认 GitHub；实例配置 `PIPEWRIGHT_GITEE_RELEASE_REPO=owner/repository` 后才能选择维护者的公开 Gitee 镜像。保存来源不会让未同步完整的镜像变为可用。新选择用于后续检查和任务；Gitee 会完整分页读取发行版，按语义版本选择最高正式版，补传旧版本不会导致推荐版本倒退。分页未读完或最高正式版不完整时直接失败，不静默退选旧版本。已中断的任务重启后仍绑定原来源、仓库、版本和 SHA256。有新版时：
 
 - **二进制部署**:点「立即更新」即自动下载新版 + 校验和核验 + 替换 + 重启(需对二进制文件有写权限;装在 `$HOME/.local/bin` 免 sudo,或用 `SETUP_SERVICE=1` 装的 root systemd 服务亦满足)。
 - **Docker 部署**:容器不替换自身镜像,按提示在宿主执行 `docker compose pull && docker compose up -d`(数据卷保留)。
+
+### 维护官方 Gitee 发布镜像
+
+这是可选的维护者流程，GitHub 安装无需配置：
+
+1. 准备公开 Gitee 仓库。脚本在临时裸仓库中只取选定的已正式发布 GitHub 标签及其可达对象，核验完整提交后，仅在 Gitee 缺失时无 force 推送该单一标签；已有同名标签须解析到相同提交，任何分支都不改。空库初始化和私有转公开由维护者另行完成。
+2. 在 GitHub 仓库设置变量 `GITEE_RELEASE_REPO=owner/repo`，以及有该仓库标签推送、Release/附件管理及账户资料读取（`user_info`，用于取得正确的 Git 用户名）权限的 secret `GITEE_RELEASE_TOKEN`。Token 不填入产品设置、URL、源码、日志或支持对话。
+3. 正常 `release` 工作流成功后，可选的 `gitee-release-mirror` 复制原始正式版产物；也可为已有 `vX.Y.Z` 手动触发。同步任务串行，`queue: max` 保留至多100个待执行任务，避免范围内的新任务替换旧待执行版本。不会重新编译或创造新源码版本，仅复制缺失的同一个已发布标签；不创建仓库或分支，也不镜像 Docker/GHCR 镜像。
+4. 脚本核验 GitHub 原始附件摘要，先暂存为 Gitee 预发布，匿名下载校验六包及原始 checksum，最后上传完成标记，再转正式。不同内容绝不覆盖；已发布却不完整的镜像也不自动修改。Git 凭据仅在 push 子进程内存的限定 HTTP header 中使用，不进入 URL/命令行、凭据助手或 trace。运行需要 Git 和 Python 3.9+（工作流 runner 已有）。推送或上传结果不确定时先核对远端，再明确重跑同一标签，先核对身份、复用一致内容。
+5. 镜像公开下载验收后，再为实例配置来源。账户容量和版本保留策略另行确定；工作流不会自动删除旧版本或附件。
+
+完成标记和 checksum 用于所选来源信任范围内的完整性与字节核验，不等于独立密码学签名或跨源认证。Gitee CDN 无可用 ETag 或忽略 Range 时，下载会安全地从头开始。
 
 ### Kubernetes 部署
 
@@ -165,6 +187,8 @@ make build          # 前端构建 → go:embed → 单个静态二进制 ./pipe
 | `PIPEWRIGHT_ADMIN_USERNAME` | 首次启动管理员用户名 | `admin` |
 | `PIPEWRIGHT_TRUST_PROXY` | 采信 `X-Forwarded-For` 首段作为审计来源 IP(`1`/`true`/`yes`/`on`)。除非前面确有可信反代,否则别开 —— 否则任意客户端都能伪造审计来源 IP | 关 |
 | `PIPEWRIGHT_RELEASE_REPO` | 检查更新所查的 GitHub 仓库(fork 可改) | `huangchengsir/pipewright` |
+| `PIPEWRIGHT_GITEE_RELEASE_REPO` | 显式配置公开 Gitee 发布镜像 `owner/repository` | 未配则不可用 |
+| `PIPEWRIGHT_UPDATE_SOURCE` | 初始来源 `github`/`gitee`；只在管理员尚未保存来源偏好时初始化，Gitee 还需配置仓库 | `github` |
 | `PIPEWRIGHT_RUNTIME` | 设 `docker` 显式声明容器部署形态(影响自更新方式);否则经 `/.dockerenv` 自动探测 | 自动探测 |
 | `PIPEWRIGHT_AUDIT_SINK` | 远端审计 sink:`http(s)://` 端点,或填其它值作为第二份本地 JSON Lines 文件路径。本地库被删后审计仍完整 | 无 |
 

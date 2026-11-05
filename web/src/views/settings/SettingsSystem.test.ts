@@ -2,13 +2,18 @@ import { HttpError } from '../../api/http'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import SettingsSystem from './SettingsSystem.vue'
+import AppSelect from '../../components/ui/AppSelect.vue'
 import { i18n, SUPPORTED_LOCALES } from '../../i18n'
-const mocks = vi.hoisted(() => ({ current: vi.fn(), get: vi.fn(), start: vi.fn(), resume: vi.fn(), version: vi.fn(), check: vi.fn() }))
-vi.mock('../../api/version', () => ({ getCurrentUpdateTask: mocks.current, getUpdateTask: mocks.get, startUpdateTask: mocks.start, resumeUpdateTask: mocks.resume, getVersion: mocks.version, checkUpdate: mocks.check }))
+const mocks = vi.hoisted(() => ({ current: vi.fn(), get: vi.fn(), start: vi.fn(), resume: vi.fn(), version: vi.fn(), check: vi.fn(), sourceGet: vi.fn(), sourceSet: vi.fn() }))
+vi.mock('../../api/version', () => ({ getCurrentUpdateTask: mocks.current, getUpdateTask: mocks.get, startUpdateTask: mocks.start, resumeUpdateTask: mocks.resume, getVersion: mocks.version, checkUpdate: mocks.check, getReleaseSourceSettings: mocks.sourceGet, setReleaseSourceSettings: mocks.sourceSet }))
 vi.mock('../../api/retention', () => ({ getRetentionConfig: vi.fn(async () => ({ enabled: false, keepPerProject: 0, maxAgeDays: 0 })), setRetentionConfig: vi.fn() }))
 const wrappers: VueWrapper[] = []
+const sourceConfig = (source: 'github' | 'gitee' = 'github', revision = 1, giteeAvailable = true) => ({ source, revision, sources: [
+ { id: 'github', name: 'GitHub', repository: 'owner/repo', available: true },
+ { id: 'gitee', name: 'Gitee', repository: giteeAvailable ? 'mirror/repo' : '', available: giteeAvailable },
+] })
 describe('system upgrade task presentation', () => {
- beforeEach(() => { vi.resetAllMocks(); sessionStorage.clear(); mocks.version.mockResolvedValue({ version: '1.0.0', commit: 'test', platform: 'linux/amd64', date: '2026-10-27T00:00:00Z', goVersion: 'go1.26' }); mocks.current.mockResolvedValue({ id: 'task', requestId: 'request', repository: 'owner/repo', target: '2.0.0', from: '1.0.0', platform: 'linux_amd64', asset: 'fixed-package', sha256: 'a'.repeat(64), state: 'ready_blocked', bytes: 100, total: 100, blockers: [{ kind: 'guards', count: 1 }], updatedAt: '2026-10-27T00:00:00Z' }) })
+ beforeEach(() => { vi.resetAllMocks(); sessionStorage.clear(); mocks.sourceGet.mockResolvedValue(sourceConfig()); mocks.version.mockResolvedValue({ version: '1.0.0', commit: 'test', platform: 'linux/amd64', date: '2026-10-27T00:00:00Z', goVersion: 'go1.26' }); mocks.current.mockResolvedValue({ id: 'task', requestId: 'request', repository: 'owner/repo', target: '2.0.0', from: '1.0.0', platform: 'linux_amd64', asset: 'fixed-package', sha256: 'a'.repeat(64), state: 'ready_blocked', bytes: 100, total: 100, blockers: [{ kind: 'guards', count: 1 }], updatedAt: '2026-10-27T00:00:00Z' }) })
  afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); i18n.global.locale.value = 'zh-CN'; vi.useRealTimers(); vi.restoreAllMocks() })
  it('keeps task status visible without a fresh update check', async () => { const w = mount(SettingsSystem); wrappers.push(w); await flushPromises(); expect(w.get('[data-testid="upgrade-task"]').text()).toContain('2.0.0'); expect(mocks.check).not.toHaveBeenCalled(); expect(mocks.start).not.toHaveBeenCalled(); expect(mocks.resume).not.toHaveBeenCalled() })
  it('translates all eight locales without resubmitting or losing the task', async () => { const w = mount(SettingsSystem); wrappers.push(w); await flushPromises(); const seen = new Set<string>(); for (const { code } of SUPPORTED_LOCALES) { i18n.global.locale.value = code; await flushPromises(); const text = w.get('[data-testid="upgrade-task"]').text(); expect(text).not.toContain('settingsSystem.'); expect(text).toContain('2.0.0'); seen.add(w.get('#upgrade-task-title').text()) } expect(seen.size).toBe(8); expect(mocks.current).toHaveBeenCalledTimes(1); expect(mocks.start).not.toHaveBeenCalled(); expect(mocks.resume).not.toHaveBeenCalled() })
@@ -22,7 +27,7 @@ describe('system upgrade task presentation', () => {
   expect(mocks.start).not.toHaveBeenCalled()
   mocks.start.mockRejectedValue(new Error('still unreachable'))
   await recover!.trigger('click'); await flushPromises()
-  expect(mocks.start).toHaveBeenCalledWith({ requestId, target: '2.0.0' })
+  expect(mocks.start).toHaveBeenCalledWith({ requestId, target: '2.0.0', source: 'github' })
  })
 
  it('shows a translated definitive rejection without stranding pending state', async () => {
@@ -59,7 +64,7 @@ describe('system upgrade task presentation', () => {
   if (action === 'start') mocks.start.mockResolvedValueOnce({ status: 'accepted', task: accepted() })
   else mocks.resume.mockResolvedValueOnce(accepted())
   await recover!.trigger('click'); await flushPromises()
-  if (action === 'start') expect(mocks.start.mock.calls[1][0]).toEqual({ requestId: original.requestId, target: original.target })
+  if (action === 'start') expect(mocks.start.mock.calls[1][0]).toEqual({ requestId: original.requestId, target: original.target, source: 'github' })
   else expect(mocks.resume.mock.calls[1]).toEqual([original.taskId, original.resumeId])
  })
  it('offers an explicit same-request check for a server accepted task without a browser pending record', async () => {
@@ -71,7 +76,7 @@ describe('system upgrade task presentation', () => {
   expect(mocks.start).not.toHaveBeenCalled()
   await recover!.trigger('click'); await flushPromises()
   expect(mocks.start).toHaveBeenCalledOnce()
-  expect(mocks.start).toHaveBeenCalledWith({ requestId: 'server-request', target: '2.0.0' })
+  expect(mocks.start).toHaveBeenCalledWith({ requestId: 'server-request', target: '2.0.0', source: 'github' })
  })
 
  it.each(['start', 'resume'] as const)('keeps status refresh reachable during an in-flight %s without stranding its writer', async action => {
@@ -149,6 +154,60 @@ describe('system upgrade task presentation', () => {
   const w = mount(SettingsSystem); wrappers.push(w); await flushPromises(); await vi.advanceTimersByTimeAsync(1500); await flushPromises()
   expect(w.get('[role="alert"]').text()).toBe(i18n.global.t('settingsSystem.errReadVersion'))
   expect(mocks.version).toHaveBeenCalledTimes(2); expect(mocks.start).not.toHaveBeenCalled()
+ })
+
+ it('uses the styled site dropdown and keeps an unconfigured source visibly unavailable', async () => {
+  mocks.sourceGet.mockResolvedValue(sourceConfig('github', 1, false)); mocks.current.mockResolvedValue(null)
+  const w = mount(SettingsSystem); wrappers.push(w); await flushPromises()
+  expect(w.find('#release-source').element.tagName).toBe('BUTTON')
+  expect(w.getComponent(AppSelect).props('options')).toEqual([
+   { value: 'github', label: 'GitHub', disabled: false }, { value: 'gitee', label: 'Gitee', disabled: true },
+  ])
+  expect(w.get('[data-testid="release-source-settings"]').text()).toContain(i18n.global.t('settingsSystem.sourceNotConfigured'))
+  expect(mocks.check).not.toHaveBeenCalled()
+ })
+ it('saves the source before checking and submits the source actually checked', async () => {
+  mocks.current.mockResolvedValue(null); mocks.sourceSet.mockResolvedValue(sourceConfig('gitee', 2))
+  mocks.check.mockResolvedValue({ current: '1.0.0', latest: '2.0.0', source: 'gitee', updateAvailable: true })
+  mocks.start.mockRejectedValue(new HttpError(409, null, 'stop after captured request'))
+  const w = mount(SettingsSystem); wrappers.push(w); await flushPromises()
+  w.getComponent(AppSelect).vm.$emit('update:modelValue', 'gitee'); await flushPromises()
+  const check = () => w.findAll('button').find(b => b.text().includes(i18n.global.t('settingsSystem.checkUpdate')))!
+  expect((check().element as HTMLButtonElement).disabled).toBe(true)
+  await w.findAll('button').find(b => b.text() === i18n.global.t('settingsSystem.sourceSave'))!.trigger('click'); await flushPromises()
+  expect(mocks.sourceSet).toHaveBeenCalledWith({ source: 'gitee', expectedRevision: 1 })
+  await check().trigger('click'); await flushPromises()
+  expect(mocks.check).toHaveBeenCalledWith('gitee', expect.objectContaining({ signal: expect.any(AbortSignal) }))
+  await w.findAll('button').find(b => b.text().includes(i18n.global.t('settingsSystem.updateNow')))!.trigger('click'); await flushPromises()
+  expect(mocks.start.mock.calls[0][0]).toMatchObject({ target: '2.0.0', source: 'gitee' })
+ })
+ it('discards a late check response after the source selection changes', async () => {
+  mocks.current.mockResolvedValue(null); let done!: (value: object) => void
+  mocks.check.mockReturnValue(new Promise(resolve => { done = resolve }))
+  const w = mount(SettingsSystem); wrappers.push(w); await flushPromises()
+  await w.findAll('button').find(b => b.text().includes(i18n.global.t('settingsSystem.checkUpdate')))!.trigger('click')
+  const signal = mocks.check.mock.calls[0][1].signal
+  w.getComponent(AppSelect).vm.$emit('update:modelValue', 'gitee'); await flushPromises()
+  done({ source: 'github', latest: '9.0.0', current: '1.0.0', updateAvailable: true }); await flushPromises()
+  expect(signal.aborted).toBe(true); expect(w.find('.sys-upgrade').exists()).toBe(false); expect(mocks.start).not.toHaveBeenCalled()
+ })
+ it('rejects an update check that returns another source', async () => {
+  mocks.current.mockResolvedValue(null); mocks.check.mockResolvedValue({ source: 'gitee', latest: '9.0.0', current: '1.0.0', updateAvailable: true })
+  const w = mount(SettingsSystem); wrappers.push(w); await flushPromises()
+  await w.findAll('button').find(b => b.text().includes(i18n.global.t('settingsSystem.checkUpdate')))!.trigger('click'); await flushPromises()
+  expect(w.find('.sys-upgrade').exists()).toBe(false); expect(w.text()).toContain(i18n.global.t('settingsSystem.sourceUnavailable'))
+ })
+ it('localizes source errors and original-task source in all eight languages', async () => {
+  mocks.sourceGet.mockResolvedValue(sourceConfig('gitee', 2)); mocks.current.mockResolvedValue({ id: 'task', state: 'interrupted', source: 'github', target: '2.0.0', from: '1.0.0', bytes: 0, total: 0 })
+  mocks.check.mockResolvedValue({ source: 'gitee', checkError: 'internal_technical_detail', checkErrorCode: 'mirror_not_ready', updateAvailable: false })
+  const w = mount(SettingsSystem); wrappers.push(w); await flushPromises()
+  await w.findAll('button').find(b => b.text().includes(i18n.global.t('settingsSystem.checkUpdate')))!.trigger('click'); await flushPromises()
+  for (const { code } of SUPPORTED_LOCALES) {
+   i18n.global.locale.value = code; await flushPromises()
+   const source = w.get('[data-testid="release-source-settings"]')
+   expect(source.text()).toContain(i18n.global.t('settingsSystem.sourceCurrentTask', { source: 'GitHub' }))
+   expect(w.text()).not.toContain('settingsSystem.'); expect(w.text()).not.toContain('internal_technical_detail'); expect(w.text()).toContain(i18n.global.t('settingsSystem.sourceNotReady'))
+  }
  })
 
 })

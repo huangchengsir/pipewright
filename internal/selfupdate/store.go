@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/releasesource"
 	"time"
 )
 
@@ -25,6 +26,7 @@ func (s *Service) load(ctx context.Context, where string, args ...any) (*Task, e
 		return nil, e
 	}
 	t := st.Task
+	t.Source = releasesource.Normalize(t.Source)
 	t.ETag = st.ETag
 	t.LastResumeID = st.ResumeID
 	return &t, nil
@@ -64,7 +66,35 @@ func (s *Service) Current(ctx context.Context) (*Task, error) {
 	return s.load(ctx, "1=1 ORDER BY CASE WHEN active_key IS NULL THEN 1 ELSE 0 END,created_at DESC,id DESC LIMIT 1")
 }
 func (s *Service) ForTarget(ctx context.Context, target string) (*Task, error) {
-	return s.load(ctx, "target_tag=? ORDER BY created_at DESC,id DESC LIMIT 1", target)
+	return s.ForSourceTarget(ctx, releasesource.GitHub, target)
+}
+func (s *Service) ForSourceTarget(ctx context.Context, source releasesource.ID, target string) (*Task, error) {
+	rows, e := s.db.QueryContext(ctx, "SELECT record_json FROM selfupdate_tasks WHERE instance_id=? AND target_tag=? ORDER BY created_at DESC,id DESC", s.instance, target)
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var raw string
+		if e = rows.Scan(&raw); e != nil {
+			return nil, e
+		}
+		var st storedTask
+		if e = json.Unmarshal([]byte(raw), &st); e != nil {
+			return nil, e
+		}
+		t := st.Task
+		t.Source = releasesource.Normalize(t.Source)
+		t.ETag = st.ETag
+		t.LastResumeID = st.ResumeID
+		if t.Source == source {
+			return &t, nil
+		}
+	}
+	if e = rows.Err(); e != nil {
+		return nil, e
+	}
+	return nil, ErrNotFound
 }
 
 func (s *Service) finish(parent context.Context, t *Task, state, reason string) error {

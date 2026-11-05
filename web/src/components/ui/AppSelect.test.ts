@@ -146,4 +146,21 @@ describe('AppSelect portal menu', () => {
     await wrapper.vm.$nextTick()
     expect(document.body.querySelector('.app-select__menu--portal')).toBeNull()
   })
+  it('skips unavailable options by keyboard and refuses their pointer selection', async () => {
+    wrapper = mount(AppSelect, { props: { modelValue: 'github', options: [
+      { value: 'github', label: 'GitHub' }, { value: 'gitee', label: 'Gitee', disabled: true }, { value: 'other', label: 'Other' },
+    ] } })
+    const trigger = wrapper.get('.app-select__trigger'); await trigger.trigger('click')
+    expect(wrapper.findAll('[role="option"]')[1].attributes('aria-disabled')).toBe('true')
+    await wrapper.findAll('[role="option"]')[1].trigger('click'); expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    await trigger.trigger('keydown', { key: 'ArrowDown' }); await trigger.trigger('keydown', { key: 'Enter' })
+    expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['other'])
+  })
+  it('does not choose anything when all options are unavailable and closes on Tab', async () => {
+    wrapper = mount(AppSelect, { props: { modelValue: '', options: [{ value: 'gitee', label: 'Gitee', disabled: true }] } })
+    const trigger = wrapper.get('.app-select__trigger'); await trigger.trigger('click'); await trigger.trigger('keydown', { key: 'ArrowUp' }); await trigger.trigger('keydown', { key: 'Enter' })
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    await trigger.trigger('keydown', { key: 'Tab' }); expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+  })
+
 })

@@ -155,7 +155,7 @@ export const http = {
       body: data !== undefined ? JSON.stringify(data) : undefined,
     })
   },
-  put<T>(url: string, data?: unknown, options?: RequestInit): Promise<T> {
+  put<T>(url: string, data?: unknown, options?: HttpOptions): Promise<T> {
     return request<T>(url, {
       ...options,
       method: 'PUT',

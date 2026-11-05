@@ -78,7 +78,7 @@ describe('durable update task tracking', () => {
   if (action === 'start') mocks.start.mockResolvedValueOnce({ status: 'accepted', task: accepted() })
   else mocks.resume.mockResolvedValueOnce(accepted())
   await api.recoverOriginal(); await flushPromises()
-  if (action === 'start') expect(mocks.start.mock.calls[1][0]).toEqual({ requestId: original.requestId, target: original.target })
+  if (action === 'start') expect(mocks.start.mock.calls[1][0]).toEqual({ requestId: original.requestId, target: original.target, source: 'github' })
   else expect(mocks.resume.mock.calls[1]).toEqual([original.taskId, original.resumeId])
  })
  it.each(['start', 'resume'] as const)('persists the %s recovery action before dispatch so in-flight refresh is recoverable', async action => {
@@ -100,7 +100,7 @@ describe('durable update task tracking', () => {
   if (action === 'start') mocks.start.mockResolvedValueOnce({ status: 'accepted', task: accepted() })
   else mocks.resume.mockResolvedValueOnce(accepted())
   await api.recoverOriginal(); await flushPromises()
-  if (action === 'start') expect(mocks.start.mock.calls[1][0]).toEqual({ requestId: original.requestId, target: original.target })
+  if (action === 'start') expect(mocks.start.mock.calls[1][0]).toEqual({ requestId: original.requestId, target: original.target, source: 'github' })
   else expect(mocks.resume.mock.calls[1]).toEqual([original.taskId, original.resumeId])
  })
  it.each(['start', 'resume'] as const)('lets a confirmed %s with a stranded or running accepted worker be checked idempotently after refresh', async action => {
@@ -118,7 +118,7 @@ describe('durable update task tracking', () => {
   expect(api.canRecoverOriginal.value).toBe(true)
   await api.recoverOriginal(); await flushPromises()
   const sent = mocks.start.mock.calls.at(-1)![0]
-  expect(sent).toEqual({ requestId: original.requestId, target: original.target })
+  expect(sent).toEqual({ requestId: original.requestId, target: original.target, source: 'github' })
   expect(new Set(mocks.start.mock.calls.map(call => call[0].requestId)).size).toBe(1)
   expect(mocks.resume).toHaveBeenCalledTimes(action === 'resume' ? 1 : 0)
  })
@@ -150,4 +150,29 @@ describe('durable update task tracking', () => {
   expect(api.canRecoverOriginal.value).toBe(true)
   expect(action === 'start' ? mocks.start : mocks.resume).toHaveBeenCalledTimes(1)
  })
+ it('persists a selected source before dispatch and keeps it after response loss and refresh', async () => {
+  mocks.start.mockRejectedValue(new Error('lost response'))
+  const first = render(); await flushPromises(); await api.start('2.0.0', 'gitee'); await flushPromises()
+  const sent = mocks.start.mock.calls[0][0]
+  expect(sent.source).toBe('gitee'); expect(JSON.parse(sessionStorage.getItem('pipewright.update.pending')!).source).toBe('gitee')
+  first.unmount(); render(); await flushPromises(); await api.start('3.0.0', 'github')
+  expect(mocks.start.mock.calls[1][0]).toEqual(sent)
+ })
+ it('binds an old pending request without a source to GitHub', async () => {
+  sessionStorage.setItem('pipewright.update.pending', JSON.stringify({ requestId: 'legacy-request', target: '2.0.0' }))
+  mocks.start.mockRejectedValue(new Error('offline')); render(); await flushPromises(); await api.recoverOriginal()
+  expect(mocks.start).toHaveBeenCalledWith({ requestId: 'legacy-request', target: '2.0.0', source: 'github' })
+ })
+ it('uses a server accepted task source when checking the original submit', async () => {
+  mocks.current.mockResolvedValue(task('accepted', { source: 'gitee' })); mocks.start.mockRejectedValue(new Error('offline'))
+  render(); await flushPromises(); await api.recoverOriginal()
+  expect(mocks.start).toHaveBeenCalledWith({ requestId: 'request-1', target: '2.0.0', source: 'gitee' })
+ })
+ it('continues an interrupted task without choosing a different source', async () => {
+  mocks.current.mockResolvedValue(task('interrupted', { source: 'gitee' })); mocks.resume.mockResolvedValue(task('accepted', { source: 'gitee' }))
+  render(); await flushPromises(); await api.resume()
+  expect(JSON.parse(sessionStorage.getItem('pipewright.update.pending')!).source).toBe('gitee')
+  expect(mocks.resume.mock.calls[0]).toHaveLength(2); expect(mocks.start).not.toHaveBeenCalled()
+ })
+
 })

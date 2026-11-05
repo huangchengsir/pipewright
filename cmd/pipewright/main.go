@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/huangchengsir/pipewright/internal/maintenance"
+	"github.com/huangchengsir/pipewright/internal/releasesource"
 	"github.com/huangchengsir/pipewright/internal/selfupdate"
 	"io/fs"
 	"log"
@@ -105,8 +106,13 @@ func runPlatform() (restart func()) {
 		log.Fatalf("store: %v", err)
 	}
 	defer func() { _ = st.Close() }()
+	releaseSources := releasesource.New()
+	releaseSourceSettings := releasesource.NewSettings(st.DB, releaseSources)
+	if e := releaseSourceSettings.InitializeFromEnvironment(context.Background()); e != nil {
+		log.Printf("[update] initial release source unavailable; existing settings preserved")
+	}
 	restartRequests := make(chan struct{}, 1)
-	selfUpdater, updateInitErr := selfupdate.New(st.DB, selfupdate.Options{RequestRestart: func() error {
+	selfUpdater, updateInitErr := selfupdate.New(st.DB, selfupdate.Options{Sources: releaseSources, PreferredSource: releaseSourceSettings.Preferred, RequestRestart: func() error {
 		select {
 		case restartRequests <- struct{}{}:
 			return nil
@@ -792,7 +798,7 @@ func runPlatform() (restart func()) {
 	go terminalManager.Run(terminalCtx)
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithSelfUpdate(selfUpdater), httpapi.WithKubernetes(kubernetesSvc, kubernetesController), httpapi.WithOnboarding(onboarding.New(st.DB, onboardingCapabilities)), httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithRunRetry(retrySvc), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithPlatformLogin(platformLogin), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithTerminalHTTP(terminalManager), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithReleaseGuard(guardSvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc), httpapi.WithOpsChat(opsChatSvc), httpapi.WithMCP(mcpHandler, mcpTokens), httpapi.WithConfigManagement(st.DB, configDrafts, configApplyEnabled)),
+		Handler:           httpapi.New(webFS, authSvc, httpapi.WithSelfUpdate(selfUpdater), httpapi.WithReleaseSources(releaseSources, releaseSourceSettings), httpapi.WithKubernetes(kubernetesSvc, kubernetesController), httpapi.WithOnboarding(onboarding.New(st.DB, onboardingCapabilities)), httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithRunRetry(retrySvc), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithPlatformLogin(platformLogin), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithTerminalHTTP(terminalManager), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithReleaseGuard(guardSvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc), httpapi.WithOpsChat(opsChatSvc), httpapi.WithMCP(mcpHandler, mcpTokens), httpapi.WithConfigManagement(st.DB, configDrafts, configApplyEnabled)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;

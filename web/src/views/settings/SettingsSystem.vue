@@ -11,10 +11,12 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getVersion, checkUpdate } from '../../api/version'
-import type { VersionInfo, UpdateInfo } from '../../api/version'
+import type { VersionInfo, UpdateInfo, ReleaseSource } from '../../api/version'
 import { getRetentionConfig, setRetentionConfig, type RetentionConfig } from '../../api/retention'
 import { HttpError } from '../../api/http'
 import AppButton from '../../components/ui/AppButton.vue'
+import AppSelect from '../../components/ui/AppSelect.vue'
+import { useReleaseSource } from '../../composables/useReleaseSource'
 import ProgressBar from '../../components/ui/ProgressBar.vue'
 import UpgradeSteps from '../../components/system/UpgradeSteps.vue'
 import { useSelfUpdate } from '../../composables/useSelfUpdate'
@@ -28,7 +30,32 @@ type CheckState = 'idle' | 'checking' | 'done' | 'error'
 const checkState = ref<CheckState>('idle')
 const update = ref<UpdateInfo | null>(null)
 const checkError = ref('')
+const checkErrorCode = ref<UpdateInfo['checkErrorCode'] | ''>('')
+const sourceErrorKeys = { source_not_configured: 'sourceNotConfigured', mirror_not_ready: 'sourceNotReady', source_unavailable: 'sourceUnavailable', invalid_source: 'sourceUnavailable' }
+const checkErrorText = computed(() => checkErrorCode.value ? t('settingsSystem.' + (sourceErrorKeys[checkErrorCode.value] ?? 'sourceUnavailable')) : checkError.value)
 const showNotes = ref(false)
+const { settings: sourceSettings, draft: sourceDraft, loading: sourceLoading, saving: sourceSaving, saved: sourceSaved,
+  error: sourceError, needsReload: sourceNeedsReload, dirty: sourceDirty, canSave: sourceCanSave,
+  canCheck: sourceCanCheck, load: reloadSource, save: saveSource } = useReleaseSource()
+const sourceOptions = computed(() => (sourceSettings.value?.sources ?? [
+  { id: 'github', name: 'GitHub', available: false }, { id: 'gitee', name: 'Gitee', available: false },
+]).map(source => ({ value: source.id, label: source.id === 'gitee' ? 'Gitee' : 'GitHub', disabled: !source.available })))
+const giteeNotConfigured = computed(() => sourceSettings.value?.sources.some(source => source.id === 'gitee' && !source.available))
+const sourceErrorText = computed(() => sourceError.value ? t('settingsSystem.' + ({ load: 'sourceLoadFailed', save: 'sourceSaveFailed', conflict: 'sourceConflict' }[sourceError.value])) : '')
+function sourceName(source?: ReleaseSource): string { return source === 'gitee' ? 'Gitee' : 'GitHub' }
+function selectSource(value: string) { if (value === 'github' || value === 'gitee') sourceDraft.value = value }
+let checkGeneration = 0
+let checkController: AbortController | undefined
+function invalidateCheck() {
+  checkGeneration++
+  checkController?.abort()
+  update.value = null
+  checkState.value = 'idle'
+  checkError.value = ''
+  checkErrorCode.value = ''
+  showNotes.value = false
+}
+watch([sourceDraft, () => sourceSettings.value?.revision, sourceNeedsReload], invalidateCheck, { flush: 'sync' })
 
 
 const { task, pending, connectionUnknown: taskUnknown, submitting, submissionError, canRecoverOriginal, recoverOriginal, manual, busy: taskBusy, canStart, start: startTask, resume: resumeTask, recheck: recheckTask } = useSelfUpdate()
@@ -57,7 +84,7 @@ watch(() => task.value ? { id: task.value.id, state: task.value.state } : null, 
   checkState.value = 'idle'
   void loadVersion()
 })
-onBeforeUnmount(() => { disposed = true; versionGeneration++ })
+onBeforeUnmount(() => { disposed = true; versionGeneration++; checkGeneration++; checkController?.abort() })
 const taskMessage = computed(() => {
  const state = task.value?.state
  if (task.value?.reason === 'installation_target_changed') return t('settingsSystem.taskTargetChanged')
@@ -122,13 +149,24 @@ async function loadVersion(): Promise<void> {
 }
 
 async function runCheck(): Promise<void> {
+  if (!sourceCanCheck.value || !sourceSettings.value) return
+  const source = sourceSettings.value.source
+  const generation = ++checkGeneration
+  checkController?.abort()
+  checkController = new AbortController()
   checkState.value = 'checking'
   checkError.value = ''
+  checkErrorCode.value = ''
   update.value = null
   showNotes.value = false
   try {
-    const info = await checkUpdate()
+    const info = await checkUpdate(source, { signal: checkController.signal })
+    if (disposed || generation !== checkGeneration) return
+    if ((info.source ?? 'github') !== source) {
+      checkErrorCode.value = 'source_unavailable'; checkState.value = 'error'; return
+    }
     if (info.checkError) {
+      checkErrorCode.value = info.checkErrorCode ?? ''
       checkError.value = info.checkError
       checkState.value = 'error'
       return
@@ -136,14 +174,15 @@ async function runCheck(): Promise<void> {
     update.value = info
     checkState.value = 'done'
   } catch (err) {
+    if (disposed || generation !== checkGeneration) return
     checkError.value = err instanceof HttpError ? (err.apiError?.message ?? t('settingsSystem.errCheckStatus', { status: err.status })) : t('settingsSystem.errCheckRetry')
     checkState.value = 'error'
   }
 }
 
 async function runUpdate(): Promise<void> {
- if (pending.value) { await startTask(pending.value.target); return }
- if (update.value?.latest && canStart.value) await startTask(update.value.latest)
+ if (pending.value) { await startTask(pending.value.target, pending.value.source); return }
+ if (update.value?.latest && canStart.value) await startTask(update.value.latest, update.value.source ?? sourceSettings.value?.source ?? 'github')
 }
 
 async function copyCommand(): Promise<void> {
@@ -232,7 +271,7 @@ onMounted(() => {
           <span class="sys-version-cap">{{ t('settingsSystem.currentVersion') }}</span>
           <strong class="sys-version-num" :class="{ 'is-dev': isDev }">{{ version?.version ?? '…' }}</strong>
         </div>
-        <AppButton variant="primary" :loading="checkState === 'checking'" @click="runCheck">
+        <AppButton variant="primary" :loading="checkState === 'checking'" :disabled="!sourceCanCheck" @click="runCheck">
           <svg v-if="checkState !== 'checking'" class="sys-btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M1 4v6h6M23 20v-6h-6" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
           </svg>
@@ -241,7 +280,25 @@ onMounted(() => {
       </div>
 
       <p v-if="versionError" class="sys-inline-err" role="alert">{{ versionError }}</p>
-      <p v-else-if="checkState === 'error'" class="sys-inline-err" role="alert">{{ t('settingsSystem.checkFailedPrefix', { msg: checkError }) }}</p>
+      <p v-else-if="checkState === 'error'" class="sys-inline-err" role="alert">{{ t('settingsSystem.checkFailedPrefix', { msg: checkErrorText }) }}</p>
+
+      <div class="sys-source" data-testid="release-source-settings" :aria-busy="sourceLoading || sourceSaving">
+        <label for="release-source" class="sys-source-label">{{ t('settingsSystem.sourceTitle') }}</label>
+        <div class="sys-source-controls">
+          <AppSelect input-id="release-source" :model-value="sourceDraft" :options="sourceOptions" min-width="160px" height="36px"
+            :portal="true" :aria-label="t('settingsSystem.sourceTitle')" aria-describedby="release-source-help"
+            :disabled="sourceLoading || sourceSaving || sourceNeedsReload" @update:model-value="selectSource" />
+          <AppButton :loading="sourceSaving" :disabled="!sourceCanSave" @click="saveSource">{{ t('settingsSystem.sourceSave') }}</AppButton>
+        </div>
+        <p id="release-source-help" class="sys-source-help">{{ t('settingsSystem.sourceHelp') }}</p>
+        <p v-if="sourceErrorText" class="sys-source-feedback sys-inline-err" role="alert">{{ sourceErrorText }}
+          <AppButton variant="ghost" :disabled="sourceLoading || sourceSaving" @click="reloadSource">{{ t('settingsSystem.sourceReload') }}</AppButton>
+        </p>
+        <p v-else-if="sourceDirty" class="sys-source-feedback" role="status">{{ t('settingsSystem.sourceUnsaved') }}</p>
+        <p v-else-if="sourceSaved" class="sys-source-feedback sys-source-saved" role="status">{{ t('settingsSystem.sourceSaved') }}</p>
+        <p v-if="giteeNotConfigured" class="sys-source-feedback">{{ t('settingsSystem.sourceNotConfigured') }}</p>
+        <p v-if="task && !['completed', 'failed'].includes(task.state) && sourceSettings && (task.source ?? 'github') !== sourceSettings.source" class="sys-source-feedback">{{ t('settingsSystem.sourceCurrentTask', { source: sourceName(task.source) }) }}</p>
+      </div>
 
       <!-- 构建元数据 -->
       <dl v-if="meta.length" class="sys-meta">
@@ -253,6 +310,7 @@ onMounted(() => {
       <details v-if="completedTask" :key="completedTask.id" class="sys-history" data-testid="upgrade-history">
         <summary><span class="sys-history-dot" aria-hidden="true" /><strong>{{ t('settingsSystem.taskHistory') }}</strong><span>{{ completedTask.from }} → {{ completedTask.target }}</span></summary>
         <p>{{ t('settingsSystem.taskStates.completed') }} · {{ fmtDate(completedTask.updatedAt) }}</p>
+        <p>{{ t('settingsSystem.sourceTaskLabel') }}: {{ sourceName(completedTask.source) }}</p>
         <p class="sys-task-identity">{{ completedTask.id }} · {{ completedTask.repository }} · {{ completedTask.platform }}</p>
         <pre class="sys-notes">{{ completedTask.asset }}
 {{ completedTask.sha256 }}</pre>
@@ -280,7 +338,7 @@ onMounted(() => {
         <div v-if="(task.state === 'interrupted' || task.state === 'ready_blocked') && !canRecoverOriginal" class="sys-upgrade-actions">
           <AppButton v-if="(task.state === 'interrupted' || task.state === 'ready_blocked') && !canRecoverOriginal" :loading="taskBusy" :disabled="taskBusy" @click="resumeTask">{{ t(task.state === 'ready_blocked' ? 'settingsSystem.taskContinue' : 'settingsSystem.taskResume') }}</AppButton>
         </div>
-        <details><summary>{{ t('settingsSystem.taskDetails') }}</summary><p>{{ task.id }} · {{ task.repository }} · {{ task.platform }}</p><p class="sys-notes">{{ task.asset }}
+        <details><summary>{{ t('settingsSystem.taskDetails') }}</summary><p>{{ t('settingsSystem.sourceTaskLabel') }}: {{ sourceName(task.source) }}</p><p>{{ task.id }} · {{ task.repository }} · {{ task.platform }}</p><p class="sys-notes">{{ task.asset }}
 {{ task.sha256 }}</p><p>{{ fmtDate(task.updatedAt) }}</p></details>
       </template>
       <div class="sys-upgrade-actions">
@@ -293,6 +351,7 @@ onMounted(() => {
     <!-- 仅当有新版时:强调升级卡 -->
     <transition name="sys-rise">
       <article v-if="hasUpdate" class="sys-upgrade">
+        <p v-if="update" class="sys-source-help">{{ t('settingsSystem.sourceCheckingFrom', { source: sourceName(update.source) }) }}</p>
         <div class="sys-upgrade-head">
           <span class="sys-upgrade-icon" aria-hidden="true">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
@@ -401,6 +460,19 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.sys-source { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 16px; padding-top: var(--space-4); border-top: 1px solid var(--color-border); }
+.sys-source-label { font-size: 13px; font-weight: 600; }
+.sys-source-controls { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sys-source-controls > .app-btn { flex-shrink: 0; white-space: nowrap; }
+.sys-source-help, .sys-source-feedback { grid-column: 1 / -1; margin: 0; color: var(--color-faint); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.sys-source-feedback { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+.sys-source-saved { color: var(--color-success); }
+@media (max-width: 560px) {
+  .sys-source { grid-template-columns: minmax(0, 1fr); }
+  .sys-source-controls { width: 100%; }
+  .sys-source-controls > :first-child { flex: 1; min-width: 0 !important; }
+}
+
 .sys-completion-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .sys {
   display: flex;

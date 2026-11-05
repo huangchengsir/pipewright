@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/releasesource"
 	"html"
 	"net/http"
 	"os"
@@ -26,13 +28,15 @@ const checkTTL = 15 * time.Minute
 // CheckError 非空表示这次检查本身失败(网络/限流);此时 UpdateAvailable 恒 false,
 // 前端据此提示「检查失败」而非误报「已是最新」。
 type UpdateInfo struct {
-	Current         string `json:"current"`
-	Latest          string `json:"latest"`
-	UpdateAvailable bool   `json:"updateAvailable"`
-	ReleaseURL      string `json:"releaseUrl"`
-	PublishedAt     string `json:"publishedAt"`
-	Notes           string `json:"notes"`
-	CheckError      string `json:"checkError,omitempty"`
+	Source          releasesource.ID `json:"source"`
+	Current         string           `json:"current"`
+	Latest          string           `json:"latest"`
+	UpdateAvailable bool             `json:"updateAvailable"`
+	ReleaseURL      string           `json:"releaseUrl"`
+	PublishedAt     string           `json:"publishedAt"`
+	Notes           string           `json:"notes"`
+	CheckError      string           `json:"checkError,omitempty"`
+	CheckErrorCode  string           `json:"checkErrorCode,omitempty"`
 }
 
 // ghRelease 是 GitHub releases/latest 响应里我们关心的字段。
@@ -46,13 +50,14 @@ type ghRelease struct {
 
 // Checker 查询 GitHub 最新发布并与当前构建版本比对,带 TTL 缓存。零值不可用,请用 NewChecker。
 type Checker struct {
-	repo   string
-	client *http.Client
+	catalog     *releasesource.Catalog
+	settings    *releasesource.Settings
+	sourceCache map[releasesource.ID]sourceCacheEntry
+	repo        string
+	client      *http.Client
 
-	mu       sync.Mutex
-	cached   *UpdateInfo
-	cachedAt time.Time
-	now      func() time.Time // 可注入,便于测试缓存过期
+	mu  sync.Mutex
+	now func() time.Time // 可注入,便于测试缓存过期
 }
 
 // NewChecker 返回默认 Checker(查 defaultRepo / 可经 env 覆盖,10s 超时)。
@@ -203,23 +208,79 @@ func htmlToText(h string) string {
 // Check 返回更新信息。命中未过期缓存则直接返回;否则查 GitHub。
 // 网络/解析失败不返回 error —— 而是在 UpdateInfo.CheckError 里带上原因(始终附当前版本),
 // 让上层端点稳定返回 200、前端优雅降级。
-func (c *Checker) Check(ctx context.Context) UpdateInfo {
+type sourceCacheEntry struct {
+	info UpdateInfo
+	at   time.Time
+}
+
+// NewCheckerWithSources shares the trusted channel definitions and persisted preference.
+func NewCheckerWithSources(catalog *releasesource.Catalog, settings *releasesource.Settings) *Checker {
+	c := NewChecker()
+	c.catalog = catalog
+	c.settings = settings
+	if catalog != nil {
+		c.repo = catalog.Repository(releasesource.GitHub)
+	}
+	return c
+}
+func (c *Checker) PreferredSource(ctx context.Context) (releasesource.ID, error) {
+	if c.settings != nil {
+		return c.settings.Preferred(ctx)
+	}
+	return releasesource.GitHub, nil
+}
+func (c *Checker) Check(ctx context.Context) UpdateInfo { return c.CheckSource(ctx, "") }
+func (c *Checker) CheckSource(ctx context.Context, source releasesource.ID) UpdateInfo {
+	if source == "" {
+		var e error
+		source, e = c.PreferredSource(ctx)
+		if e != nil {
+			return UpdateInfo{Current: Version, Source: releasesource.GitHub, CheckError: "更新来源设置暂不可用", CheckErrorCode: "source_unavailable"}
+		}
+	}
+	if !releasesource.ValidID(source) {
+		return UpdateInfo{Current: Version, Source: source, CheckError: "更新来源无效", CheckErrorCode: "invalid_source"}
+	}
+	if c.catalog != nil {
+		if _, e := c.catalog.Resolve(source); e != nil {
+			return UpdateInfo{Current: Version, Source: source, CheckError: "更新来源未配置或暂不可用", CheckErrorCode: "source_not_configured"}
+		}
+	} else if source != releasesource.GitHub {
+		return UpdateInfo{Current: Version, Source: source, CheckError: "更新来源未配置", CheckErrorCode: "source_not_configured"}
+	}
 	c.mu.Lock()
-	if c.cached != nil && c.now().Sub(c.cachedAt) < checkTTL {
-		cached := *c.cached
+	if entry, ok := c.sourceCache[source]; ok && c.now().Sub(entry.at) < checkTTL {
 		c.mu.Unlock()
-		return cached
+		return entry.info
 	}
 	c.mu.Unlock()
-
-	info := c.fetch(ctx)
-
-	// 仅缓存成功结果:失败不缓存,以便用户重试时立刻再查。
+	var info UpdateInfo
+	if source == releasesource.Gitee {
+		info = UpdateInfo{Current: Version, Source: source}
+		rel, e := c.catalog.VerifyGitee(ctx, c.client, "")
+		if e != nil {
+			info.CheckError = "Gitee 镜像未同步完整或暂不可用"
+			info.CheckErrorCode = "mirror_not_ready"
+			if errors.Is(e, releasesource.ErrUnavailable) {
+				info.CheckErrorCode = "source_unavailable"
+			}
+		} else {
+			info.Latest = rel.Release.Tag
+			info.ReleaseURL = c.catalog.ReleaseURL(source, rel.Release.Tag)
+			info.PublishedAt = rel.Release.CreatedAt
+			info.Notes = rel.Release.Notes
+			info.UpdateAvailable = isComparable(Version) && CompareVersions(info.Latest, Version) > 0
+		}
+	} else {
+		info = c.fetch(ctx)
+		info.Source = source
+	}
 	if info.CheckError == "" {
 		c.mu.Lock()
-		cp := info
-		c.cached = &cp
-		c.cachedAt = c.now()
+		if c.sourceCache == nil {
+			c.sourceCache = map[releasesource.ID]sourceCacheEntry{}
+		}
+		c.sourceCache[source] = sourceCacheEntry{info: info, at: c.now()}
 		c.mu.Unlock()
 	}
 	return info

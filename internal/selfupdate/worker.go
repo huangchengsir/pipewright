@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/maintenance"
+	"github.com/huangchengsir/pipewright/internal/releasesource"
 	"os"
 	"path/filepath"
 )
@@ -16,7 +17,13 @@ func (s *Service) work(t Task) {
 		return
 	}
 	if t.SHA256 == "" {
-		sum, e := s.checksum(ctx, t)
+		var sum string
+		var e error
+		if t.Source == releasesource.Gitee {
+			sum, e = s.giteeChecksum(ctx, &t)
+		} else {
+			sum, e = s.checksum(ctx, t)
+		}
 		if e != nil {
 			s.transition(&t, "interrupted", "checksum_unavailable")
 			return

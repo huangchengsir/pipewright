@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/go-chi/chi/v5"
 	"github.com/huangchengsir/pipewright/internal/audit"
+	"github.com/huangchengsir/pipewright/internal/releasesource"
 	"github.com/huangchengsir/pipewright/internal/selfupdate"
 	"github.com/huangchengsir/pipewright/internal/version"
 	"io"
@@ -15,7 +16,14 @@ import (
 )
 
 func makeCheckUpdateHandler(checker *version.Checker) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, checker.Check(r.Context())) }
+	return func(w http.ResponseWriter, r *http.Request) {
+		source := releasesource.ID(r.URL.Query().Get("source"))
+		if source != "" && !releasesource.ValidID(source) {
+			writeError(w, 400, "bad_request", "请求格式错误")
+			return
+		}
+		writeJSON(w, 200, checker.CheckSource(r.Context(), source))
+	}
 }
 
 type updateResult struct {
@@ -62,7 +70,7 @@ func auditUpdate(r *http.Request, a audit.Recorder, t *selfupdate.Task, action s
 		return
 	}
 	actor := auditActor
-	_ = a.Record(r.Context(), audit.Entry{Actor: actor, Action: action, TargetType: "selfupdate_task", TargetID: t.ID, Detail: map[string]any{"target": t.Target, "state": t.State}})
+	_ = a.Record(r.Context(), audit.Entry{Actor: actor, Action: action, TargetType: "selfupdate_task", TargetID: t.ID, Detail: map[string]any{"target": t.Target, "state": t.State, "source": t.Source, "repository": t.Repository}})
 }
 func decodeUpdate(w http.ResponseWriter, r *http.Request, v any) bool {
 	return decodeUpdateBody(w, r, v, false)
@@ -115,7 +123,11 @@ func makeSelfUpdateHandler(c *version.Checker, s *selfupdate.Service, a audit.Re
 			updateError(w, selfupdate.ErrUnavailable)
 			return
 		}
-		info := c.Check(r.Context())
+		var in selfupdate.Request
+		if !decodeUpdateBody(w, r, &in, true) {
+			return
+		}
+		info := c.CheckSource(r.Context(), in.Source)
 		if info.CheckError != "" {
 			updateError(w, selfupdate.ErrUnavailable)
 			return
@@ -124,23 +136,23 @@ func makeSelfUpdateHandler(c *version.Checker, s *selfupdate.Service, a audit.Re
 			writeJSON(w, 200, updateResult{Status: "uptodate", From: info.Current, To: info.Latest})
 			return
 		}
-		// Empty legacy requests are permanently bound to the same instance/target task.
-		sum := sha256.Sum256([]byte(info.Latest))
-		in := selfupdate.Request{Target: info.Latest}
-		if !decodeUpdateBody(w, r, &in, true) {
-			return
+		if in.Target == "" {
+			in.Target = info.Latest
 		}
 		if in.Target != info.Latest {
 			updateError(w, selfupdate.ErrConflict)
 			return
 		}
+		in.Source = info.Source
+		sum := sha256.Sum256([]byte(string(in.Source) + "\x00" + info.Latest))
 		if in.RequestID == "" {
-			if existing, e := s.ForTarget(r.Context(), info.Latest); e == nil {
+			if existing, e := s.ForSourceTarget(r.Context(), in.Source, info.Latest); e == nil {
 				writeJSON(w, 202, updateResult{Mode: "binary", Status: "accepted", From: existing.From, To: existing.Target, TaskID: existing.ID, Task: existing})
 				return
 			}
 			in.RequestID = fmt.Sprintf("legacy-%x", sum)
 		}
+
 		t, e := s.Submit(r.Context(), in)
 		if e != nil {
 			updateError(w, e)

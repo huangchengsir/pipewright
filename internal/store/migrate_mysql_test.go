@@ -27,8 +27,8 @@ func TestMigrationSetsMatch(t *testing.T) {
 	if len(sq) == 0 {
 		t.Fatal("未找到任何迁移")
 	}
-	if len(sq) != 62 || len(my) != 62 || !sq["0053_anomaly_ai_analysis"] || !my["0053_anomaly_ai_analysis"] || !sq["0054_pipeline_mcp"] || !my["0054_pipeline_mcp"] || !sq["0055_mcp_config_management"] || !my["0055_mcp_config_management"] || !sq["0056_deploy_attempts"] || !my["0056_deploy_attempts"] || !sq["0057_release_guard"] || !my["0057_release_guard"] || !sq["0058_resolved_commit"] || !my["0058_resolved_commit"] || !sq["0060_oauth_lifecycle"] || !my["0060_oauth_lifecycle"] {
-		t.Fatalf("expected 61 paired migrations including retry lifecycle: sqlite=%d mysql=%d", len(sq), len(my))
+	if len(sq) != 63 || len(my) != 63 || !sq["0064_release_source_settings"] || !my["0064_release_source_settings"] || !sq["0053_anomaly_ai_analysis"] || !my["0053_anomaly_ai_analysis"] || !sq["0054_pipeline_mcp"] || !my["0054_pipeline_mcp"] || !sq["0055_mcp_config_management"] || !my["0055_mcp_config_management"] || !sq["0056_deploy_attempts"] || !my["0056_deploy_attempts"] || !sq["0057_release_guard"] || !my["0057_release_guard"] || !sq["0058_resolved_commit"] || !my["0058_resolved_commit"] || !sq["0060_oauth_lifecycle"] || !my["0060_oauth_lifecycle"] {
+		t.Fatalf("expected 63 paired migrations including release sources: sqlite=%d mysql=%d", len(sq), len(my))
 	}
 	if !sq["0061_run_retry"] || !my["0061_run_retry"] {
 		t.Fatal("paired run retry migration missing")

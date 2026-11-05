@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/releasesource"
 	"github.com/huangchengsir/pipewright/internal/version"
 	"io"
 	"net/http"
@@ -37,6 +38,9 @@ func New(db *sql.DB, opts Options) (*Service, error) {
 	}
 	if !repoPattern.MatchString(opts.Repository) {
 		return nil, ErrInvalid
+	}
+	if opts.Sources == nil {
+		opts.Sources = releasesource.New()
 	}
 	if opts.Executable == "" {
 		var e error
@@ -146,7 +150,7 @@ func (s *Service) Submit(ctx context.Context, in Request) (*Task, error) {
 		return nil, ErrUnavailable
 	}
 	if old, e := s.load(ctx, "request_id=?", in.RequestID); e == nil {
-		if old.Target != in.Target {
+		if old.Target != in.Target || in.Source != "" && old.Source != in.Source {
 			return nil, ErrConflict
 		}
 		// Startup reconciliation turns a previous process's accepted task into
@@ -159,6 +163,32 @@ func (s *Service) Submit(ctx context.Context, in Request) (*Task, error) {
 	} else if !errors.Is(e, ErrNotFound) {
 		return nil, e
 	}
+	if in.Source == "" {
+		if s.opts.PreferredSource != nil {
+			var e error
+			in.Source, e = s.opts.PreferredSource(ctx)
+			if e != nil {
+				return nil, ErrUnavailable
+			}
+		} else {
+			in.Source = releasesource.GitHub
+		}
+	}
+	if !releasesource.ValidID(in.Source) {
+		return nil, ErrInvalid
+	}
+	repository := s.opts.Repository
+	if in.Source == releasesource.Gitee {
+		var e error
+		repository, e = s.opts.Sources.Resolve(in.Source)
+		if e != nil {
+			return nil, ErrUnavailable
+		}
+		if !releasesource.StableTag(in.Target) {
+			return nil, ErrInvalid
+		}
+	}
+
 	if _, e := s.load(ctx, "active_key IS NOT NULL"); e == nil {
 		return nil, ErrConflict
 	} else if !errors.Is(e, ErrNotFound) {
@@ -173,7 +203,7 @@ func (s *Service) Submit(ctx context.Context, in Request) (*Task, error) {
 		return nil, ErrUnavailable
 	}
 	now := time.Now().UTC()
-	t := &Task{BaseSHA256: baseSHA, ID: uuid.NewString(), RequestID: in.RequestID, Target: in.Target, From: current.Version, Platform: s.opts.Platform, Repository: s.opts.Repository, Asset: "pipewright_" + strings.TrimPrefix(in.Target, "v") + "_" + s.opts.Platform + ".tar.gz", State: "accepted", CreatedAt: now, UpdatedAt: now}
+	t := &Task{BaseSHA256: baseSHA, ID: uuid.NewString(), RequestID: in.RequestID, Target: in.Target, From: current.Version, Platform: s.opts.Platform, Source: in.Source, Repository: repository, Asset: "pipewright_" + strings.TrimPrefix(in.Target, "v") + "_" + s.opts.Platform + ".tar.gz", State: "accepted", CreatedAt: now, UpdatedAt: now}
 	raw, e := encoded(t)
 	if e != nil {
 		return nil, e
@@ -185,7 +215,7 @@ func (s *Service) Submit(ctx context.Context, in Request) (*Task, error) {
 		check, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		if old, x := s.load(check, "request_id=?", in.RequestID); x == nil {
-			if old.Target != in.Target {
+			if old.Target != in.Target || old.Source != in.Source {
 				return nil, ErrConflict
 			}
 			if old.State == "accepted" && !s.running[old.ID] {
@@ -222,7 +252,15 @@ func (s *Service) Resume(ctx context.Context, id, requestID string) (*Task, erro
 		}
 		return t, nil
 	}
-	if t.Repository != s.opts.Repository || t.Platform != s.opts.Platform {
+	expectedRepository := s.opts.Repository
+	if t.Source == releasesource.Gitee {
+		var x error
+		expectedRepository, x = s.opts.Sources.Resolve(t.Source)
+		if x != nil {
+			return nil, ErrConflict
+		}
+	}
+	if !releasesource.ValidID(t.Source) || t.Repository != expectedRepository || t.Platform != s.opts.Platform {
 		return nil, ErrConflict
 	}
 	if !resumable(t.State) || s.running[id] {

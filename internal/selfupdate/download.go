@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/releasesource"
 	"io"
 	"net/http"
 	"regexp"
@@ -18,12 +19,37 @@ import (
 var checksumPattern = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
 
 func (s *Service) assetURL(t Task, name string) string {
-	base := s.opts.BaseURL
-	if base == "" {
-		base = "https://github.com"
-	}
-	return strings.TrimRight(base, "/") + "/" + t.Repository + "/releases/download/" + t.Target + "/" + name
+	u, _ := releasesource.AssetURL(releasesource.Normalize(t.Source), t.Repository, t.Target, name, s.opts.BaseURL)
+	return u
 }
+func (s *Service) giteeChecksum(ctx context.Context, t *Task) (string, error) {
+	bounded, cancel := context.WithTimeout(ctx, s.opts.IdleTimeout)
+	defer cancel()
+	ctx = bounded
+	catalog := s.opts.Sources
+	if catalog.Repository(releasesource.Gitee) != t.Repository {
+		return "", ErrInvalid
+	}
+	if s.opts.BaseURL != "" {
+		var e error
+		catalog, e = catalog.ForTestBase(s.opts.BaseURL)
+		if e != nil {
+			return "", ErrInvalid
+		}
+	}
+	rel, e := catalog.VerifyGitee(ctx, s.opts.Client, t.Target)
+	if e != nil {
+		return "", ErrUnavailable
+	}
+	sum := rel.Marker.Assets[t.Asset]
+	if sum == "" {
+		return "", ErrInvalid
+	}
+	t.ReleaseCommit = rel.Marker.Commit
+	t.ChecksumsSHA256 = rel.Marker.ChecksumsSHA256
+	return sum, nil
+}
+
 func (s *Service) checksum(ctx context.Context, t Task) (string, error) {
 	ctx, cancel, touch := idleContext(ctx, s.opts.IdleTimeout)
 	defer cancel()
@@ -31,7 +57,7 @@ func (s *Service) checksum(ctx context.Context, t Task) (string, error) {
 	if e != nil {
 		return "", e
 	}
-	res, e := s.do(req)
+	res, e := s.do(req, releasesource.Normalize(t.Source))
 	if e != nil {
 		return "", e
 	}
@@ -113,7 +139,7 @@ func (s *Service) download(parent context.Context, t *Task) error {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
 		req.Header.Set("If-Range", t.ETag)
 	}
-	res, e := s.do(req)
+	res, e := s.do(req, releasesource.Normalize(t.Source))
 	if e != nil {
 		return e
 	}

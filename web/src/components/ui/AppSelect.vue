@@ -6,6 +6,7 @@ defineOptions({ inheritAttrs: false })
 export interface SelectOption {
   value: string
   label: string
+  disabled?: boolean
 }
 
 const props = withDefaults(
@@ -59,7 +60,7 @@ const visibleOptions = computed(() =>
     : props.options,
 )
 watch(query, () => {
-  activeIndex.value = 0
+  activeIndex.value = visibleOptions.value.findIndex(option => !option.disabled)
 })
 watch(
   () => props.disabled,
@@ -73,12 +74,9 @@ watch(
   (options) => {
     if (!open.value) return
     const selectedIndex = options.findIndex(
-      (option) => option.value === props.modelValue,
+      (option) => option.value === props.modelValue && !option.disabled,
     )
-    activeIndex.value =
-      selectedIndex >= 0
-        ? selectedIndex
-        : Math.min(Math.max(0, activeIndex.value), options.length - 1)
+    activeIndex.value = selectedIndex >= 0 ? selectedIndex : options.findIndex(option => !option.disabled)
     positionMenu()
   },
   { flush: 'sync' },
@@ -122,26 +120,25 @@ function toggle(): void {
   }
   positionMenu()
   open.value = true
-  activeIndex.value = Math.max(
-    0,
-    visibleOptions.value.findIndex(
-      (option) => option.value === props.modelValue,
-    ),
-  )
+  const selectedIndex = visibleOptions.value.findIndex(option => option.value === props.modelValue && !option.disabled)
+  activeIndex.value = selectedIndex >= 0 ? selectedIndex : visibleOptions.value.findIndex(option => !option.disabled)
 }
 
 function choose(option: SelectOption): void {
-  if (props.disabled) return
+  if (props.disabled || option.disabled) return
   emit('update:modelValue', option.value)
   emit('change')
   close()
 }
 
 function moveActive(direction: 1 | -1): void {
-  if (!visibleOptions.value.length) return
-  activeIndex.value =
-    (activeIndex.value + direction + visibleOptions.value.length) %
-    visibleOptions.value.length
+  const options = visibleOptions.value
+  if (!options.length) return
+  for (let step = 1; step <= options.length; step++) {
+    const index = (activeIndex.value + direction * step + options.length) % options.length
+    if (!options[index]?.disabled) { activeIndex.value = index; return }
+  }
+  activeIndex.value = -1
 }
 
 function handleKeydown(event: KeyboardEvent): void {
@@ -154,6 +151,8 @@ function handleKeydown(event: KeyboardEvent): void {
     event.preventDefault()
     const option = visibleOptions.value[activeIndex.value]
     if (option) choose(option)
+  } else if (event.key === 'Tab' && open.value) {
+    close()
   } else if (event.key === 'Escape' && open.value) {
     event.preventDefault()
     close()
@@ -253,7 +252,9 @@ onBeforeUnmount(() => {
           }"
           role="option"
           :aria-selected="option.value === modelValue"
-          @mouseenter="activeIndex = index"
+          :aria-disabled="!!option.disabled"
+          :disabled="option.disabled"
+          @mouseenter="!option.disabled && (activeIndex = index)"
           @click="choose(option)"
         >
           <span>{{ option.label }}</span>
@@ -280,6 +281,8 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.app-select__option:disabled { opacity: 0.5; cursor: not-allowed; }
+.app-select__option:disabled:hover { background: transparent; }
 .app-select {
   position: relative;
   width: 100%;

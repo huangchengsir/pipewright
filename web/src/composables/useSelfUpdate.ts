@@ -1,9 +1,10 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { getCurrentUpdateTask, getUpdateTask, resumeUpdateTask, startUpdateTask, type UpgradeTask } from '../api/version'
+import { getCurrentUpdateTask, getUpdateTask, resumeUpdateTask, startUpdateTask, type UpgradeTask, type ReleaseSource } from '../api/version'
 import { HttpError } from '../api/http'
 
 type OriginalAction = 'start' | 'resume'
 interface Pending {
+ source: ReleaseSource
  requestId: string
  target: string
  taskId?: string
@@ -38,13 +39,13 @@ export function useSelfUpdate() {
 
  try {
   const saved = JSON.parse(sessionStorage.getItem(storageKey) || 'null')
-  if (saved && validID(saved.requestId) && typeof saved.target === 'string' && targetTag.test(saved.target)) {
+  if (saved && validID(saved.requestId) && typeof saved.target === 'string' && targetTag.test(saved.target) && (saved.source === undefined || saved.source === 'github' || saved.source === 'gitee')) {
    const taskId = validID(saved.taskId) ? saved.taskId : undefined
    const resumeId = validID(saved.resumeId) ? saved.resumeId : undefined
    const action = saved.unconfirmedAction === 'start' || saved.unconfirmedAction === 'resume'
     ? saved.unconfirmedAction
     : saved.unconfirmedAction === null ? null : resumeId ? 'resume' : taskId ? null : 'start'
-   pending.value = { requestId: saved.requestId, target: saved.target, taskId, resumeId, unconfirmedAction: action }
+   pending.value = { source: saved.source ?? 'github', requestId: saved.requestId, target: saved.target, taskId, resumeId, unconfirmedAction: action }
   }
  } catch { /* Server-side task state remains authoritative. */ }
 
@@ -125,7 +126,7 @@ export function useSelfUpdate() {
   submitting.value = false
   if (gen === generation) void read(gen)
  }
- async function start(target: string): Promise<void> {
+ async function start(target: string, source: ReleaseSource = 'github'): Promise<void> {
   if (submitting.value) return
   if (pending.value?.unconfirmedAction === 'resume') {
    await recoverOriginal()
@@ -136,12 +137,12 @@ export function useSelfUpdate() {
   submitting.value = true
   manual.value = null
   submissionError.value = null
-  if (!pending.value) pending.value = { requestId: requestId(), target }
+  if (!pending.value) pending.value = { requestId: requestId(), target, source }
   pending.value.unconfirmedAction = 'start'
   // Persist before dispatch: refresh/unmount can happen before any catch runs.
   remember()
   try {
-   const result = await startUpdateTask({ requestId: pending.value.requestId, target: pending.value.target })
+   const result = await startUpdateTask({ requestId: pending.value.requestId, target: pending.value.target, source: pending.value.source })
    if (disposed || gen !== generation) return
    if (result.status === 'manual') {
     manual.value = { command: result.command }
@@ -189,7 +190,7 @@ export function useSelfUpdate() {
    await recoverOriginal()
    return
   }
-  pending.value = { requestId: value.requestId, target: value.target, taskId: value.id, resumeId: requestId(), unconfirmedAction: 'resume' }
+  pending.value = { source: value.source ?? 'github', requestId: value.requestId, target: value.target, taskId: value.id, resumeId: requestId(), unconfirmedAction: 'resume' }
   await submitContinuation(pending.value)
  }
  async function recoverOriginal(): Promise<void> {
@@ -202,7 +203,7 @@ export function useSelfUpdate() {
   } else {
    const value = task.value
    if (!value || value.state !== 'accepted') return
-   pending.value = { requestId: value.requestId, target: value.target, taskId: value.id, unconfirmedAction: 'start' }
+   pending.value = { source: value.source ?? 'github', requestId: value.requestId, target: value.target, taskId: value.id, unconfirmedAction: 'start' }
    await start(value.target)
   }
  }

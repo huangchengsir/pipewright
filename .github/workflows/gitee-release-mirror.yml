@@ -1,0 +1,71 @@
+# Opt-in only: configure GITEE_RELEASE_REPO repository variable and
+# GITEE_RELEASE_TOKEN repository secret after preparing the public Gitee repository.
+name: gitee-release-mirror
+
+on:
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing stable GitHub Release tag (vX.Y.Z)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gitee-release-mirror
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    if: >-
+      vars.GITEE_RELEASE_REPO != '' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # For workflow_run, use the default-branch implementation. Never execute a
+      # workflow artifact or source checked out from a contributor's branch.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Check opt-in configuration
+        id: configured
+        env:
+          GITEE_RELEASE_TOKEN: ${{ secrets.GITEE_RELEASE_TOKEN }}
+        run: |
+          if [ -n "$GITEE_RELEASE_TOKEN" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Gitee release mirror is disabled until GITEE_RELEASE_TOKEN is configured."
+          fi
+
+      - name: Copy and verify the exact original release
+        if: steps.configured.outputs.ready == 'true'
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
+          UPSTREAM_TAG: ${{ github.event.workflow_run.head_branch }}
+          UPSTREAM_SHA: ${{ github.event.workflow_run.head_sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          GITEE_RELEASE_REPO: ${{ vars.GITEE_RELEASE_REPO }}
+          GITEE_RELEASE_TOKEN: ${{ secrets.GITEE_RELEASE_TOKEN }}
+          ORIGINAL_REPOSITORY: ${{ github.repository }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            python3 -B scripts/sync_gitee_release.py --tag "$REQUESTED_TAG" \
+              --github-repo "$ORIGINAL_REPOSITORY" --dist-dir "$RUNNER_TEMP/gitee-release-originals"
+          else
+            python3 -B scripts/sync_gitee_release.py --tag "$UPSTREAM_TAG" \
+              --expected-commit "$UPSTREAM_SHA" --github-repo "$ORIGINAL_REPOSITORY" \
+              --dist-dir "$RUNNER_TEMP/gitee-release-originals"
+          fi

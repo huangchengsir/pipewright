@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/releasesource"
 	"github.com/huangchengsir/pipewright/internal/selfupdate"
 	"io/fs"
 	"net/http"
@@ -68,6 +69,9 @@ const contextKeySession contextKey = 1
 type Option func(*options)
 
 type options struct {
+	releaseSources        *releasesource.Catalog
+	releaseSourceSettings *releasesource.Settings
+
 	kubernetes         *kubernetes.Service
 	kubernetesObserver kubernetesObserver
 	platformLogin      *authlogin.Service
@@ -129,6 +133,9 @@ type options struct {
 }
 
 func WithSelfUpdate(s *selfupdate.Service) Option { return func(o *options) { o.selfUpdate = s } }
+func WithReleaseSources(c *releasesource.Catalog, s *releasesource.Settings) Option {
+	return func(o *options) { o.releaseSources = c; o.releaseSourceSettings = s }
+}
 
 // WithMCP adds the embedded Bearer-authenticated MCP route and admin token management.
 func WithMCP(handler http.Handler, tokens *auth.MCPTokenStore) Option {
@@ -430,7 +437,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 	}
 
 	// 更新检查器:进程级单例,内含 TTL 缓存(跨请求复用,避免反复点击打爆 GitHub 限流)。
-	updateChecker := version.NewChecker()
+	updateChecker := version.NewCheckerWithSources(o.releaseSources, o.releaseSourceSettings)
 
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
@@ -501,6 +508,8 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 
 		// 检查更新:鉴权只读,查 GitHub 最新发布并与当前版本比对(GET 免 CSRF)。
 		ar.Get("/version/check", makeCheckUpdateHandler(updateChecker))
+		ar.Get("/version/source-settings", makeGetReleaseSourceSettingsHandler(o.releaseSourceSettings))
+		ar.Put("/version/source-settings", makeSaveReleaseSourceSettingsHandler(o.releaseSourceSettings, aud))
 		ar.Get("/onboarding/status", makeOnboardingStatusHandler(o.onboarding))
 		// 一键自动更新:鉴权 + CSRF(写操作);binary 自替换+重启,docker 返回升级命令。
 		ar.Post("/version/update", makeSelfUpdateHandler(updateChecker, o.selfUpdate, aud))

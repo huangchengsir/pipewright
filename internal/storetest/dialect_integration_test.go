@@ -19,8 +19,9 @@ func TestMigrationsApplied(t *testing.T) {
 		if err := st.DB.QueryRowContext(ctx, `SELECT COUNT(1) FROM schema_migrations`).Scan(&n); err != nil {
 			t.Fatalf("count migrations: %v", err)
 		}
-		if n != 62 {
-			t.Fatalf("应用迁移数 = %d, 期望 61", n)
+		const expectedMigrations = 63
+		if n != expectedMigrations {
+			t.Fatalf("应用迁移数 = %d, 期望 %d", n, expectedMigrations)
 		}
 		// 核心领域表存在(随手验一张)。
 		if _, err := st.DB.ExecContext(ctx, `SELECT 1 FROM audit_log WHERE 1=0`); err != nil {

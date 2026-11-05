@@ -2,6 +2,7 @@ package selfupdate
 
 import (
 	"context"
+	"github.com/huangchengsir/pipewright/internal/releasesource"
 	"github.com/huangchengsir/pipewright/internal/version"
 	"io"
 	"net/http"
@@ -14,30 +15,15 @@ func loopbackBase(v string) bool {
 	u, e := url.Parse(v)
 	return e == nil && u.User == nil && (u.Scheme == "http" || u.Scheme == "https") && (u.Hostname() == "127.0.0.1" || u.Hostname() == "::1" || u.Hostname() == "localhost") && u.RawQuery == "" && u.Fragment == ""
 }
-func (s *Service) do(req *http.Request) (*http.Response, error) {
+func (s *Service) do(req *http.Request, sources ...releasesource.ID) (*http.Response, error) {
 	req.Header.Set("User-Agent", "pipewright/"+version.Version)
-	client := *s.opts.Client
-	old := client.CheckRedirect
-	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
-		if len(via) >= 10 || next.URL.User != nil {
-			return ErrInvalid
-		}
-		if len(via) > 0 && via[0].URL.Scheme == "https" && next.URL.Scheme != "https" {
-			return ErrInvalid
-		}
-		if s.opts.BaseURL == "" && next.URL.Scheme != "https" {
-			return ErrInvalid
-		}
-		if s.opts.BaseURL != "" && !loopbackBase(next.URL.Scheme+"://"+next.URL.Host) {
-			return ErrInvalid
-		}
-		if old != nil {
-			return old(next, via)
-		}
-		return nil
+	source := releasesource.GitHub
+	if len(sources) > 0 {
+		source = sources[0]
 	}
-	return client.Do(req)
+	return releasesource.Do(s.opts.Client, req, s.opts.BaseURL, source)
 }
+
 func idleContext(parent context.Context, idle time.Duration) (context.Context, context.CancelFunc, func()) {
 	ctx, cancel := context.WithCancel(parent)
 	var last atomic.Int64

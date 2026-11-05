@@ -262,6 +262,8 @@ export default {
   unnamedJob: '(未命名任务)',
   thisPipeline: '本流水线',
   closeDrawer: '关闭抽屉',
+  expandCommandEditor: '放大编辑执行命令',
+  commandEditorTitle: '编辑执行命令',
   basicInfo: '基本信息',
   jobNameLabel: '任务名称',
   jobNamePlaceholder: '例:隔离构建',

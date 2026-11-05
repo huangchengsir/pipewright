@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, shallowRef, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { localizeName } from '../../lib/pipelineLabels'
 import type { PipelineJob, PipelineStage } from '../../api/pipeline'
@@ -30,6 +30,7 @@ import AppSelect from '../ui/AppSelect.vue'
 import KubernetesJobConfig from './KubernetesJobConfig.vue'
 import ImageProvenanceSummary from './ImageProvenanceSummary.vue'
 import ProjectSourceSummary from './ProjectSourceSummary.vue'
+import CommandEditorDialog from './CommandEditorDialog.vue'
 import { imageSourceChoices, resolveImageSource } from './imageProvenance'
 
 const props = defineProps<{
@@ -72,6 +73,7 @@ const typedConfig  = ref<Record<string, string>>({})
 const extraRows    = ref<KVRow[]>([])
 
 const showAdvanced = ref(false)
+const commandEditorOpen = shallowRef(false)
 
 // 仅当「选了不同 job」或「改了 job 类型」时才重置视图模式(steps/raw);纯内容编辑不重置。
 // 否则:在「原始参数」视图编辑某字段 → blur 提交 → 父回写 props.job → 本 watch 再跑 →
@@ -103,7 +105,10 @@ function splitOnType(type: string, config: Record<string, string>, repickView = 
 
 // Resync when the selected job changes (initial hydrate runs after the
 // step-builder computeds below are declared, to avoid a temporal dead zone).
-watch(() => props.job, (next) => hydrate(next))
+watch(() => props.job, (next) => {
+  commandEditorOpen.value = false
+  hydrate(next)
+})
 
 // ─── Field schema for the current type ────────────────────────────────────────
 
@@ -153,6 +158,10 @@ const visibleFields = computed<JobField[]>(() => {
     return true
   })
 })
+
+const commandEditorPlaceholder = computed(
+  () => spec.value?.fields.find((field) => field.key === 'commands')?.placeholder ?? '',
+)
 
 // 高级(执行/缓存)字段折叠:主表单只显示非高级字段;高级字段收进默认折叠分区。
 const showExecAdvanced = ref(false)
@@ -302,6 +311,12 @@ function selectValue(field: JobField): string {
 
 function updateLocal(key: string, value: string): void {
   typedConfig.value = { ...typedConfig.value, [key]: value }
+}
+
+function applyExpandedCommands(value: string): void {
+  updateLocal('commands', value)
+  flush()
+  commandEditorOpen.value = false
 }
 
 const cacheInherited = computed(() => !Object.hasOwn(typedConfig.value, 'cachePaths'))
@@ -583,7 +598,21 @@ async function confirmSave(): Promise<void> {
         class="drawer-field"
         :data-config-key="field.key"
       >
-        <div class="drawer-field-label">{{ field.label }}</div>
+        <div class="drawer-field-heading">
+          <div class="drawer-field-label">{{ field.label }}</div>
+          <button
+            v-if="field.key === 'commands' && field.kind === 'textarea'"
+            type="button"
+            class="command-editor-trigger"
+            :aria-label="t('pipelineJob.expandCommandEditor')"
+            :title="t('pipelineJob.expandCommandEditor')"
+            @click="commandEditorOpen = true"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true">
+              <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+            </svg>
+          </button>
+        </div>
 
         <label v-if="field.key === 'cachePaths'" class="drawer-toggle">
           <input type="checkbox" :checked="cacheInherited" @change="setCacheInheritance(($event.target as HTMLInputElement).checked)">
@@ -792,6 +821,18 @@ async function confirmSave(): Promise<void> {
         </div>
       </div>
     </div>
+
+    <CommandEditorDialog
+      :open="commandEditorOpen"
+      :title="t('pipelineJob.commandEditorTitle')"
+      :value="fieldValue('commands')"
+      :placeholder="commandEditorPlaceholder"
+      :close-label="t('pipelineJob.cancel')"
+      :cancel-label="t('pipelineJob.cancel')"
+      :apply-label="t('pipelineJob.save')"
+      @close="commandEditorOpen = false"
+      @apply="applyExpandedCommands"
+    />
   </aside>
 </template>
 
@@ -807,6 +848,44 @@ async function confirmSave(): Promise<void> {
 
 .drawer-section-head .drawer-section-label {
   margin-bottom: 0;
+}
+
+.drawer-field-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+
+.drawer-field-heading .drawer-field-label {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.command-editor-trigger {
+  display: grid;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  place-items: center;
+  color: var(--color-faint);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--rounded);
+  cursor: pointer;
+}
+
+.command-editor-trigger:hover {
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+}
+
+.command-editor-trigger:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
 }
 
 .view-switch {

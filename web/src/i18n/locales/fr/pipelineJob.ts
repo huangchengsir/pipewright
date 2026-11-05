@@ -262,6 +262,8 @@ export default {
   unnamedJob: '(tâche sans nom)',
   thisPipeline: 'ce pipeline',
   closeDrawer: 'Fermer le panneau',
+  expandCommandEditor: 'Ouvrir l’éditeur de commandes agrandi',
+  commandEditorTitle: 'Modifier les commandes d’exécution',
   basicInfo: 'Informations de base',
   jobNameLabel: 'Nom de la tâche',
   jobNamePlaceholder: 'p. ex. : Build isolé',

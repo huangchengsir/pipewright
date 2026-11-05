@@ -262,6 +262,8 @@ export default {
   unnamedJob: '(이름 없는 작업)',
   thisPipeline: '이 파이프라인',
   closeDrawer: '서랍 닫기',
+  expandCommandEditor: '확대 명령 편집기 열기',
+  commandEditorTitle: '실행 명령 편집',
   basicInfo: '기본 정보',
   jobNameLabel: '작업 이름',
   jobNamePlaceholder: '예: 격리 빌드',

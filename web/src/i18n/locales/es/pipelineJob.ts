@@ -262,6 +262,8 @@ export default {
   unnamedJob: '(tarea sin nombre)',
   thisPipeline: 'este pipeline',
   closeDrawer: 'Cerrar panel',
+  expandCommandEditor: 'Abrir editor de comandos ampliado',
+  commandEditorTitle: 'Editar comandos de ejecución',
   basicInfo: 'Información básica',
   jobNameLabel: 'Nombre de la tarea',
   jobNamePlaceholder: 'p. ej.: Build aislado',

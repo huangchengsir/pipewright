@@ -262,6 +262,8 @@ export default {
   unnamedJob: '(無名のジョブ)',
   thisPipeline: 'このパイプライン',
   closeDrawer: 'ドロワーを閉じる',
+  expandCommandEditor: '拡大コマンドエディターを開く',
+  commandEditorTitle: '実行コマンドを編集',
   basicInfo: '基本情報',
   jobNameLabel: 'ジョブ名',
   jobNamePlaceholder: '例:隔離ビルド',

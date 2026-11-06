@@ -264,6 +264,7 @@ export default {
   closeDrawer: '關閉抽屜',
   expandCommandEditor: '放大編輯執行命令',
   commandEditorTitle: '編輯執行命令',
+  applyCommandsToNode: '套用至節點',
   commandEditorConflict: '命令已更新。可複製目前的草稿，關閉後重新開啟編輯器。',
   basicInfo: '基本資訊',
   jobNameLabel: '任務名稱',

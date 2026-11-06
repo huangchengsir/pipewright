@@ -264,6 +264,7 @@ export default {
   closeDrawer: 'Fermer le panneau',
   expandCommandEditor: 'Ouvrir l’éditeur de commandes agrandi',
   commandEditorTitle: 'Modifier les commandes d’exécution',
+  applyCommandsToNode: 'Appliquer au nœud',
   commandEditorConflict: 'Les commandes ont été mises à jour. Copiez votre brouillon si besoin, puis rouvrez l’éditeur.',
   basicInfo: 'Informations de base',
   jobNameLabel: 'Nom de la tâche',

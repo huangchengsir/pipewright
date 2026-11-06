@@ -113,9 +113,32 @@ describe('JobDrawer expanded command editor', () => {
     expect(dialog.open).toBe(true)
     const title = document.getElementById(dialog.getAttribute('aria-labelledby')!)
     expect(title?.textContent?.trim()).toBe('编辑执行命令')
+    expect(saveButton().textContent?.trim()).toBe('应用到节点')
     expect(commandTextarea().value).toBe(job.config.commands)
     expect(document.activeElement).toBe(commandTextarea())
     expect(document.body.style.overflow).toBe('hidden')
+  })
+
+  it('only dismisses an unchanged command draft when the backdrop is clicked', async () => {
+    await openEditor()
+    const clickBackdrop = async () => {
+      const dialog = commandEditor()!
+      for (const type of ['pointerdown', 'pointerup']) {
+        const event = new MouseEvent(type, { clientX: 1, clientY: 1 })
+        Object.assign(event, { pointerId: 1, isPrimary: true })
+        dialog.dispatchEvent(event)
+      }
+      await nextTick()
+    }
+
+    setCommandDraft('echo unsaved')
+    await clickBackdrop()
+    expect(commandTextarea().value).toBe('echo unsaved')
+    expect(wrapper.emitted('update')).toBeUndefined()
+
+    setCommandDraft(job.config.commands)
+    await clickBackdrop()
+    expect(commandEditor()).toBeNull()
   })
 
   it('discards the draft on Escape and returns focus to the command trigger', async () => {

@@ -92,12 +92,12 @@ function onPointerDown(event: PointerEvent): void {
 function onPointerUp(event: PointerEvent): void {
   if (event.pointerId !== backdropPointerId) return
   backdropPointerId = null
+  if (composing || draft.value !== initialValue.value) return
   if (event.button === 0 && isBackdrop(event)) requestClose()
 }
 
 function onKeydown(event: KeyboardEvent): void {
   if (composing || event.isComposing || event.keyCode === 229) return
-
 
   if (event.key === 'Escape') {
     event.preventDefault()

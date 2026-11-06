@@ -264,6 +264,7 @@ export default {
   closeDrawer: '关闭抽屉',
   expandCommandEditor: '放大编辑执行命令',
   commandEditorTitle: '编辑执行命令',
+  applyCommandsToNode: '应用到节点',
   commandEditorConflict: '命令已更新。可复制当前草稿，关闭后重新打开编辑器。',
   basicInfo: '基本信息',
   jobNameLabel: '任务名称',

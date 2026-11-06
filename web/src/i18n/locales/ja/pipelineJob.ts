@@ -264,6 +264,7 @@ export default {
   closeDrawer: 'ドロワーを閉じる',
   expandCommandEditor: '拡大コマンドエディターを開く',
   commandEditorTitle: '実行コマンドを編集',
+  applyCommandsToNode: 'ノードに適用',
   commandEditorConflict: 'コマンドが更新されました。必要に応じて下書きをコピーし、エディターを開き直してください。',
   basicInfo: '基本情報',
   jobNameLabel: 'ジョブ名',

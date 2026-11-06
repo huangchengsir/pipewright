@@ -264,6 +264,7 @@ export default {
   closeDrawer: 'Cerrar panel',
   expandCommandEditor: 'Abrir editor de comandos ampliado',
   commandEditorTitle: 'Editar comandos de ejecución',
+  applyCommandsToNode: 'Aplicar al nodo',
   commandEditorConflict: 'Los comandos se han actualizado. Si lo necesitas, copia el borrador y vuelve a abrir el editor.',
   basicInfo: 'Información básica',
   jobNameLabel: 'Nombre de la tarea',

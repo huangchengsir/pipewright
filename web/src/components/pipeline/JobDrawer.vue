@@ -841,7 +841,7 @@ async function confirmSave(): Promise<void> {
       :placeholder="commandEditorPlaceholder"
       :close-label="t('pipelineJob.cancel')"
       :cancel-label="t('pipelineJob.cancel')"
-      :apply-label="t('pipelineJob.save')"
+      :apply-label="t('pipelineJob.applyCommandsToNode')"
       :conflict-label="t('pipelineJob.commandEditorConflict')"
       @close="commandEditorOpen = false"
       @apply="applyExpandedCommands"

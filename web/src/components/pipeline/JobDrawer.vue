@@ -74,6 +74,7 @@ const extraRows    = ref<KVRow[]>([])
 
 const showAdvanced = ref(false)
 const commandEditorOpen = shallowRef(false)
+const commandEditorTrigger = shallowRef<HTMLElement | null>(null)
 
 // 仅当「选了不同 job」或「改了 job 类型」时才重置视图模式(steps/raw);纯内容编辑不重置。
 // 否则:在「原始参数」视图编辑某字段 → blur 提交 → 父回写 props.job → 本 watch 再跑 →
@@ -103,12 +104,16 @@ function splitOnType(type: string, config: Record<string, string>, repickView = 
   if (repickView) pickViewMode(config)
 }
 
-// Resync when the selected job changes (initial hydrate runs after the
-// step-builder computeds below are declared, to avoid a temporal dead zone).
-watch(() => props.job, (next) => {
-  commandEditorOpen.value = false
-  hydrate(next)
-})
+// Hydrate save responses, but keep the command draft when the selection is unchanged.
+watch(
+  [() => props.job, () => props.job.id, () => props.job.type, () => props.stage.id],
+  ([next, id, type, stageId], [, previousId, previousType, previousStageId]) => {
+    if (id !== previousId || type !== previousType || stageId !== previousStageId) {
+      commandEditorOpen.value = false
+    }
+    hydrate(next)
+  },
+)
 
 // ─── Field schema for the current type ────────────────────────────────────────
 
@@ -313,10 +318,16 @@ function updateLocal(key: string, value: string): void {
   typedConfig.value = { ...typedConfig.value, [key]: value }
 }
 
+function openCommandEditor(event: MouseEvent): void {
+  commandEditorTrigger.value = event.currentTarget as HTMLButtonElement
+  commandEditorOpen.value = true
+}
+
 function applyExpandedCommands(value: string): void {
+  if (!commandEditorOpen.value) return
+  commandEditorOpen.value = false
   updateLocal('commands', value)
   flush()
-  commandEditorOpen.value = false
 }
 
 const cacheInherited = computed(() => !Object.hasOwn(typedConfig.value, 'cachePaths'))
@@ -606,7 +617,7 @@ async function confirmSave(): Promise<void> {
             class="command-editor-trigger"
             :aria-label="t('pipelineJob.expandCommandEditor')"
             :title="t('pipelineJob.expandCommandEditor')"
-            @click="commandEditorOpen = true"
+            @click="openCommandEditor"
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true">
               <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
@@ -824,12 +835,14 @@ async function confirmSave(): Promise<void> {
 
     <CommandEditorDialog
       :open="commandEditorOpen"
+      :trigger="commandEditorTrigger"
       :title="t('pipelineJob.commandEditorTitle')"
       :value="fieldValue('commands')"
       :placeholder="commandEditorPlaceholder"
       :close-label="t('pipelineJob.cancel')"
       :cancel-label="t('pipelineJob.cancel')"
       :apply-label="t('pipelineJob.save')"
+      :conflict-label="t('pipelineJob.commandEditorConflict')"
       @close="commandEditorOpen = false"
       @apply="applyExpandedCommands"
     />

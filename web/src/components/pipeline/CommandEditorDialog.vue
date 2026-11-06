@@ -1,22 +1,17 @@
 <script setup lang="ts">
-import {
-  nextTick,
-  onBeforeUnmount,
-  shallowRef,
-  useId,
-  useTemplateRef,
-  watch,
-} from 'vue'
+import { computed, nextTick, onBeforeUnmount, shallowRef, useId, useTemplateRef, watch } from 'vue'
 import AppButton from '../ui/AppButton.vue'
 
 const props = defineProps<{
   open: boolean
   title: string
   value: string
+  trigger: HTMLElement | null
   placeholder?: string
   closeLabel: string
   cancelLabel: string
   applyLabel: string
+  conflictLabel: string
 }>()
 
 const emit = defineEmits<{
@@ -25,69 +20,85 @@ const emit = defineEmits<{
 }>()
 
 const draft = shallowRef('')
-const previousFocus = shallowRef<HTMLElement | null>(null)
-const dialog = useTemplateRef<HTMLElement>('dialog')
+const initialValue = shallowRef('')
+const hasConflict = computed(() => props.value !== initialValue.value)
+const dialog = useTemplateRef<HTMLDialogElement>('dialog')
 const editor = useTemplateRef<HTMLTextAreaElement>('editor')
 const titleId = useId()
+const conflictId = useId()
 
-let previousBodyOverflow = ''
-let scrollLocked = false
+let previousBodyOverflow: string | null = null
+let backdropPointerId: number | null = null
+let composing = false
 
-function lockBodyScroll(): void {
-  if (scrollLocked) return
-  previousBodyOverflow = document.body.style.overflow
-  document.body.style.overflow = 'hidden'
-  scrollLocked = true
-}
-
-function unlockBodyScroll(): void {
-  if (!scrollLocked) return
+function closeDialog(): void {
+  backdropPointerId = null
+  composing = false
+  if (dialog.value?.open) dialog.value.close()
+  if (previousBodyOverflow === null) return
   document.body.style.overflow = previousBodyOverflow
-  scrollLocked = false
-}
-
-function restoreFocus(): void {
-  const target = previousFocus.value
-  previousFocus.value = null
-  if (target?.isConnected) target.focus()
+  previousBodyOverflow = null
+  if (props.trigger?.isConnected) props.trigger.focus()
 }
 
 watch(
   () => props.open,
   async (open) => {
     if (!open) {
-      unlockBodyScroll()
-      await nextTick()
-      restoreFocus()
+      closeDialog()
       return
     }
 
-    draft.value = props.value
-    previousFocus.value =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null
-    lockBodyScroll()
+    initialValue.value = props.value
+    draft.value = initialValue.value
     await nextTick()
+    if (!props.open || !dialog.value || dialog.value.open) return
+
+    dialog.value.showModal()
+    previousBodyOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
     editor.value?.focus()
   },
   { immediate: true },
 )
 
-onBeforeUnmount(() => {
-  unlockBodyScroll()
-  restoreFocus()
-})
+onBeforeUnmount(closeDialog)
 
 function requestClose(): void {
   emit('close')
 }
 
 function apply(): void {
-  emit('apply', draft.value)
+  if (props.open && !hasConflict.value) emit('apply', draft.value)
+}
+
+function onCancel(): void {
+  if (!composing) requestClose()
+}
+
+function isBackdrop(event: PointerEvent): boolean {
+  if (!dialog.value || event.target !== dialog.value) return false
+  const { left, right, top, bottom } = dialog.value.getBoundingClientRect()
+  return event.clientX < left || event.clientX >= right
+    || event.clientY < top || event.clientY >= bottom
+}
+
+function onPointerDown(event: PointerEvent): void {
+  if (event.isPrimary) {
+    backdropPointerId = event.button === 0 && isBackdrop(event) ? event.pointerId : null
+  }
+}
+
+function onPointerUp(event: PointerEvent): void {
+  if (event.pointerId !== backdropPointerId) return
+  backdropPointerId = null
+  if (event.button === 0 && isBackdrop(event)) requestClose()
 }
 
 function onKeydown(event: KeyboardEvent): void {
+  if (composing || event.isComposing || event.keyCode === 229) return
+
+
   if (event.key === 'Escape') {
     event.preventDefault()
     requestClose()
@@ -122,94 +133,102 @@ function onKeydown(event: KeyboardEvent): void {
 
 <template>
   <Teleport to="body">
-    <div
+    <dialog
       v-if="open"
-      class="command-editor-backdrop"
-      @mousedown.self="requestClose"
+      ref="dialog"
+      class="command-editor-dialog"
+      :aria-labelledby="titleId"
+      @cancel.prevent="onCancel"
+      @keydown.stop="onKeydown"
+      @pointerdown="onPointerDown"
+      @pointerup="onPointerUp"
+      @pointercancel="backdropPointerId = null"
     >
-      <section
-        ref="dialog"
-        class="command-editor-dialog"
-        role="dialog"
-        aria-modal="true"
-        :aria-labelledby="titleId"
-        @keydown="onKeydown"
-      >
-        <header class="command-editor-dialog__header">
-          <h2 :id="titleId" class="command-editor-dialog__title">
-            {{ title }}
-          </h2>
-          <button
-            type="button"
-            class="command-editor-dialog__close"
-            :aria-label="closeLabel"
-            :title="closeLabel"
-            @click="requestClose"
+      <header class="command-editor-dialog__header">
+        <h2 :id="titleId" class="command-editor-dialog__title">
+          {{ title }}
+        </h2>
+        <button
+          type="button"
+          class="command-editor-dialog__close"
+          :aria-label="closeLabel"
+          :title="closeLabel"
+          @click="requestClose"
+        >
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            aria-hidden="true"
           >
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              aria-hidden="true"
-            >
-              <path d="M18 6 6 18M6 6l12 12" />
-            </svg>
-          </button>
-        </header>
+            <path d="M18 6 6 18M6 6l12 12" />
+          </svg>
+        </button>
+      </header>
 
-        <div class="command-editor-dialog__body">
-          <textarea
-            ref="editor"
-            v-model="draft"
-            class="command-editor-dialog__textarea"
-            :placeholder="placeholder"
-            :aria-label="title"
-            autocomplete="off"
-            autocapitalize="off"
-            spellcheck="false"
-          />
-        </div>
+      <div class="command-editor-dialog__body">
+        <textarea
+          ref="editor"
+          v-model="draft"
+          class="command-editor-dialog__textarea"
+          :placeholder="placeholder"
+          :aria-label="title"
+          :aria-describedby="hasConflict ? conflictId : undefined"
+          autofocus
+          @compositionstart="composing = true"
+          @compositionend="composing = false"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+        />
+      </div>
 
-        <footer class="command-editor-dialog__footer">
-          <AppButton @click="requestClose">{{ cancelLabel }}</AppButton>
-          <AppButton variant="primary" @click="apply">{{
-            applyLabel
-          }}</AppButton>
-        </footer>
-      </section>
-    </div>
+      <p v-if="hasConflict" :id="conflictId" class="command-editor-dialog__conflict" role="alert">
+        {{ conflictLabel }}
+      </p>
+
+      <footer class="command-editor-dialog__footer">
+        <AppButton @click="requestClose">{{ cancelLabel }}</AppButton>
+        <AppButton variant="primary" :disabled="hasConflict" @click="apply">{{
+          applyLabel
+        }}</AppButton>
+      </footer>
+    </dialog>
   </Teleport>
 </template>
 
 <style scoped>
-.command-editor-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 90;
-  display: grid;
-  place-items: center;
-  padding: 24px;
+.command-editor-dialog::backdrop {
   background: oklch(0% 0 0 / 0.48);
   backdrop-filter: blur(3px);
 }
 
 .command-editor-dialog {
+  position: fixed;
+  inset: 0;
   box-sizing: border-box;
-  display: flex;
   flex-direction: column;
   width: 80vw;
   height: 80dvh;
+  max-width: none;
+  max-height: none;
   min-width: 0;
   min-height: 0;
+  margin: auto;
+  padding: 0;
   overflow: hidden;
   color: var(--color-text);
   background: var(--color-card);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--rounded-card);
   box-shadow: var(--shadow-modal, 0 24px 64px oklch(0% 0 0 / 0.4));
+}
+
+.command-editor-dialog[open] {
+  display: flex;
 }
 
 .command-editor-dialog__header {
@@ -288,6 +307,15 @@ function onKeydown(event: KeyboardEvent): void {
   color: var(--color-muted);
 }
 
+.command-editor-dialog__conflict {
+  margin: 0 20px 12px;
+  padding: 8px 10px;
+  background: var(--color-amber-soft);
+  border-radius: var(--rounded);
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
 .command-editor-dialog__footer {
   display: flex;
   justify-content: flex-end;
@@ -297,10 +325,6 @@ function onKeydown(event: KeyboardEvent): void {
 }
 
 @media (max-width: 640px) {
-  .command-editor-backdrop {
-    padding: 12px;
-  }
-
   .command-editor-dialog {
     width: calc(100vw - 24px);
     height: calc(100dvh - 24px);
@@ -312,6 +336,11 @@ function onKeydown(event: KeyboardEvent): void {
     padding-left: 14px;
   }
 
+  .command-editor-dialog__conflict {
+    margin-right: 14px;
+    margin-left: 14px;
+  }
+
   .command-editor-dialog__footer {
     padding-right: 14px;
     padding-left: 14px;
@@ -319,7 +348,7 @@ function onKeydown(event: KeyboardEvent): void {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .command-editor-backdrop {
+  .command-editor-dialog::backdrop {
     backdrop-filter: none;
   }
 }

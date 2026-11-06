@@ -264,6 +264,7 @@ export default {
   closeDrawer: 'Close drawer',
   expandCommandEditor: 'Open expanded command editor',
   commandEditorTitle: 'Edit execution commands',
+  commandEditorConflict: 'The commands changed. Copy your draft if needed, then close and reopen the editor.',
   basicInfo: 'Basic info',
   jobNameLabel: 'Job name',
   jobNamePlaceholder: 'e.g. Isolated build',

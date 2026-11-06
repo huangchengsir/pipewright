@@ -264,6 +264,7 @@ export default {
   closeDrawer: '서랍 닫기',
   expandCommandEditor: '확대 명령 편집기 열기',
   commandEditorTitle: '실행 명령 편집',
+  commandEditorConflict: '명령이 업데이트되었습니다. 필요하면 초안을 복사한 뒤 편집기를 다시 여세요.',
   basicInfo: '기본 정보',
   jobNameLabel: '작업 이름',
   jobNamePlaceholder: '예: 격리 빌드',

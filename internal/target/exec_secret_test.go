@@ -131,13 +131,14 @@ func TestSecretSSHCancelDrainsAndReturnsUnknown(t *testing.T) {
 		for req := range requests {
 			if req.Type == "exec" {
 				_ = req.Reply(true, nil)
-				close(started)
 				_, _ = io.Copy(io.Discard, ch)
-				return
+				// Stdin EOF does not end the remote command; cancellation closes it.
+				close(started)
 			}
 		}
 	})
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	result := make(chan error, 1)
 	go func() {
 		_, e := (sshDialer{}).RunSecret(ctx, addr, SSHConfig{User: "fixture", Password: "fixture-only"}, key, []string{"docker", "exec", "cid", "sleep", "100"}, nil)

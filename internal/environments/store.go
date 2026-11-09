@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/kubernetes"
 	"github.com/huangchengsir/pipewright/internal/runretry"
 	"sort"
 	"time"
@@ -103,6 +104,23 @@ func (s *Service) loadDeploymentsByEnv(ctx context.Context, projectID string) (m
 		if e != nil {
 			return nil, nil, e
 		}
+		releases, e := s.db.QueryContext(ctx, `SELECT o.run_id,o.id FROM k8s_releases o JOIN pipeline_runs r ON r.id=o.run_id WHERE r.project_id=? AND TRIM(r.resolved_environment)<>'' AND EXISTS(SELECT 1 FROM k8s_release_actions a WHERE a.release_id=o.id) ORDER BY o.created_at DESC LIMIT 500`, projectID)
+		if e != nil {
+			return nil, nil, e
+		}
+		for releases.Next() {
+			var ref runretry.KubernetesHistoryEntry
+			if e = releases.Scan(&ref.RunID, &ref.ReleaseID); e != nil {
+				releases.Close()
+				return nil, nil, e
+			}
+			refs = append(refs, ref)
+		}
+		e = releases.Err()
+		releases.Close()
+		if e != nil {
+			return nil, nil, e
+		}
 		if s.kubernetesHistory != nil {
 			more, e := s.kubernetesHistory(ctx, projectID)
 			if e != nil {
@@ -112,15 +130,11 @@ func (s *Service) loadDeploymentsByEnv(ctx context.Context, projectID string) (m
 		}
 		seen := map[string]bool{}
 		for _, ref := range refs {
-			key := ref.RunID + "/" + ref.OperationID
+			key := ref.RunID + "/" + ref.OperationID + "/" + ref.ReleaseID
 			if seen[key] {
 				continue
 			}
 			seen[key] = true
-			op, e := s.kubernetes.GetOperation(ctx, ref.OperationID)
-			if e != nil {
-				return nil, nil, e
-			}
 			var env, commit, branch, actor, runStatus string
 			if e = s.db.QueryRowContext(ctx, "SELECT resolved_environment,trigger_commit,trigger_branch,trigger_actor,status FROM pipeline_runs WHERE id=? AND project_id=?", ref.RunID, projectID).Scan(&env, &commit, &branch, &actor, &runStatus); e != nil {
 				return nil, nil, e
@@ -134,6 +148,40 @@ func (s *Service) loadDeploymentsByEnv(ctx context.Context, projectID string) (m
 				a.dep.envName = env
 				byRun[ref.RunID] = a
 				runOrder = append(runOrder, ref.RunID)
+			}
+			if ref.ReleaseID != "" {
+				release, e := s.kubernetes.GetRelease(ctx, ref.ReleaseID)
+				if e != nil {
+					return nil, nil, e
+				}
+				if release.Plan.Authorization.Request.ProjectID != projectID || release.Plan.Authorization.Request.Environment != env {
+					return nil, nil, fmt.Errorf("environments: release identity mismatch")
+				}
+				preview := kubernetes.PreviewRelease(release)
+				a.dep.Kubernetes = append(a.dep.Kubernetes, KubernetesTargetSummary{Version: 2, ReleaseID: release.ID, SourceRunID: release.RunID, Mode: release.Plan.Mode, Resources: preview.Resources, State: release.State, Cleanup: release.Cleanup, Adopted: release.RunID != ref.RunID})
+				eventAt := release.CreatedAt
+				var dispatched sql.NullInt64
+				if e = s.db.QueryRowContext(ctx, `SELECT MAX(created_at) FROM k8s_release_actions WHERE release_id=?`, release.ID).Scan(&dispatched); e != nil {
+					return nil, nil, e
+				}
+				if dispatched.Valid {
+					eventAt = dispatched.Int64
+				}
+				when := time.UnixMilli(eventAt).UTC().Format(time.RFC3339)
+				if when > a.latest {
+					a.latest = when
+				}
+				a.runStatus = runStatus
+				if len(a.dep.Kubernetes) == 1 {
+					a.kubernetesSuccess = release.Successful()
+				} else {
+					a.kubernetesSuccess = a.kubernetesSuccess && release.Successful()
+				}
+				continue
+			}
+			op, e := s.kubernetes.GetOperation(ctx, ref.OperationID)
+			if e != nil {
+				return nil, nil, e
 			}
 			target := op.Intent.Authorization.Target
 			a.dep.Kubernetes = append(a.dep.Kubernetes, KubernetesTargetSummary{OperationID: op.ID, SourceRunID: op.RunID, Namespace: target.Namespace, Deployment: target.Deployment, Container: target.Container, Image: op.Intent.Image, Business: op.Business, Cleanup: op.Cleanup, Adopted: op.RunID != ref.RunID})

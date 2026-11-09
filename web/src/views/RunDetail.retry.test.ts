@@ -24,6 +24,7 @@ async function render(path = '/runs/root') {
 }
 function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>(r => { resolve = r }); return { resolve, promise } }
 describe('existing RunDetail recovery integration', () => {
+  it('exposes cancel for a paused waiting_action frontier',async()=>{api.get.mockResolvedValue(run('root','waiting_action'));const {wrapper}=await render();expect(wrapper.findAll('button').some(b=>b.text()==='取消运行')).toBe(true)})
   it('opens node logs in the existing panel without requesting a retry plan', async () => {
     const original = run('root', 'failed'); original.steps = ['a', 'b'].map(id => ({ id: `step-${id}`, name: id, status: 'failed', startedAt: null, finishedAt: null, durationMs: null }))
     api.get.mockResolvedValue(original); const { wrapper, router } = await render()

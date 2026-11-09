@@ -25,6 +25,9 @@ const m = vi.hoisted(() => ({
   deleteGrant: vi.fn(),
   probe: vi.fn(),
   operations: vi.fn(),
+  releases: vi.fn(),
+  releaseGrants: vi.fn(),
+  releaseProfile: vi.fn(),
   observe: vi.fn(),
   reauth: vi.fn(),
   get: vi.fn(),
@@ -139,6 +142,15 @@ beforeEach(() => {
   m.connections.mockResolvedValue([c]);
   m.grants.mockResolvedValue([g]);
   m.operations.mockResolvedValue([operation]);
+  m.releases.mockResolvedValue([]);
+  m.releaseGrants.mockResolvedValue([]);
+  m.releaseProfile.mockRejectedValue(
+    new HttpError(
+      404,
+      { code: "kubernetes_not_found", message: "missing" },
+      "missing",
+    ),
+  );
   m.reauth.mockResolvedValue({
     reauthenticatedUntil: new Date(Date.now() + 300000).toISOString(),
   });

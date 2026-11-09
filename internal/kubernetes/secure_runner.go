@@ -357,6 +357,9 @@ func inspectContainer(ctx context.Context, t PrivateTransport, l RuntimeLease) (
 	return info, false, nil
 }
 func safeContainer(c containerInfo, l RuntimeLease, p ToolProfile, running bool) bool {
+	return safeContainerSized(c, l, p, running, "8m")
+}
+func safeContainerSized(c containerInfo, l RuntimeLease, p ToolProfile, running bool, tmpfsSize string) bool {
 	h := c.HostConfig
 	uid := strconv.FormatInt(p.UID, 10)
 	if c.Image != l.ToolImageID || c.Config.User != uid+":"+uid || len(c.Config.Volumes) != 0 || !h.ReadonlyRootfs || h.Privileged || len(h.Binds) != 0 || len(h.CapAdd) != 0 || len(h.CapDrop) != 1 || strings.ToUpper(h.CapDrop[0]) != "ALL" || h.NetworkMode != p.Network || h.PidMode != "" || h.IpcMode == "host" || h.PublishAllPorts || len(h.PortBindings) > 0 || h.RestartPolicy.Name != "no" || h.LogConfig.Type != "none" || h.NanoCpus != 1000000000 || h.Memory != 268435456 || h.MemorySwap != 268435456 || h.PidsLimit != 64 || len(h.Tmpfs) != 1 || c.State.Dead || running && !c.State.Running {
@@ -385,7 +388,7 @@ func safeContainer(c containerInfo, l RuntimeLease, p ToolProfile, running bool)
 	if !ok {
 		return false
 	}
-	for _, v := range []string{"rw", "noexec", "nosuid", "nodev", "size=8m", "mode=0700", "uid=" + uid, "gid=" + uid} {
+	for _, v := range []string{"rw", "noexec", "nosuid", "nodev", "size=" + tmpfsSize, "mode=0700", "uid=" + uid, "gid=" + uid} {
 		if !containsOption(options, v) {
 			return false
 		}

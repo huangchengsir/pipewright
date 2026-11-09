@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	log "github.com/huangchengsir/pipewright/internal/logging"
 	"github.com/huangchengsir/pipewright/internal/maintenance"
-	"log"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -102,7 +102,7 @@ func (s *service) Close() {
 		ctx, cancel := context.WithTimeout(context.Background(), notifierDrainTimeout)
 		defer cancel()
 		if err := notifier.Drain(ctx); err != nil {
-			log.Print("[anomaly] notification drain interrupted")
+			log.Printf("[anomaly] notification drain interrupted")
 		}
 	}
 }
@@ -259,7 +259,7 @@ func (s *service) finishAnalysis(alert Alert, analysis *Analysis) {
 	ctx, cancel := context.WithTimeout(context.Background(), analysisPersistenceTimeout)
 	defer cancel()
 	if !s.persistAnalysis(ctx, alert, analysis) {
-		log.Print("[anomaly] analysis persistence failed; pending alert retained for local recovery")
+		log.Printf("[anomaly] analysis persistence failed; pending alert retained for local recovery")
 		s.scheduleAnalysisRecovery()
 	}
 }
@@ -289,7 +289,7 @@ func (s *service) persistAnalysis(ctx context.Context, alert Alert, analysis *An
 func (s *service) notifyAlert(ctx context.Context, alert *Alert) {
 	defer func() {
 		if recover() != nil {
-			log.Print("[anomaly] notification failed")
+			log.Printf("[anomaly] notification failed")
 		}
 	}()
 	if s.notifier != nil {

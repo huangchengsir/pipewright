@@ -4,14 +4,16 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	log "github.com/huangchengsir/pipewright/internal/logging"
 	"github.com/huangchengsir/pipewright/internal/maintenance"
 	"github.com/huangchengsir/pipewright/internal/releasesource"
 	"github.com/huangchengsir/pipewright/internal/selfupdate"
 	"io/fs"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -129,7 +131,7 @@ func runPlatform() (restart func()) {
 	// 启动期 fail-fast:内嵌前端必须含 index.html,否则运行期白屏(空/错误 web/dist 也能编过)。
 	webFS := root.WebFS()
 	if _, err := fs.Stat(webFS, "index.html"); err != nil {
-		log.Fatalf("embedded web/dist 缺少 index.html(前端未正确构建?): %v", err)
+		log.Fatalf("embedded web/dist is missing index.html (was the frontend built correctly?): %v", err)
 	}
 
 	if dbDriver == "mysql" {
@@ -145,9 +147,9 @@ func runPlatform() (restart func()) {
 	}
 	// 启动时清理 DB 中遗留的过期会话(惰性删除可能遗漏)。
 	if n, err := authSvc.PurgeExpiredSessions(); err != nil {
-		log.Printf("[auth] 警告:启动清理过期会话失败:%v", err)
+		log.Printf("[auth] Warning: startup cleanup of expired sessions failed: %v", err)
 	} else if n > 0 {
-		log.Printf("[auth] 启动清理过期会话:%d 条", n)
+		log.Printf("[auth] Startup cleanup removed %d expired sessions", n)
 	}
 
 	// 装配凭据保险库(Story 1.3)。master key 缺失 → 未配置态(不 panic,平台仍启动);
@@ -156,12 +158,12 @@ func runPlatform() (restart func()) {
 	switch key, err := config.LoadMasterKey(); {
 	case err == nil:
 		masterKey = key
-		log.Printf("[vault] master key 已加载,凭据保险库可用")
+		log.Printf("[vault] Master key loaded; credential vault is available")
 	case errors.Is(err, config.ErrNoMasterKey):
-		log.Printf("[vault] 警告:未配置 master key(PIPEWRIGHT_MASTER_KEY 或 _FILE),凭据保险库不可用。")
+		log.Printf("[vault] Warning: no master key configured (PIPEWRIGHT_MASTER_KEY or _FILE); credential vault is unavailable.")
 	default:
 		// 不打印 err 之外的任何内容;err 本身不含 key 值。
-		log.Printf("[vault] 警告:master key 配置无效(%v),凭据保险库不可用。", err)
+		log.Printf("[vault] Warning: invalid master key configuration (%v); credential vault is unavailable.", err)
 	}
 	credVault := vault.New(st.DB, masterKey)
 	oauthSvc := oauth.New(st.DB, credVault, &http.Client{Timeout: 10 * time.Second})
@@ -188,7 +190,8 @@ func runPlatform() (restart func()) {
 	triggerSvc := trigger.New(st.DB, credVault)
 
 	// 装配流水线配置服务(Story 2.2):经 store 触库,惰性默认 + spec 校验 + YAML 渲染。
-	pipelineSvc := pipeline.New(st.DB)
+	kubernetesSvc := kubernetes.New(st.DB, credVault)
+	pipelineSvc := pipeline.New(st.DB, pipeline.WithReleaseConfigProtector(kubernetesSvc))
 
 	// 装配构建/部署配置服务(Story 2.4):独立于 2-2 spec;经 vault 校验 secret 引用存在性 +
 	// 回算掩码。master key 未配置时,涉及 secret 引用的保存降级为明确错误(不 panic)。
@@ -222,7 +225,7 @@ func runPlatform() (restart func()) {
 	// 注入分支→环境解析器(#56):手动/定时/串联触发未显式带环境时,据项目分支映射补解析
 	// 环境 + 目标服务器,与 webhook 接收路径一致(否则 build_image 不知推哪个 registry、
 	// 部署节点 pull 不到镜像)。复用 trigger 包同一套 matchBranch glob。
-	runSvc := run.New(st.DB, run.WithEnvResolver(trigger.NewEnvironmentResolver(st.DB)), run.WithConfigInitializer(func(ctx context.Context, projectID string) error {
+	runSvc := run.New(st.DB, run.WithReleaseCancellation(kubernetesSvc.CancelReleaseRun), run.WithEnvResolver(trigger.NewEnvironmentResolver(st.DB)), run.WithConfigInitializer(func(ctx context.Context, projectID string) error {
 		for _, service := range []any{pipelineSvc, pipelineSettingsSvc} {
 			initializer, ok := service.(interface {
 				EnsureStoredDefault(context.Context, string) error
@@ -238,7 +241,7 @@ func runPlatform() (restart func()) {
 	}))
 	// DORA 指标只读聚合(FR-8-15):同一 *service 实现暴露为 MetricsService,无新连接/新表。
 	doraMetricsSvc := run.NewMetricsService(runSvc)
-	kubernetesSvc := kubernetes.New(st.DB, credVault)
+
 	retryBindings := &nodeRetryBindings{db: st.DB, runs: runSvc, projects: projectSvc, settings: pipelineSettingsSvc, kubernetes: kubernetesSvc}
 	retrySvc := newNodeRetryService(st.DB, credVault, retryBindings)
 	if err := retrySvc.ReconcileStartup(context.Background()); err != nil {
@@ -260,9 +263,9 @@ func runPlatform() (restart func()) {
 
 	// 重启清理:进程重启会丢失内存等待者,把残留 waiting_approval 运行清为 failed(孤儿不可恢复)。
 	if n, err := runSvc.FailOrphanedRuns(context.Background()); err != nil {
-		log.Printf("[run] 警告:清理孤儿运行失败:%v", err)
+		log.Printf("[run] Warning: cleanup of orphaned runs failed: %v", err)
 	} else if n > 0 {
-		log.Printf("[run] 启动清理孤儿运行(waiting_approval/running):%d 条 → failed", n)
+		log.Printf("[run] Startup cleanup marked %d orphaned waiting_approval/running runs as failed", n)
 	}
 
 	// 装配诊断反馈服务(Story 7.5;FR-26):诊断 👍/👎(👎 可附正确根因)持久化 + 准确率统计(知识库种子)。
@@ -280,10 +283,10 @@ func runPlatform() (restart func()) {
 	auditMasker := mask.NewMasker()
 	var auditSink audit.Sink
 	if sink, err := audit.SinkFromEnv(); err != nil {
-		log.Printf("[audit] 警告:远端 sink 配置无效(%v),仅启用本地审计。", err)
+		log.Printf("[audit] Warning: invalid remote sink configuration (%v); using local audit only.", err)
 	} else if sink != nil {
 		auditSink = sink
-		log.Printf("[audit] 远端审计 sink 已启用(PIPEWRIGHT_AUDIT_SINK)")
+		log.Printf("[audit] Remote audit sink enabled (PIPEWRIGHT_AUDIT_SINK)")
 	}
 	auditRec := audit.New(st.DB, auditMasker, auditSink)
 
@@ -350,7 +353,9 @@ func runPlatform() (restart func()) {
 	})
 	kubernetesProcessOwner := kubernetesProcessGuard.Owner()
 	kubernetesController := kubernetes.NewController(kubernetesSvc, kubernetesRuntime, kubernetesProcessOwner)
+	kubernetesReleases := kubernetes.NewReleaseController(kubernetesSvc, kubernetesRuntime)
 	retryBindings.kubernetesController = kubernetesController
+	retryBindings.kubernetesReleases = kubernetesReleases
 
 	retryBindings.targets = targetSvc
 	// Assistant sessions use a separate, local-only recorder and masker.
@@ -387,9 +392,9 @@ func runPlatform() (restart func()) {
 		if as, aerr := artifactstore.New(artDir); aerr == nil {
 			artStore = as
 			retryBindings.artifacts = as
-			log.Printf("[artifact] 制品库已启用(归档 jar/dist 真字节供部署):%s", artDir)
+			log.Printf("[artifact] Artifact store enabled (real jar/dist archive bytes for deployment): %s", artDir)
 		} else {
-			log.Printf("[artifact] 警告:制品库不可用(%v),jar/dist 部署退回占位引用", aerr)
+			log.Printf("[artifact] Warning: artifact store unavailable (%v); jar/dist deployments fall back to placeholder references", aerr)
 		}
 	}
 
@@ -405,9 +410,9 @@ func runPlatform() (restart func()) {
 		}
 		if rc, rerr := repocache.New(repoDir, build.NewCloner()); rerr == nil {
 			repoCache = rc
-			log.Printf("[repocache] 代码管理区已启用(本地镜像+增量 fetch):%s", repoDir)
+			log.Printf("[repocache] Repository cache enabled (local mirrors and incremental fetch): %s", repoDir)
 		} else {
-			log.Printf("[repocache] 警告:代码管理区不可用(%v),构建退回每次直连克隆", rerr)
+			log.Printf("[repocache] Warning: repository cache unavailable (%v); builds fall back to direct clones", rerr)
 		}
 	}
 
@@ -423,9 +428,9 @@ func runPlatform() (restart func()) {
 		}
 		if cs, cerr := buildcache.New(cacheDir); cerr == nil {
 			cacheStore = cs
-			log.Printf("[buildcache] 构建依赖缓存已启用(配 cachePaths 的脚本节点跨 run 复用依赖):%s", cacheDir)
+			log.Printf("[buildcache] Build dependency cache enabled (script nodes with cachePaths reuse dependencies across runs): %s", cacheDir)
 		} else {
-			log.Printf("[buildcache] 警告:构建依赖缓存不可用(%v),脚本节点每次冷构建", cerr)
+			log.Printf("[buildcache] Warning: build dependency cache unavailable (%v); script nodes use cold builds", cerr)
 		}
 	}
 
@@ -485,7 +490,7 @@ func runPlatform() (restart func()) {
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("PIPEWRIGHT_RUNNER")), "legacy") {
 		onboardingCapabilities.Legacy = true
 		runnerOpts, onboardingCapabilities.Runtime = buildRunnerSelection(projectSvc, pipelineSettingsSvc, credVault, artStore, repoCache)
-		log.Printf("[run] PIPEWRIGHT_RUNNER=legacy:旧版固定流程运行器已启用(clone→对仓库根 docker build→deploy,⚠ 不执行 UI 可视化流水线 stages;如需真按流水线跑请去掉该 env)")
+		log.Printf("[run] PIPEWRIGHT_RUNNER=legacy: legacy fixed-flow runner enabled (clone -> repository-root docker build -> deploy; warning: visual pipeline stages are not executed; remove this environment setting to execute the configured pipeline)")
 	} else {
 		// 阶段执行体(Story 8-2):探测到容器 CLI → 注入真实阶段执行器(script 类型 job 在隔离
 		// 容器内真实跑命令,复用 Builder 的 cloner+driver);否则回退 stub(优雅降级,NFR-10)。
@@ -506,7 +511,7 @@ func runPlatform() (restart func()) {
 				return run.ErrSourceUnavailable
 			}
 			return nil
-		}), build.WithStageDeployer(deploySvc), build.WithStageNotifier(notifySvc), build.WithKubernetes(kubernetesSvc, kubernetesController, kubernetesProcessOwner), clonerOpt, buildCacheOpt); berr == nil {
+		}), build.WithStageDeployer(deploySvc), build.WithStageNotifier(notifySvc), build.WithKubernetes(kubernetesSvc, kubernetesController, kubernetesProcessOwner), build.WithKubernetesReleases(kubernetesReleases), clonerOpt, buildCacheOpt); berr == nil {
 			// runSvc 作测试报告持久层注入(Story 8-6 / FR-8-6):script 步骤产报告 → 解析 →
 			// 落库 → 质量门禁裁决(不过则阶段失败,阻断下游部署)。
 			retryBindings.real = true
@@ -518,11 +523,11 @@ func runPlatform() (restart func()) {
 				}
 				return b.VerifyResource(ctx, ref)
 			}
-			dagOpts = append(dagOpts, dagrun.WithGitSourceContext(), dagrun.WithStageExecutor(build.NewStageExecutorWithRunner(b, runSvc, runnerSvc, targetSvc)), dagrun.WithStagePreparation(b.PrepareKubernetesStage))
+			dagOpts = append(dagOpts, dagrun.WithGitSourceContext(), dagrun.WithStageExecutor(build.NewStageExecutorWithRunner(b, runSvc, runnerSvc, targetSvc)), dagrun.WithStagePreparation(b.PrepareKubernetesStage), dagrun.WithSuspension(b.SuspendKubernetesRun))
 			onboardingCapabilities.Runtime = onboarding.RuntimeAvailable
-			log.Printf("[run] DAG 调度执行器已启用(默认;阶段按 needs 编排,真按 UI 可视化流水线 stages 执行;script 类型 job 在隔离容器真实执行,CLI=%s;PIPEWRIGHT_RUNNER=legacy 可回退旧版固定流程)", b.DriverBinary())
+			log.Printf("[run] DAG executor enabled (default; stage needs and visual pipeline stages are executed; script jobs run in isolated containers, CLI=%s; PIPEWRIGHT_RUNNER=legacy selects the legacy fixed flow)", b.DriverBinary())
 		} else {
-			log.Printf("[run] DAG 调度执行器已启用(默认;阶段按 needs 编排,真按 UI 可视化流水线 stages 执行;⚠ 未探测到容器 CLI,阶段执行体回退 stub:%v;PIPEWRIGHT_RUNNER=legacy 可回退旧版固定流程)", berr)
+			log.Printf("[run] DAG executor enabled (default; stage needs and visual pipeline stages are executed; warning: no container CLI detected, stage execution falls back to a stub: %v; PIPEWRIGHT_RUNNER=legacy selects the legacy fixed flow)", berr)
 		}
 		// 「流水线即代码」运行时覆盖(FR-8-12):装饰器包住库内 loader——运行时若项目**开启了
 		// 流水线即代码**(每项目开关 projects.pac_enabled)且仓库根含合法 `.pipewright.yml`,即用它
@@ -542,7 +547,7 @@ func runPlatform() (restart func()) {
 		)}
 		retryBindings.loader = specLoader
 		if pacGlobalOverride {
-			log.Printf("[pac] 全局强开:.pipewright.yml 覆盖对所有项目生效(PIPEWRIGHT_PAC_RUNTIME=1;无视每项目开关)")
+			log.Printf("[pac] Global override enabled: .pipewright.yml applies to all projects (PIPEWRIGHT_PAC_RUNTIME=1; per-project switches are ignored)")
 		}
 		runnerOpts = []run.PoolOption{run.WithRunner(dagrun.New(specLoader, dagOpts...))}
 	}
@@ -593,7 +598,7 @@ func runPlatform() (restart func()) {
 		prHook(ctx, runID, finalStatus)
 	}
 	if prStatusGlobalOverride {
-		log.Printf("[prstatus] 全局强开:PR 状态回写对所有项目生效(PIPEWRIGHT_PR_STATUS=1;无视每项目开关)")
+		log.Printf("[prstatus] Global override enabled: PR status writeback applies to all projects (PIPEWRIGHT_PR_STATUS=1; per-project switches are ignored)")
 	}
 
 	// 流水线串联终态钩子(FR-8-11):复用同一终态槽,叠加到 terminalHook 之上。
@@ -605,7 +610,7 @@ func runPlatform() (restart func()) {
 		if n, perr := strconv.Atoi(v); perr == nil && n > 0 {
 			chainMaxDepth = n
 		} else {
-			log.Printf("[chain] 警告:PIPEWRIGHT_CHAIN_MAX_DEPTH=%q 非法(须为正整数),用默认 %d", v, chain.DefaultMaxDepth)
+			log.Printf("[chain] Warning: invalid PIPEWRIGHT_CHAIN_MAX_DEPTH=%q (must be a positive integer); using default %d", v, chain.DefaultMaxDepth)
 		}
 	}
 	chainHook := retryTerminalOnce(retrySvc, "chain:success", false, true, chain.NewHook(chainSvc, runSvc, chainMaxDepth))
@@ -632,13 +637,13 @@ func runPlatform() (restart func()) {
 		if n, perr := strconv.Atoi(v); perr == nil && n > 0 {
 			maxConcurrent = n
 		} else {
-			log.Printf("[run] 警告:PIPEWRIGHT_MAX_CONCURRENT=%q 非法(须为正整数),忽略", v)
+			log.Printf("[run] Warning: invalid PIPEWRIGHT_MAX_CONCURRENT=%q (must be a positive integer); ignoring", v)
 		}
 	}
 
 	pool := run.NewWorkerPool(runSvc,
 		append(runnerOpts,
-			run.WithRetryRuntime(retrySvc),
+			run.WithRetryRuntime(releaseRetryRuntime{Service: retrySvc, releases: kubernetesSvc, owner: kubernetesProcessOwner}),
 			run.WithDiagnoseHook(httpapi.NewDiagnoseHook(runSvc, aiSvc, secretSrc)),
 			// per-run 日志脱敏:每个 run 构建登记了该 run 真实凭据的 Masker(红线修)。
 			run.WithLogMaskerFunc(secretSrc.MaskerForRun),
@@ -653,6 +658,9 @@ func runPlatform() (restart func()) {
 	if err := kubernetesController.RecoverSettled(recoveryCtx, kubernetesProcessGuard.DepartedOwners()); err != nil {
 		log.Printf("[kubernetes] previous controller recovery incomplete; affected holds remain blocked")
 	}
+	if err := kubernetesReleases.RecoverDeparted(recoveryCtx, kubernetesProcessGuard.DepartedOwners()); err != nil {
+		log.Printf("[kubernetes] v2 recovery incomplete; affected releases remain blocked")
+	}
 	if settled, err := kubernetesSvc.SettledOwners(recoveryCtx, kubernetesProcessGuard.DepartedOwners()); err == nil {
 		if err = kubernetesProcessGuard.PruneDeparted(settled); err != nil {
 			log.Printf("[kubernetes] owner journal compaction incomplete; prior owners retained")
@@ -662,6 +670,20 @@ func runPlatform() (restart func()) {
 	}
 	recoveryCancel()
 	pool.Start()
+	releaseDispatchCtx, releaseDispatchCancel := context.WithCancel(context.Background())
+	defer releaseDispatchCancel()
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			_ = kubernetesSvc.DeliverReleaseContinuations(releaseDispatchCtx, kubernetesProcessOwner, pool.Enqueue)
+			select {
+			case <-releaseDispatchCtx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
 	log.Printf("[run] worker pool started")
 
 	// 装配并启动定时(cron)调度器(Story 8-6):分钟粒度扫描启用的项目 cron,到点经 run.Service
@@ -669,7 +691,7 @@ func runPlatform() (restart func()) {
 	// 无启用配置时空转无副作用。优雅停机随 worker pool 停。
 	cronScheduler := cron.NewScheduler(cronSvc, httpapi.NewScheduledRunCreator(runSvc))
 	cronScheduler.Start(context.Background())
-	log.Printf("[cron] 定时调度器已启动")
+	log.Printf("[cron] Scheduler started")
 
 	// 运行数据保留清理器:按 retention_config 策略定期裁剪过期终态运行(连带其日志/步骤/产物),
 	// 防止无限增长撑爆磁盘。默认策略 enabled=0(不删);用户在设置里开启并配条数/天数后生效。
@@ -681,7 +703,7 @@ func runPlatform() (restart func()) {
 		return retryBindings.releaseImage(ctx, image)
 	}}, time.Hour)
 	retentionSweeper.Start(context.Background())
-	log.Printf("[retention] 保留清理器已启动(每小时一扫;策略默认关,需在设置开启)")
+	log.Printf("[retention] Retention sweeper started (hourly; policies are disabled by default and must be enabled in settings)")
 
 	// Per-PR 预览环境自动回收器(R4 E4.1 收尾):按固定间隔遍历 active 预览环境,查其 PR 是否
 	// 已 closed/merged,**确证已终结**才回收(删路由 + 标记 reclaimed)。安全铁律:一切不确定不回收
@@ -693,7 +715,7 @@ func runPlatform() (restart func()) {
 		if d, perr := time.ParseDuration(v); perr == nil && d > 0 {
 			previewSweepInterval = d
 		} else {
-			log.Printf("[previewenv] 警告:PIPEWRIGHT_PREVIEW_SWEEP_INTERVAL=%q 非法(须为正 Go duration),用默认 %s", v, previewSweepInterval)
+			log.Printf("[previewenv] Warning: invalid PIPEWRIGHT_PREVIEW_SWEEP_INTERVAL=%q (must be a positive Go duration); using default %s", v, previewSweepInterval)
 		}
 	}
 	previewChecker := previewenv.NewPRStateChecker(
@@ -704,7 +726,7 @@ func runPlatform() (restart func()) {
 		strings.TrimSpace(os.Getenv("PIPEWRIGHT_PR_STATUS_GITEE_BASE")))
 	previewSweeper := previewenv.NewSweeper(previewSvc, previewChecker, previewSweepInterval)
 	previewSweeper.Start(context.Background())
-	log.Printf("[previewenv] 预览环境自动回收器已启动(每 %s 一扫;仅回收确证 PR 已关闭/合并的环境)", previewSweepInterval)
+	log.Printf("[previewenv] Preview environment sweeper started (every %s; only reclaims environments whose PR is confirmed closed or merged)", previewSweepInterval)
 
 	// 装配只读源码读取器(Story 3.6;FR-4 预埋):go-git 浅克隆读 tree/blob;严格 SSRF 收口;
 	// 克隆失败优雅降级(不致命)。无 init 副作用/不驻留。
@@ -770,8 +792,14 @@ func runPlatform() (restart func()) {
 		configRuntime.RunnerMode = "legacy"
 	}
 	configApplyEnabled := strings.TrimSpace(os.Getenv("PIPEWRIGHT_MCP_CONFIG_APPLY")) == "1"
+	var configDraftKey []byte
+	if masterKey != nil {
+		mac := hmac.New(sha256.New, masterKey[:])
+		mac.Write([]byte("pipewright.configdraft.signing.v1"))
+		configDraftKey = mac.Sum(nil)
+	}
 	configDrafts := configdraft.New(st.DB, &configdraft.Options{
-		Runtime: configRuntime, ApplyEnabled: configApplyEnabled,
+		Runtime: configRuntime, ApplyEnabled: configApplyEnabled, Kubernetes: kubernetesSvc, CursorKey: configDraftKey,
 		PrepareSecrets: func(ctx context.Context) (func(string) string, error) {
 			if err := registerConfigSecrets(ctx); err != nil {
 				return nil, err
@@ -798,7 +826,7 @@ func runPlatform() (restart func()) {
 	go terminalManager.Run(terminalCtx)
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithSelfUpdate(selfUpdater), httpapi.WithReleaseSources(releaseSources, releaseSourceSettings), httpapi.WithKubernetes(kubernetesSvc, kubernetesController), httpapi.WithOnboarding(onboarding.New(st.DB, onboardingCapabilities)), httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithRunRetry(retrySvc), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithPlatformLogin(platformLogin), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithTerminalHTTP(terminalManager), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithReleaseGuard(guardSvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc), httpapi.WithOpsChat(opsChatSvc), httpapi.WithMCP(mcpHandler, mcpTokens), httpapi.WithConfigManagement(st.DB, configDrafts, configApplyEnabled)),
+		Handler:           httpapi.New(webFS, authSvc, httpapi.WithSelfUpdate(selfUpdater), httpapi.WithReleaseSources(releaseSources, releaseSourceSettings), httpapi.WithKubernetes(kubernetesSvc, kubernetesController), httpapi.WithKubernetesReleases(kubernetesReleases, kubernetesProcessOwner), httpapi.WithKubernetesRollback((kubernetesRollbackCoordinator{db: st.DB, releases: kubernetesSvc, controller: kubernetesReleases, retries: retrySvc, runs: runSvc, owner: kubernetesProcessOwner}).Start), httpapi.WithOnboarding(onboarding.New(st.DB, onboardingCapabilities)), httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithRunRetry(retrySvc), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithPlatformLogin(platformLogin), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithTerminalHTTP(terminalManager), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithReleaseGuard(guardSvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc), httpapi.WithOpsChat(opsChatSvc), httpapi.WithMCP(mcpHandler, mcpTokens), httpapi.WithConfigManagement(st.DB, configDrafts, configApplyEnabled)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;
@@ -835,14 +863,14 @@ func runPlatform() (restart func()) {
 		go func() {
 			ticker := time.NewTicker(anomalyInterval)
 			defer ticker.Stop()
-			log.Printf("[anomaly] 定时检测已启用,间隔 %s", anomalyInterval)
+			log.Printf("[anomaly] Scheduled detection enabled, interval %s", anomalyInterval)
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
 					if _, err := anomalySvc.Check(ctx); err != nil && ctx.Err() == nil {
-						log.Printf("[anomaly] 定时检测失败(已跳过本轮):%v", err)
+						log.Printf("[anomaly] Scheduled detection failed (this cycle was skipped): %v", err)
 					}
 				}
 			}
@@ -855,7 +883,7 @@ func runPlatform() (restart func()) {
 		go func() {
 			ticker := time.NewTicker(metricsSampleInterval)
 			defer ticker.Stop()
-			log.Printf("[metrics] 指标采样已启用,间隔 %s,保留 %d 天", metricsSampleInterval, metricsRetentionDays)
+			log.Printf("[metrics] Metrics sampling enabled, interval %s, retention %d days", metricsSampleInterval, metricsRetentionDays)
 			for {
 				select {
 				case <-ctx.Done():
@@ -864,18 +892,18 @@ func runPlatform() (restart func()) {
 					snaps, err := metricsSampleCollector.Collect(ctx, nil)
 					if err != nil {
 						if ctx.Err() == nil {
-							log.Printf("[metrics] 采样失败(已跳过本轮):%v", err)
+							log.Printf("[metrics] Sampling failed (this cycle was skipped): %v", err)
 						}
 						continue
 					}
 					if err := metricsHist.Record(ctx, httpapi.SamplesFromSnapshots(snaps, t.UTC())); err != nil && ctx.Err() == nil {
-						log.Printf("[metrics] 写采样失败:%v", err)
+						log.Printf("[metrics] Sample write failed: %v", err)
 					}
 					// 顺手清理过期样本(保留窗口外)。
 					if n, err := metricsHist.Sweep(ctx, t.UTC().AddDate(0, 0, -metricsRetentionDays)); err != nil && ctx.Err() == nil {
-						log.Printf("[metrics] 清理过期样本失败:%v", err)
+						log.Printf("[metrics] Expired sample cleanup failed: %v", err)
 					} else if n > 0 {
-						log.Printf("[metrics] 清理过期样本 %d 行", n)
+						log.Printf("[metrics] Removed %d expired sample rows", n)
 					}
 				}
 			}
@@ -970,7 +998,7 @@ func envDurationSeconds(name string, def time.Duration) time.Duration {
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil {
-		log.Printf("[config] %s=%q 非法(应为整数秒),用默认 %s", name, v, def)
+		log.Printf("[config] Invalid %s=%q (expected integer seconds); using default %s", name, v, def)
 		return def
 	}
 	if n <= 0 {
@@ -1061,22 +1089,22 @@ func buildRunnerSelection(projectSvc project.Service, settingsSvc pipeline.Setti
 	mode := strings.ToLower(strings.TrimSpace(os.Getenv("PIPEWRIGHT_BUILDER")))
 	switch mode {
 	case "stub":
-		log.Printf("[build] PIPEWRIGHT_BUILDER=stub:使用桩 runner(合成日志,不碰容器)")
+		log.Printf("[build] PIPEWRIGHT_BUILDER=stub: stub runner enabled (synthetic logs; no containers are used)")
 		return nil, onboarding.RuntimeStub
 	case "real":
 		b, err := build.NewBuilder(projectSvc, settingsSvc, v, build.WithArtifactStore(artStore), build.WithImageGC(os.Getenv("PIPEWRIGHT_NO_IMAGE_GC") != "1"), clonerOpt)
 		if err != nil {
-			log.Fatalf("[build] PIPEWRIGHT_BUILDER=real 但构建器不可用:%v", err)
+			log.Fatalf("[build] PIPEWRIGHT_BUILDER=real but the builder is unavailable: %v", err)
 		}
-		log.Printf("[build] 真实隔离构建器已启用(容器 CLI=%s)", b.DriverBinary())
+		log.Printf("[build] Real isolated builder enabled (container CLI=%s)", b.DriverBinary())
 		return []run.PoolOption{run.WithRunner(b)}, onboarding.RuntimeAvailable
 	default:
 		b, err := build.NewBuilder(projectSvc, settingsSvc, v, build.WithArtifactStore(artStore), build.WithImageGC(os.Getenv("PIPEWRIGHT_NO_IMAGE_GC") != "1"), clonerOpt)
 		if err != nil {
-			log.Printf("[build] 未探测到容器 CLI(docker/nerdctl/podman),回退桩 runner(PIPEWRIGHT_BUILDER=real 可强制要求真实):%v", err)
+			log.Printf("[build] No container CLI detected (docker/nerdctl/podman); falling back to a stub runner (PIPEWRIGHT_BUILDER=real requires real execution): %v", err)
 			return nil, onboarding.RuntimeStub
 		}
-		log.Printf("[build] auto:真实隔离构建器已启用(容器 CLI=%s)", b.DriverBinary())
+		log.Printf("[build] auto: real isolated builder enabled (container CLI=%s)", b.DriverBinary())
 		return []run.PoolOption{run.WithRunner(b)}, onboarding.RuntimeAvailable
 	}
 }

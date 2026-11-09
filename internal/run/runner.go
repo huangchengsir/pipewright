@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/dag"
 	"strings"
 )
 
@@ -43,6 +44,7 @@ type Runner interface {
 
 // ErrCanceled 表示运行因 context 取消而中止(worker 将其归一为 StatusFailed)。
 var ErrCanceled = errors.New("run: canceled")
+var ErrSuspended = dag.ErrSuspended
 
 // StubRunner 是本期桩 runner:顺序跑若干占位步骤,每步置 success。
 // 不做真实构建/部署、不 sleep(测试快);可注入失败步骤或在取消时中止。

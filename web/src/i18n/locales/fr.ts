@@ -129,6 +129,7 @@ const fr: typeof zhCN = {
   },
 
   runStatus: {
+ waiting_action:"En attente d’une action explicite",
     queued: 'En file',
     running: 'En cours',
     waiting_approval: 'En attente d’approbation',

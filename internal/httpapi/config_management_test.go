@@ -15,11 +15,13 @@ import (
 	"github.com/huangchengsir/pipewright/internal/auth"
 	"github.com/huangchengsir/pipewright/internal/configdraft"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/kubernetes"
 	"github.com/huangchengsir/pipewright/internal/mask"
 	pmcp "github.com/huangchengsir/pipewright/internal/mcp"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/vault"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -45,11 +47,12 @@ func configHTTPFixture(t *testing.T) (*mcpFixture, *configdraft.Service, http.Ha
 	if _, err := f.db.Exec(`INSERT INTO pipeline_settings(project_id,build_json,environments_json,steps_json,created_at,updated_at) VALUES (?,'{"model":"dockerfile","artifactType":"image","vars":[],"cache":{"enabled":false}}','[]','[]',?,?)`, f.project, stamp, stamp); err != nil {
 		t.Fatal(err)
 	}
-	token, _, err := f.tokens.Create(ctx, auth.MCPTokenInput{Name: "config", ProjectIDs: []string{f.project}, ConfigGrants: []auth.MCPConfigGrant{{ProjectID: f.project, Read: true, Propose: true, Apply: true, Sections: configdraft.Sections, Operations: configdraft.OperationTypes}}})
+	token, _, err := f.tokens.Create(ctx, auth.MCPTokenInput{Name: "config", ProjectIDs: []string{f.project}, ConfigGrants: []auth.MCPConfigGrant{{ProjectID: f.project, Read: true, Propose: true, Apply: true, Sections: configdraft.Sections, Operations: configdraft.OperationTypes, StageIDs: []string{"source", "test", "deploy"}, JobIDs: []string{"git", "script", "kube"}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := configdraft.New(f.db, &configdraft.Options{Runtime: configdraft.RuntimeInfo{RunnerMode: "dag", ExecutorKind: "local_docker", Available: true}, ApplyEnabled: true, PrepareSecrets: func(context.Context) (func(string) string, error) { return func(v string) string { return v }, nil }, AuthorizeAdmin: ConfigAdminAuthorizer(f.db), RevalidateApprover: ConfigApproverVerifier(f.db)})
+	key := [32]byte{19, 23}
+	svc := configdraft.New(f.db, &configdraft.Options{Kubernetes: kubernetes.New(f.db, vault.New(f.db, &key)), Runtime: configdraft.RuntimeInfo{RunnerMode: "dag", ExecutorKind: "local_docker", Available: true}, ApplyEnabled: true, PrepareSecrets: func(context.Context) (func(string) string, error) { return func(v string) string { return v }, nil }, AuthorizeAdmin: ConfigAdminAuthorizer(f.db), RevalidateApprover: ConfigApproverVerifier(f.db)})
 	f.handler, err = NewMCPHandler(f.tokens, pmcp.Dependencies{Configs: svc, Masker: mask.NewMasker()}, MCPHTTPOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -442,5 +445,72 @@ func TestConfigurationFirstRunInitializesActualServicesBeforeAdmission(t *testin
 	}
 	if _, err := projects.Update(ctx, f.project, project.UpdateInput{Name: &name}); err != nil {
 		t.Fatal("queued cancellation retained hold", err)
+	}
+}
+
+func TestKubernetesConfigurationThroughMCPAndHumanHTTPReview(t *testing.T) {
+	f, _, admin, sess, token := configHTTPFixture(t)
+	var raw string
+	if e := f.db.QueryRow(`SELECT spec_json FROM pipeline_configs WHERE project_id=?`, f.project).Scan(&raw); e != nil {
+		t.Fatal(e)
+	}
+	var spec map[string]any
+	_ = json.Unmarshal([]byte(raw), &spec)
+	spec["stages"] = append(spec["stages"].([]any), map[string]any{"id": "deploy", "name": "Deploy", "kind": "deploy", "needs": []string{"test"}, "jobs": []any{}})
+	b, _ := json.Marshal(spec)
+	_, _ = f.db.Exec(`UPDATE pipeline_configs SET spec_json=? WHERE project_id=?`, string(b), f.project)
+	caps := mcpOutput(t, f.call(t, token, "capabilities_get", map[string]any{}))
+	if caps["maxHTTPBodyBytes"] != float64(65536) || caps["kubernetes"] == nil {
+		t.Fatal("capabilities incomplete", caps)
+	}
+	expectMCPError(t, f.call(t, f.readonly, "project_config_get", map[string]any{"projectId": f.project, "section": "kubernetes", "beginSnapshot": true}), "permission_denied")
+	snap := mcpOutput(t, f.call(t, token, "project_config_get", map[string]any{"projectId": f.project, "section": "kubernetes", "beginSnapshot": true}))
+	if len(snap["items"].([]any)) != 1 {
+		t.Fatal("empty stage target missing")
+	}
+	options := mcpOutput(t, f.call(t, token, "config_options_list", map[string]any{"projectId": f.project, "kind": "kubernetes", "expectedBaseRevision": snap["baseRevision"], "expectedPolicyVersion": snap["policyVersion"]}))
+	if len(options["items"].([]any)) < 2 {
+		t.Fatal("typed Kubernetes options missing")
+	}
+	config := map[string]any{"version": 2, "mode": "manifest", "connectionId": "conn", "credentialId": "kcred_fixture", "context": "test", "namespace": "app", "executor": map[string]any{"kind": "local"}, "source": map[string]any{"kind": "inline", "content": "apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec:\n  containers:\n  - name: app\n    image: registry.invalid/app\n    command: [sh, -c]\n    args: [http-human-command]\n    env: [{name: TOKEN, value: http-new-private-env}]\n"}, "variables": []any{map[string]any{"name": "NAME", "source": "fixed", "type": "string", "value": "http-fixed-secret"}}}
+	args := map[string]any{"projectId": f.project, "baseRevision": snap["baseRevision"], "policyVersion": snap["policyVersion"], "requestId": "kubernetes-http-draft-1", "operations": []any{map[string]any{"type": "kubernetes.add", "stageId": "deploy", "jobId": "kube", "value": "Kubernetes", "kubernetes": map[string]any{"config": config}}}}
+	draft := mcpOutput(t, f.call(t, token, "config_draft_create", args))
+	b, _ = json.Marshal(draft)
+	for _, private := range []string{"http-human-command", "http-new-private-env", "http-fixed-secret"} {
+		if strings.Contains(string(b), private) {
+			t.Fatal("MCP projection leaked private input", private)
+		}
+	}
+	get := mcpOutput(t, f.call(t, token, "config_draft_get", map[string]any{"draftId": draft["draftId"]}))
+	if get["kubernetesReview"] != nil {
+		t.Fatal("human-only review exported through MCP")
+	}
+	path := "/api/mcp/config-drafts/" + draft["draftId"].(string)
+	review := configAdminRequest(admin, sess, "GET", path+"/review", "", "", false)
+	if review.Code != 200 || !strings.Contains(review.Body.String(), "http-human-command") || strings.Contains(review.Body.String(), "http-new-private-env") {
+		t.Fatal("human review projection incorrect", review.Code)
+	}
+	body, _ := json.Marshal(map[string]any{"baseRevision": draft["baseRevision"], "policyVersion": draft["policyVersion"], "reviewDigest": draft["reviewDigest"]})
+	if w := configAdminRequest(admin, sess, "POST", path+"/approve", string(body), "", false); w.Code != 403 {
+		t.Fatal("approval CSRF bypass")
+	}
+	approved := configAdminRequest(admin, sess, "POST", path+"/approve", string(body), "", true)
+	var approval configdraft.Approval
+	if approved.Code != 200 || json.Unmarshal(approved.Body.Bytes(), &approval) != nil || approval.ID == "" {
+		t.Fatal("approval failed", approved.Code)
+	}
+	applied := mcpOutput(t, f.call(t, token, "config_apply", map[string]any{"draftId": draft["draftId"], "approvalId": approval.ID, "requestId": "kubernetes-http-apply-1"}))
+	if applied["state"] != "applied" {
+		t.Fatal("approved configuration not applied", applied)
+	}
+	readback := mcpOutput(t, f.call(t, token, "project_config_get", map[string]any{"projectId": f.project, "section": "kubernetes", "beginSnapshot": true}))
+	b, _ = json.Marshal(readback)
+	if !strings.Contains(string(b), "kube") || strings.Contains(string(b), "http-human-command") {
+		t.Fatal("safe readback failed")
+	}
+	var count int
+	_ = f.db.QueryRow(`SELECT COUNT(*) FROM runs`).Scan(&count)
+	if count != 0 {
+		t.Fatal("configuration apply ran a pipeline")
 	}
 }

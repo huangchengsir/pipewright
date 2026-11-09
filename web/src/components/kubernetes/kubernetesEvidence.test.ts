@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   kubePhaseEvidence,
+  kubeLogEvidence,
+  kubeLogPhase,
   exactKubeOperation,
   kubeBlocksRetry,
   kubeOperationLocation,
@@ -118,5 +120,24 @@ describe("Kubernetes permission evidence", () => {
       rollout: [],
       cleanup: [],
     });
+  });
+});
+
+describe("v2 actual Kubernetes phase events", () => {
+  it("maps dispatch and observe to the existing tabs without manufacturing readiness", () => {
+    expect(kubeLogEvidence("kubernetes dispatch: resource_write_fenced")).toEqual({phase:"update",code:"resource_write_fenced"});
+    expect(kubeLogEvidence("kubernetes observe: kind=Deployment state=pending reason=current_template_pods_not_observed")).toEqual({phase:"rollout",kind:"Deployment",state:"pending"});
+    expect(kubeLogEvidence("kubernetes observe: kind=ConfigMap state=declared reason=configuration_verified_no_application_health")).toEqual({phase:"rollout",kind:"ConfigMap",state:"declared"});
+    expect(kubeLogPhase("kubernetes cleanup: cleanup_unverified")).toBe("cleanup");
+    expect(kubePhaseEvidence(["kubernetes observe: kind=Deployment state=pending reason=current_template_pods_not_observed"]).rollout).toEqual([]);
+  });
+  it("rejects foreign kinds, states, reasons and scripts as health evidence", () => {
+    for(const line of [
+      "kubernetes observe: kind=PrivateCanary state=ready reason=pod_ready",
+      "kubernetes observe: kind=Pod state=passed reason=pod_ready",
+      "kubernetes observe: kind=Pod state=ready reason=PrivateCanary",
+      "kubernetes observe: kind=Pod state=ready reason=pod_ready injected",
+      "echo kubernetes observe: kind=Pod state=ready reason=pod_ready",
+    ]) expect(kubeLogEvidence(line)).toBeUndefined();
   });
 });

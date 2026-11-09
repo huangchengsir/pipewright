@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
+	log "github.com/huangchengsir/pipewright/internal/logging"
 	"net/http"
 	"strconv"
 	"sync"
@@ -84,7 +84,7 @@ func (n *anomalyNotifier) NotifyAlert(_ context.Context, a *anomaly.Alert) {
 		sendCtx, cancel := context.WithTimeout(n.context, 12*time.Second)
 		defer cancel()
 		if err := n.notify.RouteEventForProject(sendCtx, "", notify.EventAnomalyDetected, vars); err != nil {
-			log.Printf("[anomaly] 告警 %s 通知 best-effort 失败:%v", id, err)
+			log.Printf("[anomaly] alert %s: best-effort notification failed: %v", id, err)
 		}
 	}()
 }

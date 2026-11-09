@@ -365,11 +365,14 @@ func (s *Service) DeleteConnection(ctx context.Context, id string, expected int6
 			return ErrConflict
 		}
 		var refs int
-		if e = q.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM k8s_deploy_grants WHERE connection_id=?)+(SELECT COUNT(*) FROM k8s_operations WHERE connection_id=?)`, id, id).Scan(&refs); e != nil {
+		if e = q.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM k8s_deploy_grants WHERE connection_id=?)+(SELECT COUNT(*) FROM k8s_operations WHERE connection_id=?)+(SELECT COUNT(*) FROM k8s_release_grants WHERE connection_id=?)+(SELECT COUNT(*) FROM k8s_releases WHERE connection_id=?)`, id, id, id, id).Scan(&refs); e != nil {
 			return e
 		}
 		if refs > 0 {
 			return ErrInUse
+		}
+		if _, e = q.ExecContext(ctx, `DELETE FROM k8s_release_profiles WHERE connection_id=?`, id); e != nil {
+			return e
 		}
 		return requireOne(q.ExecContext(ctx, `DELETE FROM k8s_connections WHERE id=? AND revision=?`, id, expected))
 	})

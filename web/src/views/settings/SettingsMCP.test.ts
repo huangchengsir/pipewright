@@ -117,6 +117,15 @@ describe('MCP settings', () => {
     await w.get('form').trigger('submit'); await flushPromises()
     expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ canTrigger: false, configGrants: [{ projectId: 'p1', read: true, propose: true, apply: true, sections: ['project', 'pipeline', 'build', 'step_limits', 'source_and_impact'], operations: ['project.set_name', 'project.set_default_branch', 'stage.rename', 'job.rename', 'step.set_limits', 'build.set'] }] }))
   })
+  it('requires explicitly entered Kubernetes stage and job selectors', async () => {
+    const w=render(); await flushPromises(); await fill(w); await w.get('[data-permission="read"]').setValue(true)
+    const form=w.findComponent(MCPTokenForm); form.findAllComponents(NSelect)[1].vm.$emit('update:value',['kubernetes']); await flushPromises()
+    await w.get('[data-permission="propose"]').setValue(true); await w.get('[data-permission="apply"]').setValue(true); await w.get('form').trigger('submit'); await flushPromises(); expect(mocks.create).not.toHaveBeenCalled()
+    const select=(id:string)=>form.findAllComponents(NSelect).find(x=>x.props('inputProps')?.id===id)!
+    select('mcp-stages-p1').vm.$emit('update:value',['deploy']); await flushPromises(); await w.get('form').trigger('submit'); await flushPromises(); expect(mocks.create).not.toHaveBeenCalled()
+    select('mcp-jobs-p1').vm.$emit('update:value',['kube']); await flushPromises(); await w.get('form').trigger('submit'); await flushPromises()
+    expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({canTrigger:false,configGrants:[expect.objectContaining({sections:['kubernetes'],operations:['kubernetes.add','kubernetes.update'],stageIds:['deploy'],jobIds:['kube']})]}))
+  })
   it('clears higher privileges when read permission or project selection is removed', async () => {
     const w = render(); await flushPromises(); await fill(w)
     const grant = w.get('[data-config-project="p1"]')

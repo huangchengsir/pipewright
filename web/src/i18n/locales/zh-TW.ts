@@ -129,6 +129,7 @@ const zhTW: typeof zhCN = {
   },
 
   runStatus: {
+ waiting_action:"等待明確操作",
     queued: '排隊中',
     running: '進行中',
     waiting_approval: '待審核',

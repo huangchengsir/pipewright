@@ -1,4 +1,5 @@
 import { http, HttpError } from "./http";
+import { kubernetesDiagnosticKeys } from "../utils/kubernetesDiagnostic";
 
 export interface KubeExecutor {
   kind: "local" | "ssh";
@@ -120,7 +121,7 @@ const base = "/api/kubernetes";
 const id = encodeURIComponent;
 /** Bounded requests; cancellation never causes a mutation to be replayed. */
 async function call<T>(
-  method: "GET" | "POST" | "PATCH" | "DELETE",
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
   body?: unknown,
   signal?: AbortSignal,
@@ -135,6 +136,7 @@ async function call<T>(
     if (method === "GET") return await http.get<T>(path, options);
     if (method === "POST") return await http.post<T>(path, body, options);
     if (method === "PATCH") return await http.patch<T>(path, body, options);
+    if (method === "PUT") return await http.put<T>(path, body, options);
     return await http.delete<T>(path, {
       ...options,
       body: JSON.stringify(body),
@@ -144,7 +146,230 @@ async function call<T>(
     signal?.removeEventListener("abort", abort);
   }
 }
+export interface KubeResourceID {
+  group: string;
+  version: string;
+  resource: string;
+  kind: string;
+  namespace?: string;
+  name: string;
+}
+export interface KubeReleaseAccess {
+  resource: KubeResourceID;
+  actions: string[];
+  containers?: string[];
+  fields?: string[];
+}
+export interface KubeReleaseProfile {
+  connectionId: string;
+  revision: number;
+  enabled: boolean;
+  profile: {
+    runtime: Omit<KubeProfile, "protocol"> & { protocol: "kube-gateway-v2" };
+    helperPath: string;
+    helmPath: string;
+    helmVersion: "v4.3.1";
+  };
+}
+export interface KubeReleaseGrantInput {
+  projectId: string;
+  environment: string;
+  executor: KubeExecutor;
+  resources: KubeReleaseAccess[];
+  requireApproval: boolean;
+  enabled: boolean;
+}
+export interface KubeReleaseGrant extends KubeReleaseGrantInput {
+  id: string;
+  revision: number;
+  connectionId: string;
+}
+export interface KubeReleaseHealth {
+  state: string;
+  reason: string;
+  desired?: number;
+  available?: number;
+  containers?: {
+    pod?: string;
+    name: string;
+    ready: boolean;
+    reason?: string;
+    restarts?: number;
+  }[];
+}
+export interface KubeRelease {
+  id: string;
+  runId: string;
+  nodeKey: string;
+  revision: number;
+  state: string;
+  cleanup: KubeCleanup;
+  ownerFenced: boolean;
+  cursor: number;
+  reasonCode?: string;
+  createdAt: number;
+  updatedAt: number;
+  preview: {
+    changes?: {
+      resource: KubeResourceID;
+      action: string;
+      health: string;
+      images?: { container: string; image: string }[];
+    }[];
+    planId: string;
+    mode: string;
+    rollbackOf?: string;
+    resources: KubeResourceID[];
+    deletes?: KubeResourceID[];
+    retained?: { resource: KubeResourceID; reason: string }[];
+    batchReplicas?: number[];
+    helmRelease?: string;
+    helmRevision?: number;
+    coreDNSCanary?: string;
+  };
+  results: {
+    resource: KubeResourceID;
+    actionId?: string;
+    state: string;
+    health: KubeReleaseHealth;
+    deleted?: boolean;
+    observedAt?: number;
+  }[];
+}
+const connectionRelease = (key: string) => base + "/connections/" + id(key);
+const releasePath = (row: Pick<KubeRelease, "runId" | "id">) =>
+  "/api/runs/" + id(row.runId) + "/kubernetes/releases/" + id(row.id);
 export const kubeAPI = {
+  releaseProfile: (key: string, signal?: AbortSignal) =>
+    call<KubeReleaseProfile>(
+      "GET",
+      connectionRelease(key) + "/release-profile",
+      undefined,
+      signal,
+    ),
+  saveReleaseProfile: (
+    key: string,
+    profile: KubeReleaseProfile,
+    signal?: AbortSignal,
+  ) =>
+    call<KubeReleaseProfile>(
+      "PUT",
+      connectionRelease(key) + "/release-profile",
+      {
+        expectedRevision: profile.revision,
+        enabled: profile.enabled,
+        profile: profile.profile,
+      },
+      signal,
+    ),
+  releaseGrants: (key: string, signal?: AbortSignal) =>
+    call<KubeReleaseGrant[]>(
+      "GET",
+      connectionRelease(key) + "/release-grants",
+      undefined,
+      signal,
+    ),
+  saveReleaseGrant: (
+    key: string,
+    row: KubeReleaseGrantInput,
+    grantId?: string,
+    revision = 0,
+    signal?: AbortSignal,
+  ) =>
+    call<KubeReleaseGrant>(
+      grantId ? "PATCH" : "POST",
+      connectionRelease(key) +
+        "/release-grants" +
+        (grantId ? "/" + id(grantId) : ""),
+      { ...row, expectedRevision: revision },
+      signal,
+    ),
+  deleteReleaseGrant: (
+    key: string,
+    row: KubeReleaseGrant,
+    signal?: AbortSignal,
+  ) =>
+    call(
+      "DELETE",
+      connectionRelease(key) + "/release-grants/" + id(row.id),
+      { expectedRevision: row.revision },
+      signal,
+    ),
+  releaseOptions: (
+    key: string,
+    input: { projectId: string; environment: string; executor: KubeExecutor },
+    signal?: AbortSignal,
+  ) =>
+    call<{
+      version: 2;
+      resources: KubeReleaseAccess[];
+      profile: KubeReleaseProfile;
+      requireApproval: boolean;
+    }>("POST", connectionRelease(key) + "/release-options", input, signal),
+  releaseCapabilities: (
+    key: string,
+    input: { projectId: string; environment: string; executor: KubeExecutor },
+    signal?: AbortSignal,
+  ) =>
+    call<
+      {
+        resource: {
+          group: string;
+          version: string;
+          kind: string;
+          name: string;
+          namespaced: boolean;
+        };
+        adapter: {
+          health: string;
+          implemented: boolean;
+          clusterMaintenance: boolean;
+        };
+        authorized: boolean;
+      }[]
+    >("POST", connectionRelease(key) + "/release-capabilities", input, signal),
+  releases: (run: string, signal?: AbortSignal) =>
+    call<KubeRelease[]>(
+      "GET",
+      "/api/runs/" + id(run) + "/kubernetes/releases",
+      undefined,
+      signal,
+    ),
+  release: (row: Pick<KubeRelease, "runId" | "id">, signal?: AbortSignal) =>
+    call<KubeRelease>("GET", releasePath(row), undefined, signal),
+  releaseAction: (
+    row: KubeRelease,
+    action: "continue" | "reconcile" | "cleanup",
+    signal?: AbortSignal,
+  ) =>
+    call<unknown>(
+      "POST",
+      releasePath(row) + "/" + action,
+      { expectedRevision: row.revision, planId: row.preview.planId },
+      signal,
+    ),
+  rollbackRequest: (
+    row: KubeRelease,
+    requestId: string,
+    signal?: AbortSignal,
+  ) =>
+    call<{ runId: string; release: KubeRelease }>(
+      "GET",
+      releasePath(row) + "/rollback-requests/" + id(requestId),
+      undefined,
+      signal,
+    ),
+  rollbackRelease: (
+    row: KubeRelease,
+    requestId: string,
+    signal?: AbortSignal,
+  ) =>
+    call<{ runId: string; release: KubeRelease }>(
+      "POST",
+      releasePath(row) + "/rollback",
+      { expectedRevision: row.revision, planId: row.preview.planId, requestId },
+      signal,
+    ),
   credentials: (signal?: AbortSignal) =>
     call<KubeCredential[]>("GET", base + "/credentials", undefined, signal),
   preview: (input: KubeCredentialInput, signal?: AbortSignal) =>
@@ -276,6 +501,7 @@ export const kubeAPI = {
 };
 const errors: Record<string, string> = {
   kubernetes_invalid_input: "invalid",
+  kubernetes_release_invalid: "invalid",
   kubernetes_session_invalid: "session",
   recent_password_required: "passwordRequired",
   kubernetes_not_authorized: "denied",
@@ -292,6 +518,7 @@ const errors: Record<string, string> = {
   locked_out: "passwordInvalid",
 };
 export function kubeError(error: unknown, mutation = false): string {
+  if(error instanceof HttpError && error.apiError?.code && kubernetesDiagnosticKeys[error.apiError.code]) return kubernetesDiagnosticKeys[error.apiError.code];
   if (
     error instanceof HttpError &&
     error.apiError?.code &&
@@ -302,6 +529,6 @@ export function kubeError(error: unknown, mutation = false): string {
 }
 export function kubeUnknownWrite(error: unknown): boolean {
   return (
-    !(error instanceof HttpError) || error.status === 0 || error.status >= 500
+    !(error instanceof HttpError) || error.status === 0 || error.status === 408 || error.status >= 500
   );
 }

@@ -129,6 +129,7 @@ const ko: typeof zhCN = {
   },
 
   runStatus: {
+ waiting_action:"명시적 작업 대기",
     queued: '대기 중',
     running: '실행 중',
     waiting_approval: '승인 대기',

@@ -286,15 +286,20 @@ func aggregateTargetStatus(targets []TargetSummary) string {
 // Kubernetes deployments retain their target type; they never acquire a fake
 // serverId or enter the SSH rollback path.
 type KubernetesTargetSummary struct {
-	OperationID string                   `json:"operationId"`
-	SourceRunID string                   `json:"sourceRunId"`
-	Namespace   string                   `json:"namespace"`
-	Deployment  string                   `json:"deployment"`
-	Container   string                   `json:"container"`
-	Image       string                   `json:"image"`
-	Business    kubernetes.BusinessState `json:"business"`
-	Cleanup     kubernetes.CleanupState  `json:"cleanup"`
-	Adopted     bool                     `json:"adopted"`
+	Version     int                            `json:"version,omitempty"`
+	ReleaseID   string                         `json:"releaseId,omitempty"`
+	Mode        string                         `json:"mode,omitempty"`
+	Resources   []kubernetes.ReleaseResourceID `json:"resources,omitempty"`
+	State       string                         `json:"state,omitempty"`
+	OperationID string                         `json:"operationId,omitempty"`
+	SourceRunID string                         `json:"sourceRunId"`
+	Namespace   string                         `json:"namespace"`
+	Deployment  string                         `json:"deployment"`
+	Container   string                         `json:"container"`
+	Image       string                         `json:"image"`
+	Business    kubernetes.BusinessState       `json:"business"`
+	Cleanup     kubernetes.CleanupState        `json:"cleanup"`
+	Adopted     bool                           `json:"adopted"`
 }
 
 func (s *Service) WithKubernetes(k *kubernetes.Service, h func(context.Context, string) ([]runretry.KubernetesHistoryEntry, error)) *Service {

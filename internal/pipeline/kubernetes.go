@@ -175,6 +175,16 @@ func ValidateKubernetesStages(spec Spec) error {
 				}
 				continue
 			}
+			if IsKubernetesReleaseConfig(job.Config) {
+				cfg, err := ParseKubernetesReleaseConfig(job.Config)
+				if err != nil {
+					return err
+				}
+				if err = validateKubernetesReleaseStage(spec, st, cfg); err != nil {
+					return err
+				}
+				continue
+			}
 			_, source, e := ParseKubernetesConfig(job.Config)
 			if e != nil {
 				return e

@@ -81,14 +81,16 @@ export default {
     "source": "改变默认源码分支；未验证该分支实际存在。",
     "limits": "改变资源、超时或重试限制。",
     "build": "改变受支持的构建参数；未实际运行构建。",
-    "display": "改变显示名称；执行顺序和拓扑保持不变。"
+    "display": "改变显示名称；执行顺序和拓扑保持不变。",
+    "kubernetes": "修改 Kubernetes 发布配置；集群权限和发布审批仍单独校验。"
   },
   "sections": {
     "project": "项目",
     "pipeline": "流水线",
     "build": "构建",
     "step_limits": "步骤限制",
-    "source_and_impact": "来源与影响"
+    "source_and_impact": "来源与影响",
+    "kubernetes": "Kubernetes"
   },
   "operations": {
     "project_set_name": "修改项目名称",
@@ -97,7 +99,9 @@ export default {
     "job_rename": "修改作业名称",
     "step_set_limits": "修改步骤限制",
     "build_set": "修改构建参数",
-    "unknown": "不支持的变更"
+    "unknown": "不支持的变更",
+    "kubernetes_add": "新增 Kubernetes 节点",
+    "kubernetes_update": "修改 Kubernetes 节点"
   },
   "fields": {
     "name": "名称",
@@ -110,7 +114,8 @@ export default {
     "toolchainLanguage": "工具链语言",
     "toolchainVersion": "工具链版本",
     "dockerfilePath": "Dockerfile 路径",
-    "context": "构建上下文"
+    "context": "构建上下文",
+    "kubernetes": "Kubernetes 配置"
   },
   "states": {
     "pending": "未决",
@@ -144,5 +149,10 @@ export default {
   "maintenanceDetails": "处理边界与详情",
   "maintenanceReady": "已有匹配的结束记录，可核对后结束活动。",
   "maintenanceNeedsReview": "尚不能确认原操作已结束，当前记录会保留。",
-  "operationSummary": "响应丢失时，先核对原操作，再决定是否隔离。"
+  "operationSummary": "响应丢失时，先核对原操作，再决定是否隔离。",
+  "kubernetesStages": "允许的 Kubernetes 阶段 ID",
+  "kubernetesJobs": "允许的 Kubernetes 节点 ID",
+  "kubernetesScopeHint": "填写现有阶段的准确 ID；修改还需准确节点 ID。不支持通配或继承旧授权。",
+  "kubernetesReview": "Kubernetes 配置",
+  "kubernetesReviewHint": "检查资源、命令和健康探测；私有值保持密封。批准仅修改已保存配置，不执行发布或修改远端 Git。"
 }

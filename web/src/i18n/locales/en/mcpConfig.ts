@@ -81,14 +81,16 @@ export default {
     "source": "Changes the default source branch; branch existence has not been checked.",
     "limits": "Changes resource, time or retry limits.",
     "build": "Changes the supported build inputs; no build was executed.",
-    "display": "Changes the displayed name; execution order and topology stay fixed."
+    "display": "Changes the displayed name; execution order and topology stay fixed.",
+    "kubernetes": "Changes Kubernetes delivery configuration. Cluster permissions and release approval remain separate."
   },
   "sections": {
     "project": "Project",
     "pipeline": "Pipeline",
     "build": "Build",
     "step_limits": "Step limits",
-    "source_and_impact": "Source and impact"
+    "source_and_impact": "Source and impact",
+    "kubernetes": "Kubernetes"
   },
   "operations": {
     "project_set_name": "Rename project",
@@ -97,7 +99,9 @@ export default {
     "job_rename": "Rename job",
     "step_set_limits": "Change step limits",
     "build_set": "Change build parameters",
-    "unknown": "Unsupported change"
+    "unknown": "Unsupported change",
+    "kubernetes_add": "Add Kubernetes node",
+    "kubernetes_update": "Update Kubernetes node"
   },
   "fields": {
     "name": "Name",
@@ -110,7 +114,8 @@ export default {
     "toolchainLanguage": "Toolchain language",
     "toolchainVersion": "Toolchain version",
     "dockerfilePath": "Dockerfile path",
-    "context": "Build context"
+    "context": "Build context",
+    "kubernetes": "Kubernetes configuration"
   },
   "states": {
     "pending": "Pending",
@@ -144,5 +149,10 @@ export default {
   "maintenanceDetails": "Handling limits and details",
   "maintenanceReady": "A matching exit record is available. Review it before closing the activity.",
   "maintenanceNeedsReview": "The original operation has not been confirmed as ended. This record is kept.",
-  "operationSummary": "When a response is lost, check the original operation before deciding whether to fence it."
+  "operationSummary": "When a response is lost, check the original operation before deciding whether to fence it.",
+  "kubernetesStages": "Allowed Kubernetes stage IDs",
+  "kubernetesJobs": "Allowed Kubernetes job IDs",
+  "kubernetesScopeHint": "Enter exact existing stage IDs. Updates also require exact job IDs. No wildcard or inherited grant.",
+  "kubernetesReview": "Kubernetes configuration",
+  "kubernetesReviewHint": "Inspect resources, commands and health checks. Private values remain sealed. Approval changes stored configuration only; it does not run a release or update remote Git."
 }

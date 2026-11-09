@@ -2,7 +2,7 @@ package httpapi
 
 import (
 	"context"
-	"log"
+	log "github.com/huangchengsir/pipewright/internal/logging"
 	"regexp"
 	"strconv"
 	"strings"
@@ -74,7 +74,7 @@ func NewPreviewProvisionHook(
 		// recover-safe:本钩子任何 panic 都不得冒泡到 worker(绝不影响 run 终态)。
 		defer func() {
 			if rec := recover(); rec != nil {
-				log.Printf("[preview] run %s: provision 钩子 panic 已恢复:%v", runID, rec)
+				log.Printf("[preview] run %s: recovered provision hook panic: %v", runID, rec)
 			}
 		}()
 
@@ -132,11 +132,11 @@ func NewPreviewProvisionHook(
 			HostIP:            hostIP,
 		})
 		if perr != nil {
-			log.Printf("[preview] run %s: PR #%d 预览环境分配失败(不影响部署):%v", runID, prNumber, perr)
+			log.Printf("[preview] run %s: failed to provision PR #%d preview environment (deployment is unaffected): %v", runID, prNumber, perr)
 			return
 		}
 		if env != nil {
-			log.Printf("[preview] run %s: PR #%d 预览环境就绪 → %s", runID, prNumber, env.Subdomain)
+			log.Printf("[preview] run %s: PR #%d preview environment ready -> %s", runID, prNumber, env.Subdomain)
 		}
 	}
 }

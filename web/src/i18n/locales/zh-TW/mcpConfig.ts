@@ -81,14 +81,16 @@ export default {
     "source": "改變預設原始碼分支；未驗證該分支實際存在。",
     "limits": "改變資源、逾時或重試限制。",
     "build": "改變受支援的建置參數；未實際執行建置。",
-    "display": "改變顯示名稱；執行順序和拓樸保持不變。"
+    "display": "改變顯示名稱；執行順序和拓樸保持不變。",
+    "kubernetes": "修改 Kubernetes 發佈設定；叢集權限和發佈審批仍單獨檢查。"
   },
   "sections": {
     "project": "專案",
     "pipeline": "流水線",
     "build": "建置",
     "step_limits": "步驟限制",
-    "source_and_impact": "來源與影響"
+    "source_and_impact": "來源與影響",
+    "kubernetes": "Kubernetes"
   },
   "operations": {
     "project_set_name": "修改專案名稱",
@@ -97,7 +99,9 @@ export default {
     "job_rename": "修改作業名稱",
     "step_set_limits": "修改步驟限制",
     "build_set": "修改建置參數",
-    "unknown": "不支援的變更"
+    "unknown": "不支援的變更",
+    "kubernetes_add": "新增 Kubernetes 節點",
+    "kubernetes_update": "修改 Kubernetes 節點"
   },
   "fields": {
     "name": "名稱",
@@ -110,7 +114,8 @@ export default {
     "toolchainLanguage": "工具鏈語言",
     "toolchainVersion": "工具鏈版本",
     "dockerfilePath": "Dockerfile 路徑",
-    "context": "建置上下文"
+    "context": "建置上下文",
+    "kubernetes": "Kubernetes 設定"
   },
   "states": {
     "pending": "未決",
@@ -144,5 +149,10 @@ export default {
   "maintenanceDetails": "處理範圍與詳情",
   "maintenanceReady": "已有相符的結束記錄，核對後可結束活動。",
   "maintenanceNeedsReview": "尚無法確認原操作已結束，目前記錄會保留。",
-  "operationSummary": "回應遺失時，先核對原操作，再決定是否隔離。"
+  "operationSummary": "回應遺失時，先核對原操作，再決定是否隔離。",
+  "kubernetesStages": "允許的 Kubernetes 階段 ID",
+  "kubernetesJobs": "允許的 Kubernetes 節點 ID",
+  "kubernetesScopeHint": "填寫現有階段的確切 ID；修改還需確切節點 ID。不支援萬用字元或繼承舊授權。",
+  "kubernetesReview": "Kubernetes 設定",
+  "kubernetesReviewHint": "檢查資源、命令和健康探測；私有值保持密封。核准僅修改已儲存設定，不執行發佈或修改遠端 Git。"
 }

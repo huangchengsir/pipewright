@@ -129,6 +129,7 @@ const ja: typeof zhCN = {
   },
 
   runStatus: {
+ waiting_action:"操作待ち",
     queued: '待機中',
     running: '実行中',
     waiting_approval: '承認待ち',

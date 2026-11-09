@@ -62,6 +62,8 @@ type MCPTokenInput struct {
 // MCPConfigGrant is an explicit project-local extension. Empty selectors never
 // mean all sections or all operations; CanTrigger remains unrelated.
 type MCPConfigGrant struct {
+	StageIDs   []string `json:"stageIds,omitempty"`
+	JobIDs     []string `json:"jobIds,omitempty"`
 	ProjectID  string   `json:"projectId"`
 	Read       bool     `json:"read"`
 	Propose    bool     `json:"propose"`
@@ -70,8 +72,8 @@ type MCPConfigGrant struct {
 	Operations []string `json:"operations"`
 }
 
-var mcpConfigSections = map[string]bool{"project": true, "pipeline": true, "build": true, "step_limits": true, "source_and_impact": true}
-var mcpConfigOperations = map[string]string{"project.set_name": "project", "project.set_default_branch": "project", "stage.rename": "pipeline", "job.rename": "pipeline", "step.set_limits": "step_limits", "build.set": "build"}
+var mcpConfigSections = map[string]bool{"project": true, "pipeline": true, "build": true, "step_limits": true, "source_and_impact": true, "kubernetes": true}
+var mcpConfigOperations = map[string]string{"project.set_name": "project", "project.set_default_branch": "project", "stage.rename": "pipeline", "job.rename": "pipeline", "step.set_limits": "step_limits", "build.set": "build", "kubernetes.add": "kubernetes", "kubernetes.update": "kubernetes"}
 
 func (t *MCPToken) AllowsConfig(projectID, capability, section, operation string) bool {
 	if t == nil || !t.Allows(projectID, false) {
@@ -126,10 +128,36 @@ func NormalizeMCPConfigGrants(projectIDs []string, in []MCPConfigGrant) ([]MCPCo
 	out := make([]MCPConfigGrant, 0, len(in))
 	seen := map[string]bool{}
 	for _, g := range in {
-		if !allowed[g.ProjectID] || seen[g.ProjectID] || !g.Read || (g.Apply && !g.Propose) || (g.Propose && !g.Read) || len(g.Sections) == 0 || len(g.Sections) > 5 || len(g.Operations) > 6 {
+		if !allowed[g.ProjectID] || seen[g.ProjectID] || !g.Read || (g.Apply && !g.Propose) || (g.Propose && !g.Read) || len(g.Sections) == 0 || len(g.Sections) > 6 || len(g.Operations) > 8 {
 			return nil, ErrMCPTokenInput
 		}
 		seen[g.ProjectID] = true
+		selectors := []*[]string{&g.StageIDs, &g.JobIDs}
+		for _, selector := range selectors {
+			if len(*selector) > 128 {
+				return nil, ErrMCPTokenInput
+			}
+			*selector = append([]string(nil), (*selector)...)
+			sort.Strings(*selector)
+			for i, id := range *selector {
+				if strings.TrimSpace(id) != id || id == "" || len(id) > 128 || strings.ContainsAny(id, "*\x00\r\n\t") || (i > 0 && id == (*selector)[i-1]) {
+					return nil, ErrMCPTokenInput
+				}
+			}
+		}
+		hasSection := false
+		for _, section := range g.Sections {
+			hasSection = hasSection || section == "kubernetes"
+		}
+		if hasSection && len(g.StageIDs) == 0 || !hasSection && (len(g.StageIDs) > 0 || len(g.JobIDs) > 0) {
+			return nil, ErrMCPTokenInput
+		}
+		for _, op := range g.Operations {
+			if op == "kubernetes.update" && len(g.JobIDs) == 0 {
+				return nil, ErrMCPTokenInput
+			}
+		}
+
 		g.Sections = append([]string(nil), g.Sections...)
 		sort.Strings(g.Sections)
 		for i, s := range g.Sections {
@@ -391,4 +419,41 @@ func (s *MCPTokenStore) Revoke(ctx context.Context, id string) error {
 		}
 	}
 	return nil
+}
+
+// Kubernetes configuration is a separately granted section and operation.
+// Stage scope admits only explicitly selected existing stages; job scope is
+// additionally required for edits. Neither selector is derived from old grants.
+func (t *MCPToken) AllowsConfigNode(project, capability, operation, stage, job string) bool {
+	if !strings.HasPrefix(capability, "config.") {
+		capability = "config." + capability
+	}
+	op := operation
+	if capability == "config.read" {
+		op = ""
+	}
+	if !t.AllowsConfig(project, capability, "kubernetes", op) {
+		return false
+	}
+	for _, g := range t.ConfigGrants {
+		if g.ProjectID != project {
+			continue
+		}
+		stageAllowed := false
+		for _, id := range g.StageIDs {
+			stageAllowed = stageAllowed || id == stage
+		}
+		if !stageAllowed {
+			return false
+		}
+		if capability == "config.read" || operation == "kubernetes.add" {
+			return true
+		}
+		for _, id := range g.JobIDs {
+			if id == job {
+				return true
+			}
+		}
+	}
+	return false
 }

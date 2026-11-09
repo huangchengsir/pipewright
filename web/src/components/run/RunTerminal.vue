@@ -20,7 +20,8 @@
 <script setup lang="ts">
 import { ref, computed, shallowRef, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { findLogMatches, highlightLogLine } from './logSearch'
-import { kubePhaseEvidence, type KubePhase } from '../kubernetes/kubernetesEvidence'
+import { kubePreparationDiagnostic } from '../../utils/kubernetesDiagnostic'
+import { kubeLogEvidence, kubeLogPhase, type KubePhase } from '../kubernetes/kubernetesEvidence'
 import { useI18n } from 'vue-i18n'
 import {
   getRunLogs,
@@ -191,12 +192,16 @@ const nodeLines = computed(() =>
 )
 watch(nodeLines, value => emit('kubernetesPhases', value.map(line=>line.text).filter(text=>text.startsWith('kubernetes '))), { immediate:true })
 const visibleLines = computed(() => {
- if(!props.kubernetesPhase) return nodeLines.value
+ if(!props.kubernetesPhase) return nodeLines.value.map(line => ({...line, text:kubePreparationDiagnostic(line.text,t) ?? line.text}))
  const selected=props.kubernetesPhase
- const known=kubePhaseEvidence(nodeLines.value.map(line=>line.text))[selected]
- return nodeLines.value.filter(line=>line.text.startsWith(`kubernetes ${selected}: `)).map(line=>{
-  const code=line.text.slice(`kubernetes ${selected}: `.length).trim()
-  return {...line,text:known.includes(code)?t('kubernetes.phaseCode.'+code):t('kubernetes.notRecordedHint')}
+ return nodeLines.value.filter(line=>kubeLogPhase(line.text)===selected || selected==='preflight' && line.text.startsWith('kubernetes preparation:')).map(line=>{
+  const diagnostic=kubePreparationDiagnostic(line.text,t)
+  if(diagnostic!==undefined) return {...line,text:diagnostic}
+  const entry=kubeLogEvidence(line.text)
+  const text=entry?.code ? t('kubernetes.phaseCode.'+entry.code) : entry?.kind && entry.state
+    ? t('kubernetes.release.healthObservation',{kind:entry.kind,state:t('kubernetes.release.states.'+entry.state)})
+    : t('kubernetes.notRecordedHint')
+  return {...line,text}
  })
 })
 const hasLines = computed(() => visibleLines.value.length > 0)
@@ -524,7 +529,8 @@ function lineKey(line: RunLogLine): number {
 
       <!-- Empty -->
       <div v-else-if="!hasLines" class="term-state mono">
-        <template v-if="props.live">{{ t("run.waitingLog") }}</template>
+        <template v-if="props.kubernetesPhase">{{ t("kubernetes.release.noPhaseEvents") }}</template>
+        <template v-else-if="props.live">{{ t("run.waitingLog") }}</template>
         <template v-else>{{ t("run.noLogRecords") }}</template>
       </div>
 

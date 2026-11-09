@@ -19,7 +19,7 @@ func TestMigrationsApplied(t *testing.T) {
 		if err := st.DB.QueryRowContext(ctx, `SELECT COUNT(1) FROM schema_migrations`).Scan(&n); err != nil {
 			t.Fatalf("count migrations: %v", err)
 		}
-		const expectedMigrations = 63
+		const expectedMigrations = 64
 		if n != expectedMigrations {
 			t.Fatalf("应用迁移数 = %d, 期望 %d", n, expectedMigrations)
 		}

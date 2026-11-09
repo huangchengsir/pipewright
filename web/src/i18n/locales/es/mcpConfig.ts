@@ -81,14 +81,16 @@ export default {
     "source": "Cambia la rama predeterminada; no se ha comprobado que exista.",
     "limits": "Cambia límites de recursos, tiempo o reintentos.",
     "build": "Cambia entradas de compilación compatibles; no se ejecutó ninguna compilación.",
-    "display": "Cambia el nombre mostrado; se conservan el orden y la topología."
+    "display": "Cambia el nombre mostrado; se conservan el orden y la topología.",
+    "kubernetes": "Cambia la configuración de despliegue Kubernetes. Los permisos del clúster y la aprobación del despliegue se verifican por separado."
   },
   "sections": {
     "project": "Proyecto",
     "pipeline": "Pipeline",
     "build": "Compilación",
     "step_limits": "Límites de pasos",
-    "source_and_impact": "Fuente e impacto"
+    "source_and_impact": "Fuente e impacto",
+    "kubernetes": "Kubernetes"
   },
   "operations": {
     "project_set_name": "Renombrar proyecto",
@@ -97,7 +99,9 @@ export default {
     "job_rename": "Renombrar tarea",
     "step_set_limits": "Cambiar límites del paso",
     "build_set": "Cambiar parámetros de compilación",
-    "unknown": "Cambio no compatible"
+    "unknown": "Cambio no compatible",
+    "kubernetes_add": "Añadir nodo Kubernetes",
+    "kubernetes_update": "Modificar nodo Kubernetes"
   },
   "fields": {
     "name": "Nombre",
@@ -110,7 +114,8 @@ export default {
     "toolchainLanguage": "Lenguaje de herramientas",
     "toolchainVersion": "Versión de herramientas",
     "dockerfilePath": "Ruta de Dockerfile",
-    "context": "Contexto de compilación"
+    "context": "Contexto de compilación",
+    "kubernetes": "Configuración Kubernetes"
   },
   "states": {
     "pending": "Pendiente",
@@ -144,5 +149,10 @@ export default {
   "maintenanceDetails": "Límites de actuación y detalles",
   "maintenanceReady": "Hay un registro de finalización coincidente. Revíselo antes de cerrar la actividad.",
   "maintenanceNeedsReview": "No se ha confirmado que la operación original haya terminado. Se conserva este registro.",
-  "operationSummary": "Si se pierde una respuesta, consulte la operación original antes de decidir si aislarla."
+  "operationSummary": "Si se pierde una respuesta, consulte la operación original antes de decidir si aislarla.",
+  "kubernetesStages": "ID de etapas Kubernetes permitidas",
+  "kubernetesJobs": "ID de tareas Kubernetes permitidas",
+  "kubernetesScopeHint": "Introduzca los ID exactos de etapas existentes. Las modificaciones también requieren ID de tareas. Sin comodines ni permisos heredados.",
+  "kubernetesReview": "Configuración Kubernetes",
+  "kubernetesReviewHint": "Revise recursos, comandos y comprobaciones de salud. Los valores privados permanecen cifrados. La aprobación solo cambia la configuración guardada; no ejecuta despliegues ni modifica Git remoto."
 }

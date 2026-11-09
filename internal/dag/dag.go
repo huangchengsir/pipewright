@@ -28,7 +28,9 @@ type Status string
 
 const (
 	// StatusSuccess 表示节点执行成功。
-	StatusSuccess Status = "success"
+	StatusSuccess       Status = "success"
+	StatusWaitingAction Status = "waiting_action"
+	StatusPending       Status = "pending"
 	// StatusFailed 表示节点执行失败(RunFunc 返回非 nil)。
 	StatusFailed Status = "failed"
 	// StatusSkipped 表示节点因上游失败/跳过而未执行。
@@ -108,6 +110,7 @@ var (
 // 节点据此记 StatusSkipped(而非 StatusFailed),其下游照「上游未成功」逻辑被跳过;
 // 但它**不算失败**——调用方据 Counts()[StatusFailed] 判定整体是否失败,条件跳过不令整体失败。
 var ErrSkip = errors.New("dag: node skipped by condition")
+var ErrSuspended = errors.New("dag: execution suspended for explicit action")
 
 // Graph 是一张已校验的 DAG。
 type Graph struct {
@@ -246,6 +249,7 @@ func (g *Graph) Schedule(ctx context.Context, run RunFunc, opts Options) Result 
 	}
 	// upstreamFailed[id]:其某个上游「有效失败」(失败且未 AllowFailure,或被跳过/取消)。
 	upstreamFailed := make(map[string]bool, total)
+	upstreamSuspended := make(map[string]bool, total)
 
 	type fin struct {
 		id     string
@@ -281,6 +285,8 @@ func (g *Graph) Schedule(ctx context.Context, run RunFunc, opts Options) Result 
 			err := run(ctx, id)
 			st := StatusSuccess
 			switch {
+			case errors.Is(err, ErrSuspended):
+				st = StatusWaitingAction
 			case errors.Is(err, ErrSkip):
 				st = StatusSkipped // 条件跳过:非失败,但下游照「未成功」跳过
 			case err != nil:
@@ -309,17 +315,21 @@ func (g *Graph) Schedule(ctx context.Context, run RunFunc, opts Options) Result 
 	var resolve func(id string, st Status)
 	resolve = func(id string, st Status) {
 		type pending struct {
-			id   string
-			fail bool
+			id    string
+			fail  bool
+			pause bool
 		}
 		stack := make([]pending, 0)
 		for _, dep := range g.dependents[id] {
-			stack = append(stack, pending{dep, effectiveFail(id, st)})
+			stack = append(stack, pending{dep, effectiveFail(id, st) && st != StatusWaitingAction && st != StatusPending, st == StatusWaitingAction || st == StatusPending})
 		}
 		for len(stack) > 0 {
 			p := stack[len(stack)-1]
 			stack = stack[:len(stack)-1]
 			indeg[p.id]--
+			if p.pause {
+				upstreamSuspended[p.id] = true
+			}
 			if p.fail {
 				upstreamFailed[p.id] = true
 			}
@@ -331,7 +341,13 @@ func (g *Graph) Schedule(ctx context.Context, run RunFunc, opts Options) Result 
 				results[p.id] = NodeResult{Status: StatusSkipped}
 				done++
 				for _, dd := range g.dependents[p.id] {
-					stack = append(stack, pending{dd, true})
+					stack = append(stack, pending{dd, true, false})
+				}
+			} else if upstreamSuspended[p.id] {
+				results[p.id] = NodeResult{Status: StatusPending}
+				done++
+				for _, dd := range g.dependents[p.id] {
+					stack = append(stack, pending{dd, false, true})
 				}
 			} else {
 				launch(p.id)

@@ -83,6 +83,7 @@ const STATUS_FILTER_OPTIONS: Array<RunStatus | "all"> = [
   "rolled_back",
   "queued",
   "waiting_approval",
+  "waiting_action",
 ];
 
 // 筛选标签:'all' 用本页 key;其余复用全局 runStatus.* 状态文案。
@@ -244,210 +245,276 @@ onMounted(() => {
 
 // ─── manual trigger modal ─────────────────────────────────────────────────────
 
-const triggerModalOpen    = ref(false)
-const projects            = ref<Project[]>([])
-const projectsLoading     = ref(false)
-const projectsLoadError = ref(false)
-const triggerForm         = ref({ projectId: '', branch: '', commit: '' })
-const triggerParams       = ref<Record<string, string>>({})
-const triggerDefs         = ref<ParamDef[]>([])
-const triggerBranchError  = ref('')
-const triggerProjectError = ref('')
-const triggerBanner       = ref('')
-const triggerSubmitting   = ref(false)
+const triggerModalOpen = ref(false);
+const projects = ref<Project[]>([]);
+const projectsLoading = ref(false);
+const projectsLoadError = ref(false);
+const triggerForm = ref({ projectId: "", branch: "", commit: "" });
+const triggerParams = ref<Record<string, string>>({});
+const triggerDefs = ref<ParamDef[]>([]);
+const triggerBranchError = ref("");
+const triggerProjectError = ref("");
+const triggerBanner = ref("");
+const triggerSubmitting = ref(false);
 
 const selectedProject = computed<Project | undefined>(() =>
   projects.value.find((p) => p.id === triggerForm.value.projectId),
-)
+);
 
 async function loadProjectsForTrigger(): Promise<void> {
-  if (projects.value.length > 0) return
-  projectsLoading.value = true
-  projectsLoadError.value = false
+  if (projects.value.length > 0) return;
+  projectsLoading.value = true;
+  projectsLoadError.value = false;
   try {
-    projects.value = await listProjects()
+    projects.value = await listProjects();
   } catch {
-    projectsLoadError.value = true
+    projectsLoadError.value = true;
   } finally {
-    projectsLoading.value = false
+    projectsLoading.value = false;
   }
 }
 
 function openTriggerModal(): void {
-  triggerForm.value        = { projectId: '', branch: '', commit: '' }
-  triggerParams.value       = {}
-  triggerDefs.value         = []
-  triggerBranchError.value  = ''
-  triggerProjectError.value = ''
-  triggerBanner.value       = ''
-  triggerSubmitting.value   = false
-  triggerModalOpen.value    = true
-  void loadProjectsForTrigger()
+  triggerForm.value = { projectId: "", branch: "", commit: "" };
+  triggerParams.value = {};
+  triggerDefs.value = [];
+  triggerBranchError.value = "";
+  triggerProjectError.value = "";
+  triggerBanner.value = "";
+  triggerSubmitting.value = false;
+  triggerModalOpen.value = true;
+  void loadProjectsForTrigger();
 }
 
 function closeTriggerModal(): void {
-  if (triggerSubmitting.value) return
-  triggerModalOpen.value = false
+  if (triggerSubmitting.value) return;
+  triggerModalOpen.value = false;
 }
 
 function onProjectSelect(): void {
-  triggerProjectError.value = ''
+  triggerProjectError.value = "";
   // Auto-fill branch from project's defaultBranch when user picks a project
-  const proj = selectedProject.value
+  const proj = selectedProject.value;
   if (proj && !triggerForm.value.branch) {
-    triggerForm.value.branch = proj.defaultBranch || ''
+    triggerForm.value.branch = proj.defaultBranch || "";
   }
   // 切项目 → 重载类型化参数定义(P0);清空已填值。失败静默回退自由 KV。
-  triggerParams.value = {}
-  triggerDefs.value = []
-  const pid = triggerForm.value.projectId
+  triggerParams.value = {};
+  triggerDefs.value = [];
+  const pid = triggerForm.value.projectId;
   if (pid) {
     void getParameters(pid)
       .then((defs) => {
-        if (triggerForm.value.projectId === pid) triggerDefs.value = defs
+        if (triggerForm.value.projectId === pid) triggerDefs.value = defs;
       })
-      .catch(() => {})
+      .catch(() => {});
   }
 }
 
 async function handleTriggerSubmit(): Promise<void> {
-  triggerBranchError.value  = ''
-  triggerProjectError.value = ''
-  triggerBanner.value       = ''
+  triggerBranchError.value = "";
+  triggerProjectError.value = "";
+  triggerBanner.value = "";
 
-  let ok = true
+  let ok = true;
   if (!triggerForm.value.projectId) {
-    triggerProjectError.value = t('runs.errSelectProject')
-    ok = false
+    triggerProjectError.value = t("runs.errSelectProject");
+    ok = false;
   }
-  const branch = triggerForm.value.branch.trim()
+  const branch = triggerForm.value.branch.trim();
   if (!branch) {
-    triggerBranchError.value = t('runs.errEnterBranch')
-    ok = false
+    triggerBranchError.value = t("runs.errEnterBranch");
+    ok = false;
   }
-  if (!ok) return
+  if (!ok) return;
 
   if (triggerDefs.value.length) {
-    const verr = validateParamValues(triggerDefs.value, triggerParams.value)
+    const verr = validateParamValues(triggerDefs.value, triggerParams.value);
     if (verr) {
-      triggerBanner.value = verr
-      return
+      triggerBanner.value = verr;
+      return;
     }
   }
 
-  triggerSubmitting.value = true
+  triggerSubmitting.value = true;
   try {
-    const input: TriggerManualInput = { branch }
-    const commit = triggerForm.value.commit.trim()
-    if (commit) input.commit = commit
-    if (Object.keys(triggerParams.value).length) input.params = triggerParams.value
+    const input: TriggerManualInput = { branch };
+    const commit = triggerForm.value.commit.trim();
+    if (commit) input.commit = commit;
+    if (Object.keys(triggerParams.value).length)
+      input.params = triggerParams.value;
 
-    const run: RunDetail = await triggerManual(triggerForm.value.projectId, input)
-    triggerModalOpen.value = false
-    goToDetail(run.id)
+    const run: RunDetail = await triggerManual(
+      triggerForm.value.projectId,
+      input,
+    );
+    triggerModalOpen.value = false;
+    goToDetail(run.id);
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
-        triggerBanner.value = t('runs.errNoServerDot')
+        triggerBanner.value = t("runs.errNoServerDot");
       } else if (err.status === 404) {
-        triggerBanner.value = t('runs.errProjectNotFound')
+        triggerBanner.value = t("runs.errProjectNotFound");
       } else {
-        triggerBanner.value = err.apiError?.message ?? t('runs.errTriggerFailedCode', { n: err.status })
+        triggerBanner.value =
+          err.apiError?.message ??
+          t("runs.errTriggerFailedCode", { n: err.status });
       }
     } else {
-      triggerBanner.value = t('runs.errTriggerFailedRetry')
+      triggerBanner.value = t("runs.errTriggerFailedRetry");
     }
   } finally {
-    triggerSubmitting.value = false
+    triggerSubmitting.value = false;
   }
 }
 
 // ─── group runs by date ───────────────────────────────────────────────────────
 
 interface RunGroup {
-  label: string
-  items: RunListItem[]
+  label: string;
+  items: RunListItem[];
 }
 
 const groupedRuns = computed<RunGroup[]>(() => {
-  const groups: Map<string, RunListItem[]> = new Map()
+  const groups: Map<string, RunListItem[]> = new Map();
   for (const run of runs.value) {
-    const d = new Date(run.createdAt)
-    const label = formatDateGroup(d)
-    if (!groups.has(label)) groups.set(label, [])
-    groups.get(label)!.push(run)
+    const d = new Date(run.createdAt);
+    const label = formatDateGroup(d);
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label)!.push(run);
   }
-  return Array.from(groups.entries()).map(([label, items]) => ({ label, items }))
-})
+  return Array.from(groups.entries()).map(([label, items]) => ({
+    label,
+    items,
+  }));
+});
 
 function formatDateGroup(d: Date): string {
-  const today = new Date()
-  const yesterday = new Date(today)
-  yesterday.setDate(today.getDate() - 1)
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
 
   const sameDay = (a: Date, b: Date): boolean =>
     a.getFullYear() === b.getFullYear() &&
     a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
+    a.getDate() === b.getDate();
 
-  if (sameDay(d, today)) return t('runs.today')
-  if (sameDay(d, yesterday)) return t('runs.yesterday')
+  if (sameDay(d, today)) return t("runs.today");
+  if (sameDay(d, yesterday)) return t("runs.yesterday");
 
-  return d.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })
+  return d.toLocaleDateString("zh-CN", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
 }
 
 // ─── Status pill config (fixed six-word set) ──────────────────────────────────
 
 interface StatusConfig {
-  dot: string
-  bg: string
-  border: string
-  text: string
-  pulse: boolean
+  dot: string;
+  bg: string;
+  border: string;
+  text: string;
+  pulse: boolean;
 }
 
 // 文案统一走全局 runStatus.*;此处只配语义色调与脉冲。
 const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
-  queued:        { dot: 'var(--color-faint)',  bg: 'var(--color-card-2)',     border: 'var(--color-border-strong)', text: 'var(--color-dim)',   pulse: false },
-  running:       { dot: 'var(--color-amber)',  bg: 'var(--color-amber-soft)', border: 'transparent',               text: 'var(--color-amber)', pulse: true  },
-  waiting_approval:{ dot: 'var(--color-amber)', bg: 'var(--color-amber-soft)', border: 'var(--color-amber-line)',   text: 'var(--color-amber)', pulse: true  },
-  success:       { dot: 'var(--color-green)',  bg: 'var(--color-green-soft)', border: 'transparent',               text: 'var(--color-green)', pulse: false },
-  failed:        { dot: 'var(--color-red)',    bg: 'var(--color-red-soft)',   border: 'var(--color-red-line)',     text: 'var(--color-red)',   pulse: false },
-  partial_failed:{ dot: 'var(--color-red)',    bg: 'var(--color-red-soft)',   border: 'var(--color-red-line)',     text: 'var(--color-red)',   pulse: false },
-  rolled_back:   { dot: 'var(--color-amber)',  bg: 'var(--color-amber-soft)', border: 'var(--color-amber-line)',   text: 'var(--color-amber)', pulse: false },
-}
+  queued: {
+    dot: "var(--color-faint)",
+    bg: "var(--color-card-2)",
+    border: "var(--color-border-strong)",
+    text: "var(--color-dim)",
+    pulse: false,
+  },
+  running: {
+    dot: "var(--color-amber)",
+    bg: "var(--color-amber-soft)",
+    border: "transparent",
+    text: "var(--color-amber)",
+    pulse: true,
+  },
+  waiting_action: {
+    dot: "var(--color-amber)",
+    bg: "var(--color-amber-soft)",
+    border: "var(--color-amber-line)",
+    text: "var(--color-amber)",
+    pulse: false,
+  },
+  waiting_approval: {
+    dot: "var(--color-amber)",
+    bg: "var(--color-amber-soft)",
+    border: "var(--color-amber-line)",
+    text: "var(--color-amber)",
+    pulse: true,
+  },
+  success: {
+    dot: "var(--color-green)",
+    bg: "var(--color-green-soft)",
+    border: "transparent",
+    text: "var(--color-green)",
+    pulse: false,
+  },
+  failed: {
+    dot: "var(--color-red)",
+    bg: "var(--color-red-soft)",
+    border: "var(--color-red-line)",
+    text: "var(--color-red)",
+    pulse: false,
+  },
+  partial_failed: {
+    dot: "var(--color-red)",
+    bg: "var(--color-red-soft)",
+    border: "var(--color-red-line)",
+    text: "var(--color-red)",
+    pulse: false,
+  },
+  rolled_back: {
+    dot: "var(--color-amber)",
+    bg: "var(--color-amber-soft)",
+    border: "var(--color-amber-line)",
+    text: "var(--color-amber)",
+    pulse: false,
+  },
+};
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 function shortId(id: string): string {
-  return id.slice(0, 8)
+  return id.slice(0, 8);
 }
 
 function shortCommit(commit: string): string {
-  return commit.length > 7 ? commit.slice(0, 7) : commit
+  return commit.length > 7 ? commit.slice(0, 7) : commit;
 }
 
 function formatDuration(ms: number | null): string {
-  if (ms === null) return '—'
-  if (ms < 1000) return `${ms}ms`
-  const s = Math.floor(ms / 1000)
-  if (s < 60) return `${s}s`
-  const m = Math.floor(s / 60)
-  const rem = s % 60
-  return rem > 0 ? `${m}m ${rem}s` : `${m}m`
+  if (ms === null) return "—";
+  if (ms < 1000) return `${ms}ms`;
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return rem > 0 ? `${m}m ${rem}s` : `${m}m`;
 }
 
 function formatTime(iso: string): string {
-  const d = new Date(iso)
-  return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  const d = new Date(iso);
+  return d.toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
-function triggerTypeLabel(type: 'webhook' | 'manual'): string {
-  return type === 'webhook' ? 'Webhook' : t('runs.triggerManual')
+function triggerTypeLabel(type: "webhook" | "manual"): string {
+  return type === "webhook" ? "Webhook" : t("runs.triggerManual");
 }
 
 function isFailedStatus(status: RunStatus): boolean {
-  return status === 'failed' || status === 'partial_failed'
+  return status === "failed" || status === "partial_failed";
 }
 </script>
 
@@ -456,32 +523,45 @@ function isFailedStatus(status: RunStatus): boolean {
     <!-- ─── Page header ─────────────────────────────────────────────────── -->
     <header class="page-header">
       <div class="page-header-text">
-        <h1 class="page-title">{{ t('runs.title') }}</h1>
-        <p class="page-sub">{{ t('runs.subtitle') }}</p>
+        <h1 class="page-title">{{ t("runs.title") }}</h1>
+        <p class="page-sub">{{ t("runs.subtitle") }}</p>
       </div>
       <button
         class="btn-run"
         :disabled="loadState === 'loading'"
         @click="openTriggerModal"
       >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/>
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          aria-hidden="true"
+        >
+          <polygon points="5 3 19 12 5 21 5 3" fill="currentColor" />
         </svg>
-        {{ t('runs.manualTrigger') }}
+        {{ t("runs.manualTrigger") }}
       </button>
     </header>
 
     <!-- ─── Error banner ────────────────────────────────────────────────── -->
-    <div
-      v-if="loadState === 'error'"
-      class="banner banner--error"
-      role="alert"
-    >
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-        <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
+    <div v-if="loadState === 'error'" class="banner banner--error" role="alert">
+      <svg
+        width="15"
+        height="15"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        aria-hidden="true"
+      >
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 8v4M12 16h.01" />
       </svg>
       <span>{{ loadError }}</span>
-      <button class="banner-retry" @click="loadRuns">↻ {{ t('runs.retry') }}</button>
+      <button class="banner-retry" @click="loadRuns">
+        ↻ {{ t("runs.retry") }}
+      </button>
     </div>
 
     <form class="run-query" @submit.prevent="onFilterChange">
@@ -548,7 +628,11 @@ function isFailedStatus(status: RunStatus): boolean {
       </button>
     </p>
     <!-- ─── Filter bar ───────────────────────────────────────────────────── -->
-    <div class="filter-bar" role="group" :aria-label="t('runs.filterAriaLabel')">
+    <div
+      class="filter-bar"
+      role="group"
+      :aria-label="t('runs.filterAriaLabel')"
+    >
       <button
         v-for="opt in STATUS_FILTER_OPTIONS"
         :key="opt"
@@ -556,20 +640,20 @@ function isFailedStatus(status: RunStatus): boolean {
         class="filter-tab"
         :class="{ 'filter-tab--active': statusFilter === opt }"
         :aria-pressed="statusFilter === opt"
-        @click="statusFilter = opt; onFilterChange()"
-      >{{ filterLabel(opt) }}</button>
+        @click="
+          statusFilter = opt;
+          onFilterChange();
+        "
+      >
+        {{ filterLabel(opt) }}
+      </button>
     </div>
 
     <!-- ─── Loading skeleton ─────────────────────────────────────────────── -->
     <template v-if="loadState === 'loading'">
       <div class="table-wrap" aria-busy="true" :aria-label="t('runs.loading')">
         <div class="skel-group-label skel" />
-        <div
-          v-for="i in 5"
-          :key="i"
-          class="skel-row"
-          aria-hidden="true"
-        >
+        <div v-for="i in 5" :key="i" class="skel-row" aria-hidden="true">
           <div class="skel skel--pill" />
           <div class="skel skel--name" />
           <div class="skel skel--branch" />
@@ -577,13 +661,8 @@ function isFailedStatus(status: RunStatus): boolean {
           <div class="skel skel--dur" />
           <div class="skel skel--time" />
         </div>
-        <div class="skel-group-label skel" style="margin-top: 20px;" />
-        <div
-          v-for="i in 3"
-          :key="`b${i}`"
-          class="skel-row"
-          aria-hidden="true"
-        >
+        <div class="skel-group-label skel" style="margin-top: 20px" />
+        <div v-for="i in 3" :key="`b${i}`" class="skel-row" aria-hidden="true">
           <div class="skel skel--pill" />
           <div class="skel skel--name" />
           <div class="skel skel--branch" />
@@ -598,39 +677,50 @@ function isFailedStatus(status: RunStatus): boolean {
     <template v-else-if="loadState === 'idle' && runs.length === 0">
       <div class="empty-state" role="status">
         <div class="empty-icon" aria-hidden="true">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-            <circle cx="12" cy="12" r="3"/>
-            <path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.64 5.64l2.12 2.12m8.48 8.48 2.12 2.12M5.64 18.36l2.12-2.12m8.48-8.48 2.12-2.12"/>
+          <svg
+            width="24"
+            height="24"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+          >
+            <circle cx="12" cy="12" r="3" />
+            <path
+              d="M12 3v3m0 12v3M3 12h3m12 0h3M5.64 5.64l2.12 2.12m8.48 8.48 2.12 2.12M5.64 18.36l2.12-2.12m8.48-8.48 2.12-2.12"
+            />
           </svg>
         </div>
-        <p class="empty-label">{{ t('runs.empty') }}</p>
+        <p class="empty-label">{{ t("runs.empty") }}</p>
         <p class="empty-hint">
-          <template v-if="hasFilters">{{ t('runs.emptyFiltered') }}</template>
-          <template v-else>{{ t('runs.emptyHint') }}</template>
+          <template v-if="hasFilters">{{ t("runs.emptyFiltered") }}</template>
+          <template v-else>{{ t("runs.emptyHint") }}</template>
         </p>
-        <button
-          v-if="hasFilters"
-          class="btn-secondary"
-          @click="clearFilters"
-        >{{ t('runs.clearFilter') }}</button>
+        <button v-if="hasFilters" class="btn-secondary" @click="clearFilters">
+          {{ t("runs.clearFilter") }}
+        </button>
       </div>
     </template>
 
     <!-- ─── Runs table (grouped by date) ────────────────────────────────── -->
     <template v-else-if="loadState === 'idle'">
       <p class="result-count" aria-live="polite">
-        {{ t('runs.resultCount', { n: totalRuns }) }}
+        {{ t("runs.resultCount", { n: totalRuns }) }}
       </p>
 
       <div class="table-wrap">
         <!-- Table header -->
-        <div class="table-head" role="row" :aria-label="t('runs.tableHeaderAria')">
-          <span class="th">{{ t('runs.colStatus') }}</span>
-          <span class="th">{{ t('runs.colProject') }}</span>
-          <span class="th">{{ t('runs.colBranchCommit') }}</span>
-          <span class="th">{{ t('runs.colTrigger') }}</span>
-          <span class="th">{{ t('runs.colDuration') }}</span>
-          <span class="th">{{ t('runs.colTime') }}</span>
+        <div
+          class="table-head"
+          role="row"
+          :aria-label="t('runs.tableHeaderAria')"
+        >
+          <span class="th">{{ t("runs.colStatus") }}</span>
+          <span class="th">{{ t("runs.colProject") }}</span>
+          <span class="th">{{ t("runs.colBranchCommit") }}</span>
+          <span class="th">{{ t("runs.colTrigger") }}</span>
+          <span class="th">{{ t("runs.colDuration") }}</span>
+          <span class="th">{{ t("runs.colTime") }}</span>
           <span class="th th--action" />
         </div>
 
@@ -639,7 +729,9 @@ function isFailedStatus(status: RunStatus): boolean {
           <!-- Group header -->
           <div class="group-label" role="rowgroup">
             <span class="group-label-text">{{ group.label }}</span>
-            <span class="group-label-count">{{ t('runs.groupCount', { n: group.items.length }) }}</span>
+            <span class="group-label-count">{{
+              t("runs.groupCount", { n: group.items.length })
+            }}</span>
           </div>
 
           <!-- Run rows -->
@@ -653,7 +745,6 @@ function isFailedStatus(status: RunStatus): boolean {
               'run-row--failed': isFailedStatus(run.status),
               'run-row--running': run.status === 'running',
             }"
-
             :aria-label="`${run.projectName} · ${t('runs.rowAria', { id: shortId(run.id), status: t(`runStatus.${run.status}`) })}`"
             @click="openRun($event, run.id)"
           >
@@ -666,11 +757,15 @@ function isFailedStatus(status: RunStatus): boolean {
                   border: `1px solid ${STATUS_CONFIG[run.status].border}`,
                   color: STATUS_CONFIG[run.status].text,
                 }"
-                :aria-label="t('runs.statusAria', { status: t(`runStatus.${run.status}`) })"
+                :aria-label="
+                  t('runs.statusAria', { status: t(`runStatus.${run.status}`) })
+                "
               >
                 <span
                   class="status-dot"
-                  :class="{ 'status-dot--pulse': STATUS_CONFIG[run.status].pulse }"
+                  :class="{
+                    'status-dot--pulse': STATUS_CONFIG[run.status].pulse,
+                  }"
                   :style="{ background: STATUS_CONFIG[run.status].dot }"
                   aria-hidden="true"
                 />
@@ -680,25 +775,36 @@ function isFailedStatus(status: RunStatus): boolean {
 
             <!-- Project name + run ID -->
             <div class="col-project">
-              <span class="project-name">{{ run.projectName }} <small v-if="run.executionKind === 'recovery'">{{ t('runRetry.attempt', { n: run.attemptNumber ?? 1 }) }}</small></span>
+              <span class="project-name"
+                >{{ run.projectName }}
+                <small v-if="run.executionKind === 'recovery'">{{
+                  t("runRetry.attempt", { n: run.attemptNumber ?? 1 })
+                }}</small></span
+              >
               <span class="run-id mono">#{{ shortId(run.id) }}</span>
             </div>
 
             <!-- Branch + commit -->
             <div class="col-branch">
               <span class="branch-tag mono">{{ run.trigger.branch }}</span>
-              <span class="commit-hash mono">{{ shortCommit(run.trigger.commit) }}</span>
+              <span class="commit-hash mono">{{
+                shortCommit(run.trigger.commit)
+              }}</span>
             </div>
 
             <!-- Trigger type + actor -->
             <div class="col-trigger">
-              <span class="trigger-badge">{{ triggerTypeLabel(run.trigger.type) }}</span>
+              <span class="trigger-badge">{{
+                triggerTypeLabel(run.trigger.type)
+              }}</span>
               <span class="trigger-actor">{{ run.trigger.actor }}</span>
             </div>
 
             <!-- Duration -->
             <div class="col-dur">
-              <span class="dur-value mono">{{ formatDuration(run.durationMs) }}</span>
+              <span class="dur-value mono">{{
+                formatDuration(run.durationMs)
+              }}</span>
             </div>
 
             <!-- Time -->
@@ -712,7 +818,8 @@ function isFailedStatus(status: RunStatus): boolean {
                 v-if="isFailedStatus(run.status)"
                 class="diag-link"
                 aria-hidden="true"
-              >{{ t('runs.viewDiagnosis') }} →</span>
+                >{{ t("runs.viewDiagnosis") }} →</span
+              >
             </div>
 
             <!-- Running row: mini pulse bar -->
@@ -766,13 +873,19 @@ function isFailedStatus(status: RunStatus): boolean {
         <!-- Header -->
         <div class="modal-head">
           <div class="modal-icon" aria-hidden="true">
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/>
+            <svg
+              width="17"
+              height="17"
+              viewBox="0 0 24 24"
+              fill="none"
+              aria-hidden="true"
+            >
+              <polygon points="5 3 19 12 5 21 5 3" fill="currentColor" />
             </svg>
           </div>
           <div>
-            <h3 class="modal-title">{{ t('runs.modalTitle') }}</h3>
-            <p class="modal-sub">{{ t('runs.modalSub') }}</p>
+            <h3 class="modal-title">{{ t("runs.modalTitle") }}</h3>
+            <p class="modal-sub">{{ t("runs.modalSub") }}</p>
           </div>
           <button
             class="modal-close"
@@ -780,8 +893,15 @@ function isFailedStatus(status: RunStatus): boolean {
             :disabled="triggerSubmitting"
             @click="closeTriggerModal"
           >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M18 6 6 18M6 6l12 12"/>
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path d="M18 6 6 18M6 6l12 12" />
             </svg>
           </button>
         </div>
@@ -792,8 +912,17 @@ function isFailedStatus(status: RunStatus): boolean {
           class="banner banner--error modal-banner"
           role="alert"
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-            <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 8v4M12 16h.01" />
           </svg>
           {{ triggerBanner }}
         </div>
@@ -805,7 +934,9 @@ function isFailedStatus(status: RunStatus): boolean {
         >
           <!-- Project dropdown -->
           <div class="field">
-            <label class="field-label" for="trigger-project">{{ t('runs.fieldProject') }}</label>
+            <label class="field-label" for="trigger-project">{{
+              t("runs.fieldProject")
+            }}</label>
             <div class="select-wrap">
               <select
                 id="trigger-project"
@@ -814,20 +945,37 @@ function isFailedStatus(status: RunStatus): boolean {
                 :class="{ 'field-input--error': triggerProjectError }"
                 :disabled="triggerSubmitting || projectsLoading"
                 :aria-invalid="triggerProjectError ? 'true' : undefined"
-                :aria-describedby="triggerProjectError ? 'trigger-proj-err' : undefined"
+                :aria-describedby="
+                  triggerProjectError ? 'trigger-proj-err' : undefined
+                "
                 @change="onProjectSelect"
               >
                 <option value="" disabled>
-                  {{ projectsLoading ? t('runs.loadingProjects') : t('runs.selectProject') }}
+                  {{
+                    projectsLoading
+                      ? t("runs.loadingProjects")
+                      : t("runs.selectProject")
+                  }}
                 </option>
                 <option
                   v-for="proj in projects"
                   :key="proj.id"
                   :value="proj.id"
-                >{{ proj.name }}</option>
+                >
+                  {{ proj.name }}
+                </option>
               </select>
-              <svg class="select-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
-                <path d="M6 9l6 6 6-6"/>
+              <svg
+                class="select-arrow"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.2"
+                aria-hidden="true"
+              >
+                <path d="M6 9l6 6 6-6" />
               </svg>
             </div>
             <span
@@ -835,14 +983,17 @@ function isFailedStatus(status: RunStatus): boolean {
               id="trigger-proj-err"
               class="field-error"
               role="alert"
-            >{{ triggerProjectError }}</span>
+              >{{ triggerProjectError }}</span
+            >
           </div>
 
           <!-- Branch -->
           <div class="field">
             <label class="field-label" for="trigger-branch">
-              {{ t('runs.fieldBranch') }}
-              <span class="field-hint-inline">{{ t('runs.fieldBranchHint') }}</span>
+              {{ t("runs.fieldBranch") }}
+              <span class="field-hint-inline">{{
+                t("runs.fieldBranchHint")
+              }}</span>
             </label>
             <input
               id="trigger-branch"
@@ -854,7 +1005,9 @@ function isFailedStatus(status: RunStatus): boolean {
               autocomplete="off"
               :disabled="triggerSubmitting"
               :aria-invalid="triggerBranchError ? 'true' : undefined"
-              :aria-describedby="triggerBranchError ? 'trigger-branch-err' : undefined"
+              :aria-describedby="
+                triggerBranchError ? 'trigger-branch-err' : undefined
+              "
               @input="triggerBranchError = ''"
             />
             <span
@@ -862,14 +1015,17 @@ function isFailedStatus(status: RunStatus): boolean {
               id="trigger-branch-err"
               class="field-error"
               role="alert"
-            >{{ triggerBranchError }}</span>
+              >{{ triggerBranchError }}</span
+            >
           </div>
 
           <!-- Commit (optional) -->
           <div class="field">
             <label class="field-label" for="trigger-commit">
-              {{ t('runs.fieldCommit') }}
-              <span class="field-hint-inline">{{ t('runs.fieldCommitHint') }}</span>
+              {{ t("runs.fieldCommit") }}
+              <span class="field-hint-inline">{{
+                t("runs.fieldCommitHint")
+              }}</span>
             </label>
             <input
               id="trigger-commit"
@@ -885,8 +1041,12 @@ function isFailedStatus(status: RunStatus): boolean {
           <!-- Parameters · 有类型化定义(P0)→ 类型化控件;无 → 自由 KV(Story 8-11) -->
           <div class="field">
             <label class="field-label">
-              {{ t('runs.fieldParams') }}
-              <span class="field-hint-inline">{{ triggerDefs.length ? t('runs.fieldParamsHintTyped') : t('runs.fieldParamsHintFree') }}</span>
+              {{ t("runs.fieldParams") }}
+              <span class="field-hint-inline">{{
+                triggerDefs.length
+                  ? t("runs.fieldParamsHintTyped")
+                  : t("runs.fieldParamsHintFree")
+              }}</span>
             </label>
             <TypedRunParams
               v-if="triggerDefs.length"
@@ -894,7 +1054,11 @@ function isFailedStatus(status: RunStatus): boolean {
               :defs="triggerDefs"
               v-model="triggerParams"
             />
-            <RunParamsEditor v-else v-model="triggerParams" :disabled="triggerSubmitting" />
+            <RunParamsEditor
+              v-else
+              v-model="triggerParams"
+              :disabled="triggerSubmitting"
+            />
           </div>
 
           <!-- Footer -->
@@ -904,18 +1068,31 @@ function isFailedStatus(status: RunStatus): boolean {
               class="btn-secondary"
               :disabled="triggerSubmitting"
               @click="closeTriggerModal"
-            >{{ t('runs.cancel') }}</button>
+            >
+              {{ t("runs.cancel") }}
+            </button>
             <button
               type="submit"
               class="btn-run"
               :disabled="triggerSubmitting"
               :aria-busy="triggerSubmitting"
             >
-              <span v-if="triggerSubmitting" class="spinner" aria-hidden="true" />
-              <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/>
+              <span
+                v-if="triggerSubmitting"
+                class="spinner"
+                aria-hidden="true"
+              />
+              <svg
+                v-else
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                aria-hidden="true"
+              >
+                <polygon points="5 3 19 12 5 21 5 3" fill="currentColor" />
               </svg>
-              {{ triggerSubmitting ? t('runs.triggering') : t('runs.runNow') }}
+              {{ triggerSubmitting ? t("runs.triggering") : t("runs.runNow") }}
             </button>
           </div>
         </form>
@@ -981,7 +1158,10 @@ function isFailedStatus(status: RunStatus): boolean {
   border-radius: var(--rounded-md);
   cursor: pointer;
   white-space: nowrap;
-  transition: color var(--duration-fast), background-color var(--duration-fast), box-shadow var(--duration-fast);
+  transition:
+    color var(--duration-fast),
+    background-color var(--duration-fast),
+    box-shadow var(--duration-fast);
 }
 
 .filter-tab:hover {
@@ -1090,11 +1270,7 @@ function isFailedStatus(status: RunStatus): boolean {
 
 /* Failed row: left-side red gradient */
 .run-row--failed {
-  background: linear-gradient(
-    90deg,
-    var(--color-red-soft) 0%,
-    transparent 48%
-  );
+  background: linear-gradient(90deg, var(--color-red-soft) 0%, transparent 48%);
 }
 
 .run-row--failed:hover {
@@ -1124,12 +1300,19 @@ function isFailedStatus(status: RunStatus): boolean {
 }
 
 @keyframes flow {
-  0%   { background-position: 200% center; }
-  100% { background-position: -200% center; }
+  0% {
+    background-position: 200% center;
+  }
+  100% {
+    background-position: -200% center;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .run-row-progress { animation: none; background: var(--color-amber); }
+  .run-row-progress {
+    animation: none;
+    background: var(--color-amber);
+  }
 }
 
 /* ─── status pill ────────────────────────────────────────────────────────── */
@@ -1156,12 +1339,21 @@ function isFailedStatus(status: RunStatus): boolean {
 }
 
 @keyframes dot-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50%       { opacity: 0.5; transform: scale(0.8); }
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(0.8);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .status-dot--pulse { animation: none; }
+  .status-dot--pulse {
+    animation: none;
+  }
 }
 
 /* ─── columns ────────────────────────────────────────────────────────────── */
@@ -1315,20 +1507,45 @@ function isFailedStatus(status: RunStatus): boolean {
 }
 
 @keyframes shimmer {
-  0%   { background-position: 200% center; }
-  100% { background-position: -200% center; }
+  0% {
+    background-position: 200% center;
+  }
+  100% {
+    background-position: -200% center;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .skel { animation: none; background: var(--color-inset); }
+  .skel {
+    animation: none;
+    background: var(--color-inset);
+  }
 }
 
-.skel--pill    { height: 22px; width: 80px; }
-.skel--name    { height: 14px; width: 70%; }
-.skel--branch  { height: 12px; width: 90px; }
-.skel--trigger { height: 12px; width: 70px; }
-.skel--dur     { height: 12px; width: 50px; }
-.skel--time    { height: 12px; width: 70px; }
+.skel--pill {
+  height: 22px;
+  width: 80px;
+}
+.skel--name {
+  height: 14px;
+  width: 70%;
+}
+.skel--branch {
+  height: 12px;
+  width: 90px;
+}
+.skel--trigger {
+  height: 12px;
+  width: 70px;
+}
+.skel--dur {
+  height: 12px;
+  width: 50px;
+}
+.skel--time {
+  height: 12px;
+  width: 70px;
+}
 
 /* ─── error banner ────────────────────────────────────────────────────────── */
 .banner {
@@ -1361,7 +1578,9 @@ function isFailedStatus(status: RunStatus): boolean {
   text-underline-offset: 2px;
 }
 
-.banner-retry:hover { opacity: 0.8; }
+.banner-retry:hover {
+  opacity: 0.8;
+}
 
 /* ─── empty state ────────────────────────────────────────────────────────── */
 .empty-state {
@@ -1416,7 +1635,9 @@ function isFailedStatus(status: RunStatus): boolean {
   font-weight: 500;
   border-radius: var(--rounded);
   cursor: pointer;
-  transition: border-color var(--duration-fast), background-color var(--duration-fast);
+  transition:
+    border-color var(--duration-fast),
+    background-color var(--duration-fast);
 }
 
 .btn-secondary:hover {
@@ -1444,7 +1665,10 @@ function isFailedStatus(status: RunStatus): boolean {
   border-radius: var(--rounded);
   cursor: pointer;
   box-shadow: 0 5px 16px var(--color-primary-soft);
-  transition: background-color var(--duration-fast), transform var(--duration-fast), box-shadow var(--duration-fast);
+  transition:
+    background-color var(--duration-fast),
+    transform var(--duration-fast),
+    box-shadow var(--duration-fast);
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -1479,8 +1703,12 @@ function isFailedStatus(status: RunStatus): boolean {
 }
 
 @keyframes scrim-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .modal {
@@ -1499,13 +1727,23 @@ function isFailedStatus(status: RunStatus): boolean {
 }
 
 @keyframes modal-in {
-  from { opacity: 0; transform: translateY(14px) scale(0.98); }
-  to   { opacity: 1; transform: none; }
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .modal-scrim { animation: none; }
-  .modal       { animation: none; }
+  .modal-scrim {
+    animation: none;
+  }
+  .modal {
+    animation: none;
+  }
 }
 
 .modal-head {
@@ -1554,7 +1792,9 @@ function isFailedStatus(status: RunStatus): boolean {
   cursor: pointer;
   display: grid;
   place-items: center;
-  transition: color var(--duration-fast), background-color var(--duration-fast);
+  transition:
+    color var(--duration-fast),
+    background-color var(--duration-fast);
 }
 
 .modal-close:hover {
@@ -1619,7 +1859,9 @@ function isFailedStatus(status: RunStatus): boolean {
   color: var(--color-text);
   font-family: var(--font-sans);
   font-size: 0.86rem;
-  transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
+  transition:
+    border-color var(--duration-fast),
+    box-shadow var(--duration-fast);
 }
 
 .field-input::placeholder {
@@ -1667,7 +1909,9 @@ function isFailedStatus(status: RunStatus): boolean {
   font-size: 0.86rem;
   appearance: none;
   cursor: pointer;
-  transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
+  transition:
+    border-color var(--duration-fast),
+    box-shadow var(--duration-fast);
 }
 
 .field-select:focus {
@@ -1718,11 +1962,16 @@ function isFailedStatus(status: RunStatus): boolean {
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .spinner { animation: none; border-top-color: currentColor; }
+  .spinner {
+    animation: none;
+    border-top-color: currentColor;
+  }
 }
 .run-row {
   text-decoration: none;
@@ -1778,18 +2027,16 @@ function isFailedStatus(status: RunStatus): boolean {
 }
 .table-head,
 .run-row {
-  grid-template-columns: 108px minmax(140px, 1fr) minmax(
-      115px,
-      160px
-    ) 110px 70px 85px 90px;
+  grid-template-columns:
+    108px minmax(140px, 1fr) minmax(115px, 160px)
+    110px 70px 85px 90px;
 }
 @media (max-width: 1100px) {
   .table-head,
   .run-row {
-    grid-template-columns: 108px minmax(120px, 1fr) minmax(
-        100px,
-        140px
-      ) 80px 70px;
+    grid-template-columns:
+      108px minmax(120px, 1fr) minmax(100px, 140px)
+      80px 70px;
   }
   .col-trigger,
   .col-action,

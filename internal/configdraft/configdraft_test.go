@@ -56,7 +56,7 @@ func setup(t *testing.T) *fixture {
 	if e = configstate.EnsureProject(context.Background(), db, db, f.project); e != nil {
 		t.Fatal(e)
 	}
-	_, tok, e := auth.NewMCPTokenStore(db).Create(context.Background(), auth.MCPTokenInput{Name: "config fixture", ProjectIDs: []string{f.project}, ConfigGrants: []auth.MCPConfigGrant{{ProjectID: f.project, Read: true, Propose: true, Apply: true, Sections: append([]string(nil), Sections...), Operations: append([]string(nil), OperationTypes...)}}})
+	_, tok, e := auth.NewMCPTokenStore(db).Create(context.Background(), auth.MCPTokenInput{Name: "config fixture", ProjectIDs: []string{f.project}, ConfigGrants: []auth.MCPConfigGrant{{ProjectID: f.project, Read: true, Propose: true, Apply: true, Sections: append([]string(nil), Sections...), Operations: append([]string(nil), OperationTypes...), StageIDs: []string{"source", "test", "build", "deploy"}, JobIDs: []string{"git", "script", "image", "kube"}}}})
 	if e != nil {
 		t.Fatal(e)
 	}

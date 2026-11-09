@@ -159,3 +159,37 @@ func TestKubernetesContextProjectsSealedAdoptionSourceWithoutRewritingHistory(t 
 		}
 	}
 }
+
+func TestKubernetesV2CheckedOutcomeUsesCurrentPrivateVerifierAndPlanIdentity(t *testing.T) {
+	f := newFixture(t, storetest.Open(t))
+	legacy := addKubernetesLedgerFixture(t, f)
+	record := kubernetes.ReleaseRecord{ID: "release", RunID: f.root, NodeKey: legacy.NodeID, Revision: 4, State: "ready", Cleanup: kubernetes.CleanupVerified, OwnerFenced: true, PlanID: strings.Repeat("b", 64)}
+	if _, e := f.db.Exec(`INSERT INTO k8s_releases(id,run_id,node_key,project_id,connection_id,credential_id,mode,owner_epoch,revision,state,cleanup_state,owner_fenced,plan_cipher,plan_id,created_at,updated_at) VALUES(?, ?,?,'project','conn','kc','manifest','owner',4,'ready','verified',1,X'00',?,0,0)`, record.ID, record.RunID, record.NodeKey, record.PlanID); e != nil {
+		t.Fatal(e)
+	}
+	f.s.kubernetesReleaseVerifier = func(ctx context.Context, id string) (kubernetes.ReleaseRecord, error) {
+		if configstate.Queryer(ctx, f.db) != f.db {
+			t.Fatal("network check inside transaction")
+		}
+		return record, nil
+	}
+	ctx, e := f.s.kubernetesCheckContext(context.Background(), f.root)
+	if e != nil {
+		t.Fatal(e)
+	}
+	out := Outcome{Status: "success", KubernetesRelease: &KubernetesReleaseReceipt{ReleaseID: record.ID, SourceAttemptID: record.RunID, NodeKey: record.NodeKey, PlanID: record.PlanID, Revision: record.Revision, State: record.State, Cleanup: record.Cleanup}}
+	if !f.s.kubernetesOutcomeChecked(ctx, out) {
+		t.Fatal("verified v2 success could not be reused")
+	}
+	out.KubernetesRelease.NodeKey = "another-node"
+	if f.s.kubernetesOutcomeChecked(ctx, out) {
+		t.Fatal("release crossed frozen node identity")
+	}
+	out.KubernetesRelease.NodeKey = record.NodeKey
+	if _, e = f.db.Exec(`UPDATE k8s_releases SET revision=5 WHERE id=?`, record.ID); e != nil {
+		t.Fatal(e)
+	}
+	if f.s.kubernetesOutcomeChecked(ctx, out) {
+		t.Fatal("stale verifier reused after revision change")
+	}
+}

@@ -2,7 +2,7 @@ package chain
 
 import (
 	"context"
-	"log"
+	log "github.com/huangchengsir/pipewright/internal/logging"
 	"time"
 
 	"github.com/huangchengsir/pipewright/internal/run"
@@ -44,21 +44,21 @@ func NewHook(chains Service, runs run.Service, maxDepth int) func(ctx context.Co
 
 		upstream, err := runs.Get(hookCtx, runID)
 		if err != nil {
-			log.Printf("[chain] run %s: 取上游运行失败(跳过串联):%v", runID, err)
+			log.Printf("[chain] run %s: failed to load upstream run (chaining skipped): %v", runID, err)
 			return
 		}
 
 		nextDepth := upstream.Trigger.ChainDepth + 1
 		if nextDepth > maxDepth {
 			// 深度门:硬性兜底,拒绝继续串联(防无限链 / 配置成环)。
-			log.Printf("[chain] run %s(项目 %s):串联深度达上限 %d,停止串联(环路安全)",
+			log.Printf("[chain] run %s (project %s): chain depth limit %d reached; stopping chaining (loop protection)",
 				runID, upstream.ProjectID, maxDepth)
 			return
 		}
 
 		targets, err := chains.ListEnabled(hookCtx, upstream.ProjectID)
 		if err != nil {
-			log.Printf("[chain] 项目 %s:查下游目标失败(跳过串联):%v", upstream.ProjectID, err)
+			log.Printf("[chain] project %s: failed to query downstream targets (chaining skipped): %v", upstream.ProjectID, err)
 			return
 		}
 		if len(targets) == 0 {
@@ -71,7 +71,7 @@ func NewHook(chains Service, runs run.Service, maxDepth int) func(ctx context.Co
 
 		for _, t := range targets {
 			if ancestors[t.DownstreamProjectID] {
-				log.Printf("[chain] run %s:下游项目 %s 已在本串联链路径中,跳过(环路安全)",
+				log.Printf("[chain] run %s: downstream project %s is already in this chain path; skipping (loop protection)",
 					runID, t.DownstreamProjectID)
 				continue
 			}
@@ -83,11 +83,11 @@ func NewHook(chains Service, runs run.Service, maxDepth int) func(ctx context.Co
 				ChainDepth:       nextDepth,
 			})
 			if cerr != nil {
-				log.Printf("[chain] run %s → 下游项目 %s:创建下游运行失败(续建其余):%v",
+				log.Printf("[chain] run %s -> downstream project %s: failed to create downstream run (continuing with other targets): %v",
 					runID, t.DownstreamProjectID, cerr)
 				continue
 			}
-			log.Printf("[chain] run %s(项目 %s)成功 → 串联触发下游运行 %s(项目 %s,深度 %d)",
+			log.Printf("[chain] run %s (project %s) succeeded -> triggered downstream run %s (project %s, depth %d)",
 				runID, upstream.ProjectID, created.ID, t.DownstreamProjectID, nextDepth)
 		}
 	}

@@ -2,7 +2,7 @@ package httpapi
 
 import (
 	"context"
-	"log"
+	log "github.com/huangchengsir/pipewright/internal/logging"
 	"net/url"
 	"strconv"
 	"strings"
@@ -54,7 +54,7 @@ func NewNotifyHook(runs run.Service, notifySvc notify.Service, secretSrc *RunSec
 			durationMs                                           int64
 		)
 		if r, err := runs.Get(hookCtx, runID); err != nil {
-			log.Printf("[notify] run %s: 取运行元数据失败(用降级 vars):%v", runID, err)
+			log.Printf("[notify] run %s: failed to load run metadata (using fallback vars): %v", runID, err)
 		} else {
 			projectID = r.ProjectID
 			projectName = r.ProjectName
@@ -92,7 +92,7 @@ func NewNotifyHook(runs run.Service, notifySvc notify.Service, secretSrc *RunSec
 		// 全局。projectID 空(取数失败降级)→ 等价全局路径。按渠道渲染模板(无模板 → 平台默认,
 		// 5-2 行为不变)→ SendVia。RouteEventForProject 始终返回 nil;此处兜底防御。
 		if err := notifySvc.RouteEventForProject(hookCtx, projectID, event, vars); err != nil {
-			log.Printf("[notify] run %s: 事件 %s 路由 best-effort 失败:%v", runID, event, err)
+			log.Printf("[notify] run %s: best-effort routing failed for event %s: %v", runID, event, err)
 		}
 	}
 }
@@ -146,7 +146,7 @@ func NewApprovalNotifier(notifySvc notify.Service, signer *approval.Signer, publ
 			hookCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
 			if err := notifySvc.RouteEventForProject(hookCtx, projectID, notify.EventApprovalRequired, vars); err != nil {
-				log.Printf("[notify] run %s: 审批通知路由 best-effort 失败:%v", runID, err)
+				log.Printf("[notify] run %s: best-effort approval notification routing failed: %v", runID, err)
 			}
 		}()
 	}

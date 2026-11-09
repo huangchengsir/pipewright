@@ -81,14 +81,16 @@ export default {
     "source": "Ändert den Standardquellbranch; seine Existenz wurde nicht geprüft.",
     "limits": "Ändert Ressourcen-, Zeit- oder Wiederholungslimits.",
     "build": "Ändert unterstützte Build-Eingaben; es wurde kein Build ausgeführt.",
-    "display": "Ändert den Anzeigenamen; Reihenfolge und Topologie bleiben erhalten."
+    "display": "Ändert den Anzeigenamen; Reihenfolge und Topologie bleiben erhalten.",
+    "kubernetes": "Ändert die Kubernetes-Bereitstellung. Clusterrechte und Freigaben werden separat geprüft."
   },
   "sections": {
     "project": "Projekt",
     "pipeline": "Pipeline",
     "build": "Build",
     "step_limits": "Schrittgrenzen",
-    "source_and_impact": "Quelle und Auswirkungen"
+    "source_and_impact": "Quelle und Auswirkungen",
+    "kubernetes": "Kubernetes"
   },
   "operations": {
     "project_set_name": "Projekt umbenennen",
@@ -97,7 +99,9 @@ export default {
     "job_rename": "Aufgabe umbenennen",
     "step_set_limits": "Schrittgrenzen ändern",
     "build_set": "Build-Parameter ändern",
-    "unknown": "Nicht unterstützte Änderung"
+    "unknown": "Nicht unterstützte Änderung",
+    "kubernetes_add": "Kubernetes-Knoten hinzufügen",
+    "kubernetes_update": "Kubernetes-Knoten ändern"
   },
   "fields": {
     "name": "Name",
@@ -110,7 +114,8 @@ export default {
     "toolchainLanguage": "Werkzeugkettensprache",
     "toolchainVersion": "Werkzeugkettenversion",
     "dockerfilePath": "Dockerfile-Pfad",
-    "context": "Build-Kontext"
+    "context": "Build-Kontext",
+    "kubernetes": "Kubernetes-Konfiguration"
   },
   "states": {
     "pending": "Ausstehend",
@@ -144,5 +149,10 @@ export default {
   "maintenanceDetails": "Grenzen und Details der Bearbeitung",
   "maintenanceReady": "Ein passender Beendigungsnachweis liegt vor. Prüfen Sie ihn vor dem Abschluss der Aktivität.",
   "maintenanceNeedsReview": "Das Ende des ursprünglichen Vorgangs ist nicht bestätigt. Dieser Eintrag bleibt erhalten.",
-  "operationSummary": "Bei verlorener Antwort zuerst den ursprünglichen Vorgang prüfen und erst dann über eine Sperre entscheiden."
+  "operationSummary": "Bei verlorener Antwort zuerst den ursprünglichen Vorgang prüfen und erst dann über eine Sperre entscheiden.",
+  "kubernetesStages": "Erlaubte Kubernetes-Stufen-IDs",
+  "kubernetesJobs": "Erlaubte Kubernetes-Auftrags-IDs",
+  "kubernetesScopeHint": "Exakte IDs vorhandener Stufen eingeben. Änderungen erfordern auch Auftrags-IDs. Keine Platzhalter oder geerbten Rechte.",
+  "kubernetesReview": "Kubernetes-Konfiguration",
+  "kubernetesReviewHint": "Ressourcen, Befehle und Zustandsprüfungen kontrollieren. Private Werte bleiben verschlüsselt. Die Freigabe ändert nur gespeicherte Einstellungen, führt keine Bereitstellung aus und ändert kein entferntes Git."
 }

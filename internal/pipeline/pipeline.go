@@ -147,13 +147,18 @@ func RenderYAML(spec Spec) (string, error) { return renderYAML(spec) }
 
 // service 是 store 支撑的 Service 实现。
 type service struct {
-	db *sql.DB
+	db               *sql.DB
+	releaseProtector ReleaseConfigProtector
 }
 
 // New 构造 Service(经参数化 SQL 触库)。不在此做任何重活
 // (无 init() 副作用、无包级重对象,避免抬高空载内存)。
-func New(db *sql.DB) Service {
-	return &service{db: db}
+func New(db *sql.DB, opts ...ServiceOption) Service {
+	s := &service{db: db}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *service) Get(ctx context.Context, projectID string) (*Config, error) {
@@ -241,17 +246,19 @@ func (s *service) Save(ctx context.Context, projectID string, spec Spec) (*Confi
 		return nil, err
 	}
 
-	specJSON, err := json.Marshal(normalized)
-	if err != nil {
-		return nil, fmt.Errorf("pipeline: marshal spec: %w", err)
-	}
-	renderedYAML, err := renderYAML(normalized)
-	if err != nil {
-		return nil, err
-	}
-
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 	err = configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+		if err := s.protectReleaseConfigs(txctx, projectID, &normalized); err != nil {
+			return err
+		}
+		specJSON, err := json.Marshal(normalized)
+		if err != nil {
+			return err
+		}
+		renderedYAML, err := renderYAML(normalized)
+		if err != nil {
+			return err
+		}
 		_, writeErr := q.ExecContext(txctx,
 			`UPDATE pipeline_configs
 		 SET spec_json = ?, spec_yaml = ?, status = ?, updated_at = ?, saved_at = ?
@@ -340,6 +347,7 @@ func (s *service) createDefault(ctx context.Context, projectID string) (*Config,
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
 	err = configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+
 		_, writeErr := q.ExecContext(txctx,
 			`INSERT INTO pipeline_configs (project_id, spec_json, spec_yaml, status, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?) `+

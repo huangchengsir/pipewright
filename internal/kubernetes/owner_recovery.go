@@ -19,6 +19,10 @@ func (s *Service) SettledOwners(ctx context.Context, owners []string) ([]string,
 			for _, query := range []string{
 				`SELECT COUNT(*) FROM k8s_operations WHERE owner_epoch=? AND (owner_fenced=0 OR cleanup_state<>'verified' OR (retired=0 AND business_state NOT IN ('ready','unchanged','failed','superseded')))`,
 				`SELECT COUNT(*) FROM k8s_workload_holds WHERE owner_epoch=?`,
+				`SELECT COUNT(*) FROM k8s_releases WHERE owner_epoch=? AND (owner_fenced=0 OR cleanup_state<>'verified' OR state IN ('paused','resume_requested','running','outcome_unknown'))`,
+				`SELECT COUNT(*) FROM k8s_resource_gates WHERE owner_epoch=?`,
+				`SELECT COUNT(*) FROM k8s_release_continuations WHERE owner_epoch=? AND state IN ('pending','delivering','running')`,
+				`SELECT COUNT(*) FROM k8s_release_runtime WHERE owner_epoch=? AND cleanup_state<>'verified'`,
 				`SELECT COUNT(*) FROM k8s_runtime_leases WHERE owner_epoch=? AND cleanup_state<>'verified'`,
 			} {
 				var n int

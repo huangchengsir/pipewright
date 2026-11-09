@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"github.com/huangchengsir/pipewright/internal/configstate"
-	"log"
+	log "github.com/huangchengsir/pipewright/internal/logging"
 	"strings"
 	"time"
 )
@@ -144,7 +144,7 @@ func (s *service) Reclaim(ctx context.Context, projectID string, prNumber int) e
 	if s.recordDeleter != nil && strings.TrimSpace(env.Subdomain) != "" {
 		if cfg, cerr := s.store.getConfig(ctx, projectID); cerr == nil && cfg != nil && strings.TrimSpace(cfg.DNSProviderID) != "" {
 			if derr := s.recordDeleter.DeleteRecord(ctx, cfg.DNSProviderID, env.Subdomain); derr != nil {
-				log.Printf("[previewenv] 回收 PR #%d:删 DNS 记录 %s 失败(不阻断,请手动清):%v", prNumber, env.Subdomain, derr)
+				log.Printf("[previewenv] Reclaiming PR #%d: failed to delete DNS record %s (non-blocking; remove manually): %v", prNumber, env.Subdomain, derr)
 			}
 		}
 	}
@@ -184,7 +184,7 @@ func (s *service) SweepReclaim(ctx context.Context, checker PRStateChecker) (int
 			continue
 		}
 		reclaimed++
-		log.Printf("[previewenv] 自动回收预览环境:project=%s pr=%d subdomain=%s state=%s",
+		log.Printf("[previewenv] Automatically reclaimed preview environment: project=%s pr=%d subdomain=%s state=%s",
 			env.ProjectID, env.PRNumber, env.Subdomain, state)
 	}
 	return reclaimed, nil

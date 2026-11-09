@@ -81,14 +81,16 @@ export default {
     "source": "既定のソースブランチを変更します。存在は未確認です。",
     "limits": "リソース、タイムアウト、再試行の制限を変更します。",
     "build": "対応するビルド入力を変更します。ビルドは未実行です。",
-    "display": "表示名を変更します。実行順序と構造は保持されます。"
+    "display": "表示名を変更します。実行順序と構造は保持されます。",
+    "kubernetes": "Kubernetes 配信設定を変更します。クラスタ権限とリリース承認は個別に確認されます。"
   },
   "sections": {
     "project": "プロジェクト",
     "pipeline": "パイプライン",
     "build": "ビルド",
     "step_limits": "ステップ制限",
-    "source_and_impact": "設定元と影響"
+    "source_and_impact": "設定元と影響",
+    "kubernetes": "Kubernetes"
   },
   "operations": {
     "project_set_name": "プロジェクト名を変更",
@@ -97,7 +99,9 @@ export default {
     "job_rename": "ジョブ名を変更",
     "step_set_limits": "ステップ制限を変更",
     "build_set": "ビルド設定を変更",
-    "unknown": "未対応の変更"
+    "unknown": "未対応の変更",
+    "kubernetes_add": "Kubernetes ノードを追加",
+    "kubernetes_update": "Kubernetes ノードを更新"
   },
   "fields": {
     "name": "名前",
@@ -110,7 +114,8 @@ export default {
     "toolchainLanguage": "ツールチェーン言語",
     "toolchainVersion": "ツールチェーン版",
     "dockerfilePath": "Dockerfile パス",
-    "context": "ビルドコンテキスト"
+    "context": "ビルドコンテキスト",
+    "kubernetes": "Kubernetes 設定"
   },
   "states": {
     "pending": "未確定",
@@ -144,5 +149,10 @@ export default {
   "maintenanceDetails": "処理の範囲と詳細",
   "maintenanceReady": "一致する終了記録があります。確認してからアクティビティを終了できます。",
   "maintenanceNeedsReview": "元の操作の終了は確認できていません。この記録は保持されます。",
-  "operationSummary": "応答が失われた場合は、隔離するか判断する前に元の操作を確認してください。"
+  "operationSummary": "応答が失われた場合は、隔離するか判断する前に元の操作を確認してください。",
+  "kubernetesStages": "許可する Kubernetes ステージ ID",
+  "kubernetesJobs": "許可する Kubernetes ジョブ ID",
+  "kubernetesScopeHint": "既存ステージの正確な ID を入力。更新にはジョブ ID も必要です。ワイルドカードや旧権限の継承はありません。",
+  "kubernetesReview": "Kubernetes 設定",
+  "kubernetesReviewHint": "リソース、コマンド、ヘルスチェックを確認してください。非公開値は封印されます。承認は保存済み設定のみを変更し、リリースやリモート Git 更新は実行しません。"
 }

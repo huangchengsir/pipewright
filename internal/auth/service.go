@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
+	log "github.com/huangchengsir/pipewright/internal/logging"
 	"sync"
 	"time"
 )
@@ -94,7 +94,7 @@ func (s *Service) Bootstrap(username, password string) error {
 	}
 	if password == "" {
 		// 无口令且无 admin:提示如何设置,但不阻断服务。
-		log.Printf("[auth] 警告:未设置管理员账号。请通过 PIPEWRIGHT_ADMIN_PASSWORD 环境变量设置口令后重启。")
+		log.Printf("[auth] Warning: no administrator account configured. Set PIPEWRIGHT_ADMIN_PASSWORD and restart.")
 		return nil
 	}
 	if username == "" {
@@ -113,7 +113,7 @@ func (s *Service) Bootstrap(username, password string) error {
 	if err != nil {
 		return fmt.Errorf("auth: bootstrap insert: %w", err)
 	}
-	log.Printf("[auth] 管理员账号已初始化:username=%s", username)
+	log.Printf("[auth] Administrator account initialized: username=%s", username)
 	return nil
 }
 

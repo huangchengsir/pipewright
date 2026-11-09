@@ -12,72 +12,112 @@
  *   3. Derive per-stage aggregate status from contained step statuses.
  */
 
-import type { RunStep, StepStatus } from '../../api/runs'
-import type { PipelineStage } from '../../api/pipeline'
-import { t } from '../../i18n'
-import type { RetryContext } from '../../api/runRetry'
-import { retryNodeLabel } from '../../api/runRetry'
+import type { RunStep, StepStatus } from "../../api/runs";
+import type { PipelineStage } from "../../api/pipeline";
+import { t } from "../../i18n";
+import type { RetryContext } from "../../api/runRetry";
+import { retryNodeLabel } from "../../api/runRetry";
 
 /** Exact frozen identities only. Never join a recovery node by display name. */
-export function buildFrozenRunStages(context: RetryContext, steps: ReadonlyArray<RunStep>): RunStage[] {
-  const byStage = new Map<string, RunStage>()
-  const nodes = new Map(context.graph.nodes.map(n => [n.key, n]))
-  const actual = new Map(steps.map(s => [s.id, s]))
+export function buildFrozenRunStages(
+  context: RetryContext,
+  steps: ReadonlyArray<RunStep>,
+): RunStage[] {
+  const byStage = new Map<string, RunStage>();
+  const nodes = new Map(context.graph.nodes.map((n) => [n.key, n]));
+  const actual = new Map(steps.map((s) => [s.id, s]));
   for (const item of context.nodes) {
-    const n = item.node
-    let stage = byStage.get(n.executionStageId)
+    const n = item.node;
+    let stage = byStage.get(n.executionStageId);
     if (!stage) {
-      stage = { id: n.executionStageId, name: context.graph.stages?.find(s => s.id === n.executionStageId)?.name ?? n.stageId, needs: [], steps: [], status: 'pending', gate: false, blocked: false, matrixAxes: n.axes ?? undefined }
-      byStage.set(stage.id, stage)
+      stage = {
+        id: n.executionStageId,
+        name:
+          context.graph.stages?.find((s) => s.id === n.executionStageId)
+            ?.name ?? n.stageId,
+        needs: [],
+        steps: [],
+        status: "pending",
+        gate: false,
+        blocked: false,
+        matrixAxes: n.axes ?? undefined,
+      };
+      byStage.set(stage.id, stage);
     }
-    stage.gate ||= n.controlKey === 'gate'
-    const source = item.attemptStepId ? actual.get(item.attemptStepId) : undefined
-    const status = item.decision.status
-    const displayStatus: StepStatus = status === 'outcome_unknown' ? 'failed' : ['pending', 'running', 'waiting_approval', 'success', 'failed', 'skipped'].includes(status ?? '') ? status as StepStatus : 'pending'
-    const reused = item.decision.action === 'reuse'
-    stage.steps.push({ id: n.key, name: retryNodeLabel(n), status: displayStatus, startedAt: reused ? null : source?.startedAt ?? null, finishedAt: reused ? null : source?.finishedAt ?? null, durationMs: reused ? null : source?.durationMs ?? null })
+    stage.gate ||= n.controlKey === "gate";
+    const source = item.attemptStepId
+      ? actual.get(item.attemptStepId)
+      : undefined;
+    const status = item.decision.status;
+    const displayStatus: StepStatus =
+      status === "outcome_unknown"
+        ? "failed"
+        : [
+              "pending",
+              "running",
+              "waiting_approval",
+              "waiting_action",
+              "success",
+              "failed",
+              "skipped",
+            ].includes(status ?? "")
+          ? (status as StepStatus)
+          : "pending";
+    const reused = item.decision.action === "reuse";
+    stage.steps.push({
+      id: n.key,
+      name: retryNodeLabel(n),
+      status: displayStatus,
+      startedAt: reused ? null : (source?.startedAt ?? null),
+      finishedAt: reused ? null : (source?.finishedAt ?? null),
+      durationMs: reused ? null : (source?.durationMs ?? null),
+    });
   }
   for (const edge of context.graph.edges) {
-    const from = nodes.get(edge.from)?.executionStageId; const to = nodes.get(edge.to)?.executionStageId
+    const from = nodes.get(edge.from)?.executionStageId;
+    const to = nodes.get(edge.to)?.executionStageId;
     if (from && to && from !== to) {
-      const stage = byStage.get(to)
-      if (stage && !stage.needs.includes(from)) stage.needs.push(from)
+      const stage = byStage.get(to);
+      if (stage && !stage.needs.includes(from)) stage.needs.push(from);
     }
   }
   for (const stage of byStage.values()) {
-    stage.status = deriveStageStatus(stage.steps)
-    stage.hasBlockedNodes = context.nodes.some(n => n.node.executionStageId === stage.id && n.decision.action === 'blocked')
+    stage.status = deriveStageStatus(stage.steps);
+    stage.hasBlockedNodes = context.nodes.some(
+      (n) =>
+        n.node.executionStageId === stage.id && n.decision.action === "blocked",
+    );
   }
-  return topoSort([...byStage.values()])
+  return topoSort([...byStage.values()]);
 }
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 /** A stage rendered in the DAG — one column. */
 export interface RunStage {
-  matrixAxes?: Record<string, string>
-  hasBlockedNodes?: boolean
-  id: string
-  name: string
+  matrixAxes?: Record<string, string>;
+  hasBlockedNodes?: boolean;
+  id: string;
+  name: string;
   /** Upstream stage IDs (declared needs). Empty array = no explicit deps. */
-  needs: string[]
-  steps: RunStep[]
+  needs: string[];
+  steps: RunStep[];
   /** Derived from contained step statuses. */
-  status: StepStatus
+  status: StepStatus;
   /** Gate flag from pipeline spec. */
-  gate: boolean
+  gate: boolean;
   /**
    * 阶段从未执行(无任何 step)却因整轮运行已终态失败而被卡住——典型:更早的阶段
    * (如源码克隆)失败,下游阶段根本没机会跑。此时不应显示「尚无步骤 / 等待」(误导成
    * 还没开始 / 还在跑),而要明确标为「未执行」(失败语义)。仅在运行终态失败时才置真。
    */
-  blocked: boolean
+  blocked: boolean;
 }
 
 /** An edge in the DAG (upstream → downstream). */
 export interface DagEdge {
-  from: string
-  to: string
+  from: string;
+  to: string;
 }
 
 // ─── Status derivation ───────────────────────────────────────────────────────
@@ -87,13 +127,14 @@ export interface DagEdge {
  * Priority: failed > running > skipped > pending > success.
  */
 export function deriveStageStatus(steps: RunStep[]): StepStatus {
-  if (steps.length === 0) return 'pending'
-  if (steps.some((s) => s.status === 'failed')) return 'failed'
-  if (steps.some((s) => s.status === 'running')) return 'running'
-  if (steps.every((s) => s.status === 'success')) return 'success'
-  if (steps.every((s) => s.status === 'skipped')) return 'skipped'
-  if (steps.some((s) => s.status === 'skipped')) return 'skipped'
-  return 'pending'
+  if (steps.length === 0) return "pending";
+  if (steps.some((s) => s.status === "failed")) return "failed";
+  if (steps.some((s) => s.status === "running")) return "running";
+  if (steps.some((s) => s.status === "waiting_action")) return "waiting_action";
+  if (steps.every((s) => s.status === "success")) return "success";
+  if (steps.every((s) => s.status === "skipped")) return "skipped";
+  if (steps.some((s) => s.status === "skipped")) return "skipped";
+  return "pending";
 }
 
 // ─── Step→stage matching ─────────────────────────────────────────────────────
@@ -103,7 +144,10 @@ export function deriveStageStatus(steps: RunStep[]): StepStatus {
  * Steps are matched against stage names to group them.
  */
 function normalise(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9一-鿿]+/g, ' ').trim()
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9一-鿿]+/g, " ")
+    .trim();
 }
 
 /**
@@ -117,32 +161,32 @@ export function findStageForStep(
   // 0. 节点级:step 自带所属阶段名(后端 run_steps.stage)时按阶段名精确归组,
   //    一个阶段聚合其全部节点 step(进度图阶段框可展开看各节点)。最可靠,优先。
   if (step.stage) {
-    const normStage = normalise(step.stage)
+    const normStage = normalise(step.stage);
     for (const s of stages) {
-      if (normalise(s.name) === normStage) return s.id
+      if (normalise(s.name) === normStage) return s.id;
     }
   }
-  const normStep = normalise(step.name)
+  const normStep = normalise(step.name);
   // 1. Exact name match (case-insensitive)
   for (const s of stages) {
-    if (normalise(s.name) === normStep) return s.id
+    if (normalise(s.name) === normStep) return s.id;
   }
   // 2. Step name starts with stage name
   for (const s of stages) {
-    const normStage = normalise(s.name)
-    if (normStage && normStep.startsWith(normStage)) return s.id
+    const normStage = normalise(s.name);
+    if (normStage && normStep.startsWith(normStage)) return s.id;
   }
   // 3. Stage name contained in step name
   for (const s of stages) {
-    const normStage = normalise(s.name)
-    if (normStage && normStep.includes(normStage)) return s.id
+    const normStage = normalise(s.name);
+    if (normStage && normStep.includes(normStage)) return s.id;
   }
   // 4. Step name contained in stage name
   for (const s of stages) {
-    const normStage = normalise(s.name)
-    if (normStage && normStage.includes(normStep)) return s.id
+    const normStage = normalise(s.name);
+    if (normStage && normStage.includes(normStep)) return s.id;
   }
-  return null
+  return null;
 }
 
 // ─── Build DAG stages ────────────────────────────────────────────────────────
@@ -152,7 +196,11 @@ export function findStageForStep(
  * partial_failed/rolled_back 也视为失败终态(运行没全绿,零 step 阶段确实没正常跑完)。
  */
 function isRunFailed(runStatus?: string): boolean {
-  return runStatus === 'failed' || runStatus === 'partial_failed' || runStatus === 'rolled_back'
+  return (
+    runStatus === "failed" ||
+    runStatus === "partial_failed" ||
+    runStatus === "rolled_back"
+  );
 }
 
 /**
@@ -168,7 +216,7 @@ export function buildRunStages(
   pipelineStages: ReadonlyArray<PipelineStage>,
   runStatus?: string,
 ): RunStage[] {
-  const runFailed = isRunFailed(runStatus)
+  const runFailed = isRunFailed(runStatus);
   if (pipelineStages.length === 0) {
     // No pipeline spec: treat each step as its own stage (pure linear)
     return steps.map((step) => ({
@@ -179,32 +227,34 @@ export function buildRunStages(
       status: step.status,
       gate: false,
       blocked: false,
-    }))
+    }));
   }
 
   // Map stageId → steps bucket
-  const buckets = new Map<string, RunStep[]>()
-  const unmatched: RunStep[] = []
+  const buckets = new Map<string, RunStep[]>();
+  const unmatched: RunStep[] = [];
   for (const stage of pipelineStages) {
-    buckets.set(stage.id, [])
+    buckets.set(stage.id, []);
   }
   for (const step of steps) {
-    const stageId = findStageForStep(step, pipelineStages)
+    const stageId = findStageForStep(step, pipelineStages);
     if (stageId && buckets.has(stageId)) {
-      buckets.get(stageId)!.push(step)
+      buckets.get(stageId)!.push(step);
     } else {
-      unmatched.push(step)
+      unmatched.push(step);
     }
   }
 
   // 只画「真有 job」的阶段:未配置 job 的空阶段(占位)不进拓扑图,避免冒充已执行
   // (动态阶段语义,与后端 dagrun.executableStages 一致;存量 4 阶段 spec 也即时受益)。
   // 被剔除阶段的 id 从 needs 中清理,避免悬挂依赖产生指向不存在节点的边。
-  const kept = new Set(pipelineStages.filter((s) => (s.jobs?.length ?? 0) > 0).map((s) => s.id))
+  const kept = new Set(
+    pipelineStages.filter((s) => (s.jobs?.length ?? 0) > 0).map((s) => s.id),
+  );
   const result: RunStage[] = pipelineStages
     .filter((stage) => kept.has(stage.id))
     .map((stage) => {
-      const stageSteps = buckets.get(stage.id) ?? []
+      const stageSteps = buckets.get(stage.id) ?? [];
       return {
         id: stage.id,
         name: stage.name,
@@ -214,23 +264,23 @@ export function buildRunStages(
         gate: stage.gate ?? false,
         // 运行已终态失败且本阶段无任何 step → 它根本没机会执行(被上游失败卡住),标 blocked。
         blocked: runFailed && stageSteps.length === 0,
-      }
-    })
+      };
+    });
 
   // Append unmatched steps as a synthetic stage so they're visible
   if (unmatched.length > 0) {
     result.push({
-      id: '_unmatched',
-      name: t('run.otherSteps'),
+      id: "_unmatched",
+      name: t("run.otherSteps"),
       needs: [],
       steps: unmatched,
       status: deriveStageStatus(unmatched),
       gate: false,
       blocked: false,
-    })
+    });
   }
 
-  return result
+  return result;
 }
 
 // ─── Build DAG edges ─────────────────────────────────────────────────────────
@@ -240,22 +290,22 @@ export function buildRunStages(
  * Falls back to linear chain when no stage has explicit needs.
  */
 export function buildDagEdges(stages: ReadonlyArray<RunStage>): DagEdge[] {
-  const hasNeeds = stages.some((s) => s.needs.length > 0)
+  const hasNeeds = stages.some((s) => s.needs.length > 0);
   if (hasNeeds) {
-    const edges: DagEdge[] = []
+    const edges: DagEdge[] = [];
     for (const s of stages) {
       for (const n of s.needs) {
-        edges.push({ from: n, to: s.id })
+        edges.push({ from: n, to: s.id });
       }
     }
-    return edges
+    return edges;
   }
   // Linear fallback
-  const edges: DagEdge[] = []
+  const edges: DagEdge[] = [];
   for (let i = 1; i < stages.length; i++) {
-    edges.push({ from: stages[i - 1].id, to: stages[i].id })
+    edges.push({ from: stages[i - 1].id, to: stages[i].id });
   }
-  return edges
+  return edges;
 }
 
 // ─── Topological sort ────────────────────────────────────────────────────────
@@ -266,37 +316,37 @@ export function buildDagEdges(stages: ReadonlyArray<RunStage>): DagEdge[] {
  * Uses Kahn's algorithm (BFS).
  */
 export function topoSort(stages: ReadonlyArray<RunStage>): RunStage[] {
-  const byId = new Map(stages.map((s) => [s.id, s]))
+  const byId = new Map(stages.map((s) => [s.id, s]));
   // Build in-degree + adjacency for stages we actually have
-  const indegree = new Map<string, number>()
-  const children = new Map<string, string[]>()
+  const indegree = new Map<string, number>();
+  const children = new Map<string, string[]>();
   for (const s of stages) {
-    if (!indegree.has(s.id)) indegree.set(s.id, 0)
-    if (!children.has(s.id)) children.set(s.id, [])
+    if (!indegree.has(s.id)) indegree.set(s.id, 0);
+    if (!children.has(s.id)) children.set(s.id, []);
     for (const n of s.needs) {
       if (byId.has(n)) {
-        indegree.set(s.id, (indegree.get(s.id) ?? 0) + 1)
-        children.set(n, [...(children.get(n) ?? []), s.id])
+        indegree.set(s.id, (indegree.get(s.id) ?? 0) + 1);
+        children.set(n, [...(children.get(n) ?? []), s.id]);
       }
     }
   }
-  const queue = stages.filter((s) => (indegree.get(s.id) ?? 0) === 0)
-  const result: RunStage[] = []
+  const queue = stages.filter((s) => (indegree.get(s.id) ?? 0) === 0);
+  const result: RunStage[] = [];
   while (queue.length > 0) {
-    const node = queue.shift()!
-    result.push(node)
+    const node = queue.shift()!;
+    result.push(node);
     for (const childId of children.get(node.id) ?? []) {
-      const deg = (indegree.get(childId) ?? 1) - 1
-      indegree.set(childId, deg)
+      const deg = (indegree.get(childId) ?? 1) - 1;
+      indegree.set(childId, deg);
       if (deg === 0) {
-        const child = byId.get(childId)
-        if (child) queue.push(child)
+        const child = byId.get(childId);
+        if (child) queue.push(child);
       }
     }
   }
   // Append any unreachable (cycles in data) at end
   for (const s of stages) {
-    if (!result.find((r) => r.id === s.id)) result.push(s)
+    if (!result.find((r) => r.id === s.id)) result.push(s);
   }
-  return result
+  return result;
 }

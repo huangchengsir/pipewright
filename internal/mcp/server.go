@@ -8,8 +8,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	log "github.com/huangchengsir/pipewright/internal/logging"
 	"io"
-	"log"
 	"regexp"
 	"sort"
 	"strings"
@@ -243,7 +243,7 @@ func NewServer(d Dependencies, verify VerifyFunc, requestContexts ...context.Con
 			auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 			defer cancel()
 			if err := d.Audit.Record(auditCtx, audit.Entry{Actor: "mcp:" + t.ID, Action: "mcp_pipeline.trigger", TargetType: "run", TargetID: rn.ID, Detail: map[string]any{"projectId": in.ProjectID, "dispatchState": rn.DispatchState}}); err != nil {
-				log.Print("[mcp] trigger audit write failed")
+				log.Printf("[mcp] trigger audit write failed")
 			}
 		}
 		out := d.triggerSummary(rn)
@@ -366,6 +366,7 @@ func addTool[In any](s *sdk.Server, name string, readonly bool, input map[string
 		}
 		dec := json.NewDecoder(bytes.NewReader(req.Params.Arguments))
 		dec.DisallowUnknownFields()
+		dec.UseNumber()
 		if err := dec.Decode(&in); err != nil {
 			return toolError(ErrInvalidArgument), nil
 		}

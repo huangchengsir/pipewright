@@ -81,14 +81,16 @@ export default {
     "source": "기본 소스 브랜치를 변경합니다. 실제 존재 여부는 확인하지 않았습니다.",
     "limits": "리소스, 시간 제한 또는 재시도 제한을 변경합니다.",
     "build": "지원되는 빌드 입력을 변경합니다. 빌드는 실행하지 않았습니다.",
-    "display": "표시 이름을 변경합니다. 실행 순서와 구조는 유지됩니다."
+    "display": "표시 이름을 변경합니다. 실행 순서와 구조는 유지됩니다.",
+    "kubernetes": "Kubernetes 배포 설정을 변경합니다. 클러스터 권한과 릴리스 승인은 별도로 확인합니다."
   },
   "sections": {
     "project": "프로젝트",
     "pipeline": "파이프라인",
     "build": "빌드",
     "step_limits": "단계 제한",
-    "source_and_impact": "소스 및 영향"
+    "source_and_impact": "소스 및 영향",
+    "kubernetes": "Kubernetes"
   },
   "operations": {
     "project_set_name": "프로젝트 이름 변경",
@@ -97,7 +99,9 @@ export default {
     "job_rename": "작업 이름 변경",
     "step_set_limits": "단계 제한 변경",
     "build_set": "빌드 매개변수 변경",
-    "unknown": "지원하지 않는 변경"
+    "unknown": "지원하지 않는 변경",
+    "kubernetes_add": "Kubernetes 노드 추가",
+    "kubernetes_update": "Kubernetes 노드 수정"
   },
   "fields": {
     "name": "이름",
@@ -110,7 +114,8 @@ export default {
     "toolchainLanguage": "도구 체인 언어",
     "toolchainVersion": "도구 체인 버전",
     "dockerfilePath": "Dockerfile 경로",
-    "context": "빌드 컨텍스트"
+    "context": "빌드 컨텍스트",
+    "kubernetes": "Kubernetes 설정"
   },
   "states": {
     "pending": "미결",
@@ -144,5 +149,10 @@ export default {
   "maintenanceDetails": "처리 범위 및 세부 정보",
   "maintenanceReady": "일치하는 종료 기록이 있습니다. 확인 후 활동을 종료할 수 있습니다.",
   "maintenanceNeedsReview": "원래 작업의 종료가 아직 확인되지 않았습니다. 이 기록은 유지됩니다.",
-  "operationSummary": "응답이 유실되면 격리 여부를 결정하기 전에 원래 작업을 확인하세요."
+  "operationSummary": "응답이 유실되면 격리 여부를 결정하기 전에 원래 작업을 확인하세요.",
+  "kubernetesStages": "허용된 Kubernetes 단계 ID",
+  "kubernetesJobs": "허용된 Kubernetes 작업 ID",
+  "kubernetesScopeHint": "기존 단계의 정확한 ID를 입력하세요. 수정에는 작업 ID도 필요합니다. 와일드카드와 기존 권한 상속은 지원하지 않습니다.",
+  "kubernetesReview": "Kubernetes 설정",
+  "kubernetesReviewHint": "리소스, 명령, 상태 점검을 검토하세요. 비공개 값은 봉인됩니다. 승인은 저장된 설정만 변경하며 릴리스나 원격 Git 수정은 실행하지 않습니다."
 }

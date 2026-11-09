@@ -25,15 +25,15 @@ const timer = setInterval(() => { now.value = Date.now() }, 1000)
 const draftId = computed(() => typeof route.params.id === 'string' ? route.params.id : '')
 const knownStates = new Set(['active', 'expired', 'invalidated', 'applied', 'none', 'granted', 'rejected', 'revoked', 'consumed', 'not_checked', 'passed', 'blocked', 'unknown', 'stale', 'failed', 'not_applicable'])
 const knownChecks = new Set(['structural', 'crossSection', 'authorization', 'policy', 'sourceApplicability'])
-const knownFields = new Set(['name', 'defaultBranch', 'timeoutSeconds', 'retries', 'cpu', 'memory', 'buildModel', 'toolchainLanguage', 'toolchainVersion', 'dockerfilePath', 'context'])
-const knownImpacts = new Set(['identity', 'source', 'limits', 'build', 'display'])
+const knownFields = new Set(['name', 'defaultBranch', 'timeoutSeconds', 'retries', 'cpu', 'memory', 'buildModel', 'toolchainLanguage', 'toolchainVersion', 'dockerfilePath', 'context', 'kubernetes'])
+const knownImpacts = new Set(['identity', 'source', 'limits', 'build', 'display', 'kubernetes'])
 const knownTypes = new Set<string>(MCP_CONFIG_OPERATIONS)
 const expired = computed(() => !review.value || !Number.isFinite(Date.parse(review.value.expiresAt)) || Date.parse(review.value.expiresAt) <= now.value)
 const granted = computed(() => review.value?.approval.state === 'granted' && Number.isFinite(Date.parse(review.value.approval.expiresAt ?? '')) && Date.parse(review.value.approval.expiresAt!) > now.value)
 function scalar(value: unknown): boolean { return value == null || typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value)) }
 const complete = computed(() => {
   const item = review.value
-  return !!item && item.complete === true && item.draftId === draftId.value && !!item.reviewDigest && !!item.baseRevision && !!item.policyVersion && Array.isArray(item.diff) && item.diff.length > 0 && item.diff.length <= 32 && item.diff.every(change => knownTypes.has(change.type) && knownFields.has(change.field) && scalar(change.before) && scalar(change.after))
+  return !!item && item.complete === true && item.draftId === draftId.value && !!item.reviewDigest && !!item.baseRevision && !!item.policyVersion && Array.isArray(item.diff) && item.diff.length > 0 && item.diff.length <= 32 && item.diff.every(change => knownTypes.has(change.type) && knownFields.has(change.field) && scalar(change.before) && scalar(change.after) && (change.field !== 'kubernetes' || (item.kubernetesReview?.filter(detail => detail.stageId === change.stageId && detail.jobId === change.jobId && typeof detail.after === 'string' && detail.after.length > 0).length === 1)))
 })
 const canApprove = computed(() => complete.value && !expired.value && !granted.value && review.value?.state === 'active' && review.value.validation.state === 'passed' && review.value.validation.applyAllowed === true && review.value.approval.reason !== 'apply_disabled' && !loading.value && !approving.value && !approvalUncertain.value && acknowledged.value)
 function date(value?: string): string {
@@ -141,6 +141,14 @@ onBeforeUnmount(() => { alive = false; generation++; controller?.abort(); clearI
           <p class="review-field">{{ knownFields.has(change.field) ? t(`mcpConfig.fields.${change.field}`) : t('mcpConfig.withheld') }}</p>
           <p v-if="knownImpacts.has(change.impact)" class="review-impact">{{ t(`mcpConfig.impacts.${change.impact}`) }}</p>
           <div class="review-values"><div><span>{{ t('mcpConfig.before') }}</span><pre>{{ valueText(change.before) }}</pre></div><div class="review-value--after"><span>{{ t('mcpConfig.after') }}</span><pre>{{ valueText(change.after) }}</pre></div></div>
+        </article>
+      </section>
+      <section v-if="review.kubernetesReview?.length" class="review-section" aria-labelledby="config-review-kubernetes">
+        <h2 id="config-review-kubernetes">{{ t('mcpConfig.kubernetesReview') }}</h2>
+        <p class="review-trigger-impact">{{ t('mcpConfig.kubernetesReviewHint') }}</p>
+        <article v-for="detail in review.kubernetesReview" :key="detail.stageId + '/' + detail.jobId" class="review-change">
+          <header><code>{{ detail.stageId }} / {{ detail.jobId }}</code></header>
+          <div class="review-values"><div v-if="detail.before"><span>{{ t('mcpConfig.before') }}</span><pre>{{ detail.before }}</pre></div><div class="review-value--after"><span>{{ t('mcpConfig.after') }}</span><pre>{{ detail.after }}</pre></div></div>
         </article>
       </section>
       <section class="review-section" aria-labelledby="config-review-validation">

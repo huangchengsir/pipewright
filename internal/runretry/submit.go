@@ -421,13 +421,18 @@ func (s *Service) Settle(ctx context.Context, runID string) error {
 // ReconcileStartup never re-enqueues a durable record from another process. No
 // external exit evidence can be inferred from a timestamp or terminal run row.
 func (s *Service) ReconcileStartup(ctx context.Context) error {
+	frontier, e := s.continuationRecoveryNodes(ctx)
+	if e != nil {
+		return e
+	}
 	return configstate.WithWriteTxContext(ctx, s.db, func(tx context.Context, q configstate.DBTX) error {
 		if _, e := q.ExecContext(tx, `UPDATE run_retry_requests SET state='outcome_unknown',reason_code='process_restarted' WHERE attempt_id IN (SELECT attempt_id FROM run_retry_dispatch WHERE owner_epoch<>? AND state IN ('pending','dispatching','accepted','running'))`, s.owner); e != nil {
 			return e
 		}
-		if _, e := q.ExecContext(tx, `UPDATE run_retry_nodes SET status='outcome_unknown',updated_at=? WHERE status='running' AND owner_epoch<>?`, time.Now().UnixMilli(), s.owner); e != nil {
+		if e := s.markStartupNodes(tx, q, frontier); e != nil {
 			return e
 		}
+
 		if _, e := q.ExecContext(tx, `UPDATE run_retry_external_targets SET state='outcome_unknown',updated_at=? WHERE state='running' AND EXISTS(SELECT 1 FROM run_retry_nodes n WHERE n.attempt_id=run_retry_external_targets.attempt_id AND n.node_key=run_retry_external_targets.node_key AND n.owner_epoch<>?)`, time.Now().UnixMilli(), s.owner); e != nil {
 			return e
 		}

@@ -129,6 +129,7 @@ export default {
   },
 
   runStatus: {
+ waiting_action:"等待显式操作",
     queued: '排队',
     running: '进行中',
     waiting_approval: '待审批',

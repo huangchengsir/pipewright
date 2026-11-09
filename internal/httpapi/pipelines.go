@@ -167,6 +167,8 @@ func reqStagesToDomain(in []reqStage) []pipeline.Stage {
 // writePipelineError 把领域错误映射为契约错误码/状态码。
 func writePipelineError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, pipeline.ErrKubernetesConfig):
+		writeError(w, http.StatusBadRequest, "kubernetes_invalid_input", "Kubernetes 发布配置无效，请检查来源和资源设置")
 	case errors.Is(err, pipeline.ErrProjectNotFound):
 		writeError(w, http.StatusNotFound, "project_not_found", "项目不存在")
 	case errors.Is(err, pipeline.ErrInvalidStage):

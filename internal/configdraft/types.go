@@ -54,7 +54,13 @@ type RuntimeInfo struct {
 	Available    bool   `json:"-"`
 	PACOverride  bool   `json:"-"`
 }
+type KubernetesConfigs interface {
+	PrepareReleaseDraftConfig(context.Context, string, string, map[string]any) (map[string]any, error)
+	ReleaseDraftConfig(context.Context, string, string, string) (map[string]any, error)
+	ReleaseReviewConfig(context.Context, string, string, string) (map[string]any, error)
+}
 type Options struct {
+	Kubernetes   KubernetesConfigs
 	Runtime      RuntimeInfo
 	ApplyEnabled bool
 	Now          func() time.Time
@@ -124,13 +130,24 @@ type BuildFields struct {
 	DockerfilePath    *string `json:"dockerfilePath,omitempty"`
 	Context           *string `json:"context,omitempty"`
 }
+type KubernetesFields struct {
+	Config    map[string]any `json:"config,omitempty"`
+	ConfigRef string         `json:"configRef,omitempty"`
+}
+type KubernetesReview struct {
+	StageID string `json:"stageId"`
+	JobID   string `json:"jobId"`
+	Before  string `json:"before,omitempty"`
+	After   string `json:"after"`
+}
 type Operation struct {
-	Type    string       `json:"type"`
-	StageID string       `json:"stageId,omitempty"`
-	JobID   string       `json:"jobId,omitempty"`
-	Value   *string      `json:"value,omitempty"`
-	Limits  *Limits      `json:"limits,omitempty"`
-	Build   *BuildFields `json:"build,omitempty"`
+	Kubernetes *KubernetesFields `json:"kubernetes,omitempty"`
+	Type       string            `json:"type"`
+	StageID    string            `json:"stageId,omitempty"`
+	JobID      string            `json:"jobId,omitempty"`
+	Value      *string           `json:"value,omitempty"`
+	Limits     *Limits           `json:"limits,omitempty"`
+	Build      *BuildFields      `json:"build,omitempty"`
 }
 type CreateRequest struct {
 	ProjectID     string      `json:"projectId"`
@@ -171,21 +188,22 @@ type Approval struct {
 	Reason    string `json:"reason,omitempty"`
 }
 type Draft struct {
-	DraftID       string      `json:"draftId,omitempty"`
-	ProjectID     string      `json:"projectId"`
-	BaseRevision  string      `json:"baseRevision"`
-	PolicyVersion string      `json:"policyVersion"`
-	ReviewDigest  string      `json:"reviewDigest,omitempty"`
-	State         string      `json:"state"`
-	ExpiresAt     string      `json:"expiresAt,omitempty"`
-	Operations    []Operation `json:"operations"`
-	Diff          []Diff      `json:"diff"`
-	Validation    Validation  `json:"validation"`
-	Approval      Approval    `json:"approval"`
-	ReviewURL     string      `json:"reviewUrl,omitempty"`
-	Complete      bool        `json:"complete"`
-	UntrustedData bool        `json:"untrustedData"`
-	NextCursor    string      `json:"nextCursor,omitempty"`
+	KubernetesReview []KubernetesReview `json:"kubernetesReview,omitempty"`
+	DraftID          string             `json:"draftId,omitempty"`
+	ProjectID        string             `json:"projectId"`
+	BaseRevision     string             `json:"baseRevision"`
+	PolicyVersion    string             `json:"policyVersion"`
+	ReviewDigest     string             `json:"reviewDigest,omitempty"`
+	State            string             `json:"state"`
+	ExpiresAt        string             `json:"expiresAt,omitempty"`
+	Operations       []Operation        `json:"operations"`
+	Diff             []Diff             `json:"diff"`
+	Validation       Validation         `json:"validation"`
+	Approval         Approval           `json:"approval"`
+	ReviewURL        string             `json:"reviewUrl,omitempty"`
+	Complete         bool               `json:"complete"`
+	UntrustedData    bool               `json:"untrustedData"`
+	NextCursor       string             `json:"nextCursor,omitempty"`
 }
 type ApprovalRequest struct {
 	ReviewDigest  string `json:"reviewDigest"`
@@ -214,5 +232,5 @@ type OperationResult struct {
 
 const ValidatorVersion = "configdraft-v1"
 
-var Sections = []string{"project", "pipeline", "build", "step_limits", "source_and_impact"}
-var OperationTypes = []string{"project.set_name", "project.set_default_branch", "stage.rename", "job.rename", "step.set_limits", "build.set"}
+var Sections = []string{"project", "pipeline", "build", "step_limits", "source_and_impact", "kubernetes"}
+var OperationTypes = []string{"project.set_name", "project.set_default_branch", "stage.rename", "job.rename", "step.set_limits", "build.set", "kubernetes.add", "kubernetes.update"}

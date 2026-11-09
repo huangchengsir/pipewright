@@ -2,7 +2,7 @@ package run
 
 import (
 	"context"
-	"log"
+	log "github.com/huangchengsir/pipewright/internal/logging"
 	"time"
 )
 

@@ -27,7 +27,9 @@ func (s *Service) normalize(in []Operation, g guard) ([]Operation, error) {
 		return nil, Error("budget_exceeded")
 	}
 	var ops []Operation
-	if json.Unmarshal(b, &ops) != nil {
+	decoder := json.NewDecoder(bytes.NewReader(b))
+	decoder.UseNumber()
+	if decoder.Decode(&ops) != nil {
 		return nil, ErrInvalid
 	}
 	seen := map[string]bool{}
@@ -56,7 +58,7 @@ func (s *Service) normalize(in []Operation, g guard) ([]Operation, error) {
 		var fields []string
 		switch o.Type {
 		case "project.set_name", "stage.rename", "job.rename", "project.set_default_branch":
-			if o.Value == nil || o.Limits != nil || o.Build != nil {
+			if o.Value == nil || o.Limits != nil || o.Build != nil || o.Kubernetes != nil {
 				return nil, ErrInvalid
 			}
 			v := strings.TrimSpace(*o.Value)
@@ -77,7 +79,7 @@ func (s *Service) normalize(in []Operation, g guard) ([]Operation, error) {
 			}
 			fields = []string{field}
 		case "step.set_limits":
-			if o.Limits == nil || o.Build != nil || o.Value != nil {
+			if o.Limits == nil || o.Build != nil || o.Value != nil || o.Kubernetes != nil {
 				return nil, ErrInvalid
 			}
 			l := o.Limits
@@ -127,8 +129,23 @@ func (s *Service) normalize(in []Operation, g guard) ([]Operation, error) {
 				l.Memory = &v
 				fields = append(fields, "memory")
 			}
+		case "kubernetes.add", "kubernetes.update":
+			if s.opts.Kubernetes == nil || o.Kubernetes == nil || o.Build != nil || o.Limits != nil || (len(o.Kubernetes.Config) == 0 && o.Kubernetes.ConfigRef == "") || (len(o.Kubernetes.Config) > 0 && o.Kubernetes.ConfigRef != "") {
+				return nil, ErrInvalid
+			}
+			if o.Type == "kubernetes.add" && o.Value == nil {
+				return nil, ErrInvalid
+			}
+			if o.Value != nil {
+				v := strings.TrimSpace(*o.Value)
+				if !validText(v, 128) || !g.clean(v) {
+					return nil, ErrInvalid
+				}
+				o.Value = &v
+			}
+			fields = []string{"kubernetes"}
 		case "build.set":
-			if o.Build == nil || o.Limits != nil || o.Value != nil {
+			if o.Build == nil || o.Limits != nil || o.Value != nil || o.Kubernetes != nil {
 				return nil, ErrInvalid
 			}
 			z := o.Build
@@ -221,6 +238,7 @@ func decodeSpec(d *document) error {
 	if e != nil {
 		return e
 	}
+	d.spec = pipeline.Spec{} // Decode into a fresh slice; clones must not mutate the original topology.
 	if json.Unmarshal(b, &d.spec) != nil {
 		return ErrUnsupported
 	}
@@ -296,6 +314,14 @@ func (s *Service) patch(d *document, ops []Operation, g guard) (*document, []Dif
 			old := n["name"]
 			n["name"] = *o.Value
 			add(o, "name", old, *o.Value, "display")
+		case "kubernetes.add", "kubernetes.update":
+			change, e := s.patchKubernetes(c, o, g)
+			if e != nil {
+				return nil, nil, e
+			}
+			if change.Type != "" {
+				diff = append(diff, change)
+			}
 		case "step.set_limits", "build.set":
 			n, before, e := node(c, o.StageID, o.JobID)
 			if e != nil {
@@ -362,7 +388,24 @@ func (s *Service) patch(d *document, ops []Operation, g guard) (*document, []Dif
 	if e != nil {
 		return nil, nil, ErrUnsupported
 	}
-	b, e := build.ConfigTopologySignature(c.spec)
+	topology := c.spec
+	topology.Stages = append([]pipeline.Stage(nil), c.spec.Stages...)
+	for i := range topology.Stages {
+		jobs := []pipeline.Job{}
+		for _, j := range topology.Stages[i].Jobs {
+			added := false
+			for _, o := range ops {
+				if o.Type == "kubernetes.add" && o.StageID == topology.Stages[i].ID && o.JobID == j.ID {
+					added = true
+				}
+			}
+			if !added {
+				jobs = append(jobs, j)
+			}
+		}
+		topology.Stages[i].Jobs = jobs
+	}
+	b, e := build.ConfigTopologySignature(topology)
 	if e != nil {
 		return nil, nil, ErrUnsupported
 	}

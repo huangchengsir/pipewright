@@ -42,12 +42,18 @@ func beginControl(ctx context.Context, ex runretry.Execution, stage, key string)
 	if !ok {
 		return n, runretry.ErrInvalid
 	}
+	if ex.Decision(n).Action == "reuse" && ex.Decision(n).Status == run.StepSuccess {
+		return n, nil
+	}
 	if ex.Decision(n).Action != "control" {
 		return n, runretry.ErrBlocked
 	}
 	return n, ex.Begin(ctx, n)
 }
 func finishControl(ctx context.Context, ex runretry.Execution, n runretry.NodeRef, status, external string, rep dagrun.StageReporter) error {
+	if ex.Decision(n).Action == "reuse" && ex.Decision(n).Status == run.StepSuccess {
+		return nil
+	}
 	return checkpointWarning(ctx, rep, ex.Control(context.WithoutCancel(ctx), n, runretry.Outcome{Status: status, ExecutionMode: "real", ExternalOutcome: external, Complete: status == run.StepSuccess, Reusable: status == run.StepSuccess}))
 }
 
@@ -127,7 +133,17 @@ func (b *Builder) runRecoveryStage(ctx context.Context, r *run.Run, stage pipeli
 			if cleanErr != nil {
 				s = "outcome_unknown"
 			}
-			berr = finishControl(cleanupCtx, ex, barrier, s, external, rep)
+			if errors.Is(stageErr, run.ErrSuspended) && cleanErr == nil {
+				if suspender, ok := ex.(interface {
+					SuspendNode(context.Context, runretry.NodeRef) error
+				}); ok {
+					berr = suspender.SuspendNode(cleanupCtx, barrier)
+				} else {
+					berr = runretry.ErrUnavailable
+				}
+			} else {
+				berr = finishControl(cleanupCtx, ex, barrier, s, external, rep)
+			}
 		}
 		if stageErr == nil && cerr != nil {
 			stageErr = cerr
@@ -320,6 +336,21 @@ func (b *Builder) runRecoveryStage(ctx context.Context, r *run.Run, stage pipeli
 				return nil
 			}
 		}()
+		if errors.Is(businessErr, run.ErrSuspended) {
+			if suspender, ok := ex.(interface {
+				SuspendNode(context.Context, runretry.NodeRef) error
+			}); ok {
+				if err := suspender.SuspendNode(context.WithoutCancel(nodeCtx), n); err != nil {
+					return err
+				}
+			} else {
+				return runretry.ErrUnavailable
+			}
+			if err := rep.JobDone(context.WithoutCancel(nodeCtx), id, run.StepWaitingAction); err != nil {
+				return err
+			}
+			return run.ErrSuspended
+		}
 		if recorder.external != "" {
 			external = recorder.external
 		}
@@ -335,7 +366,7 @@ func (b *Builder) runRecoveryStage(ctx context.Context, r *run.Run, stage pipeli
 		envMu.Lock()
 		envOut[id] = outputs
 		envMu.Unlock()
-		outcome := runretry.Outcome{Status: status, ExecutionMode: recorder.mode, ExternalOutcome: external, Outputs: recorder.outputs, Targets: recorder.targets, Complete: businessErr == nil && !recorder.invalid, Reusable: businessErr == nil && !recorder.invalid, WorkspaceIncomplete: recorder.workspaceIncomplete, ReasonCode: recorder.reason, DeploymentNotDispatched: recorder.deploymentNotDispatched, Kubernetes: recorder.kubernetes}
+		outcome := runretry.Outcome{Status: status, ExecutionMode: recorder.mode, ExternalOutcome: external, Outputs: recorder.outputs, Targets: recorder.targets, Complete: businessErr == nil && !recorder.invalid, Reusable: businessErr == nil && !recorder.invalid, WorkspaceIncomplete: recorder.workspaceIncomplete, ReasonCode: recorder.reason, DeploymentNotDispatched: recorder.deploymentNotDispatched, Kubernetes: recorder.kubernetes, KubernetesRelease: recorder.kubernetesRelease}
 		runretry.ApplyOutputPolicy(jb, &outcome, time.Now())
 		finishErr := checkpointWarning(context.WithoutCancel(nodeCtx), recorder, ex.Finish(context.WithoutCancel(nodeCtx), n, outcome))
 		_ = rep.JobDone(context.WithoutCancel(nodeCtx), id, status)
@@ -356,6 +387,9 @@ func (b *Builder) runRecoveryStage(ctx context.Context, r *run.Run, stage pipeli
 			}
 			_ = rep.JobDone(context.WithoutCancel(ctx), jb.ID, run.StepSkipped)
 		}
+	}
+	if result.Counts()[dag.StatusWaitingAction] > 0 {
+		return run.ErrSuspended
 	}
 	jobsDone, e := beginControl(context.WithoutCancel(ctx), ex, stage.ID, "jobs_done")
 	if e != nil {
@@ -387,6 +421,7 @@ type recoveryReporter struct {
 	reason                       string
 	deploymentNotDispatched      bool
 	kubernetes                   *runretry.KubernetesReceipt
+	kubernetesRelease            *runretry.KubernetesReleaseReceipt
 }
 
 func (r *recoveryReporter) noDeploymentDispatch() {

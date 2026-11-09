@@ -2,7 +2,7 @@ package cron
 
 import (
 	"context"
-	"log"
+	log "github.com/huangchengsir/pipewright/internal/logging"
 	"sync"
 	"time"
 )
@@ -78,14 +78,14 @@ func NewScheduler(store Store, runner Runner, opts ...Option) *Scheduler {
 func (s *Scheduler) Tick(ctx context.Context, now time.Time) {
 	entries, err := s.store.ListEnabled(ctx)
 	if err != nil {
-		log.Printf("[cron] 列举启用配置失败:%v", err)
+		log.Printf("[cron] Failed to list enabled configurations: %v", err)
 		return
 	}
 	minuteKey := now.Format("2006-01-02T15:04")
 	for _, e := range entries {
 		sched, perr := Parse(e.Expression)
 		if perr != nil {
-			log.Printf("[cron] 项目 %s 表达式非法,跳过:%v", e.ProjectID, perr)
+			log.Printf("[cron] project %s has an invalid schedule; skipping: %v", e.ProjectID, perr)
 			continue
 		}
 		if !sched.Matches(now) {
@@ -102,9 +102,9 @@ func (s *Scheduler) Tick(ctx context.Context, now time.Time) {
 			continue
 		}
 		if _, rerr := s.runner.CreateScheduledRun(ctx, e.ProjectID, e.Branch); rerr != nil {
-			log.Printf("[cron] 项目 %s 定时触发创建运行失败:%v", e.ProjectID, rerr)
+			log.Printf("[cron] project %s: failed to create scheduled run: %v", e.ProjectID, rerr)
 		} else {
-			log.Printf("[cron] 项目 %s 定时触发(%s @ %s)", e.ProjectID, e.Expression, minuteKey)
+			log.Printf("[cron] project %s: scheduled trigger (%s @ %s)", e.ProjectID, e.Expression, minuteKey)
 		}
 	}
 }

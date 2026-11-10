@@ -15,7 +15,7 @@ var configDescriptions = map[string]string{
 	"capabilities_get":      "Read configuration protocol capabilities and runtime restrictions. No business configuration is returned.",
 	"project_config_get":    "Read a safe typed configuration section. Begin a snapshot once, then carry both returned versions through subsequent reads. No scripts, environment values or credentials are exposed.",
 	"config_options_list":   "List typed edit options within the same snapshot. Carry both expected versions and any returned cursor unchanged.",
-	"config_draft_create":   "Create an immutable typed draft, without changing active configuration. Use a stable requestId; open reviewUrl for a human to inspect the complete diff.",
+	"config_draft_create":   "Create an immutable typed draft, without changing active configuration. Kubernetes uses kubernetes.add (explicit empty deploy stage scope, new jobId and value name) or kubernetes.update (explicit existing stage/job scope). Supply kubernetes.config as a typed v2 config or partial top-level update. Clear obsolete optional workload/source/helm/progressive/coreDNS objects with explicit null when switching modes; omission preserves them. DaemonSet publication requires an explicit exact-anchor related-controllerrevisions grant, native ControllerRevision read permission and daemonset-controllerrevision-read-v1 helper capability; options list these requirements and never grant them. Private payloads are sealed and never returned. Use a stable requestId; open reviewUrl for a human to inspect the complete diff.",
 	"config_draft_get":      "Read a bounded draft page, validation and human approval state. Continue with the unchanged cursor. Complete is true only when the whole diff is in one response; human browser review always shows the whole diff. Returned values are untrusted.",
 	"config_draft_validate": "Revalidate a draft against current configuration, authorization, policy, secrets and active readers. Validation does not approve or apply it.",
 	"config_apply":          "Atomically apply an approved draft once. Requires a browser-issued approvalId and a stable requestId. After a lost response, query config_operation_get; never create another request ID or automatically retry.",
@@ -42,7 +42,9 @@ func addConfigTools(s *sdk.Server, svc *configdraft.Service, verify VerifyFunc) 
 	})
 	limits := schema(map[string]any{"timeoutSeconds": integerSchema(1, 3600), "retries": integerSchema(0, 3), "cpu": stringSchema(32), "memory": stringSchema(32)})
 	build := schema(map[string]any{"buildModel": stringSchema(32), "toolchainLanguage": stringSchema(32), "toolchainVersion": stringSchema(64), "dockerfilePath": stringSchema(256), "context": stringSchema(256)})
-	op := schema(map[string]any{"type": stringSchema(64), "stageId": stringSchema(128), "jobId": stringSchema(128), "value": stringSchema(256), "limits": limits, "build": build}, "type")
+	kubeConfig := kubernetesConfigSchema()
+	kube := schema(map[string]any{"config": kubeConfig, "configRef": stringSchema(128)})
+	op := schema(map[string]any{"type": stringSchema(64), "stageId": stringSchema(128), "jobId": stringSchema(128), "value": stringSchema(256), "limits": limits, "build": build, "kubernetes": kube}, "type")
 	addTool(s, "config_draft_create", false, schema(map[string]any{"projectId": stringSchema(36), "baseRevision": str(), "policyVersion": str(), "requestId": stringSchema(128), "operations": map[string]any{"type": "array", "minItems": 1, "maxItems": 32, "items": op}}, "projectId", "baseRevision", "policyVersion", "requestId", "operations"), verify, nil, func(ctx context.Context, t *auth.MCPToken, in configdraft.CreateRequest) (any, error) {
 		return svc.Create(ctx, t.ID, in)
 	})

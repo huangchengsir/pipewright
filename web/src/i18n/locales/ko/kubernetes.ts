@@ -1,4 +1,6 @@
+import release from "./kubernetesRelease";
 export default {
+  release,
   groups: {
     resources: "리소스 및 배포",
     integrations: "통합 및 AI",
@@ -139,6 +141,12 @@ export default {
     cleanup: "도구 정리",
   },
   phaseCode: {
+    resource_identity_check: "승인된 리소스 식별 정보를 확인하고 있습니다.",
+    resource_write_fenced: "승인된 리소스 변경을 준비하고 있습니다.",
+    resource_health_check: "리소스의 실제 상태를 확인하고 있습니다.",
+    release_ready: "이번 릴리스 관찰에서 준비 완료를 확인했습니다.",
+    batch_ready_waiting_action: "이 배치는 검증되었으며 명시적인 작업을 기다리고 있습니다.",
+
     patch_not_authorized:
       "이 클러스터 자격 증명으로는 Deployment를 업데이트할 수 없습니다. 관리자에게 권한 확인을 요청하세요. 업데이트는 전송되지 않았습니다.",
     permission_check_unverified:
@@ -167,6 +175,16 @@ export default {
     blocked: "정리 차단됨",
   },
   errors: {
+    requestInvalid: "클러스터가 검증 요청을 거부했습니다. 리소스 설정을 확인하세요.",
+    credentialRejected: "클러스터가 자격 증명을 거부했습니다. 연결 자격 증명을 확인하세요.",
+    resourceConflict: "리소스 소유권 또는 버전이 이번 변경과 충돌합니다. 새로 고친 후 검토하세요.",
+    resourceInvalid: "클러스터가 리소스 정의를 거부했습니다.",
+    apiThrottled: "Kubernetes API가 사용 중입니다. 잠시 후 새 실행을 검토하세요.",
+    apiUnavailable: "Kubernetes API를 일시적으로 사용할 수 없습니다.",
+    admissionMismatch: "클러스터 승인이 선언된 필드를 변경했습니다. 리소스 정책을 확인하세요.",
+    validationFailed: "리소스 검증에 실패했습니다. 선언한 변경을 확인하세요.",
+    preparationFailed: "릴리스 준비에 실패했습니다. 입력, 연결 및 권한을 확인하세요.",
+
     invalid: "설정 형식이 올바르지 않습니다. 항목을 확인하세요.",
     session: "세션이 만료되었습니다. 다시 로그인하세요.",
     passwordRequired: "작업 전에 비밀번호를 다시 확인하세요.",

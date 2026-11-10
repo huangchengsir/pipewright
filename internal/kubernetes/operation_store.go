@@ -294,6 +294,13 @@ func (s *Service) AcquireHold(ctx context.Context, id, owner, uid string) (Workl
 		if e = s.validateAuthorization(ctx, q, o.Intent.Authorization); e != nil {
 			return e
 		}
+		if e = s.bridgeV1Gates(ctx, q); e != nil {
+			return e
+		}
+		resource := ReleaseResourceID{Group: "apps", Resource: "deployments", Namespace: o.Intent.Authorization.Target.Namespace, Name: o.Intent.Authorization.Target.Deployment}
+		if e = s.takeReleaseGate(ctx, q, releaseGateKey(o.Intent.Authorization.ClusterKey, resource), "v1", id, owner); e != nil {
+			return e
+		}
 		key := fingerprint([]string{o.Intent.Authorization.ClusterKey, o.Intent.Authorization.Target.Namespace, uid})
 		out = WorkloadHold{key, id, owner, o.Intent.Authorization.ClusterKey, o.Intent.Authorization.Target.Namespace, uid, s.now().UnixMilli()}
 		var existing, epoch string
@@ -496,6 +503,9 @@ func (s *Service) ReleaseHold(ctx context.Context, id, owner string) error {
 		if o.Cleanup != CleanupVerified || o.Business == OutcomeUnknown || o.Business == Submitted {
 			return ErrHeld
 		}
+		if _, e = q.ExecContext(ctx, `DELETE FROM k8s_resource_gates WHERE owner_kind='v1' AND owner_id=? AND owner_epoch=?`, id, owner); e != nil {
+			return e
+		}
 		_, e = q.ExecContext(ctx, `DELETE FROM k8s_workload_holds WHERE operation_id=? AND owner_epoch=?`, id, owner)
 		return e
 	})
@@ -529,6 +539,9 @@ func (s *Service) Retire(ctx context.Context, id string, expected int64, current
 		}
 		o.Retired = true
 		if e = s.saveOperation(ctx, q, &o, expected); e != nil {
+			return e
+		}
+		if _, e = q.ExecContext(ctx, `DELETE FROM k8s_resource_gates WHERE owner_kind='v1' AND owner_id=?`, id); e != nil {
 			return e
 		}
 		if _, e = q.ExecContext(ctx, `DELETE FROM k8s_workload_holds WHERE operation_id=?`, id); e != nil {

@@ -50,6 +50,7 @@ const localTagPrefix = "pipewright"
 type Builder struct {
 	kubernetes           *kubernetes.Service
 	kubernetesController *kubernetes.Controller
+	kubernetesReleases   *kubernetes.ReleaseController
 	kubernetesOwner      string
 	projects             project.Service
 	settings             pipeline.SettingsService

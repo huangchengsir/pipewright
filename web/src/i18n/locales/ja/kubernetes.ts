@@ -1,4 +1,6 @@
+import release from "./kubernetesRelease";
 export default {
+  release,
   groups: {
     resources: "リソースとリリース",
     integrations: "連携と AI",
@@ -145,6 +147,12 @@ export default {
     cleanup: "ツールの削除",
   },
   phaseCode: {
+    resource_identity_check: "承認済みリソースの識別情報を確認しています。",
+    resource_write_fenced: "承認済みのリソース変更を準備しています。",
+    resource_health_check: "リソースの実際の正常性を確認しています。",
+    release_ready: "今回のリリース監視で準備完了を確認しました。",
+    batch_ready_waiting_action: "このバッチは検証済みで、明示的な操作を待っています。",
+
     patch_not_authorized:
       "このクラスタ認証情報では Deployment を更新できません。管理者に権限の確認を依頼してください。更新は送信されていません。",
     permission_check_unverified:
@@ -174,6 +182,16 @@ export default {
     blocked: "削除がブロック中",
   },
   errors: {
+    requestInvalid: "クラスターが検証要求を拒否しました。リソース設定を確認してください。",
+    credentialRejected: "クラスターが認証情報を拒否しました。接続の認証情報を確認してください。",
+    resourceConflict: "リソースの所有権またはバージョンが変更と競合しています。再読み込みして確認してください。",
+    resourceInvalid: "クラスターがリソース定義を拒否しました。",
+    apiThrottled: "Kubernetes API が混雑しています。時間をおいて新しい実行を確認してください。",
+    apiUnavailable: "Kubernetes API を一時的に利用できません。",
+    admissionMismatch: "クラスターのアドミッションが宣言済みフィールドを変更しました。ポリシーを確認してください。",
+    validationFailed: "リソース検証に失敗しました。宣言した変更を確認してください。",
+    preparationFailed: "リリース準備に失敗しました。入力、接続、権限を確認してください。",
+
     invalid: "設定の形式が無効です。項目を確認してください。",
     session: "セッションが無効です。再ログインしてください。",
     passwordRequired: "操作前にパスワードを再確認してください。",

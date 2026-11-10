@@ -3,7 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
-	"log"
+	log "github.com/huangchengsir/pipewright/internal/logging"
 	"net/http"
 	"time"
 

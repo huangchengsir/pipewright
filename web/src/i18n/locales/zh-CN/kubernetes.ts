@@ -1,4 +1,6 @@
+import release from "./kubernetesRelease";
 export default {
+  release,
   groups: {
     resources: "资源与发布",
     integrations: "集成与 AI",
@@ -127,6 +129,12 @@ export default {
     cleanup: "清理工具",
   },
   phaseCode: {
+    resource_identity_check: "正在核对已批准的资源身份。",
+    resource_write_fenced: "正在准备已批准的资源变更。",
+    resource_health_check: "正在检查资源的实际健康状态。",
+    release_ready: "本次发布观察已确认就绪。",
+    batch_ready_waiting_action: "本批已核验，正在等待明确操作。",
+
     patch_not_authorized:
       "当前集群凭据无权更新此 Deployment，请联系管理员检查授权。本次未发送更新。",
     permission_check_unverified:
@@ -154,6 +162,16 @@ export default {
     blocked: "清理受阻",
   },
   errors: {
+    requestInvalid: "集群拒绝了验证请求，请检查资源配置。",
+    credentialRejected: "集群拒绝了凭据，请检查连接使用的凭据。",
+    resourceConflict: "资源的字段归属或版本与本次变更冲突，请刷新后重新审阅。",
+    resourceInvalid: "集群拒绝了资源定义，请检查声明内容。",
+    apiThrottled: "Kubernetes API 正忙，请稍后重新发起并审阅。",
+    apiUnavailable: "Kubernetes API 暂时不可用。",
+    admissionMismatch: "集群准入修改了已声明字段，请检查资源策略。",
+    validationFailed: "资源验证未通过，请检查声明的变更。",
+    preparationFailed: "发布准备失败，请检查输入、连接和权限。",
+
     invalid: "配置格式不符合要求，请检查字段。",
     session: "登录已失效，请重新登录。",
     passwordRequired: "请重新验证密码后再执行此操作。",

@@ -153,6 +153,14 @@ docker run -d -p 8080:8080 -v pipewright-data:/data \
   ghcr.io/huangchengsir/pipewright:latest
 ```
 
+### Process log language
+
+Pipewright's own startup and background-worker messages use English by default, or Simplified Chinese for a Chinese locale. The language is captured once when the process starts; restart after changing its environment. Web UI/API language selection remains independent and still supports all eight UI languages.
+
+The first non-empty `LC_ALL`, `LC_MESSAGES`, then `LANG` selects the message locale. An unset locale, `C`, `POSIX`, or `C.<encoding>` (including `C.UTF-8`) uses English and ignores `LANGUAGE`. With another valid locale, `LANGUAGE` can specify a colon-separated preference list over `en` and `zh` (for example, `LANG=en_US.UTF-8 LANGUAGE=zh_CN:en`). Unsupported or malformed preferences fall back to English. Chinese regions, encodings and modifiers select the existing Simplified Chinese messages; output remains UTF-8.
+
+This applies to Pipewright-owned process message templates. Opaque diagnostic values, underlying errors, pipeline scripts and Git/SSH/Docker output retain their original text. Control characters in process messages are escaped so a value cannot forge another log line.
+
 ### Build from source
 
 ```bash
@@ -218,7 +226,7 @@ when its CDN does not supply a usable ETag or honor Range requests.
 
 ### Kubernetes deployment
 
-Deploy an explicitly selected pushed image digest to one container of an existing Deployment through local Linux Docker or a pinned SSH executor. Protected credentials, exact target permissions, approval, rollout checks and read-only reconciliation are built in. Kubernetes jobs use a dedicated deployment stage; they do not execute arbitrary kubectl/Helm or use SSH rollback. See the [setup and operational guide](docs/kubernetes-deploy.md).
+The v2 node supports digest-pinned image updates, YAML, Helm 4.3.1 and progressive releases through local Linux Docker or a pinned SSH executor. Exact resource grants, frozen inputs, human approval, workload/Pod/container checks and explicit probes govern execution; uncertain writes are never automatically replayed. Assemble a verified v2 tool image in your existing registry as described in the [release suite guide](docs/kubernetes-release-suite.md). Existing v1 nodes keep the [legacy image update behavior](docs/kubernetes-deploy.md). [MCP configuration](docs/mcp.md#kubernetes-configuration-tools) uses explicit new grants and human review.
 
 ### Configuration (environment variables)
 

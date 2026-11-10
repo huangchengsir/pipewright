@@ -220,7 +220,8 @@ func (s *Service) makePlan(ctx context.Context, l lineage, runID string, targets
 		r := records[k]
 		if r.status == "outcome_unknown" {
 			original, verified := s.checkedKubernetesForNode(ctx, r.source, n.Key)
-			if n.Type != "deploy_kubernetes" || !verified || !original.Successful() {
+			release, releaseVerified := s.checkedReleaseForNode(ctx, r.source, n.Key)
+			if n.Type != "deploy_kubernetes" || (!verified || !original.Successful()) && (!releaseVerified || !release.Successful()) {
 				block("outcome_unknown")
 			}
 		} else if r.status != "failed" {

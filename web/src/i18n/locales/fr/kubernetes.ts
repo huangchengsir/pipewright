@@ -1,4 +1,6 @@
+import release from "./kubernetesRelease";
 export default {
+  release,
   groups: {
     resources: "Ressources et livraison",
     integrations: "Intégrations et IA",
@@ -148,6 +150,12 @@ export default {
     cleanup: "Nettoyage des outils",
   },
   phaseCode: {
+    resource_identity_check: "Vérification de l’identité de la ressource approuvée.",
+    resource_write_fenced: "Préparation de la modification de ressource approuvée.",
+    resource_health_check: "Vérification de l’état réel de la ressource.",
+    release_ready: "Cette observation de la livraison a confirmé sa disponibilité.",
+    batch_ready_waiting_action: "Ce lot est vérifié et attend une action explicite.",
+
     patch_not_authorized:
       "Ces identifiants de cluster ne permettent pas de mettre à jour ce Deployment. Demandez à un administrateur de vérifier les droits. Aucune mise à jour n’a été envoyée.",
     permission_check_unverified:
@@ -178,6 +186,16 @@ export default {
     blocked: "Nettoyage bloqué",
   },
   errors: {
+    requestInvalid: "Le cluster a refusé la demande de validation. Vérifiez la configuration.",
+    credentialRejected: "Le cluster a refusé les identifiants. Vérifiez ceux de la connexion.",
+    resourceConflict: "La propriété ou la version de la ressource est en conflit avec la modification. Actualisez et vérifiez.",
+    resourceInvalid: "Le cluster a refusé la définition de la ressource.",
+    apiThrottled: "L’API Kubernetes est occupée. Patientez avant un nouvel essai validé.",
+    apiUnavailable: "L’API Kubernetes est temporairement indisponible.",
+    admissionMismatch: "L’admission du cluster a modifié des champs déclarés. Vérifiez la politique de la ressource.",
+    validationFailed: "La validation de la ressource a échoué. Vérifiez les modifications déclarées.",
+    preparationFailed: "La préparation a échoué. Vérifiez les entrées, la connexion et les autorisations.",
+
     invalid: "Configuration invalide. Vérifiez les champs.",
     session: "Session expirée. Reconnectez-vous.",
     passwordRequired:

@@ -1,4 +1,8 @@
-# Kubernetes 部署
+# Kubernetes 部署（v1 / legacy）
+
+> 本文仅描述未声明版本的 v1 镜像更新节点，原有配置和历史记录继续使用这些规则。v2 的 YAML、Helm、分批发布与资源检查见 [Kubernetes 发布套件](kubernetes-release-suite.md)。
+> This guide covers legacy v1 image updates. See the [v2 release suite guide](kubernetes-release-suite.md) for the expanded node.
+
 
 Kubernetes 节点将本次流水线已推送的镜像更新到已有 Deployment 的指定容器，并等待这次更新就绪。执行位置可选 Pipewright 所在主机的 Docker，或已登记并核实主机密钥的 SSH 服务器。
 

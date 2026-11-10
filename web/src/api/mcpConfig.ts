@@ -34,6 +34,7 @@ export interface MCPConfigReview {
   state: string
   expiresAt: string
   diff: MCPConfigDiff[]
+  kubernetesReview?: Array<{ stageId: string; jobId: string; before?: string; after: string }>
   validation: MCPConfigValidation
   approval: MCPConfigApproval
   reviewUrl: string

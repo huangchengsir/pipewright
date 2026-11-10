@@ -1,4 +1,6 @@
+import release from "./kubernetesRelease";
 export default {
+  release,
   groups: {
     resources: "Resources & delivery",
     integrations: "Integrations & AI",
@@ -142,6 +144,12 @@ export default {
     cleanup: "Clean up tools",
   },
   phaseCode: {
+    resource_identity_check: "Checking approved resource identity.",
+    resource_write_fenced: "Preparing the approved resource change.",
+    resource_health_check: "Checking actual resource health.",
+    release_ready: "This release observation confirmed readiness.",
+    batch_ready_waiting_action: "This batch is verified; waiting for an explicit action.",
+
     patch_not_authorized:
       "These cluster credentials cannot update this Deployment. Ask an administrator to review permissions. No update was sent.",
     permission_check_unverified:
@@ -170,6 +178,16 @@ export default {
     blocked: "Cleanup blocked",
   },
   errors: {
+    requestInvalid: "The cluster rejected this validation request. Review the resource settings.",
+    credentialRejected: "The cluster rejected the credential. Check the connection credential.",
+    resourceConflict: "Resource ownership or version conflicts with this change. Refresh and review it.",
+    resourceInvalid: "The resource definition was rejected by the cluster.",
+    apiThrottled: "The Kubernetes API is busy. Wait before starting a new reviewed attempt.",
+    apiUnavailable: "The Kubernetes API is temporarily unavailable.",
+    admissionMismatch: "Cluster admission changed declared fields. Review the resource policy.",
+    validationFailed: "Resource validation did not pass. Review the declared changes.",
+    preparationFailed: "Release preparation failed. Review inputs, connection and permissions.",
+
     invalid: "Invalid configuration. Check the fields.",
     session: "Session expired. Sign in again.",
     passwordRequired: "Verify your password again before this action.",

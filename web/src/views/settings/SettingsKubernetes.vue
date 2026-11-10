@@ -31,6 +31,7 @@ import AppButton from "../../components/ui/AppButton.vue";
 import FormField from "../../components/ui/FormField.vue";
 import KubeDialog from "../../components/kubernetes/KubeDialog.vue";
 import KubeReadBack from "../../components/kubernetes/KubeReadBack.vue";
+import KubeReleaseSettings from "../../components/kubernetes/KubeReleaseSettings.vue";
 import KubePassword from "../../components/kubernetes/KubePassword.vue";
 import "../../styles/kubernetes.css";
 const { t } = useI18n(),
@@ -783,6 +784,11 @@ onBeforeUnmount(() => {
       @read="readOriginal"
       @done="acknowledge"
     />
-    <KubePassword :state="gate" />
+    <KubeReleaseSettings
+      v-if="selected"
+      :key="selected.id"
+      :connection="selected"
+      :projects="projects"
+    /><KubePassword :state="gate" />
   </section>
 </template>

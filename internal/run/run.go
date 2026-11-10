@@ -33,6 +33,7 @@ const (
 	// StatusWaitingApproval 表示运行阻塞在人工审批门(Story 8-4),等待批准/拒绝(非终态)。
 	// worker 仍持有该 run(在审批门内阻塞);批准 → 回 running 继续,拒绝/超时 → failed。
 	StatusWaitingApproval = "waiting_approval"
+	StatusWaitingAction   = "waiting_action"
 	// StatusSuccess 表示全部步骤成功(终态)。
 	StatusSuccess = "success"
 	// StatusFailed 表示执行失败或被取消(终态)。
@@ -57,6 +58,7 @@ const (
 	StepSkipped = "skipped"
 	// StepWaitingApproval 表示步骤(审批门阶段)正等待人工批准(Story 8-4;非终态步骤状态)。
 	StepWaitingApproval = "waiting_approval"
+	StepWaitingAction   = "waiting_action"
 )
 
 // 触发类型枚举。
@@ -278,8 +280,10 @@ var allowedTransitions = map[string]map[string]bool{
 		StatusFailed:          true,
 		StatusPartialFailed:   true,
 		StatusRolledBack:      true,
-		StatusWaitingApproval: true, // 进入审批门:running → waiting_approval(Story 8-4)
+		StatusWaitingApproval: true,
+		StatusWaitingAction:   true, // 进入审批门:running → waiting_approval(Story 8-4)
 	},
+	StatusWaitingAction: {StatusQueued: true, StatusFailed: true},
 	StatusWaitingApproval: {
 		StatusRunning: true, // 批准:waiting_approval → running 继续
 		StatusFailed:  true, // 拒绝/超时/取消:waiting_approval → failed
@@ -302,7 +306,7 @@ func IsStepTerminal(status string) bool {
 // isValidStatus 报告状态是否为已知运行状态枚举。
 func isValidStatus(status string) bool {
 	switch status {
-	case StatusQueued, StatusRunning, StatusWaitingApproval, StatusSuccess, StatusFailed, StatusPartialFailed, StatusRolledBack:
+	case StatusQueued, StatusRunning, StatusWaitingApproval, StatusWaitingAction, StatusSuccess, StatusFailed, StatusPartialFailed, StatusRolledBack:
 		return true
 	default:
 		return false

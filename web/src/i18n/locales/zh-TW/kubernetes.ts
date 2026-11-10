@@ -1,4 +1,6 @@
+import release from "./kubernetesRelease";
 export default {
+  release,
   groups: {
     resources: "資源與發佈",
     integrations: "整合與 AI",
@@ -128,6 +130,12 @@ export default {
     cleanup: "清理工具",
   },
   phaseCode: {
+    resource_identity_check: "正在核對已批准的資源身分。",
+    resource_write_fenced: "正在準備已批准的資源變更。",
+    resource_health_check: "正在檢查資源的實際健康狀態。",
+    release_ready: "本次發佈觀察已確認就緒。",
+    batch_ready_waiting_action: "本批已核驗，正在等待明確操作。",
+
     patch_not_authorized:
       "目前叢集憑證無權更新此 Deployment，請聯絡管理員檢查授權。本次未送出更新。",
     permission_check_unverified:
@@ -155,6 +163,16 @@ export default {
     blocked: "清理受阻",
   },
   errors: {
+    requestInvalid: "叢集拒絕了驗證請求，請檢查資源設定。",
+    credentialRejected: "叢集拒絕了憑證，請檢查連線使用的憑證。",
+    resourceConflict: "資源的欄位歸屬或版本與此次變更衝突，請重新整理後審閱。",
+    resourceInvalid: "叢集拒絕了資源定義，請檢查宣告內容。",
+    apiThrottled: "Kubernetes API 正忙，請稍後重新發起並審閱。",
+    apiUnavailable: "Kubernetes API 暫時無法使用。",
+    admissionMismatch: "叢集准入修改了已宣告欄位，請檢查資源原則。",
+    validationFailed: "資源驗證未通過，請檢查宣告的變更。",
+    preparationFailed: "發佈準備失敗，請檢查輸入、連線和權限。",
+
     invalid: "設定格式不符要求，請檢查欄位。",
     session: "登入已失效，請重新登入。",
     passwordRequired: "請重新驗證密碼後再執行此操作。",

@@ -1,4 +1,6 @@
+import release from "./kubernetesRelease";
 export default {
+  release,
   groups: {
     resources: "Recursos y despliegues",
     integrations: "Integraciones e IA",
@@ -144,6 +146,12 @@ export default {
     cleanup: "Limpiar herramientas",
   },
   phaseCode: {
+    resource_identity_check: "Comprobando la identidad del recurso aprobado.",
+    resource_write_fenced: "Preparando el cambio de recurso aprobado.",
+    resource_health_check: "Comprobando el estado real del recurso.",
+    release_ready: "Esta observación de la publicación confirmó su disponibilidad.",
+    batch_ready_waiting_action: "Este lote está verificado y espera una acción explícita.",
+
     patch_not_authorized:
       "Estas credenciales del clúster no permiten actualizar este Deployment. Pida a un administrador que revise los permisos. No se envió ninguna actualización.",
     permission_check_unverified:
@@ -173,6 +181,16 @@ export default {
     blocked: "Limpieza bloqueada",
   },
   errors: {
+    requestInvalid: "El clúster rechazó la solicitud de validación. Revisa la configuración.",
+    credentialRejected: "El clúster rechazó la credencial. Revisa la credencial de conexión.",
+    resourceConflict: "La propiedad o versión del recurso entra en conflicto con el cambio. Actualiza y revísalo.",
+    resourceInvalid: "El clúster rechazó la definición del recurso.",
+    apiThrottled: "La API de Kubernetes está ocupada. Espera antes de iniciar otro intento revisado.",
+    apiUnavailable: "La API de Kubernetes no está disponible temporalmente.",
+    admissionMismatch: "La admisión del clúster cambió campos declarados. Revisa la política del recurso.",
+    validationFailed: "La validación del recurso falló. Revisa los cambios declarados.",
+    preparationFailed: "La preparación falló. Revisa entradas, conexión y permisos.",
+
     invalid: "Configuración no válida. Revise los campos.",
     session: "Sesión caducada. Vuelva a iniciar sesión.",
     passwordRequired: "Verifique de nuevo su contraseña antes de esta acción.",

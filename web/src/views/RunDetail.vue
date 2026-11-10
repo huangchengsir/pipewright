@@ -13,10 +13,10 @@
   reduced-motion:跳过脉冲/入场/流光;所有动效均有媒体查询降级。
 -->
 <script setup lang="ts">
-import { ref, computed, onUnmounted, watch } from 'vue'
-import { safeRunListReturn, runDetailLocation } from '../lib/runListContext'
-import { useI18n } from 'vue-i18n'
-import { useRoute, useRouter } from 'vue-router'
+import { ref, computed, onUnmounted, watch } from "vue";
+import { safeRunListReturn, runDetailLocation } from "../lib/runListContext";
+import { useI18n } from "vue-i18n";
+import { useRoute, useRouter } from "vue-router";
 import {
   getRun,
   cancelRun,
@@ -38,304 +38,409 @@ import {
   type DeployStrategy,
   type ApprovalRecord,
   type DeployRunInput,
-} from '../api/runs'
-import type { ReleaseGuardBinding } from '../api/releaseGuard'
-import { guardReportLocation } from '../api/releaseGuard'
-import { listServers, type Server } from '../api/servers'
-import { HttpError } from '../api/http'
-import DiagnosisPanel from '../components/run/DiagnosisPanel.vue'
-import SuccessFailDiff from '../components/run/SuccessFailDiff.vue'
-import RunTerminal from '../components/run/RunTerminal.vue'
-import RunStepList from '../components/run/RunStepList.vue'
-import ArtifactList from '../components/run/ArtifactList.vue'
-import AppSelect from '../components/ui/AppSelect.vue'
-import TestReportPanel from '../components/run/TestReportPanel.vue'
-import DeployTargets from '../components/run/DeployTargets.vue'
-import RunDagView from '../components/run/RunDagView.vue'
-import PromotionPanel from '../components/run/PromotionPanel.vue'
-import BatchDeployPanel from '../components/run/BatchDeployPanel.vue'
-import ReleaseGuardPanel from '../components/run/ReleaseGuardPanel.vue'
-import ReleaseGuardAttach from '../components/run/ReleaseGuardAttach.vue'
-import LocalDockerDeploymentFields from '../components/run/LocalDockerDeploymentFields.vue'
-import RunRetryPanel from '../components/run/RunRetryPanel.vue'
-import AppButton from '../components/ui/AppButton.vue'
-import { useRunRetry } from '../composables/useRunRetry'
+} from "../api/runs";
+import type { ReleaseGuardBinding } from "../api/releaseGuard";
+import { guardReportLocation } from "../api/releaseGuard";
+import { listServers, type Server } from "../api/servers";
+import { HttpError } from "../api/http";
+import DiagnosisPanel from "../components/run/DiagnosisPanel.vue";
+import SuccessFailDiff from "../components/run/SuccessFailDiff.vue";
+import RunTerminal from "../components/run/RunTerminal.vue";
+import RunStepList from "../components/run/RunStepList.vue";
+import ArtifactList from "../components/run/ArtifactList.vue";
+import AppSelect from "../components/ui/AppSelect.vue";
+import TestReportPanel from "../components/run/TestReportPanel.vue";
+import DeployTargets from "../components/run/DeployTargets.vue";
+import RunDagView from "../components/run/RunDagView.vue";
+import PromotionPanel from "../components/run/PromotionPanel.vue";
+import BatchDeployPanel from "../components/run/BatchDeployPanel.vue";
+import ReleaseGuardPanel from "../components/run/ReleaseGuardPanel.vue";
+import ReleaseGuardAttach from "../components/run/ReleaseGuardAttach.vue";
+import LocalDockerDeploymentFields from "../components/run/LocalDockerDeploymentFields.vue";
+import RunRetryPanel from "../components/run/RunRetryPanel.vue";
+import AppButton from "../components/ui/AppButton.vue";
+import { useRunRetry } from "../composables/useRunRetry";
 
 // ─── route ────────────────────────────────────────────────────────────────────
 
-const { t, locale } = useI18n()
-const route  = useRoute()
-const router = useRouter()
-const runId  = computed(() => route.params.id as string)
-const recovery = useRunRetry(runId)
-const retryPanel = ref<InstanceType<typeof RunRetryPanel> | null>(null)
-let runGeneration = 0
-let runController: AbortController | undefined
-function openRetry(keys: string[]) { void retryPanel.value?.show(keys.length === 1 ? keys[0] : undefined, keys.length ? 'plan' : 'details'); if (keys.length) void recovery.openPlan(keys) }
-function openNodeLogs(keys: string[], stageName: string) { void retryPanel.value?.showLogs(keys, stageName) }
-function openRetryHistory() { retryPanel.value?.showHistory() }
-function openAllFailed() { openRetry(recovery.failedNodes.value.map(n => n.node.key)) }
-function openAttempt(id: string) { void router.push(runDetailLocation(id, route.query.returnTo)) }
+const { t, locale } = useI18n();
+const route = useRoute();
+const router = useRouter();
+const runId = computed(() => route.params.id as string);
+const recovery = useRunRetry(runId);
+const retryPanel = ref<InstanceType<typeof RunRetryPanel> | null>(null);
+let runGeneration = 0;
+let runController: AbortController | undefined;
+function openRetry(keys: string[]) {
+  void retryPanel.value?.show(
+    keys.length === 1 ? keys[0] : undefined,
+    keys.length ? "plan" : "details",
+  );
+  if (keys.length) void recovery.openPlan(keys);
+}
+function openNodeLogs(keys: string[], stageName: string) {
+  void retryPanel.value?.showLogs(keys, stageName);
+}
+function openRetryHistory() {
+  retryPanel.value?.showHistory();
+}
+function openAllFailed() {
+  openRetry(recovery.failedNodes.value.map((n) => n.node.key));
+}
+function openAttempt(id: string) {
+  void router.push(runDetailLocation(id, route.query.returnTo));
+}
 
 // ─── load state ──────────────────────────────────────────────────────────────
 
-type LoadState = 'loading' | 'idle' | 'error'
+type LoadState = "loading" | "idle" | "error";
 
-const loadState = ref<LoadState>('loading')
-const loadFailure = ref<{ kind: 'notFound' | 'status' | 'network'; status?: number; id?: string } | null>(null)
-const loadError = computed(() => !loadFailure.value ? '' : loadFailure.value.kind === 'notFound' ? t('runDetail.runNotFound', { id: loadFailure.value.id }) : loadFailure.value.kind === 'status' ? t('runDetail.loadFailed', { status: loadFailure.value.status }) : t('runDetail.loadRequestFailed'))
-const run = ref<RunDetail | null>(null)
+const loadState = ref<LoadState>("loading");
+const loadFailure = ref<{
+  kind: "notFound" | "status" | "network";
+  status?: number;
+  id?: string;
+} | null>(null);
+const loadError = computed(() =>
+  !loadFailure.value
+    ? ""
+    : loadFailure.value.kind === "notFound"
+      ? t("runDetail.runNotFound", { id: loadFailure.value.id })
+      : loadFailure.value.kind === "status"
+        ? t("runDetail.loadFailed", { status: loadFailure.value.status })
+        : t("runDetail.loadRequestFailed"),
+);
+const run = ref<RunDetail | null>(null);
 
 // 选中的步骤序号(点击步骤详情切换「单步日志」过滤);null = 全部步骤。
-const selectedStepOrdinal = ref<number | null>(null)
+const selectedStepOrdinal = ref<number | null>(null);
 function selectSourceLog() {
-  if (run.value?.id !== runId.value) return
-  const ordinal = Number(route.query.step)
-  selectedStepOrdinal.value = typeof route.query.step === 'string' && Number.isSafeInteger(ordinal) && ordinal >= 0 && run.value.steps[ordinal]?.id === route.query.stepId ? ordinal : null
+  if (run.value?.id !== runId.value) return;
+  const ordinal = Number(route.query.step);
+  selectedStepOrdinal.value =
+    typeof route.query.step === "string" &&
+    Number.isSafeInteger(ordinal) &&
+    ordinal >= 0 &&
+    run.value.steps[ordinal]?.id === route.query.stepId
+      ? ordinal
+      : null;
 }
-watch(() => [route.query.step, route.query.stepId], selectSourceLog)
+watch(() => [route.query.step, route.query.stepId], selectSourceLog);
 function clearSourceLog() {
-  selectedStepOrdinal.value = null
-  const query = { ...route.query }; delete query.step; delete query.stepId
-  void router.replace({ query })
+  selectedStepOrdinal.value = null;
+  const query = { ...route.query };
+  delete query.step;
+  delete query.stepId;
+  void router.replace({ query });
 }
 
 // ─── cancel state ─────────────────────────────────────────────────────────────
 
-const cancelling = ref(false)
-const cancelError = ref('')
+const cancelling = ref(false);
+const cancelError = ref("");
 
 async function handleCancel(): Promise<void> {
-  if (cancelling.value) return
-  const gen = runGeneration; const id = runId.value
-  cancelling.value = true
-  cancelError.value = ''
+  if (cancelling.value) return;
+  const gen = runGeneration;
+  const id = runId.value;
+  cancelling.value = true;
+  cancelError.value = "";
   try {
-    const updated = await cancelRun(id)
-    if (gen !== runGeneration) return
-    run.value = updated
+    const updated = await cancelRun(id);
+    if (gen !== runGeneration) return;
+    run.value = updated;
   } catch (err) {
-    if (gen !== runGeneration) return
+    if (gen !== runGeneration) return;
     if (err instanceof HttpError) {
-      cancelError.value = err.apiError?.message ?? t('runDetail.cancelFailed', { status: err.status })
+      cancelError.value =
+        err.apiError?.message ??
+        t("runDetail.cancelFailed", { status: err.status });
     } else {
-      cancelError.value = t('runDetail.cancelRequestFailed')
+      cancelError.value = t("runDetail.cancelRequestFailed");
     }
   } finally {
-    if (gen === runGeneration) cancelling.value = false
+    if (gen === runGeneration) cancelling.value = false;
   }
 }
 
 // ─── approval gate (Story 8-4) ──────────────────────────────────────────────────
 // 运行阻塞在审批门(status=waiting_approval)时,展示待批阶段 + 批准/拒绝按钮。
 
-const pendingApproval = ref<ApprovalRecord | null>(null)
-const approving = ref(false)
-const approvalError = ref('')
+const pendingApproval = ref<ApprovalRecord | null>(null);
+const approving = ref(false);
+const approvalError = ref("");
 
 async function loadApprovals(): Promise<void> {
-  const gen = runGeneration; const id = runId.value
+  const gen = runGeneration;
+  const id = runId.value;
   try {
-    const { items } = await listApprovals(id)
-    if (gen !== runGeneration) return
-    pendingApproval.value = items.find((a) => a.status === 'pending') ?? null
+    const { items } = await listApprovals(id);
+    if (gen !== runGeneration) return;
+    pendingApproval.value = items.find((a) => a.status === "pending") ?? null;
   } catch {
-    if (gen !== runGeneration) return
-    pendingApproval.value = null
+    if (gen !== runGeneration) return;
+    pendingApproval.value = null;
   }
 }
 
 async function decideApproval(approve: boolean): Promise<void> {
-  const stage = pendingApproval.value
-  if (!stage || approving.value) return
-  const gen = runGeneration; const id = runId.value
-  approving.value = true
-  approvalError.value = ''
+  const stage = pendingApproval.value;
+  if (!stage || approving.value) return;
+  const gen = runGeneration;
+  const id = runId.value;
+  approving.value = true;
+  approvalError.value = "";
   try {
-    if (approve) await approveStage(id, stage.stageId)
-    else await rejectStage(id, stage.stageId)
-    if (gen !== runGeneration) return
-    pendingApproval.value = null
+    if (approve) await approveStage(id, stage.stageId);
+    else await rejectStage(id, stage.stageId);
+    if (gen !== runGeneration) return;
+    pendingApproval.value = null;
     // status flips via SSE (waiting_approval → running → terminal); refresh run + approvals.
-    const fresh = await getRun(id, { signal: runController?.signal })
-    if (gen !== runGeneration) return
-    run.value = fresh
-    await loadApprovals()
+    const fresh = await getRun(id, { signal: runController?.signal });
+    if (gen !== runGeneration) return;
+    run.value = fresh;
+    await loadApprovals();
   } catch (err) {
-    if (gen !== runGeneration) return
+    if (gen !== runGeneration) return;
     approvalError.value =
       err instanceof HttpError
-        ? (err.apiError?.message ?? t('runDetail.actionFailed', { status: err.status }))
-        : t('runDetail.approvalRequestFailed')
+        ? (err.apiError?.message ??
+          t("runDetail.actionFailed", { status: err.status }))
+        : t("runDetail.approvalRequestFailed");
   } finally {
-    if (gen === runGeneration) approving.value = false
+    if (gen === runGeneration) approving.value = false;
   }
 }
 
 // ─── deploy state (Story 4-2: SSH 部署执行 / FR-10) ─────────────────────────────
 // 成功态可把某个产物部署到所选目标服务器;同步执行,回填 run.targets slot。
 
-const deployServers = ref<Server[]>([])
-const deployServersLoaded = ref(false)
-const selectedArtifactId = ref('')
-const artifactOptions = computed(() => (run.value?.artifacts ?? []).map((a) => {
-  const source = typeof a.metadata.workspacePath === 'string' ? a.metadata.workspacePath : a.reference.slice(0, 12)
-  return { value: a.id, label: `${a.name} · ${a.type} · ${source}` }
-}))
-const selectedServerIds = ref<string[]>([])
-const deploying = ref(false)
-const deployError = ref('')
-const showDeployPanel = ref(false)
-const attachedGuard = ref<{ enabled: boolean; ready: boolean; binding?: ReleaseGuardBinding }>({ enabled: false, ready: false })
-const attachedGuardReset = ref(0)
-const deployOutcomeUnknown = ref(false)
-const deployedGuardId = ref('')
-const selectedArtifactIsImage = computed(() => run.value?.artifacts.some(artifact => artifact.id === selectedArtifactId.value && artifact.type === 'image') ?? false)
-const selectedArtifactType = computed(() => run.value?.artifacts.find(artifact => artifact.id === selectedArtifactId.value)?.type ?? '')
-const localDockerConfig = ref<Record<string, string>>({})
-const localDockerEligible = computed(() => ['archive', 'dist'].includes(selectedArtifactType.value))
-const localDockerSelected = computed(() => localDockerEligible.value && localDockerConfig.value.localDocker === 'true')
-const guardEligible = computed(() => selectedArtifactIsImage.value || localDockerSelected.value)
+const deployServers = ref<Server[]>([]);
+const deployServersLoaded = ref(false);
+const selectedArtifactId = ref("");
+const artifactOptions = computed(() =>
+  (run.value?.artifacts ?? []).map((a) => {
+    const source =
+      typeof a.metadata.workspacePath === "string"
+        ? a.metadata.workspacePath
+        : a.reference.slice(0, 12);
+    return { value: a.id, label: `${a.name} · ${a.type} · ${source}` };
+  }),
+);
+const selectedServerIds = ref<string[]>([]);
+const deploying = ref(false);
+const deployError = ref("");
+const showDeployPanel = ref(false);
+const attachedGuard = ref<{
+  enabled: boolean;
+  ready: boolean;
+  binding?: ReleaseGuardBinding;
+}>({ enabled: false, ready: false });
+const attachedGuardReset = ref(0);
+const deployOutcomeUnknown = ref(false);
+const deployedGuardId = ref("");
+const selectedArtifactIsImage = computed(
+  () =>
+    run.value?.artifacts.some(
+      (artifact) =>
+        artifact.id === selectedArtifactId.value && artifact.type === "image",
+    ) ?? false,
+);
+const selectedArtifactType = computed(
+  () =>
+    run.value?.artifacts.find(
+      (artifact) => artifact.id === selectedArtifactId.value,
+    )?.type ?? "",
+);
+const localDockerConfig = ref<Record<string, string>>({});
+const localDockerEligible = computed(() =>
+  ["archive", "dist"].includes(selectedArtifactType.value),
+);
+const localDockerSelected = computed(
+  () =>
+    localDockerEligible.value && localDockerConfig.value.localDocker === "true",
+);
+const guardEligible = computed(
+  () => selectedArtifactIsImage.value || localDockerSelected.value,
+);
 
 // ─── deploy-time health gate (Story 4-3 / FR-12) ─────────────────────────────
 // 部署后健康门控:type none(默认,跳过)/ http(curl 探测)/ command(命令探测)。
 // 字段值仅作表单状态;提交时按 type 收敛为 HealthCheckInput(none → 不传)。
-const hcType = ref<HealthCheckType>('none')
-const hcUrl = ref('')
-const hcCommand = ref('') // 以空格分词为 command array(逐个 array 元素,经后端不拼 shell)
-const hcRetries = ref(3)
-const hcIntervalSeconds = ref(3)
-const hcTimeoutSeconds = ref(5)
+const hcType = ref<HealthCheckType>("none");
+const hcUrl = ref("");
+const hcCommand = ref(""); // 以空格分词为 command array(逐个 array 元素,经后端不拼 shell)
+const hcRetries = ref(3);
+const hcIntervalSeconds = ref(3);
+const hcTimeoutSeconds = ref(5);
 
 // ─── 零停机切换高级选项(Story 4-4 / FR-11)──────────────────────────────────
 // dist/jar 走「releases/<runId> + current 软链原子切换」;以下为可选高级覆盖,默认隐藏。
 // releaseBase:发布根目录 <base>(空 → 后端从 path 推导);keepReleases:额外保留旧发布份数。
 // 经既有 deployConfig map 透传,不改部署端点形状。
-const showAdvanced = ref(false)
-const releaseBase = ref('')
-const keepReleases = ref(1)
-const commandTimeoutSeconds = ref(60)
-const connectTimeoutSeconds = ref(15)
-const uploadIdleTimeoutSeconds = ref(120)
-const uploadTimeoutSeconds = ref(0)
+const showAdvanced = ref(false);
+const releaseBase = ref("");
+const keepReleases = ref(1);
+const commandTimeoutSeconds = ref(60);
+const connectTimeoutSeconds = ref(15);
+const uploadIdleTimeoutSeconds = ref(120);
+const uploadTimeoutSeconds = ref(0);
 
 // ─── 部署策略(Story 8-8 / FR-8-8)──────────────────────────────────────────
 // rolling(默认)= 全机并行各自成败;canary = 先发金丝雀批次、健康通过才铺其余;
 // blue_green = 全机先就绪、统一切换、失败机群回滚(release 类产物 dist/jar)。
 // 金丝雀批量经 deployConfig.canaryCount 透传。
-const deployStrategy = ref<DeployStrategy>('rolling')
-const canaryCount = ref(1)
+const deployStrategy = ref<DeployStrategy>("rolling");
+const canaryCount = ref(1);
 
-const deployStrategyOptions = computed<ReadonlyArray<{ value: DeployStrategy; label: string; desc: string }>>(() => [
-  { value: 'rolling', label: t('runDetail.strategyRollingLabel'), desc: t('runDetail.strategyRollingDesc') },
-  { value: 'canary', label: t('runDetail.strategyCanaryLabel'), desc: t('runDetail.strategyCanaryDesc') },
-  { value: 'blue_green', label: t('runDetail.strategyBlueGreenLabel'), desc: t('runDetail.strategyBlueGreenDesc') },
-  { value: 'interactive', label: t('runDetail.strategyInteractiveLabel'), desc: t('runDetail.strategyInteractiveDesc') },
-])
+const deployStrategyOptions = computed<
+  ReadonlyArray<{ value: DeployStrategy; label: string; desc: string }>
+>(() => [
+  {
+    value: "rolling",
+    label: t("runDetail.strategyRollingLabel"),
+    desc: t("runDetail.strategyRollingDesc"),
+  },
+  {
+    value: "canary",
+    label: t("runDetail.strategyCanaryLabel"),
+    desc: t("runDetail.strategyCanaryDesc"),
+  },
+  {
+    value: "blue_green",
+    label: t("runDetail.strategyBlueGreenLabel"),
+    desc: t("runDetail.strategyBlueGreenDesc"),
+  },
+  {
+    value: "interactive",
+    label: t("runDetail.strategyInteractiveLabel"),
+    desc: t("runDetail.strategyInteractiveDesc"),
+  },
+]);
 
 // buildDeployConfig 据高级选项收敛 deployConfig;空字段不传(后端取默认)。
 function buildDeployConfig(): Record<string, string> | undefined {
-  const cfg: Record<string, string> = {}
-  if (localDockerSelected.value) Object.assign(cfg, localDockerConfig.value)
-  const base = releaseBase.value.trim()
-  if (base) cfg.releaseBase = base
-  const keep = clampInt(keepReleases.value, 1, 50, 1)
+  const cfg: Record<string, string> = {};
+  if (localDockerSelected.value) Object.assign(cfg, localDockerConfig.value);
+  const base = releaseBase.value.trim();
+  if (base) cfg.releaseBase = base;
+  const keep = clampInt(keepReleases.value, 1, 50, 1);
   // 仅在非默认(1)时下发,避免无谓字段。
-  if (keep !== 1) cfg.keepReleases = String(keep)
-  if (commandTimeoutSeconds.value !== 60) cfg.commandTimeoutSeconds = String(clampInt(commandTimeoutSeconds.value, 1, 86400, 60))
-  if (connectTimeoutSeconds.value !== 15) cfg.connectTimeoutSeconds = String(clampInt(connectTimeoutSeconds.value, 1, 300, 15))
-  if (uploadIdleTimeoutSeconds.value !== 120) cfg.uploadIdleTimeoutSeconds = String(clampInt(uploadIdleTimeoutSeconds.value, 1, 86400, 120))
-  if (uploadTimeoutSeconds.value > 0) cfg.uploadTimeoutSeconds = String(clampInt(uploadTimeoutSeconds.value, 1, 604800, 0))
+  if (keep !== 1) cfg.keepReleases = String(keep);
+  if (commandTimeoutSeconds.value !== 60)
+    cfg.commandTimeoutSeconds = String(
+      clampInt(commandTimeoutSeconds.value, 1, 86400, 60),
+    );
+  if (connectTimeoutSeconds.value !== 15)
+    cfg.connectTimeoutSeconds = String(
+      clampInt(connectTimeoutSeconds.value, 1, 300, 15),
+    );
+  if (uploadIdleTimeoutSeconds.value !== 120)
+    cfg.uploadIdleTimeoutSeconds = String(
+      clampInt(uploadIdleTimeoutSeconds.value, 1, 86400, 120),
+    );
+  if (uploadTimeoutSeconds.value > 0)
+    cfg.uploadTimeoutSeconds = String(
+      clampInt(uploadTimeoutSeconds.value, 1, 604800, 0),
+    );
   // 首批量:canary / interactive 策略且 >1 时下发(默认 1 台)。
-  if (deployStrategy.value === 'canary' || deployStrategy.value === 'interactive') {
-    const n = clampInt(canaryCount.value, 1, 100, 1)
-    if (n > 1) cfg.canaryCount = String(n)
+  if (
+    deployStrategy.value === "canary" ||
+    deployStrategy.value === "interactive"
+  ) {
+    const n = clampInt(canaryCount.value, 1, 100, 1);
+    if (n > 1) cfg.canaryCount = String(n);
   }
-  return Object.keys(cfg).length > 0 ? cfg : undefined
+  return Object.keys(cfg).length > 0 ? cfg : undefined;
 }
 
 // buildHealthCheck 据表单 type 收敛 HealthCheckInput;none → undefined(等同 4-2 不做健康检查)。
 function buildHealthCheck(): HealthCheckInput | undefined {
-  if (hcType.value === 'none') return undefined
+  if (hcType.value === "none") return undefined;
   const base = {
     retries: clampInt(hcRetries.value, 1, 20, 3),
     intervalSeconds: clampInt(hcIntervalSeconds.value, 0, 3600, 3),
     timeoutSeconds: clampInt(hcTimeoutSeconds.value, 1, 60, 5),
-  }
-  if (hcType.value === 'http') {
-    return { type: 'http', url: hcUrl.value.trim(), ...base }
+  };
+  if (hcType.value === "http") {
+    return { type: "http", url: hcUrl.value.trim(), ...base };
   }
   // command:按空白分词为 array(各元素独立,AC-SEC-02 不拼 shell)。
-  const command = hcCommand.value.trim().split(/\s+/).filter(Boolean)
-  return { type: 'command', command, ...base }
+  const command = hcCommand.value.trim().split(/\s+/).filter(Boolean);
+  return { type: "command", command, ...base };
 }
 
 function clampInt(v: number, lo: number, hi: number, fallback: number): number {
-  const n = Math.trunc(Number(v))
-  if (!Number.isFinite(n)) return fallback
-  return Math.min(hi, Math.max(lo, n))
+  const n = Math.trunc(Number(v));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(hi, Math.max(lo, n));
 }
 
 // 提交前的健康检查表单是否有效(http 需 url;command 需至少一个 token;none 永远有效)。
 const healthCheckValid = computed(() => {
-  if (hcType.value === 'http') return hcUrl.value.trim().length > 0
-  if (hcType.value === 'command') return hcCommand.value.trim().length > 0
-  return true
-})
+  if (hcType.value === "http") return hcUrl.value.trim().length > 0;
+  if (hcType.value === "command") return hcCommand.value.trim().length > 0;
+  return true;
+});
 
 // 是否已部署过(run.targets 非空 → 已有部署结果)。
-const hasDeployed = computed(() => !!run.value?.targets && run.value.targets.length > 0)
+const hasDeployed = computed(
+  () => !!run.value?.targets && run.value.targets.length > 0,
+);
 
 // 配置来源徽标(GitOps 配置来源可见性 · Slice 2):本次运行由仓库 .pipewright.yml 还是网页配置驱动。
 // specSource 为空(老运行 / 桩 runner 未上报)→ null,不展示徽标。
 const specSourceBadge = computed(() => {
-  const src = run.value?.specSource
-  if (src === 'repo') {
+  const src = run.value?.specSource;
+  if (src === "repo") {
     return {
-      kind: 'repo' as const,
-      label: t('runDetail.specSourceRepo', {
-        ref: run.value?.specSourceRef || '',
-        file: run.value?.specSourceFile || '.pipewright.yml',
+      kind: "repo" as const,
+      label: t("runDetail.specSourceRepo", {
+        ref: run.value?.specSourceRef || "",
+        file: run.value?.specSourceFile || ".pipewright.yml",
       }),
-      hint: '',
-    }
+      hint: "",
+    };
   }
-  if (src === 'stored') {
+  if (src === "release_rollback") { return {kind:"stored" as const,label:t("kubernetes.release.frozenRollback"),hint:""} }
+  if (src === "stored") {
     return {
-      kind: 'stored' as const,
-      label: t('runDetail.specSourceStored'),
+      kind: "stored" as const,
+      label: t("runDetail.specSourceStored"),
       // 回退原因非空 → 「本想用仓库但回退」的轻提示(tooltip)。
-      hint: run.value?.specSourceFallback ? t('runDetail.specSourceFallbackHint') : '',
-    }
+      hint: run.value?.specSourceFallback
+        ? t("runDetail.specSourceFallbackHint")
+        : "",
+    };
   }
-  return null
-})
+  return null;
+});
 
 async function ensureDeployServers(): Promise<void> {
-  if (deployServersLoaded.value) return
+  if (deployServersLoaded.value) return;
   try {
-    deployServers.value = await listServers()
+    deployServers.value = await listServers();
   } catch {
-    deployServers.value = []
+    deployServers.value = [];
   } finally {
-    deployServersLoaded.value = true
+    deployServersLoaded.value = true;
   }
 }
 
 async function openDeployPanel(): Promise<void> {
-  deployError.value = ''
-  showDeployPanel.value = true
-  await ensureDeployServers()
+  deployError.value = "";
+  showDeployPanel.value = true;
+  await ensureDeployServers();
   // 默认选中首个产物(若存在);服务器需用户显式勾选。
   if (!selectedArtifactId.value && run.value?.artifacts.length) {
-    selectedArtifactId.value = run.value.artifacts[0].id
+    selectedArtifactId.value = run.value.artifacts[0].id;
   }
 }
 
 function toggleServer(id: string): void {
-  const idx = selectedServerIds.value.indexOf(id)
-  if (idx >= 0) selectedServerIds.value.splice(idx, 1)
-  else selectedServerIds.value.push(id)
+  const idx = selectedServerIds.value.indexOf(id);
+  if (idx >= 0) selectedServerIds.value.splice(idx, 1);
+  else selectedServerIds.value.push(id);
 }
 
 const canDeploy = computed(
@@ -343,11 +448,15 @@ const canDeploy = computed(
     !!selectedArtifactId.value &&
     selectedServerIds.value.length > 0 &&
     healthCheckValid.value &&
-    (!localDockerSelected.value || (!!localDockerConfig.value.containerName?.trim() && deployStrategy.value !== 'blue_green')) &&
-    (!guardEligible.value || !attachedGuard.value.enabled || attachedGuard.value.ready) &&
+    (!localDockerSelected.value ||
+      (!!localDockerConfig.value.containerName?.trim() &&
+        deployStrategy.value !== "blue_green")) &&
+    (!guardEligible.value ||
+      !attachedGuard.value.enabled ||
+      attachedGuard.value.ready) &&
     !deployOutcomeUnknown.value &&
     !deploying.value,
-)
+);
 
 const currentDeployInput = computed<DeployRunInput>(() => ({
   artifactId: selectedArtifactId.value,
@@ -355,45 +464,62 @@ const currentDeployInput = computed<DeployRunInput>(() => ({
   deployConfig: buildDeployConfig(),
   healthCheck: buildHealthCheck(),
   strategy: deployStrategy.value,
-}))
+}));
 
 async function handleDeploy(): Promise<void> {
-  if (!run.value || !canDeploy.value) return
-  const gen = runGeneration
-  const guardBinding = guardEligible.value ? attachedGuard.value.binding : undefined
-  deploying.value = true
-  deployError.value = ''
+  if (!run.value || !canDeploy.value) return;
+  const gen = runGeneration;
+  const guardBinding = guardEligible.value
+    ? attachedGuard.value.binding
+    : undefined;
+  deploying.value = true;
+  deployError.value = "";
   try {
     const res = await deployRun(run.value.id, {
       ...currentDeployInput.value,
       ...(guardBinding ? { releaseGuard: { ...guardBinding } } : {}),
-    })
-    if (gen !== runGeneration) return
+    });
+    if (gen !== runGeneration) return;
     // 同步执行:用返回的 targets 直接填 slot(与 run-detail 同源形状)。
-    run.value = { ...run.value, targets: res.targets, status: deriveStatus(res.targets) }
-    showDeployPanel.value = false
-    selectedServerIds.value = []
-    deployedGuardId.value = res.guardId ?? ''
+    run.value = {
+      ...run.value,
+      targets: res.targets,
+      status: deriveStatus(res.targets),
+    };
+    showDeployPanel.value = false;
+    selectedServerIds.value = [];
+    deployedGuardId.value = res.guardId ?? "";
   } catch (err) {
-    if (gen !== runGeneration) return
-    if (guardBinding && err instanceof HttpError && (err.status === 0 || err.status >= 500)) deployOutcomeUnknown.value = true
+    if (gen !== runGeneration) return;
+    if (
+      guardBinding &&
+      err instanceof HttpError &&
+      (err.status === 0 || err.status >= 500)
+    )
+      deployOutcomeUnknown.value = true;
     if (err instanceof HttpError) {
-      deployError.value = deployOutcomeUnknown.value ? t('releaseGuard.attachedOutcomeUnknown') : err.apiError?.message ?? t('runDetail.deployFailed', { status: err.status })
+      deployError.value = deployOutcomeUnknown.value
+        ? t("releaseGuard.attachedOutcomeUnknown")
+        : (err.apiError?.message ??
+          t("runDetail.deployFailed", { status: err.status }));
     } else {
-      deployError.value = t('runDetail.deployRequestFailed')
+      deployError.value = t("runDetail.deployRequestFailed");
     }
   } finally {
-    if (gen === runGeneration) { attachedGuardReset.value++; deploying.value = false }
+    if (gen === runGeneration) {
+      attachedGuardReset.value++;
+      deploying.value = false;
+    }
   }
 }
 
 // deriveStatus 据每机结果推 run 终态(与后端 SetDeployTerminal 同语义),让状态徽标即时更新。
 function deriveStatus(targets: { status: string }[]): RunStatus {
-  const anyOk = targets.some((t) => t.status === 'success')
-  const anyBad = targets.some((t) => t.status !== 'success')
-  if (anyBad && anyOk) return 'partial_failed'
-  if (anyBad) return 'failed'
-  return run.value?.status ?? 'success'
+  const anyOk = targets.some((t) => t.status === "success");
+  const anyBad = targets.some((t) => t.status !== "success");
+  if (anyBad && anyOk) return "partial_failed";
+  if (anyBad) return "failed";
+  return run.value?.status ?? "success";
 }
 
 // ─── retry only failed targets (Story 4-5 / FR-13) ───────────────────────────
@@ -401,115 +527,147 @@ function deriveStatus(targets: { status: string }[]): RunStatus {
 // 产物(selectedArtifactId,回退首个产物)+ 配置 + 健康检查,只对失败台重跑;成功台不动。
 // 后端逐目标 upsert + 重算终态,返回全量最新 targets;直接回填 slot。
 
-const retrying = ref(false)
-const retryError = ref('')
+const retrying = ref(false);
+const retryError = ref("");
 
 async function handleRetryFailed(): Promise<void> {
-  if (!run.value || retrying.value) return
-  const gen = runGeneration
+  if (!run.value || retrying.value) return;
+  const gen = runGeneration;
   // 复用产物:优先上次部署选中的;否则回退首个产物(刷新页面后表单态丢失的兜底)。
-  const artifactId = selectedArtifactId.value || run.value.artifacts[0]?.id || ''
+  const artifactId =
+    selectedArtifactId.value || run.value.artifacts[0]?.id || "";
   if (!artifactId) {
-    retryError.value = t('runDetail.noArtifactRetry')
-    return
+    retryError.value = t("runDetail.noArtifactRetry");
+    return;
   }
-  retrying.value = true
-  retryError.value = ''
+  retrying.value = true;
+  retryError.value = "";
   try {
     const res = await retryFailedDeploy(run.value.id, {
       artifactId,
       // serverIds 省略 → 后端重试该 run 当前所有失败/回滚目标。
       deployConfig: buildDeployConfig(),
       healthCheck: buildHealthCheck(),
-    })
-    if (gen !== runGeneration) return
-    run.value = { ...run.value, targets: res.targets, status: deriveStatus(res.targets) }
+    });
+    if (gen !== runGeneration) return;
+    run.value = {
+      ...run.value,
+      targets: res.targets,
+      status: deriveStatus(res.targets),
+    };
   } catch (err) {
-    if (gen !== runGeneration) return
+    if (gen !== runGeneration) return;
     if (err instanceof HttpError) {
-      retryError.value = err.apiError?.message ?? t('runDetail.retryFailed', { status: err.status })
+      retryError.value =
+        err.apiError?.message ??
+        t("runDetail.retryFailed", { status: err.status });
     } else {
-      retryError.value = t('runDetail.retryRequestFailed')
+      retryError.value = t("runDetail.retryRequestFailed");
     }
   } finally {
-    if (gen === runGeneration) retrying.value = false
+    if (gen === runGeneration) retrying.value = false;
   }
 }
 
 // ─── 交互式分批部署:续发 / 中止(P0)─────────────────────────────────────────
-const batchBusy = ref(false)
-const batchError = ref('')
+const batchBusy = ref(false);
+const batchError = ref("");
 
 // 是否有暂停待确认的批次(pending 目标存在)。
 const hasPendingTargets = computed(() =>
-  (run.value?.targets ?? []).some((t) => t.status === 'pending'),
-)
-const pendingCount = computed(() => (run.value?.targets ?? []).filter((t) => t.status === 'pending').length)
+  (run.value?.targets ?? []).some((t) => t.status === "pending"),
+);
+const pendingCount = computed(
+  () => (run.value?.targets ?? []).filter((t) => t.status === "pending").length,
+);
 
 async function handleContinueDeploy(): Promise<void> {
-  if (!run.value || batchBusy.value) return
-  const gen = runGeneration
-  const artifactId = selectedArtifactId.value || run.value.artifacts[0]?.id || ''
+  if (!run.value || batchBusy.value) return;
+  const gen = runGeneration;
+  const artifactId =
+    selectedArtifactId.value || run.value.artifacts[0]?.id || "";
   if (!artifactId) {
-    batchError.value = t('runDetail.noArtifactContinue')
-    return
+    batchError.value = t("runDetail.noArtifactContinue");
+    return;
   }
-  batchBusy.value = true
-  batchError.value = ''
+  batchBusy.value = true;
+  batchError.value = "";
   try {
     const res = await continueDeploy(run.value.id, {
       artifactId,
       deployConfig: buildDeployConfig(),
       healthCheck: buildHealthCheck(),
-    })
-    if (gen !== runGeneration) return
-    run.value = { ...run.value, targets: res.targets, status: deriveStatus(res.targets) }
+    });
+    if (gen !== runGeneration) return;
+    run.value = {
+      ...run.value,
+      targets: res.targets,
+      status: deriveStatus(res.targets),
+    };
   } catch (err) {
-    if (gen !== runGeneration) return
-    batchError.value = err instanceof HttpError ? (err.apiError?.message ?? t('runDetail.continueFailed', { status: err.status })) : t('runDetail.continueRequestFailed')
+    if (gen !== runGeneration) return;
+    batchError.value =
+      err instanceof HttpError
+        ? (err.apiError?.message ??
+          t("runDetail.continueFailed", { status: err.status }))
+        : t("runDetail.continueRequestFailed");
   } finally {
-    if (gen === runGeneration) batchBusy.value = false
+    if (gen === runGeneration) batchBusy.value = false;
   }
 }
 
 async function handleAbortDeploy(): Promise<void> {
-  if (!run.value || batchBusy.value) return
-  const gen = runGeneration
-  batchBusy.value = true
-  batchError.value = ''
+  if (!run.value || batchBusy.value) return;
+  const gen = runGeneration;
+  batchBusy.value = true;
+  batchError.value = "";
   try {
-    const res = await abortDeploy(run.value.id)
-    if (gen !== runGeneration) return
-    run.value = { ...run.value, targets: res.targets, status: deriveStatus(res.targets) }
+    const res = await abortDeploy(run.value.id);
+    if (gen !== runGeneration) return;
+    run.value = {
+      ...run.value,
+      targets: res.targets,
+      status: deriveStatus(res.targets),
+    };
   } catch (err) {
-    if (gen !== runGeneration) return
-    batchError.value = err instanceof HttpError ? (err.apiError?.message ?? t('runDetail.abortFailed', { status: err.status })) : t('runDetail.abortRequestFailed')
+    if (gen !== runGeneration) return;
+    batchError.value =
+      err instanceof HttpError
+        ? (err.apiError?.message ??
+          t("runDetail.abortFailed", { status: err.status }))
+        : t("runDetail.abortRequestFailed");
   } finally {
-    if (gen === runGeneration) batchBusy.value = false
+    if (gen === runGeneration) batchBusy.value = false;
   }
 }
 
 // ─── data loading ─────────────────────────────────────────────────────────────
 
 async function loadRun(): Promise<void> {
-  const gen = runGeneration; const id = runId.value
-  loadState.value = 'loading'
-  loadFailure.value = null
+  const gen = runGeneration;
+  const id = runId.value;
+  loadState.value = "loading";
+  loadFailure.value = null;
   try {
-    const fresh = await getRun(id, { signal: runController?.signal })
-    if (gen !== runGeneration) return
-    run.value = fresh
-    selectSourceLog()
-    loadState.value = 'idle'
-    if (run.value.status === 'waiting_approval') void loadApprovals()
+    const fresh = await getRun(id, { signal: runController?.signal });
+    if (gen !== runGeneration) return;
+    run.value = fresh;
+    selectSourceLog();
+    loadState.value = "idle";
+    if (run.value.status === "waiting_approval") void loadApprovals();
   } catch (err) {
-    if (gen !== runGeneration) return
+    if (gen !== runGeneration) return;
     if (err instanceof HttpError) {
-      loadFailure.value = err.status === 404 ? { kind: 'notFound', id } : err.status === 0 ? { kind: 'network' } : { kind: 'status', status: err.status }
+      loadFailure.value =
+        err.status === 404
+          ? { kind: "notFound", id }
+          : err.status === 0
+            ? { kind: "network" }
+            : { kind: "status", status: err.status };
     } else {
-      loadFailure.value = { kind: 'network' }
+      loadFailure.value = { kind: "network" };
     }
-    loadState.value = 'error'
+    loadState.value = "error";
   }
 }
 
@@ -520,12 +678,13 @@ async function loadRun(): Promise<void> {
 // reload. A periodic silent refresh keeps commit + steps (with stage) + status
 // current during execution; SSE still drives live log tailing.
 async function silentRefresh(): Promise<void> {
-  const gen = runGeneration; const id = runId.value
+  const gen = runGeneration;
+  const id = runId.value;
   try {
-    const fresh = await getRun(id, { signal: runController?.signal })
-    if (gen !== runGeneration) return
-    run.value = fresh
-    if (fresh.status === 'waiting_approval') void loadApprovals()
+    const fresh = await getRun(id, { signal: runController?.signal });
+    if (gen !== runGeneration) return;
+    run.value = fresh;
+    if (fresh.status === "waiting_approval") void loadApprovals();
   } catch {
     // Transient fetch failure — next tick retries; never surfaced to the UI.
   }
@@ -535,204 +694,364 @@ async function silentRefresh(): Promise<void> {
 // Subscribes when run is in-progress (running/queued).
 // Cleans up on terminal states or component unmount.
 
-let cleanupSse: (() => void) | null = null
+let cleanupSse: (() => void) | null = null;
 // Periodic in-progress snapshot refresh; lives exactly as long as the SSE
 // subscription (started/stopped alongside it).
-let refreshTimer: ReturnType<typeof setInterval> | null = null
+let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
 function startSse(): void {
-  if (cleanupSse) return
-  const gen = runGeneration; const id = runId.value
+  if (cleanupSse) return;
+  const gen = runGeneration;
+  const id = runId.value;
   cleanupSse = subscribeRunEvents(id, {
     onStatus({ status }) {
-      if (gen !== runGeneration || id !== runId.value) return
-      void recovery.refresh()
-      if (!run.value) return
-      run.value = { ...run.value, status }
+      if (gen !== runGeneration || id !== runId.value) return;
+      void recovery.refresh();
+      if (!run.value) return;
+      run.value = { ...run.value, status };
       // Approval gate (8-4): load pending stage when blocked; clear once resumed.
-      if (status === 'waiting_approval') void loadApprovals()
-      else pendingApproval.value = null
+      if (status === "waiting_approval") void loadApprovals();
+      else pendingApproval.value = null;
       // Stop SSE on terminal state + 重拉完整 run:终态由后端补齐的 commit / 构建产物 / 时长
       // 经 SSE 只推了 status,需重新 GET 才能拿到 → 否则要手动刷新才出来。
       if (isTerminal(status)) {
-        stopSse()
-        void loadRun()
+        stopSse();
+        void loadRun();
       }
     },
     onStep({ step }) {
-      if (gen !== runGeneration || id !== runId.value) return
-      void recovery.refresh()
-      if (!run.value) return
-      const steps = run.value.steps.map((s) => (s.id === step.id ? { ...s, ...step } : s))
-      run.value = { ...run.value, steps }
+      if (gen !== runGeneration || id !== runId.value) return;
+      void recovery.refresh();
+      if (!run.value) return;
+      const steps = run.value.steps.map((s) =>
+        s.id === step.id ? { ...s, ...step } : s,
+      );
+      run.value = { ...run.value, steps };
     },
     // onError is intentionally omitted — subscribeRunEvents falls back to polling
-  })
+  });
   if (refreshTimer === null) {
-    refreshTimer = setInterval(() => { void silentRefresh() }, 4000)
+    refreshTimer = setInterval(() => {
+      void silentRefresh();
+    }, 4000);
   }
 }
 
 function stopSse(): void {
   if (cleanupSse) {
-    cleanupSse()
-    cleanupSse = null
+    cleanupSse();
+    cleanupSse = null;
   }
   if (refreshTimer !== null) {
-    clearInterval(refreshTimer)
-    refreshTimer = null
+    clearInterval(refreshTimer);
+    refreshTimer = null;
   }
 }
 
 function isTerminal(status: RunStatus): boolean {
-  return status === 'success' || status === 'failed' || status === 'partial_failed' || status === 'rolled_back'
+  return (
+    status === "success" ||
+    status === "failed" ||
+    status === "partial_failed" ||
+    status === "rolled_back"
+  );
 }
 
 // Manage SSE lifecycle as run status changes
 watch(
   () => run.value?.status,
   (status) => {
-    if (!status) return
-    if ((status === 'running' || status === 'queued' || status === 'waiting_approval') && !cleanupSse) {
-      startSse()
+    if (!status) return;
+    if (
+      (status === "running" ||
+        status === "queued" ||
+        status === "waiting_approval" ||
+        status === "waiting_action") &&
+      !cleanupSse
+    ) {
+      startSse();
     } else if (isTerminal(status)) {
-      stopSse()
+      stopSse();
     }
   },
-)
+);
 
-watch(runId, () => {
-  runGeneration++; runController?.abort(); runController = new AbortController(); stopSse()
-  run.value = null; selectedStepOrdinal.value = null; pendingApproval.value = null
-  loadFailure.value = null; cancelError.value = ''; approvalError.value = ''; deployError.value = ''
-  showDeployPanel.value = false; deploying.value = false; cancelling.value = false; approving.value = false
-  retrying.value = false; retryError.value = ''; batchBusy.value = false; batchError.value = ''
-  selectedArtifactId.value = ''; selectedServerIds.value = []; deployedGuardId.value = ''; deployOutcomeUnknown.value = false
-  attachedGuard.value = { enabled: false, ready: false }; attachedGuardReset.value++
-  localDockerConfig.value = {}; showAdvanced.value = false; releaseBase.value = ''; keepReleases.value = 1
-  hcType.value = 'none'; hcUrl.value = ''; hcCommand.value = ''; hcRetries.value = 3; hcIntervalSeconds.value = 3; hcTimeoutSeconds.value = 5
-  commandTimeoutSeconds.value = 60; connectTimeoutSeconds.value = 15; uploadIdleTimeoutSeconds.value = 120; uploadTimeoutSeconds.value = 0
-  deployStrategy.value = 'rolling'; canaryCount.value = 1
-  void loadRun()
-}, { immediate: true })
+watch(
+  runId,
+  () => {
+    runGeneration++;
+    runController?.abort();
+    runController = new AbortController();
+    stopSse();
+    run.value = null;
+    selectedStepOrdinal.value = null;
+    pendingApproval.value = null;
+    loadFailure.value = null;
+    cancelError.value = "";
+    approvalError.value = "";
+    deployError.value = "";
+    showDeployPanel.value = false;
+    deploying.value = false;
+    cancelling.value = false;
+    approving.value = false;
+    retrying.value = false;
+    retryError.value = "";
+    batchBusy.value = false;
+    batchError.value = "";
+    selectedArtifactId.value = "";
+    selectedServerIds.value = [];
+    deployedGuardId.value = "";
+    deployOutcomeUnknown.value = false;
+    attachedGuard.value = { enabled: false, ready: false };
+    attachedGuardReset.value++;
+    localDockerConfig.value = {};
+    showAdvanced.value = false;
+    releaseBase.value = "";
+    keepReleases.value = 1;
+    hcType.value = "none";
+    hcUrl.value = "";
+    hcCommand.value = "";
+    hcRetries.value = 3;
+    hcIntervalSeconds.value = 3;
+    hcTimeoutSeconds.value = 5;
+    commandTimeoutSeconds.value = 60;
+    connectTimeoutSeconds.value = 15;
+    uploadIdleTimeoutSeconds.value = 120;
+    uploadTimeoutSeconds.value = 0;
+    deployStrategy.value = "rolling";
+    canaryCount.value = 1;
+    void loadRun();
+  },
+  { immediate: true },
+);
 
-onUnmounted(() => { runGeneration++; runController?.abort(); stopSse() })
+onUnmounted(() => {
+  runGeneration++;
+  runController?.abort();
+  stopSse();
+});
 
 // ─── Status config (fixed six-word set) ──────────────────────────────────────
 
 interface StatusConfig {
-  dot: string
-  bg: string
-  border: string
-  text: string
-  pulse: boolean
+  dot: string;
+  bg: string;
+  border: string;
+  text: string;
+  pulse: boolean;
 }
 
 const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
-  queued:        { dot: 'var(--color-faint)',  bg: 'var(--color-card-2)',     border: 'var(--color-border-strong)', text: 'var(--color-dim)',   pulse: false },
-  running:       { dot: 'var(--color-amber)',  bg: 'var(--color-amber-soft)', border: 'transparent',               text: 'var(--color-amber)', pulse: true  },
-  waiting_approval:{ dot: 'var(--color-amber)', bg: 'var(--color-amber-soft)', border: 'var(--color-amber-line)',   text: 'var(--color-amber)', pulse: true  },
-  success:       { dot: 'var(--color-green)',  bg: 'var(--color-green-soft)', border: 'transparent',               text: 'var(--color-green)', pulse: false },
-  failed:        { dot: 'var(--color-red)',    bg: 'var(--color-red-soft)',   border: 'var(--color-red-line)',     text: 'var(--color-red)',   pulse: false },
-  partial_failed:{ dot: 'var(--color-red)',    bg: 'var(--color-red-soft)',   border: 'var(--color-red-line)',     text: 'var(--color-red)',   pulse: false },
-  rolled_back:   { dot: 'var(--color-amber)',  bg: 'var(--color-amber-soft)', border: 'var(--color-amber-line)',   text: 'var(--color-amber)', pulse: false },
-}
+  queued: {
+    dot: "var(--color-faint)",
+    bg: "var(--color-card-2)",
+    border: "var(--color-border-strong)",
+    text: "var(--color-dim)",
+    pulse: false,
+  },
+  running: {
+    dot: "var(--color-amber)",
+    bg: "var(--color-amber-soft)",
+    border: "transparent",
+    text: "var(--color-amber)",
+    pulse: true,
+  },
+  waiting_action: {
+    dot: "var(--color-amber)",
+    bg: "var(--color-amber-soft)",
+    border: "var(--color-amber-line)",
+    text: "var(--color-amber)",
+    pulse: false,
+  },
+  waiting_approval: {
+    dot: "var(--color-amber)",
+    bg: "var(--color-amber-soft)",
+    border: "var(--color-amber-line)",
+    text: "var(--color-amber)",
+    pulse: true,
+  },
+  success: {
+    dot: "var(--color-green)",
+    bg: "var(--color-green-soft)",
+    border: "transparent",
+    text: "var(--color-green)",
+    pulse: false,
+  },
+  failed: {
+    dot: "var(--color-red)",
+    bg: "var(--color-red-soft)",
+    border: "var(--color-red-line)",
+    text: "var(--color-red)",
+    pulse: false,
+  },
+  partial_failed: {
+    dot: "var(--color-red)",
+    bg: "var(--color-red-soft)",
+    border: "var(--color-red-line)",
+    text: "var(--color-red)",
+    pulse: false,
+  },
+  rolled_back: {
+    dot: "var(--color-amber)",
+    bg: "var(--color-amber-soft)",
+    border: "var(--color-amber-line)",
+    text: "var(--color-amber)",
+    pulse: false,
+  },
+};
 
 // 状态文案复用基础命名空间 runStatus.*(六态徽标 + aria 通用)。
 function statusLabel(status: RunStatus): string {
-  return t(`runStatus.${status}`)
+  return t(`runStatus.${status}`);
 }
 
 // ─── Step config ─────────────────────────────────────────────────────────────
 
-interface StepConfig { icon: 'check' | 'spinner' | 'dot' | 'x' | 'skip'; color: string }
+interface StepConfig {
+  icon: "check" | "spinner" | "dot" | "x" | "skip";
+  color: string;
+}
 
 function stepConfig(status: StepStatus): StepConfig {
   switch (status) {
-    case 'success': return { icon: 'check',   color: 'var(--color-green)' }
-    case 'running': return { icon: 'spinner', color: 'var(--color-amber)' }
-    case 'failed':  return { icon: 'x',       color: 'var(--color-red)'   }
-    case 'skipped': return { icon: 'skip',    color: 'var(--color-faint)' }
-    default:        return { icon: 'dot',     color: 'var(--color-faint)' }
+    case "success":
+      return { icon: "check", color: "var(--color-green)" };
+    case "running":
+      return { icon: "spinner", color: "var(--color-amber)" };
+    case "failed":
+      return { icon: "x", color: "var(--color-red)" };
+    case "skipped":
+      return { icon: "skip", color: "var(--color-faint)" };
+    default:
+      return { icon: "dot", color: "var(--color-faint)" };
   }
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
-function shortId(id: string): string { return id.slice(0, 8) }
+function shortId(id: string): string {
+  return id.slice(0, 8);
+}
 
 function shortCommit(commit: string): string {
-  return commit.length > 7 ? commit.slice(0, 7) : commit
+  return commit.length > 7 ? commit.slice(0, 7) : commit;
 }
 
 // Commit 区显示文案:有 commit 取短 hash;空时——运行已失败(典型源码克隆失败,
 // 还没解析到 commit 就挂了)给失败语义「未取到」而非纯空白(误导成还在跑),
 // 其余(进行中尚未解析)用占位符 —。
 function commitDisplay(commit: string, status: RunStatus): string {
-  if (commit) return shortCommit(commit)
-  if (status === 'failed' || status === 'partial_failed' || status === 'rolled_back') return t('runDetail.commitUnresolved')
-  return '—'
+  if (commit) return shortCommit(commit);
+  if (
+    status === "failed" ||
+    status === "partial_failed" ||
+    status === "rolled_back"
+  )
+    return t("runDetail.commitUnresolved");
+  return "—";
 }
 
 function formatDuration(ms: number | null): string {
-  if (ms === null) return '—'
-  const s = Math.floor(ms / 1000)
-  if (s < 60) return `${s}s`
-  const m = Math.floor(s / 60)
-  const rem = s % 60
-  return rem > 0 ? `${m}m ${rem}s` : `${m}m`
+  if (ms === null) return "—";
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return rem > 0 ? `${m}m ${rem}s` : `${m}m`;
 }
 
 function formatDateTime(iso: string | null): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
+  if (!iso) return "—";
+  const d = new Date(iso);
   return d.toLocaleString(locale.value, {
-    month: 'numeric', day: 'numeric',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-  })
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 function goBack(): void {
-  const target = safeRunListReturn(route.query.returnTo)
-  if (window.history.state?.back === target) router.back()
-  else void router.push(target)
+  const target = safeRunListReturn(route.query.returnTo);
+  if (window.history.state?.back === target) router.back();
+  else void router.push(target);
 }
 
 // ─── Computed step status for skewer node style ───────────────────────────────
 function nodeClass(status: StepStatus): string {
   switch (status) {
-    case 'success': return 'node--ok'
-    case 'running': return 'node--running'
-    case 'failed':  return 'node--bad'
-    case 'skipped': return 'node--skip'
-    default:        return 'node--pending'
+    case "success":
+      return "node--ok";
+    case "running":
+      return "node--running";
+    case "failed":
+      return "node--bad";
+    case "skipped":
+      return "node--skip";
+    default:
+      return "node--pending";
   }
 }
 </script>
 
 <template>
   <div class="run-detail-root">
-
     <!-- ─── Back link + breadcrumb ──────────────────────────────────────── -->
     <div class="breadcrumb">
-      <button class="back-btn" @click="goBack" :aria-label="t('runDetail.backToRunsAria')">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
-          <path d="M15 18l-6-6 6-6"/>
+      <button
+        class="back-btn"
+        @click="goBack"
+        :aria-label="t('runDetail.backToRunsAria')"
+      >
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.2"
+          aria-hidden="true"
+        >
+          <path d="M15 18l-6-6 6-6" />
         </svg>
-        {{ t('runDetail.runList') }}
+        {{ t("runDetail.runList") }}
       </button>
       <span class="breadcrumb-sep" aria-hidden="true">/</span>
       <span class="breadcrumb-cur">
-        {{ t('runDetail.title') }}
-        <span v-if="run" class="breadcrumb-id mono">· #{{ shortId(run.id) }}</span>
+        {{ t("runDetail.title") }}
+        <span v-if="run" class="breadcrumb-id mono"
+          >· #{{ shortId(run.id) }}</span
+        >
       </span>
     </div>
 
-    <RunRetryPanel v-if="(loadState === 'idle' && run) || recovery.pending.value" :key="runId" ref="retryPanel" :state="recovery" :return-to="typeof route.query.returnTo === 'string' ? safeRunListReturn(route.query.returnTo) : undefined" :run-id="runId" :steps="run?.steps" :run-status="run?.status" :source-run-id="run?.sourceRunId" :attempt-number="run?.attemptNumber" @accepted="openAttempt" @full-logs="clearSourceLog" />
+    <RunRetryPanel
+      v-if="(loadState === 'idle' && run) || recovery.pending.value"
+      :key="runId"
+      ref="retryPanel"
+      :state="recovery"
+      :return-to="
+        typeof route.query.returnTo === 'string'
+          ? safeRunListReturn(route.query.returnTo)
+          : undefined
+      "
+      :run-id="runId"
+      :steps="run?.steps"
+      :run-status="run?.status"
+      :source-run-id="run?.sourceRunId"
+      :attempt-number="run?.attemptNumber"
+      @accepted="openAttempt"
+      @full-logs="clearSourceLog"
+    />
 
     <!-- ─── Loading skeleton ─────────────────────────────────────────────── -->
     <template v-if="loadState === 'loading'">
-      <div class="detail-loading" aria-busy="true" :aria-label="t('runDetail.loadingAria')">
+      <div
+        class="detail-loading"
+        aria-busy="true"
+        :aria-label="t('runDetail.loadingAria')"
+      >
         <div class="skel-head" />
         <div class="skel-body">
           <div class="skel skel--title" />
@@ -746,22 +1065,40 @@ function nodeClass(status: StepStatus): string {
     <!-- ─── Error state ──────────────────────────────────────────────────── -->
     <template v-else-if="loadState === 'error'">
       <div class="error-state" role="alert">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-          <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
+        <svg
+          width="22"
+          height="22"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          aria-hidden="true"
+        >
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 8v4M12 16h.01" />
         </svg>
         <p class="error-message">{{ loadError }}</p>
-        <button class="btn-secondary" @click="loadRun">↻ {{ t('runDetail.retry') }}</button>
+        <button class="btn-secondary" @click="loadRun">
+          ↻ {{ t("runDetail.retry") }}
+        </button>
       </div>
     </template>
 
     <!-- ─── Run detail ───────────────────────────────────────────────────── -->
     <template v-else-if="loadState === 'idle' && run">
-
-      <p v-if="selectedStepOrdinal !== null" class="source-log-selection" aria-live="polite">{{ t('run.stepDetails') }}: {{ run.steps[selectedStepOrdinal]?.name }} <button type="button" class="btn-secondary" @click="clearSourceLog">{{ t('run.allLogs') }}</button></p>
+      <p
+        v-if="selectedStepOrdinal !== null"
+        class="source-log-selection"
+        aria-live="polite"
+      >
+        {{ t("run.stepDetails") }}: {{ run.steps[selectedStepOrdinal]?.name }}
+        <button type="button" class="btn-secondary" @click="clearSourceLog">
+          {{ t("run.allLogs") }}
+        </button>
+      </p>
 
       <!-- Detail card wrapper -->
       <div class="detail-card">
-
         <!-- ── Card header: status + meta ─────────────────────────────── -->
         <div class="detail-head">
           <div class="detail-head-left">
@@ -773,12 +1110,16 @@ function nodeClass(status: StepStatus): string {
                 border: `1px solid ${STATUS_CONFIG[run.status].border}`,
                 color: STATUS_CONFIG[run.status].text,
               }"
-              :aria-label="t('runDetail.statusAria', { status: statusLabel(run.status) })"
+              :aria-label="
+                t('runDetail.statusAria', { status: statusLabel(run.status) })
+              "
               aria-live="polite"
             >
               <span
                 class="status-dot"
-                :class="{ 'status-dot--pulse': STATUS_CONFIG[run.status].pulse }"
+                :class="{
+                  'status-dot--pulse': STATUS_CONFIG[run.status].pulse,
+                }"
                 :style="{ background: STATUS_CONFIG[run.status].dot }"
                 aria-hidden="true"
               />
@@ -793,24 +1134,53 @@ function nodeClass(status: StepStatus): string {
 
           <!-- Cancel button (only when running/queued) -->
           <button
-            v-if="run.status === 'running' || run.status === 'queued'"
+            v-if="['running', 'queued', 'waiting_action'].includes(run.status)"
             class="btn-danger-ghost"
             :disabled="cancelling"
             :aria-busy="cancelling"
             @click="handleCancel"
           >
-            <span v-if="cancelling" class="spinner spinner--red" aria-hidden="true" />
-            <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-              <circle cx="12" cy="12" r="9"/><path d="m15 9-6 6M9 9l6 6"/>
+            <span
+              v-if="cancelling"
+              class="spinner spinner--red"
+              aria-hidden="true"
+            />
+            <svg
+              v-else
+              width="13"
+              height="13"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              aria-hidden="true"
+            >
+              <circle cx="12" cy="12" r="9" />
+              <path d="m15 9-6 6M9 9l6 6" />
             </svg>
-            {{ cancelling ? t('runDetail.cancelling') : t('runDetail.cancelRun') }}
+            {{
+              cancelling ? t("runDetail.cancelling") : t("runDetail.cancelRun")
+            }}
           </button>
         </div>
 
         <!-- Cancel error banner -->
-        <div v-if="cancelError" class="banner banner--error inline-banner" role="alert">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-            <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
+        <div
+          v-if="cancelError"
+          class="banner banner--error inline-banner"
+          role="alert"
+        >
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 8v4M12 16h.01" />
           </svg>
           {{ cancelError }}
         </div>
@@ -823,21 +1193,49 @@ function nodeClass(status: StepStatus): string {
           :aria-label="t('runDetail.approvalRegionAria')"
         >
           <div class="approval-gate-icon" aria-hidden="true">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <rect x="3" y="11" width="18" height="10" rx="2" />
+              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
             </svg>
           </div>
           <div class="approval-gate-body">
-            <div class="approval-gate-title">{{ t('runDetail.approvalTitle', { stage: pendingApproval.stageName }) }}</div>
-            <div class="approval-gate-sub">{{ t('runDetail.approvalSub') }}</div>
-            <div v-if="approvalError" class="approval-gate-error" role="alert">{{ approvalError }}</div>
+            <div class="approval-gate-title">
+              {{
+                t("runDetail.approvalTitle", {
+                  stage: pendingApproval.stageName,
+                })
+              }}
+            </div>
+            <div class="approval-gate-sub">
+              {{ t("runDetail.approvalSub") }}
+            </div>
+            <div v-if="approvalError" class="approval-gate-error" role="alert">
+              {{ approvalError }}
+            </div>
           </div>
           <div class="approval-gate-actions">
-            <button class="approval-btn approval-btn--reject" :disabled="approving" @click="decideApproval(false)">
-              {{ t('runDetail.reject') }}
+            <button
+              class="approval-btn approval-btn--reject"
+              :disabled="approving"
+              @click="decideApproval(false)"
+            >
+              {{ t("runDetail.reject") }}
             </button>
-            <button class="approval-btn approval-btn--approve" :disabled="approving" @click="decideApproval(true)">
-              {{ approving ? t('runDetail.approving') : t('runDetail.approve') }}
+            <button
+              class="approval-btn approval-btn--approve"
+              :disabled="approving"
+              @click="decideApproval(true)"
+            >
+              {{
+                approving ? t("runDetail.approving") : t("runDetail.approve")
+              }}
             </button>
           </div>
         </div>
@@ -845,26 +1243,40 @@ function nodeClass(status: StepStatus): string {
         <!-- ── Meta strip: trigger / branch / commit / duration ──────── -->
         <div class="meta-strip">
           <div class="meta-item">
-            <span class="meta-key">{{ t('runDetail.metaProject') }}</span>
+            <span class="meta-key">{{ t("runDetail.metaProject") }}</span>
             <span class="meta-val">{{ run.projectName }}</span>
           </div>
           <div class="meta-item">
-            <span class="meta-key">{{ t('runDetail.metaBranch') }}</span>
+            <span class="meta-key">{{ t("runDetail.metaBranch") }}</span>
             <span class="meta-val mono">{{ run.trigger.branch }}</span>
           </div>
           <div class="meta-item">
-            <span class="meta-key">{{ t('runDetail.metaCommit') }}</span>
+            <span class="meta-key">{{ t("runDetail.metaCommit") }}</span>
             <span
               class="meta-val mono"
-              :class="{ 'meta-val--failed': !run.trigger.commit && (run.status === 'failed' || run.status === 'partial_failed' || run.status === 'rolled_back') }"
-            >{{ commitDisplay(run.trigger.commit, run.status) }}</span>
+              :class="{
+                'meta-val--failed':
+                  !run.trigger.commit &&
+                  (run.status === 'failed' ||
+                    run.status === 'partial_failed' ||
+                    run.status === 'rolled_back'),
+              }"
+              >{{ commitDisplay(run.trigger.commit, run.status) }}</span
+            >
           </div>
           <div class="meta-item">
-            <span class="meta-key">{{ t('runDetail.metaTrigger') }}</span>
-            <span class="meta-val">{{ run.trigger.type === 'webhook' ? 'Webhook' : t('runDetail.triggerManual') }} · {{ run.trigger.actor }}</span>
+            <span class="meta-key">{{ t("runDetail.metaTrigger") }}</span>
+            <span class="meta-val"
+              >{{
+                run.trigger.type === "webhook"
+                  ? "Webhook"
+                  : t("runDetail.triggerManual")
+              }}
+              · {{ run.trigger.actor }}</span
+            >
           </div>
           <div v-if="specSourceBadge" class="meta-item">
-            <span class="meta-key">{{ t('runDetail.metaSpecSource') }}</span>
+            <span class="meta-key">{{ t("runDetail.metaSpecSource") }}</span>
             <span
               class="spec-source-badge"
               :class="`spec-source-badge--${specSourceBadge.kind}`"
@@ -872,20 +1284,43 @@ function nodeClass(status: StepStatus): string {
             >
               <span class="spec-source-badge-dot" aria-hidden="true" />
               {{ specSourceBadge.label }}
-              <span v-if="specSourceBadge.hint" class="spec-source-badge-hint" aria-hidden="true">⚠</span>
+              <span
+                v-if="specSourceBadge.hint"
+                class="spec-source-badge-hint"
+                aria-hidden="true"
+                >⚠</span
+              >
             </span>
           </div>
           <div class="meta-item">
-            <span class="meta-key">{{ t('runDetail.metaStarted') }}</span>
+            <span class="meta-key">{{ t("runDetail.metaStarted") }}</span>
             <span class="meta-val">{{ formatDateTime(run.startedAt) }}</span>
           </div>
           <div class="meta-item">
-            <span class="meta-key">{{ t('runDetail.metaDuration') }}</span>
-            <span class="meta-val mono">{{ formatDuration(run.durationMs) }}</span>
+            <span class="meta-key">{{ t("runDetail.metaDuration") }}</span>
+            <span class="meta-val mono">{{
+              formatDuration(run.durationMs)
+            }}</span>
           </div>
-          <div v-if="recovery.context.value || recovery.attempts.value?.items.length" class="meta-item meta-recovery">
-            <AppButton variant="ghost" class="retry-history-entry" @click="openRetryHistory">{{ t('runRetry.runHistory') }}</AppButton>
-            <AppButton v-if="recovery.failedNodes.value.length > 1" variant="ghost" class="retry-all-entry" @click="openAllFailed">{{ t('runRetry.retryAll') }}</AppButton>
+          <div
+            v-if="
+              recovery.context.value || recovery.attempts.value?.items.length
+            "
+            class="meta-item meta-recovery"
+          >
+            <AppButton
+              variant="ghost"
+              class="retry-history-entry"
+              @click="openRetryHistory"
+              >{{ t("runRetry.runHistory") }}</AppButton
+            >
+            <AppButton
+              v-if="recovery.failedNodes.value.length > 1"
+              variant="ghost"
+              class="retry-all-entry"
+              @click="openAllFailed"
+              >{{ t("runRetry.retryAll") }}</AppButton
+            >
           </div>
         </div>
 
@@ -896,26 +1331,42 @@ function nodeClass(status: StepStatus): string {
         ═══════════════════════════════════════════════════════════════ -->
 
         <!-- ── STATE: running ────────────────────────────────────────── -->
-        <template v-if="run.status === 'running' || run.status === 'queued'">
+        <template v-if="['running', 'queued', 'waiting_action'].includes(run.status)">
           <div class="state-section">
-
             <!-- DAG topology: stage graph with steps, replaces linear skewer -->
             <div class="dag-section">
-              <h2 class="section-title">{{ t('runDetail.pipelineProgress') }}</h2>
+              <h2 class="section-title">
+                {{ t("runDetail.pipelineProgress") }}
+              </h2>
               <RunDagView
                 :project-id="run.projectId"
                 :steps="run.steps"
                 :run-status="run.status"
                 :recovery="recovery.context.value"
-                @retry="openRetry" @logs="openNodeLogs"
+                @retry="openRetry"
+                @logs="openNodeLogs"
               />
             </div>
 
             <!-- Two-column layout: 步骤详情(点击单步看其日志) + 实时日志终端 -->
             <div class="running-body">
-              <RunStepList :steps="run.steps" :selected="selectedStepOrdinal" :recovery="recovery.context.value" @retry="openRetry" @select="selectedStepOrdinal = $event" />
-              <div class="slot-log-live" role="region" :aria-label="t('runDetail.liveLogAria')">
-                <RunTerminal :run-id="run.id" :live="true" :filter-ordinal="selectedStepOrdinal" />
+              <RunStepList
+                :steps="run.steps"
+                :selected="selectedStepOrdinal"
+                :recovery="recovery.context.value"
+                @retry="openRetry"
+                @select="selectedStepOrdinal = $event"
+              />
+              <div
+                class="slot-log-live"
+                role="region"
+                :aria-label="t('runDetail.liveLogAria')"
+              >
+                <RunTerminal
+                  :run-id="run.id"
+                  :live="true"
+                  :filter-ordinal="selectedStepOrdinal"
+                />
               </div>
             </div>
           </div>
@@ -924,28 +1375,38 @@ function nodeClass(status: StepStatus): string {
         <!-- ── STATE: success ────────────────────────────────────────── -->
         <template v-else-if="run.status === 'success'">
           <div class="state-section">
-
             <!-- DAG topology: full-green stage graph -->
             <div class="dag-section">
-              <h2 class="section-title">{{ t('runDetail.pipelineComplete') }}</h2>
+              <h2 class="section-title">
+                {{ t("runDetail.pipelineComplete") }}
+              </h2>
               <RunDagView
                 :project-id="run.projectId"
                 :steps="run.steps"
                 :run-status="run.status"
                 :recovery="recovery.context.value"
-                @retry="openRetry" @logs="openNodeLogs"
+                @retry="openRetry"
+                @logs="openNodeLogs"
               />
             </div>
 
             <!-- Duration summary -->
             <div class="success-summary">
               <div class="summary-item">
-                <span class="summary-key">{{ t('runDetail.finishedTime') }}</span>
-                <span class="summary-val">{{ formatDateTime(run.finishedAt) }}</span>
+                <span class="summary-key">{{
+                  t("runDetail.finishedTime")
+                }}</span>
+                <span class="summary-val">{{
+                  formatDateTime(run.finishedAt)
+                }}</span>
               </div>
               <div class="summary-item">
-                <span class="summary-key">{{ t('runDetail.totalDuration') }}</span>
-                <span class="summary-val mono">{{ formatDuration(run.durationMs) }}</span>
+                <span class="summary-key">{{
+                  t("runDetail.totalDuration")
+                }}</span>
+                <span class="summary-val mono">{{
+                  formatDuration(run.durationMs)
+                }}</span>
               </div>
             </div>
 
@@ -986,9 +1447,23 @@ function nodeClass(status: StepStatus): string {
 
             <!-- 步骤详情(点击单步看其日志)+ 历史日志回放(2 列;步骤完成后仍可见) -->
             <div class="running-body">
-              <RunStepList :steps="run.steps" :selected="selectedStepOrdinal" :recovery="recovery.context.value" @retry="openRetry" @select="selectedStepOrdinal = $event" />
-              <div class="log-history" role="region" :aria-label="t('runDetail.historyLogAria')">
-                <RunTerminal :run-id="run.id" :live="false" :filter-ordinal="selectedStepOrdinal" />
+              <RunStepList
+                :steps="run.steps"
+                :selected="selectedStepOrdinal"
+                :recovery="recovery.context.value"
+                @retry="openRetry"
+                @select="selectedStepOrdinal = $event"
+              />
+              <div
+                class="log-history"
+                role="region"
+                :aria-label="t('runDetail.historyLogAria')"
+              >
+                <RunTerminal
+                  :run-id="run.id"
+                  :live="false"
+                  :filter-ordinal="selectedStepOrdinal"
+                />
               </div>
             </div>
 
@@ -1014,18 +1489,45 @@ function nodeClass(status: StepStatus): string {
             <!-- 交互式分批部署:暂停态(有 pending 目标)→ 继续 / 中止(P0)-->
             <div v-if="hasPendingTargets" class="batch-pause" role="status">
               <div class="batch-pause-head">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                  <rect x="6" y="5" width="4" height="14" rx="1" /><rect x="14" y="5" width="4" height="14" rx="1" />
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  aria-hidden="true"
+                >
+                  <rect x="6" y="5" width="4" height="14" rx="1" />
+                  <rect x="14" y="5" width="4" height="14" rx="1" />
                 </svg>
-                <span>{{ t('runDetail.batchPausedPrefix') }}<strong>{{ pendingCount }}</strong>{{ t('runDetail.batchPausedSuffix') }}</span>
+                <span
+                  >{{ t("runDetail.batchPausedPrefix")
+                  }}<strong>{{ pendingCount }}</strong
+                  >{{ t("runDetail.batchPausedSuffix") }}</span
+                >
               </div>
-              <p v-if="batchError" class="batch-pause-err" role="alert">{{ batchError }}</p>
+              <p v-if="batchError" class="batch-pause-err" role="alert">
+                {{ batchError }}
+              </p>
               <div class="batch-pause-actions">
-                <button class="batch-btn batch-btn--go" :disabled="batchBusy" @click="handleContinueDeploy">
-                  {{ batchBusy ? t('runDetail.processing') : t('runDetail.continueRest') }}
+                <button
+                  class="batch-btn batch-btn--go"
+                  :disabled="batchBusy"
+                  @click="handleContinueDeploy"
+                >
+                  {{
+                    batchBusy
+                      ? t("runDetail.processing")
+                      : t("runDetail.continueRest")
+                  }}
                 </button>
-                <button class="batch-btn batch-btn--abort" :disabled="batchBusy" @click="handleAbortDeploy">
-                  {{ t('runDetail.abortKeepOld') }}
+                <button
+                  class="batch-btn batch-btn--abort"
+                  :disabled="batchBusy"
+                  @click="handleAbortDeploy"
+                >
+                  {{ t("runDetail.abortKeepOld") }}
                 </button>
               </div>
             </div>
@@ -1037,22 +1539,51 @@ function nodeClass(status: StepStatus): string {
                 class="btn-deploy"
                 @click="openDeployPanel"
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                  <path d="M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"
+                  />
                 </svg>
-                {{ hasDeployed ? t('runDetail.deployAgain') : t('runDetail.deployToServers') }}
+                {{
+                  hasDeployed
+                    ? t("runDetail.deployAgain")
+                    : t("runDetail.deployToServers")
+                }}
               </button>
 
               <!-- 部署配置面板:选产物 + 勾选服务器 + 触发 -->
-              <div v-else class="deploy-panel" role="region" :aria-label="t('runDetail.deployConfigAria')">
+              <div
+                v-else
+                class="deploy-panel"
+                role="region"
+                :aria-label="t('runDetail.deployConfigAria')"
+              >
                 <div class="deploy-panel-head">
-                  <span class="deploy-panel-title">{{ t('runDetail.deployToServers') }}</span>
-                  <button class="deploy-close" :aria-label="t('runDetail.deployCloseAria')" @click="showDeployPanel = false">✕</button>
+                  <span class="deploy-panel-title">{{
+                    t("runDetail.deployToServers")
+                  }}</span>
+                  <button
+                    class="deploy-close"
+                    :aria-label="t('runDetail.deployCloseAria')"
+                    @click="showDeployPanel = false"
+                  >
+                    ✕
+                  </button>
                 </div>
 
                 <!-- 选择产物 -->
                 <div class="deploy-field">
-                  <label class="deploy-label" for="deploy-artifact">{{ t('runDetail.deployArtifact') }}</label>
+                  <label class="deploy-label" for="deploy-artifact">{{
+                    t("runDetail.deployArtifact")
+                  }}</label>
                   <AppSelect
                     input-id="deploy-artifact"
                     v-model="selectedArtifactId"
@@ -1063,16 +1594,25 @@ function nodeClass(status: StepStatus): string {
 
                 <!-- 选择服务器 -->
                 <div class="deploy-field">
-                  <span class="deploy-label">{{ t('runDetail.targetServers') }}</span>
-                  <p v-if="deployServersLoaded && deployServers.length === 0" class="deploy-empty">
-                    {{ t('runDetail.noServers') }}
+                  <span class="deploy-label">{{
+                    t("runDetail.targetServers")
+                  }}</span>
+                  <p
+                    v-if="deployServersLoaded && deployServers.length === 0"
+                    class="deploy-empty"
+                  >
+                    {{ t("runDetail.noServers") }}
                   </p>
                   <div v-else class="deploy-servers">
                     <label
                       v-for="s in deployServers"
                       :key="s.id"
                       class="deploy-server-opt"
-                      :class="{ 'deploy-server-opt--on': selectedServerIds.includes(s.id) }"
+                      :class="{
+                        'deploy-server-opt--on': selectedServerIds.includes(
+                          s.id,
+                        ),
+                      }"
                     >
                       <input
                         type="checkbox"
@@ -1080,18 +1620,28 @@ function nodeClass(status: StepStatus): string {
                         @change="toggleServer(s.id)"
                       />
                       <span class="deploy-server-name">{{ s.name }}</span>
-                      <span class="deploy-server-host mono">{{ s.user }}@{{ s.host }}:{{ s.port }}</span>
+                      <span class="deploy-server-host mono"
+                        >{{ s.user }}@{{ s.host }}:{{ s.port }}</span
+                      >
                     </label>
                   </div>
                 </div>
 
                 <!-- 健康检查(Story 4-3 / FR-12):部署后门控,通过才算该机成功 -->
                 <div class="deploy-field">
-                  <label class="deploy-label" for="deploy-hc-type">{{ t('runDetail.healthCheck') }}</label>
-                  <select id="deploy-hc-type" v-model="hcType" class="deploy-select">
-                    <option value="none">{{ t('runDetail.hcNone') }}</option>
-                    <option value="http">{{ t('runDetail.hcHttp') }}</option>
-                    <option value="command">{{ t('runDetail.hcCommand') }}</option>
+                  <label class="deploy-label" for="deploy-hc-type">{{
+                    t("runDetail.healthCheck")
+                  }}</label>
+                  <select
+                    id="deploy-hc-type"
+                    v-model="hcType"
+                    class="deploy-select"
+                  >
+                    <option value="none">{{ t("runDetail.hcNone") }}</option>
+                    <option value="http">{{ t("runDetail.hcHttp") }}</option>
+                    <option value="command">
+                      {{ t("runDetail.hcCommand") }}
+                    </option>
                   </select>
 
                   <!-- http:探测 url -->
@@ -1118,33 +1668,72 @@ function nodeClass(status: StepStatus): string {
                   <!-- 重试 / 间隔 / 超时(http + command 通用) -->
                   <div v-if="hcType !== 'none'" class="hc-params">
                     <label class="hc-param">
-                      <span class="hc-param-key">{{ t('runDetail.hcRetries') }}</span>
-                      <input v-model.number="hcRetries" class="hc-num" type="number" min="1" max="20" />
+                      <span class="hc-param-key">{{
+                        t("runDetail.hcRetries")
+                      }}</span>
+                      <input
+                        v-model.number="hcRetries"
+                        class="hc-num"
+                        type="number"
+                        min="1"
+                        max="20"
+                      />
                     </label>
                     <label class="hc-param">
-                      <span class="hc-param-key">{{ t('runDetail.hcInterval') }}</span>
-                      <input v-model.number="hcIntervalSeconds" class="hc-num" type="number" min="0" max="3600" />
+                      <span class="hc-param-key">{{
+                        t("runDetail.hcInterval")
+                      }}</span>
+                      <input
+                        v-model.number="hcIntervalSeconds"
+                        class="hc-num"
+                        type="number"
+                        min="0"
+                        max="3600"
+                      />
                     </label>
                     <label class="hc-param">
-                      <span class="hc-param-key">{{ t('runDetail.hcTimeout') }}</span>
-                      <input v-model.number="hcTimeoutSeconds" class="hc-num" type="number" min="1" max="60" />
+                      <span class="hc-param-key">{{
+                        t("runDetail.hcTimeout")
+                      }}</span>
+                      <input
+                        v-model.number="hcTimeoutSeconds"
+                        class="hc-num"
+                        type="number"
+                        min="1"
+                        max="60"
+                      />
                     </label>
                   </div>
-                  <p v-if="hcType !== 'none' && !healthCheckValid" class="deploy-empty">
-                    {{ hcType === 'http' ? t('runDetail.hcUrlRequired') : t('runDetail.hcCommandRequired') }}
+                  <p
+                    v-if="hcType !== 'none' && !healthCheckValid"
+                    class="deploy-empty"
+                  >
+                    {{
+                      hcType === "http"
+                        ? t("runDetail.hcUrlRequired")
+                        : t("runDetail.hcCommandRequired")
+                    }}
                   </p>
                 </div>
 
                 <!-- 部署策略(Story 8-8 / FR-8-8):rolling | canary | blue_green -->
                 <div class="deploy-field">
-                  <span class="deploy-label">{{ t('runDetail.releaseStrategy') }}</span>
-                  <div class="strat-seg" role="radiogroup" :aria-label="t('runDetail.releaseStrategy')">
+                  <span class="deploy-label">{{
+                    t("runDetail.releaseStrategy")
+                  }}</span>
+                  <div
+                    class="strat-seg"
+                    role="radiogroup"
+                    :aria-label="t('runDetail.releaseStrategy')"
+                  >
                     <button
                       v-for="opt in deployStrategyOptions"
                       :key="opt.value"
                       type="button"
                       class="strat-opt"
-                      :class="{ 'strat-opt--active': deployStrategy === opt.value }"
+                      :class="{
+                        'strat-opt--active': deployStrategy === opt.value,
+                      }"
                       role="radio"
                       :aria-checked="deployStrategy === opt.value"
                       @click="deployStrategy = opt.value"
@@ -1153,13 +1742,30 @@ function nodeClass(status: StepStatus): string {
                       <span class="strat-opt-desc">{{ opt.desc }}</span>
                     </button>
                   </div>
-                  <label v-if="deployStrategy === 'canary'" class="adv-row strat-canary">
-                    <span class="adv-key">{{ t('runDetail.canaryCount') }}</span>
-                    <input v-model.number="canaryCount" class="hc-num" type="number" min="1" max="100" :aria-label="t('runDetail.canaryCount')" />
-                    <span class="adv-hint strat-canary-hint">{{ t('runDetail.canaryHint') }}</span>
+                  <label
+                    v-if="deployStrategy === 'canary'"
+                    class="adv-row strat-canary"
+                  >
+                    <span class="adv-key">{{
+                      t("runDetail.canaryCount")
+                    }}</span>
+                    <input
+                      v-model.number="canaryCount"
+                      class="hc-num"
+                      type="number"
+                      min="1"
+                      max="100"
+                      :aria-label="t('runDetail.canaryCount')"
+                    />
+                    <span class="adv-hint strat-canary-hint">{{
+                      t("runDetail.canaryHint")
+                    }}</span>
                   </label>
-                  <p v-else-if="deployStrategy === 'blue_green'" class="adv-hint">
-                    {{ t('runDetail.blueGreenHint') }}
+                  <p
+                    v-else-if="deployStrategy === 'blue_green'"
+                    class="adv-hint"
+                  >
+                    {{ t("runDetail.blueGreenHint") }}
                   </p>
                 </div>
 
@@ -1174,17 +1780,24 @@ function nodeClass(status: StepStatus): string {
                     <svg
                       class="adv-chevron"
                       :class="{ 'adv-chevron--open': showAdvanced }"
-                      width="12" height="12" viewBox="0 0 24 24" fill="none"
-                      stroke="currentColor" stroke-width="2.4" aria-hidden="true"
+                      width="12"
+                      height="12"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2.4"
+                      aria-hidden="true"
                     >
                       <path d="M9 18l6-6-6-6" />
                     </svg>
-                    {{ t('runDetail.advancedToggle') }}
+                    {{ t("runDetail.advancedToggle") }}
                   </button>
 
                   <div v-if="showAdvanced" class="adv-body">
                     <label class="adv-row">
-                      <span class="adv-key">{{ t('runDetail.releaseBase') }}</span>
+                      <span class="adv-key">{{
+                        t("runDetail.releaseBase")
+                      }}</span>
                       <input
                         v-model="releaseBase"
                         class="deploy-select mono"
@@ -1194,28 +1807,70 @@ function nodeClass(status: StepStatus): string {
                       />
                     </label>
                     <label class="adv-row">
-                      <span class="adv-key">{{ t('runDetail.keepReleases') }}</span>
-                      <input v-model.number="keepReleases" class="hc-num" type="number" min="1" max="50" />
+                      <span class="adv-key">{{
+                        t("runDetail.keepReleases")
+                      }}</span>
+                      <input
+                        v-model.number="keepReleases"
+                        class="hc-num"
+                        type="number"
+                        min="1"
+                        max="50"
+                      />
                     </label>
                     <label class="adv-row">
-                      <span class="adv-key">{{ t('pipelineJob.deployCommandTimeout') }}</span>
-                      <input v-model.number="commandTimeoutSeconds" class="hc-num" type="number" min="1" max="86400" />
+                      <span class="adv-key">{{
+                        t("pipelineJob.deployCommandTimeout")
+                      }}</span>
+                      <input
+                        v-model.number="commandTimeoutSeconds"
+                        class="hc-num"
+                        type="number"
+                        min="1"
+                        max="86400"
+                      />
                     </label>
                     <label class="adv-row">
-                      <span class="adv-key">{{ t('pipelineJob.deployConnectTimeout') }}</span>
-                      <input v-model.number="connectTimeoutSeconds" class="hc-num" type="number" min="1" max="300" />
+                      <span class="adv-key">{{
+                        t("pipelineJob.deployConnectTimeout")
+                      }}</span>
+                      <input
+                        v-model.number="connectTimeoutSeconds"
+                        class="hc-num"
+                        type="number"
+                        min="1"
+                        max="300"
+                      />
                     </label>
                     <label class="adv-row">
-                      <span class="adv-key">{{ t('pipelineJob.deployUploadIdleTimeout') }}</span>
-                      <input v-model.number="uploadIdleTimeoutSeconds" class="hc-num" type="number" min="1" max="86400" />
+                      <span class="adv-key">{{
+                        t("pipelineJob.deployUploadIdleTimeout")
+                      }}</span>
+                      <input
+                        v-model.number="uploadIdleTimeoutSeconds"
+                        class="hc-num"
+                        type="number"
+                        min="1"
+                        max="86400"
+                      />
                     </label>
                     <label class="adv-row">
-                      <span class="adv-key">{{ t('pipelineJob.deployUploadTotalTimeout') }}</span>
-                      <input v-model.number="uploadTimeoutSeconds" class="hc-num" type="number" min="0" max="604800" />
+                      <span class="adv-key">{{
+                        t("pipelineJob.deployUploadTotalTimeout")
+                      }}</span>
+                      <input
+                        v-model.number="uploadTimeoutSeconds"
+                        class="hc-num"
+                        type="number"
+                        min="0"
+                        max="604800"
+                      />
                     </label>
-                    <p class="adv-hint">{{ t('pipelineJob.deployUploadTimeoutHint') }}</p>
                     <p class="adv-hint">
-                      {{ t('runDetail.advancedHint') }}
+                      {{ t("pipelineJob.deployUploadTimeoutHint") }}
+                    </p>
+                    <p class="adv-hint">
+                      {{ t("runDetail.advancedHint") }}
                     </p>
                   </div>
                 </div>
@@ -1238,21 +1893,47 @@ function nodeClass(status: StepStatus): string {
                   @change="attachedGuard = $event"
                 />
 
-                <div v-if="deployError" class="banner banner--error" role="alert">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                    <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
+                <div
+                  v-if="deployError"
+                  class="banner banner--error"
+                  role="alert"
+                >
+                  <svg
+                    width="13"
+                    height="13"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    aria-hidden="true"
+                  >
+                    <circle cx="12" cy="12" r="9" />
+                    <path d="M12 8v4M12 16h.01" />
                   </svg>
                   {{ deployError }}
                 </div>
 
                 <!-- 触发 -->
                 <div class="deploy-actions">
-                  <button class="btn-deploy" :disabled="!canDeploy" :aria-busy="deploying" @click="handleDeploy">
+                  <button
+                    class="btn-deploy"
+                    :disabled="!canDeploy"
+                    :aria-busy="deploying"
+                    @click="handleDeploy"
+                  >
                     <span v-if="deploying" class="spinner" aria-hidden="true" />
-                    {{ deploying ? t('runDetail.deploying') : t('runDetail.startDeploy') }}
+                    {{
+                      deploying
+                        ? t("runDetail.deploying")
+                        : t("runDetail.startDeploy")
+                    }}
                   </button>
                   <span v-if="selectedServerIds.length > 0" class="deploy-hint">
-                    {{ t('runDetail.selectedCount', { n: selectedServerIds.length }) }}
+                    {{
+                      t("runDetail.selectedCount", {
+                        n: selectedServerIds.length,
+                      })
+                    }}
                   </span>
                 </div>
               </div>
@@ -1262,49 +1943,73 @@ function nodeClass(status: StepStatus): string {
             <!-- 代码变更(run-diff;#137)。成功运行恒可见 —— 展示「本次提交自身」相对父提交的
                  文件级 diff(git show),回答「这次部署改了啥」。后端按 commit-self 语义返回,
                  不依赖 baseline 运行;无 commit / 克隆失败时组件自身降级。与 failed 分支同一组件。 -->
-            <div class="diff-section" role="region" :aria-label="t('runDetail.diffAria')">
+            <div
+              class="diff-section"
+              role="region"
+              :aria-label="t('runDetail.diffAria')"
+            >
               <SuccessFailDiff :run-id="run.id" />
             </div>
-
           </div>
         </template>
 
         <!-- ── STATE: failed ─────────────────────────────────────────── -->
         <template v-else-if="run.status === 'failed'">
           <div class="state-section">
-
             <!-- DAG topology: failed stage highlighted -->
             <div class="dag-section">
-              <h2 class="section-title">{{ t('runDetail.pipelineFailed') }}</h2>
+              <h2 class="section-title">{{ t("runDetail.pipelineFailed") }}</h2>
               <RunDagView
                 :project-id="run.projectId"
                 :steps="run.steps"
                 :run-status="run.status"
                 :recovery="recovery.context.value"
-                @retry="openRetry" @logs="openNodeLogs"
+                @retry="openRetry"
+                @logs="openNodeLogs"
               />
             </div>
 
             <!-- Failed step summary -->
             <div class="failed-summary">
               <div
-                v-for="step in run.steps.filter(s => s.status === 'failed')"
+                v-for="step in run.steps.filter((s) => s.status === 'failed')"
                 :key="step.id"
                 class="failed-step-banner"
                 role="alert"
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                  <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  aria-hidden="true"
+                >
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M12 8v4M12 16h.01" />
                 </svg>
                 <span class="failed-step-name">{{ step.name }}</span>
-                <span class="failed-step-dur mono" v-if="step.durationMs !== null">{{ formatDuration(step.durationMs) }}</span>
+                <span
+                  class="failed-step-dur mono"
+                  v-if="step.durationMs !== null"
+                  >{{ formatDuration(step.durationMs) }}</span
+                >
               </div>
             </div>
 
             <!-- 失败日志证据(只读历史回放,Story 3-6)。在 AI 诊断面板之上;
                  不属于 7-2 的 DiagnosisPanel slot,二者共存。 -->
-            <div class="log-history" role="region" :aria-label="t('runDetail.failedLogAria')">
-              <RunTerminal :run-id="run.id" :live="false" :filter-ordinal="selectedStepOrdinal" />
+            <div
+              class="log-history"
+              role="region"
+              :aria-label="t('runDetail.failedLogAria')"
+            >
+              <RunTerminal
+                :run-id="run.id"
+                :live="false"
+                :filter-ordinal="selectedStepOrdinal"
+              />
             </div>
 
             <!--
@@ -1318,46 +2023,71 @@ function nodeClass(status: StepStatus): string {
             <DiagnosisPanel
               :diagnosis="run.diagnosis"
               :run-id="run.id"
-              @diagnosed="(dto: DiagnosisDTO) => { if (run) run = { ...run, diagnosis: dto } }"
+              @diagnosed="
+                (dto: DiagnosisDTO) => {
+                  if (run) run = { ...run, diagnosis: dto };
+                }
+              "
             />
             <!-- END SLOT: AI 失败诊断 -->
 
             <!-- 成功/失败差异对比(Story 7-3;FR-25)。作为诊断「证据」补充,挂在 AI 诊断面板之后;
                  独立区块,不属于 7-2 的 DiagnosisPanel slot,二者共存。无 baseline/克隆失败时组件自身降级。 -->
-            <div class="diff-section" role="region" :aria-label="t('runDetail.diffAria')">
+            <div
+              class="diff-section"
+              role="region"
+              :aria-label="t('runDetail.diffAria')"
+            >
               <SuccessFailDiff :run-id="run.id" />
             </div>
-
           </div>
         </template>
 
         <!-- ── STATE: partial_failed ────────────────────────────────── -->
         <template v-else-if="run.status === 'partial_failed'">
           <div class="state-section">
-
             <!-- DAG topology: partial failure view -->
             <div class="dag-section">
-              <h2 class="section-title">{{ t('runStatus.partial_failed') }}</h2>
+              <h2 class="section-title">{{ t("runStatus.partial_failed") }}</h2>
               <RunDagView
                 :project-id="run.projectId"
                 :steps="run.steps"
                 :run-status="run.status"
                 :recovery="recovery.context.value"
-                @retry="openRetry" @logs="openNodeLogs"
+                @retry="openRetry"
+                @logs="openNodeLogs"
               />
             </div>
 
             <div class="partial-info" role="status">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-                <path d="M12 9v4M12 17h.01"/>
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                aria-hidden="true"
+              >
+                <path
+                  d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+                />
+                <path d="M12 9v4M12 17h.01" />
               </svg>
-              {{ t('runDetail.partialInfo') }}
+              {{ t("runDetail.partialInfo") }}
             </div>
 
             <!-- 历史日志回放(只读,Story 3-6) -->
-            <div class="log-history" role="region" :aria-label="t('runDetail.historyLogAria')">
-              <RunTerminal :run-id="run.id" :live="false" :filter-ordinal="selectedStepOrdinal" />
+            <div
+              class="log-history"
+              role="region"
+              :aria-label="t('runDetail.historyLogAria')"
+            >
+              <RunTerminal
+                :run-id="run.id"
+                :live="false"
+                :filter-ordinal="selectedStepOrdinal"
+              />
             </div>
 
             <!--
@@ -1376,22 +2106,38 @@ function nodeClass(status: StepStatus): string {
               @retry="handleRetryFailed"
             />
             <!-- 兜底:partial_failed 但无 targets(理论上不该出现)— 占位提示,不白屏 -->
-            <div v-else class="slot-panel slot-panel--multi" role="region" :aria-label="t('runDetail.multiTargetAria')">
+            <div
+              v-else
+              class="slot-panel slot-panel--multi"
+              role="region"
+              :aria-label="t('runDetail.multiTargetAria')"
+            >
               <div class="slot-header">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-                  <rect x="2" y="14" width="6" height="6" rx="1"/>
-                  <rect x="16" y="14" width="6" height="6" rx="1"/>
-                  <rect x="9" y="2" width="6" height="6" rx="1"/>
-                  <path d="M5 14v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 7v4"/>
+                <svg
+                  width="13"
+                  height="13"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  aria-hidden="true"
+                >
+                  <rect x="2" y="14" width="6" height="6" rx="1" />
+                  <rect x="16" y="14" width="6" height="6" rx="1" />
+                  <rect x="9" y="2" width="6" height="6" rx="1" />
+                  <path d="M5 14v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 7v4" />
                 </svg>
-                <span class="slot-title">{{ t('runDetail.multiTargetFanout') }}</span>
+                <span class="slot-title">{{
+                  t("runDetail.multiTargetFanout")
+                }}</span>
               </div>
               <div class="slot-body">
-                <span class="slot-placeholder-text">{{ t('runDetail.noMultiResult') }}</span>
+                <span class="slot-placeholder-text">{{
+                  t("runDetail.noMultiResult")
+                }}</span>
               </div>
             </div>
             <!-- END SLOT: 多机目标扇出 -->
-
           </div>
         </template>
 
@@ -1399,7 +2145,6 @@ function nodeClass(status: StepStatus): string {
         <template v-else>
           <!-- queued (stale) or rolled_back -->
           <div class="state-section">
-
             <div class="terminal-state">
               <div
                 class="terminal-badge"
@@ -1409,7 +2154,11 @@ function nodeClass(status: StepStatus): string {
                   color: STATUS_CONFIG[run.status].text,
                 }"
                 role="status"
-                :aria-label="t('runDetail.runStatusAria', { status: statusLabel(run.status) })"
+                :aria-label="
+                  t('runDetail.runStatusAria', {
+                    status: statusLabel(run.status),
+                  })
+                "
               >
                 <span
                   class="status-dot"
@@ -1421,68 +2170,109 @@ function nodeClass(status: StepStatus): string {
 
               <div class="terminal-meta">
                 <div v-if="run.finishedAt" class="terminal-meta-item">
-                  <span class="meta-key">{{ t('runDetail.endTime') }}</span>
-                  <span class="meta-val">{{ formatDateTime(run.finishedAt) }}</span>
+                  <span class="meta-key">{{ t("runDetail.endTime") }}</span>
+                  <span class="meta-val">{{
+                    formatDateTime(run.finishedAt)
+                  }}</span>
                 </div>
                 <div v-if="run.durationMs !== null" class="terminal-meta-item">
-                  <span class="meta-key">{{ t('runDetail.totalDuration') }}</span>
-                  <span class="meta-val mono">{{ formatDuration(run.durationMs) }}</span>
+                  <span class="meta-key">{{
+                    t("runDetail.totalDuration")
+                  }}</span>
+                  <span class="meta-val mono">{{
+                    formatDuration(run.durationMs)
+                  }}</span>
                 </div>
               </div>
             </div>
 
             <!-- DAG topology: terminal state step record -->
             <div v-if="run.steps.length > 0" class="dag-section">
-              <h3 class="subsection-title">{{ t('runDetail.stepRecord') }}</h3>
+              <h3 class="subsection-title">{{ t("runDetail.stepRecord") }}</h3>
               <RunDagView
                 :project-id="run.projectId"
                 :steps="run.steps"
                 :run-status="run.status"
                 :recovery="recovery.context.value"
-                @retry="openRetry" @logs="openNodeLogs"
+                @retry="openRetry"
+                @logs="openNodeLogs"
               />
             </div>
 
             <!-- 历史日志回放(只读,Story 3-6) -->
-            <div class="log-history" role="region" :aria-label="t('runDetail.historyLogAria')">
-              <RunTerminal :run-id="run.id" :live="false" :filter-ordinal="selectedStepOrdinal" />
+            <div
+              class="log-history"
+              role="region"
+              :aria-label="t('runDetail.historyLogAria')"
+            >
+              <RunTerminal
+                :run-id="run.id"
+                :live="false"
+                :filter-ordinal="selectedStepOrdinal"
+              />
             </div>
-
           </div>
         </template>
         <!-- ══ END 5-STATE SECTION ══ -->
-
       </div>
       <!-- END detail-card -->
 
-      <RouterLink v-if="deployedGuardId" :to="guardReportLocation(run.projectId, deployedGuardId)">{{ t('releaseGuard.viewReport') }} →</RouterLink>
+      <RouterLink
+        v-if="deployedGuardId"
+        :to="guardReportLocation(run.projectId, deployedGuardId)"
+        >{{ t("releaseGuard.viewReport") }} →</RouterLink
+      >
       <ReleaseGuardPanel
         :run-id="run.id"
         :project-id="run.projectId"
         :has-deployment-targets="!!run.targets?.length"
         :refresh-key="JSON.stringify(run.targets ?? [])"
-        :run-active="['queued', 'running', 'waiting_approval'].includes(run.status)"
+        :run-active="
+          ['queued', 'running', 'waiting_approval', 'waiting_action'].includes(
+            run.status,
+          )
+        "
       />
 
       <BatchDeployPanel
-        v-if="run.artifacts.length > 0 && ['success', 'partial_failed', 'failed'].includes(run.status)"
+        v-if="
+          run.artifacts.length > 0 &&
+          ['success', 'partial_failed', 'failed'].includes(run.status)
+        "
         :run-id="run.id"
         :artifacts="run.artifacts"
-        :can-create="run.status === 'success' || run.status === 'partial_failed'"
+        :can-create="
+          run.status === 'success' || run.status === 'partial_failed'
+        "
         @completed="loadRun"
       />
-
     </template>
     <!-- END run detail -->
-
   </div>
 </template>
 
 <style scoped>
-.meta-recovery { flex-wrap: wrap; gap: 8px; }
-.meta-recovery :deep(.app-btn) { min-height: 44px; height: auto; white-space: normal; text-align: left; }
-.source-log-selection { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0 0 16px; color: var(--color-dim); }
-.source-log-selection button { min-height: 44px; }
+.meta-recovery {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.meta-recovery :deep(.app-btn) {
+  min-height: 44px;
+  height: auto;
+  white-space: normal;
+  text-align: left;
+}
+.source-log-selection {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 16px;
+  color: var(--color-dim);
+}
+.source-log-selection button {
+  min-height: 44px;
+}
 /* ─── approval gate (Story 8-4) ──────────────────────────────────────────── */
 .approval-gate {
   display: flex;
@@ -1504,11 +2294,31 @@ function nodeClass(status: StepStatus): string {
   background: var(--color-amber);
   color: #fff;
 }
-.approval-gate-body { flex: 1; min-width: 0; }
-.approval-gate-title { font-size: 0.92rem; font-weight: 650; color: var(--color-text); }
-.approval-gate-sub { margin-top: 2px; font-size: 0.8rem; color: var(--color-dim); }
-.approval-gate-error { margin-top: 6px; font-size: 0.78rem; color: var(--color-red); }
-.approval-gate-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.approval-gate-body {
+  flex: 1;
+  min-width: 0;
+}
+.approval-gate-title {
+  font-size: 0.92rem;
+  font-weight: 650;
+  color: var(--color-text);
+}
+.approval-gate-sub {
+  margin-top: 2px;
+  font-size: 0.8rem;
+  color: var(--color-dim);
+}
+.approval-gate-error {
+  margin-top: 6px;
+  font-size: 0.78rem;
+  color: var(--color-red);
+}
+.approval-gate-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
 .approval-btn {
   height: 34px;
   padding: 0 16px;
@@ -1518,17 +2328,30 @@ function nodeClass(status: StepStatus): string {
   font-weight: 600;
   cursor: pointer;
   border: 1px solid transparent;
-  transition: filter var(--duration-fast), background-color var(--duration-fast);
+  transition:
+    filter var(--duration-fast),
+    background-color var(--duration-fast);
 }
-.approval-btn:disabled { opacity: 0.6; cursor: default; }
-.approval-btn--approve { background: var(--color-green); color: #fff; }
-.approval-btn--approve:not(:disabled):hover { filter: brightness(1.06); }
+.approval-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.approval-btn--approve {
+  background: var(--color-green);
+  color: #fff;
+}
+.approval-btn--approve:not(:disabled):hover {
+  filter: brightness(1.06);
+}
 .approval-btn--reject {
   background: transparent;
   border-color: var(--color-border-strong);
   color: var(--color-dim);
 }
-.approval-btn--reject:not(:disabled):hover { border-color: var(--color-red); color: var(--color-red); }
+.approval-btn--reject:not(:disabled):hover {
+  border-color: var(--color-red);
+  color: var(--color-red);
+}
 
 /* ─── root ───────────────────────────────────────────────────────────────── */
 .run-detail-root {
@@ -1594,12 +2417,20 @@ function nodeClass(status: StepStatus): string {
 }
 
 @keyframes card-in {
-  from { opacity: 0; transform: translateY(10px); }
-  to   { opacity: 1; transform: none; }
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .detail-card { animation: none; }
+  .detail-card {
+    animation: none;
+  }
 }
 
 /* ─── detail head ────────────────────────────────────────────────────────── */
@@ -1661,12 +2492,21 @@ function nodeClass(status: StepStatus): string {
 }
 
 @keyframes dot-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50%       { opacity: 0.5; transform: scale(0.8); }
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(0.8);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .status-dot--pulse { animation: none; }
+  .status-dot--pulse {
+    animation: none;
+  }
 }
 
 /* ─── meta strip ─────────────────────────────────────────────────────────── */
@@ -1704,7 +2544,9 @@ function nodeClass(status: StepStatus): string {
   color: var(--color-red);
 }
 
-.mono { font-family: var(--font-mono); }
+.mono {
+  font-family: var(--font-mono);
+}
 
 /* ─── spec-source badge (GitOps config-source visibility · Slice 2) ───────── */
 .spec-source-badge {
@@ -1729,8 +2571,16 @@ function nodeClass(status: StepStatus): string {
 /* repo: GitOps 来源,蓝色强调(来源可信、可追溯)。 */
 .spec-source-badge--repo {
   color: var(--color-accent, #2563eb);
-  background: color-mix(in oklab, var(--color-accent, #2563eb) 12%, transparent);
-  border-color: color-mix(in oklab, var(--color-accent, #2563eb) 28%, transparent);
+  background: color-mix(
+    in oklab,
+    var(--color-accent, #2563eb) 12%,
+    transparent
+  );
+  border-color: color-mix(
+    in oklab,
+    var(--color-accent, #2563eb) 28%,
+    transparent
+  );
 }
 /* stored: 网页配置来源,中性色。 */
 .spec-source-badge--stored {
@@ -1850,12 +2700,24 @@ function nodeClass(status: StepStatus): string {
   align-self: flex-start;
 }
 
-.connector--ok      { background: var(--color-green); }
-.connector--bad     { background: linear-gradient(90deg, var(--color-green), var(--color-red)); }
-.connector--running { background: linear-gradient(90deg, var(--color-green) 40%, var(--color-amber)); }
+.connector--ok {
+  background: var(--color-green);
+}
+.connector--bad {
+  background: linear-gradient(90deg, var(--color-green), var(--color-red));
+}
+.connector--running {
+  background: linear-gradient(
+    90deg,
+    var(--color-green) 40%,
+    var(--color-amber)
+  );
+}
 
 /* Connector as default border */
-.skewer-connector:not(.connector--ok):not(.connector--bad):not(.connector--running) {
+.skewer-connector:not(.connector--ok):not(.connector--bad):not(
+    .connector--running
+  ) {
   background: var(--color-border-strong);
 }
 
@@ -1886,17 +2748,30 @@ function nodeClass(status: StepStatus): string {
 
 .node--bad {
   background: var(--color-red);
-  box-shadow: 0 0 0 4px var(--color-red-soft), 0 0 8px var(--color-red-soft);
+  box-shadow:
+    0 0 0 4px var(--color-red-soft),
+    0 0 8px var(--color-red-soft);
   animation: node-bad-pulse 1.2s ease-in-out infinite;
 }
 
 @keyframes node-bad-pulse {
-  0%, 100% { box-shadow: 0 0 0 4px var(--color-red-soft), 0 0 8px var(--color-red-soft); }
-  50%       { box-shadow: 0 0 0 6px var(--color-red-soft), 0 0 14px oklch(62% 0.18 22 / 0.3); }
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 4px var(--color-red-soft),
+      0 0 8px var(--color-red-soft);
+  }
+  50% {
+    box-shadow:
+      0 0 0 6px var(--color-red-soft),
+      0 0 14px oklch(62% 0.18 22 / 0.3);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .node--bad { animation: none; }
+  .node--bad {
+    animation: none;
+  }
 }
 
 .node--skip {
@@ -1915,12 +2790,21 @@ function nodeClass(status: StepStatus): string {
 }
 
 @keyframes ring-pulse {
-  0%   { opacity: 0.8; transform: scale(0.8); }
-  100% { opacity: 0;   transform: scale(1.6); }
+  0% {
+    opacity: 0.8;
+    transform: scale(0.8);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.6);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .node-pulse-ring { animation: none; display: none; }
+  .node-pulse-ring {
+    animation: none;
+    display: none;
+  }
 }
 
 /* Node label */
@@ -1944,7 +2828,9 @@ function nodeClass(status: StepStatus): string {
 }
 
 @media (max-width: 820px) {
-  .running-body { grid-template-columns: 1fr; }
+  .running-body {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ─── step list ──────────────────────────────────────────────────────────── */
@@ -1987,11 +2873,21 @@ function nodeClass(status: StepStatus): string {
   flex-shrink: 0;
 }
 
-.step-row--success .step-icon { color: var(--color-green); }
-.step-row--running .step-icon { color: var(--color-amber); }
-.step-row--failed  .step-icon { color: var(--color-red); }
-.step-row--skipped .step-icon { color: var(--color-faint); }
-.step-row--pending .step-icon { color: var(--color-faint); }
+.step-row--success .step-icon {
+  color: var(--color-green);
+}
+.step-row--running .step-icon {
+  color: var(--color-amber);
+}
+.step-row--failed .step-icon {
+  color: var(--color-red);
+}
+.step-row--skipped .step-icon {
+  color: var(--color-faint);
+}
+.step-row--pending .step-icon {
+  color: var(--color-faint);
+}
 
 .step-info {
   display: flex;
@@ -2024,9 +2920,15 @@ function nodeClass(status: StepStatus): string {
   overflow: hidden;
 }
 
-.slot-panel--success { border-color: var(--color-green-line); }
-.slot-panel--ai      { border-color: var(--color-cyan-line); }
-.slot-panel--multi   { border-color: var(--color-amber-line); }
+.slot-panel--success {
+  border-color: var(--color-green-line);
+}
+.slot-panel--ai {
+  border-color: var(--color-cyan-line);
+}
+.slot-panel--multi {
+  border-color: var(--color-amber-line);
+}
 
 .slot-header {
   display: flex;
@@ -2037,9 +2939,18 @@ function nodeClass(status: StepStatus): string {
   border-bottom: 1px solid var(--color-border);
 }
 
-.slot-panel--success .slot-header { color: var(--color-green); background: var(--color-green-soft); }
-.slot-panel--ai      .slot-header { color: var(--color-cyan);  background: var(--color-cyan-soft);  }
-.slot-panel--multi   .slot-header { color: var(--color-amber); background: var(--color-amber-soft); }
+.slot-panel--success .slot-header {
+  color: var(--color-green);
+  background: var(--color-green-soft);
+}
+.slot-panel--ai .slot-header {
+  color: var(--color-cyan);
+  background: var(--color-cyan-soft);
+}
+.slot-panel--multi .slot-header {
+  color: var(--color-amber);
+  background: var(--color-amber-soft);
+}
 
 .slot-title {
   font-size: 0.82rem;
@@ -2048,7 +2959,9 @@ function nodeClass(status: StepStatus): string {
   flex: 1;
 }
 
-.slot-title--ai { color: var(--color-cyan); }
+.slot-title--ai {
+  color: var(--color-cyan);
+}
 
 .slot-badge {
   font-size: 0.68rem;
@@ -2147,9 +3060,15 @@ function nodeClass(status: StepStatus): string {
   font-size: 0.83rem;
 }
 
-.failed-step-name { flex: 1; font-weight: 500; }
+.failed-step-name {
+  flex: 1;
+  font-weight: 500;
+}
 
-.failed-step-dur { color: var(--color-faint); font-size: 0.75rem; }
+.failed-step-dur {
+  color: var(--color-faint);
+  font-size: 0.75rem;
+}
 
 /* ─── partial info banner ────────────────────────────────────────────────── */
 .partial-info {
@@ -2272,18 +3191,34 @@ function nodeClass(status: StepStatus): string {
 }
 
 @keyframes shimmer {
-  0%   { background-position: 200% center; }
-  100% { background-position: -200% center; }
+  0% {
+    background-position: 200% center;
+  }
+  100% {
+    background-position: -200% center;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .skel { animation: none; background: var(--color-inset); }
+  .skel {
+    animation: none;
+    background: var(--color-inset);
+  }
 }
 
-.skel--title    { height: 22px; width: 45%; }
-.skel--meta     { height: 40px; }
-.skel--timeline { height: 80px; }
-.skel--steps    { height: 160px; }
+.skel--title {
+  height: 22px;
+  width: 45%;
+}
+.skel--meta {
+  height: 40px;
+}
+.skel--timeline {
+  height: 80px;
+}
+.skel--steps {
+  height: 160px;
+}
 
 /* ─── buttons ─────────────────────────────────────────────────────────────── */
 .btn-secondary {
@@ -2299,10 +3234,14 @@ function nodeClass(status: StepStatus): string {
   font-weight: 500;
   border-radius: var(--rounded);
   cursor: pointer;
-  transition: border-color var(--duration-fast), background-color var(--duration-fast);
+  transition:
+    border-color var(--duration-fast),
+    background-color var(--duration-fast);
 }
 
-.btn-secondary:hover { border-color: var(--color-faint); }
+.btn-secondary:hover {
+  border-color: var(--color-faint);
+}
 
 .btn-secondary:focus-visible {
   outline: 2px solid var(--color-primary);
@@ -2364,11 +3303,16 @@ function nodeClass(status: StepStatus): string {
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .spinner { animation: none; border-top-color: currentColor; }
+  .spinner {
+    animation: none;
+    border-top-color: currentColor;
+  }
 }
 
 /* ─── deploy entry / panel (Story 4-2) ───────────────────────────────────── */
@@ -2392,10 +3336,14 @@ function nodeClass(status: StepStatus): string {
   font-weight: 600;
   border-radius: var(--rounded);
   cursor: pointer;
-  transition: filter var(--duration-fast), opacity var(--duration-fast);
+  transition:
+    filter var(--duration-fast),
+    opacity var(--duration-fast);
 }
 
-.btn-deploy:hover:not(:disabled) { filter: brightness(1.08); }
+.btn-deploy:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
 
 .btn-deploy:focus-visible {
   outline: 2px solid var(--color-primary);
@@ -2440,7 +3388,9 @@ function nodeClass(status: StepStatus): string {
   transition: color var(--duration-fast);
 }
 
-.deploy-close:hover { color: var(--color-text); }
+.deploy-close:hover {
+  color: var(--color-text);
+}
 
 .deploy-field {
   display: flex;
@@ -2493,10 +3443,14 @@ function nodeClass(status: StepStatus): string {
   border: 1px solid var(--color-border);
   border-radius: var(--rounded-md);
   cursor: pointer;
-  transition: border-color var(--duration-fast), background-color var(--duration-fast);
+  transition:
+    border-color var(--duration-fast),
+    background-color var(--duration-fast);
 }
 
-.deploy-server-opt:hover { border-color: var(--color-faint); }
+.deploy-server-opt:hover {
+  border-color: var(--color-faint);
+}
 
 .deploy-server-opt--on {
   border-color: var(--color-primary);
@@ -2585,16 +3539,22 @@ function nodeClass(status: StepStatus): string {
   font-weight: 600;
 }
 
-.adv-toggle:hover { color: var(--color-text); }
+.adv-toggle:hover {
+  color: var(--color-text);
+}
 
 .adv-chevron {
   transition: transform var(--duration-fast);
 }
 
-.adv-chevron--open { transform: rotate(90deg); }
+.adv-chevron--open {
+  transform: rotate(90deg);
+}
 
 @media (prefers-reduced-motion: reduce) {
-  .adv-chevron { transition: none; }
+  .adv-chevron {
+    transition: none;
+  }
 }
 
 .adv-body {
@@ -2621,7 +3581,9 @@ function nodeClass(status: StepStatus): string {
   color: var(--color-faint);
 }
 
-.adv-row .hc-num { width: 120px; }
+.adv-row .hc-num {
+  width: 120px;
+}
 
 .adv-hint {
   font-size: 0.74rem;
@@ -2646,19 +3608,40 @@ function nodeClass(status: StepStatus): string {
   border: 1px solid var(--color-border-strong);
   border-radius: var(--rounded-md);
   cursor: pointer;
-  transition: border-color var(--duration-fast), background-color var(--duration-fast);
+  transition:
+    border-color var(--duration-fast),
+    background-color var(--duration-fast);
 }
-.strat-opt:hover { border-color: var(--color-primary); }
+.strat-opt:hover {
+  border-color: var(--color-primary);
+}
 .strat-opt--active {
   border-color: var(--color-primary);
   background: var(--color-primary-soft);
 }
-.strat-opt:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 1px; }
-.strat-opt-name { font-size: 0.82rem; font-weight: 650; color: var(--color-text); }
-.strat-opt--active .strat-opt-name { color: var(--color-primary); }
-.strat-opt-desc { font-size: 0.68rem; color: var(--color-faint); line-height: 1.35; }
-.strat-canary { margin-top: 10px; }
-.strat-canary-hint { margin-left: 8px; }
+.strat-opt:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+.strat-opt-name {
+  font-size: 0.82rem;
+  font-weight: 650;
+  color: var(--color-text);
+}
+.strat-opt--active .strat-opt-name {
+  color: var(--color-primary);
+}
+.strat-opt-desc {
+  font-size: 0.68rem;
+  color: var(--color-faint);
+  line-height: 1.35;
+}
+.strat-canary {
+  margin-top: 10px;
+}
+.strat-canary-hint {
+  margin-left: 8px;
+}
 
 /* ─── 交互式分批部署:暂停态 banner(P0)─────────────────────────────────── */
 .batch-pause {
@@ -2678,20 +3661,54 @@ function nodeClass(status: StepStatus): string {
   font-size: 0.85rem;
   color: var(--color-text);
 }
-.batch-pause-head svg { color: var(--color-amber, #b8860b); flex: none; }
-.batch-pause-head strong { color: var(--color-amber, #b8860b); }
-.batch-pause-err { margin: 0; font-size: 0.78rem; color: var(--color-danger, #dc2626); }
-.batch-pause-actions { display: flex; gap: 9px; }
-.batch-btn {
-  height: 32px; padding: 0 14px; border-radius: var(--rounded-md);
-  font: inherit; font-size: 0.8rem; font-weight: 600; cursor: pointer;
-  border: 1px solid var(--color-border-strong); background: var(--color-card); color: var(--color-text);
-  transition: background-color var(--duration-fast), transform var(--duration-fast);
+.batch-pause-head svg {
+  color: var(--color-amber, #b8860b);
+  flex: none;
 }
-.batch-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.batch-btn--go { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
-.batch-btn--go:hover:not(:disabled) { background: var(--color-primary-press, var(--color-primary)); transform: translateY(-1px); }
-.batch-btn--abort:hover:not(:disabled) { border-color: var(--color-danger, #dc2626); color: var(--color-danger, #dc2626); }
+.batch-pause-head strong {
+  color: var(--color-amber, #b8860b);
+}
+.batch-pause-err {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--color-danger, #dc2626);
+}
+.batch-pause-actions {
+  display: flex;
+  gap: 9px;
+}
+.batch-btn {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--rounded-md);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-card);
+  color: var(--color-text);
+  transition:
+    background-color var(--duration-fast),
+    transform var(--duration-fast);
+}
+.batch-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.batch-btn--go {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+}
+.batch-btn--go:hover:not(:disabled) {
+  background: var(--color-primary-press, var(--color-primary));
+  transform: translateY(-1px);
+}
+.batch-btn--abort:hover:not(:disabled) {
+  border-color: var(--color-danger, #dc2626);
+  color: var(--color-danger, #dc2626);
+}
 @media (max-width: 760px) {
   .run-detail-root,
   .detail-card {

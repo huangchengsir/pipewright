@@ -22,7 +22,7 @@ package pacloader
 import (
 	"context"
 	"errors"
-	"log"
+	log "github.com/huangchengsir/pipewright/internal/logging"
 	"strings"
 
 	"github.com/huangchengsir/pipewright/internal/pipeline"
@@ -130,7 +130,7 @@ func (l *Loader) tryOverride(ctx context.Context, projectID, branch string) (cfg
 
 	info, err := l.projects.Lookup(ctx, projectID)
 	if err != nil {
-		debugf("项目 %s 查询失败,回退库内配置", projectID)
+		debugf("project %s lookup failed; falling back to stored configuration", projectID)
 		return nil, fallbackLookup, false
 	}
 	// 每项目开关:未开启「流水线即代码」且非全局强开 → 不覆盖,用库内配置。
@@ -168,11 +168,11 @@ func (l *Loader) tryOverride(ctx context.Context, projectID, branch string) (cfg
 	content, degraded, ferr := l.blobs.FetchBlob(ctx, info.RepoURL, username, token, ref, DefaultFile)
 	if ferr != nil {
 		// 文件不存在 / 克隆失败 → 回退(正常路径:多数项目没有 .pipewright.yml)。
-		debugf("项目 %s 未读到 %s(回退库内配置)", projectID, DefaultFile)
+		debugf("project %s: %s was not found (falling back to stored configuration)", projectID, DefaultFile)
 		return nil, fallbackNoFile, false
 	}
 	if degraded {
-		debugf("项目 %s 仓库克隆降级,无法读 %s(回退库内配置)", projectID, DefaultFile)
+		debugf("project %s: repository clone degraded; cannot read %s (falling back to stored configuration)", projectID, DefaultFile)
 		return nil, fallbackDegraded, false
 	}
 	if strings.TrimSpace(content) == "" {
@@ -182,10 +182,10 @@ func (l *Loader) tryOverride(ctx context.Context, projectID, branch string) (cfg
 	parsed, perr := pipelineyaml.Parse([]byte(content))
 	if perr != nil {
 		// YAML 非法 → 回退(绝不让坏 YAML 中断运行)。错误不含密钥但仍只记 debug。
-		debugf("项目 %s 的 %s 解析/校验失败,回退库内配置", projectID, DefaultFile)
+		debugf("project %s: %s parsing/validation failed; falling back to stored configuration", projectID, DefaultFile)
 		return nil, fallbackInvalid, false
 	}
-	debugf("项目 %s 命中仓库 %s(分支 %s),用其驱动本次运行", projectID, DefaultFile, ref)
+	debugf("project %s: using repository %s (branch %s) for this run", projectID, DefaultFile, ref)
 	return &parsed, ref, true
 }
 

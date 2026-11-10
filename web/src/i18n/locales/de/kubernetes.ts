@@ -1,4 +1,6 @@
+import release from "./kubernetesRelease";
 export default {
+  release,
   groups: {
     resources: "Ressourcen & Auslieferung",
     integrations: "Integrationen & KI",
@@ -146,6 +148,12 @@ export default {
     cleanup: "Werkzeuge bereinigen",
   },
   phaseCode: {
+    resource_identity_check: "Die Identität der genehmigten Ressource wird geprüft.",
+    resource_write_fenced: "Die genehmigte Ressourcenänderung wird vorbereitet.",
+    resource_health_check: "Der tatsächliche Ressourcenzustand wird geprüft.",
+    release_ready: "Diese Release-Beobachtung hat die Bereitschaft bestätigt.",
+    batch_ready_waiting_action: "Dieser Stapel ist geprüft und wartet auf eine ausdrückliche Aktion.",
+
     patch_not_authorized:
       "Diese Cluster-Zugangsdaten dürfen dieses Deployment nicht aktualisieren. Bitten Sie einen Administrator, die Berechtigungen zu prüfen. Es wurde kein Update gesendet.",
     permission_check_unverified:
@@ -174,6 +182,16 @@ export default {
     blocked: "Bereinigung blockiert",
   },
   errors: {
+    requestInvalid: "Der Cluster hat die Validierungsanfrage abgelehnt. Prüfen Sie die Ressourceneinstellungen.",
+    credentialRejected: "Der Cluster hat die Zugangsdaten abgelehnt. Prüfen Sie die Verbindungsdaten.",
+    resourceConflict: "Feldbesitz oder Version der Ressource steht im Konflikt mit der Änderung. Aktualisieren und prüfen Sie sie.",
+    resourceInvalid: "Der Cluster hat die Ressourcendefinition abgelehnt.",
+    apiThrottled: "Die Kubernetes-API ist ausgelastet. Warten Sie vor einem neuen geprüften Versuch.",
+    apiUnavailable: "Die Kubernetes-API ist vorübergehend nicht verfügbar.",
+    admissionMismatch: "Die Cluster-Zulassung hat deklarierte Felder geändert. Prüfen Sie die Ressourcenrichtlinie.",
+    validationFailed: "Die Ressourcenvalidierung ist fehlgeschlagen. Prüfen Sie die deklarierten Änderungen.",
+    preparationFailed: "Die Vorbereitung ist fehlgeschlagen. Prüfen Sie Eingaben, Verbindung und Berechtigungen.",
+
     invalid: "Ungültige Konfiguration. Felder prüfen.",
     session: "Sitzung abgelaufen. Erneut anmelden.",
     passwordRequired: "Vor dieser Aktion Passwort erneut bestätigen.",

@@ -212,3 +212,109 @@
     justify-content: flex-start;
   }
 }
+
+.kube-code {
+  font-family: var(--font-mono, monospace);
+  tab-size: 2;
+  min-height: 9rem;
+  resize: vertical;
+  line-height: 1.5;
+}
+.kube-release-editor > fieldset {
+  min-width: 0;
+}
+.kube-release-editor textarea,
+.kube-release-editor input,
+.kube-release-editor select {
+  max-width: 100%;
+  min-width: 0;
+}
+.kube-release-editor details {
+  min-width: 0;
+}
+.kube-release-editor details > summary {
+  cursor: pointer;
+  padding: 0.55rem 0;
+}
+
+.kube-action-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.35rem;
+}
+.kube-action-options .kube-check {
+  font-size: 0.82rem;
+}
+
+.kube-resource-results {
+  padding-left: 1.1rem;
+  max-height: 24rem;
+  overflow: auto;
+}
+.kube-resource-results > li {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.kube-resource-results > li > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+.kube-release-result code,
+.kube-release-result dd {
+  overflow-wrap: anywhere;
+}
+
+.kube-phase-layout {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 10px;
+  margin-top: 14px;
+}
+.kube-phase-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.kube-phase-tabs button {
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: var(--rounded);
+  color: var(--color-dim);
+  padding: 8px;
+  text-align: left;
+  font: 12px var(--font-sans);
+  cursor: pointer;
+}
+.kube-phase-tabs small {
+  display: block;
+  font-size: 10px;
+  opacity: 0.8;
+  margin-top: 3px;
+}
+.kube-phase-tabs button[aria-selected="true"] {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+  color: var(--color-text);
+}
+.kube-phase-tabs button:focus-visible,
+.kube-phase-output:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+.kube-phase-output {
+  padding: 0;
+  border-radius: var(--rounded);
+  font: 12px/1.8 var(--font-sans);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 639px) {
+  .kube-phase-layout {
+    grid-template-columns: 80px minmax(0, 1fr);
+  }
+  .kube-phase-tabs button {
+    min-height: 44px;
+  }
+}

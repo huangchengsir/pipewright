@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,7 +34,9 @@ func readDraft(ctx context.Context, q configstate.DBTX, where string, args ...an
 	if e != nil {
 		return nil, e
 	}
-	if len(raw) > 16384 || json.Unmarshal([]byte(raw), &d.ops) != nil {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	if len(raw) > 16384 || decoder.Decode(&d.ops) != nil {
 		return nil, ErrUnavailable
 	}
 	if !sameDigest(d.patchDigest, digest(d.ops)) {
@@ -59,6 +62,16 @@ func (s *Service) Create(ctx context.Context, tokenID string, in CreateRequest) 
 		return nil, e
 	}
 	inputHash := digest(in)
+	for _, o := range ops {
+		if sectionFor(o.Type) == "kubernetes" {
+			m := hmac.New(sha256.New, s.cursorKey)
+			m.Write([]byte("kubernetes-draft-input-v2\x00"))
+			b, _ := json.Marshal(in)
+			m.Write(b)
+			inputHash = base64.RawURLEncoding.EncodeToString(m.Sum(nil))
+			break
+		}
+	}
 	var out *Draft
 	e = configstate.WithWriteTx(ctx, s.db, func(q configstate.DBTX) error {
 		t, e := s.locks(ctx, q, tokenID, g)
@@ -89,6 +102,10 @@ func (s *Service) Create(ctx context.Context, tokenID string, in CreateRequest) 
 		}
 		if d.policy != in.PolicyVersion {
 			return ErrPolicy
+		}
+		ops, e = s.sealKubernetes(d, ops)
+		if e != nil {
+			return e
 		}
 		_, diff, e := s.patch(d, ops, g)
 		if e != nil {
@@ -405,6 +422,12 @@ func (s *Service) get(ctx context.Context, tokenID, draftID, adminID string) (*D
 		out, e = s.draftView(ctx, q, t, r, g)
 		if e != nil {
 			return e
+		}
+		if adminID != "" && out.State == "active" {
+			out.KubernetesReview, e = s.kubernetesReview(configstate.WithTxContext(ctx, s.db, q), r.project, r.ops, g)
+			if e != nil {
+				return e
+			}
 		}
 		actor := owner
 		if adminID != "" {

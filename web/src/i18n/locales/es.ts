@@ -129,6 +129,7 @@ const es: typeof zhCN = {
   },
 
   runStatus: {
+ waiting_action:"Esperando acción explícita",
     queued: 'En cola',
     running: 'En ejecución',
     waiting_approval: 'Esperando aprobación',

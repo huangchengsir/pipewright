@@ -1,189 +1,223 @@
 <script setup lang="ts">
-import { ref, shallowRef, computed, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { localizeName } from '../../lib/pipelineLabels'
-import type { PipelineJob, PipelineStage } from '../../api/pipeline'
-import type { Credential } from '../../api/credentials'
-import type { Server } from '../../api/servers'
-import type { NotificationChannel } from '../../api/notifications'
-import type { Project } from '../../api/projects'
+import { ref, shallowRef, computed, watch } from "vue";
+import { useI18n } from "vue-i18n";
+import { localizeName } from "../../lib/pipelineLabels";
+import type { PipelineJob, PipelineStage } from "../../api/pipeline";
+import type { Credential } from "../../api/credentials";
+import type { Server } from "../../api/servers";
+import type { NotificationChannel } from "../../api/notifications";
+import type { Project } from "../../api/projects";
 import {
   getJobTypeSpec,
   splitConfig,
   jobTypeLabel,
   isScriptClassType,
   type JobField,
-} from './jobConfigSchema'
-import { configUsesTemplate } from './stepCompile'
+} from "./jobConfigSchema";
+import { configUsesTemplate } from "./stepCompile";
 import {
   isStudioNode,
   parsePromotedParams,
   promotedValues,
   applyPromotedValues,
   type PromotedParam,
-} from './studioCompile'
-import { createCustomNode } from '../../api/customNodes'
-import JobTypeIcon from './JobTypeIcon.vue'
-import StepBuilder from './StepBuilder.vue'
-import StudioInstanceParams from './StudioInstanceParams.vue'
-import AppSelect from '../ui/AppSelect.vue'
-import KubernetesJobConfig from './KubernetesJobConfig.vue'
-import ImageProvenanceSummary from './ImageProvenanceSummary.vue'
-import ProjectSourceSummary from './ProjectSourceSummary.vue'
-import CommandEditorDialog from './CommandEditorDialog.vue'
-import { imageSourceChoices, resolveImageSource } from './imageProvenance'
+} from "./studioCompile";
+import { createCustomNode } from "../../api/customNodes";
+import JobTypeIcon from "./JobTypeIcon.vue";
+import StepBuilder from "./StepBuilder.vue";
+import StudioInstanceParams from "./StudioInstanceParams.vue";
+import AppSelect from "../ui/AppSelect.vue";
+import KubernetesJobConfig from "./KubernetesJobConfig.vue";
+import ImageProvenanceSummary from "./ImageProvenanceSummary.vue";
+import ProjectSourceSummary from "./ProjectSourceSummary.vue";
+import CommandEditorDialog from "./CommandEditorDialog.vue";
+import { imageSourceChoices, resolveImageSource } from "./imageProvenance";
 
 const props = defineProps<{
-  job: PipelineJob
-  stage: PipelineStage
-  stages?: PipelineStage[]
-  credentials?: Credential[]
-  servers?: Server[]
-  channels?: NotificationChannel[]
-  projectName?: string
-  project?: Project
-  environmentAutoPushPossible?: boolean
-}>()
+  job: PipelineJob;
+  stage: PipelineStage;
+  stages?: PipelineStage[];
+  credentials?: Credential[];
+  servers?: Server[];
+  channels?: NotificationChannel[];
+  projectName?: string;
+  project?: Project;
+  environmentAutoPushPossible?: boolean;
+}>();
 
 const emit = defineEmits<{
-  (e: 'close'): void
-  (e: 'update', patch: Partial<PipelineJob>): void
-  (e: 'change-type'): void
-  (e: 'inspect-source', jobId: string): void
-}>()
+  (e: "close"): void;
+  (e: "update", patch: Partial<PipelineJob>): void;
+  (e: "change-type"): void;
+  (e: "inspect-source", jobId: string): void;
+}>();
 
-const { t } = useI18n()
+const { t } = useI18n();
 
 // ─── Local editable copy ──────────────────────────────────────────────────────
 
 interface KVRow {
-  _key: number
-  k: string
-  v: string
+  _key: number;
+  k: string;
+  v: string;
 }
 
-let _kvSeq = 0
+let _kvSeq = 0;
 
-const localName    = ref(props.job.name)
-const localType    = ref(props.job.type)
-const localSummary = ref(props.job.summary)
+const localName = ref(props.job.name);
+const localType = ref(props.job.type);
+const localSummary = ref(props.job.summary);
 /** Schema-owned keys for the current type (the typed form binds here) */
-const typedConfig  = ref<Record<string, string>>({})
+const typedConfig = ref<Record<string, string>>({});
 /** Keys NOT covered by the type schema — editable in the advanced section */
-const extraRows    = ref<KVRow[]>([])
+const extraRows = ref<KVRow[]>([]);
 
-const showAdvanced = ref(false)
-const commandEditorOpen = shallowRef(false)
-const commandEditorTrigger = shallowRef<HTMLElement | null>(null)
+const showAdvanced = ref(false);
+const commandEditorOpen = shallowRef(false);
+const commandEditorTrigger = shallowRef<HTMLElement | null>(null);
 
 // 仅当「选了不同 job」或「改了 job 类型」时才重置视图模式(steps/raw);纯内容编辑不重置。
 // 否则:在「原始参数」视图编辑某字段 → blur 提交 → 父回写 props.job → 本 watch 再跑 →
 // 会把视图无端切回「可视化步骤」(用户实测的 bug)。
-let lastModeKey = ''
+let lastModeKey = "";
 
 function hydrate(job: PipelineJob): void {
-  localName.value    = job.name
-  localType.value    = job.type
-  localSummary.value = job.summary
-  const modeKey = `${job.id} ${job.type}`
-  const repickView = modeKey !== lastModeKey
-  lastModeKey = modeKey
-  splitOnType(job.type, job.config ?? {}, repickView)
+  localName.value = job.name;
+  localType.value = job.type;
+  localSummary.value = job.summary;
+  const modeKey = `${job.id} ${job.type}`;
+  const repickView = modeKey !== lastModeKey;
+  lastModeKey = modeKey;
+  splitOnType(job.type, job.config ?? {}, repickView);
 }
 
 /** Recompute typed config + raw extras for a given type, preserving all values. */
-function splitOnType(type: string, config: Record<string, string>, repickView = true): void {
-  const { extras } = splitConfig(type, config)
-  const typed: Record<string, string> = {}
+function splitOnType(
+  type: string,
+  config: Record<string, string>,
+  repickView = true,
+): void {
+  const { extras } = splitConfig(type, config);
+  const typed: Record<string, string> = {};
   for (const [k, v] of Object.entries(config)) {
-    if (!extras.some(([ek]) => ek === k)) typed[k] = v
+    if (!extras.some(([ek]) => ek === k))
+      typed[k] =
+        type === "deploy_kubernetes" && typeof v !== "string"
+          ? JSON.stringify(v)
+          : v;
   }
-  typedConfig.value = typed
-  extraRows.value = extras.map(([k, v]) => ({ _key: ++_kvSeq, k, v }))
-  showAdvanced.value = extras.length > 0
-  if (repickView) pickViewMode(config)
+  typedConfig.value = typed;
+  extraRows.value = extras.map(([k, v]) => ({ _key: ++_kvSeq, k, v }));
+  showAdvanced.value = extras.length > 0;
+  if (repickView) pickViewMode(config);
 }
 
 // Hydrate save responses, but keep the command draft when the selection is unchanged.
 watch(
-  [() => props.job, () => props.job.id, () => props.job.type, () => props.stage.id],
-  ([next, id, type, stageId], [, previousId, previousType, previousStageId]) => {
-    if (id !== previousId || type !== previousType || stageId !== previousStageId) {
-      commandEditorOpen.value = false
+  [
+    () => props.job,
+    () => props.job.id,
+    () => props.job.type,
+    () => props.stage.id,
+  ],
+  (
+    [next, id, type, stageId],
+    [, previousId, previousType, previousStageId],
+  ) => {
+    if (
+      id !== previousId ||
+      type !== previousType ||
+      stageId !== previousStageId
+    ) {
+      commandEditorOpen.value = false;
     }
-    hydrate(next)
+    hydrate(next);
   },
-)
+);
 
 // ─── Field schema for the current type ────────────────────────────────────────
 
-const spec = computed(() => getJobTypeSpec(localType.value))
+const spec = computed(() => getJobTypeSpec(localType.value));
 
 /** 步骤构建器拥有的 config 键(commands 多行 / artifactPath 多行)。 */
-const STEP_OWNED_KEYS = new Set(['commands', 'artifactPath', 'artifacts'])
+const STEP_OWNED_KEYS = new Set(["commands", "artifactPath", "artifacts"]);
 
 // 「自定义脚本」节点(script/custom)天然就是写命令文本,可视化步骤构建器对它是冗余:
 // 这些类型不提供 steps/raw 切换、默认就用原始参数(命令文本框)。可视化步骤仅保留给
 // 前端构建/后端构建/模板等带预置语义的脚本类节点。
-const RAW_ONLY_SCRIPT_TYPES = new Set(['script', 'custom'])
+const RAW_ONLY_SCRIPT_TYPES = new Set(["script", "custom"]);
 
 // 执行/缓存类高级字段:能力保留,但默认收进可折叠「高级」分区,主表单只留镜像/命令/工作目录。
-const ADVANCED_FIELD_KEYS = new Set(['timeoutSeconds', 'retries', 'cpu', 'memory', 'cachePaths', 'cacheKey'])
+const ADVANCED_FIELD_KEYS = new Set([
+  "timeoutSeconds",
+  "retries",
+  "cpu",
+  "memory",
+  "cachePaths",
+  "cacheKey",
+]);
 
 /** 该类型能用可视化步骤构建器吗(脚本类 + 有 commands/artifactPath 字段;但 script/custom 除外)。 */
 const canUseStepBuilder = computed<boolean>(() => {
-  if (!isScriptClassType(localType.value)) return false
-  if (RAW_ONLY_SCRIPT_TYPES.has(localType.value)) return false
-  if (!spec.value) return false
-  return spec.value.fields.some((f) => STEP_OWNED_KEYS.has(f.key))
-})
+  if (!isScriptClassType(localType.value)) return false;
+  if (RAW_ONLY_SCRIPT_TYPES.has(localType.value)) return false;
+  if (!spec.value) return false;
+  return spec.value.fields.some((f) => STEP_OWNED_KEYS.has(f.key));
+});
 
 /**
  * 视图模式:'steps' 走可视化步骤构建器,'raw' 走原始 typed 表单。
  * 默认对脚本类显示步骤视图;但若 config 用了模板渲染(commandTemplate/params,
  * 步骤构建器不覆盖那套语义)则回退到原始视图,避免误编译丢数据。
  */
-const viewMode = ref<'steps' | 'raw'>('raw')
+const viewMode = ref<"steps" | "raw">("raw");
 
 function pickViewMode(config: Record<string, string>): void {
   if (canUseStepBuilder.value && !configUsesTemplate(config)) {
-    viewMode.value = 'steps'
+    viewMode.value = "steps";
   } else {
-    viewMode.value = 'raw'
+    viewMode.value = "raw";
   }
 }
 
 /** 步骤模式下,typed 表单只渲染「非步骤拥有」的字段(image/workDir/模板字段等)。 */
 const visibleFields = computed<JobField[]>(() => {
-  if (['git_source','deploy_kubernetes'].includes(localType.value)) return []
-  if (!spec.value) return []
+  if (["git_source", "deploy_kubernetes"].includes(localType.value)) return [];
+  if (!spec.value) return [];
   return spec.value.fields.filter((f) => {
-    if (f.when && !f.when(typedConfig.value)) return false
-    if (viewMode.value === 'steps' && STEP_OWNED_KEYS.has(f.key)) return false
-    return true
-  })
-})
+    if (f.when && !f.when(typedConfig.value)) return false;
+    if (viewMode.value === "steps" && STEP_OWNED_KEYS.has(f.key)) return false;
+    return true;
+  });
+});
 
 const commandEditorPlaceholder = computed(
-  () => spec.value?.fields.find((field) => field.key === 'commands')?.placeholder ?? '',
-)
+  () =>
+    spec.value?.fields.find((field) => field.key === "commands")?.placeholder ??
+    "",
+);
 
 // 高级(执行/缓存)字段折叠:主表单只显示非高级字段;高级字段收进默认折叠分区。
-const showExecAdvanced = ref(false)
+const showExecAdvanced = ref(false);
 /** 当前可见字段里第一个高级字段的 key —— 用于在它前面插入「高级」折叠开关。 */
 const firstAdvancedKey = computed<string>(
-  () => visibleFields.value.find((f) => ADVANCED_FIELD_KEYS.has(f.key))?.key ?? '',
-)
+  () =>
+    visibleFields.value.find((f) => ADVANCED_FIELD_KEYS.has(f.key))?.key ?? "",
+);
 
 /** 步骤构建器回传的编译片段并入 typedConfig 落库。 */
-function onStepsUpdate(patch: { commands: string; artifactPath: string; artifacts?: string }): void {
+function onStepsUpdate(patch: {
+  commands: string;
+  artifactPath: string;
+  artifacts?: string;
+}): void {
   typedConfig.value = {
     ...typedConfig.value,
     commands: patch.commands,
     artifactPath: patch.artifactPath,
-    artifacts: patch.artifacts ?? '',
-  }
-  flush()
+    artifacts: patch.artifacts ?? "",
+  };
+  flush();
 }
 
 // ─── 工作室节点「实例参数短清单」 ─────────────────────────────────────────────
@@ -193,251 +227,347 @@ function onStepsUpdate(patch: { commands: string; artifactPath: string; artifact
 // 经 applyPromotedValues 写回 config.params 文本。原始视图收进可折叠「高级」入口兜底。
 
 /** 当前完整 config(typed + extras 合并),供 studio 解析提升参数定义/值。 */
-const liveConfig = computed<Record<string, string>>(() => currentConfig())
+const liveConfig = computed<Record<string, string>>(() => currentConfig());
 
 /** 是否工作室节点(templated 或带 __studio)。 */
-const isStudio = computed<boolean>(() => isStudioNode(localType.value, liveConfig.value))
+const isStudio = computed<boolean>(() =>
+  isStudioNode(localType.value, liveConfig.value),
+);
 
 /** 提升参数定义(只读):key/label/type/options + 当前值(default 字段)。 */
 const promotedParams = computed<PromotedParam[]>(() =>
   isStudio.value ? parsePromotedParams(liveConfig.value) : [],
-)
+);
 
 /** 该节点是否值得显示短清单(工作室节点且至少有一个提升参数)。 */
-const showShortlist = computed<boolean>(() => promotedParams.value.length > 0)
+const showShortlist = computed<boolean>(() => promotedParams.value.length > 0);
 
 /** 短清单当前值表(key → value),由 params 文本解析而来。 */
-const shortlistValues = computed<Record<string, string>>(() => promotedValues(liveConfig.value))
+const shortlistValues = computed<Record<string, string>>(() =>
+  promotedValues(liveConfig.value),
+);
 
 /** 工作室实例:原始参数视图(image/params/commandTemplate 等)默认收起。 */
-const showStudioRaw = ref(false)
+const showStudioRaw = ref(false);
 
 /** 短清单改值 → 写回 params 文本(只动 value,不碰 __studio 定义)→ flush。 */
 function onShortlistUpdate(values: Record<string, string>): void {
-  const params = applyPromotedValues(promotedParams.value, values)
-  typedConfig.value = { ...typedConfig.value, params }
-  flush()
+  const params = applyPromotedValues(promotedParams.value, values);
+  typedConfig.value = { ...typedConfig.value, params };
+  flush();
 }
 
 // Initial hydrate (after the computeds above are declared, see watch comment).
-hydrate(props.job)
+hydrate(props.job);
 
 function credentialOptions(field: JobField): Credential[] {
-  const all = props.credentials ?? []
-  if (!field.credentialType) return all
-  return all.filter((c) => c.type === field.credentialType)
+  const all = props.credentials ?? [];
+  if (!field.credentialType) return all;
+  return all.filter((c) => c.type === field.credentialType);
 }
 
-function credentialSelectOptions(field: JobField): { value: string; label: string }[] {
-  return withUnavailableOption([
-    { value: '', label: t('pipelineJob.credUnselected') },
-    ...credentialOptions(field).map((c) => ({ value: c.id, label: `${c.name} (${c.maskedValue})` })),
-  ], fieldValue(field.key), 'pipelineJob.credentialUnavailable')
+function credentialSelectOptions(
+  field: JobField,
+): { value: string; label: string }[] {
+  return withUnavailableOption(
+    [
+      { value: "", label: t("pipelineJob.credUnselected") },
+      ...credentialOptions(field).map((c) => ({
+        value: c.id,
+        label: `${c.name} (${c.maskedValue})`,
+      })),
+    ],
+    fieldValue(field.key),
+    "pipelineJob.credentialUnavailable",
+  );
 }
 
-function withUnavailableOption(options: { value: string; label: string }[], value: string, key: string) {
+function withUnavailableOption(
+  options: { value: string; label: string }[],
+  value: string,
+  key: string,
+) {
   return value && !options.some((option) => option.value === value)
     ? [...options, { value, label: t(key) }]
-    : options
+    : options;
 }
 
-const serverSelectOptions = computed(() => withUnavailableOption([
-  { value: '', label: t('pipelineJob.serverFromEnvironment') },
-  ...(props.servers ?? []).map((srv) => ({ value: srv.id, label: `${srv.name} · ${srv.host}` })),
-], fieldValue('serverId'), 'pipelineJob.serverUnavailable'))
+const serverSelectOptions = computed(() =>
+  withUnavailableOption(
+    [
+      { value: "", label: t("pipelineJob.serverFromEnvironment") },
+      ...(props.servers ?? []).map((srv) => ({
+        value: srv.id,
+        label: `${srv.name} · ${srv.host}`,
+      })),
+    ],
+    fieldValue("serverId"),
+    "pipelineJob.serverUnavailable",
+  ),
+);
 
-const editedJob = computed(() => ({ ...props.job, config: liveConfig.value }))
-const imageSource = computed(() => resolveImageSource(props.stages ?? [], props.stage, editedJob.value, props.environmentAutoPushPossible))
-const imageDeployment = computed(() => ['deploy_ssh', 'deploy_frontend'].includes(localType.value) && fieldValue('artifactType') === 'image')
+const editedJob = computed(() => ({ ...props.job, config: liveConfig.value }));
+const imageSource = computed(() =>
+  resolveImageSource(
+    props.stages ?? [],
+    props.stage,
+    editedJob.value,
+    props.environmentAutoPushPossible,
+  ),
+);
+const imageDeployment = computed(
+  () =>
+    ["deploy_ssh", "deploy_frontend"].includes(localType.value) &&
+    fieldValue("artifactType") === "image",
+);
 
 const artifactSourceOptions = computed(() => {
-  const options = [{ value: '', label: t('pipelineJob.artifactSourceAuto') }]
+  const options = [{ value: "", label: t("pipelineJob.artifactSourceAuto") }];
   if (imageDeployment.value) {
-    options.push(...imageSourceChoices(props.stages ?? [], props.stage, editedJob.value).map((source) => ({
-      value: source.selector, label: `${source.stage.name} / ${source.job.name}`,
-    })))
-    return withUnavailableOption(options, imageSource.value.source?.selector ?? fieldValue('artifactSource'), 'pipelineJob.imageSourceUnavailable')
+    options.push(
+      ...imageSourceChoices(
+        props.stages ?? [],
+        props.stage,
+        editedJob.value,
+      ).map((source) => ({
+        value: source.selector,
+        label: `${source.stage.name} / ${source.job.name}`,
+      })),
+    );
+    return withUnavailableOption(
+      options,
+      imageSource.value.source?.selector ?? fieldValue("artifactSource"),
+      "pipelineJob.imageSourceUnavailable",
+    );
   }
   for (const stage of props.stages ?? []) {
     for (const job of stage.jobs) {
-      let declarations: { path: string; name?: string }[] = []
+      let declarations: { path: string; name?: string }[] = [];
       if (job.config?.artifacts) {
         try {
-          const parsed: unknown = JSON.parse(job.config.artifacts)
-          if (Array.isArray(parsed)) declarations = parsed.filter((item): item is { path: string; name?: string } => item && typeof item.path === 'string')
-        } catch { /* The raw editor will report malformed declarations on save. */ }
+          const parsed: unknown = JSON.parse(job.config.artifacts);
+          if (Array.isArray(parsed))
+            declarations = parsed.filter(
+              (item): item is { path: string; name?: string } =>
+                item && typeof item.path === "string",
+            );
+        } catch {
+          /* The raw editor will report malformed declarations on save. */
+        }
       } else if (job.config?.artifactPath) {
-        declarations = job.config.artifactPath.split(/\r?\n/).filter((path) => path.trim()).map((path) => ({ path }))
+        declarations = job.config.artifactPath
+          .split(/\r?\n/)
+          .filter((path) => path.trim())
+          .map((path) => ({ path }));
       }
       declarations.forEach((declaration, declarationIndex) => {
         options.push({
-          value: JSON.stringify({ stageId: stage.id, jobId: job.id, declarationIndex }),
+          value: JSON.stringify({
+            stageId: stage.id,
+            jobId: job.id,
+            declarationIndex,
+          }),
           label: `${stage.name} / ${job.name} / ${declaration.name?.trim() || declaration.path}`,
-        })
-      })
+        });
+      });
     }
   }
-  return options
-})
+  return options;
+});
 
 const channelSelectOptions = computed(() => [
-  { value: '', label: t('pipelineJob.channelUnselected') },
+  { value: "", label: t("pipelineJob.channelUnselected") },
   ...(props.channels ?? []).map((ch) => ({
     value: ch.id,
-    label: `${ch.name} · ${channelTypeLabel(ch.type)}${ch.enabled ? '' : t('pipelineJob.channelDisabled')}`,
+    label: `${ch.name} · ${channelTypeLabel(ch.type)}${ch.enabled ? "" : t("pipelineJob.channelDisabled")}`,
   })),
-])
+]);
 
 const CHANNEL_TYPE_LABELS: Record<string, string> = {
-  webhook: 'Webhook',
-  email: t('pipelineJob.channelTypeEmail'),
-  feishu: t('pipelineJob.channelTypeFeishu'),
-  wecom: t('pipelineJob.channelTypeWecom'),
-  dingtalk: t('pipelineJob.channelTypeDingtalk'),
-}
+  webhook: "Webhook",
+  email: t("pipelineJob.channelTypeEmail"),
+  feishu: t("pipelineJob.channelTypeFeishu"),
+  wecom: t("pipelineJob.channelTypeWecom"),
+  dingtalk: t("pipelineJob.channelTypeDingtalk"),
+};
 
 function channelTypeLabel(type: string): string {
-  return CHANNEL_TYPE_LABELS[type] ?? type
+  return CHANNEL_TYPE_LABELS[type] ?? type;
 }
 
 // ─── Value get/set ────────────────────────────────────────────────────────────
 
 function fieldValue(key: string): string {
-  return typedConfig.value[key] ?? ''
+  return typedConfig.value[key] ?? "";
 }
 
 /** Default-display value for selects so the first option shows before any edit. */
 function selectValue(field: JobField): string {
-  if (field.key === 'artifactSource' && imageDeployment.value && imageSource.value.source && fieldValue('artifactSource')) return imageSource.value.source.selector
-  const v = typedConfig.value[field.key]
-  if (v) return v
-  return field.options?.[0]?.value ?? ''
+  if (
+    field.key === "artifactSource" &&
+    imageDeployment.value &&
+    imageSource.value.source &&
+    fieldValue("artifactSource")
+  )
+    return imageSource.value.source.selector;
+  const v = typedConfig.value[field.key];
+  if (v) return v;
+  return field.options?.[0]?.value ?? "";
 }
 
 function updateLocal(key: string, value: string): void {
-  typedConfig.value = { ...typedConfig.value, [key]: value }
+  typedConfig.value = { ...typedConfig.value, [key]: value };
 }
 
 function openCommandEditor(event: MouseEvent): void {
-  commandEditorTrigger.value = event.currentTarget as HTMLButtonElement
-  commandEditorOpen.value = true
+  commandEditorTrigger.value = event.currentTarget as HTMLButtonElement;
+  commandEditorOpen.value = true;
 }
 
 function applyExpandedCommands(value: string): void {
-  if (!commandEditorOpen.value) return
-  commandEditorOpen.value = false
-  updateLocal('commands', value)
-  flush()
+  if (!commandEditorOpen.value) return;
+  commandEditorOpen.value = false;
+  updateLocal("commands", value);
+  flush();
 }
 
-const cacheInherited = computed(() => !Object.hasOwn(typedConfig.value, 'cachePaths'))
+const cacheInherited = computed(
+  () => !Object.hasOwn(typedConfig.value, "cachePaths"),
+);
 function setCacheInheritance(inherit: boolean): void {
-  const next = { ...typedConfig.value }
-  if (inherit) delete next.cachePaths
-  else next.cachePaths = ''
-  typedConfig.value = next
-  flush()
+  const next = { ...typedConfig.value };
+  if (inherit) delete next.cachePaths;
+  else next.cachePaths = "";
+  typedConfig.value = next;
+  flush();
 }
 
 function setField(key: string, value: string): void {
-  const previous = fieldValue(key)
-  updateLocal(key, value)
-  if (key === 'artifactType' && value !== previous) {
-    updateLocal('artifactSource', '')
+  const previous = fieldValue(key);
+  updateLocal(key, value);
+  if (key === "artifactType" && value !== previous) {
+    updateLocal("artifactSource", "");
   }
-  flush()
+  flush();
 }
 
 function referenceWarning(field: JobField): string {
-  const value = fieldValue(field.key)
-  if (fieldValue('localDocker') === 'true') {
-    if (field.key === 'localDocker' && !['archive', 'dist'].includes(fieldValue('artifactType'))) return t('pipelineJob.localDockerArtifactRequired')
-    if (['localDocker', 'restartCommand'].includes(field.key) && fieldValue('restartCommand').trim()) return t('pipelineJob.localDockerRestartConflict')
-    if (field.key === 'strategy' && ['blue_green', 'blue-green'].includes(value)) return t('pipelineJob.localDockerStrategyConflict')
-    if (field.key === 'containerName' && !value.trim()) return t('pipelineJob.localDockerContainerRequired')
+  const value = fieldValue(field.key);
+  if (fieldValue("localDocker") === "true") {
+    if (
+      field.key === "localDocker" &&
+      !["archive", "dist"].includes(fieldValue("artifactType"))
+    )
+      return t("pipelineJob.localDockerArtifactRequired");
+    if (
+      ["localDocker", "restartCommand"].includes(field.key) &&
+      fieldValue("restartCommand").trim()
+    )
+      return t("pipelineJob.localDockerRestartConflict");
+    if (
+      field.key === "strategy" &&
+      ["blue_green", "blue-green"].includes(value)
+    )
+      return t("pipelineJob.localDockerStrategyConflict");
+    if (field.key === "containerName" && !value.trim())
+      return t("pipelineJob.localDockerContainerRequired");
   }
-  if (field.kind === 'server') {
-    if (!value) return t('pipelineJob.serverRequired')
-    if (props.servers && !props.servers.some((server) => server.id === value)) return t('pipelineJob.serverUnavailable')
+  if (field.kind === "server") {
+    if (!value) return t("pipelineJob.serverRequired");
+    if (props.servers && !props.servers.some((server) => server.id === value))
+      return t("pipelineJob.serverUnavailable");
   }
-  if (field.kind === 'credential' && value && props.credentials && !credentialOptions(field).some((credential) => credential.id === value)) return t('pipelineJob.credentialUnavailable')
-  if (field.key === 'artifactSource' && imageDeployment.value && imageSource.value.status !== 'selected') return t(`pipelineJob.imageSource${imageSource.value.status === 'missing' ? 'Missing' : imageSource.value.status === 'ambiguous' ? 'Ambiguous' : 'Unavailable'}`)
-  return ''
+  if (
+    field.kind === "credential" &&
+    value &&
+    props.credentials &&
+    !credentialOptions(field).some((credential) => credential.id === value)
+  )
+    return t("pipelineJob.credentialUnavailable");
+  if (
+    field.key === "artifactSource" &&
+    imageDeployment.value &&
+    imageSource.value.status !== "selected"
+  )
+    return t(
+      `pipelineJob.imageSource${imageSource.value.status === "missing" ? "Missing" : imageSource.value.status === "ambiguous" ? "Ambiguous" : "Unavailable"}`,
+    );
+  return "";
 }
 
 function inspectSource(jobId: string): void {
-  flush()
-  emit('inspect-source', jobId)
+  flush();
+  emit("inspect-source", jobId);
 }
 
 // ─── Raw extras (advanced) ─────────────────────────────────────────────────────
 
 function addExtra(): void {
-  extraRows.value.push({ _key: ++_kvSeq, k: '', v: '' })
+  extraRows.value.push({ _key: ++_kvSeq, k: "", v: "" });
 }
 
 function removeExtra(key: number): void {
-  extraRows.value = extraRows.value.filter((r) => r._key !== key)
-  flush()
+  extraRows.value = extraRows.value.filter((r) => r._key !== key);
+  flush();
 }
 
 function extrasToObject(rows: KVRow[]): Record<string, string> {
-  const out: Record<string, string> = {}
+  const out: Record<string, string> = {};
   for (const row of rows) {
-    const key = row.k.trim()
-    if (key) out[key] = row.v
+    const key = row.k.trim();
+    if (key) out[key] = row.v;
   }
-  return out
+  return out;
 }
 
 // ─── Flush ─────────────────────────────────────────────────────────────────────
 
 /** Build the full config object from typed form + advanced extras (typed wins on conflict). */
 function currentConfig(): Record<string, string> {
-  return { ...extrasToObject(extraRows.value), ...typedConfig.value }
+  return { ...extrasToObject(extraRows.value), ...typedConfig.value };
 }
 
 function flush(): void {
-  emit('update', {
-    name:    localName.value.trim() || props.job.name,
-    type:    localType.value.trim() || props.job.type,
+  emit("update", {
+    name: localName.value.trim() || props.job.name,
+    type: localType.value.trim() || props.job.type,
     summary: localSummary.value,
-    config:  currentConfig(),
-  })
+    config: currentConfig(),
+  });
 }
 
 // ─── Save as custom node (复用库 Tier 2) ──────────────────────────────────────
 // Snapshot this node's type + summary + config into the reuse library so it can be
 // picked into any pipeline later, pre-filled. Free-form config (no schema enforced).
 
-const savePanelOpen = ref(false)
-const saveName      = ref('')
-const saveDesc      = ref('')
-const saving        = ref(false)
-const saveError     = ref('')
-const saveOk        = ref(false)
+const savePanelOpen = ref(false);
+const saveName = ref("");
+const saveDesc = ref("");
+const saving = ref(false);
+const saveError = ref("");
+const saveOk = ref(false);
 
 function openSavePanel(): void {
-  saveName.value = localName.value.trim()
-  saveDesc.value = ''
-  saveError.value = ''
-  saveOk.value = false
-  savePanelOpen.value = true
+  saveName.value = localName.value.trim();
+  saveDesc.value = "";
+  saveError.value = "";
+  saveOk.value = false;
+  savePanelOpen.value = true;
 }
 
 function cancelSave(): void {
-  savePanelOpen.value = false
-  saveError.value = ''
+  savePanelOpen.value = false;
+  saveError.value = "";
 }
 
 async function confirmSave(): Promise<void> {
-  const name = saveName.value.trim()
+  const name = saveName.value.trim();
   if (!name) {
-    saveError.value = t('pipelineJob.saveErrEmptyName')
-    return
+    saveError.value = t("pipelineJob.saveErrEmptyName");
+    return;
   }
-  saving.value = true
-  saveError.value = ''
+  saving.value = true;
+  saveError.value = "";
   try {
     await createCustomNode({
       name,
@@ -445,14 +575,16 @@ async function confirmSave(): Promise<void> {
       nodeType: localType.value.trim() || props.job.type,
       summary: localSummary.value,
       config: currentConfig(),
-    })
-    saveOk.value = true
-    savePanelOpen.value = false
+    });
+    saveOk.value = true;
+    savePanelOpen.value = false;
   } catch (err) {
     saveError.value =
-      err instanceof Error && err.message ? err.message : t('pipelineJob.saveErrFailed')
+      err instanceof Error && err.message
+        ? err.message
+        : t("pipelineJob.saveErrFailed");
   } finally {
-    saving.value = false
+    saving.value = false;
   }
 }
 </script>
@@ -462,32 +594,52 @@ async function confirmSave(): Promise<void> {
     <!-- Head -->
     <div class="drawer-head">
       <span class="drawer-icon" aria-hidden="true">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
-          <rect x="3" y="4" width="18" height="6" rx="1.6"/>
-          <rect x="3" y="14" width="18" height="6" rx="1.6"/>
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.9"
+        >
+          <rect x="3" y="4" width="18" height="6" rx="1.6" />
+          <rect x="3" y="14" width="18" height="6" rx="1.6" />
         </svg>
       </span>
       <div class="drawer-title">
-        {{ localName || t('pipelineJob.unnamedJob') }}
-        <small class="drawer-subtitle">{{ localizeName(stage.name) }} · {{ t('pipelineJob.thisPipeline') }}</small>
+        {{ localName || t("pipelineJob.unnamedJob") }}
+        <small class="drawer-subtitle"
+          >{{ localizeName(stage.name) }} ·
+          {{ t("pipelineJob.thisPipeline") }}</small
+        >
       </div>
       <button
         class="drawer-close"
         :aria-label="t('pipelineJob.closeDrawer')"
         @click="emit('close')"
       >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-          <path d="M18 6 6 18M6 6l12 12"/>
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          aria-hidden="true"
+        >
+          <path d="M18 6 6 18M6 6l12 12" />
         </svg>
       </button>
     </div>
 
     <!-- Basic info section -->
     <div class="drawer-section">
-      <div class="drawer-section-label">{{ t('pipelineJob.basicInfo') }}</div>
+      <div class="drawer-section-label">{{ t("pipelineJob.basicInfo") }}</div>
 
       <div class="drawer-field">
-        <div class="drawer-field-label">{{ t('pipelineJob.jobNameLabel') }}</div>
+        <div class="drawer-field-label">
+          {{ t("pipelineJob.jobNameLabel") }}
+        </div>
         <input
           v-model="localName"
           class="drawer-input"
@@ -499,7 +651,9 @@ async function confirmSave(): Promise<void> {
       </div>
 
       <div class="drawer-field">
-        <div class="drawer-field-label">{{ t('pipelineJob.jobTypeLabel') }}</div>
+        <div class="drawer-field-label">
+          {{ t("pipelineJob.jobTypeLabel") }}
+        </div>
         <button
           type="button"
           class="type-trigger"
@@ -509,14 +663,18 @@ async function confirmSave(): Promise<void> {
           <JobTypeIcon :type="localType" :size="32" />
           <span class="type-trigger-body">
             <span class="type-trigger-name">{{ jobTypeLabel(localType) }}</span>
-            <span class="type-trigger-desc">{{ spec ? spec.description : localType }}</span>
+            <span class="type-trigger-desc">{{
+              spec ? spec.description : localType
+            }}</span>
           </span>
-          <span class="type-trigger-action">{{ t('pipelineJob.change') }}</span>
+          <span class="type-trigger-action">{{ t("pipelineJob.change") }}</span>
         </button>
       </div>
 
       <div class="drawer-field">
-        <div class="drawer-field-label">{{ t('pipelineJob.summaryLabel') }}</div>
+        <div class="drawer-field-label">
+          {{ t("pipelineJob.summaryLabel") }}
+        </div>
         <input
           v-model="localSummary"
           class="drawer-input"
@@ -530,9 +688,11 @@ async function confirmSave(): Promise<void> {
 
     <!-- 工作室节点「实例参数短清单」:只展示作者提升的参数,类型化控件,default 预填。 -->
     <div v-if="showShortlist" class="drawer-section">
-      <div class="drawer-section-label">{{ t('pipelineJob.instanceParams') }}</div>
+      <div class="drawer-section-label">
+        {{ t("pipelineJob.instanceParams") }}
+      </div>
       <p class="shortlist-hint">
-        {{ t('pipelineJob.instanceParamsHint') }}
+        {{ t("pipelineJob.instanceParamsHint") }}
       </p>
       <StudioInstanceParams
         :params="promotedParams"
@@ -542,17 +702,28 @@ async function confirmSave(): Promise<void> {
     </div>
 
     <!-- 工作室实例:原始命令模板/参数视图收进可折叠「高级」入口(默认收起)。 -->
-    <div v-if="showShortlist && spec" class="drawer-section drawer-studio-raw-toggle">
+    <div
+      v-if="showShortlist && spec"
+      class="drawer-section drawer-studio-raw-toggle"
+    >
       <button
         class="advanced-toggle"
         :class="{ 'advanced-toggle--open': showStudioRaw }"
         :aria-expanded="showStudioRaw"
         @click="showStudioRaw = !showStudioRaw"
       >
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
-          <path d="M9 18l6-6-6-6"/>
+        <svg
+          width="11"
+          height="11"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.2"
+          aria-hidden="true"
+        >
+          <path d="M9 18l6-6-6-6" />
         </svg>
-        {{ t('pipelineJob.advancedRawToggle') }}
+        {{ t("pipelineJob.advancedRawToggle") }}
       </button>
     </div>
 
@@ -562,12 +733,40 @@ async function confirmSave(): Promise<void> {
       :has-legacy-overrides="Object.values(liveConfig).some((value) => !!value)"
     />
 
-    <KubernetesJobConfig class="drawer-section" v-if="localType === 'deploy_kubernetes'" :key="job.id" :config="liveConfig" :stages="stages ?? []" :stage="stage" :job="job" :project-id="project?.id" @update="typedConfig = $event; extraRows = []; flush()" />
+    <KubernetesJobConfig
+      class="drawer-section"
+      v-if="localType === 'deploy_kubernetes'"
+      :key="job.id"
+      :config="liveConfig"
+      :stages="stages ?? []"
+      :stage="stage"
+      :job="job"
+      :project-id="project?.id"
+      @update="
+        typedConfig = $event;
+        extraRows = [];
+        flush();
+      "
+    />
     <!-- Typed config section (per-type form) -->
-    <div v-if="spec && !['git_source','deploy_kubernetes'].includes(localType) && (!showShortlist || showStudioRaw)" class="drawer-section">
+    <div
+      v-if="
+        spec &&
+        !['git_source', 'deploy_kubernetes'].includes(localType) &&
+        (!showShortlist || showStudioRaw)
+      "
+      class="drawer-section"
+    >
       <div class="drawer-section-head">
-        <div class="drawer-section-label">{{ spec.label }}{{ t('pipelineJob.configSuffix') }}</div>
-        <div v-if="canUseStepBuilder && !showShortlist" class="view-switch" role="tablist" :aria-label="t('pipelineJob.configView')">
+        <div class="drawer-section-label">
+          {{ spec.label }}{{ t("pipelineJob.configSuffix") }}
+        </div>
+        <div
+          v-if="canUseStepBuilder && !showShortlist"
+          class="view-switch"
+          role="tablist"
+          :aria-label="t('pipelineJob.configView')"
+        >
           <button
             class="view-tab"
             :class="{ 'view-tab--active': viewMode === 'steps' }"
@@ -575,7 +774,7 @@ async function confirmSave(): Promise<void> {
             :aria-selected="viewMode === 'steps'"
             @click="viewMode = 'steps'"
           >
-            {{ t('pipelineJob.visualSteps') }}
+            {{ t("pipelineJob.visualSteps") }}
           </button>
           <button
             class="view-tab"
@@ -584,7 +783,7 @@ async function confirmSave(): Promise<void> {
             :aria-selected="viewMode === 'raw'"
             @click="viewMode = 'raw'"
           >
-            {{ t('pipelineJob.rawParams') }}
+            {{ t("pipelineJob.rawParams") }}
           </button>
         </div>
       </div>
@@ -599,135 +798,190 @@ async function confirmSave(): Promise<void> {
           :aria-expanded="showExecAdvanced"
           @click="showExecAdvanced = !showExecAdvanced"
         >
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
-            <path d="M9 18l6-6-6-6"/>
-          </svg>
-          {{ t('pipelineJob.execAdvancedToggle') }}
-        </button>
-      <div
-        v-show="!ADVANCED_FIELD_KEYS.has(field.key) || showExecAdvanced"
-        class="drawer-field"
-        :data-config-key="field.key"
-      >
-        <div class="drawer-field-heading">
-          <div class="drawer-field-label">{{ field.label }}</div>
-          <button
-            v-if="field.key === 'commands' && field.kind === 'textarea'"
-            type="button"
-            class="command-editor-trigger"
-            :aria-label="t('pipelineJob.expandCommandEditor')"
-            :title="t('pipelineJob.expandCommandEditor')"
-            @click="openCommandEditor"
+          <svg
+            width="11"
+            height="11"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.2"
+            aria-hidden="true"
           >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true">
-              <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
-            </svg>
-          </button>
-        </div>
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+          {{ t("pipelineJob.execAdvancedToggle") }}
+        </button>
+        <div
+          v-show="!ADVANCED_FIELD_KEYS.has(field.key) || showExecAdvanced"
+          class="drawer-field"
+          :data-config-key="field.key"
+        >
+          <div class="drawer-field-heading">
+            <div class="drawer-field-label">{{ field.label }}</div>
+            <button
+              v-if="field.key === 'commands' && field.kind === 'textarea'"
+              type="button"
+              class="command-editor-trigger"
+              :aria-label="t('pipelineJob.expandCommandEditor')"
+              :title="t('pipelineJob.expandCommandEditor')"
+              @click="openCommandEditor"
+            >
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.9"
+                aria-hidden="true"
+              >
+                <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+              </svg>
+            </button>
+          </div>
 
-        <label v-if="field.key === 'cachePaths'" class="drawer-toggle">
-          <input type="checkbox" :checked="cacheInherited" @change="setCacheInheritance(($event.target as HTMLInputElement).checked)">
-          <span>{{ t('pipelineJob.cacheUseProjectDefault') }}</span>
-        </label>
+          <label v-if="field.key === 'cachePaths'" class="drawer-toggle">
+            <input
+              type="checkbox"
+              :checked="cacheInherited"
+              @change="
+                setCacheInheritance(($event.target as HTMLInputElement).checked)
+              "
+            />
+            <span>{{ t("pipelineJob.cacheUseProjectDefault") }}</span>
+          </label>
 
-        <!-- textarea -->
-        <textarea
-          v-if="field.kind === 'textarea'"
-          :value="fieldValue(field.key)"
-          class="drawer-input drawer-textarea"
-          :class="{ 'is-mono': field.monospace }"
-          rows="4"
-          :placeholder="field.placeholder"
-          :aria-label="field.label"
-          :disabled="field.key === 'cachePaths' && cacheInherited"
-          @input="updateLocal(field.key, ($event.target as HTMLTextAreaElement).value)"
-          @blur="flush"
-        ></textarea>
-
-        <!-- select -->
-        <AppSelect
-          v-else-if="field.kind === 'select'"
-          :model-value="selectValue(field)"
-          :options="field.key === 'artifactSource' ? artifactSourceOptions : (field.options ?? [])"
-          :aria-label="field.label"
-          min-width="0"
-          portal
-          @update:model-value="setField(field.key, $event)"
-        />
-
-        <!-- credential picker -->
-        <AppSelect
-          v-else-if="field.kind === 'credential'"
-          :model-value="fieldValue(field.key)"
-          :options="credentialSelectOptions(field)"
-          :aria-label="field.label"
-          min-width="0"
-          portal
-          @update:model-value="setField(field.key, $event)"
-        />
-
-        <!-- server picker -->
-        <AppSelect
-          v-else-if="field.kind === 'server'"
-          :model-value="fieldValue(field.key)"
-          :options="serverSelectOptions"
-          :aria-label="field.label"
-          min-width="0"
-          portal
-          @update:model-value="setField(field.key, $event)"
-        />
-
-        <!-- notification channel picker -->
-        <AppSelect
-          v-else-if="field.kind === 'channel'"
-          :model-value="fieldValue(field.key)"
-          :options="channelSelectOptions"
-          :aria-label="field.label"
-          min-width="0"
-          portal
-          @update:model-value="setField(field.key, $event)"
-        />
-
-        <!-- toggle -->
-        <label v-else-if="field.kind === 'toggle'" class="drawer-toggle">
-          <input
-            type="checkbox"
-            :checked="fieldValue(field.key) === 'true'"
+          <!-- textarea -->
+          <textarea
+            v-if="field.kind === 'textarea'"
+            :value="fieldValue(field.key)"
+            class="drawer-input drawer-textarea"
+            :class="{ 'is-mono': field.monospace }"
+            rows="4"
+            :placeholder="field.placeholder"
             :aria-label="field.label"
-            @change="setField(field.key, ($event.target as HTMLInputElement).checked ? 'true' : 'false')"
+            :disabled="field.key === 'cachePaths' && cacheInherited"
+            @input="
+              updateLocal(
+                field.key,
+                ($event.target as HTMLTextAreaElement).value,
+              )
+            "
+            @blur="flush"
+          ></textarea>
+
+          <!-- select -->
+          <AppSelect
+            v-else-if="field.kind === 'select'"
+            :model-value="selectValue(field)"
+            :options="
+              field.key === 'artifactSource'
+                ? artifactSourceOptions
+                : (field.options ?? [])
+            "
+            :aria-label="field.label"
+            min-width="0"
+            portal
+            @update:model-value="setField(field.key, $event)"
           />
-          <span>{{ field.hint || t('pipelineJob.toggleEnable') }}</span>
-        </label>
 
-        <!-- number / text -->
-        <input
-          v-else
-          :value="fieldValue(field.key)"
-          class="drawer-input"
-          :class="{ 'is-mono': field.monospace }"
-          :type="field.kind === 'number' ? 'number' : 'text'"
-          :placeholder="field.placeholder"
-          :aria-label="field.label"
-          @input="updateLocal(field.key, ($event.target as HTMLInputElement).value)"
-          @blur="flush"
-        />
+          <!-- credential picker -->
+          <AppSelect
+            v-else-if="field.kind === 'credential'"
+            :model-value="fieldValue(field.key)"
+            :options="credentialSelectOptions(field)"
+            :aria-label="field.label"
+            min-width="0"
+            portal
+            @update:model-value="setField(field.key, $event)"
+          />
 
-        <p v-if="referenceWarning(field)" class="field-warning" role="status">{{ referenceWarning(field) }}</p>
-        <p v-if="field.hint && field.kind !== 'toggle'" class="field-hint">{{ field.key === 'artifactSource' && imageDeployment ? t('pipelineJob.imageSourceHint') : field.hint }}</p>
-        <ImageProvenanceSummary
-          v-if="field.key === 'artifactSource' && imageDeployment && imageSource.source"
-          :source="imageSource.source"
-          :project-name="projectName"
-          @inspect="inspectSource"
-        />
-      </div>
+          <!-- server picker -->
+          <AppSelect
+            v-else-if="field.kind === 'server'"
+            :model-value="fieldValue(field.key)"
+            :options="serverSelectOptions"
+            :aria-label="field.label"
+            min-width="0"
+            portal
+            @update:model-value="setField(field.key, $event)"
+          />
+
+          <!-- notification channel picker -->
+          <AppSelect
+            v-else-if="field.kind === 'channel'"
+            :model-value="fieldValue(field.key)"
+            :options="channelSelectOptions"
+            :aria-label="field.label"
+            min-width="0"
+            portal
+            @update:model-value="setField(field.key, $event)"
+          />
+
+          <!-- toggle -->
+          <label v-else-if="field.kind === 'toggle'" class="drawer-toggle">
+            <input
+              type="checkbox"
+              :checked="fieldValue(field.key) === 'true'"
+              :aria-label="field.label"
+              @change="
+                setField(
+                  field.key,
+                  ($event.target as HTMLInputElement).checked
+                    ? 'true'
+                    : 'false',
+                )
+              "
+            />
+            <span>{{ field.hint || t("pipelineJob.toggleEnable") }}</span>
+          </label>
+
+          <!-- number / text -->
+          <input
+            v-else
+            :value="fieldValue(field.key)"
+            class="drawer-input"
+            :class="{ 'is-mono': field.monospace }"
+            :type="field.kind === 'number' ? 'number' : 'text'"
+            :placeholder="field.placeholder"
+            :aria-label="field.label"
+            @input="
+              updateLocal(field.key, ($event.target as HTMLInputElement).value)
+            "
+            @blur="flush"
+          />
+
+          <p v-if="referenceWarning(field)" class="field-warning" role="status">
+            {{ referenceWarning(field) }}
+          </p>
+          <p v-if="field.hint && field.kind !== 'toggle'" class="field-hint">
+            {{
+              field.key === "artifactSource" && imageDeployment
+                ? t("pipelineJob.imageSourceHint")
+                : field.hint
+            }}
+          </p>
+          <ImageProvenanceSummary
+            v-if="
+              field.key === 'artifactSource' &&
+              imageDeployment &&
+              imageSource.source
+            "
+            :source="imageSource.source"
+            :project-name="projectName"
+            @inspect="inspectSource"
+          />
+        </div>
       </template>
 
       <!-- 可视化步骤构建器(脚本类节点;编译进 commands/artifactPath,经 update 落库) -->
-      <div v-if="canUseStepBuilder && viewMode === 'steps'" class="drawer-field step-builder-field">
+      <div
+        v-if="canUseStepBuilder && viewMode === 'steps'"
+        class="drawer-field step-builder-field"
+      >
         <StepBuilder :config="typedConfig" @update="onStepsUpdate" />
         <p class="field-hint">
-          {{ t('pipelineJob.stepBuilderHint') }}
+          {{ t("pipelineJob.stepBuilderHint") }}
         </p>
       </div>
     </div>
@@ -740,22 +994,33 @@ async function confirmSave(): Promise<void> {
         :aria-expanded="showAdvanced"
         @click="showAdvanced = !showAdvanced"
       >
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
-          <path d="M9 18l6-6-6-6"/>
+        <svg
+          width="11"
+          height="11"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.2"
+          aria-hidden="true"
+        >
+          <path d="M9 18l6-6-6-6" />
         </svg>
-        {{ t('pipelineJob.advancedRawParams') }}<span v-if="extraRows.length" class="advanced-count">{{ extraRows.length }}</span>
+        {{ t("pipelineJob.advancedRawParams")
+        }}<span v-if="extraRows.length" class="advanced-count">{{
+          extraRows.length
+        }}</span>
       </button>
 
       <div v-if="showAdvanced" class="advanced-body">
         <div v-if="extraRows.length === 0" class="kv-empty">
-          {{ spec ? t('pipelineJob.kvEmptyWithSpec') : t('pipelineJob.kvEmptyNoSpec') }}
+          {{
+            spec
+              ? t("pipelineJob.kvEmptyWithSpec")
+              : t("pipelineJob.kvEmptyNoSpec")
+          }}
         </div>
 
-        <div
-          v-for="row in extraRows"
-          :key="row._key"
-          class="kv-row"
-        >
+        <div v-for="row in extraRows" :key="row._key" class="kv-row">
           <input
             v-model="row.k"
             class="kv-input"
@@ -774,20 +1039,38 @@ async function confirmSave(): Promise<void> {
           />
           <button
             class="kv-del"
-            :aria-label="t('pipelineJob.kvDelAria', { label: row.k || row._key })"
+            :aria-label="
+              t('pipelineJob.kvDelAria', { label: row.k || row._key })
+            "
             @click="removeExtra(row._key)"
           >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-              <path d="M18 6 6 18M6 6l12 12"/>
+            <svg
+              width="11"
+              height="11"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              aria-hidden="true"
+            >
+              <path d="M18 6 6 18M6 6l12 12" />
             </svg>
           </button>
         </div>
 
         <button class="kv-add-btn" @click="addExtra">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
-            <path d="M12 5v14M5 12h14"/>
+          <svg
+            width="11"
+            height="11"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.4"
+            aria-hidden="true"
+          >
+            <path d="M12 5v14M5 12h14" />
           </svg>
-          {{ t('pipelineJob.addParam') }}
+          {{ t("pipelineJob.addParam") }}
         </button>
       </div>
     </div>
@@ -796,18 +1079,32 @@ async function confirmSave(): Promise<void> {
     <div class="drawer-section drawer-reuse">
       <div v-if="!savePanelOpen" class="reuse-row">
         <button class="reuse-btn" @click="openSavePanel">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-            <path d="M17 21v-8H7v8M7 3v5h8"/>
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            aria-hidden="true"
+          >
+            <path
+              d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"
+            />
+            <path d="M17 21v-8H7v8M7 3v5h8" />
           </svg>
-          {{ t('pipelineJob.saveAsCustomNode') }}
+          {{ t("pipelineJob.saveAsCustomNode") }}
         </button>
-        <span v-if="saveOk" class="reuse-ok" role="status">{{ t('pipelineJob.savedToLibrary') }}</span>
+        <span v-if="saveOk" class="reuse-ok" role="status">{{
+          t("pipelineJob.savedToLibrary")
+        }}</span>
       </div>
 
       <div v-else class="reuse-panel">
-        <div class="reuse-panel-title">{{ t('pipelineJob.saveAsCustomNode') }}</div>
-        <p class="reuse-panel-hint">{{ t('pipelineJob.savePanelHint') }}</p>
+        <div class="reuse-panel-title">
+          {{ t("pipelineJob.saveAsCustomNode") }}
+        </div>
+        <p class="reuse-panel-hint">{{ t("pipelineJob.savePanelHint") }}</p>
         <input
           v-model="saveName"
           class="drawer-input"
@@ -825,9 +1122,11 @@ async function confirmSave(): Promise<void> {
         />
         <p v-if="saveError" class="reuse-error" role="alert">{{ saveError }}</p>
         <div class="reuse-actions">
-          <button class="reuse-cancel" :disabled="saving" @click="cancelSave">{{ t('pipelineJob.cancel') }}</button>
+          <button class="reuse-cancel" :disabled="saving" @click="cancelSave">
+            {{ t("pipelineJob.cancel") }}
+          </button>
           <button class="reuse-confirm" :disabled="saving" @click="confirmSave">
-            {{ saving ? t('pipelineJob.saving') : t('pipelineJob.save') }}
+            {{ saving ? t("pipelineJob.saving") : t("pipelineJob.save") }}
           </button>
         </div>
       </div>
@@ -850,7 +1149,13 @@ async function confirmSave(): Promise<void> {
 </template>
 
 <style scoped>
-.field-warning { margin: 6px 0 0; color: var(--color-amber); font-size: 0.76rem; line-height: 1.5; overflow-wrap: anywhere; }
+.field-warning {
+  margin: 6px 0 0;
+  color: var(--color-amber);
+  font-size: 0.76rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
 .drawer-section-head {
   display: flex;
   align-items: center;
@@ -919,7 +1224,9 @@ async function confirmSave(): Promise<void> {
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: color var(--duration-fast), background-color var(--duration-fast);
+  transition:
+    color var(--duration-fast),
+    background-color var(--duration-fast);
   min-height: 30px;
 }
 
@@ -977,7 +1284,9 @@ async function confirmSave(): Promise<void> {
   border-radius: 6px;
   cursor: pointer;
   text-align: left;
-  transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
+  transition:
+    border-color var(--duration-fast),
+    box-shadow var(--duration-fast);
 }
 
 .type-trigger:hover {
@@ -1125,7 +1434,9 @@ async function confirmSave(): Promise<void> {
   font-size: 0.8rem;
   font-weight: 600;
   cursor: pointer;
-  transition: border-color var(--duration-fast), color var(--duration-fast);
+  transition:
+    border-color var(--duration-fast),
+    color var(--duration-fast);
   min-height: 34px;
 }
 
@@ -1184,7 +1495,9 @@ async function confirmSave(): Promise<void> {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: opacity var(--duration-fast), background-color var(--duration-fast);
+  transition:
+    opacity var(--duration-fast),
+    background-color var(--duration-fast);
   min-height: 34px;
 }
 
@@ -1215,6 +1528,15 @@ async function confirmSave(): Promise<void> {
 }
 
 @media (max-width: 640px) {
- .view-tab, .type-trigger, .reuse-btn, .reuse-cancel, .reuse-confirm { min-height: 44px; }
- .view-switch { flex-wrap: wrap; } }
+  .view-tab,
+  .type-trigger,
+  .reuse-btn,
+  .reuse-cancel,
+  .reuse-confirm {
+    min-height: 44px;
+  }
+  .view-switch {
+    flex-wrap: wrap;
+  }
+}
 </style>

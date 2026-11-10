@@ -96,6 +96,27 @@ func (s *Service) sectionItems(t *auth.MCPToken, d *document, g guard, section s
 	switch section {
 	case "project":
 		items = append(items, map[string]any{"name": g.safe(d.name), "defaultBranch": g.safe(d.branch), "hiddenFieldsPreserved": true})
+	case "kubernetes":
+		for _, st := range d.spec.Stages {
+			if !t.AllowsConfigNode(d.projectID, "config.read", "", st.ID, "") {
+				continue
+			}
+			if !g.clean(st.ID) {
+				return nil, ErrSecret
+			}
+			if st.Kind == "deploy" && len(st.Jobs) == 0 {
+				items = append(items, map[string]any{"stageId": st.ID, "name": g.safe(st.Name), "emptyDeployStage": true, "addAllowed": t.AllowsConfigNode(d.projectID, "config.propose", "kubernetes.add", st.ID, "")})
+			}
+			for _, j := range st.Jobs {
+				if build.ConfigJobKind(j.Type) != "deploy_kubernetes" {
+					continue
+				}
+				if !g.clean(j.ID) {
+					return nil, ErrSecret
+				}
+				items = append(items, map[string]any{"stageId": st.ID, "jobId": j.ID, "name": g.safe(j.Name), "kind": "deploy_kubernetes", "configuration": kubernetesSummary(j.Config, g), "updateAllowed": t.AllowsConfigNode(d.projectID, "config.propose", "kubernetes.update", st.ID, j.ID), "hiddenFieldsPreserved": true})
+			}
+		}
 	case "source_and_impact":
 		items = append(items, map[string]any{"sourceMode": d.source, "executionApplicability": d.applicability, "automaticTriggersMayUseChanges": true, "networkChecksPerformed": false, "scriptsExported": false})
 	default:
@@ -178,7 +199,7 @@ func boundedOutput(v any) error {
 }
 
 func (s *Service) OptionsList(ctx context.Context, tokenID string, in OptionsRequest) (*Snapshot, error) {
-	if !contains([]string{"operations", "node_targets", "build_enums", "resource_limits"}, in.Kind) || in.ExpectedBaseRevision == "" || in.ExpectedPolicyVersion == "" {
+	if !contains([]string{"operations", "node_targets", "build_enums", "resource_limits", "kubernetes"}, in.Kind) || in.ExpectedBaseRevision == "" || in.ExpectedPolicyVersion == "" {
 		return nil, ErrInvalid
 	}
 	size, e := pageSize(in.PageSize)
@@ -221,6 +242,9 @@ func (s *Service) OptionsList(ctx context.Context, tokenID string, in OptionsReq
 						return ErrSecret
 					}
 					kind := build.ConfigJobKind(j.Type)
+					if kind == "deploy_kubernetes" && t.AllowsConfigNode(d.projectID, "config.read", "", st.ID, j.ID) {
+						items = append(items, map[string]any{"stageId": st.ID, "jobId": j.ID, "kind": kind})
+					}
 					sec := "pipeline"
 					if kind == "script" {
 						sec = "step_limits"
@@ -233,6 +257,32 @@ func (s *Service) OptionsList(ctx context.Context, tokenID string, in OptionsReq
 					}
 				}
 			}
+		case "kubernetes":
+			if !allowed(t, d.projectID, "read", "kubernetes", "") {
+				return ErrForbidden
+			}
+			items, e = s.sectionItems(t, d, g, "kubernetes")
+			if e != nil {
+				return e
+			}
+			catalog, ok := s.opts.Kubernetes.(interface {
+				ReleaseConfigOptions(context.Context, string) ([]map[string]any, error)
+			})
+			if ok {
+				extra, e := catalog.ReleaseConfigOptions(configstate.WithTxContext(ctx, s.db, q), d.projectID)
+				if e != nil {
+					return ErrUnavailable
+				}
+				for _, item := range extra {
+					b, _ := json.Marshal(item)
+					var clean map[string]any
+					if json.Unmarshal([]byte(g.scrub(string(b))), &clean) != nil {
+						return ErrSecret
+					}
+					items = append(items, clean)
+				}
+			}
+			items = append(items, map[string]any{"modes": []string{"image", "manifest", "helm", "progressive"}, "sourceKinds": []string{"inline", "git", "artifact"}, "variableTypes": []string{"string", "number", "boolean", "object", "array", "null"}, "variableSources": []string{"fixed", "parameter", "environment", "output", "secret"}, "checkKinds": []string{"workload", "condition", "http", "dns", "tcp", "network-allow", "network-deny", "storage"}, "daemonSetProof": daemonSetProofOptions(), "configurationIsDatabaseOnly": true, "clusterNetworkChecksPerformed": false})
 		case "build_enums":
 			if !allowed(t, d.projectID, "read", "build", "") {
 				return ErrForbidden

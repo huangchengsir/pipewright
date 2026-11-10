@@ -36,6 +36,7 @@ func FreezeKubernetesPolicy(ctx context.Context, s *kubernetes.Service, snap *ru
 		return err
 	}
 	snap.Kubernetes = map[string]kubernetes.Authorization{}
+	snap.KubernetesReleasePolicies = map[string]kubernetes.ReleaseAuthorization{}
 	for i, stage := range snap.Spec.Stages {
 		for _, j := range stage.Jobs {
 			if j.Type != pipeline.KubernetesJobType {
@@ -43,6 +44,22 @@ func FreezeKubernetesPolicy(ctx context.Context, s *kubernetes.Service, snap *ru
 			}
 			if s == nil {
 				return runretry.ErrUnavailable
+			}
+			if pipeline.IsKubernetesReleaseConfig(j.Config) {
+				cfg, e := pipeline.ParseKubernetesReleaseConfig(j.Config)
+				if e != nil {
+					return e
+				}
+				if s == nil {
+					return runretry.ErrUnavailable
+				}
+				auth, e := s.ReleasePolicyCatalog(ctx, kubernetes.ReleaseAuthorizationRequest{ProjectID: snap.ProjectID, Environment: snap.Trigger.Environment, ConnectionID: cfg.ConnectionID, CredentialID: cfg.CredentialID, Context: cfg.Context, Executor: kubernetes.Executor{Kind: cfg.Executor.Kind, ServerID: cfg.Executor.ServerID}})
+				if e != nil {
+					return e
+				}
+				snap.KubernetesReleasePolicies[KubernetesBindingKey(stage.ID, j.ID)] = auth
+				snap.Spec.Stages[i].Gate = stage.Gate || auth.RequireApproval
+				continue
 			}
 			cfg, _, e := pipeline.ParseKubernetesConfig(j.Config)
 			if e != nil {
@@ -138,6 +155,9 @@ func (b *Builder) PrepareKubernetesStage(ctx context.Context, r *run.Run, stage 
 		return out, runretry.ErrUnavailable
 	}
 	j := stage.Jobs[0]
+	if pipeline.IsKubernetesReleaseConfig(j.Config) {
+		return b.prepareKubernetesRelease(ctx, r, stage)
+	}
 	cfg, src, e := pipeline.ParseKubernetesConfig(j.Config)
 	if e != nil {
 		return out, e
@@ -238,6 +258,9 @@ func (b *Builder) PrepareKubernetesStage(ctx context.Context, r *run.Run, stage 
 	return out, nil
 }
 func (b *Builder) runKubernetesJob(ctx context.Context, r *run.Run, j pipeline.Job, rep dagrun.StageReporter) error {
+	if pipeline.IsKubernetesReleaseConfig(j.Config) {
+		return b.runKubernetesReleaseJob(ctx, rep)
+	}
 	p, ok := ctx.Value(kubernetesPreparedKey{}).(kubernetesPrepared)
 	if !ok || (!p.adopted && p.operation.RunID != r.ID) || p.node.ExecutionJobID != j.ID || b.kubernetesController == nil {
 		return runretry.ErrUnavailable
@@ -310,7 +333,7 @@ func FinalizeKubernetesRun(ctx context.Context, s *kubernetes.Service, runID str
 		_, e = s.FenceOwner(ctx, o.ID, o.OwnerEpoch, o.Revision)
 		result = errors.Join(result, e)
 	}
-	return result
+	return errors.Join(result, s.FinalizeReleaseRun(ctx, runID))
 }
 
 func SameKubernetesTrust(a, b kubernetes.Authorization) bool {
@@ -353,6 +376,12 @@ func (b *Builder) verifyInheritedKubernetes(ctx context.Context, stage pipeline.
 				continue
 			}
 			o, e := runretry.NodeOutcome(ctx, n)
+			if e == nil && o.KubernetesRelease != nil && b.kubernetesReleases != nil {
+				if _, e = b.kubernetesReleases.VerifyReuse(ctx, o.KubernetesRelease.ReleaseID, o.KubernetesRelease.PlanID); e != nil {
+					return e
+				}
+				continue
+			}
 			if e != nil || o.Kubernetes == nil || b.kubernetesController == nil {
 				return runretry.ErrUnavailable
 			}

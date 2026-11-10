@@ -129,6 +129,7 @@ const de: typeof zhCN = {
   },
 
   runStatus: {
+ waiting_action:"Wartet auf explizite Aktion",
     queued: 'In Warteschlange',
     running: 'Läuft',
     waiting_approval: 'Wartet auf Freigabe',

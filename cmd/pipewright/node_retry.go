@@ -25,6 +25,7 @@ import (
 type nodeRetryBindings struct {
 	kubernetes           *kubernetes.Service
 	kubernetesController *kubernetes.Controller
+	kubernetesReleases   *kubernetes.ReleaseController
 	db                   *sql.DB
 	runs                 run.Service
 	projects             project.Service
@@ -53,6 +54,19 @@ func newNodeRetryService(db *sql.DB, sealer runretry.Sealer, b *nodeRetryBinding
 		runretry.WithRejectedChild(run.RejectRetryQueued(b.runs)),
 		runretry.WithSnapshotProvider(b.capture), runretry.WithBlobStore(retryArtifactBlobs{b}),
 		runretry.WithPreflightCheck(b.preflight),
+		runretry.WithKubernetesReleaseVerifier(func(ctx context.Context, id string) (kubernetes.ReleaseRecord, error) {
+			if b.kubernetes == nil || b.kubernetesReleases == nil {
+				return kubernetes.ReleaseRecord{}, runretry.ErrUnavailable
+			}
+			record, e := b.kubernetes.GetRelease(ctx, id)
+			if e != nil {
+				return record, e
+			}
+			if record.Successful() {
+				return b.kubernetesReleases.VerifyReuse(ctx, id, record.PlanID)
+			}
+			return record, nil
+		}),
 		runretry.WithKubernetesVerifier(func(ctx context.Context, id string) (kubernetes.Operation, error) {
 			if b.kubernetes == nil || b.kubernetesController == nil {
 				return kubernetes.Operation{}, runretry.ErrUnavailable
@@ -280,6 +294,12 @@ func (b *nodeRetryBindings) preflight(ctx context.Context, snap runretry.Snapsho
 	}
 	for _, planned := range plan.Nodes {
 		if planned.Node.Type != pipeline.KubernetesJobType || (planned.Decision.Action != "execute" && planned.Decision.Action != "reuse") {
+			continue
+		}
+		if policy, ok := snap.KubernetesReleasePolicies[build.KubernetesBindingKey(planned.Node.ExecutionStageID, planned.Node.ExecutionJobID)]; ok {
+			if b.kubernetes == nil || b.kubernetes.ValidateReleaseAuthorization(ctx, policy) != nil {
+				return []runretry.Reason{{Code: "kubernetes_authorization_changed", NodeKey: planned.Node.Key}}, nil
+			}
 			continue
 		}
 		frozen, ok := snap.Kubernetes[build.KubernetesBindingKey(planned.Node.ExecutionStageID, planned.Node.ExecutionJobID)]

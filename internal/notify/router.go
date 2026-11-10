@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
+	log "github.com/huangchengsir/pipewright/internal/logging"
 	"sort"
 	"strings"
 	"time"
@@ -236,7 +236,7 @@ func (s *service) RouteEvent(ctx context.Context, event string, payload Payload)
 		// SendVia 内部:渠道不存在 → ErrNotFound;未启用 → 优雅跳过(nil)。
 		if derr := s.SendVia(ctx, cid, payload); derr != nil {
 			// 单渠道失败:记日志、续发其余(best-effort)。错误体已人读、绝无敏感字段。
-			log.Printf("[notify] route event %q: 渠道 %s 发送失败(已跳过续发):%v", event, cid, derr)
+			log.Printf("[notify] route event %q: channel %s delivery failed (continuing with other channels): %v", event, cid, derr)
 		}
 	}
 	return nil
@@ -253,7 +253,7 @@ func (s *service) RouteEventVars(ctx context.Context, event string, vars Templat
 		// 按渠道渲染:channelID 精确模板 > 该事件通用模板 > 平台默认(无 RCE 纯文本替换)。
 		payload := s.RenderPayload(ctx, event, cid, vars)
 		if derr := s.SendVia(ctx, cid, payload); derr != nil {
-			log.Printf("[notify] route event %q: 渠道 %s 发送失败(已跳过续发):%v", event, cid, derr)
+			log.Printf("[notify] route event %q: channel %s delivery failed (continuing with other channels): %v", event, cid, derr)
 		}
 	}
 	return nil
@@ -270,7 +270,7 @@ func (s *service) RouteEventForProject(ctx context.Context, projectID, event str
 	for _, cid := range channelIDs {
 		payload := s.RenderPayload(ctx, event, cid, vars)
 		if derr := s.SendVia(ctx, cid, payload); derr != nil {
-			log.Printf("[notify] route event %q(project=%q): 渠道 %s 发送失败(已跳过续发):%v", event, projectID, cid, derr)
+			log.Printf("[notify] route event %q (project=%q): channel %s delivery failed (continuing with other channels): %v", event, projectID, cid, derr)
 		}
 	}
 	return nil
@@ -290,7 +290,7 @@ func (s *service) channelIDsForEvent(ctx context.Context, event string) []string
 func (s *service) channelIDsForEventScoped(ctx context.Context, projectID, event string) []string {
 	if !validEvent(event) {
 		// 未知事件:防御性忽略(不发、不报错)。
-		log.Printf("[notify] route event 跳过:未知事件 %q", event)
+		log.Printf("[notify] Route event skipped: unknown event %q", event)
 		return nil
 	}
 
@@ -342,7 +342,7 @@ func (s *service) queryChannelIDs(ctx context.Context, projectID, event string) 
 	}
 	if err != nil {
 		// 查询失败:best-effort,仅记日志(不阻断调用方)。
-		log.Printf("[notify] route event %q(project=%q): 查询路由失败:%v", event, projectID, err)
+		log.Printf("[notify] route event %q (project=%q): failed to query routes: %v", event, projectID, err)
 		return nil
 	}
 
@@ -351,7 +351,7 @@ func (s *service) queryChannelIDs(ctx context.Context, projectID, event string) 
 	for rows.Next() {
 		var cid string
 		if err := rows.Scan(&cid); err != nil {
-			log.Printf("[notify] route event %q(project=%q): 扫描路由失败:%v", event, projectID, err)
+			log.Printf("[notify] route event %q (project=%q): failed to scan route: %v", event, projectID, err)
 			_ = rows.Close()
 			return nil
 		}

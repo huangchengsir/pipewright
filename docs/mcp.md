@@ -136,7 +136,7 @@ versions or a cursor. Carry its `baseRevision` and `policyVersion` as
 `expectedBaseRevision` and `expectedPolicyVersion` on subsequent section and
 option reads. A changed version invalidates the snapshot and its cursors.
 Sections are `project`, `pipeline`, `build`, `step_limits` and
-`source_and_impact`. No read initializes missing configuration or exposes raw
+`source_and_impact`, plus the separately granted `kubernetes` section. No read initializes missing configuration or exposes raw
 scripts, environment values, credentials or YAML.
 
 The first editable scope is existing projects using the real DAG and local
@@ -145,7 +145,7 @@ legacy/stub/remote executors and unknown sources are read-only. Supported edits
 are project name/default branch, stage/job display names, script timeout,
 retry/CPU/memory limits, and the build fields consumed by the selected build
 path. `buildModel` is read-only because the current runtime does not consume it.
-Topology, IDs, dependencies, gates, conditions, matrices, failure policy,
+Except for explicitly granted Kubernetes additions into an existing empty deploy stage, topology, IDs, dependencies, gates, conditions, matrices, failure policy,
 artifact type and post actions remain fixed. A field referenced by a protected
 runtime template is rejected when its derived execution would change.
 
@@ -208,3 +208,54 @@ MCP 与本体同进程、同端口启动，入口为 `/mcp`。在「设置 > MCP
 逐服务器检查部署结果；镜像产物仅作为候选版本，不能冒充目标机当前版本。MCP 不
 调用模型，但外部 AI 客户端可能向自己的模型发送工具结果，敏感数据请使用受信任
 的私有客户端。跨机器接入应使用 HTTPS 并配置精确的主机白名单。
+
+## Kubernetes configuration tools
+
+For executor setup, tool image assembly, release modes and operational boundaries, see the [Kubernetes v2 release suite guide](kubernetes-release-suite.md). The [legacy guide](kubernetes-deploy.md) describes v1 only.
+
+Kubernetes configuration requires a new explicit `kubernetes` section grant.
+Select exact existing stage IDs in Settings > MCP. Grant `kubernetes.add` to add
+one node to an empty deploy stage; pass a new job ID and `value` as its name.
+Grant `kubernetes.update` with exact stage **and job** IDs to edit existing v2
+nodes. Old token grants and pipeline-trigger permissions never imply either.
+
+Use `project_config_get(section: "kubernetes")` and
+`config_options_list(kind: "kubernetes")` with the same snapshot versions.
+Options include project-scoped configured connections/resource grants, all four
+modes (image, manifest, Helm, progressive), variable sources, and health checks.
+They do not decrypt credentials or perform cluster discovery. Resource field
+counts describe restrictions; private field paths are withheld from this catalog.
+
+In `config_draft_create`, use this typed operation:
+
+```json
+{"type":"kubernetes.update","stageId":"deploy","jobId":"kube","kubernetes":{"config":{"timeoutSeconds":420}}}
+```
+
+The config accepts the same v2 fields as the web editor: Git paths, inline YAML,
+artifact sources, typed variable mappings, health probes and resource manifests.
+Updates merge supplied top-level fields and preserve omitted private inputs.
+Keep protected markers at their original node/path; copying markers between
+projects, nodes or YAML fields is rejected. Kubernetes credentials remain
+protected references and cannot be revealed or consumed by configuration tools.
+
+The whole draft is limited to 16 KiB (MCP HTTP input: 64 KiB); use committed Git
+or explicit artifacts for larger content. `capabilities_get` reports these limits.
+Private inputs are encrypted before persistence. MCP returns only summaries and
+opaque node-bound references, never YAML, scripts, values or secret literals.
+Authenticated human review shows full protected configuration and reviewable
+commands. Review, approval and apply use the existing immutable digest flow.
+An applied change modifies this instance's stored pipeline only: repository
+pipeline-as-code remains read-only and remote Git is never changed. No release
+runs until separately triggered and authorized by the normal release gates.
+
+Kubernetes 同节点切换模式时，`kubernetes.update` 会保留遗漏的顶层字段。使用显式 `null` 清除旧模式的 `source`、`workload`、`helm`、`progressive`、`coreDNS` 等可选对象；数组以 `[]` 清空。必填目标标识和 `executor`、容器镜像的 `source` 等必填对象仍不可为 `null`。每次切换均须重新生成人工审阅和批准的草稿。
+
+DaemonSet v2 configuration remains available through the same Kubernetes draft
+operations. `capabilities_get` and `config_options_list` report `daemonSetProof`
+version1, the exact-anchor `related-controllerrevisions` requirement, native
+namespace ControllerRevision read permission, and the
+`daemonset-controllerrevision-read-v1` helper capability. These are requirements,
+not an authorization change: old grants remain unchanged, no Node reads are
+implied, and revision bodies are private. The copied last-applied annotation is
+also opaque private content before identity-variable rendering and human review.

@@ -3,7 +3,7 @@ package deploy
 import (
 	"context"
 	"errors"
-	"log"
+	log "github.com/huangchengsir/pipewright/internal/logging"
 	"strings"
 	"time"
 

@@ -120,6 +120,15 @@ func (s *Service) Prepare(ctx context.Context, runID string) (context.Context, e
 	if l.sourceConflict {
 		return ctx, ErrConflict
 	}
+	resuming, resumeErr := s.sameAttemptContinuation(ctx, runID)
+	if resumeErr != nil {
+		return ctx, resumeErr
+	}
+	if resuming {
+		if err := s.prepareContinuationNodes(ctx, runID, l); err != nil {
+			return ctx, err
+		}
+	}
 	rs, e := s.records(ctx, runID)
 	if e != nil {
 		return ctx, e
@@ -128,6 +137,19 @@ func (s *Service) Prepare(ctx context.Context, runID string) (context.Context, e
 		e = configstate.WithWriteTxContext(ctx, s.db, func(tx context.Context, q configstate.DBTX) error {
 			var state, owner string
 			if e := q.QueryRowContext(tx, "SELECT state,owner_epoch FROM run_retry_dispatch WHERE attempt_id=?", runID).Scan(&state, &owner); e != nil {
+				return e
+			}
+			if resuming {
+				if e := s.lock(tx, q, l); e != nil {
+					return e
+				}
+				if l.active != "" && l.active != runID {
+					return ErrConflict
+				}
+				if _, e := q.ExecContext(tx, `UPDATE run_retry_dispatch SET owner_epoch=?,state='running',updated_at=? WHERE attempt_id=? AND state IN ('running','accepted','outcome_unknown')`, s.owner, time.Now().UnixMilli(), runID); e != nil {
+					return e
+				}
+				_, e := q.ExecContext(tx, `UPDATE run_retry_requests SET state='running',reason_code='' WHERE attempt_id=?`, runID)
 				return e
 			}
 			if owner != s.owner || state == "outcome_unknown" {
@@ -154,6 +176,16 @@ func (s *Service) Prepare(ctx context.Context, runID string) (context.Context, e
 			action = "execute"
 			if n.ControlKey != "" {
 				action = "control"
+			}
+		}
+		if resuming && r.origin == "executed" {
+			switch r.status {
+			case "success":
+				action = "reuse"
+			case "failed", "outcome_unknown":
+				action = "blocked"
+			case "skipped":
+				action = "skip"
 			}
 		}
 		ex.decisions[n.Key] = Decision{Action: action, Status: r.status, SourceAttemptID: r.source, SourceNodeKey: r.sourceKey}

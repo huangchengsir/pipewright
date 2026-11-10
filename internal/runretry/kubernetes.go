@@ -50,7 +50,7 @@ func (s *Service) kubernetesCheckContext(ctx context.Context, runID string) (con
 		}
 		checks[id] = entry
 	}
-	return context.WithValue(ctx, kubernetesChecksKey{}, checks), nil
+	return s.releaseCheckContext(context.WithValue(ctx, kubernetesChecksKey{}, checks), runID)
 }
 func (s *Service) checkedKubernetes(ctx context.Context, operationID string) (kubernetes.Operation, bool) {
 	checks, _ := ctx.Value(kubernetesChecksKey{}).(map[string]kubernetesCheck)
@@ -79,12 +79,19 @@ func (s *Service) kubernetesBoundary(ctx context.Context, root string) (string, 
 	if e != nil {
 		return "", e
 	}
-	if pending > 0 {
+	var releases int
+	if e = s.q(ctx).QueryRowContext(ctx, `SELECT COUNT(*) FROM k8s_releases WHERE run_id IN(SELECT run_id FROM run_retry_attempts WHERE root_id=?) AND (cleanup_state<>'verified' OR owner_fenced=0 OR state IN('paused','resume_requested','running','outcome_unknown'))`, root).Scan(&releases); e != nil {
+		return "", e
+	}
+	if pending+releases > 0 {
 		return "kubernetes_operation_unsettled", nil
 	}
 	return "", nil
 }
 func (s *Service) validateKubernetesReceipt(ctx context.Context, attempt string, n NodeRef, o Outcome) error {
+	if o.KubernetesRelease != nil {
+		return s.validateReleaseReceipt(ctx, attempt, n, o)
+	}
 	if n.Type != "deploy_kubernetes" {
 		if o.Kubernetes != nil {
 			return ErrInvalid
@@ -142,6 +149,10 @@ func PreviousKubernetes(ctx context.Context, n NodeRef) (string, error) {
 }
 
 func (s *Service) kubernetesOutcomeChecked(ctx context.Context, o Outcome) bool {
+	if ref := o.KubernetesRelease; ref != nil {
+		actual, ok := s.checkedRelease(ctx, ref.ReleaseID)
+		return ok && actual.Successful() && actual.PlanID == ref.PlanID && actual.NodeKey == ref.NodeKey && actual.RunID == ref.SourceAttemptID
+	}
 	if o.Kubernetes == nil {
 		return false
 	}
@@ -149,7 +160,7 @@ func (s *Service) kubernetesOutcomeChecked(ctx context.Context, o Outcome) bool 
 	return ok && actual.Successful() && actual.IntentHash == o.Kubernetes.IntentHash
 }
 
-type KubernetesHistoryEntry struct{ RunID, OperationID string }
+type KubernetesHistoryEntry struct{ RunID, OperationID, ReleaseID string }
 
 // KubernetesHistory returns only typed operation references from sealed node
 // checkpoints, including explicitly inherited or adopted nodes. No raw config.
@@ -188,10 +199,14 @@ func (s *Service) KubernetesHistory(ctx context.Context, project string) ([]Kube
 			}
 			r := records[n.Key]
 			o, e := s.outcome(ctx, l, n, r)
-			if e != nil || o.Kubernetes == nil {
+			if e != nil {
 				continue
 			}
-			out = append(out, KubernetesHistoryEntry{id, o.Kubernetes.OperationID})
+			if o.KubernetesRelease != nil {
+				out = append(out, KubernetesHistoryEntry{RunID: id, ReleaseID: o.KubernetesRelease.ReleaseID})
+			} else if o.Kubernetes != nil {
+				out = append(out, KubernetesHistoryEntry{RunID: id, OperationID: o.Kubernetes.OperationID})
+			}
 		}
 	}
 	return out, nil
@@ -206,6 +221,21 @@ func (s *Service) kubernetesReference(ctx context.Context, l lineage, attempt st
 		return nil, nil
 	}
 	out, err := s.outcome(ctx, l, n, r)
+	if err == nil && out.KubernetesRelease != nil {
+		ref := out.KubernetesRelease
+		var source, node, hash string
+		e := s.q(ctx).QueryRowContext(ctx, `SELECT o.run_id,o.node_key,o.plan_id FROM k8s_releases o JOIN run_retry_attempts original ON original.run_id=o.run_id JOIN run_retry_attempts requesting ON requesting.run_id=? AND requesting.root_id=original.root_id WHERE o.id=? AND original.root_id=? AND original.revision<=requesting.revision`, attempt, ref.ReleaseID, l.root).Scan(&source, &node, &hash)
+		if errors.Is(e, sql.ErrNoRows) {
+			return nil, nil
+		}
+		if e != nil {
+			return nil, e
+		}
+		if source != ref.SourceAttemptID || node != n.Key || hash != ref.PlanID {
+			return nil, nil
+		}
+		return &KubernetesReference{Version: 2, ReleaseID: ref.ReleaseID, SourceAttemptID: source, NodeKey: node}, nil
+	}
 	if err != nil || out.Kubernetes == nil {
 		return nil, nil
 	}

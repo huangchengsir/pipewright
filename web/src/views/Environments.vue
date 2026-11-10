@@ -11,181 +11,224 @@
   的 run;活跃版本 = 最近一次全机成功;回滚目标 = 活跃之前最近一次全机成功。
 -->
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { useRoute, useRouter } from 'vue-router'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
+import { useRoute, useRouter } from "vue-router";
 import {
   listEnvironmentDeployments,
   rollbackEnvironment,
   type EnvironmentTimeline,
-} from '../api/environments'
-import { canRollback, previousSuccess, shortCommit, toBadgeStatus } from '../api/environments.helpers'
-import { listProjects, type Project } from '../api/projects'
-import { HttpError } from '../api/http'
-import { useConfirm } from '../composables/useConfirm'
-import { useToast } from '../composables/useToast'
-import AppButton from '../components/ui/AppButton.vue'
-import ErrorState from '../components/ui/ErrorState.vue'
-import EmptyState from '../components/ui/EmptyState.vue'
-import SkeletonBlock from '../components/ui/SkeletonBlock.vue'
-import StatusBadge from '../components/ui/StatusBadge.vue'
-import AppSelect from '../components/ui/AppSelect.vue'
-import '../styles/kubernetes.css'
-import ReleaseGuardPanel from '../components/run/ReleaseGuardPanel.vue'
+} from "../api/environments";
+import {
+  canRollback,
+  previousSuccess,
+  shortCommit,
+  toBadgeStatus,
+} from "../api/environments.helpers";
+import { listProjects, type Project } from "../api/projects";
+import { HttpError } from "../api/http";
+import { useConfirm } from "../composables/useConfirm";
+import { useToast } from "../composables/useToast";
+import AppButton from "../components/ui/AppButton.vue";
+import ErrorState from "../components/ui/ErrorState.vue";
+import EmptyState from "../components/ui/EmptyState.vue";
+import SkeletonBlock from "../components/ui/SkeletonBlock.vue";
+import StatusBadge from "../components/ui/StatusBadge.vue";
+import AppSelect from "../components/ui/AppSelect.vue";
+import "../styles/kubernetes.css";
+import ReleaseGuardPanel from "../components/run/ReleaseGuardPanel.vue";
 
-type LoadState = 'idle' | 'loading' | 'error'
+type LoadState = "idle" | "loading" | "error";
 
-const route = useRoute()
-const router = useRouter()
-const confirm = useConfirm()
-const toast = useToast()
-const { t } = useI18n()
+const route = useRoute();
+const router = useRouter();
+const confirm = useConfirm();
+const toast = useToast();
+const { t } = useI18n();
 
-const loadState = ref<LoadState>('idle')
-const loadError = ref('')
-const timelines = ref<EnvironmentTimeline[]>([])
-const projects = ref<Project[]>([])
+const loadState = ref<LoadState>("idle");
+const loadError = ref("");
+const timelines = ref<EnvironmentTimeline[]>([]);
+const projects = ref<Project[]>([]);
 /** 正在回滚中的环境名(禁用按钮 + loading)。 */
-const rollingBack = ref<string>('')
+const rollingBack = ref<string>("");
 
 // ─── URL as state ───────────────────────────────────────────────────────────
 
 const projectId = computed<string>(() => {
-  const p = route.query.projectId
-  return typeof p === 'string' ? p : ''
-})
+  const p = route.query.projectId;
+  return typeof p === "string" ? p : "";
+});
 
 function setProject(id: string): void {
-  const next: Record<string, string> = { ...(route.query as Record<string, string>) }
-  if (id) next.projectId = id
-  else delete next.projectId
-  void router.replace({ query: next })
+  const next: Record<string, string> = {
+    ...(route.query as Record<string, string>),
+  };
+  if (id) next.projectId = id;
+  else delete next.projectId;
+  void router.replace({ query: next });
 }
 
 function onProjectChange(e: Event): void {
-  setProject((e.target as HTMLSelectElement).value)
+  setProject((e.target as HTMLSelectElement).value);
 }
 
 // ─── derived display ──────────────────────────────────────────────────────────
 
 function formatWhen(iso: string): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString()
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
 }
 
 // ─── load ─────────────────────────────────────────────────────────────────────
 
-let alive=true, loadGeneration=0, loadController=new AbortController()
-onBeforeUnmount(()=>{alive=false;loadGeneration++;loadController.abort()})
+let alive = true,
+  loadGeneration = 0,
+  loadController = new AbortController();
+onBeforeUnmount(() => {
+  alive = false;
+  loadGeneration++;
+  loadController.abort();
+});
 async function load(): Promise<void> {
-  loadController.abort();loadController=new AbortController()
-  const signal=loadController.signal,generation=++loadGeneration,id=projectId.value
-  if(!id){timelines.value=[];loadState.value='idle';return}
-  loadState.value = 'loading'
-  loadError.value = ''
+  loadController.abort();
+  loadController = new AbortController();
+  const signal = loadController.signal,
+    generation = ++loadGeneration,
+    id = projectId.value;
+  if (!id) {
+    timelines.value = [];
+    loadState.value = "idle";
+    return;
+  }
+  loadState.value = "loading";
+  loadError.value = "";
   try {
-    const data = await listEnvironmentDeployments(id,signal)
-    if(!alive||signal.aborted||generation!==loadGeneration)return
-    timelines.value = data
-    loadState.value = 'idle'
+    const data = await listEnvironmentDeployments(id, signal);
+    if (!alive || signal.aborted || generation !== loadGeneration) return;
+    timelines.value = data;
+    loadState.value = "idle";
   } catch (err) {
-    if(!alive||signal.aborted||generation!==loadGeneration)return
+    if (!alive || signal.aborted || generation !== loadGeneration) return;
     if (err instanceof HttpError) {
       loadError.value =
         err.status === 0
-          ? t('environments.errNetwork')
-          : (err.apiError?.message ?? t('environments.errLoad', { status: err.status }))
+          ? t("environments.errNetwork")
+          : (err.apiError?.message ??
+            t("environments.errLoad", { status: err.status }));
     } else {
-      loadError.value = t('environments.errLoadRetry')
+      loadError.value = t("environments.errLoadRetry");
     }
-    loadState.value = 'error'
+    loadState.value = "error";
   }
 }
 
 async function loadProjects(): Promise<void> {
   try {
-    const data=await listProjects()
-    if(!alive)return
-    projects.value=data
+    const data = await listProjects();
+    if (!alive) return;
+    projects.value = data;
     // 未选项目且有项目 → 默认选首个(环境历史强依赖某个项目)。
     if (!projectId.value && projects.value.length > 0) {
-      setProject(projects.value[0].id)
+      setProject(projects.value[0].id);
     }
   } catch {
-    if(alive)projects.value = []
+    if (alive) projects.value = [];
   }
 }
 
 // ─── rollback ───────────────────────────────────────────────────────────────
 
 async function onRollback(tl: EnvironmentTimeline): Promise<void> {
-  const initiatingProject=projectId.value
-  const prev = previousSuccess(tl)
-  if (!prev || !canRollback(tl)) return
+  const initiatingProject = projectId.value;
+  const prev = previousSuccess(tl);
+  if (!prev || !canRollback(tl)) return;
   const ok = await confirm.open({
-    title: t('environments.rollbackTitle', { env: tl.environment }),
-    body: t('environments.rollbackBody', {
+    title: t("environments.rollbackTitle", { env: tl.environment }),
+    body: t("environments.rollbackBody", {
       commit: shortCommit(prev.commit),
       when: formatWhen(prev.deployedAt),
     }),
-    confirmLabel: t('environments.rollbackConfirm'),
-    variant: 'danger',
-  })
-  if (!ok || !alive || initiatingProject!==projectId.value) return
+    confirmLabel: t("environments.rollbackConfirm"),
+    variant: "danger",
+  });
+  if (!ok || !alive || initiatingProject !== projectId.value) return;
 
-  rollingBack.value = tl.environment
+  rollingBack.value = tl.environment;
   try {
-    const res = await rollbackEnvironment(initiatingProject, tl.environment)
-    if(!alive||initiatingProject!==projectId.value)return
-    const failed = res.targets.filter((tg) => tg.status === 'failed' || tg.status === 'rolled_back').length
+    const res = await rollbackEnvironment(initiatingProject, tl.environment);
+    if (!alive || initiatingProject !== projectId.value) return;
+    const failed = res.targets.filter(
+      (tg) => tg.status === "failed" || tg.status === "rolled_back",
+    ).length;
     if (failed === 0) {
-      toast.success(t('environments.toastRolledBack', { env: tl.environment }), {
-        detail: t('environments.toastRolledBackDetail', { n: res.targets.length }),
-      })
+      toast.success(
+        t("environments.toastRolledBack", { env: tl.environment }),
+        {
+          detail: t("environments.toastRolledBackDetail", {
+            n: res.targets.length,
+          }),
+        },
+      );
     } else {
-      toast.error(t('environments.toastRollbackPartial', { env: tl.environment }), {
-        detail: t('environments.toastRollbackPartialDetail', { failed, total: res.targets.length }),
-      })
+      toast.error(
+        t("environments.toastRollbackPartial", { env: tl.environment }),
+        {
+          detail: t("environments.toastRollbackPartialDetail", {
+            failed,
+            total: res.targets.length,
+          }),
+        },
+      );
     }
-    await load()
+    await load();
   } catch (err) {
-    if(!alive||initiatingProject!==projectId.value)return
+    if (!alive || initiatingProject !== projectId.value) return;
     const msg =
       err instanceof HttpError
-        ? (err.apiError?.message ?? t('environments.rollbackFailedStatus', { status: err.status }))
-        : t('environments.rollbackFailedRetry')
-    toast.error(t('environments.toastRollbackFailed', { env: tl.environment }), { detail: msg })
+        ? (err.apiError?.message ??
+          t("environments.rollbackFailedStatus", { status: err.status }))
+        : t("environments.rollbackFailedRetry");
+    toast.error(
+      t("environments.toastRollbackFailed", { env: tl.environment }),
+      { detail: msg },
+    );
   } finally {
-    if(alive && initiatingProject===projectId.value)rollingBack.value = ''
+    if (alive && initiatingProject === projectId.value) rollingBack.value = "";
   }
 }
 
 // query 变化 → 重新拉取(URL 即状态的单一数据流)。
-watch(projectId, () => void load())
+watch(projectId, () => void load());
 
 onMounted(() => {
-  void loadProjects()
-  if (projectId.value) void load()
-})
+  void loadProjects();
+  if (projectId.value) void load();
+});
 </script>
 
 <template>
   <div class="env-view">
     <header class="view-header">
       <div class="view-header__text">
-        <h1 class="view-title">{{ t('environments.title') }}</h1>
+        <h1 class="view-title">{{ t("environments.title") }}</h1>
         <p class="view-sub">
-          {{ t('environments.subtitle') }}
+          {{ t("environments.subtitle") }}
         </p>
       </div>
-      <AppButton variant="default" :loading="loadState === 'loading'" @click="load">{{ t('common.refresh') }}</AppButton>
+      <AppButton
+        variant="default"
+        :loading="loadState === 'loading'"
+        @click="load"
+        >{{ t("common.refresh") }}</AppButton
+      >
     </header>
 
     <!-- Project filter -->
     <div class="env-controls">
       <label class="env-controls__field">
-        <span class="env-controls__label">{{ t('environments.project') }}</span>
+        <span class="env-controls__label">{{ t("environments.project") }}</span>
         <AppSelect
           class="select"
           :model-value="projectId"
@@ -214,7 +257,11 @@ onMounted(() => {
     />
 
     <!-- Loading skeleton -->
-    <div v-else-if="loadState === 'loading' && timelines.length === 0" class="env-grid" aria-busy="true">
+    <div
+      v-else-if="loadState === 'loading' && timelines.length === 0"
+      class="env-grid"
+      aria-busy="true"
+    >
       <div v-for="n in 2" :key="n" class="skeleton-card">
         <SkeletonBlock :height="16" width="30%" />
         <SkeletonBlock :height="40" width="70%" />
@@ -237,22 +284,47 @@ onMounted(() => {
         <div class="env-card__head">
           <div class="env-card__name-row">
             <h2 class="env-card__name">{{ tl.environment }}</h2>
-            <span v-if="tl.active" class="env-card__live" :title="t('environments.activeVersionTitle')">● {{ t('environments.active') }}</span>
-            <span v-else class="env-card__stale" :title="t('environments.noFullSuccessTitle')">{{ t('environments.noActiveVersion') }}</span>
+            <span
+              v-if="tl.active"
+              class="env-card__live"
+              :title="t('environments.activeVersionTitle')"
+              >● {{ t("environments.active") }}</span
+            >
+            <span
+              v-else
+              class="env-card__stale"
+              :title="t('environments.noFullSuccessTitle')"
+              >{{ t("environments.noActiveVersion") }}</span
+            >
           </div>
 
           <div v-if="tl.active" class="env-card__active">
             <div class="env-card__active-meta">
-              <code class="env-card__commit">{{ shortCommit(tl.active.commit) }}</code>
-              <span class="env-card__branch">{{ tl.active.branch || '—' }}</span>
+              <code class="env-card__commit">{{
+                shortCommit(tl.active.commit)
+              }}</code>
+              <span class="env-card__branch">{{
+                tl.active.branch || "—"
+              }}</span>
               <StatusBadge :status="toBadgeStatus(tl.active.status)" />
             </div>
             <div class="env-card__active-sub">
               <span>{{ formatWhen(tl.active.deployedAt) }}</span>
               <span class="env-card__dot" aria-hidden="true">·</span>
-              <span>{{ tl.active.triggeredBy || '—' }}</span>
+              <span>{{ tl.active.triggeredBy || "—" }}</span>
               <span class="env-card__dot" aria-hidden="true">·</span>
-              <span>{{ t(tl.active.kubernetes?.length ? 'kubernetes.targetCount' : 'environments.targetCount', { n: tl.active.targets.length + (tl.active.kubernetes?.length ?? 0) }) }}</span>
+              <span>{{
+                t(
+                  tl.active.kubernetes?.length
+                    ? "kubernetes.targetCount"
+                    : "environments.targetCount",
+                  {
+                    n:
+                      tl.active.targets.length +
+                      (tl.active.kubernetes?.length ?? 0),
+                  },
+                )
+              }}</span>
             </div>
           </div>
 
@@ -260,16 +332,31 @@ onMounted(() => {
             variant="default"
             :disabled="!canRollback(tl) || rollingBack === tl.environment"
             :loading="rollingBack === tl.environment"
-            :title="canRollback(tl) ? t('environments.rollbackEnabledTitle') : t('environments.rollbackDisabledTitle')"
+            :title="
+              canRollback(tl)
+                ? t('environments.rollbackEnabledTitle')
+                : t('environments.rollbackDisabledTitle')
+            "
             @click="onRollback(tl)"
           >
-            {{ t('environments.rollback') }}
+            {{ t("environments.rollback") }}
           </AppButton>
         </div>
 
-        <p v-if="tl.active?.kubernetes?.length || previousSuccess(tl)?.kubernetes?.length" class="kube-note">{{ t('kubernetes.noRollback') }}</p>
+        <p
+          v-if="
+            tl.active?.kubernetes?.length ||
+            previousSuccess(tl)?.kubernetes?.length
+          "
+          class="kube-note"
+        >
+          {{ t("kubernetes.noRollback") }}
+        </p>
         <!-- Deployment timeline rail -->
-        <ol class="env-timeline" :aria-label="t('environments.timelineAria', { env: tl.environment })">
+        <ol
+          class="env-timeline"
+          :aria-label="t('environments.timelineAria', { env: tl.environment })"
+        >
           <li
             v-for="dep in tl.deployments"
             :key="dep.runId"
@@ -283,23 +370,83 @@ onMounted(() => {
             <span class="env-timeline__node" aria-hidden="true" />
             <div class="env-timeline__body">
               <div class="env-timeline__line1">
-                <code class="env-timeline__commit">{{ shortCommit(dep.commit) }}</code>
+                <code class="env-timeline__commit">{{
+                  shortCommit(dep.commit)
+                }}</code>
                 <StatusBadge :status="toBadgeStatus(dep.status)" />
-                <span v-if="dep.active" class="env-timeline__tag">{{ t('environments.active') }}</span>
+                <span v-if="dep.active" class="env-timeline__tag">{{
+                  t("environments.active")
+                }}</span>
               </div>
               <div class="env-timeline__line2">
                 <span>{{ formatWhen(dep.deployedAt) }}</span>
                 <span class="env-card__dot" aria-hidden="true">·</span>
-                <span>{{ dep.triggeredBy || '—' }}</span>
+                <span>{{ dep.triggeredBy || "—" }}</span>
                 <span class="env-card__dot" aria-hidden="true">·</span>
-                <span class="env-timeline__servers">{{ dep.targets.map((t) => t.serverName).join(', ') || '—' }}</span>
+                <span class="env-timeline__servers">{{
+                  dep.targets.map((t) => t.serverName).join(", ") || "—"
+                }}</span>
               </div>
-              <div v-if="dep.artifacts.length > 0" class="env-timeline__artifacts">
-                <span v-for="a in dep.artifacts" :key="a.id" class="env-timeline__artifact">
+              <div
+                v-if="dep.artifacts.length > 0"
+                class="env-timeline__artifacts"
+              >
+                <span
+                  v-for="a in dep.artifacts"
+                  :key="a.id"
+                  class="env-timeline__artifact"
+                >
                   {{ a.type }}:{{ a.name }}
                 </span>
               </div>
-              <div v-for="target in dep.kubernetes ?? []" :key="target.operationId" class="kube-card kube-surface"><strong>Kubernetes · {{ target.namespace }}/{{ target.deployment }}</strong><p>{{ target.container }} · {{ t('kubernetes.business.'+target.business) }} · {{ t('kubernetes.cleanup.'+target.cleanup) }}</p><p><code>{{ target.image }}</code></p><p v-if="target.adopted" class="kube-muted">{{ t('kubernetes.adopted') }} <RouterLink :to="{name:'run-detail',params:{id:target.sourceRunId}}">{{ t('kubernetes.sourceRun') }}</RouterLink></p><p class="kube-muted">{{ t('kubernetes.rolloutOnly') }}</p></div>
+              <div
+                v-for="target in dep.kubernetes ?? []"
+                :key="target.releaseId || target.operationId"
+                class="kube-card kube-surface"
+              >
+                <template v-if="target.version === 2"
+                  ><strong>Kubernetes · {{ target.mode }}</strong>
+                  <p>
+                    {{ t("kubernetes.release.states." + target.state) }} ·
+                    {{ t("kubernetes.cleanup." + target.cleanup) }}
+                  </p>
+                  <ul>
+                    <li
+                      v-for="resource in target.resources ?? []"
+                      :key="resource.kind + resource.namespace + resource.name"
+                    >
+                      {{ resource.kind }} · {{ resource.namespace }}/{{
+                        resource.name
+                      }}
+                    </li>
+                  </ul></template
+                ><strong v-else
+                  >Kubernetes · {{ target.namespace }}/{{
+                    target.deployment
+                  }}</strong
+                >
+                <p v-if="target.version !== 2">
+                  {{ target.container }} ·
+                  {{ t("kubernetes.business." + target.business) }} ·
+                  {{ t("kubernetes.cleanup." + target.cleanup) }}
+                </p>
+                <p v-if="target.version !== 2">
+                  <code>{{ target.image }}</code>
+                </p>
+                <p v-if="target.adopted" class="kube-muted">
+                  {{ t("kubernetes.adopted") }}
+                  <RouterLink
+                    :to="{
+                      name: 'run-detail',
+                      params: { id: target.sourceRunId },
+                    }"
+                    >{{ t("kubernetes.sourceRun") }}</RouterLink
+                  >
+                </p>
+                <p v-if="target.version !== 2" class="kube-muted">
+                  {{ t("kubernetes.rolloutOnly") }}
+                </p>
+              </div>
               <ReleaseGuardPanel
                 :run-id="dep.runId"
                 :project-id="projectId"
@@ -464,7 +611,7 @@ onMounted(() => {
   position: relative;
 }
 .env-timeline::before {
-  content: '';
+  content: "";
   position: absolute;
   left: calc(var(--space-4) + 5px);
   top: var(--space-4);

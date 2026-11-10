@@ -2,7 +2,7 @@ package retention
 
 import (
 	"context"
-	"log"
+	log "github.com/huangchengsir/pipewright/internal/logging"
 	"sync"
 	"time"
 )
@@ -66,11 +66,11 @@ func (s *Sweeper) Start(ctx context.Context) {
 func (s *Sweeper) runOnce(ctx context.Context) {
 	n, err := s.pruner.Prune(ctx, time.Now())
 	if err != nil {
-		log.Printf("[retention] 清理失败:%v", err)
+		log.Printf("[retention] Cleanup failed: %v", err)
 		return
 	}
 	if n > 0 {
-		log.Printf("[retention] 已清理 %d 条过期运行(连带其日志/步骤/产物)", n)
+		log.Printf("[retention] Removed %d expired runs (including their logs, steps and artifacts)", n)
 	}
 }
 

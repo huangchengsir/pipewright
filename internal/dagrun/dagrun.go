@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/huangchengsir/pipewright/internal/dag"
+	"github.com/huangchengsir/pipewright/internal/kubernetes"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/run"
 	"github.com/huangchengsir/pipewright/internal/runretry"
@@ -45,6 +46,7 @@ type SpecLoader interface {
 //   - FromRepo=false:由库内(网页编辑)配置驱动;若是「本想用仓库但回退了」,FallbackReason
 //     记回退原因(disabled|no_file|invalid_yaml|degraded|empty|lookup_failed),否则为空。
 type SpecSource struct {
+	Kind           string
 	FromRepo       bool
 	Ref            string
 	File           string
@@ -129,6 +131,9 @@ type StagePreparation struct {
 	Close       func(context.Context) error
 }
 type StagePrepareFunc func(context.Context, *run.Run, pipeline.Stage) (StagePreparation, error)
+type SuspensionFunc func(context.Context, *run.Run, map[string]string) error
+
+func WithSuspension(f SuspensionFunc) Option { return func(r *Runner) { r.suspend = f } }
 
 func WithStagePreparation(f StagePrepareFunc) Option { return func(r *Runner) { r.prepare = f } }
 
@@ -141,6 +146,7 @@ type Runner struct {
 	exec             StageExecutor
 	gate             GateFunc
 	prepare          StagePrepareFunc
+	suspend          SuspensionFunc
 	concurrency      int
 	gitSourceContext bool
 }
@@ -192,7 +198,7 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 	if recovering {
 		snapshot := ex.Snapshot()
 		cfg = &pipeline.Config{Spec: snapshot.Spec}
-		src = SpecSource{FromRepo: snapshot.Source.Kind == "repo", Ref: snapshot.Source.Ref, File: snapshot.Source.File, FallbackReason: snapshot.Source.Fallback}
+		src = SpecSource{Kind: snapshot.Source.Kind, FromRepo: snapshot.Source.Kind == "repo", Ref: snapshot.Source.Ref, File: snapshot.Source.File, FallbackReason: snapshot.Source.Fallback}
 		copyRun := *rn
 		copyRun.Trigger.Type, copyRun.Trigger.Branch = snapshot.Trigger.Type, snapshot.Trigger.Branch
 		copyRun.Trigger.Commit, copyRun.Trigger.Params = snapshot.Trigger.Commit, snapshot.Trigger.Params
@@ -381,6 +387,12 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 			var prepareErr error
 			prepared, prepareErr = r.prepare(ctx, rn, stage)
 			if prepareErr != nil {
+				phase, reason, typed := kubernetes.ReleasePreparationDetails(prepareErr)
+				line := "stage preparation: phase=prepare reason=preparation_failed"
+				if typed {
+					line = "kubernetes preparation: phase=" + phase + " reason=" + reason
+				}
+				_ = rep.Log(context.WithoutCancel(ctx), "stderr", line)
 				rep.finishRemaining(ctx, run.StepFailed)
 				return prepareErr
 			}
@@ -400,7 +412,13 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 			}
 		}
 		// 人工审批门(Story 8-4):进入该阶段前阻塞等待批准。run 状态由 gate 置 waiting_approval。
-		if stage.Gate && r.gate != nil {
+		gateNeeded := stage.Gate && r.gate != nil
+		if recovering {
+			if n, ok := ex.ControlNode(stageID, "gate"); ok && ex.Decision(n).Action == "reuse" && ex.Decision(n).Status == run.StepSuccess {
+				gateNeeded = false
+			}
+		}
+		if gateNeeded {
 			var gateNode runretry.NodeRef
 			if recovering {
 				var ok bool
@@ -446,6 +464,9 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 		// (执行器应已把真失败节点标 failed、上游跳过节点标 skipped;剩余未报的归并到失败结果)。
 		executorStarted = true
 		execErr := r.exec(ctx, rn, stage, rep)
+		if errors.Is(execErr, run.ErrSuspended) {
+			return execErr
+		}
 		sweep := run.StepSuccess
 		if execErr != nil {
 			sweep = run.StepFailed
@@ -471,6 +492,19 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 		}
 	}
 
+	if result.Counts()[dag.StatusWaitingAction] > 0 {
+		if r.suspend == nil {
+			return errors.New("dagrun: suspension coordinator unavailable")
+		}
+		frontier := map[string]string{}
+		for id, nr := range result {
+			frontier[id] = string(nr.Status)
+		}
+		if err := r.suspend(context.WithoutCancel(ctx), rn, frontier); err != nil {
+			return err
+		}
+		return run.ErrSuspended
+	}
 	// 整体失败判定:仅当有阶段**真失败**(StatusFailed)。条件跳过 / 上游被跳过不令整体失败
 	// (上游若真失败,该失败阶段本身即计入 StatusFailed)。
 	if result.Counts()[dag.StatusFailed] > 0 {
@@ -655,6 +689,9 @@ func (j *jobReporter) JobReporter(string) StageReporter { return j }
 // toSinkSpecSource 把 dagrun.SpecSource 映射为 run.SpecSource(领域层搬运形状,经 sink 落库)。
 // FromRepo → "repo";否则 "stored"(并带回退原因)。
 func toSinkSpecSource(s SpecSource) run.SpecSource {
+	if s.Kind == "release_rollback" {
+		return run.SpecSource{Source: "release_rollback", Ref: s.Ref}
+	}
 	if s.FromRepo {
 		return run.SpecSource{Source: run.SpecSourceRepo, Ref: s.Ref, File: s.File}
 	}

@@ -2,9 +2,10 @@ package run
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
-	"log"
+	log "github.com/huangchengsir/pipewright/internal/logging"
 	"sync"
 	"time"
 
@@ -473,6 +474,15 @@ func (p *WorkerPool) execute(runID string) {
 		runErr = p.runner.Run(runCtx, r, sink)
 	}
 
+	if errors.Is(runErr, ErrSuspended) {
+		current, err := p.svc.Get(context.Background(), runID)
+		if err == nil && current.Status == StatusWaitingAction && current.FinishedAt == nil {
+			sink.persistExecution()
+			p.svc.bus.publish(Event{Kind: EventStatus, RunID: runID, Status: StatusWaitingAction})
+			return
+		}
+		runErr = errors.New("run: suspension checkpoint unavailable")
+	}
 	final := StatusSuccess
 	if runErr != nil {
 		final = StatusFailed
@@ -517,7 +527,7 @@ func (p *WorkerPool) runDiagnoseHook(runID string, onDone ...func()) {
 		// 取得槽位,继续。
 	default:
 		completed(onDone)
-		log.Printf("[run] run %s: auto-diagnose skipped (并发上限 %d 已满);手动诊断仍可用", runID, maxConcurrentDiagnoses)
+		log.Printf("[run] run %s: auto-diagnose skipped (concurrency limit %d reached); manual diagnosis remains available", runID, maxConcurrentDiagnoses)
 		return
 	}
 	p.wg.Add(1)
@@ -545,7 +555,7 @@ func (p *WorkerPool) runNotifyHook(runID, finalStatus string, onDone ...func()) 
 	case p.notifySem <- struct{}{}:
 	default:
 		completed(onDone)
-		log.Printf("[run] run %s: notify skipped (并发上限 %d 已满)", runID, maxConcurrentNotifies)
+		log.Printf("[run] run %s: notification skipped (concurrency limit %d reached)", runID, maxConcurrentNotifies)
 		return
 	}
 	p.wg.Add(1)
@@ -610,6 +620,39 @@ func (d *dbStepSink) Plan(ctx context.Context, steps []StepDecl) error {
 			}
 		}
 		id := uuid.NewString()
+		// The same run keeps its original step IDs/timestamps across explicit batch
+		// continuation. A terminal step cannot silently become a fresh execution.
+		var oldID, oldStatus, oldName, oldStage string
+		lookup := d.svc.db.QueryRowContext(ctx, `SELECT id,status,name,COALESCE(stage,'') FROM run_steps WHERE run_id=? AND ordinal=?`, d.runID, i).Scan(&oldID, &oldStatus, &oldName, &oldStage)
+		if lookup == nil {
+			if oldName != st.Name || oldStage != st.Stage {
+				return fmt.Errorf("run: continuation step identity changed")
+			}
+			if IsStepTerminal(oldStatus) {
+				if st.SeedStatus != oldStatus {
+					return fmt.Errorf("run: completed continuation step cannot be replayed")
+				}
+			} else if oldStatus != StepPending && oldStatus != StepWaitingAction {
+				return fmt.Errorf("run: continuation step still executing")
+			}
+			id = oldID
+			d.stepIDs[i] = id
+			if !IsStepTerminal(oldStatus) {
+				if _, err := d.svc.db.ExecContext(ctx, `UPDATE run_steps SET status=?,finished_at=NULL WHERE id=?`, status, id); err != nil {
+					return err
+				}
+			}
+			if st.LogicalNodeKey != "" && d.svc.retryRuntime != nil {
+				if err := d.svc.retryRuntime.BindStep(ctx, d.runID, st.LogicalNodeKey, id, i); err != nil {
+					return err
+				}
+			}
+			d.publish(i, status, nil, nil)
+			continue
+		}
+		if !errors.Is(lookup, sql.ErrNoRows) {
+			return lookup
+		}
 		d.stepIDs[i] = id
 		_, err := d.svc.db.ExecContext(ctx,
 			`INSERT INTO run_steps (id, run_id, name, stage, status, ordinal, started_at, finished_at)
@@ -643,7 +686,7 @@ func (d *dbStepSink) StepRunning(ctx context.Context, ordinal int) error {
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
 	_, err := d.svc.db.ExecContext(ctx,
-		`UPDATE run_steps SET status = ?, started_at = ? WHERE id = ?`,
+		`UPDATE run_steps SET status = ?, started_at = COALESCE(started_at, ?) WHERE id = ?`,
 		StepRunning, nowStr, d.stepIDs[ordinal],
 	)
 	if err != nil {
@@ -658,12 +701,20 @@ func (d *dbStepSink) StepDone(ctx context.Context, ordinal int, status string) e
 		return fmt.Errorf("run: step ordinal out of range: %d", ordinal)
 	}
 	switch status {
-	case StepSuccess, StepFailed, StepSkipped:
+	case StepSuccess, StepFailed, StepSkipped, StepWaitingAction:
 	default:
 		return fmt.Errorf("run: invalid step terminal status: %s", status)
 	}
 	if ordinal < len(d.seeded) && d.seeded[ordinal] {
 		return fmt.Errorf("run: inherited step cannot be executed")
+	}
+	if status == StepWaitingAction {
+		_, err := d.svc.db.ExecContext(context.WithoutCancel(ctx), `UPDATE run_steps SET status=?,finished_at=NULL WHERE id=?`, status, d.stepIDs[ordinal])
+		if err != nil {
+			return err
+		}
+		d.publish(ordinal, status, nil, nil)
+		return nil
 	}
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)

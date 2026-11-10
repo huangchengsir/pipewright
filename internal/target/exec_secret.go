@@ -13,6 +13,8 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -154,21 +156,59 @@ func (sshDialer) RunSecret(ctx context.Context, addr string, cfg SSHConfig, host
 	return out, OutcomeUnknown(ErrUnreachable)
 }
 
-// Pull uses the authenticated SSH stream-local channel to the fixed Docker
-// socket. Registry auth is an HTTP header in protected memory, not argv/env or
-// a Docker config file. No arbitrary Engine API paths are exposed.
+// Pull uses one host-pinned SSH exec stdio connection to the fixed Docker
+// socket. Registry auth stays in the HTTP header in memory, never argv/env or a
+// Docker config file. There is no stream-local fallback or ambiguous retry.
 func (sshDialer) PullSecret(ctx context.Context, addr string, cfg SSHConfig, hostKey, image string, authJSON []byte) error {
+	if image == "" || len(image) > 512 || len(authJSON) > 16384 {
+		return NotStarted(ErrSecretLimit)
+	}
+	if e := ctx.Err(); e != nil {
+		return NotStarted(e)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
 	client, cleanup, e := privateSSH(ctx, addr, cfg, hostKey)
 	if e != nil {
 		return e
 	}
 	defer cleanup()
 	defer client.Close()
-	transport := &http.Transport{DialContext: func(context.Context, string, string) (net.Conn, error) {
-		return client.Dial("unix", "/var/run/docker.sock")
+	var dialed atomic.Bool
+	var connection *secretStdioConn
+	var mu sync.Mutex
+	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, MaxResponseHeaderBytes: 64 << 10, DialContext: func(_ context.Context, network, address string) (net.Conn, error) {
+		if network != "tcp" || address != "docker:80" || !dialed.CompareAndSwap(false, true) {
+			return nil, ErrUnreachable
+		}
+		conn, e := newSecretStdioConn(ctx, client)
+		if e != nil {
+			return nil, e
+		}
+		mu.Lock()
+		connection = conn
+		mu.Unlock()
+		return conn, nil
 	}}
-	defer transport.CloseIdleConnections()
-	return PullDockerImage(ctx, transport, image, authJSON)
+	defer func() {
+		transport.CloseIdleConnections()
+		_ = client.Close()
+		mu.Lock()
+		conn := connection
+		mu.Unlock()
+		if conn != nil {
+			_ = conn.Close()
+			select {
+			case <-conn.done:
+			case <-time.After(2 * time.Second):
+			}
+		}
+	}()
+	e = PullDockerImage(ctx, transport, image, authJSON)
+	if e != nil && ctx.Err() != nil {
+		return OutcomeUnknown(ctx.Err())
+	}
+	return e
 }
 
 // PullDockerImage is fixed-purpose and also used by the local Unix-socket path.

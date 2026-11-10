@@ -81,14 +81,16 @@ export default {
     "source": "Change la branche source par défaut ; son existence n’a pas été vérifiée.",
     "limits": "Modifie les limites de ressources, de durée ou de tentatives.",
     "build": "Modifie les paramètres de compilation pris en charge ; aucune compilation n’a eu lieu.",
-    "display": "Change le nom affiché ; l’ordre et la topologie sont conservés."
+    "display": "Change le nom affiché ; l’ordre et la topologie sont conservés.",
+    "kubernetes": "Modifie le déploiement Kubernetes. Les droits du cluster et l’approbation du déploiement restent distincts."
   },
   "sections": {
     "project": "Projet",
     "pipeline": "Pipeline",
     "build": "Compilation",
     "step_limits": "Limites des étapes",
-    "source_and_impact": "Source et effets"
+    "source_and_impact": "Source et effets",
+    "kubernetes": "Kubernetes"
   },
   "operations": {
     "project_set_name": "Renommer le projet",
@@ -97,7 +99,9 @@ export default {
     "job_rename": "Renommer la tâche",
     "step_set_limits": "Modifier les limites",
     "build_set": "Modifier la compilation",
-    "unknown": "Modification non prise en charge"
+    "unknown": "Modification non prise en charge",
+    "kubernetes_add": "Ajouter un nœud Kubernetes",
+    "kubernetes_update": "Modifier un nœud Kubernetes"
   },
   "fields": {
     "name": "Nom",
@@ -110,7 +114,8 @@ export default {
     "toolchainLanguage": "Langage des outils",
     "toolchainVersion": "Version des outils",
     "dockerfilePath": "Chemin Dockerfile",
-    "context": "Contexte de compilation"
+    "context": "Contexte de compilation",
+    "kubernetes": "Configuration Kubernetes"
   },
   "states": {
     "pending": "En attente",
@@ -144,5 +149,10 @@ export default {
   "maintenanceDetails": "Limites et détails du traitement",
   "maintenanceReady": "Un enregistrement de fin correspondant est disponible. Vérifiez-le avant de terminer l’activité.",
   "maintenanceNeedsReview": "La fin de l’opération initiale n’est pas confirmée. Cet enregistrement est conservé.",
-  "operationSummary": "Si une réponse est perdue, vérifiez l’opération initiale avant de décider de l’isoler."
+  "operationSummary": "Si une réponse est perdue, vérifiez l’opération initiale avant de décider de l’isoler.",
+  "kubernetesStages": "ID des étapes Kubernetes autorisées",
+  "kubernetesJobs": "ID des tâches Kubernetes autorisées",
+  "kubernetesScopeHint": "Saisissez les ID exacts des étapes existantes. Les modifications exigent aussi les ID des tâches. Aucun joker ni droit hérité.",
+  "kubernetesReview": "Configuration Kubernetes",
+  "kubernetesReviewHint": "Vérifiez les ressources, commandes et contrôles de santé. Les valeurs privées restent chiffrées. L’approbation modifie uniquement la configuration enregistrée, sans lancer de déploiement ni modifier Git distant."
 }

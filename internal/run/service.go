@@ -132,10 +132,11 @@ type service struct {
 
 	// envResolver 可选:手动/定时/串联触发未显式带环境时,据项目分支映射补解析环境
 	// (与 webhook 路径对齐)。nil(纯单测 Service / 未注入)时 Create 不补解析,行为不变。
-	envResolver       EnvResolver
-	configInitializer func(context.Context, string) error
-	activityOwner     string
-	retryRuntime      RetryRuntime
+	envResolver         EnvResolver
+	configInitializer   func(context.Context, string) error
+	activityOwner       string
+	retryRuntime        RetryRuntime
+	releaseCancellation func(context.Context, string) (bool, error)
 }
 
 // setEnqueue 由 WorkerPool 注入调度回调(Create 入库后调用)。
@@ -166,6 +167,12 @@ func WithEnvResolver(r EnvResolver) Option {
 // must not perform network calls or reveal credentials.
 func WithConfigInitializer(fn func(context.Context, string) error) Option {
 	return func(s *service) { s.configInitializer = fn }
+}
+
+// WithReleaseCancellation atomically fences suspended release work in the caller's
+// transaction. It performs no remote actions; false retains activity holds.
+func WithReleaseCancellation(fn func(context.Context, string) (bool, error)) Option {
+	return func(s *service) { s.releaseCancellation = fn }
 }
 
 // New 构造运行 Service。db 经参数化 SQL 触库;事件总线用于 SSE 推送(不轮询 DB)。
@@ -685,45 +692,80 @@ func (s *service) Cancel(ctx context.Context, id string) (*Run, error) {
 	s.mu.Lock()
 	cancel, running := s.cancels[id]
 	s.mu.Unlock()
-	if running {
+	if running && r.Status != StatusWaitingAction {
 		cancel()
 		// worker 会异步落 failed;此处返回当前快照(可能仍 running),客户端经 SSE/轮询见终态。
 		return s.Get(ctx, id)
 	}
 
-	// 尚未被 worker 取走(queued):直接置 failed(queued→failed 合法转移)。
+	// Waiting frontiers and queued continuations settle durably under the same
+	// project lock used by worker claim. Cancel never restores cluster resources.
 	if err := configstate.WithWriteTxContext(ctx, s.db, func(txctx context.Context, q configstate.DBTX) error {
+		if err := configstate.LockEpochs(txctx, q, s.db, configstate.EpochPolicy, configstate.EpochSecrets, configstate.EpochExecutor); err != nil {
+			return err
+		}
 		if _, err := s.lockRunProject(txctx, q, id); err != nil {
 			return err
 		}
-		if err := s.transition(txctx, id, StatusQueued, StatusFailed, true); err != nil {
+		var status string
+		if err := q.QueryRowContext(txctx, "SELECT status FROM pipeline_runs WHERE id=?", id).Scan(&status); err != nil {
 			return err
 		}
-		return s.releaseQueuedActivityTx(txctx, q, id)
+		if status != StatusWaitingAction && status != StatusQueued {
+			return ErrNotCancelable
+		}
+		if err := s.transition(txctx, id, status, StatusFailed, true); err != nil {
+			return err
+		}
+		safe := true
+		if s.releaseCancellation != nil {
+			var err error
+			safe, err = s.releaseCancellation(txctx, id)
+			if err != nil {
+				return err
+			}
+		}
+		now := time.Now().UTC().Format(time.RFC3339)
+		if _, err := q.ExecContext(txctx, "UPDATE run_steps SET status=CASE WHEN status='pending' THEN 'skipped' ELSE 'failed' END,finished_at=? WHERE run_id=? AND status NOT IN ('success','failed','skipped')", now, id); err != nil {
+			return err
+		}
+		if !safe {
+			return nil
+		}
+		var phase, owner string
+		err := q.QueryRowContext(txctx, "SELECT phase,owner_epoch FROM project_activity WHERE activity_id=? AND released_at IS NULL", id).Scan(&phase, &owner)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if phase != "queued" {
+			return nil
+		}
+		if err = configstate.ReleaseActivityTx(txctx, q, id, owner); err != nil {
+			return err
+		}
+		configstate.AfterCommit(txctx, func() { configstate.ForgetActivityReaders(id, owner) })
+		return nil
 	}); err != nil {
-		// 竞态:worker 恰好取走/已落终态 → 重查当前状态,绝不把 ErrInvalidTransition 透传到 HTTP(避免 500)。
-		if errors.Is(err, ErrInvalidTransition) {
-			// 仍在执行 → 退化为「运行中取消」语义。
+		if errors.Is(err, ErrNotCancelable) || errors.Is(err, ErrInvalidTransition) {
 			s.mu.Lock()
-			cancel, running = s.cancels[id]
+			cancel, active := s.cancels[id]
 			s.mu.Unlock()
-			if running {
+			if active {
 				cancel()
 				return s.Get(ctx, id)
 			}
-			// 已被 worker 落终态(竞态末尾):重查,终态 → ErrNotCancelable(handler 映射 409)。
-			cur, gerr := s.Get(ctx, id)
-			if gerr != nil {
-				return nil, gerr
-			}
-			if IsTerminal(cur.Status) {
-				return nil, ErrNotCancelable
-			}
-			// 既非运行中又非终态(罕见中间窗口):返回当前快照,客户端经 SSE/轮询收敛。
-			return cur, nil
+			return nil, ErrNotCancelable
 		}
 		return nil, err
 	}
+
+	if running {
+		cancel()
+	}
+
 	s.completeRetryAttempt(id)
 	s.settleRetryAttempt(id)
 	return s.Get(ctx, id)
@@ -931,7 +973,7 @@ func (s *service) FailOrphanedRuns(ctx context.Context) (int, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE pipeline_runs SET status = ?, finished_at = ?
-		 WHERE status IN (?, ?, ?)`,
+		 WHERE status IN (?, ?, ?) AND NOT (EXISTS(SELECT 1 FROM k8s_release_continuations c WHERE c.run_id=pipeline_runs.id AND c.state IN ('pending','delivering','running')))`,
 		StatusFailed, now, StatusQueued, StatusRunning, StatusWaitingApproval,
 	)
 	if err != nil {
@@ -950,7 +992,7 @@ func (s *service) transition(ctx context.Context, id, from, to string, requireFr
 	set := "status = ?"
 	args := []any{to}
 	if to == StatusRunning {
-		set += ", started_at = ?"
+		set += ", started_at = COALESCE(started_at, ?)"
 		args = append(args, now)
 	}
 	if IsTerminal(to) {

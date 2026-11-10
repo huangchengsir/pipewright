@@ -359,3 +359,27 @@ func TestResultCounts(t *testing.T) {
 		t.Errorf("counts = %v", counts)
 	}
 }
+
+func TestSuspensionSettlesIndependentBranchWithoutDispatchingDescendants(t *testing.T) {
+	g, e := New([]Node{{ID: "release"}, {ID: "parallel"}, {ID: "parallel-after", Needs: []string{"parallel"}}, {ID: "after", Needs: []string{"release", "parallel"}}, {ID: "last", Needs: []string{"after"}}})
+	if e != nil {
+		t.Fatal(e)
+	}
+	var mu sync.Mutex
+	ran := map[string]int{}
+	result := g.Schedule(context.Background(), func(ctx context.Context, id string) error {
+		mu.Lock()
+		ran[id]++
+		mu.Unlock()
+		if id == "release" {
+			return ErrSuspended
+		}
+		return nil
+	}, Options{MaxConcurrency: 2})
+	if result["release"].Status != StatusWaitingAction || result["after"].Status != StatusPending || result["last"].Status != StatusPending || result["parallel-after"].Status != StatusSuccess {
+		t.Fatal(result)
+	}
+	if ran["after"] != 0 || ran["last"] != 0 {
+		t.Fatal("suspension dispatched descendant", ran)
+	}
+}

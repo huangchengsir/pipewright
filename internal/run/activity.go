@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"log"
+	log "github.com/huangchengsir/pipewright/internal/logging"
 	"sync"
 	"time"
 
@@ -85,10 +85,33 @@ func (s *service) claimRunActivity(ctx context.Context, runID string) error {
 		var owner string
 		err = q.QueryRowContext(txctx, `SELECT owner_epoch FROM project_activity WHERE activity_id = ? AND released_at IS NULL`, runID).Scan(&owner)
 		if errors.Is(err, sql.ErrNoRows) {
-			// Old callers may have inserted queued work directly. The queued row
-			// itself blocks config writes until this locked admission is complete.
-			_, err = configstate.AcquireActivityTx(txctx, q, s.db, configstate.Activity{ID: runID, ProjectID: projectID, RunID: runID, OwnerEpoch: s.activityOwner, Kind: "run", Phase: "queued"})
-			owner = s.activityOwner
+			// A proven pause released readers under the previous owner. Reactivate
+			// that durable activity only for the claimed continuation, never by age.
+			var continuation int
+			if err = q.QueryRowContext(ctx, `SELECT COUNT(*) FROM k8s_release_continuations WHERE run_id=? AND state='delivering'`, runID).Scan(&continuation); err != nil {
+				return err
+			}
+			if continuation > 0 {
+				changed, err := q.ExecContext(ctx, `UPDATE project_activity SET owner_epoch=?,phase='queued',released_at=NULL WHERE activity_id=? AND run_id=? AND released_at IS NOT NULL`, s.activityOwner, runID, runID)
+				if err != nil {
+					return err
+				}
+				count, err := changed.RowsAffected()
+				if err != nil {
+					return err
+				}
+				if count != 1 {
+					return configstate.ErrOwner
+				}
+				if _, err = q.ExecContext(ctx, `DELETE FROM run_retry_reader_exits WHERE activity_id=?`, runID); err != nil {
+					return err
+				}
+				owner = s.activityOwner
+			} else { // Old callers may have inserted queued work directly. The queued row
+				// itself blocks config writes until this locked admission is complete.
+				_, err = configstate.AcquireActivityTx(txctx, q, s.db, configstate.Activity{ID: runID, ProjectID: projectID, RunID: runID, OwnerEpoch: s.activityOwner, Kind: "run", Phase: "queued"})
+				owner = s.activityOwner
+			}
 		}
 		if err != nil {
 			return err
@@ -98,6 +121,13 @@ func (s *service) claimRunActivity(ctx context.Context, runID string) error {
 		}
 		if err := configstate.SetActivityPhaseTx(txctx, q, runID, owner, "executing"); err != nil {
 			return err
+		}
+		if binder, ok := s.retryRuntime.(interface {
+			BindRunReader(context.Context, string, string) error
+		}); ok {
+			if e := binder.BindRunReader(txctx, runID, s.activityOwner); e != nil {
+				return e
+			}
 		}
 		return s.transition(txctx, runID, StatusQueued, StatusRunning, true)
 	})

@@ -10,7 +10,7 @@ package previewenv
 
 import (
 	"context"
-	"log"
+	log "github.com/huangchengsir/pipewright/internal/logging"
 	"sync"
 	"time"
 )
@@ -79,16 +79,16 @@ func (s *Sweeper) Start(ctx context.Context) {
 func (s *Sweeper) runOnce(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[previewenv] 自动回收单轮 panic 已恢复:%v", r)
+			log.Printf("[previewenv] Recovered panic in automatic cleanup cycle: %v", r)
 		}
 	}()
 	n, err := s.svc.SweepReclaim(ctx, s.checker)
 	if err != nil {
-		log.Printf("[previewenv] 自动回收失败:%v", err)
+		log.Printf("[previewenv] Automatic cleanup failed: %v", err)
 		return
 	}
 	if n > 0 {
-		log.Printf("[previewenv] 已自动回收 %d 个 PR 已关闭/合并的预览环境", n)
+		log.Printf("[previewenv] Automatically reclaimed %d preview environments with closed or merged PRs", n)
 	}
 }
 

@@ -141,6 +141,14 @@ docker run -d -p 8080:8080 -v pipewright-data:/data \
   ghcr.io/huangchengsir/pipewright:latest
 ```
 
+### 进程日志语言
+
+Pipewright 自身的启动和后台工作日志默认使用英文，中文 locale 使用简体中文。语言在进程启动时确定一次，修改环境后需重启。网页和 API 的请求语言独立处理，原有八语支持保持。
+
+消息 locale 按首个非空的 `LC_ALL`、`LC_MESSAGES`、`LANG` 选择。未设置、`C`、`POSIX` 或 `C.<encoding>`（包括 `C.UTF-8`）使用英文并忽略 `LANGUAGE`。其他有效 locale 可通过 `LANGUAGE` 设置以冒号分隔的 `en`/`zh` 偏好列表，例如 `LANG=en_US.UTF-8 LANGUAGE=zh_CN:en`；未支持或非法偏好回退英文。中文地区、编码和 modifier 后缀均选择现有简体中文消息，输出仍为 UTF-8。
+
+本规则仅翻译 Pipewright 自有进程消息模板；诊断参数、底层错误、流水线脚本及 Git/SSH/Docker 输出保留原文。进程消息中的控制字符会转义，避免参数伪造另一条日志。
+
 ### 从源码构建
 
 ```bash
@@ -169,7 +177,7 @@ make build          # 前端构建 → go:embed → 单个静态二进制 ./pipe
 
 ### Kubernetes 部署
 
-通过本地 Linux Docker 或固定 SSH 执行节点，将明确选择的已推送镜像 digest 发布到已有 Deployment 的指定容器。支持独立受保护凭据、精确目标授权、审批、就绪检查与只读结果核对。节点独占一个部署阶段，不执行任意 kubectl/Helm，也不沿用 SSH 回滚。配置与运行要求见 [Kubernetes 部署指南](docs/kubernetes-deploy.md)。
+v2 节点通过本地 Linux Docker 或固定 SSH 执行器支持镜像 digest 更新、YAML、Helm 4.3.1 和分批发布。精确资源授权、冻结输入、人工审批、工作负载/Pod/容器检查与显式探测共同决定执行和完结，未知写入不会自动重发。请按 [发布套件指南](docs/kubernetes-release-suite.md) 在既有仓库中准备经核验的工具镜像；原 v1 节点继续遵循 [旧版镜像更新规则](docs/kubernetes-deploy.md)。[MCP 配置](docs/mcp.md#kubernetes-configuration-tools) 使用新显式授权和人工审阅。
 
 ### 配置(环境变量)
 

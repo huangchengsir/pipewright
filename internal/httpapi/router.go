@@ -72,64 +72,67 @@ type options struct {
 	releaseSources        *releasesource.Catalog
 	releaseSourceSettings *releasesource.Settings
 
-	kubernetes         *kubernetes.Service
-	kubernetesObserver kubernetesObserver
-	platformLogin      *authlogin.Service
-	selfUpdate         *selfupdate.Service
-	configDB           *sql.DB
-	configDrafts       *configdraft.Service
-	configRequireMatch bool
-	terminalHTTP       *terminalhttp.Manager
-	mcpHandler         http.Handler
-	mcpTokens          *auth.MCPTokenStore
-	opsChat            *opschat.Service
-	onboarding         onboardingStatusReader
-	vault              vault.Vault
-	projects           project.Service
-	triggers           trigger.Service
-	cron               cron.Service
-	chain              chain.Service
-	concurrency        run.ConcurrencyService
-	parameters         run.ParameterService
-	pipelines          pipeline.Service
-	pipelineSettings   pipeline.SettingsService
-	runs               run.Service
-	runRetry           runRetryService
-	runSub             runSubscriber
-	feedback           run.FeedbackService
-	secretSource       *RunSecretSource
-	receiver           *trigger.Receiver
-	audit              audit.Recorder
-	account            accountService
-	aiSettings         ai.Service
-	aiAnalyzer         ai.RepoAnalyzer
-	runDiffer          ai.RunDiffer
-	sourceReader       SourceReader
-	refsLister         RefsLister
-	runnerConfig       runner.Service
-	servers            target.Service
-	notifications      notify.Service
-	deployer           deploy.Service
-	releaseGuard       *releaseguard.Service
-	anomaly            anomaly.Service
-	anomalyInterval    int // 后台定时检测间隔(秒);0=已关闭。供前端显示节奏。
-	anomalyCooldown    int // 同条件告警去重冷却窗口(秒)。
-	metricsHistory     metrics.Service
-	oauth              oauth.Service
-	approvalCoord      *approval.Coordinator
-	approvalStore      *approval.Store
-	approvalSigner     *approval.Signer
-	promotionStore     *promotion.Store
-	environments       *environments.Service
-	doraMetrics        run.MetricsService
-	templates          library.TemplateService
-	varGroups          library.VarGroupService
-	customNodes        library.CustomNodeService
-	artifactStore      *artifactstore.Store
-	retention          *retention.Service
-	proxy              proxy.Service
-	dnsProviders       dnsprovider.Service
-	previewEnvs        PreviewService
+	kubernetes             *kubernetes.Service
+	kubernetesObserver     kubernetesObserver
+	kubernetesReleases     *kubernetes.ReleaseController
+	kubernetesReleaseOwner string
+	kubernetesRollback     kubernetes.ReleaseRollbackStarter
+	platformLogin          *authlogin.Service
+	selfUpdate             *selfupdate.Service
+	configDB               *sql.DB
+	configDrafts           *configdraft.Service
+	configRequireMatch     bool
+	terminalHTTP           *terminalhttp.Manager
+	mcpHandler             http.Handler
+	mcpTokens              *auth.MCPTokenStore
+	opsChat                *opschat.Service
+	onboarding             onboardingStatusReader
+	vault                  vault.Vault
+	projects               project.Service
+	triggers               trigger.Service
+	cron                   cron.Service
+	chain                  chain.Service
+	concurrency            run.ConcurrencyService
+	parameters             run.ParameterService
+	pipelines              pipeline.Service
+	pipelineSettings       pipeline.SettingsService
+	runs                   run.Service
+	runRetry               runRetryService
+	runSub                 runSubscriber
+	feedback               run.FeedbackService
+	secretSource           *RunSecretSource
+	receiver               *trigger.Receiver
+	audit                  audit.Recorder
+	account                accountService
+	aiSettings             ai.Service
+	aiAnalyzer             ai.RepoAnalyzer
+	runDiffer              ai.RunDiffer
+	sourceReader           SourceReader
+	refsLister             RefsLister
+	runnerConfig           runner.Service
+	servers                target.Service
+	notifications          notify.Service
+	deployer               deploy.Service
+	releaseGuard           *releaseguard.Service
+	anomaly                anomaly.Service
+	anomalyInterval        int // 后台定时检测间隔(秒);0=已关闭。供前端显示节奏。
+	anomalyCooldown        int // 同条件告警去重冷却窗口(秒)。
+	metricsHistory         metrics.Service
+	oauth                  oauth.Service
+	approvalCoord          *approval.Coordinator
+	approvalStore          *approval.Store
+	approvalSigner         *approval.Signer
+	promotionStore         *promotion.Store
+	environments           *environments.Service
+	doraMetrics            run.MetricsService
+	templates              library.TemplateService
+	varGroups              library.VarGroupService
+	customNodes            library.CustomNodeService
+	artifactStore          *artifactstore.Store
+	retention              *retention.Service
+	proxy                  proxy.Service
+	dnsProviders           dnsprovider.Service
+	previewEnvs            PreviewService
 }
 
 func WithSelfUpdate(s *selfupdate.Service) Option { return func(o *options) { o.selfUpdate = s } }
@@ -521,6 +524,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 审计查询(Story 1.4):只读 + 认证保护 + 分页 + 过滤。
 		ar.Get("/audit", makeListAuditHandler(aud))
 		mountKubernetes(ar, o.kubernetes, o.kubernetesObserver, aud)
+		mountKubernetesReleases(ar, o.kubernetes, o.kubernetesReleases, o.kubernetesReleaseOwner, o.kubernetesRollback, aud)
 
 		// 凭据保险库(Story 1.3)。v 为 nil 时 handler 返回 vault_unconfigured。
 		v := o.vault

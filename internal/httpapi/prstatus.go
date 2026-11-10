@@ -2,7 +2,7 @@ package httpapi
 
 import (
 	"context"
-	"log"
+	log "github.com/huangchengsir/pipewright/internal/logging"
 	"strings"
 
 	"github.com/huangchengsir/pipewright/internal/project"
@@ -73,10 +73,10 @@ func NewPRStatusHook(
 			targetURL = publicBaseURL + "/runs/" + runID
 		}
 		if err := reporter.Report(ctx, target, commit, state, desc, targetURL, token); err != nil {
-			log.Printf("[prstatus] 回写 %s/%s 失败(run %s):%v", target.Owner, target.Repo, runID, err)
+			log.Printf("[prstatus] Failed to write status for %s/%s (run %s): %v", target.Owner, target.Repo, runID, err)
 			return
 		}
-		log.Printf("[prstatus] 已回写 %s %s/%s @ %s = %s", target.Platform, target.Owner, target.Repo, shortSHA(commit), state)
+		log.Printf("[prstatus] Wrote %s status for %s/%s @ %s = %s", target.Platform, target.Owner, target.Repo, shortSHA(commit), state)
 	}
 }
 

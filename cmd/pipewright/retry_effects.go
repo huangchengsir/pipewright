@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
+	log "github.com/huangchengsir/pipewright/internal/logging"
 	"github.com/huangchengsir/pipewright/internal/run"
 	"github.com/huangchengsir/pipewright/internal/runretry"
-	"log"
 	"time"
 )
 

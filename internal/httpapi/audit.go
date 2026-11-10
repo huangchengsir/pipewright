@@ -2,7 +2,7 @@ package httpapi
 
 import (
 	"context"
-	"log"
+	log "github.com/huangchengsir/pipewright/internal/logging"
 	"net"
 	"net/http"
 	"os"
@@ -56,7 +56,7 @@ func recordAudit(ctx context.Context, rec audit.Recorder, e audit.Entry) {
 		return
 	}
 	if err := rec.Record(ctx, e); err != nil {
-		log.Printf("[audit] 警告:写审计失败(action=%s target=%s/%s): %v", e.Action, e.TargetType, e.TargetID, err)
+		log.Printf("[audit] Warning: audit write failed (action=%s target=%s/%s): %v", e.Action, e.TargetType, e.TargetID, err)
 	}
 }
 

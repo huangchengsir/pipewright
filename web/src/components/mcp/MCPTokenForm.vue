@@ -17,13 +17,16 @@ const selectedProjects = computed(() => props.projects.filter(p => form.projectI
 const sectionOptions = computed(() => MCP_CONFIG_SECTIONS.map(value => ({ value, label: t(`mcpConfig.sections.${value}`) })))
 const operationSection: Record<MCPConfigOperation, MCPConfigSection> = {
   'project.set_name': 'project', 'project.set_default_branch': 'project',
-  'stage.rename': 'pipeline', 'job.rename': 'pipeline', 'step.set_limits': 'step_limits', 'build.set': 'build',
+  'stage.rename': 'pipeline', 'job.rename': 'pipeline', 'step.set_limits': 'step_limits', 'build.set': 'build', 'kubernetes.add': 'kubernetes', 'kubernetes.update': 'kubernetes',
 }
 function operationOptions(id: string) {
   return MCP_CONFIG_OPERATIONS.filter(op => grants[id]?.sections.includes(operationSection[op])).map(value => ({ value, label: t(`mcpConfig.operations.${value.replaceAll('.', '_')}`) }))
 }
 const activeGrants = computed(() => form.projectIds.map(id => grants[id]).filter((grant): grant is MCPConfigGrant => !!grant?.read))
-const valid = computed(() => form.name.trim().length > 0 && form.name.trim().length <= 80 && form.projectIds.length > 0 && form.projectIds.length <= 32 && Number.isInteger(form.expiresInDays) && form.expiresInDays >= 1 && form.expiresInDays <= 30 && activeGrants.value.every(g => g.sections.length > 0 && (!g.propose || g.operations.length > 0)))
+function validSelectors(ids?: string[]) {
+ return !!ids?.length && ids.length <=128 && new Set(ids).size===ids.length && ids.every(id=>id===id.trim() && id.length>0 && id.length<=128 && Array.from(id).every(char=>{const code=char.codePointAt(0)!;return code>=32 && !(code>=127 && code<=159) && char!=='*'}))
+}
+const valid = computed(() => form.name.trim().length > 0 && form.name.trim().length <= 80 && form.projectIds.length > 0 && form.projectIds.length <= 32 && Number.isInteger(form.expiresInDays) && form.expiresInDays >= 1 && form.expiresInDays <= 30 && activeGrants.value.every(g => g.sections.length > 0 && (!g.propose || g.operations.length > 0) && (!g.sections.includes('kubernetes') || validSelectors(g.stageIds)) && (!g.operations.includes('kubernetes.update') || validSelectors(g.jobIds))))
 watch(() => [...form.projectIds], ids => {
   for (const id of Object.keys(grants)) if (!ids.includes(id)) delete grants[id]
   for (const id of ids) if (!grants[id]) grants[id] = { projectId: id, read: false, propose: false, apply: false, sections: [], operations: [] }
@@ -34,7 +37,7 @@ function setPermission(id: string, permission: 'read' | 'propose' | 'apply', eve
   const checked = (event.target as HTMLInputElement).checked
   if (permission === 'read') {
     grant.read = checked
-    grant.sections = checked ? [...MCP_CONFIG_SECTIONS] : []
+    grant.sections = checked ? MCP_CONFIG_SECTIONS.filter(section => section !== 'kubernetes') : []
     if (!checked) { grant.propose = false; grant.apply = false; grant.operations = [] }
   } else if (permission === 'propose' && grant.read) {
     grant.propose = checked
@@ -46,11 +49,12 @@ function setSections(id: string, values: MCPConfigSection[]) {
   if (props.busy) return
   const grant = grants[id]
   grant.sections = values
+  if (!values.includes('kubernetes')) { delete grant.stageIds; delete grant.jobIds }
   grant.operations = grant.operations.filter(op => values.includes(operationSection[op]))
 }
 function submit() {
   if (props.busy || !valid.value) return
-  emit('create', { ...form, name: form.name.trim(), projectIds: [...form.projectIds], ...(activeGrants.value.length ? { configGrants: activeGrants.value.map(g => ({ ...g, sections: [...g.sections], operations: [...g.operations] })) } : {}) })
+  emit('create', { ...form, name: form.name.trim(), projectIds: [...form.projectIds], ...(activeGrants.value.length ? { configGrants: activeGrants.value.map(g => ({ ...g, sections: [...g.sections], operations: [...g.operations], ...(g.stageIds ? { stageIds: [...g.stageIds] } : {}), ...(g.jobIds ? { jobIds: [...g.jobIds] } : {}) })) } : {}) })
 }
 </script>
 
@@ -87,6 +91,14 @@ function submit() {
           <FormField v-if="grants[project.id].propose" :label="t('mcpConfig.allowedOperations')" :field-id="`mcp-operations-${project.id}`" required>
             <NSelect v-model:value="grants[project.id].operations" multiple :options="operationOptions(project.id)" :disabled="busy" :input-props="{ id: `mcp-operations-${project.id}`, 'aria-label': t('mcpConfig.allowedOperations') }" />
           </FormField>
+          <template v-if="grants[project.id].sections.includes('kubernetes')">
+            <FormField :label="t('mcpConfig.kubernetesStages')" :field-id="`mcp-stages-${project.id}`" :hint="t('mcpConfig.kubernetesScopeHint')" required>
+              <NSelect v-model:value="grants[project.id].stageIds" multiple filterable tag :options="[]" :disabled="busy" :input-props="{ id: `mcp-stages-${project.id}`, 'aria-label': t('mcpConfig.kubernetesStages') }" />
+            </FormField>
+            <FormField v-if="grants[project.id].operations.includes('kubernetes.update')" :label="t('mcpConfig.kubernetesJobs')" :field-id="`mcp-jobs-${project.id}`" required>
+              <NSelect v-model:value="grants[project.id].jobIds" multiple filterable tag :options="[]" :disabled="busy" :input-props="{ id: `mcp-jobs-${project.id}`, 'aria-label': t('mcpConfig.kubernetesJobs') }" />
+            </FormField>
+          </template>
         </div>
       </div>
       <p v-if="activeGrants.some(g => g.apply)" class="mcp-grants-hint" role="note">{{ t('mcpConfig.applyPermissionHint') }}</p>

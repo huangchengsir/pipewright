@@ -174,6 +174,8 @@ func sectionFor(op string) string {
 		return "step_limits"
 	case "build.set":
 		return "build"
+	case "kubernetes.add", "kubernetes.update":
+		return "kubernetes"
 	}
 	return ""
 }
@@ -197,6 +199,12 @@ func allowed(t *auth.MCPToken, pid, cap, section, op string) bool {
 func authorize(t *auth.MCPToken, pid, cap string, ops []Operation) error {
 	for _, o := range ops {
 		sec := sectionFor(o.Type)
+		if sec == "kubernetes" {
+			if t == nil || !t.AllowsConfigNode(pid, "config.read", o.Type, o.StageID, o.JobID) || !t.AllowsConfigNode(pid, "config.propose", o.Type, o.StageID, o.JobID) || (cap == "apply" && !t.AllowsConfigNode(pid, "config.apply", o.Type, o.StageID, o.JobID)) {
+				return ErrForbidden
+			}
+			continue
+		}
 		if sec == "" || !allowed(t, pid, "read", sec, o.Type) || !allowed(t, pid, "propose", sec, o.Type) || (cap == "apply" && !allowed(t, pid, "apply", sec, o.Type)) {
 			return ErrForbidden
 		}
@@ -239,6 +247,7 @@ func (s *Service) audit(ctx context.Context, q configstate.DBTX, actor, action, 
 }
 
 type document struct {
+	ctx                                             context.Context
 	projectID, name, branch, credential             string
 	pac                                             bool
 	rev                                             int64
@@ -252,7 +261,7 @@ type document struct {
 }
 
 func (s *Service) load(ctx context.Context, q configstate.DBTX, pid string) (*document, error) {
-	d := &document{projectID: pid, runner: s.opts.Runtime.RunnerMode, executor: s.opts.Runtime.ExecutorKind, source: "stored", applicability: "supported"}
+	d := &document{ctx: configstate.WithTxContext(ctx, s.db, q), projectID: pid, runner: s.opts.Runtime.RunnerMode, executor: s.opts.Runtime.ExecutorKind, source: "stored", applicability: "supported"}
 	var n int64
 	var pac int
 	e := q.QueryRowContext(ctx, `SELECT `+s.byteLength("name")+`+`+s.byteLength("default_branch")+`+`+s.byteLength("credential_id")+` FROM projects WHERE id=?`, pid).Scan(&n)
@@ -428,7 +437,7 @@ func (s *Service) Capabilities(ctx context.Context, tokenID string) (map[string]
 	if e != nil {
 		return nil, ErrForbidden
 	}
-	return map[string]any{"configGrants": t.ConfigGrants, "authzRevision": t.AuthzRevision, "sections": Sections, "operations": OperationTypes, "maxOperations": 32, "maxDiffItems": 32, "maxPatchBytes": 16384, "applyEnabled": s.opts.ApplyEnabled, "validatorVersion": ValidatorVersion}, nil
+	return map[string]any{"configGrants": t.ConfigGrants, "authzRevision": t.AuthzRevision, "sections": Sections, "operations": OperationTypes, "maxOperations": 32, "maxDiffItems": 32, "maxPatchBytes": 16384, "maxHTTPBodyBytes": 65536, "maxToolArgumentsBytes": 16384, "kubernetes": map[string]any{"modes": []string{"image", "manifest", "helm", "progressive"}, "sourceKinds": []string{"inline", "git", "artifact"}, "yamlVariables": true, "privatePayloads": true, "humanReviewRequired": true, "stageScopedAdd": true, "jobScopedUpdate": true, "clusterCredentialsExposed": false, "maxInlinePatchBytes": 16384, "daemonSetProof": daemonSetProofOptions()}, "applyEnabled": s.opts.ApplyEnabled, "validatorVersion": ValidatorVersion}, nil
 }
 func pageSize(n int) (int, error) {
 	if n == 0 {

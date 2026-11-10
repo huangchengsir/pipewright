@@ -24,6 +24,7 @@ function date(value: string) { const d = new Date(value); return Number.isFinite
           <small v-for="grant in row.token.configGrants" :key="grant.projectId" class="mcp-grant-summary">
             {{ projectNames[grant.projectId] ?? grant.projectId }}:
             {{ [grant.read && t('mcpConfig.read'), grant.propose && t('mcpConfig.propose'), grant.apply && t('mcpConfig.apply')].filter(Boolean).join(' · ') }}
+            <template v-if="grant.sections.includes('kubernetes')"><br />{{ t('mcpConfig.kubernetesStages') }}: {{ grant.stageIds?.join(', ') }}<template v-if="grant.jobIds?.length"><br />{{ t('mcpConfig.kubernetesJobs') }}: {{ grant.jobIds.join(', ') }}</template></template>
           </small>
         </td><td>{{ date(row.token.expiresAt) }}</td>
         <td><span class="mcp-status" :class="`mcp-status--${row.state}`">{{ t(`settingsMCP.${row.state}`) }}</span></td>

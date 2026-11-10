@@ -20,6 +20,19 @@ function approveButton(wrapper: VueWrapper) { return wrapper.get('.review-approv
 async function acknowledge(wrapper: VueWrapper) { await wrapper.get('.review-ack input').setValue(true) }
 
 describe('MCP configuration review', () => {
+  it('requires complete protected Kubernetes details before approval', async () => {
+    const item=fixture(); item.diff=[{type:'kubernetes.add',field:'kubernetes',stageId:'deploy',jobId:'kube',after:'safe metadata',impact:'kubernetes'}]
+    mocks.get.mockResolvedValue(item); const w=render(); await flushPromises(); await acknowledge(w)
+    expect(approveButton(w).attributes('disabled')).toBeDefined()
+    expect(mocks.approve).not.toHaveBeenCalled()
+  })
+  it('shows Kubernetes commands as text and approves the exact digest only', async () => {
+    const item=fixture(); item.diff=[{type:'kubernetes.update',field:'kubernetes',stageId:'deploy',jobId:'kube',after:'safe metadata',impact:'kubernetes'}]
+    item.kubernetesReview=[{stageId:'deploy',jobId:'kube',before:'timeoutSeconds: 300',after:'timeoutSeconds: 420\nsource:\n  command: [human-reviewed-command]'}]
+    mocks.get.mockResolvedValue(item); const w=render(); await flushPromises(); expect(w.text()).toContain('human-reviewed-command'); await acknowledge(w)
+    expect(approveButton(w).attributes('disabled')).toBeUndefined(); await approveButton(w).trigger('click'); await flushPromises()
+    expect(mocks.approve).toHaveBeenCalledExactlyOnceWith('draft-1',{reviewDigest:'digest-1',baseRevision:'revision-1',policyVersion:'policy-1'},{signal:expect.any(AbortSignal)})
+  })
   it('keeps the exact project and draft identity visible before acknowledgement', async () => {
     const wrapper = render(); await flushPromises()
     expect(wrapper.get('.review-identity').text()).toContain('project-1')

@@ -22,8 +22,8 @@ func (s *Service) gcLock(ctx context.Context, q configstate.DBTX, root, project 
 			return err
 		}
 	}
-	query := "SELECT revision FROM run_retry_lineages WHERE root_id=?"
-	if store.DialectOf(s.db) == store.MySQL {
+	query := "SELECT revision FROM run_retry_lineages" + store.LockHint(store.DialectOf(s.db), true) + " WHERE root_id=?"
+	if store.DialectOf(s.db).RowLocks() && store.DialectOf(s.db) != store.SQLServer {
 		query += " FOR UPDATE"
 	}
 	var revision int64
@@ -52,7 +52,7 @@ type gcImage struct {
 // PruneOrphans collects only lineages with no retained runs or unverified work.
 // The durable claim serializes new pins; physical removal is outside SQL.
 func (s *Service) PruneOrphans(ctx context.Context, now time.Time, release func(context.Context, ImageRef) error) (int, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT l.root_id,l.project_id FROM run_retry_lineages l WHERE NOT EXISTS(SELECT 1 FROM run_retry_attempts a JOIN pipeline_runs p ON p.id=a.run_id WHERE a.root_id=l.root_id) ORDER BY l.updated_at,l.root_id LIMIT 16`)
+	rows, err := s.db.QueryContext(ctx, `SELECT l.root_id,l.project_id FROM run_retry_lineages l WHERE NOT EXISTS(SELECT 1 FROM run_retry_attempts a JOIN pipeline_runs p ON p.id=a.run_id WHERE a.root_id=l.root_id) ORDER BY l.updated_at,l.root_id`+store.Limit(store.DialectOf(s.db), "16"))
 	if err != nil {
 		return 0, err
 	}

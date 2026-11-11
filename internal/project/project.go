@@ -277,6 +277,7 @@ func (s *service) ListPaged(ctx context.Context, page, pageSize int) (*ListResul
 	}
 
 	offset := (page - 1) * pageSize
+	pageSQL, pageArgs := store.Page(store.DialectOf(s.db), pageSize, offset)
 	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT p.id, p.name, p.repo_url, p.default_branch, p.credential_id,
 		        COALESCE(c.name, ''), p.pac_enabled, p.pr_status_enabled, p.created_at, p.updated_at, COALESCE(cv.revision,1)
@@ -284,8 +285,8 @@ func (s *service) ListPaged(ctx context.Context, page, pageSize int) (*ListResul
 		 LEFT JOIN credentials c ON c.id = p.credential_id
  LEFT JOIN project_config_versions cv ON cv.project_id=p.id
 		 ORDER BY p.created_at DESC, p.id
-		 LIMIT ? OFFSET ?`,
-		pageSize, offset,
+		 `+pageSQL,
+		pageArgs...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("project: list: %w", err)

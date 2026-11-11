@@ -15,6 +15,7 @@ const paths = [
   "account",
   "vault",
   "system",
+  "database",
   "notifications",
   "diagnosis-stats",
 ];
@@ -64,7 +65,7 @@ describe("Settings navigation", () => {
       ).toBe("ai");
     },
   );
-  it("retains all eleven sections and uses the current route for both navigation controls", async () => {
+  it("retains all twelve sections and uses the current route for both navigation controls", async () => {
     const { w, router } = await setup("vault");
     expect(
       w.findAll(".settings-nav a").map((link) => link.attributes("href")),
@@ -125,11 +126,13 @@ describe("Settings navigation", () => {
       expect(w.get(".settings-nav-select").attributes("aria-label")).toBe(
         i18n.global.t("settingsHub.navAria"),
       );
-      expect(w.findAll(".settings-nav-select option")).toHaveLength(11);
-      expect(w.findAll(".settings-nav a")).toHaveLength(11);
+      expect(w.findAll(".settings-nav-select option")).toHaveLength(12);
+      expect(w.findAll(".settings-nav a")).toHaveLength(12);
       expect(w.findAll(".settings-nav-select optgroup")).toHaveLength(4);
       expect(w.text()).not.toContain("kubernetes.groups.");
       expect(w.text()).not.toContain("settingsHub.");
+      expect(w.text()).not.toContain("databaseMigration.");
+      expect(w.find('a[href="/settings/database"]').text()).toBe(i18n.global.t("databaseMigration.title"));
       expect(w.get(".settings-nav a").text()).toBe(
         i18n.global.t("settingsHub.navServers"),
       );

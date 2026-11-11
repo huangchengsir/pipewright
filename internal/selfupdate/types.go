@@ -15,10 +15,11 @@ import (
 )
 
 var (
-	ErrInvalid     = errors.New("selfupdate: invalid request")
-	ErrConflict    = errors.New("selfupdate: request or task conflict")
-	ErrNotFound    = errors.New("selfupdate: task not found")
-	ErrUnavailable = errors.New("selfupdate: unavailable")
+	ErrInvalid      = errors.New("selfupdate: invalid request")
+	ErrConflict     = errors.New("selfupdate: request or task conflict")
+	ErrNotFound     = errors.New("selfupdate: task not found")
+	ErrUnavailable  = errors.New("selfupdate: unavailable")
+	ErrPrivateBuild = errors.New("selfupdate: active database requires a private driver build")
 )
 
 const (

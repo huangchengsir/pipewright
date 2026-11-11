@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"strconv"
 	"time"
 
@@ -118,7 +119,7 @@ func (s *MaintenanceService) List(ctx context.Context, adminID string) (*Mainten
 		if err != nil {
 			return err
 		}
-		rows, err := q.QueryContext(txctx, `SELECT activity_id FROM project_activity WHERE released_at IS NULL ORDER BY created_at,activity_id LIMIT 201`)
+		rows, err := q.QueryContext(txctx, `SELECT activity_id FROM project_activity WHERE released_at IS NULL ORDER BY created_at,activity_id`+store.Limit(store.DialectOf(s.db), "201"))
 		if err != nil {
 			return err
 		}

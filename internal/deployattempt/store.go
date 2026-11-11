@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"regexp"
 	"strings"
 	"time"
@@ -324,10 +325,10 @@ func (s *Store) ListByWorkload(ctx context.Context, key string, limit int) ([]Ta
 	if limit > 100 {
 		limit = 100
 	}
-	return s.targetQuery(ctx, `SELECT id FROM deployment_attempt_targets WHERE workload_key=? ORDER BY created_at DESC,id DESC LIMIT ?`, key, limit)
+	return s.targetQuery(ctx, `SELECT id FROM deployment_attempt_targets WHERE workload_key=? ORDER BY created_at DESC,id DESC`+store.Limit(store.DialectOf(s.db), "?"), key, limit)
 }
 func (s *Store) ListByRun(ctx context.Context, runID string) ([]Attempt, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM deployment_attempts WHERE run_id=? ORDER BY created_at DESC,id DESC LIMIT 100`, runID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM deployment_attempts WHERE run_id=? ORDER BY created_at DESC,id DESC`+store.Limit(store.DialectOf(s.db), "100"), runID)
 	if err != nil {
 		return nil, err
 	}

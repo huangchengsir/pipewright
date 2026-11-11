@@ -120,8 +120,8 @@ func (s *Service) lock(ctx context.Context, q configstate.DBTX, l lineage) error
 	if _, e := configstate.LockProject(ctx, q, s.db, l.project); e != nil {
 		return e
 	}
-	stmt := "SELECT revision FROM run_retry_lineages WHERE root_id=?"
-	if store.DialectOf(s.db) == store.MySQL {
+	stmt := "SELECT revision FROM run_retry_lineages" + store.LockHint(store.DialectOf(s.db), true) + " WHERE root_id=?"
+	if store.DialectOf(s.db).RowLocks() && store.DialectOf(s.db) != store.SQLServer {
 		stmt += " FOR UPDATE"
 	}
 	var rev int64

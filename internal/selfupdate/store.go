@@ -7,6 +7,7 @@ import (
 	"errors"
 	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/releasesource"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"time"
 )
 
@@ -63,7 +64,7 @@ func (s *Service) saveWith(ctx context.Context, q configstate.DBTX, t *Task) err
 }
 func (s *Service) Get(ctx context.Context, id string) (*Task, error) { return s.load(ctx, "id=?", id) }
 func (s *Service) Current(ctx context.Context) (*Task, error) {
-	return s.load(ctx, "1=1 ORDER BY CASE WHEN active_key IS NULL THEN 1 ELSE 0 END,created_at DESC,id DESC LIMIT 1")
+	return s.load(ctx, "1=1 ORDER BY CASE WHEN active_key IS NULL THEN 1 ELSE 0 END,created_at DESC,id DESC"+store.Limit(store.DialectOf(s.db), "1"))
 }
 func (s *Service) ForTarget(ctx context.Context, target string) (*Task, error) {
 	return s.ForSourceTarget(ctx, releasesource.GitHub, target)

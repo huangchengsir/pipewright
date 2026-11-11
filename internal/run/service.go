@@ -605,6 +605,29 @@ func (s *service) List(ctx context.Context, f ListFilter) (*ListResult, error) {
 				args = append(args, pattern)
 			}
 			where = append(where, "("+strings.Join(predicates, " OR ")+")")
+		} else if store.DialectOf(s.db) == store.PostgreSQL {
+			pattern := literalASCIIRegexp(query)
+			predicates := make([]string, 0, 4)
+			for _, column := range []string{"pr.id", "pr.trigger_branch", "pr.trigger_commit", "pr.resolved_commit_sha"} {
+				predicates = append(predicates, column+` COLLATE "C" ~ ?`)
+				args = append(args, pattern)
+			}
+			where = append(where, "("+strings.Join(predicates, " OR ")+")")
+		} else if store.DialectOf(s.db) == store.SQLServer {
+			var folded strings.Builder
+			for _, ch := range query {
+				if ch >= 'A' && ch <= 'Z' {
+					ch += 'a' - 'A'
+				}
+				folded.WriteRune(ch)
+			}
+			pattern := "%" + strings.NewReplacer("!", "!!", "%", "!%", "_", "!_", "[", "![").Replace(folded.String()) + "%"
+			predicates := make([]string, 0, 4)
+			for _, column := range []string{"pr.id", "pr.trigger_branch", "pr.trigger_commit", "pr.resolved_commit_sha"} {
+				predicates = append(predicates, "TRANSLATE("+column+" COLLATE Latin1_General_100_BIN2, N'ABCDEFGHIJKLMNOPQRSTUVWXYZ', N'abcdefghijklmnopqrstuvwxyz') LIKE ? COLLATE Latin1_General_100_BIN2 ESCAPE '!' ")
+				args = append(args, pattern)
+			}
+			where = append(where, "("+strings.Join(predicates, " OR ")+")")
 		} else {
 			pattern := "%" + strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(query) + "%"
 			where = append(where, "(LOWER(pr.id) LIKE LOWER(?) ESCAPE '!' OR LOWER(pr.trigger_branch) LIKE LOWER(?) ESCAPE '!' OR LOWER(pr.trigger_commit) LIKE LOWER(?) ESCAPE '!' OR LOWER(pr.resolved_commit_sha) LIKE LOWER(?) ESCAPE '!')")
@@ -632,7 +655,8 @@ func (s *service) List(ctx context.Context, f ListFilter) (*ListResult, error) {
 	}
 
 	offset := (page - 1) * size
-	listArgs := append(append([]any{}, args...), size, offset)
+	pageSQL, pageArgs := store.Page(store.DialectOf(s.db), size, offset)
+	listArgs := append(append([]any{}, args...), pageArgs...)
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT pr.id, pr.project_id, COALESCE(p.name, ''), pr.status,
 		        pr.trigger_type, pr.trigger_branch, pr.trigger_commit, pr.trigger_actor,
@@ -642,7 +666,7 @@ func (s *service) List(ctx context.Context, f ListFilter) (*ListResult, error) {
 		 LEFT JOIN projects p ON p.id = pr.project_id
 		 LEFT JOIN run_retry_attempts rr ON rr.run_id=pr.id`+clause+`
 		 ORDER BY pr.created_at DESC, pr.id DESC
-		 LIMIT ? OFFSET ?`, listArgs...)
+		 `+pageSQL, listArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("run: list runs: %w", err)
 	}
@@ -787,8 +811,7 @@ func (s *service) LastSuccessfulRun(ctx context.Context, projectID, branch strin
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id FROM pipeline_runs
 		 WHERE project_id = ? AND trigger_branch = ? AND status = ? AND created_at < ?
-		 ORDER BY created_at DESC, id DESC
-		 LIMIT 1`,
+		 ORDER BY created_at DESC, id DESC`+store.Limit(store.DialectOf(s.db), "1"),
 		projectID, branch, StatusSuccess, beforeStr,
 	).Scan(&id)
 	if err != nil {

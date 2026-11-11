@@ -60,6 +60,29 @@ describe('ConfirmDialog', () => {
     await expect(p).resolves.toBe(false)
   })
 
+  it('requires a fresh checkbox acknowledgement on every confirmation', async () => {
+    const confirm = useConfirm()
+    const wrapper = mount(ConfirmDialog, { attachTo: document.body })
+    const first = confirm.open({ title: 'Move database', body: 'Keep source', confirmCheck: 'Maintenance approved' })
+    await nextTick()
+    const button = document.querySelector('.cfm-dialog__confirm') as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    const checkbox = document.querySelector('.cfm-dialog input[type=checkbox]') as HTMLInputElement
+    checkbox.checked = true
+    checkbox.dispatchEvent(new Event('change'))
+    await nextTick()
+    expect(button.disabled).toBe(false)
+    button.click()
+    await expect(first).resolves.toBe(true)
+    await nextTick()
+    const second = confirm.open({ title: 'Activate', body: 'Restart', confirmCheck: 'Maintenance approved' })
+    await nextTick()
+    expect((document.querySelector('.cfm-dialog__confirm') as HTMLButtonElement).disabled).toBe(true)
+    confirm._resolve(false)
+    await expect(second).resolves.toBe(false)
+    wrapper.unmount()
+  })
+
   it('type-to-confirm keeps confirm disabled until the exact text is typed', async () => {
     const confirm = useConfirm()
     mount(ConfirmDialog, { attachTo: document.body })

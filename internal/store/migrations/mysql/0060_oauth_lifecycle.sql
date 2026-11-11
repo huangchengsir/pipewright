@@ -1,3 +1,5 @@
+-- Match the credentials table charset policy explicitly; database-level binary
+-- collation must not change the charset-default collation of these foreign keys.
 CREATE TABLE oauth_credentials (
  credential_id VARCHAR(36) NOT NULL PRIMARY KEY,
  provider VARCHAR(32) NOT NULL, issuer TEXT NOT NULL, client_id TEXT NOT NULL,
@@ -8,16 +10,16 @@ CREATE TABLE oauth_credentials (
  state VARCHAR(32) NOT NULL, claim_id VARCHAR(36) NOT NULL DEFAULT '',
  claim_owner VARCHAR(36) NOT NULL DEFAULT '', updated_at BIGINT NOT NULL,
  CONSTRAINT fk_oauth_credential FOREIGN KEY (credential_id) REFERENCES credentials(id) ON DELETE CASCADE
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE oauth_credential_uses (
  id VARCHAR(36) NOT NULL PRIMARY KEY, credential_id VARCHAR(36) NOT NULL,
  generation BIGINT NOT NULL, owner VARCHAR(36) NOT NULL, created_at BIGINT NOT NULL,
  INDEX oauth_credential_uses_credential (credential_id),
  CONSTRAINT fk_oauth_use_credential FOREIGN KEY (credential_id) REFERENCES credentials(id) ON DELETE CASCADE
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE oauth_authorizations (
  credential_id VARCHAR(36) NOT NULL PRIMARY KEY,
  claim_id VARCHAR(36) NOT NULL, owner VARCHAR(36) NOT NULL, revision BIGINT NOT NULL,
  cipher_digest VARCHAR(64) NOT NULL, state VARCHAR(32) NOT NULL, updated_at BIGINT NOT NULL,
  CONSTRAINT fk_oauth_authorization FOREIGN KEY (credential_id) REFERENCES credentials(id) ON DELETE CASCADE
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/store"
 )
 
 // 凭据类型枚举(DB 存 snake_case 字串;JSON camelCase 字段)。
@@ -277,7 +278,7 @@ func (s *service) GetGitAuth(id string) (GitAuth, error) {
 	if !s.configured() {
 		return GitAuth{}, ErrVaultUnconfigured
 	}
-	if binding, err := readOAuth(context.Background(), s.db, id); err != nil {
+	if binding, err := readOAuth(context.Background(), s.db, store.DialectOf(s.db), id); err != nil {
 		return GitAuth{}, err
 	} else if binding != nil {
 		return GitAuth{}, ErrGitLeaseRequired
@@ -445,20 +446,20 @@ func (s *service) Update(id string, in UpdateInput) (*Credential, error) {
 			return err
 		}
 		var result sql.Result
-		if err := checkOAuthMutation(ctx, q, id, rotate || (in.Username != nil && username != oldUsername), in.DetachOAuth); err != nil {
+		if err := checkOAuthMutation(ctx, q, store.DialectOf(s.db), id, rotate || (in.Username != nil && username != oldUsername), in.DetachOAuth); err != nil {
 			return err
 		}
 		var err error
 		if rotate {
 			result, err = q.ExecContext(ctx,
 				`UPDATE credentials SET name = ?, scope = ?, username = ?, ciphertext = ?, masked_value = ?, updated_at = ?
-			 WHERE id = ? AND name = ? AND scope = ? AND username = ? AND ciphertext = ?`,
+			 WHERE id = ? AND name = ? AND scope = ? AND username = ? AND `+store.BlobEqual(store.DialectOf(s.db), "ciphertext"),
 				name, scope, username, newSealed, masked, nowStr, id, oldName, oldScope, oldUsername, oldSealed,
 			)
 		} else {
 			result, err = q.ExecContext(ctx,
 				`UPDATE credentials SET name = ?, scope = ?, username = ?, updated_at = ?
-			 WHERE id = ? AND name = ? AND scope = ? AND username = ? AND ciphertext = ?`,
+			 WHERE id = ? AND name = ? AND scope = ? AND username = ? AND `+store.BlobEqual(store.DialectOf(s.db), "ciphertext"),
 				name, scope, username, nowStr, id, oldName, oldScope, oldUsername, oldSealed,
 			)
 		}
@@ -475,7 +476,7 @@ func (s *service) Update(id string, in UpdateInput) (*Credential, error) {
 			}
 			var matches int
 			if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM credentials
-			WHERE id = ? AND name = ? AND scope = ? AND username = ? AND ciphertext = ?`,
+			WHERE id = ? AND name = ? AND scope = ? AND username = ? AND `+store.BlobEqual(store.DialectOf(s.db), "ciphertext"),
 				id, name, scope, username, expected).Scan(&matches); err != nil {
 				return fmt.Errorf("vault: check update result: %w", err)
 			}

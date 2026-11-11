@@ -29,6 +29,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/chain"
 	"github.com/huangchengsir/pipewright/internal/configdraft"
 	"github.com/huangchengsir/pipewright/internal/cron"
+	"github.com/huangchengsir/pipewright/internal/dbmigration"
 	"github.com/huangchengsir/pipewright/internal/deploy"
 	"github.com/huangchengsir/pipewright/internal/dnsprovider"
 	"github.com/huangchengsir/pipewright/internal/environments"
@@ -69,6 +70,7 @@ const contextKeySession contextKey = 1
 type Option func(*options)
 
 type options struct {
+	databaseMigration     *dbmigration.Runtime
 	releaseSources        *releasesource.Catalog
 	releaseSourceSettings *releasesource.Settings
 
@@ -451,6 +453,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		r.Handle("/mcp", o.mcpHandler)
 	}
 
+	mountDatabaseRecovery(r, o.databaseMigration)
 	r.Get("/healthz", handleHealthz)
 	// /version 公开只读:暴露构建版本元数据,供升级检查与运维探针使用(非敏感)。
 	r.Get("/version", handleVersion)
@@ -492,11 +495,14 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		})
 		if o.selfUpdate != nil {
 			ar.Use(updateAdmissionMiddleware(o.selfUpdate))
+		} else if o.databaseMigration != nil {
+			ar.Use(workAdmissionMiddleware(o.databaseMigration.Admit))
 		}
 		if o.configDB != nil {
 			ar.Use(configRevisionMiddleware(o.configDB, o.configRequireMatch))
 			mountConfigManagement(ar, o.configDB, o.configDrafts)
 		}
+		mountDatabaseMigration(ar, o.databaseMigration)
 		mountPlatformAccount(ar, o.platformLogin, svc, o.audit)
 		mountOpsChat(ar, o.opsChat, svc)
 

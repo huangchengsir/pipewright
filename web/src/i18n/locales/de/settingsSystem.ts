@@ -93,6 +93,8 @@ export default {
   errCheckStatus: 'Prüfung fehlgeschlagen ({status})',
   errCheckRetry: 'Prüfung fehlgeschlagen. Bitte später erneut versuchen.',
   restartingToNew: 'Neustart auf die neue Version…',
+  manualPrivateDriver: "Diese DM-Datenbank benötigt einen privaten Build mit Ihrem lizenzierten offiziellen Treiber. Erstellen Sie die neue Version privat und ersetzen Sie die Anwendung manuell. Öffentliche Updatepakete können nicht installiert werden.",
+  databaseMigrationActive: "Schließen Sie die Datenbankmigration ab oder brechen Sie sie ab, bevor Sie ein Anwendungsupdate installieren.",
   manualUpgrade: 'Bitte manuell aktualisieren.',
   updateFailed: 'Update fehlgeschlagen',
   errUpdateStatus: 'Update fehlgeschlagen ({status})',

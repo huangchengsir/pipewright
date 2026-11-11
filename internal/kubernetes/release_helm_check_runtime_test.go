@@ -65,9 +65,18 @@ func TestHelmSupplementalStorageConsumersKeepCheckStepIDsAndUnknownFence(t *test
 			if _, e = controller.executeFrozenResource(ctx, api, record, claim, "helm-fixture-claim"); e != nil {
 				t.Fatal(e)
 			}
-			work, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+			work, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
+			if !tc.bind && !tc.unknown {
+				api.cancelPending = cancel
+			}
 			runErr := controller.runHelmSupplementalChecks(work, api, record)
+			if !tc.bind && (!api.pendingAfterConsumer || !errors.Is(runErr, context.Canceled)) {
+				t.Fatal("Helm pending gate must cancel after observing its consumer PVC", api.pendingAfterConsumer, runErr)
+			}
+			if tc.bind && (errors.Is(runErr, context.DeadlineExceeded) || errors.Is(runErr, context.Canceled)) {
+				t.Fatal("Helm probe result depended on timeout", runErr)
+			}
 			if api.storageWrites != 1 || api.earlyHTTP {
 				t.Fatal("Helm WFFC consumer did not precede health barrier", api.storageWrites, api.earlyHTTP, runErr)
 			}

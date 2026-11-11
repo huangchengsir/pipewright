@@ -426,10 +426,7 @@ func boundedSpec(p pipeline.Spec) error {
 
 // Column names come only from fixed source-code literals, never request input.
 func (s *Service) byteLength(column string) string {
-	if store.DialectOf(s.db) == store.MySQL {
-		return "COALESCE(OCTET_LENGTH(" + column + "),0)"
-	}
-	return "COALESCE(LENGTH(CAST(" + column + " AS BLOB)),0)"
+	return "COALESCE(" + store.ByteLength(store.DialectOf(s.db), column) + ",0)"
 }
 
 func (s *Service) Capabilities(ctx context.Context, tokenID string) (map[string]any, error) {

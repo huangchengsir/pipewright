@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"strings"
 	"time"
 
@@ -27,10 +28,13 @@ type draftRow struct {
 const draftColumns = `id,owner_token_id,project_id,request_id,input_digest,base_revision,policy_version,validator_version,authz_revision,operations_json,patch_digest,created_at,expires_at,applied_operation_id`
 
 func readDraft(ctx context.Context, q configstate.DBTX, where string, args ...any) (*draftRow, error) {
+	return readDraftTable(ctx, q, "mcp_config_drafts", where, args...)
+}
+func readDraftTable(ctx context.Context, q configstate.DBTX, table, where string, args ...any) (*draftRow, error) {
 	d := &draftRow{}
 	var raw string
 	var applied sql.NullString
-	e := q.QueryRowContext(ctx, `SELECT `+draftColumns+` FROM mcp_config_drafts WHERE `+where, args...).Scan(&d.id, &d.token, &d.project, &d.request, &d.input, &d.base, &d.policy, &d.validator, &d.authz, &raw, &d.patchDigest, &d.created, &d.expiry, &applied)
+	e := q.QueryRowContext(ctx, `SELECT `+draftColumns+` FROM `+table+` WHERE `+where, args...).Scan(&d.id, &d.token, &d.project, &d.request, &d.input, &d.base, &d.policy, &d.validator, &d.authz, &raw, &d.patchDigest, &d.created, &d.expiry, &applied)
 	if e != nil {
 		return nil, e
 	}
@@ -457,7 +461,7 @@ func (s *Service) approvalView(ctx context.Context, q configstate.DBTX, r *draft
 	var revoked sql.NullInt64
 	var consumed sql.NullString
 	var digest string
-	e := q.QueryRowContext(ctx, `SELECT id,expires_at,revoked_at,consumed_by_operation_id,review_digest FROM mcp_config_approvals WHERE draft_id=? ORDER BY created_at DESC,id DESC LIMIT 1`, r.id).Scan(&a.ID, &expiry, &revoked, &consumed, &digest)
+	e := q.QueryRowContext(ctx, `SELECT id,expires_at,revoked_at,consumed_by_operation_id,review_digest FROM mcp_config_approvals WHERE draft_id=? ORDER BY created_at DESC,id DESC`+store.Limit(store.DialectOf(s.db), "1"), r.id).Scan(&a.ID, &expiry, &revoked, &consumed, &digest)
 	if errors.Is(e, sql.ErrNoRows) {
 		return a, nil
 	}

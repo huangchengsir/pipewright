@@ -21,9 +21,9 @@ type Config struct {
 	Addr string
 	// DataDir stores local controller identity and durable process journals.
 	DataDir string
-	// DBDriver 选择数据库后端:"sqlite"(默认)或 "mysql"。
+	// DBDriver selects sqlite (default), mysql, postgres or dm.
 	DBDriver string
-	// DBDSN 是数据库连接串。mysql 必填(go-sql-driver DSN);
+	// DBDSN is required for external databases; its contents must never be logged.
 	// sqlite 可选,留空则回退到 DBPath。
 	DBDSN string
 	// DBPath 是 SQLite 数据库文件路径(向后兼容,driver=sqlite 时使用)。
@@ -53,18 +53,18 @@ func Load() Config {
 // sqlite:优先 DBDSN,否则用 DBPath(向后兼容)。
 func (c Config) StoreConfig() (driver, dsn string, err error) {
 	switch c.DBDriver {
-	case "mysql":
+	case "mysql", "postgres", "sqlserver", "dm":
 		if strings.TrimSpace(c.DBDSN) == "" {
-			return "", "", fmt.Errorf("config: PIPEWRIGHT_DB_DRIVER=mysql requires PIPEWRIGHT_DB_DSN")
+			return "", "", fmt.Errorf("config: PIPEWRIGHT_DB_DRIVER=%s requires PIPEWRIGHT_DB_DSN", c.DBDriver)
 		}
-		return "mysql", c.DBDSN, nil
+		return c.DBDriver, c.DBDSN, nil
 	case "", "sqlite":
 		if strings.TrimSpace(c.DBDSN) != "" {
 			return "sqlite", c.DBDSN, nil
 		}
 		return "sqlite", c.DBPath, nil
 	default:
-		return "", "", fmt.Errorf("config: unknown PIPEWRIGHT_DB_DRIVER %q (want sqlite|mysql)", c.DBDriver)
+		return "", "", fmt.Errorf("config: unknown PIPEWRIGHT_DB_DRIVER %q (want sqlite|mysql|postgres|sqlserver|dm)", c.DBDriver)
 	}
 }
 

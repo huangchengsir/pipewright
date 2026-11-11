@@ -2,6 +2,7 @@ package opschat
 
 import (
 	"context"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"strconv"
 )
 
@@ -60,7 +61,7 @@ func (s *Service) entryTargetNames(ctx context.Context, q querier, session strin
 			calls = append(calls, c.Body.View)
 		}
 	} else {
-		rows, err := q.QueryContext(ctx, "SELECT body FROM ops_chat_calls WHERE session_id=? AND run_id=? ORDER BY ordinal LIMIT 25", session, key.run)
+		rows, err := q.QueryContext(ctx, "SELECT body FROM ops_chat_calls WHERE session_id=? AND run_id=? ORDER BY ordinal"+store.Limit(store.DialectOf(s.db), "25"), session, key.run)
 		if err != nil {
 			return nil, ErrStorage
 		}

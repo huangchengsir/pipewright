@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"strings"
 	"time"
 
@@ -258,8 +259,7 @@ func (r *recorder) List(ctx context.Context, f ListFilter) (*ListResult, error) 
 	args = append(args, limit+1)
 	query := `SELECT id, timestamp, actor, action, target_type, target_id, detail_json, ip
 	          FROM audit_log ` + where + `
-	          ORDER BY timestamp DESC, id DESC
-	          LIMIT ?`
+	          ORDER BY timestamp DESC, id DESC` + store.Limit(store.DialectOf(r.db), "?")
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {

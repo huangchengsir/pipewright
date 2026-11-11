@@ -29,8 +29,8 @@ export function useSelfUpdate() {
  const task = ref<UpgradeTask | null>(null)
  const connectionUnknown = ref(false)
  const submitting = ref(false)
- const submissionError = ref<{ status: number } | null>(null)
- const manual = ref<{ command?: string } | null>(null)
+ const submissionError = ref<{ status: number; code?: string } | null>(null)
+ const manual = ref<{ command?: string; reason?: string } | null>(null)
  const pending = ref<Pending | null>(null)
  let timer: ReturnType<typeof setTimeout> | undefined
  let controller: AbortController | undefined
@@ -112,7 +112,7 @@ export function useSelfUpdate() {
   await read(generation)
  }
  function submissionFailed(error: unknown) {
-  submissionError.value = { status: error instanceof HttpError ? error.status : 0 }
+  submissionError.value = { status: error instanceof HttpError ? error.status : 0, code: error instanceof HttpError ? error.apiError?.code : undefined }
   if (error instanceof HttpError && (error.status === 400 || error.status === 409)) {
    pending.value = null
    remember()
@@ -145,7 +145,7 @@ export function useSelfUpdate() {
    const result = await startUpdateTask({ requestId: pending.value.requestId, target: pending.value.target, source: pending.value.source })
    if (disposed || gen !== generation) return
    if (result.status === 'manual') {
-    manual.value = { command: result.command }
+    manual.value = { command: result.command, reason: result.reason }
     pending.value = null
     remember()
     return

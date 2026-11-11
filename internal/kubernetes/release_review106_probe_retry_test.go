@@ -2,6 +2,7 @@ package kubernetes
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/huangchengsir/pipewright/internal/storetest"
 	"testing"
@@ -10,9 +11,24 @@ import (
 
 type review106FailingProbeAPI struct {
 	*probeControllerAPI
-	unsafe string
+	unsafe              string
+	observedForeignSpec bool
+	cancelForeignSpec   context.CancelFunc
 }
 
+// Cancel the intentional spec-observation wait only after reading the mutated
+// Job that was created by this scenario. The safety timeout is not the assertion.
+func (a *review106FailingProbeAPI) Read(ctx context.Context, path, query string) ([]byte, error) {
+	data, err := a.probeControllerAPI.Read(ctx, path, query)
+	if err == nil && a.unsafe == "spec" && a.cancelForeignSpec != nil && path == "/apis/batch/v1/namespaces/app/jobs/check-http" {
+		var object map[string]any
+		if json.Unmarshal(data, &object) == nil && releaseMap(object["spec"])["backoffLimit"] == float64(1) {
+			a.observedForeignSpec = true
+			a.cancelForeignSpec()
+		}
+	}
+	return data, err
+}
 func (a *review106FailingProbeAPI) ExecuteAction(ctx context.Context, id, owner string, revision int64, in ReleaseActionIntent, path string) (ReleaseAction, error) {
 	action, e := a.probeControllerAPI.ExecuteAction(ctx, id, owner, revision, in, path)
 	if e == nil && in.Resource.Kind == "Job" && in.Verb != "delete" {
@@ -78,18 +94,20 @@ func TestReview106KnownFailedOwnedProbeCleansAndRetries(t *testing.T) {
 			registerControllerTestWriter(t, f, r)
 			c.writer = func(context.Context, string, string) (releaseAPI, error) { return api, nil }
 			c.preview = func(context.Context, ReleaseAuthorization, string) (releaseAPI, error) { return api, nil }
-			work := ctx
-			if scenario != "known" {
-				var cancel context.CancelFunc
-				work, cancel = context.WithTimeout(ctx, 150*time.Millisecond)
-				defer cancel()
+			work, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			if scenario == "spec" {
+				api.cancelForeignSpec = cancel
 			}
 			result, e := c.Run(work, r.ID, r.OwnerEpoch, nil)
 			if e == nil {
 				t.Fatal("fixture probe did not fail")
 			}
-			if scenario == "spec" && !errors.Is(e, context.DeadlineExceeded) {
-				t.Fatal("foreign spec fixture must end through caller observation deadline", e)
+			if scenario == "spec" && (!api.observedForeignSpec || !errors.Is(e, context.Canceled)) {
+				t.Fatal("foreign spec fixture must cancel after observing its modified Job", api.observedForeignSpec, e)
+			}
+			if scenario != "spec" && (errors.Is(e, context.DeadlineExceeded) || errors.Is(e, context.Canceled)) {
+				t.Fatal("ownership rejection depended on timeout", scenario, e)
 			}
 			if !result.OwnerFenced || result.Cleanup != CleanupVerified {
 				t.Fatal("fixture writer not positively cleaned", result.State, result.Cleanup)

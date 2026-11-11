@@ -4,15 +4,19 @@ package i18n
 // is authored at the call site and remains the fallback for missing entries.
 // It is separate from the request/UI catalog: HTTP locale defaults do not apply.
 var processLogChinese = map[string]string{
-	"[kubernetes] controller owner lock unavailable; inspect local data directory": "[kubernetes] 控制器归属锁不可用；请检查本地数据目录",
+	"[database] activation requires explicit recovery; business startup remains closed":                 "[database] 激活需要明确恢复确认；业务启动保持关闭",
+	"[database] restart unavailable; restart this instance externally; business startup remains closed": "[database] 自动重启不可用；请从部署环境重启此实例；业务启动保持关闭",
+	"[database] recovery listener unavailable":                                                          "[database] 恢复服务监听不可用",
+	"[database] control state or database identity unavailable; business startup blocked":               "[database] 控制状态或数据库身份不可用；已阻止业务启动",
+	"[database] connection identity is not eligible for migration":                                      "[database] 当前连接身份不满足迁移条件",
+	"[kubernetes] controller owner lock unavailable; inspect local data directory":                      "[kubernetes] 控制器归属锁不可用；请检查本地数据目录",
 	"config: %v": "config: 配置无效: %v",
 	"store: %v":  "store: 存储初始化失败: %v",
 	"[update] initial release source unavailable; existing settings preserved":        "[update] 初始更新源不可用；已保留现有设置",
 	"[update] durable updater unavailable":                                            "[update] 持久化更新器不可用",
 	"embedded web/dist is missing index.html (was the frontend built correctly?): %v": "embedded web/dist 缺少 index.html(前端未正确构建?): %v",
-	"data db: mysql (%s)": "数据库: mysql (%s)",
-	"data db: %s":         "数据库: %s",
-	"auth bootstrap: %v":  "auth bootstrap: 认证初始化失败: %v",
+	"data db: %s":        "数据库: %s",
+	"auth bootstrap: %v": "auth bootstrap: 认证初始化失败: %v",
 	"[auth] Warning: startup cleanup of expired sessions failed: %v":                                                "[auth] 警告:启动清理过期会话失败:%v",
 	"[auth] Startup cleanup removed %d expired sessions":                                                            "[auth] 启动清理过期会话:%d 条",
 	"[vault] Master key loaded; credential vault is available":                                                      "[vault] master key 已加载,凭据保险库可用",

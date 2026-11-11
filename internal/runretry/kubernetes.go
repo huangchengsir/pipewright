@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"github.com/huangchengsir/pipewright/internal/kubernetes"
+	"github.com/huangchengsir/pipewright/internal/store"
 )
 
 type KubernetesVerifier func(context.Context, string) (kubernetes.Operation, error)
@@ -24,7 +25,7 @@ func (s *Service) kubernetesCheckContext(ctx context.Context, runID string) (con
 		return ctx, nil
 	}
 	checks := map[string]kubernetesCheck{}
-	rows, e := s.q(ctx).QueryContext(ctx, `SELECT id FROM k8s_operations WHERE retired=0 AND run_id IN (SELECT run_id FROM run_retry_attempts WHERE root_id=(SELECT root_id FROM run_retry_attempts WHERE run_id=?)) ORDER BY created_at,id LIMIT 500`, runID)
+	rows, e := s.q(ctx).QueryContext(ctx, `SELECT id FROM k8s_operations WHERE retired=0 AND run_id IN (SELECT run_id FROM run_retry_attempts WHERE root_id=(SELECT root_id FROM run_retry_attempts WHERE run_id=?)) ORDER BY created_at,id`+store.Limit(store.DialectOf(s.db), "500"), runID)
 	if e != nil {
 		return ctx, e
 	}
@@ -67,7 +68,7 @@ func (s *Service) checkedKubernetes(ctx context.Context, operationID string) (ku
 }
 func (s *Service) checkedKubernetesForNode(ctx context.Context, attempt, node string) (kubernetes.Operation, bool) {
 	var id string
-	e := s.q(ctx).QueryRowContext(ctx, "SELECT id FROM k8s_operations WHERE run_id=? AND node_id=? ORDER BY attempt DESC LIMIT 1", attempt, node).Scan(&id)
+	e := s.q(ctx).QueryRowContext(ctx, "SELECT id FROM k8s_operations WHERE run_id=? AND node_id=? ORDER BY attempt DESC"+store.Limit(store.DialectOf(s.db), "1"), attempt, node).Scan(&id)
 	if e != nil {
 		return kubernetes.Operation{}, false
 	}
@@ -141,7 +142,7 @@ func PreviousKubernetes(ctx context.Context, n NodeRef) (string, error) {
 		return "", ErrUnavailable
 	}
 	var id string
-	err := e.svc.q(ctx).QueryRowContext(ctx, `SELECT o.id FROM k8s_operations o JOIN run_retry_attempts a ON a.run_id=o.run_id WHERE a.root_id=? AND a.revision<(SELECT revision FROM run_retry_attempts WHERE run_id=?) AND o.node_id=? AND o.retired=0 ORDER BY a.revision DESC,o.attempt DESC LIMIT 1`, e.l.root, e.runID, n.Key).Scan(&id)
+	err := e.svc.q(ctx).QueryRowContext(ctx, `SELECT o.id FROM k8s_operations o JOIN run_retry_attempts a ON a.run_id=o.run_id WHERE a.root_id=? AND a.revision<(SELECT revision FROM run_retry_attempts WHERE run_id=?) AND o.node_id=? AND o.retired=0 ORDER BY a.revision DESC,o.attempt DESC`+store.Limit(store.DialectOf(e.svc.db), "1"), e.l.root, e.runID, n.Key).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrUnavailable
 	}
@@ -165,7 +166,7 @@ type KubernetesHistoryEntry struct{ RunID, OperationID, ReleaseID string }
 // KubernetesHistory returns only typed operation references from sealed node
 // checkpoints, including explicitly inherited or adopted nodes. No raw config.
 func (s *Service) KubernetesHistory(ctx context.Context, project string) ([]KubernetesHistoryEntry, error) {
-	rows, e := s.q(ctx).QueryContext(ctx, `SELECT a.run_id FROM run_retry_attempts a JOIN run_retry_lineages l ON l.root_id=a.root_id JOIN pipeline_runs r ON r.id=a.run_id WHERE l.project_id=? ORDER BY a.created_at DESC LIMIT 500`, project)
+	rows, e := s.q(ctx).QueryContext(ctx, `SELECT a.run_id FROM run_retry_attempts a JOIN run_retry_lineages l ON l.root_id=a.root_id JOIN pipeline_runs r ON r.id=a.run_id WHERE l.project_id=? ORDER BY a.created_at DESC`+store.Limit(store.DialectOf(s.db), "500"), project)
 	if e != nil {
 		return nil, e
 	}

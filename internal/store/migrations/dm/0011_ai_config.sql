@@ -1,0 +1,15 @@
+-- DM8 standard mode explicit migration. VARCHAR character lengths and native FKs.
+-- DDL implicitly commits: incomplete versions fail closed and require inspection.
+CREATE TABLE "AI_CONFIG" (
+ "ID" BIGINT NOT NULL,
+ "PROVIDER" VARCHAR(255 CHAR) DEFAULT '' NOT NULL,
+ "BASE_URL" VARCHAR(1024 CHAR) DEFAULT '' NOT NULL,
+ "MODEL" VARCHAR(255 CHAR) DEFAULT '' NOT NULL,
+ "API_KEY_CIPHERTEXT" BLOB NULL,
+ "BUDGET_JSON" CLOB DEFAULT '{"monthlyTokenLimit":null}' NOT NULL,
+ "ENABLED" BIGINT DEFAULT 0 NOT NULL,
+ "CREATED_AT" VARCHAR(32 CHAR) NOT NULL,
+ "UPDATED_AT" VARCHAR(32 CHAR) NOT NULL,
+ NOT CLUSTER PRIMARY KEY ("ID"),
+ CHECK (id = 1)
+) STORAGE(USING LONG ROW);

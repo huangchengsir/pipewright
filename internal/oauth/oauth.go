@@ -210,11 +210,9 @@ func (s *service) SaveApp(ctx context.Context, in SaveAppInput) (*AppConfig, err
 			return err
 		}
 		_, err := q.ExecContext(ctx,
-			`INSERT INTO oauth_apps
-		   (provider, client_id, client_secret_ciphertext, base_url, enabled, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?) `+
-				store.UpsertSuffix(store.DialectOf(s.db), []string{"provider"},
-					[]string{"client_id", "client_secret_ciphertext", "base_url", "enabled", "updated_at"}),
+			store.InsertSQL(store.DialectOf(s.db), "oauth_apps",
+				[]string{"provider", "client_id", "client_secret_ciphertext", "base_url", "enabled", "created_at", "updated_at"}, []string{"?", "?", "?", "?", "?", "?", "?"},
+				[]string{"provider"}, []string{"client_id", "client_secret_ciphertext", "base_url", "enabled", "updated_at"}),
 			provider, clientID, sealed, baseURL, enabled, now, now,
 		)
 		if err != nil {

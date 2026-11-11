@@ -86,10 +86,9 @@ func (s *service) Save(ctx context.Context, projectID, runnerServerID string) (*
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	err := configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
-		_, writeErr := q.ExecContext(txctx, `
-		INSERT INTO project_runners (project_id, runner_server_id, created_at, updated_at)
-		VALUES (?, ?, ?, ?) `+
-			store.UpsertSuffix(store.DialectOf(s.db), []string{"project_id"}, []string{"runner_server_id", "updated_at"}),
+		_, writeErr := q.ExecContext(txctx, store.InsertSQL(store.DialectOf(s.db), "project_runners",
+			[]string{"project_id", "runner_server_id", "created_at", "updated_at"}, []string{"?", "?", "?", "?"},
+			[]string{"project_id"}, []string{"runner_server_id", "updated_at"}),
 			projectID, runnerServerID, now, now)
 		return writeErr
 	})

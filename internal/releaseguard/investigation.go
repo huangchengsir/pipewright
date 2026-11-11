@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/huangchengsir/pipewright/internal/maintenance"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"path"
 	"regexp"
 	"sort"
@@ -341,7 +342,7 @@ func baselineTargetMatches(p Plan, t TargetObservation, e Evidence) bool {
 }
 
 func (s *Service) investigationEvidence(ctx context.Context, id string) ([]Evidence, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT evidence_json FROM release_guard_evidence WHERE guard_id=? ORDER BY sequence LIMIT 1001`, id)
+	rows, err := s.db.QueryContext(ctx, `SELECT evidence_json FROM release_guard_evidence WHERE guard_id=? ORDER BY sequence`+store.Limit(store.DialectOf(s.db), "1001"), id)
 	if err != nil {
 		return nil, err
 	}

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestIsUniqueErr(t *testing.T) {
@@ -20,6 +21,8 @@ func TestIsUniqueErr(t *testing.T) {
 		{"mysql 1062", &mysql.MySQLError{Number: 1062, Message: "Duplicate entry"}, true},
 		{"mysql wrapped", fmt.Errorf("upsert: %w", &mysql.MySQLError{Number: 1062}), true},
 		{"mysql fk code not unique", &mysql.MySQLError{Number: 1452}, false},
+		{"postgres unique", &pgconn.PgError{Code: "23505"}, true},
+		{"postgres foreign key", &pgconn.PgError{Code: "23503", Message: "UNIQUE"}, false},
 		{"unrelated", errors.New("boom"), false},
 	}
 	for _, c := range cases {
@@ -42,6 +45,8 @@ func TestIsForeignKeyErr(t *testing.T) {
 		{"mysql 1452", &mysql.MySQLError{Number: 1452}, true},
 		{"mysql wrapped", fmt.Errorf("insert: %w", &mysql.MySQLError{Number: 1451}), true},
 		{"mysql unique code not fk", &mysql.MySQLError{Number: 1062}, false},
+		{"postgres foreign key", &pgconn.PgError{Code: "23503"}, true},
+		{"postgres unique", &pgconn.PgError{Code: "23505", Message: "FOREIGN KEY"}, false},
 		{"unrelated", errors.New("boom"), false},
 	}
 	for _, c := range cases {

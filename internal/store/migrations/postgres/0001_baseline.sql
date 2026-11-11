@@ -1,0 +1,2 @@
+-- PostgreSQL: explicit schema, integer booleans, byte-preserving ciphertext.
+-- Baseline: no domain tables.

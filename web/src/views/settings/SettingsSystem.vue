@@ -60,9 +60,13 @@ watch([sourceDraft, () => sourceSettings.value?.revision, sourceNeedsReload], in
 
 const { task, pending, connectionUnknown: taskUnknown, submitting, submissionError, canRecoverOriginal, recoverOriginal, manual, busy: taskBusy, canStart, start: startTask, resume: resumeTask, recheck: recheckTask } = useSelfUpdate()
 const updatePhase = computed<'idle' | 'applying' | 'restarting' | 'manual' | 'error'>(() => manual.value ? 'manual' : task.value?.state === 'restarting' ? 'restarting' : taskBusy.value ? 'applying' : 'idle')
-const updateMsg = computed(() => t('settingsSystem.manualUpgrade'))
+const updateMsg = computed(() => t(manual.value?.reason === 'private_driver_build' ? 'settingsSystem.manualPrivateDriver' : 'settingsSystem.manualUpgrade'))
 const dockerCommand = computed(() => manual.value?.command || '')
-const taskSubmitError = computed(() => submissionError.value ? submissionError.value.status ? t('settingsSystem.errUpdateStatus', { status: submissionError.value.status }) : t('settingsSystem.errUpdateRetry') : '')
+const taskSubmitError = computed(() => {
+ if (submissionError.value?.code === 'update_private_driver') return t('settingsSystem.manualPrivateDriver')
+ if (submissionError.value?.code === 'update_migration_active') return t('settingsSystem.databaseMigrationActive')
+ return submissionError.value ? submissionError.value.status ? t('settingsSystem.errUpdateStatus', { status: submissionError.value.status }) : t('settingsSystem.errUpdateRetry') : ''
+})
 const copied = ref(false)
 const completedTask = computed(() => task.value?.state === 'completed' ? task.value : null)
 const visibleTask = computed(() => task.value?.state !== 'completed' ? task.value : null)
@@ -87,6 +91,7 @@ watch(() => task.value ? { id: task.value.id, state: task.value.state } : null, 
 onBeforeUnmount(() => { disposed = true; versionGeneration++; checkGeneration++; checkController?.abort() })
 const taskMessage = computed(() => {
  const state = task.value?.state
+ if (task.value?.reason === 'private_driver_build') return t('settingsSystem.manualPrivateDriver')
  if (task.value?.reason === 'installation_target_changed') return t('settingsSystem.taskTargetChanged')
  if (task.value?.reason === 'readiness_unavailable') return t('settingsSystem.taskReadinessUnavailable')
  if (state === 'ready_blocked') return t('settingsSystem.taskBlocked')

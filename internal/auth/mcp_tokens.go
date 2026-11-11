@@ -332,8 +332,8 @@ func validateMCPToken(t *MCPToken) (*MCPToken, error) {
 // LoadMCPToken re-reads authorization using the caller's exact transaction.
 // lock must be true for an apply transaction so revocation serializes with it.
 func LoadMCPToken(ctx context.Context, q configstate.DBTX, db *sql.DB, id string, lock bool) (*MCPToken, error) {
-	stmt := "SELECT " + mcpTokenColumns + " FROM mcp_tokens WHERE id=?"
-	if lock && store.DialectOf(db) == store.MySQL {
+	stmt := "SELECT " + mcpTokenColumns + " FROM mcp_tokens" + store.LockHint(store.DialectOf(db), lock) + " WHERE id=?"
+	if lock && store.DialectOf(db).RowLocks() && store.DialectOf(db) != store.SQLServer {
 		stmt += " FOR UPDATE"
 	}
 	t, err := scanMCPToken(q.QueryRowContext(ctx, stmt, id))
@@ -382,7 +382,7 @@ func (s *MCPTokenStore) UpdateConfigGrants(ctx context.Context, id string, expec
 }
 
 func (s *MCPTokenStore) List(ctx context.Context) ([]MCPToken, error) {
-	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx, `SELECT `+mcpTokenColumns+` FROM mcp_tokens ORDER BY created_at DESC, id LIMIT 500`)
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx, `SELECT `+mcpTokenColumns+` FROM mcp_tokens ORDER BY created_at DESC, id`+store.Limit(store.DialectOf(s.db), "500"))
 	if err != nil {
 		return nil, err
 	}

@@ -93,10 +93,9 @@ func (s *service) Save(ctx context.Context, projectID string, in SaveInput) (*Co
 	}
 	err := configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
 		_, writeErr := q.ExecContext(txctx,
-			`INSERT INTO project_crons (project_id, expression, branch, enabled, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?) `+
-				store.UpsertSuffix(store.DialectOf(s.db), []string{"project_id"},
-					[]string{"expression", "branch", "enabled", "updated_at"}),
+			store.InsertSQL(store.DialectOf(s.db), "project_crons",
+				[]string{"project_id", "expression", "branch", "enabled", "created_at", "updated_at"}, []string{"?", "?", "?", "?", "?", "?"},
+				[]string{"project_id"}, []string{"expression", "branch", "enabled", "updated_at"}),
 			projectID, expr, branch, enabled, now, now,
 		)
 		return writeErr

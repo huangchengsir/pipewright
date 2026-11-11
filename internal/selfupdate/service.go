@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/releasesource"
 	"github.com/huangchengsir/pipewright/internal/version"
 	"io"
@@ -141,6 +142,9 @@ func (s *Service) Close() {
 	_ = s.root.Close()
 }
 func (s *Service) Submit(ctx context.Context, in Request) (*Task, error) {
+	if s.RequiresPrivateBuild() {
+		return nil, ErrPrivateBuild
+	}
 	if !requestPattern.MatchString(in.RequestID) || !tagPattern.MatchString(in.Target) {
 		return nil, ErrInvalid
 	}
@@ -208,7 +212,16 @@ func (s *Service) Submit(ctx context.Context, in Request) (*Task, error) {
 	if e != nil {
 		return nil, e
 	}
-	_, e = s.db.ExecContext(ctx, "INSERT INTO selfupdate_tasks(id,instance_id,request_id,target_tag,status,active_key,record_json,created_at) VALUES(?,?,?,?,?,?,?,?)", t.ID, s.instance, t.RequestID, t.Target, t.State, s.instance, raw, now.UnixMilli())
+	e = configstate.WithWriteTx(ctx, s.db, func(q configstate.DBTX) error {
+		if e := configstate.CheckMaintenanceAdmission(ctx, q); e != nil {
+			return e
+		}
+		_, e := q.ExecContext(ctx, "INSERT INTO selfupdate_tasks(id,instance_id,request_id,target_tag,status,active_key,record_json,created_at) VALUES(?,?,?,?,?,?,?,?)", t.ID, s.instance, t.RequestID, t.Target, t.State, s.instance, raw, now.UnixMilli())
+		return e
+	})
+	if errors.Is(e, configstate.ErrMaintenance) {
+		return nil, e
+	}
 	if e != nil {
 		// The write may have committed despite a lost result. Only authoritative
 		// matching rows can establish acceptance or a definitive conflict.
@@ -234,6 +247,9 @@ func (s *Service) Submit(ctx context.Context, in Request) (*Task, error) {
 	return t, nil
 }
 func (s *Service) Resume(ctx context.Context, id, requestID string) (*Task, error) {
+	if s.RequiresPrivateBuild() {
+		return nil, ErrPrivateBuild
+	}
 	if !requestPattern.MatchString(requestID) {
 		return nil, ErrInvalid
 	}
@@ -269,7 +285,12 @@ func (s *Service) Resume(ctx context.Context, id, requestID string) (*Task, erro
 	t.LastResumeID = requestID
 	t.State = "accepted"
 	t.Reason = ""
-	if e = s.save(ctx, t); e != nil {
+	if e = configstate.WithWriteTx(ctx, s.db, func(q configstate.DBTX) error {
+		if e := configstate.CheckMaintenanceAdmission(ctx, q); e != nil {
+			return e
+		}
+		return s.saveWith(ctx, q, t)
+	}); e != nil {
 		return nil, e
 	}
 	s.launch(*t)

@@ -319,10 +319,9 @@ func (s *service) createDefault(ctx context.Context, projectID string) (*Config,
 	err = configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
 		var writeErr error
 		res, writeErr = q.ExecContext(txctx,
-			`INSERT INTO pipeline_triggers
-		   (project_id, webhook_token, webhook_secret_ciphertext, events_json, branch_mappings_json, unmatched_policy, created_at, updated_at)
-		 VALUES (?, ?, ?, '{"push":false,"tag":false,"pullRequest":false,"release":false}', '[]', ?, ?, ?) `+
-				store.DoNothingSuffix(store.DialectOf(s.db), []string{"project_id"}),
+			store.InsertSQL(store.DialectOf(s.db), "pipeline_triggers",
+				[]string{"project_id", "webhook_token", "webhook_secret_ciphertext", "events_json", "branch_mappings_json", "unmatched_policy", "created_at", "updated_at"}, []string{"?", "?", "?", "'{\"push\":false,\"tag\":false,\"pullRequest\":false,\"release\":false}'", "'[]'", "?", "?", "?"},
+				[]string{"project_id"}, nil),
 			projectID, token, sealed, PolicyRecord, nowStr, nowStr,
 		)
 		return writeErr

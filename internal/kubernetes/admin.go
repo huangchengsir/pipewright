@@ -29,8 +29,8 @@ func (s *Service) WithAdminMutation(ctx context.Context, token string, fn func(c
 		if e := q.QueryRowContext(ctx, `SELECT id FROM admin_user WHERE id=1`).Scan(&admin); e != nil {
 			return ErrSession
 		}
-		query := `SELECT expires_at,absolute_expires_at,password_verified_at,auth_source,provider_generation,identity_generation FROM sessions WHERE token=?`
-		if store.DialectOf(s.db) == store.MySQL {
+		query := `SELECT expires_at,absolute_expires_at,password_verified_at,auth_source,provider_generation,identity_generation FROM sessions` + store.LockHint(store.DialectOf(s.db), true) + ` WHERE token=?`
+		if store.DialectOf(s.db).RowLocks() && store.DialectOf(s.db) != store.SQLServer {
 			query += " FOR UPDATE"
 		}
 		var expiry, source string

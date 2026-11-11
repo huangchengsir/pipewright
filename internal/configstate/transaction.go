@@ -94,10 +94,16 @@ func withTx(ctx context.Context, db *sql.DB, readOnly bool, fn func(DBTX) error)
 	var commit func() error
 	var rollback func()
 	var closeConn func()
-	if store.DialectOf(db) == store.MySQL {
+	if store.DialectOf(db).RowLocks() {
 		opts := &sql.TxOptions{ReadOnly: readOnly, Isolation: sql.LevelReadCommitted}
 		if readOnly {
 			opts.Isolation = sql.LevelRepeatableRead
+		}
+		if store.DialectOf(db) == store.DM && readOnly {
+			opts.Isolation = sql.LevelSerializable
+		}
+		if store.DialectOf(db) == store.SQLServer {
+			opts.ReadOnly = false
 		}
 		tx, err := db.BeginTx(ctx, opts)
 		if err != nil {
@@ -106,7 +112,7 @@ func withTx(ctx context.Context, db *sql.DB, readOnly bool, fn func(DBTX) error)
 		q, commit = tx, tx.Commit
 		rollback = func() { _ = tx.Rollback() }
 		closeConn = func() {}
-	} else {
+	} else if store.DialectOf(db) == store.SQLite {
 		conn, err := db.Conn(ctx)
 		if err != nil {
 			return err
@@ -130,6 +136,8 @@ func withTx(ctx context.Context, db *sql.DB, readOnly bool, fn func(DBTX) error)
 			_, _ = conn.ExecContext(cleanup, "ROLLBACK")
 		}
 		closeConn = func() { _ = conn.Close() }
+	} else {
+		return errors.New("configstate: unsupported database dialect")
 	}
 	t := &transaction{DBTX: q, db: db, readOnly: readOnly}
 	closed := false

@@ -195,29 +195,16 @@ func (s *Store) upsertConfig(ctx context.Context, c Config) error {
 		enabled = 1
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	// 先尝试 UPDATE,影响 0 行再 INSERT(两方言一致,不依赖 ON CONFLICT / ON DUPLICATE 语法差异)。
-	res, err := configstate.Queryer(ctx, s.db).ExecContext(ctx,
-		`UPDATE preview_configs SET enabled = ?, dns_provider_id = ?, base_domain = ?, updated_at = ? WHERE project_id = ?`,
-		enabled, c.DNSProviderID, c.BaseDomain, now, c.ProjectID)
-	if err != nil {
-		return fmt.Errorf("previewenv: update config: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n > 0 {
-		return nil
-	}
-	_, err = configstate.Queryer(ctx, s.db).ExecContext(ctx,
-		`INSERT INTO preview_configs (project_id, enabled, dns_provider_id, base_domain, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+	// One conflict-handling statement also works inside PostgreSQL transactions,
+	// where catching a unique violation cannot recover the aborted transaction.
+	_, err := configstate.Queryer(ctx, s.db).ExecContext(ctx,
+		store.InsertSQL(store.DialectOf(s.db), "preview_configs",
+			[]string{"project_id", "enabled", "dns_provider_id", "base_domain", "created_at", "updated_at"},
+			[]string{"?", "?", "?", "?", "?", "?"}, []string{"project_id"},
+			[]string{"enabled", "dns_provider_id", "base_domain", "updated_at"}),
 		c.ProjectID, enabled, c.DNSProviderID, c.BaseDomain, now, now)
 	if err != nil {
-		if store.IsUniqueErr(err) {
-			// 并发插入冲突:回退再 UPDATE 一次(幂等收敛)。
-			_, uerr := configstate.Queryer(ctx, s.db).ExecContext(ctx,
-				`UPDATE preview_configs SET enabled = ?, dns_provider_id = ?, base_domain = ?, updated_at = ? WHERE project_id = ?`,
-				enabled, c.DNSProviderID, c.BaseDomain, now, c.ProjectID)
-			return uerr
-		}
-		return fmt.Errorf("previewenv: insert config: %w", err)
+		return fmt.Errorf("previewenv: upsert config: %w", err)
 	}
 	return nil
 }

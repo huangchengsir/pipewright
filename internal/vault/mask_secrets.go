@@ -3,6 +3,7 @@ package vault
 import (
 	"context"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/store"
 
 	secretmask "github.com/huangchengsir/pipewright/internal/mask"
 )
@@ -30,11 +31,11 @@ func (s *service) RegisterMaskSecrets(ctx context.Context, masker *secretmask.Ma
 		return ErrVaultUnconfigured
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT c.type,
-	CASE WHEN LENGTH(c.ciphertext) <= 65536 THEN c.ciphertext ELSE NULL END,
-	CASE WHEN LENGTH(o.refresh_ciphertext) <= 65536 THEN o.refresh_ciphertext ELSE NULL END,
-	CASE WHEN LENGTH(o.refresh_ciphertext) > 65536 THEN 1 ELSE 0 END
+	CASE WHEN `+store.BlobLength(store.DialectOf(s.db), "c.ciphertext")+` <= 65536 THEN c.ciphertext ELSE NULL END,
+	CASE WHEN `+store.BlobLength(store.DialectOf(s.db), "o.refresh_ciphertext")+` <= 65536 THEN o.refresh_ciphertext ELSE NULL END,
+	CASE WHEN `+store.BlobLength(store.DialectOf(s.db), "o.refresh_ciphertext")+` > 65536 THEN 1 ELSE 0 END
 	FROM credentials c LEFT JOIN oauth_credentials o ON o.credential_id=c.id
-	ORDER BY c.id LIMIT 257`)
+	ORDER BY c.id`+store.Limit(store.DialectOf(s.db), "257"))
 	if err != nil {
 		return err
 	}

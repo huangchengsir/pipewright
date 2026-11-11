@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"github.com/huangchengsir/pipewright/internal/maintenance"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"github.com/huangchengsir/pipewright/internal/version"
 )
 
@@ -20,7 +21,14 @@ func (s *Service) RecordRestartFailure(ctx context.Context, db *sql.DB) {
 	}
 }
 
+// RequiresPrivateBuild follows the live connection, including managed database
+// configuration. Public release binaries do not contain the optional DM driver.
+func (s *Service) RequiresPrivateBuild() bool { return store.DialectOf(s.db) == store.DM }
+
 func (s *Service) Capabilities() (version.DeploymentMode, bool) {
+	if s.RequiresPrivateBuild() {
+		return version.Mode(), false
+	}
 	if s.opts.Capabilities != nil {
 		return s.opts.Capabilities()
 	}

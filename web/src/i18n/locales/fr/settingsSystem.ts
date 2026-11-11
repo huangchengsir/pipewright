@@ -93,6 +93,8 @@ export default {
   errCheckStatus: 'Échec de la vérification ({status})',
   errCheckRetry: 'Échec de la vérification. Réessayez plus tard.',
   restartingToNew: 'Redémarrage vers la nouvelle version…',
+  manualPrivateDriver: "Cette base DM nécessite une compilation privée avec votre pilote officiel sous licence. Compilez la nouvelle version en privé et remplacez l’application manuellement. Les mises à jour publiques ne peuvent pas être installées.",
+  databaseMigrationActive: "Terminez ou annulez la migration de la base avant d’installer une mise à jour de l’application.",
   manualUpgrade: 'Veuillez effectuer la mise à niveau manuellement.',
   updateFailed: 'Échec de la mise à jour',
   errUpdateStatus: 'Échec de la mise à jour ({status})',

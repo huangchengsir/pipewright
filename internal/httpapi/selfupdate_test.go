@@ -96,3 +96,11 @@ func TestSelfUpdateAuthenticatedTaskProtocol(t *testing.T) {
 		t.Fatal(n)
 	}
 }
+
+func TestPrivateDriverUpdateErrorHasSafeCode(t *testing.T) {
+	w := httptest.NewRecorder()
+	updateError(w, selfupdate.ErrPrivateBuild)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "update_private_driver") {
+		t.Fatal(w.Code, w.Body.String())
+	}
+}

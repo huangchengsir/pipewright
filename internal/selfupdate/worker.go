@@ -13,6 +13,10 @@ import (
 func (s *Service) work(t Task) {
 	ctx, cancel := context.WithTimeout(s.ctx, s.opts.TotalTimeout)
 	defer cancel()
+	if s.RequiresPrivateBuild() {
+		_ = s.finish(ctx, &t, "failed", "private_driver_build")
+		return
+	}
 	if e := s.transition(&t, "checking", ""); e != nil {
 		return
 	}
@@ -86,6 +90,10 @@ func (s *Service) work(t Task) {
 	}
 	if e = os.Chmod(filepath.Join(s.opts.Directory, binary), 0755); e != nil {
 		s.transition(&t, "unknown", "installation_not_confirmed")
+		return
+	}
+	if s.RequiresPrivateBuild() {
+		_ = s.finish(ctx, &t, "failed", "private_driver_build")
 		return
 	}
 	if e = s.opts.Install(filepath.Join(s.opts.Directory, binary), s.opts.Executable); e != nil {

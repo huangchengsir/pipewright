@@ -80,7 +80,11 @@ func TestStoreConfig(t *testing.T) {
 		{"sqlite prefers dsn", Config{DBDriver: "sqlite", DBDSN: "x.db", DBPath: "p.db"}, "sqlite", "x.db", false},
 		{"mysql with dsn", Config{DBDriver: "mysql", DBDSN: "u:p@tcp(h:3306)/db"}, "mysql", "u:p@tcp(h:3306)/db", false},
 		{"mysql without dsn errors", Config{DBDriver: "mysql"}, "", "", true},
-		{"unknown driver errors", Config{DBDriver: "postgres"}, "", "", true},
+		{"postgres with dsn", Config{DBDriver: "postgres", DBDSN: "postgres://localhost/example"}, "postgres", "postgres://localhost/example", false},
+		{"postgres without dsn", Config{DBDriver: "postgres"}, "", "", true},
+		{"dm with dsn", Config{DBDriver: "dm", DBDSN: "dm://localhost/example"}, "dm", "dm://localhost/example", false},
+		{"dm without dsn", Config{DBDriver: "dm"}, "", "", true},
+		{"unknown driver errors", Config{DBDriver: "unsupported"}, "", "", true},
 	}
 	for _, c := range cases {
 		d, dsn, err := c.cfg.StoreConfig()

@@ -46,6 +46,7 @@ export interface UpdateResult {
   from: string
   to: string
   message: string
+  reason?: 'private_driver_build'
   command?: string
   taskId?: string
   task?: UpgradeTask

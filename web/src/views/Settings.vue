@@ -38,6 +38,7 @@ const groups = computed(() => [
     label: t("kubernetes.groups.system"),
     sections: [
       { path: "/settings/system", label: t("settingsHub.navSystem") },
+      { path: "/settings/database", label: t("databaseMigration.title") },
       {
         path: "/settings/notifications",
         label: t("settingsHub.navNotifications"),

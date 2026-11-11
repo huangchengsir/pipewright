@@ -93,6 +93,8 @@ export default {
   errCheckStatus: '確認に失敗しました({status})',
   errCheckRetry: '確認に失敗しました。しばらくしてから再試行してください。',
   restartingToNew: '新しいバージョンに再起動しています…',
+  manualPrivateDriver: "このDMデータベースには、お客様の公式ドライバーを含む非公開ビルドが必要です。新バージョンを非公開でビルドし、アプリを手動で置き換えてください。公開更新パッケージはインストールできません。",
+  databaseMigrationActive: "アプリの更新をインストールする前に、データベース移行を完了または中止してください。",
   manualUpgrade: '手動でアップグレードしてください。',
   updateFailed: '更新に失敗しました',
   errUpdateStatus: '更新に失敗しました({status})',

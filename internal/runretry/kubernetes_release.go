@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/store"
 
 	"github.com/huangchengsir/pipewright/internal/kubernetes"
 )
@@ -33,7 +34,7 @@ func (s *Service) releaseCheckContext(ctx context.Context, run string) (context.
 	if _, ok := ctx.Value(releaseChecksKey{}).(map[string]checkedRelease); ok {
 		return ctx, nil
 	}
-	rows, e := s.q(ctx).QueryContext(ctx, `SELECT id FROM k8s_releases WHERE run_id IN(SELECT run_id FROM run_retry_attempts WHERE root_id=(SELECT root_id FROM run_retry_attempts WHERE run_id=?)) ORDER BY created_at,id LIMIT 500`, run)
+	rows, e := s.q(ctx).QueryContext(ctx, `SELECT id FROM k8s_releases WHERE run_id IN(SELECT run_id FROM run_retry_attempts WHERE root_id=(SELECT root_id FROM run_retry_attempts WHERE run_id=?)) ORDER BY created_at,id`+store.Limit(store.DialectOf(s.db), "500"), run)
 	if e != nil {
 		return ctx, e
 	}
@@ -106,7 +107,7 @@ func (s *Service) validateReleaseReceipt(ctx context.Context, attempt string, n 
 }
 func (s *Service) checkedReleaseForNode(ctx context.Context, run, node string) (kubernetes.ReleaseRecord, bool) {
 	var id string
-	e := s.q(ctx).QueryRowContext(ctx, `SELECT id FROM k8s_releases WHERE run_id=? AND node_key=? ORDER BY created_at DESC LIMIT 1`, run, node).Scan(&id)
+	e := s.q(ctx).QueryRowContext(ctx, `SELECT id FROM k8s_releases WHERE run_id=? AND node_key=? ORDER BY created_at DESC`+store.Limit(store.DialectOf(s.db), "1"), run, node).Scan(&id)
 	if e != nil {
 		return kubernetes.ReleaseRecord{}, false
 	}
@@ -122,7 +123,7 @@ func PreviousKubernetesRelease(ctx context.Context, n NodeRef) (string, error) {
 		return "", ErrUnavailable
 	}
 	var id string
-	err := e.svc.q(ctx).QueryRowContext(ctx, `SELECT r.id FROM k8s_releases r JOIN run_retry_attempts a ON a.run_id=r.run_id WHERE a.root_id=? AND a.revision<(SELECT revision FROM run_retry_attempts WHERE run_id=?) AND r.node_key=? ORDER BY a.revision DESC,r.created_at DESC LIMIT 1`, e.l.root, e.runID, n.Key).Scan(&id)
+	err := e.svc.q(ctx).QueryRowContext(ctx, `SELECT r.id FROM k8s_releases r JOIN run_retry_attempts a ON a.run_id=r.run_id WHERE a.root_id=? AND a.revision<(SELECT revision FROM run_retry_attempts WHERE run_id=?) AND r.node_key=? ORDER BY a.revision DESC,r.created_at DESC`+store.Limit(store.DialectOf(e.svc.db), "1"), e.l.root, e.runID, n.Key).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrUnavailable
 	}

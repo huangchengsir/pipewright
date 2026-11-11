@@ -3,6 +3,7 @@ package kubernetes
 import (
 	"context"
 	"encoding/json"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"strings"
 
 	"github.com/google/uuid"
@@ -203,7 +204,7 @@ func (s *Service) BindRuntimeContainer(ctx context.Context, id, owner, engine, c
 	return out, e
 }
 func (s *Service) PendingRuntimeCleanup(ctx context.Context) ([]RuntimeLease, error) {
-	rows, e := configstate.Queryer(ctx, s.db).QueryContext(ctx, `SELECT operation_id FROM k8s_runtime_leases WHERE cleanup_state<>'verified' ORDER BY created_at LIMIT 500`)
+	rows, e := configstate.Queryer(ctx, s.db).QueryContext(ctx, `SELECT operation_id FROM k8s_runtime_leases WHERE cleanup_state<>'verified' ORDER BY created_at`+store.Limit(store.DialectOf(s.db), "500"))
 	if e != nil {
 		return nil, e
 	}

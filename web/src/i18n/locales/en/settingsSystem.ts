@@ -93,6 +93,8 @@ export default {
   errCheckStatus: 'Check failed ({status})',
   errCheckRetry: 'Check failed. Please try again later.',
   restartingToNew: 'Restarting to the new version…',
+  manualPrivateDriver: "This DM database requires a private build with your licensed official driver. Build the new version privately and replace the application manually; public update packages cannot be installed.",
+  databaseMigrationActive: "Finish or cancel database migration before installing an application update.",
   manualUpgrade: 'Please upgrade manually.',
   updateFailed: 'Update failed',
   errUpdateStatus: 'Update failed ({status})',

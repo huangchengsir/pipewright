@@ -93,6 +93,8 @@ export default {
   errCheckStatus: '확인에 실패했습니다({status})',
   errCheckRetry: '확인에 실패했습니다. 잠시 후 다시 시도하세요.',
   restartingToNew: '새 버전으로 재시작 중…',
+  manualPrivateDriver: "현재 DM 데이터베이스에는 직접 제공한 공식 드라이버를 포함한 비공개 빌드가 필요합니다. 새 버전을 비공개로 빌드한 후 앱을 수동으로 교체하세요. 공개 업데이트 패키지는 설치할 수 없습니다.",
+  databaseMigrationActive: "앱 업데이트를 설치하기 전에 데이터베이스 마이그레이션을 완료하거나 취소하세요.",
   manualUpgrade: '수동으로 업그레이드하세요.',
   updateFailed: '업데이트 실패',
   errUpdateStatus: '업데이트에 실패했습니다({status})',

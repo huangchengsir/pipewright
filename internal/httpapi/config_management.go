@@ -31,8 +31,8 @@ func ConfigAdminAuthorizer(db *sql.DB) func(context.Context, configstate.DBTX, s
 		if !ok || sess == nil || id != auth.SessionID(sess.Token) {
 			return configdraft.ErrForbidden
 		}
-		query := `SELECT expires_at FROM sessions WHERE token=?`
-		if store.DialectOf(db) == store.MySQL {
+		query := `SELECT expires_at FROM sessions` + store.LockHint(store.DialectOf(db), true) + ` WHERE token=?`
+		if store.DialectOf(db).RowLocks() && store.DialectOf(db) != store.SQLServer {
 			query += " FOR UPDATE"
 		}
 		var expiry string
@@ -54,8 +54,8 @@ func ConfigApproverVerifier(db *sql.DB) func(context.Context, configstate.DBTX, 
 		if len(id) != 16 {
 			return configdraft.ErrForbidden
 		}
-		query := `SELECT token,expires_at FROM sessions ORDER BY token LIMIT 1025`
-		if store.DialectOf(db) == store.MySQL {
+		query := `SELECT token,expires_at FROM sessions` + store.LockHint(store.DialectOf(db), true) + ` ORDER BY token` + store.Limit(store.DialectOf(db), "1025")
+		if store.DialectOf(db).RowLocks() && store.DialectOf(db) != store.SQLServer {
 			query += " FOR UPDATE"
 		}
 		rows, err := q.QueryContext(ctx, query)

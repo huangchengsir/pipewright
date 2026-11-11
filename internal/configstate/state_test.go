@@ -13,13 +13,11 @@ import (
 
 func seedProject(t *testing.T, st *store.Store) {
 	t.Helper()
-	for _, stmt := range []string{
-		`INSERT INTO credentials(id,name,type,scope,ciphertext,masked_value,created_at,updated_at) VALUES ('c','c','git_token','',X'00','m','old','old')`,
-		`INSERT INTO projects(id,name,repo_url,default_branch,credential_id,created_at,updated_at) VALUES ('p','before','https://example.invalid/r','main','c','old','old')`,
-	} {
-		if _, err := st.DB.Exec(stmt); err != nil {
-			t.Fatal(err)
-		}
+	if _, err := st.DB.Exec(`INSERT INTO credentials(id,name,type,scope,ciphertext,masked_value,created_at,updated_at) VALUES ('c','c','git_token','',?,'m','old','old')`, []byte{0}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.Exec(`INSERT INTO projects(id,name,repo_url,default_branch,credential_id,created_at,updated_at) VALUES ('p','before','https://example.invalid/r','main','c','old','old')`); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -235,4 +233,73 @@ func TestSQLiteSeparateConnectionsSerializeCAS(t *testing.T) {
 	if err := <-secondResult; !errors.Is(err, ErrConflict) {
 		t.Fatalf("second writer bypassed CAS: %v", err)
 	}
+}
+
+// Concurrent writers must observe the committed revision after acquiring the
+// same project lock. This exercises real separate connections on server stores.
+func TestConcurrentProjectLockSerializesRevision(t *testing.T) {
+	storetest.ForEachDialect(t, func(t *testing.T, st *store.Store) {
+		seedProject(t, st)
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		locked := make(chan struct{})
+		release := make(chan struct{})
+		first := make(chan error, 1)
+		go func() {
+			first <- WithWriteTx(ctx, st.DB, func(q DBTX) error {
+				rev, err := LockProject(ctx, q, st.DB, "p")
+				if err != nil {
+					return err
+				}
+				if _, err = BumpRevision(ctx, q, "p", rev); err != nil {
+					return err
+				}
+				close(locked)
+				select {
+				case <-release:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			})
+		}()
+		select {
+		case <-locked:
+		case err := <-first:
+			t.Fatalf("first writer: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+		second := make(chan error, 1)
+		go func() {
+			second <- WithWriteTx(ctx, st.DB, func(q DBTX) error {
+				rev, err := LockProject(ctx, q, st.DB, "p")
+				if err != nil {
+					return err
+				}
+				if rev != 2 {
+					return errors.New("second writer observed uncommitted or stale revision")
+				}
+				_, err = BumpRevision(ctx, q, "p", rev)
+				return err
+			})
+		}()
+		select {
+		case err := <-second:
+			close(release)
+			t.Fatalf("second writer escaped held lock: %v", err)
+		case <-time.After(40 * time.Millisecond):
+		}
+		close(release)
+		if err := <-first; err != nil {
+			t.Fatal(err)
+		}
+		if err := <-second; err != nil {
+			t.Fatal(err)
+		}
+		rev, err := ReadRevision(ctx, st.DB, "p")
+		if err != nil || rev != 3 {
+			t.Fatalf("final revision %d %v", rev, err)
+		}
+	})
 }

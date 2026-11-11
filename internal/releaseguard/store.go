@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/store"
 
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/target"
@@ -157,7 +158,7 @@ func (s *Service) Evidence(ctx context.Context, project, id string, after int64,
 	if r.EvidenceExpired {
 		return page, ErrUnavailable
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT evidence_json FROM release_guard_evidence WHERE guard_id=? AND sequence>? ORDER BY sequence LIMIT ?`, id, after, limit+1)
+	rows, err := s.db.QueryContext(ctx, `SELECT evidence_json FROM release_guard_evidence WHERE guard_id=? AND sequence>? ORDER BY sequence`+store.Limit(store.DialectOf(s.db), "?"), id, after, limit+1)
 	if err != nil {
 		return page, err
 	}
@@ -201,7 +202,7 @@ func (s *Service) Events(ctx context.Context, project, id string, after int64) (
 		p.NextCursor = r.EventsCursor
 		return p, nil
 	}
-	rows, e := s.db.QueryContext(ctx, `SELECT sequence,event_json FROM release_guard_events WHERE guard_id=? AND sequence>? ORDER BY sequence LIMIT 100`, id, after)
+	rows, e := s.db.QueryContext(ctx, `SELECT sequence,event_json FROM release_guard_events WHERE guard_id=? AND sequence>? ORDER BY sequence`+store.Limit(store.DialectOf(s.db), "100"), id, after)
 	if e != nil {
 		return p, e
 	}

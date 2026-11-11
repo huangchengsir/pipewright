@@ -349,9 +349,9 @@ func (s *service) createDefault(ctx context.Context, projectID string) (*Config,
 	err = configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
 
 		_, writeErr := q.ExecContext(txctx,
-			`INSERT INTO pipeline_configs (project_id, spec_json, spec_yaml, status, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?) `+
-				store.DoNothingSuffix(store.DialectOf(s.db), []string{"project_id"}),
+			store.InsertSQL(store.DialectOf(s.db), "pipeline_configs",
+				[]string{"project_id", "spec_json", "spec_yaml", "status", "created_at", "updated_at"}, []string{"?", "?", "?", "?", "?", "?"},
+				[]string{"project_id"}, nil),
 			projectID, string(specJSON), renderedYAML, statusDraft, nowStr, nowStr,
 		)
 		return writeErr

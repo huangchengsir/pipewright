@@ -3,6 +3,7 @@ package opschat
 import (
 	"context"
 	"database/sql"
+	"github.com/huangchengsir/pipewright/internal/store"
 )
 
 const runStorageReserve int64 = 4 << 20
@@ -10,10 +11,10 @@ const runStorageReserve int64 = 4 << 20
 // LENGTH on BLOB/MEDIUMBLOB counts bytes in both dialects, including cipher overhead.
 func (s *Service) storageBytes(ctx context.Context, q querier, id string) (int64, error) {
 	var size int64
-	query := `SELECT COALESCE((SELECT LENGTH(body) FROM ops_chat_sessions WHERE id=?),0)`
+	query := `SELECT COALESCE((SELECT ` + store.BlobLength(store.DialectOf(s.db), "body") + ` FROM ops_chat_sessions WHERE id=?),0)`
 	args := []any{id}
 	for _, table := range []string{"ops_chat_entries", "ops_chat_runs", "ops_chat_calls", "ops_chat_approvals"} {
-		query += " + COALESCE((SELECT SUM(LENGTH(body)) FROM " + table + " WHERE session_id=?),0)"
+		query += " + COALESCE((SELECT SUM(" + store.BlobLength(store.DialectOf(s.db), "body") + ") FROM " + table + " WHERE session_id=?),0)"
 		args = append(args, id)
 	}
 	if err := q.QueryRowContext(ctx, query, args...).Scan(&size); err != nil {
@@ -23,10 +24,10 @@ func (s *Service) storageBytes(ctx context.Context, q querier, id string) (int64
 }
 func (s *Service) runStorageBytes(ctx context.Context, q querier, id, run string) (int64, error) {
 	var size int64
-	query := `SELECT COALESCE((SELECT LENGTH(body) FROM ops_chat_runs WHERE session_id=? AND id=?),0)`
+	query := `SELECT COALESCE((SELECT ` + store.BlobLength(store.DialectOf(s.db), "body") + ` FROM ops_chat_runs WHERE session_id=? AND id=?),0)`
 	args := []any{id, run}
 	for _, table := range []string{"ops_chat_entries", "ops_chat_calls", "ops_chat_approvals"} {
-		query += " + COALESCE((SELECT SUM(LENGTH(body)) FROM " + table + " WHERE session_id=? AND run_id=?),0)"
+		query += " + COALESCE((SELECT SUM(" + store.BlobLength(store.DialectOf(s.db), "body") + ") FROM " + table + " WHERE session_id=? AND run_id=?),0)"
 		args = append(args, id, run)
 	}
 	if err := q.QueryRowContext(ctx, query, args...).Scan(&size); err != nil {

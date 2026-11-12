@@ -91,9 +91,18 @@ export default {
     "database_connection_invalid": "연결 항목과 포트를 확인하세요.",
     "locked_out": "로그인 실패가 너무 많습니다. 나중에 다시 시도하세요.",
     "csrf_invalid": "복구 세션이 변경되었습니다. 다시 로그인하세요.",
-    "database_permissions_insufficient": "대상 계정에 이 데이터베이스 또는 스키마에서 테이블을 만드는 데 필요한 권한이 없습니다."
+    "database_permissions_insufficient": "대상 계정에 이 데이터베이스 또는 스키마에서 테이블을 만드는 데 필요한 권한이 없습니다.",
+    "database_connection_timeout": "연결 시간이 초과되었습니다. 네트워크와 연결 설정을 확인하세요.",
+    "database_path_invalid": "기존 상위 디렉터리 안에서 사용하지 않는 파일 경로를 선택하세요."
   },
   "reconcile": "활성화 확인 후 계속",
   "catalogPermissions": "카탈로그 권한을 확인했습니다. 실제 쓰기 및 DDL 권한은 대상 초기화 시 검증합니다.",
-  "pendingPermissions": "연결과 메타데이터를 확인했습니다. 쓰기 및 DDL 권한은 대상 초기화 시 검증합니다."
+  "pendingPermissions": "연결과 메타데이터를 확인했습니다. 쓰기 및 DDL 권한은 대상 초기화 시 검증합니다.",
+  "testConnection": "연결 테스트",
+  "checkPath": "경로 확인",
+  "testingConnection": "확인 중…",
+  "connectionSucceeded": "연결 성공",
+  "pathChecked": "경로 확인 완료",
+  "connectionTestHint": "연결에 성공해도 마이그레이션 사전 검사가 필요합니다.",
+  "pathTestHint": "파일을 만들지 않고 경로만 확인합니다. 쓰기 권한은 마이그레이션 중 확인합니다."
 }

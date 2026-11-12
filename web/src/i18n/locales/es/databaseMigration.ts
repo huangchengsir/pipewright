@@ -91,9 +91,18 @@ export default {
     "database_connection_invalid": "Revise los campos de conexión y el puerto.",
     "locked_out": "Demasiados intentos fallidos. Inténtelo más tarde.",
     "csrf_invalid": "La sesión de recuperación cambió. Inicie sesión de nuevo.",
-    "database_permissions_insufficient": "La cuenta de destino no tiene los permisos necesarios para crear tablas en esta base de datos o esquema."
+    "database_permissions_insufficient": "La cuenta de destino no tiene los permisos necesarios para crear tablas en esta base de datos o esquema.",
+    "database_connection_timeout": "Tiempo de conexión agotado. Comprueba la red y los parámetros.",
+    "database_path_invalid": "Elige una ruta de archivo sin usar en un directorio principal existente."
   },
   "reconcile": "Verificar la activación y continuar",
   "catalogPermissions": "Permisos de catálogo confirmados. La escritura y el DDL se verificarán al inicializar el destino.",
-  "pendingPermissions": "Conexión y metadatos comprobados. La escritura y el DDL se verificarán al inicializar el destino."
+  "pendingPermissions": "Conexión y metadatos comprobados. La escritura y el DDL se verificarán al inicializar el destino.",
+  "testConnection": "Probar conexión",
+  "checkPath": "Comprobar ruta",
+  "testingConnection": "Comprobando…",
+  "connectionSucceeded": "Conexión correcta",
+  "pathChecked": "Ruta comprobada",
+  "connectionTestHint": "La conexión correcta sigue requiriendo la comprobación previa a la migración.",
+  "pathTestHint": "Comprueba la ruta sin crear archivos. Los permisos de escritura se verifican durante la migración."
 }

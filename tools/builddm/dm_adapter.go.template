@@ -8,18 +8,34 @@ import (
  "errors"
  "io"
  "net/url"
+ "net"
+ "strconv"
  "strings"
  "unicode/utf8"
  "dm"
 )
 func init(){
+ for _,slot:=range dmTransportSlots.slots{
+  dm.RegisterDialContext("pipewright-context-"+strconv.Itoa(slot.id),func(_ context.Context,addr string)(net.Conn,error){return slot.dial(addr)})
+ }
  dmConnectorFactory=func(dsn string)(driver.Connector,error){
   u,err:=url.Parse(dsn);if err!=nil||u.Scheme!="dm"{return nil,errors.New("invalid DM URL")}
   q:=u.Query()
   // A driver reconnect must never replay an application write with unknown result.
-  for key:=range q{if strings.EqualFold(key,"driverReconnect"){q.Del(key)}}
+  for key:=range q{if strings.EqualFold(key,"driverReconnect")||strings.EqualFold(key,"dialName"){q.Del(key)}}
   q.Set("driverReconnect","false");u.RawQuery=q.Encode()
-  return (&dm.DmDriver{}).OpenConnector(u.String())
+  // Parse once before leasing a slot so invalid URLs do not retain capacity.
+  if _,err:=(&dm.DmDriver{}).OpenConnector(u.String());err!=nil{return nil,err}
+  return newDMScopedConnector(dmTransportSlots,&dm.DmDriver{},func(id int,probe bool)(driver.Connector,error){
+   copyURL:=*u;options:=copyURL.Query();options.Set("dialName","pipewright-context-"+strconv.Itoa(id))
+   // The vendor's retry sleep ignores context too; connection attempts are
+   // explicit in Pipewright, never an unbounded hidden retry loop.
+   if probe {
+    for key:=range options{if strings.EqualFold(key,"switchTimes")||strings.EqualFold(key,"switchInterval"){options.Del(key)}}
+    options.Set("switchTimes","1");options.Set("switchInterval","0")
+   };copyURL.RawQuery=options.Encode()
+   return (&dm.DmDriver{}).OpenConnector(copyURL.String())
+  }),nil
  }
  dmErrorNumber=func(err error)(int32,bool){var native *dm.DmError;if errors.As(err,&native){return native.ErrCode,true};return 0,false}
  dmDecodeValue=func(ctx context.Context,value driver.Value)(driver.Value,error){

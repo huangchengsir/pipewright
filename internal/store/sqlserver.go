@@ -4,22 +4,22 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	mssql "github.com/microsoft/go-mssqldb"
 	"strconv"
 	"strings"
 	"time"
 )
 
 func openSQLServer(ctx context.Context, dsn string) (*Store, error) {
+	return openSQLServerWithLifetime(ctx, dsn, nil)
+}
+func openSQLServerWithLifetime(ctx context.Context, dsn string, lifetime context.Context) (*Store, error) {
 	if strings.TrimSpace(dsn) == "" {
 		return nil, errors.New("store: SQL Server DSN is required")
 	}
-	connector, err := mssql.NewConnector(dsn)
+	connector, err := newSQLServerContextConnector(dsn, lifetime)
 	if err != nil {
 		return nil, errors.New("store: invalid SQL Server connection configuration")
 	}
-	// Required for filtered indexes and deterministic expression semantics.
-	connector.SessionInitSQL = "SET ANSI_NULLS ON; SET QUOTED_IDENTIFIER ON; SET ANSI_PADDING ON; SET ANSI_WARNINGS ON; SET CONCAT_NULL_YIELDS_NULL ON; SET ARITHABORT ON; SET NUMERIC_ROUNDABORT OFF;"
 	db := sql.OpenDB(&bindingConnector{Connector: connector, dialect: SQLServer})
 	db.SetMaxOpenConns(25)
 	db.SetMaxIdleConns(25)

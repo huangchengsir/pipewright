@@ -9,6 +9,7 @@ import FormField from '../../components/ui/FormField.vue'
 import {
   databaseStatus,
   databasePreflight,
+  databaseTestConnection,
   databaseAction,
   recoveryRequest,
   RecoveryError,
@@ -32,6 +33,26 @@ const dbPassword = ref('')
 const file = ref('')
 const advanced = ref(false)
 const busy = ref(false)
+const targetForm = ref<HTMLFormElement>()
+const probeBusy = ref(false)
+const probeKind = ref<'connection' | 'path'>()
+const probeErrorCode = ref('')
+const probeError = computed(() => {
+  const key = `databaseMigration.errors.${probeErrorCode.value}`
+  return te(key) ? t(key) : t('databaseMigration.failure')
+})
+let probeController: AbortController | undefined
+let probeTimer: ReturnType<typeof setTimeout> | undefined
+let probeGeneration = 0
+function clearProbe() {
+  probeGeneration++
+  probeController?.abort()
+  probeController = undefined
+  clearTimeout(probeTimer)
+  probeBusy.value = false
+  probeKind.value = undefined
+  probeErrorCode.value = ''
+}
 const errorCode = ref('')
 const error = computed(() => {
   if (!errorCode.value) return ''
@@ -108,6 +129,7 @@ watch(
   () => {
     approval.value = undefined
     errorCode.value = ''
+    clearProbe()
   },
   { flush: 'sync' },
 )
@@ -123,6 +145,58 @@ watch(
   },
   { flush: 'sync' },
 )
+watch(
+  editable,
+  (value) => {
+    if (!value) clearProbe()
+  },
+  { flush: 'sync' },
+)
+async function testConnection() {
+  if (
+    busy.value ||
+    probeBusy.value ||
+    !editable.value ||
+    props.recovery ||
+    !targetForm.value?.reportValidity()
+  )
+    return
+  clearProbe()
+  const generation = probeGeneration
+  const stamp = inputStamp()
+  const controller = new AbortController()
+  probeController = controller
+  probeBusy.value = true
+  probeTimer = setTimeout(() => {
+    if (generation !== probeGeneration || disposed) return
+    controller.abort()
+    probeGeneration++
+    probeBusy.value = false
+    probeErrorCode.value = 'database_connection_timeout'
+  }, 10000)
+  try {
+    const result = await databaseTestConnection(fields(), controller.signal)
+    if (
+      disposed ||
+      generation !== probeGeneration ||
+      stamp !== inputStamp() ||
+      !editable.value
+    )
+      return
+    probeKind.value = result.kind
+  } catch (e) {
+    if (disposed || generation !== probeGeneration || controller.signal.aborted)
+      return
+    probeErrorCode.value =
+      e instanceof HttpError ? (e.apiError?.code ?? 'unknown') : 'unknown'
+  } finally {
+    if (generation === probeGeneration) {
+      clearTimeout(probeTimer)
+      probeBusy.value = false
+      probeController = undefined
+    }
+  }
+}
 function showError(e: unknown) {
   if (disposed) return
   const code =
@@ -215,6 +289,7 @@ async function login() {
   }
 }
 async function preflight() {
+  clearProbe()
   busy.value = true
   errorCode.value = ''
   const stamp = inputStamp()
@@ -239,6 +314,7 @@ async function preflight() {
   }
 }
 async function action(name: string) {
+  clearProbe()
   if (!state.value || (name === 'start' && !ready.value)) return
   // Bind the confirmation to the exact preflight/task the operator saw.
   const request = { ...state.value }
@@ -298,6 +374,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   disposed = true
+  clearProbe()
   clearTimeout(timer)
   requestController.abort()
   dsn.value = ''
@@ -466,6 +543,7 @@ onBeforeUnmount(() => {
       </div>
       <form
         v-if="!recovery && editable"
+        ref="targetForm"
         class="database-panel"
         @submit.prevent="preflight"
       >
@@ -578,6 +656,20 @@ onBeforeUnmount(() => {
           }}
         </p>
         <div class="database-actions">
+          <AppButton
+            type="button"
+            data-testid="database-test-connection"
+            :loading="probeBusy"
+            :disabled="busy"
+            @click="testConnection"
+            >{{
+              t(
+                driver === 'sqlite'
+                  ? 'databaseMigration.checkPath'
+                  : 'databaseMigration.testConnection',
+              )
+            }}</AppButton
+          >
           <AppButton type="submit" :loading="busy">{{
             t('databaseMigration.preflight')
           }}</AppButton
@@ -587,6 +679,28 @@ onBeforeUnmount(() => {
             @click="action('abort')"
             >{{ t('databaseMigration.discard') }}</AppButton
           >
+        </div>
+        <div class="database-probe-feedback" role="status" aria-live="polite">
+          <span v-if="probeBusy">{{
+            t('databaseMigration.testingConnection')
+          }}</span>
+          <span v-else-if="probeKind" class="database-probe-success">{{
+            t(
+              probeKind === 'path'
+                ? 'databaseMigration.pathChecked'
+                : 'databaseMigration.connectionSucceeded',
+            )
+          }}</span>
+          <span v-else-if="probeErrorCode" class="database-probe-error">{{
+            probeError
+          }}</span>
+          <span class="database-probe-hint">{{
+            t(
+              driver === 'sqlite'
+                ? 'databaseMigration.pathTestHint'
+                : 'databaseMigration.connectionTestHint',
+            )
+          }}</span>
         </div>
         <ul v-if="ready" class="database-checks">
           <li v-for="check in state?.checks" :key="check">
@@ -621,6 +735,24 @@ onBeforeUnmount(() => {
   </section>
 </template>
 <style scoped>
+.database-probe-feedback {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.database-probe-hint {
+  color: var(--color-dim);
+}
+.database-probe-success {
+  color: var(--color-green);
+}
+.database-probe-error {
+  color: var(--color-red);
+}
+
 .database-engines {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

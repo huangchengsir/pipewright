@@ -91,9 +91,18 @@ export default {
     "database_connection_invalid": "請檢查連線欄位與連接埠。",
     "locked_out": "登入失敗次數過多，請稍後重試。",
     "csrf_invalid": "復原工作階段已變更，請重新登入。",
-    "database_permissions_insufficient": "目標帳戶缺少在此資料庫或結構描述中建表所需的目錄權限。"
+    "database_permissions_insufficient": "目標帳戶缺少在此資料庫或結構描述中建表所需的目錄權限。",
+    "database_connection_timeout": "連線逾時，請檢查網路和連線參數。",
+    "database_path_invalid": "路徑無法使用，請選擇父目錄已存在且尚未佔用的新檔案路徑。"
   },
   "reconcile": "核對啟用並繼續",
   "catalogPermissions": "目錄權限已確認；實際寫入與建表權限將在目標初始化時驗證。",
-  "pendingPermissions": "連線及中繼資料檢查通過；寫入與建表權限將在目標初始化時驗證。"
+  "pendingPermissions": "連線及中繼資料檢查通過；寫入與建表權限將在目標初始化時驗證。",
+  "testConnection": "測試連線",
+  "checkPath": "檢查路徑",
+  "testingConnection": "正在檢查…",
+  "connectionSucceeded": "連線成功",
+  "pathChecked": "路徑檢查通過",
+  "connectionTestHint": "連線成功不代表可以遷移，仍需檢查並預覽。",
+  "pathTestHint": "僅檢查路徑，不建立檔案；寫入權限將在遷移時驗證。"
 }

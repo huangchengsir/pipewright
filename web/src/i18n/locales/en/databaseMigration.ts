@@ -91,9 +91,18 @@ export default {
     "database_connection_invalid": "Check the connection fields and port.",
     "locked_out": "Too many failed sign-in attempts. Try again later.",
     "csrf_invalid": "The recovery session changed. Sign in again.",
-    "database_permissions_insufficient": "The target account lacks the catalog permissions required to create tables in this database or schema."
+    "database_permissions_insufficient": "The target account lacks the catalog permissions required to create tables in this database or schema.",
+    "database_connection_timeout": "Connection timed out. Check the network and connection settings.",
+    "database_path_invalid": "Choose an unused file path in an existing parent directory."
   },
   "reconcile": "Verify activation and continue",
   "catalogPermissions": "Catalog permissions confirmed; actual write and DDL permissions will be verified during target initialization.",
-  "pendingPermissions": "Connection and metadata checked. Write and DDL permissions will be verified during target initialization."
+  "pendingPermissions": "Connection and metadata checked. Write and DDL permissions will be verified during target initialization.",
+  "testConnection": "Test connection",
+  "checkPath": "Check path",
+  "testingConnection": "Checking…",
+  "connectionSucceeded": "Connected",
+  "pathChecked": "Path checked",
+  "connectionTestHint": "A successful connection still requires migration preflight.",
+  "pathTestHint": "Checks the path without creating files. Write access is verified during migration."
 }

@@ -91,9 +91,18 @@ export default {
     "database_connection_invalid": "Vérifiez les champs de connexion et le port.",
     "locked_out": "Trop d’échecs de connexion. Réessayez plus tard.",
     "csrf_invalid": "La session de récupération a changé. Reconnectez-vous.",
-    "database_permissions_insufficient": "Le compte cible ne dispose pas des autorisations nécessaires pour créer des tables dans cette base ou ce schéma."
+    "database_permissions_insufficient": "Le compte cible ne dispose pas des autorisations nécessaires pour créer des tables dans cette base ou ce schéma.",
+    "database_connection_timeout": "Délai de connexion dépassé. Vérifiez le réseau et les paramètres.",
+    "database_path_invalid": "Choisissez un chemin de fichier inutilisé dans un dossier parent existant."
   },
   "reconcile": "Vérifier l’activation et continuer",
   "catalogPermissions": "Autorisations du catalogue confirmées. L’écriture et le DDL seront vérifiés lors de l’initialisation de la cible.",
-  "pendingPermissions": "Connexion et métadonnées vérifiées. L’écriture et le DDL seront vérifiés lors de l’initialisation de la cible."
+  "pendingPermissions": "Connexion et métadonnées vérifiées. L’écriture et le DDL seront vérifiés lors de l’initialisation de la cible.",
+  "testConnection": "Tester la connexion",
+  "checkPath": "Vérifier le chemin",
+  "testingConnection": "Vérification…",
+  "connectionSucceeded": "Connexion réussie",
+  "pathChecked": "Chemin vérifié",
+  "connectionTestHint": "Une connexion réussie nécessite toujours la vérification préalable à la migration.",
+  "pathTestHint": "Vérifie le chemin sans créer de fichier. Les droits d’écriture sont vérifiés lors de la migration."
 }

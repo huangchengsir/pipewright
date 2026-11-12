@@ -22,6 +22,9 @@ var dmDriverSelfTest func() error
 const maxDMLobBytes = 64 << 20
 
 func openDM(ctx context.Context, dsn string) (*Store, error) {
+	return openDMWithLifetime(ctx, dsn, nil)
+}
+func openDMWithLifetime(ctx context.Context, dsn string, lifetime context.Context) (*Store, error) {
 	if dmConnectorFactory == nil {
 		return nil, ErrDriverUnavailable
 	}
@@ -32,7 +35,7 @@ func openDM(ctx context.Context, dsn string) (*Store, error) {
 	if err != nil {
 		return nil, errors.New("store: invalid DM connection configuration")
 	}
-	db := sql.OpenDB(&bindingConnector{Connector: connector, dialect: DM})
+	db := sql.OpenDB(&bindingConnector{Connector: &dmContextConnector{Connector: connector, lifetime: lifetime}, dialect: DM})
 	db.SetMaxOpenConns(25)
 	db.SetMaxIdleConns(25)
 	db.SetConnMaxLifetime(5 * time.Minute)

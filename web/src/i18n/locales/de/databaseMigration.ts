@@ -91,9 +91,18 @@ export default {
     "database_connection_invalid": "Prüfen Sie Verbindungsfelder und Port.",
     "locked_out": "Zu viele fehlgeschlagene Anmeldungen. Versuchen Sie es später.",
     "csrf_invalid": "Die Wiederherstellungssitzung hat sich geändert. Melden Sie sich erneut an.",
-    "database_permissions_insufficient": "Dem Zielkonto fehlen die erforderlichen Rechte, um Tabellen in dieser Datenbank oder diesem Schema anzulegen."
+    "database_permissions_insufficient": "Dem Zielkonto fehlen die erforderlichen Rechte, um Tabellen in dieser Datenbank oder diesem Schema anzulegen.",
+    "database_connection_timeout": "Zeitüberschreitung. Netzwerk und Verbindungseinstellungen prüfen.",
+    "database_path_invalid": "Wählen Sie einen unbenutzten Dateipfad in einem vorhandenen Verzeichnis."
   },
   "reconcile": "Aktivierung prüfen und fortfahren",
   "catalogPermissions": "Katalogberechtigungen bestätigt. Schreib- und DDL-Rechte werden bei der Zielinitialisierung geprüft.",
-  "pendingPermissions": "Verbindung und Metadaten geprüft. Schreib- und DDL-Rechte werden bei der Zielinitialisierung geprüft."
+  "pendingPermissions": "Verbindung und Metadaten geprüft. Schreib- und DDL-Rechte werden bei der Zielinitialisierung geprüft.",
+  "testConnection": "Verbindung testen",
+  "checkPath": "Pfad prüfen",
+  "testingConnection": "Wird geprüft…",
+  "connectionSucceeded": "Verbunden",
+  "pathChecked": "Pfad geprüft",
+  "connectionTestHint": "Auch nach erfolgreicher Verbindung ist die Migrationsprüfung erforderlich.",
+  "pathTestHint": "Prüft den Pfad, ohne Dateien anzulegen. Schreibrechte werden bei der Migration geprüft."
 }

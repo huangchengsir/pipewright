@@ -75,6 +75,18 @@ export const databaseStatus = (signal?: AbortSignal) =>
     signal,
     throwOnUnauthorized: true,
   })
+export interface ConnectionProbeResult {
+  kind: 'connection' | 'path'
+}
+export const databaseTestConnection = (
+  fields: ConnectionFields,
+  signal?: AbortSignal,
+) =>
+  http.post<ConnectionProbeResult>(
+    '/api/settings/database/test-connection',
+    fields,
+    { signal, throwOnUnauthorized: true },
+  )
 export const databasePreflight = (
   fields: ConnectionFields,
   managed: boolean,

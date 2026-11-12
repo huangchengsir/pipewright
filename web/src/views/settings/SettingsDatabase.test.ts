@@ -4,6 +4,7 @@ import SettingsDatabase from './SettingsDatabase.vue'
 import {
   databaseStatus,
   databasePreflight,
+  databaseTestConnection,
   databaseAction,
   recoveryRequest,
   RecoveryError,
@@ -18,6 +19,7 @@ vi.mock('../../api/databaseMigration', async (original) => ({
   ...(await original<typeof import('../../api/databaseMigration')>()),
   databaseStatus: vi.fn(),
   databasePreflight: vi.fn(),
+  databaseTestConnection: vi.fn(),
   databaseAction: vi.fn(),
   recoveryRequest: vi.fn(),
 }))
@@ -81,7 +83,10 @@ describe('database migration controls', () => {
     'rejects a changed task/revision while confirmation is open: %s/%s',
     async (task, revision) => {
       const wrapper = await approve()
-      await wrapper.findAll('form button.app-btn--primary').at(-1)!.trigger('click')
+      await wrapper
+        .findAll('form button.app-btn--primary')
+        .at(-1)!
+        .trigger('click')
       expect(useConfirm().pending.value).not.toBeNull()
       vi.mocked(databaseStatus).mockResolvedValue(prepared(task, revision))
       await vi.advanceTimersByTimeAsync(2500)
@@ -94,7 +99,10 @@ describe('database migration controls', () => {
   )
   it('sends the preflight task and revision confirmed by the operator', async () => {
     const wrapper = await approve()
-    await wrapper.findAll('form button.app-btn--primary').at(-1)!.trigger('click')
+    await wrapper
+      .findAll('form button.app-btn--primary')
+      .at(-1)!
+      .trigger('click')
     useConfirm()._resolve(true)
     await flushPromises()
     expect(databaseAction).toHaveBeenCalledWith(
@@ -230,5 +238,145 @@ describe('database migration controls', () => {
     await vi.advanceTimersByTimeAsync(2500)
     await flushPromises()
     expect(wrapper.text()).toContain('核对激活并继续')
+  })
+})
+
+describe('independent target connection probe', () => {
+  async function form() {
+    const wrapper = render()
+    await flushPromises()
+    await wrapper.get('#db-host').setValue('db.local')
+    await wrapper.get('#db-name').setValue('nonempty')
+    await wrapper.get('#db-user').setValue('operator')
+    await wrapper.get('#db-secret').setValue('never-render-this')
+    return wrapper
+  }
+  it('tests nonempty targets without granting migration approval or passing managed', async () => {
+    const wrapper = await form()
+    vi.mocked(databaseTestConnection).mockResolvedValue({ kind: 'connection' })
+    await wrapper.get('[data-testid=database-test-connection]').trigger('click')
+    await flushPromises()
+    expect(databaseTestConnection).toHaveBeenCalledWith(
+      {
+        driver: 'postgres',
+        host: 'db.local',
+        port: 5432,
+        database: 'nonempty',
+        schema: '',
+        username: 'operator',
+        password: 'never-render-this',
+      },
+      expect.any(AbortSignal),
+    )
+    expect(wrapper.get('[role=status]').text()).toContain('连接成功')
+    expect(wrapper.find('.database-checks').exists()).toBe(false)
+    expect(databasePreflight).not.toHaveBeenCalled()
+    expect(databaseAction).not.toHaveBeenCalled()
+    expect(wrapper.text()).not.toContain('never-render-this')
+    await wrapper.get('#db-name').setValue('edited')
+    expect(wrapper.find('.database-probe-success').exists()).toBe(false)
+  })
+  it('cancels edits and ignores an old successful response', async () => {
+    const wrapper = await form()
+    let resolve!: (value: { kind: 'connection' }) => void
+    vi.mocked(databaseTestConnection).mockImplementation(
+      () =>
+        new Promise((r) => {
+          resolve = r
+        }),
+    )
+    await wrapper.get('[data-testid=database-test-connection]').trigger('click')
+    const signal = vi.mocked(databaseTestConnection).mock.calls[0]![1]!
+    await wrapper.get('[data-testid=database-test-connection]').trigger('click')
+    expect(databaseTestConnection).toHaveBeenCalledTimes(1)
+    await wrapper.get('#db-host').setValue('other.local')
+    expect(signal.aborted).toBe(true)
+    resolve({ kind: 'connection' })
+    await flushPromises()
+    expect(wrapper.find('.database-probe-success').exists()).toBe(false)
+  })
+  it('cancels the probe on unmount and does not start a migration', async () => {
+    const wrapper = await form()
+    vi.mocked(databaseTestConnection).mockImplementation(
+      () => new Promise(() => {}),
+    )
+    await wrapper.get('[data-testid=database-test-connection]').trigger('click')
+    const signal = vi.mocked(databaseTestConnection).mock.calls[0]![1]!
+    wrapper.unmount()
+    expect(signal.aborted).toBe(true)
+    expect(databaseAction).not.toHaveBeenCalled()
+  })
+  it('bounds the UI wait and suppresses a late result after timeout', async () => {
+    const wrapper = await form()
+    let resolve!: (value: { kind: 'connection' }) => void
+    vi.mocked(databaseTestConnection).mockImplementation(
+      () =>
+        new Promise((r) => {
+          resolve = r
+        }),
+    )
+    await wrapper.get('[data-testid=database-test-connection]').trigger('click')
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(vi.mocked(databaseTestConnection).mock.calls[0]![1]!.aborted).toBe(
+      true,
+    )
+    expect(wrapper.get('[role=status]').text()).toContain('连接超时')
+    resolve({ kind: 'connection' })
+    await flushPromises()
+    expect(wrapper.find('.database-probe-success').exists()).toBe(false)
+  })
+  it('preserves an existing preflight approval when checking its connection', async () => {
+    const wrapper = await form()
+    vi.mocked(databasePreflight).mockResolvedValue({
+      ...basic(),
+      taskId: 'prepared',
+      revision: 5,
+      phase: 'prepared',
+      target: 'postgres',
+      checks: ['connection'],
+    })
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.find('.database-checks').exists()).toBe(true)
+    vi.mocked(databaseTestConnection).mockResolvedValue({ kind: 'connection' })
+    await wrapper.get('[data-testid=database-test-connection]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.database-checks').exists()).toBe(true)
+    expect(databaseAction).not.toHaveBeenCalled()
+  })
+  it('uses path wording for SQLite and clears a probe when maintenance starts', async () => {
+    vi.mocked(databaseStatus).mockResolvedValue(basic('postgres'))
+    const wrapper = render()
+    await flushPromises()
+    await wrapper.get('#db-file').setValue('/data/new.db')
+    expect(
+      wrapper.get('[data-testid=database-test-connection]').text(),
+    ).toContain('检查路径')
+    vi.mocked(databaseTestConnection).mockImplementation(
+      () => new Promise(() => {}),
+    )
+    await wrapper.get('[data-testid=database-test-connection]').trigger('click')
+    vi.mocked(databaseStatus).mockResolvedValue({
+      ...basic('postgres'),
+      phase: 'quiescing',
+    })
+    await vi.advanceTimersByTimeAsync(2500)
+    await flushPromises()
+    expect(vi.mocked(databaseTestConnection).mock.calls[0]![1]!.aborted).toBe(
+      true,
+    )
+    expect(wrapper.find('form').exists()).toBe(false)
+  })
+  it('does not render arbitrary driver errors', async () => {
+    const wrapper = await form()
+    vi.mocked(databaseTestConnection).mockRejectedValue(
+      new Error('secret-DSN-marker'),
+    )
+    await wrapper.get('[data-testid=database-test-connection]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[role=status]').text()).not.toContain(
+      'secret-DSN-marker',
+    )
+    expect(databasePreflight).not.toHaveBeenCalled()
   })
 })

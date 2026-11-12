@@ -91,9 +91,18 @@ export default {
     "database_connection_invalid": "请检查连接字段与端口。",
     "locked_out": "登录失败次数过多，请稍后重试。",
     "csrf_invalid": "恢复会话已变化，请重新登录。",
-    "database_permissions_insufficient": "目标账户缺少在此数据库或模式中建表所需的目录权限。"
+    "database_permissions_insufficient": "目标账户缺少在此数据库或模式中建表所需的目录权限。",
+    "database_connection_timeout": "连接超时，请检查网络和连接参数。",
+    "database_path_invalid": "路径不可用，请选择父目录已存在且尚未占用的新文件路径。"
   },
   "reconcile": "核对激活并继续",
   "catalogPermissions": "目录权限已确认；实际写入和建表权限将在目标初始化时验证。",
-  "pendingPermissions": "连接及元数据检查通过；写入和建表权限将在目标初始化时验证。"
+  "pendingPermissions": "连接及元数据检查通过；写入和建表权限将在目标初始化时验证。",
+  "testConnection": "测试连接",
+  "checkPath": "检查路径",
+  "testingConnection": "正在检查…",
+  "connectionSucceeded": "连接成功",
+  "pathChecked": "路径检查通过",
+  "connectionTestHint": "连接成功不代表可以迁移，仍需检查并预览。",
+  "pathTestHint": "仅检查路径，不创建文件；写入权限将在迁移时验证。"
 }

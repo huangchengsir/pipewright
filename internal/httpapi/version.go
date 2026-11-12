@@ -235,7 +235,7 @@ func workAdmissionMiddleware(admit func(context.Context, string) (func(), error)
 			websocket := strings.EqualFold(r.Header.Get("Upgrade"), "websocket") && strings.Contains(path, "/terminal")
 			write := r.Method != "GET" && r.Method != "HEAD" && r.Method != "OPTIONS"
 			cleanup := updateCompletionRoute(r.Method, path)
-			control := r.Method == http.MethodPost && (path == "/api/settings/database/start" || path == "/api/settings/database/abort" || path == "/api/settings/database/preflight" || path == "/api/version/update" || path == "/api/version/update-tasks" || updateRouteMatches(path, "/api/version/update-tasks/_/resume"))
+			control := r.Method == http.MethodPost && (path == "/api/settings/database/start" || path == "/api/settings/database/abort" || path == "/api/settings/database/preflight" || path == "/api/settings/database/test-connection" || path == "/api/version/update" || path == "/api/version/update-tasks" || updateRouteMatches(path, "/api/version/update-tasks/_/resume"))
 			if (!write && !websocket) || cleanup || control {
 				next.ServeHTTP(w, r)
 				return

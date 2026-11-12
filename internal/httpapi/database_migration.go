@@ -89,6 +89,10 @@ func migrationError(w http.ResponseWriter, e error) {
 		code = "database_verification_failed"
 	case errors.Is(e, dbmigration.ErrUnsupported):
 		code = "database_capability_unavailable"
+	case errors.Is(e, dbmigration.ErrProbeTimeout):
+		code = "database_connection_timeout"
+	case errors.Is(e, dbmigration.ErrProbePath):
+		code = "database_path_invalid"
 	case errors.Is(e, dbmigration.ErrConnection):
 		code = "database_connection_failed"
 	case errors.Is(e, dbmigration.ErrPermissions):
@@ -122,6 +126,26 @@ func mountDatabaseMigration(ar chi.Router, runtime *dbmigration.Runtime) {
 			return
 		}
 		writeJSON(w, 200, migrationView(runtime, s))
+	})
+	ar.Post("/settings/database/test-connection", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		var in dbmigration.ConnectionFields
+		if !decodeMigration(w, r, &in) {
+			return
+		}
+		connection, e := dbmigration.BuildConnection(in)
+		in.Password = ""
+		in.DSN = ""
+		if e != nil {
+			migrationError(w, e)
+			return
+		}
+		result, e := runtime.ProbeConnection(r.Context(), connection)
+		if e != nil {
+			migrationError(w, e)
+			return
+		}
+		writeJSON(w, 200, result)
 	})
 	ar.Post("/settings/database/preflight", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {

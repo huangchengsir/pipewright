@@ -91,9 +91,18 @@ export default {
     "database_connection_invalid": "接続項目とポートを確認してください。",
     "locked_out": "ログイン失敗が多すぎます。後でお試しください。",
     "csrf_invalid": "復旧セッションが変わりました。再ログインしてください。",
-    "database_permissions_insufficient": "対象アカウントには、このデータベースまたはスキーマでテーブルを作成するための権限がありません。"
+    "database_permissions_insufficient": "対象アカウントには、このデータベースまたはスキーマでテーブルを作成するための権限がありません。",
+    "database_connection_timeout": "接続がタイムアウトしました。ネットワークと接続設定を確認してください。",
+    "database_path_invalid": "既存の親ディレクトリ内の未使用ファイルパスを指定してください。"
   },
   "reconcile": "有効化を確認して続行",
   "catalogPermissions": "カタログ権限を確認しました。実際の書き込みとDDL権限は対象の初期化時に検証します。",
-  "pendingPermissions": "接続とメタデータを確認しました。書き込みとDDL権限は対象の初期化時に検証します。"
+  "pendingPermissions": "接続とメタデータを確認しました。書き込みとDDL権限は対象の初期化時に検証します。",
+  "testConnection": "接続テスト",
+  "checkPath": "パスを確認",
+  "testingConnection": "確認中…",
+  "connectionSucceeded": "接続成功",
+  "pathChecked": "パス確認済み",
+  "connectionTestHint": "接続成功後も移行の事前確認が必要です。",
+  "pathTestHint": "ファイルは作成しません。書き込み権限は移行時に確認します。"
 }

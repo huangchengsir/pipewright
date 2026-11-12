@@ -40,12 +40,9 @@ func (s *Store) CreatePending(ctx context.Context, runID, stageID, stageName str
 	now := time.Now().UTC().Format(time.RFC3339)
 	d := store.DialectOf(s.db)
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO run_approvals (id, run_id, stage_id, stage_name, status, decided_by, decided_at, created_at)
-		 VALUES (?, ?, ?, ?, 'pending', '', '', ?) `+
-			store.UpsertAssignSuffix(d, []string{"run_id", "stage_id"}, []string{
-				"status = 'pending'", "decided_by = ''", "decided_at = ''",
-				"stage_name = " + store.Excluded(d, "stage_name"),
-			}),
+		store.InsertSQL(d, "run_approvals",
+			[]string{"id", "run_id", "stage_id", "stage_name", "status", "decided_by", "decided_at", "created_at"}, []string{"?", "?", "?", "?", "'pending'", "''", "''", "?"},
+			[]string{"run_id", "stage_id"}, []string{"status", "decided_by", "decided_at", "stage_name"}),
 		uuid.NewString(), runID, stageID, stageName, now,
 	)
 	if err != nil {

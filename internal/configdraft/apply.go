@@ -24,8 +24,8 @@ type operationRow struct {
 
 func (s *Service) readOperation(ctx context.Context, q configstate.DBTX, where string, lock bool, args ...any) (*operationRow, error) {
 	x := &operationRow{}
-	sqlText := `SELECT id,token_id,project_id,request_id,input_digest,draft_id,approval_id,owner_epoch,state,reason,before_revision,after_revision,result_json FROM mcp_config_operations WHERE ` + where
-	if lock && store.DialectOf(s.db) == store.MySQL {
+	sqlText := `SELECT id,token_id,project_id,request_id,input_digest,draft_id,approval_id,owner_epoch,state,reason,before_revision,after_revision,result_json FROM mcp_config_operations` + store.LockHint(store.DialectOf(s.db), lock) + ` WHERE ` + where
+	if lock && store.DialectOf(s.db).RowLocks() && store.DialectOf(s.db) != store.SQLServer {
 		sqlText += " FOR UPDATE"
 	}
 	e := q.QueryRowContext(ctx, sqlText, args...).Scan(&x.id, &x.token, &x.project, &x.request, &x.input, &x.draft, &x.approval, &x.owner, &x.state, &x.reason, &x.before, &x.after, &x.result)
@@ -150,10 +150,10 @@ func (s *Service) Apply(ctx context.Context, tokenID string, in ApplyRequest) (*
 			return ErrIdempotency
 		}
 		where := `id=? AND owner_token_id=?`
-		if store.DialectOf(s.db) == store.MySQL {
+		if store.DialectOf(s.db).RowLocks() && store.DialectOf(s.db) != store.SQLServer {
 			where += " FOR UPDATE"
 		}
-		r, e := readDraft(work, q, where, in.DraftID, tokenID)
+		r, e := readDraftTable(work, q, "mcp_config_drafts"+store.LockHint(store.DialectOf(s.db), true), where, in.DraftID, tokenID)
 		if e != nil {
 			return ErrForbidden
 		}
@@ -203,8 +203,8 @@ func (s *Service) Apply(ctx context.Context, tokenID string, in ApplyRequest) (*
 		var aBase, aAuthz, aExpiry int64
 		var revoked sql.NullInt64
 		var consumed sql.NullString
-		stmt := `SELECT draft_id,token_id,project_id,base_revision,policy_version,validator_version,authz_revision,patch_digest,review_digest,approver,expires_at,revoked_at,consumed_by_operation_id FROM mcp_config_approvals WHERE id=?`
-		if store.DialectOf(s.db) == store.MySQL {
+		stmt := `SELECT draft_id,token_id,project_id,base_revision,policy_version,validator_version,authz_revision,patch_digest,review_digest,approver,expires_at,revoked_at,consumed_by_operation_id FROM mcp_config_approvals` + store.LockHint(store.DialectOf(s.db), true) + ` WHERE id=?`
+		if store.DialectOf(s.db).RowLocks() && store.DialectOf(s.db) != store.SQLServer {
 			stmt += " FOR UPDATE"
 		}
 		e = q.QueryRowContext(work, stmt, in.ApprovalID).Scan(&aDraft, &aToken, &aProject, &aBase, &aPolicy, &aValidator, &aAuthz, &aPatch, &aReview, &aApprover, &aExpiry, &revoked, &consumed)

@@ -93,6 +93,8 @@ export default {
   errCheckStatus: 'Error al comprobar ({status})',
   errCheckRetry: 'Error al comprobar. Inténtalo de nuevo más tarde.',
   restartingToNew: 'Reiniciando a la nueva versión…',
+  manualPrivateDriver: "Esta base DM requiere una compilación privada con su controlador oficial con licencia. Compile la nueva versión de forma privada y sustituya la aplicación manualmente. No se pueden instalar paquetes de actualización públicos.",
+  databaseMigrationActive: "Finalice o cancele la migración de la base de datos antes de instalar una actualización de la aplicación.",
   manualUpgrade: 'Actualiza manualmente.',
   updateFailed: 'Error al actualizar',
   errUpdateStatus: 'Error al actualizar ({status})',

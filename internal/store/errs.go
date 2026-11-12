@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/go-sql-driver/mysql"
+	mssql "github.com/microsoft/go-mssqldb"
 )
 
 // 错误分类集中实现:外键/唯一冲突在 SQLite 与 MySQL 上的"签名"不同——
@@ -21,6 +22,19 @@ func IsUniqueErr(err error) bool {
 	if err == nil {
 		return false
 	}
+	if dmErrorNumber != nil {
+		if number, ok := dmErrorNumber(err); ok {
+			return number == -6602
+		}
+	}
+	var se mssql.Error
+	if errors.As(err, &se) {
+		return se.Number == 2601 || se.Number == 2627
+	}
+	var pg interface{ SQLState() string }
+	if errors.As(err, &pg) {
+		return pg.SQLState() == "23505"
+	}
 	var me *mysql.MySQLError
 	if errors.As(err, &me) {
 		return me.Number == 1062
@@ -32,6 +46,20 @@ func IsUniqueErr(err error) bool {
 func IsForeignKeyErr(err error) bool {
 	if err == nil {
 		return false
+	}
+	if dmErrorNumber != nil {
+		if number, ok := dmErrorNumber(err); ok {
+			return number == -6607
+		}
+	}
+	var se mssql.Error
+	// SQL Server 547 also covers CHECK constraints; require the FK signature.
+	if errors.As(err, &se) {
+		return se.Number == 547 && strings.Contains(strings.ToUpper(se.Message), "FOREIGN KEY")
+	}
+	var pg interface{ SQLState() string }
+	if errors.As(err, &pg) {
+		return pg.SQLState() == "23503"
 	}
 	var me *mysql.MySQLError
 	if errors.As(err, &me) {

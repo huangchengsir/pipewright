@@ -6,6 +6,7 @@ import (
 	"fmt"
 	log "github.com/huangchengsir/pipewright/internal/logging"
 	"github.com/huangchengsir/pipewright/internal/maintenance"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -368,7 +369,7 @@ func (s *service) recoverAnalysis() bool {
 	pending := false
 	afterID := ""
 	for {
-		rows, err := s.db.QueryContext(ctx, `SELECT `+alertColumns+` FROM anomaly_alerts WHERE analysis_status = ? AND id > ? ORDER BY id LIMIT ?`, AnalysisPending, afterID, analysisRecoveryBatchSize)
+		rows, err := s.db.QueryContext(ctx, `SELECT `+alertColumns+` FROM anomaly_alerts WHERE analysis_status = ? AND id > ? ORDER BY id`+store.Limit(store.DialectOf(s.db), "?"), AnalysisPending, afterID, analysisRecoveryBatchSize)
 		if err != nil {
 			return true
 		}

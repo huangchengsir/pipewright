@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"sort"
 	"time"
 )
@@ -467,7 +468,9 @@ func (s *Service) Attempts(ctx context.Context, runID string, page, size int) (*
 	if e := s.q(ctx).QueryRowContext(ctx, "SELECT COUNT(*) FROM run_retry_attempts WHERE root_id=?", root).Scan(&out.Total); e != nil {
 		return nil, e
 	}
-	rows, e := s.q(ctx).QueryContext(ctx, `SELECT a.run_id,a.parent_id,a.revision,a.execution_kind,COALESCE(r.status,a.status),a.created_at,a.initiator,(EXISTS(SELECT 1 FROM run_retry_dispatch d WHERE d.attempt_id=a.run_id AND d.state='outcome_unknown') OR EXISTS(SELECT 1 FROM run_retry_nodes n WHERE n.attempt_id=a.run_id AND n.status='outcome_unknown') OR EXISTS(SELECT 1 FROM run_retry_external_targets t WHERE t.attempt_id=a.run_id AND t.state IN ('running','outcome_unknown')) OR EXISTS(SELECT 1 FROM run_retry_resources x WHERE x.attempt_id=a.run_id AND x.state<>'drained')) FROM run_retry_attempts a LEFT JOIN pipeline_runs r ON r.id=a.run_id WHERE a.root_id=? ORDER BY a.revision DESC LIMIT ? OFFSET ?`, root, size, (page-1)*size)
+	pageSQL, pageArgs := store.Page(store.DialectOf(s.db), size, (page-1)*size)
+	listArgs := append([]any{root}, pageArgs...)
+	rows, e := s.q(ctx).QueryContext(ctx, `SELECT a.run_id,a.parent_id,a.revision,a.execution_kind,COALESCE(r.status,a.status),a.created_at,a.initiator,CASE WHEN (EXISTS(SELECT 1 FROM run_retry_dispatch d WHERE d.attempt_id=a.run_id AND d.state='outcome_unknown') OR EXISTS(SELECT 1 FROM run_retry_nodes n WHERE n.attempt_id=a.run_id AND n.status='outcome_unknown') OR EXISTS(SELECT 1 FROM run_retry_external_targets t WHERE t.attempt_id=a.run_id AND t.state IN ('running','outcome_unknown')) OR EXISTS(SELECT 1 FROM run_retry_resources x WHERE x.attempt_id=a.run_id AND x.state<>'drained')) THEN 1 ELSE 0 END FROM run_retry_attempts a LEFT JOIN pipeline_runs r ON r.id=a.run_id WHERE a.root_id=? ORDER BY a.revision DESC `+pageSQL, listArgs...)
 	if e != nil {
 		return nil, e
 	}

@@ -31,6 +31,8 @@ export interface ConfirmOptions {
   confirmLabel?: string
   /** If provided, user must type this exact string before confirm is enabled */
   confirmText?: string
+  /** Optional explicit acknowledgement; confirmation remains disabled until checked. */
+  confirmCheck?: string
   /** visual intent — affects confirm button colour */
   variant?: 'danger' | 'primary'
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/completedrefs"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/store"
 )
 
 const (
@@ -110,10 +111,10 @@ func timeFromNull(v sql.NullInt64) *time.Time {
 }
 func cipherDigest(b []byte) string { sum := sha256.Sum256(b); return hex.EncodeToString(sum[:]) }
 
-func readOAuth(ctx context.Context, q configstate.DBTX, id string) (*OAuthBinding, error) {
+func readOAuth(ctx context.Context, q configstate.DBTX, dialect store.Dialect, id string) (*OAuthBinding, error) {
 	var b OAuthBinding
 	var expires, refreshExpires, refreshAfter sql.NullInt64
-	err := q.QueryRowContext(ctx, `SELECT o.credential_id,o.provider,o.issuer,o.client_id,o.redirect_uri,o.app_revision,o.account_id,o.login,o.refresh_ciphertext,o.expires_at,o.refresh_expires_at,o.refresh_after,o.revision,o.state,o.claim_id,o.claim_owner,c.ciphertext FROM oauth_credentials o JOIN credentials c ON c.id=o.credential_id WHERE o.credential_id=?`, id).Scan(&b.CredentialID, &b.Provider, &b.Issuer, &b.ClientID, &b.RedirectURI, &b.AppRevision, &b.AccountID, &b.Login, &b.RefreshCiphertext, &expires, &refreshExpires, &refreshAfter, &b.Revision, &b.State, &b.ClaimID, &b.ClaimOwner, &b.AccessCiphertext)
+	err := q.QueryRowContext(ctx, `SELECT o.credential_id,o.provider,o.issuer,o.client_id,o.redirect_uri,o.app_revision,o.account_id,o.`+store.Identifier(dialect, "login")+`,o.refresh_ciphertext,o.expires_at,o.refresh_expires_at,o.refresh_after,o.revision,o.state,o.claim_id,o.claim_owner,c.ciphertext FROM oauth_credentials o JOIN credentials c ON c.id=o.credential_id WHERE o.credential_id=?`, id).Scan(&b.CredentialID, &b.Provider, &b.Issuer, &b.ClientID, &b.RedirectURI, &b.AppRevision, &b.AccountID, &b.Login, &b.RefreshCiphertext, &expires, &refreshExpires, &refreshAfter, &b.Revision, &b.State, &b.ClaimID, &b.ClaimOwner, &b.AccessCiphertext)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -126,7 +127,7 @@ func readOAuth(ctx context.Context, q configstate.DBTX, id string) (*OAuthBindin
 	return &b, nil
 }
 func (r *OAuthRepository) Binding(ctx context.Context, id string) (*OAuthBinding, error) {
-	return readOAuth(ctx, configstate.Queryer(ctx, r.db), id)
+	return readOAuth(ctx, configstate.Queryer(ctx, r.db), store.DialectOf(r.db), id)
 }
 
 func oauthUses(ctx context.Context, q configstate.DBTX, id string) (int, error) {
@@ -152,7 +153,7 @@ func (r *OAuthRepository) Target(ctx context.Context, id string, adopt bool) (OA
 		if typ != TypeGitToken && typ != TypeGitHTTP {
 			return ErrInvalidType
 		}
-		b, err := readOAuth(ctx, q, id)
+		b, err := readOAuth(ctx, q, store.DialectOf(r.db), id)
 		if err != nil {
 			return err
 		}
@@ -201,7 +202,7 @@ func (r *OAuthRepository) ClaimAuthorization(ctx context.Context, target OAuthTa
 		if cipherDigest(cipher) != target.CipherDigest {
 			return ErrConflict
 		}
-		b, err := readOAuth(ctx, q, target.CredentialID)
+		b, err := readOAuth(ctx, q, store.DialectOf(r.db), target.CredentialID)
 		if err != nil {
 			return err
 		}
@@ -308,7 +309,7 @@ func (r *OAuthRepository) Authorize(ctx context.Context, b OAuthBinding, t OAuth
 			if cipherDigest(oldCipher) != target.CipherDigest {
 				return ErrConflict
 			}
-			old, e := readOAuth(ctx, q, id)
+			old, e := readOAuth(ctx, q, store.DialectOf(r.db), id)
 			if e != nil {
 				return e
 			}
@@ -329,7 +330,7 @@ func (r *OAuthRepository) Authorize(ctx context.Context, b OAuthBinding, t OAuth
 			if n > 0 {
 				return ErrOAuthBusy
 			}
-			res, e := q.ExecContext(ctx, "UPDATE credentials SET ciphertext=?,masked_value=?,username=?,updated_at=? WHERE id=? AND ciphertext=?", access, mask(typ, t.AccessToken), oauthGitUsername(b.Provider, b.Login), stamp, id, oldCipher)
+			res, e := q.ExecContext(ctx, "UPDATE credentials SET ciphertext=?,masked_value=?,username=?,updated_at=? WHERE id=? AND "+store.BlobEqual(store.DialectOf(r.db), "ciphertext"), access, mask(typ, t.AccessToken), oauthGitUsername(b.Provider, b.Login), stamp, id, oldCipher)
 			if e != nil {
 				return e
 			}
@@ -347,7 +348,7 @@ func (r *OAuthRepository) Authorize(ctx context.Context, b OAuthBinding, t OAuth
 				return e
 			}
 		}
-		_, e := q.ExecContext(ctx, `INSERT INTO oauth_credentials(credential_id,provider,issuer,client_id,redirect_uri,app_revision,account_id,login,refresh_ciphertext,expires_at,refresh_expires_at,refresh_after,revision,state,claim_id,claim_owner,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, b.Provider, b.Issuer, b.ClientID, b.RedirectURI, b.AppRevision, b.AccountID, b.Login, refresh, nullableMillis(t.ExpiresAt), nullableMillis(t.RefreshExpiresAt), nullableMillis(t.RefreshAfter), revision, OAuthActive, "", "", now.UnixMilli())
+		_, e := q.ExecContext(ctx, `INSERT INTO oauth_credentials(credential_id,provider,issuer,client_id,redirect_uri,app_revision,account_id,`+store.Identifier(store.DialectOf(r.db), "login")+`,refresh_ciphertext,expires_at,refresh_expires_at,refresh_after,revision,state,claim_id,claim_owner,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, b.Provider, b.Issuer, b.ClientID, b.RedirectURI, b.AppRevision, b.AccountID, b.Login, refresh, nullableMillis(t.ExpiresAt), nullableMillis(t.RefreshExpiresAt), nullableMillis(t.RefreshAfter), revision, OAuthActive, "", "", now.UnixMilli())
 		if e != nil {
 			return e
 		}
@@ -374,7 +375,7 @@ func (r *OAuthRepository) TryAcquire(ctx context.Context, id, owner string, now 
 		if e := configstate.LockEpochs(ctx, q, r.db, configstate.EpochSecrets); e != nil {
 			return e
 		}
-		b, e := readOAuth(ctx, q, id)
+		b, e := readOAuth(ctx, q, store.DialectOf(r.db), id)
 		if e != nil {
 			return e
 		}
@@ -500,7 +501,7 @@ func (r *OAuthRepository) CompleteRefresh(ctx context.Context, b *OAuthBinding, 
 		if e := configstate.LockEpochs(ctx, q, r.db, configstate.EpochSecrets); e != nil {
 			return e
 		}
-		current, e := readOAuth(ctx, q, b.CredentialID)
+		current, e := readOAuth(ctx, q, store.DialectOf(r.db), b.CredentialID)
 		if e != nil {
 			return e
 		}
@@ -521,7 +522,7 @@ func (r *OAuthRepository) CompleteRefresh(ctx context.Context, b *OAuthBinding, 
 		if e = q.QueryRowContext(ctx, "SELECT type FROM credentials WHERE id=?", b.CredentialID).Scan(&typ); e != nil {
 			return e
 		}
-		result, e := q.ExecContext(ctx, "UPDATE credentials SET ciphertext=?,masked_value=?,updated_at=? WHERE id=? AND ciphertext=?", access, mask(typ, t.AccessToken), time.Now().UTC().Format(time.RFC3339Nano), b.CredentialID, b.AccessCiphertext)
+		result, e := q.ExecContext(ctx, "UPDATE credentials SET ciphertext=?,masked_value=?,updated_at=? WHERE id=? AND "+store.BlobEqual(store.DialectOf(r.db), "ciphertext"), access, mask(typ, t.AccessToken), time.Now().UTC().Format(time.RFC3339Nano), b.CredentialID, b.AccessCiphertext)
 		if e != nil {
 			return e
 		}
@@ -579,7 +580,7 @@ func (r *OAuthRepository) AuthorizationFailure(ctx context.Context, target OAuth
 		if n != 1 {
 			return nil
 		}
-		b, err := readOAuth(ctx, q, target.CredentialID)
+		b, err := readOAuth(ctx, q, store.DialectOf(r.db), target.CredentialID)
 		if err != nil || b == nil {
 			return err
 		}
@@ -592,7 +593,7 @@ func (r *OAuthRepository) AuthorizationFailure(ctx context.Context, target OAuth
 }
 
 func OAuthView(ctx context.Context, db *sql.DB, id string) (*OAuthInfo, error) {
-	b, e := readOAuth(ctx, configstate.Queryer(ctx, db), id)
+	b, e := readOAuth(ctx, configstate.Queryer(ctx, db), store.DialectOf(db), id)
 	if e != nil {
 		return nil, e
 	}
@@ -621,8 +622,8 @@ func OAuthView(ctx context.Context, db *sql.DB, id string) (*OAuthInfo, error) {
 
 // checkOAuthMutation is called inside the existing secret epoch transaction.
 // Renames/scopes retain the binding; direct token replacement requires consent.
-func checkOAuthMutation(ctx context.Context, q configstate.DBTX, id string, replace, detach bool) error {
-	b, e := readOAuth(ctx, q, id)
+func checkOAuthMutation(ctx context.Context, q configstate.DBTX, dialect store.Dialect, id string, replace, detach bool) error {
+	b, e := readOAuth(ctx, q, dialect, id)
 	if e != nil {
 		return e
 	}

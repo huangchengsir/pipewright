@@ -13,6 +13,8 @@ type wffcProbeAPI struct {
 	*probeControllerAPI
 	storageCreated, allowBind, unknownStorage, earlyHTTP bool
 	storageWrites                                        int
+	pendingAfterConsumer                                 bool
+	cancelPending                                        context.CancelFunc
 }
 
 func (a *wffcProbeAPI) Read(ctx context.Context, path, query string) ([]byte, error) {
@@ -28,7 +30,14 @@ func (a *wffcProbeAPI) Read(ctx context.Context, path, query string) ([]byte, er
 			releaseMap(object["spec"])["volumeName"] = "allocated-volume"
 		}
 		object["status"] = map[string]any{"phase": phase}
-		return json.Marshal(object)
+		data, err := json.Marshal(object)
+		if err == nil && a.storageCreated && phase == "Pending" && a.cancelPending != nil {
+			// End this scenario only after the consumer exists and its PVC has
+			// actually been observed as unbound, not after an arbitrary wall time.
+			a.pendingAfterConsumer = true
+			a.cancelPending()
+		}
+		return data, err
 	}
 	return a.probeControllerAPI.Read(ctx, path, query)
 }
@@ -103,11 +112,17 @@ func TestStorageProbeCreatesWFFCConsumerBeforeAnyPVCHealthBarrier(t *testing.T) 
 			api.record = record
 			registerControllerTestWriter(t, f, record)
 			controller.writer = func(context.Context, string, string) (releaseAPI, error) { return api, nil }
-			work, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+			work, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
+			if !tc.bind && !tc.unknown {
+				api.cancelPending = cancel
+			}
 			result, runErr := controller.Run(work, record.ID, record.OwnerEpoch, nil)
 			if result.State != tc.want || api.storageWrites != 1 || api.earlyHTTP {
 				t.Fatal("storage consumer/health ordering incorrect", result.State, api.storageWrites, api.earlyHTTP, runErr)
+			}
+			if !tc.bind && !api.pendingAfterConsumer {
+				t.Fatal("unbound gate did not observe Pending after creating its consumer")
 			}
 			if tc.want == "ready" && runErr != nil {
 				t.Fatal("WFFC consumer chain did not finish", runErr)

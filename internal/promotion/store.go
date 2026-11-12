@@ -58,9 +58,9 @@ func (s *Store) SaveChain(ctx context.Context, projectID string, c Chain) (Chain
 	now := time.Now().UTC().Format(time.RFC3339)
 	err = configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
 		_, writeErr := q.ExecContext(txctx,
-			`INSERT INTO project_environments (project_id, chain_json, updated_at)
-		 VALUES (?, ?, ?) `+
-				store.UpsertSuffix(store.DialectOf(s.db), []string{"project_id"}, []string{"chain_json", "updated_at"}),
+			store.InsertSQL(store.DialectOf(s.db), "project_environments",
+				[]string{"project_id", "chain_json", "updated_at"}, []string{"?", "?", "?"},
+				[]string{"project_id"}, []string{"chain_json", "updated_at"}),
 			projectID, string(raw), now,
 		)
 		return writeErr

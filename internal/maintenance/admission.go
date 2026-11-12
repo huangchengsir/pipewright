@@ -51,26 +51,8 @@ func Fence(ctx context.Context, db *sql.DB, task string) error {
 		if e := configstate.CheckMaintenanceAdmission(ctx, q); e != nil {
 			return e
 		}
-		queries := []struct{ kind, sql string }{
-			{"terminal_sessions", "SELECT COUNT(*) FROM selfupdate_leases WHERE kind='terminal_pty'"},
-			{"admitted_work", "SELECT (SELECT COUNT(*) FROM selfupdate_leases WHERE kind<>'terminal_pty') + (SELECT COUNT(*) FROM oauth_credential_uses) + (SELECT COUNT(*) FROM k8s_runtime_leases WHERE cleanup_state<>'verified')"},
-			{"runs", "SELECT COUNT(*) FROM pipeline_runs WHERE status IN ('queued','running','waiting_approval')"},
-			{"activity_holds", "SELECT (SELECT COUNT(*) FROM project_activity WHERE released_at IS NULL) + (SELECT COUNT(*) FROM k8s_workload_holds)"},
-			{"guards", "SELECT COUNT(*) FROM release_guards WHERE status IN ('queued','binding','observing','stopping')"},
-			{"config_operations", "SELECT COUNT(*) FROM mcp_config_operations WHERE state IN ('pending','unknown')"},
-			{"ops_runs", "SELECT COUNT(*) FROM ops_chat_runs WHERE status IN ('queued','planning','running','analyzing')"}}
-		blocked := &BlockedError{}
-		for _, query := range queries {
-			var n int
-			if e := q.QueryRowContext(ctx, query.sql).Scan(&n); e != nil {
-				return e
-			}
-			if n > 0 {
-				blocked.Blockers = append(blocked.Blockers, Blocker{Kind: query.kind, Count: n})
-			}
-		}
-		if len(blocked.Blockers) > 0 {
-			return blocked
+		if e := Inspect(ctx, q); e != nil {
+			return e
 		}
 		_, e := q.ExecContext(ctx, "UPDATE selfupdate_control SET task_id=? WHERE id=1", task)
 		return e
@@ -79,4 +61,57 @@ func Fence(ctx context.Context, db *sql.DB, task string) error {
 func Unfence(ctx context.Context, db *sql.DB, task string) error {
 	_, e := db.ExecContext(ctx, "UPDATE selfupdate_control SET task_id='' WHERE id=1 AND task_id=?", task)
 	return e
+}
+
+// Inspect checks unresolved work without changing any business row. Recovery
+// processes use it after obtaining the exclusive process lock; cancellation or
+// an HTTP fence alone never proves that remote side effects have settled.
+func Inspect(ctx context.Context, db interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}) error {
+	queries := []struct{ kind, sql string }{
+		{"terminal_sessions", "SELECT COUNT(*) FROM selfupdate_leases WHERE kind='terminal_pty'"},
+		{"admitted_work", "SELECT (SELECT COUNT(*) FROM selfupdate_leases WHERE kind<>'terminal_pty') + (SELECT COUNT(*) FROM oauth_credential_uses) + (SELECT COUNT(*) FROM k8s_runtime_leases WHERE cleanup_state<>'verified')"},
+		{"runs", "SELECT COUNT(*) FROM pipeline_runs WHERE status IN ('queued','running','waiting_approval')"},
+		{"activity_holds", "SELECT (SELECT COUNT(*) FROM project_activity WHERE released_at IS NULL) + (SELECT COUNT(*) FROM k8s_workload_holds)"},
+		{"guards", "SELECT COUNT(*) FROM release_guards WHERE status IN ('queued','binding','observing','stopping')"},
+		{"config_operations", "SELECT COUNT(*) FROM mcp_config_operations WHERE state IN ('pending','unknown')"},
+		{"ops_runs", "SELECT COUNT(*) FROM ops_chat_runs WHERE status IN ('queued','planning','running','analyzing')"}}
+	blocked := &BlockedError{}
+	for _, query := range queries {
+		var n int
+		if e := db.QueryRowContext(ctx, query.sql).Scan(&n); e != nil {
+			return e
+		}
+		if n > 0 {
+			blocked.Blockers = append(blocked.Blockers, Blocker{Kind: query.kind, Count: n})
+		}
+	}
+	if len(blocked.Blockers) > 0 {
+		return blocked
+	}
+	return nil
+}
+
+// Drain closes admission atomically while already admitted work retains its
+// completion paths. Unlike the updater's Fence it deliberately allows blockers:
+// the migration controller waits for Inspect to become empty before process exit.
+func Drain(ctx context.Context, db *sql.DB, task string) error {
+	if task == "" {
+		return ErrBlocked
+	}
+	return configstate.WithWriteTx(ctx, db, func(q configstate.DBTX) error {
+		if e := configstate.CheckMaintenanceAdmission(ctx, q); e != nil {
+			return e
+		}
+		var updates int
+		if e := q.QueryRowContext(ctx, "SELECT COUNT(*) FROM selfupdate_tasks WHERE active_key IS NOT NULL").Scan(&updates); e != nil {
+			return e
+		}
+		if updates != 0 {
+			return ErrBlocked
+		}
+		_, e := q.ExecContext(ctx, "UPDATE selfupdate_control SET task_id=? WHERE id=1", task)
+		return e
+	})
 }

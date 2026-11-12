@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/huangchengsir/pipewright/internal/maintenance"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"io"
 	"strings"
 	"time"
@@ -88,7 +89,7 @@ func (s *Service) Analyses(ctx context.Context, project, guard string) ([]Analys
 	if r.EvidenceExpired {
 		return []Analysis{}, nil
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT analysis_json,status FROM release_guard_analyses WHERE guard_id=? ORDER BY created_at DESC LIMIT 20`, guard)
+	rows, err := s.db.QueryContext(ctx, `SELECT analysis_json,status FROM release_guard_analyses WHERE guard_id=? ORDER BY created_at DESC`+store.Limit(store.DialectOf(s.db), "20"), guard)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +129,7 @@ func (s *Service) PreviewAnalysis(ctx context.Context, project, guard string, in
 	if err != nil || provider.ConfigHash == "" || provider.Destination == "" {
 		return nil, ErrUnavailable
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT evidence_json FROM release_guard_evidence WHERE guard_id=? AND sequence<=? ORDER BY sequence DESC LIMIT 200`, guard, r.EventsCursor)
+	rows, err := s.db.QueryContext(ctx, `SELECT evidence_json FROM release_guard_evidence WHERE guard_id=? AND sequence<=? ORDER BY sequence DESC`+store.Limit(store.DialectOf(s.db), "200"), guard, r.EventsCursor)
 	if err != nil {
 		return nil, err
 	}

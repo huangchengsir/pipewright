@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/huangchengsir/pipewright/internal/kubernetes"
 	"github.com/huangchengsir/pipewright/internal/runretry"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"sort"
 	"time"
 )
@@ -87,7 +88,7 @@ func (s *Service) loadDeploymentsByEnv(ctx context.Context, projectID string) (m
 	if s.kubernetes != nil {
 		rows.Close()
 		refs := []runretry.KubernetesHistoryEntry{}
-		r, e := s.db.QueryContext(ctx, `SELECT o.run_id,o.id FROM k8s_operations o JOIN pipeline_runs r ON r.id=o.run_id WHERE r.project_id=? AND TRIM(r.resolved_environment)<>'' AND (o.dispatch_fenced=1 OR o.business_state='unchanged') ORDER BY o.created_at DESC LIMIT 500`, projectID)
+		r, e := s.db.QueryContext(ctx, `SELECT o.run_id,o.id FROM k8s_operations o JOIN pipeline_runs r ON r.id=o.run_id WHERE r.project_id=? AND TRIM(r.resolved_environment)<>'' AND (o.dispatch_fenced=1 OR o.business_state='unchanged') ORDER BY o.created_at DESC`+store.Limit(store.DialectOf(s.db), "500"), projectID)
 		if e != nil {
 			return nil, nil, e
 		}
@@ -104,7 +105,7 @@ func (s *Service) loadDeploymentsByEnv(ctx context.Context, projectID string) (m
 		if e != nil {
 			return nil, nil, e
 		}
-		releases, e := s.db.QueryContext(ctx, `SELECT o.run_id,o.id FROM k8s_releases o JOIN pipeline_runs r ON r.id=o.run_id WHERE r.project_id=? AND TRIM(r.resolved_environment)<>'' AND EXISTS(SELECT 1 FROM k8s_release_actions a WHERE a.release_id=o.id) ORDER BY o.created_at DESC LIMIT 500`, projectID)
+		releases, e := s.db.QueryContext(ctx, `SELECT o.run_id,o.id FROM k8s_releases o JOIN pipeline_runs r ON r.id=o.run_id WHERE r.project_id=? AND TRIM(r.resolved_environment)<>'' AND EXISTS(SELECT 1 FROM k8s_release_actions a WHERE a.release_id=o.id) ORDER BY o.created_at DESC`+store.Limit(store.DialectOf(s.db), "500"), projectID)
 		if e != nil {
 			return nil, nil, e
 		}
@@ -249,7 +250,7 @@ func (s *Service) loadDeploymentsByEnv(ctx context.Context, projectID string) (m
 // loadArtifacts 取某 run 的全部产物摘要(按创建序;供时间线展示 + 回滚选品)。
 func (s *Service) loadArtifacts(ctx context.Context, runID string) ([]Artifact, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, type, name, reference FROM run_artifacts
+		`SELECT id, type, name, `+store.Identifier(store.DialectOf(s.db), "reference")+` FROM run_artifacts
 		 WHERE run_id = ? ORDER BY created_at ASC, id ASC`, runID)
 	if err != nil {
 		return nil, fmt.Errorf("environments: query artifacts: %w", err)

@@ -86,7 +86,7 @@ func TestOpenWithConfig(t *testing.T) {
 	}
 	_ = s2.Close()
 
-	if _, err := OpenWithConfig(OpenConfig{Driver: "postgres", DSN: "x"}); err == nil {
+	if _, err := OpenWithConfig(OpenConfig{Driver: "unsupported", DSN: "x"}); err == nil {
 		t.Fatalf("expected error for unknown driver")
 	}
 }
@@ -122,4 +122,22 @@ func userTables(t *testing.T, s *Store) []string {
 		t.Fatalf("rows err: %v", err)
 	}
 	return tables
+}
+
+func TestConnectDoesNotInitializeSchema(t *testing.T) {
+	s, err := Connect(OpenConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "empty.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var count int
+	if err := s.DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table'").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("Connect initialized schema: count=%d err=%v", count, err)
+	}
+	if err := s.Migrate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil || count != 65 {
+		t.Fatalf("explicit migration count=%d err=%v", count, err)
+	}
 }

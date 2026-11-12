@@ -3,6 +3,7 @@ package kubernetes
 import (
 	"context"
 	"encoding/json"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"time"
 
 	"github.com/google/uuid"
@@ -129,7 +130,7 @@ func (s *Service) RequestReleaseContinue(ctx context.Context, id string, expecte
 	return out, e
 }
 func (s *Service) PendingReleaseContinuations(ctx context.Context) ([]ReleaseContinuation, error) {
-	rows, e := configstate.Queryer(ctx, s.db).QueryContext(ctx, `SELECT id,release_id,run_id,release_revision,action,state FROM k8s_release_continuations WHERE state IN ('pending','delivering') ORDER BY created_at,id LIMIT 500`)
+	rows, e := configstate.Queryer(ctx, s.db).QueryContext(ctx, `SELECT id,release_id,run_id,release_revision,action,state FROM k8s_release_continuations WHERE state IN ('pending','delivering') ORDER BY created_at,id`+store.Limit(store.DialectOf(s.db), "500"))
 	if e != nil {
 		return nil, e
 	}

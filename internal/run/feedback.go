@@ -132,11 +132,9 @@ func (s *feedbackService) SaveFeedback(ctx context.Context, in SaveFeedbackInput
 
 	// upsert by run_id(唯一约束冲突 → 覆盖最新;created_at 不动,updated_at 刷新)。
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO diagnosis_feedback
-		   (id, run_id, verdict, correct_root_cause, diagnosis_snapshot, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?) `+
-			store.UpsertSuffix(store.DialectOf(s.db), []string{"run_id"},
-				[]string{"verdict", "correct_root_cause", "diagnosis_snapshot", "updated_at"}),
+		store.InsertSQL(store.DialectOf(s.db), "diagnosis_feedback",
+			[]string{"id", "run_id", "verdict", "correct_root_cause", "diagnosis_snapshot", "created_at", "updated_at"}, []string{"?", "?", "?", "?", "?", "?", "?"},
+			[]string{"run_id"}, []string{"verdict", "correct_root_cause", "diagnosis_snapshot", "updated_at"}),
 		id, runID, verdict, correct, in.DiagnosisSnapshot, nowStr, nowStr,
 	)
 	if err != nil {
@@ -220,7 +218,7 @@ func (s *feedbackService) recentTrend(ctx context.Context) ([]TrendBucket, error
 	const window = 30
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT verdict, updated_at FROM diagnosis_feedback
-		 ORDER BY updated_at DESC, id DESC LIMIT ?`, window)
+		 ORDER BY updated_at DESC, id DESC`+store.Limit(store.DialectOf(s.db), "?"), window)
 	if err != nil {
 		return nil, fmt.Errorf("run: feedback trend: %w", err)
 	}
@@ -289,7 +287,7 @@ func (s *feedbackService) recentCorrections(ctx context.Context) ([]Correction, 
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT run_id, correct_root_cause, updated_at FROM diagnosis_feedback
 		 WHERE verdict = ? AND correct_root_cause <> ''
-		 ORDER BY updated_at DESC, id DESC LIMIT ?`, VerdictDown, recentCorrectionsLimit)
+		 ORDER BY updated_at DESC, id DESC`+store.Limit(store.DialectOf(s.db), "?"), VerdictDown, recentCorrectionsLimit)
 	if err != nil {
 		return nil, fmt.Errorf("run: feedback corrections: %w", err)
 	}

@@ -3,6 +3,7 @@ package runretry
 import (
 	"context"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"strings"
 	"time"
 )
@@ -144,7 +145,7 @@ func (s *Service) prepareContinuationNodes(ctx context.Context, run string, l li
 // audit. The Kubernetes controller still proves owner departure/cleanup and
 // activates it before Prepare can reset any preserved running node.
 func (s *Service) continuationRecoveryNodes(ctx context.Context) (map[string]map[string]bool, error) {
-	rows, e := s.q(ctx).QueryContext(ctx, `SELECT c.run_id,r.node_key FROM k8s_release_continuations c JOIN k8s_releases r ON r.id=c.release_id WHERE c.state IN ('pending','delivering','running') AND NOT EXISTS(SELECT 1 FROM k8s_release_actions a WHERE a.release_id=r.id AND a.state IN ('submitted','outcome_unknown')) ORDER BY c.run_id,r.node_key LIMIT 501`)
+	rows, e := s.q(ctx).QueryContext(ctx, `SELECT c.run_id,r.node_key FROM k8s_release_continuations c JOIN k8s_releases r ON r.id=c.release_id WHERE c.state IN ('pending','delivering','running') AND NOT EXISTS(SELECT 1 FROM k8s_release_actions a WHERE a.release_id=r.id AND a.state IN ('submitted','outcome_unknown')) ORDER BY c.run_id,r.node_key`+store.Limit(store.DialectOf(s.db), "501"))
 	if e != nil {
 		return nil, e
 	}

@@ -36,7 +36,9 @@ func (s *Service) bindContext(ctx context.Context, tx *sql.Tx, key, id string) e
 		_, err := tx.ExecContext(ctx, "UPDATE ops_chat_state SET active_session=? WHERE id=1", id)
 		return databaseError(err)
 	}
-	_, err := tx.ExecContext(ctx, "INSERT INTO ops_chat_contexts(context_key,session_id) VALUES(?,?) "+store.UpsertSuffix(store.DialectOf(s.db), []string{"context_key"}, []string{"session_id"}), key, id)
+	_, err := tx.ExecContext(ctx, store.InsertSQL(store.DialectOf(s.db), "ops_chat_contexts",
+		[]string{"context_key", "session_id"}, []string{"?", "?"},
+		[]string{"context_key"}, []string{"session_id"}), key, id)
 	return databaseError(err)
 }
 func (s *Service) ActivateContext(ctx context.Context, id, key string) error {

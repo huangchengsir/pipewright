@@ -404,9 +404,9 @@ func (s *settingsService) createDefault(ctx context.Context, projectID string) (
 	nowStr := now.Format(time.RFC3339)
 	err = configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
 		_, writeErr := q.ExecContext(txctx,
-			`INSERT INTO pipeline_settings (project_id, build_json, environments_json, created_at, updated_at)
-		 VALUES (?, ?, '[]', ?, ?) `+
-				store.DoNothingSuffix(store.DialectOf(s.db), []string{"project_id"}),
+			store.InsertSQL(store.DialectOf(s.db), "pipeline_settings",
+				[]string{"project_id", "build_json", "environments_json", "created_at", "updated_at"}, []string{"?", "?", "'[]'", "?", "?"},
+				[]string{"project_id"}, nil),
 			projectID, string(buildJSON), nowStr, nowStr,
 		)
 		return writeErr

@@ -125,9 +125,9 @@ func (s *parameterService) Save(ctx context.Context, projectID string, defs []Pa
 	now := time.Now().UTC().Format(time.RFC3339)
 	err = configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
 		_, writeErr := q.ExecContext(txctx,
-			`INSERT INTO project_parameters (project_id, defs_json, created_at, updated_at)
-		 VALUES (?, ?, ?, ?) `+
-				store.UpsertSuffix(store.DialectOf(s.db), []string{"project_id"}, []string{"defs_json", "updated_at"}),
+			store.InsertSQL(store.DialectOf(s.db), "project_parameters",
+				[]string{"project_id", "defs_json", "created_at", "updated_at"}, []string{"?", "?", "?", "?"},
+				[]string{"project_id"}, []string{"defs_json", "updated_at"}),
 			projectID, string(blob), now, now,
 		)
 		return writeErr

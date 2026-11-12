@@ -93,6 +93,8 @@ export default {
   errCheckStatus: '检查失败({status})',
   errCheckRetry: '检查失败,请稍后重试',
   restartingToNew: '正在重启到新版本…',
+  manualPrivateDriver: "当前达梦数据库需要包含您自备官方驱动的私有构建。请私有构建新版本后手动替换程序，不能安装公共升级包。",
+  databaseMigrationActive: "请先完成或取消数据库迁移，再安装应用升级。",
   manualUpgrade: '请手动升级。',
   updateFailed: '更新失败',
   errUpdateStatus: '更新失败({status})',

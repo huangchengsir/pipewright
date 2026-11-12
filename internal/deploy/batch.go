@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"path"
 	"sort"
 	"strings"
@@ -269,7 +270,7 @@ func (s *service) ListBatches(ctx context.Context, runID string) ([]BatchResult,
 	if s.batchDB == nil {
 		return nil, ErrBatchNotFound
 	}
-	rows, err := s.batchDB.QueryContext(ctx, `SELECT id FROM deploy_batches WHERE run_id=? ORDER BY created_at DESC LIMIT 50`, runID)
+	rows, err := s.batchDB.QueryContext(ctx, `SELECT id FROM deploy_batches WHERE run_id=? ORDER BY created_at DESC`+store.Limit(store.DialectOf(s.batchDB), "50"), runID)
 	if err != nil {
 		return nil, err
 	}

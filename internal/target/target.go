@@ -238,7 +238,7 @@ func (s *service) Create(ctx context.Context, in CreateInput) (*Server, error) {
 	nowStr := now.Format(time.RFC3339)
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO servers (id, name, host, port, user, credential_id, created_at, updated_at)
+		`INSERT INTO servers (id, name, host, port, `+store.Identifier(store.DialectOf(s.db), "user")+`, credential_id, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, in.Name, in.Host, port, in.User, in.CredentialID, nowStr, nowStr,
 	)
@@ -253,7 +253,7 @@ func (s *service) Create(ctx context.Context, in CreateInput) (*Server, error) {
 
 func (s *service) List(ctx context.Context) ([]*Server, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT s.id, s.name, s.host, s.port, s.user, s.credential_id,
+		`SELECT s.id, s.name, s.host, s.port, s.`+store.Identifier(store.DialectOf(s.db), "user")+`, s.credential_id,
 		        COALESCE(c.name, ''), s.created_at, s.updated_at
 		 FROM servers s
 		 LEFT JOIN credentials c ON c.id = s.credential_id
@@ -280,7 +280,7 @@ func (s *service) List(ctx context.Context) ([]*Server, error) {
 
 func (s *service) Get(ctx context.Context, id string) (*Server, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT s.id, s.name, s.host, s.port, s.user, s.credential_id,
+		`SELECT s.id, s.name, s.host, s.port, s.`+store.Identifier(store.DialectOf(s.db), "user")+`, s.credential_id,
 		        COALESCE(c.name, ''), s.created_at, s.updated_at
 		 FROM servers s
 		 LEFT JOIN credentials c ON c.id = s.credential_id
@@ -301,7 +301,7 @@ func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Serve
 	var name, host, user, credentialID string
 	var port int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT name, host, port, user, credential_id FROM servers WHERE id = ?`, id,
+		`SELECT name, host, port, `+store.Identifier(store.DialectOf(s.db), "user")+`, credential_id FROM servers WHERE id = ?`, id,
 	).Scan(&name, &host, &port, &user, &credentialID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -344,7 +344,7 @@ func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Serve
 
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 	_, err = s.db.ExecContext(ctx,
-		`UPDATE servers SET name = ?, host = ?, port = ?, user = ?, credential_id = ?, updated_at = ? WHERE id = ?`,
+		`UPDATE servers SET name = ?, host = ?, port = ?, `+store.Identifier(store.DialectOf(s.db), "user")+` = ?, credential_id = ?, updated_at = ? WHERE id = ?`,
 		name, host, port, user, credentialID, nowStr, id,
 	)
 	if err != nil {

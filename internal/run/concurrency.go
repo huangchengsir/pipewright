@@ -88,9 +88,9 @@ func (s *concurrencyService) Save(ctx context.Context, projectID string, maxConc
 	now := time.Now().UTC().Format(time.RFC3339)
 	err := configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
 		_, writeErr := q.ExecContext(txctx,
-			`INSERT INTO project_concurrency (project_id, max_concurrent, created_at, updated_at)
-		 VALUES (?, ?, ?, ?) `+
-				store.UpsertSuffix(store.DialectOf(s.db), []string{"project_id"}, []string{"max_concurrent", "updated_at"}),
+			store.InsertSQL(store.DialectOf(s.db), "project_concurrency",
+				[]string{"project_id", "max_concurrent", "created_at", "updated_at"}, []string{"?", "?", "?", "?"},
+				[]string{"project_id"}, []string{"max_concurrent", "updated_at"}),
 			projectID, maxConcurrent, now, now,
 		)
 		return writeErr

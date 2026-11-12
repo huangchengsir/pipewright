@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/store"
 )
 
 // artifacts.go 是「构建产物契约」的领域层(FR-6 / Story 3.4)。
@@ -102,7 +103,7 @@ func (s *service) AddArtifact(ctx context.Context, a Artifact) (*Artifact, error
 	}
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO run_artifacts
-		   (id, run_id, type, name, reference, size_bytes, metadata_json, created_at)
+		   (id, run_id, type, name, `+store.Identifier(store.DialectOf(s.db), "reference")+`, size_bytes, metadata_json, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		a.ID, a.RunID, a.Type, a.Name, a.Reference, a.SizeBytes, metaJSON,
 		a.CreatedAt.UTC().Format(time.RFC3339),
@@ -127,7 +128,7 @@ func (s *service) AddArtifact(ctx context.Context, a Artifact) (*Artifact, error
 // (返回空切片);HTTP 层据 run 存在性决定 404(仿 GetLogs 语义)。参数化 SQL。
 func (s *service) listOwnArtifacts(ctx context.Context, runID string) ([]Artifact, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, run_id, type, name, reference, size_bytes, metadata_json, created_at
+		`SELECT id, run_id, type, name, `+store.Identifier(store.DialectOf(s.db), "reference")+`, size_bytes, metadata_json, created_at
 		 FROM run_artifacts WHERE run_id = ? ORDER BY created_at ASC, id ASC`, runID)
 	if err != nil {
 		return nil, fmt.Errorf("run: load artifacts: %w", err)

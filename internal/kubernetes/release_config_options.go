@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/store"
 )
 
 // ReleaseConfigOptions reads configured metadata only. It neither opens a
@@ -13,7 +14,7 @@ func (s *Service) ReleaseConfigOptions(ctx context.Context, project string) ([]m
 		return nil, ErrInvalid
 	}
 	q := configstate.Queryer(ctx, s.db)
-	rows, e := q.QueryContext(ctx, `SELECT g.grant_json,c.connection_json,COALESCE(p.enabled,0) FROM k8s_release_grants g JOIN k8s_connections c ON c.id=g.connection_id LEFT JOIN k8s_release_profiles p ON p.connection_id=c.id WHERE g.project_id=? ORDER BY g.id LIMIT 4097`, project)
+	rows, e := q.QueryContext(ctx, `SELECT g.grant_json,c.connection_json,COALESCE(p.enabled,0) FROM k8s_release_grants g JOIN k8s_connections c ON c.id=g.connection_id LEFT JOIN k8s_release_profiles p ON p.connection_id=c.id WHERE g.project_id=? ORDER BY g.id`+store.Limit(store.DialectOf(s.db), "4097"), project)
 	if e != nil {
 		return nil, e
 	}

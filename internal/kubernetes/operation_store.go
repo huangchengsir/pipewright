@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/store"
 
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/configstate"
@@ -171,13 +172,13 @@ func (s *Service) ListOperations(ctx context.Context, runID string) ([]Operation
 	if !validID(runID) {
 		return nil, ErrInvalid
 	}
-	return s.queryOperations(ctx, `SELECT id FROM k8s_operations WHERE run_id=? ORDER BY created_at,id LIMIT 500`, runID)
+	return s.queryOperations(ctx, `SELECT id FROM k8s_operations WHERE run_id=? ORDER BY created_at,id`+store.Limit(store.DialectOf(s.db), "500"), runID)
 }
 
 // PendingRecovery lists bounded original operations; it never executes a tool or
 // takes over a lease. Fencing/cleanup require separate identity-proved actions.
 func (s *Service) PendingRecovery(ctx context.Context) ([]Operation, error) {
-	return s.queryOperations(ctx, `SELECT id FROM k8s_operations WHERE retired=0 AND (owner_fenced=0 OR cleanup_state<>'verified' OR business_state IN ('not_dispatched','submitted','outcome_unknown') OR EXISTS(SELECT 1 FROM k8s_workload_holds h WHERE h.operation_id=k8s_operations.id)) ORDER BY created_at,id LIMIT 500`)
+	return s.queryOperations(ctx, `SELECT id FROM k8s_operations WHERE retired=0 AND (owner_fenced=0 OR cleanup_state<>'verified' OR business_state IN ('not_dispatched','submitted','outcome_unknown') OR EXISTS(SELECT 1 FROM k8s_workload_holds h WHERE h.operation_id=k8s_operations.id)) ORDER BY created_at,id`+store.Limit(store.DialectOf(s.db), "500"))
 }
 func (s *Service) queryOperations(ctx context.Context, query string, args ...any) ([]Operation, error) {
 	q := configstate.Queryer(ctx, s.db)

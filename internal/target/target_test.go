@@ -302,32 +302,15 @@ func TestExecErrorNeverLeaksSecret(t *testing.T) {
 // TestExecVaultUnconfigured 验证未配 master key → 干净错误(不 panic、不泄漏)。
 func TestExecVaultUnconfigured(t *testing.T) {
 	db := testDB(t)
-	// nil key ⇒ 未配置态。
-	v := vault.New(db, nil)
-	// 直接插一行服务器(绕过 vault),引用任意 credential_id。
-	mustInsertServer(t, db, "srv1", "missingcred")
-	svc := New(db, v, &capturingDialer{})
-
-	if _, err := svc.Exec(context.Background(), "srv1", []string{"uname"}); err != ErrVaultUnconfigured {
+	credential := newSSHCred(t, vault.New(db, testMasterKey()), "fixture")
+	svc := New(db, vault.New(db, nil), &capturingDialer{})
+	server, err := svc.Create(context.Background(), CreateInput{Name: "n", Host: "h", User: "u", CredentialID: credential})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Exec(context.Background(), server.ID, []string{"uname"}); err != ErrVaultUnconfigured {
 		t.Fatalf("Exec = %v, want ErrVaultUnconfigured", err)
 	}
-}
-
-// mustInsertServer 直接插服务器行(测试用;credential_id 可指向不存在凭据需先关外键)。
-func mustInsertServer(t *testing.T, db *sql.DB, id, credID string) {
-	t.Helper()
-	now := time.Now().UTC().Format(time.RFC3339)
-	// 关外键以便插引用不存在凭据的行(仅测试)。两方言各发一条,另一条无效即被忽略。
-	_, _ = db.Exec(`PRAGMA foreign_keys = OFF`)  // SQLite
-	_, _ = db.Exec(`SET FOREIGN_KEY_CHECKS = 0`) // MySQL
-	if _, err := db.Exec(
-		"INSERT INTO servers (id, name, host, port, `user`, credential_id, created_at, updated_at)"+
-			` VALUES (?, 'n', 'h', 22, 'u', ?, ?, ?)`, id, credID, now, now,
-	); err != nil {
-		t.Fatalf("insert server: %v", err)
-	}
-	_, _ = db.Exec(`PRAGMA foreign_keys = ON`)
-	_, _ = db.Exec(`SET FOREIGN_KEY_CHECKS = 1`)
 }
 
 // ─── 本机真连(localhost:22):本机 sshd 在则真测,否则 t.Skip ─────────────────────

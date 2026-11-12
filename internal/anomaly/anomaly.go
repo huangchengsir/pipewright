@@ -17,6 +17,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"sync"
 	"time"
 
@@ -558,15 +559,13 @@ func (s *service) ListAlerts(ctx context.Context, serverID string, limit int) ([
 			`SELECT `+alertColumns+`
 			 FROM anomaly_alerts
 			 WHERE server_id = ?
-			 ORDER BY created_at DESC, id
-			 LIMIT ?`, serverID, limit,
+			 ORDER BY created_at DESC, id`+store.Limit(store.DialectOf(s.db), "?"), serverID, limit,
 		)
 	} else {
 		rows, err = s.db.QueryContext(ctx,
 			`SELECT `+alertColumns+`
 			 FROM anomaly_alerts
-			 ORDER BY created_at DESC, id
-			 LIMIT ?`, limit,
+			 ORDER BY created_at DESC, id`+store.Limit(store.DialectOf(s.db), "?"), limit,
 		)
 	}
 	if err != nil {

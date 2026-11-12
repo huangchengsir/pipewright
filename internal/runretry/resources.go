@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"time"
 )
 
@@ -261,7 +262,7 @@ func (s *Service) Reconcile(ctx context.Context, id string) (*ReconcileResult, e
 		}
 		for _, r := range resources {
 			if verified[r.ID] {
-				if _, err := q.ExecContext(tx, "UPDATE run_retry_resources SET state='drained',updated_at=? WHERE id=? AND ciphertext=?", time.Now().UnixMilli(), r.ID, r.cipher); err != nil {
+				if _, err := q.ExecContext(tx, "UPDATE run_retry_resources SET state='drained',updated_at=? WHERE id=? AND "+store.BlobEqual(store.DialectOf(s.db), "ciphertext"), time.Now().UnixMilli(), r.ID, r.cipher); err != nil {
 					return err
 				}
 			}

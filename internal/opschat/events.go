@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"strconv"
 	"strings"
 	"sync"
@@ -71,7 +72,7 @@ func (s *Service) entryPage(ctx context.Context, q querier, id, cursor string, l
 			out.Cursor = EventCursor(id, out.Watermark)
 			return out, ErrReset
 		}
-		query = `SELECT seq,kind,run_id,call_id,body,created_at FROM ops_chat_entries WHERE session_id=? AND seq>? AND created_at>=? ORDER BY seq LIMIT ?`
+		query = `SELECT seq,kind,run_id,call_id,body,created_at FROM ops_chat_entries WHERE session_id=? AND seq>? AND created_at>=? ORDER BY seq` + store.Limit(store.DialectOf(s.db), "?")
 		args = append(args, seq, cutoff, limit)
 	} else {
 		if cursor != "" {
@@ -85,7 +86,7 @@ func (s *Service) entryPage(ctx context.Context, q querier, id, cursor string, l
 			query += " AND seq<?"
 			args = append(args, seq)
 		}
-		query += " ORDER BY seq DESC LIMIT ?"
+		query += " ORDER BY seq DESC" + store.Limit(store.DialectOf(s.db), "?")
 		args = append(args, limit)
 	}
 	rows, err := q.QueryContext(ctx, query, args...)
@@ -262,7 +263,7 @@ func (s *Service) ListContext(ctx context.Context, before string, limit int, key
 			query += " WHERE id<?"
 			args = append(args, before)
 		}
-		query += " ORDER BY id DESC LIMIT ?"
+		query += " ORDER BY id DESC" + store.Limit(store.DialectOf(s.db), "?")
 		args = append(args, limit+1)
 		rows, e := tx.QueryContext(ctx, query, args...)
 		if e != nil {
@@ -319,7 +320,7 @@ func (s *Service) Snapshot(ctx context.Context, id string) (*Snapshot, error) {
 				visibleRuns[entry.RunID] = true
 			}
 		}
-		rows, e := tx.QueryContext(ctx, "SELECT id FROM ops_chat_runs WHERE session_id=? ORDER BY created_at DESC,id DESC LIMIT 100", id)
+		rows, e := tx.QueryContext(ctx, "SELECT id FROM ops_chat_runs WHERE session_id=? ORDER BY created_at DESC,id DESC"+store.Limit(store.DialectOf(s.db), "100"), id)
 		if e != nil {
 			return ErrStorage
 		}
@@ -467,7 +468,7 @@ func (s *Service) notify(id string) {
 	}
 }
 func (s *Service) contextMessages(ctx context.Context, id string) ([]Message, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT kind,body FROM ops_chat_entries WHERE session_id=? AND context_allowed=1 ORDER BY seq DESC LIMIT 20`, id)
+	rows, err := s.db.QueryContext(ctx, `SELECT kind,body FROM ops_chat_entries WHERE session_id=? AND context_allowed=1 ORDER BY seq DESC`+store.Limit(store.DialectOf(s.db), "20"), id)
 	if err != nil {
 		return nil, ErrStorage
 	}

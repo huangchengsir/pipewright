@@ -3,6 +3,7 @@ package releaseguard
 import (
 	"context"
 	"encoding/json"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"time"
 
 	"github.com/huangchengsir/pipewright/internal/deployattempt"
@@ -281,7 +282,7 @@ func (s *Service) ListAttempts(ctx context.Context, runID string) ([]AttemptView
 	out := []AttemptView{}
 	for _, a := range list {
 		v := AttemptView{Attempt: a, Guards: []ReportSummary{}}
-		rows, e := s.db.QueryContext(ctx, `SELECT record_json FROM release_guards WHERE attempt_id=? AND project_id=? ORDER BY created_at DESC LIMIT 50`, a.ID, rn.ProjectID)
+		rows, e := s.db.QueryContext(ctx, `SELECT record_json FROM release_guards WHERE attempt_id=? AND project_id=? ORDER BY created_at DESC`+store.Limit(store.DialectOf(s.db), "50"), a.ID, rn.ProjectID)
 		if e != nil {
 			return nil, e
 		}

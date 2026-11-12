@@ -3,6 +3,7 @@ package kubernetes
 import (
 	"context"
 	"encoding/json"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"time"
 )
 
@@ -41,7 +42,7 @@ func (s *Service) RecordReleaseChecks(ctx context.Context, id, owner string, che
 			}
 		}
 		var actionID string
-		if e = q.QueryRowContext(ctx, `SELECT id FROM k8s_release_actions WHERE release_id=? AND state='verified' ORDER BY created_at,id LIMIT 1`, id).Scan(&actionID); e != nil {
+		if e = q.QueryRowContext(ctx, `SELECT id FROM k8s_release_actions WHERE release_id=? AND state='verified' ORDER BY created_at,id`+store.Limit(store.DialectOf(s.db), "1"), id).Scan(&actionID); e != nil {
 			return e
 		}
 		action, e := s.action(ctx, q, actionID)

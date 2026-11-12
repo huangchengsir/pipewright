@@ -22,15 +22,17 @@ const { t } = useI18n()
 const confirm = useConfirm()
 
 const typeInput = ref('')
+const acknowledged = ref(false)
 const dialogRef = ref<HTMLElement | null>(null)
-const inputRef  = ref<HTMLInputElement | null>(null)
+const inputRef = ref<HTMLInputElement | null>(null)
 let focusedBeforeOpen: HTMLElement | null = null
 
 const isOpen = computed(() => confirm.pending.value !== null)
-const opts   = computed(() => confirm.pending.value?.options)
+const opts = computed(() => confirm.pending.value?.options)
 const variant = computed(() => opts.value?.variant ?? 'danger')
 
 const typeMatch = computed(() => {
+  if (opts.value?.confirmCheck && !acknowledged.value) return false
   if (!opts.value?.confirmText) return true
   return typeInput.value === opts.value.confirmText
 })
@@ -50,7 +52,7 @@ function onKeydown(e: KeyboardEvent) {
       'button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])',
     )
     const first = focusable[0]
-    const last  = focusable[focusable.length - 1]
+    const last = focusable[focusable.length - 1]
 
     if (e.shiftKey) {
       if (document.activeElement === first) {
@@ -69,13 +71,16 @@ function onKeydown(e: KeyboardEvent) {
 watch(isOpen, async (opened) => {
   if (opened) {
     typeInput.value = ''
+    acknowledged.value = false
     focusedBeforeOpen = document.activeElement as HTMLElement
     await nextTick()
     if (opts.value?.confirmText && inputRef.value) {
       inputRef.value.focus()
     } else {
       // Focus the cancel button by default (safer for destructive ops)
-      const cancelBtn = dialogRef.value?.querySelector<HTMLElement>('.cfm-dialog__cancel')
+      const cancelBtn = dialogRef.value?.querySelector<HTMLElement>(
+        '.cfm-dialog__cancel',
+      )
       cancelBtn?.focus()
     }
   } else {
@@ -118,8 +123,17 @@ function doConfirm() {
         <!-- Header -->
         <div class="cfm-dialog__header">
           <span class="cfm-dialog__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.9"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path
+                d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"
+              />
             </svg>
           </span>
           <h2 id="cfm-title" class="cfm-dialog__title">{{ opts.title }}</h2>
@@ -129,23 +143,37 @@ function doConfirm() {
         <div class="cfm-dialog__body">
           <p>{{ opts.body }}</p>
 
+          <label v-if="opts.confirmCheck" class="cfm-dialog__acknowledgement"
+            ><input v-model="acknowledged" type="checkbox" />{{
+              opts.confirmCheck
+            }}</label
+          >
           <!-- Type-to-confirm input -->
           <div v-if="opts.confirmText" class="cfm-dialog__type-field">
             <label :for="`cfm-input`" class="cfm-dialog__type-label">
-              {{ t('misc.confirm.typeLabelPrefix') }} <code class="mono">{{ opts.confirmText }}</code> {{ t('misc.confirm.typeLabelSuffix') }}
+              {{ t('misc.confirm.typeLabelPrefix') }}
+              <code class="mono">{{ opts.confirmText }}</code>
+              {{ t('misc.confirm.typeLabelSuffix') }}
             </label>
             <input
               id="cfm-input"
               ref="inputRef"
               v-model="typeInput"
               class="cfm-dialog__type-input"
-              :class="{ 'cfm-dialog__type-input--match': typeMatch && typeInput.length > 0 }"
+              :class="{
+                'cfm-dialog__type-input--match':
+                  typeMatch && typeInput.length > 0,
+              }"
               type="text"
-              :placeholder="t('misc.confirm.typePlaceholder', { text: opts.confirmText })"
+              :placeholder="
+                t('misc.confirm.typePlaceholder', { text: opts.confirmText })
+              "
               autocomplete="off"
               autocorrect="off"
               spellcheck="false"
-              :aria-label="t('misc.confirm.typeAria', { text: opts.confirmText })"
+              :aria-label="
+                t('misc.confirm.typeAria', { text: opts.confirmText })
+              "
             />
           </div>
         </div>
@@ -153,11 +181,9 @@ function doConfirm() {
         <!-- Footer -->
         <div class="cfm-dialog__footer">
           <span class="cfm-dialog__spacer" />
-          <button
-            class="cfm-dialog__cancel"
-            type="button"
-            @click="cancel"
-          >{{ t('misc.confirm.cancel') }}</button>
+          <button class="cfm-dialog__cancel" type="button" @click="cancel">
+            {{ t('misc.confirm.cancel') }}
+          </button>
           <button
             class="cfm-dialog__confirm"
             :class="{ 'cfm-dialog__confirm--disabled': !typeMatch }"
@@ -174,6 +200,18 @@ function doConfirm() {
 </template>
 
 <style scoped>
+.cfm-dialog__acknowledgement {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 14px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.cfm-dialog__acknowledgement input {
+  margin-top: 4px;
+  flex-shrink: 0;
+}
 /* ——— Overlay ——— */
 .cfm-overlay {
   position: fixed;
@@ -290,7 +328,9 @@ function doConfirm() {
   background: var(--color-card-2);
 }
 
-.cfm-dialog__spacer { flex: 1; }
+.cfm-dialog__spacer {
+  flex: 1;
+}
 
 .cfm-dialog__cancel {
   height: 34px;
@@ -307,7 +347,10 @@ function doConfirm() {
     color var(--duration-fast),
     border-color var(--duration-fast);
 }
-.cfm-dialog__cancel:hover { color: var(--color-text); border-color: var(--color-faint); }
+.cfm-dialog__cancel:hover {
+  color: var(--color-text);
+  border-color: var(--color-faint);
+}
 .cfm-dialog__cancel:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;

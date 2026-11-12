@@ -44,6 +44,7 @@ const SettingsNotifications = () => import('../views/settings/SettingsNotificati
 // Story 7-5: diagnosis feedback-loop stats (FR-26)
 const SettingsDiagnosisStats = () => import('../views/settings/SettingsDiagnosisStats.vue')
 // 系统信息 + 一键检查更新
+const SettingsDatabase = () => import('../views/settings/SettingsDatabase.vue')
 const SettingsSystem = () => import('../views/settings/SettingsSystem.vue')
 // Story 2-2: new pipeline editor
 const ProjectPipeline = () => import('../views/ProjectPipeline.vue')
@@ -63,6 +64,7 @@ const ServerTerminal = () => import('../views/ServerTerminal.vue')
 const router = createRouter({
   history: createWebHistory(),
   routes: [
+ {path: '/database-recovery',name:'database-recovery',component:SettingsDatabase,props:{recovery:true},meta:{public:true}},
     // ——— Shell-outside: Login (no rail) ———
     {
       path: '/login',
@@ -158,6 +160,7 @@ const router = createRouter({
             { path: 'kubernetes', name: 'settings-kubernetes', component: SettingsKubernetes, meta: { title: 'Kubernetes' } },
             { path: 'mcp', name: 'settings-mcp', component: SettingsMCP, meta: { title: 'MCP' } },
             // 系统信息 + 一键检查更新
+            {path:'database',name:'settings-database',component:SettingsDatabase},
             { path: 'system', name: 'settings-system', component: SettingsSystem, meta: { title: '系统信息' } },
             // Story 4-1: target servers + shared SSH layer (FR-14)
             { path: 'servers', name: 'settings-servers', component: SettingsServers, meta: { title: '服务器' } },

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"sort"
 
 	"github.com/google/uuid"
@@ -265,7 +266,7 @@ func (s *Service) ApproveRelease(ctx context.Context, id, owner string, expected
 }
 func (s *Service) ListReleases(ctx context.Context, run string) ([]ReleaseRecord, error) {
 	q := configstate.Queryer(ctx, s.db)
-	rows, e := q.QueryContext(ctx, `SELECT id FROM k8s_releases WHERE run_id=? ORDER BY created_at,id LIMIT 500`, run)
+	rows, e := q.QueryContext(ctx, `SELECT id FROM k8s_releases WHERE run_id=? ORDER BY created_at,id`+store.Limit(store.DialectOf(s.db), "500"), run)
 	if e != nil {
 		return nil, e
 	}

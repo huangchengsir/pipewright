@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"strconv"
 	"time"
 )
@@ -378,7 +379,7 @@ func (s *Service) applyReleaseReconciliation(ctx context.Context, parent Release
 		}
 		if len(checks) > 0 && verified > 0 {
 			var id string
-			if e = q.QueryRowContext(ctx, `SELECT id FROM k8s_release_actions WHERE release_id=? AND state='verified' ORDER BY created_at,id LIMIT 1`, parent.ID).Scan(&id); e != nil {
+			if e = q.QueryRowContext(ctx, `SELECT id FROM k8s_release_actions WHERE release_id=? AND state='verified' ORDER BY created_at,id`+store.Limit(store.DialectOf(s.db), "1"), parent.ID).Scan(&id); e != nil {
 				return e
 			}
 			action, e := s.action(ctx, q, id)

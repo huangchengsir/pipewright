@@ -202,7 +202,9 @@ func (s *Service) Submit(ctx context.Context, runID string, in SubmitInput) (*Re
 					keys = append(keys, f.Key)
 				}
 				for _, key := range keys {
-					if _, err = q.ExecContext(tx, `INSERT INTO run_retry_refs(owner_attempt_id,producer_attempt_id,producer_node_key,object_key,purpose,created_at) VALUES(?,?,?,?,?,?) `+store.DoNothingSuffix(store.DialectOf(s.db), []string{"owner_attempt_id", "producer_attempt_id", "producer_node_key", "object_key"}), id, source, sourceKey, key, "recovery", now.UnixMilli()); err != nil {
+					if _, err = q.ExecContext(tx, store.InsertSQL(store.DialectOf(s.db), "run_retry_refs",
+						[]string{"owner_attempt_id", "producer_attempt_id", "producer_node_key", "object_key", "purpose", "created_at"}, []string{"?", "?", "?", "?", "?", "?"},
+						[]string{"owner_attempt_id", "producer_attempt_id", "producer_node_key", "object_key"}, nil), id, source, sourceKey, key, "recovery", now.UnixMilli()); err != nil {
 						return err
 					}
 				}

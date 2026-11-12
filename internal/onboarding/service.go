@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"strings"
 	"time"
 
@@ -125,7 +126,7 @@ func (s *Service) Status(ctx context.Context, preferred string) Snapshot {
 	}
 	if selected < 0 {
 		var latestProject string
-		err := s.db.QueryRowContext(ctx, `SELECT r.project_id FROM pipeline_runs r JOIN projects p ON p.id = r.project_id ORDER BY r.created_at DESC, r.id DESC LIMIT 1`).Scan(&latestProject)
+		err := s.db.QueryRowContext(ctx, `SELECT r.project_id FROM pipeline_runs r JOIN projects p ON p.id = r.project_id ORDER BY r.created_at DESC, r.id DESC`+store.Limit(store.DialectOf(s.db), "1")).Scan(&latestProject)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			out.RunsState = Unknown
 		}
@@ -198,7 +199,7 @@ func (s *Service) projects(ctx context.Context) ([]projectRecord, error) {
 
 func (s *Service) readRun(ctx context.Context, where string, args ...any) (*RunSummary, error) {
 	var r RunSummary
-	err := s.db.QueryRowContext(ctx, `SELECT id, project_id, status, execution_mode, created_at FROM pipeline_runs `+where+` ORDER BY created_at DESC, id DESC LIMIT 1`, args...).Scan(&r.ID, &r.ProjectID, &r.Status, &r.ExecutionMode, &r.CreatedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT id, project_id, status, execution_mode, created_at FROM pipeline_runs `+where+` ORDER BY created_at DESC, id DESC`+store.Limit(store.DialectOf(s.db), "1"), args...).Scan(&r.ID, &r.ProjectID, &r.Status, &r.ExecutionMode, &r.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

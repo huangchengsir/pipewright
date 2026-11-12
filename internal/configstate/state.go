@@ -39,7 +39,9 @@ func EnsureProject(ctx context.Context, q DBTX, db *sql.DB, id string) error {
 	if exists != 1 {
 		return ErrNotFound
 	}
-	_, err := q.ExecContext(ctx, "INSERT INTO project_config_versions(project_id,revision) VALUES (?,1) "+store.DoNothingSuffix(store.DialectOf(db), []string{"project_id"}), id)
+	_, err := q.ExecContext(ctx, store.InsertSQL(store.DialectOf(db), "project_config_versions",
+		[]string{"project_id", "revision"}, []string{"?", "1"},
+		[]string{"project_id"}, nil), id)
 	return err
 }
 func ReadRevision(ctx context.Context, q DBTX, id string) (int64, error) {
@@ -57,8 +59,8 @@ func LockProject(ctx context.Context, q DBTX, db *sql.DB, id string) (int64, err
 	if err := EnsureProject(lockCtx, q, db, id); err != nil {
 		return 0, err
 	}
-	stmt := "SELECT revision,deleted_at FROM project_config_versions WHERE project_id=?"
-	if store.DialectOf(db) == store.MySQL {
+	stmt := "SELECT revision,deleted_at FROM project_config_versions" + store.LockHint(store.DialectOf(db), true) + " WHERE project_id=?"
+	if store.DialectOf(db).RowLocks() && store.DialectOf(db) != store.SQLServer {
 		stmt += " FOR UPDATE"
 	}
 	var rev int64
@@ -130,8 +132,8 @@ func LockEpochs(ctx context.Context, q DBTX, db *sql.DB, names ...string) error 
 		if i > 0 && name == items[i-1] {
 			continue
 		}
-		stmt := "SELECT value FROM config_control_epochs WHERE name=?"
-		if store.DialectOf(db) == store.MySQL {
+		stmt := "SELECT value FROM config_control_epochs" + store.LockHint(store.DialectOf(db), true) + " WHERE name=?"
+		if store.DialectOf(db).RowLocks() && store.DialectOf(db) != store.SQLServer {
 			stmt += " FOR UPDATE"
 		}
 		var value int64

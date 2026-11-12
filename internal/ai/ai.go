@@ -252,11 +252,9 @@ func (s *service) Save(ctx context.Context, in SaveInput) (*Config, error) {
 			return configstate.ErrConflict
 		}
 		_, err = q.ExecContext(txctx,
-			`INSERT INTO ai_config
-		   (id, provider, base_url, model, api_key_ciphertext, budget_json, enabled, created_at, updated_at)
-		 VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?) `+
-				store.UpsertSuffix(store.DialectOf(s.db), []string{"id"},
-					[]string{"provider", "base_url", "model", "api_key_ciphertext", "budget_json", "enabled", "updated_at"}),
+			store.InsertSQL(store.DialectOf(s.db), "ai_config",
+				[]string{"id", "provider", "base_url", "model", "api_key_ciphertext", "budget_json", "enabled", "created_at", "updated_at"}, []string{"1", "?", "?", "?", "?", "?", "?", "?", "?"},
+				[]string{"id"}, []string{"provider", "base_url", "model", "api_key_ciphertext", "budget_json", "enabled", "updated_at"}),
 			provider, baseURL, strings.TrimSpace(in.Model), sealed, string(budgetJSON), enabled, nowStr, nowStr,
 		)
 		if err != nil {

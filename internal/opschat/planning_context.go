@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"strconv"
 	"strings"
 	"time"
@@ -63,7 +64,7 @@ func (s *Service) containerObservations(ctx context.Context, id string, targets 
 func (s *Service) recentContainerCall(ctx context.Context, id string, snapshot target.ConnectionSnapshot, now time.Time) (*Call, string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT body FROM ops_chat_calls
 		WHERE session_id=? AND server_id=? AND tool_id=? AND status=?
-		ORDER BY created_at DESC,id DESC LIMIT 8`, id, snapshot.Server.ID, "docker_containers", Succeeded)
+		ORDER BY created_at DESC,id DESC`+store.Limit(store.DialectOf(s.db), "8"), id, snapshot.Server.ID, "docker_containers", Succeeded)
 	if err != nil {
 		return nil, "", ErrStorage
 	}

@@ -93,6 +93,8 @@ export default {
   errCheckStatus: '檢查失敗({status})',
   errCheckRetry: '檢查失敗,請稍後重試',
   restartingToNew: '正在重新啟動到新版本…',
+  manualPrivateDriver: "目前達夢資料庫需要包含您自備官方驅動的私有建置。請私有建置新版本後手動替換程式，不能安裝公開升級套件。",
+  databaseMigrationActive: "請先完成或取消資料庫遷移，再安裝應用程式升級。",
   manualUpgrade: '請手動升級。',
   updateFailed: '更新失敗',
   errUpdateStatus: '更新失敗({status})',

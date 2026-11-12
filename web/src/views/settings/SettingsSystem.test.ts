@@ -13,6 +13,25 @@ const sourceConfig = (source: 'github' | 'gitee' = 'github', revision = 1, gitee
  { id: 'gitee', name: 'Gitee', repository: giteeAvailable ? 'mirror/repo' : '', available: giteeAvailable },
 ] })
 describe('system upgrade task presentation', () => {
+ it('explains private DM upgrades in all eight locales without a public install command', async () => {
+  mocks.current.mockResolvedValue(null)
+  mocks.check.mockResolvedValue({ current: '1.0.0', latest: '2.0.0', updateAvailable: true })
+  mocks.start.mockResolvedValue({ status: 'manual', mode: 'binary', reason: 'private_driver_build' })
+  const w = mount(SettingsSystem); wrappers.push(w); await flushPromises()
+  await w.findAll('button').find(b => b.text().includes(i18n.global.t('settingsSystem.checkUpdate')))!.trigger('click'); await flushPromises()
+  await w.findAll('button').find(b => b.text().includes(i18n.global.t('settingsSystem.updateNow')))!.trigger('click'); await flushPromises()
+  const seen = new Set<string>()
+  for (const { code } of SUPPORTED_LOCALES) {
+   i18n.global.locale.value = code; await flushPromises()
+   const message = i18n.global.t('settingsSystem.manualPrivateDriver')
+   expect(w.text()).toContain(message); seen.add(message)
+  }
+  expect(seen.size).toBe(8)
+  expect(w.text()).not.toContain('docker pull')
+  expect(mocks.start).toHaveBeenCalledOnce()
+  expect(sessionStorage.getItem('pipewright.update.pending')).toBeNull()
+ })
+
  beforeEach(() => { vi.resetAllMocks(); sessionStorage.clear(); mocks.sourceGet.mockResolvedValue(sourceConfig()); mocks.version.mockResolvedValue({ version: '1.0.0', commit: 'test', platform: 'linux/amd64', date: '2026-10-27T00:00:00Z', goVersion: 'go1.26' }); mocks.current.mockResolvedValue({ id: 'task', requestId: 'request', repository: 'owner/repo', target: '2.0.0', from: '1.0.0', platform: 'linux_amd64', asset: 'fixed-package', sha256: 'a'.repeat(64), state: 'ready_blocked', bytes: 100, total: 100, blockers: [{ kind: 'guards', count: 1 }], updatedAt: '2026-10-27T00:00:00Z' }) })
  afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); i18n.global.locale.value = 'zh-CN'; vi.useRealTimers(); vi.restoreAllMocks() })
  it('keeps task status visible without a fresh update check', async () => { const w = mount(SettingsSystem); wrappers.push(w); await flushPromises(); expect(w.get('[data-testid="upgrade-task"]').text()).toContain('2.0.0'); expect(mocks.check).not.toHaveBeenCalled(); expect(mocks.start).not.toHaveBeenCalled(); expect(mocks.resume).not.toHaveBeenCalled() })

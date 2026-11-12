@@ -1,0 +1,14 @@
+-- DM8 standard mode explicit migration. VARCHAR character lengths and native FKs.
+-- DDL implicitly commits: incomplete versions fail closed and require inspection.
+CREATE TABLE "DNS_PROVIDERS" (
+ "ID" VARCHAR(64 CHAR) NOT NULL,
+ "TYPE" VARCHAR(32 CHAR) NOT NULL,
+ "NAME" VARCHAR(255 CHAR) NOT NULL,
+ "CREDENTIAL_ID" VARCHAR(64 CHAR) NOT NULL,
+ "BASE_DOMAIN" VARCHAR(253 CHAR) NOT NULL,
+ "CREATED_AT" VARCHAR(32 CHAR) NOT NULL,
+ "UPDATED_AT" VARCHAR(32 CHAR) NOT NULL,
+ NOT CLUSTER PRIMARY KEY ("ID")
+) STORAGE(USING LONG ROW);
+-- pipewright:statement
+CREATE INDEX "IDX_DNS_PROVIDERS_TYPE" ON "DNS_PROVIDERS" ("TYPE");

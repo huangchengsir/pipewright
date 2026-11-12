@@ -3,6 +3,7 @@ package opschat
 import (
 	"context"
 	"database/sql"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"strings"
 	"time"
 )
@@ -24,7 +25,7 @@ func (s *Service) turnQuestion(ctx context.Context, tx *sql.Tx, id string, body 
 	}
 	var previousID, kind string
 	err := tx.QueryRowContext(ctx, `SELECT run_id,kind FROM ops_chat_entries
-		WHERE session_id=? AND kind IN ('user','tool_request') ORDER BY seq DESC LIMIT 1`, id).Scan(&previousID, &kind)
+		WHERE session_id=? AND kind IN ('user','tool_request') ORDER BY seq DESC`+store.Limit(store.DialectOf(s.db), "1"), id).Scan(&previousID, &kind)
 	if err == sql.ErrNoRows {
 		return question, nil
 	}
@@ -36,7 +37,7 @@ func (s *Service) turnQuestion(ctx context.Context, tx *sql.Tx, id string, body 
 	}
 	var latestRun string
 	if err := tx.QueryRowContext(ctx, `SELECT run_id FROM ops_chat_entries
-		WHERE session_id=? AND run_id<>'' ORDER BY seq DESC LIMIT 1`, id).Scan(&latestRun); err != nil {
+		WHERE session_id=? AND run_id<>'' ORDER BY seq DESC`+store.Limit(store.DialectOf(s.db), "1"), id).Scan(&latestRun); err != nil {
 		return "", ErrStorage
 	}
 	if latestRun != previousID {

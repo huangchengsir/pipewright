@@ -39,6 +39,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/cron"
 	"github.com/huangchengsir/pipewright/internal/dagrun"
+	"github.com/huangchengsir/pipewright/internal/dbmigration"
 	"github.com/huangchengsir/pipewright/internal/deploy"
 	"github.com/huangchengsir/pipewright/internal/deployattempt"
 	"github.com/huangchengsir/pipewright/internal/dnsprovider"
@@ -93,6 +94,16 @@ func runPlatform() (restart func()) {
 	}
 
 	cfg := config.Load()
+	masterKey, masterKeyErr := config.LoadMasterKey()
+	currentDatabase, recoveryRuntime, bootErr := databaseBoot(&cfg, masterKey)
+	if bootErr != nil {
+		log.Fatalf("[database] control state or database identity unavailable; business startup blocked")
+	}
+	if recoveryRuntime != nil {
+		return serveDatabaseRecovery(cfg.Addr, root.WebFS(), recoveryRuntime)
+	}
+	databasePaths := currentDatabase.Paths
+	migrationRestartRequests := make(chan struct{}, 1)
 	var ownerErr error
 	kubernetesProcessGuard, ownerErr = kubernetesowner.Acquire(filepath.Join(cfg.DataDir, "kubernetes-owner"))
 	if ownerErr != nil {
@@ -108,6 +119,22 @@ func runPlatform() (restart func()) {
 		log.Fatalf("store: %v", err)
 	}
 	defer func() { _ = st.Close() }()
+	currentDatabase.Endpoint, err = dbmigration.Describe(context.Background(), st, dbDSN)
+	var migrationRuntime *dbmigration.Runtime
+	if err != nil {
+		log.Printf("[database] connection identity is not eligible for migration")
+	} else {
+		migrationRuntime = dbmigration.NewRuntime(databaseProcessGuard, currentDatabase, st, masterKey, false, func() error {
+			select {
+			case migrationRestartRequests <- struct{}{}:
+				return nil
+			default:
+				return dbmigration.ErrInvalidState
+			}
+		})
+		defer migrationRuntime.Close()
+	}
+
 	releaseSources := releasesource.New()
 	releaseSourceSettings := releasesource.NewSettings(st.DB, releaseSources)
 	if e := releaseSourceSettings.InitializeFromEnvironment(context.Background()); e != nil {
@@ -134,8 +161,8 @@ func runPlatform() (restart func()) {
 		log.Fatalf("embedded web/dist is missing index.html (was the frontend built correctly?): %v", err)
 	}
 
-	if dbDriver == "mysql" {
-		log.Printf("data db: mysql (%s)", st.Dialect)
+	if st.Dialect != store.SQLite {
+		log.Printf("data db: %s", st.Dialect)
 	} else if abs, err := filepath.Abs(dbDSN); err == nil {
 		log.Printf("data db: %s", abs)
 	}
@@ -154,8 +181,7 @@ func runPlatform() (restart func()) {
 
 	// 装配凭据保险库(Story 1.3)。master key 缺失 → 未配置态(不 panic,平台仍启动);
 	// 解码/长度错误 → 视为配置错误,提示但仍以未配置态继续(/healthz 保持可用)。
-	var masterKey *[config.MasterKeyLen]byte
-	switch key, err := config.LoadMasterKey(); {
+	switch key, err := masterKey, masterKeyErr; {
 	case err == nil:
 		masterKey = key
 		log.Printf("[vault] Master key loaded; credential vault is available")
@@ -385,7 +411,7 @@ func runPlatform() (restart func()) {
 	// PIPEWRIGHT_ARTIFACT_DIR 改。构造失败 → 降级 nil(保持旧占位行为,不中断启动)。
 	var artStore *artifactstore.Store
 	{
-		artDir := strings.TrimSpace(os.Getenv("PIPEWRIGHT_ARTIFACT_DIR"))
+		artDir := databasePaths.Artifacts
 		if artDir == "" {
 			artDir = filepath.Join(filepath.Dir(cfg.DBPath), "artifacts")
 		}
@@ -404,7 +430,7 @@ func runPlatform() (restart func()) {
 	// 任何缓存问题都回退直连网络克隆(永不让构建挂)。
 	var repoCache *repocache.Cache
 	if os.Getenv("PIPEWRIGHT_NO_REPO_CACHE") != "1" {
-		repoDir := strings.TrimSpace(os.Getenv("PIPEWRIGHT_REPO_CACHE_DIR"))
+		repoDir := databasePaths.Repositories
 		if repoDir == "" {
 			repoDir = filepath.Join(filepath.Dir(cfg.DBPath), "repos")
 		}
@@ -422,7 +448,7 @@ func runPlatform() (restart func()) {
 	// PIPEWRIGHT_NO_BUILD_CACHE=1 关。缓存问题绝不让构建失败(恢复失败=冷构建,保存失败=记日志)。
 	var cacheStore *buildcache.Store
 	if os.Getenv("PIPEWRIGHT_NO_BUILD_CACHE") != "1" {
-		cacheDir := strings.TrimSpace(os.Getenv("PIPEWRIGHT_CACHE_DIR"))
+		cacheDir := databasePaths.Cache
 		if cacheDir == "" {
 			cacheDir = filepath.Join(filepath.Dir(cfg.DBPath), "cache")
 		}
@@ -826,7 +852,7 @@ func runPlatform() (restart func()) {
 	go terminalManager.Run(terminalCtx)
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithSelfUpdate(selfUpdater), httpapi.WithReleaseSources(releaseSources, releaseSourceSettings), httpapi.WithKubernetes(kubernetesSvc, kubernetesController), httpapi.WithKubernetesReleases(kubernetesReleases, kubernetesProcessOwner), httpapi.WithKubernetesRollback((kubernetesRollbackCoordinator{db: st.DB, releases: kubernetesSvc, controller: kubernetesReleases, retries: retrySvc, runs: runSvc, owner: kubernetesProcessOwner}).Start), httpapi.WithOnboarding(onboarding.New(st.DB, onboardingCapabilities)), httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithRunRetry(retrySvc), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithPlatformLogin(platformLogin), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithTerminalHTTP(terminalManager), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithReleaseGuard(guardSvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc), httpapi.WithOpsChat(opsChatSvc), httpapi.WithMCP(mcpHandler, mcpTokens), httpapi.WithConfigManagement(st.DB, configDrafts, configApplyEnabled)),
+		Handler:           httpapi.New(webFS, authSvc, httpapi.WithDatabaseMigration(migrationRuntime), httpapi.WithSelfUpdate(selfUpdater), httpapi.WithReleaseSources(releaseSources, releaseSourceSettings), httpapi.WithKubernetes(kubernetesSvc, kubernetesController), httpapi.WithKubernetesReleases(kubernetesReleases, kubernetesProcessOwner), httpapi.WithKubernetesRollback((kubernetesRollbackCoordinator{db: st.DB, releases: kubernetesSvc, controller: kubernetesReleases, retries: retrySvc, runs: runSvc, owner: kubernetesProcessOwner}).Start), httpapi.WithOnboarding(onboarding.New(st.DB, onboardingCapabilities)), httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithRunRetry(retrySvc), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithPlatformLogin(platformLogin), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithTerminalHTTP(terminalManager), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithReleaseGuard(guardSvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc), httpapi.WithOpsChat(opsChatSvc), httpapi.WithMCP(mcpHandler, mcpTokens), httpapi.WithConfigManagement(st.DB, configDrafts, configApplyEnabled)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;
@@ -919,6 +945,8 @@ func runPlatform() (restart func()) {
 
 	select {
 	case <-ctx.Done():
+	case <-migrationRestartRequests:
+		restart = databaseRestart
 	case <-restartRequests:
 		restart = func() {
 			if err := version.Reexec(); err != nil {

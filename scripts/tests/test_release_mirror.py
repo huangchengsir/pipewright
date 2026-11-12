@@ -1,4 +1,8 @@
 import hashlib
+import http.client
+import socket
+import ssl
+from contextlib import redirect_stderr
 import io
 from unittest.mock import patch
 import urllib.error
@@ -265,10 +269,63 @@ class SyncTests(unittest.TestCase):
             with self.assertRaises(mirror.SyncError) as raised:
                 client.read("https://gitee.com/official/pipewright/releases/download/v2.1.2/checksums.txt")
             self.assertNotIn("fixture-sensitive", str(raised.exception))
-            self.assertIn("uncertain", str(raised.exception))
+            self.assertIn("read failed", str(raised.exception))
+            self.assertNotIn("uncertain", str(raised.exception))
 
     def test_json_duplicate_properties_rejected(self):
         with self.assertRaises(mirror.SyncError): mirror.parse_json(b'{"schemaVersion":1,"schemaVersion":2}')
+
+
+    def test_accepted_upload_lost_response_resumes_without_duplicate(self):
+        class AcceptedThenDisconnected(FakeClient):
+            disconnect = True
+            def form(self, url, fields, token, method="POST", file=None):
+                result = super().form(url, fields, token, method, file)
+                if file and self.disconnect:
+                    self.disconnect = False
+                    raise mirror.SyncError("write outcome uncertain")
+                return result
+        client = AcceptedThenDisconnected()
+        with self.assertRaises(mirror.SyncError): self.run_sync(client)
+        first = mirror.names(TAG)[0]
+        self.assertEqual(list(client.remote), [first])
+        self.assertEqual(len(client.writes), 2)  # create staging + one upload
+        self.assertFalse(any(w[0] == "PATCH" for w in client.writes))
+        client.writes.clear()
+        result = self.run_sync(client)
+        self.assertEqual(result["result"], "published")
+        self.assertEqual([w[3] for w in client.writes if w[3]],
+                         mirror.names(TAG)[1:] + ["checksums.txt", mirror.MARKER])
+
+    def test_accepted_but_different_upload_is_not_replaced(self):
+        class AcceptedDifferent(FakeClient):
+            def form(self, url, fields, token, method="POST", file=None):
+                result = super().form(url, fields, token, method, file)
+                if file:
+                    self.remote[file[0]] = b"different accepted bytes"
+                    raise mirror.SyncError("write outcome uncertain")
+                return result
+        client = AcceptedDifferent()
+        with self.assertRaises(mirror.SyncError): self.run_sync(client)
+        client.writes.clear()
+        with self.assertRaises(mirror.SyncError): self.run_sync(client)
+        self.assertEqual(client.writes, [])
+
+    def test_accepted_final_patch_lost_response_next_run_is_read_only(self):
+        class PublishedThenDisconnected(FakeClient):
+            def form(self, url, fields, token, method="POST", file=None):
+                result = super().form(url, fields, token, method, file)
+                if method == "PATCH":
+                    raise mirror.SyncError("write outcome uncertain")
+                return result
+        client = PublishedThenDisconnected()
+        with self.assertRaises(mirror.SyncError): self.run_sync(client)
+        self.assertFalse(client.gitee["prerelease"])
+        self.assertIn(mirror.MARKER, client.remote)
+        self.assertEqual(sum(w[0] == "PATCH" for w in client.writes), 1)
+        client.writes.clear()
+        self.assertEqual(self.run_sync(client)["result"], "already_identical")
+        self.assertEqual(client.writes, [])
 
 
 class FakeGit:
@@ -396,6 +453,125 @@ class GitTagTests(unittest.TestCase):
         with self.assertRaises(mirror.SyncError):
             mirror.ensure_gitee_tag(git, github_repo="official/pipewright", gitee_repo="../bad", tag=TAG, commit=COMMIT, token="fixture-sensitive-token")
         self.assertEqual(git.calls, [])
+
+
+class TransportDiagnosticsTests(unittest.TestCase):
+    def test_timeout_selection_and_fixed_success_diagnostics(self):
+        cases = [
+            ("https://api.github.com/repos/a/b/releases/tags/v2.2.0", "GET", 30, "github_release_api"),
+            ("https://api.github.com/repos/a/b/git/ref/tags/v2.2.0", "GET", 30, "github_git_api"),
+            ("https://gitee.com/api/v5/user", "GET", 30, "gitee_identity_api"),
+            ("https://gitee.com/api/v5/repos/a/b/releases/1", "POST", 30, "gitee_release_api"),
+            ("https://gitee.com/api/v5/repos/a/b/releases/1", "PATCH", 30, "gitee_release_api"),
+            ("https://gitee.com/api/v5/repos/a/b/releases/1/attach_files", "GET", 30, "gitee_attachment_api"),
+            ("https://gitee.com/api/v5/repos/a/b/releases/1/attach_files", "POST", 180, "gitee_attachment_api"),
+            ("https://github.com/a/b/releases/download/v2.2.0/archive.tar.gz", "GET", 180, "github_artifact"),
+            ("https://gitee.com/a/b/releases/download/v2.2.0/archive.tar.gz", "GET", 180, "gitee_artifact"),
+        ]
+        class Reply(io.BytesIO): status = 200
+        for url, method, expected_timeout, endpoint in cases:
+            with self.subTest(method=method, endpoint=endpoint):
+                calls = []
+                class Opener:
+                    def open(self, request, timeout):
+                        calls.append(timeout)
+                        return Reply(b"payload")
+                stderr = io.StringIO()
+                with patch("urllib.request.build_opener", return_value=Opener()), redirect_stderr(stderr):
+                    self.assertEqual(mirror.Client().read(url + "?secret=fixture-sensitive", method=method,
+                                                         data=b"fixture-sensitive" if method != "GET" else None), b"payload")
+                self.assertEqual(calls, [expected_timeout])
+                events = [json.loads(line) for line in stderr.getvalue().splitlines()]
+                self.assertEqual([x["phase"] for x in events], ["open", "read_response"])
+                self.assertEqual([x["event"] for x in events], ["request_started", "request_completed"])
+                self.assertTrue(all(x["endpoint"] == endpoint and x["method"] == method for x in events))
+                self.assertTrue(all(isinstance(x["elapsed_ms"], int) and x["elapsed_ms"] >= 0 for x in events))
+                self.assertNotIn("fixture-sensitive", stderr.getvalue())
+                self.assertNotIn("https://", stderr.getvalue())
+
+    def test_open_and_response_errors_are_classified_sanitized_and_single_attempt(self):
+        cases = [(TimeoutError("fixture-sensitive"), "timeout"),
+                 (urllib.error.URLError(TimeoutError("fixture-sensitive")), "timeout"),
+                 (urllib.error.URLError(ssl.SSLError("fixture-sensitive")), "tls"),
+                 (urllib.error.URLError(socket.gaierror("fixture-sensitive")), "dns"),
+                 (urllib.error.URLError("https://bad.test/?secret=fixture-sensitive"), "network"),
+                 (http.client.IncompleteRead(b"fixture-sensitive"), "protocol")]
+        for exc, kind in cases:
+            for phase in ("open", "read_response"):
+                for method in ("GET", "POST", "PATCH"):
+                    with self.subTest(kind=kind, phase=phase, method=method):
+                        calls = []
+                        class Reply(io.BytesIO):
+                            status = 200
+                            def read(self, limit): raise exc
+                        class Opener:
+                            def open(self, request, timeout):
+                                calls.append(timeout)
+                                if phase == "open": raise exc
+                                return Reply(b"")
+                        stderr = io.StringIO()
+                        with patch("urllib.request.build_opener", return_value=Opener()), redirect_stderr(stderr):
+                            with self.assertRaises(mirror.SyncError) as raised:
+                                mirror.Client().read("https://gitee.com/api/v5/repos/a/b/releases/1", method=method)
+                        self.assertEqual(len(calls), 1)
+                        message = str(raised.exception)
+                        self.assertNotIn("fixture-sensitive", stderr.getvalue() + message)
+                        self.assertNotIn("https://", stderr.getvalue() + message)
+                        event = json.loads(stderr.getvalue().splitlines()[-1])
+                        self.assertEqual(event["phase"], phase)
+                        self.assertEqual(event["error"], kind)
+                        self.assertEqual(event["outcome"], "read_failed" if method == "GET" else "uncertain")
+                        self.assertEqual("uncertain" in message, method != "GET")
+
+    def test_http_errors_are_closed_and_writes_remain_uncertain(self):
+        for method in ("GET", "POST", "PATCH"):
+            body = io.BytesIO(b"fixture-sensitive response")
+            error = urllib.error.HTTPError("https://gitee.com/?token=fixture-sensitive", 503,
+                                          "fixture-sensitive", {}, body)
+            class Opener:
+                calls = 0
+                def open(self, request, timeout):
+                    self.calls += 1
+                    raise error
+            opener = Opener(); stderr = io.StringIO()
+            with patch("urllib.request.build_opener", return_value=opener), redirect_stderr(stderr):
+                with self.assertRaises(mirror.SyncError) as raised:
+                    mirror.Client().read("https://gitee.com/api/v5/repos/a/b/releases/1", method=method)
+            self.assertTrue(body.closed)
+            self.assertEqual(opener.calls, 1)
+            self.assertNotIn("fixture-sensitive", stderr.getvalue() + str(raised.exception))
+            event = json.loads(stderr.getvalue().splitlines()[-1])
+            self.assertEqual(event["http_status"], 503)
+            self.assertEqual(event["outcome"], "read_failed" if method == "GET" else "uncertain")
+
+    def test_missing_is_only_success_for_get_and_response_is_closed(self):
+        for method in ("GET", "POST"):
+            body = io.BytesIO(b"fixture-sensitive")
+            class Opener:
+                def open(self, request, timeout):
+                    raise urllib.error.HTTPError(request.full_url, 404, "secret", {}, body)
+            stderr = io.StringIO()
+            with patch("urllib.request.build_opener", return_value=Opener()), redirect_stderr(stderr):
+                if method == "GET":
+                    self.assertIsNone(mirror.Client().read("https://gitee.com/api/v5/repos/a/b/releases/1", missing=True))
+                else:
+                    with self.assertRaises(mirror.SyncError):
+                        mirror.Client().read("https://gitee.com/api/v5/repos/a/b/releases/1", method=method, missing=True)
+            self.assertTrue(body.closed)
+            event = json.loads(stderr.getvalue().splitlines()[-1])
+            self.assertEqual(event["event"], "request_missing" if method == "GET" else "request_failed")
+
+    def test_response_validation_failure_is_sanitized(self):
+        class Opener:
+            def open(self, request, timeout):
+                raise mirror.SyncError("fixture-sensitive query or remote content")
+        stderr = io.StringIO()
+        with patch("urllib.request.build_opener", return_value=Opener()), redirect_stderr(stderr):
+            with self.assertRaises(mirror.SyncError) as raised:
+                mirror.Client().read("https://gitee.com/api/v5/repos/a/b/releases/1", method="POST")
+        self.assertNotIn("fixture-sensitive", stderr.getvalue() + str(raised.exception))
+        self.assertIn("uncertain", str(raised.exception))
+        self.assertEqual(json.loads(stderr.getvalue().splitlines()[-1])["error"], "validation")
 
 
 if __name__ == "__main__": unittest.main()

@@ -14,6 +14,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"time"
 
 	"github.com/google/uuid"
@@ -90,8 +91,7 @@ func (s *service) QueryRange(ctx context.Context, serverID string, since time.Ti
 		`SELECT cpu_percent, memory_percent, disk_percent, sampled_at
 		   FROM metric_samples
 		  WHERE server_id = ? AND sampled_at >= ?
-		  ORDER BY sampled_at ASC
-		  LIMIT ?`,
+		  ORDER BY sampled_at ASC`+store.Limit(store.DialectOf(s.db), "?"),
 		serverID, since.UTC().Format(time.RFC3339), maxRangePoints,
 	)
 	if err != nil {

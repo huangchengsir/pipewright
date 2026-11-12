@@ -83,7 +83,7 @@ func seedArtifact(t *testing.T, db *sql.DB, runID, typ, name, ref string) string
 	now := time.Now().UTC().Format(time.RFC3339)
 	id := uuid.NewString()
 	if _, err := db.Exec(
-		`INSERT INTO run_artifacts (id, run_id, type, name, reference, size_bytes, metadata_json, created_at)
+		`INSERT INTO run_artifacts (id, run_id, type, name, `+store.Identifier(store.DialectOf(db), "reference")+`, size_bytes, metadata_json, created_at)
 		 VALUES (?, ?, ?, ?, ?, 0, '', ?)`,
 		id, runID, typ, name, ref, now,
 	); err != nil {

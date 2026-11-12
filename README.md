@@ -68,7 +68,7 @@ It has since grown past that trio: publishing a deployed service on an HTTPS dom
 - **🖥 Server & container ops** — multi-host status overview (CPU/memory/disk) plus time-series trend charts · container/image/Stacks/volume/network management · container create/inspect/prune · live + historical service logs · live stats · interactive container terminal · web ops terminal (host shell, full copy-paste/signal support) · configurable anomaly detection that runs on a timer, dedupes by cooldown, and routes alerts to your notification channels.
 - **🤖 AI assist (optional, fully degradable)** — bring your own Claude / OpenAI / Ollama endpoint (API key encrypted in the vault). Automatic root-cause diagnosis when a build or deploy fails, with a 👍/👎 feedback loop and accuracy stats · repo analysis → generated pipeline draft · success-vs-failure commit diff · script risk annotation · natural-language→shell assistant and container diagnosis in the ops terminal. The core CI/CD path never depends on any of it (NFR-10).
 - **📈 Metrics** — the four DORA metrics (deployment frequency / lead time for changes / change failure rate / mean time to restore) out of the box, with Elite/High/Medium/Low performance bands.
-- **🧹 Housekeeping & platform** — configurable run-data retention sweeper (off by default; never touches in-flight runs) · SQLite (pure Go) or MySQL · 8 UI languages (zh-CN / zh-TW / en / ja / ko / de / fr / es) including server-side localization of API error messages.
+- **🧹 Housekeeping & platform** — configurable run-data retention sweeper (off by default; never touches in-flight runs) · SQLite (pure Go), MySQL, PostgreSQL, SQL Server, or a private DM8 build · 8 UI languages (zh-CN / zh-TW / en / ja / ko / de / fr / es) including server-side localization of API error messages.
 - **🔄 Update check + one-click self-update** — Settings → System checks the explicitly selected GitHub or configured Gitee source for the latest release with semantic comparison; binary deployments can **auto-update with one click** from the UI (download + checksum verification + atomic replace + self-restart), while Docker deployments get the exact upgrade command.
 
 > Security is non-negotiable: credentials stored as ciphertext only, commands arrayified against injection, outbound SSRF locked down, logs redacted.
@@ -261,11 +261,13 @@ are stored only in the encrypted credential vault.
 
 **Database**
 
+See [database deployment and migration](docs/database-migration.md) for connection formats, the maintenance workflow, recovery, and version coverage. DM8 uses a [user-supplied official driver](docs/database-dm-build.md); standard release binaries do not include it.
+
 | Variable | Description | Default |
 |---|---|---|
-| `PIPEWRIGHT_DB_DRIVER` | Database driver: `sqlite` or `mysql` | `sqlite` |
+| `PIPEWRIGHT_DB_DRIVER` | `sqlite`, `mysql`, `postgres`, `sqlserver`, or `dm` (private driver build) | `sqlite` |
 | `PIPEWRIGHT_DB` | SQLite database path (when driver=sqlite) | `pipewright.db` |
-| `PIPEWRIGHT_DB_DSN` | MySQL DSN (required when driver=mysql) | none |
+| `PIPEWRIGHT_DB_DSN` | Driver connection string; required for server databases | none |
 
 **Runs & builds**
 

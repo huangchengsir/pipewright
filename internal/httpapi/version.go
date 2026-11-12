@@ -1,12 +1,14 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/go-chi/chi/v5"
 	"github.com/huangchengsir/pipewright/internal/audit"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/releasesource"
 	"github.com/huangchengsir/pipewright/internal/selfupdate"
 	"github.com/huangchengsir/pipewright/internal/version"
@@ -33,11 +35,16 @@ type updateResult struct {
 	To      string           `json:"to"`
 	Message string           `json:"message"`
 	Command string           `json:"command,omitempty"`
+	Reason  string           `json:"reason,omitempty"`
 	TaskID  string           `json:"taskId,omitempty"`
 	Task    *selfupdate.Task `json:"task,omitempty"`
 }
 
 func manualUpdate(w http.ResponseWriter, s *selfupdate.Service) bool {
+	if s != nil && s.RequiresPrivateBuild() {
+		writeJSON(w, 200, updateResult{Mode: "binary", Status: "manual", Reason: "private_driver_build"})
+		return true
+	}
 	mode, can := version.Mode(), version.CanSelfReplace()
 	if s != nil {
 		mode, can = s.Capabilities()
@@ -62,6 +69,12 @@ func updateError(w http.ResponseWriter, e error) {
 	}
 	if errors.Is(e, selfupdate.ErrNotFound) {
 		code, status = "not_found", 404
+	}
+	if errors.Is(e, selfupdate.ErrPrivateBuild) {
+		code, status = "update_private_driver", 409
+	}
+	if errors.Is(e, configstate.ErrMaintenance) {
+		code, status = "update_migration_active", 409
 	}
 	writeError(w, status, code, "升级任务暂不可用，请核对原任务状态")
 }
@@ -212,13 +225,17 @@ func makeUpdateTaskResumeHandler(s *selfupdate.Service, a audit.Recorder) http.H
 	}
 }
 func updateAdmissionMiddleware(s *selfupdate.Service) func(http.Handler) http.Handler {
+	return workAdmissionMiddleware(s.Admit)
+}
+
+func workAdmissionMiddleware(admit func(context.Context, string) (func(), error)) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			path := r.URL.Path
 			websocket := strings.EqualFold(r.Header.Get("Upgrade"), "websocket") && strings.Contains(path, "/terminal")
 			write := r.Method != "GET" && r.Method != "HEAD" && r.Method != "OPTIONS"
 			cleanup := updateCompletionRoute(r.Method, path)
-			control := r.Method == http.MethodPost && (path == "/api/version/update" || path == "/api/version/update-tasks" || updateRouteMatches(path, "/api/version/update-tasks/_/resume"))
+			control := r.Method == http.MethodPost && (path == "/api/settings/database/start" || path == "/api/settings/database/abort" || path == "/api/settings/database/preflight" || path == "/api/settings/database/test-connection" || path == "/api/version/update" || path == "/api/version/update-tasks" || updateRouteMatches(path, "/api/version/update-tasks/_/resume"))
 			if (!write && !websocket) || cleanup || control {
 				next.ServeHTTP(w, r)
 				return
@@ -227,7 +244,7 @@ func updateAdmissionMiddleware(s *selfupdate.Service) func(http.Handler) http.Ha
 			if websocket {
 				kind = "terminal_pty"
 			}
-			release, e := s.Admit(r.Context(), kind)
+			release, e := admit(r.Context(), kind)
 			if e != nil {
 				writeError(w, 503, "maintenance", "系统正在安装升级，请稍后重试")
 				return

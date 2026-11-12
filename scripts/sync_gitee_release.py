@@ -10,10 +10,14 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
 import re
+import socket
+import ssl
+import time
 import sys
 import subprocess
 import tempfile
@@ -24,6 +28,8 @@ import uuid
 
 MAX_FILE = 100 * 1024 * 1024
 MAX_JSON = 1024 * 1024
+API_TIMEOUT_SECONDS = 30
+ARTIFACT_TIMEOUT_SECONDS = 180
 MARKER = "pipewright-release.json"
 TAG = re.compile(r"^v?[0-9]+\.[0-9]+\.[0-9]+$")
 SHA = re.compile(r"^[0-9a-f]{64}$")
@@ -100,6 +106,36 @@ class Redirects(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+def endpoint_category(url):
+    """Return only fixed labels; never echo URL parts, queries or credentials."""
+    parsed = urllib.parse.urlsplit(url)
+    host, path = parsed.hostname, parsed.path
+    if host == "api.github.com":
+        return "github_git_api" if "/git/" in path else "github_release_api"
+    if host == "gitee.com" and path.startswith("/api/v5/"):
+        if path == "/api/v5/user":
+            return "gitee_identity_api"
+        return "gitee_attachment_api" if "/attach_files" in path else "gitee_release_api"
+    if host == "github.com" and "/releases/download/" in path:
+        return "github_artifact"
+    if host == "gitee.com" and "/releases/download/" in path:
+        return "gitee_artifact"
+    return "other"
+
+
+def transport_error_kind(exc):
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    if isinstance(reason, TimeoutError):
+        return "timeout"
+    if isinstance(reason, ssl.SSLError):
+        return "tls"
+    if isinstance(reason, socket.gaierror):
+        return "dns"
+    if isinstance(reason, http.client.HTTPException):
+        return "protocol"
+    return "network"
+
+
 class Client:
     def __init__(self):
         self.opener = urllib.request.build_opener(Redirects())
@@ -107,21 +143,58 @@ class Client:
     def read(self, url, limit=MAX_JSON, method="GET", data=None, headers=None, missing=False):
         headers = {"User-Agent": "pipewright-release-mirror/1", "Accept-Encoding": "identity", **(headers or {})}
         req = urllib.request.Request(url, data=data, method=method, headers=headers)
+        endpoint = endpoint_category(url)
+        safe_method = method if method in ("GET", "POST", "PATCH") else "other"
+        write = method != "GET"
+        large = ((method == "GET" and endpoint in ("github_artifact", "gitee_artifact"))
+                 or (method == "POST" and endpoint == "gitee_attachment_api"))
+        # Socket operation timeouts, not a whole-request wall-clock deadline.
+        # The workflow's existing 30-minute deadline bounds the complete job.
+        timeout = ARTIFACT_TIMEOUT_SECONDS if large else API_TIMEOUT_SECONDS
+        started = time.monotonic()
+        phase = "open"
+
+        def report(event, *, error=None, status=None):
+            record = {"event": event, "endpoint": endpoint, "method": safe_method,
+                      "phase": phase, "elapsed_ms": round((time.monotonic() - started) * 1000),
+                      "timeout_seconds": timeout}
+            if error:
+                record["error"] = error
+                record["outcome"] = "uncertain" if write else "read_failed"
+            if status is not None:
+                record["http_status"] = status
+            print(json.dumps(record, sort_keys=True), file=sys.stderr, flush=True)
+
+        report("request_started")
         try:
-            with self.opener.open(req, timeout=30) as response:
+            with self.opener.open(req, timeout=timeout) as response:
+                phase = "read_response"
                 if response.status not in (200, 201):
                     raise SyncError("unexpected release response status")
                 result = response.read(limit + 1)
                 if len(result) > limit:
                     raise SyncError("release response too large")
+                report("request_completed")
                 return result
         except urllib.error.HTTPError as exc:
-            if missing and exc.code == 404:
+            status = exc.code
+            exc.close()
+            if missing and method == "GET" and status == 404:
+                report("request_missing", status=status)
                 return None
-            raise SyncError(f"release request rejected (HTTP {exc.code}); no automatic retry") from None
-        except (urllib.error.URLError, TimeoutError, OSError):
-            # Never render urllib errors: their URLs can contain signed CDN queries.
-            raise SyncError("release request failed or outcome uncertain; inspect state before explicit rerun") from None
+            report("request_failed", error="http", status=status)
+            outcome = "write outcome uncertain; inspect state before explicit rerun" if write else "read failed"
+            raise SyncError(f"{safe_method} {endpoint} {phase}: HTTP {status}; {outcome}; no automatic retry") from None
+        except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
+            error = transport_error_kind(exc)
+            report("request_failed", error=error)
+            outcome = "write outcome uncertain; inspect state before explicit rerun" if write else "read failed"
+            # Never render exception text: it may contain tokens, signed URLs or response data.
+            raise SyncError(f"{safe_method} {endpoint} {phase}: {error}; {outcome}; no automatic retry") from None
+        except SyncError:
+            report("request_failed", error="validation")
+            outcome = "write outcome uncertain; inspect state before explicit rerun" if write else "read failed"
+            raise SyncError(f"{safe_method} {endpoint} {phase}: response validation failed; {outcome}") from None
 
     def get_json(self, url, missing=False):
         raw = self.read(url, missing=missing)

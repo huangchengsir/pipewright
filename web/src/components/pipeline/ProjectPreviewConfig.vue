@@ -11,51 +11,123 @@
   - 保存调 PUT preview-config;乐观提示 + 失败回滚。
   本卡只持有编辑缓冲,保存成功才视为生效。
 */
-import { ref, shallowRef, computed, onMounted, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { NIcon } from 'naive-ui'
-import { Rocket, World } from '@vicons/tabler'
+import {
+  ref,
+  shallowRef,
+  computed,
+  onMounted,
+  onBeforeUnmount,
+  watch,
+} from "vue";
+import { useI18n } from "vue-i18n";
+import { NIcon } from "naive-ui";
+import { Rocket, World } from "@vicons/tabler";
 import {
   getPreviewConfig,
   setPreviewConfig,
   type PreviewConfig,
-} from '../../api/previewEnvs'
-import { listDnsProviders, type DnsProvider } from '../../api/dnsProviders'
-import { HttpError } from '../../api/http'
-import { configRevisionOf } from '../../api/configRevision'
-import { useProjectConfigRevisionParticipant } from '../../composables/useProjectConfigRevisions'
-import type { PipelineSaveContext } from '../../composables/usePipelineDraftSave'
-import { useToast } from '../../composables/useToast'
-import AppSelect from '../ui/AppSelect.vue'
+  listPreviewProviders, type PreviewProvider,
+} from "../../api/previewEnvs";
+import { HttpError } from "../../api/http";
+import { configRevisionOf } from "../../api/configRevision";
+import { useProjectConfigRevisionParticipant } from "../../composables/useProjectConfigRevisions";
+import type { PipelineSaveContext } from "../../composables/usePipelineDraftSave";
+import { useToast } from "../../composables/useToast";
+import AppSelect from "../ui/AppSelect.vue";
+import AutomationAuthorizationStatus from "../AutomationAuthorizationStatus.vue";
+import type {PermissionQuery} from "../../api/access";
+import PermissionGate from "../PermissionGate.vue";
+import { usePermission, usePermissions } from "../../composables/usePermission";
+import { useSessionStore } from "../../stores/session";
+import { usePermissionStore } from "../../stores/permissions";
 
 const props = defineProps<{
-  projectId: string
-  disabled?: boolean
-}>()
+  projectId: string;
+  disabled?: boolean;
+}>();
 
-const { t } = useI18n()
-const toast = useToast()
+const { t } = useI18n();
+const toast = useToast();
+const session = useSessionStore();
+const permissions = usePermissionStore();
+const editQuery = computed(() => ({
+  action: "pipeline.edit",
+  resourceId: props.projectId,
+}));
+const editPermission = usePermission(editQuery);
+const provisionPermission=usePermission(()=>({action:"preview.provision",resourceId:props.projectId}));
+const readQuery=computed(()=>({action:"pipeline.read",resourceId:props.projectId}));
+const readPermission=usePermission(readQuery);
+const mayEdit=computed(()=>readPermission.allowed.value&&editPermission.allowed.value);
+function sessionReady() {
+  return (
+    !!session.user && readPermission.allowed.value &&
+    !session.user.mustChangePassword &&
+    !session.isNetworkError &&
+    (session.user.multiTenant === false ||
+      (session.user.multiTenant === true && !!permissions.activeTeam))
+  );
+}
+let mounted = false;
+let controller: AbortController | undefined;
+function options() {
+  return {
+    signal: controller?.signal,
+    headers:
+      session.user?.multiTenant === true
+        ? { "X-Pipewright-Team": permissions.activeTeam }
+        : undefined,
+  };
+}
+function clearScope() {
+  loadGeneration++;
+  controller?.abort();
+  controller = new AbortController();
+  authorizationState.value=undefined;
+  enabled.value = false;
+  dnsProviderId.value = "";
+  baseDomain.value = "";
+  providers.value = [];
+  persistedDraft.value = "";
+  configRevision.value = undefined;
+  loadError.value = "";
+  loadState.value = "idle";
+  saving.value = false;
+}
 
 // ─── 状态 ──────────────────────────────────────────────────────────────────────
-type LoadState = 'idle' | 'loading' | 'error'
-const loadState = ref<LoadState>('idle')
-const loadError = ref('')
+type LoadState = "idle" | "loading" | "error";
+const loadState = ref<LoadState>("idle");
+const loadError = ref("");
 
-const enabled = ref(false)
-const dnsProviderId = ref('')
-const baseDomain = ref('')
-const providers = ref<DnsProvider[]>([])
-const persistedDraft = shallowRef('')
-const configRevision = ref<string>()
-const ready = computed(() => loadState.value === 'idle' && persistedDraft.value !== '')
-const dirty = computed(() => ready.value && JSON.stringify(buildPayload()) !== persistedDraft.value)
+const authorizationState=ref<PreviewConfig["authorizationState"]>();
+const enabled = ref(false);
+const dnsProviderId = ref("");
+const baseDomain = ref("");
+const providers = ref<PreviewProvider[]>([]);
+const persistedDraft = shallowRef("");
+const configRevision = ref<string>();
+const saveQueries=computed<PermissionQuery[]>(()=>[
+ editQuery.value,
+ ...(enabled.value ? [{action:"preview.provision",resourceId:props.projectId},{action:"dns.use",resourceId:dnsProviderId.value}] : []),
+]);
+const savePermission=usePermissions(saveQueries);
+
+const ready = computed(
+  () => loadState.value === "idle" && persistedDraft.value !== "",
+);
+const dirty = computed(
+  () => ready.value && JSON.stringify(buildPayload()) !== persistedDraft.value,
+);
 const revisionSync = useProjectConfigRevisionParticipant({
   projectId: () => props.projectId,
   read: () => configRevision.value,
-  advance: (_from, to) => { configRevision.value = to },
+  advance: (_from, to) => {
+    configRevision.value = to;
+  },
   ready: () => ready.value && !saving.value,
   reload: load,
-})
+});
 
 function buildPayload(): PreviewConfig {
   return {
@@ -63,166 +135,285 @@ function buildPayload(): PreviewConfig {
     enabled: enabled.value,
     dnsProviderId: dnsProviderId.value,
     baseDomain: baseDomain.value.trim().toLowerCase(),
-  }
+  };
 }
 
-const FQDN_RE = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i
-const baseDomainValid = computed(() => FQDN_RE.test(baseDomain.value.trim().toLowerCase()))
-const selectedProvider = computed(() => providers.value.find((p) => p.id === dnsProviderId.value))
+const FQDN_RE =
+  /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
+const baseDomainValid = computed(() =>
+  FQDN_RE.test(baseDomain.value.trim().toLowerCase()),
+);
+const selectedProvider = computed(() =>
+  providers.value.find((p) => p.id === dnsProviderId.value),
+);
 const providerOptions = computed(() => [
-  { value: '', label: t('previewEnvs.config.providerNone') },
-  ...providers.value.map((p) => ({ value: p.id, label: `${p.name} · ${p.baseDomain}` })),
-])
+  { value: "", label: t("previewEnvs.config.providerNone") },
+  ...providers.value.map((p) => ({
+    value: p.id,
+    label: `${p.name} · ${p.baseDomain}`,
+  })),
+]);
 
 // 开启预览必须:选定提供商 + 合法根域。关闭态不校验(可随时保存关闭)。
 const enabledConfigInvalid = computed(
-  () => enabled.value && (dnsProviderId.value.length === 0 || !baseDomainValid.value),
-)
+  () =>
+    enabled.value &&
+    (dnsProviderId.value.length === 0 || !baseDomainValid.value),
+);
 
-let loadGeneration = 0
+let loadGeneration = 0;
 async function load(): Promise<void> {
-  const generation = ++loadGeneration
-  const id = props.projectId
-  const initial = revisionSync.isInitialRead(id)
-  if (!initial) loadState.value = 'loading'
-  loadError.value = ''
+  const generation = ++loadGeneration;
+  if (!sessionReady()) return;
+  const id = props.projectId;
+  const initial = revisionSync.isInitialRead(id);
+  if (!initial) loadState.value = "loading";
+  loadError.value = "";
   try {
     const [cfg, provs] = await Promise.all([
-      getPreviewConfig(id),
-      listDnsProviders().catch(() => [] as DnsProvider[]),
-    ])
-    if (id !== props.projectId || generation !== loadGeneration) return
-    if (initial && !revisionSync.canAcceptInitialRead()) return
-    providers.value = provs
-    applyConfig(cfg)
-    loadState.value = 'idle'
+      getPreviewConfig(id, options()),
+      listPreviewProviders(id,options()).catch(() => [] as PreviewProvider[]),
+    ]);
+    if (id !== props.projectId || generation !== loadGeneration) return;
+    if (initial && !revisionSync.canAcceptInitialRead()) return;
+    providers.value = provs;
+    applyConfig(cfg);
+    loadState.value = "idle";
   } catch (err) {
-    if (id !== props.projectId || generation !== loadGeneration) return
-    if (initial) return
-    loadState.value = 'error'
+    if (id !== props.projectId || generation !== loadGeneration) return;
+    if (err instanceof HttpError && [401, 403].includes(err.status)) {
+      clearScope();
+      if(err.status===401)session.clearSession();
+      else permissions.reject(permissions.activeTeam,readQuery.value);
+      loadState.value = "error";
+    } else if (initial) return;
+    loadState.value = "error";
     loadError.value =
       err instanceof HttpError
-        ? (err.apiError?.message ?? t('previewEnvs.config.errLoad', { status: err.status }))
-        : t('previewEnvs.config.errNetwork')
+        ? (err.apiError?.message ??
+          t("previewEnvs.config.errLoad", { status: err.status }))
+        : t("previewEnvs.config.errNetwork");
   }
 }
 
-onMounted(load)
-watch(() => props.projectId, load)
+onMounted(() => {
+  mounted = true;
+  clearScope();
+  void load();
+});
+watch(
+  () =>
+    JSON.stringify([
+      props.projectId,
+      session.user,
+      session.isNetworkError,
+      permissions.activeTeam,
+      readPermission.allowed.value,
+    ]),
+  () => {
+    if (mounted) {
+      clearScope();
+      void load();
+    }
+  },
+  { flush: "sync" },
+);
+onBeforeUnmount(() => {
+  mounted = false;
+  clearScope();
+});
 
 // 选定提供商时,若根域还空着,顺手填上提供商根域(常见就是它)。
-watch(dnsProviderId, () => {
-  if (selectedProvider.value && !baseDomain.value.trim()) {
-    baseDomain.value = selectedProvider.value.baseDomain
-  }
-}, { flush: 'sync' })
+watch(
+  dnsProviderId,
+  () => {
+    if (selectedProvider.value && !baseDomain.value.trim()) {
+      baseDomain.value = selectedProvider.value.baseDomain;
+    }
+  },
+  { flush: "sync" },
+);
 
 // ─── 保存 ──────────────────────────────────────────────────────────────────────
-const saving = ref(false)
-const canSave = computed(() => !props.disabled && !saving.value && !enabledConfigInvalid.value && ready.value)
+const saving = ref(false);
+const canSave = computed(
+  () =>
+    mayEdit.value && savePermission.allowed.value &&
+    !props.disabled &&
+    !saving.value &&
+    !enabledConfigInvalid.value &&
+    ready.value,
+);
 
 function validate(): boolean {
-  return !enabledConfigInvalid.value
+  return !enabledConfigInvalid.value;
 }
 
 function applyConfig(cfg: PreviewConfig): void {
-  configRevision.value = configRevisionOf(cfg)
-  enabled.value = cfg.enabled
-  dnsProviderId.value = cfg.dnsProviderId
-  baseDomain.value = cfg.baseDomain
-  persistedDraft.value = JSON.stringify(buildPayload())
+  configRevision.value = configRevisionOf(cfg);
+  authorizationState.value=cfg.authorizationState;
+  enabled.value = cfg.enabled;
+  dnsProviderId.value = cfg.dnsProviderId;
+  baseDomain.value = cfg.baseDomain;
+  persistedDraft.value = JSON.stringify(buildPayload());
 }
 
 async function save(context?: PipelineSaveContext): Promise<boolean> {
-  if (!ready.value || saving.value || !validate()) return false
-  const id = props.projectId
-  saving.value = true
+  if (
+    !sessionReady() ||
+    !mayEdit.value || !savePermission.allowed.value ||
+    !ready.value ||
+    saving.value ||
+    !validate()
+  )
+    return false;
+  const scope = loadGeneration;
+  const id = props.projectId;
+  saving.value = true;
   try {
-    const body = buildPayload()
-    const snapshot = JSON.stringify(body)
-    const revision = context?.baseRevision ?? configRevision.value
-    const updated = revision ? await setPreviewConfig(id, body, revision) : await setPreviewConfig(id, body)
-    if (id !== props.projectId) return false
-    revisionSync.committed(revision, updated, id)
-    const committedRevision = configRevisionOf(updated)
-    if (committedRevision) { configRevision.value = committedRevision; context?.onCommitted(committedRevision) }
-    if (JSON.stringify(buildPayload()) === snapshot) applyConfig(updated)
-    else persistedDraft.value = JSON.stringify({
-      projectId: updated.projectId,
-      enabled: updated.enabled,
-      dnsProviderId: updated.dnsProviderId,
-      baseDomain: updated.baseDomain.trim().toLowerCase(),
-    })
-    if (!dirty.value) toast.success(t('previewEnvs.config.saved'))
-    return true
+    const body = buildPayload();
+    const snapshot = JSON.stringify(body);
+    const revision = context?.baseRevision ?? configRevision.value;
+    const updated = await setPreviewConfig(id, body, revision, options());
+    if (id !== props.projectId || scope !== loadGeneration || !mayEdit.value || !savePermission.allowed.value) return false;
+    revisionSync.committed(revision, updated, id);
+    const committedRevision = configRevisionOf(updated);
+    if (committedRevision) {
+      configRevision.value = committedRevision;
+      context?.onCommitted(committedRevision);
+    }
+    if (JSON.stringify(buildPayload()) === snapshot) applyConfig(updated);
+    else
+      persistedDraft.value = JSON.stringify({
+        projectId: updated.projectId,
+        enabled: updated.enabled,
+        dnsProviderId: updated.dnsProviderId,
+        baseDomain: updated.baseDomain.trim().toLowerCase(),
+      });
+    if (!dirty.value) toast.success(t("previewEnvs.config.saved"));
+    return true;
   } catch (err) {
-    toast.error(t('previewEnvs.config.saveFail'), {
+    if (scope !== loadGeneration) return false;
+    if (err instanceof HttpError && [401, 403].includes(err.status)) {
+      clearScope();
+      if(err.status===401)session.clearSession();
+      else permissions.reject(permissions.activeTeam,editQuery.value);
+    }
+    toast.error(t("previewEnvs.config.saveFail"), {
       detail:
         err instanceof HttpError
-          ? (err.apiError?.message ?? t('previewEnvs.config.errReq', { status: err.status }))
-          : t('previewEnvs.config.errNetwork'),
-    })
+          ? (err.apiError?.message ??
+            t("previewEnvs.config.errReq", { status: err.status }))
+          : t("previewEnvs.config.errNetwork"),
+    });
   } finally {
-    saving.value = false
+    if (scope === loadGeneration) saving.value = false;
   }
-  return false
+  return false;
 }
 
-function handleSave(): void { if (canSave.value) void save() }
-function advanceConfigRevision(from: string, to: string): void { if (configRevision.value === from) configRevision.value = to }
-defineExpose({ ready, dirty, saving, validate, save, configRevision, advanceConfigRevision })
+function handleSave(): void {
+  if (canSave.value) void save();
+}
+function advanceConfigRevision(from: string, to: string): void {
+  if (configRevision.value === from) configRevision.value = to;
+}
+defineExpose({
+  ready,
+  dirty,
+  saving,
+  validate,
+  save,
+  configRevision,
+  advanceConfigRevision,
+});
 
 // 例:pr-42-myproj.preview.example.com —— 让用户直观看到链接形态。
 const examplePreview = computed(() => {
-  const base = baseDomain.value.trim().toLowerCase() || 'preview.example.com'
-  return `pr-42-app.${base}`
-})
+  const base = baseDomain.value.trim().toLowerCase() || "preview.example.com";
+  return `pr-42-app.${base}`;
+});
 </script>
 
 <template>
   <section class="pvc">
     <header class="pvc__head">
-      <div class="pvc__icon" aria-hidden="true"><NIcon :size="18"><Rocket /></NIcon></div>
-      <div class="pvc__head-text">
-        <h3 class="pvc__title">{{ t('previewEnvs.config.title') }}</h3>
-        <p class="pvc__sub">{{ t('previewEnvs.config.subtitle') }}</p>
+      <div class="pvc__icon" aria-hidden="true">
+        <NIcon :size="18"><Rocket /></NIcon>
       </div>
-      <span class="pvc__badge" :class="enabled ? 'pvc__badge--on' : 'pvc__badge--off'">
-        {{ enabled ? t('previewEnvs.config.on') : t('previewEnvs.config.off') }}
+      <div class="pvc__head-text">
+        <h3 class="pvc__title">{{ t("previewEnvs.config.title") }}</h3>
+        <p class="pvc__sub">{{ t("previewEnvs.config.subtitle") }}</p>
+      </div>
+      <span
+        class="pvc__badge"
+        :class="enabled ? 'pvc__badge--on' : 'pvc__badge--off'"
+      >
+        {{ enabled ? t("previewEnvs.config.on") : t("previewEnvs.config.off") }}
       </span>
     </header>
 
-    <div v-if="loadState === 'loading'" class="pvc__state">{{ t('previewEnvs.config.loading') }}</div>
+    <div v-if="loadState === 'loading'" class="pvc__state">
+      {{ t("previewEnvs.config.loading") }}
+    </div>
     <div v-else-if="loadState === 'error'" class="pvc__banner" role="alert">
       <span>⚠ {{ loadError }}</span>
-      <button class="pvc__retry" @click="load">↻ {{ t('previewEnvs.config.retry') }}</button>
+      <button class="pvc__retry" @click="load">
+        ↻ {{ t("previewEnvs.config.retry") }}
+      </button>
     </div>
 
     <div v-else class="pvc__body">
       <!-- 总开关 -->
       <label class="pvc__toggle">
-        <input v-model="enabled" type="checkbox" class="pvc__cb" />
+        <input
+          v-model="enabled"
+          :disabled="!mayEdit || (!enabled && !provisionPermission.allowed.value)"
+          type="checkbox"
+          class="pvc__cb"
+        />
         <span class="pvc__box" aria-hidden="true" />
         <span class="pvc__toggle-txt">
-          <span class="pvc__toggle-name">{{ t('previewEnvs.config.enableLabel') }}</span>
-          <span class="pvc__toggle-desc">{{ t('previewEnvs.config.enableDesc') }}</span>
+          <span class="pvc__toggle-name">{{
+            t("previewEnvs.config.enableLabel")
+          }}</span>
+          <span class="pvc__toggle-desc">{{
+            t("previewEnvs.config.enableDesc")
+          }}</span>
         </span>
       </label>
 
       <!-- 提供商 + 根域(开启时显示;关闭也保留,便于回看) -->
       <div class="pvc__grid">
         <div class="pvc__field">
-          <label class="pvc__lbl">{{ t('previewEnvs.config.providerLabel') }}</label>
-          <AppSelect v-model="dnsProviderId" :options="providerOptions" :aria-label="t('previewEnvs.config.providerLabel')" min-width="0" portal />
-          <p v-if="providers.length === 0" class="pvc__hint">{{ t('previewEnvs.config.noProviders') }}</p>
+          <label class="pvc__lbl">{{
+            t("previewEnvs.config.providerLabel")
+          }}</label>
+          <AppSelect
+            v-model="dnsProviderId"
+            :disabled="!mayEdit"
+            :options="providerOptions"
+            :aria-label="t('previewEnvs.config.providerLabel')"
+            min-width="0"
+            portal
+          />
+          <p v-if="providers.length === 0" class="pvc__hint">
+            {{ t("previewEnvs.config.noProviders") }}
+          </p>
         </div>
 
         <div class="pvc__field">
-          <label class="pvc__lbl">{{ t('previewEnvs.config.baseDomainLabel') }}</label>
+          <label class="pvc__lbl">{{
+            t("previewEnvs.config.baseDomainLabel")
+          }}</label>
           <input
             v-model="baseDomain"
+            :disabled="!mayEdit"
             class="pvc__in mono"
-            :class="{ 'pvc__in--bad': enabled && baseDomain.trim().length > 0 && !baseDomainValid }"
+            :class="{
+              'pvc__in--bad':
+                enabled && baseDomain.trim().length > 0 && !baseDomainValid,
+            }"
             :placeholder="t('previewEnvs.config.baseDomainPlaceholder')"
             autocomplete="off"
             spellcheck="false"
@@ -233,17 +424,28 @@ const examplePreview = computed(() => {
       <!-- 链接形态预览 -->
       <p class="pvc__preview">
         <NIcon :size="13" class="pvc__preview-ic"><World /></NIcon>
-        {{ t('previewEnvs.config.exampleLabel') }}
+        {{ t("previewEnvs.config.exampleLabel") }}
         <code class="pvc__preview-url mono">https://{{ examplePreview }}</code>
       </p>
 
-      <p v-if="enabledConfigInvalid" class="pvc__hint pvc__hint--err">{{ t('previewEnvs.config.invalidHint') }}</p>
+      <p v-if="enabledConfigInvalid" class="pvc__hint pvc__hint--err">
+        {{ t("previewEnvs.config.invalidHint") }}
+      </p>
 
+      <AutomationAuthorizationStatus :state="authorizationState" />
       <div class="pvc__foot">
-        <span class="pvc__foot-note">{{ t('previewEnvs.config.footNote') }}</span>
-        <button class="pvc__save" :disabled="!canSave" @click="handleSave">
-          {{ saving ? t('previewEnvs.config.saving') : t('previewEnvs.config.save') }}
-        </button>
+        <span class="pvc__foot-note">{{
+          t("previewEnvs.config.footNote")
+        }}</span>
+        <PermissionGate :query="saveQueries"
+          ><button class="pvc__save" :disabled="!canSave" @click="handleSave">
+            {{
+              saving
+                ? t("previewEnvs.config.saving")
+                : t("previewEnvs.config.save")
+            }}
+          </button></PermissionGate
+        >
       </div>
     </div>
   </section>
@@ -370,7 +572,7 @@ const examplePreview = computed(() => {
   transition: background var(--duration-fast, 150ms) var(--ease-out-expo, ease);
 }
 .pvc__box::after {
-  content: '';
+  content: "";
   position: absolute;
   top: 2px;
   left: 2px;
@@ -431,7 +633,9 @@ const examplePreview = computed(() => {
   background: var(--color-inset);
   color: var(--color-text);
   font-size: 0.86rem;
-  transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
+  transition:
+    border-color var(--duration-fast),
+    box-shadow var(--duration-fast);
 }
 .pvc__in:focus {
   outline: none;

@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // defaultPageSize 是列表默认页大小;maxPageSize 防滥用。
@@ -137,6 +138,7 @@ type service struct {
 	activityOwner       string
 	retryRuntime        RetryRuntime
 	releaseCancellation func(context.Context, string) (bool, error)
+	executionAuthorizer ExecutionAuthorizer
 }
 
 // setEnqueue 由 WorkerPool 注入调度回调(Create 入库后调用)。
@@ -144,6 +146,24 @@ func (s *service) setEnqueue(fn func(runID string) error) {
 	s.enqueueMu.Lock()
 	s.enqueue = fn
 	s.enqueueMu.Unlock()
+}
+
+// ExecutionAuthorizer resolves controller-owned plans. It must not trust HTTP
+// action lists, target overrides, or role claims. Both methods are required in
+// multi-tenant mode; an absent implementation prevents execution.
+// PreparedExecution is opaque controller-owned preparation. It is never bound
+// from HTTP/MCP JSON. Per-request values prevent parallel admissions exchanging
+// snapshots through mutable fields on a shared authorizer.
+type PreparedExecution struct{ Value any }
+type ExecutionAuthorizer interface {
+	Prepare(context.Context, string, Trigger) (*PreparedExecution, error)
+	Approve(context.Context, string, string, Trigger, *PreparedExecution) (string, []tenancy.ExecutionPermission, error)
+	Digest(context.Context, string) (string, error)
+	Verify(context.Context, string) error
+}
+
+func WithExecutionAuthorizer(authorizer ExecutionAuthorizer) Option {
+	return func(s *service) { s.executionAuthorizer = authorizer }
 }
 
 // EnvResolver 把(项目, 分支)解析为映射的环境名 + 目标服务器引用 id 列表。
@@ -194,6 +214,18 @@ func newService(db *sql.DB, opts ...Option) *service {
 	return s
 }
 
+// AuthorizeManualStart checks the caller before looking up project parameters.
+// Create still admits the exact generated run and rechecks in its transaction.
+func AuthorizeManualStart(ctx context.Context, svc Service, projectID string) error {
+	if s, ok := svc.(*service); ok {
+		return tenancy.CheckRunAdmission(ctx, s.db, strings.TrimSpace(projectID), "new-resource")
+	}
+	if tenancy.HasAuthorizationContext(ctx) {
+		return tenancy.ErrForbidden
+	}
+	return nil
+}
+
 func (s *service) Create(ctx context.Context, projectID string, trigger Trigger) (*Run, error) {
 	idempotent := trigger.IdempotencyScope != "" || trigger.IdempotencyKey != "" || trigger.IdempotencyFingerprint != ""
 	if idempotent {
@@ -234,9 +266,54 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 		return nil, fmt.Errorf("run: marshal params: %w", err)
 	}
 
+	var created *Run
 	now := time.Now().UTC()
 	id := uuid.NewString()
-	err = configstate.WithWriteTxContext(ctx, s.db, func(txctx context.Context, q configstate.DBTX) error {
+	var prepared *PreparedExecution
+	enabled, err := tenancy.Enabled(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	if enabled {
+		if err = tenancy.CheckRunAdmission(ctx, s.db, projectID, id); err != nil {
+			return nil, err
+		}
+		if s.executionAuthorizer == nil {
+			return nil, tenancy.ErrForbidden
+		}
+		trigger.Type = tt
+		if strings.TrimSpace(trigger.Branch) == "" {
+			if err = configstate.Queryer(ctx, s.db).QueryRowContext(ctx, `SELECT default_branch FROM projects WHERE id=?`, projectID).Scan(&trigger.Branch); err != nil {
+				return nil, err
+			}
+		}
+		if strings.TrimSpace(trigger.ResolvedEnvironment) == "" && s.envResolver != nil {
+			if env, servers := s.envResolver.ResolveEnv(ctx, projectID, trigger.Branch); env != "" {
+				trigger.ResolvedEnvironment = env
+				if len(trigger.ResolvedTargetServerIDs) == 0 {
+					trigger.ResolvedTargetServerIDs = servers
+				}
+			}
+		}
+		prepared, err = s.executionAuthorizer.Prepare(ctx, projectID, trigger)
+		if err != nil {
+			return nil, err
+		}
+		if prepared == nil {
+			return nil, tenancy.ErrForbidden
+		}
+	}
+	err = configstate.WithWriteTxContext(configstate.WithWriteAdmission(ctx, tenancy.LockAuthorization), s.db, func(txctx context.Context, q configstate.DBTX) error {
+		if err := tenancy.CheckRunAdmission(txctx, s.db, projectID, id); err != nil {
+			return err
+		}
+		enabled, err := tenancy.Enabled(txctx, s.db)
+		if err != nil {
+			return err
+		}
+		if enabled && s.executionAuthorizer == nil {
+			return tenancy.ErrForbidden
+		}
 		if err := configstate.LockEpochs(txctx, q, s.db, configstate.EpochPolicy, configstate.EpochSecrets, configstate.EpochExecutor); err != nil {
 			return err
 		}
@@ -289,7 +366,26 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 		if err != nil {
 			return err
 		}
+		if enabled {
+			if err = tenancy.RecordOwnership(txctx, s.db, "run", id, projectID); err != nil {
+				return err
+			}
+			digest, permissions, planErr := s.executionAuthorizer.Approve(txctx, id, projectID, trigger, prepared)
+			if planErr != nil {
+				return planErr
+			}
+			permissions = append(permissions, tenancy.ExecutionPermission{Action: "run.start", ResourceID: id})
+			if err = tenancy.ApproveRun(txctx, s.db, id, projectID, digest, permissions); err != nil {
+				return err
+			}
+		}
 		_, err = configstate.AcquireActivityTx(txctx, q, s.db, configstate.Activity{ID: id, ProjectID: projectID, RunID: id, OwnerEpoch: s.activityOwner, Kind: "run", Phase: "queued"})
+		if err != nil {
+			return err
+		}
+		// Materialize the response while the initiating principal is fenced. Once
+		// committed, dispatch must finish independently of browser logout/revocation.
+		created, err = s.Get(txctx, id)
 		return err
 	})
 	if err != nil {
@@ -309,14 +405,10 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 		return nil, err
 	}
 	// Finish the single dispatch attempt after commit, including caller disconnect.
-	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	finishCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	ctx = finishCtx
 
-	created, err := s.Get(ctx, id)
-	if err != nil {
-		return nil, err
-	}
 	// 入队由 worker pool 调度(若已装配 pool)。无 pool 时仅入库(测试/无调度场景)。
 	s.enqueueMu.RLock()
 	fn := s.enqueue
@@ -449,6 +541,39 @@ func (s *service) idempotentRun(ctx context.Context, t Trigger) (*Run, bool, err
 }
 
 func (s *service) Get(ctx context.Context, id string) (*Run, error) {
+	var out *Run
+	err := configstate.WithReadTxContext(ctx, s.db, func(txctx context.Context, _ configstate.DBTX) error {
+		var err error
+		out, err = s.getAuthorized(txctx, id)
+		return err
+	})
+	return out, err
+}
+func (s *service) getAuthorized(ctx context.Context, id string) (*Run, error) {
+	if predicate, active, err := tenancy.DeploymentMetadataPredicate(ctx, s.db, "pr.id"); active {
+		if err != nil {
+			return nil, err
+		}
+		r := &Run{}
+		var created string
+		err = configstate.Queryer(ctx, s.db).QueryRowContext(ctx, `SELECT pr.id,pr.project_id,pr.status,pr.trigger_type,pr.trigger_branch,pr.trigger_commit,pr.trigger_actor,pr.resolved_environment,pr.created_at FROM pipeline_runs pr WHERE pr.id=? AND `+predicate.SQL, append([]any{id}, predicate.Args...)...).Scan(&r.ID, &r.ProjectID, &r.Status, &r.Trigger.Type, &r.Trigger.Branch, &r.Trigger.Commit, &r.Trigger.Actor, &r.Trigger.ResolvedEnvironment, &created)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+		if r.CreatedAt, err = time.Parse(time.RFC3339, created); err != nil {
+			return nil, err
+		}
+		return r, nil
+	}
+
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "run.read", "pr.id")
+	if err != nil {
+		return nil, err
+	}
+
 	var (
 		r             Run
 		createdStr    string
@@ -460,7 +585,7 @@ func (s *service) Get(ctx context.Context, id string) (*Run, error) {
 		targetIDsJSON sql.NullString
 	)
 	r.ID = id
-	err := s.db.QueryRowContext(ctx,
+	err = configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT pr.project_id, COALESCE(p.name, ''), pr.status,
 		        pr.trigger_type, pr.trigger_branch, pr.trigger_commit, pr.trigger_actor,
 		        pr.created_at, pr.started_at, pr.finished_at,
@@ -473,7 +598,7 @@ func (s *service) Get(ctx context.Context, id string) (*Run, error) {
 		 LEFT JOIN projects p ON p.id = pr.project_id
 		 LEFT JOIN mcp_run_requests mr ON mr.run_id = pr.id
 		 LEFT JOIN run_retry_attempts rr ON rr.run_id=pr.id
-		 WHERE pr.id = ?`, id,
+		 WHERE pr.id = ? AND `+predicate.SQL, append([]any{id}, predicate.Args...)...,
 	).Scan(&r.ProjectID, &r.ProjectName, &r.Status,
 		&r.Trigger.Type, &r.Trigger.Branch, &r.Trigger.Commit, &r.Trigger.Actor,
 		&createdStr, &startedStr, &finishStr,
@@ -489,6 +614,14 @@ func (s *service) Get(ctx context.Context, id string) (*Run, error) {
 		return nil, fmt.Errorf("run: load run: %w", err)
 	}
 
+	if on, e := tenancy.Enabled(ctx, s.db); e != nil {
+		return nil, e
+	} else if on && r.Trigger.ResolvedEnvironment != "" {
+		e = configstate.Queryer(ctx, s.db).QueryRowContext(ctx, `SELECT e.id FROM access_environments e JOIN access_ownership o ON o.tenant_id=e.tenant_id AND o.resource_kind='run' AND o.resource_id=? AND o.project_id=e.project_id WHERE e.project_id=? AND e.name=?`, r.ID, r.ProjectID, r.Trigger.ResolvedEnvironment).Scan(&r.AccessEnvironmentID)
+		if e != nil && !errors.Is(e, sql.ErrNoRows) {
+			return nil, e
+		}
+	}
 	// 回填解析出的目标服务器引用(JSON 数组)。Get 此前漏读 resolved_environment /
 	// resolved_target_server_ids → 构建执行器拿到的 run 恒无环境 → resolveRegistry 返回 nil →
 	// 镜像永不推送、部署节点 pull 不到(image build→push→deploy 全链路在 Get 路径下形同虚设)。
@@ -529,7 +662,7 @@ func (s *service) Get(ctx context.Context, id string) (*Run, error) {
 }
 
 func (s *service) loadSteps(ctx context.Context, runID string) ([]Step, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT id, name, COALESCE(stage, ''), status, ordinal, started_at, finished_at
 		 FROM run_steps WHERE run_id = ? ORDER BY ordinal ASC`, runID)
 	if err != nil {
@@ -562,6 +695,20 @@ func (s *service) loadSteps(ctx context.Context, runID string) ([]Step, error) {
 }
 
 func (s *service) List(ctx context.Context, f ListFilter) (*ListResult, error) {
+	var out *ListResult
+	err := configstate.WithReadTxContext(ctx, s.db, func(txctx context.Context, _ configstate.DBTX) error {
+		var err error
+		out, err = s.listAuthorized(txctx, f)
+		return err
+	})
+	return out, err
+}
+func (s *service) listAuthorized(ctx context.Context, f ListFilter) (*ListResult, error) {
+	predicate, authErr := tenancy.QueryPredicate(ctx, s.db, "run.read", "pr.id")
+	if authErr != nil {
+		return nil, authErr
+	}
+
 	if utf8.RuneCountInString(f.Query) > 200 || !utf8.ValidString(f.Query) {
 		return nil, ErrInvalidFilter
 	}
@@ -584,8 +731,8 @@ func (s *service) List(ctx context.Context, f ListFilter) (*ListResult, error) {
 		size = maxPageSize
 	}
 
-	where := []string{}
-	args := []any{}
+	where := []string{predicate.SQL}
+	args := append([]any{}, predicate.Args...)
 	if f.ProjectID != "" {
 		where = append(where, "pr.project_id = ?")
 		args = append(args, f.ProjectID)
@@ -648,7 +795,7 @@ func (s *service) List(ctx context.Context, f ListFilter) (*ListResult, error) {
 	}
 
 	var total int
-	if err := s.db.QueryRowContext(ctx,
+	if err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		"SELECT COUNT(1) FROM pipeline_runs pr"+clause, args...,
 	).Scan(&total); err != nil {
 		return nil, fmt.Errorf("run: count runs: %w", err)
@@ -657,7 +804,7 @@ func (s *service) List(ctx context.Context, f ListFilter) (*ListResult, error) {
 	offset := (page - 1) * size
 	pageSQL, pageArgs := store.Page(store.DialectOf(s.db), size, offset)
 	listArgs := append(append([]any{}, args...), pageArgs...)
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT pr.id, pr.project_id, COALESCE(p.name, ''), pr.status,
 		        pr.trigger_type, pr.trigger_branch, pr.trigger_commit, pr.trigger_actor,
 		        pr.created_at, pr.started_at, pr.finished_at,
@@ -704,6 +851,10 @@ func (s *service) List(ctx context.Context, f ListFilter) (*ListResult, error) {
 }
 
 func (s *service) Cancel(ctx context.Context, id string) (*Run, error) {
+	ctx = configstate.WithWriteAdmission(ctx, tenancy.LockCompletionAuthorization)
+	if err := tenancy.Check(ctx, s.db, "run.cancel", "run", id); err != nil {
+		return nil, err
+	}
 	r, err := s.Get(ctx, id)
 	if err != nil {
 		return nil, err
@@ -717,7 +868,19 @@ func (s *service) Cancel(ctx context.Context, id string) (*Run, error) {
 	cancel, running := s.cancels[id]
 	s.mu.Unlock()
 	if running && r.Status != StatusWaitingAction {
-		cancel()
+		// Serialize the permission decision and cancellation request with revocation.
+		if err := configstate.WithWriteTxContext(ctx, s.db, func(txctx context.Context, q configstate.DBTX) error {
+			if err := tenancy.LockCompletionAuthorization(txctx, s.db); err != nil {
+				return err
+			}
+			if err := tenancy.Check(txctx, s.db, "run.cancel", "run", id); err != nil {
+				return err
+			}
+			configstate.AfterCommit(txctx, cancel)
+			return nil
+		}); err != nil {
+			return nil, err
+		}
 		// worker 会异步落 failed;此处返回当前快照(可能仍 running),客户端经 SSE/轮询见终态。
 		return s.Get(ctx, id)
 	}
@@ -725,6 +888,10 @@ func (s *service) Cancel(ctx context.Context, id string) (*Run, error) {
 	// Waiting frontiers and queued continuations settle durably under the same
 	// project lock used by worker claim. Cancel never restores cluster resources.
 	if err := configstate.WithWriteTxContext(ctx, s.db, func(txctx context.Context, q configstate.DBTX) error {
+		if err := tenancy.Check(txctx, s.db, "run.cancel", "run", id); err != nil {
+			return err
+		}
+
 		if err := configstate.LockEpochs(txctx, q, s.db, configstate.EpochPolicy, configstate.EpochSecrets, configstate.EpochExecutor); err != nil {
 			return err
 		}
@@ -801,6 +968,11 @@ func (s *service) Cancel(ctx context.Context, id string) (*Run, error) {
 // 选取语义(冻结):同项目 + 同分支 + 更早 + 最近成功。created_at 以 RFC3339 文本存储,
 // 字典序与时间序一致(同一 UTC 格式),故可直接以文本比较取「早于 before」。
 func (s *service) LastSuccessfulRun(ctx context.Context, projectID, branch string, before time.Time) (*Run, error) {
+	predicate, authErr := tenancy.QueryPredicate(ctx, s.db, "run.read", "pr.id")
+	if authErr != nil {
+		return nil, authErr
+	}
+
 	projectID = strings.TrimSpace(projectID)
 	if projectID == "" {
 		return nil, ErrNotFound
@@ -809,10 +981,10 @@ func (s *service) LastSuccessfulRun(ctx context.Context, projectID, branch strin
 
 	var id string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id FROM pipeline_runs
-		 WHERE project_id = ? AND trigger_branch = ? AND status = ? AND created_at < ?
+		`SELECT id FROM pipeline_runs pr
+		 WHERE project_id = ? AND trigger_branch = ? AND status = ? AND created_at < ? AND `+predicate.SQL+`
 		 ORDER BY created_at DESC, id DESC`+store.Limit(store.DialectOf(s.db), "1"),
-		projectID, branch, StatusSuccess, beforeStr,
+		append([]any{projectID, branch, StatusSuccess, beforeStr}, predicate.Args...)...,
 	).Scan(&id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -870,9 +1042,14 @@ func (s *service) SetFailureLog(ctx context.Context, id, logText string) error {
 
 // GetFailureLog 取某次运行的失败日志原文(脱敏前;空串 = 无)。不存在 → ErrNotFound。
 func (s *service) GetFailureLog(ctx context.Context, id string) (string, error) {
+	predicate, authErr := tenancy.QueryPredicate(ctx, s.db, "run.read", "pr.id")
+	if authErr != nil {
+		return "", authErr
+	}
+
 	var logText string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT failure_log FROM pipeline_runs WHERE id = ?`, id).Scan(&logText)
+		`SELECT failure_log FROM pipeline_runs pr WHERE id = ? AND `+predicate.SQL, append([]any{id}, predicate.Args...)...).Scan(&logText)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", ErrNotFound
@@ -890,22 +1067,32 @@ func (s *service) SaveDiagnosis(ctx context.Context, id string, d *Diagnosis) er
 	if err != nil {
 		return fmt.Errorf("run: encode diagnosis: %w", err)
 	}
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE pipeline_runs SET diagnosis_json = ? WHERE id = ?`, encoded, id)
-	if err != nil {
-		return fmt.Errorf("run: save diagnosis: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	ctx = configstate.WithWriteAdmission(ctx, tenancy.LockAuthorization)
+	return configstate.WithWriteTxContext(ctx, s.db, func(txctx context.Context, q configstate.DBTX) error {
+		if err := s.AuthorizeDiagnosis(txctx, id); err != nil {
+			return err
+		}
+		result, err := q.ExecContext(txctx, `UPDATE pipeline_runs SET diagnosis_json=? WHERE id=?`, encoded, id)
+		if err != nil {
+			return fmt.Errorf("run: save diagnosis: %w", err)
+		}
+		if n, _ := result.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
 }
 
 // GetDiagnosis 取某次运行已持久化的诊断(未诊断 → nil, nil)。不存在 → ErrNotFound。
 func (s *service) GetDiagnosis(ctx context.Context, id string) (*Diagnosis, error) {
+	predicate, authErr := tenancy.QueryPredicate(ctx, s.db, "run.read", "pr.id")
+	if authErr != nil {
+		return nil, authErr
+	}
+
 	var diagnosisJSON string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT diagnosis_json FROM pipeline_runs WHERE id = ?`, id).Scan(&diagnosisJSON)
+		`SELECT diagnosis_json FROM pipeline_runs pr WHERE id = ? AND `+predicate.SQL, append([]any{id}, predicate.Args...)...).Scan(&diagnosisJSON)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -947,12 +1134,17 @@ func (s *service) AppendLog(ctx context.Context, runID, stream string, stepOrdin
 
 // GetLogs 取 sinceSeq 之后的日志行(升序)。sinceSeq<=0 取全部。参数化 SQL;不全量驻留。
 func (s *service) GetLogs(ctx context.Context, runID string, sinceSeq int) ([]LogLine, error) {
+	predicate, authErr := tenancy.QueryPredicate(ctx, s.db, "run.read", "rl.run_id")
+	if authErr != nil {
+		return nil, authErr
+	}
+
 	if sinceSeq < 0 {
 		sinceSeq = 0
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT seq, ts, stream, step_ordinal, text
-		 FROM run_logs WHERE run_id = ? AND seq > ? ORDER BY seq ASC`, runID, sinceSeq)
+		 FROM run_logs rl WHERE run_id = ? AND seq > ? AND `+predicate.SQL+` ORDER BY seq ASC`, append([]any{runID, sinceSeq}, predicate.Args...)...)
 	if err != nil {
 		return nil, fmt.Errorf("run: load logs: %w", err)
 	}

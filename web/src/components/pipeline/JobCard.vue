@@ -5,8 +5,9 @@ import type { PipelineJob, StageKind } from '../../api/pipeline'
 import { jobTypeLabel } from './jobConfigSchema'
 import JobTypeIcon from './JobTypeIcon.vue'
 
-defineProps<{
+const props = defineProps<{
   job: PipelineJob
+  readOnly?: boolean
   stageKind: StageKind
   selected: boolean
   dragging?: boolean
@@ -31,7 +32,7 @@ const { t } = useI18n()
 
 function handleDelete(e: MouseEvent): void {
   e.stopPropagation()
-  emit('delete')
+  if (!props.readOnly) emit('delete')
 }
 
 function handleEditDeps(e: MouseEvent): void {
@@ -50,17 +51,17 @@ function handleEditDeps(e: MouseEvent): void {
     }"
     role="button"
     tabindex="0"
-    draggable="true"
+    :draggable="!readOnly"
     :aria-pressed="selected"
     :aria-label="t('pipelineCanvas.jobAria', { name: job.name, type: jobTypeLabel(job.type) })"
     @click="emit('select')"
     @keydown.enter="emit('select')"
     @keydown.space.prevent="emit('select')"
-    @dragstart="emit('dragstart')"
+    @dragstart="!readOnly && emit('dragstart')"
     @dragend="emit('dragend')"
-    @dragenter.prevent="emit('dragenter')"
+    @dragenter.prevent="!readOnly && emit('dragenter')"
     @dragover.prevent
-    @drop.prevent="emit('drop')"
+    @drop.prevent="!readOnly && emit('drop')"
   >
     <div class="job-card-top">
       <JobTypeIcon :type="job.type" :size="24" />
@@ -79,6 +80,7 @@ function handleEditDeps(e: MouseEvent): void {
       </button>
       <button
         class="job-card-del"
+        :disabled="readOnly"
         :aria-label="t('pipelineCanvas.deleteJobAria', { name: job.name })"
         :title="t('pipelineCanvas.deleteJobTitle')"
         @click="handleDelete"

@@ -10,7 +10,7 @@
  * Ollama does not require an apiKey.
  */
 
-import { http } from './http'
+import { http, type HttpOptions } from './http'
 
 export type AIProvider = 'claude' | 'openai' | 'ollama' | ''
 
@@ -62,20 +62,22 @@ export interface TestAIConnectionInput {
   apiKey?: string
 }
 
-export async function getAISettings(): Promise<AISettings> {
-  return http.get<AISettings>('/api/settings/ai')
+export async function getAISettings(options: HttpOptions = {}): Promise<AISettings> {
+  return http.get<AISettings>('/api/settings/ai', {...options,throwOnUnauthorized:true})
 }
 
 export async function saveAISettings(
   input: SaveAISettingsInput,
+  options: HttpOptions = {},
 ): Promise<AISettings> {
-  return http.put<AISettings>('/api/settings/ai', input)
+  return http.put<AISettings>('/api/settings/ai', input, {...options,throwOnUnauthorized:true})
 }
 
 export async function testAIConnection(
   draft?: TestAIConnectionInput,
+  options: HttpOptions = {},
 ): Promise<AITestResult> {
-  return http.post<AITestResult>('/api/settings/ai/test', draft ?? {})
+  return http.post<AITestResult>('/api/settings/ai/test', draft ?? {}, {...options,throwOnUnauthorized:true})
 }
 
 export interface AIModelsResult {
@@ -86,6 +88,7 @@ export interface AIModelsResult {
 export function listAIModels(
   draft: TestAIConnectionInput,
   signal?: AbortSignal,
+  options: HttpOptions = {},
 ): Promise<AIModelsResult> {
-  return http.post('/api/settings/ai/models', draft, { signal })
+  return http.post('/api/settings/ai/models', draft, { ...options, signal: signal ?? options.signal, throwOnUnauthorized: true })
 }

@@ -12,11 +12,21 @@ describe('MCP token API', () => {
     const input = { name: 'test', projectIds: ['p'], canTrigger: false, expiresInDays: 7 }
     vi.mocked(http.post).mockResolvedValue({ token: 'one-time', item: token })
     expect(await createMCPToken(input)).toEqual({ token: 'one-time', item: token })
-    expect(http.post).toHaveBeenCalledWith('/api/settings/mcp/tokens', input)
+    expect(http.post).toHaveBeenCalledWith('/api/settings/mcp/tokens', input, {throwOnUnauthorized:true})
   })
   it('encodes revoke identifiers', async () => {
     await revokeMCPToken('a/b')
-    expect(http.delete).toHaveBeenCalledWith('/api/settings/mcp/tokens/a%2Fb')
+    expect(http.delete).toHaveBeenCalledWith('/api/settings/mcp/tokens/a%2Fb', {throwOnUnauthorized:true})
+  })
+  it('preserves captured identity headers and cancellation for every endpoint', async () => {
+    const options={headers:{'X-Pipewright-Team':'fixed-team'},signal:new AbortController().signal}
+    vi.mocked(http.get).mockResolvedValue({tokens:[]})
+    const input={name:'scope',projectIds:['p'],canTrigger:false,expiresInDays:7}
+    await listMCPTokens(options); await createMCPToken(input,options);await revokeMCPToken('id',options)
+    const expected={...options,throwOnUnauthorized:true}
+    expect(http.get).toHaveBeenCalledWith('/api/settings/mcp/tokens',expected)
+    expect(http.post).toHaveBeenCalledWith('/api/settings/mcp/tokens',input,expected)
+    expect(http.delete).toHaveBeenCalledWith('/api/settings/mcp/tokens/id',expected)
   })
   it('uses expiry and revocation, rejecting malformed dates', () => {
     expect(mcpTokenState(token, Date.parse('2026-01-01T12:00:00Z'))).toBe('active')

@@ -130,7 +130,7 @@ func TestModelCountPersistenceFailureConvergesWithoutModelReplay(t *testing.T) {
 		BEGIN SELECT RAISE(FAIL,'injected model count failure'); END`); err != nil {
 		t.Fatal(err)
 	}
-	s.launch(c.ID, run)
+	s.launch(context.Background(), c.ID, run)
 	snap := waitRun(t, s, c.ID, run, Failed)
 	waitJobs(t, s)
 	if snap.Session.ActiveRunID != "" || !s.Capabilities().Available {

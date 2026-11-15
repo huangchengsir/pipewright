@@ -15,94 +15,123 @@
  * by the API (saved) but their test/send returns a human-readable not_implemented.
  */
 
-import { http } from './http'
+import { http, type HttpOptions } from "./http";
 
-export type ChannelType = 'webhook' | 'email' | 'wecom' | 'dingtalk' | 'feishu'
+export type ChannelType = "webhook" | "email" | "wecom" | "dingtalk" | "feishu";
 
 /** Non-sensitive per-type config (union). Password is never returned — only hasPassword. */
 export interface ChannelConfig {
   // webhook
-  url?: string
+  url?: string;
   // email
-  smtpHost?: string
-  smtpPort?: number
-  from?: string
-  to?: string
-  username?: string
+  smtpHost?: string;
+  smtpPort?: number;
+  from?: string;
+  to?: string;
+  username?: string;
   /** True when an SMTP password is stored (write-only; plaintext never returned). */
-  hasPassword?: boolean
+  hasPassword?: boolean;
 }
 
 /** GET response item — never contains a plaintext secret. */
 export interface NotificationChannel {
-  id: string
-  name: string
-  type: ChannelType
-  enabled: boolean
-  config: ChannelConfig
-  createdAt: string
-  updatedAt: string
+  id: string;
+  name: string;
+  type: ChannelType;
+  enabled: boolean;
+  config: ChannelConfig;
+  createdAt: string;
+  updatedAt: string;
 }
 
 /** Per-type config sent on create/update. `password` is write-only. */
 export interface ChannelConfigInput {
-  url?: string
-  smtpHost?: string
-  smtpPort?: number
-  from?: string
-  to?: string
-  username?: string
+  url?: string;
+  smtpHost?: string;
+  smtpPort?: number;
+  from?: string;
+  to?: string;
+  username?: string;
   /**
    * Write-only. On update: omit/undefined keeps existing, empty string clears,
    * non-empty rotates. Never echoed back by the server.
    */
-  password?: string
+  password?: string;
 }
 
 export interface CreateChannelInput {
-  name: string
-  type: ChannelType
-  enabled: boolean
-  config: ChannelConfigInput
+  name: string;
+  type: ChannelType;
+  enabled: boolean;
+  config: ChannelConfigInput;
 }
 
 /** Update body — all fields optional (omit = keep existing). */
 export interface UpdateChannelInput {
-  name?: string
-  enabled?: boolean
-  config?: ChannelConfigInput
+  name?: string;
+  enabled?: boolean;
+  config?: ChannelConfigInput;
 }
 
 /** POST .../{id}/test response */
 export interface ChannelTestResult {
-  ok: boolean
-  latencyMs: number
-  detail: string
-  error: string | null
+  ok: boolean;
+  latencyMs: number;
+  detail: string;
+  error: string | null;
 }
 
-export async function listChannels(): Promise<NotificationChannel[]> {
-  const res = await http.get<{ items: NotificationChannel[] }>('/api/notifications/channels')
-  return res.items ?? []
+export async function listChannels(
+  options: HttpOptions = {},
+): Promise<NotificationChannel[]> {
+  const res = await http.get<{ items: NotificationChannel[] }>(
+    "/api/notifications/channels",
+    { ...options, throwOnUnauthorized: true },
+  );
+  return res.items ?? [];
 }
 
-export async function createChannel(input: CreateChannelInput): Promise<NotificationChannel> {
-  return http.post<NotificationChannel>('/api/notifications/channels', input)
+export async function createChannel(
+  input: CreateChannelInput,
+  options: HttpOptions = {},
+): Promise<NotificationChannel> {
+  return http.post<NotificationChannel>("/api/notifications/channels", input, {
+    ...options,
+    throwOnUnauthorized: true,
+  });
 }
 
 export async function updateChannel(
   id: string,
   input: UpdateChannelInput,
+  options: HttpOptions = {},
 ): Promise<NotificationChannel> {
-  return http.put<NotificationChannel>(`/api/notifications/channels/${id}`, input)
+  return http.put<NotificationChannel>(
+    `/api/notifications/channels/${id}`,
+    input,
+    { ...options, throwOnUnauthorized: true },
+  );
 }
 
-export async function deleteChannel(id: string): Promise<void> {
-  await http.delete<void>(`/api/notifications/channels/${id}`)
+export async function deleteChannel(
+  id: string,
+  options: HttpOptions = {},
+): Promise<void> {
+  await http.delete<void>(`/api/notifications/channels/${id}`, {
+    ...options,
+    throwOnUnauthorized: true,
+  });
 }
 
-export async function testChannel(id: string): Promise<ChannelTestResult> {
-  return http.post<ChannelTestResult>(`/api/notifications/channels/${id}/test`, {})
+export async function testChannel(
+  id: string,
+  options: HttpOptions = {},
+): Promise<ChannelTestResult> {
+  return http.post<ChannelTestResult>(
+    `/api/notifications/channels/${id}/test`,
+    {},
+    { ...options, throwOnUnauthorized: true },
+  );
 }
 
 /**
@@ -127,51 +156,69 @@ export async function testChannel(id: string): Promise<ChannelTestResult> {
 
 /** Frozen event enum (run terminal status → event mapping lives server-side). */
 export type NotificationEvent =
-  | 'build_succeeded'
-  | 'build_failed'
-  | 'deploy_succeeded'
-  | 'deploy_failed'
-  | 'rollback'
-  | 'health_check_failed'
-  | 'approval_required'
-  | 'anomaly_detected'
+  | "build_succeeded"
+  | "build_failed"
+  | "deploy_succeeded"
+  | "deploy_failed"
+  | "rollback"
+  | "health_check_failed"
+  | "approval_required"
+  | "anomaly_detected";
 
 /** GET response item — an event→channel mapping. */
 export interface NotificationRoute {
-  id: string
+  id: string;
   /** Per-pipeline override scope (Story 5.4); empty = global default. */
-  projectId?: string
-  event: NotificationEvent
-  channelId: string
-  enabled: boolean
-  createdAt: string
+  projectId?: string;
+  event: NotificationEvent;
+  channelId: string;
+  enabled: boolean;
+  createdAt: string;
 }
 
 /** Create body. enabled defaults to true server-side when omitted. */
 export interface CreateRouteInput {
   /** Set = project-level override (Story 5.4); omit/empty = global default. */
-  projectId?: string
-  event: NotificationEvent
-  channelId: string
-  enabled?: boolean
+  projectId?: string;
+  event: NotificationEvent;
+  channelId: string;
+  enabled?: boolean;
 }
 
 /**
  * List routes for a scope. projectId set → that project's override routes;
  * omitted/empty → global default routes.
  */
-export async function listRoutes(projectId?: string): Promise<NotificationRoute[]> {
-  const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''
-  const res = await http.get<{ items: NotificationRoute[] }>(`/api/notifications/routes${query}`)
-  return res.items ?? []
+export async function listRoutes(
+  projectId?: string,
+  options: HttpOptions = {},
+): Promise<NotificationRoute[]> {
+  const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+  const res = await http.get<{ items: NotificationRoute[] }>(
+    `/api/notifications/routes${query}`,
+    { ...options, throwOnUnauthorized: true },
+  );
+  return res.items ?? [];
 }
 
-export async function createRoute(input: CreateRouteInput): Promise<NotificationRoute> {
-  return http.post<NotificationRoute>('/api/notifications/routes', input)
+export async function createRoute(
+  input: CreateRouteInput,
+  options: HttpOptions = {},
+): Promise<NotificationRoute> {
+  return http.post<NotificationRoute>("/api/notifications/routes", input, {
+    ...options,
+    throwOnUnauthorized: true,
+  });
 }
 
-export async function deleteRoute(id: string): Promise<void> {
-  await http.delete<void>(`/api/notifications/routes/${id}`)
+export async function deleteRoute(
+  id: string,
+  options: HttpOptions = {},
+): Promise<void> {
+  await http.delete<void>(`/api/notifications/routes/${id}`, {
+    ...options,
+    throwOnUnauthorized: true,
+  });
 }
 
 /**
@@ -192,74 +239,116 @@ export async function deleteRoute(id: string): Promise<void> {
 
 /** Frozen template variable placeholders (for the "available variables" hint). */
 export const TEMPLATE_VARIABLES = [
-  'project',
-  'branch',
-  'commit',
-  'status',
-  'event',
-  'durationMs',
-  'runId',
-  'errorSummary',
-] as const
+  "project",
+  "branch",
+  "commit",
+  "status",
+  "event",
+  "durationMs",
+  "runId",
+  "errorSummary",
+] as const;
 
 /** GET response item — an event(+optional channel) → title/body template mapping. */
 export interface NotificationTemplate {
-  id: string
+  id: string;
   /** Reserved for 5-4 per-pipeline override; empty = global default this release. */
-  projectId?: string
-  event: NotificationEvent
+  projectId?: string;
+  event: NotificationEvent;
   /** Empty = applies to all channels for this event; non-empty = only that channel. */
-  channelId?: string
-  titleTemplate: string
-  bodyTemplate: string
-  createdAt: string
+  channelId?: string;
+  titleTemplate: string;
+  bodyTemplate: string;
+  createdAt: string;
 }
 
 /** Create body. channelId empty/omitted = generic (all channels for the event). */
 export interface CreateTemplateInput {
-  event: NotificationEvent
-  channelId?: string
-  titleTemplate: string
-  bodyTemplate: string
+  event: NotificationEvent;
+  channelId?: string;
+  titleTemplate: string;
+  bodyTemplate: string;
 }
 
 /** Update body — all fields optional (omit = keep existing). */
 export interface UpdateTemplateInput {
-  event?: NotificationEvent
-  channelId?: string
-  titleTemplate?: string
-  bodyTemplate?: string
+  event?: NotificationEvent;
+  channelId?: string;
+  titleTemplate?: string;
+  bodyTemplate?: string;
 }
 
-export async function listTemplates(): Promise<NotificationTemplate[]> {
-  const res = await http.get<{ items: NotificationTemplate[] }>('/api/notifications/templates')
-  return res.items ?? []
+export async function listTemplates(
+  options: HttpOptions = {},
+): Promise<NotificationTemplate[]> {
+  const res = await http.get<{ items: NotificationTemplate[] }>(
+    "/api/notifications/templates",
+    { ...options, throwOnUnauthorized: true },
+  );
+  return res.items ?? [];
 }
 
-export async function createTemplate(input: CreateTemplateInput): Promise<NotificationTemplate> {
-  return http.post<NotificationTemplate>('/api/notifications/templates', input)
+export async function createTemplate(
+  input: CreateTemplateInput,
+  options: HttpOptions = {},
+): Promise<NotificationTemplate> {
+  return http.post<NotificationTemplate>(
+    "/api/notifications/templates",
+    input,
+    { ...options, throwOnUnauthorized: true },
+  );
 }
 
 export async function updateTemplate(
   id: string,
   input: UpdateTemplateInput,
+  options: HttpOptions = {},
 ): Promise<NotificationTemplate> {
-  return http.put<NotificationTemplate>(`/api/notifications/templates/${id}`, input)
+  return http.put<NotificationTemplate>(
+    `/api/notifications/templates/${id}`,
+    input,
+    { ...options, throwOnUnauthorized: true },
+  );
 }
 
-export async function deleteTemplate(id: string): Promise<void> {
-  await http.delete<void>(`/api/notifications/templates/${id}`)
+export async function deleteTemplate(
+  id: string,
+  options: HttpOptions = {},
+): Promise<void> {
+  await http.delete<void>(`/api/notifications/templates/${id}`, {
+    ...options,
+    throwOnUnauthorized: true,
+  });
 }
 
 /** Global notification config — currently just the outbound-content language. */
 export interface NotifyConfig {
-  language: string
+  language: string;
 }
 
-export async function getNotifyConfig(): Promise<NotifyConfig> {
-  return http.get<NotifyConfig>('/api/notifications/config')
+export async function getNotifyConfig(
+  options: HttpOptions = {},
+): Promise<NotifyConfig> {
+  return http.get<NotifyConfig>("/api/notifications/config", {
+    ...options,
+    throwOnUnauthorized: true,
+  });
 }
 
-export async function setNotifyConfig(language: string): Promise<NotifyConfig> {
-  return http.put<NotifyConfig>('/api/notifications/config', { language })
+export async function setNotifyConfig(
+  language: string,
+  options: HttpOptions = {},
+): Promise<NotifyConfig> {
+  return http.put<NotifyConfig>(
+    "/api/notifications/config",
+    { language },
+    { ...options, throwOnUnauthorized: true },
+  );
+}
+
+/** Minimal scoped selector data; no recipients, URLs or secret flags. */
+export type NotificationChannelOption = Pick<NotificationChannel, "id" | "name" | "type" | "enabled">;
+export async function listChannelOptions(options: HttpOptions = {}): Promise<NotificationChannelOption[]> {
+ const res=await http.get<{items:NotificationChannelOption[]}>("/api/notifications/channel-options",{...options,throwOnUnauthorized:true});
+ return res.items ?? [];
 }

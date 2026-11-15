@@ -19,6 +19,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/target"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"io"
 	"os"
 	"strings"
@@ -128,17 +130,46 @@ func (b *Builder) runStageRemote(ctx context.Context, r *run.Run, stage pipeline
 	// 2) 打包工作区 → 经 SSH 传到远程并解包。
 	remoteWS := "/tmp/pipewright-remote/" + sanitizeRemoteSeg(r.ID) + "-" + sanitizeRemoteSeg(stage.ID)
 	remoteTar := remoteWS + ".tar.gz"
+	var cleanup func(context.Context) error
+	if creator, ok := tgt.(target.WorkspaceCreator); ok {
+		owned, err := creator.CreateWorkspace(ctx, serverID)
+		if err != nil {
+			_ = rep.Log(ctx, streamStderr, "创建隔离远端工作区失败，未开始执行")
+			return ErrBuildFailed
+		}
+		remoteWS, remoteTar = owned.Directory(), owned.Archive()
+		cleanup = owned.Cleanup
+		tgt = owned
+	} else {
+		// Legacy adapters have no cleanup bypass: their ordinary Exec still checks
+		// authority. Production target.Service always uses the owned capability.
+		cleanup = func(c context.Context) error {
+			out, err := tgt.Exec(c, serverID, []string{"rm", "-rf", "--", remoteWS, remoteTar})
+			if err != nil {
+				return err
+			}
+			if out == nil || out.ExitCode != 0 {
+				return target.ErrWorkspaceCleanup
+			}
+			return nil
+		}
+	}
+	defer func() {
+		if err := cleanup(context.WithoutCancel(ctx)); err != nil {
+			_ = rep.Log(context.WithoutCancel(ctx), streamStderr, "远端工作区清理未确认，请管理员检查本次运行的临时资源。")
+		}
+	}()
+
 	_ = rep.Log(ctx, streamStdout, "→ 远程 runner:打包工作区并经 SSH 传输…")
 	if err := uploadWorkspace(ctx, tgt, serverID, workspace, remoteTar); err != nil {
 		_ = rep.Log(ctx, streamStderr, "传输工作区到远程失败:"+err.Error())
 		return ErrBuildFailed
 	}
 	// 远程解包 + 收尾清理(尽力)。
-	if out, eerr := tgt.Exec(ctx, serverID, []string{"sh", "-c", `mkdir -p "$0" && tar -xzf "$1" -C "$0" && rm -f "$1"`, remoteWS, remoteTar}); eerr != nil || (out != nil && out.ExitCode != 0) {
+	if out, eerr := tgt.Exec(ctx, serverID, []string{"sh", "-c", `[ ! -L "$0" ] && mkdir -p "$0" && [ "$(cd -P "$0" && pwd)" = "$0" ] && tar -xzf "$1" -C "$0" && rm -f "$1"`, remoteWS, remoteTar}); eerr != nil || (out != nil && out.ExitCode != 0) {
 		_ = rep.Log(ctx, streamStderr, "远程解包工作区失败")
 		return ErrBuildFailed
 	}
-	defer func() { _, _ = tgt.Exec(context.WithoutCancel(ctx), serverID, []string{"rm", "-rf", remoteWS}) }()
 
 	// 3) 在远程机用容器跑 script job(远程 driver:docker run 经 SSH)。
 	driver := &scriptEvidenceDriver{Driver: NewRemoteDriver(tgt, serverID, "docker"), sink: &reporterSink{rep: rep}}
@@ -178,6 +209,9 @@ func markRemoteOmissions(stage pipeline.Stage, rep dagrun.StageReporter, failed 
 // runScriptOnDriver 用给定 driver(本地或远程)跑一条 script 步骤;remoteWS 为容器挂载的工作区(远程机上的路径)。
 // 与 runScriptStep 同语义(env 注入、workdir、多行 set -e 脚本、array 不拼 host shell),只是 driver 可注入。
 func (b *Builder) runScriptOnDriver(ctx context.Context, driver Driver, onLine func(stream, line string), step pipeline.PipelineStep, remoteWS string) error {
+	if err := tenancy.VerifyExecution(ctx); err != nil {
+		return err
+	}
 	plain, secretEnv := b.buildArgs(ctx, step.Env)
 	env := append(plain, secretEnv...)
 

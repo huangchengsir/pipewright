@@ -5,7 +5,10 @@ import { Send, PlayerStop, Refresh } from '@vicons/tabler'
 import AppSelect from '../ui/AppSelect.vue'
 import AiOpsExecArgs from './AiOpsExecArgs.vue'
 import { isValidExecArgv, utf8Bytes, type Tool, type ToolArgs } from '../../api/opsChat'
-const props = defineProps<{
+const props = withDefaults(defineProps<{
+  canEdit?: boolean
+  canSubmit?: boolean
+  canCancel?: boolean
   draft: string
   contextText?: string
   draftStatus: string
@@ -15,7 +18,7 @@ const props = defineProps<{
   modelAvailable: boolean
   hasTargets: boolean
   pending: boolean
-}>()
+}>(), { canEdit: true, canSubmit: true, canCancel: true })
 const emit = defineEmits<{
   edit: [value: string]
   send: []
@@ -41,7 +44,7 @@ const needsLines = computed(() => toolId.value.endsWith('_logs'))
 const selectedTool = computed(() => props.tools.find((tool) => tool.toolId === toolId.value))
 const mutation = computed(() => selectedTool.value?.mutation ?? false)
 const needsAction = computed(() => ['docker_action', 'systemd_action'].includes(toolId.value))
-const formBusy = computed(() => props.disabled || props.active || props.pending)
+const formBusy = computed(() => props.disabled || !props.canSubmit || props.active || props.pending)
 const toolDisabled = computed(() =>
   formBusy.value || !props.hasTargets || !selectedTool.value ||
   ((needsContainer.value || needsUnit.value) && !object.value.trim()) ||
@@ -72,7 +75,7 @@ function run(): void {
 </script>
 <template>
   <section class="composer">
-    <details class="tool-picker">
+    <details v-if="canSubmit" class="tool-picker">
       <summary>{{ t('opsChat.runTool') }}</summary>
       <div class="tool-fields">
         <AppSelect
@@ -82,7 +85,7 @@ function run(): void {
           min-width="100%"
           height="36px"
           portal
-          :disabled="disabled || active || pending"
+          :disabled="disabled || !canEdit || active || pending"
         />
         <input
           v-if="needsContainer || needsUnit"
@@ -148,8 +151,8 @@ function run(): void {
         :value="draft"
         :placeholder="t('opsChat.message')"
         :aria-label="t('opsChat.message')"
-        :disabled="disabled"
-        @input="emit('edit', ($event.target as HTMLTextAreaElement).value)"
+        :disabled="disabled || !canEdit"
+        @input="canEdit && emit('edit', ($event.target as HTMLTextAreaElement).value)"
       />
       <button
         class="ops-btn ops-icon ops-primary"
@@ -164,7 +167,8 @@ function run(): void {
         "
         :title="t(hasTargets ? 'opsChat.send' : 'opsChat.noTargets')"
         :aria-label="t('opsChat.send')"
-        @click="emit('send')"
+        v-if="canSubmit"
+        @click="canSubmit && emit('send')"
       >
         <Send />
       </button>
@@ -175,17 +179,17 @@ function run(): void {
         B</span
       >
       <button
-        v-if="draftStatus === 'failed'"
+        v-if="draftStatus === 'failed' && canEdit"
         class="ops-btn"
-        @click="emit('save')"
+        @click="canEdit && emit('save')"
       >
         {{ t('opsChat.save') }}
       </button>
       <button
-        v-if="active"
+        v-if="active && canCancel"
         class="ops-btn ops-danger"
         :disabled="disabled"
-        @click="emit('stop')"
+        @click="canCancel && emit('stop')"
       >
         <PlayerStop />{{ t('opsChat.stop') }}
       </button>
@@ -194,13 +198,13 @@ function run(): void {
       <button class="ops-btn" @click="emit('remote')">
         {{ t('opsChat.useRemote') }}
       </button>
-      <button class="ops-btn" @click="emit('local')">
+      <button v-if="canEdit" class="ops-btn" @click="canEdit && emit('local')">
         {{ t('opsChat.keepLocal') }}
       </button>
     </div>
     <div v-if="pending" class="ops-row">
       <span class="ops-muted ops-grow">{{ t('opsChat.ambiguous') }}</span>
-      <button class="ops-btn" :disabled="disabled" @click="emit('resend')">
+      <button v-if="canSubmit" class="ops-btn" :disabled="disabled" @click="canSubmit && emit('resend')">
         <Refresh />{{ t('opsChat.retrySubmission') }}
       </button>
     </div>

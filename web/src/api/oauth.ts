@@ -13,7 +13,7 @@
  * Leaving clientSecret empty on PUT keeps the existing secret unchanged.
  */
 
-import { http } from './http'
+import { http, type HttpOptions } from './http'
 
 export type OAuthProvider = 'gitee' | 'github' | 'gitlab' | 'custom' | 'gitea'
 
@@ -42,15 +42,16 @@ export interface SaveOAuthAppInput {
   enabled: boolean
 }
 
-export async function getOAuthApps(): Promise<OAuthApp[]> {
-  return http.get<OAuthApp[]>('/api/oauth/apps')
+export async function getOAuthApps(options: HttpOptions = {}): Promise<OAuthApp[]> {
+  return http.get<OAuthApp[]>('/api/oauth/apps', {...options,throwOnUnauthorized:true})
 }
 
 export async function saveOAuthApp(
   provider: OAuthProvider,
   input: SaveOAuthAppInput,
+  options: HttpOptions = {},
 ): Promise<OAuthApp> {
-  return http.put<OAuthApp>(`/api/oauth/apps/${provider}`, input)
+  return http.put<OAuthApp>(`/api/oauth/apps/${provider}`, input, {...options,throwOnUnauthorized:true})
 }
 
 /**
@@ -61,6 +62,7 @@ export async function saveOAuthApp(
  * The backend responds with a 302 to the git platform's consent screen.
  * Do NOT fetch this — fetch would follow the redirect without leaving the SPA.
  */
-export function authorizeUrl(provider: OAuthProvider): string {
-  return `/api/oauth/${provider}/authorize`
+export function authorizeUrl(provider: OAuthProvider, teamId?: string): string {
+  const url = `/api/oauth/${provider}/authorize`
+  return teamId ? url + '?teamId=' + encodeURIComponent(teamId) : url
 }

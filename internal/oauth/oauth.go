@@ -16,6 +16,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/maintenance"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
@@ -124,7 +125,10 @@ func (s *service) ConsumeState(state, sessionID string) bool {
 }
 
 func (s *service) ListApps(ctx context.Context) ([]AppConfig, error) {
-	rows, err := s.db.QueryContext(ctx,
+	if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+		return nil, err
+	}
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT provider, client_id, client_secret_ciphertext, base_url, enabled, updated_at
 		 FROM oauth_apps ORDER BY provider`)
 	if err != nil {
@@ -154,6 +158,9 @@ func (s *service) ListApps(ctx context.Context) ([]AppConfig, error) {
 }
 
 func (s *service) SaveApp(ctx context.Context, in SaveAppInput) (*AppConfig, error) {
+	if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+		return nil, err
+	}
 	provider, err := normalizeProvider(in.Provider)
 	if err != nil {
 		return nil, err
@@ -170,6 +177,10 @@ func (s *service) SaveApp(ctx context.Context, in SaveAppInput) (*AppConfig, err
 		}
 	}
 
+	epoch, err := configstate.ReadEpoch(ctx, configstate.Queryer(ctx, s.db), configstate.EpochSecrets)
+	if err != nil {
+		return nil, err
+	}
 	// 读既有行以实现 client_secret 保留语义。
 	_, _, existingSealed, existingBase, _, _, err := s.loadApp(ctx, provider)
 	if err != nil {
@@ -205,11 +216,24 @@ func (s *service) SaveApp(ctx context.Context, in SaveAppInput) (*AppConfig, err
 		enabled = 1
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	err = configstate.WithWriteTx(ctx, s.db, func(q configstate.DBTX) error {
+	err = configstate.WithWriteTxContext(ctx, s.db, func(ctx context.Context, q configstate.DBTX) error {
+		if err := tenancy.LockAuthorization(ctx, s.db); err != nil {
+			return err
+		}
+		if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+			return err
+		}
 		if err := configstate.LockEpochs(ctx, q, s.db, configstate.EpochSecrets); err != nil {
 			return err
 		}
-		_, err := q.ExecContext(ctx,
+		current, err := configstate.ReadEpoch(ctx, q, configstate.EpochSecrets)
+		if err != nil {
+			return err
+		}
+		if current != epoch {
+			return configstate.ErrConflict
+		}
+		_, err = q.ExecContext(ctx,
 			store.InsertSQL(store.DialectOf(s.db), "oauth_apps",
 				[]string{"provider", "client_id", "client_secret_ciphertext", "base_url", "enabled", "created_at", "updated_at"}, []string{"?", "?", "?", "?", "?", "?", "?"},
 				[]string{"provider"}, []string{"client_id", "client_secret_ciphertext", "base_url", "enabled", "updated_at"}),
@@ -362,7 +386,7 @@ func (s *service) loadApp(ctx context.Context, provider string) (string, string,
 		enabledInt int
 		updatedStr string
 	)
-	err = s.db.QueryRowContext(ctx,
+	err = configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT client_id, client_secret_ciphertext, base_url, enabled, updated_at
 		 FROM oauth_apps WHERE provider = ?`, prov,
 	).Scan(&clientID, &sealed, &baseURL, &enabledInt, &updatedStr)

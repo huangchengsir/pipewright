@@ -4,6 +4,12 @@ import { onBeforeRouteLeave, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { History, Plus, X, Refresh } from '@vicons/tabler'
 import { useOpsChat } from '../../composables/useOpsChat'
+import PermissionGate from '../PermissionGate.vue'
+import { usePermission, usePermissions } from '../../composables/usePermission'
+import { usePermissionStore } from '../../stores/permissions'
+import { useSessionStore } from '../../stores/session'
+import { useOpsChatStore } from '../../stores/opsChat'
+
 import { useOpsAutoScroll } from '../../composables/useOpsAutoScroll'
 import { useConfirm } from '../../composables/useConfirm'
 import { useToast } from '../../composables/useToast'
@@ -30,8 +36,18 @@ const { t } = useI18n(),
   router = useRouter(),
   confirm = useConfirm(),
   toast = useToast()
+const permissions = usePermissionStore()
+const authSession = useSessionStore()
+const chatMemory = useOpsChatStore()
+const requestOptions = () => ({ throwOnUnauthorized: true, headers: { 'X-Pipewright-Team': permissions.activeTeam } })
+const permissionScope = () => JSON.stringify([authSession.user?.userId ?? authSession.user?.username, authSession.user?.multiTenant, authSession.user?.mustChangePassword, authSession.isNetworkError, permissions.activeTeam])
+const requestActive = computed(() => props.active && !!authSession.user && !authSession.isNetworkError && !authSession.user.mustChangePassword && (authSession.user.multiTenant === false || (authSession.user.multiTenant === true && !!permissions.activeTeam)))
+const actionQuery = (action: string, id = chatMemory.state.currentId) => ({ action: 'opschat.' + action, resourceId: action === 'create' ? 'new-resource' : id, ...(action === 'create' ? { create: true } : {}) })
+const actionPermissions = Object.fromEntries(['read', 'create', 'edit', 'delete', 'submit', 'confirm', 'cancel'].map(action => [action, usePermission(() => actionQuery(action))]))
+const can = (action: string, id: string) => permissions.allowed(permissions.activeTeam, { action, resourceId: id, ...(action === 'opschat.create' ? { create: true } : {}) })
 const chat = useOpsChat({
-  active: toRef(props, 'active'),
+  active: requestActive,
+  permissionScope, requestOptions, can,
   initialServerIds: () => props.initialServerIds,
   context: () => props.context,
 })
@@ -51,6 +67,19 @@ const {
   confirmations,
   historyCursor,
 } = chat
+const terminalQueries = computed(() => [...new Set(Object.values(state.calls).map(call => call.serverId))].flatMap(id => {
+  const server = servers.value.find(item => item.id === id)
+  return [{ action: 'server.terminal', resourceId: id }, ...(server?.credentialId ? [{ action: 'credential.use', resourceId: server.credentialId }] : [])]
+}))
+usePermissions(terminalQueries)
+const canTerminal = (id: string) => {
+  if (authSession.user?.multiTenant === false) return true
+  const server = servers.value.find(item => item.id === id)
+  return !!server?.credentialId && permissions.allowed(permissions.activeTeam, { action:'server.terminal',resourceId:id }) && permissions.allowed(permissions.activeTeam,{action:'credential.use',resourceId:server.credentialId})
+}
+watch(() => [actionPermissions.create?.allowed.value, loading.value, session.value?.id, capabilities.value?.available] as const, ([allowed, loadingNow, id, available]) => {
+  if (allowed && !loadingNow && !id && available && requestActive.value) void chat.create()
+})
 const {
   viewport: messagesViewport,
   content: messagesContent,
@@ -201,6 +230,7 @@ async function copy(text: string): Promise<void> {
   else manualCopy.value = text
 }
 function terminal(id: string): void {
+  if (!canTerminal(id)) return
   window.open(
     router.resolve({ name: 'server-terminal', params: { id } }).href,
     '_blank',
@@ -336,7 +366,7 @@ defineExpose({ close, terminalTarget, prepareTerminal, attachTerminal })
       >
         <History />
       </button>
-      <button
+      <PermissionGate :query="actionQuery('create')"><button
         class="ops-btn ops-icon"
         :title="t('opsChat.newSession')"
         :aria-label="t('opsChat.newSession')"
@@ -344,7 +374,7 @@ defineExpose({ close, terminalTarget, prepareTerminal, attachTerminal })
         @click="chat.create"
       >
         <Plus />
-      </button>
+      </button></PermissionGate>
       <button
         class="ops-btn ops-icon"
         :title="t('opsChat.close')"
@@ -376,7 +406,7 @@ defineExpose({ close, terminalTarget, prepareTerminal, attachTerminal })
         :servers="servers"
         :selected="session?.serverIds ?? []"
         :limit="capabilities?.limits?.targets ?? 8"
-        :disabled="disabled || !!session?.activeRunId || !!pending"
+        :disabled="disabled || !actionPermissions.edit?.allowed.value || !!session?.activeRunId || !!pending"
         @change="chat.targets"
       />
       <AiOpsSessionList
@@ -384,6 +414,8 @@ defineExpose({ close, terminalTarget, prepareTerminal, attachTerminal })
         :sessions="state.sessions"
         :current-id="state.currentId"
         :disabled="disabled"
+        :can-edit="actionPermissions.edit?.allowed.value ?? false"
+        :can-delete="actionPermissions.delete?.allowed.value ?? false"
         @select="chat.select"
         @rename="chat.rename"
         @remove="remove"
@@ -403,9 +435,11 @@ defineExpose({ close, terminalTarget, prepareTerminal, attachTerminal })
           :runs="state.snapshot?.runs ?? []"
           :optimistic="optimistic"
           :waiting="waiting"
-          :disabled="disabled || !!session?.activeRunId || !!pending"
-          :model-available="capabilities?.modelAvailable ?? false"
+          :disabled="disabled || !actionPermissions.submit?.allowed.value || !!session?.activeRunId || !!pending"
+          :model-available="(capabilities?.modelAvailable ?? false) && (actionPermissions.submit?.allowed.value ?? false)"
           :has-history="!!historyCursor"
+          :can-submit="actionPermissions.submit?.allowed.value ?? false"
+          :can-terminal="canTerminal"
           @copy="copy"
           @retry="(id) => chat.retry([id])"
           @analyze="chat.analyze"
@@ -419,6 +453,8 @@ defineExpose({ close, terminalTarget, prepareTerminal, attachTerminal })
           :confirmation="confirmation"
           :calls="state.calls"
           :disabled="disabled"
+          :can-confirm="actionPermissions.confirm?.allowed.value ?? false"
+          :can-cancel="actionPermissions.cancel?.allowed.value ?? false"
           @confirm="chat.confirmBatch"
           @cancel="chat.stop"
           @reissue="chat.reissue"
@@ -438,6 +474,9 @@ defineExpose({ close, terminalTarget, prepareTerminal, attachTerminal })
       :draft-status="draftStatus"
       :tools="tools"
       :disabled="disabled"
+      :can-edit="actionPermissions.edit?.allowed.value ?? false"
+      :can-submit="actionPermissions.submit?.allowed.value ?? false"
+      :can-cancel="actionPermissions.cancel?.allowed.value ?? false"
       :active="!!session?.activeRunId"
       :model-available="capabilities?.modelAvailable ?? false"
       :has-targets="!!session?.serverIds?.length"

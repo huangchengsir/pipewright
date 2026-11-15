@@ -1,5 +1,7 @@
+import {useSessionStore} from "../stores/session";
 import { afterEach, describe, expect, it } from "vitest";
 import { h } from "vue";
+import { createPinia } from "pinia";
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { createMemoryHistory, createRouter, RouterView } from "vue-router";
 import Settings from "./Settings.vue";
@@ -26,6 +28,7 @@ afterEach(() => {
   setLocale("zh-CN");
 });
 async function setup(initial = "ai") {
+  const pinia=createPinia();useSessionStore(pinia).setUser({username:"admin",multiTenant:false});
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -43,7 +46,7 @@ async function setup(initial = "ai") {
   await router.isReady();
   wrapper = mount(
     { render: () => h(RouterView) },
-    { global: { plugins: [router] } },
+    { global: { plugins: [router, pinia] } },
   );
   await flushPromises();
   return { w: wrapper, router };
@@ -138,4 +141,12 @@ describe("Settings navigation", () => {
       );
     }
   });
+  it("resets the content pane only after a successful section change",async()=>{
+    const {w,router}=await setup("vault");const pane=w.get(".settings-content").element as HTMLElement;
+    pane.scrollTop=420;await router.push("/settings/vault?filter=active");await flushPromises();expect(pane.scrollTop).toBe(420);
+    const remove=router.beforeEach(to=>to.path==="/settings/account"?false:true);
+    await router.push("/settings/account");await flushPromises();expect(pane.scrollTop).toBe(420);
+    remove();await router.push("/settings/account");await flushPromises();expect(pane.scrollTop).toBe(0);
+  });
+
 });

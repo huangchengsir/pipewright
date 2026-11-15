@@ -59,6 +59,9 @@ func guardDecode(w http.ResponseWriter, r *http.Request, out any, optional bool)
 }
 
 func guardError(w http.ResponseWriter, err error) {
+	if writeAuthorizationError(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, releaseguard.ErrInvalid):
 		writeError(w, 400, "release_guard_invalid", "发布护航请求无效")

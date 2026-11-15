@@ -26,6 +26,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"github.com/huangchengsir/pipewright/internal/version"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -57,6 +58,7 @@ type AuditWriter interface {
 type VerifyFunc func(context.Context) (*auth.MCPToken, error)
 
 type Dependencies struct {
+	BindToken       func(context.Context, *auth.MCPToken) (context.Context, error)
 	Configs         *configdraft.Service
 	Projects        ProjectReader
 	Pipelines       PipelineReader
@@ -121,6 +123,26 @@ func NewServer(d Dependencies, verify VerifyFunc, requestContexts ...context.Con
 			}
 		})
 	}
+	// The SDK does not inherit HTTP context values. Install the verified token
+	// principal explicitly on every protocol method, never browser cookie claims.
+	if d.BindToken != nil {
+		s.AddReceivingMiddleware(func(next sdk.MethodHandler) sdk.MethodHandler {
+			return func(ctx context.Context, method string, req sdk.Request) (sdk.Result, error) {
+				if verify == nil {
+					return nil, auth.ErrMCPTokenInvalid
+				}
+				token, err := verify(ctx)
+				if err != nil {
+					return nil, auth.ErrMCPTokenInvalid
+				}
+				ctx, err = d.BindToken(ctx, token)
+				if err != nil {
+					return nil, auth.ErrMCPTokenInvalid
+				}
+				return next(ctx, method, req)
+			}
+		})
+	}
 	projectFields := map[string]any{"projectId": stringSchema(36)}
 	runFields := map[string]any{"runId": stringSchema(36)}
 	addTool(s, "projects_list", true, schema(map[string]any{"page": integerSchema(1, 32), "pageSize": integerSchema(1, 32)}), verify, d.RegisterSecrets, func(ctx context.Context, t *auth.MCPToken, in ListInput) (any, error) {
@@ -135,6 +157,22 @@ func NewServer(d Dependencies, verify VerifyFunc, requestContexts ...context.Con
 		}
 		if in.Page < 1 || in.Page > 32 || in.PageSize < 1 || in.PageSize > 32 {
 			return nil, ErrInvalidArgument
+		}
+		if reader, ok := d.Projects.(interface {
+			ListMCPProjects(context.Context, []string, int, int) ([]project.Project, int, error)
+		}); ok {
+			projects, total, err := reader.ListMCPProjects(ctx, t.ProjectIDs, in.Page, in.PageSize)
+			if err != nil {
+				return nil, err
+			}
+			items := []any{}
+			for _, p := range projects {
+				items = append(items, map[string]any{"id": p.ID, "name": d.safeText(p.Name), "defaultBranch": d.safeBranch(p.DefaultBranch)})
+			}
+			return map[string]any{"projects": items, "page": in.Page, "hasMore": in.Page*in.PageSize < total, "untrustedData": true}, nil
+		}
+		if t.OwnerModeEpoch != 0 {
+			return nil, ErrUnavailable
 		}
 		ids := append([]string(nil), t.ProjectIDs...)
 		sort.Strings(ids)
@@ -410,6 +448,10 @@ func toolError(err error) *sdk.CallToolResult {
 	code := "service_unavailable"
 	var configErr configdraft.Error
 	switch {
+	case errors.Is(err, tenancy.ErrForbidden):
+		code = "permission_denied"
+	case errors.Is(err, tenancy.ErrConflict):
+		code = "permission_state_changed"
 	case errors.As(err, &configErr):
 		code = configdraft.Code(err)
 	case errors.Is(err, auth.ErrMCPTokenInvalid):

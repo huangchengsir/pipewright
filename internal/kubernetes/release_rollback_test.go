@@ -165,3 +165,64 @@ func TestRollbackRestoresFrozenPrivateBaselineAndDeletesOnlyOwnedNewObject(t *te
 		}
 	})
 }
+
+func TestRollbackRejectionSettlesOnlyTheExactSource(t *testing.T) {
+	for _, scenario := range []struct {
+		name, state, wantSource       string
+		cleanupPending, sourceChanged bool
+	}{
+		{name: "known rejection", state: "failed", wantSource: "ready"},
+		{name: "unknown outcome", state: "outcome_unknown", wantSource: "rollback_in_progress"},
+		{name: "unverified cleanup", state: "failed", cleanupPending: true, wantSource: "rollback_in_progress"},
+		{name: "changed source", state: "failed", sourceChanged: true, wantSource: "rollback_in_progress"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := storetest.Open(t)
+			f, plan := releaseStoreFixture(t, st)
+			source, err := f.s.CreateRelease(ctx, "source-run", "node", "owner", plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			source, err = f.s.SetReleaseTerminal(ctx, source.ID, source.OwnerEpoch, source.Revision, "ready", "release_ready")
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan.Mode = "rollback"
+			plan.RollbackOf, plan.RollbackRevision, plan.RollbackPlanID = source.ID, source.Revision, source.PlanID
+			plan.ForceApproval = true
+			child, err := f.s.CreateRelease(ctx, "rollback-run", "node", "owner", plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			child, err = f.s.ApproveRelease(ctx, child.ID, child.OwnerEpoch, child.Revision, child.PlanID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = f.s.AcquireReleaseGates(ctx, child.ID, child.OwnerEpoch); err != nil {
+				t.Fatal(err)
+			}
+			if scenario.cleanupPending {
+				if _, err = st.DB.ExecContext(ctx, "UPDATE k8s_releases SET cleanup_state='pending' WHERE id=?", child.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if scenario.sourceChanged {
+				if _, err = st.DB.ExecContext(ctx, "UPDATE k8s_releases SET revision=revision+1 WHERE id=?", source.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			child, err = f.s.SetReleaseTerminal(ctx, child.ID, child.OwnerEpoch, child.Revision, scenario.state, "release_failed")
+			if err != nil || child.State != scenario.state || child.ReasonCode != "release_failed" {
+				t.Fatal("child result not retained", child.State, child.ReasonCode, err)
+			}
+			got, err := f.s.GetRelease(ctx, source.ID)
+			if err != nil || got.State != scenario.wantSource {
+				t.Fatal("wrong source release result", got.State, err)
+			}
+			if got.State == "ready" && (got.ReasonCode != "release_ready" || got.PlanID != source.PlanID) {
+				t.Fatal("verified source evidence changed")
+			}
+		})
+	}
+}

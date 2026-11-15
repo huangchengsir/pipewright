@@ -300,10 +300,8 @@ func (s *Service) SetReleaseTerminal(ctx context.Context, id, owner string, expe
 		r.State = state
 		r.ReasonCode = ReleaseSafeReason(reason)
 		r.OwnerFenced = true
-		if r.Plan.RollbackOf != "" && (state == "rolled_back" || state == "partial_failed") {
-			if _, e := q.ExecContext(ctx, `UPDATE k8s_releases SET state=?,reason_code=?,revision=revision+1,updated_at=? WHERE id=? AND state='rollback_in_progress'`, state, ReleaseSafeReason(reason), s.now().UnixMilli(), r.Plan.RollbackOf); e != nil {
-				return e
-			}
+		if e := s.settleRollbackSource(ctx, q, *r, state, r.ReasonCode); e != nil {
+			return e
 		}
 		continuationState := "failed"
 		if state == "ready" || state == "rolled_back" {

@@ -3,6 +3,9 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import AppButton from '../ui/AppButton.vue'
+import PermissionGate from '../PermissionGate.vue'
+import {useIdentityRequestScope} from '../../composables/useAuthorizedRequestScope'
+import {usePermission} from '../../composables/usePermission'
 import ReleaseGuardPlan from './ReleaseGuardPlan.vue'
 import { HttpError } from '../../api/http'
 import {
@@ -32,6 +35,11 @@ const props = withDefaults(
   },
 )
 const { t, locale } = useI18n()
+const permissionQuery = computed(() => ({action:'guard.observe',resourceId:props.runId}))
+const permission = usePermission(permissionQuery)
+const readPermission = usePermission(() => ({action:'guard.read',resourceId:props.runId}))
+const visible = ref(true)
+
 const router = useRouter()
 const attempts = ref<DeploymentAttempt[]>([])
 const loading = ref(false)
@@ -42,6 +50,8 @@ let alive = true
 let generation = 0
 let controller: AbortController | undefined
 let poll: ReturnType<typeof setTimeout> | undefined
+function clearPrivateState() { generation++; controller?.abort(); clearTimeout(poll); attempts.value=[]; selected.value=null; parentGuardId.value=''; error.value=''; loading.value=false }
+const scope=useIdentityRequestScope(() => {visible.value=false;clearPrivateState()})
 const needsPoll = computed(
   () =>
     props.runActive ||
@@ -84,9 +94,10 @@ function result(value: string | null): string {
 }
 function schedule(): void {
   clearTimeout(poll)
-  if (alive && needsPoll.value) poll = setTimeout(() => void load(true), 4000)
+  if (scope.active() && readPermission.allowed.value && alive && needsPoll.value) poll = setTimeout(() => void load(true), 4000)
 }
 async function load(silent = false): Promise<void> {
+  if (!scope.active() || !readPermission.allowed.value) return
   clearTimeout(poll)
   controller?.abort()
   const ticket = ++generation
@@ -94,14 +105,14 @@ async function load(silent = false): Promise<void> {
   controller = request
   if (!silent) loading.value = true
   try {
-    const response = await listDeploymentAttempts(props.runId, {
-      signal: request.signal,
-    })
-    if (!alive || ticket !== generation || request.signal.aborted) return
+    const response = await scope.run(() => listDeploymentAttempts(props.runId, {
+      ...scope.requestOptions, signal: request.signal,
+    }))
+    if (!scope.active() || !readPermission.allowed.value || !alive || ticket !== generation || request.signal.aborted) return
     attempts.value = response.items
     error.value = ''
   } catch (cause) {
-    if (!alive || ticket !== generation || request.signal.aborted) return
+    if (!scope.active() || !readPermission.allowed.value || !alive || ticket !== generation || request.signal.aborted) return
     error.value =
       cause instanceof HttpError
         ? (cause.apiError?.message ?? t('releaseGuard.requestFailed'))
@@ -114,9 +125,11 @@ async function load(silent = false): Promise<void> {
   }
 }
 async function started(report: GuardReport): Promise<void> {
+  if (!scope.active() || !readPermission.allowed.value || !permission.allowed.value || !selected.value || report.projectId !== props.projectId || report.runId !== props.runId || report.attemptId !== selected.value.id) return
   selected.value = null
   await router.push(guardReportLocation(report.projectId, report.id))
 }
+function selectAttempt(attempt:DeploymentAttempt):void { if(scope.active() && readPermission.allowed.value && permission.allowed.value && attemptHasIdentity(attempt) && attempts.value.includes(attempt)) selected.value=attempt }
 function closePlan(): void {
   selected.value = null
   void load(true)
@@ -124,8 +137,7 @@ function closePlan(): void {
 watch(
   () => [props.runId, props.projectId],
   () => {
-    attempts.value = []
-    selected.value = null
+    clearPrivateState()
     void load()
   },
   { immediate: true },
@@ -135,6 +147,8 @@ watch(
   () => void load(true),
 )
 watch(() => props.runActive, schedule)
+watch(readPermission.allowed,(allowed)=>{clearPrivateState();if(allowed)void load()})
+watch(permission.allowed,(allowed)=>{if(!allowed)selected.value=null})
 onBeforeUnmount(() => {
   alive = false
   generation++
@@ -145,6 +159,7 @@ onBeforeUnmount(() => {
 
 <template>
   <section
+    v-if="visible && readPermission.allowed.value"
     class="guard-panel"
     :class="{ 'guard-panel--compact': compact }"
     :aria-label="t('releaseGuard.title')"
@@ -202,16 +217,16 @@ onBeforeUnmount(() => {
             · {{ t('releaseGuard.targetCount', { n: attempt.targets.length }) }}
           </p>
         </div>
-        <AppButton
+        <PermissionGate :query="permissionQuery"><AppButton
           :disabled="!attemptHasIdentity(attempt)"
           :title="
             !attemptHasIdentity(attempt)
               ? t('releaseGuard.legacyIdentity')
               : t('releaseGuard.fromNowGap')
           "
-          @click="selected = attempt"
+          @click="selectAttempt(attempt)"
           >{{ t('releaseGuard.fromNow') }}</AppButton
-        >
+        ></PermissionGate>
       </div>
       <p class="guard-attempt__targets">
         {{
@@ -244,9 +259,10 @@ onBeforeUnmount(() => {
       <p v-else class="guard-muted">{{ t('releaseGuard.notStarted') }}</p>
     </article>
     <ReleaseGuardPlan
-      v-if="selected"
+      v-if="selected && permission.allowed.value"
       :key="selected.id"
       :project-id="projectId"
+      :run-id="runId"
       :attempt-id="selected.id"
       :parent-guard-id="parentGuardId.trim() || undefined"
       @close="closePlan"

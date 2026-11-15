@@ -1,7 +1,7 @@
 import { computed, onBeforeUnmount, shallowRef, watch } from 'vue'
 import type { Ref } from 'vue'
 import {
-  opsApi,
+  opsApi, createOpsApi,
   streamOps,
   errorCode,
   requestId,
@@ -23,7 +23,7 @@ import type {
   Capabilities,
 } from '../api/opsChat'
 import { listServers, type Server } from '../api/servers'
-import { HttpError } from '../api/http'
+import { HttpError, type HttpOptions } from '../api/http'
 import { useOpsChatStore, type PendingSubmission } from '../stores/opsChat'
 import { onOpsAuthReset, opsAuthEpoch, resetOpsAuth } from '../utils/opsAuth'
 
@@ -42,7 +42,12 @@ export function useOpsChat(options: {
   active: Ref<boolean>
   initialServerIds: () => string[]
   context?: () => string
+  permissionScope?: () => string
+  requestOptions?: () => HttpOptions
+  can?: (action: string, id: string) => boolean
 }) {
+  let api = options.requestOptions ? createOpsApi(options.requestOptions()) : opsApi
+  const permitted = (action: string, id = state.currentId) => !options.can || options.can(action, id)
   const store = useOpsChatStore()
   const state = store.state
   const capabilities = shallowRef<Capabilities | null>(null)
@@ -142,7 +147,12 @@ export function useOpsChat(options: {
   }
   relinquish.add(releaseOwnership)
   function fail(e: unknown): void {
-    error.value = errorCode(e)
+    const code = errorCode(e)
+    if (options.permissionScope && ['unauthorized', 'forbidden', 'network'].includes(code)) {
+      resetOpsAuth()
+      store.clear()
+    }
+    error.value = code
   }
   function mergeEntries(entries: Entry[], watermark = state.snapshot?.watermark ?? 0): void {
     const bySeq = new Map(state.entries.map((e) => [e.seq, e]))
@@ -299,7 +309,7 @@ export function useOpsChat(options: {
     pendingCallReads.add(id)
     const job = (async () => {
       try {
-        const call = await opsApi.call(t.id, id)
+        const call = await api.call(t.id, id)
         if (!valid(t.g, t.auth)) return false
         // A snapshot or live event that arrived during GET owns the newer value.
         if (state.calls[id] === previous) {
@@ -358,7 +368,7 @@ export function useOpsChat(options: {
       do {
         job.again = false
         try {
-          const value = await opsApi.snapshot(t.id)
+          const value = await api.snapshot(t.id)
           if (!valid(t.g, t.auth)) return false
           const applied = applySnapshot(value)
           ok = await hydrateCalls()
@@ -432,7 +442,7 @@ export function useOpsChat(options: {
     const t = token()
     const c = new AbortController()
     controller = c
-    void streamOps(t.id, cursor, c.signal, (ev) => event(ev, t.g, t.auth))
+    void streamOps(t.id, cursor, c.signal, (ev) => event(ev, t.g, t.auth), options.requestOptions?.())
       .catch((e) => {
         if (valid(t.g, t.auth) && !c.signal.aborted) fail(e)
       })
@@ -449,9 +459,12 @@ export function useOpsChat(options: {
     const t = token()
     try {
       const [cap, catalogue, registered] = await Promise.all([
-        opsApi.capabilities(),
-        opsApi.tools(),
-        listServers(),
+        api.capabilities(),
+        api.tools(),
+        listServers(options.requestOptions?.()).catch(e => {
+          if (e instanceof HttpError && e.status === 403) return []
+          throw e
+        }),
       ])
       if (!valid(t.g, t.auth)) return false
       capabilities.value = cap
@@ -484,8 +497,8 @@ export function useOpsChat(options: {
     state.calls = {}
     refreshState = null
     try {
-      await opsApi.activate(id,entryContext)
-      const value = await opsApi.snapshot(id)
+      await api.activate(id,entryContext)
+      const value = await api.snapshot(id)
       if (!valid(t.g, t.auth)) return false
       applySnapshot(value, true)
       cursor = id + ':' + value.watermark
@@ -500,18 +513,21 @@ export function useOpsChat(options: {
     }
   }
   async function create(): Promise<boolean> {
+    const authorized = () => permitted('opschat.create', 'new-resource')
+    if (busy.value) return false
+    if (!authorized()) { error.value = 'forbidden'; return false }
     const initial = token()
     if (!(await flush())) return false
-    if (!valid(initial.g, initial.auth)) return false
+    if (!valid(initial.g, initial.auth) || !authorized() || busy.value) return false
     const t = token()
     busy.value = true
     try {
-      const value = await opsApi.create(options.initialServerIds().slice(0, capabilities.value?.limits.targets??8),entryContext)
-      if (!valid(t.g, t.auth)) return false
+      const value = await api.create(options.initialServerIds().slice(0, capabilities.value?.limits.targets??8),entryContext)
+      if (!valid(t.g, t.auth) || !authorized()) return false
       state.sessions = [...state.sessions, value]
       return await select(value.id)
     } catch (e) {
-      if (valid(t.g, t.auth)) fail(e)
+      if (valid(t.g, t.auth) && authorized()) fail(e)
       return false
     } finally {
       if (t.auth === opsAuthEpoch()) busy.value = false
@@ -528,9 +544,12 @@ export function useOpsChat(options: {
     error.value = ''
     try {
       const [cap, catalogue, registered] = await Promise.all([
-        opsApi.capabilities(),
-        opsApi.tools(),
-        listServers(),
+        api.capabilities(),
+        api.tools(),
+        listServers(options.requestOptions?.()).catch(e => {
+          if (e instanceof HttpError && e.status === 403) return []
+          throw e
+        }),
       ])
       if (!valid(t.g, t.auth)) return
       capabilities.value = cap
@@ -540,7 +559,7 @@ export function useOpsChat(options: {
         error.value = 'ops_unavailable'
         return
       }
-      const page = await opsApi.list(entryContext)
+      const page = await api.list(entryContext)
       if (!valid(t.g, t.auth)) return
       state.sessions = (page.sessions ?? []).sort((a, b) =>
         b.updatedAt.localeCompare(a.updatedAt),
@@ -573,7 +592,7 @@ export function useOpsChat(options: {
       )
         return null
       try {
-        const value = await opsApi.patch(t.id, {
+        const value = await api.patch(t.id, {
           ...input,
           revision: session.value.revision,
         })
@@ -590,6 +609,7 @@ export function useOpsChat(options: {
     })
   }
   async function flush(): Promise<boolean> {
+    if (dirty.value && !permitted('opschat.edit')) { error.value = 'forbidden'; return false }
     const t = token()
     clearTimeout(timer)
     // Wait for an already-started save before capturing the newest draft.
@@ -621,6 +641,7 @@ export function useOpsChat(options: {
     return !!value
   }
   function editDraft(value: string): void {
+    if (!permitted('opschat.edit')) { error.value = 'forbidden'; return  }
     userEditGeneration++
     draft.value = value
     if (draftStatus.value !== 'conflict')
@@ -634,7 +655,7 @@ export function useOpsChat(options: {
     const t = token()
     const local = draft.value
     try {
-      const value = await opsApi.snapshot(t.id)
+      const value = await api.snapshot(t.id)
       if (!valid(t.g, t.auth)) return
       delete state.drafts[t.id]
       applySnapshot(value, true)
@@ -647,6 +668,7 @@ export function useOpsChat(options: {
     }
   }
   async function targets(ids: string[]): Promise<boolean> {
+    if (!permitted('opschat.edit')) { error.value = 'forbidden'; return false }
     const t = token()
     if (
       busy.value ||
@@ -664,6 +686,7 @@ export function useOpsChat(options: {
     }
   }
   async function rename(title: string): Promise<boolean> {
+    if (!permitted('opschat.edit')) { error.value = 'forbidden'; return false }
     const t = token()
     if (
       pending.value ||
@@ -676,13 +699,14 @@ export function useOpsChat(options: {
     return !!(await patch({ title }))
   }
   async function submitPending(): Promise<boolean> {
+    if (!permitted('opschat.submit')) { error.value = 'forbidden'; return false }
     const t = token(),
       p = pending.value
     if (!p || busy.value) return false
     busy.value = true
     error.value = ''
     try {
-      const run = p.kind==='turn' ? await opsApi.turn(t.id,p.input as Turn) : p.kind==='retry' ? await opsApi.retry(t.id,p.input as Retry) : await opsApi.analyze(t.id,p.input as Analysis)
+      const run = p.kind==='turn' ? await api.turn(t.id,p.input as Turn) : p.kind==='retry' ? await api.retry(t.id,p.input as Retry) : await api.analyze(t.id,p.input as Analysis)
       if (!valid(t.g, t.auth)) return false
       delete state.pending[t.id]
       preview.value = null
@@ -762,6 +786,7 @@ export function useOpsChat(options: {
     } finally {preparing=false;if(!state.pending[t.id]&&!state.snapshot?.runs?.some(r=>r.clientRequestId===clientRequestId))state.optimistic=state.optimistic.filter(e=>e.requestId!==clientRequestId)}
   }
   async function send(context?: { text: string; valid: () => boolean }): Promise<boolean> {
+    if (!permitted('opschat.submit')) { error.value = 'forbidden'; return false }
     if(context && !context.valid()) return false
     const text = context ? [draft.value, context.text].filter(Boolean).join('\n\n') : draft.value
     if (!session.value?.serverIds?.length) return false
@@ -774,6 +799,7 @@ export function useOpsChat(options: {
     return submit('turn', { text, analyzeResults:true, provider:capabilities.value.provider }, text, undefined, context?.valid)
   }
   async function tool(toolId: string, args: ToolArgs): Promise<boolean> {
+    if (!permitted('opschat.submit')) { error.value = 'forbidden'; return false }
     if (
       !tools.value.some((t) => t.toolId === toolId) ||
       !session.value?.serverIds?.length
@@ -782,6 +808,7 @@ export function useOpsChat(options: {
     return submit('turn', { toolId, args })
   }
   async function retry(callIds: string[]): Promise<boolean> {
+    if (!permitted('opschat.submit')) { error.value = 'forbidden'; return false }
     return submit('retry', { callIds })
   }
   async function localAction(action: () => Promise<unknown>): Promise<boolean> {
@@ -802,17 +829,20 @@ export function useOpsChat(options: {
     }
   }
   async function stop(runId = session.value?.activeRunId): Promise<boolean> {
+    if (!permitted('opschat.cancel')) { error.value = 'forbidden'; return Promise.resolve(false) }
     if (!runId) return true
     const id = state.currentId
-    return localAction(() => opsApi.cancel(id, runId))
+    return localAction(() => api.cancel(id, runId))
   }
   function confirmBatch(confirmation: Confirmation): Promise<boolean> {
+    if (!permitted('opschat.confirm')) { error.value = 'forbidden'; return Promise.resolve(false) }
     const id = state.currentId
-    return localAction(() => opsApi.confirm(id, confirmation))
+    return localAction(() => api.confirm(id, confirmation))
   }
   function reissue(runId: string): Promise<boolean> {
+    if (!permitted('opschat.confirm')) { error.value = 'forbidden'; return Promise.resolve(false) }
     const id = state.currentId
-    return localAction(() => opsApi.reissue(id, runId))
+    return localAction(() => api.reissue(id, runId))
   }
   async function analyzePreview(ids: string[]): Promise<void> {
     if (!capabilities.value?.modelAvailable || busy.value || pending.value)
@@ -821,7 +851,7 @@ export function useOpsChat(options: {
       previewToken = ++previewGeneration
     preview.value = null
     try {
-      const value = await opsApi.preview(t.id, ids)
+      const value = await api.preview(t.id, ids)
       if (valid(t.g, t.auth) && previewToken === previewGeneration)
         preview.value = value
     } catch (e) {
@@ -829,6 +859,7 @@ export function useOpsChat(options: {
     }
   }
   async function analyze(callIds: string[] = [],runId?: string): Promise<boolean> {
+    if (!permitted('opschat.submit')) { error.value = 'forbidden'; return false }
     if(!capabilities.value?.modelAvailable || (!callIds.length&&!runId))return false
     return submit('analysis', {
       ...(runId?{runId}:{callIds}),
@@ -840,7 +871,7 @@ export function useOpsChat(options: {
     const t = token()
     if (!historyCursor.value) return
     try {
-      const page = await opsApi.entries(t.id, historyCursor.value)
+      const page = await api.entries(t.id, historyCursor.value)
       if (valid(t.g, t.auth)) {
         mergeEntries(page.entries ?? [], page.watermark)
         historyCursor.value = page.entries?.length ? page.cursor : ''
@@ -851,6 +882,7 @@ export function useOpsChat(options: {
     }
   }
   async function remove(): Promise<boolean> {
+    if (!permitted('opschat.delete')) { error.value = 'forbidden'; return false }
     const initial = token()
     if (!(await flush()) || session.value?.activeRunId) {
       error.value = 'ops_conflict'
@@ -859,7 +891,7 @@ export function useOpsChat(options: {
     if (!valid(initial.g, initial.auth)) return false
     const t = token()
     try {
-      await opsApi.delete(t.id)
+      await api.delete(t.id)
       if (!valid(t.g, t.auth)) return false
       delete state.pending[t.id]
       delete state.drafts[t.id]
@@ -903,6 +935,12 @@ export function useOpsChat(options: {
     draftStatus.value = 'saved'
     error.value = 'unauthorized'
   })
+  if (options.permissionScope) watch(options.permissionScope, () => {
+    resetOpsAuth()
+    store.clear()
+    api = options.requestOptions ? createOpsApi(options.requestOptions()) : opsApi
+    if (options.active.value) void restore()
+  }, { flush: 'sync' })
   watch(
     [options.active,()=>options.context?.()??''],
     ([active]) => {

@@ -1,4 +1,8 @@
 export default {
+  monitoringReady: "모니터링 권한 승인됨",
+  monitoringRequired: "모니터링 권한 승인 필요",
+  monitoringHint: "서버를 저장하거나 실행 노드 할당을 확인하여 고정 읽기 전용 수집을 승인하세요. 승인은 서버 정상 상태를 의미하지 않습니다.",
+
   title: '서버',
   desc: '대상 서버(host / port / user + SSH 자격 증명)를 등록하고 연결성을 테스트합니다. SSH 키는 참조로만 바인딩되며 볼트를 통해 암호화되어 저장 및 조회되고, 평문으로 저장하거나 표시하지 않습니다. 배포와 운영 모두 이 공유 SSH 계층을 통해 명령을 실행합니다.',
   addServer: '서버 등록',

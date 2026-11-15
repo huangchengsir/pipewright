@@ -20,7 +20,7 @@ func (t *Target) expectedCount(table string, n int64) int64 {
 		return n
 	}
 	switch table {
-	case "sessions", "login_flows":
+	case "sessions", "access_sessions", "access_run_authorizations", "login_flows":
 		return 0
 	case "audit_log":
 		return n + 1
@@ -30,7 +30,7 @@ func (t *Target) expectedCount(table string, n int64) int64 {
 func (t *Target) verifyTransferredRow(ctx context.Context, table Table, row []any) error {
 	if t.activated {
 		switch table.Name {
-		case "sessions", "login_flows":
+		case "sessions", "access_sessions", "access_run_authorizations", "login_flows":
 			return nil
 		case "selfupdate_control":
 			row = append([]any(nil), row...)
@@ -124,7 +124,7 @@ func (r *Runtime) confirmBoot(ctx context.Context, actual ActiveConfig) (*State,
 			return nil, ErrCommitUnknown
 		}
 		defer tx.Rollback()
-		for _, query := range []string{"DELETE FROM sessions", "DELETE FROM login_flows"} {
+		for _, query := range []string{"DELETE FROM sessions", "DELETE FROM access_sessions", "DELETE FROM access_run_authorizations", "DELETE FROM login_flows"} {
 			if _, e = tx.ExecContext(ctx, query); e != nil {
 				return nil, ErrMismatch
 			}

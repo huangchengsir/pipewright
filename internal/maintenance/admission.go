@@ -59,7 +59,7 @@ func Fence(ctx context.Context, db *sql.DB, task string) error {
 	})
 }
 func Unfence(ctx context.Context, db *sql.DB, task string) error {
-	_, e := db.ExecContext(ctx, "UPDATE selfupdate_control SET task_id='' WHERE id=1 AND task_id=?", task)
+	_, e := configstate.Queryer(ctx, db).ExecContext(ctx, "UPDATE selfupdate_control SET task_id='' WHERE id=1 AND task_id=?", task)
 	return e
 }
 

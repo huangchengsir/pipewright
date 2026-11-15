@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/maintenance"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"strings"
 	"sync"
 	"time"
@@ -129,7 +131,10 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Session, error) 
 	if !validTargets(in.ServerIDs) || !utf8.ValidString(in.Title) || utf8.RuneCountInString(in.Title) > 80 {
 		return nil, ErrInvalid
 	}
-	if err := s.registerSecrets(); err != nil {
+	if err := s.checkTargets(ctx, in.ServerIDs); err != nil {
+		return nil, err
+	}
+	if err := s.registerSecrets(ctx); err != nil {
 		return nil, err
 	}
 	title := s.scrub(in.Title, 320)
@@ -145,8 +150,16 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Session, error) 
 	id := uuid.NewString()
 	now := time.Now().UnixMilli()
 	err = s.transaction(ctx, true, func(tx *sql.Tx) error {
+		txctx := configstate.WithTxContext(ctx, s.db, tx)
+		if err := tenancy.CheckNew(txctx, s.db, "opschat.create", "ops_chat", id); err != nil {
+			return err
+		}
+		predicate, err := s.sessionPredicate(ctx, tx, "chat.id")
+		if err != nil {
+			return err
+		}
 		var count int
-		if tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM ops_chat_sessions").Scan(&count) != nil {
+		if tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM ops_chat_sessions chat WHERE "+predicate.SQL, predicate.Args...).Scan(&count) != nil {
 			return ErrStorage
 		}
 		if count >= 100 {
@@ -156,7 +169,10 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Session, error) 
 		if e != nil {
 			return ErrStorage
 		}
-		if in.Context != "" {
+		if e = tenancy.RecordOwnership(txctx, s.db, "ops_chat", id, ""); e != nil {
+			return e
+		}
+		if in.Context != "" || tenancy.HasAuthorizationContext(ctx) {
 			if e = s.bindContext(ctx, tx, in.Context, id); e != nil {
 				return e
 			}
@@ -170,7 +186,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Session, error) 
 	return s.Get(ctx, id)
 }
 func (s *Service) Get(ctx context.Context, id string) (*Session, error) {
-	if err := s.registerSecrets(); err != nil {
+	if err := s.registerSecrets(ctx); err != nil {
 		return nil, err
 	}
 	r, err := s.session(ctx, s.db, id)
@@ -181,6 +197,10 @@ func (s *Service) Get(ctx context.Context, id string) (*Session, error) {
 	return &view, nil
 }
 func (s *Service) Patch(ctx context.Context, id string, in PatchInput) (*Session, error) {
+	if err := s.authorizeSession(ctx, s.db, id, "opschat.edit"); err != nil {
+		return nil, err
+	}
+
 	if err := s.ready(); err != nil {
 		return nil, err
 	}
@@ -193,10 +213,13 @@ func (s *Service) Patch(ctx context.Context, id string, in PatchInput) (*Session
 	if in.ServerIDs != nil && !validTargets(*in.ServerIDs) {
 		return nil, ErrInvalid
 	}
-	if err := s.registerSecrets(); err != nil {
+	if err := s.registerSecrets(ctx); err != nil {
 		return nil, err
 	}
 	err := s.transaction(ctx, true, func(tx *sql.Tx) error {
+		if err := s.authorizeSession(ctx, tx, id, "opschat.edit"); err != nil {
+			return err
+		}
 		r, e := s.session(ctx, tx, id)
 		if e != nil {
 			return e
@@ -215,6 +238,9 @@ func (s *Service) Patch(ctx context.Context, id string, in PatchInput) (*Session
 			r.Body.Draft = s.scrub(*in.Draft, 8<<10)
 		}
 		if in.ServerIDs != nil {
+			if e = s.checkTargets(s.authorizationContext(ctx, tx), *in.ServerIDs); e != nil {
+				return e
+			}
 			r.Body.ServerIDs = append([]string{}, (*in.ServerIDs)...)
 		}
 		r.View.Revision++
@@ -233,8 +259,15 @@ func (s *Service) Activate(ctx context.Context, id string) error {
 	return s.ActivateContext(ctx, id, "")
 }
 func (s *Service) duplicate(ctx context.Context, session, request, hash string) (*Run, error) {
+	if err := s.authorizeSession(ctx, s.db, session, "opschat.read"); err != nil {
+		return nil, err
+	}
+	key, e := s.requestKey(ctx, request)
+	if e != nil {
+		return nil, e
+	}
 	var id, chat, payload string
-	err := s.db.QueryRowContext(ctx, "SELECT id,session_id,payload_hash FROM ops_chat_runs WHERE request_id=?", request).Scan(&id, &chat, &payload)
+	err := s.db.QueryRowContext(ctx, "SELECT id,session_id,payload_hash FROM ops_chat_runs WHERE request_id=?", key).Scan(&id, &chat, &payload)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -251,6 +284,10 @@ func (s *Service) duplicate(ctx context.Context, session, request, hash string) 
 	return &r.View, nil
 }
 func (s *Service) Submit(ctx context.Context, id string, in TurnInput) (*Run, error) {
+	if err := s.authorizeSession(ctx, s.db, id, "opschat.submit"); err != nil {
+		return nil, err
+	}
+
 	if err := s.ready(); err != nil {
 		return nil, err
 	}
@@ -306,7 +343,7 @@ func (s *Service) Submit(ctx context.Context, id string, in TurnInput) (*Run, er
 		}
 		snapshots = append(snapshots, snap)
 	}
-	if err = s.registerSecrets(); err != nil {
+	if err = s.registerSecrets(ctx); err != nil {
 		return nil, err
 	}
 	if in.ToolID != "" {
@@ -334,13 +371,21 @@ func (s *Service) enqueue(ctx context.Context, id, request, hash string, body ru
 			return nil, ErrQuota
 		}
 	}
+	requestKey, keyErr := s.requestKey(ctx, request)
+	if keyErr != nil {
+		return nil, keyErr
+	}
+	body.ClientRequestID = request
 	runID := uuid.NewString()
 	now := time.Now().UTC()
 	r := runRecord{View: Run{ID: runID, SessionID: id, ClientRequestID: request, Status: Queued, CreatedAt: now}, Body: body, Hash: hash}
 	var old *Run
 	err := s.transaction(ctx, true, func(tx *sql.Tx) error {
+		if err := s.authorizeSession(ctx, tx, id, "opschat.submit"); err != nil {
+			return err
+		}
 		var existing, chat, payload string
-		e := tx.QueryRowContext(ctx, "SELECT id,session_id,payload_hash FROM ops_chat_runs WHERE request_id=?", request).Scan(&existing, &chat, &payload)
+		e := tx.QueryRowContext(ctx, "SELECT id,session_id,payload_hash FROM ops_chat_runs WHERE request_id=?", requestKey).Scan(&existing, &chat, &payload)
 		if e == nil {
 			if chat != id || payload != hash {
 				return ErrConflict
@@ -379,7 +424,7 @@ func (s *Service) enqueue(ctx context.Context, id, request, hash string, body ru
 		if e != nil {
 			return e
 		}
-		_, e = tx.ExecContext(ctx, `INSERT INTO ops_chat_runs(id,session_id,request_id,payload_hash,status,body,created_at) VALUES(?,?,?,?,?,?,?)`, runID, id, request, hash, Queued, b, now.UnixMilli())
+		_, e = tx.ExecContext(ctx, `INSERT INTO ops_chat_runs(id,session_id,request_id,payload_hash,status,body,created_at) VALUES(?,?,?,?,?,?,?)`, runID, id, requestKey, hash, Queued, b, now.UnixMilli())
 		if e != nil {
 			return ErrStorage
 		}
@@ -424,14 +469,22 @@ func (s *Service) enqueue(ctx context.Context, id, request, hash string, body ru
 		return old, nil
 	}
 	s.notify(id)
-	s.launch(id, runID)
+	s.launch(s.workerContext(ctx, id, "opschat.submit"), id, runID)
 	return &r.View, nil
 }
 func (s *Service) Cancel(ctx context.Context, id, runID string) (*Run, error) {
+	if err := s.authorizeSession(ctx, s.db, id, "opschat.cancel"); err != nil {
+		return nil, err
+	}
+
 	if err := s.ready(); err != nil {
 		return nil, err
 	}
-	err := s.transaction(ctx, true, func(tx *sql.Tx) error {
+	cancelCtx := context.WithValue(ctx, cancellationWriteKey{}, true)
+	err := s.transaction(cancelCtx, true, func(tx *sql.Tx) error {
+		if err := s.authorizeSession(ctx, tx, id, "opschat.cancel"); err != nil {
+			return err
+		}
 		r, e := s.run(ctx, tx, id, runID)
 		if e != nil {
 			return e
@@ -476,6 +529,10 @@ func (s *Service) Cancel(ctx context.Context, id, runID string) (*Run, error) {
 	return &r.View, nil
 }
 func (s *Service) Delete(ctx context.Context, id string) error {
+	if err := s.authorizeSession(ctx, s.db, id, "opschat.delete"); err != nil {
+		return err
+	}
+
 	if err := s.ready(); err != nil {
 		return err
 	}
@@ -501,6 +558,9 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 	}
 	s.mu.Unlock()
 	err = s.transaction(ctx, true, func(tx *sql.Tx) error {
+		if err := s.authorizeSession(ctx, tx, id, "opschat.delete"); err != nil {
+			return err
+		}
 		r, e := s.session(ctx, tx, id)
 		if e != nil {
 			return e
@@ -512,6 +572,10 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 			return ErrStorage
 		}
 		_, e = tx.ExecContext(ctx, "DELETE FROM ops_chat_sessions WHERE id=?", id)
+		if e != nil {
+			return databaseError(e)
+		}
+		_, e = tx.ExecContext(ctx, `DELETE FROM access_ownership WHERE resource_kind='ops_chat' AND resource_id=?`, id)
 		return databaseError(e)
 	})
 	if err == nil {

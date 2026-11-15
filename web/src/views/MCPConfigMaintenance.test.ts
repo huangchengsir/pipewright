@@ -1,3 +1,5 @@
+import {createPinia,setActivePinia} from 'pinia'
+import {useSessionStore} from '../stores/session'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import MCPConfigMaintenance from './MCPConfigMaintenance.vue'
@@ -9,7 +11,7 @@ const wrappers: VueWrapper[] = []
 function item(overrides: Partial<MCPConfigActivity> = {}): MCPConfigActivity { return { activityId: 'activity-1', projectId: 'project-1', runId: 'run-1', ownerEpoch: 'owner-1', phase: 'cleanup_unknown', projectRevision: 'cfg-7', digest: 'bound-digest', evidenceId: '', recoverable: false, reason: 'evidence_unavailable', ...overrides } }
 function render() { const wrapper = mount(MCPConfigMaintenance); wrappers.push(wrapper); return wrapper }
 describe('MCP configuration maintenance', () => {
-  beforeEach(() => { vi.resetAllMocks(); mocks.get.mockResolvedValue({ executorEpoch: 2, items: [item()], truncated: false }); mocks.recover.mockResolvedValue({}) })
+  beforeEach(() => { setActivePinia(createPinia());useSessionStore().setUser({username:'admin',multiTenant:false});vi.resetAllMocks(); mocks.get.mockResolvedValue({ executorEpoch: 2, items: [item()], truncated: false }); mocks.recover.mockResolvedValue({}) })
   afterEach(() => { for (const wrapper of wrappers.splice(0)) wrapper.unmount() })
   it('distinguishes same-project activity records before opening technical details', async () => {
     mocks.get.mockResolvedValue({ executorEpoch: 2, items: [item(), item({ activityId: 'activity-2', runId: 'run-2' })], truncated: false })
@@ -49,7 +51,7 @@ describe('MCP configuration maintenance', () => {
     const wrapper = render(); await flushPromises()
     expect(wrapper.text()).toContain('引用计数已终止')
     await wrapper.get('[data-activity-id] button').trigger('click'); await flushPromises()
-    expect(mocks.recover).toHaveBeenCalledExactlyOnceWith({ activityId: 'activity-1', expectedDigest: 'bound-digest', evidenceId: 'evidence-1' }, { signal: expect.any(AbortSignal) })
+    expect(mocks.recover).toHaveBeenCalledExactlyOnceWith({ activityId: 'activity-1', expectedDigest: 'bound-digest', evidenceId: 'evidence-1' }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(mocks.get).toHaveBeenCalledTimes(2)
     expect(wrapper.find('[data-activity-id]').exists()).toBe(false)
   })

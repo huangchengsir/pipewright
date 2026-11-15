@@ -19,6 +19,7 @@ import {
 
 const props = defineProps<{
   stage: PipelineStage
+  readOnly?: boolean
   stageIndex: number
   selectedJobId: string | null
   /** All stages — used to compute cycle-safe dependency options. */
@@ -66,6 +67,7 @@ const needLabels = computed(() =>
 )
 
 function toggleDep(needId: string): void {
+  if (props.readOnly) return
   emit('update-needs', toggleNeed(currentNeeds.value, needId))
 }
 
@@ -94,10 +96,12 @@ const anchorJob = computed<PipelineJob | null>(() => {
 
 /** 串行节点:依赖锚点 job(出现在其右侧,串行其后)。 */
 function addSerial(): void {
+  if (props.readOnly) return
   emit('add-job', anchorJob.value ? [anchorJob.value.id] : [])
 }
 /** 并行节点:与锚点 job 同上游(出现在同一 rank 的并行车道)。 */
 function addParallel(): void {
+  if (props.readOnly) return
   emit('add-job', anchorJob.value ? [...(anchorJob.value.needs ?? [])] : [])
 }
 
@@ -115,6 +119,7 @@ function openJobDeps(jobId: string): void {
   jobDepsForId.value = jobDepsForId.value === jobId ? null : jobId
 }
 function toggleJobDep(needId: string): void {
+  if (props.readOnly) return
   const job = jobDepsJob.value
   if (!job) return
   emit('update-job-needs', { jobId: job.id, needs: toggleNeed(job.needs ?? [], needId) })
@@ -204,6 +209,7 @@ function onDragEnter(i: number): void {
 }
 
 function onDrop(i: number): void {
+  if (props.readOnly) return
   const from = dragFrom.value
   if (from !== null && from !== i) emit('reorder-job', { from, to: i })
   resetDrag()
@@ -254,6 +260,7 @@ function resetDrag(): void {
       <button
         v-if="stage.kind !== 'source'"
         class="stage-del"
+        :disabled="readOnly"
         :aria-label="t('pipelineCanvas.deleteStageAria', { name: stage.name })"
         :title="t('pipelineCanvas.deleteStageTitle')"
         @click="emit('delete-stage')"
@@ -300,7 +307,7 @@ function resetDrag(): void {
       <div class="deps-popover-title">{{ t('pipelineCanvas.depsUpstreamTitle') }}</div>
       <p v-if="depChoices.length === 0" class="deps-empty">{{ t('pipelineCanvas.noUpstream') }}</p>
       <label v-for="opt in depChoices" :key="opt.id" class="deps-option">
-        <input
+        <input :disabled="readOnly"
           type="checkbox"
           :checked="currentNeeds.includes(opt.id)"
           @change="toggleDep(opt.id)"
@@ -309,7 +316,7 @@ function resetDrag(): void {
       </label>
       <div class="deps-divider"></div>
       <label class="deps-option deps-option--toggle">
-        <input
+        <input :disabled="readOnly"
           type="checkbox"
           :checked="stage.allowFailure === true"
           @change="emit('update-allow-failure', ($event.target as HTMLInputElement).checked)"
@@ -324,7 +331,7 @@ function resetDrag(): void {
       <div class="deps-popover-title">{{ t('pipelineCanvas.jobDepsTitle', { name: jobDepsJob.name }) }}</div>
       <p v-if="jobDepChoices.length === 0" class="deps-empty">{{ t('pipelineCanvas.noOtherJobs') }}</p>
       <label v-for="opt in jobDepChoices" :key="opt.id" class="deps-option">
-        <input
+        <input :disabled="readOnly"
           type="checkbox"
           :checked="(jobDepsJob.needs ?? []).includes(opt.id)"
           @change="toggleJobDep(opt.id)"
@@ -365,6 +372,7 @@ function resetDrag(): void {
         }"
       >
         <JobCard
+          :read-only="readOnly"
           :job="job"
           :stage-kind="stage.kind"
           :selected="job.id === selectedJobId"
@@ -380,6 +388,7 @@ function resetDrag(): void {
     <!-- Job cards — flat vertical list (no intra-stage deps; original behavior) -->
     <template v-else>
       <JobCard
+          :read-only="readOnly"
         v-for="(job, i) in stage.jobs"
         :key="job.id"
         :job="job"
@@ -403,13 +412,13 @@ function resetDrag(): void {
         data-onboarding-target="add-task"
         :aria-label="t('pipelineCanvas.addSerialAria', { name: stage.name })"
         :title="t('pipelineCanvas.addSerialTitle')"
-        @click="addSerial"
+        :disabled="readOnly" @click="addSerial"
       >{{ t('pipelineCanvas.addSerial') }}</button>
       <button
         class="add-job-btn add-job-btn--parallel"
         :aria-label="t('pipelineCanvas.addParallelAria', { name: stage.name })"
         :title="t('pipelineCanvas.addParallelTitle')"
-        @click="addParallel"
+        :disabled="readOnly" @click="addParallel"
       >{{ t('pipelineCanvas.addParallel') }}</button>
     </div>
   </div>

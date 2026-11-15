@@ -12,15 +12,17 @@ export interface DashEnvEntry {
   projectId: string
   projectName: string
   environment: string
-  active: EnvDeployment | null
+  active: Pick<EnvDeployment,'commit'|'branch'|'deployedAt'> | null
 }
 
 const props = defineProps<{
   entries: DashEnvEntry[]
   loading: boolean
+  canNavigate?: boolean
 }>()
 
 const router = useRouter()
+function navigate(path: string) { if (props.canNavigate !== false) void router.push(path) }
 const { t } = useI18n()
 
 const rows = computed(() => props.entries.slice(0, 8))
@@ -40,7 +42,7 @@ function fmtAgo(rfc: string): string {
   <section class="card env" aria-labelledby="dash-env-h">
     <header class="card-head">
       <h2 id="dash-env-h" class="card-title">{{ t('dash.environments') }}</h2>
-      <button class="card-link" type="button" @click="router.push('/environments')">{{ t('common.allArrow') }}</button>
+      <button v-if="canNavigate !== false" class="card-link" type="button" @click="navigate('/environments')">{{ t('common.allArrow') }}</button>
     </header>
 
     <div v-if="loading" class="env-skeleton" aria-busy="true">

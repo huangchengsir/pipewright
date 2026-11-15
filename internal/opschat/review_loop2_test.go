@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/mask"
 	"github.com/huangchengsir/pipewright/internal/target"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
@@ -366,6 +367,13 @@ func TestSecretArgsRejectDecodedFieldsAndMaskHistoricalBindings(t *testing.T) {
 type unavailableListVault struct {
 	vault.Vault
 	fail atomic.Bool
+}
+
+func (v *unavailableListVault) RegisterMaskSecrets(ctx context.Context, m *mask.Masker) error {
+	if v.fail.Load() {
+		return errors.New("raw sensitive vault error")
+	}
+	return vault.RegisterMaskSecrets(ctx, v.Vault, m)
 }
 
 func (v *unavailableListVault) List() ([]vault.Credential, error) {

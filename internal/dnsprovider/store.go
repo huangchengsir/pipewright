@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 )
 
 // Store 持久化 DNS 提供商(参数化 SQL,两方言一致)。绝不读/写任何 token 明文(只存 credential_id)。
@@ -22,7 +23,7 @@ func NewStore(db *sql.DB) *Store { return &Store{db: db} }
 func (s *Store) insert(ctx context.Context, p *Provider) error {
 	created := p.CreatedAt.UTC().Format(time.RFC3339)
 	updated := p.UpdatedAt.UTC().Format(time.RFC3339)
-	_, err := s.db.ExecContext(ctx,
+	_, err := configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`INSERT INTO dns_providers (id, type, name, credential_id, base_domain, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		p.ID, p.Type, p.Name, p.CredentialID, p.BaseDomain, created, updated,
@@ -35,7 +36,7 @@ func (s *Store) insert(ctx context.Context, p *Provider) error {
 
 // get 读取单条提供商;不存在 → ErrNotFound。
 func (s *Store) get(ctx context.Context, id string) (*Provider, error) {
-	row := s.db.QueryRowContext(ctx,
+	row := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT id, type, name, credential_id, base_domain, created_at, updated_at
 		 FROM dns_providers WHERE id = ?`, id)
 	p, err := scanProvider(row)
@@ -50,7 +51,7 @@ func (s *Store) get(ctx context.Context, id string) (*Provider, error) {
 
 // list 返回全部提供商(创建时间倒序)。
 func (s *Store) list(ctx context.Context) ([]Provider, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT id, type, name, credential_id, base_domain, created_at, updated_at
 		 FROM dns_providers ORDER BY created_at DESC, id`)
 	if err != nil {
@@ -74,7 +75,7 @@ func (s *Store) list(ctx context.Context) ([]Provider, error) {
 
 // del 删除提供商;不存在 → ErrNotFound。
 func (s *Store) del(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM dns_providers WHERE id = ?`, id)
+	res, err := configstate.Queryer(ctx, s.db).ExecContext(ctx, `DELETE FROM dns_providers WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("dnsprovider: delete: %w", err)
 	}

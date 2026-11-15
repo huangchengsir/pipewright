@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"strings"
 	"time"
 )
@@ -38,8 +40,12 @@ type MetricsService interface {
 //
 // created_at 以 RFC3339 文本存储,字典序与时间序一致(同一 UTC 格式),故 since 下界可直接文本比较。
 func (s *service) MetricsRecords(ctx context.Context, projectID string, since time.Time) ([]MetricsRecord, error) {
-	where := []string{}
-	args := []any{}
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "dora.read", "r.project_id")
+	if err != nil {
+		return nil, err
+	}
+	where := []string{"(" + predicate.SQL + ")"}
+	args := append([]any{}, predicate.Args...)
 	if pid := strings.TrimSpace(projectID); pid != "" {
 		where = append(where, "r.project_id = ?")
 		args = append(args, pid)
@@ -53,7 +59,7 @@ func (s *service) MetricsRecords(ctx context.Context, projectID string, since ti
 		clause = " WHERE " + strings.Join(where, " AND ")
 	}
 
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT r.status,r.created_at,r.finished_at,r.id,r.project_id,COALESCE(a.root_id,r.id),COALESCE(a.parent_id,''),COALESCE(a.execution_kind,'original')
 		 FROM pipeline_runs r LEFT JOIN run_retry_attempts a ON a.run_id=r.id`+clause+`
 		 ORDER BY r.created_at ASC,r.id ASC`, args...)
@@ -95,4 +101,34 @@ func NewMetricsService(s Service) MetricsService {
 		return impl
 	}
 	return nil
+}
+
+// MetricsProject deliberately omits repository configuration and credentials.
+type MetricsProject struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+type MetricsProjectService interface {
+	MetricsProjects(context.Context) ([]MetricsProject, error)
+}
+
+func (s *service) MetricsProjects(ctx context.Context) ([]MetricsProject, error) {
+	p, err := tenancy.QueryPredicate(ctx, s.db, "dora.read", "p.id")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx, `SELECT p.id,p.name FROM projects p WHERE `+p.SQL+` ORDER BY p.name,p.id`, p.Args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []MetricsProject{}
+	for rows.Next() {
+		var v MetricsProject
+		if err = rows.Scan(&v.ID, &v.Name); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }

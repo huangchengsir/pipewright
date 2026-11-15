@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"strings"
 	"time"
 
@@ -94,6 +95,12 @@ func (s *Service) Status(ctx context.Context, preferred string) Snapshot {
 	out := Snapshot{ProjectsState: Unknown, RunsState: Unknown, SuccessState: Unknown,
 		Projects: []ProjectSummary{}, Pipeline: PipelineState{State: Unknown, Issues: []Issue{}}, Runtime: s.capabilities.Runtime}
 	if s.db == nil {
+		return out
+	}
+	// First-instance setup intentionally summarizes the entire instance. It is
+	// not a team-scoped project list and must never be exposed to employees.
+	if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+		out.Runtime = RuntimeUnknown
 		return out
 	}
 	if success, err := s.readRun(ctx, `WHERE status = ? AND execution_mode IN (?, ?)`, run.StatusSuccess, run.ExecutionReal, run.ExecutionLegacyUnknown); err == nil {

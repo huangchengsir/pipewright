@@ -1,4 +1,15 @@
 export default {
+  "memberAccountTitle": "{provider} 계정 연결",
+  "viewAvailability": "안내 보기",
+  "memberUnavailableTitle": "아직 로그인할 수 없습니다",
+  "memberPausedTitle": "로그인이 일시 중지되었습니다",
+  "memberUnconfiguredHint": "관리자가 아직 {provider} 로그인을 설정하지 않았습니다. 설정 및 활성화 후 여기에서 본인 계정을 연결할 수 있습니다.",
+  "memberDisabledHint": "관리자가 {provider} 로그인을 일시 중지했습니다. 다시 활성화하면 계정을 연결할 수 있으며 기존 연결은 유지됩니다.",
+  "memberHint": "관리자가 제공업체를 설정하면 본인 계정을 연결할 수 있습니다. 연결과 해제는 본인에게만 적용됩니다.",
+  "manageBinding": "연결 관리",
+  "memberBindingHint": "반환된 계정을 확인하세요. 현재 직원 계정에만 연결하며 전체 로그인 설정은 변경하지 않습니다.",
+  "confirmPersonalBind": "연결 확인",
+
   "section": "외부 계정 로그인",
   "sectionHint": "연결된 계정으로 로그인합니다. 표시 여부와 로그인 활성화는 별도로 관리합니다.",
   "alternate": "다른 로그인 방법",

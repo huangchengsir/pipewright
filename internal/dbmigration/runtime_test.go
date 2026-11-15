@@ -2,8 +2,11 @@ package dbmigration
 
 import (
 	"context"
+	"github.com/huangchengsir/pipewright/internal/auth"
+	"github.com/huangchengsir/pipewright/internal/config"
 	"github.com/huangchengsir/pipewright/internal/maintenance"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"github.com/huangchengsir/pipewright/internal/vault"
 	"os"
 	"path/filepath"
@@ -27,6 +30,25 @@ func TestRuntimeDrainCopyRestartAndActivationReceipt(t *testing.T) {
 		t.Fatal(e)
 	}
 	if _, e = source.DB.Exec("INSERT INTO credentials(id,name,type,scope,ciphertext,masked_value,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", "secret", "secret", "git_token", "", cipher, "***", "now", "now"); e != nil {
+		t.Fatal(e)
+	}
+	// Include real multi-user policy state and sessions, not an empty schema.
+	if e = auth.NewService(source.DB, nil).Bootstrap("admin", "migration-test-password"); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = tenancy.NewRepository(source.DB).ReconcileMode(ctx, config.MultiTenantMode{Enabled: true, Explicit: true}, true); e != nil {
+		t.Fatal(e)
+	}
+	accounts := tenancy.NewAccounts(source.DB)
+	sourceSession, e := accounts.Login(ctx, "admin", "migration-test-password")
+	if e != nil {
+		t.Fatal(e)
+	}
+	employee, e := accounts.Create(ctx, sourceSession.Actor, tenancy.CreateUserInput{Username: "disabled", DisplayName: "Disabled"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = accounts.SetEnabled(ctx, sourceSession.Actor, employee.User.ID, false); e != nil {
 		t.Fatal(e)
 	}
 	if _, e = source.DB.Exec("INSERT INTO sessions(token,csrf_token,created_at,expires_at,last_seen_at) VALUES(?,?,?,?,?)", "old-session", "csrf", "now", "later", "now"); e != nil {
@@ -57,8 +79,16 @@ func TestRuntimeDrainCopyRestartAndActivationReceipt(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	s, e = r.Start(ctx, s.TaskID, s.Revision)
+	var adminTeam string
+	if err := source.DB.QueryRow("SELECT default_team_id FROM access_control WHERE id=1").Scan(&adminTeam); err != nil {
+		t.Fatal(err)
+	}
+	s, e = r.Start(tenancy.WithActor(ctx, sourceSession.Actor, adminTeam), s.TaskID, s.Revision)
 	if e != nil {
+		t.Fatal(e)
+	}
+	// Existing normal administrators may still sign in while the source drains.
+	if _, e = accounts.Login(ctx, "admin", "migration-test-password"); e != nil {
 		t.Fatal(e)
 	}
 	blockers, e := r.Blockers(ctx)
@@ -155,7 +185,7 @@ func TestRuntimeDrainCopyRestartAndActivationReceipt(t *testing.T) {
 		db    *store.Store
 		table string
 		want  int
-	}{{source, "sessions", 1}, {target, "sessions", 0}, {target, "audit_log", 1}} {
+	}{{source, "sessions", 1}, {target, "sessions", 0}, {source, "access_sessions", 2}, {target, "access_sessions", 0}, {target, "access_roles", 4}, {target, "access_users", 2}, {target, "audit_log", 1}} {
 		var count int
 		if e = tc.db.DB.QueryRow("SELECT COUNT(*) FROM " + tc.table).Scan(&count); e != nil || count != tc.want {
 			t.Fatal(tc.table, count, e)
@@ -166,6 +196,13 @@ func TestRuntimeDrainCopyRestartAndActivationReceipt(t *testing.T) {
 	}
 	if _, e = r.Abort(ctx, s.TaskID, s.Revision); e == nil {
 		t.Fatal("completed migration rolled back")
+	}
+	if _, e = tenancy.NewAccounts(target.DB).Verify(ctx, sourceSession.Token); e == nil {
+		t.Fatal("source user cookie survived migration activation")
+	}
+	var enabled int
+	if e = target.DB.QueryRow(`SELECT enabled FROM access_users WHERE id=?`, employee.User.ID).Scan(&enabled); e != nil || enabled != 0 {
+		t.Fatal("account revocation lost", enabled, e)
 	}
 }
 

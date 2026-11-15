@@ -9,10 +9,10 @@
   · 递归渲染下沉到 CodeTreeNode;目录状态集中在本组件,经 provide 共享。
 -->
 <script setup lang="ts">
-import { ref, reactive, watch, onMounted, provide } from 'vue'
+import { ref, reactive, watch, onMounted, onBeforeUnmount, provide } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getSourceTree, type SourceEntry } from '../../api/source'
-import { HttpError } from '../../api/http'
+import { HttpError, type HttpOptions } from '../../api/http'
 import CodeTreeNode from './CodeTreeNode.vue'
 import {
   CODE_TREE_CTX,
@@ -21,6 +21,8 @@ import {
 } from './codeTreeContext'
 
 const props = defineProps<{
+  requestOptions?:HttpOptions
+  runRequest?:<T>(work:()=>Promise<T>)=>Promise<T>
   projectId: string
   treeRef: string
   /** 当前选中文件路径(高亮用)。 */
@@ -40,6 +42,9 @@ const { t } = useI18n()
 const dirs = reactive(new Map<string, DirState>())
 const expanded = reactive(new Set<string>())
 
+let alive=true,generation=0
+const runRequest=<T,>(work:()=>Promise<T>)=>props.runRequest?props.runRequest(work):work()
+const active=(ticket:number)=>alive&&ticket===generation&&!props.requestOptions?.signal?.aborted
 const rootLoading = ref(true)
 const rootError = ref('')
 
@@ -53,12 +58,15 @@ function ensureDir(path: string): DirState {
 }
 
 async function loadDir(path: string): Promise<void> {
+  const ticket=generation
+  if(!active(ticket))return
   const d = ensureDir(path)
   if (d.loading) return
   d.loading = true
   d.error = ''
   try {
-    const tree = await getSourceTree(props.projectId, { ref: props.treeRef, path })
+    const tree = await runRequest(()=>getSourceTree(props.projectId,{ref:props.treeRef,path},props.requestOptions))
+    if(!active(ticket))return
     d.entries = tree.entries ?? []
     d.loaded = true
     if (path === '') {
@@ -69,6 +77,7 @@ async function loadDir(path: string): Promise<void> {
       })
     }
   } catch (err) {
+    if(!active(ticket))return
     const msg =
       err instanceof HttpError
         ? err.status === 0
@@ -83,8 +92,10 @@ async function loadDir(path: string): Promise<void> {
       emit('rootError', msg)
     }
   } finally {
-    d.loading = false
-    if (path === '') rootLoading.value = false
+    if(active(ticket)){
+      d.loading = false
+      if (path === '') rootLoading.value = false
+    }
   }
 }
 
@@ -99,6 +110,7 @@ function toggleDir(entry: SourceEntry): void {
 }
 
 function onEntryClick(entry: SourceEntry): void {
+  if(!active(generation) || !Array.from(dirs.values()).some(dir => dir.entries.includes(entry)))return
   if (entry.type === 'dir') {
     toggleDir(entry)
   } else {
@@ -118,6 +130,7 @@ const ctx: CodeTreeCtx = {
 provide(CODE_TREE_CTX, ctx)
 
 function reset(): void {
+  generation++
   dirs.clear()
   expanded.clear()
   rootError.value = ''
@@ -125,6 +138,7 @@ function reset(): void {
   void loadDir('')
 }
 
+onBeforeUnmount(()=>{alive=false;generation++;dirs.clear();expanded.clear()})
 onMounted(reset)
 watch(
   () => [props.projectId, props.treeRef] as const,

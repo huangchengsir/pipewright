@@ -30,6 +30,7 @@ export default {
     'この環境を前回成功したデプロイ(実行 {commit} · {when})にロールバックし、その成果物を元のターゲットホストに再デプロイします。この操作は実際のデプロイを実行します。',
   rollbackConfirm: 'ロールバックを確認',
   rollbackFailedStatus: 'ロールバックに失敗しました({status})',
+  rollbackTargetChanged: "デプロイが変更されました。更新してロールバックを再確認してください。",
   rollbackFailedRetry: 'ロールバックに失敗しました。しばらくしてから再試行してください。',
 
   toastRolledBack: '環境「{env}」をロールバックしました',

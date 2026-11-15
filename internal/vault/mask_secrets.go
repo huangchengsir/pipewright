@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 
 	secretmask "github.com/huangchengsir/pipewright/internal/mask"
 )
@@ -30,12 +31,16 @@ func (s *service) RegisterMaskSecrets(ctx context.Context, masker *secretmask.Ma
 	if !s.configured() {
 		return ErrVaultUnconfigured
 	}
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "credential.use", "c.id")
+	if err != nil {
+		return err
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT c.type,
 	CASE WHEN `+store.BlobLength(store.DialectOf(s.db), "c.ciphertext")+` <= 65536 THEN c.ciphertext ELSE NULL END,
 	CASE WHEN `+store.BlobLength(store.DialectOf(s.db), "o.refresh_ciphertext")+` <= 65536 THEN o.refresh_ciphertext ELSE NULL END,
 	CASE WHEN `+store.BlobLength(store.DialectOf(s.db), "o.refresh_ciphertext")+` > 65536 THEN 1 ELSE 0 END
 	FROM credentials c LEFT JOIN oauth_credentials o ON o.credential_id=c.id
-	ORDER BY c.id`+store.Limit(store.DialectOf(s.db), "257"))
+	WHERE `+predicate.SQL+` ORDER BY c.id`+store.Limit(store.DialectOf(s.db), "257"), predicate.Args...)
 	if err != nil {
 		return err
 	}

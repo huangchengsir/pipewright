@@ -1,4 +1,4 @@
-import { http, HttpError } from './http'
+import { http, HttpError, type HttpOptions } from './http'
 
 export const PLATFORM_PROVIDERS = ['github', 'gitlab', 'gitee', 'google', 'microsoft'] as const
 export type PlatformProvider = (typeof PLATFORM_PROVIDERS)[number]
@@ -29,6 +29,7 @@ export interface PlatformSettings {
   binding?: PlatformBinding
 }
 export interface PlatformSnapshot {
+  canManage: boolean
   visibilityVersion: number
   reauthenticatedUntil: string
   providers: PlatformSettings[]
@@ -42,14 +43,18 @@ export interface PlatformAppInput {
   expectedVersion: number; clientId: string; clientSecret?: string; microsoftTenant?: string; giteeMode?: string
 }
 const accountPath = '/api/account/platform-login'
-async function limited<T>(request: (signal: AbortSignal) => Promise<T>, outer?: AbortSignal): Promise<T> {
+async function limited<T>(request: (signal: AbortSignal) => Promise<T>, outer?: AbortSignal, identity?: AbortSignal): Promise<T> {
   const controller = new AbortController()
   const abort = () => controller.abort()
   const timer = setTimeout(abort, 20000)
   outer?.addEventListener('abort', abort, { once: true })
-  if (outer?.aborted) controller.abort()
-  try { return await request(controller.signal) }
-  finally { clearTimeout(timer); outer?.removeEventListener('abort', abort) }
+  identity?.addEventListener('abort', abort, { once: true })
+  if (outer?.aborted || identity?.aborted) controller.abort()
+  try {
+    if (controller.signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
+    return await request(controller.signal)
+  }
+  finally { clearTimeout(timer); outer?.removeEventListener('abort', abort); identity?.removeEventListener('abort', abort) }
 }
 export async function getPublicPlatforms(signal?: AbortSignal): Promise<PublicPlatform[]> {
   const data = await limited(active => http.get<{ providers: PublicPlatform[] }>('/api/auth/platform/providers', { signal: active }), signal)
@@ -64,32 +69,35 @@ export async function getPublicPlatforms(signal?: AbortSignal): Promise<PublicPl
 export function startPlatformLogin(provider: PlatformProvider, returnTo: string): Promise<PlatformStart> {
   return limited(signal => http.post<PlatformStart>('/api/auth/platform/' + provider + '/start', { returnTo }, { signal }))
 }
-export function getPlatformSettings(signal?: AbortSignal): Promise<PlatformSnapshot> {
-  return limited(active => http.get<PlatformSnapshot>(accountPath, { signal: active, throwOnUnauthorized: true }), signal)
+function accountRequest<T>(request: (options: HttpOptions) => Promise<T>, context?: HttpOptions, signal?: AbortSignal): Promise<T> {
+  return limited(active => request({ ...context, signal: active, throwOnUnauthorized: true }), signal, context?.signal ?? undefined)
 }
-export function savePlatformVisibility(expectedVersion: number, visibility: Record<PlatformProvider, boolean>): Promise<PlatformSnapshot> {
-  return limited(signal => http.put<PlatformSnapshot>(accountPath + '/visibility', { expectedVersion, visibility }, { signal }))
+export function getPlatformSettings(signal?: AbortSignal, context?: HttpOptions): Promise<PlatformSnapshot> {
+  return accountRequest(options => http.get<PlatformSnapshot>(accountPath, options), context, signal)
 }
-export function savePlatformApp(provider: PlatformProvider, input: PlatformAppInput): Promise<PlatformMutation> {
-  return limited(signal => http.put<PlatformMutation>(accountPath + '/' + provider + '/app', input, { signal }))
+export function savePlatformVisibility(expectedVersion: number, visibility: Record<PlatformProvider, boolean>, context?: HttpOptions): Promise<PlatformSnapshot> {
+  return accountRequest(options => http.put<PlatformSnapshot>(accountPath + '/visibility', { expectedVersion, visibility }, options), context)
 }
-export function reauthenticatePlatform(currentPassword: string): Promise<{ reauthenticatedUntil: string }> {
-  return limited(signal => http.post<{ reauthenticatedUntil: string }>('/api/account/reauth', { currentPassword }, { signal, throwOnUnauthorized: true }))
+export function savePlatformApp(provider: PlatformProvider, input: PlatformAppInput, context?: HttpOptions): Promise<PlatformMutation> {
+  return accountRequest(options => http.put<PlatformMutation>(accountPath + '/' + provider + '/app', input, options), context)
 }
-export function startPlatformBinding(provider: PlatformProvider, expectedVersion: number): Promise<PlatformStart> {
-  return limited(signal => http.post<PlatformStart>(accountPath + '/' + provider + '/bind/start', { expectedVersion }, { signal }))
+export function reauthenticatePlatform(currentPassword: string, context?: HttpOptions): Promise<{ reauthenticatedUntil: string }> {
+  return accountRequest(options => http.post<{ reauthenticatedUntil: string }>('/api/account/reauth', { currentPassword }, options), context)
 }
-export function getPlatformCandidate(flowId: string): Promise<PlatformCandidate> {
-  return limited(signal => http.get<PlatformCandidate>(accountPath + '/bind/pending/' + encodeURIComponent(flowId), { signal, throwOnUnauthorized: true }))
+export function startPlatformBinding(provider: PlatformProvider, expectedVersion: number, context?: HttpOptions): Promise<PlatformStart> {
+  return accountRequest(options => http.post<PlatformStart>(accountPath + '/' + provider + '/bind/start', { expectedVersion }, options), context)
 }
-export function confirmPlatformBinding(provider: PlatformProvider, expectedVersion: number, flowId: string): Promise<PlatformMutation> {
-  return limited(signal => http.post<PlatformMutation>(accountPath + '/' + provider + '/bind/confirm', { expectedVersion, flowId }, { signal }))
+export function getPlatformCandidate(flowId: string, context?: HttpOptions): Promise<PlatformCandidate> {
+  return accountRequest(options => http.get<PlatformCandidate>(accountPath + '/bind/pending/' + encodeURIComponent(flowId), options), context)
 }
-export function setPlatformEnabled(provider: PlatformProvider, expectedVersion: number, enabled: boolean): Promise<PlatformMutation> {
-  return limited(signal => http.post<PlatformMutation>(accountPath + '/' + provider + '/enabled', { expectedVersion, enabled }, { signal }))
+export function confirmPlatformBinding(provider: PlatformProvider, expectedVersion: number, flowId: string, context?: HttpOptions): Promise<PlatformMutation> {
+  return accountRequest(options => http.post<PlatformMutation>(accountPath + '/' + provider + '/bind/confirm', { expectedVersion, flowId }, options), context)
 }
-export function unbindPlatform(provider: PlatformProvider, expectedVersion: number): Promise<PlatformMutation> {
-  return limited(signal => http.delete<PlatformMutation>(accountPath + '/' + provider + '/binding', { signal, body: JSON.stringify({ expectedVersion }) }))
+export function setPlatformEnabled(provider: PlatformProvider, expectedVersion: number, enabled: boolean, context?: HttpOptions): Promise<PlatformMutation> {
+  return accountRequest(options => http.post<PlatformMutation>(accountPath + '/' + provider + '/enabled', { expectedVersion, enabled }, options), context)
+}
+export function unbindPlatform(provider: PlatformProvider, expectedVersion: number, context?: HttpOptions): Promise<PlatformMutation> {
+  return accountRequest(options => http.delete<PlatformMutation>(accountPath + '/' + provider + '/binding', { ...options, body: JSON.stringify({ expectedVersion }) }), context)
 }
 /** Only local enum keys are shown, never upstream bodies or raw error strings. */
 export function platformErrorKey(error: unknown, mutation = false): string {

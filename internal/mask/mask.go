@@ -24,7 +24,8 @@ const minSecretLen = 4
 
 // Masker 持有已登记 secret 集合,提供按子串脱敏。零值不可用,经 NewMasker 构造。
 type Masker struct {
-	mu sync.RWMutex
+	mu      sync.RWMutex
+	blocked bool
 	// secrets 去重存放已登记 secret;scrub 时按长度降序替换(长串优先,
 	// 避免短 secret 先替换破坏长 secret 的匹配)。
 	secrets map[string]struct{}
@@ -33,6 +34,27 @@ type Masker struct {
 // NewMasker 构造空 Masker。不做任何重计算(无包级重对象)。
 func NewMasker() *Masker {
 	return &Masker{secrets: make(map[string]struct{})}
+}
+
+// Block permanently suppresses nonempty output if required secret registration
+// cannot be completed. Existing callers cannot accidentally emit partial data.
+func (m *Masker) Block() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.blocked = true
+	m.mu.Unlock()
+}
+
+// IsBlocked reports an incomplete required registration without exposing secrets.
+func (m *Masker) IsBlocked() bool {
+	if m == nil {
+		return true
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.blocked
 }
 
 func (m *Masker) RegisterRegistrySecret(value string) {
@@ -88,6 +110,10 @@ func (m *Masker) Scrub(line string) string {
 		return line
 	}
 	m.mu.RLock()
+	if m.blocked {
+		m.mu.RUnlock()
+		return Placeholder
+	}
 	if len(m.secrets) == 0 {
 		m.mu.RUnlock()
 		return line

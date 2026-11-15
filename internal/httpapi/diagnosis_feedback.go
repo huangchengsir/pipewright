@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // diagnosis_feedback.go 是「诊断反馈闭环」HTTP 层(FR-26 / Story 7.5)。
@@ -86,7 +87,15 @@ func makeSubmitDiagnosisFeedbackHandler(runs run.Service, fb run.FeedbackService
 
 		// 脱敏 correctRootCause:登记该 run 真实用到的全部凭据(项目/registry/secret 变量)+ 桩 secret,
 		// 再 Scrub 用户输入(绝无明文 secret 入库/回吐)。secretSrc 为 nil 时降级只登记桩。
+		if err := run.AuthorizeDiagnosis(ctx, runs, id); err != nil {
+			writeRunError(w, err)
+			return
+		}
 		masker := maskerFor(ctx, secretSrc, id)
+		if masker.IsBlocked() {
+			writeAuthorizationError(w, tenancy.ErrForbidden)
+			return
+		}
 		correct := masker.Scrub(req.CorrectRootCause)
 
 		// 诊断快照(脱敏后落 pipeline_runs.diagnosis_json 的诊断;此处经 DTO 再编码为快照)。
@@ -100,6 +109,8 @@ func makeSubmitDiagnosisFeedbackHandler(runs run.Service, fb run.FeedbackService
 		})
 		if serr != nil {
 			switch {
+			case errors.Is(serr, tenancy.ErrForbidden):
+				writeError(w, http.StatusForbidden, "forbidden", "无权提交诊断反馈")
 			case errors.Is(serr, run.ErrInvalidVerdict):
 				writeError(w, http.StatusUnprocessableEntity, "invalid_verdict", "verdict 只能为 up 或 down")
 			case errors.Is(serr, run.ErrNotFound):
@@ -123,6 +134,10 @@ func makeDiagnosisStatsHandler(fb run.FeedbackService) http.HandlerFunc {
 			return
 		}
 		stats, err := fb.GetStats(r.Context())
+		if errors.Is(err, tenancy.ErrForbidden) {
+			writeError(w, http.StatusForbidden, "forbidden", "无权查看诊断反馈")
+			return
+		}
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
 			return

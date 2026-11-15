@@ -12,6 +12,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/proxy"
 	"github.com/huangchengsir/pipewright/internal/target"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // 审计 action / target(自动 HTTPS 反代路由写操作)。复用既有 audit.Recorder;detail 绝无敏感信息。
@@ -178,6 +179,10 @@ func toProxyRouteDTO(r proxy.Route) proxyRouteDTO {
 // 校验类 → 400/409/422;不存在 → 404。
 func writeProxyError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, tenancy.ErrForbidden):
+		writeError(w, http.StatusForbidden, "forbidden", "无权执行此操作")
+	case errors.Is(err, tenancy.ErrConflict):
+		writeError(w, http.StatusConflict, "scope_changed", "资源或授权已变化，请刷新后重试")
 	case errors.Is(err, proxy.ErrNotFound):
 		writeError(w, http.StatusNotFound, "route_not_found", "反代路由不存在")
 	case errors.Is(err, proxy.ErrDomainTaken):

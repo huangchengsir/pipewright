@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useSessionStore } from '../stores/session'
+import { useNavigationStore } from '../stores/navigation'
 
 // Lazy-loaded views
 const Login       = () => import('../views/Login.vue')
@@ -32,6 +33,7 @@ const SettingsOAuth = () => import('../views/settings/SettingsOAuth.vue')
 const SettingsVault = () => import('../views/settings/SettingsVault.vue')
 // R3 / E3.1: DNS providers (Cloudflare / DNSPod / 阿里云 DNS) — unlocks DNS-01 wildcard + instant subdomains
 const SettingsDnsProviders = () => import('../views/settings/SettingsDnsProviders.vue')
+const SettingsAccess = () => import('../views/settings/SettingsAccess.vue')
 const SettingsAccount = () => import('../views/settings/SettingsAccount.vue')
 const SettingsKubernetes = () => import('../views/settings/SettingsKubernetes.vue')
 const SettingsMCP = () => import('../views/settings/SettingsMCP.vue')
@@ -53,7 +55,7 @@ const ProjectTriggers = () => import('../views/ProjectTriggers.vue')
 // Story 7-4: read-only code browsing (FR-4) — Monaco dynamic-imported, off the main bundle
 const ProjectCode = () => import('../views/ProjectCode.vue')
 const RunDetail = () => import('../views/RunDetail.vue')
-const ReleaseGuardReport = () => import('../views/ReleaseGuardReport.vue')
+const ReleaseGuardReport = () => import('../views/ReleaseGuardReportRoute.vue')
 // Story 1-6: living styleguide (public — no auth required for dev browsing)
 const StatesShowcase = () => import('../views/StatesShowcase.vue')
 // 自定义节点工作室:路由级聚焦低代码编辑页(shell 外全屏,进出经路由)
@@ -157,6 +159,7 @@ const router = createRouter({
             // R3 / E3.1: DNS 提供商(DNS-01 通配符 + 一键分配子域名)
             { path: 'dns-providers', name: 'settings-dns-providers', component: SettingsDnsProviders, meta: { title: 'DNS 提供商' } },
             { path: 'account', name: 'settings-account', component: SettingsAccount, meta: { title: '账户设置' } },
+            { path: 'access', name: 'settings-access', component: SettingsAccess },
             { path: 'kubernetes', name: 'settings-kubernetes', component: SettingsKubernetes, meta: { title: 'Kubernetes' } },
             { path: 'mcp', name: 'settings-mcp', component: SettingsMCP, meta: { title: 'MCP' } },
             // 系统信息 + 一键检查更新
@@ -192,7 +195,15 @@ router.beforeEach(async (to) => {
   const sessionStore = useSessionStore()
   const result = await sessionStore.ensureSession()
 
-  if (result.kind === 'ok') return true
+  if (result.kind === 'ok') {
+    if (result.user.mustChangePassword && to.name !== 'settings-account') return { name: 'settings-account' }
+    if (to.name === 'settings-access' && !result.user.multiTenant) return { name: 'settings-account' }
+    if(result.user.multiTenant===true && to.name!=='settings-account') {
+      const navigation=useNavigationStore();await navigation.refresh()
+      if(!navigation.allows(to.path))return {name:'settings-account'}
+    }
+    return true
+  }
 
   if (result.kind === 'unauthenticated') {
     return {

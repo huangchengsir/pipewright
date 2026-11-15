@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount, type VueWrapper } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import AppSelect from './AppSelect.vue'
 
 let wrapper: VueWrapper | undefined
@@ -11,6 +12,29 @@ afterEach(() => {
 })
 
 describe('AppSelect portal menu', () => {
+  it('keeps a portal in its native dialog and tracks nested scrolling', async () => {
+    const dialog = document.createElement('dialog')
+    dialog.open = true
+    document.body.appendChild(dialog)
+    let top = 80
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({x:20,y:top,top,bottom:top+38,left:20,right:200,width:180,height:38,toJSON:()=>({})}))
+    wrapper = mount(AppSelect, {attachTo: dialog,props:{modelValue:'',portal:true,options:[{value:'a',label:'A'}]}})
+    try {
+      const trigger=wrapper.get('.app-select__trigger')
+      await trigger.trigger('click')
+      const menu=dialog.querySelector('[role=listbox]') as HTMLElement
+      expect(menu).not.toBeNull()
+      expect(menu.parentElement).toBe(dialog)
+      expect(menu.style.top).toBe('124px')
+      top=30
+      dialog.dispatchEvent(new Event('scroll'))
+      await nextTick()
+      expect(menu.style.top).toBe('74px')
+      await trigger.trigger('keydown',{key:'Escape'})
+      expect(dialog.querySelector('[role=listbox]')).toBeNull()
+      expect(trigger.attributes('aria-expanded')).toBe('false')
+    } finally {wrapper.unmount();wrapper=undefined;dialog.remove()}
+  })
   it('clamps refreshed options and blocks choices while disabled', async () => {
     wrapper = mount(AppSelect, {
       props: {

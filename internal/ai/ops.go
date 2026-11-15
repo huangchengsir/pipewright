@@ -38,10 +38,11 @@ func (e *opsPreflightError) Is(target error) bool { return target == errOpsNotDi
 func opsNotDispatched(err error) error            { return &opsPreflightError{cause: err} }
 
 type opsModel struct {
-	service     *service
-	masker      *mask.Masker
-	lookupIP    func(context.Context, string) ([]net.IPAddr, error)
-	dialContext func(context.Context, string, string) (net.Conn, error)
+	configuration bool // Only settings probes; execution models retain their scoped authorization.
+	service       *service
+	masker        *mask.Masker
+	lookupIP      func(context.Context, string) ([]net.IPAddr, error)
+	dialContext   func(context.Context, string, string) (net.Conn, error)
 }
 
 // NewOpsModel preserves the existing suggestion-only Service interface.

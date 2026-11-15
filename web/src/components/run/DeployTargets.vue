@@ -20,11 +20,12 @@ const props = withDefaults(
   defineProps<{
     targets: DeployTarget[]
     // 重试进行中(由父组件 RunDetail 持有 artifactId/config 后发起 API);禁用按钮 + 转圈。
+    retryAllowed?: boolean
     retrying?: boolean
     // 重试错误(人读);非空时在面板内展示。
     retryError?: string
   }>(),
-  { retrying: false, retryError: '' },
+  { retryAllowed: true, retrying: false, retryError: '' },
 )
 
 // 「仅重试失败目标」事件:本组件纯展示,不自取 artifactId/config;
@@ -35,6 +36,10 @@ const emit = defineEmits<{ retry: [] }>()
 const failedCount = computed(
   () => props.targets.filter((tg) => tg.status === 'failed' || tg.status === 'rolled_back').length,
 )
+
+function requestRetry(): void {
+  if (props.retryAllowed && !props.retrying && failedCount.value > 0) emit('retry')
+}
 
 // ─── Status badge config (semantic color per fixed five-word set) ────────────
 
@@ -182,7 +187,7 @@ function counts(targets: DeployTarget[]): { ok: number; bad: number; rolledBack:
       点击 → 父组件 RunDetail(持上次部署产物/配置)发起 retryFailedDeploy → 刷新 targets;
       成功台不动,只重跑失败台。本组件纯展示,只 emit 事件。
     -->
-    <footer v-if="failedCount > 0" class="dt-foot">
+    <footer v-if="retryAllowed && failedCount > 0" class="dt-foot">
       <div v-if="retryError" class="dt-retry-error" role="alert">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" />
@@ -193,7 +198,7 @@ function counts(targets: DeployTarget[]): { ok: number; bad: number; rolledBack:
         class="dt-retry-btn"
         :disabled="retrying"
         :aria-busy="retrying"
-        @click="emit('retry')"
+        @click="requestRetry"
       >
         <span v-if="retrying" class="dt-retry-spinner" aria-hidden="true" />
         <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">

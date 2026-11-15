@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"time"
 )
 
@@ -22,6 +23,14 @@ func (s *Service) request(ctx context.Context, root, scope, id string) (*Request
 	return r, fp, e
 }
 func (s *Service) Request(ctx context.Context, runID, scope, id string) (*Request, error) {
+	if err := tenancy.Check(ctx, s.db, "run.read", "run", runID); err != nil {
+		return nil, err
+	}
+	var callerErr error
+	scope, _, callerErr = tenancy.RetryCaller(ctx, s.db, scope, "")
+	if callerErr != nil {
+		return nil, callerErr
+	}
 	if !validIdentity(scope) || !validIdentity(id) {
 		return nil, ErrInvalid
 	}
@@ -37,6 +46,15 @@ func (s *Service) Request(ctx context.Context, runID, scope, id string) (*Reques
 	return r, e
 }
 func (s *Service) Submit(ctx context.Context, runID string, in SubmitInput) (*Request, error) {
+	ctx = configstate.WithWriteAdmission(ctx, tenancy.LockAuthorization)
+	if err := tenancy.Check(ctx, s.db, "run.retry", "run", runID); err != nil {
+		return nil, err
+	}
+	var callerErr error
+	in.Scope, in.Initiator, callerErr = tenancy.RetryCaller(ctx, s.db, in.Scope, in.Initiator)
+	if callerErr != nil {
+		return nil, callerErr
+	}
 	if !validIdentity(in.Scope) || !validIdentity(in.RequestID) || in.BaseAttemptID == "" || in.BaseRevision < 1 || len(in.PlanFingerprint) != 64 {
 		return nil, ErrInvalid
 	}
@@ -120,6 +138,9 @@ func (s *Service) Submit(ctx context.Context, runID string, in SubmitInput) (*Re
 	}
 	var out *Request
 	e = configstate.WithWriteTxContext(ctx, s.db, func(tx context.Context, q configstate.DBTX) error {
+		if err := tenancy.Check(tx, s.db, "run.retry", "run", runID); err != nil {
+			return err
+		}
 		if e := s.lock(tx, q, l); e != nil {
 			return e
 		}
@@ -161,6 +182,13 @@ func (s *Service) Submit(ctx context.Context, runID string, in SubmitInput) (*Re
 		now := time.Now().UTC()
 		revision := current.revision + 1
 		if err = s.child(tx, q, ChildInput{ID: id, ProjectID: current.project, RootID: root, ParentID: current.head, Trigger: current.snapshot.Trigger, CreatedAt: now}); err != nil {
+			return err
+		}
+		planDigest, err := SnapshotDigest(current.snapshot)
+		if err != nil {
+			return err
+		}
+		if err = tenancy.ApproveRetryRun(tx, s.db, runID, id, current.project, planDigest); err != nil {
 			return err
 		}
 		if _, err = q.ExecContext(tx, `INSERT INTO run_retry_attempts(run_id,root_id,parent_id,revision,execution_kind,status,created_at,initiator) VALUES(?,?,?,?,'recovery','queued',?,?)`, id, root, current.head, revision, now.UnixMilli(), in.Initiator); err != nil {

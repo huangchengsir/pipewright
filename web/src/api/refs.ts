@@ -5,7 +5,7 @@
  * 数据取自中控机本地仓库镜像(增量 fetch 后读),供触发流水线时把分支/commit 从手敲升级为下拉。
  * 代码管理区未启用 → 503;此时调用方应优雅回退到手填(不报错给用户)。
  */
-import { http } from './http'
+import { http, type HttpOptions } from './http'
 
 export interface GitRef {
   name: string
@@ -17,8 +17,8 @@ export interface RepoRefs {
   tags: GitRef[]
 }
 
-export async function listRefs(projectId: string): Promise<RepoRefs> {
-  return http.get<RepoRefs>(`/api/projects/${projectId}/refs`)
+export async function listRefs(projectId: string, options?:HttpOptions): Promise<RepoRefs> {
+  return http.get<RepoRefs>(`/api/projects/${projectId}/refs`,options)
 }
 
 export interface GitCommit {
@@ -34,12 +34,13 @@ export async function listCommits(
   projectId: string,
   ref: string,
   limit = 30,
+  options?:HttpOptions,
 ): Promise<GitCommit[]> {
   const qs = new URLSearchParams()
   if (ref) qs.set('ref', ref)
   qs.set('limit', String(limit))
   const res = await http.get<{ commits: GitCommit[] }>(
-    `/api/projects/${projectId}/commits?${qs.toString()}`,
+    `/api/projects/${projectId}/commits?${qs.toString()}`, options,
   )
   return res.commits
 }

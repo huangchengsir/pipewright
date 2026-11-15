@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"net/http"
 	"strings"
 	"time"
@@ -48,6 +49,13 @@ func (s secretReveal) Reveal(credentialID string) (string, error) {
 	return s.v.Reveal(credentialID)
 }
 
+func (s secretReveal) Use(ctx context.Context, credentialID string) (string, error) {
+	if s.v == nil {
+		return "", errors.New("vault unconfigured")
+	}
+	return vault.Use(ctx, s.v, credentialID)
+}
+
 // promotionGate 复用审批门内核(approval.Coordinator + Store)实现 promotion.Gate:
 // 对 gated 目标环境,登记待批 + 阻塞协调器等待端点投递批准/拒绝(或超时)。
 //
@@ -62,7 +70,7 @@ type promotionGate struct {
 func (g promotionGate) Await(ctx context.Context, stageID string, info promotion.GateInfo) (bool, string, error) {
 	key := approval.Key(g.runID, stageID)
 	stageName := "晋级到「" + info.TargetEnvironment + "」"
-	if err := g.store.CreatePending(ctx, g.runID, stageID, stageName); err != nil {
+	if err := g.store.CreatePromotionPending(ctx, g.runID, stageID, stageName, info.TargetEnvironment); err != nil {
 		return false, "", err
 	}
 	ch := g.coord.Wait(key)
@@ -95,7 +103,7 @@ func makeGetEnvironmentsHandler(store *promotion.Store) http.HandlerFunc {
 		projectID := chi.URLParam(r, "id")
 		chain, err := store.GetChain(r.Context(), projectID)
 		if err != nil && !errors.Is(err, promotion.ErrChainNotConfigured) {
-			writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
+			writePromotionError(w, err)
 			return
 		}
 		envs := chain.Environments
@@ -107,7 +115,7 @@ func makeGetEnvironmentsHandler(store *promotion.Store) http.HandlerFunc {
 		for _, e := range envs {
 			vs, verr := store.ListVariables(r.Context(), projectID, e.Name)
 			if verr != nil {
-				writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
+				writePromotionError(w, verr)
 				return
 			}
 			varsByEnv[e.Name] = vs
@@ -136,20 +144,10 @@ func makeSaveEnvironmentsHandler(store *promotion.Store, rec audit.Recorder) htt
 			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
 			return
 		}
-		chain, err := store.SaveChain(r.Context(), projectID, promotion.Chain{Environments: req.Environments})
+		chain, err := store.SaveConfiguration(r.Context(), projectID, promotion.Chain{Environments: req.Environments}, req.Variables)
 		if err != nil {
 			writePromotionError(w, err)
 			return
-		}
-		// 可选:逐环境覆盖变量(仅接受链上环境;未知环境忽略以防悬挂作用域)。
-		for env, vars := range req.Variables {
-			if chain.IndexOf(env) < 0 {
-				continue
-			}
-			if verr := store.SetVariables(r.Context(), projectID, env, vars); verr != nil {
-				writePromotionError(w, verr)
-				return
-			}
 		}
 		recordAudit(r.Context(), rec, audit.Entry{
 			Actor:      auditActor,
@@ -230,7 +228,7 @@ func makeListRunPromotionsHandler(store *promotion.Store) http.HandlerFunc {
 		}
 		recs, err := store.ListRecordsForRun(r.Context(), chi.URLParam(r, "id"))
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
+			writePromotionError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": toPromotionDTOs(recs)})
@@ -246,7 +244,7 @@ func makeListProjectPromotionsHandler(store *promotion.Store) http.HandlerFunc {
 		}
 		recs, err := store.ListRecordsForProject(r.Context(), chi.URLParam(r, "id"))
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
+			writePromotionError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": toPromotionDTOs(recs)})
@@ -291,6 +289,10 @@ func toPromotionDTOs(recs []promotion.Record) []promotionDTO {
 // writePromotionError 把晋级领域错误映射为 HTTP 状态码(错误体绝无敏感数据)。
 func writePromotionError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, tenancy.ErrForbidden):
+		writeError(w, http.StatusForbidden, "forbidden", "没有操作权限")
+	case errors.Is(err, tenancy.ErrConflict):
+		writeError(w, http.StatusConflict, "conflict", "权限或配置已变化，请刷新后重试")
 	case errors.Is(err, promotion.ErrRunNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "运行不存在")
 	case errors.Is(err, promotion.ErrProjectNotFound):
@@ -321,5 +323,20 @@ func writePromotionError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnprocessableEntity, "var_key_duplicate", "环境内变量 key 重复")
 	default:
 		writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
+	}
+}
+
+func makeRunPromotionPlanHandler(store *promotion.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if store == nil {
+			writeError(w, http.StatusServiceUnavailable, "internal", "晋级服务未初始化")
+			return
+		}
+		plan, err := store.ReadPlan(r.Context(), chi.URLParam(r, "id"))
+		if err != nil {
+			writePromotionError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, plan)
 	}
 }

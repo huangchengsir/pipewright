@@ -3,6 +3,8 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"net/http"
 	"net/url"
 	"time"
@@ -47,6 +49,10 @@ func toOAuthAppDTO(c oauth.AppConfig) oauthAppDTO {
 // writeOAuthError 把领域错误映射为契约错误码/状态码;绝不回显 client_secret 明文/密文。
 func writeOAuthError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, configstate.ErrConflict):
+		writeError(w, http.StatusConflict, "revision_conflict", "Configuration changed; reload before saving")
+	case errors.Is(err, tenancy.ErrForbidden):
+		writeError(w, http.StatusForbidden, "forbidden", "Permission denied")
 	case errors.Is(err, oauth.ErrInvalidProvider):
 		writeError(w, http.StatusUnprocessableEntity, "invalid_provider", "provider 只能为 gitee、github、gitlab、gitea 或 custom")
 	case errors.Is(err, oauth.ErrBaseURLRequired):
@@ -144,7 +150,17 @@ func makeOAuthAuthorizeHandler(svc oauth.Service) http.HandlerFunc {
 		// 用会话 token 作绑定身份(state 与发起授权的会话绑死,防 CSRF)。
 		if lifecycle, ok := svc.(oauth.Lifecycle); ok {
 			redirectURI := requestOrigin(r) + "/api/oauth/" + url.PathEscape(provider) + "/callback"
-			authURL, err := lifecycle.BeginAuthorization(r.Context(), sess.Token, provider, redirectURI, "", 0, false)
+			ctx := r.Context()
+			// Browser navigation does not carry the site's team request header.
+			if sess.MultiTenant && r.Header.Get("X-Pipewright-Team") == "" {
+				actor, err := tenancy.ActorFromSession(sess)
+				if err != nil {
+					writeOAuthError(w, err)
+					return
+				}
+				ctx = tenancy.WithActor(ctx, actor, r.URL.Query().Get("teamId"))
+			}
+			authURL, err := lifecycle.BeginAuthorization(ctx, sess.Token, provider, redirectURI, "", 0, false)
 			if err != nil {
 				writeOAuthError(w, err)
 				return

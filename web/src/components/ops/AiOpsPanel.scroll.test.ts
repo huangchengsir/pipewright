@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
+import { useSessionStore } from '../../stores/session'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { nextTick, reactive, shallowRef } from 'vue'
 import { mount, type VueWrapper } from '@vue/test-utils'
 import type { Entry } from '../../api/opsChat'
@@ -6,6 +8,7 @@ import AiOpsPanel from './AiOpsPanel.vue'
 import AiOpsComposer from './AiOpsComposer.vue'
 import AiOpsMessageList from './AiOpsMessageList.vue'
 
+beforeEach(() => { setActivePinia(createPinia()); useSessionStore().user = { username: 'admin', multiTenant: false } })
 const chatMock = vi.hoisted(() => ({
   send: vi.fn(),
   history: vi.fn(),

@@ -5,7 +5,30 @@ import (
 	"errors"
 	"github.com/huangchengsir/pipewright/internal/kubernetes"
 	"github.com/huangchengsir/pipewright/internal/runretry"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
+
+// continuationContext resolves the exact persisted worker identity. The
+// dispatcher has no interactive session and cannot authorize another run.
+func (c *runAccessCompiler) continuationContext(ctx context.Context, runID string) (context.Context, error) {
+	enabled, err := tenancy.Enabled(ctx, c.db)
+	if err != nil || !enabled {
+		return ctx, err
+	}
+	digest, err := c.Digest(ctx, runID)
+	if err != nil {
+		return ctx, err
+	}
+	execution := tenancy.RunContext(ctx, c.db, runID, digest)
+	admission, err := tenancy.RunAdmissionAction(execution, c.db, runID)
+	if err != nil {
+		return ctx, err
+	}
+	if err = tenancy.CheckRunPermission(execution, c.db, admission, runID, ""); err != nil {
+		return ctx, err
+	}
+	return execution, nil
+}
 
 type releaseRetryRuntime struct {
 	*runretry.Service

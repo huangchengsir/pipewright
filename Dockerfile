@@ -11,7 +11,7 @@ COPY web/ ./
 RUN npm run build
 
 # ---- Go 静态构建 ----
-FROM golang:1.26.10-alpine AS build
+FROM golang:1.26.11-alpine AS build
 ENV CGO_ENABLED=0 \
     GOPROXY=https://goproxy.cn,direct \
     GOSUMDB=off \

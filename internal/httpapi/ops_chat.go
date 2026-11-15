@@ -47,6 +47,12 @@ func opsHandler(s *opschat.Service, operation string) http.HandlerFunc {
 				return
 			}
 		}
+		if (operation == "capabilities" || operation == "tools") && s != nil {
+			if err := s.AuthorizeCatalog(r.Context()); err != nil {
+				opsError(w, err)
+				return
+			}
+		}
 		if operation == "capabilities" {
 			if s == nil {
 				writeJSON(w, 200, opschat.Capabilities{})
@@ -171,6 +177,9 @@ func opsHandler(s *opschat.Service, operation string) http.HandlerFunc {
 }
 
 func opsError(w http.ResponseWriter, err error) {
+	if writeAuthorizationError(w, err) {
+		return
+	}
 	status, code := http.StatusInternalServerError, "ops_storage_failed"
 	switch {
 	case errors.Is(err, opschat.ErrNotFound):
@@ -290,6 +299,10 @@ func opsEventsHandler(s *opschat.Service, authn auth.Authenticator, interval tim
 				write("auth", "", map[string]string{"code": "unauthorized"})
 				return false
 			}
+			if e := s.AuthorizeRead(r.Context(), id); e != nil {
+				write("auth", "", map[string]string{"code": "access_denied"})
+				return false
+			}
 			return true
 		}
 		if !authorized() {
@@ -309,6 +322,9 @@ func opsEventsHandler(s *opschat.Service, authn auth.Authenticator, interval tim
 				return
 			}
 			for _, entry := range page.Entries {
+				if !authorized() {
+					return
+				}
 				cursor = opschat.EventCursor(id, entry.Seq)
 				if !write("entry", cursor, entry) {
 					return

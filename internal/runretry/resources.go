@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"time"
 )
 
@@ -196,6 +197,9 @@ type ReconcileResult struct {
 
 // Reconcile observes existing resources only. It never creates, kills or deletes.
 func (s *Service) Reconcile(ctx context.Context, id string) (*ReconcileResult, error) {
+	if err := tenancy.Check(ctx, s.db, "run.retry", "run", id); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	out := &ReconcileResult{Reasons: []Reason{}}

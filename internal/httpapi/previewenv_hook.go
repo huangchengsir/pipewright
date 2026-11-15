@@ -3,8 +3,6 @@ package httpapi
 import (
 	"context"
 	log "github.com/huangchengsir/pipewright/internal/logging"
-	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/huangchengsir/pipewright/internal/previewenv"
@@ -33,30 +31,7 @@ type PreviewProvisioner interface {
 	Provision(ctx context.Context, in previewenv.ProvisionInput) (*previewenv.PreviewEnv, error)
 }
 
-// prBranchRes 从分支名尽力解析 PR 号的几种约定形态(均大小写不敏感)。
-var (
-	prPrefixRe = regexp.MustCompile(`^(?:pr|pull|mr|merge-requests?)[-/](\d+)$`)
-	allDigitRe = regexp.MustCompile(`^\d+$`)
-)
-
-// parsePRNumber 从分支名尽力解析 PR 号;解析不到返回 0(钩子据此静默不分配)。
-func parsePRNumber(branch string) int {
-	b := strings.ToLower(strings.TrimSpace(branch))
-	if b == "" {
-		return 0
-	}
-	if m := prPrefixRe.FindStringSubmatch(b); m != nil {
-		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
-			return n
-		}
-	}
-	if allDigitRe.MatchString(b) {
-		if n, err := strconv.Atoi(b); err == nil && n > 0 {
-			return n
-		}
-	}
-	return 0
-}
+func parsePRNumber(branch string) int { return previewenv.PRNumber(branch) }
 
 // NewPreviewProvisionHook 构造 PR 部署成功 → 预览环境分配的终态钩子。
 //
@@ -105,7 +80,7 @@ func NewPreviewProvisionHook(
 			return
 		}
 
-		// 上游容器/端口:取该主机上该项目**已有的一条反代路由**(刚部署应用通常已有对外路由)。
+		// 上游容器/端口:取已授权主机上的一条可读反代路由(刚部署应用通常已有对外路由)。
 		// 取不到 → 静默(无从知道预览该指向哪个容器,诚实降级,绝不臆造)。
 		container, port, ok := firstUpstreamForServer(ctx, proxySvc, serverID)
 		if !ok {
@@ -122,7 +97,7 @@ func NewPreviewProvisionHook(
 			return
 		}
 
-		env, perr := preview.Provision(ctx, previewenv.ProvisionInput{
+		env, perr := preview.Provision(ctx, previewenv.ProvisionInput{SourceRunID: runID,
 			ProjectID:         r.ProjectID,
 			PRNumber:          prNumber,
 			Branch:            r.Trigger.Branch,

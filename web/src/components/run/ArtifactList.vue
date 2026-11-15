@@ -5,11 +5,14 @@
   reference(可复制)+ 人读大小。产物契约是 Epic 3 一等交付物:type 枚举 + reference
   类型寻址定死,Epic 4 部署按 (type, reference) 消费。桩产物(metadata.stub=true)诚实标注。
 
-  纯展示组件(container/presentational split):仅接收 artifacts prop,不自取数据。
+  接收 artifacts 元数据；下载单独检查权限并携带当前团队。
   RunDetail 成功态据 run.artifacts 渲染;不扰终端(3-6)/诊断(7-2)slot。
 -->
 <script setup lang="ts">
 import { ref } from 'vue'
+import {usePermission} from '../../composables/usePermission'
+import {useIdentityRequestScope} from '../../composables/useAuthorizedRequestScope'
+import {HttpError} from '../../api/http'
 import { useI18n } from 'vue-i18n'
 import type { ArtifactDTO, ArtifactType } from '../../api/runs'
 
@@ -19,6 +22,24 @@ const props = defineProps<{
   artifacts: ArtifactDTO[]
   runId: string
 }>()
+
+const downloadPermission=usePermission(()=>({action:'artifact.download',resourceId:props.runId}))
+const downloading=ref(''),downloadError=ref(false)
+const scope=useIdentityRequestScope(()=>{downloading.value='';downloadError.value=false},()=>downloadPermission.allowed.value)
+async function downloadArtifact(a:ArtifactDTO){
+ if(!scope.active()||!downloadPermission.allowed.value||downloading.value)return
+ const id=props.runId;downloading.value=a.id;downloadError.value=false
+ try{
+  const result=await scope.run(async()=>{
+   const response=await fetch(downloadUrl(a),{...scope.requestOptions,credentials:'same-origin',cache:'no-store'})
+   if(!response.ok)throw new HttpError(response.status,null,'Download failed')
+   return {blob:await response.blob(),filename:response.headers.get('content-disposition')?.match(/filename="([^"]*)"/)?.[1]||a.name}
+  })
+  if(!scope.active()||props.runId!==id||!downloadPermission.allowed.value)return
+  const url=URL.createObjectURL(result.blob),link=document.createElement('a');link.href=url;link.download=result.filename;link.click();setTimeout(()=>URL.revokeObjectURL(url),0)
+ }catch{if(scope.active())downloadError.value=true}
+ finally{if(scope.active())downloading.value=''}
+}
 
 // 已归档真字节(metadata.stored=true 且有 reference 句柄)才可下载;占位/镜像类不可。
 function downloadable(a: ArtifactDTO): boolean {
@@ -85,13 +106,27 @@ function isStub(a: ArtifactDTO): boolean {
 
 const copiedId = ref<string | null>(null)
 let copyTimer: ReturnType<typeof setTimeout> | null = null
+const canRead = usePermission(() => ({ action: 'run.read', resourceId: props.runId }))
+const copyScope = useIdentityRequestScope(clearCopy, () => canRead.allowed.value)
+
+function clearCopy(): void {
+  if (copyTimer) clearTimeout(copyTimer)
+  copyTimer = null
+  copiedId.value = null
+}
 
 async function copyReference(a: ArtifactDTO): Promise<void> {
+  const runId = props.runId
+  const matchesCurrentArtifact = () => props.runId === runId && props.artifacts.some(
+    (artifact) => artifact.id === a.id && artifact.reference === a.reference,
+  )
+  if (!copyScope.active() || !matchesCurrentArtifact()) return
   try {
-    await navigator.clipboard.writeText(a.reference)
+    await copyScope.run(() => navigator.clipboard.writeText(a.reference))
+    if (!copyScope.active() || !matchesCurrentArtifact()) return
+    clearCopy()
     copiedId.value = a.id
-    if (copyTimer) clearTimeout(copyTimer)
-    copyTimer = setTimeout(() => { copiedId.value = null }, 1600)
+    copyTimer = setTimeout(clearCopy, 1600)
   } catch {
     // Clipboard unavailable (insecure context / denied) — silent; ref still visible to select.
   }
@@ -100,6 +135,7 @@ async function copyReference(a: ArtifactDTO): Promise<void> {
 
 <template>
   <section class="artifact-list" role="region" :aria-label="t('run.artifacts')">
+    <p v-if="downloadError" role="alert">{{t('runExperience.error')}}</p>
     <header class="al-head">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
         <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
@@ -181,9 +217,11 @@ async function copyReference(a: ArtifactDTO): Promise<void> {
 
         <!-- Download (仅已归档真字节可下载) -->
         <a
-          v-if="downloadable(a)"
+          v-if="downloadable(a) && downloadPermission.allowed.value"
           class="download-btn"
-          :href="downloadUrl(a)"
+          :href="downloading ? undefined : downloadUrl(a)"
+          :aria-disabled="!!downloading"
+          @click.prevent="downloadArtifact(a)"
           download
           :title="t('run.downloadTitle', { name: a.name })"
           :aria-label="t('run.downloadTitle', { name: a.name })"

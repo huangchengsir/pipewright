@@ -66,6 +66,9 @@ func toPipelineTemplateDTO(t *library.Template) pipelineTemplateDTO {
 
 // writeTemplateError 把模板领域错误映射为契约错误码/状态码。
 func writeTemplateError(w http.ResponseWriter, err error) {
+	if writeAuthorizationError(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, library.ErrTemplateNotFound):
 		writeError(w, http.StatusNotFound, "template_not_found", "模板不存在")

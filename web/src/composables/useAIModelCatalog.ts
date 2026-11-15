@@ -1,6 +1,7 @@
 import { computed, onBeforeUnmount, shallowRef, watch, type Ref } from 'vue'
 import { listAIModels, type AIProvider } from '../api/aiSettings'
 import { HttpError } from '../api/http'
+import type { AuthorizedRequestScope } from './useAuthorizedRequestScope'
 
 export function useAIModelCatalog(config: {
   provider: Ref<AIProvider>
@@ -9,6 +10,7 @@ export function useAIModelCatalog(config: {
   ready: Ref<boolean>
   hasExistingKey: Ref<boolean>
   unavailable: () => string
+  scope?: AuthorizedRequestScope
 }) {
   const options = shallowRef<{ value: string; label: string }[]>([])
   const loading = shallowRef(false)
@@ -52,22 +54,24 @@ export function useAIModelCatalog(config: {
   async function refresh() {
     clearTimeout(timer)
     timer = undefined
-    if (disposed || !canFetch.value) return
+    if (disposed || !canFetch.value || (config.scope && !config.scope.active())) return
     const current = ++generation
     controller?.abort()
     controller = new AbortController()
     loading.value = true
     error.value = ''
     try {
-      const result = await listAIModels(
+      const request = () => listAIModels(
         {
           provider: config.provider.value,
           baseUrl: config.baseUrl.value.trim(),
           ...(config.apiKey.value ? { apiKey: config.apiKey.value } : {}),
         },
-        controller.signal,
+        controller!.signal,
+        config.scope?.requestOptions,
       )
-      if (disposed || current !== generation) return
+      const result = await (config.scope ? config.scope.run(request) : request())
+      if (disposed || current !== generation || (config.scope && !config.scope.active())) return
       options.value = result.ok
         ? result.items.map((model) => ({
             value: model.id,

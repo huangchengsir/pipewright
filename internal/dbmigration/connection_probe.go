@@ -41,6 +41,17 @@ func (r *Runtime) ProbeConnection(parent context.Context, target Connection) (re
 	if r.Recovery || r.Source == nil || r.Control == nil || r.key == nil {
 		return result, ErrInvalidState
 	}
+	if e := r.AuthorizeConfiguration(ctx); e != nil {
+		return result, e
+	}
+	defer func() {
+		if err == nil {
+			if e := r.AuthorizeConfiguration(ctx); e != nil {
+				result = ConnectionProbeResult{}
+				err = e
+			}
+		}
+	}()
 	if !probeLock(ctx, &r.Control.mu) {
 		return result, ErrProbeTimeout
 	}

@@ -1,3 +1,7 @@
+import {createPinia,setActivePinia} from 'pinia'
+import {useSessionStore} from '../../stores/session'
+import {beforeEach as setLegacyFixture} from 'vitest'
+setLegacyFixture(()=>{setActivePinia(createPinia());useSessionStore().setUser({username:'admin',multiTenant:false})})
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import JobDrawer from './JobDrawer.vue'

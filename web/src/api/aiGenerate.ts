@@ -8,7 +8,7 @@
  * are server-side only, never exposed to the frontend.
  */
 
-import { http } from './http'
+import { http, type HttpOptions } from './http'
 import { configWriteOptions } from './configRevision'
 
 // ─── Generate DTO (frozen) ────────────────────────────────────────────────────
@@ -74,7 +74,8 @@ export interface AIGenerateResponse {
   /** Non-empty when available=false or LLM call failed. Never contains API keys. */
   reason: string
   analysis: AIAnalysis
-  proposal: AIProposal
+  /** Null when generation did not produce a proposal. */
+  proposal: AIProposal | null
 }
 
 // ─── Apply DTO (frozen) ───────────────────────────────────────────────────────
@@ -113,10 +114,12 @@ export interface AIApplyInput {
 export async function aiGenerate(
   projectId: string,
   input: AIGenerateInput,
+  options?: HttpOptions,
 ): Promise<AIGenerateResponse> {
   return http.post<AIGenerateResponse>(
     `/api/projects/${projectId}/pipeline/ai-generate`,
     input,
+    options,
   )
 }
 
@@ -124,10 +127,13 @@ export async function aiApply(
   projectId: string,
   input: AIApplyInput,
   expectedRevision?: string,
+  options?: HttpOptions,
 ): Promise<AIApplyResponse> {
-  if (expectedRevision) return http.post<AIApplyResponse>(`/api/projects/${projectId}/pipeline/ai-apply`, input, configWriteOptions(expectedRevision))
+  const requestOptions=configWriteOptions(expectedRevision,options)
+  if (requestOptions) return http.post<AIApplyResponse>(`/api/projects/${projectId}/pipeline/ai-apply`, input, requestOptions)
   return http.post<AIApplyResponse>(
     `/api/projects/${projectId}/pipeline/ai-apply`,
     input,
+    options,
   )
 }

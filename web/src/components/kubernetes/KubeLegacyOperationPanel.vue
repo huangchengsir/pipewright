@@ -3,6 +3,8 @@ import { computed, onBeforeUnmount, ref, watch, useId } from "vue";
 import { useI18n } from "vue-i18n";
 import { kubeAPI, kubeError, type KubeOperation } from "../../api/kubernetes";
 import { useKubeMutation } from "../../composables/useKubeMutation";
+import { usePermission } from "../../composables/usePermission";
+import { useIdentityRequestScope } from "../../composables/useAuthorizedRequestScope";
 import { useConfirm } from "../../composables/useConfirm";
 import {
   exactKubeOperation,
@@ -24,13 +26,38 @@ const props = defineProps<{
   emit = defineEmits<{ blocked: [boolean] }>(),
   { t } = useI18n(),
   confirm = useConfirm(),
-  gate = useKubeMutation();
+  gate = useKubeMutation(() => scope.requestOptions);
 const { busy, error, uncertain } = gate,
   row = ref<KubeOperation>(),
   loading = ref(false),
   loadError = ref(""),
   phase = ref<KubePhase>("preflight");
 const readBack = ref(false);
+const readPermission = usePermission(() => ({
+  action: "run.read",
+  resourceId: props.runId,
+}));
+const retryPermission = usePermission(() => ({
+  action: "run.retry",
+  resourceId: props.runId,
+}));
+const visible = ref(true);
+const scope = useIdentityRequestScope(() => {
+  visible.value = false;
+  controller.abort();
+  seq++;
+  gate.reset();
+  row.value = undefined;
+  loadError.value = "";
+  emit("blocked", true);
+});
+const canManage = computed(
+  () =>
+    scope.active() &&
+    readPermission.allowed.value &&
+    retryPermission.allowed.value &&
+    row.value?.canManage === true,
+);
 watch(uncertain, () => {
   readBack.value = false;
 });
@@ -60,6 +87,7 @@ let controller = new AbortController(),
   seq = 0,
   alive = true;
 async function load() {
+  if (!scope.active() || !readPermission.allowed.value) return;
   controller.abort();
   controller = new AbortController();
   const signal = controller.signal,
@@ -71,8 +99,17 @@ async function load() {
   loading.value = true;
   loadError.value = "";
   try {
-    const data = await kubeAPI.operations(run, signal);
-    if (!alive || signal.aborted || n !== seq) return;
+    const data = await scope.run(() =>
+      kubeAPI.operations(run, signal, scope.requestOptions),
+    );
+    if (
+      !scope.active() ||
+      !readPermission.allowed.value ||
+      !alive ||
+      signal.aborted ||
+      n !== seq
+    )
+      return;
     row.value = exactKubeOperation(data, run, node, props.operationId);
     if (uncertain.value) readBack.value = true;
     // An authoritative empty result can represent a failure before operation creation.
@@ -82,7 +119,14 @@ async function load() {
       !data.some((op) => op.runId === run && op.nodeId === node);
     emit("blocked", !beforeOperation && kubeBlocksRetry(row.value));
   } catch (e) {
-    if (alive && !signal.aborted && n === seq) loadError.value = kubeError(e);
+    if (
+      scope.active() &&
+      readPermission.allowed.value &&
+      alive &&
+      !signal.aborted &&
+      n === seq
+    )
+      loadError.value = kubeError(e);
   } finally {
     if (alive && n === seq) loading.value = false;
   }
@@ -90,6 +134,7 @@ async function load() {
 async function action(kind: "reconcile" | "retire") {
   const target = row.value;
   if (
+    !canManage.value ||
     !target ||
     (kind === "retire" && !target.canRetire) ||
     (kind === "reconcile" && !target.canReconcile)
@@ -105,10 +150,14 @@ async function action(kind: "reconcile" | "retire") {
     }))
   )
     return;
-  if (!alive || row.value?.id !== target.id) return;
+  if (!canManage.value || !alive || row.value?.id !== target.id) return;
   gate.execute(async (signal) => {
-    const result = await kubeAPI.observe(target, kind, signal);
+    if (!canManage.value || row.value?.id !== target.id) return;
+    const result = await scope.run(() =>
+      kubeAPI.observe(target, kind, signal, scope.requestOptions),
+    );
     if (
+      !canManage.value ||
       signal.aborted ||
       props.runId !== target.runId ||
       props.nodeId !== target.nodeId
@@ -141,13 +190,28 @@ watch(
   },
   { immediate: true },
 );
+watch(readPermission.allowed, (allowed) => {
+  controller.abort();
+  seq++;
+  gate.reset();
+  row.value = undefined;
+  loadError.value = "";
+  emit("blocked", true);
+  if (allowed) void load();
+});
+watch(canManage, (allowed) => {
+  if (!allowed) gate.cancel();
+});
 onBeforeUnmount(() => {
   alive = false;
   controller.abort();
 });
 </script>
 <template>
-  <section class="kube-surface kube-operation">
+  <section
+    v-if="visible && readPermission.allowed.value"
+    class="kube-surface kube-operation"
+  >
     <header class="kube-head">
       <strong>{{ t("kubernetes.receipt") }}</strong
       ><AppButton :disabled="busy" :loading="loading" @click="load">{{
@@ -191,13 +255,13 @@ onBeforeUnmount(() => {
       </p>
       <div class="kube-actions">
         <AppButton
-          v-if="row.canReconcile"
+          v-if="canManage && row.canReconcile"
           :disabled="uncertain"
           :loading="busy"
           @click="action('reconcile')"
           >{{ t("kubernetes.reconcile") }}</AppButton
         ><AppButton
-          v-if="row.canRetire"
+          v-if="canManage && row.canRetire"
           variant="ghost"
           :disabled="busy || uncertain"
           @click="action('retire')"

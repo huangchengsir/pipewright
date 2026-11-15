@@ -1,3 +1,4 @@
+import {configWriteOptions} from './configRevision'
 /**
  * Cron (scheduled trigger) API — Epic 8 · Story 8-6.
  *
@@ -10,10 +11,10 @@
  * cron.Service — a bad expression returns 422 invalid_cron.
  */
 
-import { http } from './http'
-import { configWriteOptions } from './configRevision'
+import { http,type HttpOptions } from './http'
 
 export interface CronConfig {
+  authorizationState?: 'ready' | 'required'
   /** 5-field cron expression (分 时 日 月 周); empty = unset. */
   expression: string
   /** Branch to build on each fire; empty = project default branch. */
@@ -30,10 +31,10 @@ export interface SaveCronInput {
   enabled: boolean
 }
 
-export async function getCron(projectId: string): Promise<CronConfig> {
-  return http.get<CronConfig>(`/api/projects/${projectId}/cron`)
+export async function getCron(projectId: string, options?:HttpOptions): Promise<CronConfig> {
+  return http.get<CronConfig>(`/api/projects/${projectId}/cron`,options)
 }
 
-export async function saveCron(projectId: string, input: SaveCronInput, expectedRevision?: string): Promise<CronConfig> {
-  return expectedRevision ? http.put<CronConfig>(`/api/projects/${projectId}/cron`, input, configWriteOptions(expectedRevision)) : http.put<CronConfig>(`/api/projects/${projectId}/cron`, input)
+export async function saveCron(projectId: string, input: SaveCronInput, expectedRevision?: string, options?:HttpOptions): Promise<CronConfig> {
+  return http.put<CronConfig>(`/api/projects/${projectId}/cron`, input, configWriteOptions(expectedRevision,{...options,throwOnUnauthorized:true}))
 }

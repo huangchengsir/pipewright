@@ -1,4 +1,6 @@
 export default {
+ samplingAuthorizationRequired: "待授權採樣",
+ samplingAuthorizationHelp: "請由有節點執行及憑證使用權限的管理員重新儲存規則。設定或授權變更後需重新批准。",
   title: '異常偵測',
   subtitle: '設定閾值規則,對伺服器 CPU / 記憶體 / 磁碟指標進行偵測,命中即產生告警',
   checkNow: '立即偵測',

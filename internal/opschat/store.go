@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"time"
 )
 
@@ -51,6 +53,15 @@ func (s *Service) transaction(ctx context.Context, lease bool, fn func(*sql.Tx) 
 		return ErrStorage
 	}
 	defer tx.Rollback()
+	if tenancy.HasAuthorizationContext(ctx) {
+		fence := tenancy.LockAuthorization
+		if cancelOnly, _ := ctx.Value(cancellationWriteKey{}).(bool); cancelOnly {
+			fence = tenancy.LockCompletionAuthorization
+		}
+		if err = fence(configstate.WithTxContext(ctx, s.db, tx), s.db); err != nil {
+			return err
+		}
+	}
 	if lease {
 		// Writes serialize on the singleton. Pure reads never update records.
 		if _, err = tx.ExecContext(ctx, "UPDATE ops_chat_state SET lease_until=lease_until WHERE id=1"); err != nil {
@@ -88,6 +99,9 @@ func (s *Service) transaction(ctx context.Context, lease bool, fn func(*sql.Tx) 
 }
 func (s *Service) session(ctx context.Context, q querier, id string) (sessionRecord, error) {
 	var r sessionRecord
+	if err := s.authorizeSession(ctx, q, id, "opschat.read"); err != nil {
+		return r, err
+	}
 	var b []byte
 	var created, updated int64
 	err := q.QueryRowContext(ctx, `SELECT id,revision,seq,visible_count,body_bytes,active_run,body,created_at,updated_at FROM ops_chat_sessions WHERE id=?`, id).
@@ -112,6 +126,9 @@ func (s *Service) saveSession(ctx context.Context, tx *sql.Tx, r sessionRecord) 
 }
 func (s *Service) run(ctx context.Context, q querier, session, id string) (runRecord, error) {
 	var r runRecord
+	if err := s.authorizeSession(ctx, q, session, "opschat.read"); err != nil {
+		return r, err
+	}
 	var b []byte
 	var created int64
 	var canceled int
@@ -123,6 +140,9 @@ func (s *Service) run(ctx context.Context, q querier, session, id string) (runRe
 	r.View.CancelRequested = canceled != 0
 	r.View.CreatedAt = time.UnixMilli(created).UTC()
 	err = s.open(b, &r.Body)
+	if err == nil && r.Body.ClientRequestID != "" {
+		r.View.ClientRequestID = r.Body.ClientRequestID
+	}
 	if r.Body.Analysis != nil || r.Body.AnalysisStarted {
 		r.View.Phase = "analysis"
 	}
@@ -141,6 +161,10 @@ func (s *Service) saveRun(ctx context.Context, tx *sql.Tx, r runRecord) error {
 	return databaseError(err)
 }
 func (s *Service) calls(ctx context.Context, q querier, session, run string) ([]callRecord, error) {
+	if err := s.authorizeSession(ctx, q, session, "opschat.read"); err != nil {
+		return nil, err
+	}
+
 	rows, err := q.QueryContext(ctx, `SELECT body,status,created_at,ordinal FROM ops_chat_calls WHERE session_id=? AND run_id=? ORDER BY ordinal`, session, run)
 	if err != nil {
 		return nil, ErrStorage
@@ -172,6 +196,10 @@ func (s *Service) saveCall(ctx context.Context, tx *sql.Tx, c callRecord) error 
 	return databaseError(err)
 }
 func (s *Service) approval(ctx context.Context, q querier, session, run string) (approvalRecord, error) {
+	if err := s.authorizeSession(ctx, q, session, "opschat.read"); err != nil {
+		return approvalRecord{}, err
+	}
+
 	var a approvalRecord
 	var b []byte
 	var expires int64
@@ -185,6 +213,10 @@ func (s *Service) approval(ctx context.Context, q querier, session, run string) 
 	}
 	a.View = Confirmation{RunID: run, ExpiresAt: time.UnixMilli(expires).UTC(), Calls: a.Body.Calls}
 	a.View.Valid = a.Status == "pending" && a.Instance == s.instance && expires > time.Now().UnixMilli()
+	if a.View.Valid {
+		binding, bindingErr := tenancy.ConfirmationBinding(s.authorizationContext(ctx, q), s.db)
+		a.View.Valid = bindingErr == nil && binding == a.Body.ActorBinding
+	}
 	if a.View.Valid {
 		a.View.Nonce = a.Body.Nonce
 	}

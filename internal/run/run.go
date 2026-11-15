@@ -164,12 +164,14 @@ type Run struct {
 	ExecutionKind, LogicalRunID, SourceRunID, RetryInitiator string
 	AttemptNumber                                            int64
 	// Only populated by idempotent Create; unknown must never cause re-enqueue.
-	DispatchState string
-	ID            string
-	ProjectID     string
-	ProjectName   string // 冗余只读展示名(join projects),非持久列
-	Status        string
-	Trigger       Trigger
+	// AccessEnvironmentID is derived only from this saved run environment and its trusted team.
+	AccessEnvironmentID string
+	DispatchState       string
+	ID                  string
+	ProjectID           string
+	ProjectName         string // 冗余只读展示名(join projects),非持久列
+	Status              string
+	Trigger             Trigger
 	// ResolvedCommitSHA is the first full commit confirmed by a checkout, never a
 	// guessed expansion of Trigger.Commit. A conflict makes it unsuitable as a
 	// single source revision for this run; the original evidence is retained.

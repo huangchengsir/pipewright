@@ -212,7 +212,7 @@ func (s *Service) entryPage(ctx context.Context, q querier, id, cursor string, l
 }
 func (s *Service) Entries(ctx context.Context, id, before string, limit int) (EntryPage, error) {
 	var out EntryPage
-	if err := s.registerSecrets(); err != nil {
+	if err := s.registerSecrets(ctx); err != nil {
 		return out, err
 	}
 	err := s.transaction(ctx, false, func(tx *sql.Tx) error { var e error; out, e = s.entryPage(ctx, tx, id, before, limit, false); return e })
@@ -220,7 +220,7 @@ func (s *Service) Entries(ctx context.Context, id, before string, limit int) (En
 }
 func (s *Service) Events(ctx context.Context, id, after string, limit int) (EntryPage, error) {
 	var out EntryPage
-	if err := s.registerSecrets(); err != nil {
+	if err := s.registerSecrets(ctx); err != nil {
 		return out, err
 	}
 	err := s.transaction(ctx, false, func(tx *sql.Tx) error { var e error; out, e = s.entryPage(ctx, tx, id, after, limit, true); return e })
@@ -238,7 +238,11 @@ func (s *Service) ListContext(ctx context.Context, before string, limit int, key
 	if err != nil {
 		return out, err
 	}
-	if err = s.registerSecrets(); err != nil {
+	if err = s.registerSecrets(ctx); err != nil {
+		return out, err
+	}
+	key, err = s.contextKey(ctx, key)
+	if err != nil {
 		return out, err
 	}
 	err = s.transaction(ctx, false, func(tx *sql.Tx) error {
@@ -252,18 +256,27 @@ func (s *Service) ListContext(ctx context.Context, before string, limit int, key
 				return ErrStorage
 			}
 		}
+		if out.ActiveSessionID != "" {
+			if _, e := s.session(ctx, tx, out.ActiveSessionID); e != nil {
+				out.ActiveSessionID = ""
+			}
+		}
 		if before != "" {
 			if _, e := s.session(ctx, tx, before); e != nil {
 				return ErrInvalid
 			}
 		}
-		query := "SELECT id FROM ops_chat_sessions"
-		args := []any{}
+		predicate, e := s.sessionPredicate(ctx, tx, "chat.id")
+		if e != nil {
+			return e
+		}
+		query := "SELECT chat.id FROM ops_chat_sessions chat WHERE " + predicate.SQL
+		args := append([]any{}, predicate.Args...)
 		if before != "" {
-			query += " WHERE id<?"
+			query += " AND chat.id<?"
 			args = append(args, before)
 		}
-		query += " ORDER BY id DESC" + store.Limit(store.DialectOf(s.db), "?")
+		query += " ORDER BY chat.id DESC" + store.Limit(store.DialectOf(s.db), "?")
 		args = append(args, limit+1)
 		rows, e := tx.QueryContext(ctx, query, args...)
 		if e != nil {
@@ -299,7 +312,7 @@ func (s *Service) ListContext(ctx context.Context, before string, limit int, key
 	return out, err
 }
 func (s *Service) Snapshot(ctx context.Context, id string) (*Snapshot, error) {
-	if err := s.registerSecrets(); err != nil {
+	if err := s.registerSecrets(ctx); err != nil {
 		return nil, err
 	}
 	out := &Snapshot{Runs: []Run{}, Calls: []Call{}, Confirmations: []Confirmation{}}

@@ -88,7 +88,7 @@ let chat: ReturnType<typeof useOpsChat>, view: VueWrapper | undefined
 let db: Record<string, Snapshot>,
   active = 'chat'
 const events: ((event: StreamEvent) => void)[] = []
-async function open(initial = ['b'], context?:()=>string): Promise<void> {
+async function open(initial = ['b'], context?:()=>string, permissionOptions: Partial<Parameters<typeof useOpsChat>[0]> = {}): Promise<void> {
   view = mount(
     defineComponent({
       setup() {
@@ -96,6 +96,7 @@ async function open(initial = ['b'], context?:()=>string): Promise<void> {
           active: shallowRef(true),
           initialServerIds: () => initial,
           context,
+          ...permissionOptions,
         })
         return () => null
       },
@@ -1110,4 +1111,43 @@ describe('terminal memory-only references', () => {
     )
     expect(opsApi.turn).not.toHaveBeenCalled()
   })
+})
+
+
+describe('ops action and identity boundaries', () => {
+ it('denies each mutation before autosave or request when the independent action is absent', async () => {
+   await open(['a'], undefined, { can: () => false })
+   vi.clearAllMocks()
+   expect(await chat.create()).toBe(false)
+   chat.editDraft('not writable')
+   expect(chat.draft.value).not.toBe('not writable')
+   expect(await chat.rename('denied')).toBe(false)
+   expect(await chat.targets(['b'])).toBe(false)
+   expect(await chat.send()).toBe(false)
+   expect(await chat.tool('host_resources', {})).toBe(false)
+   expect(await chat.retry(['call'])).toBe(false)
+   expect(await chat.submitPending()).toBe(false)
+   expect(await chat.stop('run')).toBe(false)
+   expect(await chat.confirmBatch({ runId:'run',nonce:'nonce',expiresAt:'time',calls:[],valid:true })).toBe(false)
+   expect(await chat.reissue('run')).toBe(false)
+   expect(await chat.analyze(['call'])).toBe(false)
+   expect(await chat.remove()).toBe(false)
+   for (const name of ['create','patch','turn','retry','cancel','confirm','reissue','analyze','delete'] as const) expect(opsApi[name]).not.toHaveBeenCalled()
+ })
+ it('drops old identity responses and private drafts synchronously on team change', async () => {
+   const identity=shallowRef('alice/team-a')
+   await open(['a'],undefined,{permissionScope:()=>identity.value})
+   chat.editDraft('alice private draft')
+   const old=defer<Snapshot>()
+   vi.mocked(opsApi.snapshot).mockReturnValueOnce(old.promise)
+   const reading=chat.refresh()
+   identity.value='bob/team-b'
+   expect(chat.state.drafts.chat).toBeUndefined()
+   expect(chat.draft.value).toBe('')
+   old.resolve(snapshot({...session('alice-old'),draft:'private old response'}))
+   await reading
+   await flushPromises()
+   expect(chat.state.snapshot?.session.id).not.toBe('alice-old')
+   expect(chat.draft.value).not.toBe('private old response')
+ })
 })

@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"strings"
 	"time"
 
@@ -255,6 +256,10 @@ func ToStoredVarsJSON(vars []BuildVar) ([]byte, error) {
 }
 
 func (s *settingsService) Get(ctx context.Context, projectID string) (*Settings, error) {
+	if err := tenancy.Check(ctx, s.db, "pipeline.read", "project", projectID); err != nil {
+		return nil, err
+	}
+
 	st, err := s.load(ctx, projectID)
 	if err == nil {
 		return st, nil
@@ -267,6 +272,16 @@ func (s *settingsService) Get(ctx context.Context, projectID string) (*Settings,
 }
 
 func (s *settingsService) Save(ctx context.Context, projectID string, in SettingsInput) (*Settings, error) {
+	scoped := *s
+	scoped.vault = vault.WithContext(ctx, s.vault)
+	s = &scoped
+	if err := tenancy.Check(ctx, s.db, "pipeline.edit", "project", projectID); err != nil {
+		return nil, err
+	}
+
+	if err := authorizeConfigReferences(ctx, s.db, in); err != nil {
+		return nil, err
+	}
 	// 确保配置已存在(惰性默认);Get 也完成项目存在性校验。
 	if _, err := s.Get(ctx, projectID); err != nil {
 		return nil, err
@@ -300,7 +315,22 @@ func (s *settingsService) Save(ctx context.Context, projectID string, in Setting
 	}
 
 	nowStr := time.Now().UTC().Format(time.RFC3339)
-	err = configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+	err = configstate.MutateProject(configstate.WithWriteAdmission(ctx, tenancy.LockAuthorization), s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+		if err := tenancy.LockAuthorization(txctx, s.db); err != nil {
+			return err
+		}
+		if err := tenancy.Check(txctx, s.db, "pipeline.edit", "project", projectID); err != nil {
+			return err
+		}
+		if err := authorizeConfigReferences(txctx, s.db, in); err != nil {
+			return err
+		}
+
+		for _, environment := range envs {
+			if err := tenancy.RegisterEnvironment(txctx, s.db, projectID, environment.Name); err != nil {
+				return err
+			}
+		}
 		_, writeErr := q.ExecContext(txctx,
 			`UPDATE pipeline_settings
 		 SET build_json = ?, environments_json = ?, steps_json = ?, updated_at = ?
@@ -337,6 +367,11 @@ func LoadExistingSettings(ctx context.Context, db *sql.DB, projectID string) (*S
 }
 
 func (s *settingsService) loadStored(ctx context.Context, projectID string) (*Settings, error) {
+	predicate, authErr := tenancy.QueryPredicate(ctx, s.db, "pipeline.read", "pc.project_id")
+	if authErr != nil {
+		return nil, authErr
+	}
+
 	var (
 		buildJSON  string
 		envsJSON   string
@@ -345,7 +380,7 @@ func (s *settingsService) loadStored(ctx context.Context, projectID string) (*Se
 	)
 	err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT build_json, environments_json, steps_json, updated_at
-		 FROM pipeline_settings WHERE project_id = ?`, projectID,
+		 FROM pipeline_settings pc WHERE pc.project_id = ? AND `+predicate.SQL, append([]any{projectID}, predicate.Args...)...,
 	).Scan(&buildJSON, &envsJSON, &stepsJSON, &updatedStr)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -394,6 +429,12 @@ func DefaultSettings() *Settings {
 // createDefault 惰性生成默认构建/部署配置(模型 dockerfile / 产物 image / 空变量 / 空环境)。
 // 项目不存在 → ErrProjectNotFound。并发首访 ON CONFLICT DO NOTHING + 回读权威行。
 func (s *settingsService) createDefault(ctx context.Context, projectID string) (*Settings, error) {
+	if err := tenancy.Check(ctx, s.db, "pipeline.edit", "project", projectID); err != nil {
+		if errors.Is(err, tenancy.ErrForbidden) {
+			return DefaultSettings(), nil
+		}
+		return nil, err
+	}
 	defaultBuild := DefaultSettings().Build
 	buildJSON, err := json.Marshal(toStoredBuild(defaultBuild))
 	if err != nil {
@@ -402,7 +443,14 @@ func (s *settingsService) createDefault(ctx context.Context, projectID string) (
 
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
-	err = configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+	err = configstate.MutateProject(configstate.WithWriteAdmission(ctx, tenancy.LockAuthorization), s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+		if err := tenancy.LockAuthorization(txctx, s.db); err != nil {
+			return err
+		}
+		if err := tenancy.Check(txctx, s.db, "pipeline.edit", "project", projectID); err != nil {
+			return err
+		}
+
 		_, writeErr := q.ExecContext(txctx,
 			store.InsertSQL(store.DialectOf(s.db), "pipeline_settings",
 				[]string{"project_id", "build_json", "environments_json", "created_at", "updated_at"}, []string{"?", "?", "'[]'", "?", "?"},

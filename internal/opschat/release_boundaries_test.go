@@ -56,8 +56,7 @@ func TestReleaseQuotaReservesDiscoveryContinuationAndAnalysisFailure(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	snap := waitRun(t, s, c.ID, r.ID, Succeeded)
-	waitJobs(t, s)
+	snap := waitSettledRun(t, s, c.ID, r.ID, Succeeded)
 	var actual, ledger int
 	if err := db.QueryRow("SELECT COUNT(*) FROM ops_chat_entries WHERE session_id=? AND visible=1", c.ID).Scan(&actual); err != nil {
 		t.Fatal(err)

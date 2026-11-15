@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -114,13 +115,18 @@ func TestMCPMountedInMainRouterKeepsAdminAuthenticationSeparate(t *testing.T) {
 	}
 }
 
-func (f *mcpFixture) rpc(token, method string, params any) *httptest.ResponseRecorder {
+func mcpRPCRequest(ctx context.Context, token, method string, params any) *http.Request {
 	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
-	r := httptest.NewRequest(http.MethodPost, "http://localhost/mcp", strings.NewReader(string(body)))
+	r := httptest.NewRequestWithContext(ctx, http.MethodPost, "http://localhost/mcp", strings.NewReader(string(body)))
 	r.Header.Set("Authorization", "Bearer "+token)
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Accept", "application/json, text/event-stream")
 	r.Header.Set("MCP-Protocol-Version", "2025-06-18")
+	return r
+}
+
+func (f *mcpFixture) rpc(token, method string, params any) *httptest.ResponseRecorder {
+	r := mcpRPCRequest(context.Background(), token, method, params)
 	w := httptest.NewRecorder()
 	f.handler.ServeHTTP(w, r)
 	return w
@@ -713,55 +719,75 @@ func TestMCPTokenAdminContractCookieCSRFAndAudit(t *testing.T) {
 	}
 }
 
-type mcpBlockingRuns struct {
-	run.Service
-	started   chan struct{}
-	release   chan struct{}
-	projectID string
+type mcpAdmissionBody struct {
+	io.ReadCloser
+	context  context.Context
+	started  chan<- struct{}
+	released <-chan struct{}
+	once     sync.Once
 }
 
-func (b mcpBlockingRuns) Get(ctx context.Context, id string) (*run.Run, error) {
-	b.started <- struct{}{}
+func (b *mcpAdmissionBody) Read(p []byte) (int, error) {
+	b.once.Do(func() { b.started <- struct{}{} })
 	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-b.release:
-		return &run.Run{ID: id, ProjectID: b.projectID, Status: run.StatusSuccess}, nil
+	case <-b.released:
+		return b.ReadCloser.Read(p)
+	case <-b.context.Done():
+		return 0, b.context.Err()
 	}
 }
 
 func TestMCPConcurrentRequestCap(t *testing.T) {
 	f := newMCPFixture(t)
-	blocking := mcpBlockingRuns{Service: f.runs, started: make(chan struct{}, 32), release: make(chan struct{}), projectID: f.project}
-	h, err := NewMCPHandler(f.tokens, pmcp.Dependencies{Runs: blocking}, MCPHTTPOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.handler = h
-	var wg sync.WaitGroup
-	for i := 0; i < 32; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			f.rpc(f.readonly, "tools/call", map[string]any{"name": "run_get", "arguments": map[string]string{"runId": "fixture"}})
-		}()
-	}
-	timer := time.NewTimer(3 * time.Second)
-	defer timer.Stop()
-	for i := 0; i < 32; i++ {
+	const limit = 32
+	ctx, cancel := context.WithTimeout(t.Context(), 25*time.Second)
+	var workers sync.WaitGroup
+	defer workers.Wait()
+	defer cancel()
+	admitted := make(chan struct{}, limit)
+	released := make(chan struct{})
+	completed := make(chan int, limit)
+
+	// The handler owns a slot when it starts reading the body. Block there so
+	// DB authentication and SDK tool setup do not serve as a timing proxy for
+	// saturation. All admitted requests coexist until the barrier is released.
+	for i := 0; i < limit; i++ {
+		req := mcpRPCRequest(ctx, f.readonly, "tools/list", map[string]any{})
+		req.Body = &mcpAdmissionBody{ReadCloser: req.Body, context: ctx, started: admitted, released: released}
+		workers.Go(func() {
+			w := httptest.NewRecorder()
+			f.handler.ServeHTTP(w, req)
+			completed <- w.Code
+		})
 		select {
-		case <-blocking.started:
-		case <-timer.C:
-			close(blocking.release)
-			wg.Wait()
-			t.Fatal("requests did not start")
+		case <-admitted:
+		case code := <-completed:
+			t.Fatalf("request finished before cap was full: admitted=%d status=%d", i, code)
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for slot: admitted=%d/%d", i, limit)
 		}
 	}
-	w := f.rpc(f.readonly, "tools/list", map[string]any{})
-	close(blocking.release)
-	wg.Wait()
-	if w.Code != http.StatusTooManyRequests {
-		t.Fatal("unbounded active requests", w.Code, w.Body.String())
+
+	overflow := httptest.NewRecorder()
+	f.handler.ServeHTTP(overflow, mcpRPCRequest(ctx, f.readonly, "tools/list", map[string]any{}))
+	if overflow.Code != http.StatusTooManyRequests || !strings.Contains(overflow.Body.String(), "mcp_busy") {
+		t.Fatalf("request beyond the cap: status=%d", overflow.Code)
+	}
+	close(released)
+	for i := 0; i < limit; i++ {
+		select {
+		case code := <-completed:
+			if code != http.StatusOK {
+				t.Fatalf("accepted request finished with status=%d", code)
+			}
+		case <-ctx.Done():
+			t.Fatalf("timed out draining admitted requests: completed=%d/%d", i, limit)
+		}
+	}
+	probe := httptest.NewRecorder()
+	f.handler.ServeHTTP(probe, mcpRPCRequest(ctx, f.readonly, "tools/list", map[string]any{}))
+	if probe.Code != http.StatusOK {
+		t.Fatalf("slot was not released after requests completed: status=%d", probe.Code)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/huangchengsir/pipewright/internal/configstate"
 	secretmask "github.com/huangchengsir/pipewright/internal/mask"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 var (
@@ -23,6 +24,10 @@ type GitAuthAcquirer interface {
 // AcquireGitAuth retains old test adapters while requiring managed production
 // credentials to hold a generation reference until the actual Git call ends.
 func AcquireGitAuth(ctx context.Context, v Vault, id string) (GitAuth, func(), error) {
+	if err := AuthorizeUse(ctx, v, id); err != nil {
+		return GitAuth{}, func() {}, err
+	}
+	v = WithContext(ctx, v)
 	if err := ValidateGenericReference(id); err != nil {
 		return GitAuth{}, func() {}, err
 	}
@@ -50,5 +55,5 @@ func IsManagedGitError(err error) bool {
 	return errors.Is(err, ErrGitLeaseRequired) || errors.Is(err, ErrOAuthReauthorize) ||
 		errors.Is(err, ErrOAuthUncertain) || errors.Is(err, ErrOAuthBusy) ||
 		errors.Is(err, ErrOAuthIdentity) || errors.Is(err, ErrOAuthDetachRequired) ||
-		errors.Is(err, configstate.ErrMaintenance) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+		errors.Is(err, tenancy.ErrForbidden) || errors.Is(err, configstate.ErrMaintenance) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

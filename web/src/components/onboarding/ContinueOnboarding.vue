@@ -1,17 +1,20 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ArrowRight } from '@vicons/tabler'
-import { resetOnboarding, useOnboardingPreferences } from '../../composables/useOnboarding'
+import { resetOnboarding, useOnboardingPreferences, canUseInstanceOnboarding } from '../../composables/useOnboarding'
 withDefaults(defineProps<{ currentPath?: string }>(), { currentPath: '' })
 const { preferences, continuing } = useOnboardingPreferences()
 const { t } = useI18n()
-function resumeOnboarding(): void {
+const allowed = computed(canUseInstanceOnboarding)
+function resumeOnboarding(event: Event): void {
+  if (!allowed.value) { event.preventDefault(); event.stopImmediatePropagation(); return }
   if (preferences.dismissed) resetOnboarding()
 }
 </script>
 
 <template>
-  <router-link v-if="!preferences.completed && (continuing || preferences.dismissed) && currentPath !== '/onboarding'" to="/onboarding" class="continue-onboarding"
+  <router-link v-if="allowed && !preferences.completed && (continuing || preferences.dismissed) && currentPath !== '/onboarding'" to="/onboarding" class="continue-onboarding"
     @click.capture="resumeOnboarding"
     data-testid="onboarding-continue" :title="t('onboarding.continue')">
     <span>{{ t('onboarding.continue') }}</span><ArrowRight aria-hidden="true" />

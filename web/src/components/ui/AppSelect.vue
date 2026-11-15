@@ -43,6 +43,7 @@ const emit = defineEmits<{
 
 const root = ref<HTMLElement | null>(null)
 const menu = ref<HTMLElement | null>(null)
+const portalTarget = ref<string | HTMLElement>("body")
 const open = ref(false)
 const activeIndex = ref(-1)
 const menuStyle = ref<Record<string, string>>({})
@@ -118,6 +119,8 @@ function toggle(): void {
     close()
     return
   }
+  // Stay in the native modal top layer while escaping its scrolling form.
+  portalTarget.value = root.value?.closest("dialog") ?? "body"
   positionMenu()
   open.value = true
   const selectedIndex = visibleOptions.value.findIndex(option => option.value === props.modelValue && !option.disabled)
@@ -219,7 +222,7 @@ onBeforeUnmount(() => {
         <path d="m6 9 6 6 6-6" />
       </svg>
     </button>
-    <Teleport to="body" :disabled="!portal">
+    <Teleport :to="portalTarget" :disabled="!portal">
       <div
         v-if="open"
         :id="inputId ? `${inputId}-options` : undefined"

@@ -44,7 +44,7 @@ func (s *diagStubAI) Generate(context.Context, ai.GenerateInput) (*ai.Proposal, 
 }
 func (s *diagStubAI) Diagnose(_ context.Context, in ai.DiagnoseInput) (*ai.Diagnosis, error) {
 	s.gotLog = in.FailureLog
-	if in.Masker != nil && in.Masker.Scrub(in.FailureLog) != in.FailureLog {
+	if in.Masker != nil && in.Masker.Scrub(run.StubFailureSecret) != run.StubFailureSecret {
 		s.gotMaskLog = true // Masker 确实会改写日志(已登记 secret)
 	}
 	if s.diag != nil {
@@ -184,9 +184,9 @@ func TestDiagnoseReadyEndpoint(t *testing.T) {
 		t.Fatalf("evidence 命中行/高亮异常: %+v", d.Evidence[0])
 	}
 
-	// stub 收到的失败日志含假 secret(脱敏前),且 Masker 会脱敏它(出网前)。
-	if !strings.Contains(stub.gotLog, run.StubFailureSecret) {
-		t.Fatalf("Diagnose 应收到含假 secret 的原始日志: %q", stub.gotLog)
+	// The model adapter receives pre-scrubbed logs and a fully registered masker.
+	if strings.Contains(stub.gotLog, run.StubFailureSecret) || !strings.Contains(stub.gotLog, mask.Placeholder) {
+		t.Fatalf("Diagnose must receive scrubbed logs: %q", stub.gotLog)
 	}
 	if !stub.gotMaskLog {
 		t.Fatalf("Diagnose 入参 Masker 应已登记假 secret(出网前脱敏)")

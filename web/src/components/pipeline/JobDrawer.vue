@@ -5,7 +5,7 @@ import { localizeName } from "../../lib/pipelineLabels";
 import type { PipelineJob, PipelineStage } from "../../api/pipeline";
 import type { Credential } from "../../api/credentials";
 import type { Server } from "../../api/servers";
-import type { NotificationChannel } from "../../api/notifications";
+import type { NotificationChannelOption } from "../../api/notifications";
 import type { Project } from "../../api/projects";
 import {
   getJobTypeSpec,
@@ -22,6 +22,9 @@ import {
   applyPromotedValues,
   type PromotedParam,
 } from "./studioCompile";
+import PermissionGate from '../PermissionGate.vue';
+import {usePermission} from '../../composables/usePermission';
+import {useIdentityRequestScope} from '../../composables/useAuthorizedRequestScope';
 import { createCustomNode } from "../../api/customNodes";
 import JobTypeIcon from "./JobTypeIcon.vue";
 import StepBuilder from "./StepBuilder.vue";
@@ -35,11 +38,12 @@ import { imageSourceChoices, resolveImageSource } from "./imageProvenance";
 
 const props = defineProps<{
   job: PipelineJob;
+  readOnly?: boolean;
   stage: PipelineStage;
   stages?: PipelineStage[];
   credentials?: Credential[];
   servers?: Server[];
-  channels?: NotificationChannel[];
+  channels?: NotificationChannelOption[];
   projectName?: string;
   project?: Project;
   environmentAutoPushPossible?: boolean;
@@ -546,8 +550,20 @@ const saveDesc = ref("");
 const saving = ref(false);
 const saveError = ref("");
 const saveOk = ref(false);
+const saveGeneration = ref(0);
+
+function resetSavePanel(): void {
+  saveGeneration.value++;
+  savePanelOpen.value = false;
+  saveName.value = "";
+  saveDesc.value = "";
+  saveError.value = "";
+  saveOk.value = false;
+}
 
 function openSavePanel(): void {
+  if (savePanelOpen.value || props.readOnly || !customCreate.allowed.value || !scope.active()) return;
+  saveGeneration.value++;
   saveName.value = localName.value.trim();
   saveDesc.value = "";
   saveError.value = "";
@@ -555,30 +571,39 @@ function openSavePanel(): void {
   savePanelOpen.value = true;
 }
 
-function cancelSave(): void {
-  savePanelOpen.value = false;
-  saveError.value = "";
+function isCurrentSaveControl(event: Event): boolean {
+  return (event.currentTarget as HTMLElement | null)?.dataset.saveGeneration === String(saveGeneration.value);
 }
 
-async function confirmSave(): Promise<void> {
+function cancelSave(event: MouseEvent): void {
+  if (savePanelOpen.value && !saving.value && isCurrentSaveControl(event)) resetSavePanel();
+}
+
+async function confirmSave(event: Event): Promise<void> {
+  if (!isCurrentSaveControl(event)) return;
+  if (!savePanelOpen.value || props.readOnly || saving.value || !customCreate.allowed.value || !scope.active()) return;
   const name = saveName.value.trim();
   if (!name) {
     saveError.value = t("pipelineJob.saveErrEmptyName");
     return;
   }
+  const ticket = saveGeneration.value;
+  const current = () => ticket === saveGeneration.value && customCreate.allowed.value && scope.active();
   saving.value = true;
   saveError.value = "";
   try {
-    await createCustomNode({
+    await scope.run(()=>createCustomNode({
       name,
       description: saveDesc.value.trim(),
       nodeType: localType.value.trim() || props.job.type,
       summary: localSummary.value,
       config: currentConfig(),
-    });
+    },scope.requestOptions));
+    if (!current()) return;
     saveOk.value = true;
     savePanelOpen.value = false;
   } catch (err) {
+    if (!current()) return;
     saveError.value =
       err instanceof Error && err.message
         ? err.message
@@ -587,6 +612,16 @@ async function confirmSave(): Promise<void> {
     saving.value = false;
   }
 }
+const customCreate = usePermission({ action: "custom_node.create", resourceId: "", create: true });
+const scope = useIdentityRequestScope(() => {
+  resetSavePanel();
+  commandEditorOpen.value = false;
+});
+watch(
+  [() => props.job.id, () => props.job.type, () => props.stage.id, () => props.readOnly, customCreate.allowed],
+  resetSavePanel,
+  { flush: "sync" },
+);
 </script>
 
 <template>
@@ -632,6 +667,7 @@ async function confirmSave(): Promise<void> {
       </button>
     </div>
 
+    <fieldset class="drawer-fields" :disabled="readOnly">
     <!-- Basic info section -->
     <div class="drawer-section">
       <div class="drawer-section-label">{{ t("pipelineJob.basicInfo") }}</div>
@@ -1075,6 +1111,7 @@ async function confirmSave(): Promise<void> {
       </div>
     </div>
 
+    <PermissionGate :query="{action:'custom_node.create',resourceId:'',create:true}">
     <!-- Save as custom node (复用库 Tier 2) -->
     <div class="drawer-section drawer-reuse">
       <div v-if="!savePanelOpen" class="reuse-row">
@@ -1111,6 +1148,7 @@ async function confirmSave(): Promise<void> {
           type="text"
           :placeholder="t('pipelineJob.saveNamePlaceholder')"
           :aria-label="t('pipelineJob.saveNameAria')"
+          :data-save-generation="saveGeneration"
           @keydown.enter.prevent="confirmSave"
         />
         <input
@@ -1122,18 +1160,20 @@ async function confirmSave(): Promise<void> {
         />
         <p v-if="saveError" class="reuse-error" role="alert">{{ saveError }}</p>
         <div class="reuse-actions">
-          <button class="reuse-cancel" :disabled="saving" @click="cancelSave">
+          <button class="reuse-cancel" :disabled="saving" :data-save-generation="saveGeneration" @click="cancelSave">
             {{ t("pipelineJob.cancel") }}
           </button>
-          <button class="reuse-confirm" :disabled="saving" @click="confirmSave">
+          <button class="reuse-confirm" :disabled="saving" :data-save-generation="saveGeneration" @click="confirmSave">
             {{ saving ? t("pipelineJob.saving") : t("pipelineJob.save") }}
           </button>
         </div>
       </div>
     </div>
 
+    </PermissionGate>
+    </fieldset>
     <CommandEditorDialog
-      :open="commandEditorOpen"
+      :open="commandEditorOpen && !readOnly"
       :trigger="commandEditorTrigger"
       :title="t('pipelineJob.commandEditorTitle')"
       :value="fieldValue('commands')"
@@ -1149,6 +1189,7 @@ async function confirmSave(): Promise<void> {
 </template>
 
 <style scoped>
+.drawer-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
 .field-warning {
   margin: 6px 0 0;
   color: var(--color-amber);

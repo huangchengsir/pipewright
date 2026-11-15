@@ -13,6 +13,7 @@
  */
 import { computed, ref, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import {useAuthorizedRequestScope} from '../../composables/useAuthorizedRequestScope'
 import { importPipeline, type PipelineDTO } from '../../api/pipeline'
 import { HttpError } from '../../api/http'
 import { useProjectConfigCommit } from '../../composables/useProjectConfigRevisions'
@@ -31,7 +32,7 @@ let generation = 0
 let alive = true
 watch(() => props.projectId, () => { generation++ })
 onBeforeUnmount(() => { alive = false; generation++ })
-const current = (ticket: number, id: string) => alive && ticket === generation && id === props.projectId
+const current = (ticket: number, id: string) => scope.active() && alive && ticket === generation && id === props.projectId
 
 const emit = defineEmits<{
   (e: 'close'): void
@@ -96,7 +97,7 @@ async function runPreview(): Promise<PipelineDTO | null> {
   errorMsg.value = ''
   busy.value = 'preview'
   try {
-    const dto = await importPipeline(projectId, yamlText.value, false)
+    const dto = await scope.run(()=>importPipeline(projectId,yamlText.value,false,undefined,scope.requestOptions))
     if (!current(ticket, projectId)) return null
     previewedStageCount.value = dto.stages.length
     return dto
@@ -111,23 +112,23 @@ async function runPreview(): Promise<PipelineDTO | null> {
 
 /** 预览:解析校验,把结果回灌画布(不落库)。 */
 async function onPreview(): Promise<void> {
-  if (locked.value) return
+  if (!scope.active() || locked.value) return
   const projectId = props.projectId
   replacing.value = true
   try {
     const dto = await runPreview()
-    if (dto && projectId === props.projectId && (!props.beforeReplace || await props.beforeReplace()) && projectId === props.projectId) emit('preview', dto)
+    if (dto && projectId === props.projectId && (!props.beforeReplace || await props.beforeReplace()) && projectId === props.projectId && scope.active()) emit('preview', dto)
   } finally { replacing.value = false }
 }
 
 /** 导入到画布:与预览同一动作语义,关闭弹窗,让用户在画布上确认后再保存草稿。 */
 async function onApplyToCanvas(): Promise<void> {
-  if (locked.value) return
+  if (!scope.active() || locked.value) return
   const projectId = props.projectId
   replacing.value = true
   try {
     const dto = await runPreview()
-    if (dto && projectId === props.projectId && (!props.beforeReplace || await props.beforeReplace()) && projectId === props.projectId) {
+    if (dto && projectId === props.projectId && (!props.beforeReplace || await props.beforeReplace()) && projectId === props.projectId && scope.active()) {
       emit('preview', dto)
       emit('close')
     }
@@ -137,7 +138,7 @@ async function onApplyToCanvas(): Promise<void> {
 /** 导入并保存:解析 + 持久化 + 重载。 */
 async function onImportAndSave(): Promise<void> {
   if (props.projectId !== initialProjectId) { errorMsg.value = t('mcpConfig.reloadRequired'); return }
-  if (locked.value) return
+  if (!scope.active() || locked.value) return
   const projectId = props.projectId
   const ticket = generation
   replacing.value = true
@@ -146,7 +147,7 @@ async function onImportAndSave(): Promise<void> {
     if (props.beforeReplace && !await props.beforeReplace()) return
     if (!current(ticket, projectId)) return
     busy.value = 'save'
-    const dto = initialRevision ? await importPipeline(projectId, yamlText.value, true, initialRevision) : await importPipeline(projectId, yamlText.value, true)
+    const dto = await scope.run(()=>importPipeline(projectId,yamlText.value,true,initialRevision,scope.requestOptions))
     if (!current(ticket, projectId)) return
     publishCommit(projectId, initialRevision, dto)
     emit('saved', dto)
@@ -166,10 +167,11 @@ function loadStarter(): void {
 function onBackdrop(e: MouseEvent): void {
   if (!locked.value && e.target === e.currentTarget) emit('close')
 }
+const scope=useAuthorizedRequestScope({action:'pipeline.edit',resourceId:props.projectId},()=>{generation++;yamlText.value='';errorMsg.value='';previewedStageCount.value=null;if(alive)emit('close')})
 </script>
 
 <template>
-  <div class="yi-backdrop" role="dialog" aria-modal="true" aria-labelledby="yi-title" @mousedown="onBackdrop">
+  <div v-if="scope.active()" class="yi-backdrop" role="dialog" aria-modal="true" aria-labelledby="yi-title" @mousedown="onBackdrop">
     <div class="yi-modal">
       <header class="yi-head">
         <div>

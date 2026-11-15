@@ -29,7 +29,7 @@ describe('configuration write preconditions', () => {
     const calls = vi.mocked(http[method]).mock.calls
     expect(calls).toHaveLength(1)
     expect(calls[0][0]).toBe(url)
-    expect(calls[0][2]).toEqual({ headers: { 'If-Match': 'cfg-7' } })
+    expect(new Headers(calls[0][2]?.headers).get('If-Match')).toBe('cfg-7')
     expect(http.get).not.toHaveBeenCalled()
   })
   it('retains header metadata when a parameters response is unwrapped into an array', async () => {
@@ -43,3 +43,10 @@ describe('configuration write preconditions', () => {
     expect(http.post).toHaveBeenCalledExactlyOnceWith('/api/projects/p/pipeline/import', { yaml: 'version: 1', save: false })
   })
 })
+
+it.each([false,true])('keeps fixed team, abort signal and If-Match with Headers input (cron=%s)',async cron=>{
+ const signal=new AbortController().signal;const headers=new Headers({'X-Pipewright-Team':'fixed','If-Match':'old'});
+ if(cron)await saveCron('p',{enabled:false,expression:'',branch:''},'cfg-7',{headers,signal});
+ else await saveConcurrency('p',{maxConcurrent:1},'cfg-7',{headers,signal});
+ const options=vi.mocked(http.put).mock.calls.at(-1)![2]!;expect(options.signal).toBe(signal);expect(options.throwOnUnauthorized).toBe(true);const actual=new Headers(options.headers);expect(actual.get('X-Pipewright-Team')).toBe('fixed');expect(actual.get('If-Match')).toBe('cfg-7');expect(headers.get('If-Match')).toBe('old');
+});

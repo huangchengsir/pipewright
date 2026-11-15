@@ -3,6 +3,7 @@ package opschat
 import (
 	"context"
 	"database/sql"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"time"
 	"unicode/utf8"
 )
@@ -58,7 +59,13 @@ func (p *replySink) finish(text, status string, allowed bool) error {
 }
 func (p *replySink) flush(status string, allowed bool) error {
 	s := p.service
-	if err := s.registerSecrets(); err != nil {
+	if err := s.authorizeSession(p.ctx, s.db, p.id, "opschat.submit"); err != nil {
+		return err
+	}
+	if err := tenancy.VerifyExecution(p.ctx); err != nil {
+		return err
+	}
+	if err := s.registerSecrets(p.ctx); err != nil {
 		return err
 	}
 	text := s.scrub(p.text, p.limit)

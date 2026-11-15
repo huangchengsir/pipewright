@@ -9,7 +9,11 @@
  *
  * Templates carry no plaintext secret (credentials remain vault references in 2-4 settings).
  */
-import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onBeforeUnmount, watch } from 'vue'
+import PermissionGate from '../PermissionGate.vue'
+import {usePermissions} from '../../composables/usePermission'
+import {useAuthorizedRequestScope} from '../../composables/useAuthorizedRequestScope'
+import type {PermissionQuery} from '../../api/access'
 import { useI18n } from 'vue-i18n'
 import {
   listTemplates,
@@ -35,15 +39,23 @@ const initialProjectId = props.projectId
 const publishCommit = useProjectConfigCommit()
 let generation = 0
 let alive = true
+const open = ref(true)
 watch(() => props.projectId, () => { generation++ })
 onBeforeUnmount(() => { alive = false; generation++ })
-const current = (ticket: number, id: string) => alive && ticket === generation && id === props.projectId
+const current = (ticket: number, id: string) => open.value && scope.active() && alive && ticket === generation && id === props.projectId
 
 const emit = defineEmits<{
   (e: 'close'): void
   /** A successful apply: parent reloads pipeline + settings. */
   (e: 'applied', dto: PipelineDTO): void
 }>()
+
+function close() {
+  if (!open.value) return
+  open.value = false
+  generation++
+  emit('close')
+}
 
 type Mode = 'apply' | 'save'
 const mode = ref<Mode>('apply')
@@ -56,12 +68,14 @@ const applying = ref(false)
 const errorMsg = ref('')
 
 async function loadTemplates(): Promise<void> {
+  if (!open.value || !scope.active()) return
   loading.value = true
   errorMsg.value = ''
   try {
-    templates.value = await listTemplates()
+    templates.value = await scope.run(()=>listTemplates(scope.requestOptions))
     if (templates.value.length > 0) selectedId.value = templates.value[0].id
   } catch (err: unknown) {
+    if (!scope.active()) return
     errorMsg.value = err instanceof HttpError ? err.apiError?.message ?? t('pipelinePanels.tplLoadFailed') : t('pipelinePanels.tplLoadFailed')
   } finally {
     loading.value = false
@@ -69,6 +83,7 @@ async function loadTemplates(): Promise<void> {
 }
 
 async function doApply(): Promise<void> {
+  if (!open.value || !scope.active() || !applyPermission.allowed.value) return
   if (props.projectId !== initialProjectId) { errorMsg.value = t('mcpConfig.reloadRequired'); return }
   if (applying.value) return
   if (!selectedId.value) {
@@ -82,13 +97,14 @@ async function doApply(): Promise<void> {
   const ticket = generation
   try {
     if (!(props.beforeReplace ? await props.beforeReplace() : window.confirm(t('pipelinePanels.tplConfirmApply')))) return
-    if (!current(ticket, projectId)) return
-    const dto = initialRevision ? await applyTemplate(projectId, templateId, initialRevision) : await applyTemplate(projectId, templateId)
+    if (!current(ticket, projectId) || !applyPermission.allowed.value) return
+    const dto = await scope.run(()=>applyTemplate(projectId,templateId,initialRevision,scope.requestOptions))
     if (!current(ticket, projectId)) return
     publishCommit(projectId, initialRevision, dto)
     emit('applied', dto)
-    emit('close')
+    close()
   } catch (err: unknown) {
+    if (!scope.active()) return
     if (!current(ticket, projectId)) return
     errorMsg.value = err instanceof HttpError ? err.apiError?.message ?? t('pipelinePanels.tplApplyFailed') : t('pipelinePanels.tplApplyFailed')
   } finally {
@@ -102,16 +118,22 @@ const saveDesc = ref('')
 const saving = ref(false)
 const saveDone = ref(false)
 
-async function doSave(): Promise<void> {
+async function doSave(event: MouseEvent): Promise<void> {
+  if ((event.currentTarget as HTMLButtonElement | null)?.dataset.saveGeneration !== String(saveGeneration.value)) return
+  if (!open.value || mode.value !== 'save' || !scope.active() || !savePermission.allowed.value || saving.value) return
+  const projectId = props.projectId
+  if (projectId !== initialProjectId) { errorMsg.value = t('mcpConfig.reloadRequired'); return }
   const name = saveName.value.trim()
   if (!name) {
     errorMsg.value = t('pipelinePanels.tplNameRequired')
     return
   }
+  const ticket = generation, permissionTicket = saveGeneration.value
+  const currentSave = () => current(ticket, projectId) && permissionTicket === saveGeneration.value && savePermission.allowed.value
   saving.value = true
   errorMsg.value = ''
   try {
-    await createTemplate({
+    await scope.run(()=>createTemplate({
       name,
       description: saveDesc.value.trim(),
       stages: props.stages.map((s) => ({
@@ -130,11 +152,13 @@ async function doSave(): Promise<void> {
           config: j.config,
         })),
       })),
-    })
+    },scope.requestOptions))
+    if (!currentSave()) return
     saveDone.value = true
     // Refresh the apply list so the new template is pickable immediately.
     await loadTemplates()
   } catch (err: unknown) {
+    if (!currentSave()) return
     errorMsg.value = err instanceof HttpError ? err.apiError?.message ?? t('pipelinePanels.tplSaveFailed') : t('pipelinePanels.tplSaveFailed')
   } finally {
     saving.value = false
@@ -143,20 +167,43 @@ async function doSave(): Promise<void> {
 
 function switchMode(m: Mode): void {
   if (applying.value || saving.value) return
+  if (mode.value !== m) saveGeneration.value++
   mode.value = m
   errorMsg.value = ''
   saveDone.value = false
 }
 
-onMounted(loadTemplates)
+const applyQueries=computed<PermissionQuery[]>(()=>[{action:'pipeline.edit',resourceId:props.projectId},{action:'template.read',resourceId:selectedId.value}])
+const saveQueries=computed<PermissionQuery[]>(()=>[{action:'pipeline.read',resourceId:props.projectId},{action:'template.create',resourceId:'',create:true}])
+const applyPermission = usePermissions(applyQueries)
+const savePermission = usePermissions(saveQueries)
+const saveGeneration = ref(0)
+watch(savePermission.allowed, allowed => {
+  if (allowed) return
+  saveGeneration.value++
+  saveName.value = ''
+  saveDesc.value = ''
+  saveDone.value = false
+  if (mode.value === 'save') errorMsg.value = ''
+}, { flush: 'sync' })
+const scope=useAuthorizedRequestScope({action:'pipeline.read',resourceId:props.projectId},()=>{
+  templates.value = []
+  selectedId.value = ''
+  saveName.value = ''
+  saveDesc.value = ''
+  errorMsg.value = ''
+  saveDone.value = false
+  if (alive) close()
+})
+watch(scope.active, active => { if (active) void loadTemplates() }, {immediate:true})
 </script>
 
 <template>
-  <div class="scrim" @click.self="!applying && !saving && emit('close')">
+  <div v-if="open && scope.active()" class="scrim" @click.self="!applying && !saving && close()">
     <div class="modal" role="dialog" aria-modal="true" :aria-label="t('pipelinePanels.tplAria')">
       <header class="head">
         <h2 class="title">{{ t('pipelinePanels.tplTitle') }}</h2>
-        <button class="close" :disabled="applying || saving" :aria-label="t('pipelinePanels.tplCloseAria')" @click="emit('close')">✕</button>
+        <button class="close" :disabled="applying || saving" :aria-label="t('pipelinePanels.tplCloseAria')" @click="close">✕</button>
       </header>
 
       <div class="seg" role="tablist">
@@ -191,7 +238,7 @@ onMounted(loadTemplates)
           {{ t('pipelinePanels.tplNoTemplates') }}
         </p>
         <ul v-else class="tpl-list" role="list">
-          <li v-for="tpl in templates" :key="tpl.id">
+          <PermissionGate v-for="tpl in templates" :key="tpl.id" :query="{action:'template.read',resourceId:tpl.id}"><li>
             <label class="tpl-opt" :class="{ sel: selectedId === tpl.id }">
               <input
                 type="radio"
@@ -206,17 +253,17 @@ onMounted(loadTemplates)
                 <span class="tpl-meta">{{ t('pipelinePanels.tplStageCount', { count: tpl.stageCount, desc: tpl.description || t('pipelinePanels.tplNoDesc') }) }}</span>
               </span>
             </label>
-          </li>
+          </li></PermissionGate>
         </ul>
         <footer class="foot">
-          <button class="btn-secondary" :disabled="applying" @click="emit('close')">{{ t('pipelinePanels.tplCancel') }}</button>
-          <button
+          <button class="btn-secondary" :disabled="applying" @click="close">{{ t('pipelinePanels.tplCancel') }}</button>
+          <PermissionGate :query="applyQueries"><button
             class="btn-primary"
             :disabled="applying || templates.length === 0"
             @click="doApply"
           >
             {{ applying ? t('pipelinePanels.tplApplying') : t('pipelinePanels.tplApplyToPipeline') }}
-          </button>
+          </button></PermissionGate>
         </footer>
       </div>
 
@@ -247,10 +294,10 @@ onMounted(loadTemplates)
           {{ t('pipelinePanels.tplSnapshotHint', { count: props.stages.length }) }}
         </p>
         <footer class="foot">
-          <button class="btn-secondary" @click="emit('close')">{{ t('pipelinePanels.tplClose') }}</button>
-          <button class="btn-primary" :disabled="saving" @click="doSave">
+          <button class="btn-secondary" @click="close">{{ t('pipelinePanels.tplClose') }}</button>
+          <PermissionGate :query="saveQueries"><button class="btn-primary" :disabled="saving" :data-save-generation="saveGeneration" @click="doSave">
             {{ saving ? t('pipelinePanels.tplSaving') : t('pipelinePanels.tplSaveAsTemplate') }}
-          </button>
+          </button></PermissionGate>
         </footer>
       </div>
     </div>

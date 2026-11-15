@@ -227,7 +227,7 @@ func (m *Manager) Create(ctx context.Context, owner, scope, requestID, descripti
 		m.mu.Unlock()
 		return "", err
 	}
-	sessionCtx, cancel := context.WithCancel(context.Background())
+	sessionCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	now := time.Now()
 	e := &entry{owner: owner, scope: scope, key: key, id: hex.EncodeToString(raw), digest: digest, ready: make(chan struct{}), notify: make(chan struct{}), closeDone: make(chan struct{}), ctx: sessionCtx, cancel: cancel, last: now, progress: now}
 	m.entries[e.id] = e

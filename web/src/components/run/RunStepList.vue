@@ -8,11 +8,15 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { RunStep, StepStatus } from '../../api/runs'
 import type { RetryContext } from '../../api/runRetry'
+import {useSessionStore} from '../../stores/session'
+import {usePermission} from '../../composables/usePermission'
+import {useIdentityRequestScope} from '../../composables/useAuthorizedRequestScope'
 import AppButton from '../ui/AppButton.vue'
 
 const { t } = useI18n()
 
 const props = defineProps<{
+  runId?: string;
   steps: RunStep[]
   /** 当前选中的步骤序号(用于高亮 + 过滤日志);null = 全部。 */
   selected?: number | null
@@ -20,6 +24,13 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{ select: [ordinal: number | null]; retry: [nodeKeys: string[]] }>()
+const retrySession=useSessionStore()
+const retryRunId=computed(()=>props.runId ?? props.recovery?.attemptRunId ?? '')
+const retryPermission=usePermission(()=>({action:'run.retry',resourceId:retryRunId.value}))
+const retryScope=useIdentityRequestScope(()=>{})
+const mayRetry=computed(()=>retryScope.active() && (!retrySession.user?.multiTenant || !!retryRunId.value) && retryPermission.allowed.value)
+function requestRetry(nodeKeys:string[]) { if(retryScope.active() && mayRetry.value)emit('retry',nodeKeys) }
+
 function retryNode(stepId: string) { return props.recovery?.nodes.find(n => n.attemptStepId === stepId) }
 function isReused(stepId: string) { return retryNode(stepId)?.decision.action === 'reuse' }
 
@@ -107,11 +118,11 @@ function formatDuration(ms: number | null): string {
               <svg v-if="n.step.status === 'success'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
                 <path d="M20 6 9 17l-5-5"/>
               </svg>
-              <span v-else-if="n.step.status === 'running'" class="spinner spinner--amber" aria-hidden="true" />
-              <svg v-else-if="n.step.status === 'failed'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
+              <span v-else-if="mayRetry && n.step.status === 'running'" class="spinner spinner--amber" aria-hidden="true" />
+              <svg v-else-if="mayRetry && n.step.status === 'failed'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
                 <path d="m18 6-12 12M6 6l12 12"/>
               </svg>
-              <svg v-else-if="n.step.status === 'skipped'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <svg v-else-if="mayRetry && n.step.status === 'skipped'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                 <path d="M13 17l5-5-5-5M6 17l5-5-5-5"/>
               </svg>
               <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -124,8 +135,8 @@ function formatDuration(ms: number | null): string {
             </div>
           </button>
           <span v-if="isReused(n.step.id)" class="step-origin">{{ t('runRetry.reusedShort') }}</span>
-          <AppButton v-if="['failed', 'outcome_unknown'].includes(retryNode(n.step.id)?.decision.status ?? '')" class="step-retry" :title="t('runRetry.retryNode')" @click="emit('retry', [retryNode(n.step.id)!.node.key])">{{ t('runRetry.retryShort') }}</AppButton>
-          <AppButton v-else-if="n.step.status === 'failed' && !recovery" class="step-retry" :title="t('runRetry.viewRecovery')" @click="emit('retry', [])">{{ t('runRetry.retryShort') }}</AppButton>
+          <AppButton v-if="mayRetry && ['failed', 'outcome_unknown'].includes(retryNode(n.step.id)?.decision.status ?? '')" class="step-retry" :title="t('runRetry.retryNode')" @click="requestRetry([retryNode(n.step.id)!.node.key])">{{ t('runRetry.retryShort') }}</AppButton>
+          <AppButton v-else-if="mayRetry && n.step.status === 'failed' && !recovery" class="step-retry" :title="t('runRetry.viewRecovery')" @click="requestRetry([])">{{ t('runRetry.retryShort') }}</AppButton>
         </li>
       </template>
     </ul>

@@ -11,7 +11,7 @@
  * does not change them.
  */
 
-import { http } from './http'
+import { http,type HttpOptions } from './http'
 
 /** A single point in the accuracy trend (most-recent-N bucketing, simple impl). */
 export interface DiagnosisTrendBucket {
@@ -37,6 +37,6 @@ export interface DiagnosisStats {
   recentCorrections: DiagnosisCorrection[]
 }
 
-export function getDiagnosisStats(): Promise<DiagnosisStats> {
-  return http.get<DiagnosisStats>('/api/settings/diagnosis-stats')
+export function getDiagnosisStats(options:HttpOptions={}): Promise<DiagnosisStats> {
+  return http.get<DiagnosisStats>('/api/settings/diagnosis-stats',{...options,throwOnUnauthorized:true})
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { DeployRunInput } from '../../api/runs'
 import type {
@@ -8,6 +8,9 @@ import type {
   ReleaseGuardBinding,
 } from '../../api/releaseGuard'
 import AppButton from '../ui/AppButton.vue'
+import PermissionGate from '../PermissionGate.vue'
+import { usePermission } from '../../composables/usePermission'
+import { useIdentityRequestScope } from '../../composables/useAuthorizedRequestScope'
 import ReleaseGuardPlan from './ReleaseGuardPlan.vue'
 
 const props = withDefaults(
@@ -26,8 +29,17 @@ const emit = defineEmits<{
   ]
 }>()
 const { t } = useI18n()
+const permissionQuery = computed(() => ({action:'guard.observe',resourceId:props.runId}))
+const permission = usePermission(permissionQuery)
+
 const enabled = ref(false)
-const open = ref(false)
+interface Review {
+  id: number
+  onPrepared: (plan: GuardPlan) => void
+  onClose: () => void
+}
+let reviewID = 0
+const review = shallowRef<Review | null>(null)
 const plan = ref<GuardPlan | null>(null)
 const acceptedSignature = ref('')
 const key = ref('')
@@ -56,9 +68,14 @@ const reviewedDuration = computed<GuardDuration>(() =>
     ? (plan.value!.durationSeconds as GuardDuration)
     : 600,
 )
+const scope = useIdentityRequestScope(() => {
+  enabled.value = false
+  invalidate()
+})
+const mayAttach = computed(() => scope.active() && permission.allowed.value)
 const ready = computed(
   () =>
-    enabled.value &&
+    mayAttach.value && enabled.value &&
     !!plan.value &&
     acceptedSignature.value === signature.value &&
     Date.parse(plan.value.expiresAt) > now.value,
@@ -71,21 +88,42 @@ function invalidate(): void {
   plan.value = null
   acceptedSignature.value = ''
   key.value = ''
-  open.value = false
+  review.value = null
 }
-function prepared(value: GuardPlan): void {
-  plan.value = value
-  acceptedSignature.value = signature.value
-  key.value = crypto.randomUUID()
-  changed.value = false
-  now.value = Date.now()
-  open.value = false
+function openReview(): void {
+  if (!mayAttach.value || props.disabled || !enabled.value || !validSelection.value) return
+  const version = signature.value
+  const epoch = props.resetKey
+  const candidate: Review = {
+    id: ++reviewID,
+    onPrepared(value) {
+      if (review.value !== candidate || !mayAttach.value || props.disabled || !enabled.value ||
+        signature.value !== version || props.resetKey !== epoch || value.mode !== 'attached') return
+      plan.value = value
+      acceptedSignature.value = version
+      key.value = crypto.randomUUID()
+      changed.value = false
+      now.value = Date.now()
+      review.value = null
+    },
+    onClose() {
+      if (review.value === candidate) review.value = null
+    },
+  }
+  review.value = candidate
 }
-watch(signature, invalidate)
-watch(() => props.resetKey, invalidate)
+watch(signature, invalidate, { flush: 'sync' })
+watch(() => props.resetKey, invalidate, { flush: 'sync' })
+watch(() => props.disabled, (disabled) => {
+  if (disabled) review.value = null
+}, { flush: 'sync' })
+watch(mayAttach, (allowed) => {
+  if (!allowed) enabled.value = false
+}, { flush: 'sync' })
 watch(enabled, (value) => {
+  if (value && !mayAttach.value) enabled.value = false
   if (!value) invalidate()
-})
+}, { flush: 'sync' })
 watch(
   [enabled, ready, plan, key],
   () =>
@@ -110,7 +148,7 @@ onBeforeUnmount(() => clearInterval(clock))
 <template>
   <section class="guard-attach">
     <label class="guard-attach__toggle"
-      ><input v-model="enabled" type="checkbox" :disabled="disabled" /><span>{{
+      ><input v-model="enabled" type="checkbox" :disabled="disabled || !mayAttach" /><span>{{
         t('releaseGuard.attached')
       }}</span></label
     >
@@ -125,19 +163,19 @@ onBeforeUnmount(() => clearInterval(clock))
       <p v-else class="guard-attach__warning">
         {{ t('releaseGuard.attachedReviewRequired') }}
       </p>
-      <AppButton :disabled="!validSelection || disabled" @click="open = true">{{
+      <PermissionGate :query="permissionQuery"><AppButton :disabled="disabled || !validSelection || !mayAttach" @click="openReview">{{
         t('releaseGuard.planTitle')
-      }}</AppButton></template
+      }}</AppButton></PermissionGate></template
     >
     <ReleaseGuardPlan
-      v-if="open"
-      :key="signature"
+      v-if="review"
+      :key="review.id"
       :project-id="projectId"
+      :run-id="runId"
       :attached-input="attachedInput"
       :initial-include-logs="plan?.includeLogs ?? false"
       :initial-duration-seconds="reviewedDuration"
-      @close="open = false"
-      @prepared="prepared"
+      v-bind="{ onClose: review.onClose, onPrepared: review.onPrepared }"
     />
   </section>
 </template>

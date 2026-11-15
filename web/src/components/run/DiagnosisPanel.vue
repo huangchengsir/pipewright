@@ -24,7 +24,12 @@
  *   - Hypothesis wording: "假说,非结论" — preserved from server response
  */
 
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
+import {useIdentityRequestScope} from '../../composables/useAuthorizedRequestScope'
+import PermissionGate from '../PermissionGate.vue'
+import { usePermission } from '../../composables/usePermission'
+import { usePermissionStore } from '../../stores/permissions'
+import { useSessionStore } from '../../stores/session'
 import { useI18n } from 'vue-i18n'
 import type { DiagnosisDTO, FeedbackVerdict } from '../../api/runs'
 
@@ -42,6 +47,12 @@ const emit = defineEmits<{
   diagnosed: [diagnosis: DiagnosisDTO]
 }>()
 
+const session=useSessionStore(),permissions=usePermissionStore()
+const diagnoseQuery=computed(()=>({action:'run.diagnose',resourceId:props.runId}))
+const {allowed:canDiagnose}=usePermission(diagnoseQuery)
+const {allowed:canRead}=usePermission(()=>({action:'run.read',resourceId:props.runId}))
+let generation=0
+
 // ─── Re-diagnose / initial diagnose state ────────────────────────────────────
 
 const diagnosing = ref(false)
@@ -51,20 +62,22 @@ const diagnoseError = ref('')
 const altCausesExpanded = ref(false)
 
 async function handleDiagnose(): Promise<void> {
-  if (diagnosing.value) return
+  if (!scope.active() || !canDiagnose.value || diagnosing.value) return
+  const current= generation
   diagnosing.value = true
   diagnoseError.value = ''
   try {
-    const result = await diagnoseRun(props.runId)
-    emit('diagnosed', result)
+    const result = await scope.run(()=>diagnoseRun(props.runId,scope.requestOptions))
+    if(scope.active()&&current===generation&&canDiagnose.value)emit('diagnosed', result)
   } catch (err) {
+    if(!scope.active()||current!==generation||!canDiagnose.value)return
     if (err instanceof HttpError) {
       diagnoseError.value = err.apiError?.message ?? t('run.diagnoseRequestFailed', { status: err.status })
     } else {
       diagnoseError.value = t('run.diagnoseRequestFailedRetry')
     }
   } finally {
-    diagnosing.value = false
+    if(current===generation)diagnosing.value = false
   }
 }
 
@@ -86,13 +99,14 @@ const feedbackError = ref('')
 const MAX_ROOT_CAUSE = 2000
 
 function openDownForm(): void {
-  if (feedbackState.value === 'submitting' || feedbackState.value === 'done') return
+  if (!scope.active() || !canDiagnose.value || feedbackState.value === 'submitting' || feedbackState.value === 'done') return
   feedbackError.value = ''
   feedbackState.value = feedbackState.value === 'down-open' ? 'idle' : 'down-open'
 }
 
 async function sendFeedback(verdict: FeedbackVerdict): Promise<void> {
-  if (feedbackState.value === 'submitting' || feedbackState.value === 'done') return
+  const current=generation
+  if (!scope.active() || !canDiagnose.value || feedbackState.value === 'submitting' || feedbackState.value === 'done') return
   feedbackError.value = ''
   feedbackState.value = 'submitting'
   try {
@@ -100,10 +114,12 @@ async function sendFeedback(verdict: FeedbackVerdict): Promise<void> {
       verdict === 'down' && correctRootCause.value.trim()
         ? { verdict, correctRootCause: correctRootCause.value.trim().slice(0, MAX_ROOT_CAUSE) }
         : { verdict }
-    await submitDiagnosisFeedback(props.runId, payload)
+    await scope.run(()=>submitDiagnosisFeedback(props.runId,payload,scope.requestOptions))
+    if(!scope.active()||current!==generation||!canDiagnose.value)return
     submittedVerdict.value = verdict
     feedbackState.value = 'done'
   } catch (err) {
+    if(!scope.active()||current!==generation||!canDiagnose.value)return
     if (err instanceof HttpError) {
       feedbackError.value = err.apiError?.message ?? t('run.feedbackSubmitFailed', { status: err.status })
     } else {
@@ -117,12 +133,18 @@ async function sendFeedback(verdict: FeedbackVerdict): Promise<void> {
 // ─── Fix script (AI moat): copy-to-clipboard ────────────────────────────────
 
 const fixScriptCopied = ref(false)
+const scope=useIdentityRequestScope(()=>{generation++;diagnosing.value=false;diagnoseError.value='';feedbackState.value='idle';correctRootCause.value='';feedbackError.value='';submittedVerdict.value=null;fixScriptCopied.value=false})
+watch(()=>[props.runId,session.user?.userId,session.user?.username,session.user?.mustChangePassword,session.isNetworkError,permissions.activeTeam,canRead.value,canDiagnose.value],()=>{
+ generation++;diagnosing.value=false;diagnoseError.value='';feedbackState.value='idle';correctRootCause.value='';feedbackError.value='';submittedVerdict.value=null;fixScriptCopied.value=false
+})
 
 async function copyFixScript(): Promise<void> {
   const text = props.diagnosis?.fixScript ?? ''
-  if (!text) return
+  if (!text || !canRead.value) return
+  const current=generation
   try {
     await navigator.clipboard.writeText(text)
+    if(!scope.active()||current!==generation||!canRead.value)return
     fixScriptCopied.value = true
     setTimeout(() => { fixScriptCopied.value = false }, 1800)
   } catch {
@@ -145,7 +167,7 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
 </script>
 
 <template>
-  <section class="dp" :aria-label="t('run.diagnosisRegion')">
+  <section v-if="canRead" class="dp" :aria-label="t('run.diagnosisRegion')">
 
     <!-- ─── Panel header ──────────────────────────────────────────────── -->
     <div class="dp-head">
@@ -191,7 +213,7 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
           </svg>
           <p class="dp-trigger-text">{{ t('run.noDiagnosisYet') }}</p>
           <p class="dp-trigger-hint">{{ t('run.triggerHint') }}</p>
-          <AppButton
+          <PermissionGate :query="diagnoseQuery"><AppButton
             variant="ai"
             :loading="diagnosing"
             @click="handleDiagnose"
@@ -200,7 +222,7 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
               <polyline points="2 12 6 12 8 4 10 20 12 10 14 15 16 12 22 12"/>
             </svg>
             {{ diagnosing ? t('run.analyzing') : t('run.analyzeFailure') }}
-          </AppButton>
+          </AppButton></PermissionGate>
           <p v-if="diagnoseError" class="dp-error" role="alert">{{ diagnoseError }}</p>
         </div>
       </div>
@@ -231,7 +253,7 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
           </svg>
           <p class="dp-unavail-title">{{ t('run.diagnosisUnavailable') }}</p>
           <p v-if="diagnosis.reason" class="dp-unavail-reason">{{ diagnosis.reason }}</p>
-          <AppButton
+          <PermissionGate :query="diagnoseQuery"><AppButton
             variant="ai"
             :loading="diagnosing"
             @click="handleDiagnose"
@@ -240,7 +262,7 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
               <path d="M1 4v6h6M23 20v-6h-6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
             </svg>
             {{ diagnosing ? t('run.analyzing') : t('run.rediagnose') }}
-          </AppButton>
+          </AppButton></PermissionGate>
           <p v-if="diagnoseError" class="dp-error" role="alert">{{ diagnoseError }}</p>
         </div>
       </div>
@@ -402,7 +424,7 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
       </div>
 
       <!-- ── Feedback footer (Story 7-5, FR-26) — append-only ──────────── -->
-      <div class="dp-feedback">
+      <PermissionGate :query="diagnoseQuery"><div class="dp-feedback">
         <!-- done state -->
         <template v-if="feedbackState === 'done'">
           <div class="dp-fb-done" role="status">
@@ -461,15 +483,15 @@ function confidenceLabel(level: DiagnosisDTO['confidence']): ConfLabel {
               :placeholder="t('run.correctRootCausePlaceholder')"
             />
             <div class="dp-fb-actions">
-              <AppButton variant="ai" :loading="feedbackSubmitting" @click="sendFeedback('down')">
+              <PermissionGate :query="diagnoseQuery"><AppButton variant="ai" :loading="feedbackSubmitting" @click="sendFeedback('down')">
                 {{ t('run.submitFeedback') }}
-              </AppButton>
+              </AppButton></PermissionGate>
             </div>
           </div>
 
           <p v-if="feedbackError" class="dp-error dp-fb-error" role="alert">{{ feedbackError }}</p>
         </template>
-      </div>
+      </div></PermissionGate>
     </template>
 
   </section>

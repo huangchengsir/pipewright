@@ -14,6 +14,7 @@ import AppSelect from '../ui/AppSelect.vue'
 const props = defineProps<{
   steps: PipelinePostStep[] | undefined
   stageId: string
+  readOnly?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -26,6 +27,7 @@ const rows = computed<PipelinePostStep[]>(() => props.steps ?? [])
 const conditionOptions = POST_CONDITIONS.map((condition) => ({ value: condition, label: POST_CONDITION_LABELS[condition] }))
 
 function commit(next: PipelinePostStep[]): void {
+  if (props.readOnly) return
   emit('update', next.length > 0 ? next : undefined)
 }
 function patch(i: number, p: Partial<PipelinePostStep>): void {
@@ -53,6 +55,7 @@ function setCommands(i: number, text: string): void {
         <AppSelect
           :model-value="step.condition"
           :options="conditionOptions"
+          :disabled="readOnly"
           :aria-label="t('pipelineCanvas.postCondAria', { n: i + 1 })"
           min-width="0"
           height="34px"

@@ -15,6 +15,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/completedrefs"
 	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 const (
@@ -188,7 +189,10 @@ func (r *OAuthRepository) Target(ctx context.Context, id string, adopt bool) (OA
 // ClaimAuthorization fences Git users before exchanging a browser code, not
 // after the provider may have invalidated an older access token.
 func (r *OAuthRepository) ClaimAuthorization(ctx context.Context, target OAuthTarget, owner string) (OAuthTarget, error) {
-	err := configstate.WithWriteTx(ctx, r.db, func(q configstate.DBTX) error {
+	err := configstate.WithWriteTxContext(ctx, r.db, func(ctx context.Context, q configstate.DBTX) error {
+		if err := tenancy.Check(ctx, r.db, "credential.edit", "credential", target.CredentialID); err != nil {
+			return err
+		}
 		if err := configstate.LockEpochs(ctx, q, r.db, configstate.EpochSecrets); err != nil {
 			return err
 		}
@@ -276,7 +280,17 @@ func (r *OAuthRepository) Authorize(ctx context.Context, b OAuthBinding, t OAuth
 	}
 	now := time.Now().UTC()
 	stamp := now.Format(time.RFC3339Nano)
-	err = configstate.WithWriteTx(ctx, r.db, func(q configstate.DBTX) error {
+	err = configstate.WithWriteTxContext(ctx, r.db, func(ctx context.Context, q configstate.DBTX) error {
+		if target.CredentialID == "" {
+			if err := tenancy.RequireInstanceAdministrator(ctx, r.db); err != nil {
+				return err
+			}
+			if err := tenancy.CheckNew(ctx, r.db, "credential.create", "credential", id); err != nil {
+				return err
+			}
+		} else if err := tenancy.Check(ctx, r.db, "credential.edit", "credential", target.CredentialID); err != nil {
+			return err
+		}
 		if e := configstate.LockEpochs(ctx, q, r.db, configstate.EpochSecrets); e != nil {
 			return e
 		}
@@ -287,6 +301,9 @@ func (r *OAuthRepository) Authorize(ctx context.Context, b OAuthBinding, t OAuth
 		if target.CredentialID == "" {
 			_, e := q.ExecContext(ctx, `INSERT INTO credentials(id,name,type,scope,username,ciphertext,masked_value,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`, id, b.Provider+":"+b.Login, TypeGitToken, "global", oauthGitUsername(b.Provider, b.Login), access, mask(TypeGitToken, t.AccessToken), stamp, stamp)
 			if e != nil {
+				return e
+			}
+			if e := tenancy.RecordOwnership(ctx, r.db, "credential", id, ""); e != nil {
 				return e
 			}
 		} else {
@@ -371,7 +388,14 @@ func (r *OAuthRepository) TryAcquire(ctx context.Context, id, owner string, now 
 		return OAuthAcquisition{}, e
 	}
 	var out OAuthAcquisition
-	err := configstate.WithWriteTx(ctx, r.db, func(q configstate.DBTX) error {
+	err := configstate.WithWriteTxContext(ctx, r.db, func(txctx context.Context, q configstate.DBTX) error {
+		ctx = txctx
+		if err := tenancy.LockAuthorization(ctx, r.db); err != nil {
+			return err
+		}
+		if err := tenancy.Check(ctx, r.db, "credential.use", "credential", id); err != nil {
+			return err
+		}
 		if e := configstate.LockEpochs(ctx, q, r.db, configstate.EpochSecrets); e != nil {
 			return e
 		}
@@ -689,4 +713,14 @@ func ParseAccountID(value any) (string, error) {
 		return "", ErrOAuthIdentity
 	}
 	return id, nil
+}
+
+// AbortUnstartedRefresh releases only an exact locally claimed exchange that
+// has not reached the provider. Never call this after dispatch or uncertainty.
+func (r *OAuthRepository) AbortUnstartedRefresh(ctx context.Context, b *OAuthBinding) error {
+	if b == nil || b.ClaimID == "" || b.ClaimOwner == "" {
+		return ErrConflict
+	}
+	_, err := r.db.ExecContext(ctx, `UPDATE oauth_credentials SET state=?,claim_id='',claim_owner='',updated_at=? WHERE credential_id=? AND revision=? AND claim_id=? AND claim_owner=? AND state=?`, OAuthActive, time.Now().UnixMilli(), b.CredentialID, b.Revision, b.ClaimID, b.ClaimOwner, OAuthRefreshing)
+	return err
 }

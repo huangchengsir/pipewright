@@ -11,6 +11,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/ai"
 	"github.com/huangchengsir/pipewright/internal/mask"
 	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // ---- 冻结 diagnosis 子 DTO(Story 7.2 定义并冻结;camelCase) ------------------
@@ -106,6 +107,9 @@ func aiToRunDiagnosis(d *ai.Diagnosis) *run.Diagnosis {
 //   - 自动钩子传 false:仅落 ready 诊断,避免污染「diagnosis=null 即未诊断」干净态、并杜绝
 //     「AI 未配 / 用户取消(取消复用 StatusFailed)的每个失败 run 都无谓写一条 unavailable」。
 func diagnoseRun(ctx context.Context, runs run.Service, aiSvc ai.Service, secretSrc *RunSecretSource, id string, persistUnavailable bool) (*run.Diagnosis, error) {
+	if err := run.AuthorizeDiagnosis(ctx, runs, id); err != nil {
+		return nil, err
+	}
 	failureLog, err := runs.GetFailureLog(ctx, id)
 	if err != nil {
 		return nil, err // ErrNotFound 等,由调用方映射
@@ -113,11 +117,17 @@ func diagnoseRun(ctx context.Context, runs run.Service, aiSvc ai.Service, secret
 
 	// 出网前脱敏:登记该 run 真实用到的全部凭据(+ 桩假 secret)。secretSrc 为 nil 时降级为只登记桩。
 	masker := maskerFor(ctx, secretSrc, id)
+	if masker.IsBlocked() {
+		return nil, tenancy.ErrForbidden
+	}
+	if err := run.AuthorizeDiagnosis(ctx, runs, id); err != nil {
+		return nil, err
+	}
 
 	var diag *ai.Diagnosis
 	if aiSvc != nil {
 		diag, _ = aiSvc.Diagnose(ctx, ai.DiagnoseInput{
-			FailureLog: failureLog,
+			FailureLog: masker.Scrub(failureLog),
 			Masker:     masker,
 		})
 	}
@@ -133,7 +143,22 @@ func diagnoseRun(ctx context.Context, runs run.Service, aiSvc ai.Service, secret
 		}
 	}
 
+	if err := run.AuthorizeDiagnosis(ctx, runs, id); err != nil {
+		return nil, err
+	}
 	domain := aiToRunDiagnosis(diag)
+	domain.Reason = masker.Scrub(domain.Reason)
+	domain.Hypothesis = masker.Scrub(domain.Hypothesis)
+	domain.FixScript = masker.Scrub(domain.FixScript)
+	for i := range domain.AlternateCauses {
+		domain.AlternateCauses[i] = masker.Scrub(domain.AlternateCauses[i])
+	}
+	for i := range domain.FixSuggestions {
+		domain.FixSuggestions[i] = masker.Scrub(domain.FixSuggestions[i])
+	}
+	for i := range domain.Evidence {
+		domain.Evidence[i].Text = masker.Scrub(domain.Evidence[i].Text)
+	}
 	// 自动钩子(persistUnavailable=false)只持久化 ready 诊断:非 ready 直接返回不落库,
 	// 保持 run-detail diagnosis=null 干净态(前端显「触发诊断」而非恒「诊断不可用」),
 	// 并消除 AI 未配/取消场景下每个失败 run 的无谓写。显式端点(true)仍落库供刷新回显。
@@ -205,6 +230,9 @@ func makeDiagnoseRunHandler(runs run.Service, aiSvc ai.Service, secretSrc *RunSe
 		// 显式诊断:用户主动请求,落库 unavailable 也无妨(刷新仍能回显 reason)。
 		domain, derr := diagnoseRun(ctx, runs, aiSvc, secretSrc, id, true)
 		if derr != nil {
+			if writeAuthorizationError(w, derr) {
+				return
+			}
 			if errors.Is(derr, run.ErrNotFound) {
 				writeError(w, http.StatusNotFound, "run_not_found", "运行不存在")
 				return

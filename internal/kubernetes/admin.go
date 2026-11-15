@@ -7,6 +7,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/auth"
 	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"strings"
 	"time"
 )
@@ -20,6 +21,23 @@ var ErrRecentPassword = errors.New("kubernetes_recent_password_required")
 func (s *Service) WithAdminMutation(ctx context.Context, token string, fn func(context.Context) error) error {
 	if strings.TrimSpace(token) == "" || fn == nil {
 		return ErrSession
+	}
+	ctx = configstate.WithWriteAdmission(ctx, tenancy.LockAuthorization)
+	on, err := tenancy.Enabled(ctx, s.db)
+	if err != nil {
+		return err
+	}
+	if on {
+		ctx = configstate.WithWriteAdmission(ctx, tenancy.LockAuthorization)
+		return configstate.WithWriteTxContext(ctx, s.db, func(ctx context.Context, q configstate.DBTX) error {
+			if err := tenancy.CheckRecentPassword(ctx, s.db, token, s.now()); err != nil {
+				if errors.Is(err, tenancy.ErrRecentPassword) {
+					return ErrRecentPassword
+				}
+				return ErrSession
+			}
+			return fn(ctx)
+		})
 	}
 	return configstate.WithWriteTxContext(ctx, s.db, func(ctx context.Context, q configstate.DBTX) error {
 		if _, e := q.ExecContext(ctx, `UPDATE admin_user SET security_generation=security_generation WHERE id=1`); e != nil {

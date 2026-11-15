@@ -29,6 +29,7 @@ export default {
     '將把該環境回滾到上一次成功部署(執行 {commit} · {when}),即把那次的產物重新部署到原目標機。此操作會觸發一次真實部署。',
   rollbackConfirm: '確認回滾',
   rollbackFailedStatus: '回滾失敗({status})',
+  rollbackTargetChanged: "部署已變更，請重新整理後再次確認回滾。",
   rollbackFailedRetry: '回滾失敗,請稍後重試',
 
   toastRolledBack: '環境「{env}」已回滾',

@@ -1,3 +1,4 @@
+import {configWriteOptions} from './configRevision'
 /**
  * Remote build runner API — 远程构建 runner(FR-8-14 续).
  *
@@ -6,17 +7,17 @@
  *
  * 配了 runner 服务器 → 该项目构建下沉到该远程机执行;空 = 本地构建(默认)。
  */
-import { http } from './http'
-import { configWriteOptions } from './configRevision'
+import { http, type HttpOptions } from './http'
+
 
 export interface RunnerConfig {
   runnerServerId: string
 }
 
-export async function getRunner(projectId: string): Promise<RunnerConfig> {
-  return http.get<RunnerConfig>(`/api/projects/${projectId}/runner`)
+export async function getRunner(projectId: string, options:HttpOptions={}): Promise<RunnerConfig> {
+  return http.get<RunnerConfig>(`/api/projects/${projectId}/runner`,{...options,throwOnUnauthorized:true})
 }
 
-export async function saveRunner(projectId: string, runnerServerId: string, expectedRevision?: string): Promise<RunnerConfig> {
-  return expectedRevision ? http.put<RunnerConfig>(`/api/projects/${projectId}/runner`, { runnerServerId }, configWriteOptions(expectedRevision)) : http.put<RunnerConfig>(`/api/projects/${projectId}/runner`, { runnerServerId })
+export async function saveRunner(projectId: string, runnerServerId: string, expectedRevision?: string, options:HttpOptions={}): Promise<RunnerConfig> {
+  return http.put<RunnerConfig>(`/api/projects/${projectId}/runner`, { runnerServerId }, configWriteOptions(expectedRevision,{...options,throwOnUnauthorized:true}))
 }

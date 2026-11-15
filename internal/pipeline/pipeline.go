@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"strings"
 	"time"
 
@@ -162,6 +163,10 @@ func New(db *sql.DB, opts ...ServiceOption) Service {
 }
 
 func (s *service) Get(ctx context.Context, projectID string) (*Config, error) {
+	if err := tenancy.Check(ctx, s.db, "pipeline.read", "project", projectID); err != nil {
+		return nil, err
+	}
+
 	cfg, err := s.load(ctx, projectID)
 	if err == nil {
 		// 给 git_source 任务预填项目绑定的仓库/分支/凭据(字段留空时)+ 卡片摘要,
@@ -236,6 +241,13 @@ func (s *service) fillSourceDefaults(ctx context.Context, projectID string, spec
 }
 
 func (s *service) Save(ctx context.Context, projectID string, spec Spec) (*Config, error) {
+	if err := tenancy.Check(ctx, s.db, "pipeline.edit", "project", projectID); err != nil {
+		return nil, err
+	}
+
+	if err := authorizeConfigReferences(ctx, s.db, spec); err != nil {
+		return nil, err
+	}
 	// 确保配置已存在(惰性默认);Get 也完成项目存在性校验。
 	if _, err := s.Get(ctx, projectID); err != nil {
 		return nil, err
@@ -247,7 +259,17 @@ func (s *service) Save(ctx context.Context, projectID string, spec Spec) (*Confi
 	}
 
 	nowStr := time.Now().UTC().Format(time.RFC3339)
-	err = configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+	err = configstate.MutateProject(configstate.WithWriteAdmission(ctx, tenancy.LockAuthorization), s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+		if err := tenancy.LockAuthorization(txctx, s.db); err != nil {
+			return err
+		}
+		if err := tenancy.Check(txctx, s.db, "pipeline.edit", "project", projectID); err != nil {
+			return err
+		}
+		if err := authorizeConfigReferences(txctx, s.db, spec); err != nil {
+			return err
+		}
+
 		if err := s.protectReleaseConfigs(txctx, projectID, &normalized); err != nil {
 			return err
 		}
@@ -278,6 +300,11 @@ func (s *service) Save(ctx context.Context, projectID string, spec Spec) (*Confi
 
 // load 读取已存在的配置行。无行 → sql.ErrNoRows(由 Get 转惰性默认)。
 func (s *service) load(ctx context.Context, projectID string) (*Config, error) {
+	predicate, authErr := tenancy.QueryPredicate(ctx, s.db, "pipeline.read", "pc.project_id")
+	if authErr != nil {
+		return nil, authErr
+	}
+
 	var (
 		specJSON   string
 		specYAML   string
@@ -287,7 +314,7 @@ func (s *service) load(ctx context.Context, projectID string) (*Config, error) {
 	)
 	err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT spec_json, spec_yaml, status, updated_at, saved_at
-		 FROM pipeline_configs WHERE project_id = ?`, projectID,
+		 FROM pipeline_configs pc WHERE pc.project_id = ? AND `+predicate.SQL, append([]any{projectID}, predicate.Args...)...,
 	).Scan(&specJSON, &specYAML, &status, &updatedStr, &savedStr)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -344,9 +371,21 @@ func (s *service) createDefault(ctx context.Context, projectID string) (*Config,
 		return nil, err
 	}
 
+	if err := tenancy.Check(ctx, s.db, "pipeline.edit", "project", projectID); err != nil {
+		if errors.Is(err, tenancy.ErrForbidden) {
+			return &Config{Spec: spec, YAML: renderedYAML, Status: statusDraft}, nil
+		}
+		return nil, err
+	}
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
-	err = configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+	err = configstate.MutateProject(configstate.WithWriteAdmission(ctx, tenancy.LockAuthorization), s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+		if err := tenancy.LockAuthorization(txctx, s.db); err != nil {
+			return err
+		}
+		if err := tenancy.Check(txctx, s.db, "pipeline.edit", "project", projectID); err != nil {
+			return err
+		}
 
 		_, writeErr := q.ExecContext(txctx,
 			store.InsertSQL(store.DialectOf(s.db), "pipeline_configs",

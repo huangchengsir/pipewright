@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // 凭据类型枚举(DB 存 snake_case 字串;JSON camelCase 字段)。
@@ -122,6 +123,7 @@ type Vault interface {
 
 // service 是 store 支撑的 Vault 实现。master key 为 nil 时为「未配置」态。
 type service struct {
+	ctx context.Context
 	db  *sql.DB
 	key *[keySize]byte // nil ⇒ 未配置
 }
@@ -173,11 +175,19 @@ func (s *service) Create(in CreateInput) (*Credential, error) {
 	masked := mask(in.Type, in.Secret)
 
 	id := uuid.NewString()
+	if err := tenancy.CheckNew(s.context(), s.db, "credential.create", "credential", id); err != nil {
+		return nil, err
+	}
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
 
-	err = configstate.WithWriteTx(context.Background(), s.db, func(q configstate.DBTX) error {
-		ctx := context.Background()
+	err = configstate.WithWriteTxContext(s.context(), s.db, func(ctx context.Context, q configstate.DBTX) error {
+		if err := tenancy.LockAuthorization(ctx, s.db); err != nil {
+			return err
+		}
+		if err := tenancy.CheckNew(ctx, s.db, "credential.create", "credential", id); err != nil {
+			return err
+		}
 		if err := configstate.LockEpochs(ctx, q, s.db, configstate.EpochSecrets); err != nil {
 			return err
 		}
@@ -187,6 +197,9 @@ func (s *service) Create(in CreateInput) (*Credential, error) {
 			id, in.Name, in.Type, in.Scope, strings.TrimSpace(in.Username), sealed, masked, nowStr, nowStr,
 		)
 		if err != nil {
+			return err
+		}
+		if err := tenancy.RecordOwnership(ctx, s.db, "credential", id, ""); err != nil {
 			return err
 		}
 		return configstate.BumpEpoch(ctx, q, configstate.EpochSecrets)
@@ -211,10 +224,12 @@ func (s *service) List() ([]Credential, error) {
 	if !s.configured() {
 		return nil, ErrVaultUnconfigured
 	}
-	rows, err := s.db.Query(
-		`SELECT id, name, type, scope, username, masked_value, last_used_at, created_at
-		 FROM credentials ORDER BY created_at DESC, id`,
-	)
+	predicate, err := tenancy.QueryPredicate(s.context(), s.db, "credential.metadata", "credentials.id")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := configstate.Queryer(s.context(), s.db).QueryContext(s.context(),
+		`SELECT id, name, type, scope, username, masked_value, last_used_at, created_at FROM credentials WHERE `+predicate.SQL+` ORDER BY created_at DESC, id`, predicate.Args...)
 	if err != nil {
 		return nil, fmt.Errorf("vault: list credentials: %w", err)
 	}
@@ -236,7 +251,7 @@ func (s *service) List() ([]Credential, error) {
 		if err := s.registryView(&creds[i]); err != nil {
 			return nil, err
 		}
-		info, err := OAuthView(context.Background(), s.db, creds[i].ID)
+		info, err := OAuthView(s.context(), s.db, creds[i].ID)
 		if err != nil {
 			return nil, err
 		}
@@ -246,6 +261,9 @@ func (s *service) List() ([]Credential, error) {
 }
 
 func (s *service) Get(id string) (string, error) {
+	if err := tenancy.Check(s.context(), s.db, "credential.use", "credential", id); err != nil {
+		return "", err
+	}
 	if err := ValidateGenericReference(id); err != nil {
 		return "", err
 	}
@@ -253,7 +271,7 @@ func (s *service) Get(id string) (string, error) {
 		return "", ErrVaultUnconfigured
 	}
 	var sealed []byte
-	err := s.db.QueryRow(`SELECT ciphertext FROM credentials WHERE id = ?`, id).Scan(&sealed)
+	err := s.readCredential("credential.use", id, "ciphertext", &sealed)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", ErrNotFound
@@ -266,32 +284,35 @@ func (s *service) Get(id string) (string, error) {
 	}
 	// 更新最近使用时间(尽力而为:失败不影响取用)。
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, _ = s.db.Exec(`UPDATE credentials SET last_used_at = ? WHERE id = ?`, now, id)
+	_, _ = configstate.Queryer(s.context(), s.db).ExecContext(s.context(), `UPDATE credentials SET last_used_at = ? WHERE id = ?`, now, id)
 	return string(plaintext), nil
 }
 
 // Reveal 同 Get 但**不更新 last_used_at**(供脱敏登记等只读取值场景)。
 func (s *service) GetGitAuth(id string) (GitAuth, error) {
+	if err := tenancy.Check(s.context(), s.db, "credential.use", "credential", id); err != nil {
+		return GitAuth{}, err
+	}
 	if err := ValidateGenericReference(id); err != nil {
 		return GitAuth{}, err
 	}
 	if !s.configured() {
 		return GitAuth{}, ErrVaultUnconfigured
 	}
-	if binding, err := readOAuth(context.Background(), s.db, store.DialectOf(s.db), id); err != nil {
+	if binding, err := readOAuth(s.context(), configstate.Queryer(s.context(), s.db), store.DialectOf(s.db), id); err != nil {
 		return GitAuth{}, err
 	} else if binding != nil {
 		return GitAuth{}, ErrGitLeaseRequired
 	}
 	var authorizationClaims int
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM oauth_authorizations WHERE credential_id=?", id).Scan(&authorizationClaims); err != nil {
+	if err := configstate.Queryer(s.context(), s.db).QueryRowContext(s.context(), "SELECT COUNT(*) FROM oauth_authorizations WHERE credential_id=?", id).Scan(&authorizationClaims); err != nil {
 		return GitAuth{}, err
 	} else if authorizationClaims > 0 {
 		return GitAuth{}, ErrGitLeaseRequired
 	}
 	var username, credType string
 	var sealed []byte
-	err := s.db.QueryRow(`SELECT type, username, ciphertext FROM credentials WHERE id = ?`, id).Scan(&credType, &username, &sealed)
+	err := s.readCredential("credential.use", id, "type, username, ciphertext", &credType, &username, &sealed)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return GitAuth{}, ErrNotFound
@@ -303,11 +324,14 @@ func (s *service) GetGitAuth(id string) (GitAuth, error) {
 		return GitAuth{}, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, _ = s.db.Exec(`UPDATE credentials SET last_used_at = ? WHERE id = ?`, now, id)
+	_, _ = configstate.Queryer(s.context(), s.db).ExecContext(s.context(), `UPDATE credentials SET last_used_at = ? WHERE id = ?`, now, id)
 	return GitAuth{Type: credType, Username: username, Token: string(plaintext)}, nil
 }
 
 func (s *service) Reveal(id string) (string, error) {
+	if err := tenancy.Check(s.context(), s.db, "credential.reveal", "credential", id); err != nil {
+		return "", err
+	}
 	if err := ValidateGenericReference(id); err != nil {
 		return "", err
 	}
@@ -315,7 +339,7 @@ func (s *service) Reveal(id string) (string, error) {
 		return "", ErrVaultUnconfigured
 	}
 	var sealed []byte
-	err := s.db.QueryRow(`SELECT ciphertext FROM credentials WHERE id = ?`, id).Scan(&sealed)
+	err := s.readCredential("credential.reveal", id, "ciphertext", &sealed)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", ErrNotFound
@@ -330,6 +354,9 @@ func (s *service) Reveal(id string) (string, error) {
 }
 
 func (s *service) Exists(id string) (bool, error) {
+	if err := tenancy.Check(s.context(), s.db, "credential.metadata", "credential", id); err != nil {
+		return false, err
+	}
 	if err := ValidateGenericReference(id); err != nil {
 		return false, err
 	}
@@ -337,7 +364,7 @@ func (s *service) Exists(id string) (bool, error) {
 		return false, ErrVaultUnconfigured
 	}
 	var one int
-	err := s.db.QueryRow(`SELECT 1 FROM credentials WHERE id = ?`, id).Scan(&one)
+	err := s.readCredential("credential.metadata", id, "1", &one)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil
@@ -348,6 +375,9 @@ func (s *service) Exists(id string) (bool, error) {
 }
 
 func (s *service) Update(id string, in UpdateInput) (*Credential, error) {
+	if err := tenancy.Check(s.context(), s.db, "credential.edit", "credential", id); err != nil {
+		return nil, err
+	}
 	if err := ValidateGenericReference(id); err != nil {
 		return nil, err
 	}
@@ -358,7 +388,7 @@ func (s *service) Update(id string, in UpdateInput) (*Credential, error) {
 	// 先取出当前行(需 type 以便在轮换 secret 时重算掩码)。
 	var name, credType, scope, username, masked string
 	var oldSealed []byte
-	err := s.db.QueryRow(
+	err := configstate.Queryer(s.context(), s.db).QueryRowContext(s.context(),
 		`SELECT name, type, scope, username, masked_value, ciphertext FROM credentials WHERE id = ?`, id,
 	).Scan(&name, &credType, &scope, &username, &masked, &oldSealed)
 	if err != nil {
@@ -440,8 +470,13 @@ func (s *service) Update(id string, in UpdateInput) (*Credential, error) {
 	}
 
 	nowStr := time.Now().UTC().Format(time.RFC3339)
-	err = configstate.WithWriteTx(context.Background(), s.db, func(q configstate.DBTX) error {
-		ctx := context.Background()
+	err = configstate.WithWriteTxContext(s.context(), s.db, func(ctx context.Context, q configstate.DBTX) error {
+		if err := tenancy.LockAuthorization(ctx, s.db); err != nil {
+			return err
+		}
+		if err := tenancy.Check(ctx, s.db, "credential.edit", "credential", id); err != nil {
+			return err
+		}
 		if err := configstate.LockEpochs(ctx, q, s.db, configstate.EpochSecrets); err != nil {
 			return err
 		}
@@ -495,6 +530,9 @@ func (s *service) Update(id string, in UpdateInput) (*Credential, error) {
 }
 
 func (s *service) Delete(id string) error {
+	if err := tenancy.Check(s.context(), s.db, "credential.delete", "credential", id); err != nil {
+		return err
+	}
 	if err := ValidateGenericReference(id); err != nil {
 		return err
 	}
@@ -504,8 +542,13 @@ func (s *service) Delete(id string) error {
 	// 在用守卫:被流水线配置 secret 引用的凭据不可删,否则悬挂引用使该项目配置再不可保存。
 	// pipeline_settings 的引用以 JSON 存(无外键),此处显式 LIKE 检查;credentialId 为 UUID,
 	// 无子串歧义。引用检查、删除和目录版本在同一短事务内，检查失败时关闭写入。
-	return configstate.WithWriteTx(context.Background(), s.db, func(q configstate.DBTX) error {
-		ctx := context.Background()
+	return configstate.WithWriteTxContext(s.context(), s.db, func(ctx context.Context, q configstate.DBTX) error {
+		if err := tenancy.LockAuthorization(ctx, s.db); err != nil {
+			return err
+		}
+		if err := tenancy.Check(ctx, s.db, "credential.delete", "credential", id); err != nil {
+			return err
+		}
 		if err := configstate.LockEpochs(ctx, q, s.db, configstate.EpochSecrets); err != nil {
 			return err
 		}
@@ -536,6 +579,9 @@ func (s *service) Delete(id string) error {
 		if n == 0 {
 			return ErrNotFound
 		}
+		if _, err := q.ExecContext(ctx, `DELETE FROM access_ownership WHERE resource_kind='credential' AND resource_id=?`, id); err != nil {
+			return err
+		}
 		return configstate.BumpEpoch(ctx, q, configstate.EpochSecrets)
 	})
 }
@@ -565,10 +611,13 @@ func (s *service) OpenSecret(sealed []byte) ([]byte, error) {
 
 // getView 回读单条凭据的掩码视图。
 func (s *service) getView(id string) (*Credential, error) {
+	if err := tenancy.Check(s.context(), s.db, "credential.metadata", "credential", id); err != nil {
+		return nil, err
+	}
 	if err := ValidateGenericReference(id); err != nil {
 		return nil, err
 	}
-	row := s.db.QueryRow(
+	row := configstate.Queryer(s.context(), s.db).QueryRowContext(s.context(),
 		`SELECT id, name, type, scope, username, masked_value, last_used_at, created_at
 		 FROM credentials WHERE id = ?`, id,
 	)
@@ -582,7 +631,7 @@ func (s *service) getView(id string) (*Credential, error) {
 	if err := s.registryView(c); err != nil {
 		return nil, err
 	}
-	info, err := OAuthView(context.Background(), s.db, c.ID)
+	info, err := OAuthView(s.context(), s.db, c.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -616,10 +665,16 @@ func (s *service) registryView(c *Credential) error {
 	if c.Type != TypeRegistry {
 		return nil
 	}
-	value, err := s.Reveal(c.ID)
+	var sealed []byte
+	if err := s.readCredential("credential.metadata", c.ID, "ciphertext", &sealed); err != nil {
+		return err
+	}
+	plain, err := open(s.key, sealed)
 	if err != nil {
 		return err
 	}
+	defer clear(plain)
+	value := string(plain)
 	c.MaskedValue = maskRegistry(value)
 	c.Username = ""
 	if user, _, found := strings.Cut(value, ":"); found && strings.IndexFunc(user, unicode.IsControl) < 0 {

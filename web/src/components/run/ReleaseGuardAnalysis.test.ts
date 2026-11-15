@@ -1,3 +1,6 @@
+import {beforeEach as beforeEachGuardSession} from 'vitest'
+import {legacyPermissionSession} from '../../test/legacyPermissionSession'
+beforeEachGuardSession(legacyPermissionSession)
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ReleaseGuardAnalysis from './ReleaseGuardAnalysis.vue'

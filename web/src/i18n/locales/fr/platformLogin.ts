@@ -1,4 +1,15 @@
 export default {
+  "memberAccountTitle": "Votre compte {provider}",
+  "viewAvailability": "Voir les détails",
+  "memberUnavailableTitle": "Connexion pas encore disponible",
+  "memberPausedTitle": "Connexion suspendue",
+  "memberUnconfiguredHint": "Un administrateur n’a pas encore configuré la connexion avec {provider}. Une fois configurée et activée, vous pourrez associer votre compte ici.",
+  "memberDisabledHint": "Un administrateur a suspendu la connexion avec {provider}. Vous pourrez associer votre compte après sa réactivation. Les associations existantes sont conservées.",
+  "memberHint": "Après la configuration par un administrateur, associez votre propre compte. Ces changements ne concernent que vous.",
+  "manageBinding": "Gérer la liaison",
+  "memberBindingHint": "Vérifiez le compte reçu. La confirmation le lie uniquement à votre compte employé, sans modifier les paramètres de connexion globaux.",
+  "confirmPersonalBind": "Confirmer la liaison",
+
   "section": "Connexion avec un compte externe",
   "sectionHint": "Utilisez un compte associé. La visibilité et l’activation se gèrent séparément.",
   "alternate": "Autres modes de connexion",

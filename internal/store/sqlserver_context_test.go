@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -58,12 +60,15 @@ func TestSQLServerContextSocketProbeCancellationClosesTransport(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	socket := newSQLServerContextSocket(ctx, client)
 	defer socket.Close()
-	cancel()
+	// Set the watchdog before cancellation: cancellation may already have closed
+	// the peer by the time SetReadDeadline executes. Require EOF rather than any
+	// error, so a watchdog timeout cannot masquerade as successful cancellation.
 	if e := server.SetReadDeadline(time.Now().Add(time.Second)); e != nil {
 		t.Fatal(e)
 	}
-	if _, e := server.Read(make([]byte, 1)); e == nil {
-		t.Fatal("cancelled transport remained open")
+	cancel()
+	if _, e := server.Read(make([]byte, 1)); !errors.Is(e, io.EOF) {
+		t.Fatalf("cancelled transport must close peer: got %v, want EOF", e)
 	}
 }
 

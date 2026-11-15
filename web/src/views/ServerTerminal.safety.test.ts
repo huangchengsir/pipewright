@@ -16,6 +16,10 @@ const m = vi.hoisted(() => ({
   open: vi.fn(),
   dispose: vi.fn(),
   attach: vi.fn(),
+  push: vi.fn(),
+  clear: vi.fn(),
+  selectAll: vi.fn(),
+  writeClipboard: vi.fn(),
   prepare: vi.fn(),
   connections: [] as {
     handlers: TerminalHandlers
@@ -28,7 +32,7 @@ let route = reactive({
 })
 vi.mock('vue-router', () => ({
   useRoute: () => route,
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: m.push }),
 }))
 vi.mock('../router', () => ({ setDocumentTitle: vi.fn() }))
 vi.mock('../api/aiOps', () => ({
@@ -95,8 +99,8 @@ vi.mock('@xterm/xterm', () => ({
     reset() {}
     focus() {}
     resize() {}
-    clear() {}
-    selectAll() {}
+    clear() { m.clear() }
+    selectAll() { m.selectAll() }
     write(_value: string, done?: () => void) {
       done?.()
     }
@@ -178,7 +182,7 @@ beforeEach(() => {
     configurable: true,
   })
   Object.defineProperty(navigator, 'clipboard', {
-    value: { readText: vi.fn().mockResolvedValue('ls') },
+    value: { readText: vi.fn().mockResolvedValue('ls'), writeText: m.writeClipboard },
     configurable: true,
   })
 })
@@ -551,5 +555,102 @@ describe('existing terminal input boundaries (no SSH/model)', () => {
     await flushPromises()
     expect(m.paste).toHaveBeenCalledTimes(1)
     expect(m.send).toHaveBeenCalledTimes(1)
+  })
+})
+
+
+it('only accepts the currently displayed local suggestion into the same terminal after a target change',async()=>{
+  await open()
+  vi.useFakeTimers()
+  m.input('ls')
+  await vi.advanceTimersByTimeAsync(500)
+  const retained=view!.get('.caret-ghost')
+  route.params.id='server-b'
+  await flushPromises()
+  expect(view!.find('.caret-ghost').exists()).toBe(false)
+  await button('Reconnect').trigger('click')
+  await flushPromises()
+  m.connections.at(-1)!.handlers.onOpen?.()
+  await flushPromises()
+  m.input('df')
+  await vi.advanceTimersByTimeAsync(500)
+  const current=view!.get('.caret-ghost')
+  m.send.mockClear()
+  await retained.trigger('click')
+  await flushPromises()
+  expect(m.send).not.toHaveBeenCalled()
+  await current.trigger('click')
+  await flushPromises()
+  expect(m.send).toHaveBeenCalledExactlyOnceWith(' -h')
+  expect(completeCommand).not.toHaveBeenCalled()
+  expect(previewTerminal).not.toHaveBeenCalled()
+})
+
+
+describe('remaining standalone terminal surface controls',()=>{
+  it('clicks close to release the current mocked transport and return to server settings',async()=>{
+    const w=await open()
+    const current=m.connections.at(-1)!
+    await w.findAll('.top button').find(item=>item.text()==='Close')!.trigger('click')
+    await flushPromises()
+    expect(current.close).toHaveBeenCalledOnce()
+    expect(m.push).toHaveBeenCalledExactlyOnceWith({name:'settings-servers'})
+    m.input('ls')
+    expect(m.send).not.toHaveBeenCalled()
+    expect(previewTerminal).not.toHaveBeenCalled()
+    expect(completeCommand).not.toHaveBeenCalled()
+  })
+
+  it('uses actual local completion and assistant launcher buttons without sending terminal or model input',async()=>{
+    const w=await open()
+    vi.useFakeTimers()
+    const local=w.get('.ai-toggle')
+    await local.trigger('click')
+    expect(local.classes()).not.toContain('on')
+    expect(localStorage.getItem('pw-terminal-complete')).toBe('0')
+    m.input('ls')
+    await vi.advanceTimersByTimeAsync(500)
+    expect(w.find('.caret-ghost').exists()).toBe(false)
+    m.send.mockClear()
+    await local.trigger('click')
+    expect(local.classes()).toContain('on')
+    expect(localStorage.getItem('pw-terminal-complete')).toBe('1')
+    await w.get('.ai-launcher').trigger('click')
+    await flushPromises()
+    expect(w.get('aside').text()).toContain('existing assistant')
+    expect(w.find('.ai-launcher').exists()).toBe(false)
+    expect(m.send).not.toHaveBeenCalled()
+    expect(previewTerminal).not.toHaveBeenCalled()
+    expect(completeCommand).not.toHaveBeenCalled()
+  })
+
+  it('copies the current selection from the surface and context menu and keeps all menu actions local',async()=>{
+    const w=await open()
+    const host=w.get('.term-host')
+    const openMenu=async()=>{await host.trigger('contextmenu',{clientX:10,clientY:10});expect(w.find('.ctx').exists()).toBe(true)}
+    const menuButton=(label:string)=>w.findAll('.ctx button').find(el=>el.text().startsWith(label))!
+    m.selection='current selected fixture'
+    await host.trigger('mouseup')
+    await flushPromises()
+    expect(m.writeClipboard).toHaveBeenNthCalledWith(1,'current selected fixture')
+    await openMenu()
+    await w.get('.ctx').trigger('click')
+    expect(w.find('.ctx').exists()).toBe(true)
+    await menuButton('Copy').trigger('click')
+    await flushPromises()
+    expect(w.find('.ctx').exists()).toBe(false)
+    expect(m.writeClipboard).toHaveBeenNthCalledWith(2,'current selected fixture')
+    await openMenu()
+    await menuButton('Select all').trigger('click')
+    expect(m.selectAll).toHaveBeenCalledOnce()
+    expect(w.find('.ctx').exists()).toBe(false)
+    await openMenu()
+    await menuButton('Clear screen').trigger('click')
+    expect(m.clear).toHaveBeenCalledOnce()
+    expect(w.find('.ctx').exists()).toBe(false)
+    expect(m.send).not.toHaveBeenCalled()
+    expect(m.paste).not.toHaveBeenCalled()
+    expect(previewTerminal).not.toHaveBeenCalled()
+    expect(completeCommand).not.toHaveBeenCalled()
   })
 })

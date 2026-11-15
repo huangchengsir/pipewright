@@ -186,7 +186,14 @@ func (rc *Receiver) Handle(ctx context.Context, d Delivery) (*Result, error) {
 		return &Result{Accepted: false, Ignored: IgnoredPathNoMatch}, nil
 	}
 
-	runID, err := rc.runner.CreateWebhookRun(ctx, cfg.ProjectID, RunRequest{
+	runCtx, authorizationErr := triggerContext(ctx, rc.db, cfg.ProjectID)
+	if authorizationErr != nil {
+		if _, rollbackErr := rc.db.ExecContext(ctx, `DELETE FROM webhook_deliveries WHERE id=?`, recID); rollbackErr != nil {
+			return nil, rollbackErr
+		}
+		return nil, authorizationErr
+	}
+	runID, err := rc.runner.CreateWebhookRun(runCtx, cfg.ProjectID, RunRequest{
 		Branch:                  parsed.Branch,
 		Commit:                  parsed.Commit,
 		Actor:                   "gitee",

@@ -20,15 +20,16 @@ import (
 // nextRun 是据当前表达式算出的下一次触发时刻(启用且表达式合法时;否则空)。
 
 type cronDTO struct {
-	Expression string `json:"expression"`
-	Branch     string `json:"branch"`
-	Enabled    bool   `json:"enabled"`
+	AuthorizationState string `json:"authorizationState,omitempty"`
+	Expression         string `json:"expression"`
+	Branch             string `json:"branch"`
+	Enabled            bool   `json:"enabled"`
 	// NextRun 是下一次触发时刻(RFC3339;未启用/非法/无下次 → 空串)。
 	NextRun string `json:"nextRun"`
 }
 
 func toCronDTO(c *cron.Config) cronDTO {
-	dto := cronDTO{Expression: c.Expression, Branch: c.Branch, Enabled: c.Enabled}
+	dto := cronDTO{AuthorizationState: c.AuthorizationState, Expression: c.Expression, Branch: c.Branch, Enabled: c.Enabled}
 	if c.Enabled && c.Expression != "" {
 		if sched, err := cron.Parse(c.Expression); err == nil {
 			if next := sched.Next(time.Now().UTC()); !next.IsZero() {
@@ -40,6 +41,9 @@ func toCronDTO(c *cron.Config) cronDTO {
 }
 
 func writeCronError(w http.ResponseWriter, err error) {
+	if writeAuthorizationError(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, cron.ErrProjectNotFound):
 		writeError(w, http.StatusNotFound, "project_not_found", "项目不存在")

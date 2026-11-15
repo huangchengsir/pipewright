@@ -1,4 +1,15 @@
 export default {
+  "memberAccountTitle": "Ihr {provider}-Konto",
+  "viewAvailability": "Details ansehen",
+  "memberUnavailableTitle": "Anmeldung noch nicht verfügbar",
+  "memberPausedTitle": "Anmeldung pausiert",
+  "memberUnconfiguredHint": "Ein Administrator hat die Anmeldung mit {provider} noch nicht eingerichtet. Nach der Einrichtung und Aktivierung können Sie hier Ihr eigenes Konto verknüpfen.",
+  "memberDisabledHint": "Ein Administrator hat die Anmeldung mit {provider} pausiert. Nach der erneuten Aktivierung können Sie Ihr Konto verknüpfen. Bestehende Verknüpfungen bleiben erhalten.",
+  "memberHint": "Nach der Einrichtung durch einen Administrator können Sie Ihr eigenes Konto verknüpfen. Änderungen betreffen nur Sie.",
+  "manageBinding": "Verknüpfung verwalten",
+  "memberBindingHint": "Prüfen Sie das zurückgegebene Konto. Es wird nur mit Ihrem Mitarbeiterkonto verknüpft; die globalen Anmeldeeinstellungen bleiben unverändert.",
+  "confirmPersonalBind": "Verknüpfung bestätigen",
+
   "section": "Anmeldung über externe Konten",
   "sectionHint": "Mit einem verknüpften Konto anmelden. Sichtbarkeit und Anmeldezugriff werden getrennt verwaltet.",
   "alternate": "Weitere Anmeldeoptionen",

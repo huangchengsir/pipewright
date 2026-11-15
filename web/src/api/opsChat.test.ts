@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { requestId, sseParser, utf8Bytes, opsApi } from './opsChat'
+import { requestId, sseParser, utf8Bytes, opsApi, createOpsApi } from './opsChat'
 import { http } from './http'
 describe('ops wire helpers', () => {
   it('creates a cryptographic UUID on insecure HTTP without randomUUID', () => {
@@ -13,6 +13,18 @@ describe('ops wire helpers', () => {
         /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       )
     spy.mockRestore()
+  })
+  it('captures the selected team per client and surfaces unauthorized completion', async () => {
+    const get = vi.spyOn(http, 'get').mockResolvedValue({})
+    const a = createOpsApi({ headers: { 'X-Pipewright-Team': 'a' } })
+    const b = createOpsApi({ headers: { 'X-Pipewright-Team': 'b' } })
+    await a.snapshot('old')
+    await b.snapshot('new')
+    expect(get.mock.calls.map(call => call[1])).toEqual([
+      { headers: { 'X-Pipewright-Team': 'a' }, throwOnUnauthorized: true },
+      { headers: { 'X-Pipewright-Team': 'b' }, throwOnUnauthorized: true },
+    ])
+    get.mockRestore()
   })
   it('counts UTF-8, not characters', () => {
     expect(utf8Bytes('中文')).toBe(6)
@@ -56,6 +68,7 @@ describe('ops wire helpers', () => {
     expect(post).toHaveBeenCalledWith(
       '/api/ai/ops/sessions/chat/calls/confirm',
       { runId: 'r', nonce: 'n', calls },
+      { throwOnUnauthorized: true },
     )
     post.mockRestore()
   })

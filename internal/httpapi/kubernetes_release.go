@@ -46,6 +46,7 @@ type k8sReleaseContinueWrite struct {
 	PlanID           string `json:"planId"`
 }
 type k8sReleaseDTO struct {
+	CanManage   bool                               `json:"canManage"`
 	Results     []kubernetes.ReleaseResourceResult `json:"results"`
 	ID          string                             `json:"id"`
 	RunID       string                             `json:"runId"`
@@ -63,6 +64,11 @@ type k8sReleaseDTO struct {
 
 func releaseDTO(r kubernetes.ReleaseRecord) k8sReleaseDTO {
 	return k8sReleaseDTO{ID: r.ID, RunID: r.RunID, NodeKey: r.NodeKey, Revision: r.Revision, State: r.State, Cleanup: r.Cleanup, OwnerFenced: r.OwnerFenced, Cursor: r.Cursor, ReasonCode: r.ReasonCode, Preview: kubernetes.PreviewRelease(r), CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt}
+}
+func (a k8sReleaseAPI) view(ctx context.Context, r kubernetes.ReleaseRecord) k8sReleaseDTO {
+	view := releaseDTO(r)
+	view.CanManage = a.s.AuthorizeReleaseRecovery(ctx, r.RunID, r.ID) == nil
+	return view
 }
 func mountKubernetesReleases(r chi.Router, s *kubernetes.Service, c *kubernetes.ReleaseController, owner string, rollback kubernetes.ReleaseRollbackStarter, a audit.Recorder) {
 	api := k8sReleaseAPI{rollback: rollback, s: s, c: c, owner: owner, audit: a}
@@ -104,7 +110,16 @@ func (a k8sReleaseAPI) handle(kind, action string) http.HandlerFunc {
 		var err error
 		var expected int64
 		status := 200
-		admin := func(fn func(context.Context) error) error { return a.s.WithAdminMutation(ctx, session.Token, fn) }
+		admin := func(fn func(context.Context) error) error {
+			return a.s.WithAdminMutation(ctx, session.Token, func(tx context.Context) error {
+				if kind == "releases" {
+					if err := a.s.AuthorizeReleaseRecovery(tx, runID, releaseID); err != nil {
+						return err
+					}
+				}
+				return fn(tx)
+			})
+		}
 		if r.Method == "GET" {
 			switch kind {
 			case "profile":
@@ -114,10 +129,10 @@ func (a k8sReleaseAPI) handle(kind, action string) http.HandlerFunc {
 			case "releases":
 				if action == "list" {
 					var records []kubernetes.ReleaseRecord
-					records, err = a.s.ListReleases(ctx, runID)
+					records, err = a.s.ListReleasesForRun(ctx, runID)
 					views := []k8sReleaseDTO{}
 					for _, record := range records {
-						view := releaseDTO(record)
+						view := a.view(ctx, record)
 						if err == nil {
 							view.Results, err = a.s.ReleaseResults(ctx, record.ID)
 						}
@@ -126,17 +141,20 @@ func (a k8sReleaseAPI) handle(kind, action string) http.HandlerFunc {
 					out = views
 				} else {
 					var record kubernetes.ReleaseRecord
-					record, err = a.s.GetRelease(ctx, releaseID)
+					record, err = a.s.ReadReleaseForRun(ctx, runID, releaseID)
 					if err == nil && record.RunID != runID {
 						err = kubernetes.ErrNotFound
 					}
 					if action == "rollback-request" && err == nil {
 						started, e := a.s.FindReleaseRollbackRequest(ctx, releaseID, chi.URLParam(r, "requestId"))
 						err = e
-						out = map[string]any{"runId": started.RunID, "release": releaseDTO(started.Release)}
+						if err == nil {
+							started.Release, err = a.s.ReadReleaseForRun(ctx, started.RunID, started.Release.ID)
+						}
+						out = map[string]any{"runId": started.RunID, "release": a.view(ctx, started.Release)}
 						break
 					}
-					view := releaseDTO(record)
+					view := a.view(ctx, record)
 					if err == nil {
 						view.Results, err = a.s.ReleaseResults(ctx, record.ID)
 					}
@@ -212,7 +230,7 @@ func (a k8sReleaseAPI) handle(kind, action string) http.HandlerFunc {
 					err = k8sDecode(w, r, &in, 16<<10)
 					expected = in.ExpectedRevision
 					if err == nil {
-						record, e := a.s.GetRelease(ctx, releaseID)
+						record, e := a.s.ReadReleaseForRun(ctx, runID, releaseID)
 						err = e
 						if err == nil && (record.RunID != runID) {
 							err = kubernetes.ErrNotFound
@@ -232,7 +250,7 @@ func (a k8sReleaseAPI) handle(kind, action string) http.HandlerFunc {
 								started, err = a.rollback(bounded, kubernetes.ReleaseRollbackRequest{SourceID: releaseID, ExpectedRevision: in.ExpectedRevision, PlanID: in.PlanID, RequestID: in.RequestID}, func(_ context.Context, fn func(context.Context) error) error { return admin(fn) })
 								cancel()
 								if err == nil {
-									out = map[string]any{"runId": started.RunID, "release": releaseDTO(started.Release)}
+									out = map[string]any{"runId": started.RunID, "release": a.view(ctx, started.Release)}
 									status = 202
 								}
 							case "continue":
@@ -256,7 +274,7 @@ func (a k8sReleaseAPI) handle(kind, action string) http.HandlerFunc {
 								}
 								cancel()
 								if err == nil {
-									view := releaseDTO(updated)
+									view := a.view(ctx, updated)
 									view.Results, err = a.s.ReleaseResults(ctx, updated.ID)
 									out = view
 								}

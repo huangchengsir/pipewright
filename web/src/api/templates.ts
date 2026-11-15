@@ -13,7 +13,7 @@
  * Templates carry no plaintext secret (credentials stay vault references in 2-4 settings).
  */
 
-import { http } from './http'
+import { http, type HttpOptions } from './http'
 import { configWriteOptions } from './configRevision'
 import type { PipelineStage, PipelineDTO, SavePipelineInput } from './pipeline'
 
@@ -47,24 +47,25 @@ interface ListTemplatesResponse {
   templates: TemplateSummary[]
 }
 
-export async function listTemplates(): Promise<TemplateSummary[]> {
-  const res = await http.get<ListTemplatesResponse>('/api/templates')
+export async function listTemplates(options?: HttpOptions): Promise<TemplateSummary[]> {
+  const res = await http.get<ListTemplatesResponse>('/api/templates', options)
   return res.templates ?? []
 }
 
-export async function getTemplate(id: string): Promise<Template> {
-  return http.get<Template>(`/api/templates/${id}`)
+export async function getTemplate(id: string, options?: HttpOptions): Promise<Template> {
+  return http.get<Template>(`/api/templates/${id}`, options)
 }
 
-export async function createTemplate(input: CreateTemplateInput): Promise<Template> {
-  return http.post<Template>('/api/templates', input)
+export async function createTemplate(input: CreateTemplateInput, options?: HttpOptions): Promise<Template> {
+  return http.post<Template>('/api/templates', input, options)
 }
 
-export async function deleteTemplate(id: string): Promise<void> {
-  await http.delete<void>(`/api/templates/${id}`)
+export async function deleteTemplate(id: string, options?: HttpOptions): Promise<void> {
+  await http.delete<void>(`/api/templates/${id}`, options)
 }
 
 /** Apply a template's stages onto a project's pipeline; returns the resulting pipeline. */
-export async function applyTemplate(projectId: string, templateId: string, expectedRevision?: string): Promise<PipelineDTO> {
-  return expectedRevision ? http.post<PipelineDTO>(`/api/projects/${projectId}/pipeline/apply-template`, { templateId }, configWriteOptions(expectedRevision)) : http.post<PipelineDTO>(`/api/projects/${projectId}/pipeline/apply-template`, { templateId })
+export async function applyTemplate(projectId: string, templateId: string, expectedRevision?: string, options?: HttpOptions): Promise<PipelineDTO> {
+  const requestOptions=configWriteOptions(expectedRevision,options)
+  return requestOptions ? http.post<PipelineDTO>(`/api/projects/${projectId}/pipeline/apply-template`, { templateId }, requestOptions) : http.post<PipelineDTO>(`/api/projects/${projectId}/pipeline/apply-template`, { templateId })
 }

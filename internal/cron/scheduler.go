@@ -101,7 +101,18 @@ func (s *Scheduler) Tick(ctx context.Context, now time.Time) {
 		if dup {
 			continue
 		}
-		if _, rerr := s.runner.CreateScheduledRun(ctx, e.ProjectID, e.Branch); rerr != nil {
+		runCtx := ctx
+		if authorizer, ok := s.store.(interface {
+			ScheduledContext(context.Context, Entry) (context.Context, error)
+		}); ok {
+			var authorizationErr error
+			runCtx, authorizationErr = authorizer.ScheduledContext(ctx, e)
+			if authorizationErr != nil {
+				log.Printf("[cron] project %s: current trigger authorization unavailable", e.ProjectID)
+				continue
+			}
+		}
+		if _, rerr := s.runner.CreateScheduledRun(runCtx, e.ProjectID, e.Branch); rerr != nil {
 			log.Printf("[cron] project %s: failed to create scheduled run: %v", e.ProjectID, rerr)
 		} else {
 			log.Printf("[cron] project %s: scheduled trigger (%s @ %s)", e.ProjectID, e.Expression, minuteKey)

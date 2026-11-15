@@ -32,16 +32,25 @@ func (s *Service) validateContext(ctx context.Context, key string) error {
 	return nil
 }
 func (s *Service) bindContext(ctx context.Context, tx *sql.Tx, key, id string) error {
+	var err error
+	key, err = s.contextKey(s.authorizationContext(ctx, tx), key)
+	if err != nil {
+		return err
+	}
 	if key == "" {
 		_, err := tx.ExecContext(ctx, "UPDATE ops_chat_state SET active_session=? WHERE id=1", id)
 		return databaseError(err)
 	}
-	_, err := tx.ExecContext(ctx, store.InsertSQL(store.DialectOf(s.db), "ops_chat_contexts",
+	_, err = tx.ExecContext(ctx, store.InsertSQL(store.DialectOf(s.db), "ops_chat_contexts",
 		[]string{"context_key", "session_id"}, []string{"?", "?"},
 		[]string{"context_key"}, []string{"session_id"}), key, id)
 	return databaseError(err)
 }
 func (s *Service) ActivateContext(ctx context.Context, id, key string) error {
+	if err := s.authorizeSession(ctx, s.db, id, "opschat.read"); err != nil {
+		return err
+	}
+
 	if err := s.ready(); err != nil {
 		return err
 	}
@@ -49,6 +58,9 @@ func (s *Service) ActivateContext(ctx context.Context, id, key string) error {
 		return err
 	}
 	return s.transaction(ctx, true, func(tx *sql.Tx) error {
+		if err := s.authorizeSession(ctx, tx, id, "opschat.read"); err != nil {
+			return err
+		}
 		if _, err := s.session(ctx, tx, id); err != nil {
 			return err
 		}

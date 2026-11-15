@@ -1,3 +1,5 @@
+import { createPinia, setActivePinia } from 'pinia'
+import { useSessionStore } from '../stores/session'
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import Dashboard from "./Dashboard.vue";
@@ -40,7 +42,7 @@ const alert = {
   at: "2026-10-30T00:00:00Z",
 };
 describe("dashboard independent data states", () => {
-  beforeEach(() => {
+  beforeEach(() => {setActivePinia(createPinia());useSessionStore().user={username:"admin",multiTenant:false};
     vi.clearAllMocks();
     api.runs.mockResolvedValue({ items: [], page: 1, total: 0 });
     api.projects.mockResolvedValue([]);
@@ -96,8 +98,11 @@ describe("dashboard independent data states", () => {
     const w = mount(Dashboard, { global: { stubs } });
     await flushPromises();
     expect(w.text()).toContain("暂无权限");
-    expect(w.find(".kpi-value").text()).toBe("—");
-    expect(w.find(".bento-env").attributes("data-state")).toBe("error");
+    expect(w.find(".kpi--primary").exists()).toBe(false);
+    expect(w.findAll(".kpi")).toHaveLength(4);
+    expect(w.find(".bento-env").exists()).toBe(false);
+    expect(w.find(".bento-srv").attributes("data-state")).toBe("error");
+    expect(w.find(".bento-srv button").exists()).toBe(true);
     w.unmount();
   });
   it("reports a server without a metrics sample as unknown instead of offline", async () => {

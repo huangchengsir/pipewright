@@ -1,9 +1,12 @@
+import { createPinia, setActivePinia } from 'pinia'
+import { useSessionStore } from '../../stores/session'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { shallowRef } from 'vue'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import AiOpsPanel from './AiOpsPanel.vue'
 import AiOpsComposer from './AiOpsComposer.vue'
 import { resetOpsAuth } from '../../utils/opsAuth'
+beforeEach(() => { setActivePinia(createPinia()); useSessionStore().user = { username: 'admin', multiTenant: false } })
 const m = vi.hoisted(() => ({
   chat: undefined as unknown as ReturnType<typeof mockChat>,
 }))

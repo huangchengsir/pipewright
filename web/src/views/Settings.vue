@@ -1,13 +1,17 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import "../styles/settings-surface.css";
+import { useSessionStore } from "../stores/session";
+import { useNavigationStore } from "../stores/navigation";
+const navigation=useNavigationStore();
+const session = useSessionStore();
 
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
-const groups = computed(() => [
+const allGroups = computed(() => [
   {
     label: t("kubernetes.groups.resources"),
     sections: [
@@ -31,6 +35,7 @@ const groups = computed(() => [
     label: t("kubernetes.groups.security"),
     sections: [
       { path: "/settings/account", label: t("settingsHub.navAccount") },
+      ...(session.user?.multiTenant ? [{ path: "/settings/access", label: t("access.title") }] : []),
       { path: "/settings/vault", label: t("settingsHub.navVault") },
     ],
   },
@@ -50,6 +55,7 @@ const groups = computed(() => [
     ],
   },
 ]);
+const groups=computed(()=>allGroups.value.map(group=>({...group,sections:group.sections.filter(section=>navigation.allows(section.path))})).filter(group=>group.sections.length));
 const sections = computed(() =>
   groups.value.flatMap((group) => group.sections),
 );
@@ -60,6 +66,12 @@ const selectedSection = computed(
         router.resolve(section.path).matched.at(-1) === route.matched.at(-1),
     )?.path ?? "/settings/ai",
 );
+const contentPane = ref<HTMLElement | null>(null);
+watch(selectedSection, async (section, previous) => {
+  if (section === previous) return;
+  await nextTick();
+  if (contentPane.value) contentPane.value.scrollTop = 0;
+});
 function navigate(event: Event): void {
   const control = event.target as HTMLSelectElement;
   const path = control.value;
@@ -119,7 +131,7 @@ function navigate(event: Event): void {
           >
         </section>
       </nav>
-      <div class="settings-content"><router-view /></div>
+      <div ref="contentPane" class="settings-content"><router-view /></div>
     </div>
   </div>
 </template>
@@ -170,6 +182,10 @@ function navigate(event: Event): void {
   min-width: 0;
 }
 @media (min-width: 768px) {
+  .settings-view { flex: 1; min-height: 0; overflow: hidden; }
+  .view-header { flex-shrink: 0; }
+  .settings-content { min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable; padding: 2px 6px 16px 2px; }
+
   .settings-nav-select {
     display: none;
   }
@@ -177,7 +193,9 @@ function navigate(event: Event): void {
     display: grid;
     grid-template-columns: 172px minmax(0, 1fr);
     gap: 28px;
-    align-items: start;
+    align-items: stretch;
+    flex: 1;
+    min-height: 0;
   }
   .settings-nav {
     display: flex;
@@ -185,6 +203,10 @@ function navigate(event: Event): void {
     gap: 20px;
     border-right: 1px solid var(--color-border);
     padding-right: 16px;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    scrollbar-width: thin;
   }
   .settings-nav-group {
     display: flex;

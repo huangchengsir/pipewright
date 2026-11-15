@@ -115,6 +115,8 @@ type Service interface {
 	// AllocateSubdomain 瞬时分配子域名(E3.3 + E3.4):挑 app-<6char>.<baseDomain> → 建 A 记录
 	// 指向 hostIP → 创建一条 DNS-01 反代路由(证书即刻可签)。返回新建的反代路由。
 	AllocateSubdomain(ctx context.Context, in AllocateInput) (*RouteRef, error)
+	// AuthorizeAllocation checks exact DNS and server grants before looking up the host.
+	AuthorizeAllocation(ctx context.Context, in AllocateInput) error
 
 	// AllocateFQDN 为一个**指定的** FQDN(in.Subdomain,须落在提供商 base_domain 下)建 A 记录指向
 	// hostIP → 创建一条 DNS-01 反代路由(R4 E4.1 预览环境用:子域名确定而非随机)。返回新建路由引用。

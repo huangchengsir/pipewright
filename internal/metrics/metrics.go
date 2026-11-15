@@ -14,7 +14,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"time"
 
 	"github.com/google/uuid"
@@ -59,40 +61,43 @@ func (s *service) Record(ctx context.Context, samples []Sample) error {
 	if len(samples) == 0 {
 		return nil
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("metrics: begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	stmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO metric_samples (id, server_id, cpu_percent, memory_percent, disk_percent, sampled_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`)
-	if err != nil {
-		return fmt.Errorf("metrics: prepare: %w", err)
-	}
-	defer func() { _ = stmt.Close() }()
-
-	for _, sm := range samples {
-		at := sm.At.UTC().Format(time.RFC3339)
-		if _, err := stmt.ExecContext(ctx, uuid.NewString(), sm.ServerID,
-			nullFloat(sm.CPU), nullFloat(sm.Memory), nullFloat(sm.Disk), at); err != nil {
-			return fmt.Errorf("metrics: insert sample: %w", err)
+	return configstate.WithWriteTxContext(ctx, s.db, func(txctx context.Context, q configstate.DBTX) error {
+		if err := tenancy.LockAuthorization(txctx, s.db); err != nil {
+			return err
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("metrics: commit: %w", err)
-	}
-	return nil
+		// Check every exact server before writing any row. A mixed unauthorized batch
+		// cannot partially commit and current revocation is serialized with the write.
+		for _, sm := range samples {
+			if err := tenancy.Check(txctx, s.db, "server.inspect", "server", sm.ServerID); err != nil {
+				return err
+			}
+		}
+		for _, sm := range samples {
+			if _, err := q.ExecContext(txctx, `INSERT INTO metric_samples (id,server_id,cpu_percent,memory_percent,disk_percent,sampled_at) VALUES (?,?,?,?,?,?)`, uuid.NewString(), sm.ServerID, nullFloat(sm.CPU), nullFloat(sm.Memory), nullFloat(sm.Disk), sm.At.UTC().Format(time.RFC3339)); err != nil {
+				return fmt.Errorf("metrics: insert sample: %w", err)
+			}
+		}
+		return nil
+	})
 }
 
 func (s *service) QueryRange(ctx context.Context, serverID string, since time.Time) ([]Point, error) {
+	if err := tenancy.Check(ctx, s.db, "server.inspect", "server", serverID); err != nil {
+		return nil, err
+	}
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "server.inspect", "ms.server_id")
+	if err != nil {
+		return nil, err
+	}
+	args := []any{serverID, since.UTC().Format(time.RFC3339)}
+	args = append(args, predicate.Args...)
+	args = append(args, maxRangePoints)
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT cpu_percent, memory_percent, disk_percent, sampled_at
-		   FROM metric_samples
-		  WHERE server_id = ? AND sampled_at >= ?
+		   FROM metric_samples ms
+		  WHERE ms.server_id = ? AND ms.sampled_at >= ? AND `+predicate.SQL+`
 		  ORDER BY sampled_at ASC`+store.Limit(store.DialectOf(s.db), "?"),
-		serverID, since.UTC().Format(time.RFC3339), maxRangePoints,
+		args...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("metrics: query range: %w", err)
@@ -116,6 +121,9 @@ func (s *service) QueryRange(ctx context.Context, serverID string, since time.Ti
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("metrics: iterate samples: %w", err)
+	}
+	if err := tenancy.Check(ctx, s.db, "server.inspect", "server", serverID); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

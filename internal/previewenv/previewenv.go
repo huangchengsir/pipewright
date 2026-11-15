@@ -42,6 +42,7 @@ var (
 
 // PreviewEnv 是一条 PR 预览环境的领域模型(冻结契约)。
 type PreviewEnv struct {
+	bindingJSON string // internal fixed provider/run association; never in HTTP DTO
 	ID          string
 	ProjectID   string
 	PipelineID  string
@@ -60,10 +61,11 @@ type PreviewEnv struct {
 //   - DNSProviderID:分配预览子域名走的 DNS 提供商(R3)。
 //   - BaseDomain:在其下分配预览子域名(如 preview.example.com)。
 type Config struct {
-	ProjectID     string
-	Enabled       bool
-	DNSProviderID string
-	BaseDomain    string
+	AuthorizationState string
+	ProjectID          string
+	Enabled            bool
+	DNSProviderID      string
+	BaseDomain         string
 }
 
 // Service 定义预览环境领域对外接口(冻结契约;httpapi 消费)。

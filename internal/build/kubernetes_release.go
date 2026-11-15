@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/vault"
 	"io"
 	"strings"
 
@@ -139,7 +140,7 @@ func (b *Builder) releaseVariables(ctx context.Context, r *run.Run, cfg pipeline
 					if b.vault == nil || kubernetes.IsProtectedCredentialID(variable.CredentialID) {
 						return nil, kubernetes.ErrVariable
 					}
-					text, e = b.vault.Reveal(variable.CredentialID)
+					text, e = vault.Use(ctx, b.vault, variable.CredentialID)
 					secret = true
 					if e != nil {
 						return nil, kubernetes.ErrVariable
@@ -153,7 +154,7 @@ func (b *Builder) releaseVariables(ctx context.Context, r *run.Run, cfg pipeline
 			if b.vault == nil || kubernetes.IsProtectedCredentialID(v.Ref) {
 				return nil, kubernetes.ErrVariable
 			}
-			text, e = b.vault.Reveal(v.Ref)
+			text, e = vault.Use(ctx, b.vault, v.Ref)
 			secret = true
 			found = e == nil
 		}

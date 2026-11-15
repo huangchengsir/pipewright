@@ -1,6 +1,6 @@
 export default {
   identityTitle: '身分',
-  identitySub: '單管理員實例(多使用者與 RBAC 為後續版本)。',
+  identitySub: '檢視目前帳戶身分與登入資訊。',
   roleAdmin: '管理員',
 
   changePwTitle: '修改密碼',

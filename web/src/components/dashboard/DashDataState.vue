@@ -19,11 +19,11 @@ function time(at: number): string {
 }
 </script>
 <template>
-  <div class="dash-data" :data-state="state" :aria-busy="pending">
+  <div class="dash-data" :data-state="forbidden ? 'forbidden' : state" :aria-busy="pending">
     <div
       v-if="state === 'loading' || state === 'error' || state === 'stale'"
       class="data-notice"
-      :role="state === 'error' ? 'alert' : 'status'"
+      :role="!forbidden && state === 'error' ? 'alert' : 'status'"
     >
       <span
         ><strong>{{ label }}</strong> ·
@@ -33,13 +33,13 @@ function time(at: number): string {
         }}</small></span
       >
       <AppButton
-        v-if="state !== 'loading'"
+        v-if="!forbidden && state !== 'loading'"
         :loading="pending"
         @click="$emit('retry')"
         >{{ t("runs.retry") }}</AppButton
       >
     </div>
-    <slot v-if="state !== 'loading' && state !== 'error'" />
+    <slot v-if="!forbidden && state !== 'loading' && state !== 'error'" />
     <p
       v-if="(state === 'ready' || state === 'empty') && updatedAt"
       class="data-updated"

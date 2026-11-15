@@ -10,7 +10,7 @@ describe('localized dashboard failure controls', () => {
    const w = mount(DashDataState, { props: { state: 'error', updatedAt: 0, pending: false, label: 'Test' } })
    expect(w.find('button').text()).toBeTruthy(); expect(w.text()).not.toMatch(/common\.|runExperience\.|runs\./)
    await w.setProps({ state: 'stale', updatedAt: 1800000000000 }); expect(w.text()).not.toMatch(/common\.|runExperience\.|runs\./)
-   await w.setProps({ forbidden: true }); expect(w.text()).not.toMatch(/common\.|runExperience\.|runs\./); w.unmount()
+   await w.setProps({ forbidden: true }); expect(w.text()).not.toMatch(/common\.|runExperience\.|runs\./); expect(w.find('button').exists()).toBe(false); expect(w.attributes('data-state')).toBe('forbidden'); w.unmount()
   })
  }
 })

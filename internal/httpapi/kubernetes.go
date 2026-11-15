@@ -8,6 +8,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/kubernetes"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"io"
 	"net/http"
 	"reflect"
@@ -61,6 +62,7 @@ type k8sProbeWrite struct {
 // Operation DTO deliberately excludes private intent, ownership, approval material,
 // credential revisions, API server URLs and runtime proofs.
 type k8sOperationDTO struct {
+	CanManage    bool                     `json:"canManage"`
 	ID           string                   `json:"id"`
 	RunID        string                   `json:"runId"`
 	NodeID       string                   `json:"nodeId"`
@@ -140,7 +142,7 @@ func k8sErrorCode(e error) (int, string) {
 		return 400, "kubernetes_invalid_input"
 	case errors.Is(e, kubernetes.ErrNotFound):
 		return 404, "kubernetes_not_found"
-	case errors.Is(e, kubernetes.ErrDenied):
+	case errors.Is(e, kubernetes.ErrDenied), errors.Is(e, tenancy.ErrForbidden):
 		return 403, "kubernetes_not_authorized"
 	case errors.Is(e, kubernetes.ErrConflict):
 		return 409, "kubernetes_revision_conflict"
@@ -250,7 +252,16 @@ func (a k8sAPI) handle(kind, action string) http.HandlerFunc {
 			writeError(w, 401, "kubernetes_session_invalid", "kubernetes_session_invalid")
 			return
 		}
-		admin := func(fn func(context.Context) error) error { return a.s.WithAdminMutation(ctx, session.Token, fn) }
+		admin := func(fn func(context.Context) error) error {
+			return a.s.WithAdminMutation(ctx, session.Token, func(tx context.Context) error {
+				if kind == "operations" {
+					if err := a.s.AuthorizeOperationRecovery(tx, runID, id); err != nil {
+						return err
+					}
+				}
+				return fn(tx)
+			})
+		}
 		if r.Method == http.MethodGet {
 			switch kind {
 			case "credentials":
@@ -271,10 +282,12 @@ func (a k8sAPI) handle(kind, action string) http.HandlerFunc {
 				}
 			case "operations":
 				var ops []kubernetes.Operation
-				ops, err = a.s.ListOperations(ctx, runID)
+				ops, err = a.s.ListOperationsForRun(ctx, runID)
 				dtos := []k8sOperationDTO{}
 				for _, o := range ops {
-					dtos = append(dtos, k8sOperation(o))
+					view := k8sOperation(o)
+					view.CanManage = a.s.AuthorizeOperationRecovery(ctx, runID, o.ID) == nil
+					dtos = append(dtos, view)
 				}
 				out = dtos
 			}
@@ -284,10 +297,13 @@ func (a k8sAPI) handle(kind, action string) http.HandlerFunc {
 			if err == nil {
 				switch {
 				case kind == "credentials" && action == "preview":
-					var in kubernetes.CredentialInput
+					var in struct {
+						kubernetes.CredentialInput
+						CredentialID string `json:"credentialId,omitempty"`
+					}
 					err = k8sDecode(w, r, &in, 384<<10)
 					if err == nil {
-						out, err = kubernetes.PreviewCredential(in)
+						out, err = a.s.PreviewCredentialFor(ctx, in.CredentialID, in.CredentialInput)
 					}
 				case kind == "credentials" && (action == "create" || action == "update"):
 					var in k8sCredentialWrite
@@ -402,6 +418,11 @@ func (a k8sAPI) handle(kind, action string) http.HandlerFunc {
 										var receipt kubernetes.Receipt
 										receipt, err = a.c.Probe(bounded, authz.Target)
 										cancel()
+										if err == nil {
+											err = admin(func(ctx context.Context) error {
+												return a.s.ValidateAuthorization(ctx, authz)
+											})
+										}
 										out = k8sReceipt(receipt)
 									}
 								}
@@ -414,7 +435,7 @@ func (a k8sAPI) handle(kind, action string) http.HandlerFunc {
 					expected = in.ExpectedRevision
 					if err == nil {
 						var o kubernetes.Operation
-						o, err = a.s.GetOperation(ctx, id)
+						o, err = a.s.ReadOperationForRun(ctx, runID, id)
 						if err == nil && o.RunID != runID {
 							err = kubernetes.ErrNotFound
 						}
@@ -443,7 +464,9 @@ func (a k8sAPI) handle(kind, action string) http.HandlerFunc {
 										} else {
 											o, err = a.s.ApplyReconciliation(ctx, id, expected, receipt)
 										}
-										out = k8sOperation(o)
+										view := k8sOperation(o)
+										view.CanManage = a.s.AuthorizeOperationRecovery(ctx, runID, o.ID) == nil
+										out = view
 										return err
 									})
 								}

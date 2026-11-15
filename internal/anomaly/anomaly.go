@@ -17,7 +17,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"sync"
 	"time"
 
@@ -73,14 +75,15 @@ func validOperator(op string) bool {
 //   - ServerID 为 nil 表示全局(对所有服务器);非空表示仅作用于该服务器。
 //   - Threshold 是百分比阈值。
 type Rule struct {
-	ID                string
-	Metric            string
-	Operator          string
-	Threshold         float64
-	ServerID          *string
-	Enabled           bool
-	AIAnalysisEnabled bool
-	CreatedAt         time.Time
+	SamplingAuthorization string
+	ID                    string
+	Metric                string
+	Operator              string
+	Threshold             float64
+	ServerID              *string
+	Enabled               bool
+	AIAnalysisEnabled     bool
+	CreatedAt             time.Time
 }
 
 // CreateRuleInput 是创建规则的入参。
@@ -235,11 +238,20 @@ const defaultAlertLimit = 100
 const maxAlertLimit = 500
 
 func (s *service) ListRules(ctx context.Context) ([]*Rule, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, metric, operator, threshold, server_id, enabled, created_at, ai_analysis_enabled
-		 FROM anomaly_rules
-		 ORDER BY created_at DESC, id`,
-	)
+	principal, on, err := tenancy.CurrentPrincipal(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "anomaly.read", "ar.server_id")
+	if err != nil {
+		return nil, err
+	}
+	where := predicate.SQL
+	if on && principal.InstanceAdmin {
+		where = "(ar.server_id IS NULL OR ar.server_id='' OR (" + where + "))"
+	}
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx, `SELECT ar.id, ar.metric, ar.operator, ar.threshold, ar.server_id, ar.enabled, ar.created_at, ar.ai_analysis_enabled FROM anomaly_rules ar WHERE `+where+` ORDER BY ar.created_at DESC,ar.id`, predicate.Args...)
+
 	if err != nil {
 		return nil, fmt.Errorf("anomaly: list rules: %w", err)
 	}
@@ -256,10 +268,14 @@ func (s *service) ListRules(ctx context.Context) ([]*Rule, error) {
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("anomaly: iterate rules: %w", err)
 	}
+	rows.Close()
+	for _, rule := range out {
+		s.samplingStatus(ctx, rule)
+	}
 	return out, nil
 }
 
-func (s *service) CreateRule(ctx context.Context, in CreateRuleInput) (*Rule, error) {
+func (s *service) createRule(ctx context.Context, in CreateRuleInput) (*Rule, error) {
 	if !validMetric(in.Metric) {
 		return nil, ErrInvalidMetric
 	}
@@ -278,7 +294,7 @@ func (s *service) CreateRule(ctx context.Context, in CreateRuleInput) (*Rule, er
 		enabled = 1
 	}
 
-	_, err := s.db.ExecContext(ctx,
+	_, err := configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`INSERT INTO anomaly_rules (id, metric, operator, threshold, server_id, enabled, created_at, ai_analysis_enabled)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, in.Metric, in.Operator, in.Threshold, serverID, enabled, nowStr, boolValue(in.AIAnalysisEnabled),
@@ -286,16 +302,19 @@ func (s *service) CreateRule(ctx context.Context, in CreateRuleInput) (*Rule, er
 	if err != nil {
 		return nil, fmt.Errorf("anomaly: insert rule: %w", err)
 	}
+	if err := tenancy.RecordOwnership(ctx, s.db, "anomaly_rule", id, ""); err != nil {
+		return nil, err
+	}
 	return s.getRule(ctx, id)
 }
 
 // UpdateRule 整体更新一条规则(校验枚举);不存在 → ErrNotFound。created_at 不变。
-func (s *service) UpdateRule(ctx context.Context, id string, in CreateRuleInput) (*Rule, error) {
+func (s *service) updateRule(ctx context.Context, id string, in CreateRuleInput) error {
 	if !validMetric(in.Metric) {
-		return nil, ErrInvalidMetric
+		return ErrInvalidMetric
 	}
 	if !validOperator(in.Operator) {
-		return nil, ErrInvalidOperator
+		return ErrInvalidOperator
 	}
 	var serverID any
 	if in.ServerID != nil && *in.ServerID != "" {
@@ -309,26 +328,19 @@ func (s *service) UpdateRule(ctx context.Context, id string, in CreateRuleInput)
 	if in.PreserveEnabled {
 		enabledValue = nil
 	}
-	_, err := s.db.ExecContext(ctx,
+	_, err := configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`UPDATE anomaly_rules SET metric = ?, operator = ?, threshold = ?, server_id = ?, enabled = COALESCE(?, enabled), ai_analysis_enabled = COALESCE(?, ai_analysis_enabled)
 		 WHERE id = ?`,
 		in.Metric, in.Operator, in.Threshold, serverID, enabledValue, optionalBoolValue(in.AIAnalysisEnabled), id,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("anomaly: update rule: %w", err)
+		return fmt.Errorf("anomaly: update rule: %w", err)
 	}
-	if (!in.PreserveEnabled && !in.Enabled) || (in.AIAnalysisEnabled != nil && !*in.AIAnalysisEnabled) {
-		s.cancelRuleAnalysis(id)
-	}
-	rule, err := s.getRule(ctx, id)
-	if err == nil && (!rule.Enabled || !rule.AIAnalysisEnabled) {
-		s.cancelRuleAnalysis(id)
-	}
-	return rule, err
+	return nil
 }
 
 func (s *service) getRule(ctx context.Context, id string) (*Rule, error) {
-	row := s.db.QueryRowContext(ctx,
+	row := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT id, metric, operator, threshold, server_id, enabled, created_at, ai_analysis_enabled
 		 FROM anomaly_rules WHERE id = ?`, id,
 	)
@@ -342,8 +354,8 @@ func (s *service) getRule(ctx context.Context, id string) (*Rule, error) {
 	return r, nil
 }
 
-func (s *service) DeleteRule(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM anomaly_rules WHERE id = ?`, id)
+func (s *service) deleteRule(ctx context.Context, id string) error {
+	res, err := configstate.Queryer(ctx, s.db).ExecContext(ctx, `DELETE FROM anomaly_rules WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("anomaly: delete rule: %w", err)
 	}
@@ -351,7 +363,6 @@ func (s *service) DeleteRule(ctx context.Context, id string) error {
 	if n == 0 {
 		return ErrNotFound
 	}
-	s.cancelRuleAnalysis(id)
 	return nil
 }
 
@@ -361,6 +372,21 @@ func (s *service) DeleteRule(ctx context.Context, id string) error {
 //  3. 逐快照 × 逐规则(规则全局或匹配该服务器)求值:指标不可得 / 不可达 → 跳过。
 //  4. 命中 → 产告警入库,收集进返回列表。
 func (s *service) Check(ctx context.Context) ([]*Alert, error) {
+	on, modeErr := tenancy.Enabled(ctx, s.db)
+	if modeErr != nil {
+		return nil, modeErr
+	}
+	if on {
+		if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+			return nil, err
+		}
+		// Manual sampling still uses the rule owner's fixed approval, not the
+		// administrator pressing the button. Request cancellation remains effective.
+		base, cancel := context.WithCancel(context.Background())
+		stop := context.AfterFunc(ctx, cancel)
+		defer func() { stop(); cancel() }()
+		return s.CheckScheduled(base)
+	}
 	select {
 	case s.checkGate <- struct{}{}:
 		defer func() { <-s.checkGate }()
@@ -484,7 +510,7 @@ func (s *service) recordAlert(ctx context.Context, rule *Rule, snap ServerMetric
 		analysis = &Analysis{Status: status}
 	}
 
-	_, err := s.db.ExecContext(ctx,
+	_, err := configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`INSERT INTO anomaly_alerts
 		   (id, server_id, server_name, metric, operator, threshold, value, message, created_at, rule_id, ai_analysis_enabled, analysis_status)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -550,24 +576,20 @@ func (s *service) ListAlerts(ctx context.Context, serverID string, limit int) ([
 		limit = maxAlertLimit
 	}
 
-	var (
-		rows *sql.Rows
-		err  error
-	)
-	if serverID != "" {
-		rows, err = s.db.QueryContext(ctx,
-			`SELECT `+alertColumns+`
-			 FROM anomaly_alerts
-			 WHERE server_id = ?
-			 ORDER BY created_at DESC, id`+store.Limit(store.DialectOf(s.db), "?"), serverID, limit,
-		)
-	} else {
-		rows, err = s.db.QueryContext(ctx,
-			`SELECT `+alertColumns+`
-			 FROM anomaly_alerts
-			 ORDER BY created_at DESC, id`+store.Limit(store.DialectOf(s.db), "?"), limit,
-		)
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "anomaly.read", "aa.server_id")
+	if err != nil {
+		return nil, err
 	}
+	where := "(" + predicate.SQL + ")"
+	args := append([]any{}, predicate.Args...)
+	if serverID != "" {
+		where += " AND aa.server_id=?"
+		args = append(args, serverID)
+	}
+	args = append(args, limit)
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
+		`SELECT `+alertColumns+` FROM anomaly_alerts aa WHERE `+where+` ORDER BY created_at DESC,id`+store.Limit(store.DialectOf(s.db), "?"), args...)
+
 	if err != nil {
 		return nil, fmt.Errorf("anomaly: list alerts: %w", err)
 	}

@@ -1,0 +1,1225 @@
+<script setup lang="ts">
+/**
+ * SettingsSystem — 系统信息与一键检查更新。
+ *
+ * - 挂载时读 GET /version 显示当前构建版本与元数据(commit / 构建时间 / 平台 / Go 版本)。
+ * - 「检查更新」按钮调 GET /api/version/check(查 GitHub 最新发布并比对):
+ *     状态收敛到 hero 右上的状态药丸;仅当有新版时,下方展开强调升级卡(CTA + 可折叠更新说明)。
+ * - 开发态(version=dev)永不误报更新,药丸显示「开发构建」。
+ */
+
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import {useAuthorizedRequestScope} from '../../composables/useAuthorizedRequestScope'
+import {useSessionStore} from '../../stores/session'
+import { getVersion, checkUpdate } from '../../api/version'
+import type { VersionInfo, UpdateInfo, ReleaseSource } from '../../api/version'
+import { getRetentionConfig, setRetentionConfig, type RetentionConfig } from '../../api/retention'
+import { HttpError } from '../../api/http'
+import AppButton from '../../components/ui/AppButton.vue'
+import AppSelect from '../../components/ui/AppSelect.vue'
+import { useReleaseSource } from '../../composables/useReleaseSource'
+import ProgressBar from '../../components/ui/ProgressBar.vue'
+import UpgradeSteps from '../../components/system/UpgradeSteps.vue'
+import { useSelfUpdate } from '../../composables/useSelfUpdate'
+
+const { t, locale } = useI18n()
+
+const version = ref<VersionInfo | null>(null)
+const versionError = ref('')
+
+type CheckState = 'idle' | 'checking' | 'done' | 'error'
+const checkState = ref<CheckState>('idle')
+const update = ref<UpdateInfo | null>(null)
+const checkError = ref('')
+const checkErrorCode = ref<UpdateInfo['checkErrorCode'] | ''>('')
+const sourceErrorKeys = { source_not_configured: 'sourceNotConfigured', mirror_not_ready: 'sourceNotReady', source_unavailable: 'sourceUnavailable', invalid_source: 'sourceUnavailable' }
+const checkErrorText = computed(() => checkErrorCode.value ? t('settingsSystem.' + (sourceErrorKeys[checkErrorCode.value] ?? 'sourceUnavailable')) : checkError.value)
+const showNotes = ref(false)
+const session=useSessionStore()
+const scope=useAuthorizedRequestScope({action:'system.manage',resourceId:'instance'},()=>{
+ version.value=null;update.value=null;checkState.value='idle';checkError.value='';rt.value={enabled:false,keepPerProject:0,maxAgeDays:0};rtSaved.value=false;disposed=true;checkController?.abort()
+})
+const { settings: sourceSettings, draft: sourceDraft, loading: sourceLoading, saving: sourceSaving, saved: sourceSaved,
+  error: sourceError, needsReload: sourceNeedsReload, dirty: sourceDirty, canSave: sourceCanSave,
+  canCheck: sourceCanCheck, load: reloadSource, save: saveSource } = useReleaseSource(scope)
+const sourceOptions = computed(() => (sourceSettings.value?.sources ?? [
+  { id: 'github', name: 'GitHub', available: false }, { id: 'gitee', name: 'Gitee', available: false },
+]).map(source => ({ value: source.id, label: source.id === 'gitee' ? 'Gitee' : 'GitHub', disabled: !source.available })))
+const giteeNotConfigured = computed(() => sourceSettings.value?.sources.some(source => source.id === 'gitee' && !source.available))
+const sourceErrorText = computed(() => sourceError.value ? t('settingsSystem.' + ({ load: 'sourceLoadFailed', save: 'sourceSaveFailed', conflict: 'sourceConflict' }[sourceError.value])) : '')
+function sourceName(source?: ReleaseSource): string { return source === 'gitee' ? 'Gitee' : 'GitHub' }
+function selectSource(value: string) { if (value === 'github' || value === 'gitee') sourceDraft.value = value }
+let checkGeneration = 0
+let checkController: AbortController | undefined
+function invalidateCheck() {
+  checkGeneration++
+  checkController?.abort()
+  update.value = null
+  checkState.value = 'idle'
+  checkError.value = ''
+  checkErrorCode.value = ''
+  showNotes.value = false
+}
+watch([sourceDraft, () => sourceSettings.value?.revision, sourceNeedsReload], invalidateCheck, { flush: 'sync' })
+
+
+const { task, pending, connectionUnknown: taskUnknown, submitting, submissionError, canRecoverOriginal, recoverOriginal, manual, busy: taskBusy, canStart, start: startTask, resume: resumeTask, recheck: recheckTask } = useSelfUpdate(scope, session.user?.multiTenant ? session.user.userId : undefined)
+const updatePhase = computed<'idle' | 'applying' | 'restarting' | 'manual' | 'error'>(() => manual.value ? 'manual' : task.value?.state === 'restarting' ? 'restarting' : taskBusy.value ? 'applying' : 'idle')
+const updateMsg = computed(() => t(manual.value?.reason === 'private_driver_build' ? 'settingsSystem.manualPrivateDriver' : 'settingsSystem.manualUpgrade'))
+const dockerCommand = computed(() => manual.value?.command || '')
+const taskSubmitError = computed(() => {
+ if (submissionError.value?.code === 'update_private_driver') return t('settingsSystem.manualPrivateDriver')
+ if (submissionError.value?.code === 'update_migration_active') return t('settingsSystem.databaseMigrationActive')
+ return submissionError.value ? submissionError.value.status ? t('settingsSystem.errUpdateStatus', { status: submissionError.value.status }) : t('settingsSystem.errUpdateRetry') : ''
+})
+const copied = ref(false)
+const completedTask = computed(() => task.value?.state === 'completed' ? task.value : null)
+const visibleTask = computed(() => task.value?.state !== 'completed' ? task.value : null)
+const downloadBytes = computed(() => Number.isFinite(task.value?.bytes) && task.value!.bytes >= 0 ? Math.floor(task.value!.bytes) : null)
+const downloadTotal = computed(() => Number.isFinite(task.value?.total) && task.value!.total > 0 ? Math.floor(task.value!.total) : null)
+const downloadPercent = computed(() => downloadBytes.value !== null && downloadTotal.value !== null && downloadTotal.value > 0
+  ? Math.round(Math.min(100, Math.max(0, downloadBytes.value / downloadTotal.value * 100)) * 10) / 10 : undefined)
+let versionGeneration = 0
+let disposed = false
+const refreshedTasks = new Set<string>()
+const completionObserved = ref(false)
+watch(() => task.value ? { id: task.value.id, state: task.value.state } : null, (next, previous) => {
+  if (next?.id !== previous?.id) completionObserved.value = false
+  if (!next || next.id !== previous?.id || next.state !== 'completed' ||
+    !['accepted', 'checking', 'downloading', 'verifying', 'extracting', 'installing', 'restarting'].includes(previous.state) || refreshedTasks.has(next.id)) return
+  completionObserved.value = true
+  refreshedTasks.add(next.id)
+  update.value = null
+  checkState.value = 'idle'
+  void loadVersion()
+})
+onBeforeUnmount(() => { disposed = true; versionGeneration++; checkGeneration++; checkController?.abort() })
+const taskMessage = computed(() => {
+ const state = task.value?.state
+ if (task.value?.reason === 'private_driver_build') return t('settingsSystem.manualPrivateDriver')
+ if (task.value?.reason === 'installation_target_changed') return t('settingsSystem.taskTargetChanged')
+ if (task.value?.reason === 'readiness_unavailable') return t('settingsSystem.taskReadinessUnavailable')
+ if (state === 'ready_blocked') return t('settingsSystem.taskBlocked')
+ if (state === 'interrupted') return t('settingsSystem.taskInterrupted')
+ if (state === 'unknown' || state === 'restart_required') return t('settingsSystem.taskNoReplay')
+ if (state === 'failed') return t('settingsSystem.taskVerificationFailed')
+ return ''
+})
+function formatNumber(value: number) { return new Intl.NumberFormat(locale.value).format(value) }
+function reloadApplication() { if(scope.active())window.location.reload() }
+
+const isDev = computed(() => {
+  const v = version.value?.version ?? ''
+  return v === '' || v === 'dev' || !/^v?\d/.test(v)
+})
+
+const hasUpdate = computed(() => checkState.value === 'done' && !!update.value?.updateAvailable)
+
+/** hero 右上状态药丸:label + 色调(随检查状态变化)。 */
+type Tone = 'neutral' | 'checking' | 'ok' | 'update' | 'dev' | 'err'
+const pill = computed<{ label: string; tone: Tone }>(() => {
+  if (checkState.value === 'checking') return { label: t('settingsSystem.pillChecking'), tone: 'checking' }
+  if (checkState.value === 'error') return { label: t('settingsSystem.pillCheckFailed'), tone: 'err' }
+  if (checkState.value === 'done') {
+    if (hasUpdate.value) return { label: t('settingsSystem.pillUpdateAvailable'), tone: 'update' }
+    if (isDev.value) return { label: t('settingsSystem.pillDevBuild'), tone: 'dev' }
+    return { label: t('settingsSystem.pillUpToDate'), tone: 'ok' }
+  }
+  return { label: isDev.value ? t('settingsSystem.pillDevBuild') : t('settingsSystem.pillNotChecked'), tone: isDev.value ? 'dev' : 'neutral' }
+})
+
+const meta = computed(() => {
+  const v = version.value
+  if (!v) return []
+  return [
+    { label: t('settingsSystem.metaCommit'), value: v.commit, mono: true },
+    { label: t('settingsSystem.metaBuildTime'), value: fmtDate(v.date) },
+    { label: t('settingsSystem.metaPlatform'), value: v.platform, mono: true },
+    { label: t('settingsSystem.metaGoVersion'), value: v.goVersion, mono: true },
+  ].filter((m) => m.value && m.value !== 'none' && m.value !== 'unknown')
+})
+
+function fmtDate(s: string): string {
+  if (!s || s === 'unknown') return s
+  const d = new Date(s)
+  if (Number.isNaN(d.getTime())) return s
+  return d.toLocaleString(locale.value, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+async function loadVersion(): Promise<void> {
+ if(!scope.active())return
+  const generation = ++versionGeneration
+  try {
+    const value = await scope.run(()=>getVersion(scope.requestOptions))
+    if (disposed || generation !== versionGeneration) return
+    version.value = value
+    versionError.value = ''
+  } catch {
+ if(!scope.active())return
+    if (!disposed && generation === versionGeneration) versionError.value = t('settingsSystem.errReadVersion')
+  }
+}
+
+async function runCheck(): Promise<void> {
+ if(!scope.active())return
+  if (!sourceCanCheck.value || !sourceSettings.value) return
+  const source = sourceSettings.value.source
+  const generation = ++checkGeneration
+  checkController?.abort()
+  checkController = new AbortController()
+  checkState.value = 'checking'
+  checkError.value = ''
+  checkErrorCode.value = ''
+  update.value = null
+  showNotes.value = false
+  try {
+    const info = await scope.run(()=>checkUpdate(source, { ...scope.requestOptions, signal: checkController!.signal }))
+    if (disposed || generation !== checkGeneration) return
+    if ((info.source ?? 'github') !== source) {
+      checkErrorCode.value = 'source_unavailable'; checkState.value = 'error'; return
+    }
+    if (info.checkError) {
+      checkErrorCode.value = info.checkErrorCode ?? ''
+      checkError.value = info.checkError
+      checkState.value = 'error'
+      return
+    }
+    update.value = info
+    checkState.value = 'done'
+  } catch (err) {
+ if(!scope.active())return
+    if (disposed || generation !== checkGeneration) return
+    checkError.value = err instanceof HttpError ? (err.apiError?.message ?? t('settingsSystem.errCheckStatus', { status: err.status })) : t('settingsSystem.errCheckRetry')
+    checkState.value = 'error'
+  }
+}
+
+async function runUpdate(): Promise<void> {
+ if(!scope.active())return
+ if (pending.value) { await startTask(pending.value.target, pending.value.source); return }
+ if (update.value?.latest && canStart.value) await startTask(update.value.latest, update.value.source ?? sourceSettings.value?.source ?? 'github')
+}
+
+async function copyCommand(): Promise<void> {
+ if(!scope.active())return
+  try {
+    await scope.run(()=>navigator.clipboard.writeText(dockerCommand.value))
+    copied.value = true
+    window.setTimeout(() => (copied.value = false), 1800)
+  } catch {
+ if(!scope.active())return
+    // 剪贴板不可用(非 https / 权限):静默,用户可手动选中复制。
+  }
+}
+
+// ─── 运行数据保留策略 ─────────────────────────────────────────────────────────
+const rt = ref<RetentionConfig>({ enabled: false, keepPerProject: 0, maxAgeDays: 0 })
+const rtLoading = ref(true)
+const rtSaving = ref(false)
+const rtSaved = ref(false)
+const rtError = ref('')
+
+async function loadRetention(): Promise<void> {
+ if(!scope.active())return
+  rtLoading.value = true
+  try {
+    rt.value = await scope.run(()=>getRetentionConfig(scope.requestOptions))
+  } catch {
+ if(!scope.active())return
+    // 读失败保持默认(关),不阻断页面
+  } finally {
+    rtLoading.value = false
+  }
+}
+
+async function saveRetention(): Promise<void> {
+ if(!scope.active())return
+  rtSaving.value = true
+  rtSaved.value = false
+  rtError.value = ''
+  try {
+    rt.value = await scope.run(()=>setRetentionConfig({
+      enabled: rt.value.enabled,
+      keepPerProject: Math.max(0, Math.floor(Number(rt.value.keepPerProject) || 0)),
+      maxAgeDays: Math.max(0, Math.floor(Number(rt.value.maxAgeDays) || 0)),
+    },scope.requestOptions))
+    rtSaved.value = true
+    setTimeout(() => { rtSaved.value = false }, 2000)
+  } catch {
+ if(!scope.active())return
+    rtError.value = t('settingsSystem.retentionSaveFailed')
+  } finally {
+    rtSaving.value = false
+  }
+}
+
+onMounted(() => {
+  void loadVersion()
+  void loadRetention()
+})
+</script>
+
+<template>
+  <section class="sys settings-page" aria-labelledby="sys-heading">
+    <header class="sys-head">
+      <h2 id="sys-heading" class="sys-title">{{ t('settingsSystem.title') }}</h2>
+      <p class="sys-sub">{{ t('settingsSystem.subtitle') }}</p>
+    </header>
+
+    <p class="sys-completion-status" role="status" aria-live="polite" aria-atomic="true">{{ completionObserved && completedTask ? t('settingsSystem.taskStates.completed') : '' }}</p>
+    <!-- 版本面板 -->
+    <article class="sys-panel">
+      <span class="sys-accent" aria-hidden="true" />
+
+      <!-- hero:品牌 + 状态药丸 -->
+      <div class="sys-hero">
+        <div class="sys-brand">
+          <span class="sys-glyph mono" aria-hidden="true">p&gt;</span>
+          <span class="sys-brand-text">
+            <span class="sys-brand-name">Pipewright</span>
+            <span class="sys-brand-tag">{{ t('settingsSystem.brandTag') }}</span>
+          </span>
+        </div>
+        <span class="sys-pill" :class="`sys-pill--${pill.tone}`">
+          <span class="sys-pill-dot" aria-hidden="true" />
+          {{ pill.label }}
+        </span>
+      </div>
+
+      <!-- 版本号 + 操作 -->
+      <div class="sys-version-row">
+        <div class="sys-version-block">
+          <span class="sys-version-cap">{{ t('settingsSystem.currentVersion') }}</span>
+          <strong class="sys-version-num" :class="{ 'is-dev': isDev }">{{ version?.version ?? '…' }}</strong>
+        </div>
+        <AppButton variant="primary" :loading="checkState === 'checking'" :disabled="!sourceCanCheck" @click="runCheck">
+          <svg v-if="checkState !== 'checking'" class="sys-btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M1 4v6h6M23 20v-6h-6" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+          </svg>
+          {{ checkState === 'checking' ? t('settingsSystem.pillChecking') : t('settingsSystem.checkUpdate') }}
+        </AppButton>
+      </div>
+
+      <p v-if="versionError" class="sys-inline-err" role="alert">{{ versionError }}</p>
+      <p v-else-if="checkState === 'error'" class="sys-inline-err" role="alert">{{ t('settingsSystem.checkFailedPrefix', { msg: checkErrorText }) }}</p>
+
+      <div class="sys-source" data-testid="release-source-settings" :aria-busy="sourceLoading || sourceSaving">
+        <label for="release-source" class="sys-source-label">{{ t('settingsSystem.sourceTitle') }}</label>
+        <div class="sys-source-controls">
+          <AppSelect input-id="release-source" :model-value="sourceDraft" :options="sourceOptions" min-width="160px" height="36px"
+            :portal="true" :aria-label="t('settingsSystem.sourceTitle')" aria-describedby="release-source-help"
+            :disabled="sourceLoading || sourceSaving || sourceNeedsReload" @update:model-value="selectSource" />
+          <AppButton :loading="sourceSaving" :disabled="!sourceCanSave" @click="saveSource">{{ t('settingsSystem.sourceSave') }}</AppButton>
+        </div>
+        <p id="release-source-help" class="sys-source-help">{{ t('settingsSystem.sourceHelp') }}</p>
+        <p v-if="sourceErrorText" class="sys-source-feedback sys-inline-err" role="alert">{{ sourceErrorText }}
+          <AppButton variant="ghost" :disabled="sourceLoading || sourceSaving" @click="reloadSource">{{ t('settingsSystem.sourceReload') }}</AppButton>
+        </p>
+        <p v-else-if="sourceDirty" class="sys-source-feedback" role="status">{{ t('settingsSystem.sourceUnsaved') }}</p>
+        <p v-else-if="sourceSaved" class="sys-source-feedback sys-source-saved" role="status">{{ t('settingsSystem.sourceSaved') }}</p>
+        <p v-if="giteeNotConfigured" class="sys-source-feedback">{{ t('settingsSystem.sourceNotConfigured') }}</p>
+        <p v-if="task && !['completed', 'failed'].includes(task.state) && sourceSettings && (task.source ?? 'github') !== sourceSettings.source" class="sys-source-feedback">{{ t('settingsSystem.sourceCurrentTask', { source: sourceName(task.source) }) }}</p>
+      </div>
+
+      <!-- 构建元数据 -->
+      <dl v-if="meta.length" class="sys-meta">
+        <div v-for="m in meta" :key="m.label" class="sys-meta-item">
+          <dt>{{ m.label }}</dt>
+          <dd :class="{ mono: m.mono }">{{ m.value }}</dd>
+        </div>
+      </dl>
+      <details v-if="completedTask" :key="completedTask.id" class="sys-history" data-testid="upgrade-history">
+        <summary><span class="sys-history-dot" aria-hidden="true" /><strong>{{ t('settingsSystem.taskHistory') }}</strong><span>{{ completedTask.from }} → {{ completedTask.target }}</span></summary>
+        <p>{{ t('settingsSystem.taskStates.completed') }} · {{ fmtDate(completedTask.updatedAt) }}</p>
+        <p>{{ t('settingsSystem.sourceTaskLabel') }}: {{ sourceName(completedTask.source) }}</p>
+        <p class="sys-task-identity">{{ completedTask.id }} · {{ completedTask.repository }} · {{ completedTask.platform }}</p>
+        <pre class="sys-notes">{{ completedTask.asset }}
+{{ completedTask.sha256 }}</pre>
+        <AppButton @click="reloadApplication">{{ t('settingsSystem.taskReload') }}</AppButton>
+      </details>
+    </article>
+
+    <article v-if="visibleTask || taskUnknown || pending || taskSubmitError" class="sys-panel" aria-labelledby="upgrade-task-title" data-testid="upgrade-task">
+      <h3 id="upgrade-task-title" class="sys-title">{{ t('settingsSystem.taskTitle') }}</h3>
+      <p v-if="taskSubmitError" class="sys-inline-err" role="alert">{{ taskSubmitError }}</p>
+      <p v-if="taskUnknown" role="status">{{ t('settingsSystem.taskConnectionUnknown') }}</p>
+      <template v-if="visibleTask && task">
+        <p role="status"><strong>{{ t('settingsSystem.taskStates.' + task.state) }}</strong> · {{ task.from }} → {{ task.target }}</p>
+        <p v-if="taskMessage">{{ taskMessage }}</p>
+        <UpgradeSteps :state="task.state" />
+        <div v-if="task.state === 'downloading'" class="sys-download">
+          <ProgressBar :value="downloadPercent" :label="t('settingsSystem.taskDownloadProgress')" />
+          <p v-if="downloadBytes !== null">{{ t('settingsSystem.taskProgress', { downloaded: formatNumber(downloadBytes), total: downloadTotal !== null ? formatNumber(downloadTotal) : t('settingsSystem.taskSizeUnknown') }) }}</p>
+          <p v-else>{{ t('settingsSystem.taskDownloadProgress') }}</p>
+        </div>
+        <ul v-if="task.blockers?.length">
+          <li v-for="blocker in task.blockers" :key="blocker.kind">{{ t('settingsSystem.taskBlockers.' + blocker.kind, { count: formatNumber(blocker.count) }) }}</li>
+        </ul>
+        <p v-if="task.state === 'ready_blocked'">{{ t('settingsSystem.taskWorkPreserved') }}</p>
+        <div v-if="(task.state === 'interrupted' || task.state === 'ready_blocked') && !canRecoverOriginal" class="sys-upgrade-actions">
+          <AppButton v-if="(task.state === 'interrupted' || task.state === 'ready_blocked') && !canRecoverOriginal" :loading="taskBusy" :disabled="taskBusy" @click="resumeTask">{{ t(task.state === 'ready_blocked' ? 'settingsSystem.taskContinue' : 'settingsSystem.taskResume') }}</AppButton>
+        </div>
+        <details><summary>{{ t('settingsSystem.taskDetails') }}</summary><p>{{ t('settingsSystem.sourceTaskLabel') }}: {{ sourceName(task.source) }}</p><p>{{ task.id }} · {{ task.repository }} · {{ task.platform }}</p><p class="sys-notes">{{ task.asset }}
+{{ task.sha256 }}</p><p>{{ fmtDate(task.updatedAt) }}</p></details>
+      </template>
+      <div class="sys-upgrade-actions">
+        <AppButton variant="ghost" @click="recheckTask">{{ t('settingsSystem.taskRecheck') }}</AppButton>
+        <AppButton v-if="canRecoverOriginal" :loading="submitting" :disabled="submitting" @click="recoverOriginal">{{ t('settingsSystem.taskOriginalRequest') }}</AppButton>
+      </div>
+    </article>
+
+
+    <!-- 仅当有新版时:强调升级卡 -->
+    <transition name="sys-rise">
+      <article v-if="hasUpdate" class="sys-upgrade">
+        <p v-if="update" class="sys-source-help">{{ t('settingsSystem.sourceCheckingFrom', { source: sourceName(update.source) }) }}</p>
+        <div class="sys-upgrade-head">
+          <span class="sys-upgrade-icon" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+          </span>
+          <div class="sys-upgrade-meta">
+            <h3 class="sys-upgrade-title">{{ t('settingsSystem.upgradeTitle') }}</h3>
+            <div class="sys-vjump">
+              <span class="sys-vtag sys-vtag--cur">{{ update?.current }}</span>
+              <span class="sys-varrow" aria-hidden="true">→</span>
+              <span class="sys-vtag sys-vtag--new">{{ update?.latest }}</span>
+              <span v-if="update?.publishedAt" class="sys-pubdate">{{ t('settingsSystem.publishedAt', { date: fmtDate(update.publishedAt) }) }}</span>
+            </div>
+          </div>
+          <div class="sys-upgrade-actions">
+            <AppButton
+              variant="primary"
+              :loading="updatePhase === 'applying' || updatePhase === 'restarting'"
+              :disabled="!canStart"
+              @click="runUpdate"
+            >
+              {{ updatePhase === 'applying' ? t('settingsSystem.preparing') : updatePhase === 'restarting' ? t('settingsSystem.restarting') : t('settingsSystem.updateNow') }}
+            </AppButton>
+            <a v-if="update?.releaseUrl" class="sys-cta-ghost" :href="update.releaseUrl" target="_blank" rel="noopener noreferrer">
+              {{ t('settingsSystem.viewRelease') }}
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17L17 7M7 7h10v10" /></svg>
+            </a>
+          </div>
+        </div>
+
+        <!-- 自动更新进行态 -->
+        <transition name="sys-rise">
+          <div v-if="updatePhase === 'restarting'" class="sys-update-state sys-update-state--busy" role="status">
+            <span class="sys-spinner-dark" aria-hidden="true" />
+            <span>{{ t('settingsSystem.taskStates.restarting') }}</span>
+          </div>
+          <div v-else-if="updatePhase === 'manual'" class="sys-update-state sys-update-state--manual">
+            <p class="sys-update-state-msg">{{ updateMsg }}</p>
+            <div v-if="dockerCommand" class="sys-cmd">
+              <code>{{ dockerCommand }}</code>
+              <button type="button" class="sys-cmd-copy" @click="copyCommand">{{ copied ? t('settingsSystem.copied') : t('settingsSystem.copy') }}</button>
+            </div>
+          </div>
+          <div v-else-if="updatePhase === 'error'" class="sys-update-state sys-update-state--err" role="alert">
+            {{ t('settingsSystem.updateFailedPrefix', { msg: updateMsg }) }}
+          </div>
+        </transition>
+
+        <div v-if="update?.notes" class="sys-notes-wrap">
+          <button class="sys-notes-toggle" :aria-expanded="showNotes" @click="showNotes = !showNotes">
+            <svg class="sys-chevron" :class="{ open: showNotes }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6" /></svg>
+            {{ showNotes ? t('settingsSystem.hideNotes') : t('settingsSystem.showNotes') }}
+          </button>
+          <transition name="sys-rise">
+            <pre v-if="showNotes" class="sys-notes">{{ update.notes }}</pre>
+          </transition>
+        </div>
+      </article>
+    </transition>
+
+    <!-- 运行数据保留 / 清理 -->
+    <article class="sys-panel">
+      <span class="sys-accent" aria-hidden="true" />
+      <div class="rt-head">
+        <div class="rt-head-text">
+          <h3 class="rt-title">{{ t('settingsSystem.retentionTitle') }}</h3>
+          <p class="rt-sub">{{ t('settingsSystem.retentionSub') }}</p>
+        </div>
+        <button
+          type="button"
+          class="rt-switch"
+          :class="{ 'rt-switch--on': rt.enabled }"
+          role="switch"
+          :aria-checked="rt.enabled"
+          :aria-label="t('settingsSystem.retentionTitle')"
+          :disabled="rtLoading"
+          @click="rt.enabled = !rt.enabled"
+        >
+          <span class="rt-switch-knob" aria-hidden="true" />
+        </button>
+      </div>
+
+      <div class="rt-fields" :class="{ 'rt-fields--off': !rt.enabled }">
+        <label class="rt-field">
+          <span class="rt-label">{{ t('settingsSystem.retentionKeep') }}</span>
+          <input class="rt-input mono" type="number" min="0" step="1" v-model.number="rt.keepPerProject" :disabled="!rt.enabled || rtLoading" />
+          <span class="rt-hint">{{ t('settingsSystem.retentionKeepHint') }}</span>
+        </label>
+        <label class="rt-field">
+          <span class="rt-label">{{ t('settingsSystem.retentionAge') }}</span>
+          <input class="rt-input mono" type="number" min="0" step="1" v-model.number="rt.maxAgeDays" :disabled="!rt.enabled || rtLoading" />
+          <span class="rt-hint">{{ t('settingsSystem.retentionAgeHint') }}</span>
+        </label>
+      </div>
+
+      <p class="rt-warn">{{ t('settingsSystem.retentionWarn') }}</p>
+
+      <div class="rt-actions">
+        <span v-if="rtSaved" class="rt-saved" role="status">{{ t('settingsSystem.retentionSaved') }}</span>
+        <span v-if="rtError" class="rt-err" role="alert">{{ rtError }}</span>
+        <AppButton variant="primary" :loading="rtSaving" :disabled="rtLoading" @click="saveRetention">
+          {{ t('settingsSystem.retentionSave') }}
+        </AppButton>
+      </div>
+    </article>
+  </section>
+</template>
+
+<style scoped>
+.sys-source { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 16px; padding-top: var(--space-4); border-top: 1px solid var(--color-border); }
+.sys-source-label { font-size: 13px; font-weight: 600; }
+.sys-source-controls { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sys-source-controls > .app-btn { flex-shrink: 0; white-space: nowrap; }
+.sys-source-help, .sys-source-feedback { grid-column: 1 / -1; margin: 0; color: var(--color-faint); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.sys-source-feedback { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+.sys-source-saved { color: var(--color-success); }
+@media (max-width: 560px) {
+  .sys-source { grid-template-columns: minmax(0, 1fr); }
+  .sys-source-controls { width: 100%; }
+  .sys-source-controls > :first-child { flex: 1; min-width: 0 !important; }
+}
+
+.sys-completion-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.sys {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 760px;
+  min-width: 0;
+  font-size: var(--settings-text-size, 13px);
+}
+
+.sys-head {
+  margin-bottom: var(--space-1);
+}
+.sys-title {
+  font-size: var(--settings-title-size, 18px);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
+}
+.sys-sub {
+  font-size: var(--settings-text-size, 13px);
+  color: var(--color-faint);
+  margin-top: 2px;
+}
+
+/* ── 版本面板 ───────────────────────────── */
+.sys-panel {
+  position: relative;
+  overflow: hidden;
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  box-shadow: none;
+}
+/* 顶部品牌强调条 */
+.sys-accent {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    var(--color-primary),
+    var(--color-primary-press) 60%,
+    transparent
+  );
+}
+
+/* hero */
+.sys-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.sys-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.sys-glyph {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--rounded, 10px);
+  display: grid;
+  place-items: center;
+  background: linear-gradient(
+    140deg,
+    var(--color-primary),
+    var(--color-primary-press)
+  );
+  color: #fff;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 0.92rem;
+  box-shadow: 0 6px 18px -4px var(--color-primary-soft);
+  flex: none;
+}
+.sys-brand-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.sys-brand-name {
+  font-size: var(--settings-text-size, 13px);
+  font-weight: 700;
+  color: var(--color-text);
+  letter-spacing: -0.01em;
+}
+.sys-brand-tag {
+  font-size: 12px;
+  color: var(--color-faint);
+}
+
+/* 状态药丸 */
+.sys-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px 4px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.sys-pill-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.sys-pill--neutral {
+  color: var(--color-dim);
+  background: var(--color-inset);
+  border-color: var(--color-border);
+}
+.sys-pill--checking {
+  color: var(--color-dim);
+  background: var(--color-inset);
+  border-color: var(--color-border);
+}
+.sys-pill--checking .sys-pill-dot {
+  animation: sys-blink 1s ease-in-out infinite;
+}
+.sys-pill--ok {
+  color: var(--color-success);
+  background: var(--color-green-soft);
+  border-color: var(--color-green-line);
+}
+.sys-pill--update {
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+}
+.sys-pill--update .sys-pill-dot {
+  animation: sys-pulse 1.5s ease-out infinite;
+}
+.sys-pill--dev {
+  color: var(--color-amber);
+  background: var(--color-amber-soft);
+  border-color: var(--color-amber-line);
+}
+.sys-pill--err {
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
+  border-color: var(--color-red-line, var(--color-danger));
+}
+
+/* 版本号 + 操作 */
+.sys-version-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.sys-version-block {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.sys-version-cap {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--color-faint);
+}
+.sys-version-num {
+  font-size: var(--text-kpi);
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+}
+.sys-version-num.is-dev {
+  color: var(--color-dim);
+}
+.sys-btn-icon {
+  margin-right: 1px;
+}
+
+/* 元数据 */
+.sys-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3) var(--space-5);
+  margin: 0;
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+.sys-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.sys-meta-item dt {
+  font-size: 12px;
+  color: var(--color-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+.sys-meta-item dd {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sys-meta-item dd.mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+}
+
+.sys-inline-err {
+  font-size: 12px;
+  color: var(--color-danger);
+  margin: -4px 0 0;
+}
+
+/* ── 升级强调卡 ─────────────────────────── */
+.sys-upgrade {
+  position: relative;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4) var(--space-5);
+  background:
+    linear-gradient(180deg, var(--color-primary-soft), transparent 70%),
+    var(--color-card);
+  box-shadow: 0 10px 30px -18px var(--color-primary);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.sys-upgrade-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.sys-upgrade-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--color-primary);
+  color: #fff;
+  flex: none;
+  box-shadow: 0 6px 16px -4px var(--color-primary-soft);
+}
+.sys-upgrade-meta {
+  flex: 1;
+  min-width: 0;
+}
+.sys-upgrade-title {
+  font-size: var(--settings-text-size, 13px);
+  font-weight: 700;
+  color: var(--color-text);
+  letter-spacing: -0.01em;
+}
+.sys-vjump {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 5px;
+  flex-wrap: wrap;
+}
+.sys-vtag {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+.sys-vtag--cur {
+  color: var(--color-dim);
+  background: var(--color-inset);
+  border: 1px solid var(--color-border);
+}
+.sys-vtag--new {
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+  border: 1px solid var(--color-primary);
+}
+.sys-varrow {
+  color: var(--color-faint);
+  font-weight: 700;
+}
+.sys-pubdate {
+  font-size: 12px;
+  color: var(--color-faint);
+}
+
+/* 升级操作组:立即更新(主)+ 查看发布(次,ghost 链接) */
+.sys-upgrade-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: none;
+}
+.sys-cta-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-label);
+  font-weight: 600;
+  color: var(--color-primary);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color var(--duration-fast);
+}
+.sys-cta-ghost:hover {
+  color: var(--color-primary-press);
+  text-decoration: underline;
+}
+
+/* 自动更新进行态 */
+.sys-update-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  border: 1px solid transparent;
+}
+.sys-update-state--busy {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+  color: var(--color-text);
+}
+.sys-update-state--manual {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-2);
+  background: var(--color-amber-soft);
+  border-color: var(--color-amber-line);
+  color: var(--color-text);
+}
+.sys-update-state-msg {
+  margin: 0;
+  color: var(--color-text-soft);
+}
+.sys-update-state--err {
+  background: var(--color-danger-soft);
+  border-color: var(--color-red-line, var(--color-danger));
+  color: var(--color-danger);
+}
+.sys-spinner-dark {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--color-primary-soft);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: sys-spin 0.7s linear infinite;
+  flex: none;
+}
+@keyframes sys-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* docker 升级命令 + 复制 */
+.sys-cmd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--color-inset);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 6px 6px 6px 12px;
+}
+.sys-cmd code {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.sys-cmd-copy {
+  flex: none;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-primary);
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast),
+    border-color var(--duration-fast);
+}
+.sys-cmd-copy:hover {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+/* 更新说明折叠 */
+.sys-notes-wrap {
+  border-top: 1px dashed var(--color-border);
+  padding-top: var(--space-3);
+}
+.sys-notes-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: var(--text-label);
+  font-weight: 600;
+  color: var(--color-primary);
+  transition: color var(--duration-fast);
+}
+.sys-notes-toggle:hover {
+  color: var(--color-primary-press);
+}
+.sys-chevron {
+  transition: transform var(--duration-fast) var(--ease-out-expo, ease);
+}
+.sys-chevron.open {
+  transform: rotate(90deg);
+}
+.sys-notes {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3) var(--space-4);
+  max-height: 220px;
+  overflow: auto;
+  background: var(--color-inset);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-text-soft);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── 动效 ───────────────────────────────── */
+@keyframes sys-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+@keyframes sys-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--color-primary-soft);
+  }
+  100% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+@keyframes sys-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+.sys-rise-enter-active,
+.sys-rise-leave-active {
+  transition:
+    opacity var(--duration-normal),
+    transform var(--duration-normal) var(--ease-out-expo, ease);
+}
+.sys-rise-enter-from,
+.sys-rise-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sys-upgrade-icon,
+  .sys-pill-dot {
+    animation: none;
+  }
+}
+
+/* ─── 运行数据保留 ───────────────────────────────────────────────────────────── */
+.rt-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.rt-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0 0 4px;
+}
+.rt-sub {
+  font-size: 13px;
+  color: var(--color-faint);
+  margin: 0;
+  max-width: 52ch;
+}
+.rt-switch {
+  position: relative;
+  flex: none;
+  width: 44px;
+  height: 36px;
+  border-radius: 999px;
+  border: none;
+  cursor: pointer;
+  background: transparent;
+}
+.rt-switch::before {
+  content: '';
+  position: absolute;
+  width: 40px;
+  height: 22px;
+  left: 2px;
+  top: calc(50% - 11px);
+  border-radius: 999px;
+  background: var(--color-border-strong);
+  transition: background var(--duration-fast);
+}
+.rt-switch--on::before {
+  background: var(--color-primary);
+}
+.rt-switch:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.rt-switch:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+.rt-switch-knob {
+  position: absolute;
+  top: calc(50% - 8px);
+  left: 5px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform var(--duration-fast);
+}
+.rt-switch--on .rt-switch-knob {
+  transform: translateX(18px);
+}
+
+.rt-fields {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+  transition: opacity var(--duration-fast);
+}
+.rt-fields--off {
+  opacity: 0.5;
+}
+.rt-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 180px;
+}
+.rt-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-dim);
+}
+.rt-input {
+  width: 140px;
+  min-height: var(--settings-control-height, 36px);
+  padding: 7px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--settings-text-size, 13px);
+}
+.rt-input:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -1px;
+}
+.rt-input:disabled {
+  opacity: 0.6;
+}
+.rt-hint {
+  font-size: 12px;
+  color: var(--color-faint);
+}
+.rt-warn {
+  margin: 16px 0 0;
+  font-size: 0.78rem;
+  color: var(--color-faint);
+  border-left: 2px solid var(--color-border);
+  padding-left: 10px;
+}
+.rt-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 18px;
+}
+.rt-saved {
+  font-size: 13px;
+  color: var(--color-ok, #18a058);
+}
+.rt-err {
+  font-size: 13px;
+  color: var(--color-danger, #e5484d);
+}
+.sys-task-identity {
+  overflow-wrap: anywhere;
+  color: var(--color-dim);
+  font: 12px/1.6 var(--font-mono);
+}
+.sys-download {
+  display: grid;
+  gap: 8px;
+}
+.sys-download p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-dim);
+}
+.sys-history {
+  border-top: 1px solid var(--color-border);
+  padding-top: 8px;
+}
+.sys-history summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  min-height: 36px;
+  cursor: pointer;
+  color: var(--color-dim);
+  font-size: 12px;
+}
+.sys-history summary strong {
+  font-weight: 500;
+  color: var(--color-text);
+}
+.sys-history-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--color-green);
+}
+.sys-history summary::after {
+  content: '⌄';
+  margin-left: auto;
+}
+.sys-history[open] summary::after {
+  transform: rotate(180deg);
+}
+.sys-history p {
+  margin: 10px 0;
+}
+.sys :is(summary, .sys-notes-toggle, .sys-cmd-copy):focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+.sys :deep(.app-btn) {
+  height: auto;
+  min-height: var(--settings-action-height, 34px);
+  padding-block: 6px;
+  font-size: var(--settings-text-size, 13px);
+  white-space: normal;
+}
+@media (max-width: 639px) {
+  .sys-panel,
+  .sys-upgrade {
+    padding: 16px;
+  }
+  .sys-upgrade-head {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .sys-upgrade-actions {
+    flex-wrap: wrap;
+  }
+  .sys-history summary,
+  .sys summary,
+  .sys-notes-toggle,
+  .sys-cmd-copy {
+    min-height: 44px;
+  }
+  .rt-fields {
+    gap: 16px;
+  }
+  .rt-field {
+    min-width: 0;
+    flex: 1 1 160px;
+  }
+  .rt-input {
+    max-width: 100%;
+    font-size: 16px;
+  }
+  .rt-actions {
+    flex-wrap: wrap;
+  }
+  .rt-switch {
+    min-width: 44px;
+  }
+}
+</style>

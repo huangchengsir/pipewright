@@ -56,6 +56,7 @@ func NewMCPHandler(tokens *auth.MCPTokenStore, d pmcp.Dependencies, opts MCPHTTP
 		}
 		allowed[host] = true
 	}
+	d.BindToken = tokens.Bind
 	stream := sdk.NewStreamableHTTPHandler(func(r *http.Request) *sdk.Server {
 		bearer, _ := mcpBearer(r)
 		d.Masker.RegisterSecret(bearer)
@@ -187,6 +188,9 @@ func NewMCPTokenHandlers(tokens *auth.MCPTokenStore, rec audit.Recorder) MCPToke
 		List: guard(func(w http.ResponseWriter, r *http.Request) {
 			items, err := tokens.List(r.Context())
 			if err != nil {
+				if writeAuthorizationError(w, err) {
+					return
+				}
 				writeError(w, http.StatusInternalServerError, "internal", "Unable to list MCP tokens")
 				return
 			}
@@ -226,6 +230,9 @@ func NewMCPTokenHandlers(tokens *auth.MCPTokenStore, rec audit.Recorder) MCPToke
 			}
 			plaintext, item, err := tokens.Create(r.Context(), auth.MCPTokenInput{Name: in.Name, ProjectIDs: in.ProjectIDs, CanTrigger: in.CanTrigger, ExpiresInDays: days, ConfigGrants: in.ConfigGrants})
 			if err != nil {
+				if writeAuthorizationError(w, err) {
+					return
+				}
 				status := http.StatusInternalServerError
 				code := "internal"
 				if errors.Is(err, auth.ErrMCPTokenInput) {
@@ -241,6 +248,9 @@ func NewMCPTokenHandlers(tokens *auth.MCPTokenStore, rec audit.Recorder) MCPToke
 		Revoke: guard(func(w http.ResponseWriter, r *http.Request) {
 			id := chi.URLParam(r, "id")
 			if err := tokens.Revoke(r.Context(), id); err != nil {
+				if writeAuthorizationError(w, err) {
+					return
+				}
 				status := http.StatusInternalServerError
 				if errors.Is(err, auth.ErrMCPTokenNotFound) {
 					status = http.StatusNotFound

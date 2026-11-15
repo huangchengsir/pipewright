@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter, isNavigationFailure, NavigationFailureType } from 'vue-router'
 import {
   Dashboard,
   GitBranch,
@@ -28,10 +28,29 @@ import { logout } from '../api/auth'
 import { useSessionStore } from '../stores/session'
 import { useConfirm } from '../composables/useConfirm'
 import { useToast } from '../composables/useToast'
+import {useNavigationStore} from '../stores/navigation'
+import {usePermissionStore} from '../stores/permissions'
+import AppSelect from '../components/ui/AppSelect.vue'
 
 const route = useRoute()
 const router = useRouter()
+const isSettings = computed(() => route.matched.some(record => record.path.toLowerCase() === '/settings'))
 const sessionStore = useSessionStore()
+const navigation=useNavigationStore(),permissionStore=usePermissionStore()
+const teamOptions=computed(()=>navigation.teams.map(team=>({value:team.id,label:team.name})))
+const changingTeam=ref(false)
+async function changeTeam(team:string){
+ if(changingTeam.value||team===permissionStore.activeTeam||!navigation.teams.some(t=>t.id===team))return
+ changingTeam.value=true
+ try{const failure=await router.push('/settings/account');if(isNavigationFailure(failure)&&!isNavigationFailure(failure,NavigationFailureType.duplicated))return;permissionStore.setTeam(team);await navigation.refresh(true)}finally{changingTeam.value=false}
+}
+let navigationTimer:ReturnType<typeof setInterval>|undefined
+onMounted(()=>{void navigation.refresh();navigationTimer=setInterval(()=>navigation.tick(),1000)})
+onBeforeUnmount(()=>{if(navigationTimer)clearInterval(navigationTimer)})
+watch(()=>[navigation.ready,navigation.pages,permissionStore.activeTeam,sessionStore.user?.mustChangePassword],()=>{
+ if(sessionStore.user?.multiTenant===true && navigation.ready && !navigation.allows(route.path))void router.replace('/settings/account')
+})
+
 const confirm = useConfirm()
 const toast = useToast()
 const { t } = useI18n()
@@ -163,7 +182,7 @@ function toggleExpanded(): void {
 
       <!-- Primary navigation items -->
       <ul class="nav-list" role="list">
-        <li v-for="item in navItems" :key="item.name">
+        <li v-for="item in navItems.filter(item=>navigation.allows(item.to))" :key="item.name">
           <router-link
             :to="item.to"
             class="nav-item"
@@ -182,7 +201,7 @@ function toggleExpanded(): void {
 
       <!-- Settings (bottom) -->
       <router-link
-        :to="settingsItem.to"
+        :to="sessionStore.user?.multiTenant ? '/settings/account' : settingsItem.to"
         class="nav-item"
         :class="{ 'nav-item--active': isActive(settingsItem) }"
         :aria-label="t(settingsItem.ariaKey)"
@@ -217,19 +236,24 @@ function toggleExpanded(): void {
     </button>
 
     <!-- Main content area -->
-    <main class="main-area" id="main-content">
+    <main class="main-area" :class="{ 'main-area--settings': isSettings }" id="main-content">
       <div class="main-inner">
-        <router-view />
+        <div v-if="sessionStore.user?.multiTenant && !sessionStore.user.mustChangePassword" class="team-switcher">
+          <AppSelect :model-value="permissionStore.activeTeam" :options="teamOptions" :aria-label="t('access.team')" :disabled="changingTeam" portal @update:model-value="changeTeam" />
+        </div>
+        <router-view v-if="navigation.allows(route.path)" />
       </div>
     </main>
 
     <!-- Theme toggle (bottom-right, always visible) -->
     <ThemeToggle />
-    <ContinueOnboarding :current-path="route.path" />
+    <ContinueOnboarding v-if="navigation.allows('/onboarding')" :current-path="route.path" />
   </div>
 </template>
 
 <style scoped>
+.team-switcher { display:flex; justify-content:flex-end; flex:0 0 auto; padding-bottom:12px; }
+.team-switcher :deep(.app-select) { width:min(260px,100%); }
 .app-shell {
   display: grid;
   /* minmax(0,1fr) 而非 1fr:1fr 的最小尺寸是 min-content,会被内部超宽元素(如终端里不换行的
@@ -496,6 +520,9 @@ function toggleExpanded(): void {
   padding-bottom: max(var(--main-pad-bottom), 132px);
 }
 @media (min-width: 768px) {
+  /* Settings alone owns a viewport-height pane. Other pages keep document scrolling. */
+  .main-area--settings { height: 100vh; height: 100dvh; min-height: 0; overflow: clip; }
+  .main-area--settings .main-inner { height: 100%; min-height: 0; display: flex; flex-direction: column; }
   .rail-edge-toggle {
     top: 23px;
     left: calc(var(--rail-width) - 13px);

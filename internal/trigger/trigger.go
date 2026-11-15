@@ -83,6 +83,7 @@ type BranchMapping struct {
 // PathFilters 为路径过滤 glob 列表(monorepo · P0):非空时仅当本次 push 改动文件匹配任一 glob 才触发;
 // 空列表 = 不启用(放行一切,向后兼容)。glob 支持 `*`(单段)与 `**`(跨 `/`)。
 type Config struct {
+	AuthorizationState  string
 	ProjectID           string
 	WebhookToken        string
 	WebhookSecretMasked string
@@ -104,8 +105,10 @@ type SaveInput struct {
 
 // ResetResult 是重置密钥的结果:完整明文仅此一次返回,同时给掩码。
 type ResetResult struct {
-	Secret string // 完整明文,仅重置时回显一次
-	Masked string
+	AuthorizationState string
+	WebhookToken       string // endpoint identity, never the signing secret
+	Secret             string // 完整明文,仅重置时回显一次
+	Masked             string
 }
 
 // Service 定义触发配置领域对外接口。
@@ -135,7 +138,7 @@ func New(db *sql.DB, v vault.Vault) Service {
 	return &service{db: db, vault: v}
 }
 
-func (s *service) Get(ctx context.Context, projectID string) (*Config, error) {
+func (s *service) get(ctx context.Context, projectID string) (*Config, error) {
 	cfg, masked, err := s.load(ctx, projectID)
 	if err == nil {
 		cfg.WebhookSecretMasked = masked
@@ -148,12 +151,7 @@ func (s *service) Get(ctx context.Context, projectID string) (*Config, error) {
 	return s.createDefault(ctx, projectID)
 }
 
-func (s *service) Save(ctx context.Context, projectID string, in SaveInput) (*Config, error) {
-	// 确保配置已存在(惰性默认);Get 也完成项目存在性校验。
-	if _, err := s.Get(ctx, projectID); err != nil {
-		return nil, err
-	}
-
+func (s *service) save(ctx context.Context, projectID string, in SaveInput) (*Config, error) {
 	policy, err := normalizePolicy(in.UnmatchedPolicy)
 	if err != nil {
 		return nil, err
@@ -180,6 +178,9 @@ func (s *service) Save(ctx context.Context, projectID string, in SaveInput) (*Co
 		return nil, fmt.Errorf("trigger: marshal path filters: %w", err)
 	}
 
+	if _, err := s.get(ctx, projectID); err != nil {
+		return nil, err
+	}
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 	err = configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
 		_, writeErr := q.ExecContext(txctx,
@@ -196,12 +197,12 @@ func (s *service) Save(ctx context.Context, projectID string, in SaveInput) (*Co
 	if err != nil {
 		return nil, fmt.Errorf("trigger: update config: %w", err)
 	}
-	return s.Get(ctx, projectID)
+	return s.get(ctx, projectID)
 }
 
-func (s *service) ResetSecret(ctx context.Context, projectID string) (*ResetResult, error) {
+func (s *service) resetSecret(ctx context.Context, projectID string) (*ResetResult, error) {
 	// 确保配置已存在(惰性默认);也完成项目存在性校验 + vault 可用性校验。
-	if _, err := s.Get(ctx, projectID); err != nil {
+	if _, err := s.get(ctx, projectID); err != nil {
 		return nil, err
 	}
 
@@ -226,7 +227,11 @@ func (s *service) ResetSecret(ctx context.Context, projectID string) (*ResetResu
 	if n, _ := res.RowsAffected(); n == 0 {
 		return nil, ErrNotFound
 	}
-	return &ResetResult{Secret: secret, Masked: masked}, nil
+	cfg, _, err := s.load(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	return &ResetResult{Secret: secret, Masked: masked, WebhookToken: cfg.WebhookToken}, nil
 }
 
 // load 读取已存在的配置行;同时回算掩码。无行 → ErrNotFound。

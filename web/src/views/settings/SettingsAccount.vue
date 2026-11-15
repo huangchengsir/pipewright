@@ -9,7 +9,7 @@
  *
  * Reuses 1-6 components: FormField / AppButton / ConfirmDialog / EmptyState / StatusBadge-free.
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import FormField from '../../components/ui/FormField.vue'
@@ -20,9 +20,11 @@ import EmptyState from '../../components/ui/EmptyState.vue'
 import SkeletonBlock from '../../components/ui/SkeletonBlock.vue'
 import { useToast } from '../../composables/useToast'
 import { useConfirm } from '../../composables/useConfirm'
-import { resetOnboarding } from '../../composables/useOnboarding'
+import { resetOnboarding, canUseInstanceOnboarding } from '../../composables/useOnboarding'
 import { useSessionStore } from '../../stores/session'
+import {usePermissionStore} from '../../stores/permissions'
 import { HttpError } from '../../api/http'
+import { access } from '../../api/access'
 import {
   changePassword,
   listSessions,
@@ -35,7 +37,26 @@ const toast = useToast()
 const confirm = useConfirm()
 const router = useRouter()
 const sessionStore = useSessionStore()
+const platformPermissions=usePermissionStore()
+const platformIdentityKey=computed(()=>JSON.stringify([sessionStore.user,sessionStore.isNetworkError,platformPermissions.activeTeam]))
 
+let identityGeneration = 0
+const identityKey = computed(() => JSON.stringify([sessionStore.user?.userId ?? sessionStore.user?.username,sessionStore.user?.multiTenant,sessionStore.user?.instanceAdmin,sessionStore.user?.mustChangePassword,sessionStore.isNetworkError]))
+function currentIdentity(generation: number): boolean { return generation === identityGeneration && !!sessionStore.user && !sessionStore.isNetworkError }
+onBeforeUnmount(() => { identityGeneration++ })
+const multiTenant = computed(() => sessionStore.user?.multiTenant === true)
+const canReopenOnboarding = computed(canUseInstanceOnboarding)
+const mustChange = computed(() => sessionStore.user?.mustChangePassword === true)
+const displayName = ref(sessionStore.user?.displayName ?? '')
+const savingProfile = ref(false)
+async function saveProfile(): Promise<void> {
+ const generation = identityGeneration
+ if (!currentIdentity(generation) || !multiTenant.value || mustChange.value) return
+ savingProfile.value = true
+ try { await access.updateSelf(displayName.value.trim()); if (!currentIdentity(generation)) return; await sessionStore.ensureSession(true); if (!currentIdentity(generation)) return; toast.success(t('access.saved')) }
+ catch { toast.error(t('access.errors.request_failed')) }
+ finally { savingProfile.value = false }
+}
 const username = computed(() => sessionStore.user?.username ?? 'admin')
 
 // ——— change-password form ———
@@ -72,27 +93,39 @@ function validatePassword(): boolean {
 }
 
 async function onSubmitPassword(): Promise<void> {
-  if (!validatePassword()) return
+  const generation = identityGeneration
+  if (!currentIdentity(generation) || !validatePassword()) return
   submitting.value = true
   try {
-    await changePassword({
+    await (multiTenant.value ? access.changePassword : changePassword)({
       currentPassword: currentPassword.value,
       newPassword: newPassword.value,
     })
+    if (!currentIdentity(generation)) return
     currentPassword.value = ''
     newPassword.value = ''
     confirmPassword.value = ''
     clearPwErrors()
+    if (multiTenant.value) {
+      const refreshed = await sessionStore.ensureSession(true)
+      if (!currentIdentity(generation)) return
+      if (refreshed.kind !== 'ok') { sessionStore.clearSession(); await router.replace('/login'); return }
+    }
     toast.success(t('settingsAccount.toastPwUpdated'), { detail: t('settingsAccount.toastPwUpdatedDetail') })
     // The server revoked other sessions; refresh the visible list.
     await loadSessions()
   } catch (err) {
+    if (!currentIdentity(generation)) return
     if (err instanceof HttpError) {
+      if (multiTenant.value && err.status === 401) {
+        currentPassword.value = ''; newPassword.value = ''; confirmPassword.value = ''
+        sessionStore.clearSession(); await router.replace('/login'); return
+      }
       if (err.apiError?.code === 'invalid_current_password') {
         currentError.value = t('settingsAccount.errCurrentWrong')
         return
       }
-      if (err.status === 429 && err.apiError?.code === 'locked_out') {
+      if (err.status === 429 && ['locked_out', 'rate_limited'].includes(err.apiError?.code ?? '')) {
         currentError.value = t('platformLogin.rateLimited')
         return
       }
@@ -115,18 +148,25 @@ const sessionsLoading = ref(true)
 const sessionsError = ref('')
 
 async function loadSessions(): Promise<void> {
+  const generation = identityGeneration
+  if (!currentIdentity(generation)) return
   sessionsLoading.value = true
   sessionsError.value = ''
   try {
-    sessions.value = await listSessions()
+    if (mustChange.value) { sessions.value = []; return }
+    const result = await (multiTenant.value ? access.sessions() : listSessions())
+    if (currentIdentity(generation)) sessions.value = result
   } catch (err) {
+    if (!currentIdentity(generation)) return
     sessionsError.value = err instanceof Error ? err.message : t('settingsAccount.errLoadSessions')
   } finally {
-    sessionsLoading.value = false
+    if (currentIdentity(generation)) sessionsLoading.value = false
   }
 }
 
 async function onRevoke(s: Session): Promise<void> {
+  const generation = identityGeneration
+  if (!currentIdentity(generation) || mustChange.value) return
   const ok = await confirm.open({
     title: s.current ? t('settingsAccount.revokeCurrentTitle') : t('settingsAccount.revokeTitle'),
     body: s.current
@@ -135,9 +175,10 @@ async function onRevoke(s: Session): Promise<void> {
     confirmLabel: t('settingsAccount.revokeConfirm'),
     variant: 'danger',
   })
-  if (!ok) return
+  if (!ok || !currentIdentity(generation) || mustChange.value) return
   try {
-    await revokeSession(s.id)
+    await (multiTenant.value ? access.revokeSession(s.id) : revokeSession(s.id))
+    if (!currentIdentity(generation)) return
     if (s.current) {
       // Revoking the current session — backend 204; next call will 401 → login.
       toast.info(t('settingsAccount.toastCurrentRevoked'), { detail: t('settingsAccount.toastCurrentRevokedDetail') })
@@ -148,6 +189,7 @@ async function onRevoke(s: Session): Promise<void> {
     toast.success(t('settingsAccount.toastSessionRevoked'))
     await loadSessions()
   } catch (err) {
+    if (!currentIdentity(generation)) return
     toast.error(t('settingsAccount.toastRevokeFailed'), {
       detail: err instanceof Error ? err.message : t('settingsAccount.unknownError'),
     })
@@ -168,11 +210,19 @@ function formatTime(iso: string): string {
 
 // ——— re-run onboarding ———
 function onReopenOnboarding(): void {
+  if (!canReopenOnboarding.value) return
   resetOnboarding()
   toast.info(t('settingsAccount.toastOnboardingReset'), { detail: t('settingsAccount.toastOnboardingResetDetail') })
   router.push('/onboarding')
 }
 
+watch(identityKey, () => {
+ identityGeneration++
+ sessions.value = []; sessionsError.value = ''; sessionsLoading.value = false
+ currentPassword.value = ''; newPassword.value = ''; confirmPassword.value = ''; clearPwErrors()
+ displayName.value = sessionStore.user?.displayName ?? ''
+ if (sessionStore.user && !sessionStore.isNetworkError && !mustChange.value) void loadSessions()
+}, {flush:'sync'})
 onMounted(loadSessions)
 </script>
 
@@ -188,13 +238,20 @@ onMounted(loadSessions)
         <div class="acct-avatar mono" aria-hidden="true">{{ username.slice(0, 1).toUpperCase() }}</div>
         <div>
           <div class="acct-identity__name">{{ username }}</div>
-          <div class="acct-identity__role">{{ t('settingsAccount.roleAdmin') }}</div>
+          <div class="acct-identity__role">{{ multiTenant ? (sessionStore.user?.instanceAdmin ? t('access.instanceAdmin') : t('access.employee')) : t('settingsAccount.roleAdmin') }}</div>
         </div>
       </div>
     </section>
 
-    <SettingsPlatformLogin :current-source="sessions.find(s => s.current)?.source" @changed="loadSessions" />
+    <SettingsPlatformLogin v-if="!mustChange && sessionStore.user && !sessionStore.isNetworkError" :key="platformIdentityKey" :current-source="sessions.find(s => s.current)?.source" @changed="loadSessions" />
 
+    <section v-if="multiTenant && !mustChange" class="acct-card">
+      <form class="acct-form" @submit.prevent="saveProfile">
+        <FormField :label="t('access.displayName')" field-id="access-display-name" required><input id="access-display-name" v-model="displayName" class="field-input" maxlength="80" required :disabled="savingProfile" /></FormField>
+        <div class="acct-form__actions"><AppButton type="submit" variant="primary" :loading="savingProfile">{{ t('access.save') }}</AppButton></div>
+      </form>
+    </section>
+    <p v-if="mustChange" class="acct-card" role="status">{{ t('access.forcePassword') }}</p>
     <!-- Change password -->
     <section class="acct-card" aria-labelledby="acct-pw-h">
       <header class="acct-card__h">
@@ -262,7 +319,7 @@ onMounted(loadSessions)
     </section>
 
     <!-- Active sessions -->
-    <section class="acct-card" aria-labelledby="acct-sessions-h">
+    <section v-if="!mustChange" class="acct-card" aria-labelledby="acct-sessions-h">
       <header class="acct-card__h">
         <h2 id="acct-sessions-h" class="acct-card__title">{{ t('settingsAccount.sessionsTitle') }}</h2>
         <p class="acct-card__sub">{{ t('settingsAccount.sessionsSub') }}</p>
@@ -311,7 +368,7 @@ onMounted(loadSessions)
     </section>
 
     <!-- Re-run onboarding -->
-    <section class="acct-card" aria-labelledby="acct-onboarding-h">
+    <section v-if="canReopenOnboarding" class="acct-card" aria-labelledby="acct-onboarding-h">
       <header class="acct-card__h">
         <h2 id="acct-onboarding-h" class="acct-card__title">{{ t('settingsAccount.onboardingTitle') }}</h2>
         <p class="acct-card__sub">{{ t('settingsAccount.onboardingSub') }}</p>

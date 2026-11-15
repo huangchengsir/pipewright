@@ -232,8 +232,24 @@ func (s *service) seedDiagnosisOnFailure(ctx context.Context, runID, status stri
 	}
 }
 
+// RollbackService keeps rollback authorization distinct from ordinary deployment.
+// The caller still supplies a verified previous deployment; this method checks
+// its environment again and retains the same target/secret execution boundaries.
+type RollbackService interface {
+	DeployRollback(context.Context, DeployInput) ([]TargetResult, error)
+}
+
+func (s *service) DeployRollback(ctx context.Context, in DeployInput) ([]TargetResult, error) {
+	return s.deploy(ctx, in, "release.rollback")
+}
 func (s *service) Deploy(ctx context.Context, in DeployInput) ([]TargetResult, error) {
-	ctx, done, activityErr := s.beginActivity(ctx, in.RunID)
+	return s.deploy(ctx, in, "deployment.execute")
+}
+func (s *service) deploy(ctx context.Context, in DeployInput, action string) ([]TargetResult, error) {
+	if err := s.authorizeInputOverride(ctx, in.RunID, in.Config, in.HealthCheck, in.Strategy); err != nil {
+		return nil, err
+	}
+	ctx, done, activityErr := s.beginActivity(ctx, in.RunID, action)
 	if activityErr != nil {
 		return nil, activityErr
 	}
@@ -530,6 +546,9 @@ func pickStageArtifact(arts []run.Artifact, prefer string) *run.Artifact {
 
 // RetryFailed 仅重试该 run 当前 failed/rolled_back 的目标(Story 4.5;FR-13)。见 Service 接口注释。
 func (s *service) RetryFailed(ctx context.Context, in RetryInput) ([]TargetResult, error) {
+	if err := s.authorizeInputOverride(ctx, in.RunID, in.Config, in.HealthCheck, ""); err != nil {
+		return nil, err
+	}
 	ctx, done, activityErr := s.beginActivity(ctx, in.RunID)
 	if activityErr != nil {
 		return nil, activityErr

@@ -30,6 +30,7 @@ export default {
     '이 환경을 마지막 성공 배포(실행 {commit} · {when})로 롤백하여 해당 산출물을 원래 대상 호스트에 다시 배포합니다. 이 작업은 실제 배포를 트리거합니다.',
   rollbackConfirm: '롤백 확인',
   rollbackFailedStatus: '롤백 실패({status})',
+  rollbackTargetChanged: "배포가 변경되었습니다. 새로 고침한 후 롤백을 다시 확인하세요.",
   rollbackFailedRetry: '롤백에 실패했습니다. 잠시 후 다시 시도하세요.',
 
   toastRolledBack: '환경 「{env}」을(를) 롤백했습니다',

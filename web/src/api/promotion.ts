@@ -1,3 +1,4 @@
+import {configWriteOptions} from './configRevision'
 /**
  * Promotion API — Epic 8 · Story 8-7 (FR-8-7).
  *
@@ -19,8 +20,8 @@
  * should read the record's `status` field.
  */
 
-import { http } from './http'
-import { configWriteOptions } from './configRevision'
+import { http, type HttpOptions } from './http'
+
 
 // ─── Domain types ─────────────────────────────────────────────────────────────
 
@@ -91,31 +92,29 @@ export interface PromoteRunInput {
 
 // ─── API functions ────────────────────────────────────────────────────────────
 
-export async function getEnvironments(projectId: string): Promise<EnvironmentsResponse> {
-  return http.get<EnvironmentsResponse>(`/api/projects/${projectId}/environments`)
+export async function getEnvironments(projectId: string, options:HttpOptions={}): Promise<EnvironmentsResponse> {
+  return http.get<EnvironmentsResponse>(`/api/projects/${projectId}/environments`,{...options,throwOnUnauthorized:true})
 }
 
 export async function saveEnvironments(
   projectId: string,
   input: SaveEnvironmentsInput,
   expectedRevision?: string,
+  options:HttpOptions={},
 ): Promise<{ environments: EnvStage[] }> {
-  if (expectedRevision) return http.put<{ environments: EnvStage[] }>(`/api/projects/${projectId}/environments`, input, configWriteOptions(expectedRevision))
-  return http.put<{ environments: EnvStage[] }>(
-    `/api/projects/${projectId}/environments`,
-    input,
-  )
+  return http.put<{ environments: EnvStage[] }>(`/api/projects/${projectId}/environments`, input, configWriteOptions(expectedRevision,{...options,throwOnUnauthorized:true}))
 }
 
 export async function promoteRun(
   runId: string,
   input: PromoteRunInput = {},
+  options:HttpOptions={},
 ): Promise<PromotionDTO> {
-  return http.post<PromotionDTO>(`/api/runs/${runId}/promote`, input)
+  return http.post<PromotionDTO>(`/api/runs/${runId}/promote`, input,{...options,throwOnUnauthorized:true})
 }
 
-export async function listRunPromotions(runId: string): Promise<{ items: PromotionDTO[] }> {
-  return http.get<{ items: PromotionDTO[] }>(`/api/runs/${runId}/promotions`)
+export async function listRunPromotions(runId: string,options:HttpOptions={}): Promise<{ items: PromotionDTO[] }> {
+  return http.get<{ items: PromotionDTO[] }>(`/api/runs/${runId}/promotions`,{...options,throwOnUnauthorized:true})
 }
 
 export async function listProjectPromotions(
@@ -123,3 +122,7 @@ export async function listProjectPromotions(
 ): Promise<{ items: PromotionDTO[] }> {
   return http.get<{ items: PromotionDTO[] }>(`/api/projects/${projectId}/promotions`)
 }
+
+export interface PromotionPlanStage extends EnvStage {environmentId?:string}
+export interface PromotionPlan {configured:boolean;atTop:boolean;environments:PromotionPlanStage[];next?:PromotionPlanStage}
+export function getPromotionPlan(runId:string,options:HttpOptions={}):Promise<PromotionPlan>{return http.get(`/api/runs/${runId}/promotion-plan`,{...options,throwOnUnauthorized:true})}

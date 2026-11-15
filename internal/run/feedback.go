@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // feedback.go 是「诊断反馈闭环」领域层(FR-26 / Story 7.5)。
@@ -130,21 +132,29 @@ func (s *feedbackService) SaveFeedback(ctx context.Context, in SaveFeedbackInput
 	nowStr := now.Format(time.RFC3339)
 	id := uuid.NewString()
 
-	// upsert by run_id(唯一约束冲突 → 覆盖最新;created_at 不动,updated_at 刷新)。
-	_, err := s.db.ExecContext(ctx,
-		store.InsertSQL(store.DialectOf(s.db), "diagnosis_feedback",
-			[]string{"id", "run_id", "verdict", "correct_root_cause", "diagnosis_snapshot", "created_at", "updated_at"}, []string{"?", "?", "?", "?", "?", "?", "?"},
-			[]string{"run_id"}, []string{"verdict", "correct_root_cause", "diagnosis_snapshot", "updated_at"}),
-		id, runID, verdict, correct, in.DiagnosisSnapshot, nowStr, nowStr,
-	)
-	if err != nil {
-		if isForeignKeyErr(err) {
-			return nil, ErrNotFound
+	var result *Feedback
+	err := configstate.WithWriteTxContext(ctx, s.db, func(txctx context.Context, q configstate.DBTX) error {
+		if err := tenancy.LockAuthorization(txctx, s.db); err != nil {
+			return err
 		}
-		return nil, fmt.Errorf("run: upsert feedback: %w", err)
-	}
-
-	return s.getFeedbackByRun(ctx, runID)
+		if err := tenancy.Check(txctx, s.db, "run.diagnose", "run", runID); err != nil {
+			return err
+		}
+		_, err := q.ExecContext(txctx,
+			store.InsertSQL(store.DialectOf(s.db), "diagnosis_feedback",
+				[]string{"id", "run_id", "verdict", "correct_root_cause", "diagnosis_snapshot", "created_at", "updated_at"}, []string{"?", "?", "?", "?", "?", "?", "?"},
+				[]string{"run_id"}, []string{"verdict", "correct_root_cause", "diagnosis_snapshot", "updated_at"}),
+			id, runID, verdict, correct, in.DiagnosisSnapshot, nowStr, nowStr)
+		if err != nil {
+			if isForeignKeyErr(err) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("run: upsert feedback: %w", err)
+		}
+		result, err = s.getFeedbackByRun(txctx, runID)
+		return err
+	})
+	return result, err
 }
 
 // getFeedbackByRun 取某 run 的反馈(供 SaveFeedback 回读最新态)。不存在 → ErrNotFound。
@@ -154,7 +164,7 @@ func (s *feedbackService) getFeedbackByRun(ctx context.Context, runID string) (*
 		createdStr string
 		updatedStr string
 	)
-	err := s.db.QueryRowContext(ctx,
+	err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT id, run_id, verdict, correct_root_cause, diagnosis_snapshot, created_at, updated_at
 		 FROM diagnosis_feedback WHERE run_id = ?`, runID,
 	).Scan(&f.ID, &f.RunID, &f.Verdict, &f.CorrectRootCause, &f.DiagnosisSnapshot, &createdStr, &updatedStr)
@@ -176,18 +186,22 @@ func (s *feedbackService) getFeedbackByRun(ctx context.Context, runID string) (*
 // GetStats 聚合统计:准确率(up/total)、计数、最近趋势(最近 N 条等分)、最近 corrections。
 // 无反馈 → 全 0 / 空数组 / Accuracy nil。参数化 SQL;不全量驻留(corrections/trend 取最近若干)。
 func (s *feedbackService) GetStats(ctx context.Context) (*FeedbackStats, error) {
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "run.read", "df.run_id")
+	if err != nil {
+		return nil, err
+	}
 	stats := &FeedbackStats{
 		RecentTrend:       []TrendBucket{},
 		RecentCorrections: []Correction{},
 	}
 
 	// 计数 + 准确率。
-	if err := s.db.QueryRowContext(ctx,
+	if err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT
 		   COUNT(1),
 		   COALESCE(SUM(CASE WHEN verdict = ? THEN 1 ELSE 0 END), 0),
 		   COALESCE(SUM(CASE WHEN verdict = ? THEN 1 ELSE 0 END), 0)
-		 FROM diagnosis_feedback`, VerdictUp, VerdictDown,
+		 FROM diagnosis_feedback df WHERE (`+predicate.SQL+`)`, append([]any{VerdictUp, VerdictDown}, predicate.Args...)...,
 	).Scan(&stats.TotalFeedback, &stats.ThumbsUp, &stats.ThumbsDown); err != nil {
 		return nil, fmt.Errorf("run: feedback counts: %w", err)
 	}
@@ -216,9 +230,13 @@ func (s *feedbackService) GetStats(ctx context.Context) (*FeedbackStats, error) 
 func (s *feedbackService) recentTrend(ctx context.Context) ([]TrendBucket, error) {
 	// 取最近 30 条(按 updated_at 降序),再升序等分 recentTrendBuckets 个桶。
 	const window = 30
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT verdict, updated_at FROM diagnosis_feedback
-		 ORDER BY updated_at DESC, id DESC`+store.Limit(store.DialectOf(s.db), "?"), window)
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "run.read", "df.run_id")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
+		`SELECT verdict, updated_at FROM diagnosis_feedback df WHERE (`+predicate.SQL+`)
+ ORDER BY updated_at DESC, id DESC`+store.Limit(store.DialectOf(s.db), "?"), append(predicate.Args, window)...)
 	if err != nil {
 		return nil, fmt.Errorf("run: feedback trend: %w", err)
 	}
@@ -284,10 +302,14 @@ func (s *feedbackService) recentTrend(ctx context.Context) ([]TrendBucket, error
 // recentCorrections 取最近若干条 👎 附根因(非空 correct_root_cause)的修正(知识库种子可视化)。
 // 按 updated_at 降序;无 → 空切片。correct_root_cause 已脱敏(落库前由 httpapi 层过 mask)。
 func (s *feedbackService) recentCorrections(ctx context.Context) ([]Correction, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT run_id, correct_root_cause, updated_at FROM diagnosis_feedback
-		 WHERE verdict = ? AND correct_root_cause <> ''
-		 ORDER BY updated_at DESC, id DESC`+store.Limit(store.DialectOf(s.db), "?"), VerdictDown, recentCorrectionsLimit)
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "run.read", "df.run_id")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
+		`SELECT run_id, correct_root_cause, updated_at FROM diagnosis_feedback df
+ WHERE (`+predicate.SQL+`) AND verdict = ? AND correct_root_cause <> ''
+		 ORDER BY updated_at DESC, id DESC`+store.Limit(store.DialectOf(s.db), "?"), append(predicate.Args, VerdictDown, recentCorrectionsLimit)...)
 	if err != nil {
 		return nil, fmt.Errorf("run: feedback corrections: %w", err)
 	}

@@ -56,7 +56,7 @@ func New(db *sql.DB, servers ServerExister) Service {
 	return &service{db: db, servers: servers}
 }
 
-func (s *service) Get(ctx context.Context, projectID string) (*Config, error) {
+func (s *service) get(ctx context.Context, projectID string) (*Config, error) {
 	cfg := &Config{ProjectID: projectID}
 	row := configstate.Queryer(ctx, s.db).QueryRowContext(ctx, `SELECT runner_server_id FROM project_runners WHERE project_id = ?`, projectID)
 	switch err := row.Scan(&cfg.RunnerServerID); {
@@ -68,7 +68,7 @@ func (s *service) Get(ctx context.Context, projectID string) (*Config, error) {
 	return cfg, nil
 }
 
-func (s *service) Save(ctx context.Context, projectID, runnerServerID string) (*Config, error) {
+func (s *service) save(ctx context.Context, projectID, runnerServerID string) (*Config, error) {
 	runnerServerID = strings.TrimSpace(runnerServerID)
 
 	// 校验项目存在。
@@ -102,7 +102,7 @@ func (s *service) Save(ctx context.Context, projectID, runnerServerID string) (*
 }
 
 func (s *service) RunnerFor(ctx context.Context, projectID string) (string, bool) {
-	cfg, err := s.Get(ctx, projectID)
+	cfg, err := s.get(ctx, projectID)
 	if err != nil || cfg.RunnerServerID == "" {
 		return "", false
 	}

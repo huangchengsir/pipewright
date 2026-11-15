@@ -24,11 +24,25 @@ func ManagedVault(svc Service, v vault.Vault) vault.Vault {
 	return v
 }
 
+func (v *managedVault) WithContext(ctx context.Context) vault.Vault {
+	return &managedVault{Vault: vault.WithContext(ctx, v.Vault), service: v.service}
+}
+func (v *managedVault) AuthorizeUse(ctx context.Context, id string) error {
+	return vault.AuthorizeUse(ctx, v.Vault, id)
+}
+
+func (v *managedVault) RegisterRelatedMaskSecrets(ctx context.Context, kind, id string, m *secretmask.Masker) (bool, error) {
+	return vault.RegisterRelatedMaskSecrets(ctx, v.Vault, kind, id, m)
+}
+
 func (v *managedVault) RegisterMaskSecrets(ctx context.Context, masker *secretmask.Masker) error {
 	return vault.RegisterMaskSecrets(ctx, v.Vault, masker)
 }
 
 func (v *managedVault) AcquireGitAuth(ctx context.Context, id string) (vault.GitAuth, func(), error) {
+	if err := v.AuthorizeUse(ctx, id); err != nil {
+		return vault.GitAuth{}, func() {}, err
+	}
 	if e := vault.ValidateGenericReference(id); e != nil {
 		return vault.GitAuth{}, func() {}, e
 	}
@@ -44,6 +58,10 @@ func (v *managedVault) AcquireGitAuth(ctx context.Context, id string) (vault.Git
 	l := v.service.lifecycle
 	g := l.gate(id)
 	for {
+		if err := v.AuthorizeUse(wait, id); err != nil {
+			leave()
+			return vault.GitAuth{}, nil, err
+		}
 		g.mu.Lock()
 		acquired, err := l.repo.TryAcquire(wait, id, l.owner, l.now().UTC())
 		if err != nil {
@@ -68,12 +86,23 @@ func (v *managedVault) AcquireGitAuth(ctx context.Context, id string) (vault.Git
 					leave()
 				})
 			}
+			if err := v.AuthorizeUse(wait, id); err != nil {
+				acquired.Auth.Token = ""
+				release()
+				return vault.GitAuth{}, nil, err
+			}
 			return acquired.Auth, release, nil
 		case "refresh":
 			b := acquired.Binding
 			g.inFlight[b.ClaimID] = true
 			g.mu.Unlock()
-			err = v.service.refresh(wait, b)
+			if err = v.AuthorizeUse(wait, id); err != nil {
+				cleanup, cancelCleanup := context.WithTimeout(context.Background(), 5*time.Second)
+				_ = l.repo.AbortUnstartedRefresh(cleanup, b)
+				cancelCleanup()
+			} else {
+				err = v.service.refresh(wait, b)
+			}
 			if err != nil {
 				cleanup, cancelCleanup := context.WithTimeout(context.Background(), 5*time.Second)
 				state := vault.OAuthUncertain

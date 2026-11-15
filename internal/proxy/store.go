@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // storedConfig 是 RouteConfig 的**存储表示**:与领域 RouteConfig 字段一一对应,但 BasicAuthHash
@@ -137,7 +139,7 @@ func (s *Store) insert(ctx context.Context, r *Route) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx,
+	_, err = configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`INSERT INTO proxy_routes
 		   (id, server_id, domain, upstream_container, upstream_port, tls_mode, enabled, cert_status, cert_detail, config, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -154,7 +156,7 @@ func (s *Store) insert(ctx context.Context, r *Route) error {
 
 // get 读取单条路由;不存在 → ErrNotFound。
 func (s *Store) get(ctx context.Context, id string) (*Route, error) {
-	row := s.db.QueryRowContext(ctx,
+	row := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT id, server_id, domain, upstream_container, upstream_port, tls_mode, enabled, cert_status, cert_detail, config, created_at, updated_at
 		 FROM proxy_routes WHERE id = ?`, id)
 	r, err := scanRoute(row)
@@ -169,41 +171,35 @@ func (s *Store) get(ctx context.Context, id string) (*Route, error) {
 
 // list 返回某主机的全部路由(创建时间倒序);serverID 为空 → 返回全部。
 func (s *Store) list(ctx context.Context, serverID string) ([]Route, error) {
-	var (
-		rows *sql.Rows
-		err  error
-	)
-	if serverID == "" {
-		rows, err = s.db.QueryContext(ctx,
-			`SELECT id, server_id, domain, upstream_container, upstream_port, tls_mode, enabled, cert_status, cert_detail, config, created_at, updated_at
-			 FROM proxy_routes ORDER BY created_at DESC, id`)
-	} else {
-		rows, err = s.db.QueryContext(ctx,
-			`SELECT id, server_id, domain, upstream_container, upstream_port, tls_mode, enabled, cert_status, cert_detail, config, created_at, updated_at
-			 FROM proxy_routes WHERE server_id = ? ORDER BY created_at DESC, id`, serverID)
-	}
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "proxy.read", "proxy_routes.server_id")
 	if err != nil {
-		return nil, fmt.Errorf("proxy: list routes: %w", err)
+		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	out := make([]Route, 0)
+	args := append([]any{}, predicate.Args...)
+	where := predicate.SQL
+	if serverID != "" {
+		where += " AND server_id=?"
+		args = append(args, serverID)
+	}
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx, `SELECT id,server_id,domain,upstream_container,upstream_port,tls_mode,enabled,cert_status,cert_detail,config,created_at,updated_at FROM proxy_routes WHERE `+where+` ORDER BY created_at DESC,id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Route{}
 	for rows.Next() {
-		r, err := scanRoute(rows)
-		if err != nil {
-			return nil, err
+		r, e := scanRoute(rows)
+		if e != nil {
+			return nil, e
 		}
 		out = append(out, *r)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("proxy: iterate routes: %w", err)
-	}
-	return out, nil
+	return out, rows.Err()
 }
 
 // listEnabledForServer 返回某主机所有 enabled 路由(供渲染 Caddyfile),按 domain 升序稳定排序。
 func (s *Store) listEnabledForServer(ctx context.Context, serverID string) ([]Route, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT id, server_id, domain, upstream_container, upstream_port, tls_mode, enabled, cert_status, cert_detail, config, created_at, updated_at
 		 FROM proxy_routes WHERE server_id = ? AND enabled = 1 ORDER BY domain ASC`, serverID)
 	if err != nil {
@@ -232,7 +228,7 @@ func (s *Store) setEnabled(ctx context.Context, id string, on bool) error {
 		v = 1
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := s.db.ExecContext(ctx,
+	res, err := configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`UPDATE proxy_routes SET enabled = ?, updated_at = ? WHERE id = ?`, v, now, id)
 	if err != nil {
 		return fmt.Errorf("proxy: set enabled: %w", err)
@@ -246,7 +242,7 @@ func (s *Store) setEnabled(ctx context.Context, id string, on bool) error {
 // setCertStatus 回写证书状态 + 人话详情(RefreshStatus 用);不存在 → ErrNotFound。
 func (s *Store) setCertStatus(ctx context.Context, id, status, detail string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := s.db.ExecContext(ctx,
+	res, err := configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`UPDATE proxy_routes SET cert_status = ?, cert_detail = ?, updated_at = ? WHERE id = ?`,
 		status, detail, now, id)
 	if err != nil {
@@ -265,7 +261,7 @@ func (s *Store) updateConfig(ctx context.Context, id, container string, port int
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := s.db.ExecContext(ctx,
+	res, err := configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`UPDATE proxy_routes SET upstream_container = ?, upstream_port = ?, config = ?, updated_at = ? WHERE id = ?`,
 		container, port, cfgJSON, now, id)
 	if err != nil {
@@ -279,14 +275,15 @@ func (s *Store) updateConfig(ctx context.Context, id, container string, port int
 
 // del 删除某路由;不存在 → ErrNotFound。
 func (s *Store) del(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM proxy_routes WHERE id = ?`, id)
+	res, err := configstate.Queryer(ctx, s.db).ExecContext(ctx, `DELETE FROM proxy_routes WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("proxy: delete route: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
-	return nil
+	_, err = configstate.Queryer(ctx, s.db).ExecContext(ctx, `DELETE FROM access_ownership WHERE resource_kind='proxy_route' AND resource_id=?`, id)
+	return err
 }
 
 // newRoute 据入参构造一条待插入路由(id/时间戳/初始证书态在此填好)。
@@ -356,4 +353,29 @@ func scanRoute(sc scanner) (*Route, error) {
 	r.CreatedAt = created
 	r.UpdatedAt = updated
 	return &r, nil
+}
+
+// listCertificates filters before materialization; other proxy consumers retain their own action boundary.
+func (s *Store) listCertificates(ctx context.Context) ([]Route, error) {
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "certificate.read", "pr.id")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx, `SELECT pr.id, pr.server_id, pr.domain, pr.upstream_container, pr.upstream_port, pr.tls_mode, pr.enabled, pr.cert_status, pr.cert_detail, pr.config, pr.created_at, pr.updated_at FROM proxy_routes pr WHERE `+predicate.SQL+` ORDER BY pr.created_at DESC, pr.id`, predicate.Args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Route, 0)
+	for rows.Next() {
+		r, e := scanRoute(rows)
+		if e != nil {
+			return nil, e
+		}
+		if predicate.SQL != "1=1" {
+			r.Config = RouteConfig{Aliases: r.Config.Aliases}
+		}
+		out = append(out, *r)
+	}
+	return out, rows.Err()
 }

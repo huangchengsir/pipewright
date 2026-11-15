@@ -1,6 +1,6 @@
 export default {
   identityTitle: 'Identité',
-  identitySub: 'Instance à administrateur unique (le multi-utilisateur et le RBAC sont prévus pour des versions ultérieures).',
+  identitySub: 'Consultez votre compte actuel et vos informations de connexion.',
   roleAdmin: 'Administrateur',
 
   changePwTitle: 'Changer le mot de passe',

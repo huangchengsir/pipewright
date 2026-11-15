@@ -3,6 +3,8 @@ package kubernetes
 import (
 	"context"
 	"errors"
+
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // releasePreparationError keeps the original cause for internal errors.Is checks,
@@ -38,7 +40,7 @@ func releasePreparationReason(err error) string {
 	}{
 		{ErrInvalid, "kubernetes_invalid_input"}, {ErrNotFound, "kubernetes_not_found"},
 		{ErrConflict, "kubernetes_revision_conflict"}, {ErrInUse, "kubernetes_in_use"},
-		{ErrDenied, "kubernetes_not_authorized"}, {ErrDecrypt, "kubernetes_credential_unavailable"},
+		{ErrDenied, "kubernetes_not_authorized"}, {tenancy.ErrForbidden, "kubernetes_not_authorized"}, {ErrDecrypt, "kubernetes_credential_unavailable"},
 		{ErrRuntimeUnverified, "secret_runtime_unverified"}, {ErrRuntimeIdentity, "kubernetes_runtime_identity_changed"},
 		{ErrTool, "kubernetes_tool_unavailable"}, {ErrVersion, "kubernetes_tool_version_incompatible"},
 		{ErrTransportUnknown, "kubernetes_transport_outcome_unknown"}, {ErrPrivateLimit, "kubernetes_private_output_limit"},

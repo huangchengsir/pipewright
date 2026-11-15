@@ -1,3 +1,9 @@
+import {createPinia,setActivePinia} from 'pinia'
+import {useSessionStore} from '../stores/session'
+import {usePermissionStore} from '../stores/permissions'
+import {access} from '../api/access'
+vi.mock('../api/access',()=>({access:{decisions:vi.fn()}}))
+beforeEach(()=>{setActivePinia(createPinia());useSessionStore().user={username:'admin',multiTenant:false}})
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
@@ -6,8 +12,8 @@ import RunDetail from './RunDetail.vue'
 import type { RunDetail as RunDTO, RunStatus } from '../api/runs'
 import { retryContext, retryPlan } from '../test/runRetryFixtures'
 import { HttpError } from '../api/http'
-const api = vi.hoisted(() => ({ get: vi.fn(), subscribe: vi.fn(), approvals: vi.fn(), context: vi.fn(), attempts: vi.fn(), plan: vi.fn(), request: vi.fn() }))
-vi.mock('../api/runs', async original => ({ ...(await original<typeof import('../api/runs')>()), getRun: api.get, subscribeRunEvents: api.subscribe, listApprovals: api.approvals }))
+const api = vi.hoisted(() => ({ get: vi.fn(), subscribe: vi.fn(), approvals: vi.fn(), context: vi.fn(), attempts: vi.fn(), plan: vi.fn(), request: vi.fn(), approve:vi.fn(),reject:vi.fn() }))
+vi.mock('../api/runs', async original => ({ ...(await original<typeof import('../api/runs')>()), getRun: api.get, subscribeRunEvents: api.subscribe, listApprovals: api.approvals,approveStage:api.approve,rejectStage:api.reject }))
 vi.mock('../api/runRetry', async original => ({ ...(await original<typeof import('../api/runRetry')>()), getRetryContext: api.context, getRetryAttempts: api.attempts, getRetryPlan: api.plan, getRetryRequest: api.request }))
 const Dag = defineComponent({ props: ['projectId', 'steps', 'runStatus', 'recovery'], emits: ['retry', 'logs'], template: '<div><button class="dag-retry" @click="$emit(\'retry\', [\'b\'])">Retry {{runStatus}}</button><button class="dag-logs" @click="$emit(\'logs\', [\'a\', \'b\'], \'Original build\')">Logs</button></div>' })
 const Terminal = defineComponent({ props: ['runId', 'live', 'filterOrdinal'], template: '<div class="test-terminal">{{runId}}/{{filterOrdinal}}</div>' })
@@ -24,6 +30,20 @@ async function render(path = '/runs/root') {
 }
 function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>(r => { resolve = r }); return { resolve, promise } }
 describe('existing RunDetail recovery integration', () => {
+  it('requires every saved approval environment and removes both actions on revocation',async()=>{
+   useSessionStore().user={username:'employee',userId:'u',multiTenant:true};usePermissionStore().activeTeam='t';
+   let denied=true;
+   vi.mocked(access.decisions).mockImplementation(async(_team,queries)=>({userId:'u',teamId:'t',modeEpoch:1,revision:1,catalogVersion:1,allowed:queries.map(q=>q.action==='run.read'||(q.action==='release.approve'&&(!denied||q.environmentId==='test')))}));
+   api.get.mockResolvedValue(run('root','waiting_approval'));
+   api.approvals.mockResolvedValue({items:[{stageId:'stage',stageName:'Release',status:'pending',accessAction:'release.approve',accessEnvironmentIds:['test','production']}]});
+   const {wrapper}=await render();await vi.advanceTimersByTimeAsync(40);await flushPromises();
+   expect(wrapper.find('.approval-btn--approve').exists()).toBe(false);expect(wrapper.find('.approval-btn--reject').exists()).toBe(false);
+   denied=false;usePermissionStore().invalidate();await vi.advanceTimersByTimeAsync(40);await flushPromises();
+   expect(wrapper.find('.approval-btn--approve').exists()).toBe(true);expect(wrapper.find('.approval-btn--reject').exists()).toBe(true);
+   denied=true;usePermissionStore().invalidate();await vi.advanceTimersByTimeAsync(40);await flushPromises();
+   expect(wrapper.find('.approval-btn--approve').exists()).toBe(false);expect(api.approve).not.toHaveBeenCalled();expect(api.reject).not.toHaveBeenCalled();
+  })
+
   it('exposes cancel for a paused waiting_action frontier',async()=>{api.get.mockResolvedValue(run('root','waiting_action'));const {wrapper}=await render();expect(wrapper.findAll('button').some(b=>b.text()==='取消运行')).toBe(true)})
   it('opens node logs in the existing panel without requesting a retry plan', async () => {
     const original = run('root', 'failed'); original.steps = ['a', 'b'].map(id => ({ id: `step-${id}`, name: id, status: 'failed', startedAt: null, finishedAt: null, durationMs: null }))

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
+import { useSessionStore } from '../stores/session'
 import { i18n, setLocale, SUPPORTED_LOCALES } from '../i18n'
 import AuditTimeline from './AuditTimeline.vue'
 import type { AuditEntry } from '../api/audit'
@@ -17,7 +19,7 @@ async function create(entries: AuditEntry[]) {
   await flushPromises()
   return wrapper
 }
-beforeEach(() => { vi.clearAllMocks(); setLocale('zh-CN') })
+beforeEach(() => { setActivePinia(createPinia()); useSessionStore().user = {username:'admin',multiTenant:false}; vi.clearAllMocks(); setLocale('zh-CN') })
 afterEach(() => { wrapper?.unmount(); setLocale('zh-CN') })
 
 describe('current lifecycle audit presentation', () => {

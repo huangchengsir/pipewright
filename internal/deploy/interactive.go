@@ -82,6 +82,9 @@ func (s *service) deployInteractiveFirstBatch(ctx context.Context, servers []*ta
 
 // ContinueDeploy 见接口注释:续发 pending 目标。
 func (s *service) ContinueDeploy(ctx context.Context, in ContinueInput) ([]TargetResult, error) {
+	if err := s.authorizeInputOverride(ctx, in.RunID, in.Config, in.HealthCheck, in.Strategy); err != nil {
+		return nil, err
+	}
 	ctx, done, activityErr := s.beginActivity(ctx, in.RunID)
 	if activityErr != nil {
 		return nil, activityErr
@@ -131,7 +134,7 @@ func (s *service) ContinueDeploy(ctx context.Context, in ContinueInput) ([]Targe
 
 // AbortDeploy 见接口注释:把 pending 标记为已中止(failed),不动已部署批次。
 func (s *service) AbortDeploy(ctx context.Context, in AbortInput) ([]TargetResult, error) {
-	ctx, done, activityErr := s.beginActivity(ctx, in.RunID)
+	ctx, done, activityErr := s.beginActivity(ctx, in.RunID, "run.cancel")
 	if activityErr != nil {
 		return nil, activityErr
 	}

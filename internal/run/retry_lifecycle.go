@@ -2,6 +2,7 @@ package run
 
 import (
 	"context"
+	"database/sql"
 	log "github.com/huangchengsir/pipewright/internal/logging"
 	"time"
 )
@@ -63,16 +64,20 @@ func (s *service) completeRetryAttempt(id string) {
 	if err != nil || !captured {
 		return
 	}
-	r, err := s.Get(ctx, id)
-	if err != nil || !IsTerminal(r.Status) {
+	// Only lifecycle facts are needed for controller settlement. Do not reuse
+	// authenticated detail reads after the initiator's session has ended.
+	var status string
+	var started sql.NullString
+	err = s.db.QueryRowContext(ctx, `SELECT status,started_at FROM pipeline_runs WHERE id=?`, id).Scan(&status, &started)
+	if err != nil || !IsTerminal(status) {
 		return
 	}
 	if restorer, ok := rr.(interface {
 		RestoreQueuedCancellation(context.Context, string) error
-	}); ok && r.StartedAt == nil {
+	}); ok && !started.Valid {
 		_ = restorer.RestoreQueuedCancellation(ctx, id)
 	}
-	if rr.Complete(ctx, id, r.Status) != nil {
+	if rr.Complete(ctx, id, status) != nil {
 		log.Printf("[run] run %s: recovery final result evidence unavailable", id)
 	}
 }

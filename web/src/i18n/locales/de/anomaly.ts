@@ -1,4 +1,6 @@
 export default {
+ samplingAuthorizationRequired: "Messfreigabe erforderlich",
+ samplingAuthorizationHelp: "Ein Administrator mit Serverausführungs- und Zugangsdatenrechten muss diese Regel erneut speichern. Änderungen erfordern eine neue Freigabe.",
   title: 'Anomalieerkennung',
   subtitle:
     'Konfigurieren Sie Schwellenwertregeln, um die CPU- / Speicher- / Festplattenmetriken des Servers zu prüfen; eine Übereinstimmung löst eine Warnung aus',

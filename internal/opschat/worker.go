@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/huangchengsir/pipewright/internal/maintenance"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"sort"
 	"strings"
 	"time"
@@ -119,11 +120,12 @@ func (s *Service) acquireLease(root context.Context, seen *leaseObservation) err
 			return ErrStorage
 		}
 		for _, pair := range ids {
-			r, e := s.run(root, tx, pair[0], pair[1])
+			completion := context.WithValue(root, completionSessionKey{}, pair[0])
+			r, e := s.run(completion, tx, pair[0], pair[1])
 			if e != nil {
 				return e
 			}
-			calls, e := s.calls(root, tx, pair[0], pair[1])
+			calls, e := s.calls(completion, tx, pair[0], pair[1])
 			if e != nil {
 				return e
 			}
@@ -138,11 +140,11 @@ func (s *Service) acquireLease(root context.Context, seen *leaseObservation) err
 				} else if !terminal(c.Body.View.Status) {
 					c.Body.View.Status = Interrupted
 				}
-				if e = s.saveCall(root, tx, c); e != nil {
+				if e = s.saveCall(completion, tx, c); e != nil {
 					return e
 				}
 			}
-			if e = s.finishTx(root, tx, r, status); e != nil {
+			if e = s.finishTx(completion, tx, r, status); e != nil {
 				return e
 			}
 		}
@@ -244,7 +246,7 @@ func (s *Service) Close(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, "UPDATE ops_chat_state SET lease_owner='',lease_until=0 WHERE id=1 AND lease_owner=?", s.instance)
 	return databaseError(err)
 }
-func (s *Service) launch(id, run string) {
+func (s *Service) launch(request context.Context, id, run string) {
 	s.mu.Lock()
 	if !s.started || s.closing || s.lost {
 		s.mu.Unlock()
@@ -255,12 +257,14 @@ func (s *Service) launch(id, run string) {
 		s.mu.Unlock()
 		return
 	}
-	ctx, cancel := context.WithCancel(s.root)
+	ctx, cancel := context.WithCancel(context.WithoutCancel(request))
+	stopRoot := context.AfterFunc(s.root, cancel)
 	j := &job{session: id, cancel: cancel, done: make(chan struct{})}
 	s.jobs[run] = j
 	s.mu.Unlock()
 	go func() {
 		defer cancel()
+		defer stopRoot()
 		for {
 			s.work(ctx, id, run)
 			s.mu.Lock()
@@ -281,7 +285,7 @@ func (s *Service) persist(id string, fn func(context.Context, *sql.Tx) error) er
 }
 
 func (s *Service) persistAttempts(id string, fn func(context.Context, *sql.Tx) error, attempts int) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), completionSessionKey{}, id), 5*time.Second)
 	defer cancel()
 	var err error
 	for attempt := 0; attempt < attempts; attempt++ {
@@ -500,7 +504,7 @@ func (s *Service) work(parent context.Context, id, run string) {
 		s.failRun(id, run, Interrupted)
 		return
 	}
-	if err = s.registerSecrets(); err != nil {
+	if err = s.registerSecrets(ctx); err != nil {
 		s.failRun(id, run, Failed)
 		return
 	}
@@ -724,7 +728,7 @@ func (s *Service) work(parent context.Context, id, run string) {
 			}
 		}
 		if pending {
-			if e = s.issueApproval(c, tx, id, run, cs); e != nil {
+			if e = s.issueApproval(s.authorizationContext(ctx, tx), tx, id, run, cs); e != nil {
 				return e
 			}
 			current.View.Status = AwaitingConfirmation
@@ -838,6 +842,14 @@ func (s *Service) analyzeWorkStatus(ctx context.Context, id, run string, r runRe
 	if err != nil {
 		return
 	}
+	if err = s.authorizeSession(ctx, s.db, id, "opschat.submit"); err != nil {
+		s.analysisFailure(id, run, finalStatus, err)
+		return
+	}
+	if err = tenancy.VerifyExecution(ctx); err != nil {
+		s.analysisFailure(id, run, finalStatus, err)
+		return
+	}
 	modelCtx, stop := context.WithTimeout(ctx, 60*time.Second)
 	reply := s.reply(modelCtx, id, run, "analysis", 16<<10)
 	var text string
@@ -853,7 +865,13 @@ func (s *Service) analyzeWorkStatus(ctx context.Context, id, run string, r runRe
 		err = reply.finish(s.scrub(text, 16<<10), Succeeded, false)
 	}
 	stop()
-	if err != nil || len(text) > 16<<10 || s.registerSecrets() != nil {
+	if err == nil {
+		err = s.authorizeSession(ctx, s.db, id, "opschat.submit")
+	}
+	if err == nil {
+		err = tenancy.VerifyExecution(ctx)
+	}
+	if err != nil || len(text) > 16<<10 || s.registerSecrets(ctx) != nil {
 		s.analysisFailure(id, run, finalStatus, err)
 		return
 	}
@@ -917,6 +935,9 @@ func (s *Service) bounded(ctx context.Context, c *callRecord, argv []string, b *
 
 // The caller owns both slots across mutation and verification; never acquire recursively.
 func (s *Service) boundedInSlot(ctx context.Context, c *callRecord, argv []string, b *readBudget) (*target.LimitedResult, error) {
+	if err := s.authorizeRemote(ctx, c); err != nil {
+		return nil, err
+	}
 	snap := c.Body.Snapshot
 	if b.bytes < 1 || b.lines < 1 {
 		b.truncated = true
@@ -926,7 +947,7 @@ func (s *Service) boundedInSlot(ctx context.Context, c *callRecord, argv []strin
 	if s.executor == nil {
 		return nil, ErrUnavailable
 	}
-	if err := s.registerSecrets(); err != nil {
+	if err := s.registerSecrets(ctx); err != nil {
 		return nil, err
 	}
 	if s.secretArgs(c.Body.View.Args) {
@@ -956,7 +977,7 @@ func (s *Service) boundedInSlot(ctx context.Context, c *callRecord, argv []strin
 		// Only the action dispatch needs approval; read-only effect verification can
 		// finish after expiry. This check is after both SSH slot waits.
 		if mutation(c.Body.View.ToolID) && mutationCommand(argv) {
-			if e = s.consumedApproval(cc, tx, c.Body.View); e != nil {
+			if e = s.consumedApproval(s.authorizationContext(ctx, tx), tx, c.Body.View); e != nil {
 				return e
 			}
 			if bound(stored.Body.View) != bound(c.Body.View) {
@@ -981,10 +1002,16 @@ func (s *Service) boundedInSlot(ctx context.Context, c *callRecord, argv []strin
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	if err := s.authorizeRemote(callCtx, c); err != nil {
+		return nil, err
+	}
 	res, err := s.executor.ExecLimited(callCtx, snap, argv, target.ExecutionLimits{Bytes: limitBytes, Lines: b.lines})
+	if err := s.authorizeRemote(callCtx, c); err != nil {
+		return nil, err
+	}
 	// Credentials may rotate while SSH is in flight. No returned stream may be
 	// projected or persisted until the latest local secret set is available.
-	if secretErr := s.registerSecrets(); secretErr != nil {
+	if secretErr := s.registerSecrets(ctx); secretErr != nil {
 		return nil, secretErr
 	}
 	if res != nil {
@@ -1170,7 +1197,17 @@ func (s *Service) executeCall(ctx context.Context, c callRecord) error {
 			return s.recordResult(c)
 		}
 		// Outside DB transactions; the injected recorder only writes the local append-only log.
-		err = s.audit.Record(callCtx, audit.Entry{Actor: "admin", Action: "ops_chat_intent", TargetType: "ops_chat_call", TargetID: v.ID,
+		actor := "admin"
+		principal, on, authErr := tenancy.CurrentPrincipal(callCtx, s.db)
+		if authErr != nil {
+			v.Status = Interrupted
+			v.Error = "authorization changed"
+			return s.recordResult(c)
+		}
+		if on {
+			actor = principal.ID
+		}
+		err = s.audit.Record(callCtx, audit.Entry{Actor: actor, Action: "ops_chat_intent", TargetType: "ops_chat_call", TargetID: v.ID,
 			Detail: map[string]any{"sessionId": v.SessionID, "runId": v.RunID, "callId": v.ID, "serverId": v.ServerID, "toolId": v.ToolID, "argsHash": v.ArgsHash, "targetHash": v.TargetHash, "status": "intent"}})
 		if err != nil {
 			v.Status = Failed
@@ -1186,7 +1223,7 @@ func (s *Service) executeCall(ctx context.Context, c callRecord) error {
 			if r.View.CancelRequested || callCtx.Err() != nil {
 				return ErrConflict
 			}
-			return s.consumedApproval(cc, tx, *v)
+			return s.consumedApproval(s.authorizationContext(callCtx, tx), tx, *v)
 		})
 		if err != nil {
 			v.Status = Interrupted

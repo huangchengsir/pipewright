@@ -107,6 +107,10 @@ func makeContainerTerminalHandler(svc target.Service, aud audit.Recorder) http.H
 			writeServerError(w, err)
 			return
 		}
+		if err := target.AuthorizeTerminal(r.Context(), svc, id); err != nil {
+			writeServerError(w, err)
+			return
+		}
 
 		// WS 升级:同源校验(防跨站 WS 劫持)。OriginPatterns 仅放行 Host 自身;
 		// 非同源 → Accept 返回错误,直接 403,绝不开 SSH。
@@ -181,6 +185,10 @@ func makeTerminalV2Handler(svc target.Service, aud audit.Recorder, container boo
 			writeServerError(w, err)
 			return
 		}
+		if err := target.AuthorizeTerminal(r.Context(), svc, id); err != nil {
+			writeServerError(w, err)
+			return
+		}
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: originPatterns(r)})
 		if err != nil {
 			return
@@ -251,6 +259,10 @@ func makeServerTerminalHandler(svc target.Service, aud audit.Recorder) http.Hand
 			return
 		}
 		if _, err := svc.Get(r.Context(), id); err != nil {
+			writeServerError(w, err)
+			return
+		}
+		if err := target.AuthorizeTerminal(r.Context(), svc, id); err != nil {
 			writeServerError(w, err)
 			return
 		}

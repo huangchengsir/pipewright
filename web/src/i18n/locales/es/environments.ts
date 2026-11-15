@@ -31,6 +31,7 @@ export default {
     'Esto revierte el entorno al último despliegue correcto (ejecución {commit} · {when}), volviendo a desplegar esos artefactos en los hosts de destino originales. Esta acción desencadena un despliegue real.',
   rollbackConfirm: 'Confirmar reversión',
   rollbackFailedStatus: 'Error en la reversión ({status})',
+  rollbackTargetChanged: "El despliegue ha cambiado. Actualiza la página y vuelve a confirmar la reversión.",
   rollbackFailedRetry: 'Error en la reversión. Inténtalo de nuevo más tarde.',
 
   toastRolledBack: 'Entorno «{env}» revertido',

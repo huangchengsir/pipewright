@@ -12,143 +12,244 @@
   这些是 CI 运行数据上的**近似**口径,卡片 caption 已显式说明样本。
 -->
 <script setup lang="ts">
-import { computed, ref, watch, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { useRoute, useRouter } from 'vue-router'
+import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
+import { useI18n } from "vue-i18n";
+import { useRoute, useRouter } from "vue-router";
 import {
   getDoraMetrics,
+  getDoraProjects,
+  type MetricsProject,
   formatDuration,
   formatFrequency,
   formatPercent,
   type DoraMetrics,
-} from '../api/metrics'
-import { listProjects, type Project } from '../api/projects'
-import { HttpError } from '../api/http'
-import DoraMetricCard from '../components/metrics/DoraMetricCard.vue'
-import AppButton from '../components/ui/AppButton.vue'
-import ErrorState from '../components/ui/ErrorState.vue'
-import SkeletonBlock from '../components/ui/SkeletonBlock.vue'
-import AppSelect from '../components/ui/AppSelect.vue'
+} from "../api/metrics";
+import { useSessionStore } from "../stores/session";
+import { usePermissionStore } from "../stores/permissions";
+import { HttpError } from "../api/http";
+import DoraMetricCard from "../components/metrics/DoraMetricCard.vue";
+import AppButton from "../components/ui/AppButton.vue";
+import ErrorState from "../components/ui/ErrorState.vue";
+import SkeletonBlock from "../components/ui/SkeletonBlock.vue";
+import AppSelect from "../components/ui/AppSelect.vue";
 
-type LoadState = 'idle' | 'loading' | 'error'
+type LoadState = "idle" | "loading" | "error";
 
-const { t } = useI18n()
-const route = useRoute()
-const router = useRouter()
+const { t } = useI18n();
+const route = useRoute();
+const router = useRouter();
+const session = useSessionStore();
+const permissions = usePermissionStore();
 
-const loadState = ref<LoadState>('idle')
-const loadError = ref('')
-const data = ref<DoraMetrics | null>(null)
-const projects = ref<Project[]>([])
+const loadState = ref<LoadState>("idle");
+const loadError = ref("");
+const data = ref<DoraMetrics | null>(null);
+const projects = ref<MetricsProject[]>([]);
 
 /** 窗口选项(value 即发给后端的 window 值;label 为本地化展示)。 */
 const windowOptions = computed(() => [
-  { value: '7d', label: t('doraDashboard.window7d') },
-  { value: '30d', label: t('doraDashboard.window30d') },
-  { value: '90d', label: t('doraDashboard.window90d') },
-])
+  { value: "7d", label: t("doraDashboard.window7d") },
+  { value: "30d", label: t("doraDashboard.window30d") },
+  { value: "90d", label: t("doraDashboard.window90d") },
+]);
 
 // ─── URL as state ───────────────────────────────────────────────────────────
 
 const projectId = computed<string>(() => {
-  const p = route.query.projectId
-  return typeof p === 'string' ? p : ''
-})
+  const p = route.query.projectId;
+  return typeof p === "string" ? p : "";
+});
 const windowSel = computed<string>(() => {
-  const w = route.query.window
-  return typeof w === 'string' && windowOptions.value.some((o) => o.value === w) ? w : '30d'
-})
+  const w = route.query.window;
+  return typeof w === "string" && windowOptions.value.some((o) => o.value === w)
+    ? w
+    : "30d";
+});
 
 function setQuery(patch: Record<string, string | undefined>): void {
-  const next: Record<string, string> = {}
+  const next: Record<string, string> = {};
   for (const [k, v] of Object.entries({ ...route.query, ...patch })) {
-    if (typeof v === 'string' && v !== '') next[k] = v
+    if (typeof v === "string" && v !== "") next[k] = v;
   }
-  void router.replace({ query: next })
+  void router.replace({ query: next });
 }
 
 function selectProject(id: string): void {
-  setQuery({ projectId: id || undefined })
+  setQuery({ projectId: id || undefined });
 }
 function onWindowChange(value: string): void {
-  setQuery({ window: value })
+  setQuery({ window: value });
 }
 
 // ─── derived display ──────────────────────────────────────────────────────────
 
 const generatedAtLabel = computed(() => {
-  if (!data.value?.generatedAt) return ''
-  const d = new Date(data.value.generatedAt)
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString()
-})
+  if (!data.value?.generatedAt) return "";
+  const d = new Date(data.value.generatedAt);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleString();
+});
 
-const deployTrend = computed(() => (data.value?.trend ?? []).map((t) => t.deployments))
-const successTrend = computed(() => (data.value?.trend ?? []).map((t) => t.successes))
-const cfrTrend = computed(() => (data.value?.trend ?? []).map((t) => t.changeFailureRate))
+const deployTrend = computed(() =>
+  (data.value?.trend ?? []).map((t) => t.deployments),
+);
+const successTrend = computed(() =>
+  (data.value?.trend ?? []).map((t) => t.successes),
+);
+const cfrTrend = computed(() =>
+  (data.value?.trend ?? []).map((t) => t.changeFailureRate),
+);
 
-const windowDaysLabel = computed(() => data.value?.windowDays ?? 30)
+const windowDaysLabel = computed(() => data.value?.windowDays ?? 30);
 
 // ─── load ─────────────────────────────────────────────────────────────────────
 
+let generation = 0;
+let controller: AbortController | undefined;
+let mounted = false;
+function ready(): boolean {
+  const user = session.user;
+  return (
+    !!user &&
+    !user.mustChangePassword &&
+    !session.isNetworkError &&
+    (user.multiTenant === false ||
+      (user.multiTenant === true && !!permissions.activeTeam))
+  );
+}
+function clearScope(): void {
+  generation++;
+  controller?.abort();
+  controller = undefined;
+  data.value = null;
+  projects.value = [];
+  loadError.value = "";
+  loadState.value = "idle";
+}
 async function load(): Promise<void> {
-  loadState.value = 'loading'
-  loadError.value = ''
+  clearScope();
+  if (!ready()) return;
+  const current = generation;
+  controller = new AbortController();
+  const options = {
+    signal: controller.signal,
+    teamId: session.user?.multiTenant ? permissions.activeTeam : undefined,
+  };
+  loadState.value = "loading";
+  // Picker and metrics share the same identity and generation. A failed picker
+  // never falls back to project configuration APIs with broader payloads.
+  const picker = getDoraProjects(options)
+    .then((result) => {
+      if (current === generation) projects.value = result;
+    })
+    .catch((err) => {
+      if (current !== generation) return;
+      projects.value = [];
+      if (
+        err instanceof HttpError &&
+        (err.status === 401 || err.status === 403)
+      ) {
+        clearScope();
+        loadError.value =
+          err.apiError?.message ??
+          t("doraDashboard.errLoadStatus", { status: err.status });
+        loadState.value = "error";
+      }
+    });
   try {
-    const res = await getDoraMetrics({ projectId: projectId.value, window: windowSel.value })
-    data.value = res
-    loadState.value = 'idle'
+    const result = await getDoraMetrics(
+      { projectId: projectId.value, window: windowSel.value },
+      options,
+    );
+    if (current !== generation) return;
+    data.value = result;
+    loadState.value = "idle";
   } catch (err) {
+    if (current !== generation) return;
+    // A late picker must not repopulate options following an authorization failure.
+    if (
+      err instanceof HttpError &&
+      (err.status === 401 || err.status === 403)
+    ) {
+      generation++;
+      controller?.abort();
+      projects.value = [];
+    }
     if (err instanceof HttpError) {
       loadError.value =
         err.status === 0
-          ? t('doraDashboard.errOffline')
-          : (err.apiError?.message ?? t('doraDashboard.errLoadStatus', { status: err.status }))
+          ? t("doraDashboard.errOffline")
+          : (err.apiError?.message ??
+            t("doraDashboard.errLoadStatus", { status: err.status }));
     } else {
-      loadError.value = t('doraDashboard.errLoadRetry')
+      loadError.value = t("doraDashboard.errLoadRetry");
     }
-    loadState.value = 'error'
+    loadState.value = "error";
   }
+  await picker;
 }
-
-async function loadProjects(): Promise<void> {
-  try {
-    projects.value = await listProjects()
-  } catch {
-    // 项目下拉失败不阻断主指标:留空(只能看全部项目)。
-    projects.value = []
-  }
-}
-
-// query 变化 → 重新拉取(URL 即状态的单一数据流)。
-watch([projectId, windowSel], () => void load())
-
+watch(
+  [
+    projectId,
+    windowSel,
+    () => session.user,
+    () =>
+      JSON.stringify([
+        session.user?.userId,
+        session.user?.multiTenant,
+        session.user?.mustChangePassword,
+      ]),
+    () => session.isNetworkError,
+    () => permissions.activeTeam,
+  ],
+  () => {
+    clearScope();
+    if (mounted) void load();
+  },
+  { flush: "sync" },
+);
 onMounted(() => {
-  void loadProjects()
-  void load()
-})
+  mounted = true;
+  void load();
+});
+onBeforeUnmount(() => {
+  mounted = false;
+  clearScope();
+});
 </script>
 
 <template>
   <div class="dora-view">
     <header class="view-header">
       <div class="view-header__text">
-        <h1 class="view-title">{{ t('doraDashboard.title') }}</h1>
+        <h1 class="view-title">{{ t("doraDashboard.title") }}</h1>
         <p class="view-sub">
-          {{ t('doraDashboard.subtitle') }}
-          <span v-if="generatedAtLabel" class="view-sub__count">{{ t('doraDashboard.generatedAt', { time: generatedAtLabel }) }}</span>
+          {{ t("doraDashboard.subtitle") }}
+          <span v-if="generatedAtLabel" class="view-sub__count">{{
+            t("doraDashboard.generatedAt", { time: generatedAtLabel })
+          }}</span>
         </p>
       </div>
-      <AppButton variant="default" :loading="loadState === 'loading'" @click="load">{{ t('common.refresh') }}</AppButton>
+      <AppButton
+        variant="default"
+        :loading="loadState === 'loading'"
+        @click="load"
+        >{{ t("common.refresh") }}</AppButton
+      >
     </header>
 
     <!-- Controls: project filter + window segmented -->
     <div class="dora-controls">
       <label class="dora-controls__field">
-        <span class="dora-controls__label">{{ t('doraDashboard.projectLabel') }}</span>
+        <span class="dora-controls__label">{{
+          t("doraDashboard.projectLabel")
+        }}</span>
         <AppSelect
           class="select"
           :model-value="projectId"
-          :options="[{ value: '', label: t('doraDashboard.allProjects') }, ...projects.map((p) => ({ value: p.id, label: p.name }))]"
+          :options="[
+            { value: '', label: t('doraDashboard.allProjects') },
+            ...projects.map((p) => ({ value: p.id, label: p.name })),
+          ]"
           :placeholder="t('doraDashboard.allProjects')"
           :aria-label="t('doraDashboard.projectFilterAria')"
           min-width="180px"
@@ -157,7 +258,11 @@ onMounted(() => {
         />
       </label>
 
-      <div class="dora-segmented" role="group" :aria-label="t('doraDashboard.windowAria')">
+      <div
+        class="dora-segmented"
+        role="group"
+        :aria-label="t('doraDashboard.windowAria')"
+      >
         <button
           v-for="opt in windowOptions"
           :key="opt.value"
@@ -181,7 +286,11 @@ onMounted(() => {
     />
 
     <!-- Loading skeleton (first load) -->
-    <div v-else-if="loadState === 'loading' && !data" class="dora-grid" aria-busy="true">
+    <div
+      v-else-if="loadState === 'loading' && !data"
+      class="dora-grid"
+      aria-busy="true"
+    >
       <div v-for="n in 4" :key="n" class="skeleton-card">
         <SkeletonBlock :height="14" width="40%" />
         <SkeletonBlock :height="32" width="60%" />
@@ -195,19 +304,37 @@ onMounted(() => {
       <div class="dora-summary">
         <div class="dora-summary__stat">
           <span class="dora-summary__num">{{ data.totalDeployments }}</span>
-          <span class="dora-summary__lbl">{{ t('doraDashboard.summaryDeployments', { days: windowDaysLabel }) }}</span>
+          <span class="dora-summary__lbl">{{
+            t("doraDashboard.summaryDeployments", { days: windowDaysLabel })
+          }}</span>
         </div>
         <div class="dora-summary__divider" aria-hidden="true" />
         <div class="dora-summary__stat">
-          <span class="dora-summary__num dora-summary__num--ok">{{ data.successfulDeployments }}</span>
-          <span class="dora-summary__lbl">{{ t('doraDashboard.summarySuccess') }}</span>
+          <span class="dora-summary__num dora-summary__num--ok">{{
+            data.successfulDeployments
+          }}</span>
+          <span class="dora-summary__lbl">{{
+            t("doraDashboard.summarySuccess")
+          }}</span>
         </div>
         <div class="dora-summary__stat">
-          <span class="dora-summary__num dora-summary__num--bad">{{ data.failedDeployments }}</span>
-          <span class="dora-summary__lbl">{{ t('doraDashboard.summaryFailed') }}</span>
+          <span class="dora-summary__num dora-summary__num--bad">{{
+            data.failedDeployments
+          }}</span>
+          <span class="dora-summary__lbl">{{
+            t("doraDashboard.summaryFailed")
+          }}</span>
         </div>
-        <div v-if="data.recoveryAttempts !== undefined" class="dora-summary__stat">
-          <span class="dora-summary__lbl">{{ t('runRetry.recoveryCount', { count: data.recoveryAttempts, success: data.successfulRecoveries ?? 0 }) }}</span>
+        <div
+          v-if="data.recoveryAttempts !== undefined"
+          class="dora-summary__stat"
+        >
+          <span class="dora-summary__lbl">{{
+            t("runRetry.recoveryCount", {
+              count: data.recoveryAttempts,
+              success: data.successfulRecoveries ?? 0,
+            })
+          }}</span>
         </div>
       </div>
 
@@ -217,7 +344,12 @@ onMounted(() => {
           :title="t('doraDashboard.metricDeployFreq')"
           subtitle="Deployment Frequency"
           :display="formatFrequency(data.metrics.deploymentFrequency.value)"
-          :caption="t('doraDashboard.capDeployFreq', { days: windowDaysLabel, count: data.successfulDeployments })"
+          :caption="
+            t('doraDashboard.capDeployFreq', {
+              days: windowDaysLabel,
+              count: data.successfulDeployments,
+            })
+          "
           :band="data.metrics.deploymentFrequency.band"
           :sample-count="data.metrics.deploymentFrequency.sampleCount"
           :trend="successTrend"
@@ -228,7 +360,9 @@ onMounted(() => {
           :display="formatDuration(data.metrics.leadTime.value)"
           :caption="
             data.metrics.leadTime.sampleCount > 0
-              ? t('doraDashboard.capLeadTime', { count: data.metrics.leadTime.sampleCount })
+              ? t('doraDashboard.capLeadTime', {
+                  count: data.metrics.leadTime.sampleCount,
+                })
               : t('doraDashboard.capLeadTimeEmpty')
           "
           :band="data.metrics.leadTime.band"
@@ -239,7 +373,12 @@ onMounted(() => {
           :title="t('doraDashboard.metricCfr')"
           subtitle="Change Failure Rate"
           :display="formatPercent(data.metrics.changeFailureRate.value)"
-          :caption="t('doraDashboard.capCfr', { failed: data.failedDeployments, total: data.totalDeployments })"
+          :caption="
+            t('doraDashboard.capCfr', {
+              failed: data.failedDeployments,
+              total: data.totalDeployments,
+            })
+          "
           :band="data.metrics.changeFailureRate.band"
           :sample-count="data.metrics.changeFailureRate.sampleCount"
           :trend="cfrTrend"
@@ -250,7 +389,9 @@ onMounted(() => {
           :display="formatDuration(data.metrics.mttr.value)"
           :caption="
             data.metrics.mttr.sampleCount > 0
-              ? t('doraDashboard.capMttr', { count: data.metrics.mttr.sampleCount })
+              ? t('doraDashboard.capMttr', {
+                  count: data.metrics.mttr.sampleCount,
+                })
               : t('doraDashboard.capMttrEmpty')
           "
           :band="data.metrics.mttr.band"
@@ -260,7 +401,9 @@ onMounted(() => {
       </div>
 
       <p class="dora-note">
-        {{ t('runRetry.doraPolicy') }}<strong>{{ t('doraDashboard.noteEmphasis') }}</strong>{{ t('doraDashboard.noteTrail') }}
+        {{ t("runRetry.doraPolicy")
+        }}<strong>{{ t("doraDashboard.noteEmphasis") }}</strong
+        >{{ t("doraDashboard.noteTrail") }}
       </p>
     </template>
   </div>

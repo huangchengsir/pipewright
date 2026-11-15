@@ -284,6 +284,9 @@ func collectStackDetail(ctx context.Context, svc target.Service, id, project str
 		}
 	}
 
+	if !target.CanRevealContainerConfig(ctx, svc, id) {
+		return out, nil
+	}
 	// config_files 标签 → 取首个非空。
 	if cfgRes, cfgErr := svc.Exec(cctx, id, cmdStackConfigFiles(project)); cfgErr == nil && cfgRes.ExitCode == 0 {
 		for _, ln := range strings.Split(cfgRes.Stdout, "\n") {

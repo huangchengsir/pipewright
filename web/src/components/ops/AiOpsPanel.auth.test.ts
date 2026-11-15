@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
+import { useSessionStore } from '../../stores/session'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { shallowRef } from 'vue'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import AiOpsPanel from './AiOpsPanel.vue'
@@ -7,6 +9,7 @@ import CopyTextDialog from './CopyTextDialog.vue'
 import AiOpsComposer from './AiOpsComposer.vue'
 import { copyText } from '../../utils/clipboard'
 import { resetOpsAuth } from '../../utils/opsAuth'
+beforeEach(() => { setActivePinia(createPinia()); useSessionStore().user = { username: 'admin', multiTenant: false } })
 const panelState = vi.hoisted(() => ({
   stop: vi.fn().mockResolvedValue(true),
   confirm: vi.fn(),

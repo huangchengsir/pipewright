@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"strings"
 	"time"
 
@@ -127,9 +128,17 @@ func (s *service) AddArtifact(ctx context.Context, a Artifact) (*Artifact, error
 // 破并列,保证产物先后稳定确定(跨 SQLite/MySQL 一致;MySQL 无 rowid 伪列)。run 不存在不报错
 // (返回空切片);HTTP 层据 run 存在性决定 404(仿 GetLogs 语义)。参数化 SQL。
 func (s *service) listOwnArtifacts(ctx context.Context, runID string) ([]Artifact, error) {
+	predicate, active, authErr := tenancy.DeploymentMetadataPredicate(ctx, s.db, "ar.run_id")
+	if !active {
+		predicate, authErr = tenancy.QueryPredicate(ctx, s.db, "run.read", "ar.run_id")
+	}
+	if authErr != nil {
+		return nil, authErr
+	}
+
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, run_id, type, name, `+store.Identifier(store.DialectOf(s.db), "reference")+`, size_bytes, metadata_json, created_at
-		 FROM run_artifacts WHERE run_id = ? ORDER BY created_at ASC, id ASC`, runID)
+		 FROM run_artifacts ar WHERE run_id = ? AND `+predicate.SQL+` ORDER BY created_at ASC, id ASC`, append([]any{runID}, predicate.Args...)...)
 	if err != nil {
 		return nil, fmt.Errorf("run: load artifacts: %w", err)
 	}

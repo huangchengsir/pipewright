@@ -12,7 +12,7 @@
  * Errors follow the canonical envelope; callers inspect `err.apiError?.code` on HttpError.
  */
 
-import { http } from "./http";
+import { http, type HttpOptions } from "./http";
 
 /** Aggregated deployment status across all target servers of one deployment. */
 export type EnvDeployStatus = "success" | "partial_failed" | "failed";
@@ -69,6 +69,7 @@ export interface EnvDeployment {
 
 /** One environment's deployment timeline (most recent first). */
 export interface EnvironmentTimeline {
+  environmentId?: string;
   environment: string;
   /** Current active version (most recent all-success); null when never fully succeeded. */
   active: EnvDeployment | null;
@@ -94,10 +95,11 @@ export interface RollbackResult {
 export async function listEnvironmentDeployments(
   projectId: string,
   signal?: AbortSignal,
+  options?: HttpOptions,
 ): Promise<EnvironmentTimeline[]> {
   const res = await http.get<EnvironmentsResponse>(
     `/api/projects/${encodeURIComponent(projectId)}/environments/deployments`,
-    { signal },
+    { ...options, signal: signal ?? options?.signal },
   );
   return res.environments ?? [];
 }
@@ -116,8 +118,16 @@ export function getEnvironmentHistory(
 export function rollbackEnvironment(
   projectId: string,
   env: string,
+  options?: HttpOptions,
+  expected?: {expectedCurrentRunId: string; expectedTargetRunId: string},
 ): Promise<RollbackResult> {
   return http.post<RollbackResult>(
-    `/api/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(env)}/rollback`,
+    `/api/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(env)}/rollback`, expected, options,
   );
+}
+
+/** Names only, scoped to environment visibility rather than project settings. */
+export async function listEnvironmentProjects(options?: HttpOptions): Promise<{id:string;name:string}[]> {
+ const response=await http.get<{projects:{id:string;name:string}[]}>("/api/environments/projects", options);
+ return response.projects ?? [];
 }

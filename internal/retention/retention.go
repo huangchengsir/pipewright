@@ -17,6 +17,8 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"time"
 )
 
@@ -35,12 +37,28 @@ type Service struct {
 // NewService 构造保留服务。
 func NewService(db *sql.DB) *Service { return &Service{db: db} }
 
+// ReadConfiguration is the interactive administrator-only configuration read.
+// GetConfig remains the internal scheduler's policy input, not an HTTP entry point.
+func (s *Service) ReadConfiguration(ctx context.Context) (Config, error) {
+	if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+		return Config{}, err
+	}
+	cfg, err := s.GetConfig(ctx)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
 // GetConfig 读取全局保留配置(单行 id=1;缺行返回零值不报错)。
 func (s *Service) GetConfig(ctx context.Context) (Config, error) {
 	var (
 		enabled, keep, age int
 	)
-	err := s.db.QueryRowContext(ctx,
+	err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT enabled, keep_per_project, max_age_days FROM retention_config WHERE id = 1`,
 	).Scan(&enabled, &keep, &age)
 	if err == sql.ErrNoRows {
@@ -54,6 +72,9 @@ func (s *Service) GetConfig(ctx context.Context) (Config, error) {
 
 // SetConfig 持久化保留配置(负值归一为 0;upsert 单行)。
 func (s *Service) SetConfig(ctx context.Context, c Config) error {
+	if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+		return err
+	}
 	if c.KeepPerProject < 0 {
 		c.KeepPerProject = 0
 	}
@@ -65,21 +86,22 @@ func (s *Service) SetConfig(ctx context.Context, c Config) error {
 		enabled = 1
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE retention_config SET enabled = ?, keep_per_project = ?, max_age_days = ?, updated_at = ? WHERE id = 1`,
-		enabled, c.KeepPerProject, c.MaxAgeDays, now)
-	if err != nil {
-		return fmt.Errorf("retention: set config: %w", err)
-	}
-	// 行不存在(迁移种子未跑)→ 兜底插入。
-	if n, _ := res.RowsAffected(); n == 0 {
-		if _, err := s.db.ExecContext(ctx,
-			`INSERT INTO retention_config (id, enabled, keep_per_project, max_age_days, updated_at) VALUES (1, ?, ?, ?, ?)`,
-			enabled, c.KeepPerProject, c.MaxAgeDays, now); err != nil {
-			return fmt.Errorf("retention: insert config: %w", err)
+	return configstate.WithWriteTxContext(ctx, s.db, func(txctx context.Context, q configstate.DBTX) error {
+		if err := tenancy.LockAuthorization(txctx, s.db); err != nil {
+			return err
 		}
-	}
-	return nil
+		if err := tenancy.RequireInstanceAdministrator(txctx, s.db); err != nil {
+			return err
+		}
+		statement := store.InsertSQL(store.DialectOf(s.db), "retention_config",
+			[]string{"id", "enabled", "keep_per_project", "max_age_days", "updated_at"},
+			[]string{"?", "?", "?", "?", "?"}, []string{"id"},
+			[]string{"enabled", "keep_per_project", "max_age_days", "updated_at"})
+		if _, err := q.ExecContext(txctx, statement, 1, enabled, c.KeepPerProject, c.MaxAgeDays, now); err != nil {
+			return fmt.Errorf("retention: set config: %w", err)
+		}
+		return nil
+	})
 }
 
 // terminalStatuses 是可被清理的终态(success/failed;取消已并入 failed)。
@@ -148,7 +170,7 @@ func (s *Service) prunableIDs(ctx context.Context, cfg Config, now time.Time) ([
 // 为 RESTRICT),删 run 前须显式清。run_logs 是最大增长源(日志文本),尤其重要。其余子表
 // (run_steps/run_artifacts/反馈/审批/测试报告/晋级历史)均级联,随删 run 自动清除。
 // 注:webhook_deliveries 为去重账本(删之可能导致重投被重复处理),不在此清。
-var nonCascadeChildTables = []string{"run_logs", "deploy_targets"}
+var nonCascadeChildTables = []string{"run_logs", "deploy_targets", "access_run_authorizations"}
 
 // deleteRuns 分批在事务内删除运行:先删非级联子表,再删 run(级联其余子表)。
 func (s *Service) deleteRuns(ctx context.Context, ids []string) (int, error) {
@@ -236,6 +258,9 @@ func (s *Service) deleteChunk(ctx context.Context, ids []string) (int, error) {
 			}
 			deleted += int(n)
 			if n > 0 {
+				if _, err = q.ExecContext(txctx, `DELETE FROM access_ownership WHERE resource_kind='run' AND resource_id=?`, id); err != nil {
+					return err
+				}
 				if _, err = q.ExecContext(txctx, "UPDATE run_retry_refs SET released_at=? WHERE owner_attempt_id=? AND released_at IS NULL", time.Now().UnixMilli(), id); err != nil {
 					return err
 				}

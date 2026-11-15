@@ -25,11 +25,21 @@ type transaction struct {
 	DBTX
 	db       *sql.DB
 	readOnly bool
+	admitted bool
 	mu       sync.Mutex
 	hooks    []func()
 	finished bool
 }
 type contextKey struct{}
+type writeAdmissionKey struct{}
+type writeAdmission func(context.Context, *sql.DB) error
+
+// WithWriteAdmission installs a server-owned fence before any business row is
+// locked. Adapters must attach it before opening the outer transaction.
+func WithWriteAdmission(ctx context.Context, fn func(context.Context, *sql.DB) error) context.Context {
+	return context.WithValue(ctx, writeAdmissionKey{}, writeAdmission(fn))
+}
+
 type binding struct {
 	db *sql.DB
 	q  DBTX
@@ -84,6 +94,13 @@ func withTx(ctx context.Context, db *sql.DB, readOnly bool, fn func(DBTX) error)
 	if b, ok := ctx.Value(contextKey{}).(binding); ok && b.db == db {
 		if t, ok := b.q.(*transaction); ok && t.readOnly && !readOnly {
 			return ErrReadOnly
+		}
+		if !readOnly {
+			if admission, _ := ctx.Value(writeAdmissionKey{}).(writeAdmission); admission != nil {
+				if t, ok := b.q.(*transaction); !ok || !t.admitted {
+					return errors.New("configstate: write admission attached after transaction began")
+				}
+			}
 		}
 		return fn(b.q)
 	}
@@ -150,6 +167,14 @@ func withTx(ctx context.Context, db *sql.DB, readOnly bool, fn func(DBTX) error)
 		t.finished = true
 		t.mu.Unlock()
 	}()
+	if !readOnly {
+		if admission, _ := ctx.Value(writeAdmissionKey{}).(writeAdmission); admission != nil {
+			if err := admission(WithTxContext(ctx, db, t), db); err != nil {
+				return err
+			}
+			t.admitted = true
+		}
+	}
 	if err := fn(t); err != nil {
 		return err
 	}

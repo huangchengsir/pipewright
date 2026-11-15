@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/mask"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // defaultConcurrency 是 worker pool 默认并发上限(有界;NFR-4 内存约束)。
@@ -425,6 +426,38 @@ func (p *WorkerPool) execute(runID string) {
 		}
 	}()
 
+	// Verify the persistent principal before reading configuration or secrets.
+	enabled, authErr := tenancy.Enabled(runCtx, p.svc.db)
+	if authErr == nil && !enabled {
+		var managed int
+		authErr = p.svc.db.QueryRowContext(runCtx, `SELECT COUNT(*) FROM access_run_authorizations WHERE run_id=?`, runID).Scan(&managed)
+		if authErr == nil && managed != 0 {
+			authErr = tenancy.ErrForbidden
+		}
+	}
+	if authErr == nil && enabled {
+		if p.svc.executionAuthorizer == nil {
+			authErr = tenancy.ErrForbidden
+		} else {
+			var digest string
+			digest, authErr = p.svc.executionAuthorizer.Digest(runCtx, runID)
+			if authErr == nil {
+				runCtx = tenancy.RunContext(runCtx, p.svc.db, runID, digest)
+				runCtx = tenancy.WithExecutionVerifier(runCtx, func(ctx context.Context) error { return p.svc.executionAuthorizer.Verify(ctx, runID) })
+				var admission string
+				admission, authErr = tenancy.RunAdmissionAction(runCtx, p.svc.db, runID)
+				if authErr == nil {
+					authErr = tenancy.CheckRunPermission(runCtx, p.svc.db, admission, runID, "")
+				}
+			}
+		}
+	}
+	if authErr != nil {
+		p.svc.failToTerminal(runID)
+		sink.reconcile(StatusFailed)
+		return
+	}
+
 	// queued → running(CAS:若已被取消为 failed 则放弃)。
 	if err := p.svc.claimRunActivity(runCtx, runID); err != nil {
 		if errors.Is(err, ErrInvalidTransition) {
@@ -475,8 +508,12 @@ func (p *WorkerPool) execute(runID string) {
 	}
 
 	if errors.Is(runErr, ErrSuspended) {
-		current, err := p.svc.Get(context.Background(), runID)
-		if err == nil && current.Status == StatusWaitingAction && current.FinishedAt == nil {
+		// This is controller settlement, not a user-facing resource read. Preserve
+		// the external suspension fact even if its initiator has since been revoked.
+		var status string
+		var finished sql.NullString
+		err := p.svc.db.QueryRowContext(context.Background(), `SELECT status,finished_at FROM pipeline_runs WHERE id=?`, runID).Scan(&status, &finished)
+		if err == nil && status == StatusWaitingAction && !finished.Valid {
 			sink.persistExecution()
 			p.svc.bus.publish(Event{Kind: EventStatus, RunID: runID, Status: StatusWaitingAction})
 			return
@@ -506,13 +543,13 @@ func (p *WorkerPool) execute(runID string) {
 	// 这些 failed 非真实执行失败,自动诊断会误触发——白打 LLM + 解密 key,且诊断「被取消的 run」无意义。
 	// (手动诊断仍可在详情页触发;真实失败的 runCtx.Err()==nil 不受影响。)
 	if final == StatusFailed && p.diagnoseHook != nil && runCtx.Err() == nil {
-		p.runDiagnoseHook(runID, readers.add())
+		p.runDiagnoseHook(runCtx, runID, readers.add())
 	}
 
 	// run 落任意终态后触发 best-effort 通知(Story 5.2;已注入钩子时)。绝不阻断 run 终态:
 	// 在独立 goroutine + recover 中调用,钩子失败仅记日志。未配路由的事件由 Router 内部保证不发送。
 	if p.notifyHook != nil {
-		p.runNotifyHook(runID, final, readers.add())
+		p.runNotifyHook(runCtx, runID, final, readers.add())
 	}
 }
 
@@ -521,7 +558,7 @@ func (p *WorkerPool) execute(runID string) {
 //
 // 并发有界(NFR-4):经 diagnoseSem 信号量限流;try-acquire 失败(已达上限)则跳过本次自动诊断
 // 并记日志——best-effort 语义不变,用户仍可在详情页手动触发诊断。
-func (p *WorkerPool) runDiagnoseHook(runID string, onDone ...func()) {
+func (p *WorkerPool) runDiagnoseHook(principalCtx context.Context, runID string, onDone ...func()) {
 	select {
 	case p.diagnoseSem <- struct{}{}:
 		// 取得槽位,继续。
@@ -540,7 +577,11 @@ func (p *WorkerPool) runDiagnoseHook(runID string, onDone ...func()) {
 				log.Printf("[run] diagnose hook recovered from panic on run %s: %v", runID, rec)
 			}
 		}()
-		p.diagnoseHook(p.ctx, runID)
+		hookCtx, cancel := context.WithCancel(context.WithoutCancel(principalCtx))
+		defer cancel()
+		stop := context.AfterFunc(p.ctx, cancel)
+		defer stop()
+		p.diagnoseHook(hookCtx, runID)
 	}()
 }
 
@@ -549,7 +590,7 @@ func (p *WorkerPool) runDiagnoseHook(runID string, onDone ...func()) {
 //
 // 通知本身经 Router 已是 best-effort(单渠道失败续发、未配路由不发);此处再套独立 goroutine +
 // recover,确保「构 Payload / 调 RouteEvent」任何环节出错都不冒泡阻断 run 终态(NFR-10)。
-func (p *WorkerPool) runNotifyHook(runID, finalStatus string, onDone ...func()) {
+func (p *WorkerPool) runNotifyHook(principalCtx context.Context, runID, finalStatus string, onDone ...func()) {
 	// 并发有界(NFR-4;P8):try-acquire,满则跳过本次通知(best-effort 语义不变)。
 	select {
 	case p.notifySem <- struct{}{}:
@@ -568,7 +609,11 @@ func (p *WorkerPool) runNotifyHook(runID, finalStatus string, onDone ...func()) 
 				log.Printf("[run] notify hook recovered from panic on run %s: %v", runID, rec)
 			}
 		}()
-		p.notifyHook(p.ctx, runID, finalStatus)
+		hookCtx, cancel := context.WithCancel(context.WithoutCancel(principalCtx))
+		defer cancel()
+		stop := context.AfterFunc(p.ctx, cancel)
+		defer stop()
+		p.notifyHook(hookCtx, runID, finalStatus)
 	}()
 }
 

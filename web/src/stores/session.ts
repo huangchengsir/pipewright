@@ -16,6 +16,11 @@ import { resetOpsAuth } from '../utils/opsAuth'
 
 export interface SessionUser {
   username: string
+  userId?: string
+  displayName?: string
+  multiTenant?: boolean
+  instanceAdmin?: boolean
+  mustChangePassword?: boolean
 }
 
 /** Discriminated result returned by fetchSession */

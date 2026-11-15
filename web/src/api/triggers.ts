@@ -1,3 +1,4 @@
+import {configWriteOptions} from './configRevision'
 /**
  * Triggers API — aligns to frozen 2.3 contract.
  *
@@ -13,8 +14,8 @@
  * validated for server existence in this story (TODO: enable in 4-1).
  */
 
-import { http } from './http'
-import { configWriteOptions } from './configRevision'
+import { http, type HttpOptions } from './http'
+
 
 // ─── Domain types ─────────────────────────────────────────────────────────────
 
@@ -40,6 +41,7 @@ export interface BranchMapping {
 export type UnmatchedPolicy = 'record' | 'ignore'
 
 export interface TriggerConfig {
+  authorizationState?: 'ready' | 'required'
   /** Read-only webhook endpoint URL, e.g. "/api/webhooks/<token>". */
   webhookUrl: string
   /**
@@ -66,6 +68,8 @@ export interface SaveTriggerInput {
 }
 
 export interface SecretResetResult {
+  authorizationState?: 'ready' | 'required'
+  webhookUrl?: string
   /** Full plaintext secret — one-time only, never stored client-side after display. */
   webhookSecret: string
   webhookSecretMasked: string
@@ -73,20 +77,19 @@ export interface SecretResetResult {
 
 // ─── API functions ────────────────────────────────────────────────────────────
 
-export async function getTrigger(projectId: string): Promise<TriggerConfig> {
-  return http.get<TriggerConfig>(`/api/projects/${projectId}/trigger`)
+export async function getTrigger(projectId: string, options: HttpOptions = {}): Promise<TriggerConfig> {
+  return http.get<TriggerConfig>(`/api/projects/${projectId}/trigger`, {...options,throwOnUnauthorized:true})
 }
 
 export async function saveTrigger(
   projectId: string,
   input: SaveTriggerInput,
   expectedRevision?: string,
+  options: HttpOptions = {},
 ): Promise<TriggerConfig> {
-  return expectedRevision
-    ? http.put<TriggerConfig>(`/api/projects/${projectId}/trigger`, input, configWriteOptions(expectedRevision))
-    : http.put<TriggerConfig>(`/api/projects/${projectId}/trigger`, input)
+  return http.put<TriggerConfig>(`/api/projects/${projectId}/trigger`, input, configWriteOptions(expectedRevision,{...options,throwOnUnauthorized:true}))
 }
 
-export async function resetSecret(projectId: string, expectedRevision?: string): Promise<SecretResetResult> {
-  return expectedRevision ? http.post<SecretResetResult>(`/api/projects/${projectId}/trigger/secret/reset`, undefined, configWriteOptions(expectedRevision)) : http.post<SecretResetResult>(`/api/projects/${projectId}/trigger/secret/reset`)
+export async function resetSecret(projectId: string, expectedRevision?: string, options: HttpOptions = {}): Promise<SecretResetResult> {
+  return http.post<SecretResetResult>(`/api/projects/${projectId}/trigger/secret/reset`, undefined, configWriteOptions(expectedRevision,{...options,throwOnUnauthorized:true}))
 }

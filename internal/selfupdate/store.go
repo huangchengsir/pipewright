@@ -8,6 +8,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/releasesource"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"time"
 )
 
@@ -62,14 +63,25 @@ func (s *Service) saveWith(ctx context.Context, q configstate.DBTX, t *Task) err
 	}
 	return nil
 }
-func (s *Service) Get(ctx context.Context, id string) (*Task, error) { return s.load(ctx, "id=?", id) }
+func (s *Service) Get(ctx context.Context, id string) (*Task, error) {
+	if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+		return nil, err
+	}
+	return s.load(ctx, "id=?", id)
+}
 func (s *Service) Current(ctx context.Context) (*Task, error) {
+	if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+		return nil, err
+	}
 	return s.load(ctx, "1=1 ORDER BY CASE WHEN active_key IS NULL THEN 1 ELSE 0 END,created_at DESC,id DESC"+store.Limit(store.DialectOf(s.db), "1"))
 }
 func (s *Service) ForTarget(ctx context.Context, target string) (*Task, error) {
 	return s.ForSourceTarget(ctx, releasesource.GitHub, target)
 }
 func (s *Service) ForSourceTarget(ctx context.Context, source releasesource.ID, target string) (*Task, error) {
+	if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+		return nil, err
+	}
 	rows, e := s.db.QueryContext(ctx, "SELECT record_json FROM selfupdate_tasks WHERE instance_id=? AND target_tag=? ORDER BY created_at DESC,id DESC", s.instance, target)
 	if e != nil {
 		return nil, e

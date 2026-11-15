@@ -20,7 +20,7 @@
 import { ref, shallowRef, computed, watch, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getSourceBlob, type SourceBlob } from '../../api/source'
-import { HttpError } from '../../api/http'
+import { HttpError, type HttpOptions } from '../../api/http'
 import { languageForPath } from './monacoLang'
 import { installMonacoEnvironment } from './monacoEnv'
 import { useThemeStore } from '../../stores/theme'
@@ -29,6 +29,8 @@ import { useThemeStore } from '../../stores/theme'
 import type * as MonacoNS from 'monaco-editor'
 
 const props = defineProps<{
+  requestOptions?:HttpOptions
+  runRequest?:<T>(work:()=>Promise<T>)=>Promise<T>
   projectId: string
   treeRef: string
   /** 选中文件路径;null ⇒ 未选。 */
@@ -58,7 +60,9 @@ let editor: MonacoNS.editor.IStandaloneCodeEditor | null = null
 const monacoFailed = shallowRef(false)
 
 // 防竞态:仅最后一次请求生效。
-let loadToken = 0
+let loadToken = 0,alive=true
+const runRequest=<T,>(work:()=>Promise<T>)=>props.runRequest?props.runRequest(work):work()
+const active=(ticket:number)=>alive&&ticket===loadToken&&!props.requestOptions?.signal?.aborted
 
 function monacoTheme(): string {
   return themeStore.current === 'light' ? 'vs' : 'vs-dark'
@@ -91,13 +95,15 @@ function disposeEditor(): void {
   }
 }
 
-async function renderMonaco(content: string, language: string): Promise<void> {
+async function renderMonaco(content: string, language: string, ticket:number): Promise<void> {
   const m = await ensureMonaco()
+  if(!active(ticket))return
   if (!m) {
     viewState.value = 'fallback'
     return
   }
   await nextTick()
+  if(!active(ticket))return
   const host = editorHost.value
   if (!host) {
     viewState.value = 'fallback'
@@ -125,12 +131,14 @@ async function renderMonaco(content: string, language: string): Promise<void> {
 
 async function loadBlob(filePath: string): Promise<void> {
   const token = ++loadToken
+  // Drop the prior document and selection before another repository/file is read.
+  disposeEditor()
   viewState.value = 'loading'
   errorMsg.value = ''
   blob.value = null
   try {
-    const b = await getSourceBlob(props.projectId, { ref: props.treeRef, path: filePath })
-    if (token !== loadToken) return // 过期请求,丢弃
+    const b = await runRequest(()=>getSourceBlob(props.projectId,{ref:props.treeRef,path:filePath},props.requestOptions))
+    if (!active(token)) return // 过期请求,丢弃
     blob.value = b
 
     if (b.binary) {
@@ -146,9 +154,9 @@ async function loadBlob(filePath: string): Promise<void> {
       viewState.value = 'degraded'
       return
     }
-    await renderMonaco(b.content, languageForPath(filePath))
+    await renderMonaco(b.content, languageForPath(filePath),token)
   } catch (err) {
-    if (token !== loadToken) return
+    if (!active(token)) return
     disposeEditor()
     errorMsg.value =
       err instanceof HttpError
@@ -166,6 +174,7 @@ watch(
   () => [props.projectId, props.treeRef, props.path] as const,
   () => {
     if (!props.path) {
+      loadToken++;blob.value=null
       disposeEditor()
       viewState.value = 'idle'
       return
@@ -183,10 +192,10 @@ watch(
   },
 )
 
-onUnmounted(disposeEditor)
+onUnmounted(()=>{alive=false;loadToken++;blob.value=null;disposeEditor()})
 
 function retry(): void {
-  if (props.path) void loadBlob(props.path)
+  if (alive && !props.requestOptions?.signal?.aborted && props.path) void loadBlob(props.path)
 }
 
 // ─── fallback / display helpers ──────────────────────────────────────────────

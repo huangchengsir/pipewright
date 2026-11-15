@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Credential } from '../../api/credentials'
 
 interface Props {
@@ -40,6 +40,7 @@ function toggle(): void {
 }
 
 function choose(credential: Credential): void {
+  if (!open.value || props.disabled || props.loading || !props.credentials.includes(credential)) return
   emit('update:modelValue', credential.id)
   emit('change')
   close()
@@ -52,7 +53,7 @@ function moveActive(direction: 1 | -1): void {
 }
 
 function handleKeydown(event: KeyboardEvent): void {
-  if (props.disabled) return
+  if (props.disabled || props.loading) return
   if (event.key === 'ArrowDown') {
     event.preventDefault()
     if (!open.value) toggle()
@@ -74,6 +75,8 @@ function handleKeydown(event: KeyboardEvent): void {
 function handleDocumentPointerdown(event: PointerEvent): void {
   if (open.value && root.value && !root.value.contains(event.target as Node)) close()
 }
+
+watch([() => props.credentials, () => props.disabled, () => props.loading], close, { deep: true, flush: 'sync' })
 
 onMounted(() => document.addEventListener('pointerdown', handleDocumentPointerdown))
 onBeforeUnmount(() => document.removeEventListener('pointerdown', handleDocumentPointerdown))

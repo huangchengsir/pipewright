@@ -25,6 +25,7 @@
  */
 
 import { onMounted, ref, computed } from 'vue'
+import {useIdentityRequestScope} from '../../composables/useAuthorizedRequestScope'
 import { useI18n } from 'vue-i18n'
 import { getRunDiff, type RunDiffDTO, type RunDiffFile } from '../../api/runs'
 
@@ -40,10 +41,12 @@ const diff = ref<RunDiffDTO | null>(null)
 // diff itself — it returns available:false — so this only catches transport.
 const loadError = ref(false)
 
+const scope=useIdentityRequestScope(()=>{diff.value=null;loadError.value=false;loading.value=false})
 onMounted(async () => {
   try {
-    diff.value = await getRunDiff(props.runId)
+    diff.value = await scope.run(()=>getRunDiff(props.runId,scope.requestOptions))
   } catch {
+    if(!scope.active())return
     loadError.value = true
   } finally {
     loading.value = false

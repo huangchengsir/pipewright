@@ -1,3 +1,7 @@
+import {createPinia,setActivePinia} from 'pinia'
+import {useSessionStore} from '../../stores/session'
+import {beforeEach as initEach} from 'vitest'
+initEach(()=>{setActivePinia(createPinia());useSessionStore().setUser({username:'admin',multiTenant:false,instanceAdmin:true})})
 // Kubernetes credentials have independent API/route lifecycle tests in KubernetesUI.test.ts.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
@@ -66,7 +70,7 @@ describe('registry independent fields', () => {
       scope: '',
       username: 'alice',
       secret: ' p:a:ss ',
-    })
+    }, expect.objectContaining({signal:expect.any(AbortSignal),throwOnUnauthorized:true}))
     expect(w.find('#cred-secret').exists()).toBe(false)
   })
   it('rejects colon usernames before calling the API', async () => {

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/huangchengsir/pipewright/internal/target"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // Caddy 编排常量(每主机一个 Caddy 容器,跑在共享 docker 网络上,按上游容器名路由)。
@@ -38,8 +39,9 @@ const (
 // dnsCred 是一条 DNS 提供商的渲染材料(类型 + token 明文)。token 仅在 apply 渲染时存在于内存,
 // 注入 0600 临时 Caddyfile,绝不日志/回库/回 API。
 type dnsCred struct {
-	Type  string // cloudflare | dnspod | alidns
-	Token string // 凭据明文(进程内,用完即弃)
+	Version string
+	Type    string // cloudflare | dnspod | alidns
+	Token   string // 凭据明文(进程内,用完即弃)
 }
 
 // renderCaddyfile 据一组 enabled 路由生成 Caddyfile 文本(纯函数,可直接单测)。
@@ -267,13 +269,24 @@ func renderReverseProxy(b *strings.Builder, indent string, r Route, cfg RouteCon
 // Caddy 容器**对宿主发布**(-p)才能被外部访问 —— layer4 监听在容器内,不发布则不可达。Docker 端口
 // 在容器创建时固定,故当既有 Caddy 容器未发布某个新增 TCP 端口时,需带「既有映射 ∪ TCP 端口」重建容器
 // (镜像自带默认 Caddyfile 兜底启动,随后 apply 会覆盖为真实配置 + reload;证书/配置走持久卷不丢)。
-func ensureCaddy(ctx context.Context, tg target.Service, serverID string, tcpPorts []int) error {
+func ensureCaddy(ctx context.Context, tg target.Service, serverID string, tcpPorts []int, installation ...func(context.Context) error) error {
+	install := func() error {
+		if len(installation) > 0 {
+			ctx = tenancy.WithActionBoundary(ctx, installation[0])
+			return tenancy.VerifyExecution(ctx)
+		}
+		return nil
+	}
+
 	// 1) 共享网络(存在即跳过)。inspect 非零退出(网络不存在)→ create。
 	netInsp, err := tg.Exec(ctx, serverID, []string{"docker", "network", "inspect", proxyNetwork})
 	if err != nil {
 		return mapExecErr(err)
 	}
 	if netInsp.ExitCode != 0 {
+		if e := install(); e != nil {
+			return e
+		}
 		res, cerr := tg.Exec(ctx, serverID, []string{"docker", "network", "create", proxyNetwork})
 		if cerr != nil {
 			return mapExecErr(cerr)
@@ -297,6 +310,9 @@ func ensureCaddy(ctx context.Context, tg target.Service, serverID string, tcpPor
 		if caddyPortsCover(cur, tcpPorts) {
 			return nil
 		}
+		if e := install(); e != nil {
+			return e
+		}
 		// 重建:rm -f 释放端口 → 用「既有映射 ∪ TCP 端口」重起。
 		if rmRes, rmErr := tg.Exec(ctx, serverID, []string{"docker", "rm", "-f", caddyContainer}); rmErr != nil {
 			return mapExecErr(rmErr)
@@ -306,6 +322,9 @@ func ensureCaddy(ctx context.Context, tg target.Service, serverID string, tcpPor
 		return runCaddyContainer(ctx, tg, serverID, mergeCaddyPorts(cur, tcpPorts))
 	}
 
+	if e := install(); e != nil {
+		return e
+	}
 	// 3) 全新部署:起前探测 80/443 占用(避免与既有进程抢端口,LE 校验需 80)。
 	if busy, detail := portsBusy(ctx, tg, serverID); busy {
 		return fmt.Errorf("%w%s", ErrPortConflict, detail)

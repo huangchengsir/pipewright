@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"net/http"
 
 	"github.com/huangchengsir/pipewright/internal/notify"
@@ -19,6 +21,12 @@ func makeGetNotifyConfigHandler(svc notify.Service) http.HandlerFunc {
 		if svc == nil {
 			writeError(w, http.StatusServiceUnavailable, "internal", "通知服务未初始化")
 			return
+		}
+		if guard, ok := svc.(interface{ AuthorizeConfiguration(context.Context) error }); ok {
+			if err := guard.AuthorizeConfiguration(r.Context()); err != nil {
+				writeNotifyError(w, err)
+				return
+			}
 		}
 		writeJSON(w, http.StatusOK, notifyConfigDTO{Language: svc.NotifyLanguage(r.Context())})
 	}
@@ -37,6 +45,10 @@ func makeSetNotifyConfigHandler(svc notify.Service) http.HandlerFunc {
 			return
 		}
 		if err := svc.SetNotifyLanguage(r.Context(), in.Language); err != nil {
+			if errors.Is(err, tenancy.ErrForbidden) {
+				writeNotifyError(w, err)
+				return
+			}
 			if errors.Is(err, notify.ErrInvalidLanguage) {
 				writeError(w, http.StatusUnprocessableEntity, "invalid_language", "通知语言非法:须为受支持的语言代码")
 				return

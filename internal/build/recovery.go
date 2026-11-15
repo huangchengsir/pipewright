@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"os"
 	"path/filepath"
 	"sort"
@@ -226,6 +227,9 @@ func (b *Builder) runRecoveryStage(ctx context.Context, r *run.Run, stage pipeli
 	envOut := map[string][]pipeline.BuildVar{}
 	var sharedMu sync.Mutex
 	result := graph.Schedule(ctx, func(ctx context.Context, id string) error {
+		if err := tenancy.VerifyExecution(ctx); err != nil {
+			return err
+		}
 		if rebuild {
 			sharedMu.Lock()
 			defer sharedMu.Unlock()

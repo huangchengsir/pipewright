@@ -1,3 +1,5 @@
+import {createPinia,setActivePinia} from 'pinia'
+import {useSessionStore} from '../../stores/session'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import SettingsAI from './SettingsAI.vue'
@@ -20,6 +22,7 @@ vi.mock('../../composables/useToast', () => ({
 }))
 let wrapper: VueWrapper | undefined
 beforeEach(() => {
+  setActivePinia(createPinia());useSessionStore().setUser({username:'admin',multiTenant:false})
   vi.useFakeTimers()
   vi.resetAllMocks()
   api.models.mockResolvedValue({ ok: false, items: [], error: 'Unauthorized' })
@@ -82,6 +85,7 @@ describe('draft model configuration', () => {
       expect(api.models).toHaveBeenCalledExactlyOnceWith(
         { provider: 'openai', baseUrl: url, apiKey: 'mock-key' },
         expect.any(AbortSignal),
+        expect.anything(),
       )
       expect(w.findAllComponents(AppSelect)[1]!.props('options')[0].value).toBe(
         'exact/model:1',
@@ -160,6 +164,7 @@ describe('draft model configuration', () => {
     expect(api.models).toHaveBeenCalledWith(
       { provider: 'openai', baseUrl: 'https://company.example/api/v1' },
       expect.any(AbortSignal),
+        expect.anything(),
     )
     expect((w.get('#ai-model').element as HTMLInputElement).value).toBe(
       'manual/model',

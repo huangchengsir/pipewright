@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"regexp"
 	"strconv"
 	"strings"
@@ -84,7 +85,7 @@ type parameterService struct {
 // NewParameterService 构造项目参数定义 Service(参数化 SQL 触库;无 init 副作用、不驻留)。
 func NewParameterService(db *sql.DB) ParameterService { return &parameterService{db: db} }
 
-func (s *parameterService) Get(ctx context.Context, projectID string) (*ParametersConfig, error) {
+func (s *parameterService) get(ctx context.Context, projectID string) (*ParametersConfig, error) {
 	var (
 		defsJSON string
 		updated  string
@@ -112,7 +113,7 @@ func (s *parameterService) Get(ctx context.Context, projectID string) (*Paramete
 	return &ParametersConfig{Defs: defs, UpdatedAt: t}, nil
 }
 
-func (s *parameterService) Save(ctx context.Context, projectID string, defs []ParamDef) (*ParametersConfig, error) {
+func (s *parameterService) save(ctx context.Context, projectID string, defs []ParamDef) (*ParametersConfig, error) {
 	projectID = strings.TrimSpace(projectID)
 	normalized, err := normalizeParamDefs(defs)
 	if err != nil {
@@ -141,11 +142,11 @@ func (s *parameterService) Save(ctx context.Context, projectID string, defs []Pa
 		}
 		return nil, fmt.Errorf("run: upsert parameters: %w", err)
 	}
-	return s.Get(ctx, projectID)
+	return s.get(ctx, projectID)
 }
 
 func (s *parameterService) Resolve(ctx context.Context, projectID string, provided map[string]string) (map[string]string, error) {
-	cfg, err := s.Get(ctx, projectID)
+	cfg, err := s.get(ctx, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -272,4 +273,28 @@ func ResolveParams(defs []ParamDef, provided map[string]string) (map[string]stri
 		out[d.Key] = v
 	}
 	return out, nil
+}
+
+func (s *parameterService) Get(ctx context.Context, projectID string) (*ParametersConfig, error) {
+	projectID = strings.TrimSpace(projectID)
+	if err := tenancy.Check(ctx, s.db, "pipeline.read", "project", projectID); err != nil {
+		return nil, err
+	}
+	cfg, err := s.get(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if err = tenancy.Check(ctx, s.db, "pipeline.read", "project", projectID); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+func (s *parameterService) Save(ctx context.Context, projectID string, defs []ParamDef) (*ParametersConfig, error) {
+	projectID = strings.TrimSpace(projectID)
+	var cfg *ParametersConfig
+	err := editProjectConfiguration(ctx, s.db, projectID, func(c context.Context) error { var err error; cfg, err = s.save(c, projectID, defs); return err })
+	if err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }

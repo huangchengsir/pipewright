@@ -1,3 +1,5 @@
+import {createPinia,setActivePinia} from 'pinia'
+import {useSessionStore} from '../../stores/session'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import SettingsOAuth from './SettingsOAuth.vue'
@@ -36,10 +38,34 @@ function makeApp(over: Partial<import('../../api/oauth').OAuthApp> = {}) {
 
 describe('SettingsOAuth', () => {
   beforeEach(() => {
+  setActivePinia(createPinia());useSessionStore().setUser({username:'admin',multiTenant:false})
     getOAuthApps.mockReset()
     saveOAuthApp.mockReset()
     toastSuccess.mockReset()
     toastError.mockReset()
+  })
+
+  it('reloads OAuth settings and submits only the current provider via the native save button', async () => {
+    const app = makeApp()
+    getOAuthApps.mockRejectedValueOnce(new Error('fixture unavailable')).mockResolvedValue([app])
+    saveOAuthApp.mockResolvedValue({ ...app, enabled: false })
+    const wrapper = mount(SettingsOAuth, { attachTo: document.body })
+    try {
+      await flushPromises()
+      await wrapper.get('.banner-retry').trigger('click')
+      await flushPromises()
+      expect(getOAuthApps).toHaveBeenCalledTimes(2)
+      const provider = wrapper.get('[data-provider="github"]')
+      await provider.get('[role="switch"]').trigger('click')
+      expect(saveOAuthApp).not.toHaveBeenCalled()
+      provider.get<HTMLButtonElement>('form button[type="submit"]').element.click()
+      await flushPromises()
+      expect(saveOAuthApp).toHaveBeenCalledExactlyOnceWith('github', {
+        clientId: 'existing-id', enabled: false,
+      }, expect.any(Object))
+    } finally {
+      wrapper.unmount()
+    }
   })
 
   it('renders a card per provider and hydrates saved values', async () => {
@@ -88,7 +114,7 @@ describe('SettingsOAuth', () => {
     await flushPromises()
     expect(saveOAuthApp).toHaveBeenCalledWith('gitea', {
       clientId: 'existing-id', baseUrl: 'https://git.example/gitea/', enabled: true,
-    })
+    }, expect.anything())
     expect((wrapper.get('#oauth-baseurl-custom').element as HTMLInputElement).value).toBe('https://gitlab.example/')
   })
 

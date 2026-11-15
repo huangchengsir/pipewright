@@ -109,9 +109,9 @@ func clip(text string, n int) string {
 func (s *Service) scrub(text string, n int) string { return clip(s.masker.ScrubTruncated(text), n) }
 
 // Never call this with an open DB transaction: vault.List/Reveal use the same SQLite connection.
-func (s *Service) registerSecrets() error {
+func (s *Service) registerSecrets(parent context.Context) error {
 	if registrar, ok := s.model.(SecretRegistrar); ok {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 		err := registrar.RegisterSecrets(ctx)
 		expired := ctx.Err() != nil
 		cancel()
@@ -119,19 +119,10 @@ func (s *Service) registerSecrets() error {
 			return ErrUnavailable
 		}
 	}
-	creds, err := s.vault.List()
-	if err != nil {
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+	defer cancel()
+	if err := vault.RegisterMaskSecrets(ctx, s.vault, s.masker); err != nil {
 		return ErrUnavailable
-	}
-	for _, c := range creds {
-		val, e := s.vault.Reveal(c.ID)
-		if e != nil {
-			return ErrDecrypt
-		}
-		s.masker.RegisterSecret(val)
-		if c.Type == vault.TypeRegistry {
-			s.masker.RegisterRegistrySecret(val)
-		}
 	}
 	return nil
 }

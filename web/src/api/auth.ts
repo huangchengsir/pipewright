@@ -10,6 +10,11 @@ import { http, HttpError } from './http'
 
 export interface SessionUser {
   username: string
+  userId?: string
+  displayName?: string
+  multiTenant?: boolean
+  instanceAdmin?: boolean
+  mustChangePassword?: boolean
 }
 
 /**

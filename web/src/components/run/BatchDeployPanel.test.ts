@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
+import { useSessionStore } from '../../stores/session'
 import BatchDeployPanel from './BatchDeployPanel.vue'
 
 const api = vi.hoisted(() => ({
@@ -31,6 +33,8 @@ function panel() {
 
 describe('BatchDeployPanel', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
+    useSessionStore().setUser({username:'admin',multiTenant:false,instanceAdmin:true})
     vi.clearAllMocks()
     api.listServers.mockResolvedValue([{ id: 'server-1', name: 'Web 1' }])
     api.listDeployBatches.mockResolvedValue({ batches: [] })
@@ -58,7 +62,7 @@ describe('BatchDeployPanel', () => {
     expect(api.deployBatch).toHaveBeenCalledWith('run-1', {
       idempotencyKey: expect.any(String),
       items: [{ artifactId: 'art-1', serverIds: ['server-1'], deployConfig: { path: '/srv/backend' } }],
-    })
+    }, expect.any(Object))
     expect(wrapper.findAll('.batch-row')).toHaveLength(0)
     expect(wrapper.emitted('completed')).toHaveLength(1)
     wrapper.unmount()

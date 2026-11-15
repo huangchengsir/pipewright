@@ -100,6 +100,10 @@ func makeArtifactDownloadHandler(svc run.Service, store *artifactstore.Store) ht
 		}
 		id := chi.URLParam(r, "id")
 		artID := chi.URLParam(r, "artifactId")
+		if err := run.AuthorizeArtifactDownload(r.Context(), svc, id); err != nil {
+			writeRunError(w, err)
+			return
+		}
 		if _, err := svc.Get(r.Context(), id); err != nil {
 			writeRunError(w, err)
 			return
@@ -125,6 +129,14 @@ func makeArtifactDownloadHandler(svc run.Service, store *artifactstore.Store) ht
 			writeError(w, http.StatusNotFound, "artifact_not_downloadable", "该产物未归档真字节(占位/镜像类),无法下载")
 			return
 		}
+		var inherited []string
+		if art.RunID != "" && art.RunID != id {
+			if err := run.AuthorizeArtifactDownload(r.Context(), svc, art.RunID); err != nil {
+				writeRunError(w, err)
+				return
+			}
+			inherited = append(inherited, art.RunID)
+		}
 		rc, oerr := store.Open(art.Reference)
 		if oerr != nil {
 			writeError(w, http.StatusNotFound, "artifact_bytes_missing", "制品库中找不到该产物字节")
@@ -138,7 +150,7 @@ func makeArtifactDownloadHandler(svc run.Service, store *artifactstore.Store) ht
 		if art.SizeBytes > 0 {
 			w.Header().Set("Content-Length", itoa(art.SizeBytes))
 		}
-		_, _ = io.Copy(w, rc)
+		_, _ = io.Copy(w, run.ArtifactDownloadReader(r.Context(), svc, id, rc, inherited...))
 	}
 }
 

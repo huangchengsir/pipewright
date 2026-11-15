@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/vault"
 	"net"
 	"net/url"
 	"regexp"
@@ -193,7 +194,7 @@ func (b *Builder) pushImageTarget(ctx context.Context, sink run.StepSink, ordina
 		if b.vault == nil {
 			return "", "", errors.New("registry credential unavailable")
 		}
-		plain, err := b.vault.Reveal(target.credentialID)
+		plain, err := vault.Use(ctx, b.vault, target.credentialID)
 		if err != nil {
 			return "", "", errors.New("registry credential unavailable")
 		}

@@ -1,4 +1,6 @@
 export default {
+ samplingAuthorizationRequired: "Autorisation de collecte requise",
+ samplingAuthorizationHelp: "Un administrateur autorisé à exécuter sur le serveur et à utiliser ses identifiants doit enregistrer cette règle à nouveau. Toute modification nécessite une nouvelle approbation.",
   title: 'Détection d’anomalies',
   subtitle:
     'Configurez des règles de seuil pour vérifier les métriques CPU / mémoire / disque du serveur ; une correspondance déclenche une alerte',

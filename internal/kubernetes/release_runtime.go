@@ -10,11 +10,14 @@ import (
 	"time"
 
 	"github.com/huangchengsir/pipewright/internal/kubeprotocol"
+	"github.com/huangchengsir/pipewright/internal/target"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 type ReleaseSession struct {
 	runtime   *Runtime
 	transport PrivateTransport
+	cleanup   privateDocker
 	lease     ReleaseRuntimeLease
 	minor     int
 	mu        sync.Mutex
@@ -102,6 +105,17 @@ func (r *Runtime) openRelease(ctx context.Context, parent, owner string, a Relea
 	session.lease = lease
 	if !safeContainerSized(info, lease.Runtime, p.Runtime, false, "64m") {
 		return nil, ErrRuntimeUnverified
+	}
+	if ssh, ok := transport.(*sshPrivateTransport); ok && ssh.snap.ExecutionBindingVersion != "" {
+		issuer, ok := ssh.remote.(target.DockerToolCleanupIssuer)
+		if !ok {
+			return nil, ErrTool
+		}
+		cleanup, err := issuer.OpenDockerToolCleanup(ctx, ssh.snap, ssh.host, lease.Runtime.ContainerID)
+		if err != nil {
+			return nil, err
+		}
+		session.cleanup = cleanup
 	}
 	phase = "container_start"
 	started, e := transport.Docker(ctx, []string{"start", info.ID}, nil)
@@ -235,11 +249,19 @@ func (s *ReleaseSession) checkIdentity(ctx context.Context, capabilities bool) (
 	}
 	phase = "engine"
 	engine, e := readEngine(ctx, s.transport, a.Profile.Profile.Runtime.Architecture)
+	if errors.Is(e, tenancy.ErrForbidden) {
+		phase = "authorization"
+		return e
+	}
 	if e != nil || engine != s.lease.Runtime.EngineID {
 		return ErrRuntimeIdentity
 	}
 	phase = "inspect"
 	info, missing, e := inspectContainer(ctx, s.transport, s.lease.Runtime)
+	if errors.Is(e, tenancy.ErrForbidden) {
+		phase = "authorization"
+		return e
+	}
 	if e != nil || missing || !safeContainerSized(info, s.lease.Runtime, a.Profile.Profile.Runtime, true, "64m") {
 		return ErrRuntimeIdentity
 	}
@@ -397,11 +419,15 @@ func (s *ReleaseSession) Close(ctx context.Context) (out ReleaseRuntimeLease, re
 		proof.CreationNotRequested = true
 		return s.runtime.store.RecordReleaseRuntimeCleanup(clean, l.ID, r.OwnerEpoch, r.Revision, proof)
 	}
-	engine, e := readEngine(clean, s.transport, l.Authorization.Profile.Profile.Runtime.Architecture)
+	transport := privateDocker(s.transport)
+	if s.cleanup != nil {
+		transport = s.cleanup
+	}
+	engine, e := readEngine(clean, transport, l.Authorization.Profile.Profile.Runtime.Architecture)
 	if e != nil || engine != r.EngineID {
 		return l, ErrRuntimeUnverified
 	}
-	info, missing, e := inspectContainer(clean, s.transport, r)
+	info, missing, e := inspectContainer(clean, transport, r)
 	if e != nil {
 		return l, ErrRuntimeUnverified
 	}
@@ -417,21 +443,21 @@ func (s *ReleaseSession) Close(ctx context.Context) (out ReleaseRuntimeLease, re
 		s.lease = l
 	}
 	if !missing {
-		stopped, e := s.transport.Docker(clean, []string{"stop", "--time", "2", r.ContainerID}, nil)
+		stopped, e := transport.Docker(clean, []string{"stop", "--time", "2", r.ContainerID}, nil)
 		defer clearResult(stopped)
 		if e != nil || stopped == nil || stopped.Truncated || stopped.ExitCode != 0 {
 			return l, ErrRuntimeUnverified
 		}
-		info, missing, e = inspectContainer(clean, s.transport, r)
+		info, missing, e = inspectContainer(clean, transport, r)
 		if e != nil || missing || info.State.Running || info.State.Pid != 0 {
 			return l, ErrRuntimeUnverified
 		}
-		removed, e := s.transport.Docker(clean, []string{"rm", r.ContainerID}, nil)
+		removed, e := transport.Docker(clean, []string{"rm", r.ContainerID}, nil)
 		defer clearResult(removed)
 		if e != nil || removed == nil || removed.Truncated || removed.ExitCode != 0 {
 			return l, ErrRuntimeUnverified
 		}
-		_, missing, e = inspectContainer(clean, s.transport, r)
+		_, missing, e = inspectContainer(clean, transport, r)
 		if e != nil || !missing {
 			return l, ErrRuntimeUnverified
 		}

@@ -44,14 +44,19 @@ func (s *Service) PreserveReleaseSuspension(ctx context.Context, run string) err
 		return requireOne(q.ExecContext(ctx, `UPDATE pipeline_runs SET status='waiting_action' WHERE id=? AND status IN ('running','waiting_action') AND finished_at IS NULL`, run))
 	})
 }
-func (s *Service) DeliverReleaseContinuations(ctx context.Context, owner string, enqueue func(string) error) error {
+func (s *Service) DeliverReleaseContinuations(ctx context.Context, owner string, authorize func(context.Context, string) (context.Context, error), enqueue func(string) error) error {
 	pending, e := s.PendingReleaseContinuations(ctx)
 	if e != nil {
 		return e
 	}
 	var result error
 	for _, entry := range pending {
-		claim, e := s.ClaimReleaseContinuation(ctx, entry.ID, owner)
+		claimCtx, e := authorize(ctx, entry.RunID)
+		if e != nil {
+			result = errors.Join(result, e)
+			continue
+		}
+		claim, e := s.ClaimReleaseContinuation(claimCtx, entry.ID, owner)
 		if errors.Is(e, ErrHeld) || errors.Is(e, ErrConflict) {
 			continue
 		}
@@ -257,10 +262,8 @@ func (s *Service) settleDepartedRelease(ctx context.Context, id string, departed
 		if e = requireOne(q.ExecContext(ctx, "UPDATE k8s_releases SET state=?,reason_code='worker_interrupted',revision=revision+1,updated_at=? WHERE id=? AND revision=? AND owner_epoch=? AND owner_fenced=1 AND cleanup_state='verified'", state, s.now().UnixMilli(), id, r.Revision, r.OwnerEpoch)); e != nil {
 			return e
 		}
-		if r.Plan.RollbackOf != "" && (state == "partial_failed" || state == "rolled_back") {
-			if _, e = q.ExecContext(ctx, "UPDATE k8s_releases SET state=?,reason_code='worker_interrupted',revision=revision+1,updated_at=? WHERE id=? AND state='rollback_in_progress'", state, s.now().UnixMilli(), r.Plan.RollbackOf); e != nil {
-				return e
-			}
+		if e = s.settleRollbackSource(ctx, q, r, state, "worker_interrupted"); e != nil {
+			return e
 		}
 		if state != "outcome_unknown" {
 			_, e = q.ExecContext(ctx, "DELETE FROM k8s_resource_gates WHERE owner_kind='v2' AND owner_id=? AND owner_epoch=?", id, r.OwnerEpoch)

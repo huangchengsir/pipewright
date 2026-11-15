@@ -143,24 +143,12 @@ func (s *Service) SaveManifest(ctx context.Context, runID string, snap Snapshot)
 	if snap.CommitSHA != "" && !fullSHA(snap.CommitSHA) {
 		return ErrInvalid
 	}
-	g, e := Compile(snap.Spec)
+	var e error
+	snap, e = FreezeSnapshot(snap)
 	if e != nil {
 		return e
 	}
-	// Normalize the internal graph before idempotent capture comparison. The
-	// ciphertext retains exact expanded configuration, identities and barriers;
-	// future compiler changes never reinterpret this attempt.
-	parents := map[string]string{}
-	for _, stage := range g.Stages {
-		if stage.MatrixParentID != "" {
-			parents[stage.ID] = stage.MatrixParentID
-		}
-	}
-	compiled := &FrozenGraph{Version: g.Version, Nodes: g.Nodes, Edges: g.Edges, Stages: g.Stages, Dependencies: pipeline.StageDependencies(g.Stages), MatrixParents: parents}
-	if snap.Compiled != nil && digest(snap.Compiled) != digest(compiled) {
-		return ErrInvalid
-	}
-	snap.Compiled = compiled
+	g := snap.Compiled
 	cipher, e := s.seal("manifest", runID, "", snap)
 	if e != nil {
 		return e
@@ -343,4 +331,50 @@ func validIdentity(s string) bool {
 		}
 	}
 	return true
+}
+
+// FreezeSnapshot binds the exact compiler output before persistence and policy
+// approval. Both use this function so authorization cannot hash an uncompiled
+// description while execution uses different expanded nodes.
+func FreezeSnapshot(snap Snapshot) (Snapshot, error) {
+	g, e := Compile(snap.Spec)
+	if e != nil {
+		return Snapshot{}, e
+	}
+	// Normalize the internal graph before idempotent capture comparison. The
+	// ciphertext retains exact expanded configuration, identities and barriers;
+	// future compiler changes never reinterpret this attempt.
+	parents := map[string]string{}
+	for _, stage := range g.Stages {
+		if stage.MatrixParentID != "" {
+			parents[stage.ID] = stage.MatrixParentID
+		}
+	}
+	compiled := &FrozenGraph{Version: g.Version, Nodes: g.Nodes, Edges: g.Edges, Stages: g.Stages, Dependencies: pipeline.StageDependencies(g.Stages), MatrixParents: parents}
+	if snap.Compiled != nil && digest(snap.Compiled) != digest(compiled) {
+		return Snapshot{}, ErrInvalid
+	}
+	snap.Compiled = compiled
+	return snap, nil
+}
+
+// SnapshotDigest covers complete private inputs and the normalized executable
+// graph; it is unrelated to the manifest storage UUID fingerprint.
+func SnapshotDigest(snap Snapshot) (string, error) {
+	// A captured attempt owns its compiler output. Never reinterpret its raw
+	// spec with today's compiler when validating an already-approved run.
+	if snap.SchemaVersion != SchemaVersion || snap.ProjectID == "" || snap.Compiled == nil || snap.Compiled.Version != SchemaVersion {
+		return "", ErrInvalid
+	}
+	if _, err := snap.ClearScriptEntrypoint(); err != nil {
+		return "", err
+	}
+	stages, err := snap.ExecutionStages()
+	if err != nil {
+		return "", err
+	}
+	if _, err = topological(Graph{Version: snap.Compiled.Version, Nodes: snap.Compiled.Nodes, Edges: snap.Compiled.Edges, Stages: stages}); err != nil {
+		return "", err
+	}
+	return digest(snap), nil
 }

@@ -2,7 +2,10 @@ package previewenv
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"regexp"
 	"strconv"
 	"strings"
@@ -12,6 +15,7 @@ import (
 // ProvisionInput 是「为一条 PR 部署分配/刷新预览环境」的入参(由 run 终态钩子据运行元数据填齐)。
 // 所有字段由上层解析(PR 号/分支/服务器/容器/宿主机 IP),本包只据预览配置组域名 + 分配 + 落库。
 type ProvisionInput struct {
+	SourceRunID       string
 	ProjectID         string
 	PipelineID        string
 	PRNumber          int
@@ -42,6 +46,12 @@ func (s *service) Provision(ctx context.Context, in ProvisionInput) (*PreviewEnv
 		return nil, nil // 分配器未装配(无 DNS 能力):优雅降级。
 	}
 
+	if err := tenancy.Check(ctx, s.store.db, "preview.provision", "project", in.ProjectID); err != nil {
+		return nil, err
+	}
+	if err := tenancy.Check(ctx, s.store.db, "pipeline.read", "project", in.ProjectID); err != nil {
+		return nil, err
+	}
 	cfg, err := s.store.getConfig(ctx, in.ProjectID)
 	if err != nil {
 		return nil, fmt.Errorf("previewenv: provision get config: %w", err)
@@ -56,9 +66,43 @@ func (s *service) Provision(ctx context.Context, in ProvisionInput) (*PreviewEnv
 		return nil, nil // 部署元数据不全:无从分配,静默。
 	}
 
+	existing, gerr := s.store.getByPR(ctx, in.ProjectID, in.PRNumber)
+	if gerr != nil && !errors.Is(gerr, ErrNotFound) {
+		return nil, gerr
+	}
+	if existing != nil {
+		if e := tenancy.Check(ctx, s.store.db, "preview.reclaim", "preview", existing.ID); e != nil {
+			return nil, e
+		}
+	}
 	subdomain := previewSubdomain(in.PRNumber, in.ProjectID, cfg.BaseDomain)
+	bindingBody, _ := json.Marshal(previewBinding{Version: 1, ProviderID: cfg.DNSProviderID, SourceRunID: in.SourceRunID})
+	bindingJSON := string(bindingBody)
 
 	// 分配 DNS-01 反代路由(复用 R3:建 A 记录 + 建路由)。失败上抛供钩子记日志,绝不阻断部署。
+	if err := tenancy.Check(ctx, s.store.db, "preview.provision", "project", in.ProjectID); err != nil {
+		return nil, err
+	}
+	if err := tenancy.Check(ctx, s.store.db, "pipeline.read", "project", in.ProjectID); err != nil {
+		return nil, err
+	}
+	validate := func(current context.Context) error {
+		if e := tenancy.Check(current, s.store.db, "preview.provision", "project", in.ProjectID); e != nil {
+			return e
+		}
+		currentConfig, e := s.store.getConfig(current, in.ProjectID)
+		if e != nil {
+			return e
+		}
+		if currentConfig == nil || previewDigest(currentConfig) != previewDigest(cfg) {
+			return tenancy.ErrConflict
+		}
+		return s.authorizeResources(current, in.ProjectID, cfg.DNSProviderID, in.ServerID)
+	}
+	if err = validate(ctx); err != nil {
+		return nil, err
+	}
+	ctx = tenancy.WithActionBoundary(ctx, validate)
 	routeID, aerr := s.allocator.Allocate(ctx, AllocateInput{
 		ProviderID:        cfg.DNSProviderID,
 		ServerID:          in.ServerID,
@@ -71,20 +115,36 @@ func (s *service) Provision(ctx context.Context, in ProvisionInput) (*PreviewEnv
 		return nil, fmt.Errorf("previewenv: provision allocate: %w", aerr)
 	}
 
+	if err = validate(ctx); err != nil {
+		return nil, err
+	}
 	// 幂等:已有同 PR 环境 → 更新(刷路由/子域名/状态回 active);否则新建。
-	existing, gerr := s.store.getByPR(ctx, in.ProjectID, in.PRNumber)
-	if gerr == nil && existing != nil {
+	if existing != nil {
 		// 同 PR 重新部署:删旧路由(best-effort,避免孤儿)后刷新本行指向新路由。
 		if s.routeDeleter != nil && existing.RouteID != "" && existing.RouteID != routeID {
-			_ = s.routeDeleter.DeleteRoute(ctx, existing.RouteID)
+			if err := validate(ctx); err != nil {
+				return nil, err
+			}
+			if err := tenancy.Check(ctx, s.store.db, "preview.reclaim", "preview", existing.ID); err != nil {
+				return nil, err
+			}
+			if err = s.routeDeleter.DeleteRoute(ctx, existing.RouteID); err != nil {
+				on, modeErr := tenancy.Enabled(ctx, s.store.db)
+				if modeErr != nil {
+					return nil, modeErr
+				}
+				if on || errors.Is(err, tenancy.ErrForbidden) {
+					return nil, err
+				}
+			}
 		}
-		if uerr := s.store.updateOnRedeploy(ctx, existing.ID, routeID, subdomain, in.Branch, in.ServerID, in.PipelineID); uerr != nil {
+		if uerr := s.store.updateOnRedeploy(ctx, existing.ID, routeID, subdomain, in.Branch, in.ServerID, in.PipelineID, bindingJSON); uerr != nil {
 			return nil, uerr
 		}
 		return s.store.get(ctx, existing.ID)
 	}
 
-	env := &PreviewEnv{
+	env := &PreviewEnv{bindingJSON: bindingJSON,
 		ID:         newEnvID(),
 		ProjectID:  in.ProjectID,
 		PipelineID: in.PipelineID,
@@ -100,7 +160,7 @@ func (s *service) Provision(ctx context.Context, in ProvisionInput) (*PreviewEnv
 		// 并发重复部署撞唯一约束:回退到「更新已存在行」路径(幂等收敛)。
 		if ierr == ErrUniqueViolation {
 			if cur, cerr := s.store.getByPR(ctx, in.ProjectID, in.PRNumber); cerr == nil && cur != nil {
-				if uerr := s.store.updateOnRedeploy(ctx, cur.ID, routeID, subdomain, in.Branch, in.ServerID, in.PipelineID); uerr != nil {
+				if uerr := s.store.updateOnRedeploy(ctx, cur.ID, routeID, subdomain, in.Branch, in.ServerID, in.PipelineID, bindingJSON); uerr != nil {
 					return nil, uerr
 				}
 				return s.store.get(ctx, cur.ID)

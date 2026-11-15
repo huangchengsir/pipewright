@@ -1,3 +1,5 @@
+import {createPinia,setActivePinia} from 'pinia'
+import {useSessionStore} from '../../stores/session'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import MCPConfigOperationPanel from './MCPConfigOperationPanel.vue'
@@ -10,16 +12,25 @@ const result = (state = 'pending'): MCPConfigOperationResult => ({ operationId: 
 async function lookup() { await wrapper.get('input').setValue('operation-1'); await wrapper.get('form').trigger('submit'); await flushPromises() }
 const fenceButton = () => wrapper.find('.operation-panel > div button')
 describe('MCP operation reconciliation', () => {
-  beforeEach(() => { vi.resetAllMocks(); mocks.get.mockResolvedValue(result()); mocks.fence.mockResolvedValue({ ...result('failed'), reason: 'interrupted_not_applied' }); wrapper = mount(MCPConfigOperationPanel) })
+  beforeEach(() => { setActivePinia(createPinia());useSessionStore().setUser({username:'admin',multiTenant:false});vi.resetAllMocks(); mocks.get.mockResolvedValue(result()); mocks.fence.mockResolvedValue({ ...result('failed'), reason: 'interrupted_not_applied' }); wrapper = mount(MCPConfigOperationPanel) })
   afterEach(() => wrapper.unmount())
+  it('uses the native query button for a read without fencing', async () => {
+    document.body.appendChild(wrapper.element)
+    await wrapper.get('input').setValue('operation-1')
+    wrapper.get<HTMLButtonElement>('form button[type="submit"]').element.click()
+    await flushPromises()
+    expect(mocks.get).toHaveBeenCalledExactlyOnceWith('operation-1', expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(mocks.fence).not.toHaveBeenCalled()
+  })
+
   it('requires a manual query before exposing an explicit fencing action', async () => {
     expect(mocks.get).not.toHaveBeenCalled(); expect(fenceButton().exists()).toBe(false)
     await lookup()
-    expect(mocks.get).toHaveBeenCalledExactlyOnceWith('operation-1', { signal: expect.any(AbortSignal) })
+    expect(mocks.get).toHaveBeenCalledExactlyOnceWith('operation-1', expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.text()).toContain('不会重试、新建操作或自动应用')
     expect(fenceButton().exists()).toBe(true); expect(mocks.fence).not.toHaveBeenCalled()
     await fenceButton().trigger('click'); await flushPromises()
-    expect(mocks.fence).toHaveBeenCalledExactlyOnceWith('operation-1', { signal: expect.any(AbortSignal) })
+    expect(mocks.fence).toHaveBeenCalledExactlyOnceWith('operation-1', expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.text()).toContain('确认未应用')
     expect(fenceButton().exists()).toBe(false)
     expect(mocks.get).toHaveBeenCalledTimes(1)

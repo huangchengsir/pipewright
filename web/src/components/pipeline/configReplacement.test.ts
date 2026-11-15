@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import {createPinia,setActivePinia} from 'pinia'
+import {useSessionStore} from '../../stores/session'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import YamlImportModal from './YamlImportModal.vue'
 import TemplatePickerModal from './TemplatePickerModal.vue'
@@ -14,6 +16,8 @@ vi.mock('../../api/aiGenerate', () => ({ aiApply: vi.fn(), aiGenerate: vi.fn() }
 vi.mock('../../api/pipeline', () => ({ importPipeline: vi.fn() }))
 vi.mock('../../api/templates', () => ({ applyTemplate: vi.fn(), listTemplates: vi.fn(), createTemplate: vi.fn() }))
 const dto = { projectId: 'p', stages: [], yaml: '', status: 'draft', updatedAt: '' }
+
+beforeEach(()=>{setActivePinia(createPinia());useSessionStore().setUser({username:'admin',userId:'admin',multiTenant:false})})
 
 describe('configuration replacement guards', () => {
   it.each(['import', 'template'])('ignores a late %s result after leaving and returning to the original project', async source => {
@@ -92,7 +96,7 @@ describe('configuration replacement guards', () => {
     await wrapper.setProps({ projectId: 'b' })
     resolve({ ...dto, projectId: 'a' })
     await flushPromises()
-    expect(importPipeline).toHaveBeenCalledWith('a', 'version: 1', label === '导入并保存')
+    expect(importPipeline).toHaveBeenCalledWith('a', 'version: 1', label === '导入并保存', undefined, expect.objectContaining({signal:expect.any(AbortSignal),throwOnUnauthorized:true}))
     expect(wrapper.emitted('preview')).toBeUndefined()
     expect(wrapper.emitted('saved')).toBeUndefined()
     expect(wrapper.emitted('close')).toBeUndefined()
@@ -121,7 +125,7 @@ describe('configuration replacement guards', () => {
     await wrapper.setProps({ projectId: 'b' })
     resolve({ ...dto, projectId: 'a' })
     await flushPromises()
-    expect(applyTemplate).toHaveBeenCalledWith('a', 'tpl')
+    expect(applyTemplate).toHaveBeenCalledWith('a', 'tpl', undefined, expect.objectContaining({signal:expect.any(AbortSignal),throwOnUnauthorized:true}))
     expect(wrapper.emitted('applied')).toBeUndefined()
     expect(wrapper.emitted('close')).toBeUndefined()
     wrapper.unmount()

@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"errors"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"net/http"
 	"strconv"
 	"time"
@@ -70,6 +72,10 @@ func makeMetricsHistoryHandler(svc metrics.Service) http.HandlerFunc {
 		since := time.Now().UTC().Add(-time.Duration(hours) * time.Hour)
 		points, err := svc.QueryRange(r.Context(), serverID, since)
 		if err != nil {
+			if errors.Is(err, tenancy.ErrForbidden) || errors.Is(err, tenancy.ErrConflict) {
+				accessError(w, err)
+				return
+			}
 			writeError(w, http.StatusInternalServerError, "internal", "查询指标历史失败")
 			return
 		}

@@ -1,4 +1,7 @@
+import {createPinia,setActivePinia} from 'pinia'
+import {useSessionStore} from '../../stores/session'
 import { HttpError } from '../../api/http'
+import { getRetentionConfig, setRetentionConfig } from '../../api/retention'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import SettingsSystem from './SettingsSystem.vue'
@@ -32,7 +35,7 @@ describe('system upgrade task presentation', () => {
   expect(sessionStorage.getItem('pipewright.update.pending')).toBeNull()
  })
 
- beforeEach(() => { vi.resetAllMocks(); sessionStorage.clear(); mocks.sourceGet.mockResolvedValue(sourceConfig()); mocks.version.mockResolvedValue({ version: '1.0.0', commit: 'test', platform: 'linux/amd64', date: '2026-10-27T00:00:00Z', goVersion: 'go1.26' }); mocks.current.mockResolvedValue({ id: 'task', requestId: 'request', repository: 'owner/repo', target: '2.0.0', from: '1.0.0', platform: 'linux_amd64', asset: 'fixed-package', sha256: 'a'.repeat(64), state: 'ready_blocked', bytes: 100, total: 100, blockers: [{ kind: 'guards', count: 1 }], updatedAt: '2026-10-27T00:00:00Z' }) })
+ beforeEach(() => { setActivePinia(createPinia());useSessionStore().setUser({username:'admin',multiTenant:false}); vi.resetAllMocks(); sessionStorage.clear(); mocks.sourceGet.mockResolvedValue(sourceConfig()); mocks.version.mockResolvedValue({ version: '1.0.0', commit: 'test', platform: 'linux/amd64', date: '2026-10-27T00:00:00Z', goVersion: 'go1.26' }); mocks.current.mockResolvedValue({ id: 'task', requestId: 'request', repository: 'owner/repo', target: '2.0.0', from: '1.0.0', platform: 'linux_amd64', asset: 'fixed-package', sha256: 'a'.repeat(64), state: 'ready_blocked', bytes: 100, total: 100, blockers: [{ kind: 'guards', count: 1 }], updatedAt: '2026-10-27T00:00:00Z' }) })
  afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); i18n.global.locale.value = 'zh-CN'; vi.useRealTimers(); vi.restoreAllMocks() })
  it('keeps task status visible without a fresh update check', async () => { const w = mount(SettingsSystem); wrappers.push(w); await flushPromises(); expect(w.get('[data-testid="upgrade-task"]').text()).toContain('2.0.0'); expect(mocks.check).not.toHaveBeenCalled(); expect(mocks.start).not.toHaveBeenCalled(); expect(mocks.resume).not.toHaveBeenCalled() })
  it('translates all eight locales without resubmitting or losing the task', async () => { const w = mount(SettingsSystem); wrappers.push(w); await flushPromises(); const seen = new Set<string>(); for (const { code } of SUPPORTED_LOCALES) { i18n.global.locale.value = code; await flushPromises(); const text = w.get('[data-testid="upgrade-task"]').text(); expect(text).not.toContain('settingsSystem.'); expect(text).toContain('2.0.0'); seen.add(w.get('#upgrade-task-title').text()) } expect(seen.size).toBe(8); expect(mocks.current).toHaveBeenCalledTimes(1); expect(mocks.start).not.toHaveBeenCalled(); expect(mocks.resume).not.toHaveBeenCalled() })
@@ -46,7 +49,7 @@ describe('system upgrade task presentation', () => {
   expect(mocks.start).not.toHaveBeenCalled()
   mocks.start.mockRejectedValue(new Error('still unreachable'))
   await recover!.trigger('click'); await flushPromises()
-  expect(mocks.start).toHaveBeenCalledWith({ requestId, target: '2.0.0', source: 'github' })
+  expect(mocks.start).toHaveBeenCalledWith({ requestId, target: '2.0.0', source: 'github' },expect.anything())
  })
 
  it('shows a translated definitive rejection without stranding pending state', async () => {
@@ -84,7 +87,7 @@ describe('system upgrade task presentation', () => {
   else mocks.resume.mockResolvedValueOnce(accepted())
   await recover!.trigger('click'); await flushPromises()
   if (action === 'start') expect(mocks.start.mock.calls[1][0]).toEqual({ requestId: original.requestId, target: original.target, source: 'github' })
-  else expect(mocks.resume.mock.calls[1]).toEqual([original.taskId, original.resumeId])
+  else expect(mocks.resume.mock.calls[1]).toEqual([original.taskId, original.resumeId, expect.anything()])
  })
  it('offers an explicit same-request check for a server accepted task without a browser pending record', async () => {
   mocks.current.mockResolvedValue({ id: 'task', requestId: 'server-request', target: '2.0.0', from: '1.0.0', state: 'accepted', bytes: 0, total: 0 })
@@ -95,7 +98,7 @@ describe('system upgrade task presentation', () => {
   expect(mocks.start).not.toHaveBeenCalled()
   await recover!.trigger('click'); await flushPromises()
   expect(mocks.start).toHaveBeenCalledOnce()
-  expect(mocks.start).toHaveBeenCalledWith({ requestId: 'server-request', target: '2.0.0', source: 'github' })
+  expect(mocks.start).toHaveBeenCalledWith({ requestId: 'server-request', target: '2.0.0', source: 'github' }, expect.anything())
  })
 
  it.each(['start', 'resume'] as const)('keeps status refresh reachable during an in-flight %s without stranding its writer', async action => {
@@ -194,11 +197,75 @@ describe('system upgrade task presentation', () => {
   const check = () => w.findAll('button').find(b => b.text().includes(i18n.global.t('settingsSystem.checkUpdate')))!
   expect((check().element as HTMLButtonElement).disabled).toBe(true)
   await w.findAll('button').find(b => b.text() === i18n.global.t('settingsSystem.sourceSave'))!.trigger('click'); await flushPromises()
-  expect(mocks.sourceSet).toHaveBeenCalledWith({ source: 'gitee', expectedRevision: 1 })
+  expect(mocks.sourceSet).toHaveBeenCalledWith({ source: 'gitee', expectedRevision: 1 }, expect.anything())
   await check().trigger('click'); await flushPromises()
   expect(mocks.check).toHaveBeenCalledWith('gitee', expect.objectContaining({ signal: expect.any(AbortSignal) }))
   await w.findAll('button').find(b => b.text().includes(i18n.global.t('settingsSystem.updateNow')))!.trigger('click'); await flushPromises()
   expect(mocks.start.mock.calls[0][0]).toMatchObject({ target: '2.0.0', source: 'gitee' })
+ })
+ it('retries only the release source read after the source error button is clicked', async () => {
+  mocks.sourceGet.mockRejectedValueOnce(new Error('source unavailable'))
+  const wrapper = mount(SettingsSystem)
+  wrappers.push(wrapper)
+  await flushPromises()
+  const reload = wrapper.findAll('button').find(button => button.text() === i18n.global.t('settingsSystem.sourceReload'))
+  expect(reload).toBeDefined()
+  await reload!.trigger('click')
+  await flushPromises()
+  expect(mocks.sourceGet).toHaveBeenCalledTimes(2)
+  expect(wrapper.find('[data-testid="release-source-settings"] [role="alert"]').exists()).toBe(false)
+  expect(mocks.sourceSet).not.toHaveBeenCalled()
+  expect(mocks.start).not.toHaveBeenCalled()
+ })
+ it('keeps the retention switch local until the current draft is saved', async () => {
+  const config = { enabled: false, keepPerProject: 10, maxAgeDays: 30 }
+  vi.mocked(getRetentionConfig).mockResolvedValue(config)
+  vi.mocked(setRetentionConfig).mockResolvedValue({ ...config, enabled: true })
+  const wrapper = mount(SettingsSystem)
+  wrappers.push(wrapper)
+  await flushPromises()
+  const toggle = wrapper.get<HTMLButtonElement>('button.rt-switch')
+  expect(toggle.attributes('aria-checked')).toBe('false')
+  await toggle.trigger('click')
+  expect(toggle.attributes('aria-checked')).toBe('true')
+  expect(setRetentionConfig).not.toHaveBeenCalled()
+  const save = wrapper.findAll('button').find(button => button.text() === i18n.global.t('settingsSystem.retentionSave'))
+  expect(save).toBeDefined()
+  await save!.trigger('click')
+  await flushPromises()
+  expect(setRetentionConfig).toHaveBeenCalledExactlyOnceWith({ ...config, enabled: true }, expect.any(Object))
+ })
+ it('shows release notes on demand and copies exactly the displayed manual command', async () => {
+  const command = 'fixture upgrade command'
+  const notes = 'fixture release notes'
+  const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+  const writeText = vi.fn(async () => undefined)
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+  try {
+   mocks.current.mockResolvedValue(null)
+   mocks.check.mockResolvedValue({ current: '1.0.0', latest: '2.0.0', source: 'github', updateAvailable: true, notes })
+   mocks.start.mockResolvedValue({ status: 'manual', mode: 'docker', command })
+   const wrapper = mount(SettingsSystem)
+   wrappers.push(wrapper)
+   await flushPromises()
+   await wrapper.findAll('button').find(button => button.text() === i18n.global.t('settingsSystem.checkUpdate'))!.trigger('click')
+   await flushPromises()
+   const toggle = wrapper.get('button.sys-notes-toggle')
+   expect(toggle.attributes('aria-expanded')).toBe('false')
+   expect(wrapper.text()).not.toContain(notes)
+   await toggle.trigger('click')
+   expect(toggle.attributes('aria-expanded')).toBe('true')
+   expect(wrapper.text()).toContain(notes)
+   await wrapper.findAll('button').find(button => button.text() === i18n.global.t('settingsSystem.updateNow'))!.trigger('click')
+   await flushPromises()
+   expect(wrapper.get('.sys-cmd code').text()).toBe(command)
+   await wrapper.get('button.sys-cmd-copy').trigger('click')
+   await flushPromises()
+   expect(writeText).toHaveBeenCalledExactlyOnceWith(command)
+  } finally {
+   if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard)
+   else Reflect.deleteProperty(navigator, 'clipboard')
+  }
  })
  it('discards a late check response after the source selection changes', async () => {
   mocks.current.mockResolvedValue(null); let done!: (value: object) => void

@@ -109,8 +109,15 @@ func makeApprovalDecisionHandler(coord *approval.Coordinator, store *approval.St
 			writeError(w, http.StatusUnprocessableEntity, "missing_stage", "缺少 stageId")
 			return
 		}
-		key := approval.Key(id, stageID)
-		if !coord.Resolve(key, approval.Decision{Approved: approve, Actor: auditActor}) {
+		if store == nil {
+			writeError(w, 503, "internal", "审批门服务未初始化")
+			return
+		}
+		actor, err := store.Resolve(r.Context(), coord, id, stageID, approve, auditActor)
+		if err != nil {
+			if writeAuthorizationError(w, err) {
+				return
+			}
 			writeError(w, http.StatusConflict, "not_waiting", "该运行阶段当前不在等待审批")
 			return
 		}
@@ -119,7 +126,7 @@ func makeApprovalDecisionHandler(coord *approval.Coordinator, store *approval.St
 			action = "run.reject"
 		}
 		recordAudit(r.Context(), rec, audit.Entry{
-			Actor:      auditActor,
+			Actor:      actor,
 			Action:     action,
 			TargetType: "run",
 			TargetID:   id,
@@ -139,6 +146,9 @@ func makeListApprovalsHandler(store *approval.Store) http.HandlerFunc {
 		}
 		recs, err := store.ListForRun(r.Context(), chi.URLParam(r, "id"))
 		if err != nil {
+			if writeAuthorizationError(w, err) {
+				return
+			}
 			writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
 			return
 		}

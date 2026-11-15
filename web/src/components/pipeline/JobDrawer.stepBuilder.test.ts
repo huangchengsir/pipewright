@@ -1,6 +1,11 @@
+import {createPinia,setActivePinia} from 'pinia'
+import {useSessionStore} from '../../stores/session'
+import {beforeEach as setLegacyFixture} from 'vitest'
+setLegacyFixture(()=>{setActivePinia(createPinia());useSessionStore().setUser({username:'admin',multiTenant:false})})
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import JobDrawer from './JobDrawer.vue'
+import JobCard from './JobCard.vue'
 import StepBuilder from './StepBuilder.vue'
 import type { PipelineJob, PipelineStage } from '../../api/pipeline'
 
@@ -83,5 +88,71 @@ describe('JobDrawer + StepBuilder integration', () => {
     const wrapper = mount(JobDrawer, { props: { job, stage } })
     expect(wrapper.findComponent(StepBuilder).exists()).toBe(false)
     expect(wrapper.findAll('.view-tab').length).toBe(0)
+  })
+})
+
+
+describe('job draft controls', () => {
+  it('switches drawer views, edits an extra key and emits the close and type requests', async () => {
+    const wrapper = mount(JobDrawer, {
+      props: { job: builderJob({ image: 'node:20' }), stage },
+    })
+    try {
+      const tabs = wrapper.findAll('.view-tab')
+      await tabs[1]!.trigger('click')
+      expect(tabs[1]!.attributes('aria-selected')).toBe('true')
+      expect(wrapper.findComponent(StepBuilder).exists()).toBe(false)
+      const advancedFields = wrapper.get('.exec-advanced-toggle')
+      expect(advancedFields.attributes('aria-expanded')).toBe('false')
+      await advancedFields.trigger('click')
+      expect(advancedFields.attributes('aria-expanded')).toBe('true')
+      await tabs[0]!.trigger('click')
+      expect(tabs[0]!.attributes('aria-selected')).toBe('true')
+      expect(wrapper.findComponent(StepBuilder).exists()).toBe(true)
+
+      const extraFields = wrapper.get('.advanced-toggle:not(.exec-advanced-toggle)')
+      await extraFields.trigger('click')
+      expect(extraFields.attributes('aria-expanded')).toBe('true')
+      await wrapper.get('.kv-add-btn').trigger('click')
+      const row = wrapper.get('.kv-row')
+      const [key, value] = row.findAll('input')
+      await key!.setValue('fixturePreview')
+      await value!.setValue('local draft')
+      await value!.trigger('blur')
+      const lastConfig = () => (wrapper.emitted<[Partial<PipelineJob>]>('update')?.at(-1)?.[0])?.config
+      expect(lastConfig()).toMatchObject({ fixturePreview: 'local draft', image: 'node:20' })
+      await row.get('.kv-del').trigger('click')
+      expect(wrapper.find('.kv-row').exists()).toBe(false)
+      expect(lastConfig()).not.toHaveProperty('fixturePreview')
+      await wrapper.get('.type-trigger').trigger('click')
+      await wrapper.get('.drawer-close').trigger('click')
+      expect(wrapper.emitted('change-type')).toHaveLength(1)
+      expect(wrapper.emitted('close')).toHaveLength(1)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('opens job details and dependencies separately and refuses a read-only delete', async () => {
+    const wrapper = mount(JobCard, {
+      props: { job: builderJob({}), stageKind: 'build', selected: false, inDag: true, readOnly: true },
+    })
+    try {
+      const card = wrapper.get('[role="button"]')
+      const remove = wrapper.get<HTMLButtonElement>('.job-card-del:not(.job-card-deps)')
+      await card.trigger('click')
+      await wrapper.get('.job-card-deps').trigger('click')
+      expect(wrapper.emitted('select')).toHaveLength(1)
+      expect(wrapper.emitted('edit-deps')).toHaveLength(1)
+      expect(remove.element.disabled).toBe(true)
+      await remove.trigger('click')
+      expect(wrapper.emitted('delete')).toBeUndefined()
+      await wrapper.setProps({ readOnly: false })
+      await remove.trigger('click')
+      expect(wrapper.emitted('delete')).toHaveLength(1)
+      expect(wrapper.emitted('select')).toHaveLength(1)
+    } finally {
+      wrapper.unmount()
+    }
   })
 })

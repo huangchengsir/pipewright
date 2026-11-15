@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -48,9 +50,10 @@ type envDeploymentDTO struct {
 }
 
 type envTimelineDTO struct {
-	Environment string             `json:"environment"`
-	Active      *envDeploymentDTO  `json:"active"`
-	Deployments []envDeploymentDTO `json:"deployments"`
+	EnvironmentID string             `json:"environmentId,omitempty"`
+	Environment   string             `json:"environment"`
+	Active        *envDeploymentDTO  `json:"active"`
+	Deployments   []envDeploymentDTO `json:"deployments"`
 }
 
 func toEnvDeploymentDTO(d environments.Deployment) envDeploymentDTO {
@@ -80,7 +83,7 @@ func toEnvTimelineDTO(tl environments.EnvironmentTimeline) envTimelineDTO {
 	for i := range tl.Deployments {
 		deps = append(deps, toEnvDeploymentDTO(tl.Deployments[i]))
 	}
-	out := envTimelineDTO{Environment: tl.Environment, Deployments: deps}
+	out := envTimelineDTO{EnvironmentID: tl.EnvironmentID, Environment: tl.Environment, Deployments: deps}
 	if tl.Active != nil {
 		a := toEnvDeploymentDTO(*tl.Active)
 		out.Active = &a
@@ -89,6 +92,9 @@ func toEnvTimelineDTO(tl environments.EnvironmentTimeline) envTimelineDTO {
 }
 
 func writeEnvError(w http.ResponseWriter, err error) {
+	if writeAuthorizationError(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, environments.ErrProjectNotFound):
 		writeError(w, http.StatusNotFound, "project_not_found", "项目不存在")
@@ -162,7 +168,29 @@ func makeRollbackEnvironmentHandler(envSvc *environments.Service, deploySvc depl
 		projectID := chi.URLParam(r, "id")
 		env := chi.URLParam(r, "env")
 
-		rt, err := envSvc.ResolveRollback(r.Context(), projectID, env)
+		var expected *environments.RollbackExpectation
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&expected); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, 400, "invalid_request", "Invalid rollback confirmation")
+			return
+		}
+		if expected != nil {
+			if expected.CurrentRunID == "" || expected.TargetRunID == "" {
+				writeError(w, 400, "invalid_request", "Both rollback identities are required")
+				return
+			}
+			var extra any
+			if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+				writeError(w, 400, "invalid_request", "Invalid rollback confirmation")
+				return
+			}
+		}
+		rt, err := envSvc.ResolveRollbackExpected(r.Context(), projectID, env, expected)
+		if errors.Is(err, environments.ErrRollbackChanged) {
+			writeError(w, 409, "rollback_target_changed", "Deployment changed; refresh and confirm rollback again")
+			return
+		}
 		if err != nil {
 			writeEnvError(w, err)
 			return
@@ -173,7 +201,12 @@ func makeRollbackEnvironmentHandler(envSvc *environments.Service, deploySvc depl
 		}
 
 		// 复用既有部署链路重发上一次成功部署的产物到原目标机(默认 rolling 策略)。
-		results, derr := deploySvc.Deploy(r.Context(), deploy.DeployInput{
+		rollback, ok := deploySvc.(deploy.RollbackService)
+		if !ok {
+			writeError(w, 503, "unavailable", "回滚服务未初始化")
+			return
+		}
+		results, derr := rollback.DeployRollback(r.Context(), deploy.DeployInput{
 			RunID:      rt.RunID,
 			ArtifactID: rt.ArtifactID,
 			ServerIDs:  rt.ServerIDs,
@@ -213,5 +246,20 @@ func makeRollbackEnvironmentHandler(envSvc *environments.Service, deploySvc depl
 			ArtifactID:  rt.ArtifactID,
 			Targets:     out,
 		})
+	}
+}
+
+func makeEnvironmentProjectsHandler(svc *environments.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil {
+			writeError(w, 503, "internal", "环境服务未初始化")
+			return
+		}
+		projects, err := svc.ProjectChoices(r.Context())
+		if err != nil {
+			writeEnvError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"projects": projects})
 	}
 }

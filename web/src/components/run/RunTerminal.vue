@@ -19,6 +19,7 @@
 -->
 <script setup lang="ts">
 import { ref, computed, shallowRef, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import {useIdentityRequestScope} from '../../composables/useAuthorizedRequestScope'
 import { findLogMatches, highlightLogLine } from './logSearch'
 import { kubePreparationDiagnostic } from '../../utils/kubernetesDiagnostic'
 import { kubeLogEvidence, kubeLogPhase, type KubePhase } from '../kubernetes/kubernetesEvidence'
@@ -80,6 +81,7 @@ function stopSse(): void {
 }
 
 async function bootstrap(): Promise<void> {
+  if(!scope.active())return
   const gen = ++generation; const id = props.runId; const live = props.live
   loadState.value = 'loading'
   loadError.value = ''
@@ -91,24 +93,25 @@ async function bootstrap(): Promise<void> {
     // which does not carry logs; so we also seed once from getRunLogs to be
     // robust to a missed replay, relying on seq de-dup to avoid duplicates.
     try {
-      const initial = await getRunLogs(id, 0)
-      if (gen !== generation || disposed) return
+      const initial = await scope.run(()=>getRunLogs(id,0,scope.requestOptions))
+      if (!scope.active()||gen !== generation || disposed) return
       ingest(initial.lines)
     } catch {
       // Non-fatal: SSE replay will still deliver history. Swallow silently.
     }
-    if (gen !== generation || disposed) return
+    if (!scope.active()||gen !== generation || disposed) return
     loadState.value = 'streaming'
     cleanupSse = subscribeRunEvents(id, {
       // status/step are owned by the parent view; here we only consume logs.
+      onAuthorizationError(error){void scope.run(()=>Promise.reject(error)).catch(()=>undefined)},
       onStatus() {},
       onStep() {},
       onLog(line) {
-        if (gen !== generation || disposed) return
+        if (!scope.active()||gen !== generation || disposed) return
         ingest([line])
         scheduleAutoScroll()
       },
-    })
+    },scope.requestOptions)
   } else {
     // Terminal mode: one-shot full historical replay, read-only.
     try {
@@ -116,8 +119,8 @@ async function bootstrap(): Promise<void> {
       // Drain pages until complete (logs endpoint paginates large logs).
       // Guard against a non-advancing cursor to avoid an infinite loop.
       for (let guard = 0; guard < 10_000; guard++) {
-        const page = await getRunLogs(id, sinceSeq)
-        if (gen !== generation || disposed) return
+        const page = await scope.run(()=>getRunLogs(id,sinceSeq,scope.requestOptions))
+        if (!scope.active()||gen !== generation || disposed) return
         ingest(page.lines)
         if (page.complete || page.nextSeq <= sinceSeq) break
         if (page.lines.length === 0) break
@@ -126,13 +129,14 @@ async function bootstrap(): Promise<void> {
       loadState.value = 'done'
       scheduleAutoScroll()
     } catch (err) {
-      if (gen !== generation || disposed) return
+      if (!scope.active()||gen !== generation || disposed) return
       loadError.value = err instanceof Error ? err.message : t('run.logLoadFailed')
       loadState.value = 'error'
     }
   }
 }
 
+const scope=useIdentityRequestScope(()=>{disposed=true;generation++;stopSse();bySeq.clear();lines.value=[];loadError.value='';loadState.value='done';resetLogView()})
 onMounted(bootstrap)
 onUnmounted(() => { disposed = true; generation++; stopSse() })
 
@@ -288,6 +292,7 @@ function changeChunk(delta: number): void {
   });
 }
 function selectLine(seq: number, shift: boolean): void {
+  if (!scope.active() || !visibleLines.value.some((line) => line.seq === seq)) return;
   if (shift && selectedStart.value) selectedEnd.value = String(seq);
   else {
     selectedStart.value = String(seq);
@@ -304,6 +309,7 @@ function selected(seq: number): boolean {
   );
 }
 async function copyExcerpt(): Promise<void> {
+  if (!scope.active()) return;
   const generation = ++copyGeneration;
   copyMessage.value = "";
   manualCopy.value = "";
@@ -341,21 +347,19 @@ async function copyExcerpt(): Promise<void> {
     manualCopyEl.value?.select();
   }
 }
-watch(
-  () => [props.runId, props.filterOrdinal, props.kubernetesPhase] as const,
-  () => {
-    copyGeneration++;
-    searchQuery.value = "";
-    selectedStart.value = "";
-    selectedEnd.value = "";
-    manualCopy.value = "";
-    copyMessage.value = "";
-    windowStart.value = 0;
-    activeHit.value = -1;
-    activeSeq.value = null;
-    stickToBottom.value = true;
-  },
-);
+function resetLogView(): void {
+  copyGeneration++;
+  searchQuery.value = "";
+  selectedStart.value = "";
+  selectedEnd.value = "";
+  manualCopy.value = "";
+  copyMessage.value = "";
+  windowStart.value = 0;
+  activeHit.value = -1;
+  activeSeq.value = null;
+  stickToBottom.value = true;
+}
+watch(() => [props.runId, props.filterOrdinal, props.kubernetesPhase] as const, resetLogView);
 watch(
   () => visibleLines.value.length,
   (length) => {

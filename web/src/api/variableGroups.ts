@@ -15,7 +15,7 @@
  * {key, secret:true, credentialId}; the plaintext value is dropped server-side.
  */
 
-import { http } from './http'
+import { http, type HttpOptions } from './http'
 import type { BuildVar } from './pipelineSettings'
 
 export interface VariableGroup {
@@ -46,26 +46,27 @@ interface ListVariableGroupsResponse {
   variableGroups: VariableGroup[]
 }
 
-export async function listVariableGroups(): Promise<VariableGroup[]> {
-  const res = await http.get<ListVariableGroupsResponse>('/api/variable-groups')
+export async function listVariableGroups(options?: HttpOptions): Promise<VariableGroup[]> {
+  const res = await http.get<ListVariableGroupsResponse>('/api/variable-groups', options)
   return res.variableGroups ?? []
 }
 
-export async function getVariableGroup(id: string): Promise<VariableGroup> {
-  return http.get<VariableGroup>(`/api/variable-groups/${id}`)
+export async function getVariableGroup(id: string, options?: HttpOptions): Promise<VariableGroup> {
+  return http.get<VariableGroup>(`/api/variable-groups/${id}`, options)
 }
 
-export async function createVariableGroup(input: SaveVariableGroupInput): Promise<VariableGroup> {
-  return http.post<VariableGroup>('/api/variable-groups', input)
+export async function createVariableGroup(input: SaveVariableGroupInput, options?: HttpOptions): Promise<VariableGroup> {
+  return http.post<VariableGroup>('/api/variable-groups', input, options)
 }
 
 export async function updateVariableGroup(
   id: string,
   input: SaveVariableGroupInput,
+  options?: HttpOptions,
 ): Promise<VariableGroup> {
-  return http.put<VariableGroup>(`/api/variable-groups/${id}`, input)
+  return http.put<VariableGroup>(`/api/variable-groups/${id}`, input, options)
 }
 
-export async function deleteVariableGroup(id: string): Promise<void> {
-  await http.delete<void>(`/api/variable-groups/${id}`)
+export async function deleteVariableGroup(id: string, options?: HttpOptions): Promise<void> {
+  await http.delete<void>(`/api/variable-groups/${id}`, options)
 }

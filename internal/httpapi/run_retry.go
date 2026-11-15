@@ -53,6 +53,9 @@ func WithRunRetry(s *runretry.Service) Option {
 }
 
 func writeRunRetryError(w http.ResponseWriter, err error) {
+	if writeAuthorizationError(w, err) {
+		return
+	}
 	status, code := 503, "retry_unavailable"
 	switch {
 	case errors.Is(err, runretry.ErrNotFound), errors.Is(err, run.ErrNotFound):
@@ -92,8 +95,7 @@ func retryVisible(w http.ResponseWriter, r *http.Request, runs run.Service, s ru
 		writeRunRetryError(w, nil)
 		return false
 	}
-	// The current product has one authenticated administrator with access to all
-	// projects. Resolve the real run through that same service before any metadata.
+	// Resolve the real run through its scoped service before reading metadata.
 	if _, err := runs.Get(r.Context(), chi.URLParam(r, "id")); err != nil {
 		writeRunError(w, err)
 		return false
@@ -143,6 +145,16 @@ func makeRunRetryContextHandler(runs run.Service, s runRetryService) http.Handle
 	}
 }
 
+func retryActorName(r *http.Request, authn auth.Authenticator) (string, error) {
+	if session, ok := sessionFromContext(r.Context()); ok && session != nil && session.MultiTenant {
+		if session.UserID == "" {
+			return "", auth.ErrSessionNotFound
+		}
+		return session.UserID, nil
+	}
+	return authn.AdminUsername()
+}
+
 func makeRunRetrySubmitHandler(runs run.Service, s runRetryService, authn auth.Authenticator, aud audit.Recorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !retryVisible(w, r, runs, s) {
@@ -156,7 +168,7 @@ func makeRunRetrySubmitHandler(runs run.Service, s runRetryService, authn auth.A
 			writeRunRetryError(w, nil)
 			return
 		}
-		name, err := authn.AdminUsername()
+		name, err := retryActorName(r, authn)
 		if err != nil || name == "" {
 			writeRunRetryError(w, nil)
 			return
@@ -236,7 +248,7 @@ func makeRunRetryReconcileHandler(runs run.Service, s runRetryService, authn aut
 			writeRunRetryError(w, nil)
 			return
 		}
-		name, err := authn.AdminUsername()
+		name, err := retryActorName(r, authn)
 		if err != nil || name == "" {
 			writeRunRetryError(w, nil)
 			return

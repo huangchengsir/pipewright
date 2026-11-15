@@ -19,6 +19,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"strings"
 	"time"
 
@@ -88,9 +90,13 @@ func NewTemplateService(db *sql.DB, pipes pipeline.Service) TemplateService {
 }
 
 func (s *templateService) List(ctx context.Context) ([]Template, error) {
-	rows, err := s.db.QueryContext(ctx,
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "template.read", "pipeline_templates.id")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT id, name, description, stages_json, created_at, updated_at
-		 FROM pipeline_templates ORDER BY name ASC`)
+		 FROM pipeline_templates WHERE `+predicate.SQL+` ORDER BY name ASC`, predicate.Args...)
 	if err != nil {
 		return nil, fmt.Errorf("library: list templates: %w", err)
 	}
@@ -111,9 +117,14 @@ func (s *templateService) List(ctx context.Context) ([]Template, error) {
 }
 
 func (s *templateService) Get(ctx context.Context, id string) (*Template, error) {
-	row := s.db.QueryRowContext(ctx,
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "template.read", "pipeline_templates.id")
+	if err != nil {
+		return nil, err
+	}
+	args := append([]any{strings.TrimSpace(id)}, predicate.Args...)
+	row := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT id, name, description, stages_json, created_at, updated_at
-		 FROM pipeline_templates WHERE id = ?`, strings.TrimSpace(id))
+		 FROM pipeline_templates WHERE id = ? AND `+predicate.SQL, args...)
 	t, err := scanTemplate(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrTemplateNotFound
@@ -121,7 +132,14 @@ func (s *templateService) Get(ctx context.Context, id string) (*Template, error)
 	return t, err
 }
 
-func (s *templateService) Create(ctx context.Context, in TemplateInput) (*Template, error) {
+func (s *templateService) create(ctx context.Context, in TemplateInput) (*Template, error) {
+	id := uuid.NewString()
+	if err := tenancy.CheckNew(ctx, s.db, "template.create", "template", id); err != nil {
+		return nil, err
+	}
+	if err := pipeline.AuthorizeReusableReferences(ctx, s.db, in.Spec); err != nil {
+		return nil, err
+	}
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
 		return nil, fmt.Errorf("%w: name must not be empty", ErrInvalidTemplate)
@@ -137,13 +155,16 @@ func (s *templateService) Create(ctx context.Context, in TemplateInput) (*Templa
 		return nil, fmt.Errorf("library: marshal template stages: %w", err)
 	}
 
-	id := uuid.NewString()
+	namespace, err := availableName(ctx, s.db, "pipeline_templates", id, name, ErrTemplateNameTaken)
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO pipeline_templates (id, name, description, stages_json, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		id, name, strings.TrimSpace(in.Description), string(stagesJSON), nowStr, nowStr,
+	_, err = configstate.Queryer(ctx, s.db).ExecContext(ctx,
+		`INSERT INTO pipeline_templates (id, name_scope, name, description, stages_json, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		id, namespace, name, strings.TrimSpace(in.Description), string(stagesJSON), nowStr, nowStr,
 	)
 	if err != nil {
 		if isUniqueErr(err) {
@@ -151,11 +172,17 @@ func (s *templateService) Create(ctx context.Context, in TemplateInput) (*Templa
 		}
 		return nil, fmt.Errorf("library: insert template: %w", err)
 	}
-	return s.Get(ctx, id)
+	if err = tenancy.RecordOwnership(ctx, s.db, "template", id, ""); err != nil {
+		return nil, err
+	}
+	return s.created(ctx, id)
 }
 
-func (s *templateService) Delete(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx,
+func (s *templateService) delete(ctx context.Context, id string) error {
+	if err := tenancy.Check(ctx, s.db, "template.delete", "template", strings.TrimSpace(id)); err != nil {
+		return err
+	}
+	res, err := configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`DELETE FROM pipeline_templates WHERE id = ?`, strings.TrimSpace(id))
 	if err != nil {
 		return fmt.Errorf("library: delete template: %w", err)
@@ -167,10 +194,10 @@ func (s *templateService) Delete(ctx context.Context, id string) error {
 	if n == 0 {
 		return ErrTemplateNotFound
 	}
-	return nil
+	return removeOwnership(ctx, s.db, "template", strings.TrimSpace(id))
 }
 
-func (s *templateService) Apply(ctx context.Context, templateID, projectID string) (*pipeline.Config, error) {
+func (s *templateService) apply(ctx context.Context, templateID, projectID string) (*pipeline.Config, error) {
 	t, err := s.Get(ctx, templateID)
 	if err != nil {
 		return nil, err
@@ -230,3 +257,35 @@ func scanTemplate(row rowScanner) (*Template, error) {
 
 // isUniqueErr 判定是否为唯一约束冲突(modernc sqlite 文本含 UNIQUE)。
 func isUniqueErr(err error) bool { return store.IsUniqueErr(err) }
+
+func (s *templateService) Create(ctx context.Context, in TemplateInput) (out *Template, err error) {
+	err = mutate(ctx, s.db, func(c context.Context) error { var e error; out, e = s.create(c, in); return e })
+	return
+}
+
+func (s *templateService) Delete(ctx context.Context, id string) error {
+	return mutate(ctx, s.db, func(c context.Context) error { return s.delete(c, id) })
+}
+
+func (s *templateService) created(ctx context.Context, id string) (*Template, error) {
+	row := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
+		`SELECT id, name, description, stages_json, created_at, updated_at
+		 FROM pipeline_templates WHERE id = ?`, id)
+	t, err := scanTemplate(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrTemplateNotFound
+	}
+	return t, err
+}
+
+func (s *templateService) Apply(ctx context.Context, templateID, projectID string) (out *pipeline.Config, err error) {
+	err = mutate(ctx, s.db, func(c context.Context) error {
+		if e := tenancy.Check(c, s.db, "pipeline.edit", "project", strings.TrimSpace(projectID)); e != nil {
+			return e
+		}
+		var e error
+		out, e = s.apply(c, templateID, projectID)
+		return e
+	})
+	return
+}

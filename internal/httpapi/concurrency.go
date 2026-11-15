@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -27,6 +28,10 @@ func toConcurrencyDTO(c *run.ConcurrencyConfig) concurrencyDTO {
 
 func writeConcurrencyError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, tenancy.ErrForbidden):
+		writeError(w, http.StatusForbidden, "forbidden", "没有操作权限")
+	case errors.Is(err, tenancy.ErrConflict):
+		writeError(w, http.StatusConflict, "conflict", "权限或配置已变化，请刷新后重试")
 	case errors.Is(err, run.ErrConcProjectNotFound):
 		writeError(w, http.StatusNotFound, "project_not_found", "项目不存在")
 	case errors.Is(err, run.ErrInvalidConcurrency):

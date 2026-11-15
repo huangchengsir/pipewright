@@ -6,16 +6,27 @@
  * DORA / 异常告警 / AI 诊断 / 各项目环境部署,派生 KPI 并以 bento 网格组织各 presentational widget。
  * 无数据各 widget 自行降级到空状态(自托管首启即可用,不白屏)。
  */
-import { ref, computed, onMounted, onUnmounted, reactive } from "vue";
+import { ref, computed, onMounted, onUnmounted, reactive, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
+import { useSessionStore } from "../stores/session";
+import { useNavigationStore } from "../stores/navigation";
+import { usePermission } from "../composables/usePermission";
+import { usePermissionStore } from "../stores/permissions";
+import {
+  getDashboardSection,
+  type DashboardServer,
+  type DashboardAlert,
+  type DashboardDiagnosis,
+} from "../api/dashboard";
+import type { MetricsProject } from "../api/metrics";
+import type { HttpOptions } from "../api/http";
 
 import { listRuns, type RunListItem } from "../api/runs";
-import { listProjects, type Project } from "../api/projects";
+import { listProjects } from "../api/projects";
 import {
   listServers,
   getAllServerMetrics,
-  type Server,
   type ServerMetrics,
 } from "../api/servers";
 import { listEnvironmentDeployments } from "../api/environments";
@@ -26,8 +37,8 @@ import {
   formatDuration,
   formatPercent,
 } from "../api/metrics";
-import { listAnomalyAlerts, type AnomalyAlert } from "../api/anomaly";
-import { getDiagnosisStats, type DiagnosisStats } from "../api/settings";
+import { listAnomalyAlerts } from "../api/anomaly";
+import { getDiagnosisStats } from "../api/settings";
 
 import DashDataState from "../components/dashboard/DashDataState.vue";
 import { HttpError } from "../api/http";
@@ -41,6 +52,13 @@ import DoraMetricCard from "../components/metrics/DoraMetricCard.vue";
 import "../components/dashboard/dashboard.css";
 
 const router = useRouter();
+const session = useSessionStore();
+const permissions = usePermissionStore();
+const navigation = useNavigationStore();
+const createPermission = usePermission({action: 'project.create', resourceId: '', create: true});
+function navigate(path: string) { if (navigation.allows(path)) void router.push(path); }
+function createProject() { if (createPermission.allowed.value) navigate('/projects'); }
+
 const { t } = useI18n();
 
 type ResourceKey =
@@ -113,15 +131,15 @@ function known(key: ResourceKey): boolean {
 const runs = ref<RunListItem[]>([]);
 const runsTotal = ref(0);
 const runningTotal = ref(0);
-const projects = ref<Project[]>([]);
-const servers = ref<Server[]>([]);
+const projects = ref<MetricsProject[]>([]);
+const servers = ref<DashboardServer[]>([]);
 const serverMetrics = ref<ServerMetrics[]>([]);
 const dora = ref<DoraMetrics | null>(null);
-const alerts = ref<AnomalyAlert[]>([]);
-const diagnosis = ref<DiagnosisStats | null>(null);
+const alerts = ref<DashboardAlert[]>([]);
+const diagnosis = ref<DashboardDiagnosis | null>(null);
 const envEntries = ref<DashEnvEntry[]>([]);
 
-async function fetchEnvironments(): Promise<void> {
+async function fetchEnvironments(): Promise<DashEnvEntry[]> {
   // Fetch the dependency on every local retry. A failed project or environment
   // response cannot turn an unknown deployment into an empty/healthy result.
   const allProjects = await listProjects();
@@ -143,58 +161,179 @@ async function fetchEnvironments(): Promise<void> {
       (b.active ? new Date(b.active.deployedAt).getTime() : 0) -
       (a.active ? new Date(a.active.deployedAt).getTime() : 0),
   );
-  envEntries.value = flat;
+  return flat;
 }
-const loaders: Record<ResourceKey, () => Promise<void>> = {
-  recent: async () => {
-    const v = await listRuns({ pageSize: 12 });
-    runs.value = v.items;
-    runsTotal.value = v.total;
+const loaders: Record<
+  ResourceKey,
+  (options: HttpOptions) => Promise<() => void>
+> = {
+  recent: async (options) => {
+    const v = session.user?.multiTenant
+      ? await getDashboardSection("recent", options)
+      : await listRuns({ pageSize: 12 });
+    return () => {
+      runs.value = v.items;
+      runsTotal.value = v.total;
+    };
   },
-  running: async () => {
-    runningTotal.value = (
-      await listRuns({ status: "running", pageSize: 1 })
-    ).total;
+  running: async (options) => {
+    const v = session.user?.multiTenant
+      ? await getDashboardSection("running", options)
+      : await listRuns({ status: "running", pageSize: 1 });
+    return () => {
+      runningTotal.value = v.total;
+    };
   },
-  projects: async () => {
-    projects.value = await listProjects();
+  projects: async (options) => {
+    const v = session.user?.multiTenant
+      ? await getDashboardSection("projects", options)
+      : await listProjects();
+    return () => {
+      projects.value = v;
+    };
   },
-  servers: async () => {
-    servers.value = await listServers();
+  servers: async (options) => {
+    const v = session.user?.multiTenant
+      ? await getDashboardSection("servers", options)
+      : await listServers();
+    return () => {
+      servers.value = v;
+    };
   },
-  metrics: async () => {
-    serverMetrics.value = await getAllServerMetrics();
+  metrics: async (options) => {
+    const v = session.user?.multiTenant
+      ? await getDashboardSection("metrics", options)
+      : await getAllServerMetrics();
+    return () => {
+      serverMetrics.value = v;
+    };
   },
-  dora: async () => {
-    dora.value = await getDoraMetrics({});
+  dora: async (options) => {
+    const v = session.user?.multiTenant
+      ? await getDashboardSection("dora", options)
+      : await getDoraMetrics({});
+    return () => {
+      dora.value = v;
+    };
   },
-  alerts: async () => {
-    alerts.value = await listAnomalyAlerts({ limit: 6 });
+  alerts: async (options) => {
+    const v = session.user?.multiTenant
+      ? await getDashboardSection("alerts", options)
+      : await listAnomalyAlerts({ limit: 6 });
+    return () => {
+      alerts.value = v;
+    };
   },
-  diagnosis: async () => {
-    diagnosis.value = await getDiagnosisStats();
+  diagnosis: async (options) => {
+    const v = session.user?.multiTenant
+      ? await getDashboardSection("diagnosis", options)
+      : await getDiagnosisStats();
+    return () => {
+      diagnosis.value = v;
+    };
   },
-  environments: fetchEnvironments,
+  environments: async (options) => {
+    const v = session.user?.multiTenant
+      ? await getDashboardSection("environments", options)
+      : await fetchEnvironments();
+    return () => {
+      envEntries.value = v;
+    };
+  },
 };
+const clearers: Record<ResourceKey, () => void> = {
+  recent: () => {
+    runs.value = [];
+    runsTotal.value = 0;
+  },
+  running: () => {
+    runningTotal.value = 0;
+  },
+  projects: () => {
+    projects.value = [];
+  },
+  servers: () => {
+    servers.value = [];
+  },
+  metrics: () => {
+    serverMetrics.value = [];
+  },
+  dora: () => {
+    dora.value = null;
+  },
+  alerts: () => {
+    alerts.value = [];
+  },
+  diagnosis: () => {
+    diagnosis.value = null;
+  },
+  environments: () => {
+    envEntries.value = [];
+  },
+};
+const controllers = new Map<ResourceKey, AbortController>();
+function ready() {
+  const user = session.user;
+  return (
+    !!user &&
+    !user.mustChangePassword &&
+    !session.isNetworkError &&
+    (user.multiTenant === false ||
+      (user.multiTenant === true && !!permissions.activeTeam))
+  );
+}
+function clearScope() {
+  for (const key of keys) {
+    controllers.get(key)?.abort();
+    controllers.delete(key);
+    clearers[key]();
+    Object.assign(resources[key], {
+      pending: false,
+      updatedAt: 0,
+      error: false,
+      forbidden: false,
+      generation: resources[key].generation + 1,
+    });
+  }
+}
 async function retry(targets: ResourceKey[]): Promise<void> {
+  if (!ready() || disposed) return;
   await Promise.all(
     targets.map(async (key) => {
       const st = resources[key];
       if (st.pending && st.generation > 0) return;
       const generation = ++st.generation;
+      const controller = new AbortController();
+      controllers.set(key, controller);
       st.pending = true;
+      const options: HttpOptions = {
+        signal: controller.signal,
+        headers: session.user?.multiTenant
+          ? { "X-Pipewright-Team": permissions.activeTeam }
+          : undefined,
+      };
       try {
-        await loaders[key]();
+        const apply = await loaders[key](options);
         if (disposed || st.generation !== generation) return;
+        apply();
         st.updatedAt = Date.now();
         st.error = false;
         st.forbidden = false;
       } catch (err) {
         if (disposed || st.generation !== generation) return;
-        st.error = true;
-        st.forbidden = err instanceof HttpError && err.status === 403;
+        st.forbidden =
+          err instanceof HttpError &&
+          (err.status === 401 || err.status === 403);
+        st.error = !st.forbidden;
+        if (st.forbidden) {
+          clearers[key]();
+          st.updatedAt = 0;
+        }
       } finally {
-        if (!disposed && st.generation === generation) st.pending = false;
+        if (!disposed && st.generation === generation) {
+          st.pending = false;
+          controllers.delete(key);
+        }
       }
     }),
   );
@@ -202,8 +341,29 @@ async function retry(targets: ResourceKey[]): Promise<void> {
 async function load(): Promise<void> {
   await retry(keys);
 }
+let mounted = false;
+watch(
+  [
+    () => session.user,
+    () =>
+      JSON.stringify([
+        session.user?.userId,
+        session.user?.multiTenant,
+        session.user?.mustChangePassword,
+      ]),
+    () => session.isNetworkError,
+    () => permissions.activeTeam,
+  ],
+  () => {
+    clearScope();
+    if (mounted) void load();
+  },
+  { flush: "sync" },
+);
 onUnmounted(() => {
   disposed = true;
+  mounted = false;
+  clearScope();
 });
 
 // ─── KPI 派生 ───────────────────────────────────────────────
@@ -308,7 +468,10 @@ const cfrTrend = computed(() =>
   doraTrend.value.map((p) => p.changeFailureRate),
 );
 
-onMounted(load);
+onMounted(() => {
+  mounted = true;
+  void load();
+});
 </script>
 
 <template>
@@ -346,9 +509,10 @@ onMounted(load);
           {{ t("common.refresh") }}
         </button>
         <button
+          v-if="createPermission.allowed.value && navigation.allows('/projects')"
           class="dash-primary"
           type="button"
-          @click="router.push('/projects')"
+          @click="createProject"
         >
           {{ t("dashboard.newProject") }}
         </button>
@@ -357,13 +521,14 @@ onMounted(load);
 
     <!-- KPI 行 -->
     <section class="kpi-row" :aria-label="t('dashboard.kpiAria')">
+      <template v-for="(k, index) in kpis" :key="k.label">
       <button
-        v-for="(k, index) in kpis"
-        :key="k.label"
+        v-if="!forbidden(kpiSources[index]!)"
         class="kpi"
         :class="`kpi--${k.accent}`"
         type="button"
-        @click="router.push(k.to)"
+        :disabled="!navigation.allows(k.to)"
+        @click="navigate(k.to)"
       >
         <span class="kpi-label">{{ k.label }}</span>
         <strong class="kpi-value">{{ k.value }}</strong>
@@ -377,6 +542,7 @@ onMounted(load);
         >
         <span v-if="k.suffix" class="kpi-suffix">{{ k.suffix }}</span>
       </button>
+      </template>
     </section>
 
     <div
@@ -401,9 +567,11 @@ onMounted(load);
         @retry="retry([key])"
       />
     </div>
+    <p v-if="keys.some(key => resources[key].forbidden)" class="dash-access-notice" role="status">{{ t('runExperience.forbidden') }}</p>
     <!-- bento 网格 -->
     <div class="bento">
       <DashDataState
+        v-if="!forbidden(['recent'])"
         class="bento-runs"
         :state="state(['recent'], !runs.length)"
         :updated-at="updated(['recent'])"
@@ -411,9 +579,10 @@ onMounted(load);
         :forbidden="forbidden(['recent'])"
         :label="t('dashboard.kpiRuns')"
         @retry="retry(['recent'])"
-        ><DashRecentRuns :runs="runs" :loading="false"
+        ><DashRecentRuns :can-navigate="navigation.allows('/runs')" :runs="runs" :loading="false"
       /></DashDataState>
       <DashDataState
+        v-if="!forbidden(['environments'])"
         class="bento-env"
         :state="state(['environments'], !envEntries.length)"
         :updated-at="updated(['environments'])"
@@ -421,9 +590,10 @@ onMounted(load);
         :forbidden="forbidden(['environments'])"
         :label="t('dash.environments')"
         @retry="retry(['environments'])"
-        ><DashEnvironments :entries="envEntries" :loading="false"
+        ><DashEnvironments :can-navigate="navigation.allows('/environments')" :entries="envEntries" :loading="false"
       /></DashDataState>
       <DashDataState
+        v-if="!forbidden(['servers','metrics'])"
         class="bento-srv"
         :state="state(['servers', 'metrics'], !servers.length)"
         :updated-at="updated(['servers', 'metrics'])"
@@ -432,12 +602,14 @@ onMounted(load);
         :label="t('dash.servers')"
         @retry="retry(['servers', 'metrics'])"
         ><DashServers
+          :can-navigate="navigation.allows('/server-status')"
           :servers="servers"
           :metrics="serverMetrics"
           :loading="false"
       /></DashDataState>
-      <div class="bento-alerts">
+      <div v-if="!forbidden(['alerts']) || !forbidden(['diagnosis'])" class="bento-alerts">
         <DashDataState
+          v-if="!forbidden(['alerts'])"
           :state="state(['alerts'], !alerts.length)"
           :updated-at="updated(['alerts'])"
           :pending="pending(['alerts'])"
@@ -446,6 +618,7 @@ onMounted(load);
           @retry="retry(['alerts'])"
         />
         <DashDataState
+          v-if="!forbidden(['diagnosis'])"
           :state="state(['diagnosis'], !diagnosis?.totalFeedback)"
           :updated-at="updated(['diagnosis'])"
           :pending="pending(['diagnosis'])"
@@ -454,6 +627,8 @@ onMounted(load);
           @retry="retry(['diagnosis'])"
         />
         <DashAlerts
+          :can-open-anomalies="navigation.allows('/anomaly') && !forbidden(['alerts'])"
+          :can-open-diagnosis="navigation.allows('/settings/diagnosis-stats') && !forbidden(['diagnosis'])"
           :alerts="alerts"
           :diagnosis="diagnosis"
           :loading="false"
@@ -463,6 +638,7 @@ onMounted(load);
       </div>
 
       <DashDataState
+        v-if="!forbidden(['dora'])"
         class="bento-dora"
         :state="state(['dora'], !dora)"
         :updated-at="updated(['dora'])"
@@ -480,7 +656,8 @@ onMounted(load);
             <button
               class="card-link"
               type="button"
-              @click="router.push('/metrics/dora')"
+              v-if="navigation.allows('/metrics/dora')"
+              @click="navigate('/metrics/dora')"
             >
               {{ t("common.detailArrow") }}
             </button>
@@ -560,6 +737,8 @@ onMounted(load);
 </template>
 
 <style scoped>
+.dash-access-notice { color: var(--color-text-soft); font-size: var(--text-caption); margin: 8px 0; }
+.kpi:disabled { cursor: default; }
 .dashboard {
   display: flex;
   flex-direction: column;
@@ -598,7 +777,9 @@ onMounted(load);
   font-weight: 600;
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: background var(--duration-fast), transform var(--duration-fast);
+  transition:
+    background var(--duration-fast),
+    transform var(--duration-fast);
 }
 .dash-ghost {
   color: var(--color-text-soft);
@@ -648,10 +829,13 @@ onMounted(load);
   cursor: pointer;
   text-align: left;
   overflow: hidden;
-  transition: transform var(--duration-fast), box-shadow var(--duration-fast), border-color var(--duration-fast);
+  transition:
+    transform var(--duration-fast),
+    box-shadow var(--duration-fast),
+    border-color var(--duration-fast);
 }
 .kpi::before {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0 auto 0 0;
   width: 3px;
@@ -741,7 +925,12 @@ onMounted(load);
 .dora-skeleton span {
   height: 150px;
   border-radius: var(--radius-md);
-  background: linear-gradient(90deg, var(--color-inset), var(--color-surface-hover), var(--color-inset));
+  background: linear-gradient(
+    90deg,
+    var(--color-inset),
+    var(--color-surface-hover),
+    var(--color-inset)
+  );
   background-size: 200% 100%;
   animation: dash-shimmer 1.3s ease-in-out infinite;
 }

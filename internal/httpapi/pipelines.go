@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/pipelineyaml"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // pipelineDTO 是流水线配置对外响应体(冻结契约;camelCase)。外层形状定死,
@@ -166,6 +167,11 @@ func reqStagesToDomain(in []reqStage) []pipeline.Stage {
 
 // writePipelineError 把领域错误映射为契约错误码/状态码。
 func writePipelineError(w http.ResponseWriter, err error) {
+	if errors.Is(err, tenancy.ErrForbidden) || errors.Is(err, tenancy.ErrConflict) {
+		accessError(w, err)
+		return
+	}
+
 	switch {
 	case errors.Is(err, pipeline.ErrKubernetesConfig):
 		writeError(w, http.StatusBadRequest, "kubernetes_invalid_input", "Kubernetes 发布配置无效，请检查来源和资源设置")
@@ -243,6 +249,10 @@ func makeImportPipelineHandler(svc pipeline.Service) http.HandlerFunc {
 			return
 		}
 		id := chi.URLParam(r, "id")
+		if err := pipeline.AuthorizeAction(r.Context(), svc, id, "pipeline.edit"); err != nil {
+			writePipelineError(w, err)
+			return
+		}
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<18) // 256KB
 		var req struct {
 			YAML string `json:"yaml"`

@@ -10,6 +10,7 @@ import (
 
 	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 type Error string
@@ -41,6 +42,12 @@ const (
 
 // Code returns only a controlled code; raw SQL and parser diagnostics stay local.
 func Code(err error) string {
+	if errors.Is(err, tenancy.ErrForbidden) {
+		return string(ErrForbidden)
+	}
+	if errors.Is(err, tenancy.ErrConflict) {
+		return string(ErrConflict)
+	}
 	var e Error
 	if errors.As(err, &e) {
 		return string(e)

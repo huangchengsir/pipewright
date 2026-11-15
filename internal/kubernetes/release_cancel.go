@@ -60,6 +60,9 @@ func (s *Service) CancelReleaseRun(ctx context.Context, runID string) (safe bool
 				safe = false
 				continue
 			}
+			if e = s.settleRollbackSource(ctx, q, r, state, "run_canceled"); e != nil {
+				return e
+			}
 			if _, e = q.ExecContext(ctx, "DELETE FROM k8s_resource_gates WHERE owner_kind='v2' AND owner_id=? AND owner_epoch=?", id, r.OwnerEpoch); e != nil {
 				return e
 			}

@@ -13,7 +13,7 @@
   写操作经后端审计(成功投递即留痕)。
 -->
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   serviceAction,
@@ -22,6 +22,8 @@ import {
   type ServiceActionResult,
 } from '../../api/servers'
 import { HttpError } from '../../api/http'
+import { usePermission } from '../../composables/usePermission'
+import { useIdentityRequestScope } from '../../composables/useAuthorizedRequestScope'
 
 const { t } = useI18n()
 
@@ -62,7 +64,7 @@ function isDestructive(a: ServiceAction): boolean {
 
 /** 点动作按钮:危险动作进入二次确认;否则直接执行。 */
 function requestAction(a: ServiceAction): void {
-  if (!targetValid.value || submitting.value) return
+  if (!scope.active() || !permission.allowed.value || !targetValid.value || submitting.value) return
   if (isDestructive(a)) {
     pendingAction.value = a
   } else {
@@ -85,18 +87,30 @@ function confirmPending(): void {
 const result = ref<ServiceActionResult | null>(null)
 /** 校验/客户端错误(如 400 invalid_service_target)的人读文案。 */
 const banner = ref('')
+const permission = usePermission(() => ({ action: type.value === 'docker' ? 'container.operate' : 'server.use', resourceId: props.serverId }))
+let generation = 0
+const scope = useIdentityRequestScope(resetContext)
+function resetContext() { generation++; pendingAction.value = null; submitting.value = false; result.value = null; banner.value = '' }
+watch([type, targetInput, () => props.serverId], resetContext, { flush: 'sync' })
+watch(permission.allowed, allowed => { if (!allowed) resetContext() }, { flush: 'sync' })
+function current(ticket: number) { return ticket === generation && scope.active() && permission.allowed.value }
+
 
 async function runAction(a: ServiceAction): Promise<void> {
+  if (!scope.active() || !permission.allowed.value || !targetValid.value || submitting.value) return
+  const ticket = ++generation
   banner.value = ''
   result.value = null
   submitting.value = true
   try {
-    result.value = await serviceAction(props.serverId, {
+    const response = await scope.run(() => serviceAction(props.serverId, {
       type: type.value,
       target: targetInput.value.trim(),
       action: a,
-    })
+    }, scope.requestOptions))
+    if (current(ticket)) result.value = response
   } catch (e) {
+    if (!current(ticket)) return
     if (e instanceof HttpError) {
       // 400 invalid_service_target / 404 / 503 等:呈现后端人读 message,绝不拼 shell。
       banner.value = e.message || t('opsServer.ops.reqFail')
@@ -104,7 +118,7 @@ async function runAction(a: ServiceAction): Promise<void> {
       banner.value = t('opsServer.ops.reqFail')
     }
   } finally {
-    submitting.value = false
+    if (current(ticket)) submitting.value = false
   }
 }
 </script>
@@ -145,7 +159,7 @@ async function runAction(a: ServiceAction): Promise<void> {
       <button
         type="button"
         class="ops-btn ops-btn--warn"
-        :disabled="!targetValid || submitting"
+        :disabled="!permission.allowed.value || !targetValid || submitting"
         @click="requestAction('restart')"
       >
         {{ t('opsServer.ops.restart') }}
@@ -153,7 +167,7 @@ async function runAction(a: ServiceAction): Promise<void> {
       <button
         type="button"
         class="ops-btn ops-btn--danger"
-        :disabled="!targetValid || submitting"
+        :disabled="!permission.allowed.value || !targetValid || submitting"
         @click="requestAction('stop')"
       >
         {{ t('opsServer.ops.stop') }}
@@ -161,7 +175,7 @@ async function runAction(a: ServiceAction): Promise<void> {
       <button
         type="button"
         class="ops-btn ops-btn--ok"
-        :disabled="!targetValid || submitting"
+        :disabled="!permission.allowed.value || !targetValid || submitting"
         @click="requestAction('start')"
       >
         {{ t('opsServer.ops.start') }}

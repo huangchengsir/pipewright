@@ -1,4 +1,15 @@
 export default {
+  "memberAccountTitle": "Tu cuenta de {provider}",
+  "viewAvailability": "Ver detalles",
+  "memberUnavailableTitle": "El inicio de sesión aún no está disponible",
+  "memberPausedTitle": "Inicio de sesión en pausa",
+  "memberUnconfiguredHint": "Un administrador aún no ha configurado el inicio de sesión con {provider}. Una vez configurado y activado, podrás vincular tu propia cuenta aquí.",
+  "memberDisabledHint": "Un administrador ha pausado el inicio de sesión con {provider}. Podrás vincular tu cuenta cuando se reactive. Los vínculos existentes se conservan.",
+  "memberHint": "Cuando un administrador configure el proveedor, vincule su propia cuenta. Estos cambios solo le afectan a usted.",
+  "manageBinding": "Gestionar vínculo",
+  "memberBindingHint": "Compruebe la cuenta recibida. La confirmación solo la vincula a su cuenta de empleado y no cambia la configuración global de acceso.",
+  "confirmPersonalBind": "Confirmar vínculo",
+
   "section": "Acceso con cuentas externas",
   "sectionHint": "Accede con una cuenta vinculada. La visibilidad y la activación se gestionan por separado.",
   "alternate": "Otras formas de acceso",

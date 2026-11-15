@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"path"
 	"sort"
 	"strings"
@@ -164,6 +165,11 @@ func (s *service) preflightBatch(ctx context.Context, in BatchInput) ([]batchPla
 }
 
 func (s *service) DeployBatch(ctx context.Context, in BatchInput) (*BatchResult, error) {
+	for _, item := range in.Items {
+		if err := s.authorizeInputOverride(ctx, in.RunID, item.Config, nil, ""); err != nil {
+			return nil, err
+		}
+	}
 	if s.batchDB == nil {
 		return nil, ErrBatchInvalid
 	}
@@ -229,6 +235,11 @@ func (s *service) batchByKey(ctx context.Context, runID, key string) (batchIdent
 }
 
 func (s *service) GetBatch(ctx context.Context, runID, batchID string) (*BatchResult, error) {
+	if s.batchDB != nil {
+		if err := tenancy.Check(ctx, s.batchDB, "run.read", "run", runID); err != nil {
+			return nil, err
+		}
+	}
 	if s.batchDB == nil {
 		return nil, ErrBatchNotFound
 	}
@@ -267,6 +278,11 @@ func (s *service) GetBatch(ctx context.Context, runID, batchID string) (*BatchRe
 }
 
 func (s *service) ListBatches(ctx context.Context, runID string) ([]BatchResult, error) {
+	if s.batchDB != nil {
+		if err := tenancy.Check(ctx, s.batchDB, "run.read", "run", runID); err != nil {
+			return nil, err
+		}
+	}
 	if s.batchDB == nil {
 		return nil, ErrBatchNotFound
 	}

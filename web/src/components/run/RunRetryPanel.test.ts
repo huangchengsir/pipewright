@@ -1,4 +1,10 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { access } from '../../api/access'
+import { usePermissionStore } from '../../stores/permissions'
+vi.mock('../../api/access',()=>({access:{decisions:vi.fn()}}))
+import { createPinia, setActivePinia } from 'pinia'
+import { useSessionStore } from '../../stores/session'
+beforeEach(() => { setActivePinia(createPinia()); useSessionStore().user = { username: 'admin', multiTenant: false } })
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { computed, defineComponent, onUnmounted, ref } from 'vue'
 import { flushPromises, mount, RouterLinkStub } from '@vue/test-utils'
 import RunRetryPanel from './RunRetryPanel.vue'
@@ -237,5 +243,67 @@ describe('legacy log feedback separation', () => {
     expect(wrapper.get('[role="alert"]').text()).toContain(i18n.global.t('runRetry.reasons.retry_conflict'))
     expect(wrapper.text()).toContain(i18n.global.t('runRetry.queryOriginal')); expect(s.pending.value?.requestId).toBe('original')
     expect(s.submit).not.toHaveBeenCalled(); wrapper.unmount()
+  })
+})
+
+it('keeps read-only node logs and blocks every retry control after revocation',async()=>{
+ useSessionStore().setUser({username:'member',userId:'employee',multiTenant:true});usePermissionStore().setTeam('team')
+ vi.mocked(access.decisions).mockImplementation(async(team,queries)=>({userId:'employee',teamId:team,modeEpoch:1,revision:1,catalogVersion:1,allowed:queries.map(()=>true)}))
+ const {wrapper,s}=render();await flushPromises();expect(wrapper.find('.app-btn--primary').exists()).toBe(true)
+ s.pending.value={runId:'root',requestId:'pending'};await flushPromises();s.pending.value=null;await flushPromises()
+ vi.mocked(access.decisions).mockImplementation(async(team,queries)=>({userId:'employee',teamId:team,modeEpoch:1,revision:2,catalogVersion:1,allowed:queries.map(()=>false)}))
+ usePermissionStore().invalidate();await flushPromises();expect(wrapper.find('.app-btn--primary').exists()).toBe(false)
+ expect(wrapper.find('.retry-actions button').exists()).toBe(false)
+ const checkbox=wrapper.get('input[type=checkbox]');await checkbox.setValue(true);expect(s.preview).not.toHaveBeenCalled();expect(s.submit).not.toHaveBeenCalled()
+ await (wrapper.vm as unknown as {show:(key?:string)=>Promise<void>}).show('a');await flushPromises();expect(wrapper.find('.retry-close').exists()).toBe(true);expect(wrapper.find('.retry-focused').exists()).toBe(false)
+ wrapper.unmount()
+})
+
+describe('retry action controls with employee authorization', () => {
+  it.each([
+    { button: 'retry all', selector: '.retry-all', effect: 'openPlan', unknown: false },
+    { button: 'confirm retry', selector: '.retry-actions .app-btn--primary', effect: 'submit', unknown: false },
+    { button: 'refresh plan', selector: '.retry-actions button:not(.app-btn--primary)', effect: 'preview', unknown: false },
+    { button: 'reconcile', selector: '.retry-controls button', effect: 'reconcile', unknown: true },
+  ] as const)('checks $button for the exact run and blocks the retained control after revocation', async ({ selector, effect, unknown }) => {
+    const session = useSessionStore()
+    const permissions = usePermissionStore()
+    session.setUser({ username: 'member', userId: 'employee', multiTenant: true })
+    permissions.setTeam('team-a')
+    let allowed = true
+    vi.mocked(access.decisions).mockImplementation(async (team, queries) => ({
+      userId: 'employee',
+      teamId: team,
+      modeEpoch: 1,
+      revision: allowed ? 1 : 2,
+      catalogVersion: 1,
+      allowed: queries.map(query => allowed && team === 'team-a' && query.action === 'run.retry' && query.resourceId === 'root'),
+    }))
+    const fixture = state()
+    fixture.context.value!.outcomeUnknown = unknown
+    const wrapper = mount(RunRetryPanel, {
+      props: { state: fixture, runId: 'root' },
+      global: { stubs: { RouterLink: RouterLinkStub, Teleport: true } },
+    })
+    try {
+      await (wrapper.vm as unknown as { show: (key?: string, mode?: string) => Promise<void> }).show(undefined, 'plan')
+      await flushPromises()
+      const effectMock = vi.mocked(fixture[effect])
+      effectMock.mockClear()
+      const oldButton = wrapper.get(selector)
+      await oldButton.trigger('click')
+      await flushPromises()
+      expect(effectMock).toHaveBeenCalledTimes(1)
+
+      allowed = false
+      permissions.invalidate()
+      await flushPromises()
+      expect(wrapper.find(selector).exists()).toBe(false)
+      await oldButton.trigger('click')
+      await flushPromises()
+      expect(effectMock).toHaveBeenCalledTimes(1)
+    } finally {
+      wrapper.unmount()
+    }
   })
 })

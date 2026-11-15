@@ -1,3 +1,4 @@
+import {useSessionStore} from '../stores/session';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia } from 'pinia'
@@ -30,16 +31,25 @@ async function render(compact: boolean, preference?: '0' | '1') {
   if (preference !== undefined) localStorage.setItem(preferenceKey, preference)
   const media = viewport(compact)
   const storage = vi.spyOn(Storage.prototype, 'setItem')
-  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:pathMatch(.*)*', component: { template: '<div>Content</div>' } }] })
+  const pinia=createPinia();useSessionStore(pinia).setUser({username:"admin",multiTenant:false});
+  const router = createRouter({ history: createMemoryHistory(), routes: [{path:'/settings',component:{template:'<router-view />'},children:[{path:'account',component:{template:'<div>Account</div>'}}]},{ path: '/:pathMatch(.*)*', component: { template: '<div>Content</div>' } }] })
   await router.push('/runs/root'); await router.isReady()
-  const wrapper = mount(AppShell, { attachTo: document.body, global: { plugins: [router, createPinia()], stubs: { ThemeToggle: true, ContinueOnboarding: true } } })
+  const wrapper = mount(AppShell, { attachTo: document.body, global: { plugins: [router, pinia], stubs: { ThemeToggle: true, ContinueOnboarding: true } } })
   wrappers.push(wrapper); await flushPromises()
-  return { wrapper, media, writes: () => storage.mock.calls.filter(([key]) => key === preferenceKey) }
+  return { wrapper, router, media, writes: () => storage.mock.calls.filter(([key]) => key === preferenceKey) }
 }
 beforeEach(() => { localStorage.clear(); setLocale('zh-CN') })
 afterEach(() => { wrappers.forEach(wrapper => wrapper.unmount()); wrappers = []; document.body.innerHTML = ''; vi.restoreAllMocks(); setLocale('zh-CN') })
 
 describe('viewport-scoped sidebar state', () => {
+  it('limits the fixed content layout to actual nested settings routes',async()=>{
+    const {wrapper,router}=await render(false)
+    expect(wrapper.get('main').classes()).not.toContain('main-area--settings')
+    await router.push('/settings/account');await flushPromises()
+    expect(wrapper.get('main').classes()).toContain('main-area--settings')
+    await router.push('/runs/other');await flushPromises()
+    expect(wrapper.get('main').classes()).not.toContain('main-area--settings')
+  })
   it('starts compact at375px even when the desktop preference is expanded, without overwriting it', async () => {
     const { wrapper, writes } = await render(true, '1')
     expect(wrapper.classes()).not.toContain('is-expanded')

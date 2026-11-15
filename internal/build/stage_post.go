@@ -3,6 +3,7 @@ package build
 import (
 	"context"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"time"
 
 	"github.com/huangchengsir/pipewright/internal/dagrun"
@@ -21,6 +22,9 @@ const postTotalTimeout = 10 * time.Minute
 
 // runStagePost 按 condition 顺序执行阶段后置步骤。stageFailed 表示阶段主体是否失败(on_failure/on_success 据此)。
 func (b *Builder) runStagePost(ctx context.Context, sink run.StepSink, r *run.Run, stage pipeline.Stage, workspace string, stageFailed bool, rep dagrun.StageReporter) {
+	if err := tenancy.VerifyExecution(ctx); err != nil {
+		return
+	}
 	if len(stage.Post) == 0 {
 		return
 	}

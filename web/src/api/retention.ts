@@ -9,7 +9,7 @@
  * In-progress runs are never pruned. 0 = unlimited for either limit.
  */
 
-import { http } from './http'
+import { http, type HttpOptions } from './http'
 
 export interface RetentionConfig {
   enabled: boolean
@@ -19,10 +19,10 @@ export interface RetentionConfig {
   maxAgeDays: number
 }
 
-export async function getRetentionConfig(): Promise<RetentionConfig> {
-  return http.get<RetentionConfig>('/api/retention/config')
+export async function getRetentionConfig(options?: HttpOptions): Promise<RetentionConfig> {
+  return http.get<RetentionConfig>('/api/retention/config',{...options,throwOnUnauthorized:true})
 }
 
-export async function setRetentionConfig(input: RetentionConfig): Promise<RetentionConfig> {
-  return http.put<RetentionConfig>('/api/retention/config', input)
+export async function setRetentionConfig(input: RetentionConfig, options?: HttpOptions): Promise<RetentionConfig> {
+  return http.put<RetentionConfig>('/api/retention/config', input,{...options,throwOnUnauthorized:true})
 }

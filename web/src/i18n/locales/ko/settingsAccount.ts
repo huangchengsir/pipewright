@@ -1,6 +1,6 @@
 export default {
   identityTitle: '신원',
-  identitySub: '단일 관리자 인스턴스(다중 사용자 및 RBAC는 향후 버전에서 지원).',
+  identitySub: '현재 계정과 로그인 정보를 확인합니다.',
   roleAdmin: '관리자',
 
   changePwTitle: '비밀번호 변경',

@@ -334,6 +334,13 @@ func (s *Store) schemaMigrationsDDL() string {
 // 撞已存在对象(单管理员全新建库场景概率极低,可接受)。
 func (s *Store) applyMigration(version, sqlText string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
+	if s.Dialect == MySQL && version == "0067_optional_tenancy" {
+		var err error
+		sqlText, err = s.mysqlTenancyForeignKeys(sqlText)
+		if err != nil {
+			return fmt.Errorf("prepare migration %s: %w", version, err)
+		}
+	}
 
 	if s.Dialect == MySQL || s.Dialect == DM {
 		statements := splitStatements(sqlText)

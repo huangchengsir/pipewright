@@ -4,14 +4,16 @@ import { useI18n } from 'vue-i18n'
 import { Stars } from '@vicons/tabler'
 import type { Call, Run, RunSummary } from '../../api/opsChat'
 import AiOpsToolResult from './AiOpsToolResult.vue'
-const props = defineProps<{
+const props = withDefaults(defineProps<{
+  canSubmit?: boolean
+  canTerminal?: (id: string) => boolean
   runId: string
   calls: Call[]
   run?: Run
   summary?: RunSummary
   disabled: boolean
   modelAvailable: boolean
-}>()
+}>(), { canSubmit: true, canTerminal: () => true })
 const emit = defineEmits<{
   copy: [text: string]
   retry: [id: string]
@@ -73,7 +75,8 @@ const bytes = (n: number) =>
         :disabled="disabled || !modelAvailable || !completed"
         :title="t('opsChat.analyzeRun')"
         :aria-label="t('opsChat.analyzeRun')"
-        @click="emit('analyzeRun', runId)"
+        v-if="canSubmit"
+        @click="canSubmit && emit('analyzeRun', runId)"
       >
         <Stars />
       </button>
@@ -112,6 +115,8 @@ const bytes = (n: number) =>
         :call="call"
         :disabled="disabled"
         :model-available="modelAvailable"
+      :can-submit="canSubmit"
+      :can-terminal="canTerminal"
         @copy="emit('copy', $event)"
         @retry="emit('retry', $event)"
         @analyze="emit('analyze', [$event])"

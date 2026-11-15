@@ -24,10 +24,11 @@ var (
 
 // Config 是项目定时配置领域模型。
 type Config struct {
-	Expression string
-	Branch     string
-	Enabled    bool
-	UpdatedAt  time.Time
+	AuthorizationState string
+	Expression         string
+	Branch             string
+	Enabled            bool
+	UpdatedAt          time.Time
 }
 
 // SaveInput 是保存入参。
@@ -54,7 +55,7 @@ type service struct {
 // NewService 构造定时配置 Service(经参数化 SQL 触库;无 init 副作用、不驻留)。
 func NewService(db *sql.DB) Service { return &service{db: db} }
 
-func (s *service) Get(ctx context.Context, projectID string) (*Config, error) {
+func (s *service) get(ctx context.Context, projectID string) (*Config, error) {
 	var (
 		expr, branch, updated string
 		enabled               int
@@ -73,7 +74,7 @@ func (s *service) Get(ctx context.Context, projectID string) (*Config, error) {
 	return &Config{Expression: expr, Branch: branch, Enabled: enabled != 0, UpdatedAt: t}, nil
 }
 
-func (s *service) Save(ctx context.Context, projectID string, in SaveInput) (*Config, error) {
+func (s *service) save(ctx context.Context, projectID string, in SaveInput) (*Config, error) {
 	expr := strings.TrimSpace(in.Expression)
 	branch := strings.TrimSpace(in.Branch)
 
@@ -109,7 +110,7 @@ func (s *service) Save(ctx context.Context, projectID string, in SaveInput) (*Co
 		}
 		return nil, fmt.Errorf("cron: upsert config: %w", err)
 	}
-	return s.Get(ctx, projectID)
+	return s.get(ctx, projectID)
 }
 
 // ListEnabled 实现 Store:返回所有启用且表达式非空的定时配置(供调度器扫描)。

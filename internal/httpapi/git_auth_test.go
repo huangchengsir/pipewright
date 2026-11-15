@@ -9,9 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/huangchengsir/pipewright/internal/ai"
+	"github.com/go-chi/chi/v5"
+"github.com/huangchengsir/pipewright/internal/ai"
 	"github.com/huangchengsir/pipewright/internal/maintenance"
 	"github.com/huangchengsir/pipewright/internal/oauth"
+	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/prstatus"
 	"github.com/huangchengsir/pipewright/internal/repocache"
@@ -228,11 +230,14 @@ func TestHTTPGitConsumersRetainLeaseAndRejectUncertainCredential(t *testing.T) {
 				case "pac":
 					handler = makePacPreviewHandler(sourceDeps{projects: projects, vault: v, reader: reader})
 				case "analysis":
-					handler = makeAIGenerateHandler(aiGenerateDeps{projects: projects, vault: v, analyzer: scopedHTTPAnalyzer{check: check}, aiSvc: &stubAIService{proposal: sampleProposal()}})
+					handler = makeAIGenerateHandler(aiGenerateDeps{pipes: pipeline.New(testStoreAuth(t).DB), projects: projects, vault: v, analyzer: scopedHTTPAnalyzer{check: check}, aiSvc: &stubAIService{proposal: sampleProposal()}})
 				case "diff":
 					handler = makeRunDiffHandler(runDiffDeps{projects: projects, vault: v, runs: scopedHTTPRuns{}, differ: scopedHTTPDiff{check: check}})
 				}
 				req := httptest.NewRequest(http.MethodGet, "http://instance.test/resource?path=app.txt", nil)
+routeContext := chi.NewRouteContext()
+routeContext.URLParams.Add("id", "p")
+req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeContext))
 				w := httptest.NewRecorder()
 				handler(w, req)
 				if failed {
@@ -241,7 +246,7 @@ func TestHTTPGitConsumersRetainLeaseAndRejectUncertainCredential(t *testing.T) {
 					}
 				} else {
 					if calls != 1 || v.active || v.released != 1 {
-						t.Fatalf("wrong scope lifetime: calls=%d active=%v releases=%d", calls, v.active, v.released)
+						t.Fatalf("wrong scope lifetime: calls=%d active=%v releases=%d status=%d body=%s", calls, v.active, v.released,w.Code,w.Body.String())
 					}
 				}
 			}

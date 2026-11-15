@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/pipeline"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"strings"
 	"time"
 
@@ -79,9 +82,13 @@ func NewCustomNodeService(db *sql.DB) CustomNodeService {
 }
 
 func (s *customNodeService) List(ctx context.Context) ([]CustomNode, error) {
-	rows, err := s.db.QueryContext(ctx,
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "custom_node.read", "custom_nodes.id")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT id, name, description, node_type, summary, config_json, created_at, updated_at
-		 FROM custom_nodes ORDER BY name ASC`)
+		 FROM custom_nodes WHERE `+predicate.SQL+` ORDER BY name ASC`, predicate.Args...)
 	if err != nil {
 		return nil, fmt.Errorf("library: list custom nodes: %w", err)
 	}
@@ -102,9 +109,14 @@ func (s *customNodeService) List(ctx context.Context) ([]CustomNode, error) {
 }
 
 func (s *customNodeService) Get(ctx context.Context, id string) (*CustomNode, error) {
-	row := s.db.QueryRowContext(ctx,
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "custom_node.read", "custom_nodes.id")
+	if err != nil {
+		return nil, err
+	}
+	args := append([]any{strings.TrimSpace(id)}, predicate.Args...)
+	row := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT id, name, description, node_type, summary, config_json, created_at, updated_at
-		 FROM custom_nodes WHERE id = ?`, strings.TrimSpace(id))
+		 FROM custom_nodes WHERE id = ? AND `+predicate.SQL, args...)
 	n, err := scanCustomNode(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrCustomNodeNotFound
@@ -112,18 +124,28 @@ func (s *customNodeService) Get(ctx context.Context, id string) (*CustomNode, er
 	return n, err
 }
 
-func (s *customNodeService) Create(ctx context.Context, in CustomNodeInput) (*CustomNode, error) {
+func (s *customNodeService) create(ctx context.Context, in CustomNodeInput) (*CustomNode, error) {
+	id := uuid.NewString()
+	if err := tenancy.CheckNew(ctx, s.db, "custom_node.create", "custom_node", id); err != nil {
+		return nil, err
+	}
+	if err := pipeline.AuthorizeReusableReferences(ctx, s.db, in.Config); err != nil {
+		return nil, err
+	}
 	name, nodeType, configJSON, err := validateCustomNode(in)
 	if err != nil {
 		return nil, err
 	}
 
-	id := uuid.NewString()
+	namespace, err := availableName(ctx, s.db, "custom_nodes", id, name, ErrCustomNodeNameTaken)
+	if err != nil {
+		return nil, err
+	}
 	nowStr := time.Now().UTC().Format(time.RFC3339)
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO custom_nodes (id, name, description, node_type, summary, config_json, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, name, strings.TrimSpace(in.Description), nodeType, strings.TrimSpace(in.Summary), configJSON, nowStr, nowStr,
+	_, err = configstate.Queryer(ctx, s.db).ExecContext(ctx,
+		`INSERT INTO custom_nodes (id, name_scope, name, description, node_type, summary, config_json, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, namespace, name, strings.TrimSpace(in.Description), nodeType, strings.TrimSpace(in.Summary), configJSON, nowStr, nowStr,
 	)
 	if err != nil {
 		if isUniqueErr(err) {
@@ -131,13 +153,22 @@ func (s *customNodeService) Create(ctx context.Context, in CustomNodeInput) (*Cu
 		}
 		return nil, fmt.Errorf("library: insert custom node: %w", err)
 	}
-	return s.Get(ctx, id)
+	if err = tenancy.RecordOwnership(ctx, s.db, "custom_node", id, ""); err != nil {
+		return nil, err
+	}
+	return s.created(ctx, id)
 }
 
-func (s *customNodeService) Update(ctx context.Context, id string, in CustomNodeInput) (*CustomNode, error) {
+func (s *customNodeService) update(ctx context.Context, id string, in CustomNodeInput) (*CustomNode, error) {
+	if err := tenancy.Check(ctx, s.db, "custom_node.edit", "custom_node", strings.TrimSpace(id)); err != nil {
+		return nil, err
+	}
 	id = strings.TrimSpace(id)
 	// 先确认存在(给明确 404,而非静默 0 行)。
 	if _, err := s.Get(ctx, id); err != nil {
+		return nil, err
+	}
+	if err := pipeline.AuthorizeReusableReferences(ctx, s.db, in.Config); err != nil {
 		return nil, err
 	}
 	name, nodeType, configJSON, err := validateCustomNode(in)
@@ -145,8 +176,11 @@ func (s *customNodeService) Update(ctx context.Context, id string, in CustomNode
 		return nil, err
 	}
 
+	if _, err = availableName(ctx, s.db, "custom_nodes", id, name, ErrCustomNodeNameTaken); err != nil {
+		return nil, err
+	}
 	nowStr := time.Now().UTC().Format(time.RFC3339)
-	_, err = s.db.ExecContext(ctx,
+	_, err = configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`UPDATE custom_nodes SET name = ?, description = ?, node_type = ?, summary = ?, config_json = ?, updated_at = ?
 		 WHERE id = ?`,
 		name, strings.TrimSpace(in.Description), nodeType, strings.TrimSpace(in.Summary), configJSON, nowStr, id,
@@ -160,8 +194,11 @@ func (s *customNodeService) Update(ctx context.Context, id string, in CustomNode
 	return s.Get(ctx, id)
 }
 
-func (s *customNodeService) Delete(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx,
+func (s *customNodeService) delete(ctx context.Context, id string) error {
+	if err := tenancy.Check(ctx, s.db, "custom_node.delete", "custom_node", strings.TrimSpace(id)); err != nil {
+		return err
+	}
+	res, err := configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`DELETE FROM custom_nodes WHERE id = ?`, strings.TrimSpace(id))
 	if err != nil {
 		return fmt.Errorf("library: delete custom node: %w", err)
@@ -173,7 +210,7 @@ func (s *customNodeService) Delete(ctx context.Context, id string) error {
 	if n == 0 {
 		return ErrCustomNodeNotFound
 	}
-	return nil
+	return removeOwnership(ctx, s.db, "custom_node", strings.TrimSpace(id))
 }
 
 // validateCustomNode 校验名称 + 类型非空,返回 trim 后名称/类型 + config 快照 JSON(nil 补 {})。
@@ -232,4 +269,29 @@ func scanCustomNode(row rowScanner) (*CustomNode, error) {
 		CreatedAt:   created,
 		UpdatedAt:   updated,
 	}, nil
+}
+
+func (s *customNodeService) Create(ctx context.Context, in CustomNodeInput) (out *CustomNode, err error) {
+	err = mutate(ctx, s.db, func(c context.Context) error { var e error; out, e = s.create(c, in); return e })
+	return
+}
+
+func (s *customNodeService) Update(ctx context.Context, id string, in CustomNodeInput) (out *CustomNode, err error) {
+	err = mutate(ctx, s.db, func(c context.Context) error { var e error; out, e = s.update(c, id, in); return e })
+	return
+}
+
+func (s *customNodeService) Delete(ctx context.Context, id string) error {
+	return mutate(ctx, s.db, func(c context.Context) error { return s.delete(c, id) })
+}
+
+func (s *customNodeService) created(ctx context.Context, id string) (*CustomNode, error) {
+	row := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
+		`SELECT id, name, description, node_type, summary, config_json, created_at, updated_at
+		 FROM custom_nodes WHERE id = ?`, id)
+	n, err := scanCustomNode(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrCustomNodeNotFound
+	}
+	return n, err
 }

@@ -180,6 +180,7 @@ const review = shallowRef<Review | null>(null)
 const reviewBusy = ref(false)
 let lineBuffer = ''
 
+const suggestionVersion = ref(0)
 const suggestion = ref('') // 补全后的完整命令(以 lineBuffer 开头);空=无建议
 const suggestionSuffix = computed(() =>
   suggestion.value.startsWith(lineBuffer) ? suggestion.value.slice(lineBuffer.length) : '',
@@ -211,6 +212,7 @@ function updateCaret(): void {
 }
 function showSuggestion(full: string): void {
   if (!full.startsWith(lineBuffer) || full === lineBuffer) return
+  suggestionVersion.value++
   suggestion.value = full
   updateCaret()
 }
@@ -230,6 +232,7 @@ function localComplete(partial: string): string {
 }
 
 function clearSuggestion(): void {
+  suggestionVersion.value++
   suggestion.value = ''
   caret.value = null
   completeAbort?.abort()
@@ -271,7 +274,9 @@ async function fetchSuggestion(partial: string): Promise<void> {
 
 }
 
-function acceptSuggestion(): void {
+function acceptSuggestion(event?: MouseEvent): void {
+  if (disposed || review.value || reviewBusy.value) return
+  if (event && (event.currentTarget as HTMLElement | null)?.dataset.suggestionVersion !== String(suggestionVersion.value)) return
   const suffix = suggestionSuffix.value
   if (!suffix || sensitive.value || connState.value !== 'connected' || inAltScreen() || /[\x00-\x1f\x7f-\x9f\u2028\u2029]/u.test(suffix)) return
   conn.value?.send(suffix)
@@ -1115,6 +1120,7 @@ onBeforeUnmount(() => {
       v-if="caret && suggestionSuffix && connState === 'connected'"
       class="caret-ghost"
       :style="{ left: caret.left + 'px', top: caret.top + 'px', height: caret.cellH + 'px', lineHeight: caret.cellH + 'px' }"
+      :data-suggestion-version="suggestionVersion"
       @click="acceptSuggestion"
     >
       <span class="cg-text">{{ suggestionSuffix }}</span>

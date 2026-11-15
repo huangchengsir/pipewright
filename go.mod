@@ -1,8 +1,11 @@
 module github.com/huangchengsir/pipewright
 
-go 1.26.3
+go 1.26.11
 
 require (
+	github.com/casbin/govaluate v1.3.0 // indirect
+	github.com/bmatcuk/doublestar/v4 v4.6.1 // indirect
+	github.com/casbin/casbin/v3 v3.11.0
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/coder/websocket v1.8.14
 	github.com/coreos/go-oidc/v3 v3.21.0

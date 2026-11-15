@@ -15,6 +15,7 @@
 
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
+import {useAuthorizedRequestScope} from '../../composables/useAuthorizedRequestScope'
 import {
   aiGenerate,
   aiApply,
@@ -49,7 +50,7 @@ const publishCommit = useProjectConfigCommit()
 let generation = 0
 let alive = true
 let closeTimer: ReturnType<typeof setTimeout> | undefined
-const current = (ticket: number, id: string) => alive && ticket === generation && id === props.projectId
+const current = (ticket: number, id: string) => scope.active() && alive && ticket === generation && id === props.projectId
 onBeforeUnmount(() => { alive = false; generation++; clearTimeout(closeTimer) })
 
 // ─── State machine ────────────────────────────────────────────────────────────
@@ -123,6 +124,7 @@ function deselectAll(): void {
 // ─── Generate ─────────────────────────────────────────────────────────────────
 
 async function generate(): Promise<void> {
+  if (!scope.active() || phase.value==='generating' || phase.value==='applying') return
   const ticket = generation
   const projectId = props.projectId
   phase.value         = 'generating'
@@ -132,9 +134,9 @@ async function generate(): Promise<void> {
   response.value      = null
 
   try {
-    const res = await aiGenerate(projectId, {
+    const res = await scope.run(()=>aiGenerate(projectId, {
       nlSupplement: nlSupplement.value.trim() || undefined,
-    })
+    },scope.requestOptions))
     if (!current(ticket, projectId)) return
     response.value = res
     if (res.available && res.proposal) {
@@ -155,8 +157,9 @@ async function generate(): Promise<void> {
 // ─── Apply ────────────────────────────────────────────────────────────────────
 
 async function apply(): Promise<void> {
+  if (!scope.active()) return
   if (props.projectId !== initialProjectId) { applyError.value = t('mcpConfig.reloadRequired'); return }
-  if (!response.value?.proposal || phase.value === 'applying') return
+  if (phase.value !== 'result' || !response.value?.proposal) return
   const ticket = generation
   const projectId = props.projectId
   phase.value      = 'applying'
@@ -171,7 +174,7 @@ async function apply(): Promise<void> {
         branchMappingIds: [...selectedMappingIds.value],
       },
     }
-    const result = initialRevision ? await aiApply(projectId, input, initialRevision) : await aiApply(projectId, input)
+    const result = await scope.run(()=>aiApply(projectId,input,initialRevision,scope.requestOptions))
     if (!current(ticket, projectId)) return
     publishCommit(projectId, initialRevision, result)
     applySuccess.value = true
@@ -187,6 +190,12 @@ async function apply(): Promise<void> {
     }
     phase.value = 'result'
   }
+}
+
+function regenerate(): void {
+  if (!scope.active() || phase.value !== 'result') return
+  response.value = null
+  phase.value = 'idle'
 }
 
 // ─── Computed helpers ─────────────────────────────────────────────────────────
@@ -233,11 +242,12 @@ watch(() => props.projectId, () => {
   applyError.value = ''
   applySuccess.value = false
 })
+const scope=useAuthorizedRequestScope({action:'pipeline.edit',resourceId:props.projectId},()=>{generation++;clearTimeout(closeTimer);nlSupplement.value='';response.value=null;generateError.value='';applyError.value='';applySuccess.value=false;selectedStageIds.value=new Set();selectedMappingIds.value=new Set();if(alive)emit('close')})
 </script>
 
 <template>
   <!-- ─── Backdrop ──────────────────────────────────────────────────────────── -->
-  <div
+  <div v-if="scope.active()"
     class="wiz-backdrop"
     aria-modal="true"
     role="dialog"
@@ -615,7 +625,7 @@ watch(() => props.projectId, () => {
 
           <!-- Available result footer -->
           <template v-else>
-            <AppButton variant="ghost" @click="phase = 'idle'">
+            <AppButton variant="ghost" :disabled="isApplying" @click="regenerate">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
                 <path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10M23 14l-4.64 4.36A9 9 0 0 1 3.51 15"/>
               </svg>

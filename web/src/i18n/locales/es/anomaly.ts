@@ -1,4 +1,6 @@
 export default {
+ samplingAuthorizationRequired: "Muestreo pendiente de autorización",
+ samplingAuthorizationHelp: "Un administrador con permisos de ejecución y uso de credenciales debe guardar esta regla de nuevo. Los cambios requieren una nueva aprobación.",
   title: 'Detección de anomalías',
   subtitle:
     'Configure reglas de umbral para comprobar las métricas de CPU / memoria / disco del servidor; una coincidencia genera una alerta',

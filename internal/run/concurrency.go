@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"strings"
 	"time"
 
@@ -61,7 +62,7 @@ type concurrencyService struct {
 // NewConcurrencyService 构造项目并发配置 Service(经参数化 SQL 触库;无 init 副作用、不驻留)。
 func NewConcurrencyService(db *sql.DB) ConcurrencyService { return &concurrencyService{db: db} }
 
-func (s *concurrencyService) Get(ctx context.Context, projectID string) (*ConcurrencyConfig, error) {
+func (s *concurrencyService) get(ctx context.Context, projectID string) (*ConcurrencyConfig, error) {
 	var (
 		maxc    int
 		updated string
@@ -80,7 +81,7 @@ func (s *concurrencyService) Get(ctx context.Context, projectID string) (*Concur
 	return &ConcurrencyConfig{MaxConcurrent: maxc, UpdatedAt: t}, nil
 }
 
-func (s *concurrencyService) Save(ctx context.Context, projectID string, maxConcurrent int) (*ConcurrencyConfig, error) {
+func (s *concurrencyService) save(ctx context.Context, projectID string, maxConcurrent int) (*ConcurrencyConfig, error) {
 	projectID = strings.TrimSpace(projectID)
 	if maxConcurrent < 0 || maxConcurrent > maxProjectConcurrency {
 		return nil, ErrInvalidConcurrency
@@ -104,14 +105,42 @@ func (s *concurrencyService) Save(ctx context.Context, projectID string, maxConc
 		}
 		return nil, fmt.Errorf("run: upsert concurrency config: %w", err)
 	}
-	return s.Get(ctx, projectID)
+	return s.get(ctx, projectID)
 }
 
 // LimitFor 实现 ConcurrencyLimits:取项目上限(0 = 不限项目级;读失败优雅降级为 0)。
 func (s *concurrencyService) LimitFor(ctx context.Context, projectID string) int {
-	cfg, err := s.Get(ctx, projectID)
+	cfg, err := s.get(ctx, projectID)
 	if err != nil || cfg == nil {
 		return 0
 	}
 	return cfg.MaxConcurrent
+}
+
+func (s *concurrencyService) Get(ctx context.Context, projectID string) (*ConcurrencyConfig, error) {
+	projectID = strings.TrimSpace(projectID)
+	if err := tenancy.Check(ctx, s.db, "pipeline.read", "project", projectID); err != nil {
+		return nil, err
+	}
+	cfg, err := s.get(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if err = tenancy.Check(ctx, s.db, "pipeline.read", "project", projectID); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+func (s *concurrencyService) Save(ctx context.Context, projectID string, maxConcurrent int) (*ConcurrencyConfig, error) {
+	projectID = strings.TrimSpace(projectID)
+	var cfg *ConcurrencyConfig
+	err := editProjectConfiguration(ctx, s.db, projectID, func(c context.Context) error {
+		var err error
+		cfg, err = s.save(c, projectID, maxConcurrent)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }

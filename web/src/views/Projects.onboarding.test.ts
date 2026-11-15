@@ -1,3 +1,5 @@
+import {createPinia,setActivePinia} from 'pinia'
+import {useSessionStore} from '../stores/session'
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { reactive } from 'vue'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
@@ -21,6 +23,7 @@ const p: Project = { id: 'a', name: 'A', repoUrl: 'https://internal.example/repo
 let wrapper: VueWrapper | undefined
 const stubs = { RouterLink: { props: ['to'], template: '<a :href="to"><slot /></a>' }, Teleport: true }
 beforeEach(() => {
+  setActivePinia(createPinia());useSessionStore().setUser({username:'admin',multiTenant:false})
   vi.clearAllMocks(); localStorage.clear(); resetOnboarding(); route.query = {}
   vi.mocked(listProjects).mockResolvedValue([p])
   vi.mocked(listCredentials).mockResolvedValue([{ id: 'c', name: 'credential', type: 'git_token', scope: '', username: '', maskedValue: 'masked', createdAt: 'now', lastUsedAt: null }])
@@ -63,7 +66,7 @@ describe('onboarding project navigation only opens existing dialogs', () => {
     expect(branch).toBeDefined()
     await branch!.setValue('other')
     expect(listRefs).not.toHaveBeenCalled(); expect(listCommits).not.toHaveBeenCalled(); expect(triggerManual).not.toHaveBeenCalled()
-    expect(getParameters).toHaveBeenCalledWith('a')
+    expect(getParameters).toHaveBeenCalledWith('a',expect.objectContaining({signal:expect.any(AbortSignal)}))
   })
   it('does not open or submit an invalid project id', async () => {
     const view = await open({ onboardingRun: 'deleted' })
@@ -83,7 +86,7 @@ describe('onboarding project navigation only opens existing dialogs', () => {
     await rename!.trigger('click')
     await view.get('#rename-input').setValue('renamed')
     await view.get('.modal-form').trigger('submit'); await flushPromises()
-    expect(updateProject).toHaveBeenCalledWith('a', { name: 'renamed' })
+    expect(updateProject).toHaveBeenCalledWith('a', { name: 'renamed' },undefined,expect.any(Object))
   })
   it('repair sends explicit credential only on Save and reports missing credential beside selector', async () => {
     const view = await open({ onboardingEdit: 'a' })
@@ -95,7 +98,7 @@ describe('onboarding project navigation only opens existing dialogs', () => {
     await view.get('#onboarding-repair-credential').trigger('click')
     await view.get('[role="option"]').trigger('click')
     await view.get('.modal-form').trigger('submit'); await flushPromises()
-    expect(updateProject).toHaveBeenCalledWith('a', { name: 'A', credentialId: 'c' })
+    expect(updateProject).toHaveBeenCalledWith('a', { name: 'A', credentialId: 'c' },undefined,expect.any(Object))
   })
   it('empty credentials cannot submit repair', async () => {
     vi.mocked(listCredentials).mockResolvedValue([])

@@ -10,7 +10,11 @@
   连接失败)→ 人读 error 条而非崩溃。scrim z-index 500(盖住主题切换按钮,与现有弹窗一致)。
 -->
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue'
+import PermissionGate from '../PermissionGate.vue'
+import { usePermission } from '../../composables/usePermission'
+import { usePermissionStore } from '../../stores/permissions'
+import { useSessionStore } from '../../stores/session'
 import { useI18n } from 'vue-i18n'
 import { getContainerInspect, type ContainerInspect } from '../../api/containers'
 import { HttpError } from '../../api/http'
@@ -22,25 +26,39 @@ const props = defineProps<{
 
 const emit = defineEmits<{ (e: 'close'): void }>()
 
+const permissionQuery=computed(()=>({action:'container.inspect',resourceId:props.serverId}))
+const permission=usePermission(permissionQuery)
+const permissions=usePermissionStore()
+const session=useSessionStore()
 const { t } = useI18n()
 const loading = ref(true)
 /** 请求层错误(网络/404/503 等);与后端 reachable:false 区分。 */
 const requestError = ref('')
 const data = ref<ContainerInspect | null>(null)
 
-async function load(): Promise<void> {
+let generation=0
+const revealPermission=usePermission(()=>({action:'container.reveal',resourceId:props.serverId}))
+async function load(signal: AbortSignal): Promise<void> {
+ if(!permission.allowed.value) return
+ const current=++generation
   loading.value = true
   requestError.value = ''
   data.value = null
   try {
-    data.value = await getContainerInspect(props.serverId, props.containerName)
+    const result = await getContainerInspect(props.serverId, props.containerName, {
+      headers: session.user?.multiTenant === true ? { 'X-Pipewright-Team': permissions.activeTeam } : undefined,
+      signal,
+    })
+    if(current!==generation || !permission.allowed.value) return
+    data.value = result
   } catch (e) {
+    if(current!==generation) return
     requestError.value =
       e instanceof HttpError
         ? e.message || t('opsContainer.inspect.loadFailed')
         : t('opsContainer.inspect.loadFailed')
   } finally {
-    loading.value = false
+    if(current===generation) loading.value = false
   }
 }
 
@@ -50,10 +68,25 @@ function onKeydown(e: KeyboardEvent): void {
 
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
-  void load()
+
 })
 
+watch(
+  [permission.allowed, revealPermission.allowed, () => permissions.activeTeam, () => session.user, () => props.serverId, () => props.containerName],
+  (_values, _previous, onCleanup) => {
+    generation++
+    data.value = null
+    requestError.value = ''
+    loading.value = false
+    if (!permission.allowed.value) return
+    const controller = new AbortController()
+    onCleanup(() => controller.abort())
+    void load(controller.signal)
+  },
+  { immediate: true, flush: 'sync' },
+)
 onBeforeUnmount(() => {
+ generation++;data.value=null
   window.removeEventListener('keydown', onKeydown)
 })
 

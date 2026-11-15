@@ -9,12 +9,14 @@ import { useRouter } from 'vue-router'
 import type { Server, ServerMetrics } from '../../api/servers'
 
 const props = defineProps<{
-  servers: Server[]
+  servers: Pick<Server,'id'|'name'|'host'>[]
   metrics: ServerMetrics[]
   loading: boolean
+  canNavigate?: boolean
 }>()
 
 const router = useRouter()
+function navigate(path: string) { if (props.canNavigate !== false) void router.push(path) }
 const { t } = useI18n()
 
 interface Row {
@@ -68,7 +70,7 @@ function tone(pct: number | null): string {
   <section class="card srv" aria-labelledby="dash-srv-h">
     <header class="card-head">
       <h2 id="dash-srv-h" class="card-title">{{ t('dash.servers') }}</h2>
-      <button class="card-link" type="button" @click="router.push('/server-status')">{{ t('common.allArrow') }}</button>
+      <button v-if="canNavigate !== false" class="card-link" type="button" @click="navigate('/server-status')">{{ t('common.allArrow') }}</button>
     </header>
 
     <div v-if="loading" class="srv-grid">

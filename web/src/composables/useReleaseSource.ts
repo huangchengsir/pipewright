@@ -1,3 +1,4 @@
+import type {AuthorizedRequestScope} from './useAuthorizedRequestScope'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { getReleaseSourceSettings, setReleaseSourceSettings, type ReleaseSource, type ReleaseSourceSettings } from '../api/version'
 import { HttpError } from '../api/http'
@@ -9,7 +10,7 @@ function valid(value: ReleaseSourceSettings): boolean {
 }
 
 /** Instance settings only. Neither loading nor saving starts an external release check. */
-export function useReleaseSource() {
+export function useReleaseSource(scope?: AuthorizedRequestScope) {
   const settings = ref<ReleaseSourceSettings | null>(null)
   const draft = ref<ReleaseSource>('github')
   const loading = ref(true)
@@ -26,6 +27,7 @@ export function useReleaseSource() {
   const canCheck = computed(() => !!settings.value && !dirty.value && !!selected.value?.available && !loading.value && !saving.value && !needsReload.value)
 
   async function load(): Promise<void> {
+ if(scope&&!scope.active())return
     if (saving.value) return
     const gen = ++generation
     controller?.abort()
@@ -34,19 +36,20 @@ export function useReleaseSource() {
     saved.value = false
     error.value = ''
     try {
-      const value = await getReleaseSourceSettings({ signal: controller.signal })
-      if (disposed || gen !== generation) return
+      const value = await (scope ? scope.run(()=>getReleaseSourceSettings({...scope.requestOptions,signal:controller!.signal})) : getReleaseSourceSettings({signal:controller.signal}))
+      if (disposed || (scope && !scope.active()) || gen !== generation) return
       if (!valid(value)) throw new Error('Invalid release source settings')
       settings.value = value
       draft.value = value.source
       needsReload.value = false
     } catch {
-      if (!disposed && gen === generation) { error.value = 'load'; needsReload.value = true }
+      if (!disposed && (!scope || scope.active()) && gen === generation) { error.value = 'load'; needsReload.value = true }
     } finally {
-      if (!disposed && gen === generation) loading.value = false
+      if (!disposed && (!scope || scope.active()) && gen === generation) loading.value = false
     }
   }
   async function save(): Promise<boolean> {
+ if(scope&&!scope.active())return false
     if (!canSave.value || !settings.value) return false
     const gen = ++generation
     const input = { source: draft.value, expectedRevision: settings.value.revision }
@@ -54,22 +57,22 @@ export function useReleaseSource() {
     saved.value = false
     error.value = ''
     try {
-      const value = await setReleaseSourceSettings(input)
-      if (disposed || gen !== generation) return false
+      const value = await (scope ? scope.run(()=>setReleaseSourceSettings(input,scope.requestOptions)) : setReleaseSourceSettings(input))
+      if (disposed || (scope && !scope.active()) || gen !== generation) return false
       if (!valid(value) || value.source !== input.source || value.revision <= input.expectedRevision) throw new Error('Unconfirmed release source save')
       settings.value = value
       draft.value = value.source
       saved.value = true
       return true
     } catch (err) {
-      if (!disposed && gen === generation) {
+      if (!disposed && (!scope || scope.active()) && gen === generation) {
         error.value = err instanceof HttpError && err.status === 409 ? 'conflict' : 'save'
         // A transport failure may have committed. Read back before another write.
         needsReload.value = true
       }
       return false
     } finally {
-      if (!disposed && gen === generation) saving.value = false
+      if (!disposed && (!scope || scope.active()) && gen === generation) saving.value = false
     }
   }
   onMounted(() => void load())

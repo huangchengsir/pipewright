@@ -14,7 +14,7 @@
  * 200 + content 空。前端据此显「源码暂不可读」,不白屏、不 500。
  */
 
-import { http } from './http'
+import { http, type HttpOptions } from './http'
 
 /** 树节点类型:目录或文件。 */
 export type SourceEntryType = 'dir' | 'file'
@@ -76,9 +76,10 @@ function buildQuery(q: SourceQuery): string {
 export async function getSourceTree(
   projectId: string,
   query: SourceQuery = {},
+  options?:HttpOptions,
 ): Promise<SourceTree> {
   return http.get<SourceTree>(
-    `/api/projects/${encodeURIComponent(projectId)}/source/tree${buildQuery(query)}`,
+    `/api/projects/${encodeURIComponent(projectId)}/source/tree${buildQuery(query)}`, options,
   )
 }
 
@@ -89,8 +90,9 @@ export async function getSourceTree(
 export async function getSourceBlob(
   projectId: string,
   query: SourceQuery & { path: string },
+  options?:HttpOptions,
 ): Promise<SourceBlob> {
   return http.get<SourceBlob>(
-    `/api/projects/${encodeURIComponent(projectId)}/source/blob${buildQuery(query)}`,
+    `/api/projects/${encodeURIComponent(projectId)}/source/blob${buildQuery(query)}`, options,
   )
 }

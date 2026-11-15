@@ -5,6 +5,10 @@
   右侧滑入,顶栏显示容器名/短 ID,可切 tail 行数、开/停实时跟随、复制、清屏。
 */
 import { ref, shallowRef, computed, watch, nextTick, onBeforeUnmount } from 'vue'
+import PermissionGate from '../PermissionGate.vue'
+import { usePermission } from '../../composables/usePermission'
+import { usePermissionStore } from '../../stores/permissions'
+import { useSessionStore } from '../../stores/session'
 import { useI18n } from 'vue-i18n'
 import { getServerLogs, subscribeServerLogs } from '../../api/servers'
 import { HttpError } from '../../api/http'
@@ -20,6 +24,10 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
 
+const permissionQuery=computed(()=>({action:'container.inspect',resourceId:props.serverId}))
+const permission=usePermission(permissionQuery)
+const permissions=usePermissionStore()
+const session=useSessionStore()
 const { t } = useI18n()
 const toast = useToast()
 
@@ -44,9 +52,21 @@ const bodyEl = ref<HTMLElement | null>(null)
 
 let unsub: (() => void) | null = null
 let generation = 0
+let transport: AbortController | undefined
+
+function transportOptions() {
+  transport = new AbortController()
+  return {
+    signal: transport.signal,
+    headers: session.user?.multiTenant === true ? { 'X-Pipewright-Team': permissions.activeTeam } : undefined,
+    throwOnUnauthorized: true,
+  }
+}
 
 function stopStream(): void {
   generation++
+  transport?.abort()
+  transport = undefined
   if (unsub) {
     unsub()
     unsub = null
@@ -61,6 +81,7 @@ async function scrollToBottom(): Promise<void> {
 }
 
 async function loadHistory(): Promise<void> {
+ if(!permission.allowed.value) return
   stopStream()
   const requestGeneration = generation
   const serverId = props.serverId
@@ -73,8 +94,8 @@ async function loadHistory(): Promise<void> {
       source: 'docker',
       target: containerName,
       lines: count,
-    })
-    if (requestGeneration !== generation) return
+    }, transportOptions())
+    if (requestGeneration !== generation || !permission.allowed.value) return
     if (res.error) {
       viewState.value = 'error'
       errorMsg.value = res.error
@@ -84,7 +105,7 @@ async function loadHistory(): Promise<void> {
     viewState.value = 'loaded'
     void scrollToBottom()
   } catch (err) {
-    if (requestGeneration !== generation) return
+    if (requestGeneration !== generation || !permission.allowed.value) return
     viewState.value = 'error'
     errorMsg.value =
       err instanceof HttpError
@@ -94,6 +115,7 @@ async function loadHistory(): Promise<void> {
 }
 
 function toggleFollow(): void {
+ if(!permission.allowed.value) { stopStream();return }
   if (following.value) {
     stopStream()
     viewState.value = 'loaded'
@@ -109,35 +131,40 @@ function toggleFollow(): void {
     { source: 'docker', target: props.containerName, lines: tailN.value },
     {
       onLine(line) {
-        if (streamGeneration !== generation || !following.value) return
+        if (streamGeneration !== generation || !following.value || !permission.allowed.value) return
         lines.value.push(line)
         // 防爆:实时跟随时只保留最近 5000 行。
         if (lines.value.length > 5000) lines.value.splice(0, lines.value.length - 5000)
         void scrollToBottom()
       },
       onError(message) {
-        if (streamGeneration !== generation || !following.value) return
+        if (streamGeneration !== generation || !following.value || !permission.allowed.value) return
         errorMsg.value = message
         stopStream()
         viewState.value = 'error'
       },
       onTransportError() {
-        if (streamGeneration !== generation || !following.value) return
+        if (streamGeneration !== generation || !following.value || !permission.allowed.value) return
         stopStream()
         // 传输断开不当致命错误:停跟随,保留已拉到的内容。
         viewState.value = 'loaded'
       },
     },
+    transportOptions(),
   )
 }
 
 async function copyAll(): Promise<void> {
+ if(!permission.allowed.value) return
   if (copying.value || manualCopyText.value !== null) return
+  const copiedGeneration=generation
   const text = lines.value.join('\n')
   const count = lines.value.length
   copying.value = true
   try {
-    if (await copyText(text)) {
+    const copied = await copyText(text)
+    if (copiedGeneration !== generation || !permission.allowed.value) return
+    if (copied) {
       toast.success(t('opsContainer.logs.copied'), { detail: t('opsContainer.logs.lineCount', { n: count }) })
     } else {
       manualCopyText.value = text
@@ -151,10 +178,11 @@ function clearView(): void {
   lines.value = []
 }
 
-watch([tailN, () => props.serverId, () => props.containerName], () => {
+watch([permission.allowed,()=>permissions.activeTeam,()=>session.user,tailN, () => props.serverId, () => props.containerName], () => {
+  stopStream();manualCopyText.value=null;errorMsg.value=''
   lines.value = []
-  void loadHistory()
-}, { immediate: true })
+  if(permission.allowed.value) void loadHistory()
+}, { immediate: true,flush:'sync' })
 
 onBeforeUnmount(stopStream)
 </script>
@@ -178,12 +206,12 @@ onBeforeUnmount(stopStream)
             <AppSelect v-model="tailValue" :options="tailOptions" :aria-label="t('opsContainer.logs.linesAria')" min-width="88px" height="36px" portal />
           </div>
         </div>
-        <button class="tool-btn" :disabled="viewState === 'loading'" @click="loadHistory">↻ {{ t('common.refresh') }}</button>
-        <button class="tool-btn" :class="{ 'tool-btn--on': following }" @click="toggleFollow">
+        <PermissionGate :query="permissionQuery"><button class="tool-btn" :disabled="viewState === 'loading'" @click="loadHistory">↻ {{ t('common.refresh') }}</button></PermissionGate>
+        <PermissionGate :query="permissionQuery"><button class="tool-btn" :class="{ 'tool-btn--on': following }" @click="toggleFollow">
           {{ following ? `⏸ ${t('opsContainer.logs.stopLive')}` : `▶ ${t('opsContainer.logs.follow')}` }}
-        </button>
+        </button></PermissionGate>
         <span class="grow" />
-        <button class="tool-btn" :disabled="lines.length === 0 || copying" @click="copyAll">{{ t('opsContainer.copy') }}</button>
+        <PermissionGate :query="permissionQuery"><button class="tool-btn" :disabled="lines.length === 0 || copying" @click="copyAll">{{ t('opsContainer.copy') }}</button></PermissionGate>
         <button class="tool-btn" :disabled="lines.length === 0" @click="clearView">{{ t('opsContainer.logs.clear') }}</button>
       </div>
 

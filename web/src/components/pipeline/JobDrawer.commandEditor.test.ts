@@ -1,3 +1,7 @@
+import {createPinia,setActivePinia} from 'pinia'
+import {useSessionStore} from '../../stores/session'
+import {beforeEach as setLegacyFixture} from 'vitest'
+setLegacyFixture(()=>{setActivePinia(createPinia());useSessionStore().setUser({username:'admin',multiTenant:false})})
 import { nextTick } from 'vue'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
@@ -117,6 +121,18 @@ describe('JobDrawer expanded command editor', () => {
     expect(commandTextarea().value).toBe(job.config.commands)
     expect(document.activeElement).toBe(commandTextarea())
     expect(document.body.style.overflow).toBe('hidden')
+  })
+
+  it('closes the expanded command editor from either visible close control without writing', async () => {
+    for (const selector of ['.command-editor-dialog__close', '.command-editor-dialog__footer button:first-child']) {
+      await openEditor()
+      const button = commandEditor()!.querySelector<HTMLButtonElement>(selector)
+      expect(button).not.toBeNull()
+      button!.click()
+      await nextTick()
+      expect(commandEditor()).toBeNull()
+      expect(wrapper.emitted('update')).toBeUndefined()
+    }
   })
 
   it('only dismisses an unchanged command draft when the backdrop is clicked', async () => {

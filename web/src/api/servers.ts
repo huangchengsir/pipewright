@@ -14,7 +14,8 @@
  * latency / output, or a human-readable error — never the secret.
  */
 
-import { http, HttpError } from './http'
+import { http, HttpError, type HttpOptions } from './http'
+import { sseParser } from './opsChat'
 import { t, currentLocale } from '../i18n'
 
 export interface Server {
@@ -27,6 +28,7 @@ export interface Server {
   credentialId: string
   /** Redundant display name joined from credentials, for the list UI. */
   credentialName: string
+  metricsAuthorizationState?: 'ready' | 'required'
   createdAt: string
   updatedAt: string
 }
@@ -56,25 +58,25 @@ export interface ServerTestResult {
   error: string | null
 }
 
-export async function listServers(): Promise<Server[]> {
-  const res = await http.get<{ items: Server[] }>('/api/servers')
+export async function listServers(options:HttpOptions={}): Promise<Server[]> {
+  const res = await http.get<{ items: Server[] }>('/api/servers',{...options,throwOnUnauthorized:true})
   return res.items
 }
 
-export async function createServer(input: CreateServerInput): Promise<Server> {
-  return http.post<Server>('/api/servers', input)
+export async function createServer(input: CreateServerInput, options: HttpOptions = {}): Promise<Server> {
+  return http.post<Server>('/api/servers', input, {...options,throwOnUnauthorized:true})
 }
 
-export async function updateServer(id: string, input: UpdateServerInput): Promise<Server> {
-  return http.put<Server>(`/api/servers/${id}`, input)
+export async function updateServer(id: string, input: UpdateServerInput, options: HttpOptions = {}): Promise<Server> {
+  return http.put<Server>(`/api/servers/${id}`, input, {...options,throwOnUnauthorized:true})
 }
 
-export async function deleteServer(id: string): Promise<void> {
-  return http.delete<void>(`/api/servers/${id}`)
+export async function deleteServer(id: string, options: HttpOptions = {}): Promise<void> {
+  return http.delete<void>(`/api/servers/${id}`, {...options,throwOnUnauthorized:true})
 }
 
-export async function testServer(id: string): Promise<ServerTestResult> {
-  return http.post<ServerTestResult>(`/api/servers/${id}/test`)
+export async function testServer(id: string, options: HttpOptions = {}): Promise<ServerTestResult> {
+  return http.post<ServerTestResult>(`/api/servers/${id}/test`,undefined,{...options,throwOnUnauthorized:true})
 }
 
 // ─── Service logs (Story 6-2, FR-16) ──────────────────────────────────────────
@@ -117,10 +119,11 @@ export interface GetServerLogsParams {
 export async function getServerLogs(
   id: string,
   params: GetServerLogsParams,
+  options: HttpOptions = {},
 ): Promise<ServerLogsResponse> {
   const qs = new URLSearchParams({ source: params.source, target: params.target })
   if (params.lines != null) qs.set('lines', String(params.lines))
-  return http.get<ServerLogsResponse>(`/api/servers/${id}/logs?${qs.toString()}`)
+  return http.get<ServerLogsResponse>(`/api/servers/${id}/logs?${qs.toString()}`, options)
 }
 
 export interface ServerLogStreamHandlers {
@@ -142,6 +145,7 @@ export function subscribeServerLogs(
   id: string,
   params: GetServerLogsParams,
   handlers: ServerLogStreamHandlers,
+  options: HttpOptions = {},
 ): () => void {
   const qs = new URLSearchParams({ source: params.source, target: params.target })
   if (params.lines != null) qs.set('lines', String(params.lines))
@@ -149,13 +153,50 @@ export function subscribeServerLogs(
 
   let es: EventSource | null = null
   let closed = false
+  const controller = new AbortController()
 
   function cleanup(): void {
     closed = true
+    controller.abort()
+    options.signal?.removeEventListener('abort', cleanup)
     if (es) {
       es.close()
       es = null
     }
+  }
+
+  if (options.signal?.aborted) { cleanup(); return cleanup }
+  options.signal?.addEventListener('abort', cleanup, { once: true })
+  if (new Headers(options.headers).has('X-Pipewright-Team')) {
+    void (async () => {
+      try {
+        const response = await fetch(url, { headers: options.headers, credentials: 'same-origin', cache: 'no-store', signal: controller.signal })
+        if (closed) return
+        if (!response.ok || !response.body) {
+          handlers.onError?.(t('opsServer.log.errFetchStatus', { status: response.status }))
+          cleanup()
+          return
+        }
+        const reader = response.body.getReader(), decoder = new TextDecoder()
+        const parse = sseParser(event => {
+          if (closed) return
+          const data = event.data as { text?: string; error?: string }
+          if (event.type === 'logline' && typeof data.text === 'string') handlers.onLine(data.text)
+          if (event.type === 'error') { handlers.onError?.(data.error ?? ''); cleanup() }
+        })
+        try {
+          while (!closed) {
+            const chunk = await reader.read()
+            if (closed) break
+            if (chunk.done) { handlers.onError?.(t('opsServer.log.errBackendUnreachable')); break }
+            parse(decoder.decode(chunk.value, { stream: true }))
+          }
+        } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); cleanup() }
+      } catch {
+        if (!closed) { handlers.onError?.(t('opsServer.log.errBackendUnreachable')); cleanup() }
+      }
+    })()
+    return cleanup
   }
 
   try {
@@ -270,8 +311,8 @@ export async function getServerMetrics(id: string): Promise<ServerMetrics> {
 }
 
 /** Fetch metrics for all registered servers (collected in parallel, each independent). */
-export async function getAllServerMetrics(): Promise<ServerMetrics[]> {
-  const res = await http.get<{ items: ServerMetrics[] }>('/api/servers/metrics')
+export async function getAllServerMetrics(options:HttpOptions={}): Promise<ServerMetrics[]> {
+  const res = await http.get<{ items: ServerMetrics[] }>('/api/servers/metrics',{...options,throwOnUnauthorized:true})
   return res.items
 }
 
@@ -331,8 +372,9 @@ export interface ServiceActionResult {
 export async function serviceAction(
   id: string,
   input: ServiceActionInput,
+  options: HttpOptions = {},
 ): Promise<ServiceActionResult> {
-  return http.post<ServiceActionResult>(`/api/servers/${id}/service/action`, input)
+  return http.post<ServiceActionResult>(`/api/servers/${id}/service/action`, input, options)
 }
 
 // ─── Container interactive terminal (Story 6-4, FR-18) ───────────────────────
@@ -628,4 +670,14 @@ function openTerminalWS(path: string, handlers: TerminalHandlers): TerminalConne
     },
     close(): void { stop() },
   }
+}
+
+export interface ExecutionAssignment { teamId: string; hostKey: string; assignedAt: number }
+export async function getExecutionAssignment(id:string):Promise<ExecutionAssignment|null> {
+ const result=await http.get<{assignment:ExecutionAssignment|null}>(`/api/servers/${encodeURIComponent(id)}/execution-assignment`,{throwOnUnauthorized:true})
+ return result.assignment
+}
+export async function setExecutionAssignment(id:string,hostKey:string):Promise<ExecutionAssignment|null> {
+ const result=await http.put<{assignment:ExecutionAssignment|null}>(`/api/servers/${encodeURIComponent(id)}/execution-assignment`,{hostKey},{throwOnUnauthorized:true})
+ return result.assignment
 }

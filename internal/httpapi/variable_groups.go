@@ -45,6 +45,9 @@ func toVariableGroupDTO(g *library.VarGroup) variableGroupDTO {
 
 // writeVarGroupError 把变量组领域错误映射为契约错误码/状态码。
 func writeVarGroupError(w http.ResponseWriter, err error) {
+	if writeAuthorizationError(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, library.ErrVarGroupNotFound):
 		writeError(w, http.StatusNotFound, "variable_group_not_found", "变量组不存在")

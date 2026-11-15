@@ -9,7 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"errors"
 	"github.com/huangchengsir/pipewright/internal/audit"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // auditActor 返回当前请求的操作者标识。本平台为单管理员账户,认证写操作的操作者
@@ -52,6 +54,12 @@ func trustForwardedHeader() bool {
 // 本地写入失败**不回滚业务**(审计不阻断),但必须**记日志**——否则敏感操作的审计缺口
 // 完全静默,损害 AC-SEC-03 的「完整」保证。
 func recordAudit(ctx context.Context, rec audit.Recorder, e audit.Entry) {
+	if session, ok := sessionFromContext(ctx); ok && session != nil && session.MultiTenant {
+		if session.UserID == "" {
+			return
+		}
+		e.Actor = "user:" + session.UserID
+	}
 	if rec == nil {
 		return
 	}
@@ -112,6 +120,10 @@ func makeListAuditHandler(rec audit.Recorder) http.HandlerFunc {
 			TargetType: strings.TrimSpace(q.Get("targetType")),
 		}
 		res, err := rec.List(r.Context(), f)
+		if errors.Is(err, tenancy.ErrForbidden) {
+			writeError(w, http.StatusForbidden, "forbidden", "无权查看审计记录")
+			return
+		}
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
 			return

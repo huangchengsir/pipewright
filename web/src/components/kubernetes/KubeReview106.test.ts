@@ -1,3 +1,7 @@
+import {createPinia,setActivePinia} from 'pinia'
+import {useSessionStore} from '../../stores/session'
+import {beforeEach as initEach} from 'vitest'
+initEach(()=>{setActivePinia(createPinia());useSessionStore().setUser({username:'admin',multiTenant:false,instanceAdmin:true})})
 import {afterEach,beforeEach,describe,it,expect,vi} from 'vitest'
 import {mount,flushPromises,type VueWrapper} from '@vue/test-utils'
 import Release from './KubeReleasePanel.vue'
@@ -14,7 +18,7 @@ const wrappers:VueWrapper[]=[]
 const tr=(key:string)=>i18n.global.t(key)
 const button=(w:VueWrapper,key:string)=>w.findAll('button').find(b=>b.text()===tr(key))!
 async function auth(w:VueWrapper){const gate=w.getComponent(Password).props('state');gate.password.value='synthetic-password';await gate.verify();await flushPromises()}
-const row:any={id:'release',runId:'run',nodeKey:'node',revision:3,state:'ready',cleanup:'verified',ownerFenced:true,cursor:0,preview:{planId:'sealed',mode:'manifest',resources:[]},results:[]}
+const row:any={canManage:true,id:'release',runId:'run',nodeKey:'node',revision:3,state:'ready',cleanup:'verified',ownerFenced:true,cursor:0,preview:{planId:'sealed',mode:'manifest',resources:[]},results:[]}
 beforeEach(()=>{for(const fn of Object.values(m))fn.mockReset();sessionStorage.clear();m.release.mockResolvedValue(row);m.confirm.mockResolvedValue(true);m.reauth.mockResolvedValue({reauthenticatedUntil:new Date(Date.now()+300000).toISOString()});m.connections.mockResolvedValue([]);m.releaseGrants.mockResolvedValue([]);m.saveReleaseGrant.mockResolvedValue({})})
 afterEach(()=>{for(const w of wrappers.splice(0))w.unmount();vi.restoreAllMocks()})
 describe('review106 Kubernetes writable boundaries',()=>{
@@ -22,7 +26,7 @@ describe('review106 Kubernetes writable boundaries',()=>{
  m.rollbackRelease.mockRejectedValue(new HttpError(status,{code:'kubernetes_conflict',message:'closed'},'closed'))
  const w=mount(Release,{props:{release:row},global:{stubs:{KubePassword:true,RouterLink:true}}});wrappers.push(w);await flushPromises();await button(w,'kubernetes.release.rollback').trigger('click');await flushPromises();await auth(w)
  expect(m.rollbackRelease).toHaveBeenCalledTimes(1);expect(sessionStorage.getItem('pipewright:kubernetes-rollback:release')!==null).toBe(status===408)
- if(status!==408)expect(button(w,'kubernetes.release.rollback').attributes('disabled')).toBeUndefined()
+ if(status===403)expect(button(w,'kubernetes.release.rollback')).toBeUndefined();else if(status!==408)expect(button(w,'kubernetes.release.rollback').attributes('disabled')).toBeUndefined()
  })
  it('grant edit and subsequent add send only writable DTO fields',async()=>{
  const grant:any={id:'old-id',connectionId:'connection',revision:7,createdAt:1,projectId:'project',environment:'dev',executor:{kind:'local',serverId:'not-local'},resources:[{resource:{group:'',version:'v1',kind:'ConfigMap',resource:'configmaps',namespace:'app',name:'approved',unexpected:'private'},actions:['get'],containers:[],fields:[],revision:9}],requireApproval:true,enabled:true}

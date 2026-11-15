@@ -20,30 +20,31 @@ const ReleaseActionAnnotation = "pipewright.io/release-action"
 // ReleasePlan is private, immutable and authenticated. Public identities are
 // hashes of its randomized ciphertext, never hashes of low-entropy secrets.
 type ReleasePlan struct {
-	MutationVersion  int                        `json:"mutationVersion,omitempty"`
-	ForceApproval    bool                       `json:"forceApproval,omitempty"`
-	RollbackRevision int64                      `json:"rollbackRevision,omitempty"`
-	RollbackPlanID   string                     `json:"rollbackPlanId,omitempty"`
-	Retained         []ReleaseRollbackRetention `json:"retained,omitempty"`
-	CoreDNS          *ReleaseCoreDNSPlan        `json:"coreDNS,omitempty"`
-	RetryOf          string                     `json:"retryOf,omitempty"`
-	Verify           []ReleaseResource          `json:"verify,omitempty"`
-	Helm             *ReleaseHelmPlan           `json:"helm,omitempty"`
-	Progressive      *ReleaseProgressivePlan    `json:"progressive,omitempty"`
-	Deletes          []ReleaseResourceID        `json:"deletes,omitempty"`
-	Version          int                        `json:"version"`
-	Mode             string                     `json:"mode"`
-	Authorization    ReleaseAuthorization       `json:"authorization"`
-	Resources        []ReleaseResource          `json:"resources"`
-	Batches          [][]ReleaseResource        `json:"batches,omitempty"`
-	Input            *FrozenManifest            `json:"input,omitempty"`
-	Config           json.RawMessage            `json:"config"`
-	TimeoutSeconds   int                        `json:"timeoutSeconds"`
-	ObserveSeconds   int                        `json:"observeSeconds"`
-	RollbackOf       string                     `json:"rollbackOf,omitempty"`
-	Baseline         []ReleaseResource          `json:"baseline,omitempty"`
-	Chart            []byte                     `json:"chart,omitempty"`
-	Values           []byte                     `json:"values,omitempty"`
+	MutationVersion  int                          `json:"mutationVersion,omitempty"`
+	ForceApproval    bool                         `json:"forceApproval,omitempty"`
+	RollbackRevision int64                        `json:"rollbackRevision,omitempty"`
+	RollbackPlanID   string                       `json:"rollbackPlanId,omitempty"`
+	RollbackPrevious *releaseRollbackSourceResult `json:"rollbackPrevious,omitempty"`
+	Retained         []ReleaseRollbackRetention   `json:"retained,omitempty"`
+	CoreDNS          *ReleaseCoreDNSPlan          `json:"coreDNS,omitempty"`
+	RetryOf          string                       `json:"retryOf,omitempty"`
+	Verify           []ReleaseResource            `json:"verify,omitempty"`
+	Helm             *ReleaseHelmPlan             `json:"helm,omitempty"`
+	Progressive      *ReleaseProgressivePlan      `json:"progressive,omitempty"`
+	Deletes          []ReleaseResourceID          `json:"deletes,omitempty"`
+	Version          int                          `json:"version"`
+	Mode             string                       `json:"mode"`
+	Authorization    ReleaseAuthorization         `json:"authorization"`
+	Resources        []ReleaseResource            `json:"resources"`
+	Batches          [][]ReleaseResource          `json:"batches,omitempty"`
+	Input            *FrozenManifest              `json:"input,omitempty"`
+	Config           json.RawMessage              `json:"config"`
+	TimeoutSeconds   int                          `json:"timeoutSeconds"`
+	ObserveSeconds   int                          `json:"observeSeconds"`
+	RollbackOf       string                       `json:"rollbackOf,omitempty"`
+	Baseline         []ReleaseResource            `json:"baseline,omitempty"`
+	Chart            []byte                       `json:"chart,omitempty"`
+	Values           []byte                       `json:"values,omitempty"`
 }
 type ReleaseRecord struct {
 	ReaderOwnerEpoch string       `json:"-"`
@@ -157,9 +158,17 @@ func (s *Service) CreateRelease(ctx context.Context, run, node, owner string, pl
 				return e
 			}
 		}
+		plan.RollbackPrevious = nil
 		if plan.RollbackOf != "" {
-			if e := s.validateRollbackSource(ctx, q, plan); e != nil {
+			source, e := s.validateRollbackSource(ctx, q, plan)
+			if e != nil {
 				return e
+			}
+			switch source.State {
+			case "ready", "failed", "partial_failed", "rolled_back":
+				plan.RollbackPrevious = &releaseRollbackSourceResult{State: source.State, Reason: source.ReasonCode}
+			case "paused":
+				plan.RollbackPrevious = &releaseRollbackSourceResult{State: "partial_failed", Reason: "rollback_partial"}
 			}
 		}
 		if e := s.validateReleaseAuthorization(ctx, q, plan.Authorization); e != nil {

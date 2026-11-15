@@ -1,3 +1,4 @@
+import {useSessionStore} from '../stores/session';
 import { describe, expect, it } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
@@ -19,7 +20,8 @@ describe('explicit report navigation ownership', () => {
     expect(record.meta.navSection).toBe('runs')
   })
   it('highlights only runs on a report and keeps path fallback for other pages and invalid ownership', async () => {
-    const router = createRouter({
+    const pinia=createPinia();useSessionStore(pinia).setUser({username:"admin",multiTenant:false});
+  const router = createRouter({
       history: createMemoryHistory(),
       routes: [
         {
@@ -41,7 +43,7 @@ describe('explicit report navigation ownership', () => {
     await router.push('/projects/p/release-guards/g')
     const wrapper = mount(AppShell, {
       global: {
-        plugins: [router, createPinia()],
+        plugins: [router, pinia],
         stubs: { ThemeToggle: true, ContinueOnboarding: true },
       },
     })

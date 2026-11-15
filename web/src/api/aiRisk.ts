@@ -11,7 +11,7 @@
  * findings never echo a detected plaintext secret.
  */
 
-import { http } from './http'
+import { http, type HttpOptions } from './http'
 
 export type RiskLevel = 'high' | 'medium' | 'low'
 export type RiskSource = 'rule' | 'ai'
@@ -39,8 +39,10 @@ export interface AnalyzeRisksResponse {
   generatedAt: string
 }
 
-export async function analyzeRisks(projectId: string): Promise<AnalyzeRisksResponse> {
+export async function analyzeRisks(projectId: string, options?: HttpOptions): Promise<AnalyzeRisksResponse> {
   return http.post<AnalyzeRisksResponse>(
     `/api/projects/${projectId}/pipeline/analyze-risks`,
+    undefined,
+    options,
   )
 }

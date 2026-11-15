@@ -30,8 +30,7 @@ func TestFullRoundEscapedOutputFitsReservedCipherStorage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snap := waitRun(t, s, c.ID, r.ID, PartialFailed)
-	waitJobs(t, s)
+	snap := waitSettledRun(t, s, c.ID, r.ID, PartialFailed)
 	bytes, calls := 0, 0
 	for _, c := range snap.Calls {
 		if c.RunID == r.ID {

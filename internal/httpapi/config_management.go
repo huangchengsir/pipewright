@@ -3,7 +3,9 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -17,10 +19,36 @@ import (
 	"github.com/huangchengsir/pipewright/internal/configdraft"
 	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 func WithConfigManagement(db *sql.DB, drafts *configdraft.Service, requireMatch bool) Option {
 	return func(o *options) { o.configDB = db; o.configDrafts = drafts; o.configRequireMatch = requireMatch }
+}
+
+func configApproverID(sess *auth.Session) string {
+	if sess.MultiTenant {
+		sum := sha256.Sum256([]byte(sess.Token))
+		return hex.EncodeToString(sum[:])
+	}
+	return auth.SessionID(sess.Token)
+}
+func configInstanceAuthorizer(db *sql.DB) func(context.Context, configstate.DBTX, string) error {
+	ordinary := ConfigAdminAuthorizer(db)
+	return func(ctx context.Context, q configstate.DBTX, id string) error {
+		if err := ordinary(ctx, q, id); err != nil {
+			return err
+		}
+		sess, ok := sessionFromContext(ctx)
+		if !ok || sess == nil {
+			return configdraft.ErrForbidden
+		}
+		if sess.MultiTenant {
+			_, err := tenancy.VerifyAccountSession(ctx, q, sess.Token, true)
+			return err
+		}
+		return nil
+	}
 }
 
 // ConfigAdminAuthorizer rechecks the browser session in the same transaction
@@ -28,8 +56,12 @@ func WithConfigManagement(db *sql.DB, drafts *configdraft.Service, requireMatch 
 func ConfigAdminAuthorizer(db *sql.DB) func(context.Context, configstate.DBTX, string) error {
 	return func(ctx context.Context, q configstate.DBTX, id string) error {
 		sess, ok := sessionFromContext(ctx)
-		if !ok || sess == nil || id != auth.SessionID(sess.Token) {
+		if !ok || sess == nil || id != configApproverID(sess) {
 			return configdraft.ErrForbidden
+		}
+		if sess.MultiTenant {
+			_, err := tenancy.VerifyAccountSession(ctx, q, sess.Token, false)
+			return err
 		}
 		query := `SELECT expires_at FROM sessions` + store.LockHint(store.DialectOf(db), true) + ` WHERE token=?`
 		if store.DialectOf(db).RowLocks() && store.DialectOf(db) != store.SQLServer {
@@ -51,6 +83,14 @@ func ConfigAdminAuthorizer(db *sql.DB) func(context.Context, configstate.DBTX, s
 // not been revoked. The MCP caller never receives or supplies its session token.
 func ConfigApproverVerifier(db *sql.DB) func(context.Context, configstate.DBTX, string) error {
 	return func(ctx context.Context, q configstate.DBTX, id string) error {
+		on, err := tenancy.Enabled(configstate.WithTxContext(ctx, db, q), db)
+		if err != nil {
+			return err
+		}
+		if on {
+			_, err = tenancy.ValidateStoredSession(ctx, q, id)
+			return err
+		}
 		if len(id) != 16 {
 			return configdraft.ErrForbidden
 		}
@@ -96,7 +136,7 @@ func mountConfigManagement(r chi.Router, db *sql.DB, svc *configdraft.Service) {
 			writeConfigError(w, configdraft.ErrForbidden)
 			return
 		}
-		out, err := svc.AdminOperation(r.Context(), auth.SessionID(sess.Token), chi.URLParam(r, "id"))
+		out, err := svc.AdminOperation(r.Context(), configApproverID(sess), chi.URLParam(r, "id"))
 		if err != nil {
 			writeConfigError(w, err)
 			return
@@ -122,11 +162,11 @@ func mountConfigManagement(r chi.Router, db *sql.DB, svc *configdraft.Service) {
 			return
 		}
 		id := chi.URLParam(r, "id")
-		if err := svc.FencePending(r.Context(), auth.SessionID(sess.Token), id); err != nil {
+		if err := svc.FencePending(r.Context(), configApproverID(sess), id); err != nil {
 			writeConfigError(w, err)
 			return
 		}
-		out, err := svc.AdminOperation(r.Context(), auth.SessionID(sess.Token), id)
+		out, err := svc.AdminOperation(r.Context(), configApproverID(sess), id)
 		if err != nil {
 			writeConfigError(w, err)
 			return
@@ -134,14 +174,14 @@ func mountConfigManagement(r chi.Router, db *sql.DB, svc *configdraft.Service) {
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, 200, out)
 	})
-	maintenance := configstate.NewMaintenance(db, &configstate.MaintenanceOptions{AuthorizeAdmin: ConfigAdminAuthorizer(db)})
+	maintenance := configstate.NewMaintenance(db, &configstate.MaintenanceOptions{AuthorizeAdmin: configInstanceAuthorizer(db)})
 	r.Get("/mcp/config-maintenance", func(w http.ResponseWriter, r *http.Request) {
 		sess, ok := sessionFromContext(r.Context())
 		if !ok || sess == nil {
 			writeConfigError(w, configstate.ErrMaintenanceForbidden)
 			return
 		}
-		out, err := maintenance.List(r.Context(), auth.SessionID(sess.Token))
+		out, err := maintenance.List(r.Context(), configApproverID(sess))
 		if err != nil {
 			writeConfigError(w, err)
 			return
@@ -155,6 +195,10 @@ func mountConfigManagement(r chi.Router, db *sql.DB, svc *configdraft.Service) {
 			writeConfigError(w, configstate.ErrMaintenanceForbidden)
 			return
 		}
+		if err := tenancy.RequireInstanceAdministrator(r.Context(), db); err != nil {
+			writeConfigError(w, err)
+			return
+		}
 		var in configstate.MaintenanceRecoverRequest
 		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 		dec.DisallowUnknownFields()
@@ -162,7 +206,7 @@ func mountConfigManagement(r chi.Router, db *sql.DB, svc *configdraft.Service) {
 			writeConfigError(w, configdraft.ErrInvalid)
 			return
 		}
-		out, err := maintenance.Recover(r.Context(), auth.SessionID(sess.Token), in)
+		out, err := maintenance.Recover(r.Context(), configApproverID(sess), in)
 		if err != nil {
 			writeConfigError(w, err)
 			return
@@ -171,7 +215,12 @@ func mountConfigManagement(r chi.Router, db *sql.DB, svc *configdraft.Service) {
 		writeJSON(w, 200, out)
 	})
 	r.Get("/projects/{id}/config-revision", func(w http.ResponseWriter, r *http.Request) {
-		v, err := configstate.ReadRevision(r.Context(), db, chi.URLParam(r, "id"))
+		id := chi.URLParam(r, "id")
+		if err := tenancy.Check(r.Context(), db, "pipeline.read", "project", id); err != nil {
+			writeConfigError(w, err)
+			return
+		}
+		v, err := configstate.ReadRevision(r.Context(), db, id)
 		if err != nil {
 			writeConfigError(w, err)
 			return
@@ -189,7 +238,7 @@ func mountConfigManagement(r chi.Router, db *sql.DB, svc *configdraft.Service) {
 			writeConfigError(w, configdraft.ErrForbidden)
 			return
 		}
-		out, err := svc.Review(r.Context(), auth.SessionID(sess.Token), chi.URLParam(r, "id"))
+		out, err := svc.Review(r.Context(), configApproverID(sess), chi.URLParam(r, "id"))
 		if err != nil {
 			writeConfigError(w, err)
 			return
@@ -214,7 +263,7 @@ func mountConfigManagement(r chi.Router, db *sql.DB, svc *configdraft.Service) {
 			writeConfigError(w, configdraft.ErrInvalid)
 			return
 		}
-		out, err := svc.Approve(r.Context(), auth.SessionID(sess.Token), chi.URLParam(r, "id"), in)
+		out, err := svc.Approve(r.Context(), configApproverID(sess), chi.URLParam(r, "id"), in)
 		if err != nil {
 			writeConfigError(w, err)
 			return
@@ -225,6 +274,9 @@ func mountConfigManagement(r chi.Router, db *sql.DB, svc *configdraft.Service) {
 }
 
 func writeConfigError(w http.ResponseWriter, err error) {
+	if !errors.Is(err, configstate.ErrMaintenanceForbidden) && writeAuthorizationError(w, err) {
+		return
+	}
 	status, code := http.StatusServiceUnavailable, "service_unavailable"
 	switch {
 	case errors.Is(err, configstate.ErrMaintenanceForbidden):
@@ -338,6 +390,10 @@ func configRevisionMiddleware(db *sql.DB, require bool) func(http.Handler) http.
 				// A lazy default may be stored by a legacy GET. Retry that safe read
 				// once; never attach a newer baseline to an older response body.
 				for attempt := 0; attempt < 2; attempt++ {
+					if e := tenancy.Check(r.Context(), db, "pipeline.read", "project", id); e != nil {
+						writeConfigError(w, e)
+						return
+					}
 					before, e := configstate.ReadRevision(r.Context(), db, id)
 					if e != nil {
 						writeConfigError(w, e)
@@ -345,6 +401,10 @@ func configRevisionMiddleware(db *sql.DB, require bool) func(http.Handler) http.
 					}
 					buf := newConfigResponse()
 					next.ServeHTTP(buf, r)
+					if buf.status >= 400 {
+						buf.flush(w)
+						return
+					}
 					after, e := configstate.ReadRevision(r.Context(), db, id)
 					if e != nil {
 						writeConfigError(w, e)
@@ -352,6 +412,10 @@ func configRevisionMiddleware(db *sql.DB, require bool) func(http.Handler) http.
 					}
 					if before != after {
 						continue
+					}
+					if e := tenancy.Check(r.Context(), db, "pipeline.read", "project", id); e != nil {
+						writeConfigError(w, e)
+						return
 					}
 					buf.Header().Set("X-Config-Revision", configRevision(after))
 					buf.flush(w)

@@ -1,4 +1,4 @@
-import { http } from './http'
+import { http, type HttpOptions } from './http'
 
 export interface MCPConfigActivity {
   activityId: string
@@ -17,10 +17,10 @@ export interface MCPConfigMaintenance {
   items: MCPConfigActivity[]
   truncated: boolean
 }
-export function getMCPConfigMaintenance(options?: RequestInit): Promise<MCPConfigMaintenance> {
+export function getMCPConfigMaintenance(options?: HttpOptions): Promise<MCPConfigMaintenance> {
   return http.get('/api/mcp/config-maintenance', options)
 }
-export function recoverMCPConfigActivity(input: { activityId: string; expectedDigest: string; evidenceId: string }, options?: RequestInit): Promise<unknown> {
+export function recoverMCPConfigActivity(input: { activityId: string; expectedDigest: string; evidenceId: string }, options?: HttpOptions): Promise<unknown> {
   return http.post('/api/mcp/config-maintenance/recover', input, options)
 }
 
@@ -33,9 +33,9 @@ export interface MCPConfigOperationResult {
   newRevision?: string
   changedOperations: string[]
 }
-export function getMCPConfigOperation(id: string, options?: RequestInit): Promise<MCPConfigOperationResult> {
+export function getMCPConfigOperation(id: string, options?: HttpOptions): Promise<MCPConfigOperationResult> {
   return http.get(`/api/mcp/config-operations/${encodeURIComponent(id)}`, options)
 }
-export function fenceMCPConfigOperation(id: string, options?: RequestInit): Promise<MCPConfigOperationResult> {
+export function fenceMCPConfigOperation(id: string, options?: HttpOptions): Promise<MCPConfigOperationResult> {
   return http.post(`/api/mcp/config-operations/${encodeURIComponent(id)}/fence`, {}, options)
 }

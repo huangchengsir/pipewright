@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/maintenance"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
@@ -25,6 +26,8 @@ type Lifecycle interface {
 type authorizationState struct {
 	Provider, AppRevision, RedirectURI string
 	Target                             vault.OAuthTarget
+	Team                               string
+	ModeEpoch                          uint64
 }
 type credentialGate struct {
 	mu       sync.Mutex
@@ -78,6 +81,22 @@ func (s *service) BeginAuthorization(ctx context.Context, session, provider, red
 	if err != nil {
 		return "", err
 	}
+	var team string
+	var epoch uint64
+	principal, enabled, err := tenancy.CurrentPrincipal(ctx, s.db)
+	if err != nil {
+		return "", err
+	}
+	if enabled {
+		current, e := tenancy.NewAccounts(s.db).Verify(ctx, session)
+		if e != nil || current.Actor.UserID != principal.ID || current.Actor.ModeEpoch != principal.ModeEpoch {
+			return "", tenancy.ErrForbidden
+		}
+		team, epoch = principal.TenantID, principal.ModeEpoch
+		if err = s.checkCredentialAuthorization(ctx, id); err != nil {
+			return "", err
+		}
+	}
 	appRev, err := s.appRevision(ctx, provider)
 	if err != nil {
 		return "", err
@@ -97,7 +116,7 @@ func (s *service) BeginAuthorization(ctx context.Context, session, provider, red
 			return "", vault.ErrOAuthIdentity
 		}
 	}
-	state, err := s.states.issueBound(session, authorizationState{Provider: provider, AppRevision: appRev, RedirectURI: redirect, Target: target})
+	state, err := s.states.issueBound(session, authorizationState{Provider: provider, AppRevision: appRev, RedirectURI: redirect, Target: target, Team: team, ModeEpoch: epoch})
 	if err != nil {
 		return "", err
 	}
@@ -116,6 +135,18 @@ func (s *service) CompleteAuthorization(ctx context.Context, session, provider, 
 	}
 	if bound.Provider != provider || bound.RedirectURI != redirect {
 		return "", "", vault.ErrOAuthIdentity
+	}
+	if bound.Team != "" {
+		current, e := tenancy.NewAccounts(s.db).Verify(ctx, session)
+		if e != nil || current.Actor.ModeEpoch != bound.ModeEpoch {
+			return "", "", tenancy.ErrForbidden
+		}
+		ctx = tenancy.WithActor(ctx, current.Actor, bound.Team)
+		if err = s.checkCredentialAuthorization(ctx, bound.Target.CredentialID); err != nil {
+			return "", "", err
+		}
+	} else if enabled, e := tenancy.Enabled(ctx, s.db); e != nil || enabled {
+		return "", "", tenancy.ErrForbidden
 	}
 	rev, err := s.appRevision(ctx, provider)
 	if err != nil || rev != bound.AppRevision {
@@ -174,11 +205,11 @@ func (s *service) CompleteAuthorization(ctx context.Context, session, provider, 
 	if result.Binding.AppRevision != bound.AppRevision {
 		return "", "", vault.ErrOAuthIdentity
 	}
-	save, cancelSave := context.WithTimeout(context.Background(), 5*time.Second)
+	save, cancelSave := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancelSave()
 	id, err := s.lifecycle.repo.Authorize(save, result.Binding, result.Tokens, bound.Target)
 	if err != nil {
-		if errors.Is(err, vault.ErrOAuthIdentity) || errors.Is(err, vault.ErrConflict) || errors.Is(err, vault.ErrOAuthBusy) || errors.Is(err, vault.ErrNotFound) {
+		if errors.Is(err, tenancy.ErrForbidden) || errors.Is(err, vault.ErrOAuthIdentity) || errors.Is(err, vault.ErrConflict) || errors.Is(err, vault.ErrOAuthBusy) || errors.Is(err, vault.ErrNotFound) {
 			return "", "", err
 		}
 		preserveClaim = true
@@ -188,6 +219,16 @@ func (s *service) CompleteAuthorization(ctx context.Context, session, provider, 
 		return "", "", vault.ErrOAuthUncertain
 	}
 	return id, result.Login, nil
+}
+
+func (s *service) checkCredentialAuthorization(ctx context.Context, id string) error {
+	if id != "" {
+		return tenancy.Check(ctx, s.db, "credential.edit", "credential", id)
+	}
+	if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+		return err
+	}
+	return tenancy.CheckNew(ctx, s.db, "credential.create", "credential", "new-resource")
 }
 
 type tokenError struct{ invalidGrant bool }
@@ -332,7 +373,7 @@ func (s *service) refresh(ctx context.Context, b *vault.OAuthBinding) error {
 	}
 	// Do not bind persistence to a browser cancellation after a rotating provider
 	// has accepted the exchange. This one bounded local commit is never retried.
-	save, cancelSave := context.WithTimeout(context.Background(), 5*time.Second)
+	save, cancelSave := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancelSave()
 	if err = s.lifecycle.repo.CompleteRefresh(save, b, tokens); err != nil {
 		_ = s.lifecycle.repo.FinishFailure(save, b, vault.OAuthUncertain)

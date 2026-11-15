@@ -52,8 +52,8 @@ export interface UpdateResult {
   task?: UpgradeTask
 }
 
-export function getVersion(): Promise<VersionInfo> {
-  return http.get<VersionInfo>('/version')
+export function getVersion(options?: HttpOptions): Promise<VersionInfo> {
+  return http.get<VersionInfo>('/version', options)
 }
 
 export function checkUpdate(source?: ReleaseSource, options?: HttpOptions): Promise<UpdateInfo> {
@@ -64,8 +64,8 @@ export function getReleaseSourceSettings(options?: HttpOptions): Promise<Release
   return http.get('/api/version/source-settings', { ...options, throwOnUnauthorized: true })
 }
 
-export function setReleaseSourceSettings(input: { source: ReleaseSource; expectedRevision: number }): Promise<ReleaseSourceSettings> {
-  return http.put('/api/version/source-settings', input, { throwOnUnauthorized: true })
+export function setReleaseSourceSettings(input: { source: ReleaseSource; expectedRevision: number }, options?: HttpOptions): Promise<ReleaseSourceSettings> {
+  return http.put('/api/version/source-settings', input, { ...options, throwOnUnauthorized: true })
 }
 
 /** 触发一键自动更新(写操作,带 CSRF)。 */
@@ -81,5 +81,5 @@ export interface UpgradeTask {
 }
 export function getCurrentUpdateTask(options?: HttpOptions): Promise<UpgradeTask | null> { return http.get('/api/version/update-tasks/current', { ...options, throwOnUnauthorized: true }) }
 export function getUpdateTask(id: string, options?: HttpOptions): Promise<UpgradeTask> { return http.get('/api/version/update-tasks/' + encodeURIComponent(id), { ...options, throwOnUnauthorized: true }) }
-export function startUpdateTask(input: { requestId: string; target: string; source?: ReleaseSource }): Promise<UpdateResult> { return http.post('/api/version/update-tasks', input, { throwOnUnauthorized: true }) }
-export function resumeUpdateTask(id: string, requestId: string): Promise<UpgradeTask> { return http.post('/api/version/update-tasks/' + encodeURIComponent(id) + '/resume', { requestId }, { throwOnUnauthorized: true }) }
+export function startUpdateTask(input: { requestId: string; target: string; source?: ReleaseSource }, options?: HttpOptions): Promise<UpdateResult> { return http.post('/api/version/update-tasks', input, { ...options, throwOnUnauthorized: true }) }
+export function resumeUpdateTask(id: string, requestId: string, options?: HttpOptions): Promise<UpgradeTask> { return http.post('/api/version/update-tasks/' + encodeURIComponent(id) + '/resume', { requestId }, { ...options, throwOnUnauthorized: true }) }

@@ -1,4 +1,4 @@
-import { http, HttpError } from "./http";
+import { http, HttpError, type HttpOptions } from "./http";
 import { kubernetesDiagnosticKeys } from "../utils/kubernetesDiagnostic";
 
 export interface KubeExecutor {
@@ -69,6 +69,8 @@ export interface KubeGrantInput {
   enabled: boolean;
 }
 export interface KubeGrant extends KubeGrantInput {
+  /** Server-derived authorization scope; never submitted as input. */
+  environmentId?: string;
   id: string;
   connectionId: string;
   revision: number;
@@ -95,6 +97,7 @@ export interface KubeReceipt {
   reason?: string;
 }
 export interface KubeOperation {
+  canManage: boolean;
   id: string;
   runId: string;
   nodeId: string;
@@ -125,14 +128,24 @@ async function call<T>(
   path: string,
   body?: unknown,
   signal?: AbortSignal,
+  context?: HttpOptions,
 ): Promise<T> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   const timer = setTimeout(abort, method === "GET" ? 20000 : 90000);
   signal?.addEventListener("abort", abort, { once: true });
   if (signal?.aborted) abort();
-  const options = { signal: controller.signal, throwOnUnauthorized: true };
+  const scopeAbort = () => controller.abort();
+  context?.signal?.addEventListener("abort", scopeAbort, { once: true });
+  if (context?.signal?.aborted) scopeAbort();
+  const options = {
+    ...context,
+    signal: controller.signal,
+    throwOnUnauthorized: true,
+  };
   try {
+    if (controller.signal.aborted)
+      throw new DOMException("Request cancelled", "AbortError");
     if (method === "GET") return await http.get<T>(path, options);
     if (method === "POST") return await http.post<T>(path, body, options);
     if (method === "PATCH") return await http.patch<T>(path, body, options);
@@ -144,6 +157,7 @@ async function call<T>(
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", abort);
+    context?.signal?.removeEventListener("abort", scopeAbort);
   }
 }
 export interface KubeResourceID {
@@ -198,6 +212,7 @@ export interface KubeReleaseHealth {
   }[];
 }
 export interface KubeRelease {
+  canManage: boolean;
   id: string;
   runId: string;
   nodeKey: string;
@@ -240,17 +255,19 @@ const connectionRelease = (key: string) => base + "/connections/" + id(key);
 const releasePath = (row: Pick<KubeRelease, "runId" | "id">) =>
   "/api/runs/" + id(row.runId) + "/kubernetes/releases/" + id(row.id);
 export const kubeAPI = {
-  releaseProfile: (key: string, signal?: AbortSignal) =>
+  releaseProfile: (key: string, signal?: AbortSignal, context?: HttpOptions) =>
     call<KubeReleaseProfile>(
       "GET",
       connectionRelease(key) + "/release-profile",
       undefined,
       signal,
+      context,
     ),
   saveReleaseProfile: (
     key: string,
     profile: KubeReleaseProfile,
     signal?: AbortSignal,
+    context?: HttpOptions,
   ) =>
     call<KubeReleaseProfile>(
       "PUT",
@@ -261,13 +278,15 @@ export const kubeAPI = {
         profile: profile.profile,
       },
       signal,
+      context,
     ),
-  releaseGrants: (key: string, signal?: AbortSignal) =>
+  releaseGrants: (key: string, signal?: AbortSignal, context?: HttpOptions) =>
     call<KubeReleaseGrant[]>(
       "GET",
       connectionRelease(key) + "/release-grants",
       undefined,
       signal,
+      context,
     ),
   saveReleaseGrant: (
     key: string,
@@ -275,6 +294,7 @@ export const kubeAPI = {
     grantId?: string,
     revision = 0,
     signal?: AbortSignal,
+    context?: HttpOptions,
   ) =>
     call<KubeReleaseGrant>(
       grantId ? "PATCH" : "POST",
@@ -283,33 +303,44 @@ export const kubeAPI = {
         (grantId ? "/" + id(grantId) : ""),
       { ...row, expectedRevision: revision },
       signal,
+      context,
     ),
   deleteReleaseGrant: (
     key: string,
     row: KubeReleaseGrant,
     signal?: AbortSignal,
+    context?: HttpOptions,
   ) =>
     call(
       "DELETE",
       connectionRelease(key) + "/release-grants/" + id(row.id),
       { expectedRevision: row.revision },
       signal,
+      context,
     ),
   releaseOptions: (
     key: string,
     input: { projectId: string; environment: string; executor: KubeExecutor },
     signal?: AbortSignal,
+    context?: HttpOptions,
   ) =>
     call<{
       version: 2;
       resources: KubeReleaseAccess[];
       profile: KubeReleaseProfile;
       requireApproval: boolean;
-    }>("POST", connectionRelease(key) + "/release-options", input, signal),
+    }>(
+      "POST",
+      connectionRelease(key) + "/release-options",
+      input,
+      signal,
+      context,
+    ),
   releaseCapabilities: (
     key: string,
     input: { projectId: string; environment: string; executor: KubeExecutor },
     signal?: AbortSignal,
+    context?: HttpOptions,
   ) =>
     call<
       {
@@ -327,110 +358,165 @@ export const kubeAPI = {
         };
         authorized: boolean;
       }[]
-    >("POST", connectionRelease(key) + "/release-capabilities", input, signal),
-  releases: (run: string, signal?: AbortSignal) =>
+    >(
+      "POST",
+      connectionRelease(key) + "/release-capabilities",
+      input,
+      signal,
+      context,
+    ),
+  releases: (run: string, signal?: AbortSignal, context?: HttpOptions) =>
     call<KubeRelease[]>(
       "GET",
       "/api/runs/" + id(run) + "/kubernetes/releases",
       undefined,
       signal,
+      context,
     ),
-  release: (row: Pick<KubeRelease, "runId" | "id">, signal?: AbortSignal) =>
-    call<KubeRelease>("GET", releasePath(row), undefined, signal),
+  release: (
+    row: Pick<KubeRelease, "runId" | "id">,
+    signal?: AbortSignal,
+    context?: HttpOptions,
+  ) => call<KubeRelease>("GET", releasePath(row), undefined, signal, context),
   releaseAction: (
     row: KubeRelease,
     action: "continue" | "reconcile" | "cleanup",
     signal?: AbortSignal,
+    context?: HttpOptions,
   ) =>
     call<unknown>(
       "POST",
       releasePath(row) + "/" + action,
       { expectedRevision: row.revision, planId: row.preview.planId },
       signal,
+      context,
     ),
   rollbackRequest: (
     row: KubeRelease,
     requestId: string,
     signal?: AbortSignal,
+    context?: HttpOptions,
   ) =>
     call<{ runId: string; release: KubeRelease }>(
       "GET",
       releasePath(row) + "/rollback-requests/" + id(requestId),
       undefined,
       signal,
+      context,
     ),
   rollbackRelease: (
     row: KubeRelease,
     requestId: string,
     signal?: AbortSignal,
+    context?: HttpOptions,
   ) =>
     call<{ runId: string; release: KubeRelease }>(
       "POST",
       releasePath(row) + "/rollback",
       { expectedRevision: row.revision, planId: row.preview.planId, requestId },
       signal,
+      context,
     ),
-  credentials: (signal?: AbortSignal) =>
-    call<KubeCredential[]>("GET", base + "/credentials", undefined, signal),
-  preview: (input: KubeCredentialInput, signal?: AbortSignal) =>
-    call<KubePreview>("POST", base + "/credentials/preview", input, signal),
+  credentials: (signal?: AbortSignal, context?: HttpOptions) =>
+    call<KubeCredential[]>(
+      "GET",
+      base + "/credentials",
+      undefined,
+      signal,
+      context,
+    ),
+  preview: (
+    input: KubeCredentialInput & { credentialId?: string },
+    signal?: AbortSignal,
+    context?: HttpOptions,
+  ) =>
+    call<KubePreview>(
+      "POST",
+      base + "/credentials/preview",
+      input,
+      signal,
+      context,
+    ),
   saveCredential: (
     key: string | undefined,
     revision: number,
     input: KubeCredentialInput,
     signal?: AbortSignal,
+    context?: HttpOptions,
   ) =>
     call<KubeCredential>(
       key ? "PATCH" : "POST",
       base + "/credentials" + (key ? "/" + id(key) : ""),
       { ...input, expectedRevision: revision },
       signal,
+      context,
     ),
   enableCredential: (
     row: KubeCredential,
     enabled: boolean,
     signal?: AbortSignal,
+    context?: HttpOptions,
   ) =>
     call<KubeCredential>(
       "POST",
       base + "/credentials/" + id(row.id) + "/enabled",
       { expectedRevision: row.revision, enabled },
       signal,
+      context,
     ),
-  deleteCredential: (row: KubeCredential, signal?: AbortSignal) =>
+  deleteCredential: (
+    row: KubeCredential,
+    signal?: AbortSignal,
+    context?: HttpOptions,
+  ) =>
     call(
       "DELETE",
       base + "/credentials/" + id(row.id),
       { expectedRevision: row.revision },
       signal,
+      context,
     ),
-  connections: (signal?: AbortSignal) =>
-    call<KubeConnection[]>("GET", base + "/connections", undefined, signal),
+  connections: (signal?: AbortSignal, context?: HttpOptions) =>
+    call<KubeConnection[]>(
+      "GET",
+      base + "/connections",
+      undefined,
+      signal,
+      context,
+    ),
   saveConnection: (
     key: string | undefined,
     revision: number,
     input: KubeConnectionInput,
     signal?: AbortSignal,
+    context?: HttpOptions,
   ) =>
     call<KubeConnection>(
       key ? "PATCH" : "POST",
       base + "/connections" + (key ? "/" + id(key) : ""),
       { ...input, expectedRevision: revision },
       signal,
+      context,
     ),
-  deleteConnection: (row: KubeConnection, signal?: AbortSignal) =>
+  deleteConnection: (
+    row: KubeConnection,
+    signal?: AbortSignal,
+    context?: HttpOptions,
+  ) =>
     call(
       "DELETE",
       base + "/connections/" + id(row.id),
       { expectedRevision: row.revision },
       signal,
+      context,
     ),
-  grants: (connection: string, signal?: AbortSignal) =>
+  grants: (connection: string, signal?: AbortSignal, context?: HttpOptions) =>
     call<KubeGrant[]>(
       "GET",
       base + "/connections/" + id(connection) + "/grants",
       undefined,
       signal,
+      context,
     ),
   saveGrant: (
     connection: string,
@@ -438,6 +524,7 @@ export const kubeAPI = {
     revision: number,
     input: KubeGrantInput,
     signal?: AbortSignal,
+    context?: HttpOptions,
   ) =>
     call<KubeGrant>(
       key ? "PATCH" : "POST",
@@ -448,37 +535,48 @@ export const kubeAPI = {
         (key ? "/" + id(key) : ""),
       { ...input, expectedRevision: revision },
       signal,
+      context,
     ),
-  deleteGrant: (connection: string, row: KubeGrant, signal?: AbortSignal) =>
+  deleteGrant: (
+    connection: string,
+    row: KubeGrant,
+    signal?: AbortSignal,
+    context?: HttpOptions,
+  ) =>
     call(
       "DELETE",
       base + "/connections/" + id(connection) + "/grants/" + id(row.id),
       { expectedRevision: row.revision },
       signal,
+      context,
     ),
   probe: (
     connection: string,
     grantId: string,
     container: string,
     signal?: AbortSignal,
+    context?: HttpOptions,
   ) =>
     call<KubeReceipt>(
       "POST",
       base + "/connections/" + id(connection) + "/probe",
       { grantId, container },
       signal,
+      context,
     ),
-  operations: (run: string, signal?: AbortSignal) =>
+  operations: (run: string, signal?: AbortSignal, context?: HttpOptions) =>
     call<KubeOperation[]>(
       "GET",
       "/api/runs/" + id(run) + "/kubernetes/operations",
       undefined,
       signal,
+      context,
     ),
   observe: (
     row: KubeOperation,
     action: "reconcile" | "retire",
     signal?: AbortSignal,
+    context?: HttpOptions,
   ) =>
     call<KubeOperation>(
       "POST",
@@ -490,13 +588,19 @@ export const kubeAPI = {
         action,
       { expectedRevision: row.revision },
       signal,
+      context,
     ),
-  reauth: (currentPassword: string, signal?: AbortSignal) =>
+  reauth: (
+    currentPassword: string,
+    signal?: AbortSignal,
+    context?: HttpOptions,
+  ) =>
     call<{ reauthenticatedUntil: string }>(
       "POST",
       "/api/account/reauth",
       { currentPassword },
       signal,
+      context,
     ),
 };
 const errors: Record<string, string> = {
@@ -518,7 +622,12 @@ const errors: Record<string, string> = {
   locked_out: "passwordInvalid",
 };
 export function kubeError(error: unknown, mutation = false): string {
-  if(error instanceof HttpError && error.apiError?.code && kubernetesDiagnosticKeys[error.apiError.code]) return kubernetesDiagnosticKeys[error.apiError.code];
+  if (
+    error instanceof HttpError &&
+    error.apiError?.code &&
+    kubernetesDiagnosticKeys[error.apiError.code]
+  )
+    return kubernetesDiagnosticKeys[error.apiError.code];
   if (
     error instanceof HttpError &&
     error.apiError?.code &&
@@ -529,6 +638,9 @@ export function kubeError(error: unknown, mutation = false): string {
 }
 export function kubeUnknownWrite(error: unknown): boolean {
   return (
-    !(error instanceof HttpError) || error.status === 0 || error.status === 408 || error.status >= 500
+    !(error instanceof HttpError) ||
+    error.status === 0 ||
+    error.status === 408 ||
+    error.status >= 500
   );
 }

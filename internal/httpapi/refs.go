@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -49,11 +48,10 @@ func makeListRefsHandler(projects project.Service, v vault.Vault, lister RefsLis
 		id := chi.URLParam(r, "id")
 		proj, err := projects.Get(r.Context(), id)
 		if err != nil {
-			if errors.Is(err, project.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "project_not_found", "项目不存在")
-				return
-			}
-			writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
+			writeProjectError(w, err)
+			return
+		}
+		if !recheckRepositoryRead(w, r.Context(), projects, v, proj) {
 			return
 		}
 
@@ -68,6 +66,9 @@ func makeListRefsHandler(projects project.Service, v vault.Vault, lister RefsLis
 		refs, lerr := lister.ListRefs(r.Context(), proj.RepoURL, username, token)
 		token = "" //nolint:ineffassign // 尽早清明文引用
 		_ = token
+		if !recheckRepositoryRead(w, r.Context(), projects, v, proj) {
+			return
+		}
 		if lerr != nil {
 			// 错误体不含凭据明文(repocache 错误为干净领域错误)。
 			writeError(w, http.StatusBadGateway, "refs_unavailable", "无法读取仓库分支(仓库不可达或凭据无效)")
@@ -104,11 +105,10 @@ func makeListCommitsHandler(projects project.Service, v vault.Vault, lister Refs
 		id := chi.URLParam(r, "id")
 		proj, err := projects.Get(r.Context(), id)
 		if err != nil {
-			if errors.Is(err, project.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "project_not_found", "项目不存在")
-				return
-			}
-			writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
+			writeProjectError(w, err)
+			return
+		}
+		if !recheckRepositoryRead(w, r.Context(), projects, v, proj) {
 			return
 		}
 		ref := strings.TrimSpace(r.URL.Query().Get("ref"))
@@ -131,6 +131,9 @@ func makeListCommitsHandler(projects project.Service, v vault.Vault, lister Refs
 		commits, lerr := lister.ListCommits(r.Context(), proj.RepoURL, username, token, ref, limit)
 		token = ""
 		_ = token
+		if !recheckRepositoryRead(w, r.Context(), projects, v, proj) {
+			return
+		}
 		if lerr != nil {
 			writeError(w, http.StatusBadGateway, "commits_unavailable", "无法读取仓库提交(仓库不可达或凭据无效)")
 			return
@@ -144,4 +147,16 @@ func makeListCommitsHandler(projects project.Service, v vault.Vault, lister Refs
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"commits": out})
 	}
+}
+
+func recheckRepositoryRead(w http.ResponseWriter, ctx context.Context, projects project.Service, v vault.Vault, p *project.Project) bool {
+	if err := recheckProjectSource(ctx, projects, p); err != nil {
+		writeProjectError(w, err)
+		return false
+	}
+	if err := vault.AuthorizeUse(ctx, v, p.CredentialID); err != nil {
+		writeVaultError(w, err)
+		return false
+	}
+	return true
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/notify"
 	"github.com/huangchengsir/pipewright/internal/run"
 	"github.com/huangchengsir/pipewright/internal/runretry"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // NewNotifyHook 把 run.Service + notify.Service 适配为 run.WorkerPool 的 best-effort 通知钩子
@@ -54,6 +55,9 @@ func NewNotifyHook(runs run.Service, notifySvc notify.Service, secretSrc *RunSec
 			durationMs                                           int64
 		)
 		if r, err := runs.Get(hookCtx, runID); err != nil {
+			if tenancy.HasAuthorizationContext(hookCtx) {
+				return
+			}
 			log.Printf("[notify] run %s: failed to load run metadata (using fallback vars): %v", runID, err)
 		} else {
 			projectID = r.ProjectID
@@ -63,7 +67,11 @@ func NewNotifyHook(runs run.Service, notifySvc notify.Service, secretSrc *RunSec
 			durationMs = runDurationMs(r)
 			// errorSummary 出网脱敏(红线修):先用该 run 真实凭据 Masker 替换(项目/registry/secret
 			// 变量的明文),再过 notify 的关键字/形态正则兜底——双层确保通知正文绝无明文凭据。
-			errorSummary = maskerFor(hookCtx, secretSrc, runID).Scrub(notify.SummarizeFailure(r.FailureLog))
+			registered := maskerFor(hookCtx, secretSrc, runID)
+			if registered.IsBlocked() {
+				return
+			}
+			errorSummary = registered.Scrub(notify.SummarizeFailure(r.FailureLog))
 		}
 
 		vars := notify.TemplateVars{

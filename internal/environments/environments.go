@@ -20,8 +20,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/kubernetes"
 	"github.com/huangchengsir/pipewright/internal/runretry"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"sort"
 	"strings"
 )
@@ -81,9 +83,10 @@ type Deployment struct {
 
 // EnvironmentTimeline 是某环境的部署时间线(最近在前)。
 type EnvironmentTimeline struct {
-	Environment string       `json:"environment"`
-	Active      *Deployment  `json:"active"`      // 当前活跃版本(最近一次全成功);无则 nil
-	Deployments []Deployment `json:"deployments"` // 最近 N 次(按部署时间降序)
+	EnvironmentID string       `json:"environmentId,omitempty"`
+	Environment   string       `json:"environment"`
+	Active        *Deployment  `json:"active"`      // 当前活跃版本(最近一次全成功);无则 nil
+	Deployments   []Deployment `json:"deployments"` // 最近 N 次(按部署时间降序)
 }
 
 // Service 是环境部署历史的只读聚合 + 回滚定位领域接口。
@@ -127,7 +130,11 @@ func (s *Service) ListEnvironments(ctx context.Context, projectID string, limit 
 		if len(deps) > limit {
 			deps = deps[:limit]
 		}
-		out = append(out, EnvironmentTimeline{Environment: env, Active: active, Deployments: deps})
+		identity, err := s.environmentIdentity(ctx, projectID, env)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, EnvironmentTimeline{EnvironmentID: identity, Environment: env, Active: active, Deployments: deps})
 	}
 	return out, nil
 }
@@ -166,7 +173,23 @@ type RollbackTarget struct {
 //
 // 本方法只**定位**,不执行;回滚执行(重发上一个产物到原目标机)由 httpapi 层经注入的
 // deploy.Service.Deploy 完成,复用既有部署链路(健康门控 / 多机扇出 / 失败诊断全复用)。
+type RollbackExpectation struct {
+	CurrentRunID string `json:"expectedCurrentRunId"`
+	TargetRunID  string `json:"expectedTargetRunId"`
+}
+
+var ErrRollbackChanged = errors.New("environments: rollback target changed; refresh and confirm again")
+
 func (s *Service) ResolveRollback(ctx context.Context, projectID, env string) (RollbackTarget, error) {
+	return s.ResolveRollbackExpected(ctx, projectID, env, nil)
+}
+
+// ResolveRollbackExpected validates and returns the same resolved target before any deployment side effect.
+// It does not lock the environment against concurrent deployments.
+func (s *Service) ResolveRollbackExpected(ctx context.Context, projectID, env string, expected *RollbackExpectation) (RollbackTarget, error) {
+	if err := tenancy.CheckEnvironmentName(ctx, s.db, "release.rollback", projectID, strings.TrimSpace(env)); err != nil {
+		return RollbackTarget{}, err
+	}
 	tl, err := s.EnvironmentHistory(ctx, projectID, env, defaultHistoryLimit)
 	if err != nil {
 		return RollbackTarget{}, err
@@ -204,6 +227,9 @@ func (s *Service) ResolveRollback(ctx context.Context, projectID, env string) (R
 			rt.ArtifactID = art.ID
 			rt.Artifact = art
 		}
+		if expected != nil && (expected.CurrentRunID != rt.CurrentRunID || expected.TargetRunID != rt.RunID) {
+			return RollbackTarget{}, ErrRollbackChanged
+		}
 		return rt, nil
 	}
 	return RollbackTarget{}, ErrNoRollbackTarget
@@ -223,8 +249,13 @@ func pickDeployableArtifact(arts []Artifact) Artifact {
 
 // assertProject 校验项目存在(项目不存在 → ErrProjectNotFound)。
 func (s *Service) assertProject(ctx context.Context, projectID string) error {
+	predicate, err := tenancy.EnvironmentPredicate(ctx, s.db, "environment.read", "p.id", "")
+	if err != nil {
+		return err
+	}
 	var one int
-	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM projects WHERE id = ?`, strings.TrimSpace(projectID)).Scan(&one)
+	args := append([]any{strings.TrimSpace(projectID)}, predicate.Args...)
+	err = configstate.Queryer(ctx, s.db).QueryRowContext(ctx, `SELECT 1 FROM projects p WHERE p.id = ? AND `+predicate.SQL, args...).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrProjectNotFound
 	}
@@ -306,4 +337,47 @@ func (s *Service) WithKubernetes(k *kubernetes.Service, h func(context.Context, 
 	s.kubernetes = k
 	s.kubernetesHistory = h
 	return s
+}
+
+// ProjectChoice exposes only labels for projects having an authorized environment.
+// It does not require the independent project configuration inspection action.
+type ProjectChoice struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+func (s *Service) ProjectChoices(ctx context.Context) ([]ProjectChoice, error) {
+	predicate, err := tenancy.EnvironmentPredicate(ctx, s.db, "environment.read", "p.id", "")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx, `SELECT p.id,p.name FROM projects p WHERE `+predicate.SQL+` ORDER BY p.name,p.id`, predicate.Args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ProjectChoice{}
+	for rows.Next() {
+		var v ProjectChoice
+		if err = rows.Scan(&v.ID, &v.Name); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+func (s *Service) environmentIdentity(ctx context.Context, project, name string) (string, error) {
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "environment.read", "e.id")
+	if err != nil {
+		return "", err
+	}
+	if predicate.SQL == "1=1" {
+		return "", nil
+	}
+	var id string
+	err = configstate.Queryer(ctx, s.db).QueryRowContext(ctx, `SELECT e.id FROM access_environments e WHERE e.project_id=? AND e.name=? AND `+predicate.SQL, append([]any{project, name}, predicate.Args...)...).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrEnvNotFound
+	}
+	return id, err
 }

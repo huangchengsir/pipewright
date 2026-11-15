@@ -314,6 +314,7 @@ type sessionBody struct {
 	Named     bool
 }
 type runBody struct {
+	ClientRequestID     string
 	Provider            ProviderInfo
 	AnalysisAuthorized  bool
 	AnalysisStarted     bool
@@ -340,6 +341,7 @@ type callBody struct {
 	Snapshot      target.ConnectionSnapshot
 }
 type approvalBody struct {
-	Nonce string
-	Calls []BoundCall
+	ActorBinding string
+	Nonce        string
+	Calls        []BoundCall
 }

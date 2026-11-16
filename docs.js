@@ -17,12 +17,24 @@ function filterSections() {
 
 searchBox.hidden = false;
 search.addEventListener('input', filterSections);
-document.querySelectorAll('.sidebar a').forEach(link => link.addEventListener('click', () => {
+const sectionLinks = [...document.querySelectorAll('.sidebar a[href^="#"]')];
+
+function updateCurrentSection() {
+  const hash = window.location.hash || '#quickstart';
+  sectionLinks.forEach(link => {
+    if (link.hash === hash) link.setAttribute('aria-current', 'location');
+    else link.removeAttribute('aria-current');
+  });
+}
+
+updateCurrentSection();
+sectionLinks.forEach(link => link.addEventListener('click', () => {
   if (!search.value) return;
   search.value = '';
   filterSections();
 }));
 window.addEventListener('hashchange', () => {
+  updateCurrentSection();
   if (!search.value) return;
   search.value = '';
   filterSections();

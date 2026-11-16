@@ -6,48 +6,75 @@
   <meta name="description" content="Pipewright 是开源自托管 CI/CD 平台，将可视化流水线、容器构建、部署和发布护航集中在同一个实例。">
   <title>Pipewright · 自托管 CI/CD</title>
   <link rel="stylesheet" href="./style.css">
+  <script src="./showcase.js" defer></script>
 </head>
-<body>
+<body class="home">
 <a class="skip" href="#main">跳到主内容</a>
 <header class="header">
   <div class="wrap header-inner">
-    <a class="brand" href="./" aria-label="Pipewright 首页"><span class="mark" aria-hidden="true">›_</span>Pipewright</a>
+    <a class="brand" href="./" aria-label="Pipewright 首页"><span class="mark" aria-hidden="true"></span>Pipewright</a>
     <nav aria-label="主导航">
       <a href="./docs/v2.4.0/#quickstart">快速开始</a>
       <a href="./docs/v2.4.0/">文档</a>
-      <a href="https://github.com/huangchengsir/pipewright">GitHub <span aria-hidden="true">↗</span></a>
+      <a class="github-link" href="https://github.com/huangchengsir/pipewright">GitHub <span aria-hidden="true">↗</span></a>
     </nav>
   </div>
 </header>
 <main id="main">
-  <section class="hero wrap">
-    <div class="hero-text">
-      <div class="eyebrow"><span></span> 开源 · 自托管 CI/CD</div>
-      <h1><span class="hero-line">从代码提交</span><span class="hero-line">到服务上线<span class="blue">。</span></span></h1>
-      <p class="lead">用可视化流水线组织构建、测试和部署。在同一个界面查看节点日志、制品与发布结果。</p>
-      <div class="actions">
-        <a class="button primary" href="./docs/v2.4.0/#quickstart">快速开始 <span aria-hidden="true">→</span></a>
-        <a class="button secondary" href="https://github.com/huangchengsir/pipewright/releases/tag/v2.4.0">下载 v2.4.0 <span aria-hidden="true">↗</span></a>
+  <section class="hero">
+    <div class="wrap hero-inner">
+      <div class="hero-copy">
+        <p class="eyebrow"><span></span>开源自托管 CI/CD</p>
+        <h1><span>从提交到上线</span><span>每一步都看得见</span></h1>
+        <p class="lead">在同一个实例编排构建、测试和部署，追踪节点日志、制品与发布结果。</p>
+        <div class="actions">
+          <a class="button primary" href="./docs/v2.4.0/#quickstart">快速开始 <span aria-hidden="true">→</span></a>
+          <a class="button secondary" href="https://github.com/huangchengsir/pipewright/releases/tag/v2.4.0">下载 v2.4.0 <span aria-hidden="true">↗</span></a>
+        </div>
       </div>
-      <p class="platforms">Linux / macOS / Windows <span aria-hidden="true">·</span> 单二进制及容器镜像</p>
-    </div>
-    <figure class="preview">
-      <div class="preview-bar"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><span>Pipewright / 流水线画布</span></div>
-      <img src="./assets/pipeline.png" alt="Pipewright 界面中的可视化流水线画布与节点连接" fetchpriority="high">
-    </figure>
-  </section>
-  <section class="feature-band">
-    <div class="wrap">
-      <h2>从编排到运维</h2>
-      <div class="features">
-        <article><h3>可视化流水线</h3><p>在画布上配置任务与依赖，或将流水线写进仓库。失败时定位具体节点并查看日志。</p><a href="./docs/v2.4.0/#pipeline">查看 YAML 示例 <span aria-hidden="true">→</span></a></article>
-        <article><h3>部署与发布护航</h3><p>通过 SSH 或 Kubernetes 发布，在发布后查看部署结果，并通过护航报告追踪相关变更。</p><a href="./docs/v2.4.0/#deploy">查看部署方式 <span aria-hidden="true">→</span></a></article>
-        <article><h3>自托管与团队权限</h3><p>在自己的实例管理流水线和凭据。需要多人协作时，可以启用团队模式并按角色授权。</p><a href="./docs/v2.4.0/#config">查看实例配置 <span aria-hidden="true">→</span></a></article>
+      <div class="showcase" aria-label="真实产品界面">
+        <div class="showcase-bar">
+          <span class="showcase-title">产品预览</span>
+          <div class="showcase-tabs" role="tablist" aria-label="产品界面" hidden>
+            <button role="tab" id="tab-pipeline" aria-controls="shot-pipeline" aria-selected="true" type="button">流水线</button>
+            <button role="tab" id="tab-run" aria-controls="shot-run" aria-selected="false" tabindex="-1" type="button">运行详情</button>
+            <button role="tab" id="tab-dashboard" aria-controls="shot-dashboard" aria-selected="false" tabindex="-1" type="button">工作台</button>
+          </div>
+        </div>
+        <div class="showcase-shots">
+          <figure id="shot-pipeline" data-shot>
+            <img src="./assets/pipeline.png" alt="横向排列的流水线阶段，包含源码、构建、部署和通知节点" fetchpriority="high">
+          </figure>
+          <figure id="shot-run" data-shot hidden>
+            <img src="./assets/run-detail.png" alt="流水线运行详情，包含运行结果和各阶段执行状态" loading="lazy">
+          </figure>
+          <figure id="shot-dashboard" data-shot hidden>
+            <img src="./assets/dashboard.png" alt="Pipewright 工作台，包括运行状态和最近记录" loading="lazy">
+          </figure>
+        </div>
       </div>
     </div>
   </section>
-  <section class="wrap bottom-cta"><div><h2>跑通第一条流水线</h2><p>安装实例、连接仓库、运行脚本，再到节点里查看输出。</p></div><a class="button primary" href="./docs/v2.4.0/#quickstart">打开安装指南 <span aria-hidden="true">→</span></a></section>
+  <section class="workflows wrap">
+    <div class="workflow-heading">
+      <h2>把流水线、发布<br class="wide-only">和运维连起来。</h2>
+      <p>从项目的第一条流水线开始，按需配置发布目标、凭据和团队权限。</p>
+    </div>
+    <div class="workflow-list">
+      <article><h3>可视化编排</h3><p>在画布配置任务与依赖，或将 YAML 提交到仓库。失败时定位具体节点并查看日志。</p><a href="./docs/v2.4.0/#pipeline">查看 YAML 示例 <span aria-hidden="true">↗</span></a></article>
+      <article><h3>部署与发布护航</h3><p>用 SSH 或 Kubernetes 发布，核对实际部署版本，再在护航报告中追踪结果与相关变更。</p><a href="./docs/v2.4.0/#deploy">查看部署方式 <span aria-hidden="true">↗</span></a></article>
+      <article><h3>自托管与团队权限</h3><p>在自己的实例管理流水线和凭据。需要协作时，可以开启团队模式并按角色授权。</p><a href="./docs/v2.4.0/#config">查看实例配置 <span aria-hidden="true">↗</span></a></article>
+    </div>
+  </section>
+  <section class="wrap next-step">
+    <div><h2>跑通第一条流水线</h2><p>从启动实例到在节点日志中看到第一条输出。</p></div>
+    <a class="button primary" href="./docs/v2.4.0/#quickstart">打开安装指南 <span aria-hidden="true">→</span></a>
+  </section>
 </main>
-<footer><div class="wrap footer-inner"><a class="brand" href="./"><span class="mark" aria-hidden="true">›_</span>Pipewright</a><a href="https://github.com/huangchengsir/pipewright/issues">反馈问题 ↗</a><a href="https://github.com/huangchengsir/pipewright/blob/v2.4.0/LICENSE">MIT ↗</a></div></footer>
+<footer><div class="wrap footer-inner">
+  <a class="brand" href="./"><span class="mark" aria-hidden="true"></span>Pipewright</a>
+  <a href="https://github.com/huangchengsir/pipewright/issues">反馈问题 ↗</a>
+  <a href="https://github.com/huangchengsir/pipewright/blob/v2.4.0/LICENSE">MIT 许可证 ↗</a>
+</div></footer>
 </body>
 </html>

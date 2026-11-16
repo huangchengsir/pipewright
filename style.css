@@ -40,6 +40,9 @@ a:focus-visible, button:focus-visible, input:focus-visible, [role="tabpanel"]:fo
 .skip:focus { transform: none; }
 
 .header { background: var(--surface); border-bottom: 1px solid var(--line); color: var(--ink); }
+.docs-page { --header-height: 67px; scroll-padding-top: var(--header-height); }
+.docs-page .header { position: sticky; top: 0; z-index: 5; }
+.docs-page .skip { position: fixed; }
 .header-inner { min-height: 66px; display: flex; align-items: center; justify-content: space-between; gap: 10px 20px; flex-wrap: wrap; padding-block: 6px; }
 .brand { display: inline-flex; align-items: center; gap: 9px; color: inherit; font-size: 19px; font-weight: 760; line-height: 1; letter-spacing: -.045em; min-height: 44px; }
 .brand:hover { text-decoration: none; }
@@ -68,11 +71,17 @@ a:focus-visible, button:focus-visible, input:focus-visible, [role="tabpanel"]:fo
 .showcase { max-width: 1030px; margin: 34px auto 0; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: 0 17px 47px var(--shadow-color); overflow: hidden; }
 .showcase-bar { display: flex; justify-content: center; align-items: center; padding: 5px 7px; gap: 10px; color: var(--muted); }
 .showcase-title { display: none; }
+.showcase-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px; }
 .showcase-tabs { display: flex; flex-wrap: wrap; gap: 3px; }
 .showcase-tabs button { cursor: pointer; border: 1px solid transparent; background: transparent; color: var(--muted); padding: 4px 11px; min-height: 44px; font-size: 13px; font-weight: 650; border-radius: 6px; }
 .showcase-tabs button[aria-selected="true"] { color: var(--accent-text); background: var(--soft); border-color: var(--line); }
 .showcase-tabs button:hover { color: var(--ink); }
 .showcase-tabs button:focus-visible { outline-offset: -2px; }
+.showcase-rotation { display: grid; place-items: center; flex: 0 0 44px; width: 44px; height: 44px; margin-left: 3px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.showcase-rotation:hover { background: var(--raised); color: var(--ink); }
+.showcase-rotation:focus-visible { outline-offset: -2px; }
+.showcase-rotation::before { content: ""; width: 10px; height: 12px; border-inline: 3px solid currentColor; }
+.showcase-rotation[data-paused]::before { width: 0; height: 0; border: 6px solid transparent; border-right: 0; border-left: 9px solid currentColor; }
 .showcase-shots { padding: 0 6px 6px; }
 .showcase-shots figure { aspect-ratio: 2.44; display: grid; place-items: start center; overflow: hidden; background: var(--raised); border: 1px solid var(--line); border-radius: 8px; }
 .showcase-shots figure:focus-visible { outline-offset: -3px; }
@@ -140,9 +149,10 @@ th { background: var(--soft); white-space: nowrap; }
   .workflows { grid-template-columns: minmax(210px, 1fr) minmax(0, 1.65fr); gap: 38px; padding-block: 66px 52px; }
   .next-step { flex-direction: row; align-items: center; padding: 26px 32px; }
   .docs-grid { grid-template-columns: 174px minmax(0, 1fr); align-items: start; gap: 24px; padding-top: 43px; }
-  .sidebar { position: sticky; top: 20px; display: grid; gap: 3px; }
+  .sidebar { position: sticky; top: calc(var(--header-height) + 20px); max-height: calc(100dvh - var(--header-height) - 40px); overflow: auto; display: grid; gap: 3px; }
 }
 @media (min-width: 1000px) {
+  .docs-page { --header-height: 73px; }
   .header-inner { min-height: 72px; }
   .hero { padding-block: 63px 56px; }
   .wide-only { display: inline; }

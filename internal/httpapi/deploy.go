@@ -336,6 +336,9 @@ func makeAbortDeployHandler(svc deploy.Service, runSvc run.Service) http.Handler
 // writeDeployError 把部署定位类错误映射为契约错误码 / 状态码(绝不回显明文 / 私钥 / 口令 / 栈)。
 // 执行类失败由 deploy.Deploy 内化为每机 failed,不走此路径(整体 200)。
 func writeDeployError(w http.ResponseWriter, err error) {
+	if writeAuthorizationError(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, deploy.ErrInvalidLocalDockerConfig):
 		writeError(w, http.StatusUnprocessableEntity, "invalid_local_docker_config", "本地 Docker 部署配置无效；请检查归档、容器参数、构建路径及脚本冲突")

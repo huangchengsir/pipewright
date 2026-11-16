@@ -1,4 +1,15 @@
 export default {
+  "memberAccountTitle": "{provider} 帳號綁定",
+  "viewAvailability": "查看說明",
+  "memberUnavailableTitle": "尚未開放登入",
+  "memberPausedTitle": "登入已暫停",
+  "memberUnconfiguredHint": "管理員尚未設定 {provider} 登入。設定並啟用後，你可以在這裡綁定自己的帳號。",
+  "memberDisabledHint": "管理員已暫停 {provider} 登入。重新啟用後即可綁定；既有綁定會保留。",
+  "memberHint": "管理員設定平台後，你可以綁定自己的帳號。綁定與解除綁定只影響本人。",
+  "manageBinding": "管理綁定",
+  "memberBindingHint": "請核對傳回的帳號。確認後只綁定到目前的員工帳號，不變更全站登入設定。",
+  "confirmPersonalBind": "確認綁定",
+
   "section": "第三方登入",
   "sectionHint": "使用已綁定的帳號登入。入口顯示與登入啟用分開管理。",
   "alternate": "其他登入方式",

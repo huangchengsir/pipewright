@@ -1,4 +1,8 @@
 export default {
+  monitoringReady: "Monitoring autorisiert",
+  monitoringRequired: "Monitoring-Autorisierung erforderlich",
+  monitoringHint: "Server speichern oder Ausführungsknoten bestätigen, um feste, schreibgeschützte Messungen zu autorisieren. Die Autorisierung bestätigt nicht den Serverzustand.",
+
   title: 'Server',
   desc: 'Zielserver registrieren (Host / Port / Benutzer + SSH-Anmeldedaten) und Konnektivität testen. SSH-Schlüssel werden nur per Referenz gebunden, über den Tresor verschlüsselt gespeichert und abgerufen und niemals im Klartext gespeichert oder angezeigt. Deployment und Betrieb führen Befehle über diese gemeinsame SSH-Schicht aus.',
   addServer: 'Server registrieren',

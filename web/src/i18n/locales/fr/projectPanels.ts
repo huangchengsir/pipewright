@@ -1,4 +1,5 @@
 export default {
+  automationAuthorization: {"ready": "Déclenchement automatique autorisé", "required": "Nouvelle autorisation requise", "requiredHint": "Les paramètres d’exécution ou les droits ont changé. Un membre autorisé à lancer des exécutions doit enregistrer à nouveau. Le déclenchement automatique reste suspendu jusque-là."},
   // ─── TriggersPanel ──────────────────────────────────────────────────────────
   triggers: {
     retry: '↻ Réessayer',

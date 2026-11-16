@@ -1,4 +1,5 @@
 export default {
+  automationAuthorization: {"ready": "Automatic trigger authorized", "required": "Authorization required", "requiredHint": "Execution settings or permissions have changed. A member with run permission must save again. Automatic triggering remains paused until authorized."},
   // ─── TriggersPanel ──────────────────────────────────────────────────────────
   triggers: {
     retry: '↻ Retry',

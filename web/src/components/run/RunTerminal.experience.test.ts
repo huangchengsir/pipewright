@@ -1,3 +1,7 @@
+import {createPinia,setActivePinia} from 'pinia'
+import {useSessionStore} from '../../stores/session'
+import {beforeEach as beforeIdentity} from 'vitest'
+beforeIdentity(()=>{setActivePinia(createPinia());useSessionStore().setUser({username:'admin',multiTenant:false})})
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import RunTerminal from "./RunTerminal.vue";
@@ -131,7 +135,7 @@ describe("current-source log workbench", () => {
       });
     const w = mount(RunTerminal, { props: { runId: "pages", live: false } });
     await flushPromises();
-    expect(api.logs).toHaveBeenNthCalledWith(2, "pages", 1);
+    expect(api.logs).toHaveBeenNthCalledWith(2, "pages", 1,expect.objectContaining({signal:expect.any(AbortSignal),throwOnUnauthorized:true}));
     expect(w.findAll(".term-line")).toHaveLength(2);
     w.unmount();
   });
@@ -163,13 +167,14 @@ describe("current-source log workbench", () => {
     await buttons(w, '自动换行').trigger('click'); await flushPromises()
     expect((w.find('.term-scroll').element as HTMLElement).scrollTop).toBeGreaterThan(800); expect(w.find('.term-match--active').text()).toBe('abc'); w.unmount()
   })
+  // Large-DOM correctness stress coverage, not a 5-second performance SLA.
   it('renders the complete original Unicode match and caps a million-character search at 2000 marks', async () => {
     api.logs.mockResolvedValue({ lines: [line(1, 1, 'İfoo'), line(2, 1, 'a'.repeat(1000000))], complete: true, nextSeq: 3 })
     const w = mount(RunTerminal, { props: { runId: 'huge', live: false, filterOrdinal: 1 } }); await flushPromises()
     await w.find('input[type=search]').setValue('foo'); await flushPromises(); expect(w.find('.term-match').text()).toBe('foo')
     await w.find('input[type=search]').setValue('a'); await flushPromises()
     expect(w.findAll('mark')).toHaveLength(2000); expect(w.find('.term-search-limit').text()).toContain('2000'); expect(w.find('.term-search-limit').text()).toContain('仅显示前'); w.unmount()
-  })
+  }, 15000)
   it('limits native search input and explains a programmatically overlong pattern', async () => {
     const w = mount(RunTerminal, { props: { runId: 'limited', live: false } }); await flushPromises()
     const input = w.find('input[type=search]'); expect(input.attributes('maxlength')).toBe('200')

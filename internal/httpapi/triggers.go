@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -16,6 +17,7 @@ const webhookURLPrefix = "/api/webhooks/"
 
 // triggerDTO 是触发配置对外响应体(冻结契约;camelCase;密钥仅掩码,绝无明文)。
 type triggerDTO struct {
+	AuthorizationState  string             `json:"authorizationState,omitempty"`
 	WebhookURL          string             `json:"webhookUrl"`
 	WebhookSecretMasked string             `json:"webhookSecretMasked"`
 	Events              eventsDTO          `json:"events"`
@@ -58,8 +60,12 @@ func toTriggerDTO(c *trigger.Config) triggerDTO {
 	if filters == nil {
 		filters = []string{}
 	}
-	return triggerDTO{
-		WebhookURL:          webhookURLPrefix + c.WebhookToken,
+	url := ""
+	if c.WebhookToken != "" {
+		url = webhookURLPrefix + c.WebhookToken
+	}
+	return triggerDTO{AuthorizationState: c.AuthorizationState,
+		WebhookURL:          url,
 		WebhookSecretMasked: c.WebhookSecretMasked,
 		Events: eventsDTO{
 			Push:        c.Events.Push,
@@ -76,6 +82,10 @@ func toTriggerDTO(c *trigger.Config) triggerDTO {
 // writeTriggerError 把领域错误映射为契约错误码/状态码;绝不回显密钥明文/密文/栈。
 func writeTriggerError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, tenancy.ErrForbidden):
+		writeError(w, http.StatusForbidden, "forbidden", "没有操作权限")
+	case errors.Is(err, tenancy.ErrConflict):
+		writeError(w, http.StatusConflict, "conflict", "权限或配置已变化，请刷新后重试")
 	case errors.Is(err, trigger.ErrVaultUnconfigured):
 		writeError(w, http.StatusUnprocessableEntity, "vault_unconfigured", "保险库未配置 master key,无法生成或读取 webhook 签名密钥")
 	case errors.Is(err, trigger.ErrProjectNotFound):
@@ -195,8 +205,10 @@ func makeResetTriggerSecretHandler(svc trigger.Service, aud audit.Recorder) http
 			IP:     clientIP(r),
 		})
 		writeJSON(w, http.StatusOK, map[string]string{
+			"webhookUrl":          webhookURLPrefix + res.WebhookToken,
 			"webhookSecret":       res.Secret, // 完整明文,仅此一次
 			"webhookSecretMasked": res.Masked,
+			"authorizationState":  res.AuthorizationState,
 		})
 	}
 }

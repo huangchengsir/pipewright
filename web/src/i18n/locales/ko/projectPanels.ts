@@ -1,4 +1,5 @@
 export default {
+  automationAuthorization: {"ready": "자동 실행 승인됨", "required": "재승인 필요", "requiredHint": "실행 설정 또는 권한이 변경되었습니다. 실행 권한이 있는 구성원이 다시 저장해야 합니다. 승인 전까지 자동 실행이 중지됩니다."},
   // ─── TriggersPanel ──────────────────────────────────────────────────────────
   triggers: {
     retry: '↻ 재시도',

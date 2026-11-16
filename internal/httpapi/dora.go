@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"errors"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"net/http"
 	"strconv"
 	"strings"
@@ -109,6 +111,10 @@ func makeDoraMetricsHandler(ms run.MetricsService) http.HandlerFunc {
 		since := now.Add(-time.Duration(windowDays) * 24 * time.Hour)
 
 		records, err := ms.MetricsRecords(r.Context(), projectID, since)
+		if errors.Is(err, tenancy.ErrForbidden) {
+			writeError(w, http.StatusForbidden, "forbidden", "无权查看交付指标")
+			return
+		}
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
 			return
@@ -201,4 +207,24 @@ func parseWindowDays(raw string) (days int, label string, ok bool) {
 		return 0, "", false
 	}
 	return n, strconv.Itoa(n) + "d", true
+}
+
+func makeDoraProjectsHandler(ms run.MetricsService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		choices, ok := ms.(run.MetricsProjectService)
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "internal", "运行服务未初始化")
+			return
+		}
+		items, err := choices.MetricsProjects(r.Context())
+		if errors.Is(err, tenancy.ErrForbidden) {
+			writeError(w, http.StatusForbidden, "forbidden", "无权查看交付指标")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	}
 }

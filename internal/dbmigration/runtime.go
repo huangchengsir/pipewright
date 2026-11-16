@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/maintenance"
 	"github.com/huangchengsir/pipewright/internal/store"
 )
@@ -67,6 +68,9 @@ func (r *Runtime) Preflight(ctx context.Context, target Connection, managed bool
 	if r.Recovery || r.Source == nil || r.key == nil {
 		return nil, ErrInvalidState
 	}
+	if err := r.AuthorizeConfiguration(ctx); err != nil {
+		return nil, err
+	}
 	if target.Driver == r.Current.Connection.Driver {
 		return nil, ErrUnsupported
 	}
@@ -119,16 +123,46 @@ func (r *Runtime) Preflight(ctx context.Context, target Connection, managed bool
 		}
 	}
 	profile := ActiveConfig{Connection: target, Endpoint: endpoint, Paths: r.Current.Paths, Managed: managed}
-	return r.Control.plan(r.Current, profile, permissions)
+	var result *State
+	err := r.authorizedConfigurationWrite(ctx, func(txctx context.Context) error {
+		if err := checkFence(txctx, r.Source, ""); err != nil {
+			return err
+		}
+		var err error
+		result, err = r.Control.plan(r.Current, profile, permissions)
+		return err
+	})
+	return result, err
 }
 
 // Start persists the maintenance intent before requesting the admission fence.
 // Any uncertain fence/exec outcome keeps the next startup in recovery mode.
 func (r *Runtime) Start(ctx context.Context, task string, revision uint64) (*State, error) {
+	return r.start(ctx, task, revision, nil)
+}
+
+// StartWithRecoverySession issues the restart bridge only inside the same live
+// administrator admission that accepts the maintenance operation.
+func (r *Runtime) StartWithRecoverySession(ctx context.Context, task string, revision uint64) (*State, string, string, error) {
+	var token, csrf string
+	state, err := r.start(ctx, task, revision, func() error {
+		var err error
+		token, csrf, err = r.Control.IssueRecoverySession(task, time.Now())
+		return err
+	})
+	if err != nil {
+		return state, "", "", err
+	}
+	return state, token, csrf, nil
+}
+func (r *Runtime) start(ctx context.Context, task string, revision uint64, beforeAccept func() error) (*State, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.Recovery || r.Source == nil || r.Restart == nil {
 		return nil, ErrInvalidState
+	}
+	if e := r.AuthorizeConfiguration(ctx); e != nil {
+		return nil, e
 	}
 	if e := checkFence(ctx, r.Source, task); e != nil {
 		return nil, e
@@ -140,27 +174,42 @@ func (r *Runtime) Start(ctx context.Context, task string, revision uint64) (*Sta
 	if s == nil || s.TaskID != task || s.Revision != revision {
 		return nil, ErrInvalidState
 	}
-	if s.Phase == Prepared {
-		s, e = r.Control.BeginQuiesce(task, revision)
-		if e != nil {
-			return nil, e
+	e = r.authorizedConfigurationWrite(ctx, func(ctx context.Context) error {
+		if s.Phase != Prepared && s.Phase != Quiescing {
+			return ErrInvalidState
 		}
-		if e = maintenance.Drain(ctx, r.Source.DB, task); e != nil {
-			return s, e
-		}
-	} else if s.Phase != Quiescing {
-		return nil, ErrInvalidState
-	} else {
-		var fence string
-		if r.Source.DB.QueryRowContext(ctx, "SELECT task_id FROM selfupdate_control WHERE id=1").Scan(&fence) != nil {
-			return nil, ErrInvalidState
-		}
-		if fence == "" {
-			if e = maintenance.Drain(ctx, r.Source.DB, task); e != nil {
-				return s, e
+		if beforeAccept != nil {
+			if err := beforeAccept(); err != nil {
+				return err
 			}
 		}
+		if s.Phase == Prepared {
+			s, e = r.Control.BeginQuiesce(task, revision)
+			if e != nil {
+				return e
+			}
+			if e = maintenance.Drain(ctx, r.Source.DB, task); e != nil {
+				return e
+			}
+		} else if s.Phase != Quiescing {
+			return ErrInvalidState
+		} else {
+			var fence string
+			if configstate.Queryer(ctx, r.Source.DB).QueryRowContext(ctx, "SELECT task_id FROM selfupdate_control WHERE id=1").Scan(&fence) != nil {
+				return ErrInvalidState
+			}
+			if fence == "" {
+				if e = maintenance.Drain(ctx, r.Source.DB, task); e != nil {
+					return e
+				}
+			}
+		}
+		return nil
+	})
+	if e != nil {
+		return s, e
 	}
+
 	if !r.draining {
 		r.draining = true
 		go r.awaitDrain(task)
@@ -170,14 +219,14 @@ func (r *Runtime) Start(ctx context.Context, task string, revision uint64) (*Sta
 }
 func checkFence(ctx context.Context, db *store.Store, allowed string) error {
 	var task string
-	if db.DB.QueryRowContext(ctx, "SELECT task_id FROM selfupdate_control WHERE id=1").Scan(&task) != nil {
+	if configstate.Queryer(ctx, db.DB).QueryRowContext(ctx, "SELECT task_id FROM selfupdate_control WHERE id=1").Scan(&task) != nil {
 		return ErrInvalidState
 	}
 	if task != "" && task != allowed {
 		return maintenance.ErrBlocked
 	}
 	var updates int
-	if db.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM selfupdate_tasks WHERE active_key IS NOT NULL").Scan(&updates) != nil || updates != 0 {
+	if configstate.Queryer(ctx, db.DB).QueryRowContext(ctx, "SELECT COUNT(*) FROM selfupdate_tasks WHERE active_key IS NOT NULL").Scan(&updates) != nil || updates != 0 {
 		return maintenance.ErrBlocked
 	}
 	return nil
@@ -343,6 +392,11 @@ func (r *Runtime) Stage(ctx context.Context, task string, revision uint64) (*Sta
 func (r *Runtime) Abort(ctx context.Context, task string, revision uint64) (*State, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if !r.Recovery {
+		if err := r.AuthorizeConfiguration(ctx); err != nil {
+			return nil, err
+		}
+	}
 	s, e := r.Control.State()
 	if e != nil {
 		return nil, e
@@ -357,12 +411,24 @@ func (r *Runtime) Abort(ctx context.Context, task string, revision uint64) (*Sta
 	if e = checkFence(ctx, r.Source, task); e != nil {
 		return nil, e
 	}
-	if e = r.Control.stageSourceRestore(task, revision); e != nil {
+	restoreIntent := func(ctx context.Context) error {
+		if err := r.Control.stageSourceRestore(task, revision); err != nil {
+			return err
+		}
+		if err := maintenance.Unfence(ctx, r.Source.DB, task); err != nil {
+			return ErrCommitUnknown
+		}
+		return nil
+	}
+	if r.Recovery {
+		e = restoreIntent(ctx)
+	} else {
+		e = r.authorizedConfigurationWrite(ctx, restoreIntent)
+	}
+	if e != nil {
 		return nil, e
 	}
-	if e = maintenance.Unfence(ctx, r.Source.DB, task); e != nil {
-		return nil, ErrCommitUnknown
-	}
+
 	s, e = r.Control.RestoreSource(task, revision)
 	if e != nil {
 		return nil, e

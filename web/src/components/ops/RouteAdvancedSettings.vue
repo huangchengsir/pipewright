@@ -27,10 +27,13 @@ import {
   type LbPolicy,
   type TcpPassthrough,
 } from '../../api/reverseProxy'
-import { listDnsProviders, type DnsProvider } from '../../api/dnsProviders'
+import { listUsableDnsProviders, type UsableDnsProvider } from '../../api/dnsProviders'
 import { HttpError } from '../../api/http'
 import { useToast } from '../../composables/useToast'
 
+import PermissionGate from '../PermissionGate.vue'
+import {useAuthorizedRequestScope} from '../../composables/useAuthorizedRequestScope'
+import {usePermission} from '../../composables/usePermission'
 const props = defineProps<{
   route: ProxyRoute
 }>()
@@ -40,6 +43,8 @@ const emit = defineEmits<{
   (e: 'saved', updated: ProxyRoute): void
 }>()
 
+const manageQuery={action:'proxy.manage',resourceId:props.route.serverId}
+const scope=useAuthorizedRequestScope(manageQuery,()=>{open.value=false;basicAuthPassword.value='';basicAuthUser.value='';aliases.value=[];dnsProviders.value=[]})
 const { t } = useI18n()
 const toast = useToast()
 
@@ -99,10 +104,10 @@ function resetFromRoute(): void {
 }
 
 // ─── DNS 提供商(供「挂接」下拉 + 通配符放行) ───────────────────────────────────────
-const dnsProviders = ref<DnsProvider[]>([])
+const dnsProviders = ref<UsableDnsProvider[]>([])
 async function loadDnsProviders(): Promise<void> {
   try {
-    dnsProviders.value = await listDnsProviders()
+    dnsProviders.value = await scope.run(()=>listUsableDnsProviders(scope.requestOptions))
   } catch {
     // 非致命:拉不到就当作没有提供商,下拉只剩「不挂接」。
     dnsProviders.value = []
@@ -308,7 +313,7 @@ const canSave = computed(
 )
 
 async function save(): Promise<void> {
-  if (!canSave.value) return
+  if (!canSave.value || !scope.active()) return
   // 清空用户名 = 关闭认证:不发密码,用户名发空。
   const user = authUserCleared.value ? '' : basicAuthUser.value.trim()
   const config: Omit<ProxyRouteConfig, 'basicAuthEnabled'> = {
@@ -352,17 +357,18 @@ async function save(): Promise<void> {
   }
   saving.value = true
   try {
-    const updated = await updateProxyRoute(props.route.id, {
+    const updated = await scope.run(()=>updateProxyRoute(props.route.id, {
       config,
       // 仅在「启用认证 + 输入了新密码」时携带密码;关闭认证不发。
       ...(user && basicAuthPassword.value.length > 0
         ? { basicAuthPassword: basicAuthPassword.value }
         : {}),
-    })
+    }, scope.requestOptions))
     emit('saved', updated)
     toast.success(t('reverseProxy.adv.saved'), { detail: updated.domain })
     open.value = false
   } catch (err) {
+    if(!scope.active())return
     toast.error(t('reverseProxy.adv.saveFail'), {
       detail:
         err instanceof HttpError
@@ -801,9 +807,9 @@ async function save(): Promise<void> {
           <NIcon :size="13" class="adv__foot-ic"><World /></NIcon>
           {{ t('reverseProxy.adv.footNote') }}
         </span>
-        <button class="advsave" :disabled="!canSave" @click="save">
+        <PermissionGate :query="manageQuery"><button class="advsave" :disabled="!canSave" @click="save">
           {{ saving ? t('reverseProxy.adv.saving') : t('reverseProxy.adv.save') }}
-        </button>
+        </button></PermissionGate>
       </div>
     </div>
   </div>

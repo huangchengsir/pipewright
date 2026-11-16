@@ -47,6 +47,8 @@ describe('platform login entry', () => {
     await wrapper.get('[data-provider="github"]').trigger('click')
     expect(mocks.start).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('管理员尚未配置')
+    await wrapper.get('.platform-dismiss').trigger('click')
+    expect(wrapper.find('.platform-note').exists()).toBe(false)
   })
   it('packs visible providers in fixed order and refreshes after focus without defaults', async () => {
     const first = policy().map(p => ({ ...p, visible: p.provider === 'gitee' || p.provider === 'microsoft' }))

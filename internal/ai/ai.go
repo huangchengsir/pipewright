@@ -28,6 +28,7 @@ import (
 
 	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
@@ -172,6 +173,9 @@ func New(db *sql.DB, v vault.Vault, client *http.Client) Service {
 }
 
 func (s *service) Get(ctx context.Context) (*Config, error) {
+	if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+		return nil, err
+	}
 	cfg, _, err := s.load(ctx)
 	if err != nil {
 		return nil, err
@@ -180,6 +184,9 @@ func (s *service) Get(ctx context.Context) (*Config, error) {
 }
 
 func (s *service) Save(ctx context.Context, in SaveInput) (*Config, error) {
+	if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+		return nil, err
+	}
 	provider, err := normalizeProvider(in.Provider)
 	if err != nil {
 		return nil, err
@@ -241,6 +248,12 @@ func (s *service) Save(ctx context.Context, in SaveInput) (*Config, error) {
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 	// 单例 upsert:首存 INSERT(id=1),已存 ON CONFLICT 更新各列(created_at 保留)。
 	err = configstate.WithWriteTxContext(ctx, s.db, func(txctx context.Context, q configstate.DBTX) error {
+		if err := tenancy.LockAuthorization(txctx, s.db); err != nil {
+			return err
+		}
+		if err := tenancy.RequireInstanceAdministrator(txctx, s.db); err != nil {
+			return err
+		}
 		if err := configstate.LockEpochs(txctx, q, s.db, configstate.EpochSecrets); err != nil {
 			return err
 		}
@@ -269,6 +282,9 @@ func (s *service) Save(ctx context.Context, in SaveInput) (*Config, error) {
 }
 
 func (s *service) Test(ctx context.Context, in TestInput) (*TestResult, error) {
+	if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+		return nil, err
+	}
 	// 读既有行作为 draft 字段的回退值(apiKey 回退到已存密钥)。
 	current, existingSealed, err := s.load(ctx)
 	if err != nil {
@@ -317,12 +333,18 @@ func (s *service) Test(ctx context.Context, in TestInput) (*TestResult, error) {
 	res := s.probe(ctx, provider, baseURL, apiKey)
 	// 明文 key 用完即弃(尽力清理本地副本)。
 	apiKey = ""
+	if ctx.Err() != nil {
+		return &TestResult{OK: false, Error: mapTransportError(ctx.Err())}, nil
+	}
+	if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+		return nil, err
+	}
 	return res, nil
 }
 
 // probe 向 provider 发轻量探测;2xx → ok+延迟;否则 ok=false + 人读错误(绝无密钥)。
 func (s *service) probe(ctx context.Context, provider, baseURL, apiKey string) *TestResult {
-	return (&opsModel{service: s}).probe(ctx, provider, baseURL, apiKey)
+	return (&opsModel{service: s, configuration: true}).probe(ctx, provider, baseURL, apiKey)
 }
 
 func (m *opsModel) probe(ctx context.Context, provider, baseURL, apiKey string) *TestResult {
@@ -350,6 +372,11 @@ func (m *opsModel) probe(ctx context.Context, provider, baseURL, apiKey string) 
 		req.Header.Set(k, v)
 	}
 
+	if m.configuration {
+		if err := tenancy.RequireInstanceAdministrator(ctx, m.service.db); err != nil {
+			return &TestResult{OK: false, Error: "Permission denied"}
+		}
+	}
 	resp, err := client.Do(req)
 	latency := time.Since(start).Milliseconds()
 	if err != nil {

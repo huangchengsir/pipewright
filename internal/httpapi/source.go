@@ -20,6 +20,7 @@ import (
 	"github.com/go-git/go-git/v5/storage/memory"
 	"github.com/huangchengsir/pipewright/internal/gitauth"
 	"github.com/huangchengsir/pipewright/internal/project"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
@@ -94,19 +95,23 @@ func newInsecureSourceReader() SourceReader { return goGitSourceReader{allowInse
 // cloneWorktree 浅克隆 repoURL@ref 到内存 worktree(只读;Depth:1 + SingleBranch)。
 // ref 为空时克隆默认分支。克隆失败返回 errSourceCloneFailed(不泄漏底层错误,可能含 URL 密钥)。
 func (g goGitSourceReader) cloneWorktree(ctx context.Context, repoURL, username, token, ref string) (billy.Filesystem, error) {
+	fs, _, err := g.cloneSnapshot(ctx, repoURL, username, token, ref)
+	return fs, err
+}
+func (g goGitSourceReader) cloneSnapshot(ctx context.Context, repoURL, username, token, ref string) (billy.Filesystem, string, error) {
 	repoURL = strings.TrimSpace(repoURL)
 	if repoURL == "" {
-		return nil, errSourceCloneFailed
+		return nil, "", errSourceCloneFailed
 	}
 	if !g.allowInsecure && !validSourceURL(repoURL) {
-		return nil, errSourceCloneFailed
+		return nil, "", errSourceCloneFailed
 	}
 
 	fs := memfs.New()
 	storer := memory.NewStorage()
 	auth, err := gitauth.AuthMethod(repoURL, username, token)
 	if err != nil {
-		return nil, errSourceCloneFailed
+		return nil, "", errSourceCloneFailed
 	}
 
 	cctx, cancel := context.WithTimeout(ctx, sourceCloneTimeout)
@@ -124,10 +129,15 @@ func (g goGitSourceReader) cloneWorktree(ctx context.Context, repoURL, username,
 		opts.ReferenceName = plumbing.NewBranchReferenceName(ref)
 	}
 
-	if _, err := gogit.CloneContext(cctx, storer, fs, opts); err != nil {
-		return nil, errSourceCloneFailed
+	repo, err := gogit.CloneContext(cctx, storer, fs, opts)
+	if err != nil {
+		return nil, "", errSourceCloneFailed
 	}
-	return fs, nil
+	head, err := repo.Head()
+	if err != nil || head.Hash().IsZero() {
+		return nil, "", errSourceCloneFailed
+	}
+	return fs, head.Hash().String(), nil
 }
 
 // Tree 列 ref 下 dir 的直接子项。dir 经 cleanRelPath 规范化(穿越拒在 handler 层)。
@@ -262,16 +272,16 @@ type sourceDeps struct {
 
 // resolveSourceContext 取项目(repoUrl + 默认分支 + 凭据 token)与规范化 ref/path。
 // 项目不存在 → 404 project_not_found;path 穿越 → 400 invalid_path。已写错误响应时返回 ok=false。
-func (d sourceDeps) resolveSourceContext(w http.ResponseWriter, r *http.Request) (repoURL, username, token, ref, cleanPath string, releaseGit func(), ok bool) {
+func (d sourceDeps) resolveSourceContext(w http.ResponseWriter, r *http.Request) (repoURL, username, token, ref, cleanPath string, releaseGit func(), expected *project.Project, ok bool) {
 	id := chi.URLParam(r, "id")
 	proj, err := d.projects.Get(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, project.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "project_not_found", "项目不存在")
-			return "", "", "", "", "", func() {}, false
+			return "", "", "", "", "", func() {}, nil, false
 		}
-		writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
-		return "", "", "", "", "", func() {}, false
+		writeProjectError(w, err)
+		return "", "", "", "", "", func() {}, nil, false
 	}
 
 	ref = strings.TrimSpace(r.URL.Query().Get("ref"))
@@ -282,17 +292,17 @@ func (d sourceDeps) resolveSourceContext(w http.ResponseWriter, r *http.Request)
 	cleanPath, valid := cleanRelPath(r.URL.Query().Get("path"))
 	if !valid {
 		writeError(w, http.StatusBadRequest, "invalid_path", "路径非法或越出仓库根")
-		return "", "", "", "", "", func() {}, false
+		return "", "", "", "", "", func() {}, nil, false
 	}
 
 	// 取仓库凭据(进程内取用即弃);取不到不致命 → 空 token 尝试(私有仓库会走克隆失败降级)。
 	username, token, releaseGit, authErr := acquireRequestGitAuth(r.Context(), d.vault, proj.CredentialID)
 	if authErr != nil {
 		writeVaultError(w, authErr)
-		return "", "", "", "", "", func() {}, false
+		return "", "", "", "", "", func() {}, nil, false
 	}
 
-	return proj.RepoURL, username, token, ref, cleanPath, releaseGit, true
+	return proj.RepoURL, username, token, ref, cleanPath, releaseGit, proj, true
 }
 
 // makeSourceTreeHandler 返回 GET /api/projects/{id}/source/tree?ref=&path= handler(认证;只读)。
@@ -303,13 +313,21 @@ func makeSourceTreeHandler(d sourceDeps) http.HandlerFunc {
 			writeError(w, http.StatusServiceUnavailable, "internal", "源码读取所需服务未初始化")
 			return
 		}
-		repoURL, username, token, ref, cleanPath, releaseGit, ok := d.resolveSourceContext(w, r)
+		repoURL, username, token, ref, cleanPath, releaseGit, expected, ok := d.resolveSourceContext(w, r)
 		if !ok {
 			return
 		}
 
 		defer releaseGit()
+		if authErr := recheckProjectSource(r.Context(), d.projects, expected); authErr != nil {
+			writeProjectError(w, authErr)
+			return
+		}
 		tree, err := d.reader.Tree(r.Context(), repoURL, username, token, ref, cleanPath)
+		if authErr := recheckProjectSource(r.Context(), d.projects, expected); authErr != nil {
+			writeProjectError(w, authErr)
+			return
+		}
 		if err != nil {
 			if errors.Is(err, errSourcePathNotFound) {
 				writeError(w, http.StatusNotFound, "path_not_found", "路径不存在")
@@ -333,7 +351,7 @@ func makeSourceBlobHandler(d sourceDeps) http.HandlerFunc {
 			writeError(w, http.StatusServiceUnavailable, "internal", "源码读取所需服务未初始化")
 			return
 		}
-		repoURL, username, token, ref, cleanPath, releaseGit, ok := d.resolveSourceContext(w, r)
+		repoURL, username, token, ref, cleanPath, releaseGit, expected, ok := d.resolveSourceContext(w, r)
 		if !ok {
 			return
 		}
@@ -344,7 +362,15 @@ func makeSourceBlobHandler(d sourceDeps) http.HandlerFunc {
 		}
 
 		defer releaseGit()
+		if authErr := recheckProjectSource(r.Context(), d.projects, expected); authErr != nil {
+			writeProjectError(w, authErr)
+			return
+		}
 		blob, err := d.reader.Blob(r.Context(), repoURL, username, token, ref, cleanPath)
+		if authErr := recheckProjectSource(r.Context(), d.projects, expected); authErr != nil {
+			writeProjectError(w, authErr)
+			return
+		}
 		if err != nil {
 			switch {
 			case errors.Is(err, errSourcePathNotFound):
@@ -364,4 +390,15 @@ func makeSourceBlobHandler(d sourceDeps) http.HandlerFunc {
 		blob.Ref = ref
 		writeJSON(w, http.StatusOK, blob)
 	}
+}
+
+func recheckProjectSource(ctx context.Context, svc project.Service, expected *project.Project) error {
+	current, err := svc.Get(ctx, expected.ID)
+	if err != nil {
+		return err
+	}
+	if current.RepoURL != expected.RepoURL || current.CredentialID != expected.CredentialID || current.DefaultBranch != expected.DefaultBranch {
+		return tenancy.ErrConflict
+	}
+	return nil
 }

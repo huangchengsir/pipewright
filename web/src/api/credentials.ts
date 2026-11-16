@@ -11,7 +11,7 @@
  * returned solely by the explicit, audited reveal endpoint.
  */
 
-import { http } from './http'
+import { http, type HttpOptions } from './http'
 
 export type CredentialType = 'git_token' | 'git_http' | 'ssh_key' | 'ssh_password' | 'registry'
 
@@ -58,34 +58,35 @@ export async function reconnectOAuthCredential(id: string, input: {
   provider: string
   revision: number
   adoptExisting: boolean
-}): Promise<{ authorizeUrl: string }> {
-  return http.post<{ authorizeUrl: string }>(`/api/credentials/${id}/oauth/reconnect`, input)
+}, options?:HttpOptions): Promise<{ authorizeUrl: string }> {
+  return http.post<{ authorizeUrl: string }>(`/api/credentials/${id}/oauth/reconnect`, input,{...options,throwOnUnauthorized:true})
 }
 
-export async function listCredentials(): Promise<Credential[]> {
-  return http.get<Credential[]>('/api/credentials')
+export async function listCredentials(options?: HttpOptions): Promise<Credential[]> {
+  return http.get<Credential[]>('/api/credentials',{...options,throwOnUnauthorized:true})
 }
 
-export async function createCredential(input: CreateCredentialInput): Promise<Credential> {
-  return http.post<Credential>('/api/credentials', input)
+export async function createCredential(input: CreateCredentialInput, options?:HttpOptions): Promise<Credential> {
+  return http.post<Credential>('/api/credentials', input, options)
 }
 
 export async function updateCredential(
   id: string,
   input: UpdateCredentialInput,
+  options?:HttpOptions,
 ): Promise<Credential> {
-  return http.patch<Credential>(`/api/credentials/${id}`, input)
+  return http.patch<Credential>(`/api/credentials/${id}`, input,{...options,throwOnUnauthorized:true})
 }
 
-export async function deleteCredential(id: string): Promise<void> {
-  return http.delete<void>(`/api/credentials/${id}`)
+export async function deleteCredential(id: string,options?:HttpOptions): Promise<void> {
+  return http.delete<void>(`/api/credentials/${id}`,{...options,throwOnUnauthorized:true})
 }
 
 /**
  * Reveal the plaintext secret on explicit demand (POST + CSRF; audited server-side
  * as `credential_reveal`). The only endpoint that returns plaintext — use sparingly.
  */
-export async function revealCredential(id: string): Promise<string> {
-  const res = await http.post<{ secret: string }>(`/api/credentials/${id}/reveal`, {})
+export async function revealCredential(id: string,options?:HttpOptions): Promise<string> {
+  const res = await http.post<{ secret: string }>(`/api/credentials/${id}/reveal`, {},{...options,throwOnUnauthorized:true})
   return res.secret
 }

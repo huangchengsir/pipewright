@@ -22,7 +22,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
@@ -174,6 +176,7 @@ type SSHDialer interface {
 // SSHConfig 是拨号所需的最小认证材料(进程内,用完即弃)。
 // 二选一:PrivateKey(PEM 私钥明文)或 Password;两者皆空则无可用认证法。
 type SSHConfig struct {
+	HostKey    string // Instance-approved SHA256 SSH host key; empty only for legacy/admin unassigned targets.
 	User       string
 	PrivateKey string // PEM 私钥明文(经 vault 取出,用完即弃)
 	Password   string // 口令明文(经 vault 取出,用完即弃)
@@ -227,17 +230,23 @@ func validateCreate(in CreateInput) error {
 	return nil
 }
 
-func (s *service) Create(ctx context.Context, in CreateInput) (*Server, error) {
+func (s *service) create(ctx context.Context, in CreateInput) (*Server, error) {
 	if err := validateCreate(in); err != nil {
 		return nil, err
 	}
 	port := normalizePort(in.Port)
 
 	id := uuid.NewString()
+	if err := tenancy.CheckNew(ctx, s.db, "server.create", "server", id); err != nil {
+		return nil, err
+	}
+	if err := tenancy.Check(ctx, s.db, "credential.use", "credential", in.CredentialID); err != nil {
+		return nil, err
+	}
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
 
-	_, err := s.db.ExecContext(ctx,
+	_, err := configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`INSERT INTO servers (id, name, host, port, `+store.Identifier(store.DialectOf(s.db), "user")+`, credential_id, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, in.Name, in.Host, port, in.User, in.CredentialID, nowStr, nowStr,
@@ -248,16 +257,26 @@ func (s *service) Create(ctx context.Context, in CreateInput) (*Server, error) {
 		}
 		return nil, fmt.Errorf("target: insert: %w", err)
 	}
+	if err := tenancy.RecordOwnership(ctx, s.db, "server", id, ""); err != nil {
+		return nil, err
+	}
 	return s.Get(ctx, id)
 }
 
 func (s *service) List(ctx context.Context) ([]*Server, error) {
-	rows, err := s.db.QueryContext(ctx,
+	return s.listAction(ctx, "server.inspect")
+}
+func (s *service) listAction(ctx context.Context, action string) ([]*Server, error) {
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, action, "s.id")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT s.id, s.name, s.host, s.port, s.`+store.Identifier(store.DialectOf(s.db), "user")+`, s.credential_id,
 		        COALESCE(c.name, ''), s.created_at, s.updated_at
 		 FROM servers s
 		 LEFT JOIN credentials c ON c.id = s.credential_id
-		 ORDER BY s.created_at DESC, s.id`,
+		 WHERE `+predicate.SQL+` ORDER BY s.created_at DESC, s.id`, predicate.Args...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("target: list: %w", err)
@@ -279,12 +298,20 @@ func (s *service) List(ctx context.Context) ([]*Server, error) {
 }
 
 func (s *service) Get(ctx context.Context, id string) (*Server, error) {
-	row := s.db.QueryRowContext(ctx,
+	return s.getAction(ctx, "server.inspect", id)
+}
+func (s *service) getAction(ctx context.Context, action, id string) (*Server, error) {
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, action, "s.id")
+	if err != nil {
+		return nil, err
+	}
+	args := append([]any{id}, predicate.Args...)
+	row := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT s.id, s.name, s.host, s.port, s.`+store.Identifier(store.DialectOf(s.db), "user")+`, s.credential_id,
 		        COALESCE(c.name, ''), s.created_at, s.updated_at
 		 FROM servers s
 		 LEFT JOIN credentials c ON c.id = s.credential_id
-		 WHERE s.id = ?`, id,
+		 WHERE s.id = ? AND `+predicate.SQL, args...,
 	)
 	srv, err := scanServer(row)
 	if err != nil {
@@ -296,11 +323,14 @@ func (s *service) Get(ctx context.Context, id string) (*Server, error) {
 	return srv, nil
 }
 
-func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Server, error) {
+func (s *service) update(ctx context.Context, id string, in UpdateInput) (*Server, error) {
+	if err := tenancy.Check(ctx, s.db, "server.edit", "server", id); err != nil {
+		return nil, err
+	}
 	// 先取当前行。
 	var name, host, user, credentialID string
 	var port int
-	err := s.db.QueryRowContext(ctx,
+	err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT name, host, port, `+store.Identifier(store.DialectOf(s.db), "user")+`, credential_id FROM servers WHERE id = ?`, id,
 	).Scan(&name, &host, &port, &user, &credentialID)
 	if err != nil {
@@ -342,8 +372,11 @@ func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Serve
 		credentialID = *in.CredentialID
 	}
 
+	if err := tenancy.Check(ctx, s.db, "credential.use", "credential", credentialID); err != nil {
+		return nil, err
+	}
 	nowStr := time.Now().UTC().Format(time.RFC3339)
-	_, err = s.db.ExecContext(ctx,
+	_, err = configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`UPDATE servers SET name = ?, host = ?, port = ?, `+store.Identifier(store.DialectOf(s.db), "user")+` = ?, credential_id = ?, updated_at = ? WHERE id = ?`,
 		name, host, port, user, credentialID, nowStr, id,
 	)
@@ -356,8 +389,11 @@ func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Serve
 	return s.Get(ctx, id)
 }
 
-func (s *service) Delete(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM servers WHERE id = ?`, id)
+func (s *service) delete(ctx context.Context, id string) error {
+	if err := tenancy.Check(ctx, s.db, "server.delete", "server", id); err != nil {
+		return err
+	}
+	res, err := configstate.Queryer(ctx, s.db).ExecContext(ctx, `DELETE FROM servers WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("target: delete: %w", err)
 	}
@@ -365,7 +401,8 @@ func (s *service) Delete(ctx context.Context, id string) error {
 	if n == 0 {
 		return ErrNotFound
 	}
-	return nil
+	_, err = configstate.Queryer(ctx, s.db).ExecContext(ctx, `DELETE FROM access_ownership WHERE resource_kind='server' AND resource_id=?`, id)
+	return err
 }
 
 func (s *service) Test(ctx context.Context, id string) (*TestResult, error) {
@@ -374,7 +411,7 @@ func (s *service) Test(ctx context.Context, id string) (*TestResult, error) {
 	latency := time.Since(start).Milliseconds()
 	if err != nil {
 		// 服务器/凭据不存在等定位类错误:上抛供 HTTP 层映射 404/422/503。
-		if errors.Is(err, ErrNotFound) ||
+		if errors.Is(err, tenancy.ErrForbidden) || errors.Is(err, ErrNotFound) ||
 			errors.Is(err, ErrCredentialNotFound) ||
 			errors.Is(err, ErrVaultUnconfigured) {
 			return nil, err
@@ -401,6 +438,13 @@ func (s *service) Test(ctx context.Context, id string) (*TestResult, error) {
 
 // Exec 取凭据明文装配 SSH 配置并跑 array 命令;凭据明文仅进程内存在,用完即弃。
 func (s *service) Exec(ctx context.Context, serverID string, cmd []string) (*ExecResult, error) {
+
+	if err := tenancy.VerifyExecution(ctx); err != nil {
+		return nil, err
+	}
+	if err := tenancy.Check(ctx, s.db, "server.use", "server", serverID); err != nil {
+		return nil, err
+	}
 	if len(cmd) == 0 {
 		return nil, fmt.Errorf("target: empty command")
 	}
@@ -408,14 +452,19 @@ func (s *service) Exec(ctx context.Context, serverID string, cmd []string) (*Exe
 	if err != nil {
 		return nil, err
 	}
+	if err = s.checkExecutionIdentity(ctx, srv); err != nil {
+		return nil, err
+	}
 	if s.vault == nil {
 		return nil, ErrVaultUnconfigured
 	}
 
 	// 取凭据明文(私钥或口令)。明文仅进程内,Exec 返回前清引用。
-	secret, err := s.vault.Get(srv.CredentialID)
+	secret, err := vault.Use(ctx, s.vault, srv.CredentialID)
 	if err != nil {
 		switch {
+		case errors.Is(err, tenancy.ErrForbidden):
+			return nil, err
 		case errors.Is(err, vault.ErrVaultUnconfigured):
 			return nil, ErrVaultUnconfigured
 		case errors.Is(err, vault.ErrNotFound):
@@ -426,7 +475,11 @@ func (s *service) Exec(ctx context.Context, serverID string, cmd []string) (*Exe
 		}
 	}
 
-	cfg := SSHConfig{User: srv.User}
+	hostKey, err := s.executionHostKey(ctx, srv)
+	if err != nil {
+		return nil, err
+	}
+	cfg := SSHConfig{User: srv.User, HostKey: hostKey}
 	if looksLikePEM(secret) {
 		cfg.PrivateKey = secret
 	} else {
@@ -453,6 +506,13 @@ func (s *service) Exec(ctx context.Context, serverID string, cmd []string) (*Exe
 // 大文件友好;remotePath 作位置参数 shell 转义(AC-SEC-02 不拼 shell);凭据明文用完即清。
 // 远端非零退出 → 人读错误(含 stderr 摘要,绝无凭据明文);连接/认证失败 → ErrUnreachable / ErrAuth。
 func (s *service) Upload(ctx context.Context, serverID string, content io.Reader, remotePath string) error {
+
+	if err := tenancy.VerifyExecution(ctx); err != nil {
+		return err
+	}
+	if err := tenancy.Check(ctx, s.db, "server.use", "server", serverID); err != nil {
+		return err
+	}
 	if content == nil {
 		return fmt.Errorf("target: nil content")
 	}
@@ -463,12 +523,17 @@ func (s *service) Upload(ctx context.Context, serverID string, content io.Reader
 	if err != nil {
 		return err
 	}
+	if err = s.checkExecutionIdentity(ctx, srv); err != nil {
+		return err
+	}
 	if s.vault == nil {
 		return ErrVaultUnconfigured
 	}
-	secret, err := s.vault.Get(srv.CredentialID)
+	secret, err := vault.Use(ctx, s.vault, srv.CredentialID)
 	if err != nil {
 		switch {
+		case errors.Is(err, tenancy.ErrForbidden):
+			return err
 		case errors.Is(err, vault.ErrVaultUnconfigured):
 			return ErrVaultUnconfigured
 		case errors.Is(err, vault.ErrNotFound):
@@ -477,7 +542,11 @@ func (s *service) Upload(ctx context.Context, serverID string, content io.Reader
 			return ErrAuth
 		}
 	}
-	cfg := SSHConfig{User: srv.User}
+	hostKey, err := s.executionHostKey(ctx, srv)
+	if err != nil {
+		return err
+	}
+	cfg := SSHConfig{User: srv.User, HostKey: hostKey}
 	if looksLikePEM(secret) {
 		cfg.PrivateKey = secret
 	} else {
@@ -508,20 +577,33 @@ func (s *service) Upload(ctx context.Context, serverID string, content io.Reader
 // 注意 cfg.PrivateKey/Password 的副本随 RunStream 进入 dialer 持有的 session 生命周期,
 // 用于建连;连接建立后由 dialer 持有的 client/session 负责;调用方读完/关闭流即释放。
 func (s *service) ExecStream(ctx context.Context, serverID string, cmd []string) (io.ReadCloser, error) {
+
+	if err := tenancy.VerifyExecution(ctx); err != nil {
+		return nil, err
+	}
+	if err := tenancy.Check(ctx, s.db, "server.use", "server", serverID); err != nil {
+		return nil, err
+	}
 	if len(cmd) == 0 {
 		return nil, fmt.Errorf("target: empty command")
 	}
-	srv, err := s.Get(ctx, serverID)
+	approved, err := s.Capture(ctx, serverID)
 	if err != nil {
+		return nil, err
+	}
+	srv := &approved.Server
+	if err = s.checkExecutionIdentity(ctx, srv); err != nil {
 		return nil, err
 	}
 	if s.vault == nil {
 		return nil, ErrVaultUnconfigured
 	}
 
-	secret, err := s.vault.Get(srv.CredentialID)
+	secret, err := vault.Use(ctx, s.vault, srv.CredentialID)
 	if err != nil {
 		switch {
+		case errors.Is(err, tenancy.ErrForbidden):
+			return nil, err
 		case errors.Is(err, vault.ErrVaultUnconfigured):
 			return nil, ErrVaultUnconfigured
 		case errors.Is(err, vault.ErrNotFound):
@@ -531,7 +613,11 @@ func (s *service) ExecStream(ctx context.Context, serverID string, cmd []string)
 		}
 	}
 
-	cfg := SSHConfig{User: srv.User}
+	hostKey, err := s.executionHostKey(ctx, srv)
+	if err != nil {
+		return nil, err
+	}
+	cfg := SSHConfig{User: srv.User, HostKey: hostKey}
 	if looksLikePEM(secret) {
 		cfg.PrivateKey = secret
 	} else {
@@ -550,27 +636,43 @@ func (s *service) ExecStream(ctx context.Context, serverID string, cmd []string)
 	if runErr != nil {
 		return nil, runErr
 	}
-	return rc, nil
+	return s.guardStream(ctx, approved, rc)
 }
 
 // ExecInteractive 取凭据明文装配 SSH 配置并开 PTY 跑 array 命令(供容器交互终端,Story 6.4)。
 // 与 Exec/ExecStream 同样的凭据取用/清引用纪律:明文仅进程内,装配完 cfg 后立即清零本地引用。
 // 返回的 Session 持有底层 SSH client/session 生命周期;调用方 Close()(或 ctx 取消)即释放。
 func (s *service) ExecInteractive(ctx context.Context, serverID string, cmd []string) (Session, error) {
+
+	if err := tenancy.VerifyExecution(ctx); err != nil {
+		return nil, err
+	}
+	if err := tenancy.Check(ctx, s.db, "server.use", "server", serverID); err != nil {
+		return nil, err
+	}
+	if err := tenancy.Check(ctx, s.db, terminalAction(ctx, serverID), "server", serverID); err != nil {
+		return nil, err
+	}
 	if len(cmd) == 0 {
 		return nil, fmt.Errorf("target: empty command")
 	}
-	srv, err := s.Get(ctx, serverID)
+	approved, err := s.Capture(ctx, serverID)
 	if err != nil {
+		return nil, err
+	}
+	srv := &approved.Server
+	if err = s.checkExecutionIdentity(ctx, srv); err != nil {
 		return nil, err
 	}
 	if s.vault == nil {
 		return nil, ErrVaultUnconfigured
 	}
 
-	secret, err := s.vault.Get(srv.CredentialID)
+	secret, err := vault.Use(ctx, s.vault, srv.CredentialID)
 	if err != nil {
 		switch {
+		case errors.Is(err, tenancy.ErrForbidden):
+			return nil, err
 		case errors.Is(err, vault.ErrVaultUnconfigured):
 			return nil, ErrVaultUnconfigured
 		case errors.Is(err, vault.ErrNotFound):
@@ -580,7 +682,11 @@ func (s *service) ExecInteractive(ctx context.Context, serverID string, cmd []st
 		}
 	}
 
-	cfg := SSHConfig{User: srv.User}
+	hostKey, err := s.executionHostKey(ctx, srv)
+	if err != nil {
+		return nil, err
+	}
+	cfg := SSHConfig{User: srv.User, HostKey: hostKey}
 	if looksLikePEM(secret) {
 		cfg.PrivateKey = secret
 	} else {
@@ -599,7 +705,7 @@ func (s *service) ExecInteractive(ctx context.Context, serverID string, cmd []st
 	if runErr != nil {
 		return nil, runErr
 	}
-	return sess, nil
+	return s.guardTerminal(ctx, approved, sess)
 }
 
 // looksLikePEM 判定凭据明文是否为 PEM 私钥(决定走私钥还是口令认证)。

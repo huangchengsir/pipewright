@@ -102,7 +102,7 @@ func (s *service) PullSecretPinned(ctx context.Context, snap ConnectionSnapshot,
 	})
 }
 func privateSSH(ctx context.Context, addr string, cfg SSHConfig, hostKey string) (*ssh.Client, func(), error) {
-	if !validHostFingerprint(hostKey) {
+	if !validHostFingerprint(hostKey) || (cfg.HostKey != "" && cfg.HostKey != hostKey) {
 		return nil, func() {}, NotStarted(ErrHostIdentity)
 	}
 	methods, e := authMethods(cfg)

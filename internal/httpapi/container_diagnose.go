@@ -8,7 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/huangchengsir/pipewright/internal/ai"
-	"github.com/huangchengsir/pipewright/internal/mask"
+
 	"github.com/huangchengsir/pipewright/internal/target"
 )
 
@@ -57,17 +57,36 @@ func makeContainerDiagnoseHandler(svc target.Service, aiSvc ai.Service) http.Han
 		cctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
 
-		// 取日志(docker logs 同时走 stdout/stderr,合并)。失败不致命:空日志也能让 AI 据状态推断。
-		logText := fetchContainerLogs(cctx, svc, id, containerID)
+		masker, pinnedContainer, maskErr := containerLogMasker(cctx, svc, id, containerID)
+		if maskErr != nil {
+			if writeAuthorizationError(w, maskErr) {
+				return
+			}
+			writeJSON(w, http.StatusOK, &ai.Diagnosis{Status: "unavailable", Reason: "无法安全读取容器日志，请稍后重试。", GeneratedAt: time.Now().UTC()})
+			return
+		}
+		// Collect first, then recheck before any model invocation.
+		logText, logErr := fetchContainerLogs(cctx, svc, id, pinnedContainer)
+		if logErr != nil {
+			if writeAuthorizationError(w, logErr) {
+				return
+			}
+			writeJSON(w, http.StatusOK, &ai.Diagnosis{Status: "unavailable", Reason: "无法安全读取容器日志，请稍后重试。", GeneratedAt: time.Now().UTC()})
+			return
+		}
 		if strings.TrimSpace(logText) == "" {
 			logText = "(该容器无日志输出)"
 		}
 
+		if _, err := svc.Get(cctx, id); err != nil {
+			writeServerError(w, err)
+			return
+		}
 		diag, err := aiSvc.Diagnose(cctx, ai.DiagnoseInput{
-			FailureLog:  logText,
+			FailureLog:  masker.Scrub(logText),
 			StepName:    "容器 " + containerID,
 			ProjectName: "",
-			Masker:      mask.NewMasker(),
+			Masker:      masker,
 		})
 		if err != nil || diag == nil {
 			// ai.Diagnose 仅极少内部错回 error;统一降级 unavailable(绝不 500 / 绝无密钥)。
@@ -78,15 +97,31 @@ func makeContainerDiagnoseHandler(svc target.Service, aiSvc ai.Service) http.Han
 			})
 			return
 		}
+		if _, err := svc.Get(cctx, id); err != nil {
+			writeServerError(w, err)
+			return
+		}
+		diag.Reason = masker.Scrub(diag.Reason)
+		diag.Hypothesis = masker.Scrub(diag.Hypothesis)
+		diag.FixScript = masker.Scrub(diag.FixScript)
+		for i := range diag.AlternateCauses {
+			diag.AlternateCauses[i] = masker.Scrub(diag.AlternateCauses[i])
+		}
+		for i := range diag.FixSuggestions {
+			diag.FixSuggestions[i] = masker.Scrub(diag.FixSuggestions[i])
+		}
+		for i := range diag.Evidence {
+			diag.Evidence[i].Text = masker.Scrub(diag.Evidence[i].Text)
+		}
 		writeJSON(w, http.StatusOK, diag)
 	}
 }
 
 // fetchContainerLogs 取容器最近 N 行日志(stdout+stderr 合并;失败返回空串,由调用方兜底)。
-func fetchContainerLogs(ctx context.Context, svc target.Service, serverID, containerID string) string {
+func fetchContainerLogs(ctx context.Context, svc target.Service, serverID, containerID string) (string, error) {
 	res, err := svc.Exec(ctx, serverID, []string{"docker", "logs", "--tail", diagnoseLogTail, containerID})
 	if err != nil {
-		return ""
+		return "", err
 	}
 	var b strings.Builder
 	if s := strings.TrimSpace(res.Stdout); s != "" {
@@ -102,5 +137,5 @@ func fetchContainerLogs(ctx context.Context, svc target.Service, serverID, conta
 	if len(out) > 32<<10 {
 		out = out[len(out)-(32<<10):] // 取末尾 32KiB(最近日志最相关)
 	}
-	return out
+	return out, nil
 }

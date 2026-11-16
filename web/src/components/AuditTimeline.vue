@@ -1,162 +1,304 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { listAudit } from '../api/audit'
-import type { AuditEntry } from '../api/audit'
-import { HttpError } from '../api/http'
+import { ref, onMounted, onBeforeUnmount, watch } from "vue";
+import { useSessionStore } from "../stores/session";
+import { usePermissionStore } from "../stores/permissions";
+import { useI18n } from "vue-i18n";
+import { listAudit } from "../api/audit";
+import type { AuditEntry } from "../api/audit";
+import { HttpError } from "../api/http";
 
-const { t } = useI18n()
+const { t } = useI18n();
+const session = useSessionStore();
+const permissions = usePermissionStore();
+let mounted = false;
+let generation = 0;
+let controller: AbortController | undefined;
+function clearScope() {
+  generation++;
+  controller?.abort();
+  controller = undefined;
+  entries.value = [];
+  nextBefore.value = null;
+  loadingMore.value = false;
+  loadError.value = "";
+  loadState.value = "idle";
+}
+function ready() {
+  return (
+    !!session.user &&
+    !session.user.mustChangePassword &&
+    !session.isNetworkError &&
+    (session.user.multiTenant === false ||
+      (session.user.multiTenant === true && !!permissions.activeTeam))
+  );
+}
+function requestOptions(signal: AbortSignal) {
+  return {
+    signal,
+    teamId: session.user?.multiTenant ? permissions.activeTeam : undefined,
+  };
+}
 
 // ─── state ──────────────────────────────────────────────────────────────────
 
-type LoadState = 'idle' | 'loading' | 'error'
+type LoadState = "idle" | "loading" | "error";
 
-const PAGE_SIZE = 8
+const PAGE_SIZE = 8;
 
-const loadState = ref<LoadState>('idle')
-const loadError = ref('')
-const entries = ref<AuditEntry[]>([])
-const nextBefore = ref<string | null>(null)
-const loadingMore = ref(false)
+const loadState = ref<LoadState>("idle");
+const loadError = ref("");
+const entries = ref<AuditEntry[]>([]);
+const nextBefore = ref<string | null>(null);
+const loadingMore = ref(false);
 
 // ─── action → presentation mapping ───────────────────────────────────────────
 
-type DotKind = 'add' | 'del' | 'use' | 'cfg'
+type DotKind = "add" | "del" | "use" | "cfg";
 
 interface ActionMeta {
-  dot: DotKind
-  verb: string
-  noun: string
+  dot: DotKind;
+  verb: string;
+  noun: string;
 }
 
 // Maps each audit action to a verb/noun i18n key + a dot category that drives
 // semantic coloring (green=create, red=delete, primary=run, cyan=config change).
 // verb/noun hold i18n keys (under misc.audit.*); meta() resolves them via t().
 const ACTION_META: Record<string, ActionMeta> = {
-  credential_create: { dot: 'add', verb: 'verbCreate', noun: 'nounCredential' },
-  credential_update: { dot: 'cfg', verb: 'verbUpdate', noun: 'nounCredential' },
-  credential_delete: { dot: 'del', verb: 'verbDelete', noun: 'nounCredential' },
-  trigger_secret_reset: { dot: 'cfg', verb: 'verbReset', noun: 'nounWebhookSecret' },
-  project_create: { dot: 'add', verb: 'verbAdd', noun: 'nounProject' },
-  project_update: { dot: 'cfg', verb: 'verbUpdate', noun: 'nounProject' },
-  project_delete: { dot: 'del', verb: 'verbDelete', noun: 'nounProject' },
-  run_trigger_manual: { dot: 'use', verb: 'verbTrigger', noun: 'nounRun' },
-  'oauth_credential.authorize': { dot: 'cfg', verb: 'verbAuthorizeOAuth', noun: 'nounOAuthCredential' },
-  'oauth_credential.reconnect': { dot: 'cfg', verb: 'verbReconnectOAuth', noun: 'nounOAuthCredential' },
-  selfupdate_submit: { dot: 'cfg', verb: 'verbSubmitUpgrade', noun: 'nounUpgrade' },
-  selfupdate_resume: { dot: 'cfg', verb: 'verbResumeUpgrade', noun: 'nounUpgrade' },
-}
+  credential_create: { dot: "add", verb: "verbCreate", noun: "nounCredential" },
+  credential_update: { dot: "cfg", verb: "verbUpdate", noun: "nounCredential" },
+  credential_delete: { dot: "del", verb: "verbDelete", noun: "nounCredential" },
+  trigger_secret_reset: {
+    dot: "cfg",
+    verb: "verbReset",
+    noun: "nounWebhookSecret",
+  },
+  project_create: { dot: "add", verb: "verbAdd", noun: "nounProject" },
+  project_update: { dot: "cfg", verb: "verbUpdate", noun: "nounProject" },
+  project_delete: { dot: "del", verb: "verbDelete", noun: "nounProject" },
+  run_trigger_manual: { dot: "use", verb: "verbTrigger", noun: "nounRun" },
+  "oauth_credential.authorize": {
+    dot: "cfg",
+    verb: "verbAuthorizeOAuth",
+    noun: "nounOAuthCredential",
+  },
+  "oauth_credential.reconnect": {
+    dot: "cfg",
+    verb: "verbReconnectOAuth",
+    noun: "nounOAuthCredential",
+  },
+  selfupdate_submit: {
+    dot: "cfg",
+    verb: "verbSubmitUpgrade",
+    noun: "nounUpgrade",
+  },
+  selfupdate_resume: {
+    dot: "cfg",
+    verb: "verbResumeUpgrade",
+    noun: "nounUpgrade",
+  },
+};
 
 // Returns the dot category plus localized verb/noun for an action. Unknown
 // actions fall back to a generic verb and surface the raw action id as the noun.
 function meta(action: string): ActionMeta {
-  const m = ACTION_META[action]
-  if (m) return { dot: m.dot, verb: t(`misc.audit.${m.verb}`), noun: t(`misc.audit.${m.noun}`) }
-  return { dot: 'cfg', verb: t('misc.audit.verbDefault'), noun: action }
+  const m = ACTION_META[action];
+  if (m)
+    return {
+      dot: m.dot,
+      verb: t(`misc.audit.${m.verb}`),
+      noun: t(`misc.audit.${m.noun}`),
+    };
+  return { dot: "cfg", verb: t("misc.audit.verbDefault"), noun: action };
 }
 
 // Best-effort human label for the affected object: prefer detail.name, then
 // branch (for runs), else the target id. detail is already masked server-side.
 function objectLabel(e: AuditEntry): string {
-  const d = e.detail ?? {}
-  if (e.action === 'oauth_credential.authorize' || e.action === 'oauth_credential.reconnect') {
-    switch (d['provider']) {
-      case 'gitee': return 'Gitee'
-      case 'github': return 'GitHub'
-      case 'gitlab': return 'GitLab'
-      case 'gitea': return 'Gitea'
-      case 'custom': return t('settingsVault.providerCustom')
-      default: return e.targetId || '—'
+  const d = e.detail ?? {};
+  if (
+    e.action === "oauth_credential.authorize" ||
+    e.action === "oauth_credential.reconnect"
+  ) {
+    switch (d["provider"]) {
+      case "gitee":
+        return "Gitee";
+      case "github":
+        return "GitHub";
+      case "gitlab":
+        return "GitLab";
+      case "gitea":
+        return "Gitea";
+      case "custom":
+        return t("settingsVault.providerCustom");
+      default:
+        return e.targetId || "—";
     }
   }
-  if (e.action === 'selfupdate_submit' || e.action === 'selfupdate_resume') {
-    const target = d['target']
+  if (e.action === "selfupdate_submit" || e.action === "selfupdate_resume") {
+    const target = d["target"];
     // Match the updater's accepted version-tag format; other details retain
     // the existing target-id fallback rather than becoming display text.
-    if (typeof target === 'string' && target.length <= 128 && target.trim() === target && /^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$/.test(target)) return target
-    return e.targetId || '—'
+    if (
+      typeof target === "string" &&
+      target.length <= 128 &&
+      target.trim() === target &&
+      /^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$/.test(target)
+    )
+      return target;
+    return e.targetId || "—";
   }
-  const name = d['name']
-  if (typeof name === 'string' && name) return name
-  const branch = d['branch']
-  if (typeof branch === 'string' && branch) return branch
-  return e.targetId || '—'
+  const name = d["name"];
+  if (typeof name === "string" && name) return name;
+  const branch = d["branch"];
+  if (typeof branch === "string" && branch) return branch;
+  return e.targetId || "—";
 }
 
 function actorLabel(actor: string): string {
-  return actor === 'admin' ? t('misc.audit.actorYou') : actor
+  return actor === "admin" ? t("misc.audit.actorYou") : actor;
 }
 
 // ─── relative time ────────────────────────────────────────────────────────────
 
 function relativeTime(isoStr: string): string {
-  const diff = Date.now() - new Date(isoStr).getTime()
-  const s = Math.floor(diff / 1000)
-  if (s < 60) return t('time.justNow')
-  const m = Math.floor(s / 60)
-  if (m < 60) return t('time.minAgo', { n: m })
-  const h = Math.floor(m / 60)
-  if (h < 24) return t('time.hourAgo', { n: h })
-  const day = Math.floor(h / 24)
-  if (day < 30) return t('time.dayAgo', { n: day })
-  return new Date(isoStr).toLocaleDateString()
+  const diff = Date.now() - new Date(isoStr).getTime();
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return t("time.justNow");
+  const m = Math.floor(s / 60);
+  if (m < 60) return t("time.minAgo", { n: m });
+  const h = Math.floor(m / 60);
+  if (h < 24) return t("time.hourAgo", { n: h });
+  const day = Math.floor(h / 24);
+  if (day < 30) return t("time.dayAgo", { n: day });
+  return new Date(isoStr).toLocaleDateString();
 }
 
 // ─── data loading ─────────────────────────────────────────────────────────────
 
 function describeError(err: unknown): string {
   if (err instanceof HttpError) {
-    if (err.status === 0) return t('misc.audit.errConnect')
-    return err.apiError?.message ?? t('misc.audit.errLoad', { status: err.status })
+    if (err.status === 0) return t("misc.audit.errConnect");
+    return (
+      err.apiError?.message ?? t("misc.audit.errLoad", { status: err.status })
+    );
   }
-  return t('misc.audit.errLoadRetry')
+  return t("misc.audit.errLoadRetry");
 }
 
 async function loadFirst(): Promise<void> {
-  loadState.value = 'loading'
-  loadError.value = ''
+  clearScope();
+  if (!ready()) return;
+  const current = generation;
+  controller = new AbortController();
+  loadState.value = "loading";
   try {
-    const res = await listAudit({ limit: PAGE_SIZE })
-    entries.value = res.entries
-    nextBefore.value = res.nextBefore
-    loadState.value = 'idle'
+    const res = await listAudit(
+      { limit: PAGE_SIZE },
+      requestOptions(controller.signal),
+    );
+    if (current !== generation) return;
+    entries.value = res.entries;
+    nextBefore.value = res.nextBefore;
+    loadState.value = "idle";
   } catch (err) {
-    loadError.value = describeError(err)
-    loadState.value = 'error'
+    if (current !== generation) return;
+    loadError.value = describeError(err);
+    loadState.value = "error";
   }
 }
-
 async function loadMore(): Promise<void> {
-  if (!nextBefore.value || loadingMore.value) return
-  loadingMore.value = true
+  if (
+    !ready() ||
+    !nextBefore.value ||
+    loadingMore.value ||
+    loadState.value === "loading"
+  )
+    return;
+  const current = generation;
+  const request = new AbortController();
+  controller = request;
+  loadingMore.value = true;
+  loadError.value = "";
   try {
-    const res = await listAudit({ limit: PAGE_SIZE, before: nextBefore.value })
-    entries.value = [...entries.value, ...res.entries]
-    nextBefore.value = res.nextBefore
+    const res = await listAudit(
+      { limit: PAGE_SIZE, before: nextBefore.value },
+      requestOptions(request.signal),
+    );
+    if (current !== generation) return;
+    entries.value = [...entries.value, ...res.entries];
+    nextBefore.value = res.nextBefore;
   } catch (err) {
-    loadError.value = describeError(err)
+    if (current !== generation) return;
+    if (
+      err instanceof HttpError &&
+      (err.status === 401 || err.status === 403)
+    ) {
+      entries.value = [];
+      nextBefore.value = null;
+    }
+    loadError.value = describeError(err);
   } finally {
-    loadingMore.value = false
+    if (current === generation) loadingMore.value = false;
   }
 }
-
-onMounted(loadFirst)
+watch(
+  [
+    () => session.user,
+    () =>
+      JSON.stringify([
+        session.user?.userId,
+        session.user?.multiTenant,
+        session.user?.mustChangePassword,
+      ]),
+    () => session.isNetworkError,
+    () => permissions.activeTeam,
+  ],
+  () => {
+    clearScope();
+    if (mounted) void loadFirst();
+  },
+  { flush: "sync", deep: true },
+);
+onMounted(() => {
+  mounted = true;
+  void loadFirst();
+});
+onBeforeUnmount(() => {
+  mounted = false;
+  clearScope();
+});
 </script>
 
 <template>
   <div class="panel audit-panel">
     <div class="panel-head">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true">
-        <path d="M12 8v4l3 2" /><circle cx="12" cy="12" r="9" />
+      <svg
+        width="15"
+        height="15"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.9"
+        aria-hidden="true"
+      >
+        <path d="M12 8v4l3 2" />
+        <circle cx="12" cy="12" r="9" />
       </svg>
-      {{ t('misc.audit.title') }}
-      <span class="panel-sub">{{ t('misc.audit.sub') }}</span>
+      {{ t("misc.audit.title") }}
+      <span class="panel-sub">{{ t("misc.audit.sub") }}</span>
     </div>
 
     <!-- Error -->
-    <div v-if="loadState === 'error' && entries.length === 0" class="audit-error" role="alert">
+    <div
+      v-if="loadState === 'error' && entries.length === 0"
+      class="audit-error"
+      role="alert"
+    >
       <span>{{ loadError }}</span>
-      <button class="audit-retry" @click="loadFirst">↻ {{ t('misc.error.retry') }}</button>
+      <button class="audit-retry" @click="loadFirst">
+        ↻ {{ t("misc.error.retry") }}
+      </button>
     </div>
 
     <!-- Loading skeleton -->
@@ -171,8 +313,8 @@ onMounted(loadFirst)
     <!-- Empty -->
     <template v-else-if="loadState === 'idle' && entries.length === 0">
       <div class="audit-empty">
-        <p class="audit-empty-label">{{ t('misc.audit.emptyLabel') }}</p>
-        <p class="audit-empty-hint">{{ t('misc.audit.emptyHint') }}</p>
+        <p class="audit-empty-label">{{ t("misc.audit.emptyLabel") }}</p>
+        <p class="audit-empty-hint">{{ t("misc.audit.emptyHint") }}</p>
       </div>
     </template>
 
@@ -180,15 +322,52 @@ onMounted(loadFirst)
     <template v-else>
       <ol class="audit" :aria-label="t('misc.audit.treeAria')">
         <li v-for="e in entries" :key="e.id" class="aev">
-          <span class="adot" :class="`adot--${meta(e.action).dot}`" aria-hidden="true">
+          <span
+            class="adot"
+            :class="`adot--${meta(e.action).dot}`"
+            aria-hidden="true"
+          >
             <!-- add -->
-            <svg v-if="meta(e.action).dot === 'add'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14" /></svg>
+            <svg
+              v-if="meta(e.action).dot === 'add'"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.2"
+            >
+              <path d="M12 5v14M5 12h14" />
+            </svg>
             <!-- del -->
-            <svg v-else-if="meta(e.action).dot === 'del'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14" /></svg>
+            <svg
+              v-else-if="meta(e.action).dot === 'del'"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.2"
+            >
+              <path d="M5 12h14" />
+            </svg>
             <!-- use (run) -->
-            <svg v-else-if="meta(e.action).dot === 'use'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M5 3v18M5 7h10l-2 3 2 3H5" /></svg>
+            <svg
+              v-else-if="meta(e.action).dot === 'use'"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.9"
+            >
+              <path d="M5 3v18M5 7h10l-2 3 2 3H5" />
+            </svg>
             <!-- cfg -->
-            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3" /></svg>
+            <svg
+              v-else
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.9"
+            >
+              <circle cx="12" cy="12" r="3" />
+              <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+            </svg>
           </span>
 
           <div class="atx">
@@ -198,11 +377,16 @@ onMounted(loadFirst)
               <span class="obj">{{ objectLabel(e) }}</span>
             </span>
             <span class="who">
-              {{ actorLabel(e.actor) }} · {{ t('misc.audit.via') }}<template v-if="e.ip"> · <span class="ip">{{ e.ip }}</span></template>
+              {{ actorLabel(e.actor) }} · {{ t("misc.audit.via")
+              }}<template v-if="e.ip">
+                · <span class="ip">{{ e.ip }}</span></template
+              >
             </span>
           </div>
 
-          <time class="atm" :datetime="e.timestamp" :title="e.timestamp">{{ relativeTime(e.timestamp) }}</time>
+          <time class="atm" :datetime="e.timestamp" :title="e.timestamp">{{
+            relativeTime(e.timestamp)
+          }}</time>
         </li>
       </ol>
 
@@ -213,7 +397,7 @@ onMounted(loadFirst)
         @click="loadMore"
       >
         <span v-if="loadingMore" class="spinner" aria-hidden="true" />
-        {{ loadingMore ? t('misc.loadingShort') : t('misc.audit.loadMore') }}
+        {{ loadingMore ? t("misc.loadingShort") : t("misc.audit.loadMore") }}
       </button>
     </template>
   </div>
@@ -230,8 +414,14 @@ onMounted(loadFirst)
 }
 
 @keyframes panel-in {
-  from { opacity: 0; transform: translateY(13px); }
-  to   { opacity: 1; transform: none; }
+  from {
+    opacity: 0;
+    transform: translateY(13px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .panel-head {
@@ -270,7 +460,7 @@ onMounted(loadFirst)
 
 /* Connecting spine between dots. */
 .aev::before {
-  content: '';
+  content: "";
   position: absolute;
   left: 33px;
   top: 30px;
@@ -452,13 +642,27 @@ onMounted(loadFirst)
 }
 
 @keyframes shimmer {
-  0%   { background-position: 200% center; }
-  100% { background-position: -200% center; }
+  0% {
+    background-position: 200% center;
+  }
+  100% {
+    background-position: -200% center;
+  }
 }
 
-.adot-skel { width: 34px; height: 34px; border-radius: var(--rounded-lg); }
-.line-skel { height: 13px; width: 72%; }
-.time-skel { height: 11px; width: 48px; }
+.adot-skel {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--rounded-lg);
+}
+.line-skel {
+  height: 13px;
+  width: 72%;
+}
+.time-skel {
+  height: 11px;
+  width: 48px;
+}
 
 /* ─── spinner ───────────────────────────────────────────────────────────────── */
 .spinner {
@@ -472,7 +676,9 @@ onMounted(loadFirst)
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

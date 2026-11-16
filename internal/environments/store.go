@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/kubernetes"
 	"github.com/huangchengsir/pipewright/internal/runretry"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"sort"
 	"time"
 )
@@ -23,14 +25,19 @@ import (
 // loadDeploymentsByEnv 取某项目全部已部署 run,按环境分组(每组按部署时刻降序)。
 // 返回 (env→[]Deployment, env 出现顺序);env 顺序按各环境最近部署时刻降序(活跃环境靠前)。
 func (s *Service) loadDeploymentsByEnv(ctx context.Context, projectID string) (map[string][]Deployment, []string, error) {
+	predicate, err := tenancy.EnvironmentPredicate(ctx, s.db, "environment.read", "r.project_id", "r.resolved_environment")
+	if err != nil {
+		return nil, nil, err
+	}
+	args := append([]any{projectID}, predicate.Args...)
 	// 1) 拉「有部署目标的 run + 其环境/触发元数据」。一行一目标机,后续内存按 run 折叠。
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx, `
 		SELECT r.id, r.resolved_environment, r.trigger_commit, r.trigger_branch, r.trigger_actor,
 		       dt.server_id, dt.server_name, dt.status, dt.started_at, dt.finished_at
 		FROM pipeline_runs r
 		JOIN deploy_targets dt ON dt.run_id = r.id
-		WHERE r.project_id = ? AND TRIM(r.resolved_environment) <> ''
-		ORDER BY r.id ASC, dt.started_at ASC, dt.id ASC`, projectID)
+		WHERE r.project_id = ? AND TRIM(r.resolved_environment) <> '' AND `+predicate.SQL+`
+		ORDER BY r.id ASC, dt.started_at ASC, dt.id ASC`, args...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("environments: query deployments: %w", err)
 	}
@@ -88,7 +95,7 @@ func (s *Service) loadDeploymentsByEnv(ctx context.Context, projectID string) (m
 	if s.kubernetes != nil {
 		rows.Close()
 		refs := []runretry.KubernetesHistoryEntry{}
-		r, e := s.db.QueryContext(ctx, `SELECT o.run_id,o.id FROM k8s_operations o JOIN pipeline_runs r ON r.id=o.run_id WHERE r.project_id=? AND TRIM(r.resolved_environment)<>'' AND (o.dispatch_fenced=1 OR o.business_state='unchanged') ORDER BY o.created_at DESC`+store.Limit(store.DialectOf(s.db), "500"), projectID)
+		r, e := configstate.Queryer(ctx, s.db).QueryContext(ctx, `SELECT o.run_id,o.id FROM k8s_operations o JOIN pipeline_runs r ON r.id=o.run_id WHERE r.project_id=? AND TRIM(r.resolved_environment)<>'' AND `+predicate.SQL+` AND (o.dispatch_fenced=1 OR o.business_state='unchanged') ORDER BY o.created_at DESC`+store.Limit(store.DialectOf(s.db), "500"), args...)
 		if e != nil {
 			return nil, nil, e
 		}
@@ -105,7 +112,7 @@ func (s *Service) loadDeploymentsByEnv(ctx context.Context, projectID string) (m
 		if e != nil {
 			return nil, nil, e
 		}
-		releases, e := s.db.QueryContext(ctx, `SELECT o.run_id,o.id FROM k8s_releases o JOIN pipeline_runs r ON r.id=o.run_id WHERE r.project_id=? AND TRIM(r.resolved_environment)<>'' AND EXISTS(SELECT 1 FROM k8s_release_actions a WHERE a.release_id=o.id) ORDER BY o.created_at DESC`+store.Limit(store.DialectOf(s.db), "500"), projectID)
+		releases, e := configstate.Queryer(ctx, s.db).QueryContext(ctx, `SELECT o.run_id,o.id FROM k8s_releases o JOIN pipeline_runs r ON r.id=o.run_id WHERE r.project_id=? AND TRIM(r.resolved_environment)<>'' AND `+predicate.SQL+` AND EXISTS(SELECT 1 FROM k8s_release_actions a WHERE a.release_id=o.id) ORDER BY o.created_at DESC`+store.Limit(store.DialectOf(s.db), "500"), args...)
 		if e != nil {
 			return nil, nil, e
 		}
@@ -137,7 +144,7 @@ func (s *Service) loadDeploymentsByEnv(ctx context.Context, projectID string) (m
 			}
 			seen[key] = true
 			var env, commit, branch, actor, runStatus string
-			if e = s.db.QueryRowContext(ctx, "SELECT resolved_environment,trigger_commit,trigger_branch,trigger_actor,status FROM pipeline_runs WHERE id=? AND project_id=?", ref.RunID, projectID).Scan(&env, &commit, &branch, &actor, &runStatus); e != nil {
+			if e = configstate.Queryer(ctx, s.db).QueryRowContext(ctx, "SELECT r.resolved_environment,r.trigger_commit,r.trigger_branch,r.trigger_actor,r.status FROM pipeline_runs r WHERE r.id=? AND r.project_id=? AND "+predicate.SQL, append([]any{ref.RunID, projectID}, predicate.Args...)...).Scan(&env, &commit, &branch, &actor, &runStatus); e != nil {
 				return nil, nil, e
 			}
 			if env == "" {
@@ -162,7 +169,7 @@ func (s *Service) loadDeploymentsByEnv(ctx context.Context, projectID string) (m
 				a.dep.Kubernetes = append(a.dep.Kubernetes, KubernetesTargetSummary{Version: 2, ReleaseID: release.ID, SourceRunID: release.RunID, Mode: release.Plan.Mode, Resources: preview.Resources, State: release.State, Cleanup: release.Cleanup, Adopted: release.RunID != ref.RunID})
 				eventAt := release.CreatedAt
 				var dispatched sql.NullInt64
-				if e = s.db.QueryRowContext(ctx, `SELECT MAX(created_at) FROM k8s_release_actions WHERE release_id=?`, release.ID).Scan(&dispatched); e != nil {
+				if e = configstate.Queryer(ctx, s.db).QueryRowContext(ctx, `SELECT MAX(created_at) FROM k8s_release_actions WHERE release_id=?`, release.ID).Scan(&dispatched); e != nil {
 					return nil, nil, e
 				}
 				if dispatched.Valid {
@@ -249,7 +256,7 @@ func (s *Service) loadDeploymentsByEnv(ctx context.Context, projectID string) (m
 
 // loadArtifacts 取某 run 的全部产物摘要(按创建序;供时间线展示 + 回滚选品)。
 func (s *Service) loadArtifacts(ctx context.Context, runID string) ([]Artifact, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT id, type, name, `+store.Identifier(store.DialectOf(s.db), "reference")+` FROM run_artifacts
 		 WHERE run_id = ? ORDER BY created_at ASC, id ASC`, runID)
 	if err != nil {

@@ -41,6 +41,57 @@ function mountParent(initial: Environment, servers: Server[], credentials: Crede
 }
 
 describe('EnvCredsTab', () => {
+  it('adds and removes draft environments and their plain and vault variables through each entry', async () => {
+    const { wrapper, environments } = mountParent(environment(), [])
+    try {
+      environments.value = []
+      await nextTick()
+      await wrapper.get('.env-empty button').trigger('click')
+      await nextTick()
+      expect(environments.value).toHaveLength(1)
+      await wrapper.get('.head-add').trigger('click')
+      await nextTick()
+      expect(environments.value).toHaveLength(2)
+
+      const secondEnvironment = () => wrapper.findAll('.env')[1]!
+      await secondEnvironment().get('.addrow button:not(.addbtn--vault)').trigger('click')
+      await secondEnvironment().get('.addrow .addbtn--vault').trigger('click')
+      expect(environments.value[1]!.envVars.map(row => row.secret)).toEqual([false, true])
+      const firstVariable = () => secondEnvironment().findAll('.evar-row')[0]!
+      await firstVariable().get('.ev-v').setValue('draft-only')
+      await firstVariable().get('.vfrom').trigger('click')
+      expect(environments.value[1]!.envVars[0]).toEqual(expect.objectContaining({ secret: true, credentialId: '' }))
+      expect(environments.value[1]!.envVars[0]!.value).toBeUndefined()
+      await firstVariable().get('.ev-del').trigger('click')
+      expect(environments.value[1]!.envVars).toHaveLength(1)
+
+      await secondEnvironment().get('.env-del').trigger('click')
+      expect(environments.value).toHaveLength(1)
+      expect(environments.value[0]!.envVars).toHaveLength(0)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('prevents all environment and variable draft buttons while read-only', async () => {
+    const wrapper = mount(EnvCredsTab, { props: { environments: [environment()], credentials: [], disabled: true } })
+    try {
+      const buttons = wrapper.findAll<HTMLButtonElement>('.head-add,.env-del,.vfrom,.ev-del,.addrow button')
+      expect(buttons).toHaveLength(6)
+      for (const button of buttons) {
+        expect(button.element.disabled).toBe(true)
+        await button.trigger('click')
+      }
+      await wrapper.setProps({ environments: [] })
+      const addFirst = wrapper.get<HTMLButtonElement>('.env-empty button')
+      expect(addFirst.element.disabled).toBe(true)
+      await addFirst.trigger('click')
+      expect(wrapper.emitted('update')).toBeUndefined()
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
   it.each([
     '环境名',
     '变量键',
@@ -248,6 +299,35 @@ describe('EnvCredsTab', () => {
       const external = { ...environment(), name: 'production' }
       await wrapper.setProps({ environments: [external] })
       expect((wrapper.find('input[aria-label="环境名"]').element as HTMLInputElement).value).toBe('production')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('drops the prior environment mask when selecting another secret or switching to plain text', async () => {
+    const initial = environment()
+    initial.envVars = [
+      { id: 'v1', key: 'MODE', secret: true, credentialId: 'vault-old', maskedValue: 'old-mask' },
+      { id: 'v2', key: 'EXTRA', secret: true, credentialId: 'vault-old', maskedValue: 'old-mask' },
+    ]
+    const { wrapper, environments } = mountParent(initial, [], [
+      credential('vault-old', 'git_token'),
+      { ...credential('vault-new', 'git_token'), maskedValue: 'new-mask' },
+    ])
+    try {
+      expect(wrapper.get('.mask').text()).toBe('old-mask')
+      const secret = wrapper.findAllComponents(AppSelect).find(select => select.props('modelValue') === 'vault-old')
+      expect(secret).toBeDefined()
+      secret!.vm.$emit('update:modelValue', 'vault-new')
+      await nextTick()
+      expect(wrapper.get('.mask').text()).toBe('new-mask')
+      expect(environments.value[0]!.envVars[0]!.maskedValue).toBeUndefined()
+      await wrapper.findAll('.vfrom')[1]!.trigger('click')
+      const updated = environments.value[0]!.envVars[1]!
+      expect(environments.value[0]!.envVars[0]!.credentialId).toBe('vault-new')
+      expect(updated.secret).toBe(false)
+      expect(updated.credentialId).toBeUndefined()
+      expect(updated.maskedValue).toBeUndefined()
     } finally {
       wrapper.unmount()
     }

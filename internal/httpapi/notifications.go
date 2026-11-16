@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/huangchengsir/pipewright/internal/notify"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // ---- 通知渠道 DTO(冻结契约;camelCase;敏感字段绝无明文,仅 hasPassword:bool) ----
@@ -85,6 +87,8 @@ func toChannelDTO(c *notify.Channel) channelDTO {
 // writeNotifyError 把领域错误映射为契约错误码/状态码;绝不回显敏感字段明文/密文。
 func writeNotifyError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, tenancy.ErrForbidden):
+		writeError(w, http.StatusForbidden, "forbidden", "无权执行此操作")
 	case errors.Is(err, notify.ErrRouteNotFound):
 		writeError(w, http.StatusNotFound, "route_not_found", "通知路由不存在")
 	case errors.Is(err, notify.ErrInvalidEvent):
@@ -549,5 +553,23 @@ func makeDeleteTemplateHandler(svc notify.Service) http.HandlerFunc {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func makeChannelOptionsHandler(svc notify.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		reader, ok := svc.(interface {
+			ListChannelOptions(context.Context) ([]notify.ChannelOption, error)
+		})
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "unavailable", "Notification channel selection unavailable")
+			return
+		}
+		items, err := reader.ListChannelOptions(r.Context())
+		if err != nil {
+			writeNotifyError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": items})
 	}
 }

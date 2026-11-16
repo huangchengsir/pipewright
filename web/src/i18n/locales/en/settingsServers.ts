@@ -1,4 +1,8 @@
 export default {
+  monitoringReady: "Monitoring authorized",
+  monitoringRequired: "Monitoring authorization required",
+  monitoringHint: "Save the server or confirm its execution assignment to authorize fixed read-only sampling. Authorization does not indicate server health.",
+
   title: 'Servers',
   desc: 'Register target servers (host / port / user + SSH credential) and test connectivity. SSH keys are bound by reference only, stored and retrieved encrypted via the vault, and never persisted or echoed in plaintext. Deployment and operations both run commands through this shared SSH layer.',
   addServer: 'Register Server',

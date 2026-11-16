@@ -1,3 +1,7 @@
+import {createPinia,setActivePinia} from 'pinia'
+import {useSessionStore} from '../../stores/session'
+import {beforeEach as beforeIdentity} from 'vitest'
+beforeIdentity(()=>{setActivePinia(createPinia());useSessionStore().setUser({username:'admin',multiTenant:false})})
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import RunTerminal from './RunTerminal.vue'

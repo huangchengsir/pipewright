@@ -106,7 +106,7 @@ func TestPostgresUpgradeReopenAndMigrationRollback(t *testing.T) {
 		t.Fatal("reopen changed ciphertext", err)
 	}
 	var count int
-	if err := st.DB.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil || count != 65 {
+	if err := st.DB.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil || count != 66 {
 		t.Fatalf("migration count %d %v", count, err)
 	}
 	if err := st.DB.QueryRow("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_type='BASE TABLE'").Scan(&count); err != nil || count != 109 {

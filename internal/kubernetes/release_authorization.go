@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/authz"
 	"sort"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 const ReleaseProfileProtocol = "kube-gateway-v2"
@@ -115,6 +117,9 @@ func (s *Service) SaveReleaseProfile(ctx context.Context, connection string, exp
 		return out, ErrInvalid
 	}
 	e := s.configWrite(ctx, func(ctx context.Context, q dbtx) error {
+		if err := tenancy.Check(ctx, s.db, "kubernetes.edit", "kubernetes", connection); err != nil {
+			return err
+		}
 		if _, e := s.connection(ctx, q, connection); e != nil {
 			return e
 		}
@@ -149,6 +154,10 @@ func (s *Service) releaseProfile(ctx context.Context, q dbtx, connection string)
 	return p, nil
 }
 func (s *Service) GetReleaseProfile(ctx context.Context, connection string) (ReleaseProfile, error) {
+
+	if err := tenancy.Check(ctx, s.db, "kubernetes.read", "kubernetes", connection); err != nil {
+		return ReleaseProfile{}, err
+	}
 	return s.releaseProfile(ctx, configstate.Queryer(ctx, s.db), connection)
 }
 func (s *Service) releaseGrant(ctx context.Context, q dbtx, id string) (ReleaseGrant, error) {
@@ -184,6 +193,15 @@ func (s *Service) SaveReleaseGrant(ctx context.Context, connection, id string, e
 		return out, ErrInvalid
 	}
 	e := s.configWrite(ctx, func(ctx context.Context, q dbtx) error {
+		if err := tenancy.CheckSameTeam(ctx, s.db, authz.ResourceRef{Kind: "kubernetes", ID: connection}, authz.ResourceRef{Kind: "project", ID: in.ProjectID}); err != nil {
+			return err
+		}
+		if err := tenancy.Check(ctx, s.db, "project.read", "project", in.ProjectID); err != nil {
+			return err
+		}
+		if err := tenancy.Check(ctx, s.db, "kubernetes.edit", "kubernetes", connection); err != nil {
+			return err
+		}
 		c, e := s.connection(ctx, q, connection)
 		if e != nil {
 			return e
@@ -209,6 +227,9 @@ func (s *Service) SaveReleaseGrant(ctx context.Context, connection, id string, e
 			if e != nil {
 				return e
 			}
+			if e = s.checkReleaseGrantProject(ctx, old.ProjectID); e != nil {
+				return e
+			}
 			if old.Revision != expected || old.ConnectionID != connection {
 				return ErrConflict
 			}
@@ -228,8 +249,17 @@ func (s *Service) SaveReleaseGrant(ctx context.Context, connection, id string, e
 	return out, e
 }
 func (s *Service) ListReleaseGrants(ctx context.Context, connection string) ([]ReleaseGrant, error) {
+
+	if err := tenancy.Check(ctx, s.db, "kubernetes.read", "kubernetes", connection); err != nil {
+		return nil, err
+	}
 	q := configstate.Queryer(ctx, s.db)
-	rows, e := q.QueryContext(ctx, `SELECT grant_json FROM k8s_release_grants WHERE connection_id=? ORDER BY created_at,id`, connection)
+	predicate, e := tenancy.QueryPredicate(ctx, s.db, "project.read", "g.project_id")
+	if e != nil {
+		return nil, e
+	}
+	args := append([]any{connection}, predicate.Args...)
+	rows, e := q.QueryContext(ctx, `SELECT g.grant_json FROM k8s_release_grants g WHERE g.connection_id=? AND `+predicate.SQL+` ORDER BY g.created_at,g.id`, args...)
 	if e != nil {
 		return nil, e
 	}
@@ -272,10 +302,18 @@ func releaseAccessContains(a, w ReleaseAccess) bool {
 }
 func (s *Service) authorizeRelease(ctx context.Context, q dbtx, in ReleaseAuthorizationRequest) (ReleaseAuthorization, error) {
 	a := ReleaseAuthorization{Request: in}
+	if err := s.authorizeTenantTarget(ctx, in.ProjectID, in.Environment, in.ConnectionID, in.CredentialID, in.Executor); err != nil {
+		return a, err
+	}
 	if !validID(in.ProjectID) || !cleanText(in.Environment, 128) || !validExecutor(in.Executor) || len(in.Resources) == 0 || len(in.Resources) > 512 {
 		return a, ErrInvalid
 	}
 	for _, r := range in.Resources {
+		if r.ID.Namespace == "" || (r.ID.Namespace == "kube-system" && r.ID.Name == "coredns") {
+			if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+				return a, err
+			}
+		}
 		if !validReleaseAccess(r) {
 			return a, ErrInvalid
 		}
@@ -387,6 +425,9 @@ func canonicalReleaseAccess(in []ReleaseAccess) []ReleaseAccess {
 // Final preview obtains a narrower authorization for the actual plan/action set.
 func (s *Service) ReleasePolicyCatalog(ctx context.Context, in ReleaseAuthorizationRequest) (ReleaseAuthorization, error) {
 	var out ReleaseAuthorization
+	if err := s.authorizeTenantTarget(ctx, in.ProjectID, in.Environment, in.ConnectionID, in.CredentialID, in.Executor); err != nil {
+		return out, err
+	}
 	e := configstate.WithReadTxContext(ctx, s.db, func(ctx context.Context, q dbtx) error {
 		connection, e := s.connection(ctx, q, in.ConnectionID)
 		if e != nil {
@@ -470,13 +511,26 @@ func hasReleaseAction(actions []string, want string) bool {
 	return false
 }
 
+func (s *Service) checkReleaseGrantProject(ctx context.Context, project string) error {
+	err := tenancy.Check(ctx, s.db, "project.read", "project", project)
+	if errors.Is(err, tenancy.ErrForbidden) {
+		return ErrNotFound
+	}
+	return err
+}
 func (s *Service) DeleteReleaseGrant(ctx context.Context, connection, id string, expected int64) error {
 	if !validRevision(expected) {
 		return ErrInvalid
 	}
 	return s.configWrite(ctx, func(ctx context.Context, q dbtx) error {
+		if err := tenancy.Check(ctx, s.db, "kubernetes.edit", "kubernetes", connection); err != nil {
+			return err
+		}
 		g, e := s.releaseGrant(ctx, q, id)
 		if e != nil {
+			return e
+		}
+		if e = s.checkReleaseGrantProject(ctx, g.ProjectID); e != nil {
 			return e
 		}
 		if g.ConnectionID != connection || g.Revision != expected {

@@ -69,6 +69,15 @@ func makeTerminalHTTPHandler(m *terminalhttp.Manager, svc target.Service, aud au
 			writeError(w, 503, "terminal_unavailable", "终端兼容通道未初始化")
 			return
 		}
+		if r.Method != http.MethodDelete {
+			if err := target.AuthorizeTerminal(r.Context(), svc, chi.URLParam(r, "id")); err != nil {
+				if writeAuthorizationError(w, err) {
+					return
+				}
+				writeServerError(w, err)
+				return
+			}
+		}
 		owner, scope := terminalOwner(r), terminalScope(r)
 		sid := chi.URLParam(r, "sid")
 		if sid == "" {
@@ -140,10 +149,17 @@ func makeTerminalHTTPHandler(m *terminalhttp.Manager, svc target.Service, aud au
 					return false
 				}
 				_, verifyErr = authSvc.Verify(cookie.Value)
+				if verifyErr == nil {
+					verifyErr = target.AuthorizeTerminal(r.Context(), svc, chi.URLParam(r, "id"))
+				}
 				return verifyErr == nil
 			}
 			out, err := m.Poll(r.Context(), owner, scope, sid, after, valid)
 			if verifyErr != nil {
+				_ = m.Delete(owner, scope, sid)
+				if writeAuthorizationError(w, verifyErr) {
+					return
+				}
 				if !errors.Is(verifyErr, auth.ErrSessionNotFound) {
 					writeError(w, 500, "internal", "服务器内部错误")
 					return

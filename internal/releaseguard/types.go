@@ -160,6 +160,7 @@ type Evidence struct {
 }
 
 type TimelineItem struct {
+	SourceRunID string    `json:"sourceRunId,omitempty"`
 	ID          string    `json:"id"`
 	At          time.Time `json:"at"`
 	Kind        string    `json:"kind"`

@@ -53,6 +53,8 @@ func toDNSProviderDTO(p dnsprovider.Provider) dnsProviderDTO {
 // writeDNSProviderError 把 DNS 提供商领域错误映射为契约错误码/状态码;绝不回显明文/token。
 func writeDNSProviderError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, vault.ErrVaultUnconfigured), errors.Is(err, vault.ErrEmptySecret), errors.Is(err, vault.ErrEmptyName):
+		writeVaultError(w, err)
 	case errors.Is(err, dnsprovider.ErrNotFound):
 		writeError(w, http.StatusNotFound, "dns_provider_not_found", "DNS 提供商不存在")
 	case errors.Is(err, dnsprovider.ErrInvalidType):
@@ -133,28 +135,20 @@ func makeCreateDNSProviderHandler(svc dnsprovider.Service, v vault.Vault, rec au
 			writeError(w, http.StatusBadRequest, "invalid_dns_provider", "请填写 API 凭据")
 			return
 		}
-		// 先把 token 存入 vault(加密),拿到 credentialId;DB 与领域层全程只见 credential_id。
-		cred, err := v.Create(vault.CreateInput{
-			Name:   "DNS · " + strings.TrimSpace(in.Name),
-			Type:   vault.TypeDNSToken,
-			Secret: in.Token,
+		creator, ok := svc.(interface {
+			CreateWithToken(context.Context, dnsprovider.CreateInput, string) (*dnsprovider.Provider, error)
 		})
-		if err != nil {
-			writeVaultError(w, err)
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "internal", "DNS 提供商服务未初始化")
 			return
 		}
-		p, err := svc.Create(r.Context(), dnsprovider.CreateInput{
-			Type:         in.Type,
-			Name:         in.Name,
-			CredentialID: cred.ID,
-			BaseDomain:   in.BaseDomain,
-		})
+		p, err := creator.CreateWithToken(r.Context(), dnsprovider.CreateInput{Type: in.Type, Name: in.Name, BaseDomain: in.BaseDomain}, in.Token)
+		in.Token = ""
 		if err != nil {
-			// 登记失败 → 回滚刚存的凭据,避免悬挂(provider 没建成,凭据不应留存)。
-			_ = v.Delete(cred.ID)
 			writeDNSProviderError(w, err)
 			return
 		}
+
 		recordAudit(r.Context(), rec, audit.Entry{
 			Actor:      auditActor,
 			Action:     auditActionDNSProviderCreate,
@@ -244,8 +238,19 @@ func makeAllocateSubdomainHandler(deps subdomainDeps, rec audit.Recorder) http.H
 			return
 		}
 
+		allocation := dnsprovider.AllocateInput{
+			ProviderID:        strings.TrimSpace(in.ProviderID),
+			ServerID:          strings.TrimSpace(in.ServerID),
+			UpstreamContainer: in.UpstreamContainer,
+			UpstreamPort:      in.UpstreamPort,
+		}
+		if err := deps.dns.AuthorizeAllocation(r.Context(), allocation); err != nil {
+			writeDNSProviderError(w, err)
+			return
+		}
+
 		// 据 server.Host 解析宿主机公网 IPv4(A 记录指向它;非用户自由文本,杜绝任意解析注入)。
-		srv, err := deps.servers.Get(r.Context(), strings.TrimSpace(in.ServerID))
+		srv, err := deps.servers.Get(r.Context(), allocation.ServerID)
 		if err != nil {
 			writeProxyError(w, err)
 			return
@@ -256,20 +261,15 @@ func makeAllocateSubdomainHandler(deps subdomainDeps, rec audit.Recorder) http.H
 			return
 		}
 
-		ref, err := deps.dns.AllocateSubdomain(r.Context(), dnsprovider.AllocateInput{
-			ProviderID:        in.ProviderID,
-			ServerID:          in.ServerID,
-			UpstreamContainer: in.UpstreamContainer,
-			UpstreamPort:      in.UpstreamPort,
-			HostIP:            hostIP,
-		})
+		allocation.HostIP = hostIP
+		ref, err := deps.dns.AllocateSubdomain(r.Context(), allocation)
 		if err != nil {
 			writeDNSProviderError(w, err)
 			return
 		}
 
 		// 回读新建路由 DTO(子域名分配响应 = 一个普通 Route DTO)。
-		routes, lerr := deps.proxy.List(r.Context(), in.ServerID)
+		routes, lerr := deps.proxy.List(r.Context(), allocation.ServerID)
 		if lerr != nil {
 			writeProxyError(w, lerr)
 			return
@@ -313,4 +313,22 @@ func resolveHostIPv4(ctx context.Context, host string) (string, error) {
 		}
 	}
 	return "", errors.New("no IPv4 for host")
+}
+
+func makeUsableDNSProvidersHandler(svc dnsprovider.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		reader, ok := svc.(interface {
+			ListUsable(context.Context) ([]dnsprovider.UsableProvider, error)
+		})
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "unavailable", "DNS provider selection unavailable")
+			return
+		}
+		items, err := reader.ListUsable(r.Context())
+		if err != nil {
+			writeDNSProviderError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	}
 }

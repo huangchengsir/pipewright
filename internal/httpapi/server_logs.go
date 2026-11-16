@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/huangchengsir/pipewright/internal/mask"
 	"github.com/huangchengsir/pipewright/internal/target"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // Story 6.2(FR-16):服务日志查看(历史 + 实时 tail,经 SSH)。
@@ -158,16 +160,35 @@ func makeServerLogsHandler(svc target.Service) http.HandlerFunc {
 			return
 		}
 
+		scopedService := svc
+		if source == "docker" {
+			scopedService = target.ForContainerAction(svc, "container.inspect")
+		}
 		// 先确认服务器存在(404 在写任何 200 体之前)。
-		if _, err := svc.Get(r.Context(), id); err != nil {
+		if _, err := scopedService.Get(r.Context(), id); err != nil {
 			writeServerError(w, err)
 			return
 		}
 
-		cmd := buildLogCmd(source, tgt, lines, false)
-		res, err := svc.Exec(r.Context(), id, cmd)
+		logMasker := mask.NewMasker()
+		pinnedTarget := tgt
+		if source == "docker" && tenancy.HasAuthorizationContext(r.Context()) {
+			var err error
+			logMasker, pinnedTarget, err = containerLogMasker(r.Context(), scopedService, id, tgt)
+			if err != nil {
+				if !writeAuthorizationError(w, err) {
+					writeError(w, http.StatusServiceUnavailable, "log_unavailable", "无法安全读取容器日志")
+				}
+				return
+			}
+		}
+		cmd := buildLogCmd(source, pinnedTarget, lines, false)
+		res, err := scopedService.Exec(r.Context(), id, cmd)
 		out := serverLogsDTO{ServerID: id, Source: source, Target: tgt, Lines: []serverLogLineDTO{}}
 		if err != nil {
+			if writeAuthorizationError(w, err) {
+				return
+			}
 			// 定位类错误(服务器/凭据不存在、保险库未配)→ 走标准映射(404/422/503)。
 			if errors.Is(err, target.ErrNotFound) ||
 				errors.Is(err, target.ErrCredentialNotFound) ||
@@ -187,12 +208,16 @@ func makeServerLogsHandler(svc target.Service) http.HandlerFunc {
 			if msg == "" {
 				msg = "日志命令以非零状态退出"
 			}
-			out.Error = truncateLog(msg, 1024)
+			out.Error = truncateLog(logMasker.Scrub(msg), 1024)
 			writeJSON(w, http.StatusOK, out)
 			return
 		}
 
-		text := res.Stdout
+		if _, err := scopedService.Get(r.Context(), id); err != nil {
+			writeServerError(w, err)
+			return
+		}
+		text := logMasker.Scrub(res.Stdout)
 		truncated := false
 		if len(text) > logBytesMax {
 			text = text[:logBytesMax]
@@ -228,14 +253,33 @@ func makeServerLogsStreamHandler(svc target.Service) http.HandlerFunc {
 			return
 		}
 
-		if _, err := svc.Get(r.Context(), id); err != nil {
+		scopedService := svc
+		if source == "docker" {
+			scopedService = target.ForContainerAction(svc, "container.inspect")
+		}
+		if _, err := scopedService.Get(r.Context(), id); err != nil {
 			writeServerError(w, err)
 			return
 		}
 
-		cmd := buildLogCmd(source, tgt, lines, true)
-		rc, err := svc.ExecStream(r.Context(), id, cmd)
+		logMasker := mask.NewMasker()
+		pinnedTarget := tgt
+		if source == "docker" && tenancy.HasAuthorizationContext(r.Context()) {
+			var err error
+			logMasker, pinnedTarget, err = containerLogMasker(r.Context(), scopedService, id, tgt)
+			if err != nil {
+				if !writeAuthorizationError(w, err) {
+					writeError(w, http.StatusServiceUnavailable, "log_unavailable", "无法安全读取容器日志")
+				}
+				return
+			}
+		}
+		cmd := buildLogCmd(source, pinnedTarget, lines, true)
+		rc, err := scopedService.ExecStream(r.Context(), id, cmd)
 		if err != nil {
+			if writeAuthorizationError(w, err) {
+				return
+			}
 			// 定位类错误未写任何流帧前 → 标准状态码。
 			if errors.Is(err, target.ErrNotFound) ||
 				errors.Is(err, target.ErrCredentialNotFound) ||
@@ -304,7 +348,10 @@ func makeServerLogsStreamHandler(svc target.Service) http.HandlerFunc {
 					}
 					return
 				}
-				writeSSE(w, flusher, "logline", logLinePayload(line))
+				if _, err := scopedService.Get(ctx, id); err != nil {
+					return
+				}
+				writeSSE(w, flusher, "logline", logLinePayload(logMasker.Scrub(line)))
 			}
 		}
 	}

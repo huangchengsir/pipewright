@@ -3,8 +3,10 @@ package kubernetes
 import (
 	"context"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/kubeprotocol"
 	"github.com/huangchengsir/pipewright/internal/storetest"
 	"github.com/huangchengsir/pipewright/internal/target"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"strings"
 	"testing"
 )
@@ -92,5 +94,60 @@ func TestReleaseRuntimeImageIdentityUsesDockerSHA256(t *testing.T) {
 	prepared, e := f.s.PrepareReleaseRuntimeCreate(ctx, lease.ID, "image-owner", lease.Runtime.Revision, nil, image)
 	if e != nil || prepared.Runtime.ToolImageID != image {
 		t.Fatal("Docker image identity rejected", e)
+	}
+}
+
+func TestReleasePreparationRecognizesTenantDenial(t *testing.T) {
+	private := errors.New("private authorization detail")
+	cause := errors.Join(tenancy.ErrForbidden, private)
+	err := WithReleasePreparationPhase(cause, "authorization")
+	phase, reason, ok := ReleasePreparationDetails(err)
+	if !ok || phase != "authorization" || reason != "kubernetes_not_authorized" {
+		t.Fatalf("got phase=%q reason=%q", phase, reason)
+	}
+	if !errors.Is(err, tenancy.ErrForbidden) || strings.Contains(err.Error(), private.Error()) {
+		t.Fatal("authorization classification must preserve the cause without logging its text")
+	}
+}
+
+type revokedIdentityTransport struct {
+	*fakePrivateDocker
+	revokedOn string
+	commands  []string
+}
+
+func (t *revokedIdentityTransport) Docker(ctx context.Context, args []string, in []byte) (*target.SecretResult, error) {
+	t.commands = append(t.commands, args[0])
+	if args[0] == t.revokedOn {
+		return nil, errors.Join(tenancy.ErrForbidden, errors.New("private executor detail"))
+	}
+	return t.fakePrivateDocker.Docker(ctx, args, in)
+}
+
+func TestReleaseRPCReportsTransportRevocationWithoutDispatch(t *testing.T) {
+	for _, command := range []string{"info", "inspect"} {
+		t.Run(command, func(t *testing.T) {
+			ctx := context.Background()
+			f, plan := releaseStoreFixture(t, storetest.Open(t))
+			transport := &revokedIdentityTransport{fakePrivateDocker: &fakePrivateDocker{}, revokedOn: command}
+			session := &ReleaseSession{
+				runtime:   NewRuntime(f.s, nil, nil),
+				transport: transport,
+				lease: ReleaseRuntimeLease{
+					Authorization: plan.Authorization,
+					Runtime:       RuntimeLease{EngineID: "engine-test"},
+				},
+			}
+			_, err := session.RPC(ctx, kubeprotocol.Frame{Version: 2, Command: "read"})
+			_, reason, ok := ReleasePreparationDetails(err)
+			if !ok || reason != "kubernetes_not_authorized" || !errors.Is(err, tenancy.ErrForbidden) {
+				t.Fatalf("expected authorization denial, got %v", err)
+			}
+			for _, command := range transport.commands {
+				if command == "exec" {
+					t.Fatal("revocation dispatched a private command")
+				}
+			}
+		})
 	}
 }

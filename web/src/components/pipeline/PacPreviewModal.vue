@@ -8,8 +8,9 @@
  * see whether the file is found, whether it is valid, the parse error if not, and a summary of the
  * stages the runtime would use. Read-only — it never saves anything and never reveals secrets.
  */
-import { ref, onMounted } from 'vue'
+import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import {useAuthorizedRequestScope} from '../../composables/useAuthorizedRequestScope'
 import { previewPacConfig, type PacPreviewResult } from '../../api/projects'
 import { HttpError } from '../../api/http'
 
@@ -31,13 +32,14 @@ const errorMsg = ref('')
 const result = ref<PacPreviewResult | null>(null)
 
 async function runPreview(): Promise<void> {
-  if (busy.value) return
+  if (!scope.active() || busy.value) return
   busy.value = true
   errorMsg.value = ''
   result.value = null
   try {
-    result.value = await previewPacConfig(props.projectId, refInput.value)
+    result.value = await scope.run(()=>previewPacConfig(props.projectId,refInput.value,scope.requestOptions))
   } catch (err) {
+    if (!scope.active()) return
     if (err instanceof HttpError) {
       errorMsg.value = err.status === 0
         ? t('projectPipeline.pacPreviewConnFailed')
@@ -54,14 +56,14 @@ function onBackdrop(e: MouseEvent): void {
   if (e.target === e.currentTarget) emit('close')
 }
 
+const scope=useAuthorizedRequestScope({action:'pipeline.read',resourceId:props.projectId},()=>{refInput.value='';result.value=null;errorMsg.value='';emit('close')})
+
 // Auto-run on open against the default branch so the user sees a result immediately.
-onMounted(() => {
-  void runPreview()
-})
+watch(scope.active, active => { if (active) void runPreview() }, {immediate:true})
 </script>
 
 <template>
-  <div class="pp-backdrop" role="dialog" aria-modal="true" aria-labelledby="pp-title" @mousedown="onBackdrop">
+  <div v-if="scope.active()" class="pp-backdrop" role="dialog" aria-modal="true" aria-labelledby="pp-title" @mousedown="onBackdrop">
     <div class="pp-modal">
       <header class="pp-head">
         <div>

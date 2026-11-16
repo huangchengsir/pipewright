@@ -67,7 +67,7 @@ func (s *Service) Apply(ctx context.Context, tokenID string, in ApplyRequest) (*
 	hash := digest(in)
 	var intent *operationRow
 	execute := false
-	e = configstate.WithWriteTx(ctx, s.db, func(q configstate.DBTX) error {
+	e = s.withWriteTx(ctx, func(q configstate.DBTX) error {
 		t, e := s.locks(ctx, q, tokenID, g)
 		if e != nil {
 			return e
@@ -94,6 +94,9 @@ func (s *Service) Apply(ctx context.Context, tokenID string, in ApplyRequest) (*
 		r, e := readDraft(ctx, q, `id=? AND owner_token_id=?`, in.DraftID, tokenID)
 		if e != nil {
 			return ErrForbidden
+		}
+		if e = s.configurationWrite(ctx, q, r.project, r.ops); e != nil {
+			return e
 		}
 		if e = authorize(t, r.project, "apply", r.ops); e != nil {
 			return e
@@ -131,7 +134,7 @@ func (s *Service) Apply(ctx context.Context, tokenID string, in ApplyRequest) (*
 	work, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	commitAttempted := false
-	e = configstate.WithWriteTx(work, s.db, func(q configstate.DBTX) error {
+	e = s.withWriteTx(work, func(q configstate.DBTX) error {
 		t, e := s.locks(work, q, tokenID, g)
 		if e != nil {
 			return e
@@ -156,6 +159,12 @@ func (s *Service) Apply(ctx context.Context, tokenID string, in ApplyRequest) (*
 		r, e := readDraftTable(work, q, "mcp_config_drafts"+store.LockHint(store.DialectOf(s.db), true), where, in.DraftID, tokenID)
 		if e != nil {
 			return ErrForbidden
+		}
+		if e = s.configurationWrite(work, q, r.project, r.ops); e != nil {
+			return e
+		}
+		if e = s.configurationApproval(work, q, approver, r.project, r.ops); e != nil {
+			return e
 		}
 		if e = authorize(t, r.project, "apply", r.ops); e != nil {
 			return e
@@ -301,7 +310,7 @@ func (s *Service) AdminOperation(ctx context.Context, adminID, operationID strin
 		return nil, ErrInvalid
 	}
 	var out *OperationResult
-	err := configstate.WithWriteTx(ctx, s.db, func(q configstate.DBTX) error {
+	err := s.withWriteTx(ctx, func(q configstate.DBTX) error {
 		if err := configstate.LockEpochs(ctx, q, s.db, configstate.EpochPolicy, configstate.EpochSecrets, configstate.EpochExecutor); err != nil {
 			return err
 		}
@@ -311,6 +320,9 @@ func (s *Service) AdminOperation(ctx context.Context, adminID, operationID strin
 		x, err := s.readOperation(ctx, q, `id=?`, false, operationID)
 		if err != nil {
 			return ErrForbidden
+		}
+		if err = s.configurationApproval(ctx, q, adminID, x.project, nil); err != nil {
+			return err
 		}
 		out = operationView(x)
 		return s.audit(ctx, q, "admin", "mcp_config_operation_inspect", x.project, x.draft, nil)
@@ -339,10 +351,10 @@ func renderRawYAML(raw []byte) (string, error) {
 func (s *Service) finishFailed(ctx context.Context, x *operationRow, cause error) {
 	cleanup, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	_ = configstate.WithWriteTx(cleanup, s.db, func(q configstate.DBTX) error {
+	_ = s.withWriteTx(cleanup, func(q configstate.DBTX) error {
 		state := "failed"
 		var controlled Error
-		if errors.As(cause, &controlled) {
+		if errors.As(cause, &controlled) || Code(cause) != string(ErrUnavailable) {
 			state = "rejected"
 		}
 		reason := Code(cause)
@@ -359,7 +371,7 @@ func (s *Service) Operation(ctx context.Context, tokenID string, in OperationReq
 		return nil, e
 	}
 	var out *OperationResult
-	e = configstate.WithWriteTx(ctx, s.db, func(q configstate.DBTX) error {
+	e = s.withWriteTx(ctx, func(q configstate.DBTX) error {
 		t, e := s.locks(ctx, q, tokenID, g)
 		if e != nil {
 			return e
@@ -397,7 +409,7 @@ func (s *Service) Operation(ctx context.Context, tokenID string, in OperationReq
 // FencePending is an explicit browser-admin recovery action, never an automatic
 // retry. A delayed original executor must fail its state/owner check afterwards.
 func (s *Service) FencePending(ctx context.Context, adminID, operationID string) error {
-	return configstate.WithWriteTx(ctx, s.db, func(q configstate.DBTX) error {
+	return s.withWriteTx(ctx, func(q configstate.DBTX) error {
 		if e := configstate.LockEpochs(ctx, q, s.db, configstate.EpochPolicy, configstate.EpochSecrets, configstate.EpochExecutor); e != nil {
 			return e
 		}
@@ -407,6 +419,9 @@ func (s *Service) FencePending(ctx context.Context, adminID, operationID string)
 		x, e := s.readOperation(ctx, q, `id=?`, false, operationID)
 		if e != nil {
 			return ErrForbidden
+		}
+		if e = s.configurationApproval(ctx, q, adminID, x.project, nil); e != nil {
+			return e
 		}
 		if _, e = configstate.LockProject(ctx, q, s.db, x.project); e != nil {
 			return e

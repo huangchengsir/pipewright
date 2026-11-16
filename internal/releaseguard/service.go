@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/maintenance"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"regexp"
 	"sort"
 	"strings"
@@ -33,26 +35,27 @@ type Options struct {
 }
 
 type Service struct {
-	model              ExplanationModel
-	masker             *mask.Masker
-	analysisCancels    map[string]context.CancelFunc
-	analysisProjects   map[string]string
-	compareSource      func(context.Context, string, string, string) SourceComparison
-	db                 *sql.DB
-	ledger             *deployattempt.Store
-	runs               run.Service
-	targets            target.Service
-	observer           Observer
-	now                func() time.Time
-	mu                 sync.Mutex
-	workers            map[string]context.CancelFunc
-	reads              map[string]*guardReads
-	finishing          map[string]guardFinish
-	wg                 sync.WaitGroup
-	sshSem             chan struct{}
-	closed             bool
-	deleting           map[string]bool
-	resolveImageTarget func(run.Artifact, map[string]string) (string, deployattempt.ExpectedImage, error)
+	model               ExplanationModel
+	masker              *mask.Masker
+	analysisCancels     map[string]context.CancelFunc
+	analysisProjects    map[string]string
+	compareSource       func(context.Context, string, string, string) SourceComparison
+	db                  *sql.DB
+	ledger              *deployattempt.Store
+	runs                run.Service
+	targets             target.Service
+	observer            Observer
+	now                 func() time.Time
+	mu                  sync.Mutex
+	workers             map[string]context.CancelFunc
+	observationContexts map[string]context.Context
+	reads               map[string]*guardReads
+	finishing           map[string]guardFinish
+	wg                  sync.WaitGroup
+	sshSem              chan struct{}
+	closed              bool
+	deleting            map[string]bool
+	resolveImageTarget  func(run.Artifact, map[string]string) (string, deployattempt.ExpectedImage, error)
 }
 
 type guardReads struct {
@@ -71,6 +74,7 @@ func New(o Options) (*Service, error) {
 	}
 	s := &Service{db: o.DB, ledger: o.Ledger, runs: o.Runs, targets: o.Targets, observer: o.Observer, now: o.Now, workers: map[string]context.CancelFunc{}, sshSem: make(chan struct{}, 2), deleting: map[string]bool{}, resolveImageTarget: o.ResolveImageTarget}
 	s.reads = map[string]*guardReads{}
+	s.observationContexts = map[string]context.Context{}
 	s.finishing = map[string]guardFinish{}
 	s.model = o.Model
 	s.masker = o.Masker
@@ -132,6 +136,9 @@ func (s *Service) Prepare(ctx context.Context, project string, in PrepareInput) 
 			return nil, ErrNotFound
 		}
 		p.RunID = a.Source.RunID
+		if err := tenancy.Check(ctx, s.db, "guard.observe", "run", p.RunID); err != nil {
+			return nil, err
+		}
 		p.Environment = a.Source.Environment
 		p.Limitations = append(p.Limitations, "before_start_not_observed", "no_immediate_predeployment_baseline")
 		for _, t := range a.Targets {
@@ -167,6 +174,9 @@ func (s *Service) Prepare(ctx context.Context, project string, in PrepareInput) 
 	} else {
 		if s.runs == nil || s.targets == nil || in.RunID == "" || in.ArtifactID == "" || len(in.ServerIDs) == 0 || len(in.ServerIDs) > 5 {
 			return nil, ErrInvalid
+		}
+		if err := tenancy.Check(ctx, s.db, "guard.observe", "run", in.RunID); err != nil {
+			return nil, err
 		}
 		rn, err := s.runs.Get(ctx, in.RunID)
 		if err != nil || rn.ProjectID != project {
@@ -250,7 +260,10 @@ func (s *Service) Prepare(ctx context.Context, project string, in PrepareInput) 
 	}
 	p.Hash = digestJSON(*p)
 	body, _ := json.Marshal(p)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO release_guard_plans(id,project_id,expires_at,plan_json) VALUES(?,?,?,?)`, p.ID, p.ProjectID, p.ExpiresAt.UnixMilli(), string(body))
+	err := s.guardWrite(ctx, p.RunID, "guard.observe", func(txctx context.Context, q configstate.DBTX) error {
+		_, err := q.ExecContext(txctx, `INSERT INTO release_guard_plans(id,project_id,expires_at,plan_json) VALUES(?,?,?,?)`, p.ID, p.ProjectID, p.ExpiresAt.UnixMilli(), string(body))
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -281,20 +294,23 @@ func (s *Service) startLocked(ctx context.Context, project string, in StartInput
 	var existing string
 	err := s.db.QueryRowContext(ctx, `SELECT id FROM release_guards WHERE project_id=? AND idempotency_key=?`, project, in.IdempotencyKey).Scan(&existing)
 	if err == nil {
-		d, e := s.load(ctx, project, existing)
+		d, e := s.authorizeGuard(ctx, project, existing, "guard.observe")
 		if e != nil {
 			return nil, e
 		}
 		if d.Report.Plan.ID != in.PlanID || d.Report.Plan.Hash != in.PlanHash {
 			return nil, ErrConflict
 		}
-		return s.responseReport(d.Report), nil
+		return s.responseReport(ctx, d.Report), nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
 	p, err := s.plan(ctx, project, in.PlanID)
 	if err != nil {
+		return nil, err
+	}
+	if err := tenancy.Check(ctx, s.db, "guard.observe", "run", p.RunID); err != nil {
 		return nil, err
 	}
 	if p.Hash != in.PlanHash || !s.now().Before(p.ExpiresAt) || (p.Mode == "attached") != attached {
@@ -340,35 +356,44 @@ func (s *Service) startLocked(ctx context.Context, project string, in StartInput
 		d.Report.Targets = append(d.Report.Targets, to)
 	}
 	if p.ParentGuardID != "" {
-		if parent, e := s.load(ctx, project, p.ParentGuardID); e == nil {
+		if parent, e := s.authorizedDocument(ctx, project, p.ParentGuardID, "guard.read"); e == nil {
 			d.Report.Comparison = comparePlans(parent.Report.Plan, *p)
 		}
 	}
 	body, _ := json.Marshal(d)
-	tx, err := s.db.BeginTx(ctx, nil)
+	var observation context.Context
+	err = s.guardWrite(ctx, p.RunID, "guard.observe", func(txctx context.Context, tx configstate.DBTX) error {
+		servers := make([]string, 0, len(p.Targets))
+		for _, pt := range p.Targets {
+			servers = append(servers, pt.ServerID)
+		}
+		var e error
+		observation, e = tenancy.ObservationContext(txctx, s.db, project, p.RunID, servers)
+		if e != nil {
+			return e
+		}
+		res, e := tx.ExecContext(txctx, `UPDATE release_guard_plans SET consumed_by=? WHERE id=? AND project_id=? AND consumed_by='' AND expires_at>?`, d.Report.ID, p.ID, project, now.UnixMilli())
+		if e != nil {
+			return e
+		}
+		n, e := res.RowsAffected()
+		if e != nil {
+			return e
+		}
+		if n != 1 {
+			return ErrConflict
+		}
+		_, e = tx.ExecContext(txctx, `INSERT INTO release_guards(id,project_id,run_id,attempt_id,plan_id,idempotency_key,status,created_at,evidence_expires_at,report_expires_at,record_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, d.Report.ID, project, p.RunID, p.AttemptID, p.ID, in.IdempotencyKey, d.Report.ExecutionStatus, now.UnixMilli(), d.Report.EvidenceExpiresAt.UnixMilli(), now.Add(30*24*time.Hour).UnixMilli(), string(body))
+		return e
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE release_guard_plans SET consumed_by=? WHERE id=? AND project_id=? AND consumed_by='' AND expires_at>?`, d.Report.ID, p.ID, project, now.UnixMilli())
-	if err != nil {
-		return nil, err
-	}
-	n, _ := res.RowsAffected()
-	if n != 1 {
-		return nil, ErrConflict
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO release_guards(id,project_id,run_id,attempt_id,plan_id,idempotency_key,status,created_at,evidence_expires_at,report_expires_at,record_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, d.Report.ID, project, p.RunID, p.AttemptID, p.ID, in.IdempotencyKey, d.Report.ExecutionStatus, now.UnixMilli(), d.Report.EvidenceExpiresAt.UnixMilli(), now.Add(30*24*time.Hour).UnixMilli(), string(body))
-	if err != nil {
-		return nil, err
-	}
-	if err = tx.Commit(); err != nil {
-		return nil, err
-	}
+	s.observationContexts[d.Report.ID] = observation
 	if !attached {
 		s.launchLocked(d.Report.ID, project)
 	}
-	return s.responseReport(d.Report), nil
+	return s.responseReport(ctx, d.Report), nil
 }
 
 func comparePlans(a, b Plan) Comparison {
@@ -426,36 +451,42 @@ func compareObservedHealth(c Comparison, parents []TargetObservation, current Ta
 }
 
 func (s *Service) Stop(ctx context.Context, project, id string) (*Report, error) {
+	return s.stop(ctx, project, id, "guard.stop")
+}
+func (s *Service) stop(ctx context.Context, project, id, action string) (*Report, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	d, err := s.load(ctx, project, id)
+	d, err := s.authorizeGuard(ctx, project, id, action)
 	if err != nil {
 		return nil, err
 	}
 	if terminal(d.Report.ExecutionStatus) {
-		return s.responseReport(d.Report), nil
+		return s.responseReport(ctx, d.Report), nil
 	}
-	// Cancellation is immediate even if persisting the stop acknowledgement
-	// fails. A storage error must not leave an authorized observation dispatching.
-	if reads := s.reads[id]; reads != nil {
-		for _, cancel := range reads.cancels {
+	// Check/cancellation/save share the authority fence. A revoked request must
+	// not cancel another accepted worker before its final write is rejected.
+	err = s.guardWrite(ctx, d.Report.RunID, action, func(txctx context.Context, q configstate.DBTX) error {
+		if reads := s.reads[id]; reads != nil {
+			for _, cancel := range reads.cancels {
+				cancel()
+			}
+		}
+		if cancel := s.workers[id]; cancel != nil {
 			cancel()
 		}
-	}
-	if cancel := s.workers[id]; cancel != nil {
-		cancel()
-	}
-	d.Report.ExecutionStatus = "stopping"
-	d.Report.Reason = "user_stopped"
-	if err = s.save(ctx, d, "stop_requested", nil); err != nil {
+		d.Report.ExecutionStatus = "stopping"
+		d.Report.Reason = "user_stopped"
+		return s.save(txctx, d, "stop_requested", nil)
+	})
+	if err != nil {
 		return nil, err
 	}
 	s.finishLocked(ctx, d, "stopped", "user_stopped")
-	return s.responseReport(d.Report), nil
+	return s.responseReport(ctx, d.Report), nil
 }
 
 func (s *Service) Delete(ctx context.Context, project, id string) error {
-	if _, e := s.Stop(ctx, project, id); e != nil {
+	if _, e := s.stop(ctx, project, id, "guard.delete"); e != nil {
 		return e
 	}
 	s.mu.Lock()
@@ -489,8 +520,14 @@ func (s *Service) Delete(ctx context.Context, project, id string) error {
 	if len(pending) > 0 {
 		return ErrConflict
 	}
-	_, e := s.db.ExecContext(ctx, `DELETE FROM release_guards WHERE id=? AND project_id=?`, id, project)
-	return e
+	d, e := s.authorizeGuard(ctx, project, id, "guard.delete")
+	if e != nil {
+		return e
+	}
+	return s.guardWrite(ctx, d.Report.RunID, "guard.delete", func(txctx context.Context, q configstate.DBTX) error {
+		_, e := q.ExecContext(txctx, `DELETE FROM release_guards WHERE id=? AND project_id=?`, id, project)
+		return e
+	})
 }
 
 func (s *Service) Close(ctx context.Context) error {
@@ -545,6 +582,7 @@ func (s *Service) finishLocked(ctx context.Context, d *document, status, reason 
 		return
 	}
 	delete(s.finishing, d.Report.ID)
+	delete(s.observationContexts, d.Report.ID)
 	d.Report.ExecutionStatus = status
 	d.Report.Reason = reason
 	now := s.now().UTC()
@@ -559,6 +597,9 @@ func (s *Service) finishLocked(ctx context.Context, d *document, status, reason 
 // cancelled when the guard stops; every concurrent host is registered until the
 // observer has actually returned, including time spent waiting for the semaphore.
 func (s *Service) beginReadLocked(ctx context.Context, project, id string) (context.Context, func()) {
+	if approved := s.observationContexts[id]; approved != nil {
+		ctx = approved
+	}
 	readCtx, cancel := context.WithCancel(ctx)
 	reads := s.reads[id]
 	if reads == nil {
@@ -598,11 +639,12 @@ func (s *Service) finishPendingLocked(project, id string) {
 
 // Response expiry is independent of the hourly physical purge. Copy the target
 // slice because projection must not mutate the document that preserves history.
-func (s *Service) responseReport(r Report) *Report {
+func (s *Service) responseReport(ctx context.Context, r Report) *Report {
 	if r.EvidenceExpired || !s.now().Before(r.EvidenceExpiresAt) {
 		r.Targets = append([]TargetObservation{}, r.Targets...)
 		expireReport(&r)
 	}
+	s.scopeHistoricalReport(ctx, &r)
 	return &r
 }
 

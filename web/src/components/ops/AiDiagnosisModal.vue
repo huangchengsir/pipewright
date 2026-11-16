@@ -3,7 +3,11 @@
   AiDiagnosisModal.vue — 容器 AI 诊断 / 看日志。取容器最近日志 → ai.Diagnose,
   展示根因假说 + 置信度 + 修复建议 + 可粘贴修复脚本 + 证据行。AI 未配/失败优雅降级。
 */
-import { ref } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import PermissionGate from '../PermissionGate.vue'
+import { usePermission } from '../../composables/usePermission'
+import { usePermissionStore } from '../../stores/permissions'
+import { useSessionStore } from '../../stores/session'
 import { useI18n } from 'vue-i18n'
 import { diagnoseContainer, type ContainerDiagnosis } from '../../api/containers'
 import { HttpError } from '../../api/http'
@@ -12,6 +16,10 @@ import { useToast } from '../../composables/useToast'
 const props = defineProps<{ serverId: string; containerName: string }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
 
+const permissionQuery=computed(()=>({action:'container.diagnose',resourceId:props.serverId}))
+const permission=usePermission(permissionQuery)
+const permissions=usePermissionStore()
+const session=useSessionStore()
 const { t } = useI18n()
 const toast = useToast()
 const state = ref<'loading' | 'done' | 'error'>('loading')
@@ -25,13 +33,35 @@ const CONFIDENCE_LABEL: Record<string, () => string> = {
   '': () => '',
 }
 
+let generation = 0
+let transport: AbortController | undefined
+function resetTransport() {
+  generation++
+  transport?.abort()
+  transport = undefined
+  diag.value = null
+  errorMsg.value = ''
+}
 async function run(): Promise<void> {
+ if(!permission.allowed.value) return
+  resetTransport()
+  const current = generation
+  const request = new AbortController()
+  transport = request
+  const target = { server: props.serverId, container: props.containerName }
   state.value = 'loading'
   errorMsg.value = ''
   try {
-    diag.value = await diagnoseContainer(props.serverId, props.containerName)
+    const result = await diagnoseContainer(target.server, target.container, {
+      signal: request.signal,
+      headers: session.user?.multiTenant === true ? { 'X-Pipewright-Team': permissions.activeTeam } : undefined,
+      throwOnUnauthorized: true,
+    })
+    if(current!==generation || !permission.allowed.value) return
+    diag.value=result
     state.value = 'done'
   } catch (err) {
+    if (current !== generation || !permission.allowed.value) return
     state.value = 'error'
     errorMsg.value =
       err instanceof HttpError
@@ -41,16 +71,24 @@ async function run(): Promise<void> {
 }
 
 async function copyScript(): Promise<void> {
-  if (!diag.value?.fixScript) return
+  if (!diag.value?.fixScript || !permission.allowed.value) return
+  const ticket = generation
+  const script = diag.value.fixScript
   try {
-    await navigator.clipboard.writeText(diag.value.fixScript)
+    await navigator.clipboard.writeText(script)
+    if (ticket !== generation || !permission.allowed.value) return
     toast.success(t('opsContainer.diag.scriptCopied'))
   } catch {
+    if (ticket !== generation || !permission.allowed.value) return
     toast.error(t('opsContainer.copyFailed'), { detail: t('opsContainer.needHttps') })
   }
 }
 
-void run()
+watch([permission.allowed,()=>permissions.activeTeam,()=>session.user,()=>props.serverId,()=>props.containerName],()=>{
+  if (permission.allowed.value) void run()
+  else resetTransport()
+},{immediate:true,flush:'sync'})
+onBeforeUnmount(resetTransport)
 </script>
 
 <template>
@@ -100,7 +138,7 @@ void run()
           <section v-if="diag.fixScript" class="block">
             <div class="block__h">
               {{ t('opsContainer.diag.fixScript') }}
-              <button class="copy" @click="copyScript">{{ t('opsContainer.copy') }}</button>
+              <PermissionGate :query="permissionQuery"><button class="copy" @click="copyScript">{{ t('opsContainer.copy') }}</button></PermissionGate>
             </div>
             <pre class="script mono">{{ diag.fixScript }}</pre>
           </section>
@@ -128,7 +166,7 @@ void run()
       <footer class="modal__foot">
         <span class="foot-hint">{{ t('opsContainer.diag.footHint') }}</span>
         <span class="grow" />
-        <button class="btn btn--ghost" @click="run">{{ t('opsContainer.diag.rerun') }}</button>
+        <PermissionGate :query="permissionQuery"><button class="btn btn--ghost" @click="run">{{ t('opsContainer.diag.rerun') }}</button></PermissionGate>
         <button class="btn btn--primary" @click="emit('close')">{{ t('opsContainer.close') }}</button>
       </footer>
     </div>

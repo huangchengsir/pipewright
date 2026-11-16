@@ -10,6 +10,7 @@
 -->
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
+import {useIdentityRequestScope} from '../../composables/useAuthorizedRequestScope'
 import { useI18n } from 'vue-i18n'
 import { getRunTestReport } from '../../api/runs'
 import type { TestReportDTO, GateVerdict, RunTestReportResponse } from '../../api/runs'
@@ -26,14 +27,20 @@ const gate = ref<GateVerdict>({ enabled: false, passed: true, reasons: [] })
 const loaded = ref(false)
 const error = ref<string | null>(null)
 
+let sequence=0
+const scope=useIdentityRequestScope(()=>{sequence++;reports.value=[];gate.value={enabled:false,passed:true,reasons:[]};loaded.value=false;error.value=null})
 async function load(id: string): Promise<void> {
+  if(!scope.active())return
+  const ticket=++sequence
   loaded.value = false
   error.value = null
   try {
-    const res: RunTestReportResponse = await getRunTestReport(id)
+    const res: RunTestReportResponse = await scope.run(()=>getRunTestReport(id,scope.requestOptions))
+    if(ticket!==sequence)return
     reports.value = res.reports
     gate.value = res.gate
   } catch (err: unknown) {
+    if(!scope.active()||ticket!==sequence)return
     // 404 / 未就绪 → 静默(无报告等价空);其它错误给一行提示。
     if (err instanceof HttpError && err.status === 404) {
       reports.value = []
@@ -42,7 +49,7 @@ async function load(id: string): Promise<void> {
       error.value = t('run.testReportLoadFailed')
     }
   } finally {
-    loaded.value = true
+    if(scope.active()&&ticket===sequence)loaded.value = true
   }
 }
 

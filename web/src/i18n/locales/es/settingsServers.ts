@@ -1,4 +1,8 @@
 export default {
+  monitoringReady: "Monitorización autorizada",
+  monitoringRequired: "Se requiere autorización de monitorización",
+  monitoringHint: "Guarde el servidor o confirme su nodo de ejecución para autorizar mediciones fijas de solo lectura. La autorización no indica que el servidor esté funcionando correctamente.",
+
   title: 'Servidores',
   desc: 'Registra servidores de destino (host / puerto / usuario + credencial SSH) y prueba la conectividad. Las claves SSH se vinculan solo por referencia, se almacenan y recuperan cifradas mediante la bóveda, y nunca se persisten ni se muestran en texto plano. El despliegue y las operaciones ejecutan comandos a través de esta capa SSH compartida.',
   addServer: 'Registrar servidor',

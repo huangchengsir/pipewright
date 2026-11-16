@@ -16,7 +16,7 @@ const op = (extra: Partial<KubeOperation> = {}): KubeOperation =>
     business: "ready",
     cleanup: "verified",
     retired: false,
-    canReconcile: true,
+    canManage:true,canReconcile: true,
     ...extra,
   }) as KubeOperation;
 describe("Kubernetes evidence", () => {
@@ -98,7 +98,7 @@ describe("Kubernetes Context DTO to UI source mapping", () => {
   });
   it("blocks a known failure until owner exit is confirmed", () => {
     expect(
-      kubeBlocksRetry(op({ business: "failed", canReconcile: false })),
+      kubeBlocksRetry(op({ business: "failed", canManage:true,canReconcile: false })),
     ).toBe(true);
     expect(kubeBlocksRetry(op({ business: "failed" }))).toBe(false);
   });

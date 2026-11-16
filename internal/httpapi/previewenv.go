@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/previewenv"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // previewenv.go 装配「Per-PR 预览环境」(R4 E4.1)的 HTTP API:
@@ -74,24 +75,28 @@ func toPreviewEnvDTO(e previewenv.PreviewEnv) previewEnvDTO {
 
 // previewConfigDTO 是项目预览配置对外响应体(冻结契约;camelCase)。
 type previewConfigDTO struct {
-	ProjectID     string `json:"projectId"`
-	Enabled       bool   `json:"enabled"`
-	DNSProviderID string `json:"dnsProviderId"`
-	BaseDomain    string `json:"baseDomain"`
+	AuthorizationState string `json:"authorizationState,omitempty"`
+	ProjectID          string `json:"projectId"`
+	Enabled            bool   `json:"enabled"`
+	DNSProviderID      string `json:"dnsProviderId"`
+	BaseDomain         string `json:"baseDomain"`
 }
 
 func toPreviewConfigDTO(c previewenv.Config) previewConfigDTO {
 	return previewConfigDTO{
-		ProjectID:     c.ProjectID,
-		Enabled:       c.Enabled,
-		DNSProviderID: c.DNSProviderID,
-		BaseDomain:    c.BaseDomain,
+		AuthorizationState: c.AuthorizationState,
+		ProjectID:          c.ProjectID,
+		Enabled:            c.Enabled,
+		DNSProviderID:      c.DNSProviderID,
+		BaseDomain:         c.BaseDomain,
 	}
 }
 
 // writePreviewError 把预览环境领域错误映射为契约错误码/状态码。
 func writePreviewError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, tenancy.ErrForbidden):
+		writeError(w, http.StatusForbidden, "forbidden", "无权执行此操作")
 	case errors.Is(err, previewenv.ErrNotFound):
 		writeError(w, http.StatusNotFound, "preview_env_not_found", "预览环境不存在")
 	case errors.Is(err, previewenv.ErrInvalidProject):
@@ -211,5 +216,41 @@ func makeSetPreviewConfigHandler(svc PreviewService, rec audit.Recorder) http.Ha
 			IP:         clientIP(r),
 		})
 		writeJSON(w, http.StatusOK, toPreviewConfigDTO(*cfg))
+	}
+}
+
+func makePreviewProjectsHandler(svc PreviewService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		reader, ok := svc.(interface {
+			Projects(context.Context) ([]previewenv.ProjectChoice, error)
+		})
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "internal", "预览环境服务未初始化")
+			return
+		}
+		rows, err := reader.Projects(r.Context())
+		if err != nil {
+			writePreviewError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": rows})
+	}
+}
+
+func makePreviewProvidersHandler(svc PreviewService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		reader, ok := svc.(interface {
+			Providers(context.Context, string) ([]previewenv.ProviderChoice, error)
+		})
+		if !ok {
+			writeError(w, 503, "unavailable", "预览提供商不可用")
+			return
+		}
+		rows, e := reader.Providers(r.Context(), chi.URLParam(r, "id"))
+		if e != nil {
+			writePreviewError(w, e)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"items": rows})
 	}
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // Store 持久化预览环境 + 预览配置(参数化 SQL,两方言一致)。
@@ -20,21 +21,21 @@ type Store struct {
 // NewStore 构造持久层。
 func NewStore(db *sql.DB) *Store { return &Store{db: db} }
 
-const envColumns = `id, project_id, pipeline_id, pr_number, branch, server_id, route_id, subdomain, status, created_at, reclaimed_at`
+const envColumns = `id, project_id, pipeline_id, pr_number, branch, server_id, route_id, subdomain, status, created_at, reclaimed_at, binding_json`
 
 // list 返回某项目全部预览环境(创建时间倒序);projectID 为空 → 全部。
 func (s *Store) list(ctx context.Context, projectID string) ([]PreviewEnv, error) {
-	var (
-		rows *sql.Rows
-		err  error
-	)
-	if projectID == "" {
-		rows, err = s.db.QueryContext(ctx,
-			`SELECT `+envColumns+` FROM preview_envs ORDER BY created_at DESC, id`)
-	} else {
-		rows, err = s.db.QueryContext(ctx,
-			`SELECT `+envColumns+` FROM preview_envs WHERE project_id = ? ORDER BY created_at DESC, id`, projectID)
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "preview.read", "pe.id")
+	if err != nil {
+		return nil, err
 	}
+	query := `SELECT ` + envColumns + ` FROM preview_envs pe WHERE (` + predicate.SQL + `)`
+	args := predicate.Args
+	if projectID != "" {
+		query += ` AND project_id=?`
+		args = append(args, projectID)
+	}
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx, query+` ORDER BY created_at DESC, id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("previewenv: list: %w", err)
 	}
@@ -56,8 +57,12 @@ func (s *Store) list(ctx context.Context, projectID string) ([]PreviewEnv, error
 
 // listActive 返回全部 active 预览环境(创建时间倒序),供自动回收 sweeper 逐个核查 PR 状态。
 func (s *Store) listActive(ctx context.Context) ([]PreviewEnv, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+envColumns+` FROM preview_envs WHERE status = ? ORDER BY created_at DESC, id`, StatusActive)
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "preview.read", "pe.id")
+	if err != nil {
+		return nil, err
+	}
+	args := append([]any{StatusActive}, predicate.Args...)
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx, `SELECT `+envColumns+` FROM preview_envs pe WHERE status=? AND (`+predicate.SQL+`) ORDER BY created_at DESC,id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("previewenv: list active: %w", err)
 	}
@@ -122,36 +127,61 @@ func (s *Store) getByPR(ctx context.Context, projectID string, prNumber int) (*P
 
 // insert 落库一条新预览环境。(project_id, pr_number) 唯一冲突由调用方先查后 upsert 规避。
 func (s *Store) insert(ctx context.Context, e *PreviewEnv) error {
-	_, err := configstate.Queryer(ctx, s.db).ExecContext(ctx,
-		`INSERT INTO preview_envs (`+envColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		e.ID, e.ProjectID, e.PipelineID, e.PRNumber, e.Branch, e.ServerID, e.RouteID, e.Subdomain,
-		e.Status, fmtTime(&e.CreatedAt), fmtTimePtr(e.ReclaimedAt))
-	if err != nil {
-		if store.IsUniqueErr(err) {
-			return ErrUniqueViolation
+	return configstate.WithWriteTxContext(ctx, s.db, func(txctx context.Context, _ configstate.DBTX) error {
+		if err := tenancy.LockAuthorization(txctx, s.db); err != nil {
+			return err
 		}
-		return fmt.Errorf("previewenv: insert: %w", err)
-	}
-	return nil
+		if err := tenancy.Check(txctx, s.db, "preview.provision", "project", e.ProjectID); err != nil {
+			return err
+		}
+
+		_, err := configstate.Queryer(txctx, s.db).ExecContext(txctx,
+			`INSERT INTO preview_envs (`+envColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			e.ID, e.ProjectID, e.PipelineID, e.PRNumber, e.Branch, e.ServerID, e.RouteID, e.Subdomain,
+			e.Status, fmtTime(&e.CreatedAt), fmtTimePtr(e.ReclaimedAt), e.bindingJSON)
+		if err != nil {
+			if store.IsUniqueErr(err) {
+				return ErrUniqueViolation
+			}
+			return fmt.Errorf("previewenv: insert: %w", err)
+		}
+		return tenancy.RecordOwnership(txctx, s.db, "preview", e.ID, e.ProjectID)
+	})
 }
 
 // ErrUniqueViolation 表示 (project_id, pr_number) 唯一约束冲突(并发重复部署);调用方据此重查后更新。
 var ErrUniqueViolation = errors.New("previewenv: duplicate project/pr")
 
 // updateOnRedeploy 在同一 PR 重新部署时刷新环境(路由/子域名/分支/服务器/状态回 active),不重复建行。
-func (s *Store) updateOnRedeploy(ctx context.Context, id, routeID, subdomain, branch, serverID, pipelineID string) error {
-	res, err := configstate.Queryer(ctx, s.db).ExecContext(ctx,
-		`UPDATE preview_envs
-		   SET route_id = ?, subdomain = ?, branch = ?, server_id = ?, pipeline_id = ?, status = ?, reclaimed_at = ''
+func (s *Store) updateOnRedeploy(ctx context.Context, id, routeID, subdomain, branch, serverID, pipelineID, bindingJSON string) error {
+	return configstate.WithWriteTxContext(ctx, s.db, func(txctx context.Context, _ configstate.DBTX) error {
+		if err := tenancy.LockAuthorization(txctx, s.db); err != nil {
+			return err
+		}
+		if err := tenancy.Check(txctx, s.db, "preview.reclaim", "preview", id); err != nil {
+			return err
+		}
+		current, err := s.get(txctx, id)
+		if err != nil {
+			return err
+		}
+		if err = tenancy.Check(txctx, s.db, "preview.provision", "project", current.ProjectID); err != nil {
+			return err
+		}
+
+		res, err := configstate.Queryer(txctx, s.db).ExecContext(txctx,
+			`UPDATE preview_envs
+		   SET route_id = ?, subdomain = ?, branch = ?, server_id = ?, pipeline_id = ?, status = ?, reclaimed_at = '', binding_json=?
 		 WHERE id = ?`,
-		routeID, subdomain, branch, serverID, pipelineID, StatusActive, id)
-	if err != nil {
-		return fmt.Errorf("previewenv: update on redeploy: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
-	}
-	return nil
+			routeID, subdomain, branch, serverID, pipelineID, StatusActive, bindingJSON, id)
+		if err != nil {
+			return fmt.Errorf("previewenv: update on redeploy: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
 }
 
 // markReclaimed 把某环境标记为已回收(记录回收时刻)。
@@ -224,13 +254,15 @@ func scanEnv(sc scanner) (*PreviewEnv, error) {
 		e            PreviewEnv
 		createdStr   string
 		reclaimedStr string
+		binding      sql.NullString
 	)
 	if err := sc.Scan(
 		&e.ID, &e.ProjectID, &e.PipelineID, &e.PRNumber, &e.Branch, &e.ServerID, &e.RouteID,
-		&e.Subdomain, &e.Status, &createdStr, &reclaimedStr,
+		&e.Subdomain, &e.Status, &createdStr, &reclaimedStr, &binding,
 	); err != nil {
 		return nil, err
 	}
+	e.bindingJSON = binding.String
 	created, err := time.Parse(time.RFC3339, createdStr)
 	if err != nil {
 		return nil, fmt.Errorf("previewenv: parse created_at: %w", err)

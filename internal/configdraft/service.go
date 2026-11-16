@@ -97,6 +97,9 @@ func (s *Service) fresh(ctx context.Context, tokenID string, g guard) error {
 	if e != nil {
 		return ErrForbidden
 	}
+	if e = s.currentToken(ctx, s.db, t); e != nil {
+		return ErrForbidden
+	}
 	if g.authz != nil && *g.authz >= 0 && t.AuthzRevision != *g.authz {
 		return ErrForbidden
 	}
@@ -223,6 +226,9 @@ func (s *Service) locks(ctx context.Context, q configstate.DBTX, tokenID string,
 	if e != nil {
 		return nil, ErrForbidden
 	}
+	if e = s.currentToken(ctx, q, t); e != nil {
+		return nil, ErrForbidden
+	}
 	if g.authz != nil && *g.authz < 0 {
 		*g.authz = t.AuthzRevision
 	}
@@ -261,6 +267,9 @@ type document struct {
 }
 
 func (s *Service) load(ctx context.Context, q configstate.DBTX, pid string) (*document, error) {
+	if err := s.configurationRead(ctx, q, pid, "project"); err != nil {
+		return nil, err
+	}
 	d := &document{ctx: configstate.WithTxContext(ctx, s.db, q), projectID: pid, runner: s.opts.Runtime.RunnerMode, executor: s.opts.Runtime.ExecutorKind, source: "stored", applicability: "supported"}
 	var n int64
 	var pac int

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"regexp"
 	"sort"
 	"strconv"
@@ -117,9 +119,16 @@ type TemplateService interface {
 
 // ListTemplates 实现 TemplateService.ListTemplates。
 func (s *service) ListTemplates(ctx context.Context) ([]Template, error) {
-	rows, err := s.db.QueryContext(ctx,
+	if err := s.AuthorizeConfiguration(ctx); err != nil {
+		return nil, err
+	}
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "pipeline.read", "nt.project_id")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT id, project_id, event, channel_id, title_template, body_template, created_at
-		 FROM notification_templates ORDER BY event, created_at, id`,
+		 FROM notification_templates nt WHERE nt.project_id IS NULL OR (`+predicate.SQL+`) ORDER BY event, created_at, id`, predicate.Args...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("notify: list templates: %w", err)
@@ -141,7 +150,7 @@ func (s *service) ListTemplates(ctx context.Context) ([]Template, error) {
 }
 
 // CreateTemplate 实现 TemplateService.CreateTemplate。
-func (s *service) CreateTemplate(ctx context.Context, in CreateTemplateInput) (*Template, error) {
+func (s *service) createTemplate(ctx context.Context, in CreateTemplateInput) (*Template, error) {
 	event := strings.TrimSpace(in.Event)
 	if !validEvent(event) {
 		return nil, ErrInvalidEvent
@@ -169,7 +178,7 @@ func (s *service) CreateTemplate(ctx context.Context, in CreateTemplateInput) (*
 		chanID = channelID
 	}
 
-	_, err := s.db.ExecContext(ctx,
+	_, err := configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`INSERT INTO notification_templates (id, project_id, event, channel_id, title_template, body_template, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		id, projectID, event, chanID, in.TitleTemplate, in.BodyTemplate, nowStr,
@@ -189,7 +198,7 @@ func (s *service) CreateTemplate(ctx context.Context, in CreateTemplateInput) (*
 }
 
 // UpdateTemplate 实现 TemplateService.UpdateTemplate。
-func (s *service) UpdateTemplate(ctx context.Context, id string, in UpdateTemplateInput) (*Template, error) {
+func (s *service) updateTemplate(ctx context.Context, id string, in UpdateTemplateInput) (*Template, error) {
 	cur, err := s.loadTemplate(ctx, id)
 	if err != nil {
 		return nil, err
@@ -229,7 +238,7 @@ func (s *service) UpdateTemplate(ctx context.Context, id string, in UpdateTempla
 	if channelID != "" {
 		chanID = channelID
 	}
-	_, err = s.db.ExecContext(ctx,
+	_, err = configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`UPDATE notification_templates SET event = ?, channel_id = ?, title_template = ?, body_template = ?
 		 WHERE id = ?`,
 		event, chanID, title, body, id,
@@ -250,8 +259,8 @@ func (s *service) UpdateTemplate(ctx context.Context, id string, in UpdateTempla
 }
 
 // DeleteTemplate 实现 TemplateService.DeleteTemplate。
-func (s *service) DeleteTemplate(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM notification_templates WHERE id = ?`, id)
+func (s *service) deleteTemplate(ctx context.Context, id string) error {
+	res, err := configstate.Queryer(ctx, s.db).ExecContext(ctx, `DELETE FROM notification_templates WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("notify: delete template: %w", err)
 	}
@@ -373,7 +382,7 @@ func (s *service) matchTemplate(ctx context.Context, event, channelID string) *T
 	if !validEvent(event) {
 		return nil
 	}
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT id, project_id, event, channel_id, title_template, body_template, created_at
 		 FROM notification_templates WHERE event = ? AND (channel_id IS NULL OR channel_id = '' OR channel_id = ?)
 		 ORDER BY created_at, id`, event, channelID,
@@ -434,7 +443,7 @@ func renderTemplate(tpl string, vars map[string]string) string {
 
 // loadTemplate 读取单条模板行。不存在 → ErrTemplateNotFound。
 func (s *service) loadTemplate(ctx context.Context, id string) (*Template, error) {
-	row := s.db.QueryRowContext(ctx,
+	row := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT id, project_id, event, channel_id, title_template, body_template, created_at
 		 FROM notification_templates WHERE id = ?`, id,
 	)

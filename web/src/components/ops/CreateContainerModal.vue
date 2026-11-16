@@ -4,7 +4,10 @@
   表单收集镜像/名/端口/env/卷/重启/命令 → POST /api/servers/:id/containers。
   端口/env/卷用多行文本框(一行一条),空行忽略。后端严格白名单校验,绝不拼 shell。
 */
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
+import PermissionGate from '../PermissionGate.vue'
+import { usePermission, usePermissions } from '../../composables/usePermission'
+import { useIdentityRequestScope } from '../../composables/useAuthorizedRequestScope'
 import { useI18n } from 'vue-i18n'
 import { createContainer, type CreateContainerInput, type RestartPolicy } from '../../api/containers'
 import { suggestCommand } from '../../api/aiOps'
@@ -23,6 +26,11 @@ const { t } = useI18n()
 const toast = useToast()
 
 const serverId = ref(props.servers[0]?.id ?? '')
+const operationQuery=computed(()=>({action:'container.operate',resourceId:serverId.value}))
+const operationPermission = usePermission(operationQuery)
+const hasSelectedServer = computed(() => props.servers.some(server => server.id === serverId.value))
+const aiQueries = computed(() => [operationQuery.value, {action:'container.diagnose',resourceId:serverId.value}])
+const aiPermission = usePermissions(aiQueries)
 const image = ref('')
 const name = ref('')
 const portsText = ref('')
@@ -38,14 +46,50 @@ const banner = ref('')
 const aiNl = ref('')
 const aiBusy = ref(false)
 const aiNote = ref('')
+let createRequest: AbortController | undefined
+let aiRequest: AbortController | undefined
+const closed = ref(false)
+function resetPending() {
+  createRequest?.abort()
+  aiRequest?.abort()
+  createRequest = aiRequest = undefined
+  submitting.value = aiBusy.value = false
+  aiNote.value = banner.value = ''
+}
+const scope = useIdentityRequestScope(() => {
+  resetPending()
+  image.value = name.value = portsText.value = envText.value = volumesText.value = command.value = aiNl.value = ''
+})
+const canOperate = () => !closed.value && scope.active() && hasSelectedServer.value && operationPermission.allowed.value
+const canGenerate = () => canOperate() && aiPermission.allowed.value
+watch([serverId, hasSelectedServer], resetPending, {flush:'sync'})
+watch(operationPermission.allowed, (allowed) => { if (!allowed) resetPending() }, {flush:'sync'})
+watch(aiPermission.allowed, (allowed) => {
+  if (!allowed) {
+    aiRequest?.abort()
+    aiRequest = undefined
+    aiBusy.value = false
+    aiNote.value = ''
+  }
+}, {flush:'sync'})
+function dismiss() {
+  closed.value = true
+  resetPending()
+  emit('close')
+}
 async function aiGenerate(): Promise<void> {
   const nl = aiNl.value.trim()
-  if (!nl || aiBusy.value) return
+  if (!nl || aiBusy.value || !canGenerate()) return
+  const target = serverId.value
+  const request = new AbortController()
+  aiRequest = request
+  const current = () => aiRequest === request && target === serverId.value && canGenerate()
   aiBusy.value = true
   aiNote.value = ''
   banner.value = ''
   try {
-    const res = await suggestCommand(nl, { os: 'linux', shell: '/bin/sh', container: t('opsContainer.create.dockerHost') })
+    const res = await suggestCommand(nl, { os: 'linux', shell: '/bin/sh', container: t('opsContainer.create.dockerHost') }, { ...scope.requestOptions, signal: request.signal })
+    if (!current()) return
     if (!res.available) {
       aiNote.value = t('opsContainer.create.aiNotConfigured')
       return
@@ -66,12 +110,16 @@ async function aiGenerate(): Promise<void> {
     aiNote.value = t('opsContainer.create.aiFilled', { command: res.command })
     toast.success(t('opsContainer.create.aiGenerated'), { detail: t('opsContainer.create.aiGeneratedDetail') })
   } catch (err) {
+    if (!current()) return
     aiNote.value =
       err instanceof HttpError
         ? (err.apiError?.message ?? t('opsContainer.create.genFailedStatus', { status: err.status }))
         : t('opsContainer.create.genFailed')
   } finally {
-    aiBusy.value = false
+    if (aiRequest === request) {
+      aiRequest = undefined
+      aiBusy.value = false
+    }
   }
 }
 
@@ -82,7 +130,7 @@ const RESTART_OPTIONS = computed<{ value: RestartPolicy; label: string }[]>(() =
   { value: 'on-failure', label: t('opsContainer.create.restartOnFailure') },
 ])
 
-const canSubmit = computed(() => serverId.value !== '' && image.value.trim() !== '' && !submitting.value)
+const canSubmit = computed(() => canOperate() && image.value.trim() !== '' && !submitting.value)
 
 /** 多行文本 → 去空行、去首尾空白的数组。 */
 function linesToArray(text: string): string[] {
@@ -94,6 +142,10 @@ function linesToArray(text: string): string[] {
 
 async function submit(): Promise<void> {
   if (!canSubmit.value) return
+  const target = serverId.value
+  const request = new AbortController()
+  createRequest = request
+  const current = () => createRequest === request && target === serverId.value && canOperate()
   banner.value = ''
   submitting.value = true
   const input: CreateContainerInput = {
@@ -106,38 +158,43 @@ async function submit(): Promise<void> {
     command: command.value.trim() || undefined,
   }
   try {
-    const res = await createContainer(serverId.value, input)
+    const res = await createContainer(target, input, { ...scope.requestOptions, signal: request.signal })
+    if (!current()) return
     if (res.ok) {
-      toast.success(t('opsContainer.create.created'), { detail: `${name.value || image.value} · ${res.containerId.slice(0, 12)}` })
-      emit('created', serverId.value)
-      emit('close')
+      toast.success(t('opsContainer.create.created'), { detail: `${input.name || input.image} · ${res.containerId.slice(0, 12)}` })
+      emit('created', target)
+      dismiss()
     } else {
       banner.value = res.error || t('opsContainer.create.dockerRunFailed')
     }
   } catch (err) {
+    if (!current()) return
     banner.value =
       err instanceof HttpError
         ? (err.apiError?.message ?? t('opsContainer.create.createFailedStatus', { status: err.status }))
         : t('opsContainer.create.createFailed')
   } finally {
-    submitting.value = false
+    if (createRequest === request) {
+      createRequest = undefined
+      submitting.value = false
+    }
   }
 }
 </script>
 
 <template>
-  <div class="modal-scrim" @click.self="emit('close')">
+  <div class="modal-scrim" @click.self="dismiss">
     <div class="modal" role="dialog" :aria-label="t('opsContainer.create.title')">
       <header class="modal__head">
         <h3 class="modal__title">{{ t('opsContainer.create.title') }}</h3>
-        <button class="modal__close" :aria-label="t('opsContainer.close')" @click="emit('close')">✕</button>
+        <button class="modal__close" :aria-label="t('opsContainer.close')" @click="dismiss">✕</button>
       </header>
 
       <div class="modal__body">
         <p v-if="banner" class="form-banner">⚠ {{ banner }}</p>
 
         <!-- AI 生成:中文描述 → 自动填表 -->
-        <div class="ai-gen">
+        <div v-if="canGenerate()" class="ai-gen">
           <span class="ai-gen__spark">✦</span>
           <input
             v-model="aiNl"
@@ -201,10 +258,10 @@ async function submit(): Promise<void> {
       <footer class="modal__foot">
         <span class="foot-hint">{{ t('opsContainer.create.footHint') }}</span>
         <span class="grow" />
-        <button class="btn btn--ghost" :disabled="submitting" @click="emit('close')">{{ t('opsContainer.cancel') }}</button>
-        <button class="btn btn--primary" :disabled="!canSubmit" @click="submit">
+        <button class="btn btn--ghost" :disabled="submitting" @click="dismiss">{{ t('opsContainer.cancel') }}</button>
+        <PermissionGate :query="operationQuery"><button class="btn btn--primary" :disabled="!canSubmit" @click="submit">
           {{ submitting ? t('opsContainer.create.creating') : t('opsContainer.create.createRun') }}
-        </button>
+        </button></PermissionGate>
       </footer>
     </div>
   </div>

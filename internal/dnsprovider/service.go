@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
@@ -72,11 +73,21 @@ func New(db *sql.DB, v vault.Vault, routes RouteCreator) Service {
 	}
 }
 
-func (s *service) List(ctx context.Context) ([]Provider, error) { return s.store.list(ctx) }
+func (s *service) List(ctx context.Context) ([]Provider, error) {
+	if err := s.AuthorizeConfiguration(ctx); err != nil {
+		return nil, err
+	}
+	return s.store.list(ctx)
+}
 
-func (s *service) Get(ctx context.Context, id string) (*Provider, error) { return s.store.get(ctx, id) }
+func (s *service) Get(ctx context.Context, id string) (*Provider, error) {
+	if err := s.AuthorizeConfiguration(ctx); err != nil {
+		return nil, err
+	}
+	return s.store.get(ctx, id)
+}
 
-func (s *service) Create(ctx context.Context, in CreateInput) (*Provider, error) {
+func (s *service) create(ctx context.Context, in CreateInput) (*Provider, error) {
 	in.Type = strings.ToLower(strings.TrimSpace(in.Type))
 	in.Name = strings.TrimSpace(in.Name)
 	in.CredentialID = strings.TrimSpace(in.CredentialID)
@@ -86,7 +97,11 @@ func (s *service) Create(ctx context.Context, in CreateInput) (*Provider, error)
 	}
 	// 校验凭据存在(避免悬挂引用);vault 未配置时仍允许登记(凭据存在性在 Verify/Allocate 时再校）。
 	if s.vault != nil {
-		ok, err := s.vault.Exists(in.CredentialID)
+		reader := s.vault
+		if v, ok := reader.(vault.Vault); ok {
+			reader = vault.WithContext(ctx, v)
+		}
+		ok, err := reader.Exists(in.CredentialID)
 		if err != nil {
 			if !errors.Is(err, vault.ErrVaultUnconfigured) {
 				return nil, fmt.Errorf("dnsprovider: check credential: %w", err)
@@ -99,24 +114,53 @@ func (s *service) Create(ctx context.Context, in CreateInput) (*Provider, error)
 	if err := s.store.insert(ctx, p); err != nil {
 		return nil, err
 	}
+	if err := tenancy.RecordOwnership(ctx, s.store.db, "dns_provider", p.ID, ""); err != nil {
+		return nil, err
+	}
 	return s.store.get(ctx, p.ID)
 }
 
-func (s *service) Delete(ctx context.Context, id string) error { return s.store.del(ctx, id) }
+func (s *service) Delete(ctx context.Context, id string) error {
+	_, err := configurationWrite(ctx, s, func(c context.Context) (struct{}, error) { return struct{}{}, s.store.del(c, id) })
+	return err
+}
 
 func (s *service) Verify(ctx context.Context, id string) error {
+	if err := s.AuthorizeConfiguration(ctx); err != nil {
+		return err
+	}
 	p, err := s.store.get(ctx, id)
 	if err != nil {
 		return err
 	}
-	client, err := s.clientFor(p)
-	if err != nil {
+	var client DNSClient
+	if v, ok := s.vault.(vault.Vault); ok {
+		token, e := vault.Use(ctx, v, p.CredentialID)
+		if e != nil {
+			return e
+		}
+		client = s.dial(p.Type, token)
+		token = ""
+	} else {
+		on, e := tenancy.Enabled(ctx, s.store.db)
+		if e != nil {
+			return e
+		}
+		if on {
+			return tenancy.ErrForbidden
+		}
+		client, err = s.clientFor(p)
+		if err != nil {
+			return err
+		}
+	}
+	if err = s.AuthorizeConfiguration(ctx); err != nil {
 		return err
 	}
-	if err := client.VerifyZone(ctx, p.BaseDomain); err != nil {
+	if err = client.VerifyZone(ctx, p.BaseDomain); err != nil {
 		return err
 	}
-	return nil
+	return s.AuthorizeConfiguration(ctx)
 }
 
 // DeleteSubdomainRecord 删除某提供商根域下 fqdn 的 A 记录(回收预览/子域名时清 DNS)。
@@ -126,7 +170,11 @@ func (s *service) DeleteSubdomainRecord(ctx context.Context, providerID, fqdn st
 	if err != nil {
 		return err
 	}
-	client, err := s.clientFor(p)
+	fqdn = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(fqdn), "."))
+	if fqdn == p.BaseDomain || !strings.HasSuffix(fqdn, "."+p.BaseDomain) || !baseDomainRe.MatchString(fqdn) {
+		return ErrAllocate
+	}
+	client, err := s.runtimeClient(ctx, p)
 	if err != nil {
 		return err
 	}
@@ -135,6 +183,9 @@ func (s *service) DeleteSubdomainRecord(ctx context.Context, providerID, fqdn st
 
 // ProviderType 返回某提供商类型(不取 token);不存在 → ok=false。
 func (s *service) ProviderType(ctx context.Context, providerID string) (string, bool, error) {
+	if err := s.authorizeUse(ctx, providerID); err != nil {
+		return "", false, err
+	}
 	p, err := s.store.get(ctx, providerID)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -147,6 +198,9 @@ func (s *service) ProviderType(ctx context.Context, providerID string) (string, 
 
 // ResolveToken 取某提供商 (类型, token 明文)(供 proxy apply 渲染 DNS-01)。token 用完即弃。
 func (s *service) ResolveToken(ctx context.Context, providerID string) (string, string, bool, error) {
+	if err := s.authorizeUse(ctx, providerID); err != nil {
+		return "", "", false, err
+	}
 	p, err := s.store.get(ctx, providerID)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -157,7 +211,11 @@ func (s *service) ResolveToken(ctx context.Context, providerID string) (string, 
 	if s.vault == nil {
 		return "", "", false, ErrVaultUnconfigured
 	}
-	token, err := s.vault.Reveal(p.CredentialID)
+	version, err := s.providerVersion(ctx, p)
+	if err != nil {
+		return "", "", false, err
+	}
+	token, err := s.useToken(ctx, p)
 	if err != nil {
 		switch {
 		case errors.Is(err, vault.ErrVaultUnconfigured):
@@ -165,8 +223,15 @@ func (s *service) ResolveToken(ctx context.Context, providerID string) (string, 
 		case errors.Is(err, vault.ErrNotFound):
 			return "", "", false, ErrCredentialNotFound
 		default:
-			return "", "", false, ErrVerifyFailed
+			return "", "", false, err
 		}
+	}
+	current, e := s.runtimeVersion(ctx, providerID)
+	if e != nil {
+		return "", "", false, e
+	}
+	if current != version {
+		return "", "", false, tenancy.ErrConflict
 	}
 	return p.Type, token, true, nil
 }
@@ -201,8 +266,15 @@ func (s *service) clientFor(p *Provider) (DNSClient, error) {
 //  3. 经 DNSClient 建 A 记录指向 hostIP(Cloudflare 真实;其余桩返回未实现)。
 //  4. 经 RouteCreator 创建一条 DNS-01 反代路由(证书即刻可签)。
 func (s *service) AllocateSubdomain(ctx context.Context, in AllocateInput) (*RouteRef, error) {
+	if err := s.AuthorizeAllocation(ctx, in); err != nil {
+		return nil, err
+	}
 	if s.routes == nil {
 		return nil, fmt.Errorf("%w:路由创建器未装配", ErrAllocate)
+	}
+	routes, verify, err := s.prepareAllocation(ctx, in)
+	if err != nil {
+		return nil, err
 	}
 	p, err := s.store.get(ctx, in.ProviderID)
 	if err != nil {
@@ -222,11 +294,12 @@ func (s *service) AllocateSubdomain(ctx context.Context, in AllocateInput) (*Rou
 		return nil, fmt.Errorf("%w:宿主机 IP 非法", ErrAllocate)
 	}
 
-	client, err := s.clientFor(p)
+	client, err := s.runtimeClient(ctx, p)
 	if err != nil {
 		return nil, err
 	}
 
+	client = &authorizedDNSClient{client: client, verify: verify}
 	// 有限次随机挑子域名,避开与已建路由域名冲突(由 RouteCreator 的 domain 唯一约束兜底)。
 	const maxAttempts = 5
 	var lastErr error
@@ -239,8 +312,11 @@ func (s *service) AllocateSubdomain(ctx context.Context, in AllocateInput) (*Rou
 
 		// 建 A 记录指向宿主机 IP(幂等)。确定性错误(未实现 / 凭据格式非法)直接上抛,不重试;
 		// 其余(瞬时网络 / API)记为 lastErr 后换下一个后缀重试。
+		if err := verify(ctx); err != nil {
+			return nil, err
+		}
 		if err := client.EnsureARecord(ctx, p.BaseDomain, domain, in.HostIP); err != nil {
-			if errors.Is(err, ErrProviderNotImplemented) || errors.Is(err, ErrInvalidCredential) {
+			if errors.Is(err, ErrProviderNotImplemented) || errors.Is(err, ErrInvalidCredential) || errors.Is(err, tenancy.ErrForbidden) || errors.Is(err, tenancy.ErrConflict) {
 				return nil, err
 			}
 			lastErr = err
@@ -248,7 +324,10 @@ func (s *service) AllocateSubdomain(ctx context.Context, in AllocateInput) (*Rou
 		}
 
 		// 创建 DNS-01 反代路由。domain 唯一冲突(极小概率随机撞车)→ 重试下一个后缀。
-		routeID, rerr := s.routes.CreateDNS01Route(ctx, CreateDNS01RouteInput{
+		if err := verify(ctx); err != nil {
+			return nil, err
+		}
+		routeID, rerr := routes.CreateDNS01Route(ctx, CreateDNS01RouteInput{
 			ServerID:          in.ServerID,
 			Domain:            domain,
 			UpstreamContainer: in.UpstreamContainer,
@@ -276,8 +355,15 @@ func (s *service) AllocateSubdomain(ctx context.Context, in AllocateInput) (*Rou
 //   - in.Subdomain 必须非空且落在提供商 base_domain 下(后缀 .base 校验);否则 ErrAllocate。
 //   - 域名已占用(同 PR 重复分配且未先回收旧路由)→ 透传 proxy 的 domain-taken 错误,供上层处置。
 func (s *service) AllocateFQDN(ctx context.Context, in AllocateInput) (*RouteRef, error) {
+	if err := s.AuthorizeAllocation(ctx, in); err != nil {
+		return nil, err
+	}
 	if s.routes == nil {
 		return nil, fmt.Errorf("%w:路由创建器未装配", ErrAllocate)
+	}
+	routes, verify, err := s.prepareAllocation(ctx, in)
+	if err != nil {
+		return nil, err
 	}
 	p, err := s.store.get(ctx, in.ProviderID)
 	if err != nil {
@@ -298,15 +384,22 @@ func (s *service) AllocateFQDN(ctx context.Context, in AllocateInput) (*RouteRef
 		return nil, fmt.Errorf("%w:子域名须落在提供商根域下", ErrAllocate)
 	}
 
-	client, cerr := s.clientFor(p)
+	client, cerr := s.runtimeClient(ctx, p)
 	if cerr != nil {
 		return nil, cerr
 	}
+	client = &authorizedDNSClient{client: client, verify: verify}
 	// 建 A 记录指向宿主机 IP(幂等)。DNSPod/alidns 桩返回未实现 → 直接上抛。
+	if err := verify(ctx); err != nil {
+		return nil, err
+	}
 	if err := client.EnsureARecord(ctx, p.BaseDomain, domain, in.HostIP); err != nil {
 		return nil, err
 	}
-	routeID, rerr := s.routes.CreateDNS01Route(ctx, CreateDNS01RouteInput{
+	if err := verify(ctx); err != nil {
+		return nil, err
+	}
+	routeID, rerr := routes.CreateDNS01Route(ctx, CreateDNS01RouteInput{
 		ServerID:          in.ServerID,
 		Domain:            domain,
 		UpstreamContainer: in.UpstreamContainer,

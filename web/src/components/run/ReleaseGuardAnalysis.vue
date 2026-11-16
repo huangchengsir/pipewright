@@ -2,6 +2,9 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppButton from '../ui/AppButton.vue'
+import PermissionGate from '../PermissionGate.vue'
+import {usePermission} from '../../composables/usePermission'
+import { useIdentityRequestScope } from '../../composables/useAuthorizedRequestScope'
 import { guardDate, guardNumber } from '../../utils/guardEvidencePresentation'
 import { HttpError } from '../../api/http'
 import {
@@ -16,6 +19,9 @@ import {
 const props = defineProps<{ report: GuardReport }>()
 const emit = defineEmits<{ locateEvidence: [id: string] }>()
 const { t, locale } = useI18n()
+const permissionQuery = computed(() => ({action:'guard.analyze',resourceId:props.report.runId}))
+const permission = usePermission(permissionQuery)
+
 const includeRuntime = ref(false)
 const includeLogs = ref(false)
 const confirmed = ref(false)
@@ -139,6 +145,7 @@ function save(item: GuardAnalysis): void {
   selectedId.value = item.id
 }
 async function revoke(): Promise<void> {
+  if (!scope.active() || !permission.allowed.value) return
   const item = selected.value
   if (!item || item.revoked || revoking.value) return
   const ticket = generation
@@ -147,23 +154,24 @@ async function revoke(): Promise<void> {
   revoking.value = true
   confirmed.value = false
   try {
-    const response = await revokeGuardAnalysis(
+    const response = await scope.run(() => revokeGuardAnalysis(
       props.report.projectId,
       props.report.id,
       item.id,
-      { signal: request.signal },
-    )
+      { ...scope.requestOptions, signal: request.signal },
+    ))
     if (alive && ticket === generation && !request.signal.aborted)
       save(response)
   } catch (cause) {
     if (alive && ticket === generation && !request.signal.aborted)
       error.value = 'releaseGuard.requestFailed'
   } finally {
-    if (alive && ticket === generation) revoking.value = false
+    if (alive && ticket === generation && revokeController === request)
+      revoking.value = false
   }
 }
 async function load(): Promise<void> {
-  if (busy.value) return
+  if (!scope.active() || busy.value) return
   const ticket = generation
   const readTicket = ++readGeneration
   readController?.abort()
@@ -171,11 +179,11 @@ async function load(): Promise<void> {
   readController = request
   loading.value = true
   try {
-    const response = await listGuardAnalyses(
+    const response = await scope.run(() => listGuardAnalyses(
       props.report.projectId,
       props.report.id,
-      { signal: request.signal },
-    )
+      { ...scope.requestOptions, signal: request.signal },
+    ))
     if (
       !alive ||
       generation !== ticket ||
@@ -202,6 +210,7 @@ async function load(): Promise<void> {
   }
 }
 async function perform(action: 'preview' | 'send'): Promise<void> {
+  if (!scope.active() || !permission.allowed.value) return
   if (
     busy.value ||
     (action === 'preview' && !canPreview.value) ||
@@ -224,18 +233,18 @@ async function perform(action: 'preview' | 'send'): Promise<void> {
   try {
     const projectId = props.report.projectId
     const id = props.report.id
-    const result =
+    const result = await scope.run(() =>
       action === 'preview'
-        ? await previewGuardAnalysis(
+        ? previewGuardAnalysis(
             projectId,
             id,
             {
               includeRuntime: includeRuntime.value,
               includeLogs: includeLogs.value,
             },
-            { signal: request.signal },
+            { ...scope.requestOptions, signal: request.signal },
           )
-        : await sendGuardAnalysis(
+        : sendGuardAnalysis(
             projectId,
             id,
             snapshot!.id,
@@ -244,8 +253,9 @@ async function perform(action: 'preview' | 'send'): Promise<void> {
               providerConfigHash: snapshot!.provider.configHash,
               confirmed: true,
             },
-            { signal: request.signal },
-          )
+            { ...scope.requestOptions, signal: request.signal },
+          ),
+    )
     if (!alive || ticket !== generation || request.signal.aborted) return
     save(result)
   } catch (cause) {
@@ -266,7 +276,8 @@ async function perform(action: 'preview' | 'send'): Promise<void> {
       error.value = 'releaseGuardAnalysis.noProvider'
     } else error.value = 'releaseGuard.requestFailed'
   } finally {
-    if (alive && ticket === generation) busy.value = false
+    if (alive && ticket === generation && actionController === request)
+      busy.value = false
   }
 }
 watch(selectedId, () => {
@@ -275,28 +286,40 @@ watch(selectedId, () => {
 watch([includeRuntime, includeLogs], () => {
   confirmed.value = false
 })
+function resetAnalysis(): void {
+  generation++
+  readGeneration++
+  readController?.abort()
+  actionController?.abort()
+  revokeController?.abort()
+  includeRuntime.value = false
+  includeLogs.value = false
+  confirmed.value = false
+  items.value = []
+  selectedId.value = ''
+  busy.value = false
+  revoking.value = false
+  loading.value = false
+  error.value = ''
+  missingProvider.value = false
+}
+const scope = useIdentityRequestScope(resetAnalysis)
 watch(
   [() => props.report.id, () => props.report.projectId],
   () => {
-    generation++
-    readGeneration++
-    readController?.abort()
-    actionController?.abort()
-    revokeController?.abort()
-    includeRuntime.value = false
-    includeLogs.value = false
-    confirmed.value = false
-    items.value = []
-    selectedId.value = ''
-    busy.value = false
-    revoking.value = false
-    loading.value = false
-    error.value = ''
-    missingProvider.value = false
+    resetAnalysis()
     void load()
   },
   { immediate: true },
 )
+watch(permission.allowed, (allowed) => {
+  if (allowed) return
+  confirmed.value = false
+  actionController?.abort()
+  revokeController?.abort()
+  busy.value = false
+  revoking.value = false
+}, { flush: 'sync' })
 watch(
   () => props.report.eventsCursor,
   () => {
@@ -362,12 +385,12 @@ onBeforeUnmount(() => {
       >
     </div>
     <p>{{ t('releaseGuardAnalysis.scopeHint') }}</p>
-    <AppButton
+    <PermissionGate :query="permissionQuery"><AppButton
       :disabled="!canPreview"
       :loading="busy && !selected"
       @click="perform('preview')"
       >{{ t('releaseGuardAnalysis.preview') }}</AppButton
-    >
+    ></PermissionGate>
     <p v-if="unresolved" class="guard-analysis-notice">
       {{ t('releaseGuardAnalysis.unknown') }}
     </p>
@@ -441,15 +464,15 @@ onBeforeUnmount(() => {
             type="checkbox"
             :disabled="busy || selected.stale || selected.revoked || unresolved"
           />{{ t('releaseGuardAnalysis.confirm') }}</label
-        ><AppButton
+        ><PermissionGate :query="permissionQuery"><AppButton
           variant="primary"
           :disabled="!canSend"
           :loading="busy"
           @click="perform('send')"
           >{{ t('releaseGuardAnalysis.sendOnce') }}</AppButton
-        ></template
+        ></PermissionGate></template
       >
-      <AppButton
+      <PermissionGate :query="permissionQuery"><AppButton
         v-if="
           !selected.revoked &&
           ['preview', 'sending', 'unknown'].includes(selected.status)
@@ -458,7 +481,7 @@ onBeforeUnmount(() => {
         :loading="revoking"
         @click="revoke"
         >{{ t('releaseGuardAnalysis.revoke') }}</AppButton
-      >
+      ></PermissionGate>
       <p v-if="selected.revoked">{{ t('releaseGuardAnalysis.revoked') }}</p>
       <p class="guard-analysis-muted">
         {{ t('releaseGuardAnalysis.cannotRecall') }}

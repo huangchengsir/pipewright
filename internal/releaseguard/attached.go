@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"time"
 
 	"github.com/huangchengsir/pipewright/internal/deployattempt"
@@ -265,14 +266,21 @@ type ReportSummary struct {
 }
 
 func (s *Service) ListAttempts(ctx context.Context, runID string) ([]AttemptView, error) {
+	if err := tenancy.Check(ctx, s.db, "guard.read", "run", runID); err != nil {
+		return nil, err
+	}
 	if s.runs == nil {
 		return nil, ErrUnavailable
 	}
-	rn, err := s.runs.Get(ctx, runID)
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "guard.read", "r.id")
 	if err != nil {
+		return nil, err
+	}
+	var project string
+	if err = s.db.QueryRowContext(ctx, `SELECT r.project_id FROM pipeline_runs r WHERE r.id=? AND `+predicate.SQL, append([]any{runID}, predicate.Args...)...).Scan(&project); err != nil {
 		return nil, ErrNotFound
 	}
-	if err = s.projectExists(ctx, rn.ProjectID); err != nil {
+	if err = s.projectExists(ctx, project); err != nil {
 		return nil, err
 	}
 	list, err := s.ledger.ListByRun(ctx, runID)
@@ -282,7 +290,11 @@ func (s *Service) ListAttempts(ctx context.Context, runID string) ([]AttemptView
 	out := []AttemptView{}
 	for _, a := range list {
 		v := AttemptView{Attempt: a, Guards: []ReportSummary{}}
-		rows, e := s.db.QueryContext(ctx, `SELECT record_json FROM release_guards WHERE attempt_id=? AND project_id=? ORDER BY created_at DESC`+store.Limit(store.DialectOf(s.db), "50"), a.ID, rn.ProjectID)
+		predicate, e := tenancy.QueryPredicate(ctx, s.db, "guard.read", "g.run_id")
+		if e != nil {
+			return nil, e
+		}
+		rows, e := s.db.QueryContext(ctx, `SELECT g.record_json FROM release_guards g WHERE g.attempt_id=? AND g.project_id=? AND `+predicate.SQL+` ORDER BY g.created_at DESC`+store.Limit(store.DialectOf(s.db), "50"), append([]any{a.ID, project}, predicate.Args...)...)
 		if e != nil {
 			return nil, e
 		}

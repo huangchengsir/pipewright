@@ -1,3 +1,4 @@
+import {configWriteOptions} from './configRevision'
 /**
  * Parameters API — 项目级「类型化运行参数定义」(P0 typed params).
  *
@@ -9,8 +10,8 @@
  * secret 绝不作明文参数 —— 仍走 vault 引用。
  */
 
-import { http } from './http'
-import { bindConfigRevision, configRevisionOf, configWriteOptions } from './configRevision'
+import { http, type HttpOptions } from './http'
+import { bindConfigRevision, configRevisionOf } from './configRevision'
 import { t } from '../i18n'
 
 export type ParamType = 'string' | 'choice' | 'boolean' | 'number'
@@ -28,13 +29,13 @@ interface ParametersResponse {
   parameters: ParamDef[]
 }
 
-export async function getParameters(projectId: string): Promise<ParamDef[]> {
-  const res = await http.get<ParametersResponse>(`/api/projects/${projectId}/parameters`)
+export async function getParameters(projectId: string, options:HttpOptions={}): Promise<ParamDef[]> {
+  const res = await http.get<ParametersResponse>(`/api/projects/${projectId}/parameters`,{...options,throwOnUnauthorized:true})
   return bindConfigRevision(res.parameters ?? [], configRevisionOf(res))
 }
 
-export async function saveParameters(projectId: string, parameters: ParamDef[], expectedRevision?: string): Promise<ParamDef[]> {
-  const res = expectedRevision ? await http.put<ParametersResponse>(`/api/projects/${projectId}/parameters`, { parameters }, configWriteOptions(expectedRevision)) : await http.put<ParametersResponse>(`/api/projects/${projectId}/parameters`, { parameters })
+export async function saveParameters(projectId: string, parameters: ParamDef[], expectedRevision?: string, options:HttpOptions={}): Promise<ParamDef[]> {
+  const res = await http.put<ParametersResponse>(`/api/projects/${projectId}/parameters`, { parameters }, configWriteOptions(expectedRevision,{...options,throwOnUnauthorized:true}))
   return bindConfigRevision(res.parameters ?? [], configRevisionOf(res))
 }
 

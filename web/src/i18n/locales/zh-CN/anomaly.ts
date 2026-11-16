@@ -1,4 +1,6 @@
 export default {
+ samplingAuthorizationRequired: "待授权采样",
+ samplingAuthorizationHelp: "请由有节点执行及凭据使用权限的管理员重新保存规则。配置或授权变化后需重新批准。",
   title: '异常检测',
   subtitle: '配置阈值规则,对服务器 CPU / 内存 / 磁盘指标做检测,命中即产告警',
   checkNow: '立即检测',

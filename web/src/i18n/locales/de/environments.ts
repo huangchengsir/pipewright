@@ -31,6 +31,7 @@ export default {
     'Dies rollt die Umgebung auf das letzte erfolgreiche Deployment (Lauf {commit} · {when}) zurück und stellt diese Artefakte erneut auf den ursprünglichen Zielhosts bereit. Diese Aktion löst ein echtes Deployment aus.',
   rollbackConfirm: 'Zurückrollen bestätigen',
   rollbackFailedStatus: 'Zurückrollen fehlgeschlagen ({status})',
+  rollbackTargetChanged: "Die Bereitstellung hat sich geändert. Aktualisieren Sie die Ansicht und bestätigen Sie das Zurückrollen erneut.",
   rollbackFailedRetry: 'Zurückrollen fehlgeschlagen. Bitte später erneut versuchen.',
 
   toastRolledBack: 'Umgebung „{env}“ zurückgerollt',

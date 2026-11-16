@@ -12,7 +12,7 @@
  * The API never returns credential plaintext — only credentialName (masked display).
  */
 
-import { http } from './http'
+import { http, type HttpOptions } from './http'
 import { configWriteOptions } from './configRevision'
 
 export type RunStatus =
@@ -80,28 +80,26 @@ export interface TestCloneInput {
   credentialId: string
 }
 
-export async function listProjects(): Promise<Project[]> {
-  return http.get<Project[]>('/api/projects')
+export async function listProjects(options: HttpOptions = {}): Promise<Project[]> {
+  return http.get<Project[]>('/api/projects', {...options,throwOnUnauthorized:true})
 }
 
-export async function createProject(input: CreateProjectInput): Promise<Project> {
-  return http.post<Project>('/api/projects', input)
+export async function createProject(input: CreateProjectInput, options?:HttpOptions): Promise<Project> {
+  return http.post<Project>('/api/projects', input, options)
 }
 
-export async function testClone(input: TestCloneInput): Promise<TestCloneResult> {
-  return http.post<TestCloneResult>('/api/projects/test-clone', input)
+export async function testClone(input: TestCloneInput, options?:HttpOptions): Promise<TestCloneResult> {
+  return http.post<TestCloneResult>('/api/projects/test-clone', input, options)
 }
 
-export async function updateProject(id: string, input: UpdateProjectInput, expectedRevision?: string): Promise<Project> {
-  return expectedRevision
-    ? http.patch<Project>(`/api/projects/${id}`, input, configWriteOptions(expectedRevision))
-    : http.patch<Project>(`/api/projects/${id}`, input)
+export async function updateProject(id: string, input: UpdateProjectInput, expectedRevision?: string, options?: HttpOptions): Promise<Project> {
+  const requestOptions=configWriteOptions(expectedRevision,options)
+  return requestOptions ? http.patch<Project>(`/api/projects/${id}`,input,requestOptions) : http.patch<Project>(`/api/projects/${id}`,input)
 }
 
-export async function deleteProject(id: string, expectedRevision?: string): Promise<void> {
-  return expectedRevision
-    ? http.delete<void>(`/api/projects/${id}`, configWriteOptions(expectedRevision))
-    : http.delete<void>(`/api/projects/${id}`)
+export async function deleteProject(id: string, expectedRevision?: string, options?:HttpOptions): Promise<void> {
+  const requestOptions=configWriteOptions(expectedRevision,options)
+  return requestOptions ? http.delete<void>(`/api/projects/${id}`,requestOptions) : http.delete<void>(`/api/projects/${id}`)
 }
 
 /** One stage's summary from a previewed `.pipewright.yml` (no secrets). */
@@ -132,7 +130,7 @@ export interface PacPreviewResult {
  * Fetch & validate the repo's `.pipewright.yml` at `ref` (defaults to the project's default
  * branch when omitted). Read-only; never returns secrets or the repo URL credentials.
  */
-export async function previewPacConfig(id: string, ref?: string): Promise<PacPreviewResult> {
+export async function previewPacConfig(id: string, ref?: string, options?: HttpOptions): Promise<PacPreviewResult> {
   const qs = ref && ref.trim() ? `?ref=${encodeURIComponent(ref.trim())}` : ''
-  return http.get<PacPreviewResult>(`/api/projects/${id}/pac/preview${qs}`)
+  return http.get<PacPreviewResult>(`/api/projects/${id}/pac/preview${qs}`, options)
 }

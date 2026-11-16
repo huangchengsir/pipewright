@@ -207,8 +207,16 @@ function removeVar(env: EnvRow, rowKey: number): void {
   env.envVars = env.envVars.filter((v) => v._key !== rowKey)
 }
 
+function setVariableCredential(row: VarRow, credentialId: string): void {
+  if (props.disabled || row.credentialId === credentialId) return
+  row.credentialId = credentialId
+  row.maskedValue = undefined
+}
+
 function toggleSecret(row: VarRow): void {
+  if (props.disabled) return
   row.secret = !row.secret
+  row.maskedValue = undefined
   if (row.secret) {
     row.value = undefined
     row.credentialId = ''
@@ -299,7 +307,7 @@ function maskFor(row: VarRow): string {
                   :disabled="disabled"
                   min-width="0"
                   portal
-                  @update:model-value="row.credentialId = $event"
+                  @update:model-value="setVariableCredential(row, $event)"
                 />
                 <input v-else v-model="row.value" class="ev-v mono" type="text" :placeholder="t('pipelinePanels.envVarValuePlaceholder')" :aria-label="t('pipelinePanels.envVarValueAria')" :disabled="disabled">
                 <button

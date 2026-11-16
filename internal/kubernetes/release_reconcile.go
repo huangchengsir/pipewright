@@ -398,10 +398,8 @@ func (s *Service) applyReleaseReconciliation(ctx context.Context, parent Release
 		if _, e = q.ExecContext(ctx, `UPDATE k8s_releases SET state=?,reason_code=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?`, state, reason, s.now().UnixMilli(), parent.ID, parent.Revision); e != nil {
 			return e
 		}
-		if parent.Plan.RollbackOf != "" && (state == "rolled_back" || state == "partial_failed") {
-			if _, e = q.ExecContext(ctx, `UPDATE k8s_releases SET state=?,reason_code=?,revision=revision+1,updated_at=? WHERE id=? AND state='rollback_in_progress'`, state, reason, s.now().UnixMilli(), parent.Plan.RollbackOf); e != nil {
-				return e
-			}
+		if e = s.settleRollbackSource(ctx, q, current, state, reason); e != nil {
+			return e
 		}
 		out, e = s.release(ctx, q, parent.ID)
 		return e

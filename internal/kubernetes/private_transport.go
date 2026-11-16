@@ -26,8 +26,12 @@ var ErrTransportUnknown = errors.New("kubernetes_transport_outcome_unknown")
 
 // PrivateTransport is not exposed through HTTP or repository configuration.
 // Implementations must never log inputs, arguments or raw output.
-type PrivateTransport interface {
+type privateDocker interface {
 	Docker(context.Context, []string, []byte) (*target.SecretResult, error)
+}
+
+type PrivateTransport interface {
+	privateDocker
 	Pull(context.Context, string, []byte) error
 	Snapshot() *target.ConnectionSnapshot
 }

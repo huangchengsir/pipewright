@@ -4,7 +4,11 @@
   tab 内容只针对这一台(Portainer 式按主机管理)。容器 tab:生命周期操作 + 日志 + 终端;
   镜像 tab:列表 + 拉取 + 删除。生命周期/镜像写操作完成后 emit('changed') 让父刷新聚合。
 */
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
+import {useIdentityRequestScope} from '../../composables/useAuthorizedRequestScope'
+import PermissionGate from '../PermissionGate.vue'
+import { usePermission } from '../../composables/usePermission'
+import type { PermissionQuery } from '../../api/access'
 import { useI18n } from 'vue-i18n'
 import {
   getServerContainerStats,
@@ -77,6 +81,35 @@ const emit = defineEmits<{
   (e: 'toggle-select', name: string): void
 }>()
 
+function permissionQuery(action: string): PermissionQuery { return {action,resourceId:props.group.serverId} }
+const inspectPermission=usePermission(()=>permissionQuery('container.inspect'))
+const operatePermission=usePermission(()=>permissionQuery('container.operate'))
+const diagnosePermission=usePermission(()=>permissionQuery('container.diagnose'))
+const terminalPermission=usePermission(()=>permissionQuery('container.terminal'))
+const revealPermission=usePermission(()=>permissionQuery('container.reveal'))
+function can(action:string):boolean {
+ if(!scope.active()) return false
+ return ({'container.inspect':inspectPermission,'container.operate':operatePermission,'container.diagnose':diagnosePermission,'container.terminal':terminalPermission,'container.reveal':revealPermission}[action])?.allowed.value === true
+}
+const fixedServerId=props.group.serverId
+let requestGeneration=0
+const scope=useIdentityRequestScope(clearPrivate,()=>props.group.serverId===fixedServerId)
+function clearPrivate(){
+ requestGeneration++
+ containerStats.value=new Map(); images.value=[]; volumes.value=[]; networks.value=[]; netConns.value=[]; stacks.value=[]; stackDetail.value=null
+ editCompose.value=''; deployCompose.value=''; aiComposeNl.value=''; showDeploy.value=false
+}
+async function request<T>(action:string, work:()=>Promise<T>):Promise<T>{
+ const generation=requestGeneration
+ if(!can(action)) throw new Error('Authorization scope changed')
+ const result=await scope.run(work)
+ if(generation!==requestGeneration || !can(action)) throw new Error('Authorization scope changed')
+ return result
+}
+watch(()=>[inspectPermission.allowed.value,operatePermission.allowed.value,revealPermission.allowed.value],(now,old)=>{
+ if(old?.some((value,i)=>value&&!now[i])) requestGeneration++
+ if(old?.[0]&&!now[0]) clearPrivate()
+},{flush:'sync'})
 const toast = useToast()
 const confirm = useConfirm()
 const { t } = useI18n()
@@ -130,6 +163,7 @@ function isSelected(name: string): boolean {
 }
 
 async function runAction(c: ContainerInfo, spec: ActionSpec): Promise<void> {
+  if (!can('container.operate')) return
   if (spec.danger) {
     const copy = DANGER_COPY[spec.action]
     const ok = await confirm.open({
@@ -138,15 +172,16 @@ async function runAction(c: ContainerInfo, spec: ActionSpec): Promise<void> {
       confirmLabel: copy?.confirmLabel ?? spec.label,
       variant: 'danger',
     })
-    if (!ok) return
+    if (!ok || !can('container.operate')) return
   }
   const key = `${c.id}:${spec.action}`
   busy.value = new Set(busy.value).add(key)
   try {
-    const res = await serviceAction(props.group.serverId, { type: 'docker', target: c.names, action: spec.action })
+    const res = await request('container.operate',()=>serviceAction(fixedServerId, { type: 'docker', target: c.names, action: spec.action }, scope.requestOptions))
     if (res.ok) toast.success(t('opsServer.card.actionSuccess', { label: spec.label }), { detail: `${c.names} · ${props.name}` })
     else toast.error(t('opsServer.card.actionFail', { label: spec.label }), { detail: res.error || t('opsServer.card.errNonZeroExit') })
   } catch (err) {
+    if(!scope.active()) return
     toast.error(t('opsServer.card.actionFail', { label: spec.label }), {
       detail: err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errReqFail', { status: err.status })) : t('opsServer.card.errNetwork'),
     })
@@ -154,13 +189,14 @@ async function runAction(c: ContainerInfo, spec: ActionSpec): Promise<void> {
     const next = new Set(busy.value)
     next.delete(key)
     busy.value = next
-    setTimeout(() => emit('changed'), 600)
+    if(scope.active()) setTimeout(() => {if(scope.active()) emit('changed')}, 600)
   }
 }
 
 // ─── 实时资源 stats(进容器 tab 拉一次 + 手动刷新) ──────────────────────────────
 // docker stats --no-stream:仅 running 容器有样本,按容器名 merge 到行上。失败静默(只读
 // 锦上添花,不打断容器管理);不可达/无运行时 → 空 Map,行上不显示。
+watch(()=>inspectPermission.allowed.value,(ok)=>{if(ok&&scope.active()){void loadStats();void loadImages();void loadStacks();void loadVolumes();void loadNetworks()}})
 const containerStats = ref<Map<string, ContainerStat>>(new Map())
 const statsLoading = ref(false)
 
@@ -172,6 +208,7 @@ function statFor(name: string): ContainerStat | undefined {
 // 镜像/Stacks/卷/网络 的计数,让各 tab 上的数字一开始就有(不必点开)。仅对连得上且有
 // 运行时的服务器预取,避免对不可达主机白跑 SSH。
 onMounted(() => {
+  if (!can('container.inspect')) return
   if (tab.value === 'containers') void loadStats()
   if (props.group.reachable && props.group.runtime) {
     void loadImages()
@@ -182,10 +219,11 @@ onMounted(() => {
 })
 
 async function loadStats(): Promise<void> {
+  if(!can('container.inspect')) return
   if (statsLoading.value) return
   statsLoading.value = true
   try {
-    const res = await getServerContainerStats(props.group.serverId)
+    const res = await request('container.inspect',()=>getServerContainerStats(fixedServerId, scope.requestOptions))
     const next = new Map<string, ContainerStat>()
     if (res.reachable && res.runtime) {
       for (const s of res.stats) next.set(s.name, s)
@@ -211,10 +249,11 @@ function repoTag(img: ImageInfo): string {
 }
 
 async function loadImages(): Promise<void> {
+  if(!can('container.inspect')) return
   imgState.value = 'loading'
   imgError.value = ''
   try {
-    const res = await getServerImages(props.group.serverId)
+    const res = await request('container.inspect',()=>getServerImages(fixedServerId, scope.requestOptions))
     if (!res.reachable || !res.runtime) {
       imgState.value = 'error'
       imgError.value = res.error || t('opsServer.card.errUnreachableOrNoRuntime')
@@ -223,6 +262,7 @@ async function loadImages(): Promise<void> {
     images.value = res.images
     imgState.value = 'loaded'
   } catch (err) {
+    if(!scope.active()) return
     imgState.value = 'error'
     imgError.value =
       err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errLoadImages', { status: err.status })) : t('opsServer.card.errLoadImagesPlain')
@@ -234,6 +274,7 @@ const domainsMounted = ref(false)
 const domainCount = ref(-1) // -1 = 尚未加载(角标不显示)
 
 function switchTab(tabKey: TabKey): void {
+  if (!scope.active()) return
   tab.value = tabKey
   if (tabKey === 'containers') void loadStats()
   if (tabKey === 'images' && imgState.value === 'idle') void loadImages()
@@ -251,10 +292,11 @@ const newVol = ref('')
 const busyVol = ref('')
 
 async function loadVolumes(): Promise<void> {
+  if(!can('container.inspect')) return
   volState.value = 'loading'
   volError.value = ''
   try {
-    const res = await getServerVolumes(props.group.serverId)
+    const res = await request('container.inspect',()=>getServerVolumes(fixedServerId, scope.requestOptions))
     if (!res.reachable || !res.runtime) {
       volState.value = 'error'
       volError.value = res.error || t('opsServer.card.errUnreachableOrNoRuntime')
@@ -263,40 +305,47 @@ async function loadVolumes(): Promise<void> {
     volumes.value = res.volumes
     volState.value = 'loaded'
   } catch (err) {
+    if(!scope.active()) return
     volState.value = 'error'
     volError.value = err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errLoadVol', { status: err.status })) : t('opsServer.card.errLoadVolPlain')
   }
 }
 async function doCreateVol(): Promise<void> {
+  if (!can('container.operate')) return
   const name = newVol.value.trim()
   if (!name) return
   busyVol.value = '@create'
   try {
-    const res = await createVolume(props.group.serverId, name)
+    const res = await request('container.operate',()=>createVolume(fixedServerId, name, scope.requestOptions))
     if (res.ok) {
       toast.success(t('opsServer.card.volCreated'), { detail: name })
       newVol.value = ''
       void loadVolumes()
     } else toast.error(t('opsServer.card.createFail'), { detail: res.error })
+  } catch {
+    if(can('container.operate')) toast.error(t('opsServer.card.errReqFailPlain'))
   } finally {
     busyVol.value = ''
   }
 }
 async function doRemoveVol(v: VolumeInfo): Promise<void> {
+  if (!can('container.operate')) return
   const ok = await confirm.open({
     title: t('opsServer.card.removeVolTitle', { name: v.name }),
     body: t('opsServer.card.removeVolBody'),
     confirmLabel: t('opsServer.card.removeVolConfirm'),
     variant: 'danger',
   })
-  if (!ok) return
+  if (!ok || !can('container.operate')) return
   busyVol.value = v.name
   try {
-    const res = await removeVolume(props.group.serverId, v.name)
+    const res = await request('container.operate',()=>removeVolume(fixedServerId, v.name, scope.requestOptions))
     if (res.ok) {
       toast.success(t('opsServer.card.volRemoved'), { detail: v.name })
       void loadVolumes()
     } else toast.error(t('opsServer.card.removeFail'), { detail: res.error || t('opsServer.card.volInUse') })
+  } catch {
+    if(can('container.operate')) toast.error(t('opsServer.card.errReqFailPlain'))
   } finally {
     busyVol.value = ''
   }
@@ -310,10 +359,11 @@ const newNet = ref('')
 const busyNet = ref('')
 
 async function loadNetworks(): Promise<void> {
+  if(!can('container.inspect')) return
   netState.value = 'loading'
   netError.value = ''
   try {
-    const res = await getServerNetworks(props.group.serverId)
+    const res = await request('container.inspect',()=>getServerNetworks(fixedServerId, scope.requestOptions))
     if (!res.reachable || !res.runtime) {
       netState.value = 'error'
       netError.value = res.error || t('opsServer.card.errUnreachableOrNoRuntime')
@@ -322,40 +372,47 @@ async function loadNetworks(): Promise<void> {
     networks.value = res.networks
     netState.value = 'loaded'
   } catch (err) {
+    if(!scope.active()) return
     netState.value = 'error'
     netError.value = err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errLoadNet', { status: err.status })) : t('opsServer.card.errLoadNetPlain')
   }
 }
 async function doCreateNet(): Promise<void> {
+  if (!can('container.operate')) return
   const name = newNet.value.trim()
   if (!name) return
   busyNet.value = '@create'
   try {
-    const res = await createNetwork(props.group.serverId, name)
+    const res = await request('container.operate',()=>createNetwork(fixedServerId, name, scope.requestOptions))
     if (res.ok) {
       toast.success(t('opsServer.card.netCreated'), { detail: name })
       newNet.value = ''
       void loadNetworks()
     } else toast.error(t('opsServer.card.createFail'), { detail: res.error })
+  } catch {
+    if(can('container.operate')) toast.error(t('opsServer.card.errReqFailPlain'))
   } finally {
     busyNet.value = ''
   }
 }
 async function doRemoveNet(n: NetworkInfo): Promise<void> {
+  if (!can('container.operate')) return
   const ok = await confirm.open({
     title: t('opsServer.card.removeNetConfirmTitle', { name: n.name }),
     body: t('opsServer.card.removeNetBody'),
     confirmLabel: t('opsServer.card.removeNetConfirm'),
     variant: 'danger',
   })
-  if (!ok) return
+  if (!ok || !can('container.operate')) return
   busyNet.value = n.id
   try {
-    const res = await removeNetwork(props.group.serverId, n.name)
+    const res = await request('container.operate',()=>removeNetwork(fixedServerId, n.name, scope.requestOptions))
     if (res.ok) {
       toast.success(t('opsServer.card.netRemoved'), { detail: n.name })
       void loadNetworks()
     } else toast.error(t('opsServer.card.removeFail'), { detail: res.error || t('opsServer.card.netInUse') })
+  } catch {
+    if(can('container.operate')) toast.error(t('opsServer.card.errReqFailPlain'))
   } finally {
     busyNet.value = ''
   }
@@ -370,8 +427,12 @@ const netConns = ref<NetworkContainer[]>([])
 const netConnState = ref<'idle' | 'loading' | 'loaded' | 'error'>('idle')
 const netConnError = ref('')
 const busyConn = ref('')
+let netDetailGeneration = 0
 
 async function toggleNetDetail(n: NetworkInfo): Promise<void> {
+  if (!can('container.inspect')) return
+  const ticket = ++netDetailGeneration
+  busyConn.value = ''; connectName.value = ''
   if (expandedNet.value === n.name) {
     expandedNet.value = ''
     return
@@ -381,7 +442,8 @@ async function toggleNetDetail(n: NetworkInfo): Promise<void> {
   netConnError.value = ''
   netConns.value = []
   try {
-    const res = await getNetworkContainers(props.group.serverId, n.name)
+    const res = await request('container.inspect',()=>getNetworkContainers(fixedServerId, n.name, scope.requestOptions))
+    if (ticket !== netDetailGeneration || expandedNet.value !== n.name) return
     if (!res.reachable) {
       netConnState.value = 'error'
       netConnError.value = res.error || t('opsServer.card.errReadFail')
@@ -390,6 +452,7 @@ async function toggleNetDetail(n: NetworkInfo): Promise<void> {
     netConns.value = res.containers
     netConnState.value = 'loaded'
   } catch (err) {
+    if(!scope.active() || ticket !== netDetailGeneration || expandedNet.value !== n.name) return
     netConnState.value = 'error'
     netConnError.value = err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errReadFail')) : t('opsServer.card.errReadFail')
   }
@@ -398,24 +461,28 @@ async function toggleNetDetail(n: NetworkInfo): Promise<void> {
 // 连接容器到网络:从该机容器里选一个,docker network connect。
 const connectName = ref('')
 async function doConnect(network: string): Promise<void> {
+  if (!can('container.operate') || expandedNet.value !== network) return
+  const ticket = netDetailGeneration
   const name = connectName.value.trim()
   if (!name) return
   busyConn.value = '@connect'
   try {
-    const res = await connectNetwork(props.group.serverId, network, name)
+    const res = await request('container.operate',()=>connectNetwork(fixedServerId, network, name, scope.requestOptions))
     if (res.ok) {
       toast.success(t('opsServer.card.connected'), { detail: `${name} ⇢ ${network}` })
+      if (ticket !== netDetailGeneration || expandedNet.value !== network) return
       connectName.value = ''
       // 刷新该网络的连接列表。
-      const r = await getNetworkContainers(props.group.serverId, network)
-      if (r.reachable) netConns.value = r.containers
+      const r = await request('container.inspect',()=>getNetworkContainers(fixedServerId, network, scope.requestOptions))
+      if (r.reachable && ticket === netDetailGeneration && expandedNet.value === network) netConns.value = r.containers
     } else toast.error(t('opsServer.card.connectFail'), { detail: res.error })
   } catch (err) {
+    if(!scope.active()) return
     toast.error(t('opsServer.card.connectFail'), {
       detail: err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errReqFailPlain')) : t('opsServer.card.errNetwork'),
     })
   } finally {
-    busyConn.value = ''
+    if (ticket === netDetailGeneration) busyConn.value = ''
   }
 }
 
@@ -426,22 +493,26 @@ function attachableContainers(): string[] {
 }
 
 async function doDisconnect(network: string, c: NetworkContainer): Promise<void> {
+  if (!can('container.operate') || expandedNet.value !== network) return
+  const ticket = netDetailGeneration
   const ok = await confirm.open({
     title: t('opsServer.card.disconnectConfirmTitle', { name: c.name, network }),
     body: t('opsServer.card.disconnectBody'),
     confirmLabel: t('opsServer.card.disconnectConfirm'),
     variant: 'danger',
   })
-  if (!ok) return
+  if (!ok || !can('container.operate') || ticket !== netDetailGeneration || expandedNet.value !== network) return
   busyConn.value = c.id
   try {
-    const res = await disconnectNetwork(props.group.serverId, network, c.name)
+    const res = await request('container.operate',()=>disconnectNetwork(fixedServerId, network, c.name, scope.requestOptions))
     if (res.ok) {
       toast.success(t('opsServer.card.disconnected'), { detail: `${c.name} ⇠ ${network}` })
-      netConns.value = netConns.value.filter((x) => x.id !== c.id)
+      if (ticket === netDetailGeneration && expandedNet.value === network) netConns.value = netConns.value.filter((x) => x.id !== c.id)
     } else toast.error(t('opsServer.card.disconnectFail'), { detail: res.error })
+  } catch {
+    if(can('container.operate')) toast.error(t('opsServer.card.errReqFailPlain'))
   } finally {
-    busyConn.value = ''
+    if (ticket === netDetailGeneration) busyConn.value = ''
   }
 }
 
@@ -456,10 +527,11 @@ const deployCompose = ref('')
 const deploying = ref(false)
 
 async function loadStacks(): Promise<void> {
+  if(!can('container.inspect')) return
   stackState.value = 'loading'
   stackError.value = ''
   try {
-    const res = await getServerStacks(props.group.serverId)
+    const res = await request('container.inspect',()=>getServerStacks(fixedServerId, scope.requestOptions))
     if (!res.reachable || !res.runtime) {
       stackState.value = 'error'
       stackError.value = res.error || t('opsServer.card.errUnreachableOrNoCompose')
@@ -468,6 +540,7 @@ async function loadStacks(): Promise<void> {
     stacks.value = res.stacks
     stackState.value = 'loaded'
   } catch (err) {
+    if(!scope.active()) return
     stackState.value = 'error'
     stackError.value =
       err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errLoadStacks', { status: err.status })) : t('opsServer.card.errLoadStacksPlain')
@@ -483,6 +556,7 @@ const STACK_ACTIONS = computed<{ action: StackAction; label: string; danger?: bo
 ])
 
 async function doStackAction(s: StackInfo, action: StackAction, label: string, danger?: boolean): Promise<void> {
+  if (!can('container.operate')) return
   // 「更新」不再据列表 configFiles 预拦:老 compose v1 标签恒空,后端会三级解析(受管目录/探测)
   // 兜底找 compose 文件,真定位不到才返回清晰错误。预拦会误伤可探测到文件的存量 stack。
   if (danger) {
@@ -497,11 +571,11 @@ async function doStackAction(s: StackInfo, action: StackAction, label: string, d
       confirmLabel: label,
       variant: 'danger',
     })
-    if (!ok) return
+    if (!ok || !can('container.operate')) return
   }
   busyStack.value = s.name
   try {
-    const res = await stackAction(props.group.serverId, s.name, action, s.configFiles)
+    const res = await request('container.operate',()=>stackAction(fixedServerId, s.name, action, s.configFiles, scope.requestOptions))
     if (res.ok) {
       toast.success(t('opsServer.card.stackActionSuccess', { label }), { detail: s.name })
       void loadStacks()
@@ -510,6 +584,7 @@ async function doStackAction(s: StackInfo, action: StackAction, label: string, d
       toast.error(t('opsServer.card.stackActionFail', { label }), { detail: res.error || t('opsServer.card.errNonZeroExit') })
     }
   } catch (err) {
+    if(!scope.active()) return
     toast.error(t('opsServer.card.stackActionFail', { label }), {
       detail: err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errReqFail', { status: err.status })) : t('opsServer.card.errNetwork'),
     })
@@ -523,10 +598,12 @@ const detailName = ref('') // 当前展开的 stack(空 = 都收起)
 const detailState = ref<'idle' | 'loading' | 'loaded' | 'error'>('idle')
 const detailError = ref('')
 const stackDetail = ref<StackDetail | null>(null)
+watch(()=>revealPermission.allowed.value,(allowed)=>{ if(!allowed){editCompose.value=''; if(stackDetail.value) stackDetail.value={...stackDetail.value,compose:'',configFiles:''} } },{flush:'sync'})
 const editCompose = ref('') // compose 编辑缓冲
 const savingStack = ref(false)
 
 async function toggleDetail(s: StackInfo): Promise<void> {
+  if (!can('container.inspect')) return
   if (detailName.value === s.name) {
     detailName.value = '' // 再点一次收起
     return
@@ -536,16 +613,18 @@ async function toggleDetail(s: StackInfo): Promise<void> {
   detailState.value = 'loading'
   detailError.value = ''
   try {
-    const res = await getStackDetail(props.group.serverId, s.name)
+    const res = await request('container.inspect',()=>getStackDetail(fixedServerId, s.name, scope.requestOptions))
     if (!res.reachable || !res.runtime) {
       detailState.value = 'error'
       detailError.value = res.error || t('opsServer.card.errUnreachable')
       return
     }
-    stackDetail.value = res
-    editCompose.value = res.compose
+    if(detailName.value!==s.name) return
+    stackDetail.value = can('container.reveal') ? res : {...res,compose:'',configFiles:''}
+    editCompose.value = can('container.reveal') ? res.compose : ''
     detailState.value = 'loaded'
   } catch (err) {
+    if(!scope.active()) return
     detailState.value = 'error'
     detailError.value =
       err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errLoadDetail', { status: err.status })) : t('opsServer.card.errLoadDetailPlain')
@@ -553,6 +632,7 @@ async function toggleDetail(s: StackInfo): Promise<void> {
 }
 
 async function doSaveStack(): Promise<void> {
+  if (!can('container.operate') || !can('container.reveal')) return
   const d = stackDetail.value
   if (!d || !d.editable || savingStack.value) return
   const compose = editCompose.value.trim()
@@ -566,10 +646,11 @@ async function doSaveStack(): Promise<void> {
     confirmLabel: t('opsServer.card.saveStackConfirm'),
     variant: 'danger',
   })
-  if (!ok) return
+  if (!ok || !can('container.operate') || !can('container.reveal') ||
+    stackDetail.value !== d || detailName.value !== d.name || editCompose.value.trim() !== compose) return
   savingStack.value = true
   try {
-    const res = await saveStackCompose(props.group.serverId, d.name, compose, d.configFiles)
+    const res = await request('container.operate',()=>saveStackCompose(fixedServerId, d.name, compose, d.configFiles, scope.requestOptions))
     if (res.ok) {
       toast.success(t('opsServer.card.savedRedeployed'), { detail: d.name })
       void loadStacks()
@@ -578,6 +659,7 @@ async function doSaveStack(): Promise<void> {
       toast.error(t('opsServer.card.saveFail'), { detail: res.error || t('opsServer.card.errNonZeroExit') })
     }
   } catch (err) {
+    if(!scope.active()) return
     toast.error(t('opsServer.card.saveFail'), {
       detail: err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errReqFail', { status: err.status })) : t('opsServer.card.errNetwork'),
     })
@@ -590,11 +672,12 @@ async function doSaveStack(): Promise<void> {
 const aiComposeNl = ref('')
 const aiComposeBusy = ref(false)
 async function aiGenCompose(): Promise<void> {
+  if (!can('container.diagnose')) return
   const nl = aiComposeNl.value.trim()
   if (!nl || aiComposeBusy.value) return
   aiComposeBusy.value = true
   try {
-    const res = await generateCompose(nl)
+    const res = await request('container.diagnose',()=>generateCompose(nl))
     if (!res.available) {
       toast.error(t('opsServer.card.aiNotConfigured'), { detail: t('opsServer.card.aiConfigHint') })
       return
@@ -607,6 +690,7 @@ async function aiGenCompose(): Promise<void> {
       toast.error(t('opsServer.card.genFail'), { detail: res.reason || t('opsServer.card.modelNoCompose') })
     }
   } catch (err) {
+    if(!scope.active()) return
     toast.error(t('opsServer.card.genFail'), {
       detail: err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errReqFailPlain')) : t('opsServer.card.errNetwork'),
     })
@@ -616,12 +700,13 @@ async function aiGenCompose(): Promise<void> {
 }
 
 async function doDeploy(): Promise<void> {
+  if (!can('container.operate')) return
   const name = deployName.value.trim()
   const compose = deployCompose.value.trim()
   if (!name || !compose || deploying.value) return
   deploying.value = true
   try {
-    const res = await deployStack(props.group.serverId, name, compose)
+    const res = await request('container.operate',()=>deployStack(fixedServerId, name, compose, scope.requestOptions))
     if (res.ok) {
       toast.success(t('opsServer.card.stackDeployed'), { detail: name })
       showDeploy.value = false
@@ -633,6 +718,7 @@ async function doDeploy(): Promise<void> {
       toast.error(t('opsServer.card.deployFail'), { detail: res.error || t('opsServer.card.composeUpFail') })
     }
   } catch (err) {
+    if(!scope.active()) return
     toast.error(t('opsServer.card.deployFail'), {
       detail: err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errReqFail', { status: err.status })) : t('opsServer.card.errNetwork'),
     })
@@ -642,11 +728,12 @@ async function doDeploy(): Promise<void> {
 }
 
 async function doPull(): Promise<void> {
+  if (!can('container.operate')) return
   const ref = pullRef.value.trim()
   if (!ref || pulling.value) return
   pulling.value = true
   try {
-    const res = await pullImage(props.group.serverId, ref)
+    const res = await request('container.operate',()=>pullImage(fixedServerId, ref, scope.requestOptions))
     if (res.ok) {
       toast.success(t('opsServer.card.imagePulled'), { detail: ref })
       pullRef.value = ''
@@ -655,6 +742,7 @@ async function doPull(): Promise<void> {
       toast.error(t('opsServer.card.pullFail'), { detail: res.error || t('opsServer.card.pullCheck') })
     }
   } catch (err) {
+    if(!scope.active()) return
     toast.error(t('opsServer.card.pullFail'), {
       detail: err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errReqFail', { status: err.status })) : t('opsServer.card.errNetwork'),
     })
@@ -664,6 +752,7 @@ async function doPull(): Promise<void> {
 }
 
 async function doRemoveImage(img: ImageInfo): Promise<void> {
+  if (!can('container.operate')) return
   const tagStr = repoTag(img)
   const ok = await confirm.open({
     title: t('opsServer.card.removeImageConfirmTitle', { tag: tagStr }),
@@ -671,10 +760,10 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
     confirmLabel: t('opsServer.card.removeImageConfirm'),
     variant: 'danger',
   })
-  if (!ok) return
+  if (!ok || !can('container.operate')) return
   busyImage.value = img.id
   try {
-    const res = await removeImage(props.group.serverId, img.id, false)
+    const res = await request('container.operate',()=>removeImage(fixedServerId, img.id, false, scope.requestOptions))
     if (res.ok) {
       toast.success(t('opsServer.card.imageRemoved'), { detail: tagStr })
       void loadImages()
@@ -682,6 +771,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
       toast.error(t('opsServer.card.removeFail'), { detail: res.error || t('opsServer.card.imageInUse') })
     }
   } catch (err) {
+    if(!scope.active()) return
     toast.error(t('opsServer.card.removeFail'), {
       detail: err instanceof HttpError ? (err.apiError?.message ?? t('opsServer.card.errReqFail', { status: err.status })) : t('opsServer.card.errNetwork'),
     })
@@ -750,20 +840,20 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
       <template v-if="tab === 'containers'">
         <div v-if="group.total > 0" class="cstats-bar">
           <span class="cstats-bar__label">{{ t('opsServer.card.realtimeStats') }}</span>
-          <button class="op op--ghost" :disabled="statsLoading" :title="t('opsServer.card.refreshStatsTitle')" @click="loadStats">
+          <PermissionGate :query="permissionQuery('container.inspect')"><button class="op op--ghost" :disabled="statsLoading" :title="t('opsServer.card.refreshStatsTitle')" @click="loadStats">
             {{ statsLoading ? t('opsServer.card.sampling') : t('common.refresh') }}
-          </button>
+          </button></PermissionGate>
         </div>
         <p v-if="group.total === 0" class="panel__hint">{{ t('opsServer.card.noContainers') }}</p>
         <p v-else-if="visibleContainers.length === 0" class="panel__hint">{{ emptyContainersHint }}</p>
         <ul v-else class="clist" role="list">
           <li v-for="c in visibleContainers" :key="c.id" class="crow" :class="{ 'crow--busy': rowBusy(c.id), 'crow--bulk': bulkMode }">
-            <label v-if="bulkMode" class="crow__check">
+            <label v-if="bulkMode && can('container.operate')" class="crow__check">
               <input
                 type="checkbox"
                 :checked="isSelected(c.names)"
                 :aria-label="t('opsServer.card.selectContainerAria', { name: c.names })"
-                @change="emit('toggle-select', c.names)"
+                @change="can('container.operate') && emit('toggle-select', c.names)"
               />
             </label>
             <div class="crow__state">
@@ -786,7 +876,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
               </div>
             </div>
             <div class="crow__actions">
-              <button
+              <PermissionGate :query="permissionQuery('container.operate')"><button
                 v-for="a in actionsFor(c.state)"
                 :key="a.action"
                 class="op"
@@ -796,11 +886,11 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
                 @click="runAction(c, a)"
               >
                 {{ a.label }}
-              </button>
-              <button class="op op--ghost" :title="t('opsServer.card.inspectTitle')" @click="emit('inspect', c)">{{ t('opsServer.card.detail') }}</button>
-              <button class="op op--ai" :title="t('opsServer.card.aiDiagnoseTitle')" @click="emit('diagnose', c)">{{ t('opsServer.card.ai') }}</button>
-              <button class="op op--ghost" :title="t('opsServer.card.logsTitle')" @click="emit('logs', c)">{{ t('opsServer.card.logs') }}</button>
-              <button class="op op--ghost" :disabled="rowBusy(c.id)" :title="t('opsServer.card.terminalTitle')" @click="emit('terminal', c)">{{ t('opsServer.card.terminal') }}</button>
+              </button></PermissionGate>
+              <PermissionGate :query="permissionQuery('container.inspect')"><button class="op op--ghost" :title="t('opsServer.card.inspectTitle')" @click="can('container.inspect') && emit('inspect', c)">{{ t('opsServer.card.detail') }}</button></PermissionGate>
+              <PermissionGate :query="permissionQuery('container.diagnose')"><button class="op op--ai" :title="t('opsServer.card.aiDiagnoseTitle')" @click="can('container.diagnose') && emit('diagnose', c)">{{ t('opsServer.card.ai') }}</button></PermissionGate>
+              <PermissionGate :query="permissionQuery('container.inspect')"><button class="op op--ghost" :title="t('opsServer.card.logsTitle')" @click="can('container.inspect') && emit('logs', c)">{{ t('opsServer.card.logs') }}</button></PermissionGate>
+              <PermissionGate :query="permissionQuery('container.terminal')"><button class="op op--ghost" :disabled="rowBusy(c.id)" :title="t('opsServer.card.terminalTitle')" @click="can('container.terminal') && emit('terminal', c)">{{ t('opsServer.card.terminal') }}</button></PermissionGate>
             </div>
           </li>
         </ul>
@@ -811,12 +901,12 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
         <div class="img-toolbar">
           <div class="pull">
             <input v-model="pullRef" class="pull__in mono" :placeholder="t('opsServer.card.pullPlaceholder')" @keyup.enter="doPull" />
-            <button class="pull__btn" :disabled="pulling || !pullRef.trim()" @click="doPull">
+            <PermissionGate :query="permissionQuery('container.operate')"><button class="pull__btn" :disabled="pulling || !pullRef.trim()" @click="doPull">
               {{ pulling ? t('opsServer.card.pulling') : t('opsServer.card.pull') }}
-            </button>
+            </button></PermissionGate>
           </div>
           <span class="grow" />
-          <button class="refresh" :disabled="imgState === 'loading'" @click="loadImages">{{ t('opsServer.card.refresh') }}</button>
+          <PermissionGate :query="permissionQuery('container.inspect')"><button class="refresh" :disabled="imgState === 'loading'" @click="loadImages">{{ t('opsServer.card.refresh') }}</button></PermissionGate>
         </div>
         <p v-if="imgState === 'error'" class="panel__hint panel__hint--down">⚠ {{ imgError }}</p>
         <p v-else-if="imgState === 'loading' && images.length === 0" class="panel__hint">{{ t('opsServer.card.loadingImages') }}</p>
@@ -830,7 +920,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
             <div class="irow__size mono">{{ img.size }}</div>
             <div class="irow__age">{{ img.createdSince }}</div>
             <div class="irow__act">
-              <button class="op op--ghost" :disabled="busyImage === img.id" :title="t('opsServer.card.removeImageTitle')" @click="doRemoveImage(img)">{{ t('opsServer.card.remove') }}</button>
+              <PermissionGate :query="permissionQuery('container.operate')"><button class="op op--ghost" :disabled="busyImage === img.id" :title="t('opsServer.card.removeImageTitle')" @click="doRemoveImage(img)">{{ t('opsServer.card.remove') }}</button></PermissionGate>
             </div>
           </li>
         </ul>
@@ -839,9 +929,9 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
       <!-- Stacks tab -->
       <template v-else-if="tab === 'stacks'">
         <div class="img-toolbar">
-          <button class="pull__btn" @click="showDeploy = !showDeploy">{{ showDeploy ? t('opsServer.card.collapseDeploy') : t('opsServer.card.deployStack') }}</button>
+          <PermissionGate :query="permissionQuery('container.operate')"><button class="pull__btn" @click="can('container.operate') && (showDeploy = !showDeploy)">{{ showDeploy ? t('opsServer.card.collapseDeploy') : t('opsServer.card.deployStack') }}</button></PermissionGate>
           <span class="grow" />
-          <button class="refresh" :disabled="stackState === 'loading'" @click="loadStacks">{{ t('opsServer.card.refresh') }}</button>
+          <PermissionGate :query="permissionQuery('container.inspect')"><button class="refresh" :disabled="stackState === 'loading'" @click="loadStacks">{{ t('opsServer.card.refresh') }}</button></PermissionGate>
         </div>
 
         <!-- 部署表单(贴 compose yaml) -->
@@ -854,9 +944,9 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
               :placeholder="t('opsServer.card.aiComposePlaceholder')"
               @keyup.enter="aiGenCompose"
             />
-            <button class="pull__btn" :disabled="aiComposeBusy || !aiComposeNl.trim()" @click="aiGenCompose">
+            <PermissionGate :query="permissionQuery('container.diagnose')"><button class="pull__btn" :disabled="aiComposeBusy || !aiComposeNl.trim()" @click="aiGenCompose">
               {{ aiComposeBusy ? t('opsServer.card.aiGenerating') : t('opsServer.card.aiGenerate') }}
-            </button>
+            </button></PermissionGate>
           </div>
           <input v-model="deployName" class="deploy__name mono" :placeholder="t('opsServer.card.deployNamePlaceholder')" />
           <textarea
@@ -867,9 +957,9 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
           />
           <div class="deploy__act">
             <span class="deploy__hint">{{ t('opsServer.card.deployHint') }}</span>
-            <button class="pull__btn" :disabled="deploying || !deployName.trim() || !deployCompose.trim()" @click="doDeploy">
+            <PermissionGate :query="permissionQuery('container.operate')"><button class="pull__btn" :disabled="deploying || !deployName.trim() || !deployCompose.trim()" @click="doDeploy">
               {{ deploying ? t('opsServer.card.deploying') : t('opsServer.card.deploy') }}
-            </button>
+            </button></PermissionGate>
           </div>
         </div>
 
@@ -884,17 +974,17 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
             :class="{ 'irow--busy': busyStack === s.name, 'srow--open': detailName === s.name }"
           >
             <div class="srow__head">
-              <button
+              <PermissionGate :query="permissionQuery('container.inspect')"><button
                 class="srow__toggle"
                 :title="detailName === s.name ? t('opsServer.card.collapseDetailTitle') : t('opsServer.card.viewServicesTitle')"
                 @click="toggleDetail(s)"
               >
                 <span class="srow__caret" :class="{ 'srow__caret--open': detailName === s.name }">▸</span>
                 <span class="srow__name">{{ s.name }}</span>
-              </button>
+              </button></PermissionGate>
               <div class="srow__status mono">{{ s.status }}</div>
               <div class="srow__act">
-                <button
+                <PermissionGate :query="permissionQuery('container.operate')"><button
                   v-for="a in STACK_ACTIONS"
                   :key="a.action"
                   class="op"
@@ -904,7 +994,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
                   @click="doStackAction(s, a.action, a.label, a.danger)"
                 >
                   {{ a.label }}
-                </button>
+                </button></PermissionGate>
               </div>
             </div>
 
@@ -930,20 +1020,20 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
                     · {{ stackDetail.configFiles }}
                   </span>
                 </div>
-                <template v-if="stackDetail.composeSource === 'file'">
+                <template v-if="stackDetail.composeSource === 'file' && can('container.reveal')">
                   <textarea v-model="editCompose" class="deploy__yaml mono" rows="12" spellcheck="false" />
                   <div class="deploy__act">
                     <span class="deploy__hint">
                       {{ stackDetail.editable ? t('opsServer.card.saveWritebackHint') : t('opsServer.card.multiFileReadonlyHint') }}
                     </span>
-                    <button
+                    <PermissionGate :query="permissionQuery('container.operate')"><button
                       v-if="stackDetail.editable"
                       class="pull__btn"
                       :disabled="savingStack || !editCompose.trim()"
                       @click="doSaveStack"
                     >
                       {{ savingStack ? t('opsServer.card.saving') : t('opsServer.card.saveRedeploy') }}
-                    </button>
+                    </button></PermissionGate>
                   </div>
                 </template>
                 <p v-else class="panel__hint">
@@ -960,10 +1050,10 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
         <div class="img-toolbar">
           <div class="pull">
             <input v-model="newVol" class="pull__in mono" :placeholder="t('opsServer.card.newVolPlaceholder')" @keyup.enter="doCreateVol" />
-            <button class="pull__btn" :disabled="busyVol === '@create' || !newVol.trim()" @click="doCreateVol">{{ t('opsServer.card.create') }}</button>
+            <PermissionGate :query="permissionQuery('container.operate')"><button class="pull__btn" :disabled="busyVol === '@create' || !newVol.trim()" @click="doCreateVol">{{ t('opsServer.card.create') }}</button></PermissionGate>
           </div>
           <span class="grow" />
-          <button class="refresh" :disabled="volState === 'loading'" @click="loadVolumes">{{ t('opsServer.card.refresh') }}</button>
+          <PermissionGate :query="permissionQuery('container.inspect')"><button class="refresh" :disabled="volState === 'loading'" @click="loadVolumes">{{ t('opsServer.card.refresh') }}</button></PermissionGate>
         </div>
         <p v-if="volState === 'error'" class="panel__hint panel__hint--down">⚠ {{ volError }}</p>
         <p v-else-if="volState === 'loading' && volumes.length === 0" class="panel__hint">{{ t('opsServer.card.loadingVolumes') }}</p>
@@ -975,7 +1065,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
             </div>
             <div class="srow__status mono">{{ v.driver }}</div>
             <div class="srow__act">
-              <button class="op op--ghost" :disabled="busyVol === v.name" @click="doRemoveVol(v)">{{ t('opsServer.card.remove') }}</button>
+              <PermissionGate :query="permissionQuery('container.operate')"><button class="op op--ghost" :disabled="busyVol === v.name" @click="doRemoveVol(v)">{{ t('opsServer.card.remove') }}</button></PermissionGate>
             </div>
           </li>
         </ul>
@@ -986,10 +1076,10 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
         <div class="img-toolbar">
           <div class="pull">
             <input v-model="newNet" class="pull__in mono" :placeholder="t('opsServer.card.newNetPlaceholder')" @keyup.enter="doCreateNet" />
-            <button class="pull__btn" :disabled="busyNet === '@create' || !newNet.trim()" @click="doCreateNet">{{ t('opsServer.card.create') }}</button>
+            <PermissionGate :query="permissionQuery('container.operate')"><button class="pull__btn" :disabled="busyNet === '@create' || !newNet.trim()" @click="doCreateNet">{{ t('opsServer.card.create') }}</button></PermissionGate>
           </div>
           <span class="grow" />
-          <button class="refresh" :disabled="netState === 'loading'" @click="loadNetworks">{{ t('opsServer.card.refresh') }}</button>
+          <PermissionGate :query="permissionQuery('container.inspect')"><button class="refresh" :disabled="netState === 'loading'" @click="loadNetworks">{{ t('opsServer.card.refresh') }}</button></PermissionGate>
         </div>
         <p v-if="netState === 'error'" class="panel__hint panel__hint--down">⚠ {{ netError }}</p>
         <p v-else-if="netState === 'loading' && networks.length === 0" class="panel__hint">{{ t('opsServer.card.loadingNetworks') }}</p>
@@ -997,23 +1087,23 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
         <ul v-else class="ilist" role="list">
           <li v-for="n in networks" :key="n.id">
             <div class="srow" :class="{ 'irow--busy': busyNet === n.id }">
-              <button class="srow__main netexp" @click="toggleNetDetail(n)">
+              <PermissionGate :query="permissionQuery('container.inspect')"><button class="srow__main netexp" @click="toggleNetDetail(n)">
                 <span class="netexp__caret" :class="{ 'netexp__caret--open': expandedNet === n.name }">▸</span>
                 <span>
                   <span class="srow__name">{{ n.name }}</span>
                   <span class="srow__cfg mono">{{ n.id }} · {{ n.scope }}</span>
                 </span>
-              </button>
+              </button></PermissionGate>
               <div class="srow__status mono">{{ n.driver }}</div>
               <div class="srow__act">
-                <button
+                <PermissionGate :query="permissionQuery('container.operate')"><button
                   class="op op--ghost"
                   :disabled="busyNet === n.id || BUILTIN_NETWORKS.has(n.name)"
                   :title="BUILTIN_NETWORKS.has(n.name) ? t('opsServer.card.builtinNetUndeletable') : t('opsServer.card.removeNetTitle')"
                   @click="doRemoveNet(n)"
                 >
                   {{ t('opsServer.card.remove') }}
-                </button>
+                </button></PermissionGate>
               </div>
             </div>
             <!-- 展开:该网络上连着的容器 -->
@@ -1025,7 +1115,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
                 <li v-for="c in netConns" :key="c.id" class="connrow" :class="{ 'irow--busy': busyConn === c.id }">
                   <span class="connrow__name">{{ c.name }}</span>
                   <span class="connrow__ip mono">{{ c.ipv4 || '—' }}</span>
-                  <button class="op op--ghost" :disabled="busyConn === c.id" @click="doDisconnect(n.name, c)">{{ t('opsServer.card.disconnect') }}</button>
+                  <PermissionGate :query="permissionQuery('container.operate')"><button class="op op--ghost" :disabled="busyConn === c.id" @click="doDisconnect(n.name, c)">{{ t('opsServer.card.disconnect') }}</button></PermissionGate>
                 </li>
               </ul>
               <!-- 连接容器到该网络 -->
@@ -1034,9 +1124,9 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
                   <option value="">{{ attachableContainers().length ? t('opsServer.card.selectAttachable') : t('opsServer.card.noAttachable') }}</option>
                   <option v-for="name in attachableContainers()" :key="name" :value="name">{{ name }}</option>
                 </select>
-                <button class="op op--default" :disabled="!connectName || busyConn === '@connect'" @click="doConnect(n.name)">
+                <PermissionGate :query="permissionQuery('container.operate')"><button class="op op--default" :disabled="!connectName || busyConn === '@connect'" @click="doConnect(n.name)">
                   {{ t('opsServer.card.connect') }}
-                </button>
+                </button></PermissionGate>
               </div>
             </div>
           </li>

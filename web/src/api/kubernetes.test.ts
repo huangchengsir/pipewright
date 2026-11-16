@@ -128,3 +128,69 @@ describe("Kubernetes v2 wire contracts", () => {
     expect(calls.post).not.toHaveBeenCalled();
   });
 });
+
+describe("Kubernetes identity request context", () => {
+  it.each(["credential", "connection", "probe", "release", "reauth"])(
+    "preserves the fixed team for %s",
+    async (kind) => {
+      const context = {
+        headers: { "X-Pipewright-Team": "team-fixed" },
+        signal: new AbortController().signal,
+      };
+      if (kind === "credential") await kubeAPI.credentials(undefined, context);
+      else if (kind === "connection")
+        await kubeAPI.connections(undefined, context);
+      else if (kind === "probe")
+        await kubeAPI.probe("c", "g", "web", undefined, context);
+      else if (kind === "release")
+        await kubeAPI.releaseGrants("c", undefined, context);
+      else await kubeAPI.reauth("fixture", undefined, context);
+      const call =
+        kind === "probe" || kind === "reauth" ? calls.post : calls.get;
+      expect(call.mock.calls[0]!.at(-1)).toEqual(
+        expect.objectContaining({
+          headers: { "X-Pipewright-Team": "team-fixed" },
+          throwOnUnauthorized: true,
+          signal: expect.any(AbortSignal),
+        }),
+      );
+    },
+  );
+  it("aborts an active request when its identity scope is disposed without retry", async () => {
+    const scope = new AbortController();
+    calls.post.mockImplementation(
+      (_p, _d, o) =>
+        new Promise((_r, reject) =>
+          o.signal.addEventListener("abort", () =>
+            reject(new Error("aborted")),
+          ),
+        ),
+    );
+    const pending = kubeAPI.probe("c", "g", "web", undefined, {
+      signal: scope.signal,
+    });
+    scope.abort();
+    await expect(pending).rejects.toThrow("aborted");
+    expect(calls.post).toHaveBeenCalledTimes(1);
+  });
+  it("does not dispatch a write with an already disposed scope", async () => {
+    const scope = new AbortController();
+    scope.abort();
+    await expect(
+      kubeAPI.probe("c", "g", "web", undefined, { signal: scope.signal }),
+    ).rejects.toThrow();
+    expect(calls.post).not.toHaveBeenCalled();
+  });
+  it("includes the explicit credential identity only in edit previews", async () => {
+    const input = {
+      name: "test",
+      context: "test",
+      mode: "server_token" as const,
+      enabled: true,
+    };
+    await kubeAPI.preview({ ...input, credentialId: "credential-a" });
+    expect(calls.post.mock.calls[0]![1].credentialId).toBe("credential-a");
+    await kubeAPI.preview(input);
+    expect(calls.post.mock.calls[1]![1]).not.toHaveProperty("credentialId");
+  });
+});

@@ -79,6 +79,9 @@ func writeVaultError(w http.ResponseWriter, err error) {
 	case errors.Is(err, vault.ErrInvalidUsername):
 		writeError(w, http.StatusBadRequest, "invalid_credential", "Registry username cannot contain colons or control characters.")
 	default:
+		if writeAuthorizationError(w, err) {
+			return
+		}
 		// 包含 ErrDecrypt 等内部错误:不泄漏细节。
 		writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
 	}
@@ -91,7 +94,7 @@ func makeListCredentialsHandler(v vault.Vault) http.HandlerFunc {
 			writeError(w, http.StatusServiceUnavailable, "vault_unconfigured", "保险库未配置 master key")
 			return
 		}
-		creds, err := v.List()
+		creds, err := vault.WithContext(r.Context(), v).List()
 		if err != nil {
 			writeVaultError(w, err)
 			return
@@ -128,7 +131,7 @@ func makeCreateCredentialHandler(v vault.Vault, aud audit.Recorder) http.Handler
 		if req.Username != nil {
 			username = *req.Username
 		}
-		cred, err := v.Create(vault.CreateInput{
+		cred, err := vault.WithContext(r.Context(), v).Create(vault.CreateInput{
 			Name:             req.Name,
 			Type:             req.Type,
 			Scope:            req.Scope,
@@ -173,7 +176,7 @@ func makeUpdateCredentialHandler(v vault.Vault, aud audit.Recorder) http.Handler
 			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
 			return
 		}
-		cred, err := v.Update(id, vault.UpdateInput{
+		cred, err := vault.WithContext(r.Context(), v).Update(id, vault.UpdateInput{
 			Name:        req.Name,
 			Scope:       req.Scope,
 			Username:    req.Username,
@@ -206,7 +209,7 @@ func makeRevealCredentialHandler(v vault.Vault, aud audit.Recorder) http.Handler
 			return
 		}
 		id := chi.URLParam(r, "id")
-		secret, err := v.Reveal(id)
+		secret, err := vault.WithContext(r.Context(), v).Reveal(id)
 		if err != nil {
 			writeVaultError(w, err)
 			return
@@ -232,7 +235,7 @@ func makeDeleteCredentialHandler(v vault.Vault, aud audit.Recorder) http.Handler
 			return
 		}
 		id := chi.URLParam(r, "id")
-		if err := v.Delete(id); err != nil {
+		if err := vault.WithContext(r.Context(), v).Delete(id); err != nil {
 			writeVaultError(w, err)
 			return
 		}

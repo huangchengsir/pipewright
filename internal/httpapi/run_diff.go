@@ -8,6 +8,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/ai"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
@@ -138,6 +139,18 @@ func makeRunDiffHandler(d runDiffDeps) http.HandlerFunc {
 		// 「本次提交自身」diff(git show 语义:相对首个父提交;根提交=全新增)。不依赖任何 baseline
 		// 运行,故成功/失败运行都恒可展示「这次改了什么」。parentCommit 回填 baselineCommit 作上下文。
 		diff, parentCommit := d.differ.DiffCommit(ctx, proj.RepoURL, username, token, currentCommit)
+		latest, err := d.runs.Get(ctx, id)
+		if err != nil {
+			writeRunError(w, err)
+			return
+		}
+		if latest.ProjectID != rn.ProjectID || latest.Trigger.Commit != rn.Trigger.Commit {
+			writeRunError(w, tenancy.ErrConflict)
+			return
+		}
+		if !recheckRepositoryRead(w, ctx, d.projects, d.vault, proj) {
+			return
+		}
 		writeJSON(w, http.StatusOK, toRunDiffDTO(diff, "", parentCommit, currentCommit))
 	}
 }

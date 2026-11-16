@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, toRaw } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import AppButton from '../ui/AppButton.vue'
 import FormField from '../ui/FormField.vue'
 import PlatformProviderIcon from './PlatformProviderIcon.vue'
+import {useIdentityRequestScope} from '../../composables/useAuthorizedRequestScope'
 import { useConfirm } from '../../composables/useConfirm'
 import { useToast } from '../../composables/useToast'
 import { useSessionStore } from '../../stores/session'
@@ -25,6 +26,8 @@ const session = useSessionStore()
 const route = useRoute()
 const router = useRouter()
 const snapshot = ref<PlatformSnapshot | null>(null)
+const canManage = computed(() => snapshot.value?.canManage === true && (session.user?.multiTenant !== true || session.user.instanceAdmin === true))
+const multiTenant = computed(() => session.user?.multiTenant === true)
 const loading = ref(true)
 const loadError = ref(false)
 const busy = ref(false)
@@ -49,7 +52,7 @@ const secretRequired = computed(() => !!selected.value && (!selected.value.hasSe
   || app.clientId !== selected.value.clientId
   || (selected.value.provider === 'microsoft' && effectiveTenant() !== selected.value.microsoftTenant)
   || (selected.value.provider === 'gitee' && app.giteeMode !== selected.value.giteeMode)))
-const appDirty = computed(() => !!selected.value && (app.clientId !== selected.value.clientId || !!app.clientSecret || (selected.value.provider === 'microsoft' && effectiveTenant() !== selected.value.microsoftTenant) || (selected.value.provider === 'gitee' && app.giteeMode !== selected.value.giteeMode)))
+const appDirty = computed(() => canManage.value && !!selected.value && (app.clientId !== selected.value.clientId || !!app.clientSecret || (selected.value.provider === 'microsoft' && effectiveTenant() !== selected.value.microsoftTenant) || (selected.value.provider === 'gitee' && app.giteeMode !== selected.value.giteeMode)))
 const readBackNeeded = computed(() => uncertain.value)
 let focusBeforeDialog: HTMLElement | null = null
 let pendingAction: (() => Promise<void>) | null = null
@@ -57,17 +60,55 @@ let controller: AbortController | undefined
 let sequence = 0
 let mounted = false
 const bindingReadFailed = ref(false)
+const visible = ref(true)
+let operationEpoch = 0
+let ownedConfirmation: Parameters<typeof confirm.open>[0] | null = null
+function clearSensitiveState() {
+  operationEpoch++
+  pendingAction = null
+  if (ownedConfirmation && toRaw(confirm.pending?.value?.options) === ownedConfirmation) confirm._resolve(false)
+  ownedConfirmation = null
+  dialog.value?.close()
+  modal.value = null
+  selected.value = null
+  candidate.value = null
+  currentPassword.value = ''
+  app.clientId = ''; app.clientSecret = ''; app.microsoftTenant = 'common'; app.giteeMode = ''
+  tenantMode.value = 'common'; tenantID.value = ''
+  modalError.value = ''; busy.value = false
+  if (snapshot.value) snapshot.value.reauthenticatedUntil = ''
+  focusBeforeDialog = null
+}
+const scope = useIdentityRequestScope(() => {
+  visible.value = false; sequence++; controller?.abort(); clearSensitiveState()
+  snapshot.value = null; notice.value = ''; noticeError.value = false
+  uncertain.value = false; bindingReadFailed.value = false; loading.value = false; loadError.value = false
+  for (const provider of PLATFORM_PROVIDERS) visibility[provider] = false
+}, () => true, undefined, error => error.apiError?.code !== 'platform_reauth_required')
+function currentOperation(epoch: number) { return mounted && scope.active() && operationEpoch === epoch }
+function currentRow(row: PlatformSettings) {
+  const actual = snapshot.value?.providers.find(p => p.provider === row.provider)
+  return selected.value?.provider === row.provider && actual?.configVersion === row.configVersion
+    && actual?.binding?.issuer === row.binding?.issuer && actual?.binding?.subject === row.binding?.subject
+}
+async function askConfirmation(options: Parameters<typeof confirm.open>[0]) {
+  ownedConfirmation = options
+  try { return await confirm.open(options) }
+  finally { if (ownedConfirmation === options) ownedConfirmation = null }
+}
+watch(canManage, (allowed, previous) => { if (previous && !allowed) clearSensitiveState() }, {flush:'sync'})
 
 function checkResult() { closeModal(); void load() }
 function effectiveTenant() { return tenantMode.value === 'custom' ? tenantID.value : tenantMode.value }
 function name(provider: PlatformProvider) { return PLATFORM_NAMES[provider] }
-function status(row: PlatformSettings) { return row.enabled ? 'enabled' : !row.configured ? 'unconfigured' : !row.binding ? 'unbound' : 'disabled' }
+function status(row: PlatformSettings) { if (!canManage.value && row.enabled && !row.binding) return 'unbound'; return row.enabled ? 'enabled' : !row.configured ? 'unconfigured' : !row.binding ? 'unbound' : 'disabled' }
 function say(key: string, error = false) { notice.value = key; noticeError.value = error }
 function recent() {
   const until = Date.parse(snapshot.value?.reauthenticatedUntil ?? '')
   return Number.isFinite(until) && Date.now() < until
 }
 async function load(preserveDraft = true) {
+  if (!scope.active()) return
   controller?.abort()
   controller = new AbortController()
   const signal = controller.signal
@@ -75,8 +116,8 @@ async function load(preserveDraft = true) {
   loading.value = true
   loadError.value = false
   try {
-    const data = await getPlatformSettings(signal)
-    if (!mounted || signal.aborted || sequence !== seq) return
+    const data = await scope.run(() => getPlatformSettings(signal, scope.requestOptions))
+    if (!scope.active() || !mounted || signal.aborted || sequence !== seq) return
     if (data.providers.length !== 5 || !PLATFORM_PROVIDERS.every(p => data.providers.some(row => row.provider === p))) throw new Error('Invalid settings')
     const keep = preserveDraft && visibilityDirty.value
     snapshot.value = data
@@ -85,19 +126,22 @@ async function load(preserveDraft = true) {
     const flow = route.query.platform_binding
     if (typeof flow === 'string') await bindingReturn(flow, seq)
   } catch {
-    if (mounted && !signal.aborted && sequence === seq) loadError.value = true
+    if (scope.active() && mounted && !signal.aborted && sequence === seq) loadError.value = true
   } finally {
-    if (mounted && sequence === seq) loading.value = false
+    if (scope.active() && mounted && sequence === seq) loading.value = false
   }
 }
 async function openModal(kind: 'app' | 'reauth' | 'candidate') {
+  if (!scope.active()) return
+  const epoch = operationEpoch
   modalError.value = ''
   if (!dialog.value?.open) focusBeforeDialog = document.activeElement as HTMLElement | null
   modal.value = kind
   await nextTick()
-  if (!mounted || !dialog.value) return
+  if (!currentOperation(epoch) || modal.value !== kind || !dialog.value) return
   if (!dialog.value.open) dialog.value.showModal()
   await nextTick()
+  if (!currentOperation(epoch) || modal.value !== kind) return
   if (kind === 'reauth') passwordInput.value?.focus()
   else dialog.value.querySelector<HTMLElement>('button, input')?.focus()
 }
@@ -113,7 +157,8 @@ function closeModal(dropAction = true) {
 }
 function onCancel(event: Event) { event.preventDefault(); closeModal() }
 function configure(row: PlatformSettings) {
-  if (busy.value || loading.value) return
+  if (!scope.active() || busy.value || loading.value) return
+  operationEpoch++
   selected.value = { ...row }
   app.clientId = row.clientId
   app.clientSecret = ''
@@ -124,19 +169,22 @@ function configure(row: PlatformSettings) {
   tenantID.value = preset ? '' : app.microsoftTenant
   void openModal('app')
 }
-async function withPassword(action: () => Promise<void>) {
-  if (busy.value || uncertain.value || loading.value) return
-  if (recent()) { await action(); return }
-  pendingAction = action
+async function withPassword(action: () => Promise<void>, authorized: () => boolean = () => true) {
+  if (!scope.active() || !authorized() || busy.value || uncertain.value || loading.value) return
+  const epoch = operationEpoch
+  const guarded = async () => { if (currentOperation(epoch) && authorized()) await action() }
+  if (recent()) { await guarded(); return }
+  pendingAction = guarded
   await openModal('reauth')
 }
 async function verifyPassword() {
-  if (busy.value || !currentPassword.value) return
+  if (!scope.active() || busy.value || !currentPassword.value || !pendingAction || modal.value !== 'reauth') return
+  const epoch = operationEpoch
   busy.value = true
   modalError.value = ''
   try {
-    const result = await reauthenticatePlatform(currentPassword.value)
-    if (!mounted) return
+    const result = await scope.run(() => reauthenticatePlatform(currentPassword.value, scope.requestOptions))
+    if (!currentOperation(epoch)) return
     if (snapshot.value) snapshot.value.reauthenticatedUntil = result.reauthenticatedUntil
     const action = pendingAction
     pendingAction = null
@@ -144,10 +192,9 @@ async function verifyPassword() {
     closeModal(false)
     if (action) await action()
   } catch (e) {
-    if (mounted) modalError.value = platformErrorKey(e)
+    if (currentOperation(epoch)) modalError.value = platformErrorKey(e)
   } finally {
-    currentPassword.value = ''
-    busy.value = false
+    if (currentOperation(epoch)) {currentPassword.value = '';busy.value = false}
   }
 }
 function applyMutation(result: PlatformMutation) {
@@ -159,13 +206,14 @@ function applyMutation(result: PlatformMutation) {
   emit('changed')
 }
 async function mutate(action: () => Promise<PlatformMutation>) {
-  if (busy.value || uncertain.value || loading.value) return
+  if (!scope.active() || busy.value || uncertain.value || loading.value) return
+  const epoch = operationEpoch
   busy.value = true
   modalError.value = ''
   notice.value = ''
   try {
-    const result = await action()
-    if (!mounted) return
+    const result = await scope.run(action)
+    if (!currentOperation(epoch)) return
     applyMutation(result)
     busy.value = false
     closeModal()
@@ -176,37 +224,38 @@ async function mutate(action: () => Promise<PlatformMutation>) {
     }
     toast.success(t('platformLogin.saved'))
   } catch (e) {
-    if (!mounted) return
+    if (!currentOperation(epoch)) return
     const key = platformErrorKey(e, true)
     if (key === 'unknownResult') uncertain.value = true
     if (key === 'reauthRequired' && snapshot.value) snapshot.value.reauthenticatedUntil = ''
     if (modal.value === 'app' || modal.value === 'candidate') modalError.value = key
     say(key, true)
   } finally {
-    app.clientSecret = ''
-    busy.value = false
+    if (currentOperation(epoch)) {app.clientSecret = '';busy.value = false}
   }
 }
 async function saveVisibility() {
-  if (!snapshot.value || busy.value || uncertain.value || !visibilityDirty.value) return
+  const epoch = operationEpoch
+  if (!scope.active() || !canManage.value || !snapshot.value || busy.value || uncertain.value || !visibilityDirty.value) return
+  if (multiTenant.value && !recent()) { await withPassword(saveVisibility, () => canManage.value); return }
   busy.value = true
   notice.value = ''
   try {
-    const data = await savePlatformVisibility(snapshot.value.visibilityVersion, { ...visibility })
-    if (!mounted) return
+    const data = await scope.run(() => savePlatformVisibility(snapshot.value!.visibilityVersion, { ...visibility }, scope.requestOptions))
+    if (!currentOperation(epoch)) return
     snapshot.value = data
     for (const row of data.providers) visibility[row.provider] = row.visible
     toast.success(t('platformLogin.visibilitySaved'))
   } catch (e) {
-    if (!mounted) return
+    if (!currentOperation(epoch)) return
     const key = platformErrorKey(e, true)
     uncertain.value = key === 'unknownResult'
     say(key, true)
-  } finally { busy.value = false }
+  } finally { if(currentOperation(epoch))busy.value = false }
 }
 async function saveApp() {
   const row = selected.value
-  if (!row || busy.value || uncertain.value || !appDirty.value) return
+  if (!scope.active() || !canManage.value || !row || busy.value || uncertain.value || !appDirty.value) return
   modalError.value = ''
   if (!app.clientId.trim() || (secretRequired.value && !app.clientSecret)) { modalError.value = 'invalidSettings'; return }
   if (row.provider === 'gitee' && !['confidential_code', 's256'].includes(app.giteeMode)) { modalError.value = 'invalidSettings'; return }
@@ -219,75 +268,80 @@ async function saveApp() {
     ...(row.provider === 'gitee' ? { giteeMode: app.giteeMode } : {}),
   }
   app.clientSecret = ''
-  await withPassword(() => mutate(() => savePlatformApp(row.provider, input)))
+  await withPassword(() => mutate(() => savePlatformApp(row.provider, input, scope.requestOptions)), () => canManage.value && currentRow(row))
 }
 async function beginBinding() {
   const row = selected.value
-  if (!row || busy.value || uncertain.value || !row.configured) return
+  if (!scope.active() || !row || busy.value || uncertain.value || !row.configured || (multiTenant.value && !row.enabled)) return
   closeModal()
   await withPassword(async () => {
+    const epoch = operationEpoch
     busy.value = true
     try {
-      const result = await startPlatformBinding(row.provider, row.configVersion)
-      if (!mounted) return
+      const result = await scope.run(() => startPlatformBinding(row.provider, row.configVersion, scope.requestOptions))
+      if (!currentOperation(epoch)) return
       const url = safePlatformAuthorize(row.provider, result.authorizeURL)
       if (!url) { say('authFailed', true); return }
       window.location.assign(url)
     } catch (e) {
-      if (mounted) {
+      if (currentOperation(epoch)) {
         const key = platformErrorKey(e, true)
         uncertain.value = key === 'unknownResult'
         if (key === 'reauthRequired' && snapshot.value) snapshot.value.reauthenticatedUntil = ''
         say(key, true)
       }
-    } finally { busy.value = false }
-  })
+    } finally { if(currentOperation(epoch))busy.value = false }
+  }, () => currentRow(row) && (!multiTenant.value || snapshot.value?.providers.find(p=>p.provider===row.provider)?.enabled === true))
 }
 async function enabledChange() {
+  const epoch = operationEpoch
   const row = selected.value
-  if (!row || busy.value || uncertain.value) return
+  if (!scope.active() || !canManage.value || !row || busy.value || uncertain.value) return
   closeModal()
   if (row.enabled) {
-    const accepted = await confirm.open({ title: t('platformLogin.disableTitle', { provider: name(row.provider) }), body: t('platformLogin.disableBody'), confirmLabel: t('platformLogin.disable'), variant: 'danger' })
-    if (!accepted || !mounted) return
+    const accepted = await askConfirmation({ title: t('platformLogin.disableTitle', { provider: name(row.provider) }), body: t('platformLogin.disableBody'), confirmLabel: t('platformLogin.disable'), variant: 'danger' })
+    if (!accepted || !currentOperation(epoch) || !currentRow(row)) return
   }
-  await withPassword(() => mutate(() => setPlatformEnabled(row.provider, row.configVersion, !row.enabled)))
+  await withPassword(() => mutate(() => setPlatformEnabled(row.provider, row.configVersion, !row.enabled, scope.requestOptions)), () => canManage.value && currentRow(row))
 }
 async function unlink() {
+  const epoch = operationEpoch
   const row = selected.value
-  if (!row || !row.binding || busy.value || uncertain.value) return
+  if (!scope.active() || !row || !row.binding || busy.value || uncertain.value) return
   closeModal()
-  const accepted = await confirm.open({ title: t('platformLogin.unbindTitle', { provider: name(row.provider) }), body: t('platformLogin.unbindBody'), confirmLabel: t('platformLogin.unbind'), variant: 'danger' })
-  if (!accepted || !mounted) return
-  await withPassword(() => mutate(() => unbindPlatform(row.provider, row.configVersion)))
+  const accepted = await askConfirmation({ title: t('platformLogin.unbindTitle', { provider: name(row.provider) }), body: t('platformLogin.unbindBody'), confirmLabel: t('platformLogin.unbind'), variant: 'danger' })
+  if (!accepted || !currentOperation(epoch) || !currentRow(row)) return
+  await withPassword(() => mutate(() => unbindPlatform(row.provider, row.configVersion, scope.requestOptions)), () => currentRow(row))
 }
 async function confirmBinding() {
   const value = candidate.value
-  if (!value || busy.value || uncertain.value) return
+  if (!scope.active() || !value || busy.value || uncertain.value) return
   if (Date.parse(value.expiresAt) <= Date.now()) { modalError.value = 'bindingExpired'; return }
-  await withPassword(() => mutate(() => confirmPlatformBinding(value.provider, value.configVersion, value.flowId)))
+  await withPassword(() => mutate(() => confirmPlatformBinding(value.provider, value.configVersion, value.flowId, scope.requestOptions)), () => candidate.value?.flowId === value.flowId)
 }
 async function bindingReturn(flowId: string, seq: number) {
   bindingReadFailed.value = false
   try {
-    const value = await getPlatformCandidate(flowId)
-    if (!mounted || sequence !== seq) return
+    const value = await scope.run(() => getPlatformCandidate(flowId, scope.requestOptions))
+    if (!scope.active() || !mounted || sequence !== seq) return
     if (!isPlatformProvider(value.provider)) throw new Error('Invalid candidate')
     const query = { ...route.query }
     delete query.platform_binding
     await router.replace({ path: route.path, query })
-    if (!mounted || sequence !== seq) return
+    if (!scope.active() || !mounted || sequence !== seq) return
     say('')
     candidate.value = value
     selected.value = snapshot.value?.providers.find(p => p.provider === value.provider) ?? null
     await openModal('candidate')
-  } catch (e) { if (mounted && sequence === seq) { bindingReadFailed.value = true; say(e instanceof HttpError && (e.status === 0 || e.status >= 500) ? 'candidateLoadFailed' : platformErrorKey(e), true) } }
+  } catch (e) { if (scope.active() && mounted && sequence === seq) { bindingReadFailed.value = true; say(e instanceof HttpError && (e.status === 0 || e.status >= 500) ? 'candidateLoadFailed' : platformErrorKey(e), true) } }
 }
 async function copyCallback() {
+  if (!scope.active()) return
+  const epoch = operationEpoch
   const url = selected.value?.callbackURL
   if (!url) return
-  try { await navigator.clipboard.writeText(url); toast.success(t('platformLogin.copied')) }
-  catch { modalError.value = 'copyFailed'; await nextTick(); callbackInput.value?.focus(); callbackInput.value?.select() }
+  try { await navigator.clipboard.writeText(url); if (!currentOperation(epoch)) return; toast.success(t('platformLogin.copied')) }
+  catch { if (!currentOperation(epoch)) return; modalError.value = 'copyFailed'; await nextTick(); callbackInput.value?.focus(); callbackInput.value?.select() }
 }
 function bindingTime(raw: string) {
   const value = new Date(raw)
@@ -301,17 +355,14 @@ onBeforeUnmount(() => {
   mounted = false
   sequence++
   controller?.abort()
-  pendingAction = null
-  currentPassword.value = ''
-  app.clientSecret = ''
-  dialog.value?.close()
+  clearSensitiveState()
 })
 </script>
 
 <template>
-  <section class="platform-settings" aria-labelledby="platform-settings-heading">
+  <section v-if="visible" class="platform-settings" aria-labelledby="platform-settings-heading">
     <header class="platform-settings__head">
-      <div><h2 id="platform-settings-heading">{{ t('platformLogin.section') }}</h2><p>{{ t('platformLogin.sectionHint') }}</p></div>
+      <div><h2 id="platform-settings-heading">{{ t('platformLogin.section') }}</h2><p>{{ t('platformLogin.' + (canManage ? 'sectionHint' : 'memberHint')) }}</p></div>
       <AppButton variant="ghost" :disabled="loading || busy" @click="load()">{{ t('platformLogin.reload') }}</AppButton>
     </header>
     <p v-if="loading && !snapshot" class="platform-feedback" role="status">{{ t('platformLogin.loading') }}</p>
@@ -329,17 +380,17 @@ onBeforeUnmount(() => {
               <p class="platform-row__summary"><span :class="{ 'platform-state--enabled': row.enabled }">{{ t('platformLogin.' + status(row)) }}</span><span v-if="row.binding" class="platform-account" :title="row.binding.displayLabel"> · {{ row.binding.displayLabel }}</span></p>
             </div>
           </div>
-          <div class="platform-visibility">
+          <div v-if="canManage" class="platform-visibility">
             <button :id="'platform-visible-' + row.provider" type="button" role="switch" class="platform-switch"
               :class="{ 'platform-switch--on': visibility[row.provider] }" :aria-checked="visibility[row.provider]"
               :aria-labelledby="'platform-label-' + row.provider" :disabled="busy || readBackNeeded"
               @click="visibility[row.provider] = !visibility[row.provider]"><span aria-hidden="true" /></button>
             <label :id="'platform-label-' + row.provider" :for="'platform-visible-' + row.provider">{{ t('platformLogin.visible') }}<span class="sr-only"> · {{ name(row.provider) }}</span></label>
           </div>
-          <AppButton class="platform-configure" :disabled="busy || readBackNeeded || loading" @click="configure(row)">{{ t('platformLogin.configure') }}</AppButton>
+          <AppButton class="platform-configure" :disabled="busy || readBackNeeded || loading" @click="configure(row)">{{ t('platformLogin.' + (canManage ? 'configure' : !row.configured && !row.binding ? 'viewAvailability' : 'manageBinding')) }}</AppButton>
         </div>
       </div>
-      <div class="platform-settings__footer">
+      <div v-if="canManage" class="platform-settings__footer">
         <p>{{ visibilityDirty ? t('platformLogin.unsaved') : t('platformLogin.passwordHint') }}</p>
         <AppButton variant="primary" :disabled="!visibilityDirty || readBackNeeded || loading" :loading="busy && !modal" @click="saveVisibility">{{ t('platformLogin.saveVisibility') }}</AppButton>
       </div>
@@ -353,10 +404,10 @@ onBeforeUnmount(() => {
       <dialog ref="dialog" class="platform-dialog settings-dialog" aria-labelledby="platform-dialog-heading" @cancel="onCancel">
         <template v-if="modal === 'app' && selected">
           <header class="platform-dialog__head">
-            <div class="platform-dialog__title"><PlatformProviderIcon :provider="selected.provider" /><h2 id="platform-dialog-heading">{{ t('platformLogin.appTitle', { provider: name(selected.provider) }) }}</h2></div>
+            <div class="platform-dialog__title"><PlatformProviderIcon :provider="selected.provider" /><h2 id="platform-dialog-heading">{{ t('platformLogin.' + (canManage ? 'appTitle' : 'memberAccountTitle'), { provider: name(selected.provider) }) }}</h2></div>
             <AppButton variant="ghost" :disabled="busy" @click="closeModal()">{{ t('platformLogin.close') }}</AppButton>
           </header>
-          <form class="platform-app-form" novalidate @submit.prevent="saveApp">
+          <form v-if="canManage" class="platform-app-form" novalidate @submit.prevent="saveApp">
             <FormField :label="t('platformLogin.clientId')" field-id="platform-client-id" required>
               <input id="platform-client-id" v-model="app.clientId" class="platform-input" maxlength="2048" autocomplete="off" :disabled="busy || readBackNeeded" />
             </FormField>
@@ -387,6 +438,14 @@ onBeforeUnmount(() => {
               <AppButton variant="primary" type="submit" :loading="busy" :disabled="readBackNeeded || !appDirty">{{ t('platformLogin.save') }}</AppButton>
             </div>
           </form>
+          <div v-if="!canManage" class="platform-member-body">
+            <div v-if="!selected.configured || !selected.enabled" class="platform-unavailable" role="status">
+              <h3>{{ t('platformLogin.' + (!selected.configured ? 'memberUnavailableTitle' : 'memberPausedTitle')) }}</h3>
+              <p>{{ t('platformLogin.' + (!selected.configured ? 'memberUnconfiguredHint' : 'memberDisabledHint'), { provider: name(selected.provider) }) }}</p>
+            </div>
+            <p v-else class="platform-help">{{ t('platformLogin.memberHint') }}</p>
+            <p v-if="modalError" class="platform-feedback platform-feedback--error" role="alert">{{ t('platformLogin.' + modalError) }}</p>
+          </div>
           <section v-if="selected.configured || selected.binding" class="platform-binding" aria-labelledby="platform-binding-heading">
             <div class="platform-binding__heading"><h3 id="platform-binding-heading">{{ t('platformLogin.identity') }}</h3><span>{{ t('platformLogin.' + status(selected)) }}</span></div>
             <p class="platform-binding__account">{{ selected.binding?.displayLabel ?? t('platformLogin.unbound') }}</p>
@@ -394,11 +453,15 @@ onBeforeUnmount(() => {
             <p class="platform-help">{{ t('platformLogin.sourceSessionHint') }}</p>
             <p v-if="appDirty" class="platform-help">{{ t('platformLogin.saveBeforeBinding') }}</p>
             <div class="platform-binding__actions">
-              <AppButton :disabled="busy || readBackNeeded || !selected.configured || appDirty" @click="beginBinding">{{ t('platformLogin.bind') }}</AppButton>
-              <AppButton v-if="selected.binding" :disabled="busy || readBackNeeded || appDirty" @click="enabledChange">{{ t('platformLogin.' + (selected.enabled ? 'disable' : 'enable')) }}</AppButton>
+              <AppButton :disabled="busy || readBackNeeded || !selected.configured || (multiTenant && !selected.enabled) || appDirty" @click="beginBinding">{{ t('platformLogin.bind') }}</AppButton>
+              <AppButton v-if="canManage && (multiTenant || selected.binding)" :disabled="busy || readBackNeeded || appDirty" @click="enabledChange">{{ t('platformLogin.' + (selected.enabled ? 'disable' : 'enable')) }}</AppButton>
               <AppButton v-if="selected.binding" variant="danger" :disabled="busy || readBackNeeded || appDirty" @click="unlink">{{ t('platformLogin.unbind') }}</AppButton>
             </div>
           </section>
+          <footer v-if="!canManage && (!selected.configured || !selected.enabled)" class="platform-member-footer">
+            <AppButton :disabled="busy || loading" @click="checkResult">{{ t('platformLogin.reload') }}</AppButton>
+            <AppButton variant="primary" :disabled="busy" @click="closeModal()">{{ t('platformLogin.close') }}</AppButton>
+          </footer>
         </template>
         <template v-else-if="modal === 'reauth'">
           <header class="platform-dialog__head"><h2 id="platform-dialog-heading">{{ t('platformLogin.reauthTitle') }}</h2><AppButton variant="ghost" :disabled="busy" @click="closeModal()">{{ t('platformLogin.close') }}</AppButton></header>
@@ -413,12 +476,12 @@ onBeforeUnmount(() => {
         <template v-else-if="modal === 'candidate' && candidate">
           <header class="platform-dialog__head"><h2 id="platform-dialog-heading">{{ t('platformLogin.bindingTitle', { provider: name(candidate.provider) }) }}</h2><AppButton variant="ghost" :disabled="busy" @click="closeModal()">{{ t('platformLogin.close') }}</AppButton></header>
           <div class="platform-app-form">
-            <p class="platform-help">{{ t('platformLogin.bindingHint') }}</p>
+            <p class="platform-help">{{ t('platformLogin.' + (multiTenant ? 'memberBindingHint' : 'bindingHint')) }}</p>
             <p v-if="props.currentSource === candidate.provider" class="platform-help platform-help--strong">{{ t('platformLogin.currentSessionWarning') }}</p>
             <div class="platform-candidate"><PlatformProviderIcon :provider="candidate.provider" /><strong>{{ candidate.displayLabel }}</strong></div>
             <p class="platform-help">{{ t('platformLogin.candidateExpires', { time: bindingTime(candidate.expiresAt) }) }}</p>
             <p v-if="modalError" class="platform-feedback platform-feedback--error" role="alert">{{ t('platformLogin.' + modalError) }}</p>
-            <div class="platform-dialog__actions"><AppButton v-if="readBackNeeded" :disabled="busy" @click="checkResult">{{ t('platformLogin.reload') }}</AppButton><AppButton :disabled="busy" @click="closeModal()">{{ t('platformLogin.cancel') }}</AppButton><AppButton variant="primary" :loading="busy" :disabled="readBackNeeded" @click="confirmBinding">{{ t('platformLogin.confirmBind') }}</AppButton></div>
+            <div class="platform-dialog__actions"><AppButton v-if="readBackNeeded" :disabled="busy" @click="checkResult">{{ t('platformLogin.reload') }}</AppButton><AppButton :disabled="busy" @click="closeModal()">{{ t('platformLogin.cancel') }}</AppButton><AppButton variant="primary" :loading="busy" :disabled="readBackNeeded" @click="confirmBinding">{{ t('platformLogin.' + (multiTenant ? 'confirmPersonalBind' : 'confirmBind')) }}</AppButton></div>
           </div>
         </template>
       </dialog>
@@ -462,6 +525,11 @@ onBeforeUnmount(() => {
 .platform-dialog__head h2 { margin: 0; font-size: 15px; line-height: 1.5; font-weight: 600; overflow-wrap: anywhere; }
 .platform-dialog__title { display: flex; align-items: center; min-width: 0; gap: 9px; }
 .platform-dialog__head .app-btn { flex: none; }
+.platform-member-body { padding: 18px; }
+.platform-unavailable { padding: 14px 16px; border: 1px solid var(--color-border); border-radius: var(--rounded, 8px); background: var(--color-inset); }
+.platform-unavailable h3 { margin: 0 0 6px; font-size: 14px; line-height: 1.5; font-weight: 600; }
+.platform-unavailable p { margin: 0; color: var(--color-dim); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.platform-member-footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--color-border); }
 .platform-app-form { display: flex; flex-direction: column; gap: 15px; padding: 18px; }
 .platform-input { width: 100%; min-width: 0; min-height: var(--settings-control-height, 36px); box-sizing: border-box; padding: 8px 10px; font-family: var(--font-sans); font-size: 13px; line-height: 1.4; color: var(--color-text); background: var(--color-inset); border: 1px solid var(--color-border-strong); border-radius: var(--rounded, 8px); }
 .platform-input:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 1px; }

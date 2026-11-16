@@ -3,8 +3,11 @@ package previewenv
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"github.com/huangchengsir/pipewright/internal/authz"
 	"github.com/huangchengsir/pipewright/internal/configstate"
 	log "github.com/huangchengsir/pipewright/internal/logging"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"strings"
 	"time"
 )
@@ -79,13 +82,23 @@ func (s *service) List(ctx context.Context, projectID string) ([]PreviewEnv, err
 }
 
 func (s *service) Get(ctx context.Context, id string) (*PreviewEnv, error) {
-	return s.store.get(ctx, strings.TrimSpace(id))
+	id = strings.TrimSpace(id)
+	if err := tenancy.Check(ctx, s.store.db, "preview.read", "preview", id); err != nil {
+		if errors.Is(err, tenancy.ErrForbidden) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return s.store.get(ctx, id)
 }
 
 func (s *service) GetConfig(ctx context.Context, projectID string) (*Config, error) {
 	projectID = strings.TrimSpace(projectID)
 	if projectID == "" {
 		return nil, ErrInvalidProject
+	}
+	if err := tenancy.Check(ctx, s.store.db, "pipeline.read", "project", projectID); err != nil {
+		return nil, err
 	}
 	c, err := s.store.getConfig(ctx, projectID)
 	if err != nil {
@@ -94,6 +107,14 @@ func (s *service) GetConfig(ctx context.Context, projectID string) (*Config, err
 	if c == nil {
 		// 无配置 → 返回零值(未启用)。
 		return &Config{ProjectID: projectID, Enabled: false}, nil
+	}
+	if on, e := tenancy.Enabled(ctx, s.store.db); e != nil {
+		return nil, e
+	} else if on && c.Enabled {
+		c.AuthorizationState = "required"
+		if tenancy.AutomationReady(ctx, s.store.db, "preview", projectID, previewDigest(c), s.currentDigest(projectID)) {
+			c.AuthorizationState = "ready"
+		}
 	}
 	return c, nil
 }
@@ -114,10 +135,33 @@ func (s *service) SetConfig(ctx context.Context, in Config) (*Config, error) {
 			return nil, ErrConfigInvalidBaseDomain
 		}
 	}
-	if err := configstate.MutateProject(ctx, s.store.db, in.ProjectID, func(txctx context.Context, _ configstate.DBTX) error { return s.store.upsertConfig(txctx, in) }); err != nil {
+	ctx = configstate.WithWriteAdmission(ctx, tenancy.LockAuthorization)
+	if err := configstate.MutateProject(ctx, s.store.db, in.ProjectID, func(txctx context.Context, _ configstate.DBTX) error {
+		if err := tenancy.LockAuthorization(txctx, s.store.db); err != nil {
+			return err
+		}
+		if err := tenancy.Check(txctx, s.store.db, "pipeline.edit", "project", in.ProjectID); err != nil {
+			return err
+		}
+		if in.Enabled {
+			if err := tenancy.Check(txctx, s.store.db, "preview.provision", "project", in.ProjectID); err != nil {
+				return err
+			}
+			if err := tenancy.CheckSameTeam(txctx, s.store.db, authz.ResourceRef{Kind: "dns_provider", ID: in.DNSProviderID}); err != nil {
+				return err
+			}
+			if err := s.authorizeProvider(txctx, in.ProjectID, in.DNSProviderID); err != nil {
+				return err
+			}
+		}
+		if err := s.store.upsertConfig(txctx, in); err != nil {
+			return err
+		}
+		return s.approveConfig(txctx, in)
+	}); err != nil {
 		return nil, err
 	}
-	return s.store.getConfig(ctx, in.ProjectID)
+	return s.GetConfig(ctx, in.ProjectID)
 }
 
 // Reclaim 回收某项目某 PR 的预览环境:删反代路由(best-effort)+ 标记 reclaimed。
@@ -134,21 +178,57 @@ func (s *service) Reclaim(ctx context.Context, projectID string, prNumber int) e
 	if err != nil {
 		return err
 	}
+	if err := tenancy.Check(ctx, s.store.db, "preview.reclaim", "preview", env.ID); err != nil {
+		return err
+	}
+	if on, e := tenancy.Enabled(ctx, s.store.db); e != nil {
+		return e
+	} else if on {
+		return s.reclaimBound(ctx, env)
+	}
 	// 删反代路由(best-effort:删失败不阻断标记 reclaimed —— 库里标记后,下次部署会重建;
 	// 残留路由由用户/总览可见并手动清,绝不因删路由失败把环境永久卡在 active)。
 	if s.routeDeleter != nil && strings.TrimSpace(env.RouteID) != "" {
-		_ = s.routeDeleter.DeleteRoute(ctx, env.RouteID)
+		if err := tenancy.RequireInstanceAdministrator(ctx, s.store.db); err != nil {
+			return err
+		}
+		if err := tenancy.Check(ctx, s.store.db, "preview.reclaim", "preview", env.ID); err != nil {
+			return err
+		}
+		if err := s.routeDeleter.DeleteRoute(ctx, env.RouteID); errors.Is(err, tenancy.ErrForbidden) {
+			return err
+		}
 	}
 	// 清 DNS A 记录(best-effort:provision 时建了 pr-<n>-<proj>.base 的 A 记录,回收须一并删除,
 	// 否则解析记录悬挂累积。取项目预览配置里的 DNS 提供商 + 本环境子域名;任何失败仅记日志不阻断标记)。
 	if s.recordDeleter != nil && strings.TrimSpace(env.Subdomain) != "" {
 		if cfg, cerr := s.store.getConfig(ctx, projectID); cerr == nil && cfg != nil && strings.TrimSpace(cfg.DNSProviderID) != "" {
+			if err := tenancy.RequireInstanceAdministrator(ctx, s.store.db); err != nil {
+				return err
+			}
+			if err := tenancy.Check(ctx, s.store.db, "preview.reclaim", "preview", env.ID); err != nil {
+				return err
+			}
 			if derr := s.recordDeleter.DeleteRecord(ctx, cfg.DNSProviderID, env.Subdomain); derr != nil {
+				if errors.Is(derr, tenancy.ErrForbidden) {
+					return derr
+				}
 				log.Printf("[previewenv] Reclaiming PR #%d: failed to delete DNS record %s (non-blocking; remove manually): %v", prNumber, env.Subdomain, derr)
 			}
 		}
 	}
-	return s.store.markReclaimed(ctx, env.ID, time.Now().UTC())
+	return configstate.WithWriteTxContext(ctx, s.store.db, func(txctx context.Context, _ configstate.DBTX) error {
+		if err := tenancy.LockAuthorization(txctx, s.store.db); err != nil {
+			return err
+		}
+		if err := tenancy.RequireInstanceAdministrator(txctx, s.store.db); err != nil {
+			return err
+		}
+		if err := tenancy.Check(txctx, s.store.db, "preview.reclaim", "preview", env.ID); err != nil {
+			return err
+		}
+		return s.store.markReclaimed(txctx, env.ID, time.Now().UTC())
+	})
 }
 
 // SweepReclaim 执行一轮自动回收:遍历全部 active 预览环境,对每个用 checker 查其 PR 状态;
@@ -162,6 +242,28 @@ func (s *service) SweepReclaim(ctx context.Context, checker PRStateChecker) (int
 	if checker == nil {
 		return 0, nil
 	}
+	on, err := tenancy.Enabled(ctx, s.store.db)
+	if err != nil {
+		return 0, err
+	}
+	if on && !tenancy.HasAuthorizationContext(ctx) {
+		projects, e := s.automaticProjects(ctx)
+		if e != nil {
+			return 0, e
+		}
+		total := 0
+		for _, id := range projects {
+			principal, e := s.automaticProjectContext(ctx, id)
+			if e != nil {
+				continue
+			}
+			n, e := s.SweepReclaim(principal, checker)
+			if e == nil {
+				total += n
+			}
+		}
+		return total, nil
+	}
 	envs, err := s.store.listActive(ctx)
 	if err != nil {
 		return 0, err
@@ -169,12 +271,21 @@ func (s *service) SweepReclaim(ctx context.Context, checker PRStateChecker) (int
 	reclaimed := 0
 	for i := range envs {
 		env := envs[i]
+		if err := tenancy.Check(ctx, s.store.db, "preview.reclaim", "preview", env.ID); err != nil {
+			continue
+		}
 		// 配置门控:项目未开启预览 → 跳过(不在此误删历史环境)。
 		cfg, cerr := s.store.getConfig(ctx, env.ProjectID)
 		if cerr != nil || cfg == nil || !cfg.Enabled {
 			continue
 		}
+		if e := tenancy.VerifyExecution(ctx); e != nil {
+			continue
+		}
 		state, serr := checker.State(ctx, env.ProjectID, env.PRNumber)
+		if e := tenancy.VerifyExecution(ctx); e != nil {
+			continue
+		}
 		if serr != nil || !state.IsClosedOrMerged() {
 			// 查询出错 / open / unknown:绝不回收。
 			continue
@@ -195,4 +306,32 @@ func defaultValidBase(s string) bool {
 	s = strings.ToLower(strings.TrimSpace(s))
 	return s != "" && len(s) <= 253 && strings.Contains(s, ".") &&
 		!strings.HasPrefix(s, ".") && !strings.HasSuffix(s, ".") && !strings.Contains(s, " ")
+}
+
+// ProjectChoice exposes only names for projects with readable previews. It does
+// not grant project configuration access or reveal projects without a visible row.
+type ProjectChoice struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+func (s *service) Projects(ctx context.Context) ([]ProjectChoice, error) {
+	predicate, err := tenancy.QueryPredicate(ctx, s.store.db, "preview.read", "pe.id")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := configstate.Queryer(ctx, s.store.db).QueryContext(ctx, `SELECT DISTINCT p.id,p.name FROM projects p JOIN preview_envs pe ON pe.project_id=p.id WHERE `+predicate.SQL+` ORDER BY p.name,p.id`, predicate.Args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ProjectChoice{}
+	for rows.Next() {
+		var v ProjectChoice
+		if err = rows.Scan(&v.ID, &v.Name); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }

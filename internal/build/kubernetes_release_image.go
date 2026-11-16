@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/vault"
 	"io"
 	"mime"
 	"net"
@@ -207,7 +208,7 @@ func (b *Builder) releaseImageUpdates(ctx context.Context, cfg pipeline.Kubernet
 				if b.vault == nil || kubernetes.IsProtectedCredentialID(binding.Source.CredentialID) {
 					return nil, errReleaseImage
 				}
-				secret, e := b.vault.Reveal(binding.Source.CredentialID)
+				secret, e := vault.Use(ctx, b.vault, binding.Source.CredentialID)
 				if e != nil || secret == "" {
 					return nil, errReleaseImage
 				}

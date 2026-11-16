@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -42,6 +43,7 @@ func (o *guardHTTPObserver) Logs(context.Context, target.ConnectionSnapshot, str
 }
 
 type guardHTTPFixture struct {
+	db                                                *sql.DB
 	http                                              http.Handler
 	service                                           *releaseguard.Service
 	ledger                                            *deployattempt.Store
@@ -118,7 +120,7 @@ func newGuardHTTPFixture(t *testing.T, models ...releaseguard.ExplanationModel) 
 	})
 	deployer := deploy.New(targets, runs, deploy.WithAttemptLedger(ledger), deploy.WithImageObserver(guards))
 	h := New(nil, onboardingAuth{}, WithReleaseGuard(guards), WithRuns(runs, nil), WithProjects(projects), WithDeploy(deployer), WithAudit(audit.New(st.DB, mask.NewMasker(), nil)))
-	return guardHTTPFixture{h, guards, ledger, observer, p.ID, runID, a.ID, server.ID, attempt.ID, runs}
+	return guardHTTPFixture{st.DB, h, guards, ledger, observer, p.ID, runID, a.ID, server.ID, attempt.ID, runs}
 }
 
 func guardHTTPRequest(h http.Handler, method, path, body, token, csrf string) *httptest.ResponseRecorder {

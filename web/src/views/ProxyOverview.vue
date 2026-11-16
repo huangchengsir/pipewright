@@ -11,192 +11,315 @@
   - 排序/分组:按主机 或 按到期排序。
   数据来自 GET /api/proxy/overview(只读聚合)。每行刷新调 refreshProxyRoute,回写该行。
 */
-import { ref, computed, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
-import { NIcon } from 'naive-ui'
-import { Lock, LockOpen, AlertTriangle, Refresh, Server, ExternalLink, ListCheck } from '@vicons/tabler'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from "vue";
+import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
+import { NIcon } from "naive-ui";
+import {
+  Lock,
+  LockOpen,
+  AlertTriangle,
+  Refresh,
+  Server,
+  ExternalLink,
+  ListCheck,
+} from "@vicons/tabler";
 import {
   getProxyOverview,
   refreshProxyRoute,
   type ProxyRouteOverview,
   type CertStatus,
-} from '../api/reverseProxy'
-import { HttpError } from '../api/http'
-import { useToast } from '../composables/useToast'
-import EmptyState from '../components/ui/EmptyState.vue'
-import ErrorState from '../components/ui/ErrorState.vue'
-import SkeletonBlock from '../components/ui/SkeletonBlock.vue'
+} from "../api/reverseProxy";
+import { HttpError } from "../api/http";
+import { useToast } from "../composables/useToast";
+import PermissionGate from "../components/PermissionGate.vue";
+import { useSessionStore } from "../stores/session";
+import { usePermissionStore } from "../stores/permissions";
+import EmptyState from "../components/ui/EmptyState.vue";
+import ErrorState from "../components/ui/ErrorState.vue";
+import SkeletonBlock from "../components/ui/SkeletonBlock.vue";
 
-const { t } = useI18n()
-const router = useRouter()
-const toast = useToast()
+const { t } = useI18n();
+const router = useRouter();
+const toast = useToast();
+const session = useSessionStore(),
+  permissions = usePermissionStore();
+let generation = 0,
+  mounted = false;
+let controller: AbortController | undefined;
+function ready() {
+  return (
+    mounted &&
+    !!session.user &&
+    !session.user.mustChangePassword &&
+    !session.isNetworkError &&
+    (session.user.multiTenant === false ||
+      (session.user.multiTenant === true && !!permissions.activeTeam))
+  );
+}
+function options() {
+  return {
+    signal: controller?.signal,
+    headers:
+      session.user?.multiTenant === true
+        ? { "X-Pipewright-Team": permissions.activeTeam }
+        : undefined,
+  };
+}
+function clearScope() {
+  generation++;
+  controller?.abort();
+  controller = new AbortController();
+  rows.value = [];
+  busy.value = new Set();
+  loadError.value = "";
+  loadState.value = "idle";
+  refreshing.value = false;
+}
 
-type LoadState = 'idle' | 'loading' | 'loaded' | 'error'
-const loadState = ref<LoadState>('idle')
-const loadError = ref('')
-const rows = ref<ProxyRouteOverview[]>([])
-const refreshing = ref(false)
+type LoadState = "idle" | "loading" | "loaded" | "error";
+const loadState = ref<LoadState>("idle");
+const loadError = ref("");
+const rows = ref<ProxyRouteOverview[]>([]);
+const refreshing = ref(false);
 
 async function load(): Promise<void> {
-  loadState.value = rows.value.length === 0 ? 'loading' : 'loaded'
-  refreshing.value = true
-  loadError.value = ''
+  if (!ready()) return;
+  const scope = generation;
+  loadState.value = rows.value.length === 0 ? "loading" : "loaded";
+  refreshing.value = true;
+  loadError.value = "";
   try {
-    rows.value = await getProxyOverview()
-    loadState.value = 'loaded'
+    const result = await getProxyOverview(options());
+    if (scope !== generation) return;
+    rows.value = result;
+    loadState.value = "loaded";
   } catch (err) {
-    loadState.value = rows.value.length === 0 ? 'error' : 'loaded'
+    if (scope !== generation) return;
+    if (err instanceof HttpError && [401, 403].includes(err.status))
+      rows.value = [];
+    loadState.value = rows.value.length === 0 ? "error" : "loaded";
     loadError.value =
       err instanceof HttpError
-        ? (err.apiError?.message ?? t('proxyOverview.errLoad', { status: err.status }))
-        : t('proxyOverview.errNetwork')
+        ? (err.apiError?.message ??
+          t("proxyOverview.errLoad", { status: err.status }))
+        : t("proxyOverview.errNetwork");
   } finally {
-    refreshing.value = false
+    if (scope === generation) refreshing.value = false;
   }
 }
 
-onMounted(load)
+function reloadScope() {
+  clearScope();
+  void load();
+}
+onMounted(() => {
+  mounted = true;
+  reloadScope();
+});
+watch(
+  () =>
+    JSON.stringify([
+      session.user,
+      session.isNetworkError,
+      permissions.activeTeam,
+    ]),
+  () => {
+    if (mounted) reloadScope();
+  },
+  { flush: "sync" },
+);
+onBeforeUnmount(() => {
+  mounted = false;
+  clearScope();
+});
 
 // ─── 到期解析:certDetail 是人类可读串,尽力从中抽一个日期(ISO 或 yyyy-mm-dd / yyyy/mm/dd)。 ──
 // 抽不到 → undefined(表格里显示「—」,排序时沉底)。仅 issued 行有意义。
 function parseExpiry(r: ProxyRouteOverview): Date | undefined {
-  if (r.certStatus !== 'issued') return undefined
-  const s = r.certDetail || ''
-  const iso = s.match(/\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)?/)
+  if (r.certStatus !== "issued") return undefined;
+  const s = r.certDetail || "";
+  const iso = s.match(
+    /\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)?/,
+  );
   if (iso) {
-    const d = new Date(iso[0].replace(' ', 'T'))
-    if (!Number.isNaN(d.getTime())) return d
+    const d = new Date(iso[0].replace(" ", "T"));
+    if (!Number.isNaN(d.getTime())) return d;
   }
-  const slash = s.match(/\d{4}\/\d{2}\/\d{2}/)
+  const slash = s.match(/\d{4}\/\d{2}\/\d{2}/);
   if (slash) {
-    const d = new Date(slash[0].replace(/\//g, '-'))
-    if (!Number.isNaN(d.getTime())) return d
+    const d = new Date(slash[0].replace(/\//g, "-"));
+    if (!Number.isNaN(d.getTime())) return d;
   }
-  return undefined
+  return undefined;
 }
 
-const DAY_MS = 86_400_000
+const DAY_MS = 86_400_000;
 function daysLeft(d: Date): number {
-  return Math.ceil((d.getTime() - Date.now()) / DAY_MS)
+  return Math.ceil((d.getTime() - Date.now()) / DAY_MS);
 }
 // 30 天内视为「将到期」高亮(Caddy 默认到期前 30 天续期)。
-const EXPIRING_DAYS = 30
+const EXPIRING_DAYS = 30;
 
 interface DerivedRow {
-  route: ProxyRouteOverview
-  expiry?: Date
-  days?: number
-  expiring: boolean
+  route: ProxyRouteOverview;
+  generation: number;
+  expiry?: Date;
+  days?: number;
+  expiring: boolean;
 }
 const derived = computed<DerivedRow[]>(() =>
   rows.value.map((route) => {
-    const expiry = parseExpiry(route)
-    const days = expiry ? daysLeft(expiry) : undefined
-    return { route, expiry, days, expiring: days !== undefined && days <= EXPIRING_DAYS }
+    const expiry = parseExpiry(route);
+    const days = expiry ? daysLeft(expiry) : undefined;
+    return {
+      route,
+      generation,
+      expiry,
+      days,
+      expiring: days !== undefined && days <= EXPIRING_DAYS,
+    };
   }),
-)
+);
 
 // ─── 摘要 ─────────────────────────────────────────────────────────────────────
-const total = computed(() => rows.value.length)
-const issuedCount = computed(() => rows.value.filter((r) => r.certStatus === 'issued').length)
-const pendingCount = computed(() => rows.value.filter((r) => r.certStatus === 'pending').length)
-const failedCount = computed(() => rows.value.filter((r) => r.certStatus === 'failed').length)
-const expiringCount = computed(() => derived.value.filter((d) => d.expiring).length)
+const total = computed(() => rows.value.length);
+const issuedCount = computed(
+  () => rows.value.filter((r) => r.certStatus === "issued").length,
+);
+const pendingCount = computed(
+  () => rows.value.filter((r) => r.certStatus === "pending").length,
+);
+const failedCount = computed(
+  () => rows.value.filter((r) => r.certStatus === "failed").length,
+);
+const expiringCount = computed(
+  () => derived.value.filter((d) => d.expiring).length,
+);
 
 // 最近一个到期:有效期内、天数最小的那条。
 const soonest = computed<DerivedRow | undefined>(() => {
-  const withExpiry = derived.value.filter((d) => d.days !== undefined)
-  if (withExpiry.length === 0) return undefined
-  return withExpiry.reduce((a, b) => (a.days! <= b.days! ? a : b))
-})
+  const withExpiry = derived.value.filter((d) => d.days !== undefined);
+  if (withExpiry.length === 0) return undefined;
+  return withExpiry.reduce((a, b) => (a.days! <= b.days! ? a : b));
+});
 
 // ─── 排序 / 分组 ──────────────────────────────────────────────────────────────
-type SortMode = 'host' | 'expiry'
-const sortMode = ref<SortMode>('expiry')
+type SortMode = "host" | "expiry";
+const sortMode = ref<SortMode>("expiry");
 
 const sorted = computed<DerivedRow[]>(() => {
-  const list = [...derived.value]
-  if (sortMode.value === 'host') {
+  const list = [...derived.value];
+  if (sortMode.value === "host") {
     list.sort(
       (a, b) =>
         a.route.serverName.localeCompare(b.route.serverName) ||
         a.route.domain.localeCompare(b.route.domain),
-    )
+    );
   } else {
     // 按到期升序:有到期日的在前(天数小的优先),其余(无到期 / 失败 / 申请中)沉底。
     list.sort((a, b) => {
-      const av = a.days ?? Number.POSITIVE_INFINITY
-      const bv = b.days ?? Number.POSITIVE_INFINITY
-      return av - bv || a.route.domain.localeCompare(b.route.domain)
-    })
+      const av = a.days ?? Number.POSITIVE_INFINITY;
+      const bv = b.days ?? Number.POSITIVE_INFINITY;
+      return av - bv || a.route.domain.localeCompare(b.route.domain);
+    });
   }
-  return list
-})
+  return list;
+});
 
 // 按主机分组(仅 host 排序模式下渲染分组头)。
 interface HostGroup {
-  serverId: string
-  serverName: string
-  rows: DerivedRow[]
+  serverId: string;
+  serverName: string;
+  rows: DerivedRow[];
 }
 const grouped = computed<HostGroup[]>(() => {
-  const map = new Map<string, HostGroup>()
+  const map = new Map<string, HostGroup>();
   for (const d of sorted.value) {
-    const key = d.route.serverId
-    let g = map.get(key)
+    const key = d.route.serverId;
+    let g = map.get(key);
     if (!g) {
-      g = { serverId: key, serverName: d.route.serverName, rows: [] }
-      map.set(key, g)
+      g = { serverId: key, serverName: d.route.serverName, rows: [] };
+      map.set(key, g);
     }
-    g.rows.push(d)
+    g.rows.push(d);
   }
-  return [...map.values()]
-})
+  return [...map.values()];
+});
 
 // ─── 行操作:刷新证书 / 跳主机 ──────────────────────────────────────────────────
-const busy = ref<Set<string>>(new Set())
+const busy = ref<Set<string>>(new Set());
 function isBusy(id: string): boolean {
-  return busy.value.has(id)
+  return busy.value.has(id);
 }
 async function refreshRow(d: DerivedRow): Promise<void> {
-  const r = d.route
-  if (isBusy(r.id)) return
-  busy.value = new Set(busy.value).add(r.id)
+  const r = d.route;
+  if (
+    d.generation !== generation ||
+    !ready() ||
+    !permissions.allowed(permissions.activeTeam, {
+      action: "certificate.refresh",
+      resourceId: r.id,
+    }) ||
+    isBusy(r.id)
+  )
+    return;
+  const scope = generation;
+  busy.value = new Set(busy.value).add(r.id);
   try {
-    const updated = await refreshProxyRoute(r.id)
-    rows.value = rows.value.map((x) => (x.id === r.id ? { ...x, ...updated } : x))
-    toast.success(t('proxyOverview.refreshing'), { detail: updated.domain })
+    const updated = await refreshProxyRoute(r.id, options());
+    if (scope !== generation) return;
+    rows.value = rows.value.map((x) =>
+      x.id === r.id ? { ...x, ...updated } : x,
+    );
+    toast.success(t("proxyOverview.refreshing"), { detail: updated.domain });
   } catch (err) {
-    toast.error(t('proxyOverview.refreshFail'), {
+    if (scope !== generation) return;
+    if (err instanceof HttpError && [401, 403, 404].includes(err.status)) {
+      rows.value = rows.value.filter((x) => x.id !== r.id);
+      permissions.invalidate();
+    }
+    toast.error(t("proxyOverview.refreshFail"), {
       detail:
         err instanceof HttpError
-          ? (err.apiError?.message ?? t('proxyOverview.errReq', { status: err.status }))
-          : t('proxyOverview.errNetwork'),
-    })
+          ? (err.apiError?.message ??
+            t("proxyOverview.errReq", { status: err.status }))
+          : t("proxyOverview.errNetwork"),
+    });
   } finally {
-    const next = new Set(busy.value)
-    next.delete(r.id)
-    busy.value = next
+    if (scope === generation) {
+      const next = new Set(busy.value);
+      next.delete(r.id);
+      busy.value = next;
+    }
   }
 }
 
 function gotoHost(d: DerivedRow): void {
+  if (
+    d.generation !== generation ||
+    !ready() ||
+    !permissions.allowed(permissions.activeTeam, {
+      action: "container.inspect",
+      resourceId: d.route.serverId,
+    })
+  )
+    return;
   // 跳容器页(每台主机一张卡有「域名/反代」tab)。serverId 经 query 供高亮。
-  void router.push({ name: 'containers', query: { server: d.route.serverId } })
+  void router.push({ name: "containers", query: { server: d.route.serverId } });
 }
 
 function statusLabel(s: CertStatus): string {
-  if (s === 'issued') return t('proxyOverview.statusIssued')
-  if (s === 'failed') return t('proxyOverview.statusFailed')
-  return t('proxyOverview.statusPending')
+  if (s === "issued") return t("proxyOverview.statusIssued");
+  if (s === "failed") return t("proxyOverview.statusFailed");
+  return t("proxyOverview.statusPending");
 }
 
 function expiryText(d: DerivedRow): string {
-  if (d.days === undefined) return '—'
-  if (d.days < 0) return t('proxyOverview.expiredAgo', { n: Math.abs(d.days) })
-  if (d.days === 0) return t('proxyOverview.expiresToday')
-  return t('proxyOverview.daysLeft', { n: d.days })
+  if (d.days === undefined) return "—";
+  if (d.days < 0) return t("proxyOverview.expiredAgo", { n: Math.abs(d.days) });
+  if (d.days === 0) return t("proxyOverview.expiresToday");
+  return t("proxyOverview.daysLeft", { n: d.days });
 }
 </script>
 
@@ -206,19 +329,26 @@ function expiryText(d: DerivedRow): string {
       <div class="ovw__title-wrap">
         <span class="ovw__eyebrow">
           <NIcon :size="13"><ListCheck /></NIcon>
-          {{ t('proxyOverview.eyebrow') }}
+          {{ t("proxyOverview.eyebrow") }}
         </span>
-        <h1 class="ovw__title">{{ t('proxyOverview.title') }}</h1>
-        <p class="ovw__sub">{{ t('proxyOverview.subtitle') }}</p>
+        <h1 class="ovw__title">{{ t("proxyOverview.title") }}</h1>
+        <p class="ovw__sub">{{ t("proxyOverview.subtitle") }}</p>
       </div>
       <button class="ovw__refresh" :disabled="refreshing" @click="load">
         <NIcon :size="14"><Refresh /></NIcon>
-        {{ refreshing ? t('proxyOverview.refreshingAll') : t('common.refresh') }}
+        {{
+          refreshing ? t("proxyOverview.refreshingAll") : t("common.refresh")
+        }}
       </button>
     </header>
 
     <!-- 首屏骨架 -->
-    <div v-if="loadState === 'loading'" class="ovw__skel" :aria-label="t('proxyOverview.loadingAria')" aria-busy="true">
+    <div
+      v-if="loadState === 'loading'"
+      class="ovw__skel"
+      :aria-label="t('proxyOverview.loadingAria')"
+      aria-busy="true"
+    >
       <div class="ovw__skel-cards">
         <SkeletonBlock v-for="n in 4" :key="n" :height="84" width="100%" />
       </div>
@@ -243,31 +373,55 @@ function expiryText(d: DerivedRow): string {
       <section class="cards" :aria-label="t('proxyOverview.summaryAria')">
         <article class="card card--total">
           <span class="card__num">{{ total }}</span>
-          <span class="card__label">{{ t('proxyOverview.cardTotal') }}</span>
+          <span class="card__label">{{ t("proxyOverview.cardTotal") }}</span>
         </article>
         <article class="card card--issued">
           <span class="card__num">{{ issuedCount }}</span>
-          <span class="card__label">{{ t('proxyOverview.cardIssued') }}</span>
+          <span class="card__label">{{ t("proxyOverview.cardIssued") }}</span>
         </article>
         <article class="card card--warn">
           <span class="card__num">{{ pendingCount + failedCount }}</span>
-          <span class="card__label">{{ t('proxyOverview.cardPendingFailed') }}</span>
-          <span class="card__break">{{ t('proxyOverview.cardPendingFailedBreak', { pending: pendingCount, failed: failedCount }) }}</span>
+          <span class="card__label">{{
+            t("proxyOverview.cardPendingFailed")
+          }}</span>
+          <span class="card__break">{{
+            t("proxyOverview.cardPendingFailedBreak", {
+              pending: pendingCount,
+              failed: failedCount,
+            })
+          }}</span>
         </article>
-        <article class="card card--expiry" :class="{ 'card--expiry-hot': soonest && soonest.expiring }">
+        <article
+          class="card card--expiry"
+          :class="{ 'card--expiry-hot': soonest && soonest.expiring }"
+        >
           <span v-if="soonest" class="card__num">
-            {{ soonest.days! < 0 ? '!' : soonest.days }}<span v-if="soonest.days! >= 0" class="card__unit">{{ t('proxyOverview.dayUnit') }}</span>
+            {{ soonest.days! < 0 ? "!" : soonest.days
+            }}<span v-if="soonest.days! >= 0" class="card__unit">{{
+              t("proxyOverview.dayUnit")
+            }}</span>
           </span>
           <span v-else class="card__num card__num--none">—</span>
-          <span class="card__label">{{ t('proxyOverview.cardSoonest') }}</span>
-          <span v-if="soonest" class="card__break mono" :title="soonest.route.domain">{{ soonest.route.domain }}</span>
-          <span v-else class="card__break">{{ t('proxyOverview.cardSoonestNone') }}</span>
+          <span class="card__label">{{ t("proxyOverview.cardSoonest") }}</span>
+          <span
+            v-if="soonest"
+            class="card__break mono"
+            :title="soonest.route.domain"
+            >{{ soonest.route.domain }}</span
+          >
+          <span v-else class="card__break">{{
+            t("proxyOverview.cardSoonestNone")
+          }}</span>
         </article>
       </section>
 
       <!-- 控件:排序 / 分组 + 将到期计数 -->
       <div class="ovw__controls">
-        <div class="seg" role="tablist" :aria-label="t('proxyOverview.sortAria')">
+        <div
+          class="seg"
+          role="tablist"
+          :aria-label="t('proxyOverview.sortAria')"
+        >
           <button
             class="seg__btn"
             :class="{ 'seg__btn--on': sortMode === 'expiry' }"
@@ -275,7 +429,7 @@ function expiryText(d: DerivedRow): string {
             :aria-selected="sortMode === 'expiry'"
             @click="sortMode = 'expiry'"
           >
-            {{ t('proxyOverview.sortExpiry') }}
+            {{ t("proxyOverview.sortExpiry") }}
           </button>
           <button
             class="seg__btn"
@@ -284,12 +438,12 @@ function expiryText(d: DerivedRow): string {
             :aria-selected="sortMode === 'host'"
             @click="sortMode = 'host'"
           >
-            {{ t('proxyOverview.sortHost') }}
+            {{ t("proxyOverview.sortHost") }}
           </button>
         </div>
         <span v-if="expiringCount > 0" class="ovw__expiring">
           <NIcon :size="14"><AlertTriangle /></NIcon>
-          {{ t('proxyOverview.expiringSoon', { n: expiringCount }) }}
+          {{ t("proxyOverview.expiringSoon", { n: expiringCount }) }}
         </span>
       </div>
 
@@ -298,13 +452,13 @@ function expiryText(d: DerivedRow): string {
         <table class="tbl">
           <thead>
             <tr>
-              <th>{{ t('proxyOverview.colDomain') }}</th>
-              <th>{{ t('proxyOverview.colHost') }}</th>
-              <th>{{ t('proxyOverview.colUpstream') }}</th>
-              <th>{{ t('proxyOverview.colStatus') }}</th>
-              <th>{{ t('proxyOverview.colCertDetail') }}</th>
-              <th>{{ t('proxyOverview.colExpiry') }}</th>
-              <th class="tbl__act-h">{{ t('proxyOverview.colActions') }}</th>
+              <th>{{ t("proxyOverview.colDomain") }}</th>
+              <th>{{ t("proxyOverview.colHost") }}</th>
+              <th>{{ t("proxyOverview.colUpstream") }}</th>
+              <th>{{ t("proxyOverview.colStatus") }}</th>
+              <th>{{ t("proxyOverview.colCertDetail") }}</th>
+              <th>{{ t("proxyOverview.colExpiry") }}</th>
+              <th class="tbl__act-h">{{ t("proxyOverview.colActions") }}</th>
             </tr>
           </thead>
 
@@ -313,45 +467,93 @@ function expiryText(d: DerivedRow): string {
             <tbody v-for="g in grouped" :key="g.serverId">
               <tr class="grouprow">
                 <td colspan="7">
-                  <span class="grouprow__ic"><NIcon :size="13"><Server /></NIcon></span>
+                  <span class="grouprow__ic"
+                    ><NIcon :size="13"><Server /></NIcon
+                  ></span>
                   <span class="grouprow__name">{{ g.serverName }}</span>
-                  <span class="grouprow__count">{{ t('proxyOverview.groupCount', { n: g.rows.length }) }}</span>
+                  <span class="grouprow__count">{{
+                    t("proxyOverview.groupCount", { n: g.rows.length })
+                  }}</span>
                 </td>
               </tr>
               <tr
                 v-for="d in g.rows"
                 :key="d.route.id"
                 class="datarow"
-                :class="{ 'datarow--busy': isBusy(d.route.id), 'datarow--expiring': d.expiring, 'datarow--off': !d.route.enabled }"
+                :class="{
+                  'datarow--busy': isBusy(d.route.id),
+                  'datarow--expiring': d.expiring,
+                  'datarow--off': !d.route.enabled,
+                }"
               >
                 <td class="cell-domain">
                   <div class="dom mono">{{ d.route.domain }}</div>
-                  <div v-if="d.route.config.aliases.length" class="dom__aliases">
-                    <span v-for="a in d.route.config.aliases" :key="a" class="dom__alias mono">{{ a }}</span>
+                  <div
+                    v-if="d.route.config.aliases.length"
+                    class="dom__aliases"
+                  >
+                    <span
+                      v-for="a in d.route.config.aliases"
+                      :key="a"
+                      class="dom__alias mono"
+                      >{{ a }}</span
+                    >
                   </div>
-                  <span v-if="!d.route.enabled" class="dom__off">{{ t('proxyOverview.disabled') }}</span>
+                  <span v-if="!d.route.enabled" class="dom__off">{{
+                    t("proxyOverview.disabled")
+                  }}</span>
                 </td>
                 <td class="cell-host">{{ d.route.serverName }}</td>
-                <td class="cell-up mono">{{ d.route.upstreamContainer }}:{{ d.route.upstreamPort }}</td>
+                <td class="cell-up mono">
+                  {{ d.route.upstreamContainer }}:{{ d.route.upstreamPort }}
+                </td>
                 <td>
                   <span class="badge" :class="`badge--${d.route.certStatus}`">
                     <NIcon :size="13">
                       <Lock v-if="d.route.certStatus === 'issued'" />
-                      <AlertTriangle v-else-if="d.route.certStatus === 'failed'" />
+                      <AlertTriangle
+                        v-else-if="d.route.certStatus === 'failed'"
+                      />
                       <LockOpen v-else />
                     </NIcon>
                     {{ statusLabel(d.route.certStatus) }}
                   </span>
                 </td>
-                <td class="cell-detail mono" :title="d.route.certDetail">{{ d.route.certDetail || '—' }}</td>
-                <td class="cell-expiry" :class="{ 'cell-expiry--hot': d.expiring }">{{ expiryText(d) }}</td>
+                <td class="cell-detail mono" :title="d.route.certDetail">
+                  {{ d.route.certDetail || "—" }}
+                </td>
+                <td
+                  class="cell-expiry"
+                  :class="{ 'cell-expiry--hot': d.expiring }"
+                >
+                  {{ expiryText(d) }}
+                </td>
                 <td class="cell-act">
-                  <button class="rowbtn" :disabled="isBusy(d.route.id)" :title="t('proxyOverview.refreshRowTitle')" @click="refreshRow(d)">
-                    <NIcon :size="14"><Refresh /></NIcon>
-                  </button>
-                  <button class="rowbtn" :title="t('proxyOverview.gotoHostTitle')" @click="gotoHost(d)">
-                    <NIcon :size="14"><ExternalLink /></NIcon>
-                  </button>
+                  <PermissionGate
+                    :query="{
+                      action: 'certificate.refresh',
+                      resourceId: d.route.id,
+                    }"
+                    ><button
+                      class="rowbtn"
+                      :disabled="isBusy(d.route.id)"
+                      :title="t('proxyOverview.refreshRowTitle')"
+                      @click="refreshRow(d)"
+                    >
+                      <NIcon :size="14"><Refresh /></NIcon></button
+                  ></PermissionGate>
+                  <PermissionGate
+                    :query="{
+                      action: 'container.inspect',
+                      resourceId: d.route.serverId,
+                    }"
+                    ><button
+                      class="rowbtn"
+                      :title="t('proxyOverview.gotoHostTitle')"
+                      @click="gotoHost(d)"
+                    >
+                      <NIcon :size="14"><ExternalLink /></NIcon></button
+                  ></PermissionGate>
                 </td>
               </tr>
             </tbody>
@@ -363,36 +565,77 @@ function expiryText(d: DerivedRow): string {
               v-for="d in sorted"
               :key="d.route.id"
               class="datarow"
-              :class="{ 'datarow--busy': isBusy(d.route.id), 'datarow--expiring': d.expiring, 'datarow--off': !d.route.enabled }"
+              :class="{
+                'datarow--busy': isBusy(d.route.id),
+                'datarow--expiring': d.expiring,
+                'datarow--off': !d.route.enabled,
+              }"
             >
               <td class="cell-domain">
                 <div class="dom mono">{{ d.route.domain }}</div>
                 <div v-if="d.route.config.aliases.length" class="dom__aliases">
-                  <span v-for="a in d.route.config.aliases" :key="a" class="dom__alias mono">{{ a }}</span>
+                  <span
+                    v-for="a in d.route.config.aliases"
+                    :key="a"
+                    class="dom__alias mono"
+                    >{{ a }}</span
+                  >
                 </div>
-                <span v-if="!d.route.enabled" class="dom__off">{{ t('proxyOverview.disabled') }}</span>
+                <span v-if="!d.route.enabled" class="dom__off">{{
+                  t("proxyOverview.disabled")
+                }}</span>
               </td>
               <td class="cell-host">{{ d.route.serverName }}</td>
-              <td class="cell-up mono">{{ d.route.upstreamContainer }}:{{ d.route.upstreamPort }}</td>
+              <td class="cell-up mono">
+                {{ d.route.upstreamContainer }}:{{ d.route.upstreamPort }}
+              </td>
               <td>
                 <span class="badge" :class="`badge--${d.route.certStatus}`">
                   <NIcon :size="13">
                     <Lock v-if="d.route.certStatus === 'issued'" />
-                    <AlertTriangle v-else-if="d.route.certStatus === 'failed'" />
+                    <AlertTriangle
+                      v-else-if="d.route.certStatus === 'failed'"
+                    />
                     <LockOpen v-else />
                   </NIcon>
                   {{ statusLabel(d.route.certStatus) }}
                 </span>
               </td>
-              <td class="cell-detail mono" :title="d.route.certDetail">{{ d.route.certDetail || '—' }}</td>
-              <td class="cell-expiry" :class="{ 'cell-expiry--hot': d.expiring }">{{ expiryText(d) }}</td>
+              <td class="cell-detail mono" :title="d.route.certDetail">
+                {{ d.route.certDetail || "—" }}
+              </td>
+              <td
+                class="cell-expiry"
+                :class="{ 'cell-expiry--hot': d.expiring }"
+              >
+                {{ expiryText(d) }}
+              </td>
               <td class="cell-act">
-                <button class="rowbtn" :disabled="isBusy(d.route.id)" :title="t('proxyOverview.refreshRowTitle')" @click="refreshRow(d)">
-                  <NIcon :size="14"><Refresh /></NIcon>
-                </button>
-                <button class="rowbtn" :title="t('proxyOverview.gotoHostTitle')" @click="gotoHost(d)">
-                  <NIcon :size="14"><ExternalLink /></NIcon>
-                </button>
+                <PermissionGate
+                  :query="{
+                    action: 'certificate.refresh',
+                    resourceId: d.route.id,
+                  }"
+                  ><button
+                    class="rowbtn"
+                    :disabled="isBusy(d.route.id)"
+                    :title="t('proxyOverview.refreshRowTitle')"
+                    @click="refreshRow(d)"
+                  >
+                    <NIcon :size="14"><Refresh /></NIcon></button
+                ></PermissionGate>
+                <PermissionGate
+                  :query="{
+                    action: 'container.inspect',
+                    resourceId: d.route.serverId,
+                  }"
+                  ><button
+                    class="rowbtn"
+                    :title="t('proxyOverview.gotoHostTitle')"
+                    @click="gotoHost(d)"
+                  >
+                    <NIcon :size="14"><ExternalLink /></NIcon></button
+                ></PermissionGate>
               </td>
             </tr>
           </tbody>
@@ -401,7 +644,7 @@ function expiryText(d: DerivedRow): string {
 
       <p class="ovw__foot">
         <NIcon :size="13" class="ovw__foot-ic"><Lock /></NIcon>
-        {{ t('proxyOverview.footNote') }}
+        {{ t("proxyOverview.footNote") }}
       </p>
     </template>
   </div>
@@ -505,7 +748,7 @@ function expiryText(d: DerivedRow): string {
   overflow: hidden;
 }
 .card::before {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0 auto 0 0;
   width: 4px;

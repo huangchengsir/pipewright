@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // Identity is a public provenance projection. Reading it never decrypts config or outputs.
@@ -17,6 +18,9 @@ type Identity struct {
 }
 
 func (s *Service) Identity(ctx context.Context, id string) (Identity, error) {
+	if err := tenancy.Check(ctx, s.db, "run.read", "run", id); err != nil {
+		return Identity{}, err
+	}
 	var out Identity
 	err := s.q(ctx).QueryRowContext(ctx, "SELECT run_id,root_id,parent_id,execution_kind,initiator,revision FROM run_retry_attempts WHERE run_id=?", id).Scan(&out.RunID, &out.LogicalRunID, &out.SourceRunID, &out.ExecutionKind, &out.Initiator, &out.Revision)
 	if errors.Is(err, sql.ErrNoRows) {

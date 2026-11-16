@@ -21,53 +21,58 @@
  * Writes go through the shared `http` wrapper (auto CSRF + locale).
  */
 
-import { http } from './http'
-import { configWriteOptions } from './configRevision'
+import { http, type HttpOptions } from "./http";
+import { configWriteOptions } from "./configRevision";
 
 /** Lifecycle of an ephemeral preview environment. */
-export type PreviewEnvStatus = 'active' | 'reclaimed'
+export type PreviewEnvStatus = "active" | "reclaimed";
 
 /** One per-PR ephemeral preview environment. */
 export interface PreviewEnv {
-  id: string
+  id: string;
   /** Project this preview belongs to. */
-  projectId: string
+  projectId: string;
   /** The pipeline whose run produced/owns this preview. */
-  pipelineId: string
+  pipelineId: string;
   /** Pull-request number that triggered the preview. */
-  prNumber: number
+  prNumber: number;
   /** Source branch of the PR. */
-  branch: string
+  branch: string;
   /** Target host the preview's route/container live on. */
-  serverId: string
+  serverId: string;
   /** The minted subdomain, e.g. `pr-42-shop.preview.example.com`. */
-  subdomain: string
+  subdomain: string;
   /** The reverse-proxy route bound for this preview. */
-  routeId: string
+  routeId: string;
   /** Live while `active`; torn down once `reclaimed`. */
-  status: PreviewEnvStatus
-  createdAt: string
+  status: PreviewEnvStatus;
+  createdAt: string;
   /** When the environment was reclaimed (empty while active). */
-  reclaimedAt: string
+  reclaimedAt: string;
 }
 
 /** Per-project preview-environment configuration. */
 export interface PreviewConfig {
-  projectId: string
+  authorizationState?: "ready" | "required";
+  projectId: string;
   /** Master switch: mint a preview env for each PR run. */
-  enabled: boolean
+  enabled: boolean;
   /** DNS provider whose zone preview subdomains are minted under (references a `DnsProvider`). */
-  dnsProviderId: string
+  dnsProviderId: string;
   /** Base domain previews live under, e.g. `preview.example.com`. */
-  baseDomain: string
+  baseDomain: string;
 }
 
 /** List a project's preview environments (active + recently reclaimed). */
-export async function listPreviewEnvs(projectId: string): Promise<PreviewEnv[]> {
+export async function listPreviewEnvs(
+  projectId: string,
+  options: HttpOptions = {},
+): Promise<PreviewEnv[]> {
   const res = await http.get<{ items: PreviewEnv[] }>(
     `/api/preview-envs?projectId=${encodeURIComponent(projectId)}`,
-  )
-  return res.items ?? []
+    { ...options, throwOnUnauthorized: true },
+  );
+  return res.items ?? [];
 }
 
 /**
@@ -75,18 +80,50 @@ export async function listPreviewEnvs(projectId: string): Promise<PreviewEnv[]> 
  * route, and DNS record. Idempotent — reclaiming an already-reclaimed env is a
  * no-op. Returns `{ ok: true }`.
  */
-export async function reclaimPreviewEnv(id: string): Promise<{ ok: boolean }> {
-  return http.post<{ ok: boolean }>(`/api/preview-envs/${encodeURIComponent(id)}/reclaim`, {})
+export async function reclaimPreviewEnv(
+  id: string,
+  options: HttpOptions = {},
+): Promise<{ ok: boolean }> {
+  return http.post<{ ok: boolean }>(
+    `/api/preview-envs/${encodeURIComponent(id)}/reclaim`,
+    {},
+    { ...options, throwOnUnauthorized: true },
+  );
 }
 
 /** Read a project's preview-environment config (provider + base domain + on/off). */
-export async function getPreviewConfig(projectId: string): Promise<PreviewConfig> {
-  return http.get<PreviewConfig>(`/api/projects/${encodeURIComponent(projectId)}/preview-config`)
+export async function getPreviewConfig(
+  projectId: string,
+  options: HttpOptions = {},
+): Promise<PreviewConfig> {
+  return http.get<PreviewConfig>(
+    `/api/projects/${encodeURIComponent(projectId)}/preview-config`,
+    { ...options, throwOnUnauthorized: true },
+  );
 }
 
 /** Update a project's preview-environment config. Returns the persisted config. */
-export async function setPreviewConfig(projectId: string, body: PreviewConfig, expectedRevision?: string): Promise<PreviewConfig> {
-  return expectedRevision
-    ? http.put<PreviewConfig>(`/api/projects/${encodeURIComponent(projectId)}/preview-config`, body, configWriteOptions(expectedRevision))
-    : http.put<PreviewConfig>(`/api/projects/${encodeURIComponent(projectId)}/preview-config`, body)
+export async function setPreviewConfig(
+  projectId: string,
+  body: PreviewConfig,
+  expectedRevision?: string,
+  options: HttpOptions = {},
+): Promise<PreviewConfig> {
+  return http.put<PreviewConfig>(
+    `/api/projects/${encodeURIComponent(projectId)}/preview-config`, body,
+    configWriteOptions(expectedRevision,{...options,throwOnUnauthorized:true}),
+  );
+}
+
+/** Minimal choices derived from readable preview rows, not project configuration. */
+export interface PreviewProject { id:string; name:string }
+export async function listPreviewProjects(options:HttpOptions={}):Promise<PreviewProject[]> {
+ const result=await http.get<{items:PreviewProject[]}>('/api/preview-envs/projects',{...options,throwOnUnauthorized:true});
+ return result.items ?? [];
+}
+
+export interface PreviewProvider {id:string;name:string;baseDomain:string}
+export async function listPreviewProviders(projectId:string,options:HttpOptions={}):Promise<PreviewProvider[]> {
+ const result=await http.get<{items:PreviewProvider[]}>(`/api/projects/${encodeURIComponent(projectId)}/preview-providers`,{...options,throwOnUnauthorized:true});
+ return result.items ?? [];
 }

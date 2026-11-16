@@ -64,14 +64,25 @@ func currentSessionToken(r *http.Request) string {
 	return ""
 }
 
+func legacyAccountAvailable(w http.ResponseWriter, r *http.Request, svc accountService) bool {
+	if session, ok := sessionFromContext(r.Context()); ok && session != nil && session.MultiTenant {
+		writeError(w, http.StatusForbidden, "access_denied", "请使用当前账号的个人设置")
+		return false
+	}
+	if svc == nil {
+		writeError(w, http.StatusServiceUnavailable, "no_auth", "认证服务未初始化")
+		return false
+	}
+	return true
+}
+
 // makeChangePasswordHandler 返回 POST /api/account/password handler(认证 + CSRF)。
 // 校验当前口令 → 更新新 argon2id 哈希 → 删除其它会话(当前保留)→ 204。
 // 错当前 → 401 invalid_current_password;弱新口令 → 422 weak_password。
 // 成功后追加 password_change 审计(detail 仅元数据,绝无明文口令)。
 func makeChangePasswordHandler(svc accountService, aud audit.Recorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if svc == nil {
-			writeError(w, http.StatusServiceUnavailable, "no_auth", "认证服务未初始化")
+		if !legacyAccountAvailable(w, r, svc) {
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
@@ -122,8 +133,7 @@ func makeChangePasswordHandler(svc accountService, aud audit.Recorder) http.Hand
 // 返回所有未过期会话元数据;**绝不回传原 token**;current 标识本请求所属会话。
 func makeListSessionsHandler(svc accountService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if svc == nil {
-			writeError(w, http.StatusServiceUnavailable, "no_auth", "认证服务未初始化")
+		if !legacyAccountAvailable(w, r, svc) {
 			return
 		}
 		token := currentSessionToken(r)
@@ -145,8 +155,7 @@ func makeListSessionsHandler(svc accountService) http.HandlerFunc {
 // 撤销当前会话亦允许(返回 204,前端随后 401 跳登录)。成功后追加 session_revoke 审计。
 func makeRevokeSessionHandler(svc accountService, aud audit.Recorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if svc == nil {
-			writeError(w, http.StatusServiceUnavailable, "no_auth", "认证服务未初始化")
+		if !legacyAccountAvailable(w, r, svc) {
 			return
 		}
 		id := chi.URLParam(r, "id")

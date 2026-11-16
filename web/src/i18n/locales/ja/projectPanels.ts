@@ -1,4 +1,5 @@
 export default {
+  automationAuthorization: {"ready": "自動実行は承認済み", "required": "再承認が必要です", "requiredHint": "実行設定または権限が変更されました。実行権限を持つメンバーが再保存してください。承認されるまで自動実行は停止します。"},
   // ─── TriggersPanel ──────────────────────────────────────────────────────────
   triggers: {
     retry: '↻ 再試行',

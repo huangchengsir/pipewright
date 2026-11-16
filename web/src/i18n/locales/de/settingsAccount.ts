@@ -1,6 +1,6 @@
 export default {
   identityTitle: 'Identität',
-  identitySub: 'Instanz mit einem einzigen Administrator (Mehrbenutzer und RBAC sind für spätere Versionen geplant).',
+  identitySub: 'Aktuelle Kontodaten und Anmeldeinformationen anzeigen.',
   roleAdmin: 'Administrator',
 
   changePwTitle: 'Passwort ändern',

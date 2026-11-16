@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/huangchengsir/pipewright/internal/auth"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"golang.org/x/net/idna"
 	"net"
 	"net/url"
@@ -202,6 +203,7 @@ type ProviderSettings struct {
 	Binding         *Binding `json:"binding,omitempty"`
 }
 type Snapshot struct {
+	CanManage            bool               `json:"canManage"`
 	VisibilityVersion    int64              `json:"visibilityVersion"`
 	ReauthenticatedUntil string             `json:"reauthenticatedUntil"`
 	Providers            []ProviderSettings `json:"providers"`
@@ -257,7 +259,12 @@ func (s *Service) read(ctx context.Context, q querier, p string) (row, error) {
 	return r, nil
 }
 func (s *Service) Settings(ctx context.Context, token string) (Snapshot, error) {
-	out := Snapshot{Providers: make([]ProviderSettings, 0, 5)}
+	if enabled, err := s.tenantMode(ctx, s.db); err != nil {
+		return Snapshot{}, err
+	} else if enabled {
+		return s.personalSettings(ctx, token)
+	}
+	out := Snapshot{CanManage: true, Providers: make([]ProviderSettings, 0, 5)}
 	if e := s.db.QueryRowContext(ctx, `SELECT visibility_revision FROM login_settings WHERE id=1`).Scan(&out.VisibilityVersion); e != nil {
 		return out, e
 	}
@@ -278,13 +285,17 @@ func (s *Service) Settings(ctx context.Context, token string) (Snapshot, error) 
 	return out, nil
 }
 func (s *Service) PublicProviders(ctx context.Context) ([]PublicProvider, error) {
+	multi, err := s.tenantMode(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]PublicProvider, 0, 5)
 	for _, p := range Providers {
 		r, e := s.read(ctx, s.db, p)
 		if e != nil {
 			return nil, e
 		}
-		v := PublicProvider{Provider: p, Visible: r.Visible, Available: r.Configured && r.Enabled && r.Binding != nil}
+		v := PublicProvider{Provider: p, Visible: r.Visible, Available: r.Configured && r.Enabled && (multi || r.Binding != nil)}
 		if !r.Configured {
 			v.Reason = "not_configured"
 		} else if !v.Available {
@@ -308,6 +319,16 @@ func (s *Service) SaveVisibility(ctx context.Context, token string, version int6
 		return Snapshot{}, e
 	}
 	defer tx.Rollback()
+	if multi, err := s.tenantMode(ctx, tx); err != nil {
+		return Snapshot{}, err
+	} else if multi {
+		if _, err = s.lockTenant(ctx, tx, token, true); err != nil {
+			return Snapshot{}, err
+		}
+		if _, err = tenancy.VerifyAccountSession(ctx, tx, token, true); err != nil {
+			return Snapshot{}, err
+		}
+	}
 	result, e := tx.ExecContext(ctx, `UPDATE login_settings SET visibility_revision=visibility_revision+1 WHERE id=1 AND visibility_revision=?`, version)
 	if e != nil {
 		return Snapshot{}, e
@@ -329,6 +350,11 @@ func (s *Service) SaveVisibility(ctx context.Context, token string, version int6
 
 // Locking the single administrator serializes security mutations and final callback commits.
 func (s *Service) lock(ctx context.Context, tx *sql.Tx, token string, recent bool) (int64, error) {
+	if enabled, err := s.tenantMode(ctx, tx); err != nil {
+		return 0, err
+	} else if enabled {
+		return s.lockTenant(ctx, tx, token, recent)
+	}
 	if _, e := tx.ExecContext(ctx, `UPDATE admin_user SET security_generation=security_generation WHERE id=1`); e != nil {
 		return 0, e
 	}
@@ -363,6 +389,9 @@ func (s *Service) lock(ctx context.Context, tx *sql.Tx, token string, recent boo
 	return generation, nil
 }
 func (s *Service) invalidate(ctx context.Context, tx *sql.Tx, p string) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM access_sessions WHERE auth_source=?`, p); err != nil {
+		return err
+	}
 	if _, e := tx.ExecContext(ctx, `DELETE FROM sessions WHERE auth_source=?`, p); e != nil {
 		return e
 	}
@@ -381,6 +410,15 @@ func (s *Service) mutation(ctx context.Context, token, p string, version int64, 
 	if _, e = s.lock(ctx, tx, token, true); e != nil {
 		return Mutation{}, e
 	}
+	multi, e := s.tenantMode(ctx, tx)
+	if e != nil {
+		return Mutation{}, e
+	}
+	if multi {
+		if _, e = tenancy.VerifyAccountSession(ctx, tx, token, true); e != nil {
+			return Mutation{}, e
+		}
+	}
 	old, e := s.read(ctx, tx, p)
 	if e != nil {
 		return Mutation{}, e
@@ -389,7 +427,13 @@ func (s *Service) mutation(ctx context.Context, token, p string, version int64, 
 		return Mutation{}, ErrConflict
 	}
 	var source string
-	if e = tx.QueryRowContext(ctx, `SELECT auth_source FROM sessions WHERE token=?`, token).Scan(&source); e != nil {
+	if multi {
+		account, err := tenancy.VerifyAccountSession(ctx, tx, token, true)
+		if err != nil {
+			return Mutation{}, err
+		}
+		source = account.AuthSource
+	} else if e = tx.QueryRowContext(ctx, `SELECT auth_source FROM sessions WHERE token=?`, token).Scan(&source); e != nil {
 		return Mutation{}, e
 	}
 	if e = change(tx, old); e != nil {
@@ -459,6 +503,9 @@ func (s *Service) SaveApp(ctx context.Context, token, p string, in AppInput) (Mu
 		}
 
 		if changed {
+			if _, e := tx.ExecContext(ctx, `DELETE FROM access_identities WHERE provider=?`, p); e != nil {
+				return e
+			}
 			if _, e := tx.ExecContext(ctx, `DELETE FROM login_identities WHERE provider=?`, p); e != nil {
 				return e
 			}
@@ -472,7 +519,11 @@ func (s *Service) SaveApp(ctx context.Context, token, p string, in AppInput) (Mu
 }
 func (s *Service) SetEnabled(ctx context.Context, token, p string, version int64, enabled bool) (Mutation, error) {
 	return s.mutation(ctx, token, p, version, func(tx *sql.Tx, r row) error {
-		if enabled && (!r.Configured || r.Binding == nil) {
+		multi, err := s.tenantMode(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if enabled && (!r.Configured || (!multi && r.Binding == nil)) {
 			return ErrNotConfigured
 		}
 		_, e := tx.ExecContext(ctx, `UPDATE login_provider_settings SET enabled=? WHERE provider=?`, enabled, p)
@@ -480,6 +531,11 @@ func (s *Service) SetEnabled(ctx context.Context, token, p string, version int64
 	})
 }
 func (s *Service) Unbind(ctx context.Context, token, p string, version int64) (Mutation, error) {
+	if enabled, err := s.tenantMode(ctx, s.db); err != nil {
+		return Mutation{}, err
+	} else if enabled {
+		return s.unbindPersonal(ctx, token, p, version)
+	}
 	return s.mutation(ctx, token, p, version, func(tx *sql.Tx, _ row) error {
 		if _, e := tx.ExecContext(ctx, `DELETE FROM login_identities WHERE provider=?`, p); e != nil {
 			return e

@@ -1,4 +1,8 @@
 export default {
+  monitoringReady: "監控採樣已授權",
+  monitoringRequired: "監控採樣待授權",
+  monitoringHint: "儲存伺服器或確認執行節點分配後授權固定唯讀採樣；已授權不代表伺服器健康。",
+
   title: '伺服器',
   desc: '登記目標伺服器(host / port / user + SSH 憑證),測試連通性。SSH 金鑰僅按引用綁定,經保險庫密文存取,絕不入庫或回顯明文。部署與維運都經此共享 SSH 層執行命令。',
   addServer: '登記伺服器',

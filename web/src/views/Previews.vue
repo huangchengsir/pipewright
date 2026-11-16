@@ -11,153 +11,284 @@
   - 摘要条:活跃 / 已回收计数。手动回收走 POST reclaim,乐观回写该卡。
   数据来自 GET /api/preview-envs?projectId=(只读列表)。
 */
-import { ref, computed, onMounted, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { useRoute, useRouter } from 'vue-router'
-import { NIcon } from 'naive-ui'
-import { Rocket, GitPullRequest, ExternalLink, Recycle, Clock, GitBranch, Server } from '@vicons/tabler'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from "vue";
+import { useI18n } from "vue-i18n";
+import { useRoute, useRouter } from "vue-router";
+import { NIcon } from "naive-ui";
+import {
+  Rocket,
+  GitPullRequest,
+  ExternalLink,
+  Recycle,
+  Clock,
+  GitBranch,
+  Server,
+} from "@vicons/tabler";
 import {
   listPreviewEnvs,
+  listPreviewProjects,
+  type PreviewProject,
   reclaimPreviewEnv,
   type PreviewEnv,
-} from '../api/previewEnvs'
-import { listProjects, type Project } from '../api/projects'
-import { HttpError } from '../api/http'
-import { useToast } from '../composables/useToast'
-import { useConfirm } from '../composables/useConfirm'
-import EmptyState from '../components/ui/EmptyState.vue'
-import ErrorState from '../components/ui/ErrorState.vue'
-import SkeletonBlock from '../components/ui/SkeletonBlock.vue'
-import AppSelect from '../components/ui/AppSelect.vue'
+} from "../api/previewEnvs";
+import { listProjects } from "../api/projects";
+import { useSessionStore } from "../stores/session";
+import { usePermissionStore } from "../stores/permissions";
+import PermissionGate from "../components/PermissionGate.vue";
+import { HttpError } from "../api/http";
+import { useToast } from "../composables/useToast";
+import { useConfirm } from "../composables/useConfirm";
+import EmptyState from "../components/ui/EmptyState.vue";
+import ErrorState from "../components/ui/ErrorState.vue";
+import SkeletonBlock from "../components/ui/SkeletonBlock.vue";
+import AppSelect from "../components/ui/AppSelect.vue";
 
-const { t } = useI18n()
-const route = useRoute()
-const router = useRouter()
-const toast = useToast()
-const confirm = useConfirm()
+const { t } = useI18n();
+const route = useRoute();
+const router = useRouter();
+const toast = useToast();
+const confirm = useConfirm();
+const session = useSessionStore();
+const permissions = usePermissionStore();
+const instanceAllowed = computed(
+  () =>
+    session.user?.multiTenant === false ||
+    (session.user?.multiTenant === true && session.user.instanceAdmin === true),
+);
+function ready() {
+  return (
+    !!session.user &&
+    !session.user.mustChangePassword &&
+    !session.isNetworkError &&
+    (session.user.multiTenant === false ||
+      (session.user.multiTenant === true && !!permissions.activeTeam))
+  );
+}
+let generation = 0;
+let controller: AbortController | undefined;
+let mounted = false;
+function options() {
+  return {
+    signal: controller?.signal,
+    headers:
+      session.user?.multiTenant === true
+        ? { "X-Pipewright-Team": permissions.activeTeam }
+        : undefined,
+  };
+}
+function clearScope() {
+  generation++;
+  controller?.abort();
+  controller = new AbortController();
+  projects.value = [];
+  envs.value = [];
+  busy.value = new Set();
+  loadError.value = "";
+  loadState.value = "idle";
+  refreshing.value = false;
+}
 
 // ─── URL as state:projectId 落 query ──────────────────────────────────────────
 const projectId = computed<string>(() => {
-  const p = route.query.projectId
-  return typeof p === 'string' ? p : ''
-})
+  const p = route.query.projectId;
+  return typeof p === "string" ? p : "";
+});
 function selectProject(id: string): void {
-  void router.replace({ query: id ? { ...route.query, projectId: id } : {} })
+  void router.replace({ query: id ? { ...route.query, projectId: id } : {} });
 }
 function onProjectChange(e: Event): void {
-  selectProject((e.target as HTMLSelectElement).value)
+  selectProject((e.target as HTMLSelectElement).value);
 }
 
-const projects = ref<Project[]>([])
-const selectedProject = computed(() => projects.value.find((p) => p.id === projectId.value))
+const projects = ref<PreviewProject[]>([]);
+const selectedProject = computed(() =>
+  projects.value.find((p) => p.id === projectId.value),
+);
 
 // ─── 列表加载 ──────────────────────────────────────────────────────────────────
-type LoadState = 'idle' | 'loading' | 'loaded' | 'error' | 'noproject'
-const loadState = ref<LoadState>('idle')
-const loadError = ref('')
-const envs = ref<PreviewEnv[]>([])
-const refreshing = ref(false)
+type LoadState = "idle" | "loading" | "loaded" | "error" | "noproject";
+const loadState = ref<LoadState>("idle");
+const loadError = ref("");
+const envs = ref<PreviewEnv[]>([]);
+const refreshing = ref(false);
 
 async function loadProjects(): Promise<void> {
+  const scope = generation;
+  if (!ready()) return;
   try {
-    projects.value = await listProjects()
+    const result =
+      session.user?.multiTenant === true
+        ? await listPreviewProjects(options())
+        : await listProjects();
+    if (scope !== generation) return;
+    projects.value = result;
     // 没选项目时默认选第一个(契约要求按 projectId 查询)。
     if (!projectId.value && projects.value.length > 0) {
-      selectProject(projects.value[0].id)
+      selectProject(projects.value[0].id);
     }
   } catch {
-    projects.value = []
+    if (scope !== generation) return;
+    projects.value = [];
   }
 }
 
 async function load(): Promise<void> {
+  if (!ready()) return;
+  const scope = generation;
+  const selected = projectId.value;
   if (!projectId.value) {
-    loadState.value = projects.value.length === 0 ? 'noproject' : 'idle'
-    envs.value = []
-    return
+    loadState.value = projects.value.length === 0 ? "noproject" : "idle";
+    envs.value = [];
+    return;
   }
-  loadState.value = envs.value.length === 0 ? 'loading' : 'loaded'
-  refreshing.value = true
-  loadError.value = ''
+  loadState.value = envs.value.length === 0 ? "loading" : "loaded";
+  refreshing.value = true;
+  loadError.value = "";
   try {
-    envs.value = await listPreviewEnvs(projectId.value)
-    loadState.value = 'loaded'
+    const result = await listPreviewEnvs(selected, options());
+    if (scope !== generation || selected !== projectId.value) return;
+    envs.value = result;
+    loadState.value = "loaded";
   } catch (err) {
-    loadState.value = envs.value.length === 0 ? 'error' : 'loaded'
+    if (scope !== generation || selected !== projectId.value) return;
+    if (err instanceof HttpError && [401, 403].includes(err.status))
+      envs.value = [];
+    loadState.value = envs.value.length === 0 ? "error" : "loaded";
     loadError.value =
       err instanceof HttpError
-        ? (err.apiError?.message ?? t('previewEnvs.board.errLoad', { status: err.status }))
-        : t('previewEnvs.board.errNetwork')
+        ? (err.apiError?.message ??
+          t("previewEnvs.board.errLoad", { status: err.status }))
+        : t("previewEnvs.board.errNetwork");
   } finally {
-    refreshing.value = false
+    if (scope === generation && selected === projectId.value)
+      refreshing.value = false;
   }
 }
 
-onMounted(async () => {
-  await loadProjects()
-  await load()
-})
-
-// 切项目 → 清空旧数据并重新拉。
+async function reloadScope() {
+  clearScope();
+  if (!ready()) return;
+  const scope = generation;
+  await loadProjects();
+  if (scope === generation) await load();
+}
+onMounted(() => {
+  mounted = true;
+  void reloadScope();
+});
+watch(
+  () =>
+    JSON.stringify([
+      session.user,
+      session.isNetworkError,
+      permissions.activeTeam,
+    ]),
+  () => {
+    if (mounted) void reloadScope();
+  },
+  { flush: "sync" },
+);
+onBeforeUnmount(() => {
+  mounted = false;
+  clearScope();
+});
 watch(projectId, () => {
-  envs.value = []
-  void load()
-})
+  generation++;
+  controller?.abort();
+  controller = new AbortController();
+  envs.value = [];
+  void load();
+});
 
 // ─── 派生:活跃在前,创建时间倒序 ────────────────────────────────────────────────
 const sorted = computed<PreviewEnv[]>(() => {
   return [...envs.value].sort((a, b) => {
-    if (a.status !== b.status) return a.status === 'active' ? -1 : 1
-    return b.createdAt.localeCompare(a.createdAt)
-  })
-})
-const activeCount = computed(() => envs.value.filter((e) => e.status === 'active').length)
-const reclaimedCount = computed(() => envs.value.filter((e) => e.status === 'reclaimed').length)
+    if (a.status !== b.status) return a.status === "active" ? -1 : 1;
+    return b.createdAt.localeCompare(a.createdAt);
+  });
+});
+const activeCount = computed(
+  () => envs.value.filter((e) => e.status === "active").length,
+);
+const reclaimedCount = computed(
+  () => envs.value.filter((e) => e.status === "reclaimed").length,
+);
 
 function fmtTime(s: string): string {
-  if (!s) return '—'
-  const d = new Date(s)
-  return Number.isNaN(d.getTime()) ? s : d.toLocaleString()
+  if (!s) return "—";
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? s : d.toLocaleString();
 }
 
 // ─── 回收 ──────────────────────────────────────────────────────────────────────
-const busy = ref<Set<string>>(new Set())
+const busy = ref<Set<string>>(new Set());
 function isBusy(id: string): boolean {
-  return busy.value.has(id)
+  return busy.value.has(id);
 }
 
 async function reclaim(env: PreviewEnv): Promise<void> {
-  if (isBusy(env.id) || env.status !== 'active') return
+  const query = { action: "preview.reclaim", resourceId: env.id };
+  const scope = generation;
+  if (
+    !ready() ||
+    !instanceAllowed.value ||
+    !permissions.allowed(permissions.activeTeam, query) ||
+    isBusy(env.id) ||
+    env.status !== "active"
+  )
+    return;
   const ok = await confirm.open({
-    title: t('previewEnvs.board.reclaimConfirmTitle'),
-    body: t('previewEnvs.board.reclaimConfirmBody', { sub: env.subdomain }),
-    confirmLabel: t('previewEnvs.board.reclaim'),
-    variant: 'danger',
-  })
-  if (!ok) return
-  busy.value = new Set(busy.value).add(env.id)
+    title: t("previewEnvs.board.reclaimConfirmTitle"),
+    body: t("previewEnvs.board.reclaimConfirmBody", { sub: env.subdomain }),
+    confirmLabel: t("previewEnvs.board.reclaim"),
+    variant: "danger",
+  });
+  if (
+    !ok ||
+    scope !== generation ||
+    !ready() ||
+    !instanceAllowed.value ||
+    !permissions.allowed(permissions.activeTeam, query)
+  )
+    return;
+  busy.value = new Set(busy.value).add(env.id);
   try {
-    const res = await reclaimPreviewEnv(env.id)
+    const res = await reclaimPreviewEnv(env.id, options());
+    if (scope !== generation) return;
     if (res.ok) {
-      const nowIso = new Date().toISOString()
+      const nowIso = new Date().toISOString();
       envs.value = envs.value.map((e) =>
-        e.id === env.id ? { ...e, status: 'reclaimed', reclaimedAt: nowIso } : e,
-      )
-      toast.success(t('previewEnvs.board.reclaimed'), { detail: env.subdomain })
+        e.id === env.id
+          ? { ...e, status: "reclaimed", reclaimedAt: nowIso }
+          : e,
+      );
+      toast.success(t("previewEnvs.board.reclaimed"), {
+        detail: env.subdomain,
+      });
     } else {
-      toast.error(t('previewEnvs.board.reclaimFail'), { detail: env.subdomain })
+      toast.error(t("previewEnvs.board.reclaimFail"), {
+        detail: env.subdomain,
+      });
     }
   } catch (err) {
-    toast.error(t('previewEnvs.board.reclaimFail'), {
+    if (scope !== generation) return;
+    if (err instanceof HttpError && [401, 403].includes(err.status)) {
+      envs.value = [];
+      permissions.invalidate();
+    }
+    toast.error(t("previewEnvs.board.reclaimFail"), {
       detail:
         err instanceof HttpError
-          ? (err.apiError?.message ?? t('previewEnvs.board.errReq', { status: err.status }))
-          : t('previewEnvs.board.errNetwork'),
-    })
+          ? (err.apiError?.message ??
+            t("previewEnvs.board.errReq", { status: err.status }))
+          : t("previewEnvs.board.errNetwork"),
+    });
   } finally {
-    const next = new Set(busy.value)
-    next.delete(env.id)
-    busy.value = next
+    if (scope === generation) {
+      const next = new Set(busy.value);
+      next.delete(env.id);
+      busy.value = next;
+    }
   }
 }
 </script>
@@ -168,21 +299,29 @@ async function reclaim(env: PreviewEnv): Promise<void> {
       <div class="pvb__title-wrap">
         <span class="pvb__eyebrow">
           <NIcon :size="13"><Rocket /></NIcon>
-          {{ t('previewEnvs.board.eyebrow') }}
+          {{ t("previewEnvs.board.eyebrow") }}
         </span>
-        <h1 class="pvb__title">{{ t('previewEnvs.board.title') }}</h1>
-        <p class="pvb__sub">{{ t('previewEnvs.board.subtitle') }}</p>
+        <h1 class="pvb__title">{{ t("previewEnvs.board.title") }}</h1>
+        <p class="pvb__sub">{{ t("previewEnvs.board.subtitle") }}</p>
       </div>
-      <button class="pvb__refresh" :disabled="refreshing || !projectId" @click="load">
+      <button
+        class="pvb__refresh"
+        :disabled="refreshing || !projectId"
+        @click="load"
+      >
         <NIcon :size="14"><Recycle /></NIcon>
-        {{ refreshing ? t('previewEnvs.board.refreshing') : t('common.refresh') }}
+        {{
+          refreshing ? t("previewEnvs.board.refreshing") : t("common.refresh")
+        }}
       </button>
     </header>
 
     <!-- 项目选择器 + 摘要 -->
     <div class="pvb__controls">
       <label class="pvb__field">
-        <span class="pvb__field-lbl">{{ t('previewEnvs.board.projectLabel') }}</span>
+        <span class="pvb__field-lbl">{{
+          t("previewEnvs.board.projectLabel")
+        }}</span>
         <AppSelect
           class="pvb__select"
           :model-value="projectId"
@@ -196,10 +335,10 @@ async function reclaim(env: PreviewEnv): Promise<void> {
       <div v-if="loadState === 'loaded' && envs.length > 0" class="pvb__stats">
         <span class="pvb__stat pvb__stat--active">
           <span class="pvb__stat-dot" aria-hidden="true" />
-          {{ t('previewEnvs.board.activeCount', { n: activeCount }) }}
+          {{ t("previewEnvs.board.activeCount", { n: activeCount }) }}
         </span>
         <span class="pvb__stat pvb__stat--reclaimed">
-          {{ t('previewEnvs.board.reclaimedCount', { n: reclaimedCount }) }}
+          {{ t("previewEnvs.board.reclaimedCount", { n: reclaimedCount }) }}
         </span>
       </div>
     </div>
@@ -225,7 +364,11 @@ async function reclaim(env: PreviewEnv): Promise<void> {
     <EmptyState
       v-else-if="loadState === 'loaded' && envs.length === 0"
       :title="t('previewEnvs.board.emptyTitle')"
-      :description="t('previewEnvs.board.emptyDesc', { project: selectedProject?.name ?? '' })"
+      :description="
+        t('previewEnvs.board.emptyDesc', {
+          project: selectedProject?.name ?? '',
+        })
+      "
     />
 
     <!-- 卡片网格 -->
@@ -234,7 +377,10 @@ async function reclaim(env: PreviewEnv): Promise<void> {
         v-for="env in sorted"
         :key="env.id"
         class="pcard"
-        :class="{ 'pcard--reclaimed': env.status === 'reclaimed', 'pcard--busy': isBusy(env.id) }"
+        :class="{
+          'pcard--reclaimed': env.status === 'reclaimed',
+          'pcard--busy': isBusy(env.id),
+        }"
       >
         <div class="pcard__top">
           <span class="pcard__pr">
@@ -242,7 +388,11 @@ async function reclaim(env: PreviewEnv): Promise<void> {
             <span class="pcard__pr-num">#{{ env.prNumber }}</span>
           </span>
           <span class="pcard__status" :class="`pcard__status--${env.status}`">
-            {{ env.status === 'active' ? t('previewEnvs.board.statusActive') : t('previewEnvs.board.statusReclaimed') }}
+            {{
+              env.status === "active"
+                ? t("previewEnvs.board.statusActive")
+                : t("previewEnvs.board.statusReclaimed")
+            }}
           </span>
         </div>
 
@@ -257,45 +407,72 @@ async function reclaim(env: PreviewEnv): Promise<void> {
           <span class="pcard__url-txt mono">{{ env.subdomain }}</span>
           <NIcon :size="14" class="pcard__url-ic"><ExternalLink /></NIcon>
         </a>
-        <span v-else class="pcard__url pcard__url--dead mono" :title="env.subdomain">{{ env.subdomain }}</span>
+        <span
+          v-else
+          class="pcard__url pcard__url--dead mono"
+          :title="env.subdomain"
+          >{{ env.subdomain }}</span
+        >
 
         <dl class="pcard__meta">
           <div class="pcard__meta-row">
-            <dt><NIcon :size="13"><GitBranch /></NIcon></dt>
+            <dt>
+              <NIcon :size="13"><GitBranch /></NIcon>
+            </dt>
             <dd class="mono" :title="env.branch">{{ env.branch }}</dd>
           </div>
           <div class="pcard__meta-row">
-            <dt><NIcon :size="13"><Clock /></NIcon></dt>
+            <dt>
+              <NIcon :size="13"><Clock /></NIcon>
+            </dt>
             <dd>
-              {{ env.status === 'active'
-                ? t('previewEnvs.board.createdAt', { time: fmtTime(env.createdAt) })
-                : t('previewEnvs.board.reclaimedAt', { time: fmtTime(env.reclaimedAt) }) }}
+              {{
+                env.status === "active"
+                  ? t("previewEnvs.board.createdAt", {
+                      time: fmtTime(env.createdAt),
+                    })
+                  : t("previewEnvs.board.reclaimedAt", {
+                      time: fmtTime(env.reclaimedAt),
+                    })
+              }}
             </dd>
           </div>
           <div v-if="env.serverId" class="pcard__meta-row">
-            <dt><NIcon :size="13"><Server /></NIcon></dt>
+            <dt>
+              <NIcon :size="13"><Server /></NIcon>
+            </dt>
             <dd class="mono">{{ env.serverId }}</dd>
           </div>
         </dl>
 
         <div class="pcard__foot">
-          <button
-            v-if="env.status === 'active'"
-            class="pcard__reclaim"
-            :disabled="isBusy(env.id)"
-            @click="reclaim(env)"
+          <PermissionGate
+            v-if="instanceAllowed"
+            :query="{ action: 'preview.reclaim', resourceId: env.id }"
+            ><button
+              v-if="env.status === 'active'"
+              class="pcard__reclaim"
+              :disabled="isBusy(env.id)"
+              @click="reclaim(env)"
+            >
+              <NIcon :size="13"><Recycle /></NIcon>
+              {{
+                isBusy(env.id)
+                  ? t("previewEnvs.board.reclaiming")
+                  : t("previewEnvs.board.reclaim")
+              }}
+            </button></PermissionGate
           >
-            <NIcon :size="13"><Recycle /></NIcon>
-            {{ isBusy(env.id) ? t('previewEnvs.board.reclaiming') : t('previewEnvs.board.reclaim') }}
-          </button>
-          <span v-else class="pcard__retired">{{ t('previewEnvs.board.retired') }}</span>
+          <span v-else class="pcard__retired">{{
+            t("previewEnvs.board.retired")
+          }}</span>
         </div>
       </article>
     </div>
 
     <p v-if="loadState === 'loaded' && envs.length > 0" class="pvb__foot">
       <NIcon :size="13" class="pvb__foot-ic"><Rocket /></NIcon>
-      {{ t('previewEnvs.board.footNote') }}
+      {{ t("previewEnvs.board.footNote") }}
     </p>
   </div>
 </template>
@@ -353,7 +530,9 @@ async function reclaim(env: PreviewEnv): Promise<void> {
   background: var(--color-card);
   color: var(--color-dim);
   cursor: pointer;
-  transition: color var(--duration-fast, 150ms) ease, border-color var(--duration-fast, 150ms) ease;
+  transition:
+    color var(--duration-fast, 150ms) ease,
+    border-color var(--duration-fast, 150ms) ease;
 }
 .pvb__refresh:hover:not(:disabled) {
   color: var(--color-text);
@@ -443,11 +622,13 @@ async function reclaim(env: PreviewEnv): Promise<void> {
   background: var(--color-card);
   box-shadow: var(--shadow);
   overflow: hidden;
-  transition: border-color var(--duration-fast, 150ms) ease, transform var(--duration-fast, 150ms) ease;
+  transition:
+    border-color var(--duration-fast, 150ms) ease,
+    transform var(--duration-fast, 150ms) ease;
 }
 /* 活跃卡:顶部主色光条 + hover 微抬,营造「在线/可点」感 */
 .pcard::before {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0 0 auto 0;
   height: 3px;
@@ -515,7 +696,9 @@ async function reclaim(env: PreviewEnv): Promise<void> {
   border: 1px solid var(--color-border);
   background: var(--color-inset);
   text-decoration: none;
-  transition: border-color var(--duration-fast, 150ms) ease, background var(--duration-fast, 150ms) ease;
+  transition:
+    border-color var(--duration-fast, 150ms) ease,
+    background var(--duration-fast, 150ms) ease;
 }
 a.pcard__url:hover {
   border-color: var(--color-primary);
@@ -591,7 +774,10 @@ a.pcard__url:hover {
   background: transparent;
   color: var(--color-dim);
   cursor: pointer;
-  transition: color var(--duration-fast, 150ms) ease, border-color var(--duration-fast, 150ms) ease, background var(--duration-fast, 150ms) ease;
+  transition:
+    color var(--duration-fast, 150ms) ease,
+    border-color var(--duration-fast, 150ms) ease,
+    background var(--duration-fast, 150ms) ease;
 }
 .pcard__reclaim:hover:not(:disabled) {
   color: var(--color-red);

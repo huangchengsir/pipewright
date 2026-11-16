@@ -1,4 +1,5 @@
 export default {
+  automationAuthorization: {"ready": "Activación automática autorizada", "required": "Se requiere una nueva autorización", "requiredHint": "La configuración de ejecución o los permisos han cambiado. Un miembro con permiso de ejecución debe volver a guardar. La activación automática permanece pausada hasta recibir autorización."},
   // ─── TriggersPanel ──────────────────────────────────────────────────────────
   triggers: {
     retry: '↻ Reintentar',

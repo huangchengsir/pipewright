@@ -135,6 +135,7 @@ function removeVar(rowKey: number): void {
 }
 
 function toggleSecret(row: VarRow): void {
+  row.maskedValue = undefined
   row.secret = !row.secret
   if (row.secret) {
     row.value = undefined
@@ -143,6 +144,12 @@ function toggleSecret(row: VarRow): void {
     row.credentialId = undefined
     row.value = ''
   }
+}
+
+function selectCredential(row: VarRow, credentialId: string): void {
+  if (props.disabled || !row.secret || credentialId === row.credentialId) return
+  row.credentialId = credentialId
+  row.maskedValue = undefined
 }
 
 // Credentials suitable for secret values (any vault credential is a valid reference).
@@ -196,7 +203,7 @@ function maskFor(row: VarRow): string {
             :disabled="disabled"
             min-width="0"
             portal
-            @update:model-value="row.credentialId = $event"
+            @update:model-value="selectCredential(row, $event)"
           />
         </template>
         <input

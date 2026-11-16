@@ -9,7 +9,7 @@
  * Post-2.2 stories only fill job.config, never change the outer shape.
  */
 
-import { http } from './http'
+import { http, type HttpOptions } from './http'
 import { configWriteOptions } from './configRevision'
 
 // ─── Domain types (frozen DTO shape) ─────────────────────────────────────────
@@ -125,18 +125,18 @@ export interface SavePipelineInput {
 
 // ─── API functions ────────────────────────────────────────────────────────────
 
-export async function getPipeline(projectId: string): Promise<PipelineDTO> {
-  return http.get<PipelineDTO>(`/api/projects/${projectId}/pipeline`)
+export async function getPipeline(projectId: string, options?: HttpOptions): Promise<PipelineDTO> {
+  return http.get<PipelineDTO>(`/api/projects/${projectId}/pipeline`, options)
 }
 
 export async function savePipeline(
   projectId: string,
   input: SavePipelineInput,
   expectedRevision?: string,
+  options?: HttpOptions,
 ): Promise<PipelineDTO> {
-  return expectedRevision
-    ? http.put<PipelineDTO>(`/api/projects/${projectId}/pipeline`, input, configWriteOptions(expectedRevision))
-    : http.put<PipelineDTO>(`/api/projects/${projectId}/pipeline`, input)
+  const requestOptions=configWriteOptions(expectedRevision,options)
+  return requestOptions ? http.put<PipelineDTO>(`/api/projects/${projectId}/pipeline`,input,requestOptions) : http.put<PipelineDTO>(`/api/projects/${projectId}/pipeline`,input)
 }
 
 // ─── Pipeline-as-code import / preview (FR-8-12) ──────────────────────────────
@@ -155,7 +155,9 @@ export async function importPipeline(
   yaml: string,
   save = false,
   expectedRevision?: string,
+  options?: HttpOptions,
 ): Promise<PipelineDTO> {
-  if (save && expectedRevision) return http.post<PipelineDTO>(`/api/projects/${projectId}/pipeline/import`, { yaml, save }, configWriteOptions(expectedRevision))
+  const requestOptions=configWriteOptions(save ? expectedRevision : undefined,options)
+  if (requestOptions) return http.post<PipelineDTO>(`/api/projects/${projectId}/pipeline/import`, { yaml, save }, requestOptions)
   return http.post<PipelineDTO>(`/api/projects/${projectId}/pipeline/import`, { yaml, save })
 }

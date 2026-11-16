@@ -208,6 +208,7 @@ type revealRecordingVault struct {
 	ids []string
 }
 
+func (v *revealRecordingVault) Get(id string) (string, error) { return v.Reveal(id) }
 func (v *revealRecordingVault) Reveal(id string) (string, error) {
 	v.ids = append(v.ids, id)
 	if id == "missing" {

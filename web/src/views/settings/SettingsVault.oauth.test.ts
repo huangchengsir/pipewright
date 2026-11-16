@@ -1,3 +1,7 @@
+import {createPinia,setActivePinia} from 'pinia'
+import {useSessionStore} from '../../stores/session'
+import {beforeEach as initEach} from 'vitest'
+initEach(()=>{setActivePinia(createPinia());useSessionStore().setUser({username:'admin',multiTenant:false,instanceAdmin:true})})
 // Kubernetes credentials have independent API/route lifecycle tests in KubernetesUI.test.ts.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'

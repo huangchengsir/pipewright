@@ -38,7 +38,7 @@ func (sshDialer) Run(ctx context.Context, addr string, cfg SSHConfig, cmd []stri
 		User: cfg.User,
 		Auth: auth,
 		// DEFERRED:生产应固定 known_hosts(见上方类型注释)。
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // dev-only;生产固定 known_hosts(deferred)
+		HostKeyCallback: configuredHostKey(cfg),
 		Timeout:         resolveTimeout(ctx),
 	}
 
@@ -93,7 +93,7 @@ func (sshDialer) RunWithStdin(ctx context.Context, addr string, cfg SSHConfig, c
 	clientCfg := &ssh.ClientConfig{
 		User:            cfg.User,
 		Auth:            auth,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // dev-only;生产固定 known_hosts(deferred)
+		HostKeyCallback: configuredHostKey(cfg),
 		Timeout:         resolveTimeout(ctx),
 	}
 	client, cleanup, err := dialSSH(ctx, addr, clientCfg)
@@ -144,7 +144,7 @@ func (sshDialer) RunStream(ctx context.Context, addr string, cfg SSHConfig, cmd 
 	clientCfg := &ssh.ClientConfig{
 		User:            cfg.User,
 		Auth:            auth,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // dev-only;生产固定 known_hosts(deferred)
+		HostKeyCallback: configuredHostKey(cfg),
 		Timeout:         resolveTimeout(ctx),
 	}
 
@@ -215,7 +215,7 @@ func (sshDialer) RunInteractive(ctx context.Context, addr string, cfg SSHConfig,
 	clientCfg := &ssh.ClientConfig{
 		User:            cfg.User,
 		Auth:            auth,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // dev-only;生产固定 known_hosts(deferred)
+		HostKeyCallback: configuredHostKey(cfg),
 		Timeout:         resolveTimeout(ctx),
 	}
 
@@ -515,4 +515,13 @@ func shellQuote(s string) string {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// Every ordinary team connection has an administrator-approved pinned host key.
+// Empty is retained exclusively for the existing single-admin compatibility path.
+func configuredHostKey(cfg SSHConfig) ssh.HostKeyCallback {
+	if cfg.HostKey != "" {
+		return secretHostKey(cfg.HostKey)
+	}
+	return ssh.InsecureIgnoreHostKey() //nolint:gosec // Legacy/admin unassigned policy; team assignment requires a key.
 }

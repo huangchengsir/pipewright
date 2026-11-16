@@ -113,3 +113,20 @@ describe("Kubernetes password and mutation lifecycle", () => {
     expect(s.password.value).toBe("");
   });
 });
+
+
+it("does not reopen password verification from a confirmation resolving after unmount", async () => {
+  setup();
+  const confirm = deferred<boolean>();
+  const action = vi.fn();
+  const continuation = confirm.promise.then(accepted => { if (accepted) s.execute(action); });
+  w?.unmount();
+  w = undefined;
+  confirm.resolve(true);
+  await continuation;
+  expect(s.passwordOpen.value).toBe(false);
+  s.password.value = "stale-fixture";
+  await s.verify();
+  expect(reauth).not.toHaveBeenCalled();
+  expect(action).not.toHaveBeenCalled();
+});

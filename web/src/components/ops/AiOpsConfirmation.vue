@@ -2,11 +2,13 @@
 import { useI18n } from 'vue-i18n'
 import { computed, shallowRef, onBeforeUnmount } from 'vue'
 import { isValidExecArgv, type BoundCall, type Call, type Confirmation } from '../../api/opsChat'
-const props = defineProps<{
+const props = withDefaults(defineProps<{
+  canConfirm?: boolean
+  canCancel?: boolean
   confirmation: Confirmation
   calls: Record<string, Call>
   disabled: boolean
-}>()
+}>(), { canConfirm: true, canCancel: true })
 const emit = defineEmits<{
   confirm: [value: Confirmation]
   cancel: [runId: string]
@@ -39,7 +41,7 @@ const rows = computed(() => props.confirmation.calls.map((bound) => ({ bound, ca
 const loaded = computed(() => rows.value.length > 0 && rows.value.every((row) => !!row.call))
 const hasExec = computed(() => props.confirmation.calls.some((bound) => bound.toolId === 'docker_exec'))
 function confirm(): void {
-  if (!props.disabled && fresh.value && loaded.value) emit('confirm', props.confirmation)
+  if (props.canConfirm && !props.disabled && fresh.value && loaded.value) emit('confirm', props.confirmation)
 }
 </script>
 <template>
@@ -79,7 +81,7 @@ function confirm(): void {
     </p>
     <div class="ops-row">
       <button
-        v-if="fresh"
+        v-if="fresh && canConfirm"
         class="ops-btn ops-primary"
         :disabled="disabled || !loaded"
         @click="confirm"
@@ -87,7 +89,7 @@ function confirm(): void {
         {{ t('opsChat.confirmBatch') }}
       </button>
       <button
-        v-else
+        v-else-if="!fresh && canConfirm"
         class="ops-btn"
         :disabled="disabled"
         @click="emit('reissue', confirmation.runId)"
@@ -95,9 +97,10 @@ function confirm(): void {
         {{ t('opsChat.refreshConfirmation') }}
       </button>
       <button
+        v-if="canCancel"
         class="ops-btn"
         :disabled="disabled"
-        @click="emit('cancel', confirmation.runId)"
+        @click="canCancel && emit('cancel', confirmation.runId)"
       >
         {{ t('opsChat.cancelBatch') }}
       </button>

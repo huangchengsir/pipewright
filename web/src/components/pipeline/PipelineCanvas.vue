@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import type { PipelineStage, PipelineJob, StageKind } from '../../api/pipeline'
 import type { Credential } from '../../api/credentials'
 import type { Server } from '../../api/servers'
-import type { NotificationChannel } from '../../api/notifications'
+import type { NotificationChannelOption } from '../../api/notifications'
 import type { Project } from '../../api/projects'
 import StageColumn from './StageColumn.vue'
 import JobDrawer from './JobDrawer.vue'
@@ -21,10 +21,11 @@ import { guideJobs, type GuideContext } from '../../composables/pipelineGuideSta
 
 const props = defineProps<{
   stages: PipelineStage[]
+  readOnly?: boolean
   yaml: string
   credentials?: Credential[]
   servers?: Server[]
-  channels?: NotificationChannel[]
+  channels?: NotificationChannelOption[]
   projectName?: string
   project?: Project
   environmentAutoPushPossible?: boolean
@@ -101,6 +102,7 @@ function closeStageSettings(): void {
 // ─── Mutation helpers ─────────────────────────────────────────────────────────
 
 function updateJob(stageId: string, jobId: string, patch: Partial<PipelineJob>): void {
+  if (props.readOnly) return
   const next = props.stages.map((s) => {
     if (s.id !== stageId) return s
     return {
@@ -112,11 +114,13 @@ function updateJob(stageId: string, jobId: string, patch: Partial<PipelineJob>):
 }
 
 function updateStage(stageId: string, patch: Partial<PipelineStage>): void {
+  if (props.readOnly) return
   const next = props.stages.map((s) => (s.id === stageId ? { ...s, ...patch } : s))
   emit('update', next)
 }
 
 function deleteJob(stageId: string, jobId: string): void {
+  if (props.readOnly) return
   if (selectedJobId.value === jobId) selectedJobId.value = null
   const next = props.stages.map((s) => {
     if (s.id !== stageId) return s
@@ -146,6 +150,7 @@ interface PickerState {
 }
 
 const picker = ref<PickerState>({ open: false, mode: 'add', stageId: '', jobId: '', current: '', needs: [] })
+watch(()=>props.readOnly,value=>{if(value)picker.value.open=false})
 watch([selectedJobId, () => picker.value.open], ([selectedJobId, pickerOpen]) => {
   emit('guide-context', { selectedJobId, pickerOpen })
 }, { immediate: true })
@@ -164,11 +169,13 @@ defineExpose({ focusGuideJob, focusGuideStage })
 
 /** Open the type picker to add a new job to a stage. `needs` seeds intra-stage deps. */
 function requestAddJob(stageId: string, needs: string[] = []): void {
+  if (props.readOnly) return
   picker.value = { open: true, mode: 'add', stageId, jobId: '', current: '', needs }
 }
 
 /** Open the type picker to change the selected job's type (from the drawer). */
 function requestChangeType(): void {
+  if (props.readOnly) return
   if (!selectedJob.value || !selectedStage.value) return
   picker.value = {
     open: true,
@@ -185,6 +192,7 @@ function closePicker(): void {
 }
 
 function onPickerSelect(type: string): void {
+  if (props.readOnly) return
   const p = picker.value
   if (p.mode === 'add') {
     const stage = props.stages.find((s) => s.id === p.stageId)
@@ -214,6 +222,7 @@ function onPickerSelect(type: string): void {
  * type + summary + config snapshot. On "change" mode we overwrite type & config in place.
  */
 function onPickerSelectCustom(node: CustomNode): void {
+  if (props.readOnly) return
   const p = picker.value
   // config 快照转字符串 KV(Job.config 为 string KV;后端以 any 存,值实为字符串)。
   const config: Record<string, string> = {}
@@ -239,6 +248,7 @@ function onPickerSelectCustom(node: CustomNode): void {
 }
 
 function addJobToStage(stageId: string, newJob: PipelineJob): void {
+  if (props.readOnly) return
   kubernetesNotice.value = ''
   const host = props.stages.find(s=>s.id===stageId)
   if (newJob.type === 'deploy_kubernetes') {
@@ -256,6 +266,7 @@ function addJobToStage(stageId: string, newJob: PipelineJob): void {
 }
 
 function reorderJob(stageId: string, from: number, to: number): void {
+  if (props.readOnly) return
   const next = props.stages.map((s) => {
     if (s.id !== stageId) return s
     const jobs = [...s.jobs]
@@ -268,6 +279,7 @@ function reorderJob(stageId: string, from: number, to: number): void {
 }
 
 function deleteStage(stageId: string): void {
+  if (props.readOnly) return
   const idx = props.stages.findIndex((s) => s.id === stageId)
   if (idx < 0) return
   // Deselect if selected job was in this stage
@@ -283,6 +295,7 @@ function deleteStage(stageId: string): void {
 }
 
 function addStage(): void {
+  if (props.readOnly) return
   const KIND_SEQ: StageKind[] = ['build', 'deploy', 'notify', 'custom']
   const existing = props.stages.map((s) => s.kind)
   const nextKind: StageKind = KIND_SEQ.find((k) => !existing.includes(k)) ?? 'custom'
@@ -364,6 +377,7 @@ watch(() => props.stages, () => nextTick(measureEdges), { deep: true })
 const yamlOpen = ref(false)
 
 function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
+  if (props.readOnly) return
   if (!selectedJob.value || !selectedStage.value) return
   updateJob(selectedStage.value.id, selectedJob.value.id, patch)
 }
@@ -392,6 +406,7 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
         <template v-for="(stage, idx) in stages" :key="stage.id">
           <!-- Stage column -->
           <StageColumn
+      :read-only="props.readOnly"
             :stage="stage"
             :stage-index="idx"
             :selected-job-id="selectedJobId"
@@ -413,6 +428,7 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
         <!-- Add stage button (dashed) -->
         <button
           class="add-stage-btn"
+          :disabled="readOnly"
           data-onboarding-target="add-stage"
           :aria-label="t('pipelineCanvas.addStageAria')"
           @click="addStage"
@@ -441,6 +457,7 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
 
     <!-- ─── Right-side drawer (selected job OR stage settings — one shared slot) ─ -->
     <JobDrawer
+      :read-only="props.readOnly"
       v-if="selectedJob && selectedStage"
       :job="selectedJob"
       :stage="selectedStage"
@@ -458,6 +475,7 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
     />
 
     <StageDrawer
+      :read-only="props.readOnly"
       v-else-if="selectedSettingsStage"
       :stage="selectedSettingsStage"
       :stage-index="selectedSettingsIndex"
@@ -471,7 +489,7 @@ function handleDrawerUpdate(patch: Partial<PipelineJob>): void {
 
     <!-- Type picker modal (add new job / change type) -->
     <JobTypePicker
-      :open="picker.open"
+      :open="picker.open && !readOnly"
       :guide-enabled="props.guideEnabled"
       :current="picker.mode === 'change' ? picker.current : ''"
       :title="picker.mode === 'change' ? t('pipelineCanvas.pickerTitleChange') : t('pipelineCanvas.pickerTitleAdd')"

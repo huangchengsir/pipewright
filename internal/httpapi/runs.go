@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // maxPage 是列表分页 page 的上界:防极大 page 致 (page-1)*size OFFSET 溢出。
@@ -28,21 +29,22 @@ type runSubscriber interface {
 
 // runDetailDTO 是 GET /api/runs/{id} 响应体(冻结)。
 type runDetailDTO struct {
-	ExecutionKind  string      `json:"executionKind,omitempty"`
-	LogicalRunID   string      `json:"logicalRunId,omitempty"`
-	SourceRunID    string      `json:"sourceRunId,omitempty"`
-	RetryInitiator string      `json:"retryInitiator,omitempty"`
-	AttemptNumber  int64       `json:"attemptNumber,omitempty"`
-	ID             string      `json:"id"`
-	ProjectID      string      `json:"projectId"`
-	ProjectName    string      `json:"projectName"`
-	Status         string      `json:"status"`
-	Trigger        triggerInfo `json:"trigger"`
-	Steps          []stepDTO   `json:"steps"`
-	CreatedAt      string      `json:"createdAt"`
-	StartedAt      *string     `json:"startedAt"`
-	FinishedAt     *string     `json:"finishedAt"`
-	DurationMs     *int64      `json:"durationMs"`
+	AccessEnvironmentID string      `json:"accessEnvironmentId,omitempty"`
+	ExecutionKind       string      `json:"executionKind,omitempty"`
+	LogicalRunID        string      `json:"logicalRunId,omitempty"`
+	SourceRunID         string      `json:"sourceRunId,omitempty"`
+	RetryInitiator      string      `json:"retryInitiator,omitempty"`
+	AttemptNumber       int64       `json:"attemptNumber,omitempty"`
+	ID                  string      `json:"id"`
+	ProjectID           string      `json:"projectId"`
+	ProjectName         string      `json:"projectName"`
+	Status              string      `json:"status"`
+	Trigger             triggerInfo `json:"trigger"`
+	Steps               []stepDTO   `json:"steps"`
+	CreatedAt           string      `json:"createdAt"`
+	StartedAt           *string     `json:"startedAt"`
+	FinishedAt          *string     `json:"finishedAt"`
+	DurationMs          *int64      `json:"durationMs"`
 	// 配置来源(GitOps 配置来源可见性 · Slice 2):本次运行由仓库 `.pipewright.yml`("repo")还是
 	// 库内网页配置("stored")驱动;""=未记录(老运行)。SpecSourceRef/File 在 repo 来源时有值;
 	// SpecSourceFallback 在 stored 来源且「本想用仓库但回退」时记原因(no_file|invalid_yaml|…)。
@@ -151,7 +153,8 @@ func toRunDetailDTO(r *run.Run, artifacts []run.Artifact, targets []run.DeployTa
 	}
 
 	return runDetailDTO{
-		ExecutionKind: r.ExecutionKind, LogicalRunID: r.LogicalRunID, SourceRunID: r.SourceRunID, RetryInitiator: r.RetryInitiator, AttemptNumber: r.AttemptNumber,
+		AccessEnvironmentID: r.AccessEnvironmentID,
+		ExecutionKind:       r.ExecutionKind, LogicalRunID: r.LogicalRunID, SourceRunID: r.SourceRunID, RetryInitiator: r.RetryInitiator, AttemptNumber: r.AttemptNumber,
 		ID:          r.ID,
 		ProjectID:   r.ProjectID,
 		ProjectName: r.ProjectName,
@@ -189,6 +192,11 @@ func toRunListItemDTO(r *run.Run) runListItemDTO {
 
 // writeRunError 把领域错误映射为契约错误码/状态码。
 func writeRunError(w http.ResponseWriter, err error) {
+	if errors.Is(err, tenancy.ErrForbidden) || errors.Is(err, tenancy.ErrConflict) {
+		accessError(w, err)
+		return
+	}
+
 	switch {
 	case errors.Is(err, run.ErrNotFound):
 		writeError(w, http.StatusNotFound, "run_not_found", "运行不存在")
@@ -343,63 +351,87 @@ func makeRunEventsHandler(svc run.Service, sub runSubscriber) http.HandlerFunc {
 		w.Header().Set("X-Accel-Buffering", "no")
 		w.WriteHeader(http.StatusOK)
 
-		// 连接即回放(Story 3.6):先按 seq 升序补发该 run 全部历史 log 事件(已脱敏,从 DB 读
-		// 不全量驻留内存),让刷新者拿到完整日志,再转入实时。订阅已在快照前注册,故回放窗口内
-		// 新产生的行也会经实时通道补达(前端按 seq 去重)。
-		replaySeq := 0
-		if hist, herr := svc.GetLogs(r.Context(), id, 0); herr == nil {
-			for i := range hist {
-				writeSSE(w, flusher, string(run.EventLog), logPayload(id, hist[i]))
-				replaySeq = hist[i].Seq
+		// The actor and run stay pinned to this request. Reuse the normal service
+		// query for every frame, so role/session revocation also applies after the
+		// snapshot/history has already been loaded. Never send cached private data
+		// after authorization fails, and stop immediately on a disconnected writer.
+		send := func(event, data string) bool {
+			if r.Context().Err() != nil {
+				return false
 			}
+			if _, err := svc.Get(r.Context(), id); err != nil {
+				return false
+			}
+			return writeSSE(w, flusher, event, data) == nil
 		}
-
-		// 初始 status 事件:让客户端立刻拿到当前态(进行中据此渲染)。
-		writeSSE(w, flusher, string(run.EventStatus), statusPayload(id, rn.Status))
-		// 若快照已终态:发完初始帧立即收流(无后续事件)。
+		replaySeq := 0
+		hist, herr := svc.GetLogs(r.Context(), id, 0)
+		if herr != nil {
+			return
+		}
+		for i := range hist {
+			if !send(string(run.EventLog), logPayload(id, hist[i])) {
+				return
+			}
+			replaySeq = hist[i].Seq
+		}
+		if !send(string(run.EventStatus), statusPayload(id, rn.Status)) {
+			return
+		}
 		if run.IsTerminal(rn.Status) {
 			return
 		}
-
 		ctx := r.Context()
 		heartbeat := time.NewTicker(15 * time.Second)
 		defer heartbeat.Stop()
-
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-heartbeat.C:
-				// 心跳:保活 + 探测断连(写失败则 handler 退出)。
+				cur, err := svc.Get(ctx, id)
+				if err != nil {
+					return
+				}
+				if run.IsTerminal(cur.Status) {
+					if !send(string(run.EventStatus), statusPayload(id, cur.Status)) {
+						return
+					}
+					return
+				}
 				if _, err := w.Write([]byte(": keepalive\n\n")); err != nil {
 					return
 				}
-				flusher.Flush()
-				// 兜底:慢/不读订阅者会被非阻塞 bus 丢弃事件(含终态),致 SSE 永不结束。
-				// 每次心跳时主动查一次 run 状态,已终态则补发终态帧并收流(不改 bus 非阻塞语义)。
-				if cur, gerr := svc.Get(ctx, id); gerr == nil && run.IsTerminal(cur.Status) {
-					writeSSE(w, flusher, string(run.EventStatus), statusPayload(id, cur.Status))
+				if err := http.NewResponseController(w).Flush(); err != nil {
 					return
 				}
 			case ev, more := <-events:
 				if !more {
 					return
 				}
+				if ev.RunID != id {
+					return
+				}
 				switch ev.Kind {
 				case run.EventStatus:
-					writeSSE(w, flusher, string(run.EventStatus), statusPayload(ev.RunID, ev.Status))
+					if !send(string(run.EventStatus), statusPayload(id, ev.Status)) {
+						return
+					}
 					if run.IsTerminal(ev.Status) {
-						return // 终态推完即结束流。
+						return
 					}
 				case run.EventStep:
-					writeSSE(w, flusher, string(run.EventStep), stepPayload(ev.RunID, ev.Step))
+					if !send(string(run.EventStep), stepPayload(id, ev.Step)) {
+						return
+					}
 				case run.EventLog:
-					// 去重:回放已补发 seq<=replaySeq 的历史行(回放与订阅窗口可能重叠)。
 					if ev.Log.Seq <= replaySeq {
 						continue
 					}
+					if !send(string(run.EventLog), logPayload(id, ev.Log)) {
+						return
+					}
 					replaySeq = ev.Log.Seq
-					writeSSE(w, flusher, string(run.EventLog), logPayload(ev.RunID, ev.Log))
 				}
 			}
 		}
@@ -407,9 +439,15 @@ func makeRunEventsHandler(svc run.Service, sub runSubscriber) http.HandlerFunc {
 }
 
 // writeSSE 写一帧 SSE 事件(event: <name>\n data: <json>\n\n)并 flush。
-func writeSSE(w http.ResponseWriter, flusher http.Flusher, event, data string) {
-	_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
+func writeSSE(w http.ResponseWriter, flusher http.Flusher, event, data string) error {
+	if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data); err != nil {
+		return err
+	}
+	if f, ok := flusher.(interface{ FlushError() error }); ok {
+		return f.FlushError()
+	}
 	flusher.Flush()
+	return nil
 }
 
 // statusPayload 构造 status 事件 JSON(经 json.Marshal,安全转义)。

@@ -85,7 +85,15 @@ func makePacPreviewHandler(d sourceDeps) http.HandlerFunc {
 		}
 		defer releaseGit()
 
+		if err := recheckProjectSource(r.Context(), d.projects, proj); err != nil {
+			writeProjectError(w, err)
+			return
+		}
 		blob, berr := d.reader.Blob(r.Context(), proj.RepoURL, username, token, ref, pacPreviewFile)
+		if err := recheckProjectSource(r.Context(), d.projects, proj); err != nil {
+			writeProjectError(w, err)
+			return
+		}
 		if berr != nil {
 			// 文件不存在 / 克隆失败 → found=false(运行时此路径会回退库内配置)。
 			// 绝不外泄底层错误(可能含 URL 凭据);valid=false、error 留空(非 YAML 问题)。

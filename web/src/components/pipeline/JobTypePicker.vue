@@ -13,6 +13,9 @@ import { useI18n } from 'vue-i18n'
 import { groupedJobTypes } from './jobConfigSchema'
 import { listCustomNodes, type CustomNode } from '../../api/customNodes'
 import JobTypeIcon from './JobTypeIcon.vue'
+import PermissionGate from '../PermissionGate.vue'
+import { usePermissionStore } from '../../stores/permissions'
+import { useIdentityRequestScope } from '../../composables/useAuthorizedRequestScope'
 
 const props = defineProps<{
   open: boolean
@@ -38,16 +41,30 @@ let focusedBeforeOpen: HTMLElement | null = null
 // 复用库 Tier 2:挑选时加载已保存的自定义节点(选中即插入预填好 config 的 Job)。
 const customNodes = ref<CustomNode[]>([])
 const customLoading = ref(false)
+const permissions = usePermissionStore()
+let customSequence = 0
+function clearCustomNodes(): void {
+  customSequence++
+  customNodes.value = []
+  customLoading.value = false
+}
+const customScope = useIdentityRequestScope(clearCustomNodes)
+function canReadCustom(node: CustomNode): boolean {
+  return customScope.active() && permissions.allowed(permissions.activeTeam, { action: 'custom_node.read', resourceId: node.id })
+}
 
 async function loadCustomNodes(): Promise<void> {
+  if (!props.open || !customScope.active()) return
+  const sequence = ++customSequence
   customLoading.value = true
   try {
-    customNodes.value = await listCustomNodes()
+    const nodes = await customScope.run(() => listCustomNodes(customScope.requestOptions))
+    if (props.open && sequence === customSequence) customNodes.value = nodes
   } catch {
-    // 复用库为附加能力,加载失败不阻断挑选内建类型。
-    customNodes.value = []
+    // The optional library must not prevent selecting a built-in type.
+    if (sequence === customSequence) customNodes.value = []
   } finally {
-    customLoading.value = false
+    if (sequence === customSequence) customLoading.value = false
   }
 }
 
@@ -56,6 +73,7 @@ function choose(type: string): void {
 }
 
 function chooseCustom(node: CustomNode): void {
+  if (!props.open || !canReadCustom(node) || !customNodes.value.includes(node)) return
   emit('select-custom', node)
 }
 
@@ -76,6 +94,7 @@ watch(
       await nextTick()
       dialogRef.value?.querySelector<HTMLElement>('.type-card')?.focus()
     } else {
+      clearCustomNodes()
       focusedBeforeOpen?.focus?.()
     }
   },
@@ -115,9 +134,7 @@ watch(
               <h3 class="jtp-group-label">{{ t('pipelineCanvas.myCustomNodes') }}</h3>
               <p v-if="customLoading" class="jtp-custom-hint">{{ t('pipelineCanvas.loading') }}</p>
               <div v-else class="jtp-grid">
-                <button
-                  v-for="node in customNodes"
-                  :key="node.id"
+                <PermissionGate v-for="node in customNodes" :key="node.id" :query="{ action: 'custom_node.read', resourceId: node.id }"><button
                   class="type-card type-card--custom"
                   @click="chooseCustom(node)"
                 >
@@ -130,7 +147,7 @@ watch(
                     <span class="type-card-desc">{{ node.description || node.summary || t('pipelineCanvas.savedCustomNode') }}</span>
                     <code class="type-card-token">{{ node.nodeType }}</code>
                   </span>
-                </button>
+                </button></PermissionGate>
               </div>
             </section>
 

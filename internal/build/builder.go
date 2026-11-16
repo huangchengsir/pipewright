@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"os"
 	"path/filepath"
 	"strings"
@@ -203,6 +204,9 @@ func (b *Builder) DriverBinary() string {
 // Run 实现 run.Runner:拉取源码 → 构建 →(image 且配仓库时)推送。
 // 任一步骤命令非零退出 → 该步 failed + SetFailureLog + 返回 ErrBuildFailed;ctx 取消 → run.ErrCanceled。
 func (b *Builder) Run(ctx context.Context, r *run.Run, sink run.StepSink) error {
+	if err := tenancy.VerifyExecution(ctx); err != nil {
+		return err
+	}
 	// 解析项目 + 构建配置(经注入服务;缺失即诚实失败,不假装)。
 	proj, settings, perr := b.resolve(ctx, r)
 	if perr != nil {
@@ -572,7 +576,7 @@ func (b *Builder) resolveBuildVars(ctx context.Context, vars []pipeline.BuildVar
 			if v.CredentialID == "" || b.vault == nil {
 				continue
 			}
-			pt, err := b.vault.Reveal(v.CredentialID)
+			pt, err := vault.Use(ctx, b.vault, v.CredentialID)
 			if err != nil || pt == "" {
 				continue
 			}

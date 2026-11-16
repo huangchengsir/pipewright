@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 const leaseLabel = "io.pipewright.k8s.lease"
@@ -230,11 +233,14 @@ func createToolArgs(l RuntimeLease, p ToolProfile) []string {
 	uid := strconv.FormatInt(p.UID, 10)
 	return []string{"create", "--name", l.ContainerName, "--label", leaseLabel + "=" + l.OperationID, "--label", ownerLabel + "=" + l.OwnerEpoch, "--read-only", "--user", uid + ":" + uid, "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--ulimit", "core=0:0", "--restart", "no", "--network", p.Network, "--cpus", "1", "--memory", "256m", "--memory-swap", "256m", "--pids-limit", "64", "--log-driver", "none", "--tmpfs", "/run/pipewright:rw,noexec,nosuid,nodev,size=8m,mode=0700,uid=" + uid + ",gid=" + uid, "--entrypoint", "/bin/sh", p.Image, "-c", bootstrap}
 }
-func readEngine(ctx context.Context, t PrivateTransport, arch string) (string, error) {
+func readEngine(ctx context.Context, t privateDocker, arch string) (string, error) {
 	c, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	out, e := t.Docker(c, []string{"info", "--format", "{{json .}}"}, nil)
 	defer clearResult(out)
+	if errors.Is(e, tenancy.ErrForbidden) {
+		return "", tenancy.ErrForbidden
+	}
 	if e != nil || out == nil || out.ExitCode != 0 || out.Truncated {
 		return "", ErrTool
 	}
@@ -325,7 +331,7 @@ type containerInfo struct {
 	}
 }
 
-func inspectContainer(ctx context.Context, t PrivateTransport, l RuntimeLease) (containerInfo, bool, error) {
+func inspectContainer(ctx context.Context, t privateDocker, l RuntimeLease) (containerInfo, bool, error) {
 	var info containerInfo
 	lookup := l.ContainerID
 	if lookup == "" {
@@ -335,6 +341,9 @@ func inspectContainer(ctx context.Context, t PrivateTransport, l RuntimeLease) (
 	defer cancel()
 	out, e := t.Docker(c, []string{"inspect", "--type", "container", "--format", "{{json .}}", lookup}, nil)
 	defer clearResult(out)
+	if errors.Is(e, tenancy.ErrForbidden) {
+		return info, false, tenancy.ErrForbidden
+	}
 	if e != nil || out == nil || out.Truncated {
 		return info, false, ErrTransportUnknown
 	}

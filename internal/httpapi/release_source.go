@@ -4,6 +4,7 @@ import (
 	"errors"
 	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/releasesource"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"net/http"
 )
 
@@ -14,6 +15,12 @@ func releaseSourceError(w http.ResponseWriter, e error) {
 	}
 	if errors.Is(e, releasesource.ErrInvalid) {
 		status, code = 400, "bad_request"
+	}
+	if errors.Is(e, tenancy.ErrForbidden) {
+		status, code = 403, "forbidden"
+	}
+	if errors.Is(e, tenancy.ErrConflict) {
+		status, code = 409, "conflict"
 	}
 	writeError(w, status, code, "升级任务暂不可用，请核对原任务状态")
 }

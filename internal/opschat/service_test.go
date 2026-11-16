@@ -228,16 +228,21 @@ func TestSharedReadBudgetProjectionAndSecretOutput(t *testing.T) {
 func TestEventsWatermarkDroppedWakeupsAndReset(t *testing.T) {
 	s, _, db := fixture(t, executor(), nil)
 	c := chat(t, s)
-	err := s.transaction(context.Background(), true, func(tx *sql.Tx) error {
-		for i := 0; i < 4001; i++ {
-			if e := s.append(context.Background(), tx, Entry{SessionID: c.ID, Kind: "event"}, false, false); e != nil {
-				return e
+	// The event-fence test does not need one long write transaction. Leave
+	// room for the executor heartbeat on SQLite's single connection.
+	const events = 4001
+	const batchSize = 128
+	for offset := 0; offset < events; offset += batchSize {
+		if err := s.transaction(context.Background(), true, func(tx *sql.Tx) error {
+			for range min(batchSize, events-offset) {
+				if err := s.append(context.Background(), tx, Entry{SessionID: c.ID, Kind: "event"}, false, false); err != nil {
+					return err
+				}
 			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 	page, err := s.Events(context.Background(), c.ID, EventCursor(c.ID, 0), 100)
 	if err != ErrReset || !page.Reset || page.Watermark != 4002 {
@@ -468,6 +473,39 @@ func waitRun(t *testing.T, s *Service, id, run string, statuses ...string) *Snap
 	t.Fatalf("run did not converge: %+v", snap)
 	return nil
 }
+
+// waitSettledRun waits for the worker of a terminal run to finish without
+// competing with it for the SQLite connection while it persists its results.
+func waitSettledRun(t *testing.T, s *Service, session, runID, status string) *Snapshot {
+	t.Helper()
+	s.mu.Lock()
+	pending := s.jobs[runID]
+	s.mu.Unlock()
+	if pending != nil {
+		settled := time.NewTimer(25 * time.Second)
+		defer settled.Stop()
+		select {
+		case <-pending.done:
+		case <-settled.C:
+			t.Fatal("fixture worker did not finish")
+		}
+	}
+	snap, err := s.Snapshot(context.Background(), session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, run := range snap.Runs {
+		if run.ID == runID {
+			if run.Status != status {
+				t.Fatalf("worker finished with run status %q, want %q", run.Status, status)
+			}
+			return snap
+		}
+	}
+	t.Fatal("finished worker has no persisted run")
+	return nil
+}
+
 func waitJobs(t *testing.T, s *Service) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

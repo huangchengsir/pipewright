@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppButton from '../ui/AppButton.vue'
+import PermissionGate from '../PermissionGate.vue'
+import {usePermission} from '../../composables/usePermission'
+import { useIdentityRequestScope } from '../../composables/useAuthorizedRequestScope'
 import { HttpError } from '../../api/http'
 import {
   investigateReleaseGuard,
@@ -19,6 +22,9 @@ const emit = defineEmits<{
   locateEvidence: [id: string]
 }>()
 const { t, locale } = useI18n()
+const permissionQuery = computed(() => ({action:'guard.investigate',resourceId:props.report.runId}))
+const permission = usePermission(permissionQuery)
+
 const busy = ref(false)
 const error = ref('')
 let generation = 0
@@ -31,6 +37,7 @@ function when(value?: string): string {
   return guardDate(value, locale.value, t)
 }
 async function update(): Promise<void> {
+  if (!scope.active() || !permission.allowed.value) return
   if (busy.value || props.report.evidenceExpired) return
   const ticket = generation
   const projectId = props.report.projectId
@@ -40,9 +47,10 @@ async function update(): Promise<void> {
   busy.value = true
   error.value = ''
   try {
-    const report = await investigateReleaseGuard(projectId, id, {
+    const report = await scope.run(() => investigateReleaseGuard(projectId, id, {
+      ...scope.requestOptions,
       signal: request.signal,
-    })
+    }))
     if (!alive || ticket !== generation || request.signal.aborted) return
     if (report.id !== id || report.projectId !== projectId)
       throw new Error('Mismatched report identity')
@@ -64,12 +72,17 @@ async function update(): Promise<void> {
     if (alive && ticket === generation) busy.value = false
   }
 }
-watch([() => props.report.id, () => props.report.projectId], () => {
+function resetInvestigation(): void {
   generation++
   controller?.abort()
   busy.value = false
   error.value = ''
-})
+}
+const scope = useIdentityRequestScope(resetInvestigation)
+watch([() => props.report.id, () => props.report.projectId], resetInvestigation)
+watch(permission.allowed, (allowed) => {
+  if (!allowed) resetInvestigation()
+}, { flush: 'sync' })
 onBeforeUnmount(() => {
   alive = false
   generation++
@@ -81,12 +94,12 @@ onBeforeUnmount(() => {
   <section class="guard-investigation-update">
     <div class="guard-investigation-update__action">
       <p>{{ t('releaseGuardInvestigation.localOnly') }}</p>
-      <AppButton
+      <PermissionGate :query="permissionQuery"><AppButton
         :disabled="report.evidenceExpired"
         :loading="busy"
         @click="update"
         >{{ t('releaseGuardInvestigation.update') }}</AppButton
-      >
+      ></PermissionGate>
     </div>
     <p v-if="error" class="guard-investigation-error" role="alert">
       {{ t(error) }}

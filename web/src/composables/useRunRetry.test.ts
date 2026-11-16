@@ -1,3 +1,6 @@
+import {createPinia,setActivePinia} from 'pinia'
+import {useSessionStore} from '../stores/session'
+beforeEach(()=>{setActivePinia(createPinia());useSessionStore().setUser({username:'admin',multiTenant:false})})
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, h, ref } from 'vue'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'

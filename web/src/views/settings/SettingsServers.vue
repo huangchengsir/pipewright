@@ -1,5 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onBeforeUnmount, watch } from 'vue'
+import PermissionGate from '../../components/PermissionGate.vue'
+import AppSelect from '../../components/ui/AppSelect.vue'
+import { usePermissionStore } from '../../stores/permissions'
+import { useSessionStore } from '../../stores/session'
 import {
   listServers,
   createServer,
@@ -15,16 +19,50 @@ import type {
 } from '../../api/servers'
 import { listCredentials } from '../../api/credentials'
 import type { Credential } from '../../api/credentials'
-import { HttpError } from '../../api/http'
+import { HttpError, type HttpOptions } from '../../api/http'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import ServiceLogViewer from '../../components/ops/ServiceLogViewer.vue'
 import ServiceOpsPanel from '../../components/ops/ServiceOpsPanel.vue'
 import ContainerAiPanel from '../../components/ops/ContainerAiPanel.vue'
+import ServerExecutionAssignment from '../../components/ops/ServerExecutionAssignment.vue'
 
+const session=useSessionStore(),permissions=usePermissionStore()
+const createQuery={action:"server.create",resourceId:"",create:true}
+const permits=(action:string,id:string)=>permissions.allowed(permissions.activeTeam,{action,resourceId:id})
+const executionQueries=(s:Server,action="server.use")=>[{action,resourceId:s.id},{action:"credential.use",resourceId:s.credentialId}]
+const executable=(s:Server,action="server.use")=>executionQueries(s,action).every(q=>permissions.allowed(permissions.activeTeam,q))
+let generation=0,loadRequest=0
+let requests = new AbortController()
+
+function requestOptions(): HttpOptions {
+  const team = permissions.activeTeam
+  return {
+    signal: requests.signal,
+    headers: session.user?.multiTenant ? { 'X-Pipewright-Team': team } : undefined,
+    throwOnUnauthorized: true,
+  }
+}
+
+onBeforeUnmount(() => {
+  generation++
+  requests.abort()
+})
 const router = useRouter()
 const { t } = useI18n()
 const aiTargets = ref<string[] | null>(null)
+const aiQuery = { action: 'opschat.create', resourceId: 'new-resource', create: true }
+const canOpenAI = computed(() => permissions.allowed(permissions.activeTeam, aiQuery))
+
+function openAI(server: Server): void {
+  if (canOpenAI.value && permits('server.inspect', server.id) && executable(server)) {
+    aiTargets.value = [server.id]
+  }
+}
+
+watch(canOpenAI, (allowed) => {
+  if (!allowed) aiTargets.value = null
+})
 
 // ─── state ──────────────────────────────────────────────────────────────────
 
@@ -62,6 +100,11 @@ const formErrors = ref({
 const formBanner = ref('')
 const formSubmitting = ref(false)
 
+const saveQueries=computed(()=>[modalMode.value==='add'?createQuery:{action:'server.edit',resourceId:editingId.value??''},{action:'credential.use',resourceId:form.value.credentialId}])
+const canSave=computed(()=>saveQueries.value.every(q=>permissions.allowed(permissions.activeTeam,q)))
+const visibleServers=computed(()=>servers.value.filter(s=>permits('server.inspect',s.id)))
+const credentialOptions=computed(()=>sshCredentials.value.map(c=>({value:c.id,label:c.name})))
+
 // ─── delete confirm ─────────────────────────────────────────────────────────
 
 const deleteModalOpen = ref(false)
@@ -80,6 +123,7 @@ const logsModalOpen = ref(false)
 const logsServer = ref<Server | null>(null)
 
 function openLogsModal(s: Server): void {
+  if(!executable(s))return
   logsServer.value = s
   logsModalOpen.value = true
 }
@@ -95,6 +139,7 @@ const opsModalOpen = ref(false)
 const opsServer = ref<Server | null>(null)
 
 function openOpsModal(s: Server): void {
+  if(!executable(s))return
   opsServer.value = s
   opsModalOpen.value = true
 }
@@ -108,6 +153,7 @@ function closeOpsModal(): void {
 // 升级为独立全屏「AI 运维终端」页(左终端 / 右 AI 助手),替代旧内联弹窗。
 
 function openTerminal(s: Server): void {
+ if(!executable(s,"server.terminal"))return
   // 全屏终端在**新标签页**打开,保留当前服务器列表页(终端是长会话,不该顶掉原页面)。
   const route = router.resolve({ name: 'server-terminal', params: { id: s.id } })
   window.open(route.href, '_blank', 'noopener')
@@ -125,14 +171,20 @@ function credentialLabel(id: string): string {
 // ─── data loading ────────────────────────────────────────────────────────────
 
 async function loadServers(): Promise<void> {
+  const current=generation,request=++loadRequest
+  const options = requestOptions()
   loadState.value = 'loading'
   loadError.value = ''
   try {
-    const [srv, creds] = await Promise.all([listServers(), listCredentials()])
-    servers.value = srv
-    sshCredentials.value = creds.filter((c) => c.type === 'ssh_key' || c.type === 'ssh_password')
+    const [srv,creds]=await Promise.allSettled([listServers(options),listCredentials(options)])
+    if(current!==generation||request!==loadRequest)return
+    if(srv.status==='rejected')throw srv.reason
+    servers.value=srv.value
+    sshCredentials.value=creds.status==='fulfilled'?creds.value.filter(c=>c.type==='ssh_key'||c.type==='ssh_password'):[]
     loadState.value = 'idle'
   } catch (err) {
+    if(current!==generation||request!==loadRequest)return
+    servers.value=[];sshCredentials.value=[];testResults.value={}
     if (err instanceof HttpError) {
       if (err.status === 0) {
         loadError.value = t('settingsServers.errLoadConn')
@@ -148,11 +200,17 @@ async function loadServers(): Promise<void> {
   }
 }
 
-onMounted(loadServers)
+watch(()=>[session.user?.userId,session.user?.username,session.user?.multiTenant,session.user?.mustChangePassword,session.isNetworkError,permissions.activeTeam],()=>{
+ requests.abort()
+ requests = new AbortController()
+ generation++;servers.value=[];sshCredentials.value=[];testResults.value={};modalOpen.value=false;deleteModalOpen.value=false;logsModalOpen.value=false;opsModalOpen.value=false;aiTargets.value=null;editingId.value=null;deletingServer.value=null;logsServer.value=null;opsServer.value=null;formSubmitting.value=false;deleteSubmitting.value=false;testingId.value=null
+ if(session.user&&session.user.multiTenant!==undefined&&!session.user.mustChangePassword&&!session.isNetworkError&&(!session.user.multiTenant||permissions.activeTeam))void loadServers()
+},{immediate:true,flush:'sync'})
 
 // ─── modal open / close ─────────────────────────────────────────────────────
 
 function openAddModal(): void {
+ if(!permissions.allowed(permissions.activeTeam,createQuery))return
   modalMode.value = 'add'
   editingId.value = null
   form.value = {
@@ -168,6 +226,7 @@ function openAddModal(): void {
 }
 
 function openEditModal(s: Server): void {
+ if(!permits("server.edit",s.id))return
   modalMode.value = 'edit'
   editingId.value = s.id
   form.value = {
@@ -222,7 +281,8 @@ function validateForm(): boolean {
 // ─── form submit ─────────────────────────────────────────────────────────────
 
 async function handleFormSubmit(): Promise<void> {
-  if (!validateForm()) return
+  if (!canSave.value || formSubmitting.value || !validateForm()) return
+ const current=generation
   formSubmitting.value = true
   formBanner.value = ''
   try {
@@ -234,7 +294,8 @@ async function handleFormSubmit(): Promise<void> {
         user: form.value.user.trim(),
         credentialId: form.value.credentialId,
       }
-      const created = await createServer(payload)
+      const created = await createServer(payload, requestOptions())
+      if(current!==generation)return
       servers.value = [created, ...servers.value]
     } else if (editingId.value) {
       const payload: UpdateServerInput = {
@@ -244,12 +305,14 @@ async function handleFormSubmit(): Promise<void> {
         user: form.value.user.trim(),
         credentialId: form.value.credentialId,
       }
-      const updated = await updateServer(editingId.value, payload)
+      const updated = await updateServer(editingId.value, payload, requestOptions())
+      if(current!==generation)return
       servers.value = servers.value.map((s) => (s.id === updated.id ? updated : s))
       delete testResults.value[updated.id]
     }
     modalOpen.value = false
   } catch (err) {
+    if(current!==generation)return
     if (err instanceof HttpError) {
       if (err.status === 0) {
         formBanner.value = t('settingsServers.errConnRetry')
@@ -260,13 +323,14 @@ async function handleFormSubmit(): Promise<void> {
       formBanner.value = t('settingsServers.errSaveRetry')
     }
   } finally {
-    formSubmitting.value = false
+    if(current===generation)formSubmitting.value = false
   }
 }
 
 // ─── delete ──────────────────────────────────────────────────────────────────
 
 function openDeleteModal(s: Server): void {
+ if(!permits("server.delete",s.id))return
   deletingServer.value = s
   deleteBanner.value = ''
   deleteModalOpen.value = true
@@ -279,17 +343,20 @@ function closeDeleteModal(): void {
 }
 
 async function confirmDelete(): Promise<void> {
-  if (!deletingServer.value) return
+  if (!deletingServer.value || deleteSubmitting.value || !permits("server.delete",deletingServer.value.id)) return
+ const current=generation
   deleteSubmitting.value = true
   deleteBanner.value = ''
   const id = deletingServer.value.id
   try {
-    await deleteServer(id)
+    await deleteServer(id, requestOptions())
+    if(current!==generation)return
     servers.value = servers.value.filter((s) => s.id !== id)
     delete testResults.value[id]
     deleteModalOpen.value = false
     deletingServer.value = null
   } catch (err) {
+    if(current!==generation)return
     if (err instanceof HttpError) {
       if (err.status === 0) {
         deleteBanner.value = t('settingsServers.errConnRetry')
@@ -300,18 +367,22 @@ async function confirmDelete(): Promise<void> {
       deleteBanner.value = t('settingsServers.errDeleteRetry')
     }
   } finally {
-    deleteSubmitting.value = false
+    if(current===generation)deleteSubmitting.value = false
   }
 }
 
 // ─── test connection ──────────────────────────────────────────────────────────
 
 async function handleTest(s: Server): Promise<void> {
+ if(!executable(s)||testingId.value===s.id)return
+ const current=generation
   testingId.value = s.id
   try {
-    const result = await testServer(s.id)
+    const result = await testServer(s.id, requestOptions())
+    if(current!==generation||!executable(s))return
     testResults.value = { ...testResults.value, [s.id]: result }
   } catch (err) {
+    if(current!==generation||!executable(s))return
     let message = t('settingsServers.errTestRetry')
     if (err instanceof HttpError) {
       message = err.apiError?.message ?? t('settingsServers.errTestStatus', { status: err.status })
@@ -321,14 +392,14 @@ async function handleTest(s: Server): Promise<void> {
       [s.id]: { ok: false, latencyMs: 0, output: '', error: message },
     }
   } finally {
-    if (testingId.value === s.id) testingId.value = null
+    if (current===generation && testingId.value === s.id) testingId.value = null
   }
 }
 </script>
 
 <template>
   <div class="servers-root settings-page">
-    <ContainerAiPanel v-if="aiTargets !== null" context="servers" :initial-server-ids="aiTargets" @close="aiTargets = null" />
+    <ContainerAiPanel v-if="canOpenAI && aiTargets !== null && aiTargets.every(id=>servers.some(s=>s.id===id&&permits('server.inspect',s.id)&&executable(s)))" context="servers" :initial-server-ids="aiTargets" @close="aiTargets = null" />
     <!-- ─── section header ──────────────────────────────────────────────────── -->
     <div class="section-head">
       <div class="section-head-text">
@@ -337,7 +408,7 @@ async function handleTest(s: Server): Promise<void> {
           {{ t('settingsServers.desc') }}
         </p>
       </div>
-      <button
+      <PermissionGate :query="createQuery"><button
         class="btn-primary"
         :disabled="loadState === 'loading' || !hasSSHCredentials"
         :title="!hasSSHCredentials ? t('settingsServers.addDisabledHint') : ''"
@@ -347,7 +418,7 @@ async function handleTest(s: Server): Promise<void> {
           <path d="M12 5v14M5 12h14" />
         </svg>
         {{ t('settingsServers.addServer') }}
-      </button>
+      </button></PermissionGate>
     </div>
 
     <!-- ─── no-credential hint ────────────────────────────────────────────────── -->
@@ -368,7 +439,7 @@ async function handleTest(s: Server): Promise<void> {
     <div class="panel" :class="{ 'panel--loading': loadState === 'loading' }">
       <div class="panel-head">
         <span>{{ t('settingsServers.registeredServers') }}</span>
-        <span class="panel-meta" v-if="loadState === 'idle'">{{ t('settingsServers.serverCount', { n: servers.length }) }}</span>
+        <span class="panel-meta" v-if="loadState === 'idle'">{{ t('settingsServers.serverCount', { n: visibleServers.length }) }}</span>
       </div>
 
       <template v-if="loadState === 'loading'">
@@ -382,16 +453,19 @@ async function handleTest(s: Server): Promise<void> {
       </template>
 
       <ul v-else class="server-list">
-        <li v-for="s in servers" :key="s.id" class="server-row">
+        <PermissionGate v-for="s in servers" :key="permissions.activeTeam+'/'+s.id" :query="{action:'server.inspect',resourceId:s.id}"><li class="server-row">
           <div class="server-main">
             <div class="server-name">{{ s.name }}</div>
+            <div v-if="s.metricsAuthorizationState" class="monitoring-authorization" :title="t('settingsServers.monitoringHint')">
+              {{ t(s.metricsAuthorizationState === 'ready' ? 'settingsServers.monitoringReady' : 'settingsServers.monitoringRequired') }}
+            </div>
             <div class="server-addr">
               <span class="mono">{{ s.user }}@{{ s.host }}:{{ s.port }}</span>
               <span class="cred-tag">🔑 {{ credentialLabel(s.credentialId) }}</span>
             </div>
             <!-- test result -->
             <div
-              v-if="testResults[s.id]"
+              v-if="testResults[s.id] && executable(s)"
               class="test-result"
               :class="testResults[s.id].ok ? 'test-result--ok' : 'test-result--fail'"
               role="status"
@@ -406,22 +480,23 @@ async function handleTest(s: Server): Promise<void> {
             </div>
           </div>
           <div class="server-actions">
-            <button class="btn-ghost" @click="aiTargets = [s.id]">{{ t('opsChat.title') }}</button>
-            <button class="btn-ghost" :disabled="testingId === s.id" @click="handleTest(s)">
+            <PermissionGate :query="[...executionQueries(s), aiQuery]"><button class="btn-ghost" @click="openAI(s)">{{ t('opsChat.title') }}</button></PermissionGate>
+            <PermissionGate :query="executionQueries(s)"><button class="btn-ghost" :disabled="testingId === s.id" @click="handleTest(s)">
               {{ testingId === s.id ? t('settingsServers.testing') : t('settingsServers.testConnection') }}
-            </button>
-            <button class="btn-ghost" @click="openLogsModal(s)">{{ t('settingsServers.logs') }}</button>
-            <button class="btn-ghost" @click="openTerminal(s)">{{ t('settingsServers.terminal') }}</button>
-            <button class="btn-ghost" @click="openOpsModal(s)">{{ t('settingsServers.serviceOps') }}</button>
-            <button class="btn-ghost" @click="openEditModal(s)">{{ t('settingsServers.edit') }}</button>
-            <button class="btn-ghost btn-danger" @click="openDeleteModal(s)">{{ t('settingsServers.delete') }}</button>
+            </button></PermissionGate>
+            <PermissionGate :query="executionQueries(s)"><button class="btn-ghost" @click="openLogsModal(s)">{{ t('settingsServers.logs') }}</button></PermissionGate>
+            <PermissionGate :query="executionQueries(s, 'server.terminal')"><button class="btn-ghost" @click="openTerminal(s)">{{ t('settingsServers.terminal') }}</button></PermissionGate>
+            <PermissionGate :query="executionQueries(s)"><button class="btn-ghost" @click="openOpsModal(s)">{{ t('settingsServers.serviceOps') }}</button></PermissionGate>
+            <PermissionGate :query="{action:'server.edit',resourceId:s.id}"><button class="btn-ghost" @click="openEditModal(s)">{{ t('settingsServers.edit') }}</button></PermissionGate>
+            <PermissionGate :query="{action:'server.delete',resourceId:s.id}"><button class="btn-ghost btn-danger" @click="openDeleteModal(s)">{{ t('settingsServers.delete') }}</button></PermissionGate>
           </div>
-        </li>
+        </li></PermissionGate>
       </ul>
     </div>
 
+    <Teleport to="body">
     <!-- ─── add / edit modal ──────────────────────────────────────────────────── -->
-    <div v-if="modalOpen" class="modal-backdrop settings-dialog" @click.self="closeModal">
+    <div v-if="modalOpen && (modalMode==='add'?permissions.allowed(permissions.activeTeam,createQuery):permits('server.edit',editingId??''))" class="modal-backdrop settings-dialog" @click.self="closeModal">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="server-modal-title">
         <h3 id="server-modal-title" class="modal-title">
           {{ modalMode === 'add' ? t('settingsServers.addServer') : t('settingsServers.editServer') }}
@@ -457,25 +532,23 @@ async function handleTest(s: Server): Promise<void> {
 
           <label class="field">
             <span class="field-label">{{ t('settingsServers.fieldCredential') }}</span>
-            <select v-model="form.credentialId" class="field-input">
-              <option value="" disabled>{{ t('settingsServers.selectCredential') }}</option>
-              <option v-for="c in sshCredentials" :key="c.id" :value="c.id">{{ c.name }}</option>
-            </select>
+            <AppSelect v-model="form.credentialId" :options="credentialOptions" :placeholder="t('settingsServers.selectCredential')" portal />
             <span v-if="formErrors.credentialId" class="field-error">{{ formErrors.credentialId }}</span>
           </label>
 
           <div class="modal-actions">
             <button type="button" class="btn-ghost" :disabled="formSubmitting" @click="closeModal">{{ t('settingsServers.cancel') }}</button>
-            <button type="submit" class="btn-primary" :disabled="formSubmitting">
+            <PermissionGate :query="saveQueries"><button type="submit" class="btn-primary" :disabled="formSubmitting">
               {{ formSubmitting ? t('settingsServers.saving') : t('settingsServers.save') }}
-            </button>
+            </button></PermissionGate>
           </div>
         </form>
+        <ServerExecutionAssignment v-if="editingId" :server-id="editingId" />
       </div>
     </div>
 
     <!-- ─── delete confirm modal ──────────────────────────────────────────────── -->
-    <div v-if="deleteModalOpen" class="modal-backdrop settings-dialog" @click.self="closeDeleteModal">
+    <div v-if="deleteModalOpen && deletingServer && permits('server.delete',deletingServer.id)" class="modal-backdrop settings-dialog" @click.self="closeDeleteModal">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="server-del-title">
         <h3 id="server-del-title" class="modal-title">{{ t('settingsServers.deleteServer') }}</h3>
         <div v-if="deleteBanner" class="banner banner--error" role="alert">{{ deleteBanner }}</div>
@@ -486,15 +559,15 @@ async function handleTest(s: Server): Promise<void> {
         </p>
         <div class="modal-actions">
           <button type="button" class="btn-ghost" :disabled="deleteSubmitting" @click="closeDeleteModal">{{ t('settingsServers.cancel') }}</button>
-          <button type="button" class="btn-primary btn-danger" :disabled="deleteSubmitting" @click="confirmDelete">
+          <PermissionGate :query="{action:'server.delete',resourceId:deletingServer?.id??''}"><button type="button" class="btn-primary btn-danger" :disabled="deleteSubmitting" @click="confirmDelete">
             {{ deleteSubmitting ? t('settingsServers.deleting') : t('settingsServers.confirmDelete') }}
-          </button>
+          </button></PermissionGate>
         </div>
       </div>
     </div>
 
     <!-- ─── service logs modal (Story 6-2, FR-16) ─────────────────────────────── -->
-    <div v-if="logsModalOpen" class="modal-backdrop settings-dialog" @click.self="closeLogsModal">
+    <div v-if="logsModalOpen && logsServer && executable(logsServer)" class="modal-backdrop settings-dialog" @click.self="closeLogsModal">
       <div class="modal modal--wide" role="dialog" aria-modal="true" aria-labelledby="server-logs-title">
         <div class="logs-modal-head">
           <h3 id="server-logs-title" class="modal-title">
@@ -514,7 +587,7 @@ async function handleTest(s: Server): Promise<void> {
     </div>
 
     <!-- ─── service operations modal (Story 6-3, FR-17) ───────────────────────── -->
-    <div v-if="opsModalOpen" class="modal-backdrop settings-dialog" @click.self="closeOpsModal">
+    <div v-if="opsModalOpen && opsServer && executable(opsServer)" class="modal-backdrop settings-dialog" @click.self="closeOpsModal">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="server-ops-title">
         <div class="logs-modal-head">
           <h3 id="server-ops-title" class="modal-title">
@@ -532,10 +605,12 @@ async function handleTest(s: Server): Promise<void> {
         />
       </div>
     </div>
+    </Teleport>
   </div>
 </template>
 
 <style scoped>
+.monitoring-authorization { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
 .servers-root {
   display: flex;
   flex-direction: column;

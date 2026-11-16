@@ -7,6 +7,7 @@ import (
 	log "github.com/huangchengsir/pipewright/internal/logging"
 	"github.com/huangchengsir/pipewright/internal/maintenance"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -124,22 +125,24 @@ func (s *service) dispatchAlert(ctx context.Context, alert Alert, snapshot Serve
 		return
 	}
 	if s.analyzer == nil {
-		s.finishAnalysis(alert, unavailableAnalysis("AI 分析未配置，原始告警照常发送"))
+		s.finishAnalysis(ctx, alert, unavailableAnalysis("AI 分析未配置，原始告警照常发送"))
 		return
 	}
 	select {
 	case s.analysisSlots <- struct{}{}:
 	default:
-		s.finishAnalysis(alert, unavailableAnalysis("AI 分析繁忙，原始告警照常发送"))
+		s.finishAnalysis(ctx, alert, unavailableAnalysis("AI 分析繁忙，原始告警照常发送"))
 		return
 	}
-	jobCtx, cancel := context.WithTimeout(s.analysisContext, s.analysisTimeout)
+	jobCtx, timeoutCancel := context.WithTimeout(context.WithoutCancel(ctx), s.analysisTimeout)
+	stop := context.AfterFunc(s.analysisContext, timeoutCancel)
+	cancel := func() { stop(); timeoutCancel() }
 	s.analysisMu.Lock()
 	if s.closed {
 		s.analysisMu.Unlock()
 		cancel()
 		<-s.analysisSlots
-		s.finishAnalysis(alert, unavailableAnalysis("AI 分析已中断，原始告警照常发送"))
+		s.finishAnalysis(ctx, alert, unavailableAnalysis("AI 分析已中断，原始告警照常发送"))
 		return
 	}
 	s.analysisJobs[alert.ID] = analysisJob{ruleID: alert.RuleID, cancel: cancel}
@@ -160,7 +163,7 @@ func (s *service) analyzeAlert(ctx context.Context, alert Alert, snapshot Server
 	}()
 	release, admissionErr := maintenance.Enter(ctx, s.db, "alert_analysis")
 	if admissionErr != nil {
-		s.finishAnalysis(alert, unavailableAnalysis("AI 分析不可用，原始告警照常发送"))
+		s.finishAnalysis(ctx, alert, unavailableAnalysis("AI 分析不可用，原始告警照常发送"))
 		return
 	}
 	defer release()
@@ -178,7 +181,7 @@ func (s *service) analyzeAlert(ctx context.Context, alert Alert, snapshot Server
 		if result == nil {
 			result = unavailableAnalysis("AI 分析不可用，原始告警照常发送")
 		}
-		s.finishAnalysis(alert, result)
+		s.finishAnalysis(ctx, alert, result)
 	}()
 	// Re-read the rule after registering cancellation, so disabling/deleting it cannot start stale work.
 	rule, err := s.getRule(ctx, alert.RuleID)
@@ -186,7 +189,19 @@ func (s *service) analyzeAlert(ctx context.Context, alert Alert, snapshot Server
 		result = unavailableAnalysis("告警规则已关闭 AI 分析，原始告警照常发送")
 		return
 	}
+	if err = tenancy.VerifyExecution(ctx); err != nil {
+		result = unavailableAnalysis("告警分析授权已失效")
+		return
+	}
+	if err = tenancy.Check(ctx, s.db, "anomaly.analyze", "server", alert.ServerID); err != nil {
+		result = unavailableAnalysis("告警分析授权已失效")
+		return
+	}
 	result, err = s.analyzer.AnalyzeAlert(ctx, AnalysisInput{Alert: alert, Metrics: snapshot})
+	if e := tenancy.VerifyExecution(ctx); e != nil {
+		result = unavailableAnalysis("告警分析授权已失效")
+		return
+	}
 	if err != nil {
 		result = unavailableAnalysis("AI 分析失败，原始告警照常发送")
 	}
@@ -256,8 +271,8 @@ func normalizeAnalysis(in *Analysis) *Analysis {
 	return out
 }
 
-func (s *service) finishAnalysis(alert Alert, analysis *Analysis) {
-	ctx, cancel := context.WithTimeout(context.Background(), analysisPersistenceTimeout)
+func (s *service) finishAnalysis(parent context.Context, alert Alert, analysis *Analysis) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), analysisPersistenceTimeout)
 	defer cancel()
 	if !s.persistAnalysis(ctx, alert, analysis) {
 		log.Printf("[anomaly] analysis persistence failed; pending alert retained for local recovery")
@@ -294,6 +309,16 @@ func (s *service) notifyAlert(ctx context.Context, alert *Alert) {
 		}
 	}()
 	if s.notifier != nil {
+		if on, err := tenancy.Enabled(ctx, s.db); err != nil {
+			return
+		} else if on {
+			if err = tenancy.VerifyExecution(ctx); err != nil {
+				return
+			}
+			if err = tenancy.Check(ctx, s.db, "anomaly.read", "server", alert.ServerID); err != nil {
+				return
+			}
+		}
 		s.notifier.NotifyAlert(ctx, alert)
 	}
 }

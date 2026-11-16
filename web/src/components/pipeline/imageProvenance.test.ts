@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import {createPinia,setActivePinia} from 'pinia'
+import {useSessionStore} from '../../stores/session'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 import type { PipelineJob, PipelineStage } from '../../api/pipeline'
 import { imageSourceChoices, projectImageName, registryRepository, resolveImageSource } from './imageProvenance'
@@ -16,6 +18,8 @@ const build = stage('build', [job('image')])
 const push = stage('push', [job('publish', 'push_image', { registry: 'http://registry.test/team/', imageName: 'service', tag: '${DATE:yyyyMMddHHmmss}-${COMMIT_SHA}' })], ['build'])
 const deployJob = job('deploy', 'deploy_ssh', { artifactType: 'image' })
 const deploy = stage('deploy', [deployJob], ['push'])
+
+beforeEach(()=>{setActivePinia(createPinia());useSessionStore().setUser({username:'admin',multiTenant:false})})
 
 describe('configuration-time image provenance', () => {
   it('does not hide a build that may already be published by an environment', () => {

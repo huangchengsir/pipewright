@@ -14,7 +14,7 @@
  * message  is human-readable Chinese text from the server
  */
 
-import { http } from './http'
+import { http, type HttpOptions } from './http'
 
 // ─── Frozen DTO types (do NOT modify shape — only new code values may be added) ─
 
@@ -47,6 +47,6 @@ export interface ValidationDTO {
  * Fetch the aggregated pipeline validation result for a project.
  * Read-only GET; does not modify any server state.
  */
-export async function getValidation(projectId: string): Promise<ValidationDTO> {
-  return http.get<ValidationDTO>(`/api/projects/${projectId}/pipeline/validation`)
+export async function getValidation(projectId: string, options?: HttpOptions): Promise<ValidationDTO> {
+  return http.get<ValidationDTO>(`/api/projects/${projectId}/pipeline/validation`, options)
 }

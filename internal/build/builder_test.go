@@ -42,6 +42,7 @@ type fakeVault struct {
 	secrets map[string]string
 }
 
+func (f fakeVault) Get(id string) (string, error) { return f.Reveal(id) }
 func (f fakeVault) Reveal(id string) (string, error) {
 	if v, ok := f.secrets[id]; ok {
 		return v, nil

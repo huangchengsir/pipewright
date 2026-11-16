@@ -4,7 +4,12 @@
   ServerCard(卡片内部按 容器/镜像 分 tab,只针对这一台)。日志走抽屉、终端跳全屏页、
   新增容器走弹窗。每 12s 自动刷新聚合(stale-while-revalidate)。
 */
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import PermissionGate from '../components/PermissionGate.vue'
+import { usePermissions } from '../composables/usePermission'
+import { usePermissionStore } from '../stores/permissions'
+import { useSessionStore } from '../stores/session'
+import type { PermissionQuery } from '../api/access'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { getAllContainers, type ServerContainers, type ContainerInfo } from '../api/containers'
@@ -33,6 +38,15 @@ const router = useRouter()
 const toast = useToast()
 const confirm = useConfirm()
 
+const permissions=usePermissionStore()
+const session=useSessionStore()
+const cardIdentity=computed(()=>JSON.stringify([session.user,session.isNetworkError,permissions.activeTeam]))
+let lifeController=new AbortController()
+let generation=0
+function options(){return {signal:lifeController.signal,headers:session.user?.multiTenant===true?{'X-Pipewright-Team':permissions.activeTeam}:undefined,throwOnUnauthorized:true}}
+let requestSequence=0
+function query(action:string,serverId:string):PermissionQuery { return {action,resourceId:serverId} }
+function can(action:string,serverId:string):boolean { return permissions.allowed(permissions.activeTeam,query(action,serverId)) }
 const loadState = ref<LoadState>('idle')
 const loadError = ref('')
 const groups = ref<ServerContainers[]>([])
@@ -42,11 +56,13 @@ const refreshing = ref(false)
 const POLL_MS = 12_000
 let timer: ReturnType<typeof setInterval> | null = null
 
+const authorizedGroups=computed(()=>groups.value.filter(g=>can('container.inspect',g.serverId)))
+
 // ─── 聚合统计 ─────────────────────────────────────────────────────────────────
-const totalContainers = computed(() => groups.value.reduce((n, g) => n + g.total, 0))
-const runningContainers = computed(() => groups.value.reduce((n, g) => n + g.running, 0))
+const totalContainers = computed(() => authorizedGroups.value.reduce((n, g) => n + g.total, 0))
+const runningContainers = computed(() => authorizedGroups.value.reduce((n, g) => n + g.running, 0))
 const stoppedContainers = computed(() => totalContainers.value - runningContainers.value)
-const coveredServers = computed(() => groups.value.filter((g) => g.reachable && g.runtime).length)
+const coveredServers = computed(() => groups.value.filter((g) => g.reachable && g.runtime && can('container.operate',g.serverId)).length)
 
 function serverName(id: string): string {
   return serverById.value.get(id)?.name ?? id
@@ -63,7 +79,7 @@ const bucketCounts = computed(() => {
   let running = 0
   let paused = 0
   let stopped = 0
-  for (const g of groups.value) {
+  for (const g of authorizedGroups.value) {
     for (const c of g.containers) {
       const b = stateBucket(c.state)
       if (b === 'running') running++
@@ -98,11 +114,15 @@ const bulkMode = ref(false)
 const selected = ref<Set<string>>(new Set())
 const bulkBusy = ref(false)
 const selectedCount = computed(() => selected.value.size)
+const bulkQueries=computed(()=>Array.from(new Set([...selected.value].map(key=>key.slice(0,key.indexOf('::'))))).map(id=>query('container.operate',id)))
+const bulkPermission=usePermissions(bulkQueries)
+const firstOperationQuery=computed(()=>query('container.operate',creatableServers.value[0]?.id ?? ''))
 
 function selectKey(serverId: string, name: string): string {
   return `${serverId}::${name}`
 }
 function toggleSelect(serverId: string, name: string): void {
+  if(!can('container.operate',serverId)) return
   const key = selectKey(serverId, name)
   const next = new Set(selected.value)
   if (next.has(key)) next.delete(key)
@@ -130,7 +150,9 @@ const BULK_ACTIONS: BulkAction[] = [
 ]
 
 async function runBulk({ action, labelKey, danger }: BulkAction): Promise<void> {
-  if (selected.value.size === 0 || bulkBusy.value) return
+  if (selected.value.size === 0 || bulkBusy.value || !bulkPermission.allowed.value) return
+  const identity=generation, team=permissions.activeTeam, requestOptions=options()
+  const selection=JSON.stringify([...selected.value].sort())
   const label = t(labelKey)
   const targets = [...selected.value].map((key) => {
     const i = key.indexOf('::')
@@ -147,13 +169,14 @@ async function runBulk({ action, labelKey, danger }: BulkAction): Promise<void> 
       confirmLabel: t('containers.confirmLabel', { label, n }),
       variant: 'danger',
     })
-    if (!ok) return
+    if (!ok || identity!==generation || team!==permissions.activeTeam || selection!==JSON.stringify([...selected.value].sort()) || !targets.every(tg=>can('container.operate',tg.serverId))) return
   }
   bulkBusy.value = true
   try {
     const results = await Promise.allSettled(
-      targets.map((tg) => serviceAction(tg.serverId, { type: 'docker', target: tg.name, action })),
+      targets.map((tg) => serviceAction(tg.serverId, { type: 'docker', target: tg.name, action },requestOptions)),
     )
+    if(identity!==generation || !targets.every(tg=>can('container.operate',tg.serverId))) return
     let okCount = 0
     let failCount = 0
     for (const r of results) {
@@ -175,7 +198,7 @@ async function runBulk({ action, labelKey, danger }: BulkAction): Promise<void> 
     clearSelection()
     await load()
   } finally {
-    bulkBusy.value = false
+    if(identity===generation) bulkBusy.value = false
   }
 }
 
@@ -183,7 +206,7 @@ async function runBulk({ action, labelKey, danger }: BulkAction): Promise<void> 
 const showCreate = ref(false)
 const creatableServers = computed(() =>
   groups.value
-    .filter((g) => g.reachable && g.runtime)
+    .filter((g) => g.reachable && g.runtime && can('container.operate',g.serverId))
     .map((g) => ({ id: g.serverId, name: serverName(g.serverId) })),
 )
 function onContainerCreated(): void {
@@ -193,9 +216,11 @@ function onContainerCreated(): void {
 // ─── 日志抽屉 / 终端 ──────────────────────────────────────────────────────────
 const logsTarget = ref<{ serverId: string; name: string; id: string } | null>(null)
 function openLogs(serverId: string, c: ContainerInfo): void {
+ if(!can('container.inspect',serverId)) return
   logsTarget.value = { serverId, name: c.names, id: c.id.length > 12 ? c.id.slice(0, 12) : c.id }
 }
 function openTerminal(serverId: string, c: ContainerInfo): void {
+ if(!can('container.terminal',serverId)) return
   const url = router.resolve({
     name: 'server-terminal',
     params: { id: serverId },
@@ -210,12 +235,14 @@ const showAi = ref(false)
 // AI 诊断弹窗。
 const diagnoseTarget = ref<{ serverId: string; name: string } | null>(null)
 function openDiagnose(serverId: string, c: ContainerInfo): void {
+ if(!can('container.diagnose',serverId)) return
   diagnoseTarget.value = { serverId, name: c.names }
 }
 
 // 容器详情 inspect 弹窗。
 const inspectTarget = ref<{ serverId: string; name: string } | null>(null)
 function openInspect(serverId: string, c: ContainerInfo): void {
+ if(!can('container.inspect',serverId)) return
   inspectTarget.value = { serverId, name: c.names }
 }
 
@@ -224,18 +251,24 @@ const showPrune = ref(false)
 
 // ─── 加载 ─────────────────────────────────────────────────────────────────────
 async function load(): Promise<void> {
+  const current=++requestSequence
+  const identity=generation
+  if(!session.user || session.isNetworkError) return
   const firstLoad = groups.value.length === 0
   loadState.value = 'loading'
   loadError.value = ''
   if (!firstLoad) refreshing.value = true
   try {
-    const [servers, items] = await Promise.all([listServers(), getAllContainers()])
+    const [servers, items] = await Promise.all([listServers(options()), getAllContainers(options())])
+    if(current!==requestSequence || identity!==generation) return
     const m = new Map<string, Server>()
     for (const s of servers) m.set(s.id, s)
     serverById.value = m
     groups.value = items
     loadState.value = 'idle'
   } catch (err) {
+    if(current!==requestSequence || identity!==generation) return
+    groups.value=[]; serverById.value=new Map(); clearSelection()
     if (err instanceof HttpError) {
       loadError.value =
         err.status === 0
@@ -246,16 +279,28 @@ async function load(): Promise<void> {
     }
     loadState.value = 'error'
   } finally {
-    refreshing.value = false
+    if(current===requestSequence && identity===generation) refreshing.value = false
   }
 }
 
+watch([()=>permissions.activeTeam,()=>session.user,()=>session.isNetworkError],()=>{
+ lifeController.abort();lifeController=new AbortController();bulkBusy.value=false
+ generation++;requestSequence++
+ groups.value=[];serverById.value=new Map();clearSelection();bulkMode.value=false
+ logsTarget.value=null;inspectTarget.value=null;diagnoseTarget.value=null;showCreate.value=false;showPrune.value=false;showAi.value=false
+ if(session.user && !session.isNetworkError) void load()
+},{flush:'sync'})
+watch(()=>[logsTarget.value && can('container.inspect',logsTarget.value.serverId),inspectTarget.value && can('container.inspect',inspectTarget.value.serverId),diagnoseTarget.value && can('container.diagnose',diagnoseTarget.value.serverId)],([logs,inspect,diagnose])=>{
+ if(logsTarget.value && !logs) logsTarget.value=null
+ if(inspectTarget.value && !inspect) inspectTarget.value=null
+ if(diagnoseTarget.value && !diagnose) diagnoseTarget.value=null
+})
 onMounted(() => {
   void load()
   timer = setInterval(() => void load(), POLL_MS)
 })
 onUnmounted(() => {
-  if (timer) clearInterval(timer)
+  lifeController.abort();generation++;requestSequence++; if (timer) clearInterval(timer)
 })
 </script>
 
@@ -274,15 +319,15 @@ onUnmounted(() => {
       </div>
       <div class="header-actions">
         <AppButton variant="ai" @click="showAi = true">{{ t('containers.aiAssistant') }}</AppButton>
-        <AppButton variant="default" :disabled="creatableServers.length === 0" @click="showPrune = true">
+        <PermissionGate :query="firstOperationQuery"><AppButton variant="default" :disabled="creatableServers.length === 0" @click="showPrune = true">
           {{ t('containers.prune') }}
-        </AppButton>
+        </AppButton></PermissionGate>
         <AppButton :variant="bulkMode ? 'primary' : 'default'" @click="toggleBulkMode">
           {{ bulkMode ? t('containers.bulkExit') : t('containers.bulkEnter') }}
         </AppButton>
-        <AppButton variant="primary" :disabled="creatableServers.length === 0" @click="showCreate = true">
+        <PermissionGate :query="firstOperationQuery"><AppButton variant="primary" :disabled="creatableServers.length === 0" @click="showCreate = true">
           {{ t('containers.create') }}
-        </AppButton>
+        </AppButton></PermissionGate>
         <AppButton variant="default" :loading="loadState === 'loading' && groups.length === 0" @click="load">
           {{ t('common.refresh') }}
         </AppButton>
@@ -327,7 +372,7 @@ onUnmounted(() => {
           <span class="kpi__label">{{ t('containers.kpiStopped') }}</span>
         </div>
         <div class="kpi kpi--hosts">
-          <span class="kpi__num">{{ coveredServers }}<span class="kpi__den">/{{ groups.length }}</span></span>
+          <span class="kpi__num">{{ coveredServers }}<span class="kpi__den">/{{ authorizedGroups.length }}</span></span>
           <span class="kpi__label">{{ t('containers.kpiHosts') }}</span>
         </div>
       </section>
@@ -363,7 +408,7 @@ onUnmounted(() => {
       <div v-if="bulkMode" class="bulk-bar" role="group" :aria-label="t('containers.bulkAria')">
         <span class="bulk-bar__count">{{ t('containers.bulkSelected') }} <strong>{{ selectedCount }}</strong> {{ t('containers.bulkSelectedUnit') }}</span>
         <div class="bulk-bar__actions">
-          <button
+          <PermissionGate :query="bulkQueries"><button
             v-for="a in BULK_ACTIONS"
             :key="a.action"
             class="bulk-btn"
@@ -372,7 +417,7 @@ onUnmounted(() => {
             @click="runBulk(a)"
           >
             {{ t(a.labelKey) }}
-          </button>
+          </button></PermissionGate>
           <button class="bulk-btn bulk-btn--ghost" :disabled="selectedCount === 0 || bulkBusy" @click="clearSelection">
             {{ t('containers.bulkClear') }}
           </button>
@@ -381,9 +426,7 @@ onUnmounted(() => {
 
       <!-- 逐台卡片(卡片内自带 容器/镜像 tab) -->
       <section class="cards" :aria-label="t('containers.cardsAria')" :aria-busy="refreshing || undefined">
-        <ServerCard
-          v-for="g in groups"
-          :key="g.serverId"
+        <template v-for="g in groups" :key="cardIdentity+':'+g.serverId"><PermissionGate :query="query('container.inspect',g.serverId)"><ServerCard
           :group="g"
           :name="serverName(g.serverId)"
           :host="serverHost(g.serverId)"
@@ -397,7 +440,7 @@ onUnmounted(() => {
           @terminal="(c) => openTerminal(g.serverId, c)"
           @diagnose="(c) => openDiagnose(g.serverId, c)"
           @inspect="(c) => openInspect(g.serverId, c)"
-        />
+        /></PermissionGate></template>
       </section>
     </template>
 

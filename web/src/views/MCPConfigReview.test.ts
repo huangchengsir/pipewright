@@ -1,3 +1,7 @@
+import { access } from '../api/access'
+import { usePermissionStore } from '../stores/permissions'
+import { createPinia, setActivePinia } from 'pinia'
+import { useSessionStore } from '../stores/session'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { reactive } from 'vue'
@@ -6,9 +10,11 @@ import AppButton from '../components/ui/AppButton.vue'
 import { HttpError } from '../api/http'
 import type { MCPConfigApproval, MCPConfigReview as Review } from '../api/mcpConfig'
 
+vi.mock('../api/access', () => ({ access: { decisions: vi.fn() } }))
 const mocks = vi.hoisted(() => ({ get: vi.fn(), approve: vi.fn(), route: { params: { id: 'draft-1' } } }))
 vi.mock('vue-router', () => ({ useRoute: () => mocks.route }))
 vi.mock('../api/mcpConfig', () => ({ getMCPConfigReview: mocks.get, approveMCPConfigDraft: mocks.approve }))
+beforeEach(() => { setActivePinia(createPinia()); useSessionStore().setUser({ username: 'admin', multiTenant: false }) })
 const wrappers: VueWrapper[] = []
 const approval: MCPConfigApproval = { id: 'approval-1', state: 'granted', expiresAt: '2099-01-01T00:00:00Z', eligible: true }
 function fixture(id = 'draft-1'): Review {
@@ -31,7 +37,7 @@ describe('MCP configuration review', () => {
     item.kubernetesReview=[{stageId:'deploy',jobId:'kube',before:'timeoutSeconds: 300',after:'timeoutSeconds: 420\nsource:\n  command: [human-reviewed-command]'}]
     mocks.get.mockResolvedValue(item); const w=render(); await flushPromises(); expect(w.text()).toContain('human-reviewed-command'); await acknowledge(w)
     expect(approveButton(w).attributes('disabled')).toBeUndefined(); await approveButton(w).trigger('click'); await flushPromises()
-    expect(mocks.approve).toHaveBeenCalledExactlyOnceWith('draft-1',{reviewDigest:'digest-1',baseRevision:'revision-1',policyVersion:'policy-1'},{signal:expect.any(AbortSignal)})
+    expect(mocks.approve).toHaveBeenCalledExactlyOnceWith('draft-1',{reviewDigest:'digest-1',baseRevision:'revision-1',policyVersion:'policy-1'},expect.objectContaining({signal:expect.any(AbortSignal)}))
   })
   it('keeps the exact project and draft identity visible before acknowledgement', async () => {
     const wrapper = render(); await flushPromises()
@@ -50,7 +56,7 @@ describe('MCP configuration review', () => {
 
   it('loads the full safe diff without approving and requires human acknowledgement', async () => {
     const wrapper = render(); await flushPromises()
-    expect(mocks.get).toHaveBeenCalledWith('draft-1', { signal: expect.any(AbortSignal) })
+    expect(mocks.get).toHaveBeenCalledWith('draft-1', expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.text()).toContain('Original')
     expect(wrapper.text()).toContain('Updated')
     expect(wrapper.text()).toContain('已有定时任务')
@@ -74,7 +80,7 @@ describe('MCP configuration review', () => {
   it('approves only the shown immutable binding and never applies configuration', async () => {
     const wrapper = render(); await flushPromises(); await acknowledge(wrapper)
     await approveButton(wrapper).trigger('click'); await flushPromises()
-    expect(mocks.approve).toHaveBeenCalledExactlyOnceWith('draft-1', { reviewDigest: 'digest-1', baseRevision: 'revision-1', policyVersion: 'policy-1' }, { signal: expect.any(AbortSignal) })
+    expect(mocks.approve).toHaveBeenCalledExactlyOnceWith('draft-1', { reviewDigest: 'digest-1', baseRevision: 'revision-1', policyVersion: 'policy-1' }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.text()).toContain('请回到客户端继续')
     expect(approveButton(wrapper).attributes('disabled')).toBeDefined()
     expect(wrapper.findAll('button').map(button => button.text()).some(text => text.includes('应用'))).toBe(false)
@@ -183,4 +189,13 @@ describe('MCP configuration review', () => {
     expect(wrapper.text()).toContain('draft-2')
     expect(wrapper.text()).not.toContain('请回到客户端继续')
   })
+})
+
+it('denies the approve button even when the configuration validation passed', async () => {
+ useSessionStore().setUser({ username:'reviewer',userId:'user',multiTenant:true });usePermissionStore().setTeam('team')
+ mocks.route.params.id='draft-1';mocks.get.mockResolvedValue(fixture());mocks.approve.mockClear()
+ vi.mocked(access.decisions).mockImplementation(async (_team,queries) => ({userId:'user',teamId:'team',modeEpoch:1,revision:1,catalogVersion:1,allowed:queries.map(q=>q.action==='project.read')}))
+ const wrapper=render();await flushPromises();await acknowledge(wrapper)
+ expect(approveButton(wrapper).attributes('disabled')).toBeDefined();await approveButton(wrapper).trigger('click');expect(mocks.approve).not.toHaveBeenCalled()
+ wrapper.unmount()
 })

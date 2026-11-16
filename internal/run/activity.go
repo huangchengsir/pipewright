@@ -54,12 +54,18 @@ func (s *service) discardRejectedRun(ctx context.Context, r *Run) error {
 		if _, err := s.lockRunProject(txctx, q, r.ID); err != nil {
 			return err
 		}
+		if _, err := q.ExecContext(txctx, `DELETE FROM access_run_authorizations WHERE run_id=? AND EXISTS(SELECT 1 FROM pipeline_runs pr WHERE pr.id=? AND pr.status=?)`, r.ID, r.ID, StatusQueued); err != nil {
+			return err
+		}
 		res, err := q.ExecContext(txctx, `DELETE FROM pipeline_runs WHERE id = ? AND status = ?`, r.ID, StatusQueued)
 		if err != nil {
 			return err
 		}
 		n, err := res.RowsAffected()
 		if err != nil || n == 0 {
+			return err
+		}
+		if _, err = q.ExecContext(txctx, `DELETE FROM access_ownership WHERE resource_kind='run' AND resource_id=?`, r.ID); err != nil {
 			return err
 		}
 		return s.releaseQueuedActivityTx(txctx, q, r.ID)

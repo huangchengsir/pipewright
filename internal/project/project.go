@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"time"
 
 	"github.com/google/uuid"
@@ -211,6 +212,13 @@ func (s *service) Create(ctx context.Context, in CreateInput) (*Project, error) 
 		return nil, err
 	}
 
+	id := uuid.NewString()
+	if err := tenancy.CheckNew(ctx, s.db, "project.create", "project", id); err != nil {
+		return nil, err
+	}
+	if err := tenancy.Check(ctx, s.db, "credential.use", "credential", in.CredentialID); err != nil {
+		return nil, err
+	}
 	branch, err := s.probe(ctx, in.RepoURL, in.CredentialID)
 	if err != nil {
 		return nil, err
@@ -220,11 +228,19 @@ func (s *service) Create(ctx context.Context, in CreateInput) (*Project, error) 
 		defaultBranch = branch // ls-remote 探测到的远端 HEAD(可能为空)
 	}
 
-	id := uuid.NewString()
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
 
 	err = configstate.WithWriteTxContext(ctx, s.db, func(txctx context.Context, q configstate.DBTX) error {
+		if err := tenancy.LockAuthorization(txctx, s.db); err != nil {
+			return err
+		}
+		if err := tenancy.CheckNew(txctx, s.db, "project.create", "project", id); err != nil {
+			return err
+		}
+		if err := tenancy.Check(txctx, s.db, "credential.use", "credential", in.CredentialID); err != nil {
+			return err
+		}
 		_, writeErr := q.ExecContext(txctx,
 			`INSERT INTO projects (id, name, repo_url, default_branch, credential_id, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -232,6 +248,9 @@ func (s *service) Create(ctx context.Context, in CreateInput) (*Project, error) 
 		)
 		if writeErr != nil {
 			return writeErr
+		}
+		if err := tenancy.RecordOwnership(txctx, s.db, "project", id, id); err != nil {
+			return err
 		}
 		return configstate.EnsureProject(txctx, q, s.db, id)
 	})
@@ -269,10 +288,23 @@ func normalizePage(page, pageSize int) (int, int) {
 }
 
 func (s *service) ListPaged(ctx context.Context, page, pageSize int) (*ListResult, error) {
+	var result *ListResult
+	err := configstate.WithReadTxContext(ctx, s.db, func(txctx context.Context, _ configstate.DBTX) error {
+		var err error
+		result, err = s.listPaged(txctx, page, pageSize)
+		return err
+	})
+	return result, err
+}
+func (s *service) listPaged(ctx context.Context, page, pageSize int) (*ListResult, error) {
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "project.read", "p.id")
+	if err != nil {
+		return nil, err
+	}
 	page, pageSize = normalizePage(page, pageSize)
 
 	var total int
-	if err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx, `SELECT COUNT(1) FROM projects`).Scan(&total); err != nil {
+	if err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx, `SELECT COUNT(1) FROM projects p WHERE `+predicate.SQL, predicate.Args...).Scan(&total); err != nil {
 		return nil, fmt.Errorf("project: count: %w", err)
 	}
 
@@ -284,9 +316,10 @@ func (s *service) ListPaged(ctx context.Context, page, pageSize int) (*ListResul
 		 FROM projects p
 		 LEFT JOIN credentials c ON c.id = p.credential_id
  LEFT JOIN project_config_versions cv ON cv.project_id=p.id
+   WHERE `+predicate.SQL+`
 		 ORDER BY p.created_at DESC, p.id
 		 `+pageSQL,
-		pageArgs...,
+		append(predicate.Args, pageArgs...)...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("project: list: %w", err)
@@ -308,13 +341,19 @@ func (s *service) ListPaged(ctx context.Context, page, pageSize int) (*ListResul
 }
 
 func (s *service) Get(ctx context.Context, id string) (*Project, error) {
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "project.read", "p.id")
+	if err != nil {
+		return nil, err
+	}
+	args := []any{id}
+	args = append(args, predicate.Args...)
 	row := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT p.id, p.name, p.repo_url, p.default_branch, p.credential_id,
 		        COALESCE(c.name, ''), p.pac_enabled, p.pr_status_enabled, p.created_at, p.updated_at, COALESCE(cv.revision,1)
 		 FROM projects p
 		 LEFT JOIN credentials c ON c.id = p.credential_id
  LEFT JOIN project_config_versions cv ON cv.project_id=p.id
-		 WHERE p.id = ?`, id,
+		 WHERE p.id = ? AND `+predicate.SQL, args...,
 	)
 	p, err := scanProject(row)
 	if err != nil {
@@ -327,6 +366,9 @@ func (s *service) Get(ctx context.Context, id string) (*Project, error) {
 }
 
 func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Project, error) {
+	if err := tenancy.Check(ctx, s.db, "project.edit", "project", id); err != nil {
+		return nil, err
+	}
 	// External credential validation must precede the configuration transaction.
 	if in.Name != nil && *in.Name == "" {
 		return nil, ErrEmptyName
@@ -339,41 +381,60 @@ func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Proje
 		if err != nil {
 			return nil, err
 		}
+		if err := tenancy.Check(ctx, s.db, "credential.use", "credential", *in.CredentialID); err != nil {
+			return nil, err
+		}
 		if _, err := s.probe(ctx, current.RepoURL, *in.CredentialID); err != nil {
 			return nil, err
 		}
 	}
 	var out *Project
-	err := configstate.MutateProject(ctx, s.db, id, func(txctx context.Context, q configstate.DBTX) error {
-		current, err := s.Get(txctx, id)
-		if err != nil {
+	err := configstate.WithWriteTxContext(ctx, s.db, func(fenced context.Context, _ configstate.DBTX) error {
+		if err := tenancy.LockAuthorization(fenced, s.db); err != nil {
 			return err
 		}
-		if in.Name != nil {
-			current.Name = *in.Name
-		}
-		if in.DefaultBranch != nil {
-			current.DefaultBranch = *in.DefaultBranch
-		}
-		if in.CredentialID != nil {
-			current.CredentialID = *in.CredentialID
-		}
-		if in.PacEnabled != nil {
-			current.PacEnabled = *in.PacEnabled
-		}
-		if in.PRStatusEnabled != nil {
-			current.PRStatusEnabled = *in.PRStatusEnabled
-		}
-		current.UpdatedAt = time.Now().UTC()
-		_, err = q.ExecContext(txctx, `UPDATE projects SET name=?, default_branch=?, credential_id=?, pac_enabled=?, pr_status_enabled=?, updated_at=? WHERE id=?`, current.Name, current.DefaultBranch, current.CredentialID, current.PacEnabled, current.PRStatusEnabled, current.UpdatedAt.Format(time.RFC3339), id)
-		if err != nil && isForeignKeyErr(err) {
-			return ErrCredentialNotFound
-		}
-		if err != nil {
+		return configstate.MutateProject(fenced, s.db, id, func(txctx context.Context, q configstate.DBTX) error {
+			if err := tenancy.LockAuthorization(txctx, s.db); err != nil {
+				return err
+			}
+			if err := tenancy.Check(txctx, s.db, "project.edit", "project", id); err != nil {
+				return err
+			}
+			if in.CredentialID != nil {
+				if err := tenancy.Check(txctx, s.db, "credential.use", "credential", *in.CredentialID); err != nil {
+					return err
+				}
+			}
+			current, err := s.Get(txctx, id)
+			if err != nil {
+				return err
+			}
+			if in.Name != nil {
+				current.Name = *in.Name
+			}
+			if in.DefaultBranch != nil {
+				current.DefaultBranch = *in.DefaultBranch
+			}
+			if in.CredentialID != nil {
+				current.CredentialID = *in.CredentialID
+			}
+			if in.PacEnabled != nil {
+				current.PacEnabled = *in.PacEnabled
+			}
+			if in.PRStatusEnabled != nil {
+				current.PRStatusEnabled = *in.PRStatusEnabled
+			}
+			current.UpdatedAt = time.Now().UTC()
+			_, err = q.ExecContext(txctx, `UPDATE projects SET name=?, default_branch=?, credential_id=?, pac_enabled=?, pr_status_enabled=?, updated_at=? WHERE id=?`, current.Name, current.DefaultBranch, current.CredentialID, current.PacEnabled, current.PRStatusEnabled, current.UpdatedAt.Format(time.RFC3339), id)
+			if err != nil && isForeignKeyErr(err) {
+				return ErrCredentialNotFound
+			}
+			if err != nil {
+				return err
+			}
+			out, err = s.Get(txctx, id)
 			return err
-		}
-		out, err = s.Get(txctx, id)
-		return err
+		})
 	})
 	if errors.Is(err, configstate.ErrNotFound) {
 		return nil, ErrNotFound
@@ -385,8 +446,17 @@ func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Proje
 }
 
 func (s *service) Delete(ctx context.Context, id string) error {
+	if err := tenancy.Check(ctx, s.db, "project.delete", "project", id); err != nil {
+		return err
+	}
 	var revision int64
 	err := configstate.WithWriteTxContext(ctx, s.db, func(txctx context.Context, q configstate.DBTX) error {
+		if err := tenancy.LockAuthorization(txctx, s.db); err != nil {
+			return err
+		}
+		if err := tenancy.Check(txctx, s.db, "project.delete", "project", id); err != nil {
+			return err
+		}
 		if err := configstate.LockEpochs(txctx, q, s.db, configstate.EpochPolicy, configstate.EpochSecrets, configstate.EpochExecutor); err != nil {
 			return err
 		}
@@ -412,6 +482,11 @@ func (s *service) Delete(ctx context.Context, id string) error {
 			return err
 		}
 		for _, pid := range ids {
+			if pid != id {
+				if err := tenancy.Check(txctx, s.db, "project.edit", "project", pid); err != nil {
+					return err
+				}
+			}
 			if err := configstate.CheckIdle(txctx, q, pid); err != nil {
 				if errors.Is(err, configstate.ErrBusy) {
 					return ErrProjectHasActiveRuns
@@ -443,6 +518,15 @@ func (s *service) Delete(ctx context.Context, id string) error {
 		if err := configstate.MarkDeleted(txctx, q, id, rev); err != nil {
 			return err
 		}
+		if _, err := q.ExecContext(txctx, `DELETE FROM access_run_authorizations WHERE project_id=?`, id); err != nil {
+			return err
+		}
+		if _, err := q.ExecContext(txctx, `DELETE FROM access_ownership WHERE resource_kind<>'audit' AND (project_id=? OR (resource_kind='project' AND resource_id=?))`, id, id); err != nil {
+			return err
+		}
+		if _, err := q.ExecContext(txctx, `DELETE FROM access_environments WHERE project_id=?`, id); err != nil {
+			return err
+		}
 		r, err := q.ExecContext(txctx, `DELETE FROM projects WHERE id=?`, id)
 		if err != nil {
 			return err
@@ -471,8 +555,14 @@ func (s *service) TestClone(ctx context.Context, repoURL, credentialID string) (
 	if credentialID == "" {
 		return nil, ErrEmptyCredentialID
 	}
+	if err := tenancy.Check(ctx, s.db, "credential.use", "credential", credentialID); err != nil {
+		return nil, err
+	}
 	branch, err := s.probe(ctx, repoURL, credentialID)
 	if err != nil {
+		return nil, err
+	}
+	if err := tenancy.Check(ctx, s.db, "credential.use", "credential", credentialID); err != nil {
 		return nil, err
 	}
 	return &TestCloneResult{DefaultBranch: branch}, nil

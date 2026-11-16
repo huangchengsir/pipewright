@@ -1,0 +1,2808 @@
+<script setup lang="ts">
+import { ref, computed, onMounted, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
+import {
+  listProjects,
+  createProject,
+  updateProject,
+  deleteProject,
+  testClone,
+  type Project,
+  type RunStatus,
+  type CreateProjectInput,
+  type UpdateProjectInput,
+} from '../api/projects'
+import { listCredentials, createCredential, type Credential, type CredentialType } from '../api/credentials'
+import { triggerManual, type RunDetail, type TriggerManualInput } from '../api/runs'
+import { listRefs, listCommits, type GitRef, type GitCommit } from '../api/refs'
+import RunParamsEditor from '../components/RunParamsEditor.vue'
+import TypedRunParams from '../components/TypedRunParams.vue'
+import CredentialSelect from '../components/projects/CredentialSelect.vue'
+import { getParameters, validateParamValues, type ParamDef } from '../api/parameters'
+import { HttpError } from '../api/http'
+import PermissionGate from '../components/PermissionGate.vue'
+import {usePermission} from '../composables/usePermission'
+import {usePermissionStore} from '../stores/permissions'
+import {useIdentityRequestScope} from '../composables/useAuthorizedRequestScope'
+import type {PermissionQuery} from '../api/access'
+import { configRevisionOf } from '../api/configRevision'
+import { selectCreatedOnboardingProject } from '../composables/useOnboarding'
+
+// ─── i18n ─────────────────────────────────────────────────────────────────────
+
+const { t } = useI18n()
+
+// Map the Chinese-keyed project RunStatus to the shared `runStatus.*` i18n keys.
+const RUN_STATUS_KEY: Record<RunStatus, string> = {
+  '成功': 'success',
+  '失败': 'failed',
+  '进行中': 'running',
+  '部分失败': 'partial_failed',
+  '已回滚': 'rolled_back',
+  '排队中': 'queued',
+}
+
+function runStatusLabel(s: RunStatus): string {
+  return t(`runStatus.${RUN_STATUS_KEY[s]}`)
+}
+
+// ─── router ───────────────────────────────────────────────────────────────────
+
+const router = useRouter()
+const route = useRoute()
+const permissions=usePermissionStore(),team=permissions.activeTeam
+const query=(action:string,resourceId='',create=false):PermissionQuery=>({action,resourceId,create})
+const can=(action:string,id='',create=false)=>scope.active()&&permissions.allowed(team,query(action,id,create))
+const createPermission=usePermission(query('project.create','',true))
+const credentialCreatePermission=usePermission(query('credential.create','',true))
+const onboardingRunPermission=usePermission(()=>query('run.start',String(route.query.onboardingRun??''),true))
+const onboardingEditPermission=usePermission(()=>query('project.edit',String(route.query.onboardingEdit??'')))
+
+function goToPipeline(projectId: string): void {
+  if (!can("pipeline.read",projectId)) return
+  void router.push({ name: 'project-pipeline', params: { id: projectId } })
+}
+
+// Story 7-4: read-only code browsing (FR-4)
+function goToCode(projectId: string): void {
+  if (!can("project.read",projectId)) return
+  void router.push({ name: 'project-code', params: { id: projectId } })
+}
+
+// ─── load state ──────────────────────────────────────────────────────────────
+
+type LoadState = 'idle' | 'loading' | 'error'
+
+const loadState = ref<LoadState>('idle')
+const loadError = ref('')
+const projects = ref<Project[]>([])
+
+// ─── search + filter ─────────────────────────────────────────────────────────
+
+const searchQuery = ref('')
+const statusFilter = ref<RunStatus | 'all'>('all')
+
+const STATUS_OPTIONS = computed<Array<{ value: RunStatus | 'all'; label: string }>>(() => [
+  { value: 'all',     label: t('projects.statusAll') },
+  { value: '成功',     label: runStatusLabel('成功') },
+  { value: '失败',     label: runStatusLabel('失败') },
+  { value: '进行中',   label: runStatusLabel('进行中') },
+  { value: '部分失败', label: runStatusLabel('部分失败') },
+  { value: '已回滚',   label: runStatusLabel('已回滚') },
+  { value: '排队中',   label: runStatusLabel('排队中') },
+])
+
+const filteredProjects = computed(() => {
+  let list = projects.value
+  const q = searchQuery.value.trim().toLowerCase()
+  if (q) {
+    list = list.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.repoUrl.toLowerCase().includes(q) ||
+        p.defaultBranch.toLowerCase().includes(q),
+    )
+  }
+  if (statusFilter.value !== 'all') {
+    list = list.filter((p) => p.lastRunStatus === statusFilter.value)
+  }
+  return list
+})
+
+// ─── credentials for dropdown ─────────────────────────────────────────────────
+
+const credentials = ref<Credential[]>([])
+const credentialsLoading = ref(false)
+
+const gitCredentials = computed(() => credentials.value.filter((c) =>
+  isSSHRepo.value ? (c.type === 'ssh_key' || c.type === 'ssh_password') : (c.type === 'git_token' || c.type === 'git_http'),
+))
+
+async function loadCredentials(): Promise<void> {
+  credentialsLoading.value = true
+  try {
+    credentials.value = await scope.run(()=>listCredentials(scope.requestOptions))
+  } catch {
+    // non-fatal; user will see empty dropdown with helper text
+  } finally {
+    credentialsLoading.value = false
+  }
+}
+
+// ─── data loading ──────────────────────────────────────────────────────────────
+
+async function loadProjects(): Promise<void> {
+  loadState.value = 'loading'
+  loadError.value = ''
+  try {
+    projects.value = await scope.run(()=>listProjects(scope.requestOptions))
+    loadState.value = 'idle'
+    consumeOnboardingQuery()
+  } catch (err) {
+    if(!scope.active())return
+    if (err instanceof HttpError) {
+      if (err.status === 0) {
+        loadError.value = t('projects.errLoadNetwork')
+      } else {
+        loadError.value = err.apiError?.message ?? t('projects.errLoadStatus', { status: err.status })
+      }
+    } else {
+      loadError.value = t('projects.errLoadRetry')
+    }
+    loadState.value = 'error'
+  }
+}
+
+onMounted(async () => {
+  await Promise.all([loadProjects(), loadCredentials()])
+})
+
+// ─── new project modal ────────────────────────────────────────────────────────
+
+const createModalOpen = ref(false)
+
+const createForm = ref({
+  name: '',
+  repoUrl: '',
+  credentialId: '',
+  defaultBranch: '',
+})
+const createCredentialUsePermission=usePermission(()=>query('credential.use',createForm.value.credentialId))
+const isPlainHTTPRepo = computed(() => createForm.value.repoUrl.trim().toLowerCase().startsWith('http://'))
+const isSSHRepo = computed(() => /^(ssh:\/\/|[^\s@/:]+@[^\s@/:]+:)/i.test(createForm.value.repoUrl.trim()))
+const inlineCredentialTypes = computed<CredentialType[]>(() => isSSHRepo.value ? ['ssh_key', 'ssh_password'] : ['git_token', 'git_http'])
+const inlineCredentialLabels: Record<CredentialType, string> = {
+  git_token: 'typeGitToken', git_http: 'typeGitHttp', ssh_key: 'typeSshKey',
+  ssh_password: 'typeSshPassword', registry: 'typeRegistry',
+}
+
+watch(isSSHRepo, (ssh) => {
+  createForm.value.credentialId = ''
+  inlineCredentialForm.value.type = ssh ? 'ssh_key' : 'git_http'
+  inlineCredentialForm.value.secret = ''
+  testState.value = 'idle'
+})
+
+function repoURLProblem(raw: string): 'errRepoFormat' | 'errRepoProtocol' | '' {
+  if (/^[^\s@/:]+@[^\s@/:]+:[^\s]+$/.test(raw.trim())) return ''
+  try {
+    const parsed = new URL(raw.trim())
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:' && parsed.protocol !== 'ssh:') return 'errRepoProtocol'
+    if (parsed.protocol === 'ssh:' && (!parsed.username || parsed.password)) return 'errRepoFormat'
+    return parsed.hostname && parsed.pathname && parsed.pathname !== '/' ? '' : 'errRepoFormat'
+  } catch {
+    return 'errRepoFormat'
+  }
+}
+
+const createErrors = ref({
+  name: '',
+  repoUrl: '',
+  credentialId: '',
+})
+
+const inlineCredentialOpen = ref(false)
+const inlineCredentialForm = ref<{ name: string; type: CredentialType; username: string; secret: string }>({ name: '', type: 'git_http', username: '', secret: '' })
+const inlineCredentialErrors = ref({ name: '', username: '', secret: '' })
+const inlineCredentialBanner = ref('')
+const inlineCredentialSubmitting = ref(false)
+
+const createBanner = ref('')
+const createSubmitting = ref(false)
+
+// test-clone sub-state
+type TestState = 'idle' | 'testing' | 'ok' | 'error'
+const testState = ref<TestState>('idle')
+const testError = ref('')
+const testDetectedBranch = ref('')
+
+function openCreateModal(): void {
+  if (!can("project.create","",true)) return
+  createForm.value = { name: '', repoUrl: '', credentialId: '', defaultBranch: '' }
+  clearCreateErrors()
+  createBanner.value = ''
+  testState.value = 'idle'
+  testError.value = ''
+  testDetectedBranch.value = ''
+  inlineCredentialOpen.value = false
+  inlineCredentialForm.value = { name: '', type: 'git_http', username: '', secret: '' }
+  inlineCredentialErrors.value = { name: '', username: '', secret: '' }
+  inlineCredentialBanner.value = ''
+  createModalOpen.value = true
+}
+
+function closeCreateModal(): void {
+  if (createSubmitting.value) return
+  createModalOpen.value = false
+}
+
+function clearCreateErrors(): void {
+  createErrors.value = { name: '', repoUrl: '', credentialId: '' }
+}
+
+function clearInlineCredentialErrors(): void {
+  inlineCredentialErrors.value = { name: '', username: '', secret: '' }
+  inlineCredentialBanner.value = ''
+}
+
+async function handleInlineCredentialSubmit(): Promise<void> {
+  if (!can("project.create","",true)||!can("credential.create","",true)||inlineCredentialSubmitting.value) return
+  clearInlineCredentialErrors()
+  let valid = true
+  if (!inlineCredentialForm.value.name.trim()) {
+    inlineCredentialErrors.value.name = t('projects.inlineCredNameRequired')
+    valid = false
+  }
+  if (inlineCredentialForm.value.type === 'git_http' && !inlineCredentialForm.value.username.trim()) {
+    inlineCredentialErrors.value.username = t('projects.inlineCredUsernameRequired')
+    valid = false
+  }
+  if (!inlineCredentialForm.value.secret) {
+    inlineCredentialErrors.value.secret = t('projects.inlineCredSecretRequired')
+    valid = false
+  }
+  if (!valid) return
+
+  inlineCredentialSubmitting.value = true
+  try {
+    const credential = await scope.run(()=>createCredential({
+      name: inlineCredentialForm.value.name.trim(),
+      type: inlineCredentialForm.value.type,
+      scope: '',
+      username: inlineCredentialForm.value.username.trim(),
+      secret: inlineCredentialForm.value.secret,
+    },scope.requestOptions))
+    if(!can("project.create","",true)||!can("credential.create","",true))return
+    credentials.value = [credential, ...credentials.value]
+    createForm.value.credentialId = credential.id
+    inlineCredentialOpen.value = false
+    inlineCredentialForm.value.secret = ''
+    testState.value = 'idle'
+  } catch (err) {
+    if(!scope.active())return
+    if (err instanceof HttpError) {
+      inlineCredentialBanner.value = err.apiError?.message ?? t('projects.inlineCredCreateStatus', { status: err.status })
+    } else {
+      inlineCredentialBanner.value = t('projects.inlineCredCreateRetry')
+    }
+  } finally {
+    inlineCredentialSubmitting.value = false
+  }
+}
+
+function validateCreateForm(): boolean {
+  clearCreateErrors()
+  let ok = true
+  const repoProblem = repoURLProblem(createForm.value.repoUrl)
+  if (!createForm.value.name.trim()) {
+    createErrors.value.name = t('projects.errNameRequired')
+    ok = false
+  }
+  if (!createForm.value.repoUrl.trim()) {
+    createErrors.value.repoUrl = t('projects.errRepoRequired')
+    ok = false
+  } else if (repoProblem) {
+    createErrors.value.repoUrl = t(`projects.${repoProblem}`)
+    ok = false
+  }
+  if (!createForm.value.credentialId) {
+    createErrors.value.credentialId = t('projects.errCredRequired')
+    ok = false
+  }
+  return ok
+}
+
+async function handleTestClone(): Promise<void> {
+  if (!can("project.create","",true)||!can("credential.use",createForm.value.credentialId)||testState.value==="testing") return
+  // Validate url + credential only
+  let ok = true
+  if (!createForm.value.repoUrl.trim()) {
+    createErrors.value.repoUrl = t('projects.errRepoFirst')
+    ok = false
+  } else if (repoURLProblem(createForm.value.repoUrl)) {
+    createErrors.value.repoUrl = t(`projects.${repoURLProblem(createForm.value.repoUrl)}`)
+    ok = false
+  }
+  if (!createForm.value.credentialId) {
+    createErrors.value.credentialId = t('projects.errCredFirst')
+    ok = false
+  }
+  if (!ok) return
+
+  const credentialId=createForm.value.credentialId,repoUrl=createForm.value.repoUrl.trim()
+  testState.value = 'testing'
+  testError.value = ''
+  testDetectedBranch.value = ''
+
+  try {
+    const result = await scope.run(()=>testClone({
+      repoUrl: createForm.value.repoUrl.trim(),
+      credentialId: createForm.value.credentialId,
+    },scope.requestOptions))
+    if(!can("project.create","",true)||!can("credential.use",credentialId)||credentialId!==createForm.value.credentialId||repoUrl!==createForm.value.repoUrl.trim())return
+    testState.value = 'ok'
+    testDetectedBranch.value = result.defaultBranch
+    // Auto-fill default branch if user hasn't typed one
+    if (!createForm.value.defaultBranch) {
+      createForm.value.defaultBranch = result.defaultBranch
+    }
+  } catch (err) {
+    if(!scope.active())return
+    testState.value = 'error'
+    if (err instanceof HttpError) {
+      const code = err.apiError?.code
+      if (code === 'credential_error') {
+        testError.value = t('projects.testErrCredential')
+      } else if (code === 'unsupported_repo_protocol') {
+        testError.value = t('projects.errRepoProtocol')
+      } else if (code === 'repo_unreachable') {
+        testError.value = t('projects.testErrUnreachable')
+      } else if (code === 'vault_unconfigured') {
+        testError.value = t('projects.testErrVault')
+      } else if (err.status === 0) {
+        testError.value = t('projects.errNetwork')
+      } else {
+        testError.value = err.apiError?.message ?? t('projects.testErrStatus', { status: err.status })
+      }
+    } else {
+      testError.value = t('projects.testErrRetry')
+    }
+  }
+}
+
+async function handleCreateSubmit(): Promise<void> {
+  if (!can("project.create","",true)||!can("credential.use",createForm.value.credentialId)||createSubmitting.value) return
+  if (!validateCreateForm()) return
+  createSubmitting.value = true
+  createBanner.value = ''
+
+  const input: CreateProjectInput = {
+    name: createForm.value.name.trim(),
+    repoUrl: createForm.value.repoUrl.trim(),
+    credentialId: createForm.value.credentialId,
+  }
+  if (createForm.value.defaultBranch.trim()) {
+    input.defaultBranch = createForm.value.defaultBranch.trim()
+  }
+
+  try {
+    const created = await scope.run(()=>createProject(input,scope.requestOptions))
+    if(!can("project.create","",true)||!can("credential.use",input.credentialId))return
+    projects.value = [created, ...projects.value]
+    selectCreatedOnboardingProject(created.id)
+    createModalOpen.value = false
+  } catch (err) {
+    if(!scope.active())return
+    if (err instanceof HttpError) {
+      const code = err.apiError?.code
+      if (code === 'credential_error') {
+        createErrors.value.credentialId = t('projects.createErrCredField')
+        createBanner.value = t('projects.createErrCredBanner')
+      } else if (code === 'repo_unreachable') {
+        createErrors.value.repoUrl = t('projects.createErrRepoField')
+        createBanner.value = t('projects.createErrRepoBanner')
+      } else if (code === 'unsupported_repo_protocol') {
+        createErrors.value.repoUrl = t('projects.errRepoProtocol')
+        createBanner.value = t('projects.errRepoProtocol')
+      } else if (code === 'vault_unconfigured') {
+        createBanner.value = t('projects.createErrVault')
+      } else if (err.status === 0) {
+        createBanner.value = t('projects.errNetwork')
+      } else {
+        createBanner.value = err.apiError?.message ?? t('projects.createErrStatus', { status: err.status })
+      }
+    } else {
+      createBanner.value = t('projects.createErrRetry')
+    }
+  } finally {
+    createSubmitting.value = false
+  }
+}
+
+// ─── rename modal ──────────────────────────────────────────────────────────────
+
+const renameModalOpen = ref(false)
+const renamingProject = ref<Project | null>(null)
+const renameValue = ref('')
+const renameError = ref('')
+const renameBanner = ref('')
+const renameSubmitting = ref(false)
+const repairCredential = ref(false)
+const renameCredentialId = ref('')
+const renameCredentialError = ref('')
+const renameCredentialUsePermission=usePermission(()=>query('credential.use',renameCredentialId.value))
+const renameCredentials = computed(() => credentials.value.filter(c =>
+  /^(ssh:\/\/|[^\s@/:]+@[^\s@/:]+:)/i.test(renamingProject.value?.repoUrl ?? '')
+    ? c.type === 'ssh_key' || c.type === 'ssh_password' : c.type === 'git_token' || c.type === 'git_http'))
+
+function openRenameModal(p: Project, credentialRepair = false): void {
+  if (!can("project.edit",p.id)) return
+  repairCredential.value = credentialRepair
+  renameCredentialId.value = p.credentialId
+  renameCredentialError.value = ''
+  renamingProject.value = p
+  renameValue.value = p.name
+  renameError.value = ''
+  renameBanner.value = ''
+  renameModalOpen.value = true
+}
+
+function closeRenameModal(): void {
+  if (renameSubmitting.value) return
+  renameModalOpen.value = false
+  renamingProject.value = null
+}
+
+async function handleRenameSubmit(): Promise<void> {
+  if (!renamingProject.value||!can("project.edit",renamingProject.value.id)||renameSubmitting.value||(repairCredential.value&&renameCredentialId.value!==""&&!can("credential.use",renameCredentialId.value))) return
+  if (repairCredential.value && !renameCredentialId.value) {
+    renameCredentialError.value = t('projects.errCredRequired')
+    return
+  }
+  if (!renameValue.value.trim()) {
+    renameError.value = t('projects.errNameEmpty')
+    return
+  }
+  if (!renamingProject.value) return
+  renameSubmitting.value = true
+  renameBanner.value = ''
+
+  const input: UpdateProjectInput = { name: renameValue.value.trim() }
+
+  try {
+    if (repairCredential.value) input.credentialId = renameCredentialId.value
+    const revision = configRevisionOf(renamingProject.value)
+    const id=renamingProject.value.id
+    const updated=await scope.run(()=>updateProject(id,input,revision,scope.requestOptions))
+    if(!can("project.edit",id)||renamingProject.value?.id!==id)return
+    projects.value = projects.value.map((p) => (p.id === updated.id ? updated : p))
+    renameModalOpen.value = false
+    renamingProject.value = null
+  } catch (err) {
+    if(!scope.active())return
+    if (err instanceof HttpError) {
+      if (err.status === 0) {
+        renameBanner.value = t('projects.errNetworkRetry')
+      } else {
+        renameBanner.value = err.apiError?.message ?? t('projects.renameErrStatus', { status: err.status })
+      }
+    } else {
+      renameBanner.value = t('projects.renameErrRetry')
+    }
+  } finally {
+    renameSubmitting.value = false
+  }
+}
+
+// ─── delete confirm modal ─────────────────────────────────────────────────────
+
+const deleteModalOpen = ref(false)
+const deletingProject = ref<Project | null>(null)
+const deleteSubmitting = ref(false)
+const deleteBanner = ref('')
+
+function openDeleteModal(p: Project): void {
+  if (!can("project.delete",p.id)) return
+  deletingProject.value = p
+  deleteBanner.value = ''
+  deleteModalOpen.value = true
+}
+
+function closeDeleteModal(): void {
+  if (deleteSubmitting.value) return
+  deleteModalOpen.value = false
+  deletingProject.value = null
+}
+
+async function confirmDelete(): Promise<void> {
+  if (!deletingProject.value||!can("project.delete",deletingProject.value.id)||deleteSubmitting.value) return
+  if (!deletingProject.value) return
+  deleteSubmitting.value = true
+  deleteBanner.value = ''
+  const id = deletingProject.value.id
+
+  try {
+    const revision = configRevisionOf(deletingProject.value)
+    await scope.run(()=>deleteProject(id,revision,scope.requestOptions))
+    if(!can("project.delete",id)||deletingProject.value?.id!==id)return
+    projects.value = projects.value.filter((p) => p.id !== id)
+    deleteModalOpen.value = false
+    deletingProject.value = null
+  } catch (err) {
+    if(!scope.active())return
+    if (err instanceof HttpError) {
+      if (err.status === 0) {
+        deleteBanner.value = t('projects.errNetworkRetry')
+      } else {
+        deleteBanner.value = err.apiError?.message ?? t('projects.deleteErrStatus', { status: err.status })
+      }
+    } else {
+      deleteBanner.value = t('projects.deleteErrRetry')
+    }
+  } finally {
+    deleteSubmitting.value = false
+  }
+}
+
+// ─── manual trigger modal ─────────────────────────────────────────────────────
+
+const triggerModalOpen   = ref(false)
+const triggerProject     = ref<Project | null>(null)
+const triggerForm        = ref({ branch: '', commit: '' })
+const triggerParams      = ref<Record<string, string>>({})
+const triggerDefs        = ref<ParamDef[]>([])
+const triggerBranchError = ref('')
+const triggerBanner      = ref('')
+const triggerSubmitting  = ref(false)
+let triggerLoadReferences = true
+let referenceLoadSeq = 0
+
+function openTriggerModal(p: Project, loadReferences = true): void {
+  if (!can("run.start",p.id,true)) return
+  triggerLoadReferences = loadReferences
+  referenceLoadSeq++
+  commitLoadSeq++
+  branchOptions.value = []
+  commitOptions.value = []
+  triggerProject.value     = p
+  triggerForm.value        = { branch: p.defaultBranch || '', commit: '' }
+  triggerParams.value      = {}
+  triggerDefs.value        = []
+  triggerBranchError.value = ''
+  triggerBanner.value      = ''
+  triggerSubmitting.value  = false
+  triggerModalOpen.value   = true
+  if (loadReferences) void loadBranchOptions(p.id)
+  void loadTriggerDefs(p.id)
+}
+
+// 类型化运行参数定义(P0):有定义 → 弹窗渲染类型化控件;无 → 回退自由 KV。失败静默(降级)。
+async function loadTriggerDefs(projectId: string): Promise<void> {
+  const seq=referenceLoadSeq
+  try {
+    const defs=await scope.run(()=>getParameters(projectId,scope.requestOptions))
+    if(can("run.start",projectId,true)&&seq===referenceLoadSeq&&triggerProject.value?.id===projectId)triggerDefs.value=defs
+  } catch {
+    if(scope.active()&&seq===referenceLoadSeq&&triggerProject.value?.id===projectId)triggerDefs.value = []
+  }
+}
+
+// 代码管理区(Story 8-18):拉取真实分支/commit 供下拉建议(datalist);未启用/失败 → 静默回退手填。
+const branchOptions = ref<GitRef[]>([])
+const commitOptions = ref<GitCommit[]>([])
+async function loadBranchOptions(projectId: string): Promise<void> {
+  const seq = referenceLoadSeq
+  branchOptions.value = []
+  commitOptions.value = []
+  try {
+    const refs = await scope.run(()=>listRefs(projectId,scope.requestOptions))
+    if (scope.active() && can("run.start",projectId,true) && seq === referenceLoadSeq && triggerLoadReferences) branchOptions.value = [...refs.branches, ...refs.tags]
+  } catch {
+    // 代码管理区未启用(503)或仓库不可达:静默,保持纯文本输入(优雅降级)。
+  }
+  if (scope.active() && can("run.start",projectId,true) && seq === referenceLoadSeq && triggerLoadReferences) void loadCommitOptions(projectId, triggerForm.value.branch)
+}
+
+// 据当前分支拉最近 commit 供 commit 下拉(分支变化时刷新);失败静默。
+let commitLoadSeq = 0
+async function loadCommitOptions(projectId: string, ref: string): Promise<void> {
+  const seq = ++commitLoadSeq
+  try {
+    const commits = await scope.run(()=>listCommits(projectId,ref,30,scope.requestOptions))
+    if (scope.active() && can("run.start",projectId,true) && seq === commitLoadSeq) commitOptions.value = commits
+  } catch {
+    if (scope.active() && can("run.start",projectId,true) && seq === commitLoadSeq) commitOptions.value = []
+  }
+}
+
+function onTriggerBranchInput(): void {
+  triggerBranchError.value = ''
+  if (triggerLoadReferences && triggerProject.value) void loadCommitOptions(triggerProject.value.id, triggerForm.value.branch)
+}
+
+function closeTriggerModal(): void {
+  if (triggerSubmitting.value) return
+  triggerModalOpen.value = false
+  triggerProject.value   = null
+  referenceLoadSeq++
+  commitLoadSeq++
+}
+
+function consumeOnboardingQuery(): void {
+  if (loadState.value !== 'idle') return
+  const { onboardingCreate, onboardingRun, onboardingEdit } = route.query
+  if(onboardingCreate==='1'&&createPermission.pending.value)return
+  if(typeof onboardingRun==='string'&&onboardingRunPermission.pending.value)return
+  if(typeof onboardingEdit==='string'&&onboardingEditPermission.pending.value)return
+  if (onboardingCreate === undefined && onboardingRun === undefined && onboardingEdit === undefined) return
+  const query = { ...route.query }
+  delete query.onboardingCreate
+  delete query.onboardingRun
+  delete query.onboardingEdit
+  void router.replace({ query })
+  if (onboardingCreate === '1') openCreateModal()
+  else if (typeof onboardingRun === 'string') {
+    const p = projects.value.find(p => p.id === onboardingRun)
+    if (p) openTriggerModal(p, false)
+  } else if (typeof onboardingEdit === 'string') {
+    const p = projects.value.find(p => p.id === onboardingEdit)
+    if (p) openRenameModal(p, true)
+  }
+}
+watch(()=>[route.query,createPermission.pending.value,onboardingRunPermission.pending.value,onboardingEditPermission.pending.value],consumeOnboardingQuery)
+
+async function handleTriggerSubmit(): Promise<void> {
+  if (!triggerProject.value||!can("run.start",triggerProject.value.id,true)||triggerSubmitting.value) return
+  triggerBranchError.value = ''
+  triggerBanner.value      = ''
+
+  // 分支可选:留空时后端按项目默认分支解析(项目已知默认分支,不必逼用户填)。
+  const branch = triggerForm.value.branch.trim()
+
+  if (!triggerProject.value) return
+
+  // 类型化参数:提交前客户端即时校验(后端仍会再校验一次 422)。
+  if (triggerDefs.value.length) {
+    const verr = validateParamValues(triggerDefs.value, triggerParams.value)
+    if (verr) {
+      triggerBanner.value = verr
+      return
+    }
+  }
+
+  triggerSubmitting.value = true
+
+  try {
+    const input: TriggerManualInput = {}
+    if (branch) input.branch = branch
+    const commit = triggerForm.value.commit.trim()
+    if (commit) input.commit = commit
+    if (Object.keys(triggerParams.value).length) input.params = triggerParams.value
+
+    const id=triggerProject.value.id
+    const run: RunDetail = await scope.run(()=>triggerManual(id,input,scope.requestOptions))
+    if(!can("run.start",id,true)||triggerProject.value?.id!==id)return
+    triggerModalOpen.value = false
+    triggerProject.value   = null
+    void router.push(`/runs/${run.id}`)
+  } catch (err) {
+    if(!scope.active())return
+    if (err instanceof HttpError) {
+      if (err.status === 0) {
+        triggerBanner.value = t('projects.errNetwork')
+      } else if (err.status === 404) {
+        triggerBanner.value = t('projects.triggerErrNotFound')
+      } else {
+        triggerBanner.value = err.apiError?.message ?? t('projects.triggerErrStatus', { status: err.status })
+      }
+    } else {
+      triggerBanner.value = t('projects.triggerErrRetry')
+    }
+  } finally {
+    triggerSubmitting.value = false
+  }
+}
+
+// ─── helpers ──────────────────────────────────────────────────────────────────
+
+function relativeTime(isoStr: string): string {
+  const diff = Date.now() - new Date(isoStr).getTime()
+  const s = Math.floor(diff / 1000)
+  if (s < 60) return t('time.justNow')
+  const m = Math.floor(s / 60)
+  if (m < 60) return t('time.minAgo', { n: m })
+  const h = Math.floor(m / 60)
+  if (h < 24) return t('time.hourAgo', { n: h })
+  const d = Math.floor(h / 24)
+  return t('time.dayAgo', { n: d })
+}
+
+// Status pill config — fixed six-word vocabulary, no substitutes
+type StatusConfig = { dot: string; bg: string; border: string; text: string; pulse: boolean }
+
+const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
+  '成功':   { dot: 'var(--color-green)',  bg: 'var(--color-green-soft)',  border: 'transparent',            text: 'var(--color-green)',  pulse: false },
+  '失败':   { dot: 'var(--color-red)',    bg: 'var(--color-red-soft)',    border: 'var(--color-red-line)',   text: 'var(--color-red)',    pulse: false },
+  '进行中': { dot: 'var(--color-amber)',  bg: 'var(--color-amber-soft)',  border: 'transparent',            text: 'var(--color-amber)',  pulse: true  },
+  '部分失败': { dot: 'var(--color-red)',  bg: 'var(--color-red-soft)',    border: 'var(--color-red-line)',   text: 'var(--color-red)',    pulse: false },
+  '已回滚': { dot: 'var(--color-amber)',  bg: 'var(--color-amber-soft)',  border: 'var(--color-amber-line)', text: 'var(--color-amber)',  pulse: false },
+  '排队中': { dot: 'var(--color-faint)',  bg: 'var(--color-card-2)',      border: 'var(--color-border-strong)', text: 'var(--color-dim)', pulse: false },
+}
+const scope=useIdentityRequestScope(()=>{
+ projects.value=[];credentials.value=[];referenceLoadSeq++;commitLoadSeq++
+ createModalOpen.value=false;renameModalOpen.value=false;deleteModalOpen.value=false;triggerModalOpen.value=false
+ renamingProject.value=null;deletingProject.value=null;triggerProject.value=null
+ inlineCredentialForm.value.secret='';createForm.value={name:'',repoUrl:'',credentialId:'',defaultBranch:''}
+ triggerParams.value={};triggerDefs.value=[];branchOptions.value=[];commitOptions.value=[]
+})
+watch(()=>[createPermission.allowed.value,credentialCreatePermission.allowed.value,
+ renamingProject.value?can('project.edit',renamingProject.value.id):true,
+ deletingProject.value?can('project.delete',deletingProject.value.id):true,
+ triggerProject.value?can('run.start',triggerProject.value.id,true):true],()=>{
+ if(!createPermission.allowed.value){createModalOpen.value=false;inlineCredentialForm.value.secret=''}
+ if(!credentialCreatePermission.allowed.value){inlineCredentialOpen.value=false;inlineCredentialForm.value.secret=''}
+ if(renamingProject.value&&!can('project.edit',renamingProject.value.id)){renameModalOpen.value=false;renamingProject.value=null}
+ if(deletingProject.value&&!can('project.delete',deletingProject.value.id)){deleteModalOpen.value=false;deletingProject.value=null}
+ if(triggerProject.value&&!can('run.start',triggerProject.value.id,true)){triggerModalOpen.value=false;triggerProject.value=null;referenceLoadSeq++;commitLoadSeq++;triggerDefs.value=[];triggerParams.value={}}
+})
+const visibleCount=computed(()=>projects.value.filter(p=>can('project.read',p.id)).length)
+const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('project.read',p.id)).length)
+</script>
+
+<template>
+  <div class="projects-root">
+    <!-- ─── Page header ─────────────────────────────────────────────────── -->
+    <header class="page-header">
+      <div class="page-header-text">
+        <h1 class="page-title">{{ t('projects.title') }}</h1>
+        <p class="page-sub">{{ t('projects.subtitle') }}</p>
+      </div>
+      <PermissionGate :query="query('project.create','',true)"><button
+        class="btn-primary"
+        :disabled="loadState === 'loading'"
+        @click="openCreateModal"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
+          <path d="M12 5v14M5 12h14"/>
+        </svg>
+        {{ t('projects.newProject') }}
+      </button></PermissionGate>
+    </header>
+
+    <!-- ─── Load error banner ────────────────────────────────────────────── -->
+    <div
+      v-if="loadState === 'error'"
+      class="banner banner--error"
+      role="alert"
+    >
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
+      </svg>
+      <span>{{ loadError }}</span>
+      <button class="banner-retry" @click="loadProjects">↻ {{ t('projects.retry') }}</button>
+    </div>
+
+    <!-- ─── Search + Filter toolbar ─────────────────────────────────────── -->
+    <div
+      v-if="loadState === 'idle' && projects.length > 0"
+      class="toolbar"
+      role="search"
+      :aria-label="t('projects.searchFilterAria')"
+    >
+      <!-- Search box -->
+      <div class="search-wrap">
+        <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/>
+        </svg>
+        <input
+          v-model="searchQuery"
+          type="search"
+          class="search-input"
+          :placeholder="t('projects.searchPlaceholder')"
+          :aria-label="t('projects.searchAria')"
+        />
+      </div>
+
+      <!-- Status filter -->
+      <div class="filter-tabs" role="group" :aria-label="t('projects.statusFilterAria')">
+        <button
+          v-for="opt in STATUS_OPTIONS"
+          :key="opt.value"
+          type="button"
+          class="filter-tab"
+          :class="{ 'filter-tab--active': statusFilter === opt.value }"
+          @click="statusFilter = opt.value"
+        >
+          {{ opt.label }}
+        </button>
+      </div>
+    </div>
+
+    <!-- ─── Loading skeleton ─────────────────────────────────────────────── -->
+    <template v-if="loadState === 'loading'">
+      <div class="project-grid" aria-busy="true" :aria-label="t('projects.loading')">
+        <div
+          v-for="i in 6"
+          :key="i"
+          class="skel-card"
+          aria-hidden="true"
+        >
+          <div class="skel skel--name" />
+          <div class="skel skel--url" />
+          <div class="skel skel--tag" />
+          <div class="skel skel--meta" />
+        </div>
+      </div>
+    </template>
+
+    <!-- ─── Empty state ──────────────────────────────────────────────────── -->
+    <template v-else-if="loadState === 'idle' && projects.length === 0">
+      <div class="empty-state" role="status">
+        <div class="empty-icon" aria-hidden="true">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+            <path d="M14.5 9.5 21 3M21 3h-5M21 3v5"/>
+            <path d="M10 14a5 5 0 1 1-7 4.6"/>
+          </svg>
+        </div>
+        <p class="empty-label">{{ t('projects.emptyTitle') }}</p>
+        <p class="empty-hint">{{ t('projects.emptyHint') }}</p>
+        <PermissionGate :query="query('project.create','',true)"><button class="btn-primary" @click="openCreateModal">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
+            <path d="M12 5v14M5 12h14"/>
+          </svg>
+          {{ t('projects.newProject') }}
+        </button></PermissionGate>
+      </div>
+    </template>
+
+    <!-- ─── Empty search result ──────────────────────────────────────────── -->
+    <template v-else-if="loadState === 'idle' && filteredProjects.length === 0">
+      <div class="empty-state" role="status">
+        <div class="empty-icon" aria-hidden="true">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+            <circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/>
+          </svg>
+        </div>
+        <p class="empty-label">{{ t('projects.noMatchTitle') }}</p>
+        <p class="empty-hint">{{ t('projects.noMatchHint') }}</p>
+        <button
+          class="btn-secondary"
+          @click="searchQuery = ''; statusFilter = 'all'"
+        >{{ t('projects.clearFilter') }}</button>
+      </div>
+    </template>
+
+    <!-- ─── Project grid ─────────────────────────────────────────────────── -->
+    <template v-else-if="loadState === 'idle'">
+      <p class="result-count" aria-live="polite">
+        {{ t('projects.resultCount', { n: filteredVisibleCount }) }}
+        <template v-if="searchQuery || statusFilter !== 'all'">
+          {{ t('projects.resultCountTotal', { total: visibleCount }) }}
+        </template>
+      </p>
+
+      <ul class="project-grid" role="list">
+        <PermissionGate v-for="project in filteredProjects" :key="project.id" :query="query('project.read',project.id)"><li class="project-card">
+          <!-- Card header: name + status badge -->
+          <div class="card-header">
+            <div class="project-icon" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+                <path d="M14.5 9.5 21 3M21 3h-5M21 3v5"/>
+                <path d="M10 14a5 5 0 1 1-7 4.6"/>
+              </svg>
+            </div>
+            <h2 class="project-name" :title="project.name">{{ project.name }}</h2>
+
+            <!-- Status badge: only if we have a run status -->
+            <div
+              v-if="project.lastRunStatus"
+              class="status-pill"
+              :style="{
+                background: STATUS_CONFIG[project.lastRunStatus].bg,
+                border: `1px solid ${STATUS_CONFIG[project.lastRunStatus].border}`,
+                color: STATUS_CONFIG[project.lastRunStatus].text,
+              }"
+              :aria-label="t('projects.runStatusAria', { status: runStatusLabel(project.lastRunStatus) })"
+            >
+              <span
+                class="status-dot"
+                :class="{ 'status-dot--pulse': STATUS_CONFIG[project.lastRunStatus].pulse }"
+                :style="{ background: STATUS_CONFIG[project.lastRunStatus].dot }"
+                aria-hidden="true"
+              />
+              {{ runStatusLabel(project.lastRunStatus) }}
+            </div>
+          </div>
+
+          <!-- Repo + branch (equal-width columns) -->
+          <div class="card-repo">
+            <div class="repo-url-row">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/>
+              </svg>
+              <a
+                class="repo-url mono"
+                :href="project.repoUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+                :title="project.repoUrl"
+              >{{ project.repoUrl.replace(/^https?:\/\//, '') }}</a>
+            </div>
+            <div class="branch-row">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>
+              </svg>
+              <span class="branch-name mono">{{ project.defaultBranch || '—' }}</span>
+            </div>
+          </div>
+
+          <!-- Divider -->
+          <div class="card-divider" aria-hidden="true" />
+
+          <!-- Last run: empty placeholder or status -->
+          <div class="card-meta-row">
+            <span class="meta-label">{{ t('projects.lastRun') }}</span>
+            <span
+              v-if="!project.lastRunStatus"
+              class="meta-empty"
+            >{{ t('projects.noRun') }}</span>
+            <span
+              v-else
+              class="meta-value"
+              :style="{ color: STATUS_CONFIG[project.lastRunStatus].text }"
+            >{{ runStatusLabel(project.lastRunStatus) }}</span>
+          </div>
+
+          <!-- Target servers: empty placeholder or list -->
+          <div class="card-meta-row">
+            <span class="meta-label">{{ t('projects.targetServers') }}</span>
+            <span
+              v-if="!project.targetServers || project.targetServers.length === 0"
+              class="meta-empty"
+            >{{ t('projects.notBound') }}</span>
+            <span v-else class="meta-value">
+              {{ project.targetServers.join(', ') }}
+            </span>
+          </div>
+
+          <!-- Credential reference: display name + masked, never plaintext -->
+          <div class="card-meta-row">
+            <span class="meta-label">{{ t('projects.credential') }}</span>
+            <span class="meta-value meta-value--mono" :title="t('projects.credentialRefTitle')">
+              {{ project.credentialName || '—' }}
+            </span>
+          </div>
+
+          <!-- Card footer: updatedAt + actions -->
+          <div class="card-footer">
+            <span class="card-time" :title="project.updatedAt">
+              {{ t('projects.updatedAt', { time: relativeTime(project.updatedAt) }) }}
+            </span>
+
+            <div class="card-actions">
+              <!-- Manual trigger / Run -->
+              <PermissionGate :query="query('run.start',project.id,true)"><button
+                class="action-btn action-btn--run"
+                :title="t('projects.actionRunTitle', { name: project.name })"
+                :aria-label="t('projects.actionRunAria', { name: project.name })"
+                @click.stop="openTriggerModal(project)"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <polygon points="5 3 19 12 5 21 5 3" fill="currentColor" stroke="none"/>
+                </svg>
+              </button></PermissionGate>
+
+              <!-- Rename -->
+              <PermissionGate :query="query('project.edit',project.id)"><button
+                class="action-btn"
+                :title="t('projects.actionRenameTitle', { name: project.name })"
+                :aria-label="t('projects.actionRenameAria', { name: project.name })"
+                @click="openRenameModal(project)"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                </svg>
+              </button></PermissionGate>
+
+              <!-- Code browse (Story 7-4: read-only source viewer, FR-4) -->
+              <PermissionGate :query="query('project.read',project.id)"><button
+                class="action-btn"
+                :title="t('projects.actionCodeTitle', { name: project.name })"
+                :aria-label="t('projects.actionCodeAria', { name: project.name })"
+                @click="goToCode(project.id)"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="16 18 22 12 16 6"/>
+                  <polyline points="8 6 2 12 8 18"/>
+                </svg>
+              </button></PermissionGate>
+
+              <!-- Configure → triggers page (Story 2.3; will be extended to 4-tab editor in 2-2) -->
+              <PermissionGate :query="query('pipeline.read',project.id)"><button
+                class="action-btn"
+                :title="t('projects.actionPipelineTitle', { name: project.name })"
+                :aria-label="t('projects.actionPipelineAria', { name: project.name })"
+                @click="goToPipeline(project.id)"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+                  <circle cx="12" cy="12" r="3"/>
+                  <path d="M19.07 4.93a10 10 0 1 1-14.14 0"/>
+                  <path d="M12 2v4M12 18v4M4.93 4.93 7.76 7.76M16.24 16.24l2.83 2.83"/>
+                </svg>
+              </button></PermissionGate>
+
+              <!-- Delete -->
+              <PermissionGate :query="query('project.delete',project.id)"><button
+                class="action-btn action-btn--danger"
+                :title="t('projects.actionDeleteTitle', { name: project.name })"
+                :aria-label="t('projects.actionDeleteAria', { name: project.name })"
+                @click="openDeleteModal(project)"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+                  <path d="M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                  <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/>
+                </svg>
+              </button></PermissionGate>
+            </div>
+          </div>
+        </li></PermissionGate>
+      </ul>
+    </template>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       Manual trigger modal
+  ════════════════════════════════════════════════════════════════════════ -->
+  <Teleport to="body">
+    <div
+      v-if="triggerModalOpen && triggerProject"
+      class="modal-scrim"
+      role="dialog"
+      :aria-label="t('projects.triggerDialogAria', { name: triggerProject.name })"
+      aria-modal="true"
+      @keydown.esc="closeTriggerModal"
+      @click.self="closeTriggerModal"
+    >
+      <div class="modal modal--sm">
+        <!-- Header -->
+        <div class="modal-head">
+          <div class="modal-icon modal-icon--run" aria-hidden="true">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+              <polygon points="5 3 19 12 5 21 5 3" fill="currentColor" stroke="none"/>
+            </svg>
+          </div>
+          <div>
+            <h3 class="modal-title">{{ t('projects.triggerTitle') }}</h3>
+            <p class="modal-sub">{{ t('projects.triggerSub', { name: triggerProject.name }) }}</p>
+          </div>
+          <button
+            class="modal-close"
+            :aria-label="t('projects.closeDialog')"
+            :disabled="triggerSubmitting"
+            @click="closeTriggerModal"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 6 6 18M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Error banner -->
+        <div
+          v-if="triggerBanner"
+          class="banner banner--error modal-banner"
+          role="alert"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
+          </svg>
+          {{ triggerBanner }}
+        </div>
+
+        <form
+          class="modal-form"
+          novalidate
+          @submit.prevent="handleTriggerSubmit"
+        >
+          <!-- Branch -->
+          <div class="field">
+            <label class="field-label" for="trigger-branch">
+              {{ t('projects.branch') }}
+              <span class="field-hint-inline">{{ t('projects.branchHint') }}</span>
+            </label>
+            <input
+              id="trigger-branch"
+              v-model="triggerForm.branch"
+              class="field-input field-input--mono"
+              :class="{ 'field-input--error': triggerBranchError }"
+              type="text"
+              placeholder="main"
+              autocomplete="off"
+              list="trigger-branch-options"
+              :disabled="triggerSubmitting"
+              :aria-invalid="triggerBranchError ? 'true' : undefined"
+              :aria-describedby="triggerBranchError ? 'trigger-branch-err' : undefined"
+              @input="onTriggerBranchInput"
+            />
+            <!-- 代码管理区:真实分支/tag 下拉建议(空则纯文本输入,优雅降级) -->
+            <datalist id="trigger-branch-options">
+              <option v-for="r in branchOptions" :key="r.name" :value="r.name" />
+            </datalist>
+            <span
+              v-if="triggerBranchError"
+              id="trigger-branch-err"
+              class="field-error"
+              role="alert"
+            >{{ triggerBranchError }}</span>
+          </div>
+
+          <!-- Commit (optional) -->
+          <div class="field">
+            <label class="field-label" for="trigger-commit">
+              {{ t('projects.commit') }}
+              <span class="field-hint-inline">{{ t('projects.commitHint') }}</span>
+            </label>
+            <input
+              id="trigger-commit"
+              v-model="triggerForm.commit"
+              class="field-input field-input--mono"
+              type="text"
+              :placeholder="t('projects.commitPlaceholder')"
+              autocomplete="off"
+              list="trigger-commit-options"
+              :disabled="triggerSubmitting"
+            />
+            <!-- 代码管理区:当前分支最近 commit 下拉建议(短 sha — 首行说明) -->
+            <datalist id="trigger-commit-options">
+              <option v-for="c in commitOptions" :key="c.sha" :value="c.short">{{ c.subject }}</option>
+            </datalist>
+          </div>
+
+          <!-- Parameters · 有类型化定义(P0)→ 渲染类型化控件;无 → 自由 KV(Story 8-11) -->
+          <div class="field">
+            <label class="field-label">
+              {{ t('projects.params') }}
+              <span class="field-hint-inline">{{ triggerDefs.length ? t('projects.paramsHintTyped') : t('projects.paramsHintFree') }}</span>
+            </label>
+            <TypedRunParams
+              v-if="triggerDefs.length"
+              :key="`typed-${triggerProject.id}`"
+              :defs="triggerDefs"
+              v-model="triggerParams"
+            />
+            <RunParamsEditor
+              v-else
+              :key="triggerProject.id"
+              v-model="triggerParams"
+              :disabled="triggerSubmitting"
+            />
+          </div>
+
+          <!-- Footer -->
+          <div class="modal-footer">
+            <button
+              type="button"
+              class="btn-secondary"
+              :disabled="triggerSubmitting"
+              @click="closeTriggerModal"
+            >{{ t('projects.cancel') }}</button>
+            <button
+              type="submit"
+              class="btn-run"
+              :disabled="triggerSubmitting"
+              :aria-busy="triggerSubmitting"
+            >
+              <span v-if="triggerSubmitting" class="spinner" aria-hidden="true" />
+              <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/>
+              </svg>
+              {{ triggerSubmitting ? t('projects.triggering') : t('projects.runNow') }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       New project modal
+  ════════════════════════════════════════════════════════════════════════ -->
+  <Teleport to="body">
+    <div
+      v-if="createModalOpen && createPermission.allowed.value"
+      class="modal-scrim"
+      role="dialog"
+      :aria-label="t('projects.newProject')"
+      aria-modal="true"
+      @keydown.esc="closeCreateModal"
+    >
+      <div class="modal">
+        <!-- Header -->
+        <div class="modal-head">
+          <div class="modal-icon" aria-hidden="true">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+              <path d="M14.5 9.5 21 3M21 3h-5M21 3v5"/>
+              <path d="M10 14a5 5 0 1 1-7 4.6"/>
+            </svg>
+          </div>
+          <div>
+            <h3 class="modal-title">{{ t('projects.newProject') }}</h3>
+            <p class="modal-sub">{{ t('projects.createSub') }}</p>
+          </div>
+          <button
+            class="modal-close"
+            :aria-label="t('projects.closeDialog')"
+            :disabled="createSubmitting"
+            @click="closeCreateModal"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 6 6 18M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Error banner -->
+        <div
+          v-if="createBanner"
+          class="banner banner--error modal-banner"
+          role="alert"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
+          </svg>
+          {{ createBanner }}
+        </div>
+
+        <form
+          class="modal-form"
+          novalidate
+          @submit.prevent="handleCreateSubmit"
+        >
+          <!-- Project name -->
+          <div class="field">
+            <label class="field-label" for="proj-name">{{ t('projects.fieldName') }}</label>
+            <input
+              id="proj-name"
+              v-model="createForm.name"
+              class="field-input"
+              :class="{ 'field-input--error': createErrors.name }"
+              type="text"
+              :placeholder="t('projects.fieldNamePlaceholder')"
+              autocomplete="off"
+              :disabled="createSubmitting"
+              :aria-invalid="createErrors.name ? 'true' : undefined"
+              :aria-describedby="createErrors.name ? 'proj-name-err' : undefined"
+              @input="createErrors.name = ''"
+            />
+            <span v-if="createErrors.name" id="proj-name-err" class="field-error" role="alert">{{ createErrors.name }}</span>
+          </div>
+
+          <!-- Repo URL -->
+          <div class="field">
+            <label class="field-label" for="proj-repo">{{ t('projects.fieldRepo') }}</label>
+            <input
+              id="proj-repo"
+              v-model="createForm.repoUrl"
+              class="field-input field-input--mono"
+              :class="{ 'field-input--error': createErrors.repoUrl }"
+              type="text"
+              placeholder="https://gitee.com/org/repo.git / ssh://git@host:2424/org/repo.git"
+              autocomplete="off"
+              :disabled="createSubmitting"
+              :aria-invalid="createErrors.repoUrl ? 'true' : undefined"
+              :aria-describedby="createErrors.repoUrl ? 'proj-repo-err' : undefined"
+              @input="createErrors.repoUrl = ''; testState = 'idle'"
+            />
+            <span v-if="createErrors.repoUrl" id="proj-repo-err" class="field-error" role="alert">{{ createErrors.repoUrl }}</span>
+            <span v-else-if="isPlainHTTPRepo" class="field-hint">{{ t('projects.repoHttpWarning') }}</span>
+            <span v-else-if="isSSHRepo" class="field-hint">{{ t('projects.repoSSHKnownHosts') }}</span>
+          </div>
+
+          <!-- Credential dropdown — Git credentials supported by project clone, masked display -->
+          <div class="field">
+            <label class="field-label" for="proj-cred">
+              {{ t('projects.credential') }}
+              <span class="field-hint-inline">{{ t('projects.fieldCredHint') }}</span>
+            </label>
+            <CredentialSelect
+              input-id="proj-cred"
+              v-model="createForm.credentialId"
+              :credentials="gitCredentials"
+              :loading="credentialsLoading"
+              :disabled="createSubmitting"
+              :has-error="Boolean(createErrors.credentialId)"
+              :placeholder="t('projects.credSelect')"
+              :loading-label="t('projects.credLoading')"
+              :empty-label="t('projects.credSelect')"
+              @change="createErrors.credentialId = ''; testState = 'idle'"
+            />
+            <PermissionGate :query="query('credential.create','',true)"><button
+              type="button"
+              class="btn-ghost credential-create-toggle"
+              :disabled="createSubmitting || inlineCredentialSubmitting"
+              @click="inlineCredentialOpen = !inlineCredentialOpen; clearInlineCredentialErrors()"
+            >
+              {{ inlineCredentialOpen ? t('projects.inlineCredCancel') : t('projects.inlineCredNew') }}
+            </button></PermissionGate>
+            <span v-if="createErrors.credentialId" id="proj-cred-err" class="field-error" role="alert">{{ createErrors.credentialId }}</span>
+            <span
+              v-if="!credentialsLoading && gitCredentials.length === 0"
+              class="field-hint"
+            >
+              {{ t('projects.credEmptyPre') }}
+              <a href="/settings/vault" class="link">{{ t('projects.credVaultLink') }}</a>
+              {{ t('projects.credEmptyPost') }}
+            </span>
+          </div>
+
+          <div v-if="inlineCredentialOpen && credentialCreatePermission.allowed.value" class="inline-credential-panel">
+            <div class="inline-credential-title">{{ t('projects.inlineCredTitle') }}</div>
+            <div v-if="inlineCredentialBanner" class="field-error" role="alert">{{ inlineCredentialBanner }}</div>
+            <div class="field">
+              <span class="field-label">{{ t('settingsVault.fieldType') }}</span>
+              <div class="inline-credential-types" role="group" :aria-label="t('settingsVault.credentialTypeAria')">
+                <button
+                  v-for="type in inlineCredentialTypes"
+                  :key="type"
+                  type="button"
+                  class="inline-credential-type"
+                  :class="{ 'inline-credential-type--active': inlineCredentialForm.type === type }"
+                  :disabled="inlineCredentialSubmitting"
+                  @click="inlineCredentialForm.type = type"
+                >{{ t(`settingsVault.${inlineCredentialLabels[type]}`) }}</button>
+              </div>
+            </div>
+            <div class="field">
+              <label class="field-label" for="inline-cred-name">{{ t('projects.inlineCredName') }}</label>
+              <input
+                id="inline-cred-name"
+                v-model="inlineCredentialForm.name"
+                class="field-input"
+                :class="{ 'field-input--error': inlineCredentialErrors.name }"
+                type="text"
+                :placeholder="t('projects.inlineCredNamePlaceholder')"
+                :disabled="inlineCredentialSubmitting"
+                @input="inlineCredentialErrors.name = ''"
+              />
+              <span v-if="inlineCredentialErrors.name" class="field-error" role="alert">{{ inlineCredentialErrors.name }}</span>
+            </div>
+            <div v-if="!isSSHRepo" class="field">
+              <label class="field-label" for="inline-cred-username">
+                {{ t('projects.inlineCredUsername') }}
+                <span class="field-optional">{{ inlineCredentialForm.type === 'git_http' ? '' : t('settingsVault.optional') }}</span>
+              </label>
+              <input
+                id="inline-cred-username"
+                v-model="inlineCredentialForm.username"
+                class="field-input"
+                :class="{ 'field-input--error': inlineCredentialErrors.username }"
+                type="text"
+                :placeholder="t('projects.inlineCredUsernamePlaceholder')"
+                :disabled="inlineCredentialSubmitting"
+                autocomplete="username"
+                @input="inlineCredentialErrors.username = ''"
+              />
+              <span v-if="inlineCredentialErrors.username" class="field-error" role="alert">{{ inlineCredentialErrors.username }}</span>
+            </div>
+            <div class="field">
+              <label class="field-label" for="inline-cred-secret">{{ isSSHRepo ? t('settingsVault.fieldSecret') : t('projects.inlineCredSecret') }}</label>
+              <textarea
+                v-if="inlineCredentialForm.type === 'ssh_key'"
+                id="inline-cred-secret"
+                v-model="inlineCredentialForm.secret"
+                class="field-input"
+                :class="{ 'field-input--error': inlineCredentialErrors.secret }"
+                :placeholder="t('settingsVault.secretPlaceholderSshKey')"
+                :disabled="inlineCredentialSubmitting"
+                autocomplete="off"
+                rows="5"
+                @input="inlineCredentialErrors.secret = ''"
+              />
+              <input
+                v-else
+                id="inline-cred-secret"
+                v-model="inlineCredentialForm.secret"
+                class="field-input"
+                :class="{ 'field-input--error': inlineCredentialErrors.secret }"
+                type="password"
+                :placeholder="inlineCredentialForm.type === 'ssh_password' ? t('settingsVault.secretPlaceholderSshPassword') : t('projects.inlineCredSecretPlaceholder')"
+                :disabled="inlineCredentialSubmitting"
+                autocomplete="new-password"
+                @input="inlineCredentialErrors.secret = ''"
+              />
+              <span v-if="!isSSHRepo" class="field-hint">{{ t('projects.inlineCredSecretHint') }}</span>
+              <span v-if="inlineCredentialErrors.secret" class="field-error" role="alert">{{ inlineCredentialErrors.secret }}</span>
+            </div>
+            <PermissionGate :query="query('credential.create','',true)"><button
+              type="button"
+              class="btn-secondary inline-credential-submit"
+              :disabled="inlineCredentialSubmitting"
+              @click="handleInlineCredentialSubmit"
+            >{{ inlineCredentialSubmitting ? t('projects.inlineCredCreating') : t('projects.inlineCredCreate') }}</button></PermissionGate>
+          </div>
+
+          <!-- Default branch (optional) -->
+          <div class="field">
+            <label class="field-label" for="proj-branch">
+              {{ t('projects.fieldDefaultBranch') }}
+              <span class="field-hint-inline">{{ t('projects.fieldDefaultBranchHint') }}</span>
+            </label>
+            <input
+              id="proj-branch"
+              v-model="createForm.defaultBranch"
+              class="field-input field-input--mono"
+              type="text"
+              placeholder="main"
+              autocomplete="off"
+              :disabled="createSubmitting"
+            />
+          </div>
+
+          <!-- Test clone — left-bottom, separated from primary actions -->
+          <div class="test-clone-row">
+            <PermissionGate :query="[query('project.create','',true),query('credential.use',createForm.credentialId)]"><button
+              type="button"
+              class="btn-ghost"
+              :disabled="createSubmitting || testState === 'testing'"
+              :aria-busy="testState === 'testing'"
+              @click="handleTestClone"
+            >
+              <span v-if="testState === 'testing'" class="spinner spinner--dim" aria-hidden="true" />
+              <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M5 12.55a11 11 0 0 1 14.08 0"/>
+                <path d="M1.42 9a16 16 0 0 1 21.16 0"/>
+                <path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>
+                <circle cx="12" cy="20" r="1" fill="currentColor"/>
+              </svg>
+              {{ testState === 'testing' ? t('projects.testing') : t('projects.testConnection') }}
+            </button></PermissionGate>
+
+            <!-- Test result inline -->
+            <div
+              v-if="testState === 'ok'"
+              class="test-result test-result--ok"
+              role="status"
+              aria-live="polite"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
+                <path d="M20 6 9 17l-5-5"/>
+              </svg>
+              {{ t('projects.testOk') }}
+              <span v-if="testDetectedBranch" class="test-branch mono">{{ t('projects.testDetectedBranch', { branch: testDetectedBranch }) }}</span>
+            </div>
+
+            <div
+              v-else-if="testState === 'error'"
+              class="test-result test-result--error"
+              role="alert"
+              aria-live="assertive"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
+              </svg>
+              {{ testError }}
+            </div>
+          </div>
+
+          <!-- Modal footer -->
+          <div class="modal-footer">
+            <button
+              type="button"
+              class="btn-secondary"
+              :disabled="createSubmitting"
+              @click="closeCreateModal"
+            >{{ t('projects.cancel') }}</button>
+            <button
+              type="submit"
+              class="btn-primary"
+              :disabled="createSubmitting || !createCredentialUsePermission.allowed.value"
+              :aria-busy="createSubmitting"
+            >
+              <span v-if="createSubmitting" class="spinner" aria-hidden="true" />
+              {{ createSubmitting ? t('projects.creating') : t('projects.createSubmit') }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       Rename modal
+  ════════════════════════════════════════════════════════════════════════ -->
+  <Teleport to="body">
+    <div
+      v-if="renameModalOpen && renamingProject"
+      class="modal-scrim"
+      role="dialog"
+      :aria-label="repairCredential ? t('onboardingFlow.actions.repairCredential') : t('projects.renameTitle')"
+      aria-modal="true"
+      @keydown.esc="closeRenameModal"
+      @click.self="closeRenameModal"
+    >
+      <div class="modal modal--sm">
+        <div class="modal-head">
+          <div class="modal-icon" aria-hidden="true">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+          </div>
+          <div>
+            <h3 class="modal-title">{{ repairCredential ? t('onboardingFlow.actions.repairCredential') : t('projects.renameTitle') }}</h3>
+            <p class="modal-sub">{{ repairCredential ? t('onboardingFlow.repairCredentialDescription') : t('projects.renameSub') }}</p>
+          </div>
+          <button
+            class="modal-close"
+            :aria-label="t('projects.closeDialog')"
+            :disabled="renameSubmitting"
+            @click="closeRenameModal"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 6 6 18M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+
+        <div
+          v-if="renameBanner"
+          class="banner banner--error modal-banner"
+          role="alert"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
+          </svg>
+          {{ renameBanner }}
+        </div>
+
+        <form
+          class="modal-form"
+          novalidate
+          @submit.prevent="handleRenameSubmit"
+        >
+          <div class="field">
+            <label class="field-label" for="rename-input">{{ t('projects.fieldName') }}</label>
+            <input
+              id="rename-input"
+              v-model="renameValue"
+              class="field-input"
+              :class="{ 'field-input--error': renameError }"
+              type="text"
+              autocomplete="off"
+              :disabled="renameSubmitting"
+              :aria-invalid="renameError ? 'true' : undefined"
+              :aria-describedby="renameError ? 'rename-err' : undefined"
+              @input="renameError = ''"
+            />
+            <span v-if="renameError" id="rename-err" class="field-error" role="alert">{{ renameError }}</span>
+          </div>
+
+          <div v-if="repairCredential" class="field">
+            <label class="field-label" for="onboarding-repair-credential">{{ t('projects.credential') }}</label>
+            <CredentialSelect v-model="renameCredentialId" :credentials="renameCredentials" :loading="credentialsLoading"
+              input-id="onboarding-repair-credential" :disabled="renameSubmitting" :placeholder="t('projects.credSelect')"
+              :has-error="!!renameCredentialError" :aria-invalid="!!renameCredentialError || undefined" :aria-describedby="renameCredentialError ? 'onboarding-repair-error' : undefined"
+              :loading-label="t('projects.credLoading')" :empty-label="t('projects.credSelect')" @change="renameCredentialError = ''" />
+            <span v-if="renameCredentialError" id="onboarding-repair-error" class="field-error" role="alert">{{ renameCredentialError }}</span>
+            <router-link to="/settings/vault">{{ t('onboardingFlow.actions.credentials') }}</router-link>
+          </div>
+
+          <div class="modal-footer">
+            <button
+              type="button"
+              class="btn-secondary"
+              :disabled="renameSubmitting"
+              @click="closeRenameModal"
+            >{{ t('projects.cancel') }}</button>
+            <button
+              type="submit"
+              class="btn-primary"
+              :disabled="renameSubmitting || (repairCredential && !!renameCredentialId && !renameCredentialUsePermission.allowed.value)"
+              :aria-busy="renameSubmitting"
+            >
+              <span v-if="renameSubmitting" class="spinner" aria-hidden="true" />
+              {{ renameSubmitting ? t('projects.saving') : t('projects.save') }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       Delete confirm modal
+  ════════════════════════════════════════════════════════════════════════ -->
+  <Teleport to="body">
+    <div
+      v-if="deleteModalOpen && deletingProject"
+      class="modal-scrim"
+      role="dialog"
+      :aria-label="t('projects.deleteDialogAria')"
+      aria-modal="true"
+      @keydown.esc="closeDeleteModal"
+      @click.self="closeDeleteModal"
+    >
+      <div class="modal modal--sm">
+        <div class="modal-head">
+          <div class="modal-icon modal-icon--danger" aria-hidden="true">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+              <path d="M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+              <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/>
+            </svg>
+          </div>
+          <div>
+            <h3 class="modal-title">{{ t('projects.deleteTitle') }}</h3>
+            <p class="modal-sub">{{ t('projects.deleteSub') }}</p>
+          </div>
+          <button
+            class="modal-close"
+            :aria-label="t('projects.closeDialog')"
+            :disabled="deleteSubmitting"
+            @click="closeDeleteModal"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 6 6 18M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+
+        <div class="modal-body">
+          <p class="delete-confirm-text">
+            {{ t('projects.deleteConfirmPre') }}
+            <strong class="delete-name">{{ deletingProject.name }}</strong>
+            {{ t('projects.deleteConfirmPost') }}
+          </p>
+
+          <div
+            v-if="deleteBanner"
+            class="banner banner--error modal-banner-body"
+            role="alert"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
+            </svg>
+            {{ deleteBanner }}
+          </div>
+        </div>
+
+        <div class="modal-footer modal-footer--body">
+          <button
+            type="button"
+            class="btn-secondary"
+            :disabled="deleteSubmitting"
+            @click="closeDeleteModal"
+          >{{ t('projects.cancel') }}</button>
+          <button
+            type="button"
+            class="btn-danger"
+            :disabled="deleteSubmitting"
+            :aria-busy="deleteSubmitting"
+            @click="confirmDelete"
+          >
+            <span v-if="deleteSubmitting" class="spinner spinner--red" aria-hidden="true" />
+            {{ deleteSubmitting ? t('projects.deleting') : t('projects.confirmDelete') }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
+</template>
+
+<style scoped>
+/* ─── root layout ──────────────────────────────────────────────────────────── */
+.projects-root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--card-gap);
+}
+
+/* ─── page header ──────────────────────────────────────────────────────────── */
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.page-header-text {
+  flex: 1;
+}
+
+.page-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--color-text);
+  line-height: 1.2;
+}
+
+.page-sub {
+  font-size: 0.82rem;
+  color: var(--color-faint);
+  margin-top: 5px;
+  line-height: 1.5;
+}
+
+/* ─── toolbar (search + filter) ────────────────────────────────────────────── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.search-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 200px;
+  max-width: 380px;
+}
+
+.search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--color-faint);
+  pointer-events: none;
+}
+
+.search-input {
+  width: 100%;
+  height: 36px;
+  background: var(--color-inset);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded);
+  padding: 0 12px 0 34px;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 0.83rem;
+  transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
+}
+
+.search-input::placeholder {
+  color: var(--color-faint);
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-soft);
+}
+
+/* Clear the native "x" button on search inputs */
+.search-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+}
+
+.filter-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--color-inset);
+  border-radius: var(--rounded);
+  padding: 3px;
+}
+
+.filter-tab {
+  height: 30px;
+  padding: 0 11px;
+  border: none;
+  background: transparent;
+  color: var(--color-dim);
+  font-family: var(--font-sans);
+  font-size: 0.78rem;
+  font-weight: 500;
+  border-radius: var(--rounded-md);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--duration-fast), background-color var(--duration-fast), box-shadow var(--duration-fast);
+}
+
+.filter-tab:hover {
+  color: var(--color-text);
+  background: oklch(100% 0 0 / 0.04);
+}
+
+.filter-tab--active {
+  background: var(--color-card);
+  color: var(--color-text);
+  box-shadow: var(--shadow);
+}
+
+.filter-tab:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+/* ─── result count ─────────────────────────────────────────────────────────── */
+.result-count {
+  font-size: 0.78rem;
+  color: var(--color-faint);
+  margin-top: -4px;
+}
+
+/* ─── project grid ──────────────────────────────────────────────────────────── */
+.project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--card-gap);
+  list-style: none;
+}
+
+/* ─── project card ──────────────────────────────────────────────────────────── */
+.project-card {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-card);
+  box-shadow: var(--shadow);
+  padding: 18px 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  animation: card-in 0.4s var(--ease-out-expo) both;
+  transition: border-color var(--duration-fast), box-shadow var(--duration-fast), transform var(--duration-fast);
+}
+
+.project-card:hover {
+  border-color: var(--color-border-strong);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow), 0 0 0 1px var(--color-border-strong);
+}
+
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(13px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-card {
+    animation: none;
+  }
+  .project-card:hover {
+    transform: none;
+  }
+}
+
+/* card header: icon + name + status badge */
+.card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.project-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--rounded);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.project-name {
+  flex: 1;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--color-text);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+}
+
+/* status pill */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--rounded-md);
+  font-size: var(--text-micro);
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--rounded-full);
+  flex-shrink: 0;
+}
+
+.status-dot--pulse {
+  animation: dot-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.5; transform: scale(0.8); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot--pulse {
+    animation: none;
+  }
+}
+
+/* repo + branch */
+.card-repo {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.repo-url-row,
+.branch-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-faint);
+}
+
+.repo-url {
+  font-size: 0.74rem;
+  color: var(--color-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-decoration: none;
+  flex: 1;
+  min-width: 0;
+}
+
+.repo-url:hover {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.repo-url:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.branch-name {
+  font-size: 0.72rem;
+  color: var(--color-dim);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+/* divider */
+.card-divider {
+  height: 1px;
+  background: var(--color-border);
+  margin-bottom: 12px;
+}
+
+/* meta rows */
+.card-meta-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+  min-height: 20px;
+}
+
+.card-meta-row:last-of-type {
+  margin-bottom: 14px;
+}
+
+.meta-label {
+  font-size: 0.71rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-faint);
+  flex-shrink: 0;
+}
+
+.meta-empty {
+  font-size: 0.78rem;
+  color: var(--color-faint);
+  font-style: italic;
+}
+
+.meta-value {
+  font-size: 0.78rem;
+  color: var(--color-dim);
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60%;
+}
+
+.meta-value--mono {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
+/* card footer */
+.card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-border);
+}
+
+.card-time {
+  font-size: 0.72rem;
+  color: var(--color-faint);
+}
+
+.card-actions {
+  display: flex;
+  gap: 5px;
+}
+
+.action-btn {
+  width: 28px;
+  height: 26px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-faint);
+  border-radius: var(--rounded-md);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition:
+    color var(--duration-fast),
+    border-color var(--duration-fast),
+    background-color var(--duration-fast);
+}
+
+.action-btn:hover {
+  color: var(--color-text);
+  border-color: var(--color-faint);
+}
+
+.action-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.action-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.action-btn--danger:hover {
+  color: var(--color-red);
+  border-color: var(--color-red-line);
+  background: var(--color-red-soft);
+}
+
+.action-btn--run:hover {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+/* ─── skeleton ──────────────────────────────────────────────────────────────── */
+.skel-card {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-card);
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 200px;
+}
+
+.skel {
+  display: block;
+  background: linear-gradient(
+    90deg,
+    var(--color-inset) 0%,
+    oklch(100% 0 0 / 0.06) 50%,
+    var(--color-inset) 100%
+  );
+  background-size: 200% 100%;
+  border-radius: var(--rounded-md);
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0%   { background-position: 200% center; }
+  100% { background-position: -200% center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skel { animation: none; background: var(--color-inset); }
+}
+
+.skel--name { height: 18px; width: 55%; }
+.skel--url  { height: 12px; width: 80%; }
+.skel--tag  { height: 12px; width: 40%; }
+.skel--meta { height: 12px; width: 65%; }
+
+/* ─── empty state ───────────────────────────────────────────────────────────── */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 72px 32px;
+  text-align: center;
+  background: var(--color-card);
+  border: 1.5px dashed var(--color-border-strong);
+  border-radius: var(--rounded-card);
+}
+
+.empty-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--rounded-xl);
+  background: var(--color-inset);
+  border: 1.5px dashed var(--color-border-strong);
+  display: grid;
+  place-items: center;
+  color: var(--color-dim);
+  margin-bottom: 4px;
+}
+
+.empty-label {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.empty-hint {
+  font-size: 0.82rem;
+  color: var(--color-faint);
+  max-width: 44ch;
+  line-height: 1.6;
+  margin-bottom: 6px;
+}
+
+/* ─── error banner ──────────────────────────────────────────────────────────── */
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px 14px;
+  border-radius: var(--rounded);
+  font-size: 0.83rem;
+  line-height: 1.5;
+}
+
+.banner--error {
+  background: var(--color-red-soft);
+  border: 1px solid var(--color-red-line);
+  color: var(--color-red);
+}
+
+.banner-retry {
+  margin-left: auto;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--color-red);
+  font-size: 0.83rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.banner-retry:hover {
+  opacity: 0.8;
+}
+
+/* ─── buttons ───────────────────────────────────────────────────────────────── */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 15px;
+  border: none;
+  background: var(--color-primary);
+  color: #fff;
+  font-family: var(--font-sans);
+  font-size: 0.83rem;
+  font-weight: 600;
+  border-radius: var(--rounded);
+  cursor: pointer;
+  box-shadow: 0 5px 16px var(--color-primary-soft);
+  transition: background-color var(--duration-fast), transform var(--duration-fast), box-shadow var(--duration-fast);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--color-primary-press);
+  transform: translateY(-1px);
+}
+
+.btn-primary:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+
+.btn-primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 15px;
+  background: var(--color-card-2);
+  color: var(--color-text);
+  border: 1px solid var(--color-border-strong);
+  font-family: var(--font-sans);
+  font-size: 0.83rem;
+  font-weight: 500;
+  border-radius: var(--rounded);
+  cursor: pointer;
+  transition: border-color var(--duration-fast), background-color var(--duration-fast);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  border-color: var(--color-faint);
+}
+
+.btn-secondary:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.btn-secondary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  background: transparent;
+  color: var(--color-dim);
+  border: 1px solid var(--color-border-strong);
+  font-family: var(--font-sans);
+  font-size: 0.8rem;
+  font-weight: 500;
+  border-radius: var(--rounded);
+  cursor: pointer;
+  transition: color var(--duration-fast), border-color var(--duration-fast), background-color var(--duration-fast);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  color: var(--color-text);
+  border-color: var(--color-faint);
+  background: var(--color-inset);
+}
+
+.btn-ghost:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.btn-ghost:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 15px;
+  background: var(--color-red-soft);
+  color: var(--color-red);
+  border: 1px solid var(--color-red-line);
+  font-family: var(--font-sans);
+  font-size: 0.83rem;
+  font-weight: 600;
+  border-radius: var(--rounded);
+  cursor: pointer;
+  transition: background-color var(--duration-fast), transform var(--duration-fast);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: oklch(62% 0.18 22 / 0.25);
+  transform: translateY(-1px);
+}
+
+.btn-danger:focus-visible {
+  outline: 2px solid var(--color-red);
+  outline-offset: 2px;
+}
+
+.btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.btn-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 15px;
+  border: none;
+  background: var(--color-primary);
+  color: #fff;
+  font-family: var(--font-sans);
+  font-size: 0.83rem;
+  font-weight: 600;
+  border-radius: var(--rounded);
+  cursor: pointer;
+  box-shadow: 0 5px 16px var(--color-primary-soft);
+  transition: background-color var(--duration-fast), transform var(--duration-fast), box-shadow var(--duration-fast);
+  white-space: nowrap;
+}
+
+.btn-run:hover:not(:disabled) {
+  background: var(--color-primary-press);
+  transform: translateY(-1px);
+}
+
+.btn-run:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+
+.btn-run:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+/* ─── modal ─────────────────────────────────────────────────────────────────── */
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  background: oklch(0% 0 0 / 0.62);
+  display: grid;
+  place-items: center;
+  z-index: 100;
+  padding: 24px;
+  animation: scrim-in var(--duration-fast) ease both;
+}
+
+@keyframes scrim-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.modal {
+  width: 100%;
+  max-width: 520px;
+  max-height: calc(100dvh - 48px);
+  background: var(--color-card);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--rounded-xl);
+  box-shadow: var(--shadow-modal);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  animation: modal-in 0.35s var(--ease-out-expo) both;
+}
+
+.modal--sm {
+  max-width: 420px;
+}
+
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-scrim { animation: none; }
+  .modal       { animation: none; }
+}
+
+.modal-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.modal-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--rounded-lg);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.modal-icon--danger {
+  background: var(--color-red-soft);
+  color: var(--color-red);
+}
+
+.modal-icon--run {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+.modal-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-top: 2px;
+  letter-spacing: -0.01em;
+}
+
+.modal-sub {
+  font-size: 0.78rem;
+  color: var(--color-faint);
+  margin-top: 3px;
+  line-height: 1.4;
+}
+
+.modal-close {
+  margin-left: auto;
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--rounded-md);
+  border: none;
+  background: transparent;
+  color: var(--color-faint);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: color var(--duration-fast), background-color var(--duration-fast);
+}
+
+.modal-close:hover {
+  color: var(--color-text);
+  background: var(--color-inset);
+}
+
+.modal-close:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.modal-close:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.modal-banner {
+  margin: 16px 20px 0;
+  border-radius: var(--rounded);
+}
+
+.modal-form {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.modal-body {
+  padding: 20px;
+}
+
+.modal-banner-body {
+  margin-top: 14px;
+  border-radius: var(--rounded);
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.modal-footer--body {
+  padding: 0 20px 20px;
+  padding-top: 0;
+}
+
+/* ─── form fields ────────────────────────────────────────────────────────────── */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field-label {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--color-dim);
+}
+
+.field-hint-inline {
+  font-weight: 400;
+  color: var(--color-faint);
+}
+
+.field-input {
+  width: 100%;
+  height: 38px;
+  background: var(--color-inset);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded);
+  padding: 0 12px;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 0.86rem;
+  transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
+}
+
+.field-input::placeholder {
+  color: var(--color-faint);
+}
+
+.field-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-soft);
+}
+
+.field-input--error {
+  border-color: var(--color-red);
+}
+
+.field-input--error:focus {
+  border-color: var(--color-red);
+  box-shadow: 0 0 0 3px var(--color-red-soft);
+}
+
+.field-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.field-input--mono {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+/* Select / dropdown */
+.select-wrap {
+  position: relative;
+}
+
+.field-select {
+  width: 100%;
+  height: 38px;
+  background: var(--color-inset);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded);
+  padding: 0 36px 0 12px;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 0.86rem;
+  appearance: none;
+  cursor: pointer;
+  transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
+}
+
+.field-select:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-soft);
+}
+
+.field-select.field-input--error {
+  border-color: var(--color-red);
+}
+
+.field-select.field-input--error:focus {
+  box-shadow: 0 0 0 3px var(--color-red-soft);
+}
+
+.field-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Style select options for dark background */
+.field-select option {
+  background: var(--color-card-2);
+  color: var(--color-text);
+}
+
+.select-arrow {
+  position: absolute;
+  right: 11px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--color-faint);
+  pointer-events: none;
+}
+
+.field-error {
+  font-size: 0.76rem;
+  color: var(--color-red);
+  line-height: 1.4;
+}
+
+.field-hint {
+  font-size: 0.74rem;
+  color: var(--color-faint);
+  line-height: 1.4;
+}
+
+.link {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.link:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ─── test clone row ─────────────────────────────────────────────────────────── */
+.test-clone-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: -4px;
+}
+
+.credential-create-toggle {
+  margin-top: 8px;
+}
+
+.inline-credential-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: -2px;
+  padding: 14px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--rounded);
+  background: var(--color-inset);
+}
+
+.inline-credential-title {
+  font-size: 0.82rem;
+  font-weight: 650;
+  color: var(--color-text);
+}
+
+.inline-credential-types {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  padding: 3px;
+  gap: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded);
+  background: var(--color-card-2);
+}
+
+.inline-credential-type {
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: calc(var(--rounded) - 2px);
+  background: transparent;
+  color: var(--color-dim);
+  font: inherit;
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.inline-credential-type:hover:not(:disabled) {
+  color: var(--color-text);
+}
+
+.inline-credential-type--active {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  font-weight: 650;
+}
+
+.inline-credential-type:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.inline-credential-submit {
+  justify-self: start;
+}
+
+.test-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  flex: 1;
+  padding-top: 6px;
+}
+
+.test-result--ok {
+  color: var(--color-green);
+}
+
+.test-result--error {
+  color: var(--color-red);
+}
+
+.test-branch {
+  color: var(--color-dim);
+  font-size: 0.76rem;
+}
+
+/* ─── delete confirm ─────────────────────────────────────────────────────────── */
+.delete-confirm-text {
+  font-size: 0.86rem;
+  color: var(--color-dim);
+  line-height: 1.6;
+}
+
+.delete-name {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+/* ─── spinner ────────────────────────────────────────────────────────────────── */
+.spinner {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: var(--rounded-full);
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+.spinner--dim {
+  border-color: oklch(72% 0.008 270 / 0.3);
+  border-top-color: var(--color-dim);
+}
+
+.spinner--red {
+  border-color: oklch(69% 0.17 22 / 0.3);
+  border-top-color: var(--color-red);
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation: none; border-top-color: currentColor; }
+}
+</style>

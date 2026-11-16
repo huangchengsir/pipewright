@@ -9,6 +9,10 @@ import {
 } from "../../api/runRetry";
 import { runDetailLocation } from "../../lib/runListContext";
 import AppButton from "../ui/AppButton.vue";
+import PermissionGate from "../PermissionGate.vue";
+import { usePermission } from "../../composables/usePermission";
+import { usePermissionStore } from "../../stores/permissions";
+import { useSessionStore } from "../../stores/session";
 import { kubeOperationLocation } from "../kubernetes/kubernetesEvidence";
 import KubeOperationPanel from "../kubernetes/KubeOperationPanel.vue";
 import RunTerminal from "./RunTerminal.vue";
@@ -25,6 +29,17 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ accepted: [runId: string]; fullLogs: [] }>();
 const { t, te } = useI18n();
+const retryQuery = computed(() => ({ action: 'run.retry', resourceId: props.runId || props.state.context.value?.attemptRunId || '' }));
+const retryPermission = usePermission(retryQuery);
+const permissions = usePermissionStore();
+const session = useSessionStore();
+let retryDecisionGeneration = 0;
+watch([() => retryQuery.value.resourceId, retryPermission.allowed], () => {
+  retryDecisionGeneration++;
+}, { flush: 'sync' });
+function refreshPlan() { if (retryPermission.allowed.value) void props.state.preview(); }
+function reconcile() { if (retryPermission.allowed.value) void props.state.reconcile(); }
+
 const {
   context,
   contextError,
@@ -76,6 +91,9 @@ const activeTabIndex = computed(() =>
 const heading = ref<HTMLElement | null>(null);
 const dialog = ref<HTMLElement | null>(null);
 let returnFocus: HTMLElement | null = null;
+const closedErrorBanner = ref<HTMLElement | null>(null);
+let closedErrorFocus: { key: string } | null = null;
+const closedErrorFocusKey = () => JSON.stringify([permissions.activeTeam, session.user, retryQuery.value.resourceId, error.value]);
 const focusedNode = computed(() =>
   context.value?.nodes.find((n) => n.node.key === nodeKey.value),
 );
@@ -120,11 +138,13 @@ async function show(
 ) {
   nodeKey.value = key;
   mode.value = view;
-  if (!open.value)
+  if (!open.value) {
     returnFocus =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
+    closedErrorFocus = null;
+  }
   open.value = true;
   await nextTick();
   heading.value?.focus({ preventScroll: true });
@@ -219,9 +239,24 @@ function openFullLogs(event: MouseEvent) {
 function showHistory() {
   void show(undefined, "history");
 }
+function showClosedError(event: MouseEvent) {
+  if (open.value) return;
+  void show();
+  if (event.currentTarget instanceof HTMLElement) returnFocus = event.currentTarget;
+  closedErrorFocus = { key: closedErrorFocusKey() };
+}
 function close() {
+  if (!open.value) return;
   open.value = false;
-  if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+  if (returnFocus?.isConnected) {
+    returnFocus.focus({ preventScroll: true });
+    return;
+  }
+  const target = closedErrorFocus;
+  if (target) void nextTick(() => {
+    if (open.value || closedErrorFocus !== target || target.key !== closedErrorFocusKey()) return;
+    closedErrorBanner.value?.querySelector("button")?.focus({ preventScroll: true });
+  });
 }
 function keydown(event: KeyboardEvent) {
   if (event.key === "Escape") {
@@ -266,6 +301,7 @@ function keydown(event: KeyboardEvent) {
 }
 defineExpose({ show, showLogs, showHistory, close });
 onBeforeUnmount(() => {
+  closedErrorFocus = null;
   if (open.value && returnFocus?.isConnected)
     returnFocus.focus({ preventScroll: true });
 });
@@ -325,16 +361,19 @@ function detail(r: RetryReason) {
     .join(" · ");
 }
 function toggleRebuild(nodeIds: string[], enabled: boolean) {
+  if (!open.value || mode.value !== "plan" || !retryPermission.allowed.value) return;
   const next = new Set(rebuild.value);
   nodeIds.forEach((id) => (enabled ? next.add(id) : next.delete(id)));
   void props.state.preview(undefined, [...next]);
 }
 function retryAll() {
+  if (!retryPermission.allowed.value) return;
   void show(undefined, "plan");
   if (failedNodes.value.length)
     void props.state.openPlan(failedNodes.value.map((n) => n.node.key));
 }
 function retryFocused() {
+  if (!retryPermission.allowed.value) return;
   const key = nodeKey.value;
   if (key) {
     void show(key, "plan");
@@ -342,8 +381,11 @@ function retryFocused() {
   }
 }
 async function confirmPlan() {
+  if (!retryPermission.allowed.value) return;
+  const generation = retryDecisionGeneration;
   const result = await props.state.submit();
-  if (result?.attemptRunId) emit("accepted", result.attemptRunId);
+  if (result?.attemptRunId && generation === retryDecisionGeneration && retryPermission.allowed.value)
+    emit("accepted", result.attemptRunId);
 }
 </script>
 
@@ -374,9 +416,9 @@ async function confirmPlan() {
       t("runRetry.viewRecovery")
     }}</AppButton>
   </div>
-  <div v-if="!open && error" class="retry-closed-error" role="alert">
+  <div v-if="!open && error" ref="closedErrorBanner" class="retry-closed-error" role="alert">
     <span>{{ reason(error) }}</span>
-    <AppButton variant="ghost" @click="show()">{{
+    <AppButton variant="ghost" @click="showClosedError">{{
       t("runRetry.viewRecovery")
     }}</AppButton>
   </div>
@@ -522,7 +564,7 @@ async function confirmPlan() {
                         focusedNode?.decision.status ?? actualStep?.status,
                       )
                 }}</span>
-                <AppButton
+                <PermissionGate :query="retryQuery"><AppButton
                   v-if="
                     focusedNode &&
                     ['failed', 'outcome_unknown'].includes(
@@ -535,7 +577,7 @@ async function confirmPlan() {
                   "
                   @click="retryFocused"
                   >{{ t("runRetry.retryNode") }}</AppButton
-                >
+                ></PermissionGate>
               </div>
               <p v-if="isKube && !kubeLocation" class="kube-note">
                 {{ t("kubernetes.noReceipt") }}
@@ -679,7 +721,7 @@ async function confirmPlan() {
             <p v-if="focusedNode.reasonCode">
               {{ reason(focusedNode.reasonCode) }}
             </p>
-            <AppButton
+            <PermissionGate :query="retryQuery"><AppButton
               class="retry-focused"
               v-if="
                 mode !== 'plan' &&
@@ -692,7 +734,7 @@ async function confirmPlan() {
               "
               @click="retryFocused"
               >{{ t("runRetry.retryNode") }}</AppButton
-            >
+            ></PermissionGate>
           </section>
           <p v-if="mode === 'history'" class="retry-muted">
             {{ t("runRetry.historyNote") }}
@@ -703,7 +745,7 @@ async function confirmPlan() {
           >
             {{ t("runRetry.none") }}
           </p>
-          <AppButton
+          <PermissionGate :query="retryQuery"><AppButton
             v-if="
               mode !== 'history' &&
               mode !== 'logs' &&
@@ -714,7 +756,7 @@ async function confirmPlan() {
             :disabled="!!pending || submitting"
             @click="retryAll"
             >{{ t("runRetry.retryAll") }}</AppButton
-          >
+          ></PermissionGate>
           <div
             v-if="
               !context &&
@@ -744,7 +786,7 @@ async function confirmPlan() {
           >
             {{ t("runRetry.loadingPlan") }}
           </p>
-          <AppButton
+          <PermissionGate :query="retryQuery"><AppButton
             v-if="
               mode === 'plan' &&
               !plan &&
@@ -752,9 +794,9 @@ async function confirmPlan() {
               !pending &&
               !planLoading
             "
-            @click="state.preview()"
+            @click="refreshPlan"
             >{{ t("runRetry.refreshPlan") }}</AppButton
-          >
+          ></PermissionGate>
           <div v-if="mode === 'plan' && plan">
             <p class="retry-note">{{ t("runRetry.planNote") }}</p>
             <div class="retry-groups">
@@ -813,7 +855,7 @@ async function confirmPlan() {
             <fieldset
               v-if="plan.rebuildGroups?.length"
               class="retry-rebuild"
-              :disabled="submitting || !!pending"
+              :disabled="submitting || !!pending || !retryPermission.allowed.value"
             >
               <legend>{{ t("runRetry.rebuildTitle") }}</legend>
               <p>{{ t("runRetry.rebuildNote") }}</p>
@@ -845,7 +887,7 @@ async function confirmPlan() {
               </li>
             </ul>
             <div class="retry-actions">
-              <AppButton
+              <PermissionGate :query="retryQuery"><AppButton
                 variant="primary"
                 :loading="submitting"
                 :disabled="
@@ -853,12 +895,12 @@ async function confirmPlan() {
                 "
                 @click="confirmPlan"
                 >{{ t("runRetry.confirm") }}</AppButton
-              >
-              <AppButton
-                :disabled="submitting || !!pending"
-                @click="state.preview()"
+              ></PermissionGate>
+              <PermissionGate :query="retryQuery"><AppButton
+                :disabled="submitting || !!pending || !retryPermission.allowed.value"
+                @click="refreshPlan"
                 >{{ t("runRetry.refreshPlan") }}</AppButton
-              >
+              ></PermissionGate>
             </div>
             <details class="retry-technical">
               <summary>{{ t("runRetry.technical") }}</summary>
@@ -876,9 +918,9 @@ async function confirmPlan() {
           </div>
           <div v-if="context?.outcomeUnknown && !isKube" class="retry-controls">
             <p>{{ t("runRetry.reconcileNote") }}</p>
-            <AppButton :loading="reconciling" @click="state.reconcile">{{
+            <PermissionGate :query="retryQuery"><AppButton :loading="reconciling" @click="reconcile">{{
               t("runRetry.reconcile")
-            }}</AppButton>
+            }}</AppButton></PermissionGate>
             <ul>
               <li v-for="(r, index) in reconcileReasons" :key="index">
                 {{ detail(r) }}

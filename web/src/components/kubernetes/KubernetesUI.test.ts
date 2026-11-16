@@ -1,3 +1,7 @@
+import {createPinia,setActivePinia} from 'pinia'
+import {useSessionStore} from '../../stores/session'
+import {beforeEach as initEach} from 'vitest'
+initEach(()=>{setActivePinia(createPinia());useSessionStore().setUser({username:'admin',multiTenant:false,instanceAdmin:true})})
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import KubeCredentials from "./KubeCredentials.vue";
@@ -107,7 +111,7 @@ const operation: KubeOperation = {
   cleanup: "verified",
   retired: false,
   reasonCode: "boundary",
-  canReconcile: true,
+  canManage:true,canReconcile: true,
   canRetire: true,
 };
 let w: VueWrapper | undefined;
@@ -246,6 +250,7 @@ describe("Kubernetes management forms", () => {
       "grant",
       "web",
       expect.any(AbortSignal),
+      expect.objectContaining({signal:expect.any(AbortSignal),throwOnUnauthorized:true}),
     );
     expect(w!.text()).toContain("连接检查通过");
   });
@@ -341,6 +346,7 @@ describe("Kubernetes node config and operation evidence", () => {
       operation,
       "reconcile",
       expect.any(AbortSignal),
+      expect.objectContaining({throwOnUnauthorized:true}),
     );
     expect(w!.emitted("blocked")!.at(-1)).toEqual([false]);
     expect(w!.text()).toContain("工作负载已就绪");

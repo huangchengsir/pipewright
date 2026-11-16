@@ -4,6 +4,9 @@ import { useI18n } from 'vue-i18n'
 import { NSelect } from 'naive-ui'
 import { Plus } from '@vicons/tabler'
 import AppButton from '../ui/AppButton.vue'
+import PermissionGate from '../PermissionGate.vue'
+import { usePermissions } from '../../composables/usePermission'
+import {mcpIssueQueries} from '../../utils/mcpPermissions'
 import FormField from '../ui/FormField.vue'
 import { MCP_CONFIG_SECTIONS, MCP_CONFIG_OPERATIONS, type CreateMCPToken, type MCPConfigGrant, type MCPConfigSection, type MCPConfigOperation } from '../../api/mcp'
 
@@ -12,6 +15,7 @@ const emit = defineEmits<{ create: [input: CreateMCPToken] }>()
 const { t } = useI18n()
 const form = reactive<CreateMCPToken>({ name: '', projectIds: [], canTrigger: false, expiresInDays: 7 })
 const grants = reactive<Record<string, MCPConfigGrant>>({})
+
 const options = computed(() => props.projects.map(p => ({ label: p.name, value: p.id })))
 const selectedProjects = computed(() => props.projects.filter(p => form.projectIds.includes(p.id)))
 const sectionOptions = computed(() => MCP_CONFIG_SECTIONS.map(value => ({ value, label: t(`mcpConfig.sections.${value}`) })))
@@ -23,6 +27,8 @@ function operationOptions(id: string) {
   return MCP_CONFIG_OPERATIONS.filter(op => grants[id]?.sections.includes(operationSection[op])).map(value => ({ value, label: t(`mcpConfig.operations.${value.replaceAll('.', '_')}`) }))
 }
 const activeGrants = computed(() => form.projectIds.map(id => grants[id]).filter((grant): grant is MCPConfigGrant => !!grant?.read))
+const issueQueries = computed(() => mcpIssueQueries({...form,configGrants:activeGrants.value}))
+const issuePermission = usePermissions(issueQueries)
 function validSelectors(ids?: string[]) {
  return !!ids?.length && ids.length <=128 && new Set(ids).size===ids.length && ids.every(id=>id===id.trim() && id.length>0 && id.length<=128 && Array.from(id).every(char=>{const code=char.codePointAt(0)!;return code>=32 && !(code>=127 && code<=159) && char!=='*'}))
 }
@@ -53,7 +59,7 @@ function setSections(id: string, values: MCPConfigSection[]) {
   grant.operations = grant.operations.filter(op => values.includes(operationSection[op]))
 }
 function submit() {
-  if (props.busy || !valid.value) return
+  if (props.busy || !valid.value || !issuePermission.allowed.value) return
   emit('create', { ...form, name: form.name.trim(), projectIds: [...form.projectIds], ...(activeGrants.value.length ? { configGrants: activeGrants.value.map(g => ({ ...g, sections: [...g.sections], operations: [...g.operations], ...(g.stageIds ? { stageIds: [...g.stageIds] } : {}), ...(g.jobIds ? { jobIds: [...g.jobIds] } : {}) })) } : {}) })
 }
 </script>
@@ -71,7 +77,7 @@ function submit() {
         <input id="mcp-expiry" v-model.number="form.expiresInDays" class="mcp-input" type="number" min="1" max="30" step="1" :disabled="busy" />
       </FormField>
       <label class="mcp-permission"><input v-model="form.canTrigger" type="checkbox" :disabled="busy" />{{ t('settingsMCP.canTrigger') }}</label>
-      <AppButton type="submit" variant="primary" :loading="busy" :disabled="!valid"><Plus class="mcp-icon" aria-hidden="true" />{{ t('settingsMCP.create') }}</AppButton>
+      <PermissionGate :query="issueQueries" mode="disabled"><AppButton type="submit" variant="primary" :loading="busy" :disabled="!valid"><Plus class="mcp-icon" aria-hidden="true" />{{ t('settingsMCP.create') }}</AppButton><template #denied="{ disabled }"><AppButton type="submit" variant="primary" :disabled="disabled"><Plus class="mcp-icon" aria-hidden="true" />{{ t('settingsMCP.create') }}</AppButton></template></PermissionGate>
     </div>
     <p v-if="form.canTrigger" class="mcp-warning" role="note">{{ t('settingsMCP.triggerWarning') }}</p>
     <fieldset v-if="selectedProjects.length" class="mcp-config-grants" :disabled="busy" aria-describedby="mcp-config-grants-hint">

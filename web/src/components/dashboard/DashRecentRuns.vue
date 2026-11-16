@@ -12,9 +12,11 @@ import type { RunListItem, RunStatus } from "../../api/runs";
 const props = defineProps<{
   runs: RunListItem[];
   loading: boolean;
+  canNavigate?: boolean;
 }>();
 
-const router = useRouter();
+const router = useRouter()
+function navigate(path: string) { if (props.canNavigate !== false) void router.push(path) };
 const { t } = useI18n();
 
 // RunStatus → 语义色调(成功/失败/进行/等待/回滚);文案走 i18n `runStatus.*`。
@@ -57,7 +59,7 @@ function fmtAgo(rfc: string): string {
   <section class="card runs" aria-labelledby="dash-runs-h">
     <header class="card-head">
       <h2 id="dash-runs-h" class="card-title">{{ t("dash.recentRuns") }}</h2>
-      <button class="card-link" type="button" @click="router.push('/runs')">
+      <button v-if="canNavigate !== false" class="card-link" type="button" @click="navigate('/runs')">
         {{ t("common.allArrow") }}
       </button>
     </header>
@@ -73,9 +75,10 @@ function fmtAgo(rfc: string): string {
     <ul v-else class="runs-list" role="list">
       <li v-for="r in items" :key="r.id">
         <button
+          :disabled="canNavigate === false"
           class="run-row"
           type="button"
-          @click="router.push(`/runs/${r.id}`)"
+          @click="navigate(`/runs/${r.id}`)"
         >
           <span class="run-badge" :class="`t-${STATUS_TONE[r.status]}`">
             <span class="run-dot" aria-hidden="true" />

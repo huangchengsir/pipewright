@@ -3,6 +3,7 @@ package httpapi
 import (
 	"html/template"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/huangchengsir/pipewright/internal/approval"
@@ -104,7 +105,7 @@ func renderApprovalPage(w http.ResponseWriter, status int, data approvalPageData
 // makeApprovalPageHandler 返回 GET /approvals?token=... 的处理器(公开;无副作用)。
 //
 // token 无效/过期 → 友好错误页;门已不在等待 → 已处理页;否则 → 确认页(两个 POST 表单)。
-func makeApprovalPageHandler(signer *approval.Signer, coord *approval.Coordinator) http.HandlerFunc {
+func makeApprovalPageHandler(signer *approval.Signer, coord *approval.Coordinator, stores ...*approval.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if signer == nil || !signer.Enabled() || coord == nil {
 			renderApprovalPage(w, http.StatusOK, approvalPageData{
@@ -119,6 +120,18 @@ func makeApprovalPageHandler(signer *approval.Signer, coord *approval.Coordinato
 				Title: "链接无效", Message: "链接无效或已过期,请重新发起或登录平台处理。",
 			})
 			return
+		}
+		if len(stores) > 0 && stores[0] != nil {
+			on, err := stores[0].MultiTenant(r.Context())
+			if err != nil {
+				http.Error(w, "Approval unavailable", 503)
+				return
+			}
+			if on {
+				w.Header().Set("Referrer-Policy", "no-referrer")
+				http.Redirect(w, r, "/runs/"+url.PathEscape(runID)+"?approvalStage="+url.QueryEscape(stageID), http.StatusSeeOther)
+				return
+			}
 		}
 		// GET 无副作用:仅查询门是否仍在等待。
 		if !coord.IsWaiting(approval.Key(runID, stageID)) {
@@ -143,8 +156,20 @@ func makeApprovalPageHandler(signer *approval.Signer, coord *approval.Coordinato
 // 解析 form 的 token + decision(approve|reject)→ Verify → coord.Resolve。Resolve 为 false
 // (门已不在等待)→ 提示页;成功 → 审计(run.approve/run.reject)+ 结果页。
 // **不**在此调 store.Decide——门内 worker 收到决定后自行落库(与 UI 审批端点一致)。
-func makeApprovalActHandler(signer *approval.Signer, coord *approval.Coordinator, rec audit.Recorder) http.HandlerFunc {
+func makeApprovalActHandler(signer *approval.Signer, coord *approval.Coordinator, rec audit.Recorder, stores ...*approval.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if len(stores) > 0 && stores[0] != nil {
+			on, err := stores[0].MultiTenant(r.Context())
+			if err != nil {
+				http.Error(w, "Approval unavailable", 503)
+				return
+			}
+			if on {
+				renderApprovalPage(w, http.StatusForbidden, approvalPageData{Title: "请登录后审批", Message: "请打开通知中的运行页面，使用本人账号确认审批。"})
+				return
+			}
+		}
+
 		if signer == nil || !signer.Enabled() || coord == nil {
 			renderApprovalPage(w, http.StatusOK, approvalPageData{
 				Title: "审批链接不可用", Message: "服务端未启用签名链接审批,请登录平台处理。",

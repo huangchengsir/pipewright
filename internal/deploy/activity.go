@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	log "github.com/huangchengsir/pipewright/internal/logging"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"sync"
 	"time"
 
@@ -23,9 +24,33 @@ type deployActivity struct {
 // Admission protects current configuration reads without holding SQL locks
 // across SSH, health probes, archive IO, or asynchronous diagnosis. Remote
 // leftovers are not inferred from these reader holds and no TTL releases them.
-func (s *service) beginActivity(ctx context.Context, runID string) (context.Context, func(), error) {
+func (s *service) beginActivity(ctx context.Context, runID string, actions ...string) (context.Context, func(), error) {
 	if s.batchDB == nil {
+		if tenancy.HasAuthorizationContext(ctx) {
+			return ctx, nil, tenancy.ErrForbidden
+		}
 		return ctx, func() {}, nil
+	}
+	action := "deployment.execute"
+	if len(actions) > 0 {
+		action = actions[0]
+	}
+	if action != "deployment.execute" && action != "release.rollback" && action != "run.cancel" {
+		return ctx, nil, tenancy.ErrForbidden
+	}
+	if err := tenancy.VerifyExecution(ctx); err != nil {
+		return ctx, nil, err
+	}
+	if err := s.authorizeDeployment(ctx, runID, action); err != nil {
+		return ctx, nil, err
+	}
+	ctx = tenancy.WithActionBoundary(ctx, func(current context.Context) error { return s.authorizeDeployment(current, runID, action) })
+	if action != "run.cancel" {
+		var err error
+		ctx, err = tenancy.DeploymentReadContext(ctx, s.batchDB, runID, action)
+		if err != nil {
+			return ctx, nil, err
+		}
 	}
 	if a, ok := ctx.Value(deployActivityKey{}).(*deployActivity); ok && a.svc.activityOwner == s.activityOwner && a.runID == runID {
 		if done, ok := a.retain(); ok {
@@ -38,7 +63,11 @@ func (s *service) beginActivity(ctx context.Context, runID string) (context.Cont
 	if err := configstate.StartActivityReaders(a.id, s.activityOwner); err != nil {
 		return ctx, nil, err
 	}
+	ctx = configstate.WithWriteAdmission(ctx, tenancy.LockAuthorization)
 	err := configstate.WithWriteTxContext(ctx, s.batchDB, func(txctx context.Context, q configstate.DBTX) error {
+		if err := s.authorizeDeployment(txctx, runID, action); err != nil {
+			return err
+		}
 		if err := configstate.LockEpochs(txctx, q, s.batchDB, configstate.EpochPolicy, configstate.EpochSecrets, configstate.EpochExecutor); err != nil {
 			return err
 		}
@@ -144,4 +173,39 @@ func retainDiagnosticActivity(ctx context.Context) func() {
 		}
 	}
 	return func() {}
+}
+
+// All deployment APIs, including batch retries and stage recovery, pass this
+// gate before registering activity or changing result rows. The saved run, not
+// the request payload, supplies its project and environment.
+func (s *service) authorizeDeployment(ctx context.Context, runID, action string) error {
+	if action == "run.cancel" {
+		return tenancy.Check(ctx, s.batchDB, action, "run", runID)
+	}
+	var project, environment string
+	err := configstate.Queryer(ctx, s.batchDB).QueryRowContext(ctx, `SELECT project_id,resolved_environment FROM pipeline_runs WHERE id=?`, runID).Scan(&project, &environment)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrRunNotFound
+	}
+	if err != nil {
+		return err
+	}
+	return tenancy.CheckEnvironmentName(ctx, s.batchDB, action, project, environment)
+}
+
+func (s *service) authorizeInputOverride(ctx context.Context, runID string, config map[string]string, health *HealthCheck, strategy string) error {
+	if len(config) == 0 && health == nil && strategy == "" {
+		return nil
+	}
+	if s.batchDB == nil {
+		if tenancy.HasAuthorizationContext(ctx) {
+			return tenancy.ErrForbidden
+		}
+		return nil
+	}
+	var project string
+	if err := configstate.Queryer(ctx, s.batchDB).QueryRowContext(ctx, `SELECT project_id FROM pipeline_runs WHERE id=?`, runID).Scan(&project); err != nil {
+		return ErrRunNotFound
+	}
+	return tenancy.CheckExecutionInputOverride(ctx, s.batchDB, project)
 }

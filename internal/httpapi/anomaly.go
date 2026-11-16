@@ -15,6 +15,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/notify"
 	"github.com/huangchengsir/pipewright/internal/target"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // Story 6.5(FR-23):可配置运行时异常检测与告警。
@@ -59,7 +60,7 @@ type anomalyNotifier struct {
 
 // NotifyAlert 异步发一次告警通知:不阻塞检测主流程(手动检测的 HTTP 响应 /
 // 定时检测的 goroutine 都不等慢渠道)。用独立 ctx + 超时,失败仅记日志(best-effort,NFR-10)。
-func (n *anomalyNotifier) NotifyAlert(_ context.Context, a *anomaly.Alert) {
+func (n *anomalyNotifier) NotifyAlert(ctx context.Context, a *anomaly.Alert) {
 	if n.notify == nil || a == nil {
 		return
 	}
@@ -81,8 +82,12 @@ func (n *anomalyNotifier) NotifyAlert(_ context.Context, a *anomaly.Alert) {
 	n.mu.Unlock()
 	go func() {
 		defer n.wg.Done()
-		sendCtx, cancel := context.WithTimeout(n.context, 12*time.Second)
-		defer cancel()
+		sendCtx, cancel := context.WithTimeout(notify.WithAnomalySource(context.WithoutCancel(ctx), a.ServerID), 12*time.Second)
+		stop := context.AfterFunc(n.context, cancel)
+		defer func() { stop(); cancel() }()
+		if err := tenancy.VerifyExecution(sendCtx); err != nil {
+			return
+		}
 		if err := n.notify.RouteEventForProject(sendCtx, "", notify.EventAnomalyDetected, vars); err != nil {
 			log.Printf("[anomaly] alert %s: best-effort notification failed: %v", id, err)
 		}
@@ -199,26 +204,28 @@ func snapshotFromMetricsDTO(id, name string, dto serverMetricsDTO) anomaly.Serve
 
 // anomalyRuleDTO 是规则对外响应体(冻结契约;camelCase)。serverId 为 null 表示全局。
 type anomalyRuleDTO struct {
-	ID                string  `json:"id"`
-	Metric            string  `json:"metric"`
-	Operator          string  `json:"operator"`
-	Threshold         float64 `json:"threshold"`
-	ServerID          *string `json:"serverId"`
-	Enabled           bool    `json:"enabled"`
-	AIAnalysisEnabled bool    `json:"aiAnalysisEnabled"`
-	CreatedAt         string  `json:"createdAt"`
+	SamplingAuthorization string  `json:"samplingAuthorization,omitempty"`
+	ID                    string  `json:"id"`
+	Metric                string  `json:"metric"`
+	Operator              string  `json:"operator"`
+	Threshold             float64 `json:"threshold"`
+	ServerID              *string `json:"serverId"`
+	Enabled               bool    `json:"enabled"`
+	AIAnalysisEnabled     bool    `json:"aiAnalysisEnabled"`
+	CreatedAt             string  `json:"createdAt"`
 }
 
 func toRuleDTO(r *anomaly.Rule) anomalyRuleDTO {
 	return anomalyRuleDTO{
-		ID:                r.ID,
-		Metric:            r.Metric,
-		Operator:          r.Operator,
-		Threshold:         r.Threshold,
-		ServerID:          r.ServerID,
-		Enabled:           r.Enabled,
-		AIAnalysisEnabled: r.AIAnalysisEnabled,
-		CreatedAt:         r.CreatedAt.UTC().Format(time.RFC3339),
+		SamplingAuthorization: r.SamplingAuthorization,
+		ID:                    r.ID,
+		Metric:                r.Metric,
+		Operator:              r.Operator,
+		Threshold:             r.Threshold,
+		ServerID:              r.ServerID,
+		Enabled:               r.Enabled,
+		AIAnalysisEnabled:     r.AIAnalysisEnabled,
+		CreatedAt:             r.CreatedAt.UTC().Format(time.RFC3339),
 	}
 }
 
@@ -256,6 +263,8 @@ func toAlertDTO(a *anomaly.Alert) anomalyAlertDTO {
 // writeAnomalyError 把领域错误映射为契约错误码/状态码。
 func writeAnomalyError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, tenancy.ErrForbidden):
+		writeError(w, http.StatusForbidden, "forbidden", "无权执行此操作")
 	case errors.Is(err, anomaly.ErrNotFound):
 		writeError(w, http.StatusNotFound, "rule_not_found", "规则不存在")
 	case errors.Is(err, anomaly.ErrInvalidMetric):

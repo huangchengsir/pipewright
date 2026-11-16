@@ -26,7 +26,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/target"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -329,6 +331,11 @@ func (s *service) Create(ctx context.Context, in CreateInput) (*Route, error) {
 	if err := validateCreate(in); err != nil {
 		return nil, err
 	}
+	scoped, boundary, authErr := s.bindExecution(ctx, in.ServerID, "proxy.manage")
+	if authErr != nil {
+		return nil, authErr
+	}
+	s, ctx = scoped, boundary
 	// 若引用了 DNS 提供商,校验其存在 + 类型合法(经注入的 resolver,不取 token)。
 	if in.DNSProviderID != "" {
 		if err := s.validateDNSProviderRef(ctx, in.DNSProviderID); err != nil {
@@ -338,7 +345,17 @@ func (s *service) Create(ctx context.Context, in CreateInput) (*Route, error) {
 
 	r := newRoute(in)
 	// 1) 先落库(domain 唯一冲突 → ErrDomainTaken,先于触网,避免无谓 docker 操作)。
-	if err := s.store.insert(ctx, r); err != nil {
+	if err := s.write(ctx, r.ServerID, "proxy.manage", func(c context.Context) error {
+		if r.Config.DNSProviderID != "" {
+			if e := s.authorizeDNS(c, r.Config.DNSProviderID); e != nil {
+				return e
+			}
+		}
+		if e := s.store.insert(c, r); e != nil {
+			return e
+		}
+		return s.recordRouteOwnership(c, r)
+	}); err != nil {
 		return nil, err
 	}
 	// 2) 编排:保证 Caddy 就绪 → (仅 container 上游)接入共享网络 → 渲染 + 下发 + reload。
@@ -352,11 +369,16 @@ func (s *service) Create(ctx context.Context, in CreateInput) (*Route, error) {
 }
 
 func (s *service) Delete(ctx context.Context, id string) error {
-	r, err := s.store.get(ctx, id)
+	r, err := s.authorizedRoute(ctx, id, "proxy.manage")
 	if err != nil {
 		return err
 	}
-	if err := s.store.del(ctx, id); err != nil {
+	scoped, boundary, authErr := s.bindExecution(ctx, r.ServerID, "proxy.manage")
+	if authErr != nil {
+		return authErr
+	}
+	s, ctx = scoped, boundary
+	if err := s.write(ctx, r.ServerID, "proxy.manage", func(c context.Context) error { return s.store.del(c, id) }); err != nil {
 		return err
 	}
 	// 把它从反代摘除:重渲染该主机剩余 enabled 路由并 reload(best-effort:reload 失败仍算删成功,
@@ -368,11 +390,16 @@ func (s *service) Delete(ctx context.Context, id string) error {
 }
 
 func (s *service) SetEnabled(ctx context.Context, id string, on bool) error {
-	r, err := s.store.get(ctx, id)
+	r, err := s.authorizedRoute(ctx, id, "proxy.manage")
 	if err != nil {
 		return err
 	}
-	if err := s.store.setEnabled(ctx, id, on); err != nil {
+	scoped, boundary, authErr := s.bindExecution(ctx, r.ServerID, "proxy.manage")
+	if authErr != nil {
+		return authErr
+	}
+	s, ctx = scoped, boundary
+	if err := s.write(ctx, r.ServerID, "proxy.manage", func(c context.Context) error { return s.store.setEnabled(c, id, on) }); err != nil {
 		return err
 	}
 	// 启用时确保上游已接入网络(仅 container 上游;address 上游不接网络);停用时无需(渲染时自然摘除)。
@@ -386,25 +413,54 @@ func (s *service) SetEnabled(ctx context.Context, id string, on bool) error {
 }
 
 func (s *service) RefreshStatus(ctx context.Context, id string) (*Route, error) {
+	if err := tenancy.Check(ctx, s.store.db, "certificate.read", "proxy_route", id); err != nil {
+		if errors.Is(err, tenancy.ErrForbidden) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if err := tenancy.Check(ctx, s.store.db, "certificate.refresh", "proxy_route", id); err != nil {
+		return nil, err
+	}
 	r, err := s.store.get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	// 优先经 SSH 直接读 Caddy 容器里已签发的证书文件来判定状态:这反映 Caddy 的真实证书态,
-	// 不受「Caddy 不在 443(被宿主 nginx 占用而映射到别的端口)/ 公网 DNS 未指向 / 探测方有本地代理」
-	// 等部署形态影响——公网 TLS 握手探测在这些场景会误报 pending/failed,而证书其实早已签发。
-	// 读不到(无 SSH / 容器无此域名证书文件 / 传输层错误)才回退到公网 443 握手探测。
-	if res, ok := s.probeCaddyCertViaSSH(ctx, r.ServerID, r.Domain); ok {
-		if err := s.store.setCertStatus(ctx, id, res.Status, res.Detail); err != nil {
-			return nil, err
-		}
-		return s.store.get(ctx, id)
-	}
-	res := s.prober.Probe(ctx, r.Domain)
-	if err := s.store.setCertStatus(ctx, id, res.Status, res.Detail); err != nil {
+	res, ok, err := s.probeCaddyCertViaSSH(ctx, r.ServerID, r.Domain)
+	if err != nil {
 		return nil, err
 	}
-	return s.store.get(ctx, id)
+	if !ok {
+		if err = tenancy.Check(ctx, s.store.db, "certificate.refresh", "proxy_route", id); err != nil {
+			return nil, err
+		}
+		if err = tenancy.VerifyExecution(ctx); err != nil {
+			return nil, err
+		}
+		res = s.prober.Probe(ctx, r.Domain)
+	}
+	var result *Route
+	err = configstate.WithWriteTxContext(ctx, s.store.db, func(txctx context.Context, _ configstate.DBTX) error {
+		if e := tenancy.LockAuthorization(txctx, s.store.db); e != nil {
+			return e
+		}
+		if e := tenancy.Check(txctx, s.store.db, "certificate.refresh", "proxy_route", id); e != nil {
+			return e
+		}
+		current, e := s.store.get(txctx, id)
+		if e != nil {
+			return e
+		}
+		if current.ServerID != r.ServerID || current.Domain != r.Domain {
+			return tenancy.ErrConflict
+		}
+		if e = s.store.setCertStatus(txctx, id, res.Status, res.Detail); e != nil {
+			return e
+		}
+		result, e = s.store.get(txctx, id)
+		return e
+	})
+	return result, err
 }
 
 // probeCaddyCertViaSSH 经 target(SSH)进 pipewright-caddy 容器读该域名已签发的证书文件(仅证书公钥
@@ -412,9 +468,9 @@ func (s *service) RefreshStatus(ctx context.Context, id string) (*Route, error) 
 //   - 证书在有效期 → issued(detail 含签发机构 + 到期日)。
 //   - 证书文件在但不在有效期(临时证/尚未生效)→ pending。
 //   - 无 tg / serverID 空 / SSH 传输层错误 / 无该域名证书文件 → ok=false(回退公网探测)。
-func (s *service) probeCaddyCertViaSSH(ctx context.Context, serverID, domain string) (ProbeResult, bool) {
+func (s *service) probeCaddyCertViaSSH(ctx context.Context, serverID, domain string) (ProbeResult, bool, error) {
 	if s.tg == nil || strings.TrimSpace(serverID) == "" {
-		return ProbeResult{}, false
+		return ProbeResult{}, false, nil
 	}
 	// Caddy 把通配符 *.example.com 的证书存为目录/文件名 wildcard_.example.com。
 	name := domain
@@ -426,16 +482,19 @@ func (s *service) probeCaddyCertViaSSH(ctx context.Context, serverID, domain str
 	out, err := s.tg.Exec(ctx, serverID, []string{
 		"docker", "exec", caddyContainer, "sh", "-c", "cat " + certGlob + " 2>/dev/null",
 	})
+	if errors.Is(err, tenancy.ErrForbidden) || errors.Is(err, tenancy.ErrConflict) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return ProbeResult{}, false, err
+	}
 	if err != nil || out == nil {
-		return ProbeResult{}, false // 传输层错误(SSH 不可达等)→ 回退
+		return ProbeResult{}, false, nil // 传输层错误(SSH 不可达等)→ 回退
 	}
 	leaf := parseFirstCertPEM(out.Stdout)
 	if leaf == nil {
-		return ProbeResult{}, false // 还没有证书文件(可能仍在签发中)→ 回退公网探测
+		return ProbeResult{}, false, nil // 还没有证书文件(可能仍在签发中)→ 回退公网探测
 	}
 	now := time.Now()
 	if now.Before(leaf.NotBefore) || now.After(leaf.NotAfter) {
-		return ProbeResult{Status: CertStatusPending, Detail: "证书不在有效期(可能仍在签发中)"}, true
+		return ProbeResult{Status: CertStatusPending, Detail: "证书不在有效期(可能仍在签发中)"}, true, nil
 	}
 	issuer := strings.TrimSpace(leaf.Issuer.CommonName)
 	if issuer == "" && len(leaf.Issuer.Organization) > 0 {
@@ -445,7 +504,7 @@ func (s *service) probeCaddyCertViaSSH(ctx context.Context, serverID, domain str
 	if issuer != "" {
 		detail = fmt.Sprintf("已由 %s 签发,到期 %s", issuer, leaf.NotAfter.UTC().Format("2006-01-02"))
 	}
-	return ProbeResult{Status: CertStatusIssued, Detail: detail}, true
+	return ProbeResult{Status: CertStatusIssued, Detail: detail}, true, nil
 }
 
 // parseFirstCertPEM 从 PEM 文本中解析第一张 CERTIFICATE。无有效证书返回 nil。
@@ -469,10 +528,15 @@ func parseFirstCertPEM(pemText string) *x509.Certificate {
 // Update 校验入参 → 归一化 + bcrypt 口令 → 持久化高级配置 → apply(reload)。
 // upstream 容器/端口为空/0 时保持原值;BasicAuthUser=="" 时清空认证(忽略口令)。
 func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Route, error) {
-	r, err := s.store.get(ctx, id)
+	r, err := s.authorizedRoute(ctx, id, "proxy.manage")
 	if err != nil {
 		return nil, err
 	}
+	scoped, boundary, authErr := s.bindExecution(ctx, r.ServerID, "proxy.manage")
+	if authErr != nil {
+		return nil, authErr
+	}
+	s, ctx = scoped, boundary
 
 	// 1) upstream 增量更新(空 = 保持)。
 	container := r.UpstreamContainer
@@ -524,7 +588,14 @@ func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Route
 	}
 
 	// 5) 持久化(config JSON 含 bcrypt 哈希)。
-	if err := s.store.updateConfig(ctx, id, container, port, cfg); err != nil {
+	if err := s.write(ctx, r.ServerID, "proxy.manage", func(c context.Context) error {
+		if cfg.DNSProviderID != "" {
+			if e := s.authorizeDNS(c, cfg.DNSProviderID); e != nil {
+				return e
+			}
+		}
+		return s.store.updateConfig(c, id, container, port, cfg)
+	}); err != nil {
 		return nil, err
 	}
 
@@ -542,7 +613,7 @@ func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Route
 
 // Overview 列全部路由,并按 server_id 关联主机展示名(主机查不到则回退 server_id)。
 func (s *service) Overview(ctx context.Context) ([]RouteWithServer, error) {
-	routes, err := s.store.list(ctx, "")
+	routes, err := s.store.listCertificates(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -575,6 +646,12 @@ func (s *service) CaddyStatus(ctx context.Context, serverID string) (*CaddyStatu
 	if serverID == "" {
 		return nil, ErrEmptyServerID
 	}
+
+	scoped, boundary, authErr := s.bindExecution(ctx, serverID, "proxy.read")
+	if authErr != nil {
+		return nil, authErr
+	}
+	s, ctx = scoped, boundary
 	st, err := inspectCaddy(ctx, s.tg, serverID)
 	if err != nil {
 		return nil, err
@@ -594,6 +671,12 @@ func (s *service) RemoveCaddy(ctx context.Context, serverID string) error {
 	if serverID == "" {
 		return ErrEmptyServerID
 	}
+
+	scoped, boundary, authErr := s.bindExecution(ctx, serverID, "proxy.install")
+	if authErr != nil {
+		return authErr
+	}
+	s, ctx = scoped, boundary
 	return removeCaddy(ctx, s.tg, serverID)
 }
 
@@ -602,7 +685,9 @@ func (s *service) RemoveCaddy(ctx context.Context, serverID string) error {
 func (s *service) ensureAndApply(ctx context.Context, serverID, container string) error {
 	// 取本主机所有 enabled 路由声明的 TCP 透传监听端口 —— ensureCaddy 据此确保 Caddy 容器
 	// 对宿主发布这些端口(缺则带「既有映射 ∪ TCP 端口」重建),否则 layer4 监听不可达。
-	if err := ensureCaddy(ctx, s.tg, serverID, s.tcpPortsForServer(ctx, serverID)); err != nil {
+	if err := ensureCaddy(ctx, s.tg, serverID, s.tcpPortsForServer(ctx, serverID), func(c context.Context) error {
+		return tenancy.Check(c, s.store.db, "proxy.install", "server", serverID)
+	}); err != nil {
 		return err
 	}
 	if container != "" {
@@ -637,8 +722,16 @@ func (s *service) PrepareCaddy(ctx context.Context, serverID string) (*CaddyStat
 	if serverID == "" {
 		return nil, ErrEmptyServerID
 	}
+
+	scoped, boundary, authErr := s.bindExecution(ctx, serverID, "proxy.install")
+	if authErr != nil {
+		return nil, authErr
+	}
+	s, ctx = scoped, boundary
 	// 显式部署:按本主机既有 TCP 路由(若有)发布端口;无则 80/443 起。
-	if err := ensureCaddy(ctx, s.tg, serverID, s.tcpPortsForServer(ctx, serverID)); err != nil {
+	if err := ensureCaddy(ctx, s.tg, serverID, s.tcpPortsForServer(ctx, serverID), func(c context.Context) error {
+		return tenancy.Check(c, s.store.db, "proxy.install", "server", serverID)
+	}); err != nil {
 		return nil, err
 	}
 	return s.CaddyStatus(ctx, serverID)
@@ -673,16 +766,50 @@ func (s *service) apply(ctx context.Context, serverID string) error {
 	if err != nil {
 		return err
 	}
-	creds := s.resolveDNSCreds(ctx, routes)
+	creds, err := s.resolveDNSCreds(ctx, routes)
+	if err != nil {
+		return err
+	}
+	ctx = tenancy.WithActionBoundary(ctx, func(c context.Context) error {
+		for _, r := range routes {
+			if r.Config.DNSProviderID != "" {
+				if e := s.authorizeDNS(c, r.Config.DNSProviderID); e != nil {
+					return e
+				}
+				current, e := s.dnsVersion(c, r.Config.DNSProviderID)
+				if e != nil {
+					return e
+				}
+				if current != creds[r.Config.DNSProviderID].Version {
+					return tenancy.ErrConflict
+				}
+			}
+		}
+		return nil
+	})
+	if err = tenancy.VerifyExecution(ctx); err != nil {
+		return err
+	}
 	return applyCaddyfile(ctx, s.tg, serverID, renderCaddyfile(routes, creds))
 }
 
 // resolveDNSCreds 为这批路由里引用的每个 DNS 提供商取一次 (类型, token)。
 // resolver 未注入 / 取不到(提供商被删 / vault 未配)时跳过该提供商 —— 对应路由退回 HTTP-01 渲染
 // (不阻断其它路由 apply;通配符路由会因无 token 而签不出证书,由用户在状态里看到 pending)。
-func (s *service) resolveDNSCreds(ctx context.Context, routes []Route) map[string]dnsCred {
+func (s *service) resolveDNSCreds(ctx context.Context, routes []Route) (map[string]dnsCred, error) {
 	if s.dns == nil {
-		return nil
+		on, e := tenancy.Enabled(ctx, s.store.db)
+		if e != nil {
+			return nil, e
+		}
+		if on {
+			for _, r := range routes {
+				if r.Config.DNSProviderID != "" {
+					return nil, ErrInvalidDNSProvider
+				}
+			}
+		}
+		return nil, nil
 	}
 	out := map[string]dnsCred{}
 	for _, r := range routes {
@@ -693,16 +820,40 @@ func (s *service) resolveDNSCreds(ctx context.Context, routes []Route) map[strin
 		if _, seen := out[pid]; seen {
 			continue
 		}
+		if err := s.authorizeDNS(ctx, pid); err != nil {
+			return nil, err
+		}
+		version, err := s.dnsVersion(ctx, pid)
+		if err != nil {
+			return nil, err
+		}
 		pt, token, ok, err := s.dns.Resolve(ctx, pid)
 		if err != nil || !ok || pt == "" || token == "" {
+			on, modeErr := tenancy.Enabled(ctx, s.store.db)
+			if modeErr != nil {
+				return nil, modeErr
+			}
+			if on {
+				if err != nil {
+					return nil, err
+				}
+				return nil, ErrInvalidDNSProvider
+			}
 			continue
 		}
-		out[pid] = dnsCred{Type: pt, Token: token}
+		current, e := s.dnsVersion(ctx, pid)
+		if e != nil {
+			return nil, e
+		}
+		if current != version {
+			return nil, tenancy.ErrConflict
+		}
+		out[pid] = dnsCred{Type: pt, Token: token, Version: version}
 	}
 	if len(out) == 0 {
-		return nil
+		return nil, nil
 	}
-	return out
+	return out, nil
 }
 
 // --- 校验 -------------------------------------------------------------------
@@ -998,6 +1149,9 @@ func validateConfig(cfg RouteConfig) error {
 // validateDNSProviderRef 校验 DNS 提供商引用存在且类型合法(经注入的 resolver,不取 token)。
 // 未注入 resolver → 视为「DNS 功能不可用」,引用即非法。
 func (s *service) validateDNSProviderRef(ctx context.Context, providerID string) error {
+	if err := s.authorizeDNS(ctx, providerID); err != nil {
+		return err
+	}
 	if s.dns == nil {
 		return ErrInvalidDNSProvider
 	}

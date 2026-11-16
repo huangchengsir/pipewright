@@ -132,9 +132,12 @@ func TestLoginSuccess(t *testing.T) {
 		t.Fatalf("login status = %d, want 200", resp.StatusCode)
 	}
 
-	var body map[string]string
+	var body map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode body: %v", err)
+	}
+	if body["multiTenant"] != false {
+		t.Fatalf("legacy mode must be explicit: %v", body)
 	}
 	if body["username"] != "admin" {
 		t.Fatalf("body username = %q, want admin", body["username"])
@@ -272,9 +275,12 @@ func TestSessionEndpointAuthenticated(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
-	var body map[string]string
+	var body map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
+	}
+	if body["multiTenant"] != false {
+		t.Fatalf("legacy mode must be explicit: %v", body)
 	}
 	if body["username"] != "admin" {
 		t.Fatalf("username = %q, want admin", body["username"])

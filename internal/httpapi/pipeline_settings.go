@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // ---- 构建/部署配置 DTO(冻结契约;camelCase;secret 项绝无明文,仅 credentialId + maskedValue) ----
@@ -152,6 +153,11 @@ func toSettingsDTO(st *pipeline.Settings) settingsDTO {
 
 // writeSettingsError 把领域错误映射为契约错误码/状态码;绝不回显明文。
 func writeSettingsError(w http.ResponseWriter, err error) {
+	if errors.Is(err, tenancy.ErrForbidden) || errors.Is(err, tenancy.ErrConflict) {
+		accessError(w, err)
+		return
+	}
+
 	switch {
 	case errors.Is(err, pipeline.ErrProjectNotFound):
 		writeError(w, http.StatusNotFound, "project_not_found", "项目不存在")

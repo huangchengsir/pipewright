@@ -37,11 +37,14 @@ func (s *Service) LookupReleaseRollback(ctx context.Context, in ReleaseRollbackR
 	if e != nil {
 		return ReleaseRollbackStart{}, rowError(e)
 	}
+	r, e := s.ReadReleaseForRun(ctx, run, id)
+	if e != nil {
+		return ReleaseRollbackStart{}, e
+	}
 	if source != in.SourceID || revision != in.ExpectedRevision || plan != in.PlanID {
 		return ReleaseRollbackStart{}, ErrConflict
 	}
-	r, e := s.GetRelease(ctx, id)
-	return ReleaseRollbackStart{RunID: run, Release: r}, e
+	return ReleaseRollbackStart{RunID: run, Release: r}, nil
 }
 
 // RecordReleaseRollbackRequest must share the transaction that creates the

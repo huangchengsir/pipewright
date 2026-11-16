@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/huangchengsir/pipewright/internal/prstatus"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // PRState 是一个 PR 的判定状态(自动回收只在 closed / merged 时触发)。
@@ -56,6 +57,12 @@ type PRStateChecker interface {
 // 解析失败(项目不存在等)返回 error → checker 据此返回 unknown。
 type ProjectRepoResolver interface {
 	Resolve(ctx context.Context, projectID string) (repoURL, token string, err error)
+}
+
+// ProjectRepoLeaseResolver retains the managed lease through the provider call.
+// The context freezes the project/credential reference; it stays in-process.
+type ProjectRepoLeaseResolver interface {
+	Acquire(context.Context, string) (context.Context, string, string, func(), error)
 }
 
 // httpChecker 是基于 HTTP 的 PR 状态读取器(复用 prstatus.Detect 识别平台 + 同款 base/UA 约定)。
@@ -99,7 +106,17 @@ func (c *httpChecker) State(ctx context.Context, projectID string, prNumber int)
 	if c.resolver == nil || prNumber < 1 {
 		return PRStateUnknown, nil
 	}
-	repoURL, token, err := c.resolver.Resolve(ctx, projectID)
+	var repoURL, token string
+	var err error
+	if leased, ok := c.resolver.(ProjectRepoLeaseResolver); ok {
+		var release func()
+		ctx, repoURL, token, release, err = leased.Acquire(ctx, projectID)
+		if release != nil {
+			defer release()
+		}
+	} else {
+		repoURL, token, err = c.resolver.Resolve(ctx, projectID)
+	}
 	if err != nil {
 		// 解析失败(项目缺失等):无从确证 → unknown(不回收)。
 		return PRStateUnknown, nil
@@ -179,6 +196,9 @@ func (c *httpChecker) fetchGitee(ctx context.Context, endpoint, token string) (P
 
 // doGet 发一个鉴权 GET,2xx 返回响应体 + true;否则 (nil, false)。token 仅进头,绝不进 URL/日志。
 func (c *httpChecker) doGet(ctx context.Context, endpoint, token string, github bool) ([]byte, bool) {
+	if e := tenancy.VerifyExecution(ctx); e != nil {
+		return nil, false
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, false
@@ -198,6 +218,9 @@ func (c *httpChecker) doGet(ctx context.Context, endpoint, token string, github 
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
+		return nil, false
+	}
+	if e := tenancy.VerifyExecution(ctx); e != nil {
 		return nil, false
 	}
 	return body, true

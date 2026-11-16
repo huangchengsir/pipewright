@@ -9,6 +9,9 @@ import (
 
 func (s *Service) call(ctx context.Context, q querier, id, cid string) (callRecord, error) {
 	var c callRecord
+	if err := s.authorizeSession(ctx, q, id, "opschat.read"); err != nil {
+		return c, err
+	}
 	var blob []byte
 	var status string
 	err := q.QueryRowContext(ctx, "SELECT body,status,created_at,ordinal FROM ops_chat_calls WHERE session_id=? AND id=?", id, cid).Scan(&blob, &status, &c.Created, &c.Ordinal)
@@ -24,7 +27,7 @@ func (s *Service) call(ctx context.Context, q querier, id, cid string) (callReco
 
 // Call retrieves historical results without changing records or visiting SSH/model.
 func (s *Service) Call(ctx context.Context, id, cid string) (*Call, error) {
-	if err := s.registerSecrets(); err != nil {
+	if err := s.registerSecrets(ctx); err != nil {
 		return nil, err
 	}
 	c, err := s.call(ctx, s.db, id, cid)
@@ -54,6 +57,10 @@ func retryable(c callRecord) error {
 	}
 }
 func (s *Service) RetryFailed(ctx context.Context, id string, in RetryInput) (*Run, error) {
+	if err := s.authorizeSession(ctx, s.db, id, "opschat.submit"); err != nil {
+		return nil, err
+	}
+
 	if err := s.ready(); err != nil {
 		return nil, err
 	}
@@ -163,7 +170,7 @@ func (s *Service) RetryFailed(ctx context.Context, id string, in RetryInput) (*R
 	if len(body.Targets) > 8 {
 		return nil, ErrInvalid
 	}
-	if err = s.registerSecrets(); err != nil {
+	if err = s.registerSecrets(ctx); err != nil {
 		return nil, err
 	}
 	return s.enqueue(ctx, id, in.ClientRequestID, hash, body, in.Revision)

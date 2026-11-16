@@ -1,3 +1,7 @@
+import { createPinia, setActivePinia } from 'pinia'
+import { useSessionStore } from '../stores/session'
+import {usePermissionStore} from '../stores/permissions'
+import {access} from '../api/access'
 import { defineComponent, h } from 'vue'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter, RouterView, type Router } from 'vue-router'
@@ -17,6 +21,8 @@ import type { SettingsDTO } from '../api/pipelineSettings'
 import type { TriggerConfig } from '../api/triggers'
 import type { PreviewConfig } from '../api/previewEnvs'
 import type { ValidationDTO } from '../api/pipelineValidation'
+
+vi.mock('../api/access',()=>({access:{decisions:vi.fn()}}))
 
 vi.mock('../api/http', async (importOriginal) => ({
   ...await importOriginal<typeof import('../api/http')>(),
@@ -178,6 +184,8 @@ function versionedRequests(lazyDefaults = false, alwaysChanging = false) {
 }
 
 beforeEach(() => {
+  setActivePinia(createPinia())
+  useSessionStore().setUser({username: 'admin',multiTenant:false})
   vi.resetAllMocks()
   vi.spyOn(window, 'confirm').mockReturnValue(false)
   storedPipeline = { stages: [], yaml: '', status: 'draft', updatedAt: 'initial' }
@@ -202,7 +210,7 @@ beforeEach(() => {
     if (url === `${prefix}/preview-config`) return clone(storedPreview)
     if (url === '/api/projects') return [{ id: 'p1', name: 'Project' }]
     if (url === '/api/credentials') return []
-    if (['/api/servers', '/api/notifications/channels', '/api/dns/providers'].includes(url)) return { items: [] }
+    if (['/api/servers', '/api/notifications/channel-options', '/api/dns/providers'].includes(url)) return { items: [] }
     throw new Error(`Unexpected GET ${url}`)
   })
   vi.mocked(http.put).mockImplementation(async (url, input) => {
@@ -447,7 +455,7 @@ describe('ProjectPipeline draft save scope (#190/#193)', () => {
     await render()
     expect(isGuarded()).toBe(false)
     await clickSave()
-    expect(http.put).toHaveBeenCalledExactlyOnceWith(`${prefix}/pipeline`, { stages: [] })
+    expect(http.put).toHaveBeenCalledExactlyOnceWith(`${prefix}/pipeline`, { stages: [] },expect.objectContaining({signal:expect.any(AbortSignal),throwOnUnauthorized:true}))
     expect(storedPipeline.updatedAt).toBe('saved')
     expect(wrapper!.find('.pipeline-banner--success').exists()).toBe(true)
     expect(isGuarded()).toBe(false)
@@ -863,4 +871,129 @@ describe('ProjectPipeline draft save scope (#190/#193)', () => {
     expect(saveStatus().props('state')).toBe('error')
     expect(saveStatus().props('failedScopes')).toEqual([scopeLabel('triggers')])
   })
+})
+
+
+describe('ProjectPipeline employee permissions',()=>{
+ function member(actions:string[]){
+  const granted=new Set(actions);useSessionStore().setUser({userId:'member',username:'member',multiTenant:true});usePermissionStore().setTeam('team-a')
+  vi.mocked(access.decisions).mockImplementation(async(team,queries)=>({userId:'member',teamId:team,modeEpoch:1,revision:1,catalogVersion:1,allowed:queries.map(q=>granted.has(q.action))}));return granted
+ }
+ async function settled(){for(let i=0;i<4;i++)await flushPromises()}
+ it('does not request the pipeline or settings when read is denied',async()=>{member([]);await render();await settled();expect(wrapper!.find('.pipeline-root').exists()).toBe(false);expect(http.get).not.toHaveBeenCalled()})
+ it('keeps readers in a usable read-only canvas with no mutation controls',async()=>{
+  member(['pipeline.read','project.read']);storedPipeline.stages=[{id:'s',name:'Build',kind:'build',jobs:[{id:'j',name:'Job',type:'script',summary:'',config:{commands:'echo test'}}]}];storedPipeline.yaml='stages: []'
+  await render('canvas',true);await settled();expect(wrapper!.find('.top-btn--save').exists()).toBe(false);expect(wrapper!.get('.add-stage-btn').attributes('disabled')).toBeDefined();expect(wrapper!.get('.job-card-del').attributes('disabled')).toBeDefined();expect(wrapper!.get('.job-card').attributes('draggable')).toBe('false')
+  await wrapper!.get('.job-card').trigger('click');await settled();expect(wrapper!.find('.job-drawer').exists()).toBe(true);expect(wrapper!.get('.job-drawer input.drawer-input').element.matches(':disabled')).toBe(true)
+  await wrapper!.get('.drawer-close').trigger('click');await wrapper!.get('.yaml-toggle').trigger('click');expect(wrapper!.get('.yaml-code').text()).toBe('stages: []');expect(http.put).not.toHaveBeenCalled()
+ })
+ it('rejects an editor component update when only pipeline.read is granted',async()=>{
+  member(['pipeline.read','project.read']);await render();await settled();wrapper!.findComponent(CanvasStub).vm.$emit('update',[{id:'s',name:'Unauthorized',kind:'build',jobs:[]}]);await settled();expect(saveStatus().props('state')).not.toBe('dirty');expect(http.put).not.toHaveBeenCalled()
+ })
+ it('disables the variables and environment fields for readers',async()=>{
+  member(['pipeline.read','project.read']);await render('vars');await settled();expect(wrapper!.findComponent(VarsCacheTab).props('disabled')).toBe(true);await switchTab('envs');expect(wrapper!.findComponent(EnvCredsTab).props('disabled')).toBe(true);expect(http.put).not.toHaveBeenCalled()
+ })
+ it('does not grant project switches along with pipeline editing',async()=>{
+  member(['pipeline.read','pipeline.edit','project.read']);await render();await settled();for(const button of wrapper!.findAll('.pac-switch'))expect(button.attributes('disabled')).toBeDefined();expect(http.patch).not.toHaveBeenCalled();expect(wrapper!.find('.top-btn--save').exists()).toBe(true)
+ })
+ it('saves with the selected team and keeps the original draft behavior',async()=>{
+  member(['pipeline.read','pipeline.edit','project.read']);await render();await settled();wrapper!.findComponent(CanvasStub).vm.$emit('update',[{id:'s',name:'Authorized',kind:'build',jobs:[]}]);await settled();await clickSave();expect(storedPipeline.stages[0]!.name).toBe('Authorized');const opts=vi.mocked(http.put).mock.calls[0]![2]!;expect(new Headers(opts.headers).get('X-Pipewright-Team')).toBe('team-a');expect(opts.signal).toBeInstanceOf(AbortSignal)
+ })
+ it('removes editor actions on revocation and rejects forced updates',async()=>{
+  const granted=member(['pipeline.read','pipeline.edit','project.read']);await render();await settled();granted.delete('pipeline.edit');usePermissionStore().invalidate();await settled();expect(wrapper!.find('.top-btn--save').exists()).toBe(false);wrapper!.findComponent(CanvasStub).vm.$emit('update',[{id:'s',name:'Denied',kind:'build',jobs:[]}]);await settled();expect(http.put).not.toHaveBeenCalled()
+ })
+ it('aborts reads and clears configuration when the employee logs out',async()=>{
+  member(['pipeline.read','pipeline.edit','project.read']);await render();await settled();const opts=vi.mocked(http.get).mock.calls.find(c=>c[0]===`${prefix}/pipeline`)![1]!;useSessionStore().clearSession();await settled();expect(opts.signal?.aborted).toBe(true);expect(wrapper!.find('.pipeline-root').exists()).toBe(false)
+ })
+ it.each([
+   ['aiGenerate', '.wiz-panel'],
+   ['importYaml', '.yi-modal'],
+   ['templates', '.scrim .modal'],
+ ] as const)('gates the actual %s toolbar button on selected pipeline edit and blocks its retained control',async (key, modal)=>{
+  const granted=member(['pipeline.read','pipeline.edit','project.read'])
+  await render('canvas',false,false,true);await settled()
+  const label=i18n.global.t('projectPipeline.'+key)
+  const button=wrapper!.findAll('.top-btn').find(candidate=>candidate.text()===label)!
+  expect(button.exists()).toBe(true)
+  await button.trigger('click');await settled()
+  expect(wrapper!.find(modal).exists()).toBe(true)
+  expect(vi.mocked(access.decisions).mock.calls.some(([team,queries])=>team==='team-a'&&queries.some(q=>q.action==='pipeline.edit'&&q.resourceId==='p1'))).toBe(true)
+  granted.delete('pipeline.edit');usePermissionStore().invalidate();await settled()
+  expect(wrapper!.findAll('.top-btn').some(candidate=>candidate.text()===label)).toBe(false)
+  expect(wrapper!.find(modal).exists()).toBe(false)
+  await button.trigger('click');await settled()
+  expect(wrapper!.find(modal).exists()).toBe(false)
+  expect(http.post).not.toHaveBeenCalled()
+ })
+
+ it('clicks each editor tab as a reader and blocks a retained tab after read revocation', async () => {
+  const granted=member(['pipeline.read','project.read'])
+  await render();await settled()
+  for(const key of ['vars','triggers','envs','canvas']) {
+   await wrapper!.get('#tab-'+key).trigger('click');await settled()
+   expect(router.currentRoute.value.query.tab).toBe(key)
+   expect(wrapper!.get('#tab-'+key).attributes('aria-selected')).toBe('true')
+   expect(wrapper!.get('#tabpanel-'+key).isVisible()).toBe(true)
+  }
+  const retained=wrapper!.get('#tab-vars')
+  granted.delete('pipeline.read');usePermissionStore().invalidate();await settled()
+  await retained.trigger('click');await settled()
+  expect(router.currentRoute.value.query.tab).toBe('canvas')
+  expect(wrapper!.find('.tab-strip').exists()).toBe(false)
+  expect(http.put).not.toHaveBeenCalled()
+  expect(http.post).not.toHaveBeenCalled()
+ })
+
+ it('opens the actual read-only PAC preview for the current project and its default branch', async () => {
+  const granted=member(['pipeline.read','project.read'])
+  const normalGet=vi.mocked(http.get).getMockImplementation()!
+  vi.mocked(http.get).mockImplementation(async (url,options) => {
+   if(url==='/api/projects')return [{id:'p1',name:'Project',repoUrl:'https://example.test/repo',defaultBranch:'test/pac'}]
+   if(url===prefix+'/pac/preview?ref=test%2Fpac')return {found:true,valid:true,ref:'test/pac',stageCount:0,stages:[]}
+   return normalGet(url,options)
+  })
+  await render();await settled()
+  const launch=wrapper!.get('.pac-preview-btn')
+  expect(vi.mocked(http.get).mock.calls.some(([url])=>url.includes('/pac/preview'))).toBe(false)
+  await launch.trigger('click');await settled()
+  const requests=()=>vi.mocked(http.get).mock.calls.filter(([url])=>url.includes('/pac/preview'))
+  const [[path, options]]=requests() as [[string,RequestInit]]
+  expect(path).toBe(prefix+'/pac/preview?ref=test%2Fpac')
+  expect(new Headers(options.headers).get('X-Pipewright-Team')).toBe('team-a')
+  expect(wrapper!.get('#pp-ref').element).toHaveProperty('value','test/pac')
+  granted.delete('pipeline.read');usePermissionStore().invalidate();await settled()
+  await launch.trigger('click');await settled()
+  expect(requests()).toHaveLength(1)
+  expect(options.signal?.aborted).toBe(true)
+  expect(wrapper!.find('.pp-modal').exists()).toBe(false)
+  expect(http.put).not.toHaveBeenCalled()
+  expect(http.post).not.toHaveBeenCalled()
+ })
+
+ it.each([
+  ['workflow',prefix+'/pipeline','#tabpanel-canvas .banner-retry'],
+  ['settings',prefix+'/pipeline/settings','.pipeline-root > .pipeline-banner .banner-retry'],
+ ] as const)('retries %s loading through its own reader button, then blocks it after revocation',async (_,endpoint,selector)=>{
+  const granted=member(['pipeline.read','project.read'])
+  const normalGet=vi.mocked(http.get).getMockImplementation()!
+  let failures=1
+  vi.mocked(http.get).mockImplementation(async (url,options)=>{
+   if(url===endpoint&&failures>0){failures--;throw new Error('transient')}
+   return normalGet(url,options)
+  })
+  await render();await settled()
+  const retained=wrapper!.get(selector)
+  await retained.trigger('click');await settled()
+  const requests=()=>vi.mocked(http.get).mock.calls.filter(([url])=>url===endpoint)
+  expect(requests()).toHaveLength(2)
+  const options=requests()[1]![1]!
+  expect(new Headers(options.headers).get('X-Pipewright-Team')).toBe('team-a')
+  expect(wrapper!.find(selector).exists()).toBe(false)
+  granted.delete('pipeline.read');usePermissionStore().invalidate();await settled()
+  await retained.trigger('click');await settled()
+  expect(requests()).toHaveLength(2)
+  expect(options.signal?.aborted).toBe(true)
+  expect(http.put).not.toHaveBeenCalled()
+  expect(http.post).not.toHaveBeenCalled()
+ })
 })

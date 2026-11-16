@@ -10,14 +10,18 @@ import type { AnomalyAlert } from '../../api/anomaly'
 import type { DiagnosisStats } from '../../api/settings'
 
 const props = defineProps<{
-  alerts: AnomalyAlert[]
-  diagnosis: DiagnosisStats | null
+  alerts: Pick<AnomalyAlert,'id'|'metric'|'message'|'serverName'|'at'>[]
+  diagnosis: Pick<DiagnosisStats,'totalFeedback'|'thumbsUp'|'thumbsDown'|'accuracy'> | null
   loading: boolean
   alertsUnavailable?: boolean
   diagnosisUnavailable?: boolean
+  canOpenAnomalies?: boolean
+  canOpenDiagnosis?: boolean
 }>()
 
 const router = useRouter()
+function openAnomalies() { if (props.canOpenAnomalies !== false) void router.push('/anomaly') }
+function openDiagnosis() { if (props.canOpenDiagnosis !== false) void router.push('/settings/diagnosis-stats') }
 const { t } = useI18n()
 
 const recent = computed(() => props.alerts.slice(0, 4))
@@ -42,7 +46,7 @@ function fmtAgo(rfc: string): string {
   <section class="card alerts" aria-labelledby="dash-alerts-h">
     <header class="card-head">
       <h2 id="dash-alerts-h" class="card-title">{{ t('dash.alertsTitle') }}</h2>
-      <button class="card-link" type="button" @click="router.push('/anomaly')">{{ t('dash.anomalyLink') }}</button>
+      <button v-if="canOpenAnomalies !== false" class="card-link" type="button" @click="openAnomalies">{{ t('dash.anomalyLink') }}</button>
     </header>
 
     <div v-if="loading" class="al-skeleton" aria-busy="true">
@@ -78,7 +82,7 @@ function fmtAgo(rfc: string): string {
             <span class="diag-down">👎 {{ diagnosis?.thumbsDown ?? 0 }}</span>
             <span class="diag-total">{{ t('dash.feedbackTotal', { n: diagnosis?.totalFeedback ?? 0 }) }}</span>
           </div>
-          <button class="card-link" type="button" @click="router.push('/settings/diagnosis-stats')">{{ t('common.detailArrow') }}</button>
+          <button v-if="canOpenDiagnosis !== false" class="card-link" type="button" @click="openDiagnosis">{{ t('common.detailArrow') }}</button>
         </div>
       </div>
     </template>

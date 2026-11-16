@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/target"
@@ -76,65 +78,60 @@ func (s *Service) load(ctx context.Context, project, id string) (*document, erro
 // save atomically persists snapshot, evidence and replay cursor. CAS fences
 // late workers and concurrent cancellation; raw private state never leaves DB.
 func (s *Service) save(ctx context.Context, d *document, kind string, e *Evidence) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	d.Report.EventsCursor++
-	now := s.now().UTC()
-	if e != nil {
-		if e.ID == "" {
-			e.ID = uuid.NewString()
+	return configstate.WithWriteTxContext(ctx, s.db, func(ctx context.Context, tx configstate.DBTX) error {
+		var err error
+		d.Report.EventsCursor++
+		now := s.now().UTC()
+		if e != nil {
+			if e.ID == "" {
+				e.ID = uuid.NewString()
+			}
+			e.Sequence = d.Report.EventsCursor
+			b, _ := json.Marshal(e)
+			if len(b) > maxEvidenceSize {
+				return ErrInvalid
+			}
+			nextBytes := d.Private.EvidenceBytes + len(b)
+			failure := (e.Kind == "runtime" || e.Kind == "deployment_health_gate") && d.Report.VerificationResult != nil && *d.Report.VerificationResult == "failed"
+			if nextBytes > maxEvidenceBytes || (nextBytes > regularEvidenceBytes && !failure) {
+				return ErrCapacity
+			}
+			d.Private.EvidenceBytes = nextBytes
+			d.Report.EvidenceSetHash = digestJSON([]string{d.Report.EvidenceSetHash, string(b)})
+			if d.Report.Investigation.Status == "completed" {
+				d.Report.Investigation.Status = "stale"
+				d.Report.Investigation.Limitations = appendUnique(d.Report.Investigation.Limitations, "investigation_input_changed")
+			}
+			_, err = tx.ExecContext(ctx, `INSERT INTO release_guard_evidence(guard_id,sequence,evidence_json) VALUES(?,?,?)`, d.Report.ID, e.Sequence, string(b))
+			if err != nil {
+				return err
+			}
 		}
-		e.Sequence = d.Report.EventsCursor
-		b, _ := json.Marshal(e)
-		if len(b) > maxEvidenceSize {
-			return ErrInvalid
+		event := TimelineItem{ID: uuid.NewString(), At: now, Kind: kind, Summary: kind, EvidenceIDs: []string{}}
+		if e != nil {
+			event.TargetID = e.TargetID
+			event.EvidenceIDs = []string{e.ID}
 		}
-		nextBytes := d.Private.EvidenceBytes + len(b)
-		failure := (e.Kind == "runtime" || e.Kind == "deployment_health_gate") && d.Report.VerificationResult != nil && *d.Report.VerificationResult == "failed"
-		if nextBytes > maxEvidenceBytes || (nextBytes > regularEvidenceBytes && !failure) {
-			return ErrCapacity
-		}
-		d.Private.EvidenceBytes = nextBytes
-		d.Report.EvidenceSetHash = digestJSON([]string{d.Report.EvidenceSetHash, string(b)})
-		if d.Report.Investigation.Status == "completed" {
-			d.Report.Investigation.Status = "stale"
-			d.Report.Investigation.Limitations = appendUnique(d.Report.Investigation.Limitations, "investigation_input_changed")
-		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO release_guard_evidence(guard_id,sequence,evidence_json) VALUES(?,?,?)`, d.Report.ID, e.Sequence, string(b))
+		b, _ := json.Marshal(event)
+		_, err = tx.ExecContext(ctx, `INSERT INTO release_guard_events(guard_id,sequence,event_json) VALUES(?,?,?)`, d.Report.ID, d.Report.EventsCursor, string(b))
 		if err != nil {
 			return err
 		}
-	}
-	event := TimelineItem{ID: uuid.NewString(), At: now, Kind: kind, Summary: kind, EvidenceIDs: []string{}}
-	if e != nil {
-		event.TargetID = e.TargetID
-		event.EvidenceIDs = []string{e.ID}
-	}
-	b, _ := json.Marshal(event)
-	_, err = tx.ExecContext(ctx, `INSERT INTO release_guard_events(guard_id,sequence,event_json) VALUES(?,?,?)`, d.Report.ID, d.Report.EventsCursor, string(b))
-	if err != nil {
-		return err
-	}
-	body, _ := json.Marshal(d)
-	res, err := tx.ExecContext(ctx, `UPDATE release_guards SET status=?,attempt_id=?,record_json=?,revision=revision+1 WHERE id=? AND project_id=? AND revision=?`, d.Report.ExecutionStatus, d.Report.AttemptID, string(body), d.Report.ID, d.Report.ProjectID, d.Private.Revision)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n != 1 {
-		return ErrConflict
-	}
-	if err = tx.Commit(); err != nil {
-		return err
-	}
-	d.Private.Revision++
-	return nil
+		body, _ := json.Marshal(d)
+		res, err := tx.ExecContext(ctx, `UPDATE release_guards SET status=?,attempt_id=?,record_json=?,revision=revision+1 WHERE id=? AND project_id=? AND revision=?`, d.Report.ExecutionStatus, d.Report.AttemptID, string(body), d.Report.ID, d.Report.ProjectID, d.Private.Revision)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return ErrConflict
+		}
+		d.Private.Revision++
+		return nil
+	})
 }
 
 type EvidencePage struct {
@@ -158,7 +155,13 @@ func (s *Service) Evidence(ctx context.Context, project, id string, after int64,
 	if r.EvidenceExpired {
 		return page, ErrUnavailable
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT evidence_json FROM release_guard_evidence WHERE guard_id=? AND sequence>? ORDER BY sequence`+store.Limit(store.DialectOf(s.db), "?"), id, after, limit+1)
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "guard.read", "g.run_id")
+	if err != nil {
+		return page, err
+	}
+	args := append([]any{id, after, project}, predicate.Args...)
+	args = append(args, limit+1)
+	rows, err := s.db.QueryContext(ctx, `SELECT e.evidence_json FROM release_guard_evidence e JOIN release_guards g ON g.id=e.guard_id WHERE e.guard_id=? AND e.sequence>? AND g.project_id=? AND `+predicate.SQL+` ORDER BY e.sequence`+store.Limit(store.DialectOf(s.db), "?"), args...)
 	if err != nil {
 		return page, err
 	}
@@ -202,7 +205,11 @@ func (s *Service) Events(ctx context.Context, project, id string, after int64) (
 		p.NextCursor = r.EventsCursor
 		return p, nil
 	}
-	rows, e := s.db.QueryContext(ctx, `SELECT sequence,event_json FROM release_guard_events WHERE guard_id=? AND sequence>? ORDER BY sequence`+store.Limit(store.DialectOf(s.db), "100"), id, after)
+	predicate, e := tenancy.QueryPredicate(ctx, s.db, "guard.read", "g.run_id")
+	if e != nil {
+		return p, e
+	}
+	rows, e := s.db.QueryContext(ctx, `SELECT ev.sequence,ev.event_json FROM release_guard_events ev JOIN release_guards g ON g.id=ev.guard_id WHERE ev.guard_id=? AND ev.sequence>? AND g.project_id=? AND `+predicate.SQL+` ORDER BY ev.sequence`+store.Limit(store.DialectOf(s.db), "100"), append([]any{id, after, project}, predicate.Args...)...)
 	if e != nil {
 		return p, e
 	}
@@ -321,10 +328,7 @@ func (s *Service) Purge(ctx context.Context) error {
 }
 
 func (s *Service) Snapshot(ctx context.Context, project, id string) (*Report, error) {
-	if err := s.projectExists(ctx, project); err != nil {
-		return nil, err
-	}
-	d, err := s.load(ctx, project, id)
+	d, err := s.authorizedDocument(ctx, project, id, "guard.read")
 	if err != nil {
 		return nil, err
 	}
@@ -332,7 +336,7 @@ func (s *Service) Snapshot(ctx context.Context, project, id string) (*Report, er
 	if d.Report.EvidenceExpired {
 		expireReport(&d.Report)
 	}
-	return &d.Report, nil
+	return s.responseReport(ctx, d.Report), nil
 }
 
 func newEvidenceID() string { return uuid.NewString() }
@@ -351,4 +355,28 @@ func (s *Service) planRevisionCurrent(ctx context.Context, p Plan) bool {
 	var revision int64
 	err := s.db.QueryRowContext(ctx, `SELECT revision FROM project_config_versions WHERE project_id=? AND deleted_at IS NULL`, p.ProjectID).Scan(&revision)
 	return err == nil && revision == p.ConfigRevision
+}
+
+// authorizedDocument is a public projection boundary. The private worker's load
+// remains a fixed-ID ledger operation and does not grant callers access to it.
+func (s *Service) authorizedDocument(ctx context.Context, project, id, action string) (*document, error) {
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, action, "g.run_id")
+	if err != nil {
+		return nil, err
+	}
+	var body string
+	var revision int64
+	err = configstate.Queryer(ctx, s.db).QueryRowContext(ctx, `SELECT g.record_json,g.revision FROM release_guards g WHERE g.id=? AND g.project_id=? AND `+predicate.SQL, append([]any{id, project}, predicate.Args...)...).Scan(&body, &revision)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	d := &document{}
+	if json.Unmarshal([]byte(body), d) != nil || d.Report.ID != id || d.Report.ProjectID != project {
+		return nil, ErrUnavailable
+	}
+	d.Private.Revision = revision
+	return d, nil
 }

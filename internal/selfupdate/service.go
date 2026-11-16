@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/releasesource"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"github.com/huangchengsir/pipewright/internal/version"
 	"io"
 	"net/http"
@@ -142,6 +143,15 @@ func (s *Service) Close() {
 	_ = s.root.Close()
 }
 func (s *Service) Submit(ctx context.Context, in Request) (*Task, error) {
+	if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+		return nil, err
+	}
+	// The upgrade worker has filesystem/process effects and cannot join an outer
+	// configuration transaction whose eventual commit is outside this service.
+	if configstate.Queryer(ctx, s.db) != s.db {
+		return nil, ErrConflict
+	}
+
 	if s.RequiresPrivateBuild() {
 		return nil, ErrPrivateBuild
 	}
@@ -161,6 +171,9 @@ func (s *Service) Submit(ctx context.Context, in Request) (*Task, error) {
 		// interrupted. An accepted row here belongs to this live service and has
 		// not crossed the installation boundary; explicit retry can start it.
 		if old.State == "accepted" && !s.running[old.ID] {
+			if err := s.authorizeRestart(ctx); err != nil {
+				return nil, err
+			}
 			s.launch(*old)
 		}
 		return old, nil
@@ -212,13 +225,22 @@ func (s *Service) Submit(ctx context.Context, in Request) (*Task, error) {
 	if e != nil {
 		return nil, e
 	}
-	e = configstate.WithWriteTx(ctx, s.db, func(q configstate.DBTX) error {
+	e = configstate.WithWriteTxContext(ctx, s.db, func(ctx context.Context, q configstate.DBTX) error {
+		if err := tenancy.LockAuthorization(ctx, s.db); err != nil {
+			return err
+		}
+		if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+			return err
+		}
 		if e := configstate.CheckMaintenanceAdmission(ctx, q); e != nil {
 			return e
 		}
 		_, e := q.ExecContext(ctx, "INSERT INTO selfupdate_tasks(id,instance_id,request_id,target_tag,status,active_key,record_json,created_at) VALUES(?,?,?,?,?,?,?,?)", t.ID, s.instance, t.RequestID, t.Target, t.State, s.instance, raw, now.UnixMilli())
 		return e
 	})
+	if errors.Is(e, tenancy.ErrForbidden) || errors.Is(e, tenancy.ErrConflict) {
+		return nil, e
+	}
 	if errors.Is(e, configstate.ErrMaintenance) {
 		return nil, e
 	}
@@ -232,6 +254,9 @@ func (s *Service) Submit(ctx context.Context, in Request) (*Task, error) {
 				return nil, ErrConflict
 			}
 			if old.State == "accepted" && !s.running[old.ID] {
+				if err := s.authorizeRestart(ctx); err != nil {
+					return nil, err
+				}
 				s.launch(*old)
 			}
 			return old, nil
@@ -247,6 +272,15 @@ func (s *Service) Submit(ctx context.Context, in Request) (*Task, error) {
 	return t, nil
 }
 func (s *Service) Resume(ctx context.Context, id, requestID string) (*Task, error) {
+	if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+		return nil, err
+	}
+	// The upgrade worker has filesystem/process effects and cannot join an outer
+	// configuration transaction whose eventual commit is outside this service.
+	if configstate.Queryer(ctx, s.db) != s.db {
+		return nil, ErrConflict
+	}
+
 	if s.RequiresPrivateBuild() {
 		return nil, ErrPrivateBuild
 	}
@@ -263,6 +297,9 @@ func (s *Service) Resume(ctx context.Context, id, requestID string) (*Task, erro
 		return nil, e
 	}
 	if t.LastResumeID == requestID {
+		if err := s.authorizeRestart(ctx); err != nil {
+			return nil, err
+		}
 		if t.State == "accepted" && !s.running[t.ID] {
 			s.launch(*t)
 		}
@@ -285,7 +322,13 @@ func (s *Service) Resume(ctx context.Context, id, requestID string) (*Task, erro
 	t.LastResumeID = requestID
 	t.State = "accepted"
 	t.Reason = ""
-	if e = configstate.WithWriteTx(ctx, s.db, func(q configstate.DBTX) error {
+	if e = configstate.WithWriteTxContext(ctx, s.db, func(ctx context.Context, q configstate.DBTX) error {
+		if err := tenancy.LockAuthorization(ctx, s.db); err != nil {
+			return err
+		}
+		if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+			return err
+		}
 		if e := configstate.CheckMaintenanceAdmission(ctx, q); e != nil {
 			return e
 		}
@@ -351,4 +394,17 @@ func fileDigest(path string) (string, error) {
 		return "", e
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// authorizeRestart serializes explicit recovery of an accepted task with revocation.
+func (s *Service) authorizeRestart(ctx context.Context) error {
+	return configstate.WithWriteTxContext(ctx, s.db, func(ctx context.Context, q configstate.DBTX) error {
+		if err := tenancy.LockAuthorization(ctx, s.db); err != nil {
+			return err
+		}
+		if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+			return err
+		}
+		return configstate.CheckMaintenanceAdmission(ctx, q)
+	})
 }

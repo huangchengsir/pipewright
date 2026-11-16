@@ -9,7 +9,7 @@
  * 确定性规则复核(rm -rf / mkfs / dd / 关机重启等无条件 danger),前端据此拦截直接执行。
  */
 
-import { http } from './http'
+import { http, type HttpOptions } from './http'
 import type { Provider } from './opsChat'
 
 /** 命令风险等级(对齐命令卡左色条:safe=cyan / write=amber / danger=red)。 */
@@ -53,8 +53,9 @@ export interface CompleteCommandResponse {
 export async function suggestCommand(
   nl: string,
   context: CommandContext = {},
+  options: HttpOptions = {},
 ): Promise<CommandSuggestResponse> {
-  return http.post<CommandSuggestResponse>('/api/ai/command', { nl, context })
+  return http.post<CommandSuggestResponse>('/api/ai/command', { nl, context }, options)
 }
 
 /** 解释一条命令(+ 确定性风险等级)。 */

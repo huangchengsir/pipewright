@@ -12,8 +12,10 @@ import (
 	"github.com/huangchengsir/pipewright/internal/releasesource"
 	"github.com/huangchengsir/pipewright/internal/selfupdate"
 	"io/fs"
+	"net"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,6 +51,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/run"
 	"github.com/huangchengsir/pipewright/internal/runner"
 	"github.com/huangchengsir/pipewright/internal/target"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"github.com/huangchengsir/pipewright/internal/terminalhttp"
 	"github.com/huangchengsir/pipewright/internal/trigger"
 	"github.com/huangchengsir/pipewright/internal/vault"
@@ -70,6 +73,8 @@ const contextKeySession contextKey = 1
 type Option func(*options)
 
 type options struct {
+	accessAccounts        *tenancy.Accounts
+	accessRepository      *tenancy.Repository
 	databaseMigration     *dbmigration.Runtime
 	releaseSources        *releasesource.Catalog
 	releaseSourceSettings *releasesource.Settings
@@ -482,8 +487,8 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 	// 从通知直接审批(公开入口,SECURITY-SENSITIVE):豁免 requireAuth + CSRF——token(HMAC+过期+
 	// 常量时间比较)即认证。GET 仅渲染确认页(无副作用,防 IM 预取自动放行);POST 才解析门。
 	// signer 为 nil/禁用时页面提示不可用、不解析任何门。
-	r.Get("/approvals", makeApprovalPageHandler(o.approvalSigner, o.approvalCoord))
-	r.Post("/approvals/act", makeApprovalActHandler(o.approvalSigner, o.approvalCoord, o.audit))
+	r.Get("/approvals", makeApprovalPageHandler(o.approvalSigner, o.approvalCoord, o.approvalStore))
+	r.Post("/approvals/act", makeApprovalActHandler(o.approvalSigner, o.approvalCoord, o.audit, o.approvalStore))
 
 	// 受保护 API 端点(除 /api/auth 与 /api/webhooks 外):requireAuth + 写方法 requireCSRF。
 	r.Route("/api", func(ar chi.Router) {
@@ -504,6 +509,8 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		}
 		mountDatabaseMigration(ar, o.databaseMigration)
 		mountPlatformAccount(ar, o.platformLogin, svc, o.audit)
+		mountTenancyAccounts(ar, o.accessAccounts, o.audit, policy)
+		mountTenancyManagement(ar, o.accessRepository, o.audit)
 		mountOpsChat(ar, o.opsChat, svc)
 
 		// 审计 Recorder(Story 1.4):传给既有敏感操作 handler,业务成功后追加审计行。
@@ -516,16 +523,16 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Delete("/settings/mcp/tokens/{id}", mcpTokens.Revoke)
 
 		// 检查更新:鉴权只读,查 GitHub 最新发布并与当前版本比对(GET 免 CSRF)。
-		ar.Get("/version/check", makeCheckUpdateHandler(updateChecker))
-		ar.Get("/version/source-settings", makeGetReleaseSourceSettingsHandler(o.releaseSourceSettings))
-		ar.Put("/version/source-settings", makeSaveReleaseSourceSettingsHandler(o.releaseSourceSettings, aud))
-		ar.Get("/onboarding/status", makeOnboardingStatusHandler(o.onboarding))
+		ar.Get("/version/check", requireInstanceSettings(o.accessAccounts, makeCheckUpdateHandler(updateChecker)))
+		ar.Get("/version/source-settings", requireInstanceSettings(o.accessAccounts, makeGetReleaseSourceSettingsHandler(o.releaseSourceSettings)))
+		ar.Put("/version/source-settings", requireInstanceSettings(o.accessAccounts, makeSaveReleaseSourceSettingsHandler(o.releaseSourceSettings, aud)))
+		ar.Get("/onboarding/status", requireInstanceSettings(o.accessAccounts, makeOnboardingStatusHandler(o.onboarding)))
 		// 一键自动更新:鉴权 + CSRF(写操作);binary 自替换+重启,docker 返回升级命令。
-		ar.Post("/version/update", makeSelfUpdateHandler(updateChecker, o.selfUpdate, aud))
-		ar.Post("/version/update-tasks", makeUpdateTaskStartHandler(o.selfUpdate, aud))
-		ar.Get("/version/update-tasks/current", makeUpdateTaskGetHandler(o.selfUpdate, true))
-		ar.Get("/version/update-tasks/{taskId}", makeUpdateTaskGetHandler(o.selfUpdate, false))
-		ar.Post("/version/update-tasks/{taskId}/resume", makeUpdateTaskResumeHandler(o.selfUpdate, aud))
+		ar.Post("/version/update", requireInstanceSettings(o.accessAccounts, makeSelfUpdateHandler(updateChecker, o.selfUpdate, aud)))
+		ar.Post("/version/update-tasks", requireInstanceSettings(o.accessAccounts, makeUpdateTaskStartHandler(o.selfUpdate, aud)))
+		ar.Get("/version/update-tasks/current", requireInstanceSettings(o.accessAccounts, makeUpdateTaskGetHandler(o.selfUpdate, true)))
+		ar.Get("/version/update-tasks/{taskId}", requireInstanceSettings(o.accessAccounts, makeUpdateTaskGetHandler(o.selfUpdate, false)))
+		ar.Post("/version/update-tasks/{taskId}/resume", requireInstanceSettings(o.accessAccounts, makeUpdateTaskResumeHandler(o.selfUpdate, aud)))
 
 		// 审计查询(Story 1.4):只读 + 认证保护 + 分页 + 过滤。
 		ar.Get("/audit", makeListAuditHandler(aud))
@@ -585,6 +592,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 比 /projects/{id}/environments 多一段(/deployments、/{env}/...),chi 精确匹配不会被吞。
 		// 纯查询既有表(零迁移);回滚执行复用 o.deployer(经 WithDeploy 注入)。
 		// GET 过 auth;rollback 为写方法,过 auth + CSRF + 审计。o.environments 为 nil → 503。
+		ar.Get("/environments/projects", makeEnvironmentProjectsHandler(o.environments))
 		ar.Get("/projects/{id}/environments/deployments", makeListEnvironmentDeploymentsHandler(o.environments))
 		ar.Get("/projects/{id}/environments/{env}/history", makeEnvironmentHistoryHandler(o.environments))
 		ar.Post("/projects/{id}/environments/{env}/rollback", makeRollbackEnvironmentHandler(o.environments, o.deployer, o.runs, aud))
@@ -644,6 +652,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// promote 为写方法,过 auth + CSRF;o.promotionStore 为 nil → 503。
 		ar.Post("/runs/{id}/promote", makePromoteRunHandler(o.promotionStore, rs, o.approvalCoord, o.approvalStore, o.vault, aud))
 		ar.Get("/runs/{id}/promotions", makeListRunPromotionsHandler(o.promotionStore))
+		ar.Get("/runs/{id}/promotion-plan", makeRunPromotionPlanHandler(o.promotionStore))
 		// SSH 部署执行(Story 4.2 / FR-10):认证 + CSRF(写方法)。dep 为 nil → 503。
 		// 取 run + 产物 + 服务器 → deploy.Deploy(逐机经 SSH 执行部署命令,array 不拼 shell)
 		// → 据结果更新 run 终态 → 返回填好的 targets。部署执行失败不 500(每机 status=failed)。
@@ -731,7 +740,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 确定性正则预扫(rm -rf /、curl|sh、chmod 777、明文密钥、latest 镜像)+ 可选 LLM 语义增强。
 		// 复用 aiSvc + projects(p)+ settings(ps)+ secretSource(出网前脱敏)。写方法,过 auth + CSRF。
 		// AI 未配/失败均 200 + 确定性结果 + aiEnhanced=false,绝不 500、绝无明文密钥。
-		aiRisk := aiRiskDeps{aiSvc: aiSvc, projects: p, settings: ps, secretSource: o.secretSource}
+		aiRisk := aiRiskDeps{aiSvc: aiSvc, projects: p, pipes: pl, settings: ps, secretSource: o.secretSource}
 		ar.Post("/projects/{id}/pipeline/analyze-risks", makeAnalyzeRisksHandler(aiRisk))
 
 		// AI 运维终端助手(运维终端 P1 · 护城河):中文 → 命令卡 / 命令解释。复用 aiSvc。
@@ -772,6 +781,8 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Put("/servers/{id}", makeUpdateServerHandler(sv))
 		ar.Delete("/servers/{id}", makeDeleteServerHandler(sv))
 		ar.Post("/servers/{id}/test", makeTestServerHandler(sv))
+		ar.Get("/servers/{id}/execution-assignment", makeExecutionAssignmentHandler(sv))
+		ar.Put("/servers/{id}/execution-assignment", makeExecutionAssignmentHandler(sv))
 		// 服务日志查看(Story 6.2;FR-16,经 SSH 取目标服务器日志)。复用 sv(4-1 装配,无新服务)。
 		// 均为 GET 只读 → 过 auth、豁免 CSRF。source/target 严格白名单校验(AC-SEC-02);
 		// SSH/命令失败人读不 500;实时 /logs/stream 为 SSE,客户端断开即关 SSH session。
@@ -790,43 +801,43 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// array、不接受任何用户输入(AC-SEC-02);某台不可达/无运行时 → reachable:false / runtime:""
 		// ,不 500。批量端点逐台并行有界、各自独立。容器**生命周期**写操作复用上面的 /service/action
 		// (type=docker)。chi 字面段 /servers/containers 优先于 {id},不会被吞。
-		ar.Get("/servers/containers", makeAllServerContainersHandler(sv))
-		ar.Get("/servers/{id}/containers", makeServerContainersHandler(sv))
+		ar.Get("/servers/containers", makeAllServerContainersHandler(target.ForContainerAction(sv, "container.inspect")))
+		ar.Get("/servers/{id}/containers", makeServerContainersHandler(target.ForContainerAction(sv, "container.inspect")))
 		// 容器实时资源 stats(docker stats --no-stream)。字面段 stats 不与 {id}/containers 冲突。
-		ar.Get("/servers/{id}/containers/stats", makeServerContainerStatsHandler(sv))
+		ar.Get("/servers/{id}/containers/stats", makeServerContainerStatsHandler(target.ForContainerAction(sv, "container.inspect")))
 		// 容器详情 inspect(docker inspect → 精选字段)。
-		ar.Get("/servers/{id}/containers/{containerId}/inspect", makeContainerInspectHandler(sv))
+		ar.Get("/servers/{id}/containers/{containerId}/inspect", makeContainerInspectHandler(target.ForContainerAction(sv, "container.inspect")))
 		// 一键清理:磁盘占用(docker system df)+ prune(写,过 CSRF + 审计)。
-		ar.Get("/servers/{id}/system/df", makeSystemDfHandler(sv))
-		ar.Post("/servers/{id}/system/prune", makeSystemPruneHandler(sv, aud))
+		ar.Get("/servers/{id}/system/df", makeSystemDfHandler(target.ForContainerAction(sv, "container.inspect")))
+		ar.Post("/servers/{id}/system/prune", makeSystemPruneHandler(target.ForContainerAction(sv, "container.operate"), aud))
 		// 新增容器(docker run) —— 写操作,过 auth + CSRF。参数严格白名单 + array 化,
 		// 非法 400 invalid_create_spec;SSH/命令失败人读不 500;成功后写审计(detail 仅 image/name)。
-		ar.Post("/servers/{id}/containers", makeCreateContainerHandler(sv, aud))
+		ar.Post("/servers/{id}/containers", makeCreateContainerHandler(target.ForContainerAction(sv, "container.operate"), aud))
 		// 镜像管理 —— 列表(只读)+ 拉取/删除(写,过 CSRF + 审计)。镜像引用严格白名单 + array 化。
-		ar.Get("/servers/{id}/images", makeServerImagesHandler(sv))
-		ar.Post("/servers/{id}/images/pull", makeImagePullHandler(sv, aud))
-		ar.Post("/servers/{id}/images/remove", makeImageRemoveHandler(sv, aud))
+		ar.Get("/servers/{id}/images", makeServerImagesHandler(target.ForContainerAction(sv, "container.inspect")))
+		ar.Post("/servers/{id}/images/pull", makeImagePullHandler(target.ForContainerAction(sv, "container.operate"), aud))
+		ar.Post("/servers/{id}/images/remove", makeImageRemoveHandler(target.ForContainerAction(sv, "container.operate"), aud))
 		// Compose/Stacks —— 列表(只读)+ 部署(贴 yaml → up)+ start/stop/restart/down。
 		// 项目名严格白名单 + array 化;compose 内容经 Upload 落文件(非 shell 注入面)。写过 CSRF + 审计。
-		ar.Get("/servers/{id}/stacks", makeServerStacksHandler(sv))
-		ar.Get("/servers/{id}/stacks/{name}", makeServerStackDetailHandler(sv))
-		ar.Post("/servers/{id}/stacks/deploy", makeStackDeployHandler(sv, aud))
-		ar.Post("/servers/{id}/stacks/action", makeStackActionHandler(sv, aud))
-		ar.Post("/servers/{id}/stacks/save", makeStackSaveHandler(sv, aud))
+		ar.Get("/servers/{id}/stacks", makeServerStacksHandler(target.ForContainerAction(sv, "container.inspect")))
+		ar.Get("/servers/{id}/stacks/{name}", makeServerStackDetailHandler(target.ForContainerAction(sv, "container.inspect")))
+		ar.Post("/servers/{id}/stacks/deploy", makeStackDeployHandler(target.ForContainerAction(sv, "container.operate"), aud))
+		ar.Post("/servers/{id}/stacks/action", makeStackActionHandler(target.ForContainerAction(sv, "container.operate"), aud))
+		ar.Post("/servers/{id}/stacks/save", makeStackSaveHandler(target.ForContainerAction(sv, "container.operate"), aud))
 		// 容器 AI 诊断 / 看日志(AI moat):取容器日志 → ai.Diagnose 出根因+修复。复用 sv +
 		// o.aiSettings。出网前脱敏;AI 未配/失败 → 200 unavailable,绝不 500。比 {id} 多两段不被吞。
-		ar.Post("/servers/{id}/containers/{containerId}/diagnose", makeContainerDiagnoseHandler(sv, o.aiSettings))
+		ar.Post("/servers/{id}/containers/{containerId}/diagnose", makeContainerDiagnoseHandler(target.ForContainerAction(sv, "container.diagnose"), o.aiSettings))
 		// 数据卷 + 网络 —— 列表(只读)+ 创建/删除(写,过 CSRF + 审计)。名称白名单 + array 化。
-		ar.Get("/servers/{id}/volumes", makeServerVolumesHandler(sv))
-		ar.Post("/servers/{id}/volumes/create", makeVolumeCreateHandler(sv, aud))
-		ar.Post("/servers/{id}/volumes/remove", makeVolumeRemoveHandler(sv, aud))
-		ar.Get("/servers/{id}/networks", makeServerNetworksHandler(sv))
-		ar.Post("/servers/{id}/networks/create", makeNetworkCreateHandler(sv, aud))
-		ar.Post("/servers/{id}/networks/remove", makeNetworkRemoveHandler(sv, aud))
+		ar.Get("/servers/{id}/volumes", makeServerVolumesHandler(target.ForContainerAction(sv, "container.inspect")))
+		ar.Post("/servers/{id}/volumes/create", makeVolumeCreateHandler(target.ForContainerAction(sv, "container.operate"), aud))
+		ar.Post("/servers/{id}/volumes/remove", makeVolumeRemoveHandler(target.ForContainerAction(sv, "container.operate"), aud))
+		ar.Get("/servers/{id}/networks", makeServerNetworksHandler(target.ForContainerAction(sv, "container.inspect")))
+		ar.Post("/servers/{id}/networks/create", makeNetworkCreateHandler(target.ForContainerAction(sv, "container.operate"), aud))
+		ar.Post("/servers/{id}/networks/remove", makeNetworkRemoveHandler(target.ForContainerAction(sv, "container.operate"), aud))
 		// 网络详情:某网络上连着哪些容器 + 连接/断开。network 段白名单 + array 化。
-		ar.Get("/servers/{id}/networks/{network}/containers", makeNetworkContainersHandler(sv))
-		ar.Post("/servers/{id}/networks/{network}/connect", makeNetworkConnectHandler(sv, aud))
-		ar.Post("/servers/{id}/networks/{network}/disconnect", makeNetworkDisconnectHandler(sv, aud))
+		ar.Get("/servers/{id}/networks/{network}/containers", makeNetworkContainersHandler(target.ForContainerAction(sv, "container.inspect")))
+		ar.Post("/servers/{id}/networks/{network}/connect", makeNetworkConnectHandler(target.ForContainerAction(sv, "container.operate"), aud))
+		ar.Post("/servers/{id}/networks/{network}/disconnect", makeNetworkDisconnectHandler(target.ForContainerAction(sv, "container.operate"), aud))
 		// 服务操作 —— 重启/停止/启动(Story 6.3;FR-17,经 SSH 跑 systemctl/docker)。
 		// 复用 sv(4-1 装配)+ aud(1-4 装配),无需新服务。写操作 → 过 auth + CSRF。
 		// type/target/action 严格白名单(AC-SEC-02:首字符非 `-` 防 flag 注入、无 shell 元字符
@@ -840,15 +851,19 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// containerId 严格白名单(首字符非 `-` 防 flag 注入、无 shell 元字符)+ shell 枚举白名单;
 		// 命令 array 化经 target.ExecInteractive 不拼 shell。握手成功(PTY 建立)后写审计(detail 脱敏)。
 		// 比 /servers/{id} 多两段,不会被吞。
-		ar.Get("/servers/{id}/containers/{containerId}/terminal", makeContainerTerminalHandler(sv, aud))
+		ar.Get("/servers/{id}/containers/{containerId}/terminal", makeContainerTerminalHandler(target.ForContainerAction(sv, "container.terminal"), aud))
 		// 主机 shell 终端(「连服务器终端」的目标:SSH 直起交互 shell)。进容器留给用户在 shell 里
 		// 自己 docker exec 自由探索(不绑死容器;很多服务器没 docker)。WS 升级,同源校验 + shell
 		// 白名单;审计 server_terminal。比 /servers/{id} 多一段,不会被吞。
 		ar.Get("/servers/{id}/terminal", makeServerTerminalHandler(sv, aud))
 		ar.Get("/servers/{id}/terminal/ws-v2", makeTerminalV2Handler(sv, aud, false))
-		ar.Get("/servers/{id}/containers/{containerId}/terminal/ws-v2", makeTerminalV2Handler(sv, aud, true))
+		ar.Get("/servers/{id}/containers/{containerId}/terminal/ws-v2", makeTerminalV2Handler(target.ForContainerAction(sv, "container.terminal"), aud, true))
 		for _, base := range []string{"/servers/{id}/terminal", "/servers/{id}/containers/{containerId}/terminal"} {
-			h := makeTerminalHTTPHandler(o.terminalHTTP, sv, aud, svc)
+			terminalTarget := sv
+			if strings.Contains(base, "/containers/") {
+				terminalTarget = target.ForContainerAction(sv, "container.terminal")
+			}
+			h := makeTerminalHTTPHandler(o.terminalHTTP, terminalTarget, aud, svc)
 			ar.Post(base+"/sessions", h)
 			ar.Get(base+"/sessions/{sid}", h)
 			ar.Post(base+"/sessions/{sid}/input", h)
@@ -895,6 +910,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 字面段 /proxy/subdomains 与 /proxy/routes 不同尾段,不会被吞。
 		dp := o.dnsProviders
 		ar.Get("/dns/providers", makeListDNSProvidersHandler(dp))
+		ar.Get("/dns/providers/usable", makeUsableDNSProvidersHandler(dp))
 		ar.Post("/dns/providers", makeCreateDNSProviderHandler(dp, o.vault, aud))
 		ar.Post("/dns/providers/{id}/verify", makeVerifyDNSProviderHandler(dp, aud))
 		ar.Delete("/dns/providers/{id}", makeDeleteDNSProviderHandler(dp, aud))
@@ -907,10 +923,13 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 多一段,均不会被吞。DNS token 全程走 R3 vault,DTO/审计/日志绝无密钥。
 		pv := o.previewEnvs
 		ar.Get("/preview-envs", makeListPreviewEnvsHandler(pv))
+		ar.Get("/preview-envs/projects", makePreviewProjectsHandler(pv))
 		ar.Post("/preview-envs/{id}/reclaim", makeReclaimPreviewEnvHandler(pv, aud))
 		ar.Get("/projects/{id}/preview-config", makeGetPreviewConfigHandler(pv))
+		ar.Get("/projects/{id}/preview-providers", makePreviewProvidersHandler(pv))
 		ar.Put("/projects/{id}/preview-config", makeSetPreviewConfigHandler(pv, aud))
 
+		ar.Get("/notifications/channel-options", makeChannelOptionsHandler(nf))
 		ar.Get("/notifications/channels", makeListChannelsHandler(nf))
 		ar.Post("/notifications/channels", makeCreateChannelHandler(nf))
 		ar.Get("/notifications/channels/{id}", makeGetChannelHandler(nf))
@@ -964,7 +983,9 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// DORA 四指标只读聚合(FR-8-15):部署频率 / 变更前置时长 / 变更失败率 / MTTR。
 		// 对既有运行数据做纯聚合(无新表、无副作用)。GET 只读 → 过 auth、豁免 CSRF。
 		// projectId 可选过滤;window 形如 30d(默认)。o.doraMetrics 为 nil → handler 返回 503。
+		ar.Get("/dashboard/{section}", makeDashboardHandler(&o))
 		ar.Get("/metrics/dora", makeDoraMetricsHandler(o.doraMetrics))
+		ar.Get("/metrics/dora/projects", makeDoraProjectsHandler(o.doraMetrics))
 
 		// 流水线模板(FR-8-13 复用基座):命名、可复用的流水线定义,跨项目共享。
 		// tpl 为 nil → handler 返回 503。GET(列表/详情)过 auth;POST/DELETE/apply 为写方法,
@@ -1029,7 +1050,19 @@ func requireAuth(svc auth.Authenticator, next http.Handler) http.Handler {
 			writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
 			return
 		}
+		if sess.MultiTenant && sess.MustChangePassword && !restrictedAccountRoute(r.Method, r.URL.Path) {
+			writeError(w, http.StatusForbidden, "password_change_required", "请先修改初始密码")
+			return
+		}
 		ctx := context.WithValue(r.Context(), contextKeySession, sess)
+		if sess.MultiTenant {
+			actor, err := tenancy.ActorFromSession(sess)
+			if err != nil {
+				writeError(w, http.StatusUnauthorized, "unauthorized", "请先登录")
+				return
+			}
+			ctx = tenancy.WithActor(ctx, actor, r.Header.Get("X-Pipewright-Team"))
+		}
 		if leaser, ok := svc.(interface {
 			Lease(context.Context, *auth.Session) (context.Context, context.CancelFunc)
 		}); ok {
@@ -1086,10 +1119,21 @@ func requireCSRF(next http.Handler) http.Handler {
 // makeLoginHandler 返回 POST /api/auth/login handler。
 // 登录端点豁免 CSRF(此时尚无会话);但受锁定限制。
 func makeLoginHandler(svc auth.Authenticator, policies ...authCookiePolicy) http.HandlerFunc {
+	var loginBudget tenancy.LookupBudget
 	return func(w http.ResponseWriter, r *http.Request) {
 		if svc == nil {
 			writeError(w, http.StatusServiceUnavailable, "no_auth", "认证服务未初始化")
 			return
+		}
+		if _, enabled := svc.(*tenancy.Authenticator); enabled {
+			peer, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				peer = r.RemoteAddr
+			}
+			if retry := loginBudget.Allow(peer, 60); retry > 0 {
+				accessError(w, &auth.ErrLockedOut{RetryAfter: retry})
+				return
+			}
 		}
 		// 限制匿名请求体大小,防超大 body。
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
@@ -1102,10 +1146,19 @@ func makeLoginHandler(svc auth.Authenticator, policies ...authCookiePolicy) http
 			return
 		}
 
-		sess, err := svc.Login(req.Username, req.Password)
+		var sess *auth.Session
+		var err error
+		if contextual, ok := svc.(interface {
+			LoginContext(context.Context, string, string) (*auth.Session, error)
+		}); ok {
+			sess, err = contextual.LoginContext(r.Context(), req.Username, req.Password)
+		} else {
+			sess, err = svc.Login(req.Username, req.Password)
+		}
 		if err != nil {
 			var lockedErr *auth.ErrLockedOut
 			if errors.As(err, &lockedErr) {
+				w.Header().Set("Retry-After", strconv.Itoa(int(lockedErr.RetryAfter.Seconds())+1))
 				mins := int(lockedErr.RetryAfter.Minutes()) + 1
 				msg := fmt.Sprintf("登录失败次数过多,请 %d 分钟后重试", mins)
 				writeError(w, http.StatusTooManyRequests, "locked_out", msg)
@@ -1142,10 +1195,14 @@ func makeLoginHandler(svc auth.Authenticator, policies ...authCookiePolicy) http
 		})
 		// 回显真实存储的用户名(不再硬编码 "admin")。
 		username := req.Username
+		if sess.MultiTenant {
+			writeJSON(w, http.StatusOK, tenantSessionDTO(sess))
+			return
+		}
 		if u, err := svc.AdminUsername(); err == nil {
 			username = u
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"username": username})
+		writeJSON(w, http.StatusOK, map[string]any{"username": username, "multiTenant": false})
 	}
 }
 
@@ -1184,10 +1241,14 @@ func makeSessionHandler(svc auth.Authenticator, policies ...authCookiePolicy) ht
 		})
 		// 回显真实存储的用户名。
 		username := "admin"
+		if sess.MultiTenant {
+			writeJSON(w, http.StatusOK, tenantSessionDTO(sess))
+			return
+		}
 		if u, err := svc.AdminUsername(); err == nil {
 			username = u
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"username": username})
+		writeJSON(w, http.StatusOK, map[string]any{"username": username, "multiTenant": false})
 	}
 }
 

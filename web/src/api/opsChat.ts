@@ -1,4 +1,4 @@
-import { http, HttpError } from './http'
+import { http, HttpError, type HttpOptions } from './http'
 import { resetOpsAuth } from '../utils/opsAuth'
 import { currentLocale } from '../i18n'
 
@@ -203,46 +203,56 @@ export interface Analysis {
 const root = '/api/ai/ops'
 const path = (id: string): string =>
   `${root}/sessions/${encodeURIComponent(id)}`
-export const opsApi = {
-  capabilities: () => http.get<Capabilities>(`${root}/capabilities`),
-  tools: () => http.get<Tool[]>(`${root}/tools`),
-  list: (context='') => http.get<SessionPage>(`${root}/sessions?limit=100${context?'&context='+encodeURIComponent(context):''}`),
+export function createOpsApi(options: HttpOptions = {}) {
+ const bound = { ...options, throwOnUnauthorized: true }
+ const scoped = {
+  get: <T>(url: string) => http.get<T>(url, bound),
+  post: <T>(url: string, data?: unknown) => http.post<T>(url, data, bound),
+  patch: <T>(url: string, data?: unknown) => http.patch<T>(url, data, bound),
+  delete: <T>(url: string) => http.delete<T>(url, bound),
+ }
+ return {
+  capabilities: () => scoped.get<Capabilities>(`${root}/capabilities`),
+  tools: () => scoped.get<Tool[]>(`${root}/tools`),
+  list: (context='') => scoped.get<SessionPage>(`${root}/sessions?limit=100${context?'&context='+encodeURIComponent(context):''}`),
   create: (serverIds: string[],context='') =>
-    http.post<Session>(`${root}/sessions`, { title: '', serverIds,...(context?{context}:{}) }),
-  snapshot: (id: string) => http.get<Snapshot>(path(id)),
-  patch: (id: string, input: Patch) => http.patch<Session>(path(id), input),
+    scoped.post<Session>(`${root}/sessions`, { title: '', serverIds,...(context?{context}:{}) }),
+  snapshot: (id: string) => scoped.get<Snapshot>(path(id)),
+  patch: (id: string, input: Patch) => scoped.patch<Session>(path(id), input),
   activate: (id: string,context='') =>
-    http.post<{ ok: boolean }>(`${path(id)}/activate`, context?{context}:{}),
-  delete: (id: string) => http.delete<void>(path(id)),
+    scoped.post<{ ok: boolean }>(`${path(id)}/activate`, context?{context}:{}),
+  delete: (id: string) => scoped.delete<void>(path(id)),
   entries: (id: string, before: string) =>
-    http.get<EntryPage>(
+    scoped.get<EntryPage>(
       `${path(id)}/entries?limit=50&before=${encodeURIComponent(before)}`,
     ),
   call: (id: string, callId: string) =>
-    http.get<Call>(`${path(id)}/calls/${encodeURIComponent(callId)}`),
-  turn: (id: string, input: Turn) => http.post<Run>(`${path(id)}/turns`, input),
+    scoped.get<Call>(`${path(id)}/calls/${encodeURIComponent(callId)}`),
+  turn: (id: string, input: Turn) => scoped.post<Run>(`${path(id)}/turns`, input),
   retry: (id: string, input: Retry) =>
-    http.post<Run>(`${path(id)}/retry`, input),
+    scoped.post<Run>(`${path(id)}/retry`, input),
   cancel: (id: string, run: string) =>
-    http.post<Run>(`${path(id)}/runs/${encodeURIComponent(run)}/cancel`, {}),
+    scoped.post<Run>(`${path(id)}/runs/${encodeURIComponent(run)}/cancel`, {}),
   confirm: (id: string, input: Confirmation) =>
-    http.post<Run>(`${path(id)}/calls/confirm`, {
+    scoped.post<Run>(`${path(id)}/calls/confirm`, {
       runId: input.runId,
       nonce: input.nonce,
       calls: input.calls,
     }),
   reissue: (id: string, run: string) =>
-    http.post<Confirmation>(
+    scoped.post<Confirmation>(
       `${path(id)}/runs/${encodeURIComponent(run)}/confirmation`,
       {},
     ),
   preview: (id: string, callIds: string[]) =>
-    http.get<Preview>(
+    scoped.get<Preview>(
       `${path(id)}/analysis/preview?callIds=${encodeURIComponent(callIds.join(','))}`,
     ),
   analyze: (id: string, input: Analysis) =>
-    http.post<Run>(`${path(id)}/analysis`, input),
+    scoped.post<Run>(`${path(id)}/analysis`, input),
 }
+}
+export const opsApi = createOpsApi()
 
 export function requestId(): string {
   if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
@@ -326,17 +336,18 @@ export async function streamOps(
   after: string,
   signal: AbortSignal,
   deliver: (event: StreamEvent) => void,
+  options: HttpOptions = {},
 ): Promise<void> {
+  const headers = new Headers(options.headers)
+  headers.set('Accept', 'text/event-stream')
+  headers.set('X-Pipewright-Locale', currentLocale())
   const response = await fetch(
     `${path(id)}/events?after=${encodeURIComponent(after)}`,
     {
       credentials: 'same-origin',
       cache: 'no-store',
       signal,
-      headers: {
-        Accept: 'text/event-stream',
-        'X-Pipewright-Locale': currentLocale(),
-      },
+      headers,
     },
   )
   if (response.status === 401) resetOpsAuth()

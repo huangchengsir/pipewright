@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"github.com/huangchengsir/pipewright/internal/vault"
 	"golang.org/x/crypto/ssh"
 )
@@ -37,8 +39,10 @@ type LimitedResult struct {
 
 // The snapshot is server-created and must never be accepted from a browser.
 type ConnectionSnapshot struct {
-	Server            Server
-	CredentialVersion string
+	Server                  Server
+	CredentialVersion       string
+	ExecutionHostKey        string
+	ExecutionBindingVersion string
 }
 
 func (s ConnectionSnapshot) Fingerprint() string {
@@ -63,14 +67,29 @@ func (s *service) Capture(ctx context.Context, id string) (ConnectionSnapshot, e
 		return ConnectionSnapshot{}, err
 	}
 	var ciphertext []byte
-	if err := s.db.QueryRowContext(ctx, "SELECT ciphertext FROM credentials WHERE id = ?", server.CredentialID).Scan(&ciphertext); err != nil {
+	if err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx, "SELECT ciphertext FROM credentials WHERE id = ?", server.CredentialID).Scan(&ciphertext); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ConnectionSnapshot{}, ErrCredentialNotFound
 		}
 		return ConnectionSnapshot{}, errors.New("target: credential version unavailable")
 	}
 	digest := sha256.Sum256(ciphertext)
-	return ConnectionSnapshot{Server: *server, CredentialVersion: hex.EncodeToString(digest[:])}, nil
+	snapshot := ConnectionSnapshot{Server: *server, CredentialVersion: hex.EncodeToString(digest[:])}
+	on, err := tenancy.Enabled(ctx, s.db)
+	if err != nil {
+		return ConnectionSnapshot{}, err
+	}
+	if on {
+		assignment, version, e := s.readExecutionAssignment(ctx, id)
+		if e != nil {
+			return ConnectionSnapshot{}, e
+		}
+		if assignment != nil {
+			snapshot.ExecutionHostKey = assignment.HostKey
+			snapshot.ExecutionBindingVersion = version
+		}
+	}
+	return snapshot, nil
 }
 
 func normalizeExecutionLimits(l ExecutionLimits) (ExecutionLimits, error) {
@@ -118,7 +137,20 @@ func (s *service) execApproved(ctx context.Context, approved ConnectionSnapshot,
 	return result, err
 }
 
-func (s *service) withApprovedSSH(ctx context.Context, approved ConnectionSnapshot, use func(string, SSHConfig) error) error {
+// AuthorizePinned validates a captured execution identity without connecting or
+// decrypting its credential. External prerequisite actions (such as DNS writes)
+// use this before they produce side effects for a later SSH operation.
+func (s *service) AuthorizePinned(ctx context.Context, approved ConnectionSnapshot) error {
+	if err := tenancy.VerifyExecution(ctx); err != nil {
+		return err
+	}
+	if err := tenancy.Check(ctx, s.db, "server.use", "server", approved.Server.ID); err != nil {
+		return err
+	}
+	if err := vault.AuthorizeUse(ctx, s.vault, approved.Server.CredentialID); err != nil {
+		return err
+	}
+
 	current, err := s.Capture(ctx, approved.Server.ID)
 	if err != nil {
 		return err
@@ -126,11 +158,27 @@ func (s *service) withApprovedSSH(ctx context.Context, approved ConnectionSnapsh
 	if approved.Fingerprint() != current.Fingerprint() {
 		return ErrTargetChanged
 	}
+	if err = s.checkExecutionIdentity(ctx, &current.Server); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *service) withApprovedSSH(ctx context.Context, approved ConnectionSnapshot, use func(string, SSHConfig) error) error {
+	if err := s.AuthorizePinned(ctx, approved); err != nil {
+		return err
+	}
+	return s.withPinnedCredential(ctx, approved, use)
+}
+
+// Private credential primitive: callers must first prove execution authority or a
+// server-created, fixed-resource cleanup capability. Never expose this as Exec.
+func (s *service) withPinnedCredential(ctx context.Context, approved ConnectionSnapshot, use func(string, SSHConfig) error) error {
 	if s.vault == nil {
 		return ErrVaultUnconfigured
 	}
 	var sealed []byte
-	err = s.db.QueryRowContext(ctx, "SELECT ciphertext FROM credentials WHERE id = ?", approved.Server.CredentialID).Scan(&sealed)
+	err := s.db.QueryRowContext(ctx, "SELECT ciphertext FROM credentials WHERE id = ?", approved.Server.CredentialID).Scan(&sealed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrCredentialNotFound
 	}
@@ -158,7 +206,7 @@ func (s *service) withApprovedSSH(ctx context.Context, approved ConnectionSnapsh
 		}
 	}()
 	secret := string(plaintext)
-	cfg := SSHConfig{User: approved.Server.User}
+	cfg := SSHConfig{User: approved.Server.User, HostKey: approved.ExecutionHostKey}
 	if looksLikePEM(secret) {
 		cfg.PrivateKey = secret
 	} else {
@@ -253,7 +301,7 @@ func runLimitedInput(ctx context.Context, addr string, cfg SSHConfig, cmd []stri
 	}
 	clientCfg := &ssh.ClientConfig{
 		User: cfg.User, Auth: auth,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // Existing target trust policy; not a host identity guarantee.
+		HostKeyCallback: configuredHostKey(cfg),
 		Timeout:         resolveTimeout(ctx),
 	}
 	client, cleanup, err := dialSSH(ctx, addr, clientCfg)

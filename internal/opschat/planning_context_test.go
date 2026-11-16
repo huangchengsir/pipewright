@@ -179,7 +179,7 @@ func TestContainerObservationsInvalidRowsSecretsAndCopy(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := s.registerSecrets(); err != nil {
+	if err := s.registerSecrets(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	output := strings.Join([]string{

@@ -75,7 +75,18 @@ func NewHook(chains Service, runs run.Service, maxDepth int) func(ctx context.Co
 					runID, t.DownstreamProjectID)
 				continue
 			}
-			created, cerr := runs.Create(hookCtx, t.DownstreamProjectID, run.Trigger{
+			downstreamCtx := hookCtx
+			if authorizer, ok := chains.(interface {
+				ChainContext(context.Context, string, string, Target) (context.Context, error)
+			}); ok {
+				var authorizationErr error
+				downstreamCtx, authorizationErr = authorizer.ChainContext(hookCtx, runID, upstream.ProjectID, t)
+				if authorizationErr != nil {
+					log.Printf("[chain] run %s: downstream authorization unavailable", runID)
+					continue
+				}
+			}
+			created, cerr := runs.Create(downstreamCtx, t.DownstreamProjectID, run.Trigger{
 				Type:             run.TriggerChain,
 				Branch:           t.Branch,
 				Actor:            "chain",

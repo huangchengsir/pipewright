@@ -66,6 +66,7 @@ func toAnalyzeRisksDTO(r *ai.RiskReport) analyzeRisksDTO {
 type aiRiskDeps struct {
 	aiSvc        ai.Service
 	projects     project.Service
+	pipes        pipeline.Service
 	settings     pipeline.SettingsService
 	secretSource *RunSecretSource
 }
@@ -81,14 +82,19 @@ func makeAnalyzeRisksHandler(d aiRiskDeps) http.HandlerFunc {
 		}
 		id := chi.URLParam(r, "id")
 		ctx := r.Context()
-
-		// 项目存在性(404 与既有 ai-generate 一致)。
-		if _, err := d.projects.Get(ctx, id); err != nil {
-			if err == project.ErrNotFound {
-				writeError(w, http.StatusNotFound, "project_not_found", "项目不存在")
-				return
+		authorize := func() bool {
+			if err := pipeline.AuthorizeAction(ctx, d.pipes, id, "pipeline.edit"); err != nil {
+				writeAIApplyError(w, err)
+				return false
 			}
-			writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
+			return true
+		}
+		if !authorize() {
+			return
+		}
+		proj, err := d.projects.Get(ctx, id)
+		if err != nil {
+			writeProjectError(w, err)
 			return
 		}
 
@@ -101,6 +107,9 @@ func makeAnalyzeRisksHandler(d aiRiskDeps) http.HandlerFunc {
 		// 出网前脱敏:据项目凭据建 Masker(把 secret env 明文登记后,命令进 prompt 前一律脱敏)。
 		masker := maskerForProject(ctx, d.secretSource, id)
 
+		if !authorize() {
+			return
+		}
 		report, _ := d.aiSvc.AnnotateRisks(ctx, ai.AnnotateRisksInput{
 			Steps:  steps,
 			Masker: masker,
@@ -108,6 +117,13 @@ func makeAnalyzeRisksHandler(d aiRiskDeps) http.HandlerFunc {
 		if report == nil {
 			// 极端兜底:AnnotateRisks 约定永不返 nil,但仍防御性给空报告(绝不 500)。
 			report = &ai.RiskReport{Findings: []ai.RiskFinding{}, GeneratedAt: time.Now().UTC()}
+		}
+		if !authorize() {
+			return
+		}
+		if err := recheckProjectSource(ctx, d.projects, proj); err != nil {
+			writeProjectError(w, err)
+			return
 		}
 		writeJSON(w, http.StatusOK, toAnalyzeRisksDTO(report))
 	}

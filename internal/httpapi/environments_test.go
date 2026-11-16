@@ -213,3 +213,65 @@ func TestEnvironmentHistoryNotFound(t *testing.T) {
 		t.Fatalf("want 404, got %d", resp.StatusCode)
 	}
 }
+
+func (s *stubDeploy) DeployRollback(ctx context.Context, in deploy.DeployInput) ([]deploy.TargetResult, error) {
+	return s.Deploy(ctx, in)
+}
+
+func TestEnvironmentRollbackRejectsChangedConfirmation(t *testing.T) {
+	srv, client, csrf, project, runs, dep := setupEnvironmentsServer(t)
+	base := time.Now().UTC().Add(-3 * time.Hour)
+	previous, _, _ := seedDeployedRun(t, runs, project, "prod", base)
+	active, _, _ := seedDeployedRun(t, runs, project, "prod", base.Add(time.Hour))
+	seedDeployedRun(t, runs, project, "prod", base.Add(2*time.Hour))
+	body, _ := json.Marshal(map[string]string{"expectedCurrentRunId": active, "expectedTargetRunId": previous})
+	response := doJSON(t, client, http.MethodPost, srv.URL+"/api/projects/"+project+"/environments/prod/rollback", csrf, string(body))
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusConflict {
+		t.Fatalf("expected conflict, got %d", response.StatusCode)
+	}
+	if dep.lastInput.RunID != "" {
+		t.Fatal("stale confirmation performed deployment")
+	}
+}
+
+func TestEnvironmentRollbackConfirmationValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		status     int
+	}{
+		{"matching", "matching", 200},
+		{"wrong_previous", "wrong_previous", 409},
+		{"missing_previous", `{"expectedCurrentRunId":"x"}`, 400},
+		{"unknown_field", `{"unexpected":"x"}`, 400},
+		{"malformed", `{`, 400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, client, csrf, project, runs, dep := setupEnvironmentsServer(t)
+			base := time.Now().UTC().Add(-2 * time.Hour)
+			previous, _, _ := seedDeployedRun(t, runs, project, "prod", base)
+			active, _, _ := seedDeployedRun(t, runs, project, "prod", base.Add(time.Hour))
+			body := tc.body
+			if body == "matching" || body == "wrong_previous" {
+				target := previous
+				if body == "wrong_previous" {
+					target = "other"
+				}
+				data, _ := json.Marshal(map[string]string{"expectedCurrentRunId": active, "expectedTargetRunId": target})
+				body = string(data)
+			}
+			response := doJSON(t, client, http.MethodPost, srv.URL+"/api/projects/"+project+"/environments/prod/rollback", csrf, body)
+			defer response.Body.Close()
+			if response.StatusCode != tc.status {
+				t.Fatalf("expected %d got %d", tc.status, response.StatusCode)
+			}
+			if tc.status == 200 {
+				if dep.lastInput.RunID != previous {
+					t.Fatal("confirmed target not used")
+				}
+			} else if dep.lastInput.RunID != "" {
+				t.Fatal("invalid confirmation performed deployment")
+			}
+		})
+	}
+}

@@ -44,6 +44,7 @@ var (
 
 // Target 是一个下游串联目标(上游成功后要触发的一个下游流水线)。
 type Target struct {
+	AuthorizationState string
 	// DownstreamProjectID 是被触发的下游项目 id。
 	DownstreamProjectID string
 	// Branch 是触发下游时使用的分支;空 = 下游项目默认分支(由 run.Create 解析)。
@@ -75,7 +76,7 @@ type service struct {
 // NewService 构造串联配置 Service(经参数化 SQL 触库;无 init 副作用、不驻留)。
 func NewService(db *sql.DB) Service { return &service{db: db} }
 
-func (s *service) Get(ctx context.Context, projectID string) (*Config, error) {
+func (s *service) get(ctx context.Context, projectID string) (*Config, error) {
 	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT downstream_project_id, branch, enabled
 		   FROM project_chain_targets
@@ -104,7 +105,7 @@ func (s *service) Get(ctx context.Context, projectID string) (*Config, error) {
 	return cfg, nil
 }
 
-func (s *service) Save(ctx context.Context, projectID string, targets []Target) (*Config, error) {
+func (s *service) save(ctx context.Context, projectID string, targets []Target) (*Config, error) {
 	projectID = strings.TrimSpace(projectID)
 	if projectID == "" {
 		return nil, ErrProjectNotFound
@@ -144,6 +145,9 @@ func (s *service) Save(ctx context.Context, projectID string, targets []Target) 
 
 	// 全量替换:删旧整写,单事务(避免半写)。
 	err := configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
+		if _, err := q.ExecContext(txctx, `DELETE FROM access_automation_authorizations WHERE source_kind='chain' AND source_id IN (SELECT id FROM project_chain_targets WHERE project_id=?)`, projectID); err != nil {
+			return err
+		}
 		if _, err := q.ExecContext(txctx,
 			`DELETE FROM project_chain_targets WHERE project_id = ?`, projectID); err != nil {
 			return fmt.Errorf("chain: delete old targets: %w", err)
@@ -171,7 +175,7 @@ func (s *service) Save(ctx context.Context, projectID string, targets []Target) 
 	if err != nil {
 		return nil, err
 	}
-	return s.Get(ctx, projectID)
+	return s.get(ctx, projectID)
 }
 
 func (s *service) ListEnabled(ctx context.Context, projectID string) ([]Target, error) {

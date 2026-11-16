@@ -1,11 +1,18 @@
+import {beforeEach as beforeEachGuardSession} from 'vitest'
+import {legacyPermissionSession} from '../test/legacyPermissionSession'
+beforeEachGuardSession(legacyPermissionSession)
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
-import ReleaseGuardReport from "./ReleaseGuardReport.vue";
-import { guardReport } from "../test/releaseGuardFixtures";
+import ReleaseGuardReport from "./ReleaseGuardReportRoute.vue";
+import { guardPlan, guardReport } from "../test/releaseGuardFixtures";
 import { reactive } from "vue";
 import { i18n, setLocale } from "../i18n";
-import type { GuardEvidence, GuardReport } from "../api/releaseGuard";
+import type { GuardAnalysis, GuardEvidence, GuardPlan, GuardReport } from "../api/releaseGuard";
 import { HttpError } from "../api/http";
+import { access } from "../api/access";
+import { usePermissionStore } from "../stores/permissions";
+import { useSessionStore } from "../stores/session";
+vi.mock("../api/access", () => ({ access: { decisions: vi.fn() } }));
 import ReleaseGuardAnalysis from "../components/run/ReleaseGuardAnalysis.vue";
 import ReleaseGuardInvestigation from "../components/run/ReleaseGuardInvestigation.vue";
 
@@ -18,6 +25,9 @@ const api = vi.hoisted(() => ({
   preview: vi.fn(),
   send: vi.fn(),
   investigate: vi.fn(),
+  plan: vi.fn(),
+  start: vi.fn(),
+  revoke: vi.fn(),
 }));
 const route = reactive({
   params: { projectId: "project-1", guardId: "guard-1" },
@@ -31,6 +41,9 @@ vi.mock("../api/releaseGuard", async (importOriginal) => ({
   previewGuardAnalysis: api.preview,
   sendGuardAnalysis: api.send,
   investigateReleaseGuard: api.investigate,
+  previewGuardPlan: api.plan,
+  startReleaseGuard: api.start,
+  revokeGuardAnalysis: api.revoke,
 }));
 vi.mock("vue-router", () => ({
   useRoute: () => route,
@@ -432,6 +445,64 @@ describe("release guard report", () => {
       "future_internal_event",
     );
     wrapper.unmount();
+  });
+  it("locates each condition, timeline and investigation citation in the active report", async () => {
+    const report = guardReport();
+    report.timeline = [{
+      id: "timeline-1",
+      at: "2026-10-25T10:00:00Z",
+      kind: "runtime_sample",
+      targetId: "target-1",
+      summary: "runtime_sample",
+      evidenceIds: ["timeline"],
+    }];
+    report.investigation.candidates = [{
+      id: "candidate-1",
+      title: "docker_unhealthy",
+      supportingEvidenceIds: ["support"],
+      counterEvidenceIds: ["counter"],
+      missingEvidence: [],
+      nextReadOnlyCheck: "",
+    }];
+    api.get.mockResolvedValue(report);
+    api.evidence.mockResolvedValue({
+      items: ["evidence-1", "timeline", "support", "counter"].map(id => sample(id)),
+      nextCursor: 4,
+      hasMore: false,
+    });
+    const wrapper = page();
+    await flushPromises();
+    const citations = [
+      ["#guard-tab-verification", ".guard-condition-list a", "evidence-1"],
+      ["#guard-tab-verification", ".guard-timeline a", "timeline"],
+      ["#guard-tab-investigation", ".guard-candidate > div:nth-of-type(1) a", "support"],
+      ["#guard-tab-investigation", ".guard-candidate > div:nth-of-type(2) a", "counter"],
+    ];
+    for (const [tab, selector, id] of citations) {
+      await wrapper.get(tab).trigger("click");
+      const citation = wrapper.get(selector);
+      expect(citation.isVisible()).toBe(true);
+      await citation.trigger("click");
+      await flushPromises();
+      const item = wrapper.get("#guard-evidence-" + id);
+      expect(item.classes()).toContain("is-highlighted");
+      expect(document.activeElement).toBe(item.element);
+    }
+    expect(api.evidence).toHaveBeenCalledTimes(1);
+    expect(api.investigate).not.toHaveBeenCalled();
+    expect(api.stop).not.toHaveBeenCalled();
+  });
+  it("refreshes only the current report from the report toolbar", async () => {
+    const wrapper = page();
+    await flushPromises();
+    const refresh = wrapper.findAll("button").find(button => button.text() === i18n.global.t("common.refresh"));
+    expect(refresh).toBeDefined();
+    await refresh!.trigger("click");
+    await flushPromises();
+    expect(api.get).toHaveBeenCalledTimes(2);
+    expect(api.get).toHaveBeenLastCalledWith("project-1", "guard-1", expect.any(Object));
+    expect(api.stop).not.toHaveBeenCalled();
+    expect(api.send).not.toHaveBeenCalled();
   });
   it("locates cross-page citations by actual cursor, deduplicates and focuses the same visible card", async () => {
     api.evidence.mockResolvedValueOnce({
@@ -938,4 +1009,248 @@ describe("release guard report", () => {
     ).toEqual(["· Shared server / app", "· Shared server / worker"]);
     wrapper.unmount();
   });
+  describe("release guard report selected team", () => {
+    async function settle() { for (let i = 0; i < 4; i++) await flushPromises(); }
+    function member() {
+      const runId = guardReport().runId;
+      let stop = true;
+      useSessionStore().setUser({username:"employee",userId:"u",multiTenant:true});
+      usePermissionStore().setTeam("team-a");
+      vi.mocked(access.decisions).mockImplementation(async (team, queries) => ({
+        userId:"u",teamId:team,modeEpoch:1,revision:1,catalogVersion:1,
+        allowed:queries.map(q => q.resourceId === runId && team === "team-a" &&
+          (q.action === "guard.read" || (stop && q.action === "guard.stop"))),
+      }));
+      api.get.mockResolvedValue(guardReport({executionStatus:"observing",finishedAt:undefined}));
+      return () => { stop = false; usePermissionStore().invalidate(); };
+    }
+    function inTeam(team: string) { return expect.objectContaining({
+      headers:{"X-Pipewright-Team":team},signal:expect.any(AbortSignal),throwOnUnauthorized:true,
+    }); }
+    it("pins report, evidence and actual stop requests to the selected team", async () => {
+      member(); const wrapper = page(); await settle();
+      await wrapper.get(".guard-actions button").trigger("click"); await settle();
+      expect(api.get).toHaveBeenCalledWith("project-1","guard-1",inTeam("team-a"));
+      expect(api.evidence).toHaveBeenCalledWith("project-1","guard-1",0,inTeam("team-a"));
+      expect(api.stop).toHaveBeenCalledExactlyOnceWith("project-1","guard-1",inTeam("team-a"));
+    });
+    it("removes a retained stop action after its independent permission is revoked", async () => {
+      const denyStop = member(); const wrapper = page(); await settle();
+      const old = wrapper.get(".guard-actions button");
+      denyStop(); await settle(); await old.trigger("click"); await settle();
+      expect(wrapper.find(".guard-actions button").exists()).toBe(false);
+      expect(wrapper.find(".guard-verdict").exists()).toBe(true);
+      expect(api.stop).not.toHaveBeenCalled();
+    });
+    it("aborts same-route evidence and drops its response after team change", async () => {
+      member();
+      let finish!: (value: unknown) => void;
+      api.evidence.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      const wrapper = page(); await settle();
+      const oldSignal: AbortSignal = api.evidence.mock.calls[0]![3].signal;
+      usePermissionStore().setTeam("team-b"); await settle();
+      expect(oldSignal.aborted).toBe(true);
+      finish({items:[sample("old-team-evidence",{summary:"Synthetic old team evidence"})],nextCursor:1,hasMore:false});
+      await settle();
+      expect(wrapper.text()).not.toContain("Synthetic old team evidence");
+      expect(api.get).toHaveBeenLastCalledWith("project-1","guard-1",inTeam("team-b"));
+      expect(api.evidence).toHaveBeenLastCalledWith("project-1","guard-1",0,inTeam("team-b"));
+    });
+    it("does not request the report with no selected team or after logout", async () => {
+      member(); usePermissionStore().setTeam("");
+      const wrapper = page(); await settle();
+      expect(api.get).not.toHaveBeenCalled();
+      usePermissionStore().setTeam("team-a"); await settle();
+      const oldSignal: AbortSignal = api.get.mock.calls[0]![2].signal;
+      useSessionStore().clearSession(); await settle();
+      expect(oldSignal.aborted).toBe(true);
+      expect(wrapper.find(".guard-verdict").exists()).toBe(false);
+      expect(api.get).toHaveBeenCalledTimes(1);
+    });
+  });
+  describe("release guard report nested action scope", () => {
+    const fixture: GuardAnalysis = {
+      id:"analysis-1",guardId:"guard-1",status:"preview",
+      provider:{name:"Fixture model",model:"test",destination:"https://model.example.test",configHash:"provider-hash"},
+      input:{includeRuntime:true,includeLogs:false},payload:"{}",payloadHash:"payload-hash",
+      planHash:"plan-hash",evidenceSetHash:"evidence-hash",evidenceIds:[],
+      createdAt:"2026-11-15T12:00:00Z",expiresAt:"2099-01-01T00:00:00Z",
+      revoked:false,stale:false,reason:"",limitations:[],
+    };
+    async function settled() { for (let i = 0; i < 4; i++) await flushPromises(); }
+    function allowed(...actions: string[]) {
+      const grants = new Set(actions);
+      useSessionStore().setUser({username:"employee",userId:"u",multiTenant:true});
+      usePermissionStore().setTeam("team-a");
+      vi.mocked(access.decisions).mockImplementation(async (team, queries) => ({
+        userId:"u",teamId:team,modeEpoch:1,revision:1,catalogVersion:1,
+        allowed:queries.map(q => q.resourceId === "run-1" && grants.has(q.action)),
+      }));
+      api.get.mockResolvedValue(guardReport({evidenceSetHash:"evidence-hash"}));
+      api.preview.mockResolvedValue(fixture);
+      api.send.mockResolvedValue({...fixture,status:"unknown"});
+      api.revoke.mockResolvedValue({...fixture,revoked:true});
+      api.plan.mockResolvedValue(guardPlan());
+      api.start.mockResolvedValue(guardReport({id:"new-report"}));
+      return grants;
+    }
+    function teamOptions(team = "team-a") { return expect.objectContaining({
+      headers:{"X-Pipewright-Team":team},signal:expect.any(AbortSignal),throwOnUnauthorized:true,
+    }); }
+    function action(wrapper: ReturnType<typeof page>, region: string, text: string) {
+      const item = wrapper.get(region).findAll("button").find(button => button.text() === text);
+      expect(item).toBeDefined();
+      return item!;
+    }
+    async function openAI(wrapper: ReturnType<typeof page>) {
+      await wrapper.get(".guard-header-actions .app-btn--ai").trigger("click");
+      await wrapper.get(".guard-analysis-scope input").setValue(true);
+      await settled();
+    }
+
+    it("uses exact report, selected team and explicit confirmation for actual AI history, preview, send and revoke", async () => {
+      allowed("guard.analyze");
+      const wrapper = page(); await settled();
+      await wrapper.get(".guard-next .app-btn--ai").trigger("click");
+      expect(wrapper.get("#guard-tab-ai").attributes("aria-selected")).toBe("true");
+      await wrapper.get(".guard-analysis header button").trigger("click");
+      await wrapper.get(".guard-analysis-scope input").setValue(true);
+      await settled();
+      expect(api.preview).not.toHaveBeenCalled();
+      expect(api.send).not.toHaveBeenCalled();
+      await action(wrapper, ".guard-analysis", "预览本次快照").trigger("click");
+      await settled();
+      await wrapper.get(".guard-analysis-confirm input").setValue(true);
+      await action(wrapper, ".guard-analysis", "仅发送这份快照").trigger("click");
+      await settled();
+      await action(wrapper, ".guard-analysis", "撤回后续发送").trigger("click");
+      await settled();
+      expect(api.analyses).toHaveBeenCalledWith("project-1","guard-1",teamOptions());
+      expect(api.preview).toHaveBeenCalledExactlyOnceWith("project-1","guard-1",
+        {includeRuntime:true,includeLogs:false},teamOptions());
+      expect(api.send).toHaveBeenCalledExactlyOnceWith("project-1","guard-1","analysis-1",
+        {payloadHash:"payload-hash",providerConfigHash:"provider-hash",confirmed:true},teamOptions());
+      expect(api.revoke).toHaveBeenCalledExactlyOnceWith("project-1","guard-1","analysis-1",teamOptions());
+    });
+    it("keeps read-only AI history and ignores a revoked in-flight preview from its old button", async () => {
+      const grants = allowed("guard.analyze");
+      const wrapper = page(); await settled(); await openAI(wrapper);
+      let finish!: (input: GuardAnalysis) => void;
+      api.preview.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      const old = action(wrapper,".guard-analysis","预览本次快照");
+      await old.trigger("click"); await settled();
+      const signal: AbortSignal = api.preview.mock.calls[0]![3].signal;
+      grants.delete("guard.analyze"); usePermissionStore().invalidate(); await settled();
+      expect(signal.aborted).toBe(true);
+      finish({...fixture,payload:"Private old analysis"}); await settled();
+      await old.trigger("click"); await settled();
+      expect(wrapper.text()).not.toContain("Private old analysis");
+      expect(api.preview).toHaveBeenCalledTimes(1);
+      expect(api.send).not.toHaveBeenCalled();
+    });
+    it("aborts old analysis after changing team while admitting the new team's same-report history", async () => {
+      allowed("guard.analyze");
+      const wrapper = page(); await settled(); await openAI(wrapper);
+      let resolve!: (input: GuardAnalysis) => void;
+      api.preview.mockImplementationOnce(() => new Promise(finish => { resolve = finish; }));
+      await action(wrapper, ".guard-analysis", "预览本次快照").trigger("click"); await settled();
+      const old: AbortSignal = api.preview.mock.calls[0]![3].signal;
+      usePermissionStore().setTeam("team-b"); await settled();
+      expect(old.aborted).toBe(true);
+      resolve({...fixture,payload:"Private old team analysis"}); await settled();
+      expect(wrapper.text()).not.toContain("Private old team analysis");
+      expect(api.analyses).toHaveBeenLastCalledWith("project-1","guard-1",teamOptions("team-b"));
+    });
+    it("pins actual investigation and discards its already authorized response after withdrawal", async () => {
+      const grants = allowed("guard.investigate");
+      const wrapper = page(); await settled();
+      await action(wrapper, ".guard-next", i18n.global.t("releaseGuardPresentation.investigateAction")).trigger("click");
+      expect(wrapper.get("#guard-tab-investigation").attributes("aria-selected")).toBe("true");
+      expect(api.investigate).not.toHaveBeenCalled();
+      await wrapper.get(".guard-investigation-update__action button").trigger("click"); await settled();
+      expect(api.investigate).toHaveBeenCalledExactlyOnceWith("project-1","guard-1",teamOptions());
+      let finish!: (input: GuardReport) => void;
+      api.investigate.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      const old = wrapper.get(".guard-investigation-update__action button");
+      await old.trigger("click"); await settled();
+      const signal: AbortSignal = api.investigate.mock.calls.at(-1)![2].signal;
+      grants.delete("guard.investigate"); usePermissionStore().invalidate(); await settled();
+      expect(signal.aborted).toBe(true);
+      finish(guardReport({eventsCursor:9,verificationResult:"passed"})); await settled();
+      await old.trigger("click"); await settled();
+      expect(api.investigate).toHaveBeenCalledTimes(2);
+      expect(wrapper.get(".guard-verdict").attributes("data-result")).toBe("failed");
+    });
+    it.each([".guard-actions",".guard-next"] as const)("previews and explicitly starts current revalidation through %s", async (region) => {
+      allowed("guard.observe");
+      const wrapper = page(); await settled();
+      await action(wrapper,region,"审阅复验计划").trigger("click"); await settled();
+      expect(api.plan).toHaveBeenCalledExactlyOnceWith("project-1", {
+        mode:"from_now",attemptId:"attempt-1",durationSeconds:600,includeLogs:false,parentGuardId:"guard-1",
+      },teamOptions());
+      expect(api.start).not.toHaveBeenCalled();
+      await action(wrapper,".guard-overlay","开始观察").trigger("click"); await settled();
+      expect(api.start).toHaveBeenCalledExactlyOnceWith("project-1", {
+        planId:"plan-1",planHash:"plan-hash",idempotencyKey:expect.any(String),
+      },teamOptions());
+      expect(api.push).toHaveBeenCalledWith(expect.objectContaining({params:{projectId:"project-1",guardId:"new-report"}}));
+    });
+    it("aborts a revalidation plan and denies both retained entries after observation permission is withdrawn", async () => {
+      const grants = allowed("guard.observe");
+      const wrapper = page(); await settled();
+      const header = action(wrapper,".guard-actions","审阅复验计划");
+      const next = action(wrapper,".guard-next","审阅复验计划");
+      let finish!: (input: GuardPlan) => void;
+      api.plan.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      await next.trigger("click"); await settled();
+      const signal: AbortSignal = api.plan.mock.calls[0]![2].signal;
+      grants.delete("guard.observe"); usePermissionStore().invalidate(); await settled();
+      expect(signal.aborted).toBe(true);
+      finish(guardPlan()); await settled();
+      await header.trigger("click"); await next.trigger("click"); await settled();
+      expect(api.plan).toHaveBeenCalledTimes(1);
+      expect(api.start).not.toHaveBeenCalled();
+      expect(wrapper.findAll(".guard-overlay button").some(button=>button.text()==="开始观察")).toBe(false);
+    });
+    it("does not reissue an AI send after authorization is withdrawn and restored", async () => {
+      const grants = allowed("guard.analyze");
+      const wrapper = page(); await settled(); await openAI(wrapper);
+      await action(wrapper, ".guard-analysis", "预览本次快照").trigger("click"); await settled();
+      await wrapper.get(".guard-analysis-confirm input").setValue(true);
+      let finish!: (value: GuardAnalysis) => void;
+      api.send.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      const oldSend = action(wrapper,".guard-analysis","仅发送这份快照");
+      await oldSend.trigger("click"); await settled();
+      const signal: AbortSignal = api.send.mock.calls[0]![4].signal;
+      grants.delete("guard.analyze"); usePermissionStore().invalidate(); await settled();
+      expect(signal.aborted).toBe(true);
+      finish({...fixture,status:"completed",payload:"Private revoked model result"});
+      grants.add("guard.analyze"); usePermissionStore().invalidate(); await settled();
+      await oldSend.trigger("click"); await settled();
+      expect(api.send).toHaveBeenCalledTimes(1);
+      expect(api.preview).toHaveBeenCalledTimes(1);
+      expect(wrapper.text()).not.toContain("Private revoked model result");
+      expect(wrapper.findAll(".guard-analysis button").some(button=>button.text()==="仅发送这份快照")).toBe(false);
+    });
+    it("does not use a pending revalidation result after moving to a different report", async () => {
+      allowed("guard.observe");
+      const wrapper = page(); await settled();
+      await action(wrapper,".guard-next","审阅复验计划").trigger("click"); await settled();
+      let finish!: (value: GuardReport) => void;
+      api.start.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      await action(wrapper,".guard-overlay","开始观察").trigger("click"); await settled();
+      const oldSignal: AbortSignal = api.start.mock.calls[0]![2].signal;
+      api.get.mockResolvedValue(guardReport({id:"guard-2"}));
+      route.params.guardId = "guard-2"; await settled();
+      expect(oldSignal.aborted).toBe(true);
+      finish(guardReport({id:"old-started",verificationResult:"passed"})); await settled();
+      expect(api.push).not.toHaveBeenCalled();
+      expect(api.start).toHaveBeenCalledTimes(1);
+      expect(wrapper.find(".guard-overlay").exists()).toBe(false);
+      expect(api.get).toHaveBeenLastCalledWith("project-1","guard-2",teamOptions());
+      expect(wrapper.get(".guard-verdict").attributes("data-result")).toBe("failed");
+    });
+
+  });
+
 });

@@ -18,23 +18,30 @@ import (
 type opsFlushRecorder struct {
 	*httptest.ResponseRecorder
 	flushed chan struct{}
+	waitFor string
 }
 
 func (w *opsFlushRecorder) Flush() {
 	w.ResponseRecorder.Flush()
+	if w.waitFor != "" && !strings.Contains(w.Body.String(), w.waitFor) {
+		return
+	}
 	select {
 	case w.flushed <- struct{}{}:
 	default:
 	}
 }
 
-func opsRecordedStream(t *testing.T, h http.Handler, path string) (*opsFlushRecorder, context.CancelFunc, <-chan struct{}) {
+func opsRecordedStream(t *testing.T, h http.Handler, path string, waitFor ...string) (*opsFlushRecorder, context.CancelFunc, <-chan struct{}) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	t.Cleanup(cancel)
 	r := httptest.NewRequest("GET", path, nil).WithContext(ctx)
 	r.AddCookie(&http.Cookie{Name: cookieSession, Value: "valid"})
-	w := &opsFlushRecorder{httptest.NewRecorder(), make(chan struct{}, 1)}
+	w := &opsFlushRecorder{ResponseRecorder: httptest.NewRecorder(), flushed: make(chan struct{}, 1)}
+	if len(waitFor) > 0 {
+		w.waitFor = waitFor[0]
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -115,7 +122,7 @@ func TestOpsHistoricalRotationProjectsHTTPAndSSEWithoutInference(t *testing.T) {
 			t.Fatal("HTTP echoed a newly registered secret", path, w.Body.String())
 		}
 	}
-	w, cancel, done := opsRecordedStream(t, h, base+"/events")
+	w, cancel, done := opsRecordedStream(t, h, base+"/events", `"kind":"assistant"`)
 	cancel()
 	<-done
 	if strings.Contains(w.Body.String(), secret) || !strings.Contains(w.Body.String(), "[MASKED]") || !strings.Contains(w.Body.String(), `"kind":"assistant"`) {

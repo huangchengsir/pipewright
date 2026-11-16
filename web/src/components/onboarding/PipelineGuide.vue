@@ -55,7 +55,9 @@ async function mark(focus = false): Promise<void> {
   }
 }
 async function locate(): Promise<void> { pendingFocus = true; emit('locate', phase.value); await nextTick(); await mark(true) }
+// Capture before RouterLink's click handler, so local canvas actions can keep the current query.
 function locateIssue(event: MouseEvent, issue: Snapshot['pipeline']['issues'][number]): void {
+  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.altKey || event.ctrlKey || event.shiftKey) return
   if (issue.scope !== 'canvas' || ['project_credential_missing', 'vault_unconfigured', 'credential_missing', 'server_missing'].includes(issue.code)) return
   event.preventDefault()
   if (issue.code === 'no_tasks') emit('locate', 'conditions')
@@ -74,7 +76,7 @@ defineExpose({ refresh })
       <p class="guide-description">{{ t(`onboardingGuide.phases.${phase}.description`) }}</p>
       <ul v-if="phase === 'issues'" class="guide-issues">
         <li v-for="issue in issues" :key="`${issue.code}-${issue.scope}`">
-          <router-link :to="guideIssueTarget(issue.code, issue.scope, projectId)" @click="locateIssue($event, issue)">{{ t(`onboardingFlow.issues.${ISSUE_KEYS[issue.code] ?? 'pipeline'}`) }} <ArrowRight aria-hidden="true" /></router-link>
+          <router-link :to="guideIssueTarget(issue.code, issue.scope, projectId)" @click.capture="locateIssue($event, issue)">{{ t(`onboardingFlow.issues.${ISSUE_KEYS[issue.code] ?? 'pipeline'}`) }} <ArrowRight aria-hidden="true" /></router-link>
         </li>
       </ul>
       <p v-if="phase === 'runtime'" class="guide-description">{{ t('onboardingFlow.runtime.instructions') }}</p>

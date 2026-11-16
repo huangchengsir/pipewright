@@ -30,13 +30,16 @@ func (s *Service) Snapshot(ctx context.Context, tokenID string, in SnapshotReque
 		return nil, e
 	}
 	var out *Snapshot
-	e = configstate.WithWriteTx(ctx, s.db, func(q configstate.DBTX) error {
+	e = s.withWriteTx(ctx, func(q configstate.DBTX) error {
 		t, e := s.locks(ctx, q, tokenID, g)
 		if e != nil {
 			return e
 		}
 		if !allowed(t, in.ProjectID, "read", in.Section, "") {
 			return ErrForbidden
+		}
+		if e = s.configurationRead(ctx, q, in.ProjectID, in.Section); e != nil {
+			return e
 		}
 		d, e := s.load(ctx, q, in.ProjectID)
 		if e != nil {
@@ -211,7 +214,7 @@ func (s *Service) OptionsList(ctx context.Context, tokenID string, in OptionsReq
 		return nil, e
 	}
 	var out *Snapshot
-	e = configstate.WithWriteTx(ctx, s.db, func(q configstate.DBTX) error {
+	e = s.withWriteTx(ctx, func(q configstate.DBTX) error {
 		t, e := s.locks(ctx, q, tokenID, g)
 		if e != nil {
 			return e

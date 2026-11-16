@@ -13,6 +13,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/library"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"github.com/huangchengsir/pipewright/internal/trigger"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
@@ -161,6 +162,10 @@ func makeAIGenerateHandler(d aiGenerateDeps) http.HandlerFunc {
 		}
 		id := chi.URLParam(r, "id")
 		ctx := r.Context()
+		if err := pipeline.AuthorizeAction(ctx, d.pipes, id, "pipeline.edit"); err != nil {
+			writeAIApplyError(w, err)
+			return
+		}
 
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
 		var req struct {
@@ -191,7 +196,19 @@ func makeAIGenerateHandler(d aiGenerateDeps) http.HandlerFunc {
 		}
 		defer releaseGit()
 
+		if err := pipeline.AuthorizeAction(ctx, d.pipes, id, "pipeline.edit"); err != nil {
+			writeAIApplyError(w, err)
+			return
+		}
 		analysis := d.analyzer.Analyze(ctx, proj.RepoURL, username, token)
+		if err := pipeline.AuthorizeAction(ctx, d.pipes, id, "pipeline.edit"); err != nil {
+			writeAIApplyError(w, err)
+			return
+		}
+		if err := recheckProjectSource(ctx, d.projects, proj); err != nil {
+			writeProjectError(w, err)
+			return
+		}
 		token = "" // 明文用完即弃
 		_ = token
 
@@ -221,11 +238,23 @@ func makeAIGenerateHandler(d aiGenerateDeps) http.HandlerFunc {
 			}
 		}
 
+		if err := pipeline.AuthorizeAction(ctx, d.pipes, id, "pipeline.edit"); err != nil {
+			writeAIApplyError(w, err)
+			return
+		}
 		proposal, gerr := d.aiSvc.Generate(ctx, ai.GenerateInput{
 			Analysis: analysis,
 			NL:       req.NLSupplement,
 			Catalog:  catalog,
 		})
+		if err := pipeline.AuthorizeAction(ctx, d.pipes, id, "pipeline.edit"); err != nil {
+			writeAIApplyError(w, err)
+			return
+		}
+		if err := recheckProjectSource(ctx, d.projects, proj); err != nil {
+			writeProjectError(w, err)
+			return
+		}
 		switch {
 		case gerr == nil:
 			dto.Proposal = toAIProposalDTO(proposal)
@@ -274,6 +303,10 @@ func makeAIApplyHandler(d aiGenerateDeps) http.HandlerFunc {
 		}
 		id := chi.URLParam(r, "id")
 		ctx := r.Context()
+		if err := pipeline.AuthorizeAction(ctx, d.pipes, id, "pipeline.edit"); err != nil {
+			writeAIApplyError(w, err)
+			return
+		}
 
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<18) // 256KB
 		var req struct {
@@ -539,6 +572,10 @@ func applySelectedMappings(ctx context.Context, svc trigger.Service, projectID s
 
 // writeAIApplyError 把 apply 过程中各服务的领域错误映射为契约错误码(404/422/503/500)。
 func writeAIApplyError(w http.ResponseWriter, err error) {
+	if errors.Is(err, tenancy.ErrForbidden) || errors.Is(err, tenancy.ErrConflict) {
+		accessError(w, err)
+		return
+	}
 	switch {
 	case errors.Is(err, pipeline.ErrProjectNotFound),
 		errors.Is(err, trigger.ErrProjectNotFound),

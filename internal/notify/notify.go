@@ -24,6 +24,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"net/http"
 	"strings"
 	"time"
@@ -92,7 +94,7 @@ var ErrInvalidLanguage = errors.New("notify: invalid language")
 // notifyLanguage 读取通知语言配置(notify_config 单行);缺失/出错回退默认。
 func (s *service) notifyLanguage(ctx context.Context) string {
 	var lang string
-	err := s.db.QueryRowContext(ctx, `SELECT language FROM notify_config WHERE id = 1`).Scan(&lang)
+	err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx, `SELECT language FROM notify_config WHERE id = 1`).Scan(&lang)
 	if err != nil || i18n.Normalize(lang) == "" {
 		return i18n.Default
 	}
@@ -101,15 +103,18 @@ func (s *service) notifyLanguage(ctx context.Context) string {
 
 // NotifyLanguage 暴露当前通知语言(供 HTTP 层 GET)。
 func (s *service) NotifyLanguage(ctx context.Context) string {
+	if err := s.AuthorizeConfiguration(ctx); err != nil {
+		return i18n.Default
+	}
 	return s.notifyLanguage(ctx)
 }
 
 // SetNotifyLanguage 持久化通知语言;要求精确的受支持 locale 码(如 zh-CN/en/ja)。
-func (s *service) SetNotifyLanguage(ctx context.Context, lang string) error {
+func (s *service) setNotifyLanguage(ctx context.Context, lang string) error {
 	if i18n.Normalize(lang) != lang {
 		return ErrInvalidLanguage
 	}
-	_, err := s.db.ExecContext(ctx,
+	_, err := configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`UPDATE notify_config SET language = ?, updated_at = ? WHERE id = 1`,
 		lang, time.Now().UTC().Format(time.RFC3339))
 	return err
@@ -243,7 +248,10 @@ func New(db *sql.DB, v vault.Vault, client *http.Client) Service {
 }
 
 func (s *service) List(ctx context.Context) ([]Channel, error) {
-	rows, err := s.db.QueryContext(ctx,
+	if err := s.AuthorizeConfiguration(ctx); err != nil {
+		return nil, err
+	}
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT id, name, type, enabled, config_json, secret_ciphertext, created_at, updated_at
 		 FROM notification_channels ORDER BY created_at DESC, id`,
 	)
@@ -267,6 +275,9 @@ func (s *service) List(ctx context.Context) ([]Channel, error) {
 }
 
 func (s *service) Get(ctx context.Context, id string) (*Channel, error) {
+	if err := s.AuthorizeConfiguration(ctx); err != nil {
+		return nil, err
+	}
 	ch, _, err := s.load(ctx, id)
 	if err != nil {
 		return nil, err
@@ -274,7 +285,7 @@ func (s *service) Get(ctx context.Context, id string) (*Channel, error) {
 	return ch, nil
 }
 
-func (s *service) Create(ctx context.Context, in CreateInput) (*Channel, error) {
+func (s *service) create(ctx context.Context, in CreateInput) (*Channel, error) {
 	if !validType(in.Type) {
 		return nil, ErrInvalidType
 	}
@@ -307,7 +318,7 @@ func (s *service) Create(ctx context.Context, in CreateInput) (*Channel, error) 
 	nowStr := now.Format(time.RFC3339)
 	enabled := boolToInt(in.Enabled)
 
-	_, err = s.db.ExecContext(ctx,
+	_, err = configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`INSERT INTO notification_channels (id, name, type, enabled, config_json, secret_ciphertext, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, name, in.Type, enabled, string(cfgJSON), sealed, nowStr, nowStr,
@@ -328,7 +339,7 @@ func (s *service) Create(ctx context.Context, in CreateInput) (*Channel, error) 
 	}, nil
 }
 
-func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Channel, error) {
+func (s *service) update(ctx context.Context, id string, in UpdateInput) (*Channel, error) {
 	cur, curSealed, err := s.load(ctx, id)
 	if err != nil {
 		return nil, err
@@ -375,7 +386,7 @@ func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Chann
 
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
-	_, err = s.db.ExecContext(ctx,
+	_, err = configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`UPDATE notification_channels SET name = ?, enabled = ?, config_json = ?, secret_ciphertext = ?, updated_at = ?
 		 WHERE id = ?`,
 		name, boolToInt(enabled), string(cfgJSON), sealed, nowStr, id,
@@ -396,8 +407,8 @@ func (s *service) Update(ctx context.Context, id string, in UpdateInput) (*Chann
 	}, nil
 }
 
-func (s *service) Delete(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM notification_channels WHERE id = ?`, id)
+func (s *service) delete(ctx context.Context, id string) error {
+	res, err := configstate.Queryer(ctx, s.db).ExecContext(ctx, `DELETE FROM notification_channels WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("notify: delete channel: %w", err)
 	}
@@ -409,12 +420,18 @@ func (s *service) Delete(ctx context.Context, id string) error {
 }
 
 func (s *service) Test(ctx context.Context, id string) (*TestResult, error) {
+	if err := s.AuthorizeConfiguration(ctx); err != nil {
+		return nil, err
+	}
 	ch, sealed, err := s.load(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	payload := testPayload()
 	start := time.Now()
+	if err := s.AuthorizeConfiguration(ctx); err != nil {
+		return nil, err
+	}
 	if derr := s.deliver(ctx, ch, sealed, payload); derr != nil {
 		return &TestResult{
 			OK:        false,
@@ -438,17 +455,32 @@ func (s *service) SendVia(ctx context.Context, channelID string, payload Payload
 	if !ch.Enabled {
 		return nil
 	}
-	observeDelivery(ctx)
 	return s.deliver(ctx, ch, sealed, payload)
 }
 
 // deliver 按 type 分派投递(webhook/email 实现;其余 not_implemented 人读)。
 // 返回人读错误(绝无敏感字段明文)。需 sealed(敏感字段密文)时在各 notifier 内解密、用完即弃。
 func (s *service) deliver(ctx context.Context, ch *Channel, sealed []byte, payload Payload) error {
+	if err := configstate.WithReadTxContext(ctx, s.db, func(c context.Context, _ configstate.DBTX) error {
+		if e := s.authorizeDelivery(c, ch, sealed); e != nil {
+			return e
+		}
+		current, currentSecret, e := s.load(c, ch.ID)
+		if e != nil {
+			return e
+		}
+		if channelVersion(current, currentSecret) != channelVersion(ch, sealed) {
+			return tenancy.ErrConflict
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
 	// 确保渲染语言已定(直接投递的预构造 payload 可能未设)——飞书/邮件据此本地化标签。
 	if payload.Lang == "" {
 		payload.Lang = s.notifyLanguage(ctx)
 	}
+	observeDelivery(ctx)
 	switch ch.Type {
 	case TypeWebhook:
 		return s.sendWebhook(ctx, ch, payload)
@@ -468,7 +500,7 @@ func (s *service) deliver(ctx context.Context, ch *Channel, sealed []byte, paylo
 
 // load 读取单条渠道行 + 既有密文(密文绝不外泄,仅供 deliver/test 内部解密用)。
 func (s *service) load(ctx context.Context, id string) (*Channel, []byte, error) {
-	row := s.db.QueryRowContext(ctx,
+	row := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT id, name, type, enabled, config_json, secret_ciphertext, created_at, updated_at
 		 FROM notification_channels WHERE id = ?`, id,
 	)

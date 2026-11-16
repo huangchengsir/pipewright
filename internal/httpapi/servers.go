@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -12,15 +13,16 @@ import (
 
 // serverDTO 是服务器对外响应体(冻结契约;camelCase;无明文/无私钥/无口令)。
 type serverDTO struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	Host           string `json:"host"`
-	Port           int    `json:"port"`
-	User           string `json:"user"`
-	CredentialID   string `json:"credentialId"`
-	CredentialName string `json:"credentialName"`
-	CreatedAt      string `json:"createdAt"`
-	UpdatedAt      string `json:"updatedAt"`
+	MetricsAuthorizationState string `json:"metricsAuthorizationState,omitempty"`
+	ID                        string `json:"id"`
+	Name                      string `json:"name"`
+	Host                      string `json:"host"`
+	Port                      int    `json:"port"`
+	User                      string `json:"user"`
+	CredentialID              string `json:"credentialId"`
+	CredentialName            string `json:"credentialName"`
+	CreatedAt                 string `json:"createdAt"`
+	UpdatedAt                 string `json:"updatedAt"`
 }
 
 // toServerDTO 把领域 Server 转为契约 DTO。
@@ -38,6 +40,18 @@ func toServerDTO(s *target.Server) serverDTO {
 	}
 }
 
+func serverView(ctx context.Context, svc target.Service, server *target.Server) (serverDTO, error) {
+	out := toServerDTO(server)
+	if states, ok := svc.(target.MetricsAutomationService); ok {
+		state, e := states.MetricsAuthorizationState(ctx, server.ID)
+		if e != nil {
+			return out, e
+		}
+		out.MetricsAuthorizationState = state
+	}
+	return out, nil
+}
+
 // serverTestDTO 是测试连接响应体(冻结契约)。error 失败时为人读串、成功时为 null。
 type serverTestDTO struct {
 	OK        bool    `json:"ok"`
@@ -48,6 +62,9 @@ type serverTestDTO struct {
 
 // writeServerError 把领域错误映射为契约错误码/状态码;绝不回显明文/私钥/口令/栈。
 func writeServerError(w http.ResponseWriter, err error) {
+	if writeAuthorizationError(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, target.ErrVaultUnconfigured):
 		writeError(w, http.StatusServiceUnavailable, "vault_unconfigured", "保险库未配置 master key,无法取 SSH 凭据")
@@ -85,7 +102,12 @@ func makeListServersHandler(svc target.Service) http.HandlerFunc {
 		}
 		out := make([]serverDTO, 0, len(servers))
 		for _, s := range servers {
-			out = append(out, toServerDTO(s))
+			view, e := serverView(r.Context(), svc, s)
+			if e != nil {
+				writeServerError(w, e)
+				return
+			}
+			out = append(out, view)
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": out})
 	}
@@ -103,7 +125,12 @@ func makeGetServerHandler(svc target.Service) http.HandlerFunc {
 			writeServerError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, toServerDTO(s))
+		view, e := serverView(r.Context(), svc, s)
+		if e != nil {
+			writeServerError(w, e)
+			return
+		}
+		writeJSON(w, http.StatusOK, view)
 	}
 }
 
@@ -137,7 +164,12 @@ func makeCreateServerHandler(svc target.Service) http.HandlerFunc {
 			writeServerError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, toServerDTO(s))
+		view, e := serverView(r.Context(), svc, s)
+		if e != nil {
+			writeServerError(w, e)
+			return
+		}
+		writeJSON(w, http.StatusCreated, view)
 	}
 }
 
@@ -172,7 +204,12 @@ func makeUpdateServerHandler(svc target.Service) http.HandlerFunc {
 			writeServerError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, toServerDTO(s))
+		view, e := serverView(r.Context(), svc, s)
+		if e != nil {
+			writeServerError(w, e)
+			return
+		}
+		writeJSON(w, http.StatusOK, view)
 	}
 }
 

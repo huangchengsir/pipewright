@@ -8,6 +8,8 @@ import (
 	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/auth"
 	"github.com/huangchengsir/pipewright/internal/authlogin"
+	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"io"
 	"net"
 	"net/http"
@@ -40,6 +42,10 @@ func platformJSON(w http.ResponseWriter, r *http.Request, value any) bool {
 func platformError(w http.ResponseWriter, e error) {
 	status, code := 500, "internal"
 	switch {
+	case errors.Is(e, tenancy.ErrForbidden):
+		status, code = 403, "access_denied"
+	case errors.Is(e, configstate.ErrMaintenance):
+		status, code = 409, "maintenance_active"
 	case errors.Is(e, auth.ErrSessionNotFound):
 		status, code = 401, "unauthorized"
 	case errors.Is(e, auth.ErrInvalidCurrentPassword):

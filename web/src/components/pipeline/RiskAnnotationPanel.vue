@@ -13,17 +13,29 @@
  * dots red/amber/grey; mono for the risky line ref). Motion is transform +
  * opacity only, with prefers-reduced-motion guard.
  */
-import { ref, computed } from 'vue'
+import { ref, computed, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { analyzeRisks, type RiskFinding, type RiskLevel } from '../../api/aiRisk'
 import { HttpError } from '../../api/http'
 import AppButton from '../ui/AppButton.vue'
+import PermissionGate from '../PermissionGate.vue'
+import { usePermission } from '../../composables/usePermission'
+import { usePermissionStore } from '../../stores/permissions'
+import { useSessionStore } from '../../stores/session'
 
 const props = defineProps<{
   projectId: string
 }>()
 
 const { t } = useI18n()
+const permissions = usePermissionStore()
+const session = useSessionStore()
+const permissionQuery = computed(() => ({ action: 'pipeline.edit', resourceId: props.projectId }))
+const { allowed } = usePermission(permissionQuery)
+const scopeKey = computed(() => JSON.stringify([
+  props.projectId, permissions.activeTeam, session.user, session.isNetworkError,
+]))
+
 
 type RunState = 'idle' | 'running' | 'done' | 'error'
 
@@ -59,29 +71,64 @@ function levelLabel(level: RiskLevel): string {
   }
 }
 
+let request: AbortController | undefined
+
+function resetAnalysis(): void {
+  const previous = request
+  request = undefined
+  previous?.abort()
+  state.value = 'idle'
+  errorMsg.value = ''
+  findings.value = []
+  aiEnhanced.value = false
+  aiReason.value = ''
+}
+
+watch([scopeKey, allowed], resetAnalysis, { flush: 'sync' })
+onBeforeUnmount(resetAnalysis)
+
 async function runAnalysis(): Promise<void> {
-  if (state.value === 'running') return
+  if (!allowed.value || !props.projectId || request) return
+  const query = permissionQuery.value
+  const team = permissions.activeTeam
+  const current = new AbortController()
+  request = current
   state.value = 'running'
   errorMsg.value = ''
   try {
-    const res = await analyzeRisks(props.projectId)
+    const res = await analyzeRisks(query.resourceId, {
+      headers: session.user?.multiTenant === true ? { 'X-Pipewright-Team': team } : undefined,
+      signal: current.signal,
+      throwOnUnauthorized: true,
+    })
+    if (request !== current || !allowed.value) return
     findings.value = res.findings
     aiEnhanced.value = res.aiEnhanced
     aiReason.value = res.aiReason
     state.value = 'done'
   } catch (err) {
-    if (err instanceof HttpError) {
-      errorMsg.value = err.apiError?.message ?? t('pipelinePanels.rapFailed', { status: err.status })
-    } else {
-      errorMsg.value = t('pipelinePanels.rapFailedRetry')
+    if (request !== current || !allowed.value) return
+    if (err instanceof HttpError && err.status === 401) {
+      session.clearSession()
+      return
     }
+    if (err instanceof HttpError && err.status === 403 && session.user?.multiTenant === true) {
+      permissions.reject(team, query)
+      resetAnalysis()
+      return
+    }
+    errorMsg.value = err instanceof HttpError
+      ? (err.apiError?.message ?? t('pipelinePanels.rapFailed', { status: err.status }))
+      : t('pipelinePanels.rapFailedRetry')
     state.value = 'error'
+  } finally {
+    if (request === current) request = undefined
   }
 }
 </script>
 
 <template>
-  <section class="rap" :aria-label="t('pipelinePanels.rapAria')">
+  <PermissionGate :key="scopeKey" :query="permissionQuery"><section class="rap" :aria-label="t('pipelinePanels.rapAria')">
     <!-- Header -->
     <div class="rap-head">
       <div class="rap-head-left">
@@ -158,7 +205,7 @@ async function runAnalysis(): Promise<void> {
         </li>
       </ul>
     </div>
-  </section>
+  </section></PermissionGate>
 </template>
 
 <style scoped>

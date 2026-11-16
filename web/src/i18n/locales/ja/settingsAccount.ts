@@ -1,6 +1,6 @@
 export default {
   identityTitle: 'アイデンティティ',
-  identitySub: '単一管理者インスタンス(マルチユーザーと RBAC は今後のバージョンで対応)。',
+  identitySub: '現在のアカウントとログイン情報を確認します。',
   roleAdmin: '管理者',
 
   changePwTitle: 'パスワード変更',

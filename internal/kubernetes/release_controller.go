@@ -312,6 +312,20 @@ func (c *ReleaseController) prepareManifestWithCommit(ctx context.Context, run, 
 	if e != nil {
 		return out, e
 	}
+	// Every resource below is read before its create/patch action is known.
+	// Authorize the entire read set first, so a later denied object cannot cause
+	// earlier baseline reads or obscure an authorization denial as a tool error.
+	phase = "authorization"
+	readRequest := auth.Request
+	readRequest.Resources = make([]ReleaseAccess, 0, len(plan.Resources))
+	for _, resource := range plan.Resources {
+		readRequest.Resources = append(readRequest.Resources, ReleaseAccess{ID: resource.ID, Actions: []string{"get"}})
+	}
+	if len(readRequest.Resources) > 0 {
+		if _, e = c.store.AuthorizeRelease(ctx, readRequest); e != nil {
+			return out, e
+		}
+	}
 	request := auth.Request
 	request.Resources = nil
 	for _, resource := range plan.Resources {

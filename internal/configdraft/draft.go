@@ -77,12 +77,15 @@ func (s *Service) Create(ctx context.Context, tokenID string, in CreateRequest) 
 		}
 	}
 	var out *Draft
-	e = configstate.WithWriteTx(ctx, s.db, func(q configstate.DBTX) error {
+	e = s.withWriteTx(ctx, func(q configstate.DBTX) error {
 		t, e := s.locks(ctx, q, tokenID, g)
 		if e != nil {
 			return e
 		}
 		if e = authorize(t, in.ProjectID, "propose", ops); e != nil {
+			return e
+		}
+		if e = s.configurationWrite(ctx, q, in.ProjectID, ops); e != nil {
 			return e
 		}
 		// Persistent identity is resolved before mutable defaults and base checks.
@@ -282,6 +285,11 @@ func (s *Service) reviewDigest(r *draftRow, diff []Diff) string {
 	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
 func (s *Service) draftView(ctx context.Context, q configstate.DBTX, t *auth.MCPToken, r *draftRow, g guard) (*Draft, error) {
+	for _, op := range r.ops {
+		if err := s.configurationRead(ctx, q, r.project, sectionFor(op.Type)); err != nil {
+			return nil, err
+		}
+	}
 	if r.token != t.ID {
 		return nil, ErrForbidden
 	}
@@ -405,7 +413,7 @@ func (s *Service) get(ctx context.Context, tokenID, draftID, adminID string) (*D
 	}
 	var out *Draft
 	var owner string
-	e = configstate.WithWriteTx(ctx, s.db, func(q configstate.DBTX) error {
+	e = s.withWriteTx(ctx, func(q configstate.DBTX) error {
 		r, e := readDraft(ctx, q, `id=?`, draftID)
 		if e != nil {
 			return ErrForbidden
@@ -497,7 +505,7 @@ func (s *Service) Approve(ctx context.Context, adminID, draftID string, in Appro
 	}
 	var out *Approval
 	var owner string
-	e = configstate.WithWriteTx(ctx, s.db, func(q configstate.DBTX) error {
+	e = s.withWriteTx(ctx, func(q configstate.DBTX) error {
 		r, e := readDraft(ctx, q, `id=?`, draftID)
 		if e != nil {
 			return ErrForbidden
@@ -511,6 +519,9 @@ func (s *Service) Approve(ctx context.Context, adminID, draftID string, in Appro
 			return ErrForbidden
 		}
 		if _, e = configstate.LockProject(ctx, q, s.db, r.project); e != nil {
+			return e
+		}
+		if e = s.configurationApproval(ctx, q, adminID, r.project, r.ops); e != nil {
 			return e
 		}
 		if e = authorize(t, r.project, "apply", r.ops); e != nil {

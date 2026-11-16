@@ -1,4 +1,6 @@
 export default {
+ samplingAuthorizationRequired: "Sampling authorization required",
+ samplingAuthorizationHelp: "An administrator with server execution and credential use permissions must save this rule again. Configuration or authorization changes require renewed approval.",
   title: 'Anomaly detection',
   subtitle:
     'Configure threshold rules to check server CPU / memory / disk metrics; a match raises an alert',

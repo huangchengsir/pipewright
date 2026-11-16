@@ -1,4 +1,4 @@
-import { http } from './http'
+import { http, type HttpOptions } from './http'
 import { currentLocale } from '../i18n'
 export interface ConnectionFields {
   driver: string
@@ -70,9 +70,9 @@ export async function recoveryRequest<T>(
     )
   return data as T
 }
-export const databaseStatus = (signal?: AbortSignal) =>
+export const databaseStatus = (signal?: AbortSignal, options?: HttpOptions) =>
   http.get<MigrationState>('/api/settings/database', {
-    signal,
+    ...options, signal,
     throwOnUnauthorized: true,
   })
 export interface ConnectionProbeResult {
@@ -81,29 +81,32 @@ export interface ConnectionProbeResult {
 export const databaseTestConnection = (
   fields: ConnectionFields,
   signal?: AbortSignal,
+  options?: HttpOptions,
 ) =>
   http.post<ConnectionProbeResult>(
     '/api/settings/database/test-connection',
     fields,
-    { signal, throwOnUnauthorized: true },
+    { ...options, signal, throwOnUnauthorized: true },
   )
 export const databasePreflight = (
   fields: ConnectionFields,
   managed: boolean,
   signal?: AbortSignal,
+  options?: HttpOptions,
 ) =>
   http.post<MigrationState>(
     '/api/settings/database/preflight',
     { ...fields, managed },
-    { signal, throwOnUnauthorized: true },
+    { ...options, signal, throwOnUnauthorized: true },
   )
 export const databaseAction = (
   action: string,
   state: MigrationState,
   signal?: AbortSignal,
+  options?: HttpOptions,
 ) =>
   http.post<MigrationState | { state: MigrationState; csrf: string }>(
     `/api/settings/database/${action}`,
     { taskId: state.taskId, revision: state.revision },
-    { signal, throwOnUnauthorized: true },
+    { ...options, signal, throwOnUnauthorized: true },
   )

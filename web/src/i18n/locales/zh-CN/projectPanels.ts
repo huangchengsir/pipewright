@@ -1,4 +1,5 @@
 export default {
+  automationAuthorization: {"ready": "自动触发已授权", "required": "需要重新授权", "requiredHint": "执行配置或权限已变化。请由具备运行权限的成员重新保存；授权前不会自动触发。"},
   // ─── TriggersPanel ──────────────────────────────────────────────────────────
   triggers: {
     retry: '↻ 重试',

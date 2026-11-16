@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -103,6 +104,9 @@ func isBuildImageJob(jobType string) bool {
 // reportSink 可选(nil = 不持久化测试报告,但质量门禁阻断仍生效;Story 8-6 / FR-8-6)。
 func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecutor {
 	return func(ctx context.Context, r *run.Run, stage pipeline.Stage, rep dagrun.StageReporter) (stageErr error) {
+		if err := tenancy.VerifyExecution(ctx); err != nil {
+			return err
+		}
 		if ex, ok := runretry.ExecutionFrom(ctx); ok {
 			return b.runRecoveryStage(ctx, r, stage, rep, reportSink, ex)
 		}
@@ -457,6 +461,9 @@ func (b *Builder) runStageJobsDAG(
 	jobEnvOut := make(map[string][]pipeline.BuildVar, len(stage.Jobs)) // jobID → 该 job 产出的 env(供下游合并)
 
 	runJob := func(ctx context.Context, id string) error {
+		if err := tenancy.VerifyExecution(ctx); err != nil {
+			return err
+		}
 		if canceled(ctx) {
 			return run.ErrCanceled
 		}
@@ -849,6 +856,15 @@ func (b *Builder) runNotifyJob(ctx context.Context, rep dagrun.StageReporter, jb
 
 // resolveChannel 把节点配的「渠道 id 或名称」解析为 (id, name);找不到返回空。
 func (b *Builder) resolveChannel(ctx context.Context, ref string) (id, name string) {
+	if resolver, ok := b.notifier.(interface {
+		ResolveChannel(context.Context, string) (string, string, error)
+	}); ok {
+		id, name, err := resolver.ResolveChannel(ctx, ref)
+		if err != nil {
+			return "", ""
+		}
+		return id, name
+	}
 	if ch, err := b.notifier.Get(ctx, ref); err == nil && ch != nil {
 		return ch.ID, ch.Name
 	}

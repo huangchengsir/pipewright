@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	log "github.com/huangchengsir/pipewright/internal/logging"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"sort"
 	"strings"
 	"time"
@@ -125,6 +127,12 @@ func (s *service) ListRoutes(ctx context.Context) ([]Route, error) {
 
 // ListRoutesForProject 实现 RouteService.ListRoutesForProject(Story 5.4 作用域过滤)。
 func (s *service) ListRoutesForProject(ctx context.Context, projectID string) ([]Route, error) {
+	if err := s.AuthorizeConfiguration(ctx); err != nil {
+		return nil, err
+	}
+	if err := s.authorizeProject(ctx, projectID, "pipeline.read"); err != nil {
+		return nil, err
+	}
 	projectID = strings.TrimSpace(projectID)
 	var (
 		rows *sql.Rows
@@ -132,14 +140,14 @@ func (s *service) ListRoutesForProject(ctx context.Context, projectID string) ([
 	)
 	if projectID == "" {
 		// 全局路由:project_id IS NULL。
-		rows, err = s.db.QueryContext(ctx,
+		rows, err = configstate.Queryer(ctx, s.db).QueryContext(ctx,
 			`SELECT id, project_id, event, channel_id, enabled, created_at
 			 FROM notification_routes WHERE project_id IS NULL
 			 ORDER BY event, created_at, id`,
 		)
 	} else {
 		// 项目级路由:project_id = ?。
-		rows, err = s.db.QueryContext(ctx,
+		rows, err = configstate.Queryer(ctx, s.db).QueryContext(ctx,
 			`SELECT id, project_id, event, channel_id, enabled, created_at
 			 FROM notification_routes WHERE project_id = ?
 			 ORDER BY event, created_at, id`, projectID,
@@ -165,7 +173,7 @@ func (s *service) ListRoutesForProject(ctx context.Context, projectID string) ([
 }
 
 // CreateRoute 实现 RouteService.CreateRoute。
-func (s *service) CreateRoute(ctx context.Context, in CreateRouteInput) (*Route, error) {
+func (s *service) createRoute(ctx context.Context, in CreateRouteInput) (*Route, error) {
 	event := strings.TrimSpace(in.Event)
 	if !validEvent(event) {
 		return nil, ErrInvalidEvent
@@ -192,7 +200,7 @@ func (s *service) CreateRoute(ctx context.Context, in CreateRouteInput) (*Route,
 		projectID = scopedProject
 	}
 
-	_, err := s.db.ExecContext(ctx,
+	_, err := configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`INSERT INTO notification_routes (id, project_id, event, channel_id, enabled, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		id, projectID, event, channelID, boolToInt(in.Enabled), nowStr,
@@ -212,8 +220,8 @@ func (s *service) CreateRoute(ctx context.Context, in CreateRouteInput) (*Route,
 }
 
 // DeleteRoute 实现 RouteService.DeleteRoute。
-func (s *service) DeleteRoute(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM notification_routes WHERE id = ?`, id)
+func (s *service) deleteRoute(ctx context.Context, id string) error {
+	res, err := configstate.Queryer(ctx, s.db).ExecContext(ctx, `DELETE FROM notification_routes WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("notify: delete route: %w", err)
 	}
@@ -230,6 +238,9 @@ func (s *service) DeleteRoute(ctx context.Context, id string) error {
 // **未配置任何路由 → 不发送(返回 nil)**(FR-20)。best-effort:单渠道失败仅记日志、续发
 // 其余;整体始终返回 nil(绝不把发送失败冒泡为阻断 run 终态/500 的错误,NFR-10)。
 func (s *service) RouteEvent(ctx context.Context, event string, payload Payload) error {
+	if err := s.AuthorizeConfiguration(ctx); err != nil {
+		return err
+	}
 	channelIDs := s.channelIDsForEvent(ctx, event)
 	// 未配置任何路由(FR-20):不发送。
 	for _, cid := range channelIDs {
@@ -248,6 +259,9 @@ func (s *service) RouteEvent(ctx context.Context, event string, payload Payload)
 // 渲染 Payload(无模板 → 平台默认,5-2 行为不变)→ SendVia。**未配置任何路由 → 不发送**。
 // best-effort:单渠道失败仅记日志、续发其余;整体始终返回 nil(绝不阻断调用方,NFR-10)。
 func (s *service) RouteEventVars(ctx context.Context, event string, vars TemplateVars) error {
+	if err := s.AuthorizeConfiguration(ctx); err != nil {
+		return err
+	}
 	channelIDs := s.channelIDsForEvent(ctx, event)
 	for _, cid := range channelIDs {
 		// 按渠道渲染:channelID 精确模板 > 该事件通用模板 > 平台默认(无 RCE 纯文本替换)。
@@ -266,10 +280,21 @@ func (s *service) RouteEventVars(ctx context.Context, event string, vars Templat
 // 渠道集确定后按渠道渲染模板(RenderPayload)→ SendVia。**未配置任何路由 → 不发送**;
 // best-effort:单渠道失败仅记日志、续发其余;整体始终返回 nil(绝不阻断调用方,NFR-10)。
 func (s *service) RouteEventForProject(ctx context.Context, projectID, event string, vars TemplateVars) error {
+	if on, err := tenancy.Enabled(ctx, s.db); err != nil {
+		return err
+	} else if on {
+		if err = s.eventSource(ctx, projectID, event, vars); err != nil {
+			return err
+		}
+	}
 	channelIDs := s.channelIDsForEventScoped(ctx, projectID, event)
 	for _, cid := range channelIDs {
-		payload := s.RenderPayload(ctx, event, cid, vars)
-		if derr := s.SendVia(ctx, cid, payload); derr != nil {
+		delivery, err := s.routedContext(ctx, projectID, event, cid, vars)
+		if err != nil {
+			return err
+		}
+		payload := s.RenderPayload(delivery, event, cid, vars)
+		if derr := s.SendVia(delivery, cid, payload); derr != nil {
 			log.Printf("[notify] route event %q (project=%q): channel %s delivery failed (continuing with other channels): %v", event, projectID, cid, derr)
 		}
 	}
@@ -311,7 +336,7 @@ func (s *service) channelIDsForEventScoped(ctx context.Context, projectID, event
 // projectHasRoute 报告某项目+事件是否存在**任一**路由(无论 enabled);用于判定是否整体覆盖全局。
 func (s *service) projectHasRoute(ctx context.Context, projectID, event string) bool {
 	var n int
-	err := s.db.QueryRowContext(ctx,
+	err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT COUNT(1) FROM notification_routes WHERE project_id = ? AND event = ?`,
 		projectID, event,
 	).Scan(&n)
@@ -330,12 +355,12 @@ func (s *service) queryChannelIDs(ctx context.Context, projectID, event string) 
 		err  error
 	)
 	if projectID == "" {
-		rows, err = s.db.QueryContext(ctx,
+		rows, err = configstate.Queryer(ctx, s.db).QueryContext(ctx,
 			`SELECT channel_id FROM notification_routes
 			 WHERE project_id IS NULL AND event = ? AND enabled = 1`, event,
 		)
 	} else {
-		rows, err = s.db.QueryContext(ctx,
+		rows, err = configstate.Queryer(ctx, s.db).QueryContext(ctx,
 			`SELECT channel_id FROM notification_routes
 			 WHERE project_id = ? AND event = ? AND enabled = 1`, projectID, event,
 		)

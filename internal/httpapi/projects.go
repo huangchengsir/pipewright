@@ -12,6 +12,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/releaseguard"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // projectDTO 是项目对外响应体(冻结契约;camelCase;无明文/无密文)。
@@ -57,6 +58,10 @@ func toProjectDTO(p *project.Project) projectDTO {
 
 // writeProjectError 把领域错误映射为契约错误码/状态码;绝不回显明文/凭据/栈。
 func writeProjectError(w http.ResponseWriter, err error) {
+	if errors.Is(err, tenancy.ErrForbidden) || errors.Is(err, tenancy.ErrConflict) {
+		accessError(w, err)
+		return
+	}
 	switch {
 	case errors.Is(err, project.ErrVaultUnconfigured):
 		writeError(w, http.StatusUnprocessableEntity, "vault_unconfigured", "保险库未配置 master key,无法校验仓库连通")

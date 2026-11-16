@@ -31,6 +31,7 @@ import './pipeline.css'
 
 const props = defineProps<{
   stage: PipelineStage
+  readOnly?: boolean
   stageIndex: number
 }>()
 
@@ -53,13 +54,16 @@ const matrixWarn = computed(() => matrixError(props.stage.matrix))
 const matrixChip = computed(() => matrixSummary(props.stage.matrix))
 
 function commitBranches(text: string): void {
+  if (props.readOnly) return
   emit('update-when', normalizeWhen(parseBranches(text), currentEvents.value))
 }
 function toggleEvent(ev: WhenEvent): void {
+  if (props.readOnly) return
   const events = toggleWhenEvent(currentEvents.value, ev)
   emit('update-when', normalizeWhen(props.stage.when?.branches ?? [], events))
 }
 function commitMatrix(text: string): void {
+  if (props.readOnly) return
   emit('update-matrix', parseMatrix(text))
 }
 </script>
@@ -85,6 +89,7 @@ function commitMatrix(text: string): void {
       </button>
     </div>
 
+    <fieldset class="drawer-fields" :disabled="readOnly">
     <!-- 条件执行(WHEN) -->
     <div class="drawer-section">
       <div class="drawer-section-label">{{ t('pipelineCanvas.whenSectionLabel') }}</div>
@@ -175,14 +180,17 @@ function commitMatrix(text: string): void {
       <StagePostEditor
         :steps="stage.post"
         :stage-id="stage.id"
+        :read-only="readOnly"
         @update="emit('update-post', $event)"
       />
       <p class="drawer-hint">{{ t('pipelineCanvas.postHint') }}</p>
     </div>
+    </fieldset>
   </aside>
 </template>
 
 <style scoped>
+.drawer-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
 .drawer-section-head {
   display: flex;
   align-items: center;

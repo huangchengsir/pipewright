@@ -1,4 +1,8 @@
 export default {
+  monitoringReady: "Surveillance autorisée",
+  monitoringRequired: "Autorisation de surveillance requise",
+  monitoringHint: "Enregistrez le serveur ou confirmez son nœud d’exécution pour autoriser les mesures fixes en lecture seule. Cette autorisation ne garantit pas le bon état du serveur.",
+
   title: 'Serveurs',
   desc: 'Enregistrez les serveurs cibles (hôte / port / utilisateur + identifiant SSH) et testez la connectivité. Les clés SSH sont liées par référence uniquement, stockées et récupérées chiffrées via le coffre, et ne sont jamais conservées ni affichées en clair. Le déploiement et les opérations exécutent leurs commandes via cette couche SSH partagée.',
   addServer: 'Enregistrer un serveur',

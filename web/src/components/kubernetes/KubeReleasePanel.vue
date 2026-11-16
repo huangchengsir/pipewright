@@ -3,8 +3,17 @@ import "../../styles/kubernetes.css";
 import { computed, onBeforeUnmount, ref, useId, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { RouterLink } from "vue-router";
-import { kubeAPI, kubeError, kubeUnknownWrite, type KubeRelease } from "../../api/kubernetes";
+import {
+  kubeAPI,
+  kubeError,
+  kubeUnknownWrite,
+  type KubeRelease,
+} from "../../api/kubernetes";
 import { useKubeMutation } from "../../composables/useKubeMutation";
+import { usePermission } from "../../composables/usePermission";
+import { useIdentityRequestScope } from "../../composables/useAuthorizedRequestScope";
+import { useSessionStore } from "../../stores/session";
+import { usePermissionStore } from "../../stores/permissions";
 import { useConfirm } from "../../composables/useConfirm";
 import AppButton from "../ui/AppButton.vue";
 import KubePassword from "./KubePassword.vue";
@@ -13,7 +22,7 @@ import { kubePhases, type KubePhase } from "./kubernetesEvidence";
 const props = defineProps<{ release: KubeRelease }>(),
   emit = defineEmits<{ blocked: [boolean]; accepted: [string] }>();
 const { t, te } = useI18n(),
-  gate = useKubeMutation(),
+  gate = useKubeMutation(() => scope.requestOptions),
   confirm = useConfirm();
 const { busy, error, uncertain } = gate;
 const row = ref(props.release),
@@ -23,10 +32,42 @@ const row = ref(props.release),
   phase = ref<KubePhase>("preflight"),
   pendingRollback = ref(""),
   rollbackRun = ref("");
+const readPermission = usePermission(() => ({
+  action: "run.read",
+  resourceId: props.release.runId,
+}));
+const retryPermission = usePermission(() => ({
+  action: "run.retry",
+  resourceId: props.release.runId,
+}));
+const visible = ref(true);
+const scope = useIdentityRequestScope(() => {
+  visible.value = false;
+  controller.abort();
+  generation++;
+  gate.reset();
+  loadError.value = "";
+  pendingRollback.value = "";
+  rollbackRun.value = "";
+  emit("blocked", true);
+});
+const canManage = computed(
+  () =>
+    scope.active() &&
+    readPermission.allowed.value &&
+    retryPermission.allowed.value &&
+    row.value.canManage === true,
+);
+const session = useSessionStore(),
+  permissions = usePermissionStore();
+const storageIdentity = session.user?.multiTenant
+  ? JSON.stringify([session.user, permissions.activeTeam]) + ":"
+  : "";
 const phaseId = useId();
 let controller = new AbortController(),
   generation = 0;
-const pendingKey = () => "pipewright:kubernetes-rollback:" + row.value.id;
+const pendingKey = () =>
+  "pipewright:kubernetes-rollback:" + storageIdentity + row.value.id;
 function remember(id: string) {
   pendingRollback.value = id;
   try {
@@ -75,30 +116,57 @@ function block() {
   );
 }
 async function findRollback() {
-  if (!pendingRollback.value) return;
+  if (
+    !scope.active() ||
+    !readPermission.allowed.value ||
+    !pendingRollback.value
+  )
+    return;
+  const target = row.value,
+    n = generation;
   try {
-    const found = await kubeAPI.rollbackRequest(
-      row.value,
-      pendingRollback.value,
-      controller.signal,
+    const found = await scope.run(() =>
+      kubeAPI.rollbackRequest(
+        target,
+        pendingRollback.value,
+        controller.signal,
+        scope.requestOptions,
+      ),
     );
-    if (controller.signal.aborted) return;
+    if (
+      !scope.active() ||
+      !readPermission.allowed.value ||
+      controller.signal.aborted ||
+      n !== generation ||
+      target.id !== row.value.id
+    )
+      return;
     rollbackRun.value = found.runId;
     forget();
     gate.reset();
   } catch (e) {
-    if (!controller.signal.aborted) loadError.value = kubeError(e);
+    if (
+      scope.active() &&
+      readPermission.allowed.value &&
+      !controller.signal.aborted &&
+      n === generation
+    )
+      loadError.value = kubeError(e);
   }
 }
 async function load() {
-  if (loading.value) return;
+  if (!scope.active() || !readPermission.allowed.value || loading.value) return;
   const n = ++generation,
     target = row.value;
   loading.value = true;
   loadError.value = "";
   try {
-    const fresh = await kubeAPI.release(target, controller.signal);
+    const fresh = await scope.run(() =>
+      kubeAPI.release(target, controller.signal, scope.requestOptions),
+    );
     if (
+      !scope.active() ||
+      !readPermission.allowed.value ||
       controller.signal.aborted ||
       n !== generation ||
       props.release.id !== target.id
@@ -108,13 +176,19 @@ async function load() {
     readBack.value = uncertain.value;
     block();
   } catch (e) {
-    if (!controller.signal.aborted && n === generation)
+    if (
+      scope.active() &&
+      readPermission.allowed.value &&
+      !controller.signal.aborted &&
+      n === generation
+    )
       loadError.value = kubeError(e);
   } finally {
     if (n === generation) loading.value = false;
   }
 }
 async function action(kind: "continue" | "reconcile" | "cleanup" | "rollback") {
+  if (!canManage.value) return;
   const target = row.value;
   if (
     kind === "rollback" &&
@@ -126,26 +200,49 @@ async function action(kind: "continue" | "reconcile" | "cleanup" | "rollback") {
     }))
   )
     return;
-  if (target.id !== row.value.id) return;
+  if (!canManage.value || target.id !== row.value.id) return;
   const requestId = kind === "rollback" ? crypto.randomUUID() : "";
+  const requestKey = pendingKey();
   gate.execute(async (signal) => {
+    if (!canManage.value || target.id !== row.value.id) return;
     if (kind === "rollback") {
       remember(requestId);
       try {
-        const next = await kubeAPI.rollbackRelease(target, requestId, signal);
-        if (signal.aborted || row.value.id !== target.id) return;
+        const next = await scope.run(() =>
+          kubeAPI.rollbackRelease(
+            target,
+            requestId,
+            signal,
+            scope.requestOptions,
+          ),
+        );
+        if (!canManage.value || signal.aborted || row.value.id !== target.id)
+          return;
         forget();
         rollbackRun.value = next.runId;
         emit("accepted", next.runId);
       } catch (error) {
         // A completed rejection proves no rollback was accepted. Lost replies,
         // request timeouts and navigation keep the original durable request ID.
-        if (!signal.aborted && row.value.id === target.id && !kubeUnknownWrite(error)) forget();
+        if (!kubeUnknownWrite(error)) {
+          // A definitive rejection clears only this original identity's request,
+          // even if a 403 already disposed the visible authorization scope.
+          try {
+            sessionStorage.removeItem(requestKey);
+          } catch {
+            /* Optional storage. */
+          }
+          if (scope.active() && row.value.id === target.id)
+            pendingRollback.value = "";
+        }
         throw error;
       }
     } else {
-      await kubeAPI.releaseAction(target, kind, signal);
-      if (!signal.aborted && row.value.id === target.id) await load();
+      await scope.run(() =>
+        kubeAPI.releaseAction(target, kind, signal, scope.requestOptions),
+      );
+      if (scope.active() && !signal.aborted && row.value.id === target.id)
+        await load();
     }
   });
 }
@@ -179,6 +276,19 @@ watch(
     }
   },
 );
+watch(readPermission.allowed, (allowed) => {
+  controller.abort();
+  controller = new AbortController();
+  generation++;
+  gate.reset();
+  loading.value = false;
+  loadError.value = "";
+  if (allowed) void load();
+  else emit("blocked", true);
+});
+watch(canManage, (allowed) => {
+  if (!allowed) gate.cancel();
+});
 const timer = setInterval(() => {
   if (!busy.value) void load();
 }, 4000);
@@ -195,7 +305,9 @@ function keydown(e: KeyboardEvent, index: number) {
   else return;
   e.preventDefault();
   phase.value = kubePhases[next];
-  const tabs = (e.currentTarget as HTMLElement).parentElement?.querySelectorAll<HTMLButtonElement>("button");
+  const tabs = (
+    e.currentTarget as HTMLElement
+  ).parentElement?.querySelectorAll<HTMLButtonElement>("button");
   tabs?.[next]?.focus();
 }
 function state(value: string) {
@@ -204,7 +316,10 @@ function state(value: string) {
 }
 </script>
 <template>
-  <section class="kube-surface kube-release-result">
+  <section
+    v-if="visible && readPermission.allowed.value"
+    class="kube-surface kube-release-result"
+  >
     <header class="kube-head">
       <strong
         >{{ t("kubernetes.receipt") }} ·
@@ -244,22 +359,22 @@ function state(value: string) {
     </p>
     <div class="kube-actions">
       <AppButton
-        v-if="row.state === 'paused'"
+        v-if="canManage && row.state === 'paused'"
         :disabled="busy || uncertain || !!pendingRollback"
         @click="action('continue')"
         >{{ t("kubernetes.release.continue") }}</AppButton
       ><AppButton
-        v-if="canRollback"
+        v-if="canManage && canRollback"
         :disabled="busy || uncertain || !!pendingRollback"
         @click="action('rollback')"
         >{{ t("kubernetes.release.rollback") }}</AppButton
       ><AppButton
-        v-if="canReconcile"
+        v-if="canManage && canReconcile"
         :disabled="busy || uncertain || !!pendingRollback"
         @click="action('reconcile')"
         >{{ t("kubernetes.reconcile") }}</AppButton
       ><AppButton
-        v-if="row.ownerFenced && row.cleanup !== 'verified'"
+        v-if="canManage && row.ownerFenced && row.cleanup !== 'verified'"
         :disabled="busy || uncertain || !!pendingRollback"
         @click="action('cleanup')"
         >{{ t("kubernetes.release.cleanupTool") }}</AppButton
@@ -425,7 +540,13 @@ function state(value: string) {
           @click="phase = item"
           @keydown="keydown($event, index)"
         >
-          {{ t(item === "update" ? "kubernetes.release.applyResources" : "kubernetes.phase." + item) }}
+          {{
+            t(
+              item === "update"
+                ? "kubernetes.release.applyResources"
+                : "kubernetes.phase." + item,
+            )
+          }}
         </button>
       </div>
       <div

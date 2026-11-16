@@ -84,7 +84,7 @@ func checkManifest(ctx context.Context, tx *sql.Tx, d store.Dialect) error {
 	}
 	var count int
 	var latest string
-	if tx.QueryRowContext(ctx, "SELECT COUNT(*),MAX(version) FROM schema_migrations").Scan(&count, &latest) != nil || count != 65 || latest != "0066_database_migration" {
+	if tx.QueryRowContext(ctx, "SELECT COUNT(*),MAX(version) FROM schema_migrations").Scan(&count, &latest) != nil || count != 66 || latest != "0067_optional_tenancy" {
 		return fmt.Errorf("dbmigration: schema migration versions: %w", ErrMismatch)
 	}
 	return nil

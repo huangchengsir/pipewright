@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"os"
 	"strings"
 )
@@ -25,23 +26,42 @@ type SettingsInput struct {
 
 func NewSettings(db *sql.DB, catalog *Catalog) *Settings { return &Settings{db: db, catalog: catalog} }
 func (s *Settings) Get(ctx context.Context) (SettingsView, error) {
+	if s == nil || s.db == nil {
+		return SettingsView{}, ErrUnavailable
+	}
+	if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+		return SettingsView{}, err
+	}
+	out, err := s.get(ctx)
+	if err != nil {
+		return SettingsView{}, err
+	}
+	if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+		return SettingsView{}, err
+	}
+	return out, nil
+}
+func (s *Settings) get(ctx context.Context) (SettingsView, error) {
 	if s == nil || s.db == nil || s.catalog == nil {
 		return SettingsView{}, ErrUnavailable
 	}
 	out := SettingsView{Sources: s.catalog.Sources()}
-	e := s.db.QueryRowContext(ctx, "SELECT source,revision FROM release_source_settings WHERE id=1").Scan(&out.Source, &out.Revision)
+	e := configstate.Queryer(ctx, s.db).QueryRowContext(ctx, "SELECT source,revision FROM release_source_settings WHERE id=1").Scan(&out.Source, &out.Revision)
 	if e != nil || !ValidID(out.Source) {
 		return SettingsView{}, ErrUnavailable
 	}
 	return out, nil
 }
 func (s *Settings) Preferred(ctx context.Context) (ID, error) {
-	out, e := s.Get(ctx)
+	out, e := s.get(ctx)
 	return out.Source, e
 }
 func (s *Settings) Save(ctx context.Context, in SettingsInput) (SettingsView, error) {
 	if s == nil || s.db == nil || s.catalog == nil {
 		return SettingsView{}, ErrUnavailable
+	}
+	if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+		return SettingsView{}, err
 	}
 	if !ValidID(in.Source) || in.ExpectedRevision < 1 {
 		return SettingsView{}, ErrInvalid
@@ -50,7 +70,13 @@ func (s *Settings) Save(ctx context.Context, in SettingsInput) (SettingsView, er
 		return SettingsView{}, e
 	}
 	out := SettingsView{Source: in.Source, Revision: in.ExpectedRevision + 1, Sources: s.catalog.Sources()}
-	e := configstate.WithWriteTx(ctx, s.db, func(q configstate.DBTX) error {
+	e := configstate.WithWriteTxContext(ctx, s.db, func(ctx context.Context, q configstate.DBTX) error {
+		if err := tenancy.LockAuthorization(ctx, s.db); err != nil {
+			return err
+		}
+		if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+			return err
+		}
 		r, e := q.ExecContext(ctx, "UPDATE release_source_settings SET source=?,revision=revision+1 WHERE id=1 AND revision=?", in.Source, in.ExpectedRevision)
 		if e != nil {
 			return e
@@ -65,6 +91,9 @@ func (s *Settings) Save(ctx context.Context, in SettingsInput) (SettingsView, er
 		return nil
 	})
 	if e != nil {
+		if errors.Is(e, tenancy.ErrForbidden) || errors.Is(e, tenancy.ErrConflict) {
+			return SettingsView{}, e
+		}
 		if errors.Is(e, ErrConflict) {
 			return SettingsView{}, ErrConflict
 		}

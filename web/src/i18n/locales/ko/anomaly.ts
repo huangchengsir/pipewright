@@ -1,4 +1,6 @@
 export default {
+ samplingAuthorizationRequired: "수집 승인 필요",
+ samplingAuthorizationHelp: "서버 실행 및 자격 증명 사용 권한이 있는 관리자가 규칙을 다시 저장해야 합니다. 설정 또는 권한 변경 후에는 재승인이 필요합니다.",
   title: '이상 감지',
   subtitle:
     '임계값 규칙을 구성하여 서버의 CPU / 메모리 / 디스크 지표를 검사하며, 일치하면 경고를 생성합니다',

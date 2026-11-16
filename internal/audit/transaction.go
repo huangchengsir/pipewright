@@ -6,6 +6,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/mask"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"time"
 )
 
@@ -19,7 +20,15 @@ func AppendLocalTx(ctx context.Context, q configstate.DBTX, m *mask.Masker, e En
 	if err != nil {
 		return err
 	}
+	id := uuid.NewString()
+	actor, err := tenancy.AppendAuditOwnership(ctx, q, id, e.TargetType, e.TargetID)
+	if err != nil {
+		return err
+	}
+	if actor != "" {
+		e.Actor = actor
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err = q.ExecContext(ctx, `INSERT INTO audit_log(id,timestamp,actor,action,target_type,target_id,detail_json,ip,created_at) VALUES(?,?,?,?,?,?,?,?,?)`, uuid.NewString(), now, e.Actor, e.Action, e.TargetType, e.TargetID, string(detail), nil, now)
+	_, err = q.ExecContext(ctx, `INSERT INTO audit_log(id,timestamp,actor,action,target_type,target_id,detail_json,ip,created_at) VALUES(?,?,?,?,?,?,?,?,?)`, id, now, e.Actor, e.Action, e.TargetType, e.TargetID, string(detail), nil, now)
 	return err
 }

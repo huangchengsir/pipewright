@@ -134,3 +134,18 @@ describe('ConfirmDialog', () => {
     await expect(p).resolves.toBe(false)
   })
 })
+
+it('the confirmation backdrop cancels only its own outside click', async () => {
+  const confirm = useConfirm()
+  const wrapper = mount(ConfirmDialog, { attachTo: document.body })
+  try {
+    const result = confirm.open({ title: 'fixture title', body: 'fixture body' })
+    await nextTick()
+    dialogEl()!.click()
+    expect(confirm.pending.value).not.toBeNull()
+    document.querySelector<HTMLElement>('.cfm-overlay')!.click()
+    await expect(result).resolves.toBe(false)
+  } finally {
+    wrapper.unmount()
+  }
+})

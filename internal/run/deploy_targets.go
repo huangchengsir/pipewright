@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"time"
 
 	"github.com/google/uuid"
@@ -221,9 +222,14 @@ func (s *service) UpsertDeployTargets(ctx context.Context, runID string, targets
 // 无部署 → 空切片)。run 不存在不报错(返回空切片);HTTP 层据 run 存在性决定 404。
 // 参数化 SQL;不全量驻留无关数据。
 func (s *service) ListDeployTargets(ctx context.Context, runID string) ([]DeployTarget, error) {
+	predicate, authErr := tenancy.QueryPredicate(ctx, s.db, "run.read", "ar.run_id")
+	if authErr != nil {
+		return nil, authErr
+	}
+
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, run_id, server_id, server_name, status, message, started_at, finished_at
-		 FROM deploy_targets WHERE run_id = ? ORDER BY started_at ASC, id ASC`, runID)
+		 FROM deploy_targets ar WHERE run_id = ? AND `+predicate.SQL+` ORDER BY started_at ASC, id ASC`, append([]any{runID}, predicate.Args...)...)
 	if err != nil {
 		return nil, fmt.Errorf("run: load deploy targets: %w", err)
 	}

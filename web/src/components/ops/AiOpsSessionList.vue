@@ -3,11 +3,13 @@ import { shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Pencil, Trash, Check, X } from '@vicons/tabler'
 import type { Session } from '../../api/opsChat'
-const props = defineProps<{
+const props = withDefaults(defineProps<{
+  canEdit?: boolean
+  canDelete?: boolean
   sessions: Session[]
   currentId: string
   disabled: boolean
-}>()
+}>(), { canEdit: true, canDelete: true })
 const emit = defineEmits<{
   select: [id: string]
   rename: [title: string]
@@ -26,13 +28,14 @@ watch(
   },
 )
 function start(): void {
+  if (!props.canEdit) return
   editingId = props.currentId
   title.value =
     props.sessions.find((s) => s.id === props.currentId)?.title ?? ''
   editing.value = true
 }
 function save(): void {
-  if (props.disabled || editingId !== props.currentId) return
+  if (!props.canEdit || props.disabled || editingId !== props.currentId) return
   if (title.value.trim() && Array.from(title.value).length <= 80) {
     emit('rename', title.value.trim())
     editing.value = false
@@ -43,7 +46,7 @@ function save(): void {
   <section class="ops-section session-navigation">
     <div class="session-controls">
       <h3 v-if="!editing" class="list-title">{{ t('opsChat.history') }}</h3>
-      <form v-if="editing" class="ops-row session-actions" @submit.prevent="save">
+      <form v-if="editing && canEdit" class="ops-row session-actions" @submit.prevent="save">
         <input
           v-model="title"
           class="ops-input ops-grow"
@@ -71,6 +74,7 @@ function save(): void {
       <div v-else class="ops-row session-actions">
         <button
           class="ops-btn ops-icon"
+          v-if="canEdit"
           :title="t('opsChat.rename')"
           :aria-label="t('opsChat.rename')"
           :disabled="disabled"
@@ -80,6 +84,7 @@ function save(): void {
         </button>
         <button
           class="ops-btn ops-icon ops-danger"
+          v-if="canDelete"
           :title="t('opsChat.delete')"
           :aria-label="t('opsChat.delete')"
           :disabled="disabled"

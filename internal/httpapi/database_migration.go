@@ -14,6 +14,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/auth"
 	"github.com/huangchengsir/pipewright/internal/dbmigration"
 	"github.com/huangchengsir/pipewright/internal/maintenance"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 const recoveryCookie = "pipewright_database_recovery"
@@ -70,6 +71,10 @@ func migrationView(runtime *dbmigration.Runtime, s *dbmigration.State) databaseM
 	return v
 }
 func migrationError(w http.ResponseWriter, e error) {
+	if errors.Is(e, tenancy.ErrForbidden) || errors.Is(e, tenancy.ErrConflict) {
+		accessError(w, e)
+		return
+	}
 	code := "database_migration_failed"
 	switch {
 	case errors.Is(e, dbmigration.ErrRecoveryAuth):
@@ -119,6 +124,15 @@ func mountDatabaseMigration(ar chi.Router, runtime *dbmigration.Runtime) {
 	if runtime == nil {
 		return
 	}
+	ar = ar.With(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := runtime.AuthorizeConfiguration(r.Context()); err != nil {
+				migrationError(w, err)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
 	ar.Get("/settings/database", func(w http.ResponseWriter, r *http.Request) {
 		s, e := runtime.Control.State()
 		if e != nil {
@@ -178,12 +192,7 @@ func mountDatabaseMigration(ar chi.Router, runtime *dbmigration.Runtime) {
 		if !decodeMigration(w, r, &in) {
 			return
 		}
-		token, csrf, e := runtime.Control.IssueRecoverySession(in.TaskID, time.Now())
-		if e != nil {
-			migrationError(w, e)
-			return
-		}
-		s, e := runtime.Start(r.Context(), in.TaskID, in.Revision)
+		s, token, csrf, e := runtime.StartWithRecoverySession(r.Context(), in.TaskID, in.Revision)
 		if e != nil {
 			migrationError(w, e)
 			return

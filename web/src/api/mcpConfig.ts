@@ -1,4 +1,4 @@
-import { http } from './http'
+import { http, type HttpOptions } from './http'
 
 export interface MCPConfigDiff {
   type: string
@@ -47,11 +47,11 @@ export interface ApproveMCPConfigDraft {
   policyVersion: string
 }
 
-export function getMCPConfigReview(id: string, options?: RequestInit): Promise<MCPConfigReview> {
+export function getMCPConfigReview(id: string, options?: HttpOptions): Promise<MCPConfigReview> {
   return http.get(`/api/mcp/config-drafts/${encodeURIComponent(id)}/review`, options)
 }
 
 /** Approve the exact reviewed draft. Applying it remains a separate MCP action. */
-export function approveMCPConfigDraft(id: string, input: ApproveMCPConfigDraft, options?: RequestInit): Promise<MCPConfigApproval> {
+export function approveMCPConfigDraft(id: string, input: ApproveMCPConfigDraft, options?: HttpOptions): Promise<MCPConfigApproval> {
   return http.post(`/api/mcp/config-drafts/${encodeURIComponent(id)}/approve`, input, options)
 }

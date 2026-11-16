@@ -25,6 +25,16 @@ var ErrSessionNotFound = errors.New("auth: session not found or expired")
 
 // Session 代表一个服务端会话。
 type Session struct {
+	// Optional team identity is set only by the tenancy authenticator. Legacy
+	// single-administrator sessions leave these fields empty/false.
+	UserID             string
+	Username           string
+	DisplayName        string
+	MultiTenant        bool
+	InstanceAdmin      bool
+	MustChangePassword bool
+	ModeEpoch          uint64
+	SecurityGeneration uint64
 	Token              string
 	CSRFToken          string
 	CreatedAt          time.Time

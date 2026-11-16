@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"github.com/huangchengsir/pipewright/internal/auth"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"strings"
 	"time"
 )
@@ -27,6 +28,8 @@ type Completion struct {
 	ReturnTo, BindingFlow string
 }
 type flow struct {
+	userID                                                     sql.NullString
+	modeEpoch                                                  uint64
 	id, stateHash, browserHash, purpose, provider              string
 	config, generation, identityGeneration, securityGeneration int64
 	sessionHash                                                string
@@ -41,11 +44,11 @@ type identityEnvelope struct {
 	Identity                Identity
 }
 
-const flowQuery = `SELECT flow_id,state_hash,browser_hash,purpose,provider,config_version,auth_generation,identity_generation,security_generation,session_hash,verifier_cipher,nonce_hash,return_to,status,expires_at,candidate_cipher,candidate_expires_at FROM login_flows WHERE flow_id=?`
+const flowQuery = `SELECT flow_id,state_hash,browser_hash,purpose,provider,config_version,auth_generation,identity_generation,security_generation,session_hash,verifier_cipher,nonce_hash,return_to,status,expires_at,candidate_cipher,candidate_expires_at,access_user_id,mode_epoch FROM login_flows WHERE flow_id=?`
 
 func readFlow(ctx context.Context, q querier, id string) (flow, error) {
 	var f flow
-	e := q.QueryRowContext(ctx, flowQuery, id).Scan(&f.id, &f.stateHash, &f.browserHash, &f.purpose, &f.provider, &f.config, &f.generation, &f.identityGeneration, &f.securityGeneration, &f.sessionHash, &f.verifier, &f.nonceHash, &f.returnTo, &f.status, &f.expires, &f.candidate, &f.candidateExpires)
+	e := q.QueryRowContext(ctx, flowQuery, id).Scan(&f.id, &f.stateHash, &f.browserHash, &f.purpose, &f.provider, &f.config, &f.generation, &f.identityGeneration, &f.securityGeneration, &f.sessionHash, &f.verifier, &f.nonceHash, &f.returnTo, &f.status, &f.expires, &f.candidate, &f.candidateExpires, &f.userID, &f.modeEpoch)
 	if e == sql.ErrNoRows {
 		return f, ErrFlowInvalid
 	}
@@ -86,11 +89,39 @@ func (s *Service) Start(ctx context.Context, p, purpose, token, returnTo string,
 	if e != nil {
 		return StartResult{}, e
 	}
+	multi, e := s.tenantMode(ctx, tx)
+	if e != nil {
+		return StartResult{}, e
+	}
+	var modeEpoch uint64
+	var userID any
+	if multi {
+		if e = tx.QueryRowContext(ctx, `SELECT mode_epoch FROM access_control WHERE id=1`).Scan(&modeEpoch); e != nil {
+			return StartResult{}, e
+		}
+		if purpose == "bind" {
+			account, err := tenancy.VerifyAccountSession(ctx, tx, token, false)
+			if err != nil {
+				return StartResult{}, err
+			}
+			userID = account.User.ID
+		}
+	}
 	r, e := s.read(ctx, tx, p)
 	if e != nil {
 		return StartResult{}, e
 	}
-	if purpose == "login" && (!r.Enabled || r.Binding == nil) {
+	if multi {
+		uid, _ := userID.(string)
+		r, e = s.personalRow(ctx, tx, p, uid)
+		if e != nil {
+			return StartResult{}, e
+		}
+		if !r.Enabled {
+			return StartResult{}, ErrDisabled
+		}
+	}
+	if purpose == "login" && (!r.Enabled || (!multi && r.Binding == nil)) {
 		if !r.Configured {
 			return StartResult{}, ErrNotConfigured
 		}
@@ -141,7 +172,7 @@ func (s *Service) Start(ctx context.Context, p, purpose, token, returnTo string,
 	if token != "" {
 		sessionHash = digest(token)
 	}
-	_, e = tx.ExecContext(ctx, `INSERT INTO login_flows(flow_id,state_hash,browser_hash,purpose,provider,config_version,auth_generation,identity_generation,security_generation,session_hash,verifier_cipher,nonce_hash,return_to,status,expires_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'created',?,?)`, id, digest(state), digest(browser), purpose, p, r.ConfigVersion, r.generation, r.identityGeneration, generation, sessionHash, cipher, digest(nonce), safe, expiry.Format(time.RFC3339), now.Format(time.RFC3339))
+	_, e = tx.ExecContext(ctx, `INSERT INTO login_flows(flow_id,state_hash,browser_hash,purpose,provider,config_version,auth_generation,identity_generation,security_generation,session_hash,verifier_cipher,nonce_hash,return_to,status,expires_at,created_at,access_user_id,mode_epoch) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'created',?,?,?,?)`, id, digest(state), digest(browser), purpose, p, r.ConfigVersion, r.generation, r.identityGeneration, generation, sessionHash, cipher, digest(nonce), safe, expiry.Format(time.RFC3339), now.Format(time.RFC3339), userID, modeEpoch)
 	if e != nil {
 		return StartResult{}, e
 	}
@@ -159,6 +190,12 @@ func (s *Service) fail(ctx context.Context, id, status string) {
 	_, _ = s.db.ExecContext(ctx, `UPDATE login_flows SET status=?,verifier_cipher=NULL,candidate_cipher=NULL WHERE flow_id=? AND status IN ('created','processing')`, status, id)
 }
 func (s *Service) checkFlow(ctx context.Context, q querier, f flow, token string) (row, error) {
+	if f.modeEpoch != 0 {
+		return s.checkTenantFlow(ctx, q, f, token)
+	}
+	if enabled, err := s.tenantMode(ctx, q); err != nil || enabled {
+		return row{}, ErrFlowInvalid
+	}
 	expiry, e := time.Parse(time.RFC3339, f.expires)
 	if e != nil || !s.now().Before(expiry) {
 		return row{}, ErrFlowExpired
@@ -294,6 +331,15 @@ func (s *Service) Complete(ctx context.Context, p, state, browser, token, code s
 			return Completion{}, e
 		}
 		out.BindingFlow = id
+	} else if f.modeEpoch != 0 {
+		session, err := tenancy.NewAccounts(s.db).IssueExternalSession(ctx, tx, p, identity.Issuer, identity.Subject, f.modeEpoch, r.generation)
+		if err != nil {
+			return Completion{}, ErrIdentityDenied
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE login_flows SET status='completed',verifier_cipher=NULL,candidate_cipher=NULL WHERE flow_id=?`, id); err != nil {
+			return Completion{}, err
+		}
+		out.Session = session.AuthSession()
 	} else {
 		if r.Binding.Issuer != identity.Issuer || r.Binding.Subject != identity.Subject {
 			return Completion{}, ErrIdentityDenied
@@ -338,6 +384,11 @@ func (s *Service) Pending(ctx context.Context, token, id string) (Candidate, err
 	return Candidate{id, f.provider, envelope.Identity.DisplayLabel, f.candidateExpires.String, f.config}, nil
 }
 func (s *Service) Confirm(ctx context.Context, token, p, id string, version int64) (Mutation, error) {
+	if enabled, err := s.tenantMode(ctx, s.db); err != nil {
+		return Mutation{}, err
+	} else if enabled {
+		return s.confirmPersonal(ctx, token, p, id, version)
+	}
 	// mutation serializes confirmation with configuration/credential and generation changes.
 	return s.mutation(ctx, token, p, version, func(tx *sql.Tx, r row) error {
 		f, e := readFlow(ctx, tx, id)

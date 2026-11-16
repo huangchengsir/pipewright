@@ -31,6 +31,7 @@ export default {
     'This rolls the environment back to the last successful deploy (run {commit} · {when}), redeploying those artifacts to the original target hosts. This triggers a real deployment.',
   rollbackConfirm: 'Confirm rollback',
   rollbackFailedStatus: 'Rollback failed ({status})',
+  rollbackTargetChanged: "Deployment changed. Refresh and confirm the rollback again.",
   rollbackFailedRetry: 'Rollback failed. Please try again later.',
 
   toastRolledBack: 'Environment "{env}" rolled back',

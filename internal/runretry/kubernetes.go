@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/huangchengsir/pipewright/internal/kubernetes"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 type KubernetesVerifier func(context.Context, string) (kubernetes.Operation, error)
@@ -166,7 +167,11 @@ type KubernetesHistoryEntry struct{ RunID, OperationID, ReleaseID string }
 // KubernetesHistory returns only typed operation references from sealed node
 // checkpoints, including explicitly inherited or adopted nodes. No raw config.
 func (s *Service) KubernetesHistory(ctx context.Context, project string) ([]KubernetesHistoryEntry, error) {
-	rows, e := s.q(ctx).QueryContext(ctx, `SELECT a.run_id FROM run_retry_attempts a JOIN run_retry_lineages l ON l.root_id=a.root_id JOIN pipeline_runs r ON r.id=a.run_id WHERE l.project_id=? ORDER BY a.created_at DESC`+store.Limit(store.DialectOf(s.db), "500"), project)
+	predicate, e := tenancy.EnvironmentPredicate(ctx, s.db, "environment.read", "r.project_id", "r.resolved_environment")
+	if e != nil {
+		return nil, e
+	}
+	rows, e := s.q(ctx).QueryContext(ctx, `SELECT a.run_id FROM run_retry_attempts a JOIN run_retry_lineages l ON l.root_id=a.root_id JOIN pipeline_runs r ON r.id=a.run_id WHERE l.project_id=? AND `+predicate.SQL+` ORDER BY a.created_at DESC`+store.Limit(store.DialectOf(s.db), "500"), append([]any{project}, predicate.Args...)...)
 	if e != nil {
 		return nil, e
 	}

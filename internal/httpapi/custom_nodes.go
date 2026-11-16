@@ -53,6 +53,9 @@ func toCustomNodeDTO(n *library.CustomNode) customNodeDTO {
 
 // writeCustomNodeError 把自定义节点领域错误映射为契约错误码/状态码。
 func writeCustomNodeError(w http.ResponseWriter, err error) {
+	if writeAuthorizationError(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, library.ErrCustomNodeNotFound):
 		writeError(w, http.StatusNotFound, "custom_node_not_found", "自定义节点不存在")

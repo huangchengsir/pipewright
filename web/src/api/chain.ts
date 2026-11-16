@@ -1,3 +1,4 @@
+import {configWriteOptions} from './configRevision'
 /**
  * Chain API — Epic 8 · Story 8-11 (FR-8-11 流水线串联).
  *
@@ -10,10 +11,11 @@
  * deleting the row.
  */
 
-import { http } from './http'
-import { configWriteOptions } from './configRevision'
+import { http, type HttpOptions } from './http'
+
 
 export interface ChainTarget {
+  authorizationState?: 'ready' | 'required'
   /** The downstream project's ID. */
   downstreamProjectId: string
   /** Branch to trigger in the downstream project; empty = default branch. */
@@ -30,14 +32,15 @@ export interface SaveChainInput {
   downstream: ChainTarget[]
 }
 
-export async function getChain(projectId: string): Promise<ChainConfig> {
-  return http.get<ChainConfig>(`/api/projects/${projectId}/chain`)
+export async function getChain(projectId: string, options: HttpOptions = {}): Promise<ChainConfig> {
+  return http.get<ChainConfig>(`/api/projects/${projectId}/chain`, {...options,throwOnUnauthorized:true})
 }
 
 export async function saveChain(
   projectId: string,
   input: SaveChainInput,
   expectedRevision?: string,
+  options: HttpOptions = {},
 ): Promise<ChainConfig> {
-  return expectedRevision ? http.put<ChainConfig>(`/api/projects/${projectId}/chain`, input, configWriteOptions(expectedRevision)) : http.put<ChainConfig>(`/api/projects/${projectId}/chain`, input)
+  return http.put<ChainConfig>(`/api/projects/${projectId}/chain`, input, configWriteOptions(expectedRevision,{...options,throwOnUnauthorized:true}))
 }

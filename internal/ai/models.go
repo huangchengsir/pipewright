@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"io"
 	"net/http"
 	"net/url"
@@ -106,7 +107,17 @@ func (s *service) resolveDraft(ctx context.Context, in TestInput) (provider, bas
 	return
 }
 func (s *service) Models(ctx context.Context, in TestInput) (*ModelsResult, error) {
-	return (&opsModel{service: s}).models(ctx, in)
+	if err := tenancy.RequireInstanceAdministrator(ctx, s.db); err != nil {
+		return nil, err
+	}
+	result, err := (&opsModel{service: s, configuration: true}).models(ctx, in)
+	if ctx.Err() != nil {
+		return &ModelsResult{Items: []ModelOption{}, Error: mapTransportError(ctx.Err())}, nil
+	}
+	if check := tenancy.RequireInstanceAdministrator(ctx, s.db); check != nil {
+		return nil, check
+	}
+	return result, err
 }
 
 func (m *opsModel) models(ctx context.Context, in TestInput) (*ModelsResult, error) {
@@ -153,6 +164,11 @@ func (m *opsModel) models(ctx context.Context, in TestInput) (*ModelsResult, err
 		}
 		for k, v := range headers {
 			req.Header.Set(k, v)
+		}
+		if m.configuration {
+			if err := tenancy.RequireInstanceAdministrator(ctx, m.service.db); err != nil {
+				return nil, err
+			}
 		}
 		resp, e := client.Do(req)
 		if e != nil {

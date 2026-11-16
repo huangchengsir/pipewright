@@ -10,7 +10,7 @@
  * (no plaintext / mask).
  */
 
-import { http } from './http'
+import { http, type HttpOptions } from './http'
 import { configWriteOptions } from './configRevision'
 
 // ─── Enums (frozen) ──────────────────────────────────────────────────────────
@@ -112,16 +112,16 @@ export interface SaveSettingsInput {
 
 // ─── API functions ────────────────────────────────────────────────────────────
 
-export async function getSettings(projectId: string): Promise<SettingsDTO> {
-  return http.get<SettingsDTO>(`/api/projects/${projectId}/pipeline/settings`)
+export async function getSettings(projectId: string, options?: HttpOptions): Promise<SettingsDTO> {
+  return http.get<SettingsDTO>(`/api/projects/${projectId}/pipeline/settings`, options)
 }
 
 export async function saveSettings(
   projectId: string,
   input: SaveSettingsInput,
   expectedRevision?: string,
+  options?: HttpOptions,
 ): Promise<SettingsDTO> {
-  return expectedRevision
-    ? http.put<SettingsDTO>(`/api/projects/${projectId}/pipeline/settings`, input, configWriteOptions(expectedRevision))
-    : http.put<SettingsDTO>(`/api/projects/${projectId}/pipeline/settings`, input)
+  const requestOptions=configWriteOptions(expectedRevision,options)
+  return requestOptions ? http.put<SettingsDTO>(`/api/projects/${projectId}/pipeline/settings`,input,requestOptions) : http.put<SettingsDTO>(`/api/projects/${projectId}/pipeline/settings`,input)
 }

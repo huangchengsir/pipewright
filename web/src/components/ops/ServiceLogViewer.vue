@@ -22,6 +22,8 @@ import {
   type LogSource,
 } from '../../api/servers'
 import { HttpError } from '../../api/http'
+import { usePermission } from '../../composables/usePermission'
+import { useIdentityRequestScope } from '../../composables/useAuthorizedRequestScope'
 
 const { t } = useI18n()
 
@@ -37,6 +39,28 @@ const source = ref<LogSource>('file')
 const targetInput = ref('')
 const linesInput = ref(200)
 const live = ref(false)
+const permission = usePermission(() => ({ action: source.value === 'docker' ? 'container.inspect' : 'server.use', resourceId: props.serverId }))
+let generation = 0
+let requestController: AbortController | null = null
+const scope = useIdentityRequestScope(resetContext)
+function resetContext(): void {
+  generation++
+  requestController?.abort()
+  requestController = null
+  stopStream()
+  live.value = false
+  resetLines()
+  errorMsg.value = ''
+  viewState.value = 'idle'
+}
+function requestOptions() {
+  requestController?.abort()
+  const controller = new AbortController()
+  requestController = controller
+  return { ...scope.requestOptions, signal: controller.signal }
+}
+function current(ticket: number): boolean { return ticket === generation && scope.active() && permission.allowed.value }
+
 
 const sourcePlaceholder = computed(() => {
   switch (source.value) {
@@ -96,6 +120,8 @@ function stopStream(): void {
 
 /** 历史拉取(一次性最近 N 行)。 */
 async function fetchHistory(): Promise<void> {
+  if (!scope.active() || !permission.allowed.value) return
+  const ticket = ++generation
   if (!targetValid.value) {
     errorMsg.value = t('opsServer.log.errTargetRequired')
     viewState.value = 'error'
@@ -111,7 +137,8 @@ async function fetchHistory(): Promise<void> {
       source: source.value,
       target: targetInput.value.trim(),
       lines: linesInput.value,
-    })
+    }, requestOptions())
+    if (!current(ticket)) return
     if (res.error) {
       // SSH/命令失败:后端 200 + 人读 error。呈现为终端内错误,不崩。
       errorMsg.value = res.error
@@ -121,6 +148,7 @@ async function fetchHistory(): Promise<void> {
     appendLines(res.lines.map((l) => l.text))
     viewState.value = 'history'
   } catch (err) {
+    if (!current(ticket)) return
     errorMsg.value = humanError(err)
     viewState.value = 'error'
   }
@@ -128,7 +156,9 @@ async function fetchHistory(): Promise<void> {
 
 /** 切换实时 tail。 */
 function toggleLive(): void {
+  if (!scope.active() || !permission.allowed.value) return
   if (live.value) {
+    generation++
     // 关闭实时:断流(后端关 SSH session)。
     stopStream()
     live.value = false
@@ -140,6 +170,8 @@ function toggleLive(): void {
     viewState.value = 'error'
     return
   }
+  const ticket = ++generation
+  requestController?.abort()
   // 开启实时:清屏后订阅 SSE(后端先发最近 N 行,再实时追加)。
   resetLines()
   errorMsg.value = ''
@@ -150,9 +182,11 @@ function toggleLive(): void {
     { source: source.value, target: targetInput.value.trim(), lines: linesInput.value },
     {
       onLine(text) {
+        if (!current(ticket)) return
         appendLines([text])
       },
       onError(message) {
+        if (!current(ticket)) return
         // 后端 SSE `error` 事件:SSH/命令失败的人读告知。
         errorMsg.value = message
         viewState.value = 'error'
@@ -161,10 +195,11 @@ function toggleLive(): void {
       },
       onTransportError() {
         // 连接掉线:EventSource 会自动重连;此处仅提示。不视为致命。
-        if (!live.value) return
+        if (!current(ticket) || !live.value) return
         errorMsg.value = t('opsServer.log.errReconnecting')
       },
     },
+    scope.requestOptions,
   )
 }
 
@@ -175,15 +210,10 @@ function clearLogs(): void {
 }
 
 // 切 source/target 时若在实时中,断开旧流(避免取到旧目标的流)。
-watch([source, targetInput], () => {
-  if (live.value) {
-    stopStream()
-    live.value = false
-    viewState.value = lines.value.length > 0 ? 'history' : 'idle'
-  }
-})
+watch([source, targetInput, () => props.serverId], resetContext, { flush: 'sync' })
+watch(permission.allowed, allowed => { if (!allowed) resetContext() }, { flush: 'sync' })
 
-onUnmounted(stopStream)
+onUnmounted(resetContext)
 
 function humanError(err: unknown): string {
   if (err instanceof HttpError) {
@@ -269,7 +299,7 @@ const showFollowButton = computed(() => !stickToBottom.value && hasLines.value)
         <button
           class="lv-btn"
           type="button"
-          :disabled="!targetValid || viewState === 'loading'"
+          :disabled="!permission.allowed.value || !targetValid || viewState === 'loading'"
           @click="fetchHistory"
         >
           {{ viewState === 'loading' ? t('opsServer.log.loading') : t('opsServer.log.viewHistory') }}
@@ -278,7 +308,7 @@ const showFollowButton = computed(() => !stickToBottom.value && hasLines.value)
           class="lv-btn"
           :class="{ 'lv-btn--live': live }"
           type="button"
-          :disabled="!targetValid"
+          :disabled="!permission.allowed.value || !targetValid"
           @click="toggleLive"
         >
           {{ live ? t('opsServer.log.stopLive') : t('opsServer.log.liveTail') }}

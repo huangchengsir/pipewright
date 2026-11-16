@@ -77,5 +77,6 @@ describe('oauth api client', () => {
     expect(authorizeUrl('github')).toBe('/api/oauth/github/authorize')
     expect(authorizeUrl('gitlab')).toBe('/api/oauth/gitlab/authorize')
     expect(authorizeUrl('custom')).toBe('/api/oauth/custom/authorize')
+    expect(authorizeUrl('custom', 'team-fixture')).toBe('/api/oauth/custom/authorize?teamId=team-fixture')
   })
 })

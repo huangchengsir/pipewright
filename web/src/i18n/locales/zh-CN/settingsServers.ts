@@ -1,4 +1,8 @@
 export default {
+  monitoringReady: "监控采样已授权",
+  monitoringRequired: "监控采样待授权",
+  monitoringHint: "保存服务器或确认执行节点分配后授权固定只读采样；已授权不代表服务器健康。",
+
   title: '服务器',
   desc: '登记目标服务器(host / port / user + SSH 凭据),测试连通性。SSH 密钥仅按引用绑定,经保险库密文存取,绝不入库或回显明文。部署与运维都经此共享 SSH 层执行命令。',
   addServer: '登记服务器',

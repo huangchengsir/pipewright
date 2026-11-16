@@ -16,7 +16,7 @@
  * endpoint with `source: 'docker'`.
  */
 
-import { http } from './http'
+import { http, type HttpOptions } from './http'
 
 /** One container as reported by `docker ps -a`. */
 export interface ContainerInfo {
@@ -63,8 +63,8 @@ export interface ServerContainers {
 }
 
 /** Fetch the container inventory for every registered server (parallel, fault-isolated). */
-export async function getAllContainers(): Promise<ServerContainers[]> {
-  const res = await http.get<{ items: ServerContainers[] }>('/api/servers/containers')
+export async function getAllContainers(options: HttpOptions = {}): Promise<ServerContainers[]> {
+  const res = await http.get<{ items: ServerContainers[] }>('/api/servers/containers',{...options,throwOnUnauthorized:true})
   return res.items ?? []
 }
 
@@ -109,8 +109,9 @@ export interface CreateContainerResult {
 export async function createContainer(
   serverId: string,
   input: CreateContainerInput,
+  options: HttpOptions = {},
 ): Promise<CreateContainerResult> {
-  return http.post<CreateContainerResult>(`/api/servers/${serverId}/containers`, input)
+  return http.post<CreateContainerResult>(`/api/servers/${serverId}/containers`, input, options)
 }
 
 // ─── Images ──────────────────────────────────────────────────────────────────
@@ -146,18 +147,18 @@ export interface ImageActionResult {
 }
 
 /** List images on a server (docker images). */
-export async function getServerImages(id: string): Promise<ServerImages> {
-  return http.get<ServerImages>(`/api/servers/${id}/images`)
+export async function getServerImages(id: string, options?: HttpOptions): Promise<ServerImages> {
+  return http.get<ServerImages>(`/api/servers/${id}/images`, options)
 }
 
 /** Pull an image onto a server (docker pull). */
-export async function pullImage(id: string, image: string): Promise<ImageActionResult> {
-  return http.post<ImageActionResult>(`/api/servers/${id}/images/pull`, { image })
+export async function pullImage(id: string, image: string, options?: HttpOptions): Promise<ImageActionResult> {
+  return http.post<ImageActionResult>(`/api/servers/${id}/images/pull`, { image }, options)
 }
 
 /** Remove an image from a server (docker rmi). */
-export async function removeImage(id: string, image: string, force = false): Promise<ImageActionResult> {
-  return http.post<ImageActionResult>(`/api/servers/${id}/images/remove`, { image, force })
+export async function removeImage(id: string, image: string, force = false, options?: HttpOptions): Promise<ImageActionResult> {
+  return http.post<ImageActionResult>(`/api/servers/${id}/images/remove`, { image, force }, options)
 }
 
 // ─── Compose / Stacks ────────────────────────────────────────────────────────
@@ -192,8 +193,8 @@ export interface StackActionResult {
 }
 
 /** List compose projects on a server (docker compose ls). */
-export async function getServerStacks(id: string): Promise<ServerStacks> {
-  return http.get<ServerStacks>(`/api/servers/${id}/stacks`)
+export async function getServerStacks(id: string, options?: HttpOptions): Promise<ServerStacks> {
+  return http.get<ServerStacks>(`/api/servers/${id}/stacks`, options)
 }
 
 /** One service/container inside a compose project. */
@@ -226,8 +227,8 @@ export interface StackDetail {
 }
 
 /** Drill into one compose project (services + compose file when available). */
-export async function getStackDetail(id: string, name: string): Promise<StackDetail> {
-  return http.get<StackDetail>(`/api/servers/${id}/stacks/${encodeURIComponent(name)}`)
+export async function getStackDetail(id: string, name: string, options?: HttpOptions): Promise<StackDetail> {
+  return http.get<StackDetail>(`/api/servers/${id}/stacks/${encodeURIComponent(name)}`, options)
 }
 
 /** Save edited compose back to its original path and redeploy (docker compose up -d). */
@@ -236,8 +237,9 @@ export async function saveStackCompose(
   name: string,
   compose: string,
   configFile: string,
+  options?: HttpOptions,
 ): Promise<StackActionResult> {
-  return http.post<StackActionResult>(`/api/servers/${id}/stacks/save`, { name, compose, configFile })
+  return http.post<StackActionResult>(`/api/servers/${id}/stacks/save`, { name, compose, configFile }, options)
 }
 
 // ─── AI 诊断 / 看日志 ─────────────────────────────────────────────────────────
@@ -266,10 +268,11 @@ export interface ContainerDiagnosis {
  * 让 AI 分析/诊断一个容器:取其最近日志 → 根因假说 + 修复建议 + 修复脚本。
  * AI 未配置 / 失败 → status=unavailable + reason(不报错)。
  */
-export async function diagnoseContainer(serverId: string, name: string): Promise<ContainerDiagnosis> {
+export async function diagnoseContainer(serverId: string, name: string, options: HttpOptions = {}): Promise<ContainerDiagnosis> {
   return http.post<ContainerDiagnosis>(
     `/api/servers/${serverId}/containers/${encodeURIComponent(name)}/diagnose`,
     {},
+    options,
   )
 }
 
@@ -295,14 +298,14 @@ export interface VolNetActionResult {
   error: string
 }
 
-export async function getServerVolumes(id: string): Promise<ServerVolumes> {
-  return http.get<ServerVolumes>(`/api/servers/${id}/volumes`)
+export async function getServerVolumes(id: string, options?: HttpOptions): Promise<ServerVolumes> {
+  return http.get<ServerVolumes>(`/api/servers/${id}/volumes`, options)
 }
-export async function createVolume(id: string, name: string): Promise<VolNetActionResult> {
-  return http.post<VolNetActionResult>(`/api/servers/${id}/volumes/create`, { name })
+export async function createVolume(id: string, name: string, options?: HttpOptions): Promise<VolNetActionResult> {
+  return http.post<VolNetActionResult>(`/api/servers/${id}/volumes/create`, { name }, options)
 }
-export async function removeVolume(id: string, name: string): Promise<VolNetActionResult> {
-  return http.post<VolNetActionResult>(`/api/servers/${id}/volumes/remove`, { name })
+export async function removeVolume(id: string, name: string, options?: HttpOptions): Promise<VolNetActionResult> {
+  return http.post<VolNetActionResult>(`/api/servers/${id}/volumes/remove`, { name }, options)
 }
 
 // ─── 网络 ─────────────────────────────────────────────────────────────────────
@@ -322,8 +325,8 @@ export interface ServerNetworks {
   collectedAt: string
 }
 
-export async function getServerNetworks(id: string): Promise<ServerNetworks> {
-  return http.get<ServerNetworks>(`/api/servers/${id}/networks`)
+export async function getServerNetworks(id: string, options?: HttpOptions): Promise<ServerNetworks> {
+  return http.get<ServerNetworks>(`/api/servers/${id}/networks`, options)
 }
 
 /** One container attached to a network. */
@@ -341,27 +344,27 @@ export interface NetworkContainers {
 }
 
 /** List which containers are attached to a given network (docker network inspect). */
-export async function getNetworkContainers(id: string, network: string): Promise<NetworkContainers> {
-  return http.get<NetworkContainers>(`/api/servers/${id}/networks/${encodeURIComponent(network)}/containers`)
+export async function getNetworkContainers(id: string, network: string, options?: HttpOptions): Promise<NetworkContainers> {
+  return http.get<NetworkContainers>(`/api/servers/${id}/networks/${encodeURIComponent(network)}/containers`, options)
 }
 /** Attach a container to a network (docker network connect). */
-export async function connectNetwork(id: string, network: string, container: string): Promise<VolNetActionResult> {
-  return http.post<VolNetActionResult>(`/api/servers/${id}/networks/${encodeURIComponent(network)}/connect`, { container })
+export async function connectNetwork(id: string, network: string, container: string, options?: HttpOptions): Promise<VolNetActionResult> {
+  return http.post<VolNetActionResult>(`/api/servers/${id}/networks/${encodeURIComponent(network)}/connect`, { container }, options)
 }
 /** Detach a container from a network (docker network disconnect). */
-export async function disconnectNetwork(id: string, network: string, container: string): Promise<VolNetActionResult> {
-  return http.post<VolNetActionResult>(`/api/servers/${id}/networks/${encodeURIComponent(network)}/disconnect`, { container })
+export async function disconnectNetwork(id: string, network: string, container: string, options?: HttpOptions): Promise<VolNetActionResult> {
+  return http.post<VolNetActionResult>(`/api/servers/${id}/networks/${encodeURIComponent(network)}/disconnect`, { container }, options)
 }
-export async function createNetwork(id: string, name: string): Promise<VolNetActionResult> {
-  return http.post<VolNetActionResult>(`/api/servers/${id}/networks/create`, { name })
+export async function createNetwork(id: string, name: string, options?: HttpOptions): Promise<VolNetActionResult> {
+  return http.post<VolNetActionResult>(`/api/servers/${id}/networks/create`, { name }, options)
 }
-export async function removeNetwork(id: string, name: string): Promise<VolNetActionResult> {
-  return http.post<VolNetActionResult>(`/api/servers/${id}/networks/remove`, { name })
+export async function removeNetwork(id: string, name: string, options?: HttpOptions): Promise<VolNetActionResult> {
+  return http.post<VolNetActionResult>(`/api/servers/${id}/networks/remove`, { name }, options)
 }
 
 /** Deploy a stack from compose yaml (docker compose up -d). */
-export async function deployStack(id: string, name: string, compose: string): Promise<StackActionResult> {
-  return http.post<StackActionResult>(`/api/servers/${id}/stacks/deploy`, { name, compose })
+export async function deployStack(id: string, name: string, compose: string, options?: HttpOptions): Promise<StackActionResult> {
+  return http.post<StackActionResult>(`/api/servers/${id}/stacks/deploy`, { name, compose }, options)
 }
 
 /**
@@ -374,8 +377,9 @@ export async function stackAction(
   name: string,
   action: StackAction,
   configFile?: string,
+  options?: HttpOptions,
 ): Promise<StackActionResult> {
-  return http.post<StackActionResult>(`/api/servers/${id}/stacks/action`, { name, action, configFile })
+  return http.post<StackActionResult>(`/api/servers/${id}/stacks/action`, { name, action, configFile }, options)
 }
 
 // ─── 容器实时资源 stats(A1)──────────────────────────────────────────────────
@@ -398,8 +402,8 @@ export interface ServerContainerStats {
   collectedAt: string
 }
 /** 一次性拉取某服务器所有运行中容器的资源样本(只读;不可达/无运行时不 500)。 */
-export async function getServerContainerStats(id: string): Promise<ServerContainerStats> {
-  return http.get<ServerContainerStats>(`/api/servers/${id}/containers/stats`)
+export async function getServerContainerStats(id: string, options?: HttpOptions): Promise<ServerContainerStats> {
+  return http.get<ServerContainerStats>(`/api/servers/${id}/containers/stats`, options)
 }
 
 // ─── 容器详情 inspect(A2)─────────────────────────────────────────────────────
@@ -436,9 +440,10 @@ export interface ContainerInspect {
   labels: Record<string, string>
 }
 /** 拉取指定容器的 inspect 详情(containerId 后端白名单校验)。 */
-export function getContainerInspect(serverId: string, containerId: string): Promise<ContainerInspect> {
+export function getContainerInspect(serverId: string, containerId: string, options?: HttpOptions): Promise<ContainerInspect> {
   return http.get<ContainerInspect>(
     `/api/servers/${encodeURIComponent(serverId)}/containers/${encodeURIComponent(containerId)}/inspect`,
+    options,
   )
 }
 
@@ -467,10 +472,10 @@ export interface SystemPruneResult {
   error: string
 }
 /** 某主机 Docker 磁盘占用(只读)。 */
-export async function getSystemDf(id: string): Promise<SystemDf> {
-  return http.get<SystemDf>(`/api/servers/${id}/system/df`)
+export async function getSystemDf(id: string, options?: HttpOptions): Promise<SystemDf> {
+  return http.get<SystemDf>(`/api/servers/${id}/system/df`, options)
 }
 /** 对某主机执行指定 scope 的 docker prune(写;过 CSRF)。 */
-export async function systemPrune(id: string, scope: PruneScope): Promise<SystemPruneResult> {
-  return http.post<SystemPruneResult>(`/api/servers/${id}/system/prune`, { scope })
+export async function systemPrune(id: string, scope: PruneScope, options?: HttpOptions): Promise<SystemPruneResult> {
+  return http.post<SystemPruneResult>(`/api/servers/${id}/system/prune`, { scope }, options)
 }

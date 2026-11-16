@@ -99,7 +99,9 @@ function patchStep(id: string, patch: Partial<StepBlock>): void {
 
 // ─── 排序:上下移按钮 + 原生 HTML5 拖拽 ─────────────────────────────────────────
 
-function move(index: number, delta: number): void {
+function move(id: string, delta: number): void {
+  const index = steps.value.findIndex((step) => step.id === id)
+  if (index < 0) return
   const next = index + delta
   if (next < 0 || next >= steps.value.length) return
   const arr = [...steps.value]
@@ -178,7 +180,7 @@ const stepCount = computed(() => steps.value.length)
               class="sb-move"
               :disabled="index === 0"
               :aria-label="t('pipelineJob.sbMoveUp', { n: index + 1 })"
-              @click="move(index, -1)"
+              @click="move(step.id, -1)"
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M18 15l-6-6-6 6" /></svg>
             </button>
@@ -186,7 +188,7 @@ const stepCount = computed(() => steps.value.length)
               class="sb-move"
               :disabled="index === steps.length - 1"
               :aria-label="t('pipelineJob.sbMoveDown', { n: index + 1 })"
-              @click="move(index, 1)"
+              @click="move(step.id, 1)"
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
             </button>

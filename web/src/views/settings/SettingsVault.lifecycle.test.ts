@@ -1,3 +1,7 @@
+import {createPinia,setActivePinia} from 'pinia'
+import {useSessionStore} from '../../stores/session'
+import {beforeEach as initEach} from 'vitest'
+initEach(()=>{setActivePinia(createPinia());useSessionStore().setUser({username:'admin',multiTenant:false,instanceAdmin:true})})
 // Kubernetes credentials have independent API/route lifecycle tests in KubernetesUI.test.ts.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
@@ -33,7 +37,7 @@ describe('OAuth credential lifecycle', () => {
     const w = create(); await flushPromises(); await w.get('.oauth-reconnect').trigger('click')
     expect(api.reconnect).not.toHaveBeenCalled()
     await w.get('[data-testid="oauth-confirm-reconnect"]').trigger('click'); await flushPromises()
-    expect(api.reconnect).toHaveBeenCalledWith('credential-1', { provider: 'gitea', revision: 4, adoptExisting: false })
+    expect(api.reconnect).toHaveBeenCalledWith('credential-1', { provider: 'gitea', revision: 4, adoptExisting: false }, expect.objectContaining({signal:expect.any(AbortSignal),throwOnUnauthorized:true}))
     expect(w.get('[role="alert"]').text()).toContain('无法发起重新授权')
   })
 
@@ -45,7 +49,7 @@ describe('OAuth credential lifecycle', () => {
     expect(w.get('[data-testid="oauth-confirm-reconnect"]').attributes('disabled')).toBeDefined()
     await w.get('[data-testid="oauth-adopt"]').setValue(true)
     await w.get('[data-testid="oauth-confirm-reconnect"]').trigger('click'); await flushPromises()
-    expect(api.reconnect).toHaveBeenCalledWith('credential-1', { provider: 'gitea', revision: 0, adoptExisting: true })
+    expect(api.reconnect).toHaveBeenCalledWith('credential-1', { provider: 'gitea', revision: 0, adoptExisting: true }, expect.objectContaining({signal:expect.any(AbortSignal),throwOnUnauthorized:true}))
   })
 
   it('translates state, expiry, and a retained failure in all eight locales without resending', async () => {
@@ -70,6 +74,6 @@ describe('OAuth credential lifecycle', () => {
     await w.get('.oauth-detach input').setValue(true)
     api.update.mockResolvedValue({ ...credential, oauth: undefined })
     await w.get('.modal-form').trigger('submit'); await flushPromises()
-    expect(api.update).toHaveBeenCalledWith('credential-1', expect.objectContaining({ detachOAuth: true, secret: 'synthetic-user-secret' }))
+    expect(api.update).toHaveBeenCalledWith('credential-1', expect.objectContaining({ detachOAuth: true, secret: 'synthetic-user-secret' }), expect.objectContaining({signal:expect.any(AbortSignal),throwOnUnauthorized:true}))
   })
 })

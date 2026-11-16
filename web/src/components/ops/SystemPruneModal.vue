@@ -9,6 +9,9 @@
  * 安全:scope 走后端枚举白名单;命令服务端 array 化、不拼 shell;all 不加 --volumes(不误删卷)。
  */
 import { ref, computed, watch, onMounted } from 'vue'
+import PermissionGate from '../PermissionGate.vue'
+import { usePermission } from '../../composables/usePermission'
+import { useIdentityRequestScope } from '../../composables/useAuthorizedRequestScope'
 import { useI18n } from 'vue-i18n'
 import {
   getSystemDf,
@@ -33,6 +36,9 @@ const toast = useToast()
 const confirm = useConfirm()
 
 const selectedId = ref(props.servers[0]?.id ?? '')
+const operationQuery=computed(()=>({action:'container.operate',resourceId:selectedId.value}))
+const operationPermission=usePermission(operationQuery)
+const inspectPermission=usePermission(()=>({action:'container.inspect',resourceId:selectedId.value}))
 const df = ref<SystemDf | null>(null)
 const loading = ref(false)
 const loadError = ref('')
@@ -82,61 +88,44 @@ const actions = computed<PruneAction[]>(() => [
   },
 ])
 
+let generation = 0, loadSequence = 0
+const requestScope = useIdentityRequestScope(resetContext)
+function resetContext() { generation++; loadSequence++; df.value=null; loadError.value=''; loading.value=false; busyScope.value='' }
+function current(ticket:number,id:string) { return ticket===generation && id===selectedId.value && requestScope.active() }
 async function loadDf(): Promise<void> {
-  if (!selectedId.value) return
-  loading.value = true
-  loadError.value = ''
+  if (!selectedId.value || !requestScope.active() || !inspectPermission.allowed.value) return
+  const id=selectedId.value, ticket=generation, sequence=++loadSequence
+  loading.value=true; loadError.value=''
   try {
-    df.value = await getSystemDf(selectedId.value)
-  } catch (err: unknown) {
-    df.value = null
-    loadError.value =
-      err instanceof HttpError
-        ? err.status === 0
-          ? t('opsContainer.prune.errConnect')
-          : err.apiError?.message ?? t('opsContainer.prune.dfFailedStatus', { status: err.status })
-        : t('opsContainer.prune.dfFailedRetry')
-  } finally {
-    loading.value = false
-  }
+    const result=await requestScope.run(()=>getSystemDf(id,requestScope.requestOptions))
+    if(current(ticket,id) && sequence===loadSequence && inspectPermission.allowed.value) df.value=result
+  } catch(err:unknown) {
+    if(!current(ticket,id) || sequence!==loadSequence || !inspectPermission.allowed.value)return
+    df.value=null
+    loadError.value=err instanceof HttpError ? err.status===0 ? t('opsContainer.prune.errConnect') : err.apiError?.message ?? t('opsContainer.prune.dfFailedStatus',{status:err.status}) : t('opsContainer.prune.dfFailedRetry')
+  } finally { if(current(ticket,id) && sequence===loadSequence)loading.value=false }
 }
-
-async function runPrune(action: PruneAction): Promise<void> {
-  if (!selectedId.value || busyScope.value) return
-  const ok = await confirm.open({
-    title: t('opsContainer.prune.confirmTitle', { label: action.label, server: selectedName.value }),
-    body: action.confirmBody,
-    confirmLabel: t('opsContainer.prune.confirmLabel', { label: action.label }),
-    variant: action.danger ? 'danger' : 'primary',
-  })
-  if (!ok) return
-
-  busyScope.value = action.scope
+async function runPrune(action:PruneAction):Promise<void> {
+  if(!requestScope.active() || !operationPermission.allowed.value || !selectedId.value || busyScope.value)return
+  const id=selectedId.value,ticket=generation
+  const ok=await confirm.open({title:t('opsContainer.prune.confirmTitle',{label:action.label,server:selectedName.value}),body:action.confirmBody,confirmLabel:t('opsContainer.prune.confirmLabel',{label:action.label}),variant:action.danger?'danger':'primary'})
+  if(!ok || !current(ticket,id) || !operationPermission.allowed.value || busyScope.value)return
+  busyScope.value=action.scope
   try {
-    const res = await systemPrune(selectedId.value, action.scope)
-    if (res.ok) {
-      const summary = res.output.trim()
-      toast.success(t('opsContainer.prune.cleaned', { label: action.label }), {
-        detail: summary || t('opsContainer.prune.nothingToClean'),
-      })
-    } else {
-      toast.error(t('opsContainer.prune.cleanFailed', { label: action.label }), { detail: res.error || t('opsContainer.prune.remoteCmdFailed') })
-    }
-  } catch (err: unknown) {
-    const msg =
-      err instanceof HttpError
-        ? err.apiError?.message ?? t('opsContainer.prune.reqFailedStatus', { status: err.status })
-        : t('opsContainer.prune.reqFailedRetry')
-    toast.error(t('opsContainer.prune.cleanFailed', { label: action.label }), { detail: msg })
-  } finally {
-    busyScope.value = ''
-    // 清理后刷新占用(无论成功失败,占用都可能变了)。
-    void loadDf()
-  }
+    const res=await requestScope.run(()=>systemPrune(id,action.scope,requestScope.requestOptions))
+    if(!current(ticket,id) || !operationPermission.allowed.value)return
+    if(res.ok)toast.success(t('opsContainer.prune.cleaned',{label:action.label}),{detail:res.output.trim() || t('opsContainer.prune.nothingToClean')})
+    else toast.error(t('opsContainer.prune.cleanFailed',{label:action.label}),{detail:res.error || t('opsContainer.prune.remoteCmdFailed')})
+  } catch(err:unknown) {
+    if(!current(ticket,id) || !operationPermission.allowed.value)return
+    const msg=err instanceof HttpError ? err.apiError?.message ?? t('opsContainer.prune.reqFailedStatus',{status:err.status}) : t('opsContainer.prune.reqFailedRetry')
+    toast.error(t('opsContainer.prune.cleanFailed',{label:action.label}),{detail:msg})
+  } finally { if(current(ticket,id)){busyScope.value='';void loadDf()} }
 }
-
-watch(selectedId, () => void loadDf())
-onMounted(() => void loadDf())
+watch(selectedId,()=>{resetContext();void loadDf()},{flush:'sync'})
+watch(inspectPermission.allowed,allowed=>{if(!allowed)resetContext();else void loadDf()},{flush:'sync'})
+watch(operationPermission.allowed,allowed=>{if(!allowed){resetContext();void loadDf()}},{flush:'sync'})
+onMounted(()=>void loadDf())
 </script>
 
 <template>
@@ -166,7 +155,7 @@ onMounted(() => void loadDf())
         <section class="usage" :aria-label="t('opsContainer.prune.diskUsageAria')">
           <div class="usage-head">
             <span>{{ t('opsContainer.prune.diskUsage') }}</span>
-            <button class="link" :disabled="loading" @click="loadDf">
+            <button class="link" :disabled="loading || !inspectPermission.allowed.value" @click="loadDf">
               {{ loading ? t('opsContainer.prune.refreshing') : t('common.refresh') }}
             </button>
           </div>
@@ -202,7 +191,7 @@ onMounted(() => void loadDf())
         <section class="actions" :aria-label="t('opsContainer.prune.actionsAria')">
           <p class="actions-title">{{ t('opsContainer.prune.cleanup') }}</p>
           <div class="action-grid">
-            <AppButton
+            <PermissionGate :query="operationQuery"><AppButton
               v-for="a in actions"
               :key="a.scope"
               :variant="a.danger ? 'danger' : 'default'"
@@ -211,7 +200,7 @@ onMounted(() => void loadDf())
               @click="runPrune(a)"
             >
               {{ a.label }}
-            </AppButton>
+            </AppButton></PermissionGate>
           </div>
           <p class="note">{{ t('opsContainer.prune.noteHead') }}<strong>{{ t('opsContainer.prune.noteStrong') }}</strong>{{ t('opsContainer.prune.noteTail') }}</p>
         </section>

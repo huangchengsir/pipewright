@@ -1,4 +1,15 @@
 export default {
+  "memberAccountTitle": "{provider} 账号绑定",
+  "viewAvailability": "查看说明",
+  "memberUnavailableTitle": "尚未开放登录",
+  "memberPausedTitle": "登录已暂停",
+  "memberUnconfiguredHint": "管理员尚未配置 {provider} 登录。配置并启用后，你可以在这里绑定自己的账号。",
+  "memberDisabledHint": "管理员已暂停 {provider} 登录。重新启用后即可绑定；已有绑定会保留。",
+  "memberHint": "管理员配置平台后，你可以绑定自己的账号。绑定与解绑只影响本人。",
+  "manageBinding": "管理绑定",
+  "memberBindingHint": "请核对返回的账号。确认后仅绑定到你当前的员工账号，不更改全站登录设置。",
+  "confirmPersonalBind": "确认绑定",
+
   "section": "第三方登录",
   "sectionHint": "使用已绑定的账号登录。显示入口与启用登录分别管理。",
   "alternate": "其他方式登录",

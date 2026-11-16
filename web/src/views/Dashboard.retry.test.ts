@@ -1,3 +1,5 @@
+import { createPinia, setActivePinia } from 'pinia'
+import { useSessionStore } from '../stores/session'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import Dashboard from './Dashboard.vue'
@@ -13,7 +15,7 @@ vi.mock('../api/settings', () => ({ getDiagnosisStats: api.diagnosis }))
 const row = (id: string, status: RunListItem['status'], executionKind?: string): RunListItem => ({ id, projectId: 'p', projectName: 'P', status, trigger: { type: 'manual', branch: 'main', commit: '', actor: 'admin' }, createdAt: '', durationMs: null, executionKind })
 const stubs = { DashRecentRuns: true, DashServers: true, DashEnvironments: true, DashAlerts: true, DoraMetricCard: true }
 describe('original-run dashboard sample', () => {
-  beforeEach(() => { vi.clearAllMocks(); api.projects.mockResolvedValue([]); api.servers.mockResolvedValue([]); api.serverMetrics.mockResolvedValue([]); api.dora.mockRejectedValue(new Error('no metrics')); api.alerts.mockResolvedValue([]); api.diagnosis.mockResolvedValue(null) })
+  beforeEach(() => {setActivePinia(createPinia());useSessionStore().user={username:"admin",multiTenant:false}; vi.clearAllMocks(); api.projects.mockResolvedValue([]); api.servers.mockResolvedValue([]); api.serverMetrics.mockResolvedValue([]); api.dora.mockRejectedValue(new Error('no metrics')); api.alerts.mockResolvedValue([]); api.diagnosis.mockResolvedValue(null) })
   it('excludes recovery attempts and shows the actual included count, never a claimed fixed sample', async () => {
     api.runs.mockResolvedValue({ page: 1, total: 100, items: [row('original-ok', 'success'), row('original-bad', 'failed', 'original'), row('recovery-ok', 'success', 'recovery'), row('pending', 'queued')] })
     const wrapper = mount(Dashboard, { global: { stubs } }); await flushPromises()

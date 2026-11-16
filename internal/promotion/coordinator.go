@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
+	"reflect"
 )
 
 // RunInfo 是晋级编排所需的源运行最小信息(由 RunLookup 提供)。
@@ -78,6 +80,10 @@ type PromoteResult struct {
 //
 // actor 为操作者(审计/展示)。注意:gated 路径会阻塞直到审批决定(或 ctx 取消)。
 func (c *Coordinator) Promote(ctx context.Context, runID, target, actor string) (*PromoteResult, error) {
+	ctx = configstate.WithWriteAdmission(ctx, tenancy.LockAuthorization)
+	if err := tenancy.Check(ctx, c.store.db, "run.read", "run", runID); err != nil {
+		return nil, err
+	}
 	info, err := c.runs.LookupRun(ctx, runID)
 	if err != nil {
 		return nil, err
@@ -88,6 +94,7 @@ func (c *Coordinator) Promote(ctx context.Context, runID, target, actor string) 
 
 	var rec Record
 	var gated bool
+	var approvedChain Chain
 	err = configstate.WithWriteTxContext(ctx, c.store.db, func(tx context.Context, q configstate.DBTX) error {
 		if e := configstate.LockEpochs(tx, q, c.store.db, configstate.EpochPolicy, configstate.EpochSecrets, configstate.EpochExecutor); e != nil {
 			return e
@@ -105,7 +112,7 @@ func (c *Coordinator) Promote(ctx context.Context, runID, target, actor string) 
 		if project != info.ProjectID || status != SuccessStatus {
 			return ErrRunNotSuccessful
 		}
-		chain, e := c.store.GetChain(tx, info.ProjectID)
+		chain, e := c.store.getChain(tx, info.ProjectID)
 		if e != nil {
 			return e
 		}
@@ -121,6 +128,14 @@ func (c *Coordinator) Promote(ctx context.Context, runID, target, actor string) 
 		} else if chain.IndexOf(target) < 0 {
 			return ErrUnknownEnv
 		}
+		if e = tenancy.CheckEnvironmentAction(tx, c.store.db, "release.promote", "run", runID, info.ProjectID, target); e != nil {
+			return e
+		}
+		actor, e = tenancy.SubjectID(tx, c.store.db, actor)
+		if e != nil {
+			return e
+		}
+		approvedChain = chain
 		active, e := c.store.hasActivePromotion(tx, runID, target)
 		if e != nil {
 			return e
@@ -152,7 +167,7 @@ func (c *Coordinator) Promote(ctx context.Context, runID, target, actor string) 
 	stageKey := rec.ApprovalStage
 
 	if c.gate == nil {
-		_ = c.store.decideRecord(ctx, id, StatusRejected, "no_gate")
+		_ = c.store.decideRecord(context.WithoutCancel(ctx), id, StatusRejected, "no_gate")
 		rec.Status = StatusRejected
 		return &PromoteResult{Record: rec, Approved: false}, ErrGateRejected
 	}
@@ -166,17 +181,38 @@ func (c *Coordinator) Promote(ctx context.Context, runID, target, actor string) 
 		by = actor
 	}
 	if gerr != nil {
-		_ = c.store.decideRecord(ctx, id, StatusRejected, by)
+		_ = c.store.decideRecord(context.WithoutCancel(ctx), id, StatusRejected, by)
 		rec.Status = StatusRejected
 		return &PromoteResult{Record: rec, Approved: false}, gerr
 	}
 	if !approved {
-		_ = c.store.decideRecord(ctx, id, StatusRejected, by)
+		_ = c.store.decideRecord(context.WithoutCancel(ctx), id, StatusRejected, by)
 		rec.Status = StatusRejected
 		return &PromoteResult{Record: rec, Approved: false}, ErrGateRejected
 	}
-	if derr := c.store.decideRecord(ctx, id, StatusPromoted, by); derr != nil {
-		return nil, derr
+	completion := configstate.WithWriteAdmission(ctx, tenancy.LockCompletionAuthorization)
+	derr := configstate.WithWriteTxContext(completion, c.store.db, func(tx context.Context, q configstate.DBTX) error {
+		if _, e := configstate.LockProject(tx, q, c.store.db, info.ProjectID); e != nil {
+			return e
+		}
+		if e := tenancy.CheckEnvironmentAction(tx, c.store.db, "release.promote", "run", runID, info.ProjectID, target); e != nil {
+			return e
+		}
+		current, e := c.store.getChain(tx, info.ProjectID)
+		if e != nil {
+			return e
+		}
+		if !reflect.DeepEqual(current, approvedChain) {
+			return tenancy.ErrConflict
+		}
+		return c.store.decideRecord(tx, id, StatusPromoted, by)
+	})
+	if derr != nil {
+		// This exact pending row was created above; recording its rejection grants
+		// no new operation after revocation and must not leave it waiting forever.
+		_ = c.store.decideRecord(context.WithoutCancel(ctx), id, StatusRejected, "authorization_changed")
+		rec.Status = StatusRejected
+		return &PromoteResult{Record: rec, Approved: false}, derr
 	}
 	rec.Status = StatusPromoted
 	rec.PromotedBy = by
@@ -187,6 +223,12 @@ func (c *Coordinator) Promote(ctx context.Context, runID, target, actor string) 
 // secret 解密失败(凭据缺失/保险库未配)→ 跳过该变量(不让注入因缺失凭据而崩),但记于返回的
 // unresolved 列表(供调用方记日志/告警,绝不含明文)。无 SecretResolver 时所有 secret 变量进 unresolved。
 func (c *Coordinator) ResolveEnvVars(ctx context.Context, projectID, env string) (vars []ResolvedVar, unresolved []string, err error) {
+	if err = tenancy.VerifyExecution(ctx); err != nil {
+		return nil, nil, err
+	}
+	if err = tenancy.CheckEnvironmentName(ctx, c.store.db, "deployment.execute", projectID, env); err != nil {
+		return nil, nil, err
+	}
 	raw, err := c.store.loadRawVariables(ctx, projectID, env)
 	if err != nil {
 		return nil, nil, err
@@ -201,12 +243,31 @@ func (c *Coordinator) ResolveEnvVars(ctx context.Context, projectID, env string)
 			unresolved = append(unresolved, v.Key)
 			continue
 		}
-		plain, rerr := c.secret.Reveal(v.CredentialID)
+		if err = tenancy.Check(ctx, c.store.db, "credential.use", "credential", v.CredentialID); err != nil {
+			return nil, nil, err
+		}
+		var plain string
+		var rerr error
+		if scoped, ok := c.secret.(interface {
+			Use(context.Context, string) (string, error)
+		}); ok {
+			plain, rerr = scoped.Use(ctx, v.CredentialID)
+		} else if on, e := tenancy.Enabled(ctx, c.store.db); e != nil || on {
+			return nil, nil, tenancy.ErrForbidden
+		} else {
+			plain, rerr = c.secret.Reveal(v.CredentialID)
+		}
+		if err = tenancy.Check(ctx, c.store.db, "credential.use", "credential", v.CredentialID); err != nil {
+			return nil, nil, err
+		}
 		if rerr != nil {
 			unresolved = append(unresolved, v.Key) // 错误体绝无明文
 			continue
 		}
 		vars = append(vars, ResolvedVar{Key: v.Key, Value: plain, Secret: true})
+	}
+	if err = tenancy.CheckEnvironmentName(ctx, c.store.db, "deployment.execute", projectID, env); err != nil {
+		return nil, nil, err
 	}
 	return vars, unresolved, nil
 }

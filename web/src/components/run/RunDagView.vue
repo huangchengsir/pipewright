@@ -28,6 +28,9 @@ import { localizeName } from "../../lib/pipelineLabels";
 import type { RunStep, StepStatus } from "../../api/runs";
 import type { RetryContext, RetryPlannedNode } from "../../api/runRetry";
 import { retryNodeLabel } from "../../api/runRetry";
+import {useSessionStore} from '../../stores/session'
+import {usePermission} from '../../composables/usePermission'
+import {useIdentityRequestScope} from '../../composables/useAuthorizedRequestScope'
 import AppButton from "../ui/AppButton.vue";
 import {
   buildRunStages,
@@ -42,6 +45,7 @@ const { t } = useI18n();
 // ─── Props ───────────────────────────────────────────────────────────────────
 
 const props = defineProps<{
+  runId?: string;
   /** Kept for existing callers; topology never loads mutable project config. */
   projectId: string;
   /** Steps from the live run (reactive — updates via SSE). */
@@ -54,6 +58,13 @@ const emit = defineEmits<{
   retry: [nodeKeys: string[]];
   logs: [nodeKeys: string[], stageName: string];
 }>();
+
+const retrySession=useSessionStore()
+const retryRunId=computed(()=>props.runId ?? props.recovery?.attemptRunId ?? '')
+const retryPermission=usePermission(()=>({action:'run.retry',resourceId:retryRunId.value}))
+const retryScope=useIdentityRequestScope(()=>{})
+const mayRetry=computed(()=>retryScope.active() && (!retrySession.user?.multiTenant || !!retryRunId.value) && retryPermission.allowed.value)
+function requestRetry(nodeKeys:string[]) { if(retryScope.active() && mayRetry.value)emit('retry',nodeKeys) }
 
 // ─── Pipeline spec loading ────────────────────────────────────────────────────
 
@@ -620,20 +631,20 @@ function edgeClass(status: string): string {
                 }}</span>
                 <AppButton
                   v-if="
-                    ['failed', 'outcome_unknown'].includes(
+                    mayRetry && ['failed', 'outcome_unknown'].includes(
                       recoveryNode(step.id)?.decision.status ?? '',
                     )
                   "
                   class="node-retry"
                   :title="t('runRetry.retryNode')"
-                  @click="emit('retry', [step.id])"
+                  @click="requestRetry([step.id])"
                   >{{ t("runRetry.retryShort") }}</AppButton
                 >
                 <AppButton
-                  v-else-if="step.status === 'failed' && !recoveryNode(step.id)"
+                  v-else-if="mayRetry && step.status === 'failed' && !recoveryNode(step.id)"
                   class="node-retry"
                   :title="t('runRetry.viewRecovery')"
-                  @click="emit('retry', [])"
+                  @click="requestRetry([])"
                   >{{ t("runRetry.retryShort") }}</AppButton
                 >
               </li>

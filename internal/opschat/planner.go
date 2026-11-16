@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"sort"
 	"strconv"
 	"time"
@@ -80,6 +81,12 @@ func (s *Service) requestPlan(ctx context.Context, r runRecord, continuation boo
 	if err = ctx.Err(); err != nil {
 		return plan, nil, err
 	}
+	if err = s.authorizeSession(ctx, s.db, r.View.SessionID, "opschat.submit"); err != nil {
+		return plan, nil, err
+	}
+	if err = tenancy.VerifyExecution(ctx); err != nil {
+		return plan, nil, err
+	}
 	modelCtx, stop := context.WithTimeout(ctx, 60*time.Second)
 	defer stop()
 	reply := s.reply(modelCtx, r.View.SessionID, r.View.ID, "assistant", req.MaxResponseBytes)
@@ -89,7 +96,13 @@ func (s *Service) requestPlan(ctx context.Context, r runRecord, continuation boo
 		plan, err = s.model.Plan(modelCtx, req)
 	}
 	if err == nil {
-		err = s.registerSecrets()
+		err = s.authorizeSession(ctx, s.db, r.View.SessionID, "opschat.submit")
+	}
+	if err == nil {
+		err = tenancy.VerifyExecution(ctx)
+	}
+	if err == nil {
+		err = s.registerSecrets(ctx)
 	}
 	var candidates []callRecord
 	if err == nil {

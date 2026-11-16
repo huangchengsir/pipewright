@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/maintenance"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"io"
 	"strings"
 	"time"
@@ -77,7 +79,7 @@ func (s *Service) loadAnalysis(ctx context.Context, guard, id string) (*Analysis
 
 func (s *Service) saveAnalysis(ctx context.Context, a *Analysis) error {
 	body, _ := json.Marshal(a)
-	_, err := s.db.ExecContext(ctx, `UPDATE release_guard_analyses SET status=?,analysis_json=? WHERE id=? AND guard_id=?`, a.Status, string(body), a.ID, a.GuardID)
+	_, err := configstate.Queryer(ctx, s.db).ExecContext(ctx, `UPDATE release_guard_analyses SET status=?,analysis_json=? WHERE id=? AND guard_id=?`, a.Status, string(body), a.ID, a.GuardID)
 	return err
 }
 
@@ -89,7 +91,11 @@ func (s *Service) Analyses(ctx context.Context, project, guard string) ([]Analys
 	if r.EvidenceExpired {
 		return []Analysis{}, nil
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT analysis_json,status FROM release_guard_analyses WHERE guard_id=? ORDER BY created_at DESC`+store.Limit(store.DialectOf(s.db), "20"), guard)
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "guard.read", "g.run_id")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT a.analysis_json,a.status FROM release_guard_analyses a JOIN release_guards g ON g.id=a.guard_id WHERE a.guard_id=? AND g.project_id=? AND `+predicate.SQL+` ORDER BY a.created_at DESC`+store.Limit(store.DialectOf(s.db), "20"), append([]any{guard, project}, predicate.Args...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +124,11 @@ func (s *Service) PreviewAnalysis(ctx context.Context, project, guard string, in
 	if s.model == nil {
 		return nil, ErrUnavailable
 	}
-	r, err := s.Snapshot(ctx, project, guard)
+	authorized, err := s.authorizeGuard(ctx, project, guard, "guard.analyze")
+	var r *Report
+	if err == nil {
+		r = s.responseReport(ctx, authorized.Report)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +139,11 @@ func (s *Service) PreviewAnalysis(ctx context.Context, project, guard string, in
 	if err != nil || provider.ConfigHash == "" || provider.Destination == "" {
 		return nil, ErrUnavailable
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT evidence_json FROM release_guard_evidence WHERE guard_id=? AND sequence<=? ORDER BY sequence DESC`+store.Limit(store.DialectOf(s.db), "200"), guard, r.EventsCursor)
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "guard.analyze", "g.run_id")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT e.evidence_json FROM release_guard_evidence e JOIN release_guards g ON g.id=e.guard_id WHERE e.guard_id=? AND e.sequence<=? AND `+predicate.SQL+` ORDER BY e.sequence DESC`+store.Limit(store.DialectOf(s.db), "200"), append([]any{guard, r.EventsCursor}, predicate.Args...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +242,10 @@ func (s *Service) PreviewAnalysis(ctx context.Context, project, guard string, in
 		}
 	}
 	body, _ := json.Marshal(a)
-	_, err = s.db.ExecContext(ctx, `INSERT INTO release_guard_analyses(id,guard_id,status,created_at,analysis_json) VALUES(?,?,?,?,?)`, a.ID, guard, a.Status, a.CreatedAt.UnixMilli(), string(body))
+	err = s.guardWrite(ctx, r.RunID, "guard.analyze", func(txctx context.Context, q configstate.DBTX) error {
+		_, e := q.ExecContext(txctx, `INSERT INTO release_guard_analyses(id,guard_id,status,created_at,analysis_json) VALUES(?,?,?,?,?)`, a.ID, guard, a.Status, a.CreatedAt.UnixMilli(), string(body))
+		return e
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -242,7 +259,11 @@ func (s *Service) SendAnalysis(ctx context.Context, project, guard, id string, i
 	}
 	defer release()
 	s.mu.Lock()
-	r, err := s.Snapshot(ctx, project, guard)
+	authorized, err := s.authorizeGuard(ctx, project, guard, "guard.analyze")
+	var r *Report
+	if err == nil {
+		r = s.responseReport(ctx, authorized.Report)
+	}
 	if err != nil {
 		s.mu.Unlock()
 		return nil, err
@@ -289,7 +310,7 @@ func (s *Service) SendAnalysis(ctx context.Context, project, guard, id string, i
 		return nil, ErrConflict
 	}
 	a.Status = "sending"
-	if err = s.saveAnalysis(ctx, a); err != nil {
+	if err = s.guardWrite(ctx, r.RunID, "guard.analyze", func(txctx context.Context, q configstate.DBTX) error { return s.saveAnalysis(txctx, a) }); err != nil {
 		s.mu.Unlock()
 		return nil, err
 	}
@@ -298,7 +319,15 @@ func (s *Service) SendAnalysis(ctx context.Context, project, guard, id string, i
 	s.analysisProjects[id] = project
 	s.wg.Add(1)
 	s.mu.Unlock()
-	text, callErr := s.model.Explain(callCtx, provider, a.Payload)
+	var text string
+	var callErr error
+	leaseCtx, endLease, leaseErr := tenancy.ActionLease(callCtx, s.db, "guard.analyze", "run", r.RunID)
+	if leaseErr != nil {
+		callErr = ErrNotDispatched
+	} else {
+		text, callErr = s.model.Explain(leaseCtx, provider, a.Payload)
+		endLease()
+	}
 	cancel()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -311,7 +340,7 @@ func (s *Service) SendAnalysis(ctx context.Context, project, guard, id string, i
 	}
 	a = current
 	a.Stale = false
-	if report, e := s.Snapshot(context.Background(), project, guard); e != nil || report.EvidenceExpired || report.EvidenceSetHash != a.EvidenceSetHash || report.Plan.Hash != a.PlanHash {
+	if latest, e := s.load(context.Background(), project, guard); e != nil || !s.now().Before(latest.Report.EvidenceExpiresAt) || latest.Report.EvidenceSetHash != a.EvidenceSetHash || latest.Report.Plan.Hash != a.PlanHash {
 		a.Stale = true
 	}
 	if errors.Is(callErr, ErrNotDispatched) {
@@ -336,13 +365,20 @@ func (s *Service) SendAnalysis(ctx context.Context, project, guard, id string, i
 	if err = s.saveAnalysis(context.Background(), a); err != nil {
 		return nil, ErrUnavailable
 	}
+	if err := tenancy.Check(ctx, s.db, "guard.analyze", "run", r.RunID); err != nil {
+		return nil, err
+	}
 	return a, nil
 }
 
 func (s *Service) RevokeAnalysis(ctx context.Context, project, guard, id string) (*Analysis, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	r, err := s.Snapshot(ctx, project, guard)
+	authorized, err := s.authorizeGuard(ctx, project, guard, "guard.analyze")
+	var r *Report
+	if err == nil {
+		r = s.responseReport(ctx, authorized.Report)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -357,10 +393,12 @@ func (s *Service) RevokeAnalysis(ctx context.Context, project, guard, id string)
 	if a.Status == "preview" {
 		a.Status = "revoked"
 	}
-	if cancel := s.analysisCancels[id]; cancel != nil {
-		cancel()
-	}
-	if err = s.saveAnalysis(ctx, a); err != nil {
+	if err = s.guardWrite(ctx, r.RunID, "guard.analyze", func(txctx context.Context, q configstate.DBTX) error {
+		if cancel := s.analysisCancels[id]; cancel != nil {
+			cancel()
+		}
+		return s.saveAnalysis(txctx, a)
+	}); err != nil {
 		return nil, err
 	}
 	return a, nil

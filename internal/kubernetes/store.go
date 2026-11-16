@@ -9,7 +9,9 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/authz"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 type dbtx = configstate.DBTX
@@ -18,6 +20,7 @@ type dbtx = configstate.DBTX
 // no external calls while holding the transaction. MySQL uses row locks; SQLite
 // uses BEGIN IMMEDIATE through the existing transaction coordinator.
 func (s *Service) write(ctx context.Context, fn func(context.Context, dbtx) error) error {
+	ctx = configstate.WithWriteAdmission(ctx, tenancy.LockAuthorization)
 	return configstate.WithWriteTxContext(ctx, s.db, func(ctx context.Context, q dbtx) error {
 		if e := configstate.LockEpochs(ctx, q, s.db, configstate.EpochPolicy, configstate.EpochSecrets); e != nil {
 			return e
@@ -28,6 +31,7 @@ func (s *Service) write(ctx context.Context, fn func(context.Context, dbtx) erro
 
 // Configuration changes invalidate existing review catalogs, unlike runtime facts.
 func (s *Service) configWrite(ctx context.Context, fn func(context.Context, dbtx) error) error {
+	ctx = configstate.WithWriteAdmission(ctx, tenancy.LockAuthorization)
 	return s.write(ctx, func(ctx context.Context, q dbtx) error {
 		if e := fn(ctx, q); e != nil {
 			return e
@@ -114,11 +118,18 @@ func (s *Service) credential(ctx context.Context, q dbtx, id string) (Credential
 	return c, cipher, nil
 }
 func (s *Service) GetCredential(ctx context.Context, id string) (Credential, error) {
+	if err := tenancy.Check(ctx, s.db, "kubernetes_credential.read", "kubernetes_credential", id); err != nil {
+		return Credential{}, err
+	}
 	c, _, e := s.credential(ctx, configstate.Queryer(ctx, s.db), id)
 	return c, e
 }
 func (s *Service) ListCredentials(ctx context.Context) ([]Credential, error) {
-	rows, e := configstate.Queryer(ctx, s.db).QueryContext(ctx, `SELECT id,name,revision,enabled,metadata_json,created_at,updated_at FROM k8s_credentials ORDER BY created_at,id`)
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "kubernetes_credential.read", "k8s_credentials.id")
+	if err != nil {
+		return nil, err
+	}
+	rows, e := configstate.Queryer(ctx, s.db).QueryContext(ctx, `SELECT id,name,revision,enabled,metadata_json,created_at,updated_at FROM k8s_credentials WHERE `+predicate.SQL+` ORDER BY created_at,id`, predicate.Args...)
 	if e != nil {
 		return nil, e
 	}
@@ -157,6 +168,15 @@ func (s *Service) SaveCredential(ctx context.Context, id string, expected int64,
 		return out, ErrInvalid
 	}
 	e = s.configWrite(ctx, func(ctx context.Context, q dbtx) error {
+		if create {
+			if err := tenancy.CheckNew(ctx, s.db, "kubernetes_credential.create", "kubernetes_credential", id); err != nil {
+				return err
+			}
+		} else {
+			if err := tenancy.Check(ctx, s.db, "kubernetes_credential.edit", "kubernetes_credential", id); err != nil {
+				return err
+			}
+		}
 		now := s.now().UnixMilli()
 		created := now
 		if !create {
@@ -184,7 +204,10 @@ func (s *Service) SaveCredential(ctx context.Context, id string, expected int64,
 		metadata, _ := json.Marshal(preview)
 		if create {
 			_, e = q.ExecContext(ctx, `INSERT INTO k8s_credentials(id,name,revision,enabled,metadata_json,secret_cipher,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`, id, in.Name, out.Revision, in.Enabled, string(metadata), cipher, created, now)
-			return e
+			if e != nil {
+				return e
+			}
+			return tenancy.RecordOwnership(ctx, s.db, "kubernetes_credential", id, "")
 		}
 		return requireOne(q.ExecContext(ctx, `UPDATE k8s_credentials SET name=?,revision=?,enabled=?,metadata_json=?,secret_cipher=?,updated_at=? WHERE id=? AND revision=?`, in.Name, out.Revision, in.Enabled, string(metadata), cipher, now, id, expected))
 	})
@@ -199,6 +222,9 @@ func (s *Service) SetCredentialEnabled(ctx context.Context, id string, expected 
 		return out, ErrInvalid
 	}
 	e := s.configWrite(ctx, func(ctx context.Context, q dbtx) error {
+		if err := tenancy.Check(ctx, s.db, "kubernetes_credential.edit", "kubernetes_credential", id); err != nil {
+			return err
+		}
 		old, cipher, e := s.credential(ctx, q, id)
 		if e != nil {
 			return e
@@ -228,6 +254,9 @@ func (s *Service) DeleteCredential(ctx context.Context, id string, expected int6
 		return ErrInvalid
 	}
 	return s.configWrite(ctx, func(ctx context.Context, q dbtx) error {
+		if err := tenancy.Check(ctx, s.db, "kubernetes_credential.delete", "kubernetes_credential", id); err != nil {
+			return err
+		}
 		c, _, e := s.credential(ctx, q, id)
 		if e != nil {
 			return e
@@ -242,7 +271,11 @@ func (s *Service) DeleteCredential(ctx context.Context, id string, expected int6
 		if refs > 0 {
 			return ErrInUse
 		}
-		return requireOne(q.ExecContext(ctx, `DELETE FROM k8s_credentials WHERE id=? AND revision=?`, id, expected))
+		if err := requireOne(q.ExecContext(ctx, `DELETE FROM k8s_credentials WHERE id=? AND revision=?`, id, expected)); err != nil {
+			return err
+		}
+		_, err := q.ExecContext(ctx, `DELETE FROM access_ownership WHERE resource_kind='kubernetes_credential' AND resource_id=?`, id)
+		return err
 	})
 }
 func (s *Service) connection(ctx context.Context, q dbtx, id string) (Connection, error) {
@@ -259,10 +292,17 @@ func (s *Service) connection(ctx context.Context, q dbtx, id string) (Connection
 	return saved, nil
 }
 func (s *Service) GetConnection(ctx context.Context, id string) (Connection, error) {
+	if err := tenancy.Check(ctx, s.db, "kubernetes.read", "kubernetes", id); err != nil {
+		return Connection{}, err
+	}
 	return s.connection(ctx, configstate.Queryer(ctx, s.db), id)
 }
 func (s *Service) ListConnections(ctx context.Context) ([]Connection, error) {
-	rows, e := configstate.Queryer(ctx, s.db).QueryContext(ctx, `SELECT connection_json FROM k8s_connections ORDER BY created_at,id`)
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "kubernetes.read", "k8s_connections.id")
+	if err != nil {
+		return nil, err
+	}
+	rows, e := configstate.Queryer(ctx, s.db).QueryContext(ctx, `SELECT connection_json FROM k8s_connections WHERE `+predicate.SQL+` ORDER BY created_at,id`, predicate.Args...)
 	if e != nil {
 		return nil, e
 	}
@@ -312,6 +352,21 @@ func (s *Service) SaveConnection(ctx context.Context, id string, expected int64,
 		return out, ErrInvalid
 	}
 	e := s.configWrite(ctx, func(ctx context.Context, q dbtx) error {
+		if create {
+			if err := tenancy.CheckNew(ctx, s.db, "kubernetes.create", "kubernetes", id); err != nil {
+				return err
+			}
+		} else {
+			if err := tenancy.Check(ctx, s.db, "kubernetes.edit", "kubernetes", id); err != nil {
+				return err
+			}
+		}
+		if err := tenancy.CheckSameTeam(ctx, s.db, authz.ResourceRef{Kind: "kubernetes_credential", ID: in.CredentialID}); err != nil {
+			return err
+		}
+		if err := tenancy.Check(ctx, s.db, "kubernetes_credential.use", "kubernetes_credential", in.CredentialID); err != nil {
+			return err
+		}
 		cred, _, e := s.credential(ctx, q, in.CredentialID)
 		if e != nil {
 			return e
@@ -333,6 +388,9 @@ func (s *Service) SaveConnection(ctx context.Context, id string, expected int64,
 		}
 		for _, v := range in.Executors {
 			if v.Kind == "ssh" {
+				if err := tenancy.Check(ctx, s.db, "server.use", "server", v.ServerID); err != nil {
+					return err
+				}
 				var count int
 				if e = q.QueryRowContext(ctx, `SELECT COUNT(*) FROM servers WHERE id=?`, v.ServerID).Scan(&count); e != nil {
 					return e
@@ -346,7 +404,10 @@ func (s *Service) SaveConnection(ctx context.Context, id string, expected int64,
 		b, _ := json.Marshal(out)
 		if create {
 			_, e = q.ExecContext(ctx, `INSERT INTO k8s_connections(id,credential_id,revision,enabled,connection_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`, id, in.CredentialID, out.Revision, in.Enabled, string(b), created, now)
-			return e
+			if e != nil {
+				return e
+			}
+			return tenancy.RecordOwnership(ctx, s.db, "kubernetes", id, "")
 		}
 		return requireOne(q.ExecContext(ctx, `UPDATE k8s_connections SET credential_id=?,revision=?,enabled=?,connection_json=?,updated_at=? WHERE id=? AND revision=?`, in.CredentialID, out.Revision, in.Enabled, string(b), now, id, expected))
 	})
@@ -357,6 +418,9 @@ func (s *Service) DeleteConnection(ctx context.Context, id string, expected int6
 		return ErrInvalid
 	}
 	return s.configWrite(ctx, func(ctx context.Context, q dbtx) error {
+		if err := tenancy.Check(ctx, s.db, "kubernetes.delete", "kubernetes", id); err != nil {
+			return err
+		}
 		c, e := s.connection(ctx, q, id)
 		if e != nil {
 			return e
@@ -374,7 +438,11 @@ func (s *Service) DeleteConnection(ctx context.Context, id string, expected int6
 		if _, e = q.ExecContext(ctx, `DELETE FROM k8s_release_profiles WHERE connection_id=?`, id); e != nil {
 			return e
 		}
-		return requireOne(q.ExecContext(ctx, `DELETE FROM k8s_connections WHERE id=? AND revision=?`, id, expected))
+		if err := requireOne(q.ExecContext(ctx, `DELETE FROM k8s_connections WHERE id=? AND revision=?`, id, expected)); err != nil {
+			return err
+		}
+		_, err := q.ExecContext(ctx, `DELETE FROM access_ownership WHERE resource_kind='kubernetes' AND resource_id=?`, id)
+		return err
 	})
 }
 func grantScope(connection string, in GrantInput) string {
@@ -407,10 +475,26 @@ func (s *Service) grant(ctx context.Context, q dbtx, id string) (Grant, error) {
 	return saved, nil
 }
 func (s *Service) GetGrant(ctx context.Context, id string) (Grant, error) {
-	return s.grant(ctx, configstate.Queryer(ctx, s.db), id)
+	if err := s.authorizeGrant(ctx, id, "kubernetes.read"); err != nil {
+		return Grant{}, err
+	}
+	out, e := s.grant(ctx, configstate.Queryer(ctx, s.db), id)
+	if e != nil {
+		return out, e
+	}
+	e = s.grantEnvironmentID(ctx, &out)
+	return out, e
 }
 func (s *Service) ListGrants(ctx context.Context, connectionID string) ([]Grant, error) {
-	rows, e := configstate.Queryer(ctx, s.db).QueryContext(ctx, `SELECT grant_json FROM k8s_deploy_grants WHERE connection_id=? ORDER BY created_at,id`, connectionID)
+	if err := tenancy.Check(ctx, s.db, "kubernetes.read", "kubernetes", connectionID); err != nil {
+		return nil, err
+	}
+	predicate, e := tenancy.QueryPredicate(ctx, s.db, "project.read", "g.project_id")
+	if e != nil {
+		return nil, e
+	}
+	args := append([]any{connectionID}, predicate.Args...)
+	rows, e := configstate.Queryer(ctx, s.db).QueryContext(ctx, `SELECT g.grant_json FROM k8s_deploy_grants g WHERE g.connection_id=? AND `+predicate.SQL+` ORDER BY g.created_at,g.id`, args...)
 	if e != nil {
 		return nil, e
 	}
@@ -427,7 +511,24 @@ func (s *Service) ListGrants(ctx context.Context, connectionID string) ([]Grant,
 		}
 		out = append(out, g)
 	}
-	return out, rows.Err()
+	if e = rows.Err(); e != nil {
+		return nil, e
+	}
+	rows.Close()
+	for i := range out {
+		if e = s.grantEnvironmentID(ctx, &out[i]); e != nil {
+			return nil, e
+		}
+	}
+	return out, nil
+}
+func (s *Service) grantEnvironmentID(ctx context.Context, g *Grant) error {
+	g.EnvironmentID = ""
+	on, e := tenancy.Enabled(ctx, s.db)
+	if e != nil || !on {
+		return e
+	}
+	return configstate.Queryer(ctx, s.db).QueryRowContext(ctx, `SELECT e.id FROM access_environments e JOIN access_ownership o ON o.resource_kind='project' AND o.resource_id=e.project_id AND o.tenant_id=e.tenant_id WHERE e.project_id=? AND e.name=?`, g.ProjectID, g.Environment).Scan(&g.EnvironmentID)
 }
 func (s *Service) SaveGrant(ctx context.Context, connectionID, id string, expected int64, in GrantInput) (Grant, error) {
 	var out Grant
@@ -444,6 +545,15 @@ func (s *Service) SaveGrant(ctx context.Context, connectionID, id string, expect
 		return out, ErrInvalid
 	}
 	e := s.configWrite(ctx, func(ctx context.Context, q dbtx) error {
+		if err := tenancy.Check(ctx, s.db, "kubernetes.edit", "kubernetes", connectionID); err != nil {
+			return err
+		}
+		if err := tenancy.Check(ctx, s.db, "project.read", "project", in.ProjectID); err != nil {
+			return err
+		}
+		if err := tenancy.CheckSameTeam(ctx, s.db, authz.ResourceRef{Kind: "kubernetes", ID: connectionID}, authz.ResourceRef{Kind: "project", ID: in.ProjectID}); err != nil {
+			return err
+		}
 		c, e := s.connection(ctx, q, connectionID)
 		if e != nil {
 			return e
@@ -465,6 +575,9 @@ func (s *Service) SaveGrant(ctx context.Context, connectionID, id string, expect
 		now := s.now().UnixMilli()
 		created := now
 		if !create {
+			if e := s.authorizeGrant(ctx, id, "kubernetes.edit"); e != nil {
+				return e
+			}
 			old, e := s.grant(ctx, q, id)
 			if e != nil {
 				return e
@@ -502,6 +615,9 @@ func (s *Service) DeleteGrant(ctx context.Context, id string, expected int64) er
 		return ErrInvalid
 	}
 	return s.configWrite(ctx, func(ctx context.Context, q dbtx) error {
+		if err := s.authorizeGrant(ctx, id, "kubernetes.edit"); err != nil {
+			return err
+		}
 		g, e := s.grant(ctx, q, id)
 		if e != nil {
 			return e
@@ -514,6 +630,9 @@ func (s *Service) DeleteGrant(ctx context.Context, id string, expected int64) er
 }
 func (s *Service) authorize(ctx context.Context, q dbtx, t Target) (Authorization, error) {
 	var a Authorization
+	if err := s.authorizeTenantTarget(ctx, t.ProjectID, t.Environment, t.ConnectionID, t.CredentialID, t.Executor); err != nil {
+		return a, err
+	}
 	if e := validateTarget(t); e != nil {
 		return a, e
 	}

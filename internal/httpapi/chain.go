@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -17,6 +18,7 @@ import (
 // 串联本身的触发在 internal/chain 的终态钩子(run 落 success 时);此处仅配置存取。
 
 type chainTargetDTO struct {
+	AuthorizationState  string `json:"authorizationState,omitempty"`
 	DownstreamProjectID string `json:"downstreamProjectId"`
 	Branch              string `json:"branch"`
 	Enabled             bool   `json:"enabled"`
@@ -30,6 +32,7 @@ func toChainDTO(c *chain.Config) chainDTO {
 	out := chainDTO{Downstream: []chainTargetDTO{}}
 	for _, t := range c.Targets {
 		out.Downstream = append(out.Downstream, chainTargetDTO{
+			AuthorizationState:  t.AuthorizationState,
 			DownstreamProjectID: t.DownstreamProjectID,
 			Branch:              t.Branch,
 			Enabled:             t.Enabled,
@@ -40,6 +43,10 @@ func toChainDTO(c *chain.Config) chainDTO {
 
 func writeChainError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, tenancy.ErrForbidden):
+		writeError(w, http.StatusForbidden, "forbidden", "没有操作权限")
+	case errors.Is(err, tenancy.ErrConflict):
+		writeError(w, http.StatusConflict, "conflict", "权限或配置已变化，请刷新后重试")
 	case errors.Is(err, chain.ErrProjectNotFound):
 		writeError(w, http.StatusNotFound, "project_not_found", "项目不存在")
 	case errors.Is(err, chain.ErrDownstreamNotFound):
@@ -88,6 +95,7 @@ func makeSaveChainHandler(svc chain.Service) http.HandlerFunc {
 		targets := make([]chain.Target, 0, len(req.Downstream))
 		for _, t := range req.Downstream {
 			targets = append(targets, chain.Target{
+				AuthorizationState:  t.AuthorizationState,
 				DownstreamProjectID: t.DownstreamProjectID,
 				Branch:              t.Branch,
 				Enabled:             t.Enabled,

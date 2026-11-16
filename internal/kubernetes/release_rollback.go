@@ -14,23 +14,57 @@ type ReleaseRollbackRetention struct {
 	Reason   string            `json:"reason"`
 }
 
-func (s *Service) validateRollbackSource(ctx context.Context, q dbtx, plan ReleasePlan) error {
+type releaseRollbackSourceResult struct {
+	State  string `json:"state"`
+	Reason string `json:"reason"`
+}
+
+func (s *Service) validateRollbackSource(ctx context.Context, q dbtx, plan ReleasePlan) (ReleaseRecord, error) {
 	source, e := s.release(ctx, q, plan.RollbackOf)
 	if e != nil {
-		return e
+		return source, e
 	}
 	if !plan.ForceApproval || source.Revision != plan.RollbackRevision || source.PlanID != plan.RollbackPlanID || !source.OwnerFenced || source.Cleanup != CleanupVerified || source.State == "outcome_unknown" || source.State == "resume_requested" || source.State == "rollback_in_progress" || source.Plan.Authorization.ClusterKey != plan.Authorization.ClusterKey || source.Plan.Authorization.Request.ProjectID != plan.Authorization.Request.ProjectID {
-		return ErrConflict
+		return source, ErrConflict
 	}
 	var unknown int
 	if e = q.QueryRowContext(ctx, `SELECT COUNT(*) FROM k8s_release_actions WHERE release_id=? AND state IN ('outcome_unknown','submitted')`, source.ID).Scan(&unknown); e != nil {
-		return e
+		return source, e
 	}
 	if unknown > 0 {
-		return ErrOutcomeUnknown
+		return source, ErrOutcomeUnknown
 	}
-	return nil
+	return source, nil
 }
+
+// A definitively rejected rollback must not replace the source release's
+// verified result. A paused source was canceled during gate transfer.
+func (s *Service) settleRollbackSource(ctx context.Context, q dbtx, child ReleaseRecord, state, reason string) error {
+	plan := child.Plan
+	if plan.RollbackOf == "" {
+		return nil
+	}
+	switch state {
+	case "rolled_back", "partial_failed":
+	case "failed":
+		if child.Cleanup != CleanupVerified || plan.RollbackPrevious == nil {
+			return nil
+		}
+		var effects int
+		if err := q.QueryRowContext(ctx, "SELECT COUNT(*) FROM k8s_release_actions WHERE release_id=? AND state IN ('verified','submitted','outcome_unknown')", child.ID).Scan(&effects); err != nil {
+			return err
+		}
+		if effects != 0 {
+			return nil
+		}
+		state, reason = plan.RollbackPrevious.State, plan.RollbackPrevious.Reason
+	default:
+		return nil
+	}
+	_, err := q.ExecContext(ctx, "UPDATE k8s_releases SET state=?,reason_code=?,revision=revision+1,updated_at=? WHERE id=? AND state='rollback_in_progress' AND revision=? AND plan_id=?", state, reason, s.now().UnixMilli(), plan.RollbackOf, plan.RollbackRevision+1, plan.RollbackPlanID)
+	return err
+}
+
 func rollbackProtected(id ReleaseResourceID) bool {
 	return id.Group == "" && (id.Kind == "PersistentVolume" || id.Kind == "PersistentVolumeClaim" || id.Kind == "Namespace") || id.Group == "apiextensions.k8s.io" && id.Kind == "CustomResourceDefinition"
 }
@@ -292,7 +326,7 @@ func (s *Service) transferRollbackGates(ctx context.Context, q dbtx, r ReleaseRe
 		}
 		return ErrHeld
 	}
-	if e = s.validateRollbackSource(ctx, q, r.Plan); e != nil {
+	if _, e = s.validateRollbackSource(ctx, q, r.Plan); e != nil {
 		return e
 	}
 	for _, scope := range r.Plan.Authorization.Request.Resources {

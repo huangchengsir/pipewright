@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"github.com/huangchengsir/pipewright/internal/maintenance"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"path"
 	"regexp"
 	"sort"
@@ -51,7 +52,7 @@ func (s *Service) Investigate(ctx context.Context, project, id string) (*Report,
 		s.mu.Unlock()
 		return nil, err
 	}
-	d, err := s.load(ctx, project, id)
+	d, err := s.authorizeGuard(ctx, project, id, "guard.investigate")
 	if err != nil {
 		s.mu.Unlock()
 		return nil, err
@@ -63,7 +64,7 @@ func (s *Service) Investigate(ctx context.Context, project, id string) (*Report,
 	input := investigationInput(d.Report)
 	if d.Report.Investigation.Status == "completed" && d.Report.Investigation.InputHash == input && !retryableInvestigation(d.Report.Investigation) {
 		s.mu.Unlock()
-		return &d.Report, nil
+		return s.responseReport(ctx, d.Report), nil
 	}
 	revision, planHash, evidenceHash := d.Private.Revision, d.Report.Plan.Hash, d.Report.EvidenceSetHash
 	asOf := s.now().UTC()
@@ -99,7 +100,7 @@ func (s *Service) Investigate(ctx context.Context, project, id string) (*Report,
 				current = v
 			}
 		}
-		history, herr := s.ledger.ListByWorkload(workCtx, observed.WorkloadKey, 10)
+		history, herr := s.visibleWorkloadHistory(workCtx, observed.WorkloadKey, 10)
 		if herr != nil {
 			baseline.MissingEvidence = append(baseline.MissingEvidence, "deployment_history_unavailable")
 			history = nil
@@ -135,7 +136,7 @@ func (s *Service) Investigate(ctx context.Context, project, id string) (*Report,
 				}
 				key := "deployment_receipt:" + receipt.ID
 				if !seenTimeline[key] && addedTimeline < 100 {
-					timeline = append(timeline, TimelineItem{ID: key, At: receipt.At, Kind: "deployment_" + receipt.Kind, TargetID: observed.ID, Summary: receipt.Kind + "; attempt=" + prior.AttemptID + "; run=" + prior.Source.RunID, EvidenceIDs: []string{}})
+					timeline = append(timeline, TimelineItem{ID: key, SourceRunID: prior.Source.RunID, At: receipt.At, Kind: "deployment_" + receipt.Kind, TargetID: observed.ID, Summary: receipt.Kind + "; attempt=" + prior.AttemptID + "; run=" + prior.Source.RunID, EvidenceIDs: []string{}})
 					seenTimeline[key] = true
 					addedTimeline++
 				}
@@ -269,7 +270,7 @@ func (s *Service) Investigate(ctx context.Context, project, id string) (*Report,
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	latest, err := s.load(ctx, project, id)
+	latest, err := s.authorizeGuard(ctx, project, id, "guard.investigate")
 	if err != nil {
 		return nil, err
 	}
@@ -280,18 +281,18 @@ func (s *Service) Investigate(ctx context.Context, project, id string) (*Report,
 		return nil, ErrUnavailable
 	}
 	if latest.Report.Investigation.Status == "completed" && latest.Report.Investigation.InputHash == input && latest.Private.Revision != revision {
-		return &latest.Report, nil
+		return s.responseReport(ctx, latest.Report), nil
 	}
 	if latest.Private.Revision != revision || latest.Report.Plan.Hash != planHash || latest.Report.EvidenceSetHash != evidenceHash || !s.planRevisionCurrent(ctx, latest.Report.Plan) {
 		latest.Report.Investigation.Status = "stale"
 		latest.Report.Investigation.Limitations = appendUnique(latest.Report.Investigation.Limitations, "investigation_input_changed")
-		if err = s.save(ctx, latest, "investigation_stale", nil); err != nil {
+		if err = s.saveAuthorized(ctx, latest, "guard.investigate", "investigation_stale", nil); err != nil {
 			return nil, err
 		}
-		return &latest.Report, ErrConflict
+		return s.responseReport(ctx, latest.Report), ErrConflict
 	}
 	if sameInvestigationFacts(latest.Report.Investigation, result) && digestJSON(latest.Report.Timeline) == digestJSON(timeline) {
-		return &latest.Report, nil
+		return s.responseReport(ctx, latest.Report), nil
 	}
 	latest.Report.Investigation = result
 	latest.Report.Timeline = timeline
@@ -300,10 +301,10 @@ func (s *Service) Investigate(ctx context.Context, project, id string) (*Report,
 	} else {
 		latest.Report.AttributionStatus = "not_investigated"
 	}
-	if err = s.save(ctx, latest, "investigated", nil); err != nil {
+	if err = s.saveAuthorized(ctx, latest, "guard.investigate", "investigated", nil); err != nil {
 		return nil, err
 	}
-	return &latest.Report, nil
+	return s.responseReport(ctx, latest.Report), nil
 }
 
 func retryableInvestigation(i Investigation) bool {
@@ -342,7 +343,11 @@ func baselineTargetMatches(p Plan, t TargetObservation, e Evidence) bool {
 }
 
 func (s *Service) investigationEvidence(ctx context.Context, id string) ([]Evidence, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT evidence_json FROM release_guard_evidence WHERE guard_id=? ORDER BY sequence`+store.Limit(store.DialectOf(s.db), "1001"), id)
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "guard.investigate", "g.run_id")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT e.evidence_json FROM release_guard_evidence e JOIN release_guards g ON g.id=e.guard_id WHERE e.guard_id=? AND `+predicate.SQL+` ORDER BY e.sequence`+store.Limit(store.DialectOf(s.db), "1001"), append([]any{id}, predicate.Args...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -369,14 +374,20 @@ func (s *Service) verifiedSource(ctx context.Context, project string, source dep
 	if s.runs == nil || !sourceFullSHA.MatchString(source.ResolvedFullSHA) {
 		return "", "resolved_source_unavailable"
 	}
-	r, err := s.runs.Get(ctx, source.RunID)
-	if err != nil || r.ProjectID != project || r.Trigger.ResolvedEnvironment != source.Environment {
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "guard.read", "r.id")
+	if err != nil {
 		return "", "source_run_unavailable"
 	}
-	if r.ResolvedCommitConflict {
+	var resolvedProject, environment, sha string
+	var conflict bool
+	err = s.db.QueryRowContext(ctx, `SELECT r.project_id,r.resolved_environment,r.resolved_commit_sha,r.resolved_commit_conflict FROM pipeline_runs r WHERE r.id=? AND `+predicate.SQL, append([]any{source.RunID}, predicate.Args...)...).Scan(&resolvedProject, &environment, &sha, &conflict)
+	if err != nil || resolvedProject != project || environment != source.Environment {
+		return "", "source_run_unavailable"
+	}
+	if conflict {
 		return "", "source_revision_conflict"
 	}
-	if r.ResolvedCommitSHA != source.ResolvedFullSHA {
+	if sha != source.ResolvedFullSHA {
 		return "", "source_revision_not_confirmed"
 	}
 	return source.ResolvedFullSHA, ""
@@ -414,4 +425,49 @@ func validatedSourceComparison(c SourceComparison, t TargetObservation, base, cu
 		seen[f.Path] = true
 	}
 	return c
+}
+
+// visibleWorkloadHistory intersects historical run authority before applying the
+// history limit. A matching workload alone never grants access to another run.
+func (s *Service) visibleWorkloadHistory(ctx context.Context, key string, limit int) ([]deployattempt.Target, error) {
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "guard.read", "a.run_id")
+	if err != nil {
+		return nil, err
+	}
+	if limit < 1 || limit > 100 {
+		return nil, ErrInvalid
+	}
+	args := append([]any{key}, predicate.Args...)
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT t.id FROM deployment_attempt_targets t JOIN deployment_attempts a ON a.id=t.attempt_id WHERE t.workload_key=? AND `+predicate.SQL+` ORDER BY t.created_at DESC,t.id DESC`+store.Limit(store.DialectOf(s.db), "?"), args...)
+	if err != nil {
+		return nil, err
+	}
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	out := []deployattempt.Target{}
+	for _, id := range ids {
+		item, err := s.ledger.GetTarget(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		// The authority may have changed while immutable receipt data was loaded.
+		if err = tenancy.Check(ctx, s.db, "guard.read", "run", item.Source.RunID); err != nil {
+			return nil, err
+		}
+		out = append(out, *item)
+	}
+	return out, nil
 }

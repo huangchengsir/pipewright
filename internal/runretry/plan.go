@@ -6,11 +6,15 @@ import (
 	"errors"
 	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"sort"
 	"time"
 )
 
 func (s *Service) Plan(ctx context.Context, runID string, targets []string, options ...PlanOptions) (*Plan, error) {
+	if err := tenancy.Check(ctx, s.db, "run.retry", "run", runID); err != nil {
+		return nil, err
+	}
 	var checkErr error
 	ctx, checkErr = s.planCheckContext(ctx, runID)
 	if checkErr != nil {
@@ -392,6 +396,9 @@ func (s *Service) makePlan(ctx context.Context, l lineage, runID string, targets
 	return p, nil
 }
 func (s *Service) Context(ctx context.Context, runID string) (*Context, error) {
+	if err := tenancy.Check(ctx, s.db, "run.read", "run", runID); err != nil {
+		return nil, err
+	}
 	var out *Context
 	e := configstate.WithReadTxContext(ctx, s.db, func(tx context.Context, _ configstate.DBTX) error {
 		l, e := s.load(tx, runID)
@@ -446,6 +453,9 @@ func (s *Service) Context(ctx context.Context, runID string) (*Context, error) {
 	return out, e
 }
 func (s *Service) Attempts(ctx context.Context, runID string, page, size int) (*AttemptPage, error) {
+	if err := tenancy.Check(ctx, s.db, "run.read", "run", runID); err != nil {
+		return nil, err
+	}
 	if page < 1 {
 		page = 1
 	}
@@ -465,12 +475,17 @@ func (s *Service) Attempts(ctx context.Context, runID string, page, size int) (*
 		return nil, e
 	}
 	out := &AttemptPage{Page: page, Items: []Attempt{}}
-	if e := s.q(ctx).QueryRowContext(ctx, "SELECT COUNT(*) FROM run_retry_attempts WHERE root_id=?", root).Scan(&out.Total); e != nil {
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "run.read", "a.run_id")
+	if err != nil {
+		return nil, err
+	}
+	scopedArgs := append([]any{root}, predicate.Args...)
+	if e := s.q(ctx).QueryRowContext(ctx, "SELECT COUNT(*) FROM run_retry_attempts a WHERE a.root_id=? AND ("+predicate.SQL+")", scopedArgs...).Scan(&out.Total); e != nil {
 		return nil, e
 	}
 	pageSQL, pageArgs := store.Page(store.DialectOf(s.db), size, (page-1)*size)
-	listArgs := append([]any{root}, pageArgs...)
-	rows, e := s.q(ctx).QueryContext(ctx, `SELECT a.run_id,a.parent_id,a.revision,a.execution_kind,COALESCE(r.status,a.status),a.created_at,a.initiator,CASE WHEN (EXISTS(SELECT 1 FROM run_retry_dispatch d WHERE d.attempt_id=a.run_id AND d.state='outcome_unknown') OR EXISTS(SELECT 1 FROM run_retry_nodes n WHERE n.attempt_id=a.run_id AND n.status='outcome_unknown') OR EXISTS(SELECT 1 FROM run_retry_external_targets t WHERE t.attempt_id=a.run_id AND t.state IN ('running','outcome_unknown')) OR EXISTS(SELECT 1 FROM run_retry_resources x WHERE x.attempt_id=a.run_id AND x.state<>'drained')) THEN 1 ELSE 0 END FROM run_retry_attempts a LEFT JOIN pipeline_runs r ON r.id=a.run_id WHERE a.root_id=? ORDER BY a.revision DESC `+pageSQL, listArgs...)
+	listArgs := append(scopedArgs, pageArgs...)
+	rows, e := s.q(ctx).QueryContext(ctx, `SELECT a.run_id,a.parent_id,a.revision,a.execution_kind,COALESCE(r.status,a.status),a.created_at,a.initiator,CASE WHEN (EXISTS(SELECT 1 FROM run_retry_dispatch d WHERE d.attempt_id=a.run_id AND d.state='outcome_unknown') OR EXISTS(SELECT 1 FROM run_retry_nodes n WHERE n.attempt_id=a.run_id AND n.status='outcome_unknown') OR EXISTS(SELECT 1 FROM run_retry_external_targets t WHERE t.attempt_id=a.run_id AND t.state IN ('running','outcome_unknown')) OR EXISTS(SELECT 1 FROM run_retry_resources x WHERE x.attempt_id=a.run_id AND x.state<>'drained')) THEN 1 ELSE 0 END FROM run_retry_attempts a LEFT JOIN pipeline_runs r ON r.id=a.run_id WHERE a.root_id=? AND (`+predicate.SQL+`) ORDER BY a.revision DESC `+pageSQL, listArgs...)
 	if e != nil {
 		return nil, e
 	}

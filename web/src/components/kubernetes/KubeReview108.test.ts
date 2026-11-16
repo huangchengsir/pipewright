@@ -1,3 +1,7 @@
+import {createPinia,setActivePinia} from 'pinia'
+import {useSessionStore} from '../../stores/session'
+import {beforeEach as initEach} from 'vitest'
+initEach(()=>{setActivePinia(createPinia());useSessionStore().setUser({username:'admin',multiTenant:false,instanceAdmin:true})})
 import {afterEach,beforeEach,describe,it,expect,vi} from 'vitest'
 import {mount,flushPromises,type VueWrapper} from '@vue/test-utils'
 import Settings from './KubeReleaseSettings.vue'

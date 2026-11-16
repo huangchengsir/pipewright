@@ -1,5 +1,10 @@
+import {access} from '../../api/access'
+import {usePermissionStore} from '../../stores/permissions'
+import SettingsDatabaseContent from './SettingsDatabaseContent.vue'
+import {createPinia,setActivePinia} from 'pinia'
+import {useSessionStore} from '../../stores/session'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import SettingsDatabase from './SettingsDatabase.vue'
 import {
   databaseStatus,
@@ -11,9 +16,10 @@ import {
   type MigrationState,
 } from '../../api/databaseMigration'
 import { HttpError } from '../../api/http'
-import { setLocale } from '../../i18n'
+import { i18n, setLocale } from '../../i18n'
 import { useConfirm } from '../../composables/useConfirm'
 const navigation = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }))
+vi.mock('../../api/access',()=>({access:{decisions:vi.fn()}}))
 vi.mock('vue-router', () => ({ useRouter: () => navigation }))
 vi.mock('../../api/databaseMigration', async (original) => ({
   ...(await original<typeof import('../../api/databaseMigration')>()),
@@ -40,6 +46,7 @@ const render = (recovery = false) => {
   return wrapper
 }
 beforeEach(() => {
+ setActivePinia(createPinia());useSessionStore().setUser({username:"admin",multiTenant:false})
   vi.resetAllMocks()
   vi.useFakeTimers()
   vi.mocked(databaseStatus).mockResolvedValue(basic())
@@ -109,6 +116,7 @@ describe('database migration controls', () => {
       'start',
       expect.objectContaining({ taskId: 'page-a', revision: 1 }),
       expect.any(AbortSignal),
+      expect.objectContaining({throwOnUnauthorized:true}),
     )
   })
 
@@ -267,6 +275,7 @@ describe('independent target connection probe', () => {
         password: 'never-render-this',
       },
       expect.any(AbortSignal),
+      expect.objectContaining({throwOnUnauthorized:true}),
     )
     expect(wrapper.get('[role=status]').text()).toContain('连接成功')
     expect(wrapper.find('.database-checks').exists()).toBe(false)
@@ -378,5 +387,129 @@ describe('independent target connection probe', () => {
       'secret-DSN-marker',
     )
     expect(databasePreflight).not.toHaveBeenCalled()
+  })
+})
+
+describe('database settings permission and identity lifetime',()=>{
+ function employee(allowed:boolean){
+  useSessionStore().setUser({username:'member',userId:'employee',multiTenant:true});usePermissionStore().setTeam('team')
+  vi.mocked(access.decisions).mockImplementation(async(team,queries)=>({userId:'employee',teamId:team,modeEpoch:1,revision:1,catalogVersion:1,allowed:queries.map(()=>allowed)}))
+ }
+ it('never loads database settings for an employee without system permission',async()=>{
+  employee(false);const w=render();await flushPromises()
+  expect(w.find('form').exists()).toBe(false);expect(databaseStatus).not.toHaveBeenCalled()
+  expect(databasePreflight).not.toHaveBeenCalled();expect(databaseTestConnection).not.toHaveBeenCalled()
+ })
+ it('clears passwords, aborts the probe and discards its result on employee change',async()=>{
+  let resolve!:(result:{kind:'connection'})=>void
+  vi.mocked(databaseTestConnection).mockReturnValue(new Promise(r=>{resolve=r}))
+  const w=render();await flushPromises()
+  await w.get('#db-host').setValue('db.local');await w.get('#db-name').setValue('target');await w.get('#db-user').setValue('operator');await w.get('#db-secret').setValue('private-target-password')
+  await w.get('[data-testid=database-test-connection]').trigger('click');await flushPromises()
+  const signal=vi.mocked(databaseTestConnection).mock.calls[0][1]!
+  useSessionStore().setUser({username:'different-admin',multiTenant:false});await flushPromises()
+  resolve({kind:'connection'});await flushPromises()
+  expect(signal.aborted).toBe(true);expect((w.get('#db-secret').element as HTMLInputElement).value).toBe('')
+  expect(w.find('.database-probe-success').exists()).toBe(false)
+ })
+ it('rejects captured preflight and probe handlers after revocation',async()=>{
+  employee(true);const w=render();await flushPromises()
+  const vm=w.findComponent(SettingsDatabaseContent).vm as unknown as {preflight:()=>Promise<void>;testConnection:()=>Promise<void>}
+  employee(false);await flushPromises()
+  await vm.preflight();await vm.testConnection();await flushPromises()
+  expect(databasePreflight).not.toHaveBeenCalled();expect(databaseTestConnection).not.toHaveBeenCalled()
+ })
+ it('keeps recovery authentication independent of the normal employee session',async()=>{
+  useSessionStore().clearSession()
+  vi.mocked(recoveryRequest).mockResolvedValue({state:basic(),csrf:'recovery-only'})
+  const w=render(true);await flushPromises()
+  expect(recoveryRequest).toHaveBeenCalled();expect(databaseStatus).not.toHaveBeenCalled()
+  expect(w.findComponent(SettingsDatabaseContent).exists()).toBe(true)
+ })
+})
+
+describe('database recovery and settings entry controls', () => {
+  const currentTask = (phase: NonNullable<MigrationState['phase']>, recovery: boolean) => ({
+    ...basic(), recovery, phase, taskId: 'confirmed-task', revision: 7, target: 'postgres',
+  })
+  const button = (wrapper: VueWrapper, action: string) => {
+    const match = wrapper.findAll('button').find(control => control.text() === i18n.global.t('databaseMigration.' + action))
+    expect(match, action).toBeDefined()
+    return match!
+  }
+
+  it.each([
+    ['continue', 'copying'], ['reconcile', 'awaiting_restart'], ['activate', 'verified'], ['abort', 'copying'],
+  ] as const)('dispatches the recovery %s button with the current task and csrf', async (action, phase) => {
+    const state = currentTask(phase, true)
+    vi.mocked(recoveryRequest).mockImplementation(async path => path === 'session' ? { csrf: 'recovery-fixture', state } : state)
+    const wrapper = render(true)
+    await flushPromises()
+    await button(wrapper, action).trigger('click')
+    if (action !== 'continue') {
+      expect(recoveryRequest).toHaveBeenCalledTimes(1)
+      useConfirm()._resolve(true)
+    }
+    await flushPromises()
+    expect(recoveryRequest).toHaveBeenLastCalledWith(action, { taskId: state.taskId, revision: 7 }, 'recovery-fixture', expect.any(AbortSignal))
+    expect(databaseAction).not.toHaveBeenCalled()
+  })
+
+  it('submits recovery login through the native button and clears the password', async () => {
+    vi.mocked(recoveryRequest)
+      .mockRejectedValueOnce(new RecoveryError(401, 'database_recovery_auth'))
+      .mockResolvedValueOnce({ recovery: true })
+      .mockResolvedValueOnce({ csrf: 'recovery-fixture' })
+      .mockResolvedValueOnce({ csrf: 'recovery-fixture', state: currentTask('copying', true) })
+    const wrapper = render(true)
+    document.body.appendChild(wrapper.element)
+    await flushPromises()
+    await wrapper.get('#db-username').setValue('fixture-admin')
+    await wrapper.get('#db-password').setValue('fixture-password')
+    ;(wrapper.get('button[type=submit]').element as HTMLButtonElement).click()
+    await flushPromises()
+    expect(recoveryRequest).toHaveBeenNthCalledWith(3, 'login', { username: 'fixture-admin', password: 'fixture-password' }, undefined, expect.any(AbortSignal))
+    expect(wrapper.find('#db-password').exists()).toBe(false)
+    expect(databaseStatus).not.toHaveBeenCalled()
+  })
+
+  it('switches the destination engine and preflights only when the native submit button is clicked', async () => {
+    vi.mocked(databasePreflight).mockResolvedValue(currentTask('prepared', false))
+    const wrapper = render()
+    document.body.appendChild(wrapper.element)
+    await flushPromises()
+    const postgres = wrapper.findAll('.database-engines button').find(engine => engine.text() === 'PostgreSQL')
+    expect(postgres).toBeDefined()
+    await postgres!.trigger('click')
+    expect(postgres!.attributes('aria-pressed')).toBe('true')
+    await wrapper.get('#db-host').setValue('db.example.test')
+    await wrapper.get('#db-name').setValue('target')
+    await wrapper.get('#db-user').setValue('fixture-user')
+    expect(databasePreflight).not.toHaveBeenCalled()
+    ;(wrapper.get('form button[type=submit]').element as HTMLButtonElement).click()
+    await flushPromises()
+    expect(databasePreflight).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ driver: 'postgres' }), false, expect.any(AbortSignal), expect.any(Object))
+  })
+
+  it('aborts a prepared task only after confirmation in ordinary settings', async () => {
+    const state = currentTask('prepared', false)
+    vi.mocked(databaseStatus).mockResolvedValue(state)
+    const wrapper = render()
+    await flushPromises()
+    await button(wrapper, 'discard').trigger('click')
+    expect(databaseAction).not.toHaveBeenCalled()
+    useConfirm()._resolve(true)
+    await flushPromises()
+    expect(databaseAction).toHaveBeenCalledExactlyOnceWith('abort', expect.objectContaining({ taskId: state.taskId, revision: 7 }), expect.any(AbortSignal), expect.any(Object))
+    expect(recoveryRequest).not.toHaveBeenCalled()
+  })
+
+  it('opens the recovery route for the quiescing task without dispatching a mutation', async () => {
+    vi.mocked(databaseStatus).mockResolvedValue(currentTask('quiescing', false))
+    const wrapper = render()
+    await flushPromises()
+    await button(wrapper, 'recovery').trigger('click')
+    expect(navigation.push).toHaveBeenCalledExactlyOnceWith('/database-recovery')
+    expect(databaseAction).not.toHaveBeenCalled()
   })
 })

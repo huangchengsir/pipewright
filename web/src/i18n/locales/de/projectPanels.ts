@@ -1,4 +1,5 @@
 export default {
+  automationAuthorization: {"ready": "Automatischer Start autorisiert", "required": "Erneute Autorisierung erforderlich", "requiredHint": "Ausführungseinstellungen oder Berechtigungen wurden geändert. Ein Mitglied mit Ausführungsberechtigung muss erneut speichern. Bis zur Autorisierung bleibt der automatische Start pausiert."},
   // ─── TriggersPanel ──────────────────────────────────────────────────────────
   triggers: {
     retry: '↻ Wiederholen',

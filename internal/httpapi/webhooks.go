@@ -128,6 +128,10 @@ func makeManualRunHandler(svc run.Service, params run.ParameterService, aud audi
 		branch := strings.TrimSpace(req.Branch)
 		commit := strings.TrimSpace(req.Commit)
 		// 参数化运行(Story 8-11):trim key、剔空 key;明文构建参数(注入 script 步骤容器环境)。
+		if err := run.AuthorizeManualStart(r.Context(), svc, id); err != nil {
+			writeRunError(w, err)
+			return
+		}
 		runParams := normalizeRunParams(req.Params)
 		// 类型化参数(P0):有项目参数定义时校验 + 强转 + 填默认;无定义则透传(向后兼容)。
 		// 非法值(必填缺失 / 枚举越界 / 类型不符)→ 422,不创建运行。

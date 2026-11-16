@@ -115,8 +115,12 @@ func makeServiceActionHandler(svc target.Service, aud audit.Recorder) http.Handl
 			return
 		}
 
+		operationService := svc
+		if req.Type == "docker" {
+			operationService = target.ForContainerAction(svc, "container.operate")
+		}
 		// 先确认服务器存在(404 在写任何 200 体之前)。
-		if _, err := svc.Get(r.Context(), id); err != nil {
+		if _, err := operationService.Get(r.Context(), id); err != nil {
 			writeServerError(w, err)
 			return
 		}
@@ -138,7 +142,7 @@ func makeServiceActionHandler(svc target.Service, aud audit.Recorder) http.Handl
 			})
 		}
 
-		res, err := svc.Exec(r.Context(), id, cmd)
+		res, err := operationService.Exec(r.Context(), id, cmd)
 		if err != nil {
 			// 定位类错误(服务器/凭据不存在、保险库未配)→ 走标准映射(404/422/503)。
 			// 服务器不存在无可审计目标;凭据/vault 错误是对真实服务器的写尝试 → 留痕。

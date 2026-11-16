@@ -11,6 +11,8 @@ import (
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/run"
 	"github.com/huangchengsir/pipewright/internal/runretry"
+	"github.com/huangchengsir/pipewright/internal/target"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"time"
 )
 
@@ -20,6 +22,7 @@ type kubernetesRollbackCoordinator struct {
 	controller *kubernetes.ReleaseController
 	retries    *runretry.Service
 	runs       run.Service
+	targets    target.Service
 	owner      string
 }
 
@@ -100,6 +103,64 @@ func frozenRollbackSnapshot(snapshot runretry.Snapshot, source kubernetes.Releas
 	return snapshot, selected, nil
 }
 
+func (c kubernetesRollbackCoordinator) approveRun(ctx context.Context, id string, snapshot *runretry.Snapshot, request kubernetes.ReleaseAuthorizationRequest) error {
+	enabled, err := tenancy.Enabled(ctx, c.db)
+	if err != nil || !enabled {
+		return err
+	}
+	projectID := request.ProjectID
+	if snapshot.ProjectID != projectID || snapshot.Trigger.Environment != request.Environment {
+		return tenancy.ErrConflict
+	}
+	var environmentID string
+	q := configstate.Queryer(ctx, c.db)
+	if err = q.QueryRowContext(ctx, "SELECT id FROM access_environments WHERE project_id=? AND name=?", projectID, request.Environment).Scan(&environmentID); err != nil {
+		return tenancy.ErrForbidden
+	}
+	// The rollback executes a single frozen release. Bind it to the current
+	// caller and target without inheriting permissions from the source run.
+	permissions := []tenancy.ExecutionPermission{
+		{Action: "run.retry", ResourceID: id},
+		{Action: "deployment.execute", ResourceID: environmentID, EnvironmentID: environmentID},
+		{Action: "kubernetes.use", ResourceID: request.ConnectionID},
+		{Action: "kubernetes.deploy", ResourceID: request.ConnectionID, EnvironmentID: environmentID},
+		{Action: "kubernetes_credential.use", ResourceID: request.CredentialID},
+	}
+	refs := map[string]string{}
+	if request.Executor.Kind == "ssh" {
+		if c.targets == nil {
+			return tenancy.ErrForbidden
+		}
+		server, err := c.targets.Get(ctx, request.Executor.ServerID)
+		if err != nil {
+			return err
+		}
+		ref := "server/" + server.ID
+		version := bindingIdentity(server)
+		if previous := snapshot.RunnerRefs[ref]; previous != "" && previous != version {
+			return tenancy.ErrConflict
+		}
+		refs[ref] = version
+		permissions = append(permissions,
+			tenancy.ExecutionPermission{Action: "server.use", ResourceID: server.ID},
+			tenancy.ExecutionPermission{Action: "credential.use", ResourceID: server.CredentialID},
+		)
+	}
+	snapshot.RunnerRefs = refs
+	*snapshot, err = runretry.FreezeSnapshot(*snapshot)
+	if err != nil {
+		return err
+	}
+	digest, err := runretry.SnapshotDigest(*snapshot)
+	if err != nil {
+		return err
+	}
+	if err = tenancy.RecordOwnership(ctx, c.db, "run", id, projectID); err != nil {
+		return err
+	}
+	return tenancy.ApproveRun(ctx, c.db, id, projectID, digest, permissions)
+}
+
 func (c kubernetesRollbackCoordinator) Start(ctx context.Context, in kubernetes.ReleaseRollbackRequest, commit kubernetes.ReleaseRollbackCommit) (out kubernetes.ReleaseRollbackStart, resultErr error) {
 	if commit == nil || c.controller == nil || c.retries == nil {
 		return out, runretry.ErrUnavailable
@@ -154,6 +215,9 @@ func (c kubernetesRollbackCoordinator) Start(ctx context.Context, in kubernetes.
 			}
 			snapshot.KubernetesReleasePolicies = map[string]kubernetes.ReleaseAuthorization{build.KubernetesBindingKey(node.ExecutionStageID, node.ExecutionJobID): plan.Authorization}
 			snapshot.KubernetesRollbacks = map[string]string{node.Key: record.ID}
+			if e = c.approveRun(tx, id, &snapshot, plan.Authorization.Request); e != nil {
+				return e
+			}
 			if e = c.retries.SaveManifest(tx, id, snapshot); e != nil {
 				return e
 			}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/maintenance"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"time"
 )
 
@@ -32,6 +33,13 @@ func (s *Service) consumedApproval(ctx context.Context, tx *sql.Tx, call Call) e
 	if err != nil {
 		return err
 	}
+	binding, err := tenancy.ConfirmationBinding(s.authorizationContext(ctx, tx), s.db)
+	if err != nil {
+		return err
+	}
+	if a.Body.ActorBinding != binding {
+		return ErrApproval
+	}
 	if a.Status != "consumed" || a.Instance != s.instance || !a.View.ExpiresAt.After(time.Now()) || call.ArgsHash != digest(call.Args) {
 		return ErrApproval
 	}
@@ -43,7 +51,11 @@ func (s *Service) consumedApproval(ctx context.Context, tx *sql.Tx, call Call) e
 	return ErrApproval
 }
 func (s *Service) issueApproval(ctx context.Context, tx *sql.Tx, id, run string, calls []callRecord) error {
-	body := approvalBody{Nonce: uuid.NewString(), Calls: []BoundCall{}}
+	binding, err := tenancy.ConfirmationBinding(s.authorizationContext(ctx, tx), s.db)
+	if err != nil {
+		return err
+	}
+	body := approvalBody{ActorBinding: binding, Nonce: uuid.NewString(), Calls: []BoundCall{}}
 	for _, c := range calls {
 		if c.Body.View.Status == AwaitingConfirmation {
 			body.Calls = append(body.Calls, bound(c.Body.View))
@@ -66,7 +78,11 @@ func (s *Service) issueApproval(ctx context.Context, tx *sql.Tx, id, run string,
 	return databaseError(err)
 }
 func (s *Service) ReissueConfirmation(ctx context.Context, id, run string) (*Confirmation, error) {
-	if err := s.registerSecrets(); err != nil {
+	if err := s.authorizeSession(ctx, s.db, id, "opschat.confirm"); err != nil {
+		return nil, err
+	}
+
+	if err := s.registerSecrets(ctx); err != nil {
 		return nil, err
 	}
 	if s.executor == nil {
@@ -88,6 +104,9 @@ func (s *Service) ReissueConfirmation(ctx context.Context, id, run string) (*Con
 		}
 	}
 	err = s.transaction(ctx, true, func(tx *sql.Tx) error {
+		if err := s.authorizeSession(ctx, tx, id, "opschat.confirm"); err != nil {
+			return err
+		}
 		r, e := s.run(ctx, tx, id, run)
 		if e != nil {
 			return e
@@ -116,12 +135,16 @@ func (s *Service) ReissueConfirmation(ctx context.Context, id, run string) (*Con
 	return &view, err
 }
 func (s *Service) Confirm(ctx context.Context, id string, in ConfirmInput) (*Run, error) {
+	if err := s.authorizeSession(ctx, s.db, id, "opschat.confirm"); err != nil {
+		return nil, err
+	}
+
 	release, admissionErr := maintenance.Enter(ctx, s.db, "ops_confirm")
 	if admissionErr != nil {
 		return nil, admissionErr
 	}
 	defer release()
-	if err := s.registerSecrets(); err != nil {
+	if err := s.registerSecrets(ctx); err != nil {
 		return nil, err
 	}
 	if s.executor == nil {
@@ -136,6 +159,13 @@ func (s *Service) Confirm(ctx context.Context, id string, in ConfirmInput) (*Run
 	a, err := s.approval(ctx, s.db, id, in.RunID)
 	if err != nil {
 		return nil, err
+	}
+	binding, err := tenancy.ConfirmationBinding(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	if a.Body.ActorBinding != binding {
+		return nil, ErrApproval
 	}
 	if !a.View.Valid || a.Body.Nonce != in.Nonce || digest(s.publicConfirmation(a.View).Calls) != digest(in.Calls) {
 		return nil, ErrApproval
@@ -154,6 +184,9 @@ func (s *Service) Confirm(ctx context.Context, id string, in ConfirmInput) (*Run
 		}
 	}
 	err = s.transaction(ctx, true, func(tx *sql.Tx) error {
+		if err := s.authorizeSession(ctx, tx, id, "opschat.confirm"); err != nil {
+			return err
+		}
 		r, e := s.run(ctx, tx, id, in.RunID)
 		if e != nil {
 			return e
@@ -164,6 +197,13 @@ func (s *Service) Confirm(ctx context.Context, id string, in ConfirmInput) (*Run
 		current, e := s.approval(ctx, tx, id, in.RunID)
 		if e != nil {
 			return e
+		}
+		liveBinding, e := tenancy.ConfirmationBinding(s.authorizationContext(ctx, tx), s.db)
+		if e != nil {
+			return e
+		}
+		if current.Body.ActorBinding != liveBinding {
+			return ErrApproval
 		}
 		if !current.View.Valid || current.Body.Nonce != in.Nonce || digest(s.publicConfirmation(current.View).Calls) != digest(in.Calls) {
 			return ErrApproval
@@ -201,7 +241,7 @@ func (s *Service) Confirm(ctx context.Context, id string, in ConfirmInput) (*Run
 		return nil, err
 	}
 	s.notify(id)
-	s.launch(id, in.RunID)
+	s.launch(s.workerContext(ctx, id, "opschat.confirm"), id, in.RunID)
 	r, err := s.run(ctx, s.db, id, in.RunID)
 	if err != nil {
 		return nil, err
@@ -215,7 +255,7 @@ func (s *Service) AnalysisPreview(ctx context.Context, id string, ids []string) 
 	return s.analysisPreview(ctx, id, ids, "")
 }
 func (s *Service) analysisPreview(ctx context.Context, id string, ids []string, ownRun string) (*AnalysisPreview, error) {
-	if err := s.registerSecrets(); err != nil {
+	if err := s.registerSecrets(ctx); err != nil {
 		return nil, err
 	}
 	if s.model == nil {
@@ -304,6 +344,10 @@ func (s *Service) analysisPreview(ctx context.Context, id string, ids []string, 
 	return out, nil
 }
 func (s *Service) Analyze(ctx context.Context, id string, in AnalysisInput) (*Run, error) {
+	if err := s.authorizeSession(ctx, s.db, id, "opschat.submit"); err != nil {
+		return nil, err
+	}
+
 	if err := s.ready(); err != nil {
 		return nil, err
 	}
@@ -314,7 +358,7 @@ func (s *Service) Analyze(ctx context.Context, id string, in AnalysisInput) (*Ru
 	if old, err := s.duplicate(ctx, id, in.ClientRequestID, hash); old != nil || err != nil {
 		return old, err
 	}
-	if err := s.registerSecrets(); err != nil {
+	if err := s.registerSecrets(ctx); err != nil {
 		return nil, err
 	}
 	ids := in.CallIDs

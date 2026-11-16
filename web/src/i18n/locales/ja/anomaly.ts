@@ -1,4 +1,6 @@
 export default {
+ samplingAuthorizationRequired: "収集の承認が必要",
+ samplingAuthorizationHelp: "サーバー実行と認証情報の使用権限を持つ管理者がルールを再保存してください。設定または権限の変更後は再承認が必要です。",
   title: '異常検知',
   subtitle:
     'しきい値ルールを設定し、サーバーの CPU / メモリ / ディスク指標を検査します。一致するとアラートを発生させます',

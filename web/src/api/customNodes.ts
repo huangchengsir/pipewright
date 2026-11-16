@@ -16,7 +16,7 @@
  * plaintext secret (same shape as a pipeline spec — secrets stay vault references).
  */
 
-import { http } from './http'
+import { http, type HttpOptions } from './http'
 
 export interface CustomNode {
   id: string
@@ -42,26 +42,27 @@ interface ListCustomNodesResponse {
   customNodes: CustomNode[]
 }
 
-export async function listCustomNodes(): Promise<CustomNode[]> {
-  const res = await http.get<ListCustomNodesResponse>('/api/custom-nodes')
+export async function listCustomNodes(options?: HttpOptions): Promise<CustomNode[]> {
+  const res = await http.get<ListCustomNodesResponse>('/api/custom-nodes', options)
   return res.customNodes ?? []
 }
 
-export async function getCustomNode(id: string): Promise<CustomNode> {
-  return http.get<CustomNode>(`/api/custom-nodes/${id}`)
+export async function getCustomNode(id: string, options?: HttpOptions): Promise<CustomNode> {
+  return http.get<CustomNode>(`/api/custom-nodes/${id}`, options)
 }
 
-export async function createCustomNode(input: SaveCustomNodeInput): Promise<CustomNode> {
-  return http.post<CustomNode>('/api/custom-nodes', input)
+export async function createCustomNode(input: SaveCustomNodeInput, options?: HttpOptions): Promise<CustomNode> {
+  return http.post<CustomNode>('/api/custom-nodes', input, options)
 }
 
 export async function updateCustomNode(
   id: string,
   input: SaveCustomNodeInput,
+  options?: HttpOptions,
 ): Promise<CustomNode> {
-  return http.put<CustomNode>(`/api/custom-nodes/${id}`, input)
+  return http.put<CustomNode>(`/api/custom-nodes/${id}`, input, options)
 }
 
-export async function deleteCustomNode(id: string): Promise<void> {
-  await http.delete<void>(`/api/custom-nodes/${id}`)
+export async function deleteCustomNode(id: string, options?: HttpOptions): Promise<void> {
+  await http.delete<void>(`/api/custom-nodes/${id}`, options)
 }

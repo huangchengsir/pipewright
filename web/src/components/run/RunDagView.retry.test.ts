@@ -1,3 +1,6 @@
+import {beforeEach} from 'vitest'
+import {legacyPermissionSession} from '../../test/legacyPermissionSession'
+beforeEach(legacyPermissionSession)
 import { describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, RouterLinkStub } from '@vue/test-utils'
 import RunDagView from './RunDagView.vue'

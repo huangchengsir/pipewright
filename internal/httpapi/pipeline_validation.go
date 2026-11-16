@@ -93,7 +93,7 @@ func makeGetPipelineValidationHandler(
 			return
 		}
 
-		in := buildValidationInput(cfg, st, tcfg, proj, v)
+		in := buildValidationInput(cfg, st, tcfg, proj, vault.WithContext(ctx, v))
 		writeJSON(w, http.StatusOK, toValidationDTO(pipeline.Validate(in)))
 	}
 }
@@ -214,6 +214,9 @@ func credentialExists(v vault.Vault, id string) bool {
 // writeValidationError 把聚合读取过程中的领域错误映射为契约错误码/状态码。
 // 各服务的项目不存在错误统一映射为 404 project_not_found。
 func writeValidationError(w http.ResponseWriter, err error) {
+	if writeAuthorizationError(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, pipeline.ErrProjectNotFound),
 		errors.Is(err, trigger.ErrProjectNotFound),

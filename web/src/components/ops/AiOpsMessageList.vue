@@ -8,6 +8,8 @@ import AiOpsWaiting from './AiOpsWaiting.vue'
 import AiOpsMarkdown from './AiOpsMarkdown.vue'
 const props = withDefaults(
   defineProps<{
+    canSubmit?: boolean
+    canTerminal?: (id: string) => boolean
     entries: Entry[]
     calls: Record<string, Call>
     runs?: Run[]
@@ -17,7 +19,7 @@ const props = withDefaults(
     modelAvailable: boolean
     hasHistory: boolean
   }>(),
-  { runs: () => [], optimistic: () => [], waiting: false },
+  { canSubmit: true, canTerminal: () => true, runs: () => [], optimistic: () => [], waiting: false },
 )
 const emit = defineEmits<{
   copy: [text: string]
@@ -132,6 +134,8 @@ const visible = computed(() => {
         :summary="row.summary"
         :disabled="disabled"
         :model-available="modelAvailable"
+        :can-submit="canSubmit"
+        :can-terminal="canTerminal"
         @copy="emit('copy', $event)"
         @retry="emit('retry', $event)"
         @analyze="emit('analyze', $event)"

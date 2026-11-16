@@ -1,4 +1,15 @@
 export default {
+  "memberAccountTitle": "Your {provider} account",
+  "viewAvailability": "View details",
+  "memberUnavailableTitle": "Sign-in is not available yet",
+  "memberPausedTitle": "Sign-in is paused",
+  "memberUnconfiguredHint": "An administrator has not configured {provider} sign-in yet. Once configured and enabled, you can link your own account here.",
+  "memberDisabledHint": "An administrator has paused {provider} sign-in. You can link an account once it is enabled again. Existing links are kept.",
+  "memberHint": "After an administrator configures a provider, link your own account. Linking and unlinking affect only you.",
+  "manageBinding": "Manage binding",
+  "memberBindingHint": "Check the returned account. Confirmation links it only to your employee account and does not change instance sign-in settings.",
+  "confirmPersonalBind": "Confirm binding",
+
   "section": "Third-party sign-in",
   "sectionHint": "Sign in with a linked account. Visibility and sign-in access are managed separately.",
   "alternate": "Other sign-in options",

@@ -1,7 +1,16 @@
+import {beforeEach as beforeEachGuardSession} from 'vitest'
+import {legacyPermissionSession} from '../../test/legacyPermissionSession'
+beforeEachGuardSession(legacyPermissionSession)
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import ReleaseGuardAttach from "./ReleaseGuardAttach.vue";
 import { guardPlan } from "../../test/releaseGuardFixtures";
+import { access } from "../../api/access";
+import { usePermissionStore } from "../../stores/permissions";
+import { useSessionStore } from "../../stores/session";
+
+vi.mock("../../api/access", () => ({ access: { decisions: vi.fn() } }));
+
 
 const input = {
   artifactId: "image-1",
@@ -110,4 +119,48 @@ describe("attached release guard consent", () => {
     expect(lastState(wrapper).binding).not.toEqual(firstBinding);
     wrapper.unmount();
   });
+});
+
+it("revokes an accepted attachment and ignores the late callback from an earlier review", async () => {
+  useSessionStore().setUser({username: "employee", userId: "u", multiTenant: true});
+  const permissions = usePermissionStore();
+  permissions.setTeam("team-a");
+  vi.mocked(access.decisions).mockImplementation(async (team, queries) => ({
+    teamId: team, userId: "u", modeEpoch: 1, revision: 1, catalogVersion: 1,
+    allowed: queries.map(q => q.action === "guard.observe" && q.resourceId === "run-1"),
+  }));
+  const wrapper = panel();
+  await flushPromises();
+  await wrapper.get("input").setValue(true);
+  await wrapper.get("button").trigger("click");
+  const prepared = guardPlan({mode: "attached", artifactId: "image-1", attemptId: ""});
+  wrapper.findComponent({name: "ReleaseGuardPlan"}).vm.$emit("prepared", prepared);
+  await flushPromises();
+  expect(lastState(wrapper)).toMatchObject({ready: true});
+  await wrapper.get("button").trigger("click");
+  const obsolete = wrapper.findComponent({name: "ReleaseGuardPlan"}).vm.$.vnode.props?.onPrepared;
+  expect(obsolete).toBeTypeOf("function");
+  permissions.reject("team-a", {action: "guard.observe", resourceId: "run-1"});
+  obsolete(prepared);
+  await flushPromises();
+  expect(lastState(wrapper)).toEqual({enabled: false, ready: false});
+  expect(wrapper.get("input").attributes("disabled")).toBeDefined();
+  expect(wrapper.findComponent({name: "ReleaseGuardPlan"}).exists()).toBe(false);
+  wrapper.unmount();
+});
+
+it("preserves an accepted plan during an in-flight deployment without accepting a new review", async () => {
+  const wrapper = panel();
+  await wrapper.get("input").setValue(true);
+  await wrapper.get("button").trigger("click");
+  wrapper.findComponent({name: "ReleaseGuardPlan"}).vm.$emit("prepared", guardPlan({mode:"attached"}));
+  await flushPromises();
+  const accepted = lastState(wrapper);
+  expect(accepted.ready).toBe(true);
+  await wrapper.get("button").trigger("click");
+  await wrapper.setProps({disabled:true});
+  expect(lastState(wrapper)).toEqual(accepted);
+  expect(wrapper.get("input").attributes("disabled")).toBeDefined();
+  expect(wrapper.findComponent({name: "ReleaseGuardPlan"}).exists()).toBe(false);
+  wrapper.unmount();
 });

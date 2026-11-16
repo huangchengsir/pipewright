@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"net/http"
 
 	"github.com/huangchengsir/pipewright/internal/retention"
@@ -24,9 +26,9 @@ func makeGetRetentionConfigHandler(svc *retention.Service) http.HandlerFunc {
 			writeError(w, http.StatusServiceUnavailable, "internal", "保留服务未初始化")
 			return
 		}
-		cfg, err := svc.GetConfig(r.Context())
+		cfg, err := svc.ReadConfiguration(r.Context())
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
+			writeRetentionConfigError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, retentionConfigDTO{
@@ -51,13 +53,13 @@ func makeSetRetentionConfigHandler(svc *retention.Service) http.HandlerFunc {
 		}
 		cfg := retention.Config{Enabled: in.Enabled, KeepPerProject: in.KeepPerProject, MaxAgeDays: in.MaxAgeDays}
 		if err := svc.SetConfig(r.Context(), cfg); err != nil {
-			writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
+			writeRetentionConfigError(w, err)
 			return
 		}
 		// 回读归一后的值返回(负值已被归零)。
-		saved, err := svc.GetConfig(r.Context())
+		saved, err := svc.ReadConfiguration(r.Context())
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
+			writeRetentionConfigError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, retentionConfigDTO{
@@ -66,4 +68,16 @@ func makeSetRetentionConfigHandler(svc *retention.Service) http.HandlerFunc {
 			MaxAgeDays:     saved.MaxAgeDays,
 		})
 	}
+}
+
+func writeRetentionConfigError(w http.ResponseWriter, err error) {
+	if errors.Is(err, tenancy.ErrForbidden) {
+		writeError(w, http.StatusForbidden, "forbidden", "无权执行此操作")
+		return
+	}
+	if errors.Is(err, tenancy.ErrConflict) {
+		writeError(w, http.StatusConflict, "conflict", "权限状态已变化")
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
 }

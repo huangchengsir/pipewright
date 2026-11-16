@@ -1,8 +1,9 @@
 import { onBeforeUnmount, ref } from "vue";
 import { kubeAPI, kubeError, kubeUnknownWrite } from "../api/kubernetes";
+import type { HttpOptions } from "../api/http";
 type Action = (signal: AbortSignal) => Promise<void>;
 /** A target change invalidates every pending continuation, including password verification. */
-export function useKubeMutation() {
+export function useKubeMutation(requestOptions?: () => HttpOptions) {
   const busy = ref(false),
     passwordOpen = ref(false),
     password = ref(""),
@@ -37,7 +38,7 @@ export function useKubeMutation() {
     }
   }
   function execute(action: Action) {
-    if (busy.value || uncertain.value) return;
+    if (!alive || busy.value || uncertain.value) return;
     if (Date.now() < until) {
       void perform(action);
       return;
@@ -47,7 +48,7 @@ export function useKubeMutation() {
     passwordOpen.value = true;
   }
   async function verify() {
-    if (busy.value || !password.value || !pending) return;
+    if (!alive || busy.value || !password.value || !pending) return;
     const n = generation,
       signal = controller.signal,
       action = pending;
@@ -55,7 +56,11 @@ export function useKubeMutation() {
     busy.value = true;
     error.value = "";
     try {
-      const result = await kubeAPI.reauth(password.value, signal);
+      const result = await kubeAPI.reauth(
+        password.value,
+        signal,
+        requestOptions?.(),
+      );
       if (!current(n, signal)) return;
       until = Date.parse(result.reauthenticatedUntil);
       password.value = "";

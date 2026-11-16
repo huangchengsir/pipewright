@@ -31,6 +31,7 @@ export default {
     "Cela ramène l'environnement au dernier déploiement réussi (exécution {commit} · {when}), en redéployant ces artefacts sur les hôtes cibles d'origine. Cette action déclenche un déploiement réel.",
   rollbackConfirm: "Confirmer l'annulation",
   rollbackFailedStatus: "Échec de l'annulation ({status})",
+  rollbackTargetChanged: "Le déploiement a changé. Actualisez la page et confirmez à nouveau le retour en arrière.",
   rollbackFailedRetry: "Échec de l'annulation. Veuillez réessayer plus tard.",
 
   toastRolledBack: 'Environnement « {env} » annulé',

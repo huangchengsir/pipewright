@@ -3,6 +3,9 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import AppButton from '../components/ui/AppButton.vue'
+import PermissionGate from '../components/PermissionGate.vue'
+import {usePermission} from '../composables/usePermission'
+import {useIdentityRequestScope} from '../composables/useAuthorizedRequestScope'
 import GuardImageIdentity from '../components/run/GuardImageIdentity.vue'
 import ReleaseGuardPlan from '../components/run/ReleaseGuardPlan.vue'
 import ReleaseGuardInvestigation from '../components/run/ReleaseGuardInvestigation.vue'
@@ -42,6 +45,10 @@ const { t, te, locale } = useI18n()
 const projectId = computed(() => String(route.params.projectId ?? ''))
 const guardId = computed(() => String(route.params.guardId ?? ''))
 const report = ref<GuardReport | null>(null)
+const stopQuery=computed(()=>({action:'guard.stop',resourceId:report.value?.runId??''}))
+const observeQuery=computed(()=>({action:'guard.observe',resourceId:report.value?.runId??''}))
+const stopPermission=usePermission(stopQuery)
+const observePermission = usePermission(observeQuery)
 const evidence = ref<GuardEvidence[]>([])
 const loading = ref(false)
 const loadingEvidence = ref(false)
@@ -202,10 +209,11 @@ function message(cause: unknown): string {
 }
 function schedule(): void {
   clearTimeout(poll)
-  if (alive && active.value) poll = setTimeout(() => void load(true), 4000)
+  if (alive && scope.active() && active.value) poll = setTimeout(() => void load(true), 4000)
 }
 async function loadEvidence(ticket = generation): Promise<void> {
   if (
+    !scope.active() ||
     loadingEvidence.value ||
     report.value?.evidenceExpired ||
     paginationStalled.value
@@ -215,12 +223,12 @@ async function loadEvidence(ticket = generation): Promise<void> {
   evidenceController = request
   loadingEvidence.value = true
   try {
-    const page = await listGuardEvidence(
+    const page = await scope.run(() => listGuardEvidence(
       projectId.value,
       guardId.value,
       evidenceCursor.value,
-      { signal: request.signal },
-    )
+      { ...scope.requestOptions, signal: request.signal },
+    ))
     if (!alive || ticket !== generation || request.signal.aborted) return
     const ids = new Set(evidence.value.map((item) => item.id))
     for (const item of page.items) {
@@ -325,6 +333,7 @@ async function moreEvidence(): Promise<void> {
   if (pendingReferenceFocus) await finishReferenceLookup(ticket)
 }
 async function load(silent = false): Promise<void> {
+  if (!scope.active()) return
   clearTimeout(poll)
   controller?.abort()
   const ticket = generation
@@ -337,9 +346,10 @@ async function load(silent = false): Promise<void> {
     evidence.value = []
   }
   try {
-    const item = await getReleaseGuard(projectId.value, guardId.value, {
+    const item = await scope.run(() => getReleaseGuard(projectId.value, guardId.value, {
+      ...scope.requestOptions,
       signal: request.signal,
-    })
+    }))
     if (!alive || ticket !== generation || request.signal.aborted) return
     if (item.id !== guardId.value || item.projectId !== projectId.value)
       throw new Error('Mismatched report identity')
@@ -363,7 +373,7 @@ async function load(silent = false): Promise<void> {
   }
 }
 async function stop(): Promise<void> {
-  if (!canStop.value) return
+  if (!scope.active() || !canStop.value || !stopPermission.allowed.value) return
   const ticket = generation
   stopping.value = true
   stopError.value = ''
@@ -372,10 +382,11 @@ async function stop(): Promise<void> {
   const request = new AbortController()
   stopController = request
   try {
-    const item = await stopReleaseGuard(projectId.value, guardId.value, {
+    const item = await scope.run(() => stopReleaseGuard(projectId.value, guardId.value, {
+      ...scope.requestOptions,
       signal: request.signal,
-    })
-    if (alive && ticket === generation && !request.signal.aborted)
+    }))
+    if (alive && ticket === generation && !request.signal.aborted && stopPermission.allowed.value)
       report.value = item
   } catch (cause) {
     if (alive && ticket === generation && !request.signal.aborted)
@@ -399,7 +410,14 @@ function selectTab(event: KeyboardEvent, index: number): void {
           tabs.length
   openTab(tabs[next])
 }
+function openReverify(): void {
+  if (scope.active() && report.value && !active.value && observePermission.allowed.value)
+    showReverify.value = true
+}
 async function started(item: GuardReport): Promise<void> {
+  if (!scope.active() || !observePermission.allowed.value ||
+      item.projectId !== projectId.value || item.runId !== report.value?.runId)
+    return
   showReverify.value = false
   await router.push(guardReportLocation(item.projectId, item.id))
 }
@@ -419,30 +437,37 @@ function updatedInvestigation(item: GuardReport): void {
   report.value = item
   schedule()
 }
+function resetReport(): void {
+  loading.value = false
+  generation++
+  controller?.abort()
+  evidenceController?.abort()
+  stopController?.abort()
+  clearTimeout(poll)
+  report.value = null
+  evidence.value = []
+  evidenceCursor.value = 0
+  hasMore.value = false
+  loadingEvidence.value = false
+  stopping.value = false
+  showReverify.value = false
+  tab.value = 'verification'
+  referenceId.value = ''
+  referenceState.value = 'idle'
+  pendingReferenceFocus = undefined
+  paginationStalled.value = false
+  error.value = ''
+  evidenceError.value = ''
+  stopError.value = ''
+  investigationError.value = ''
+}
+const scope = useIdentityRequestScope(resetReport, undefined, () => {
+  error.value = 'releaseGuard.requestFailed'
+})
 watch(
   [projectId, guardId],
   () => {
-    generation++
-    controller?.abort()
-    evidenceController?.abort()
-    stopController?.abort()
-    clearTimeout(poll)
-    report.value = null
-    evidence.value = []
-    evidenceCursor.value = 0
-    hasMore.value = false
-    loadingEvidence.value = false
-    stopping.value = false
-    showReverify.value = false
-    tab.value = 'verification'
-    referenceId.value = ''
-    referenceState.value = 'idle'
-    pendingReferenceFocus = undefined
-    paginationStalled.value = false
-    error.value = ''
-    evidenceError.value = ''
-    stopError.value = ''
-    investigationError.value = ''
+    resetReport()
     void load()
   },
   { immediate: true },
@@ -657,7 +682,7 @@ onBeforeUnmount(() => {
         >
       </section>
       <div class="guard-actions">
-        <AppButton
+        <PermissionGate :query="stopQuery"><AppButton
           v-if="active"
           variant="danger"
           :disabled="!canStop"
@@ -668,9 +693,9 @@ onBeforeUnmount(() => {
               ? t('releaseGuard.stopping')
               : t('releaseGuard.stopObservation')
           }}</AppButton
-        ><AppButton v-if="!active" @click="showReverify = true">{{
+        ></PermissionGate><PermissionGate :query="observeQuery"><AppButton v-if="!active" @click="openReverify">{{
           t('releaseGuard.reverify')
-        }}</AppButton>
+        }}</AppButton></PermissionGate>
       </div>
       <p v-if="stopError" class="guard-error" role="alert">
         {{ t(stopError) }}
@@ -812,9 +837,9 @@ onBeforeUnmount(() => {
               >{{ t('releaseGuardPresentation.aiTitle') }}</AppButton
             >
             <p>{{ t('releaseGuardPresentation.snapshotScope') }}</p>
-            <AppButton v-if="!active" @click="showReverify = true">{{
+            <PermissionGate :query="observeQuery"><AppButton v-if="!active" @click="openReverify">{{
               t('releaseGuard.reverify')
-            }}</AppButton>
+            }}</AppButton></PermissionGate>
           </aside>
         </div>
         <h2 class="guard-timeline-heading">{{ t('releaseGuard.timeline') }}</h2>
@@ -1087,6 +1112,7 @@ onBeforeUnmount(() => {
         :key="report.id"
         :project-id="projectId"
         :attempt-id="report.attemptId"
+        :run-id="report.runId"
         :parent-guard-id="report.id"
         :initial-duration-seconds="reverifyDuration"
         :initial-include-logs="report.plan.includeLogs"

@@ -6,7 +6,9 @@
  * this client does not render their content — only preserves shape.
  */
 
-import { http, type HttpOptions } from "./http";
+import { http, HttpError, type HttpOptions } from "./http";
+
+import {sseParser} from './opsChat';
 
 // ─── Status vocabulary (fixed six-word set; do not alias) ────────────────────
 
@@ -36,6 +38,8 @@ export type StepStatus =
 export type ApprovalStatus = "pending" | "approved" | "rejected";
 
 export interface ApprovalRecord {
+  accessAction?: "run.approve" | "release.approve";
+  accessEnvironmentIds?: string[];
   stageId: string;
   stageName: string;
   status: ApprovalStatus;
@@ -145,6 +149,7 @@ export interface ArtifactDTO {
 // ─── Run Detail (frozen DTO contract — do not change shape) ─────────────────
 
 export interface RunDetail {
+  accessEnvironmentId?: string;
   executionKind?: string;
   logicalRunId?: string;
   sourceRunId?: string;
@@ -232,30 +237,33 @@ export function getRun(id: string, options?: HttpOptions): Promise<RunDetail> {
   return http.get<RunDetail>(`/api/runs/${id}`, options);
 }
 
-export function cancelRun(id: string): Promise<RunDetail> {
-  return http.post<RunDetail>(`/api/runs/${id}/cancel`);
+export function cancelRun(id: string, options?: HttpOptions): Promise<RunDetail> {
+  return http.post<RunDetail>(`/api/runs/${id}/cancel`, undefined, options);
 }
 
 // ─── Approval gate (Epic 8 · 8-4) ──────────────────────────────────────────────
 
 export function listApprovals(
   runId: string,
+  options?: HttpOptions,
 ): Promise<{ items: ApprovalRecord[] }> {
-  return http.get<{ items: ApprovalRecord[] }>(`/api/runs/${runId}/approvals`);
+  return http.get<{ items: ApprovalRecord[] }>(`/api/runs/${runId}/approvals`, options);
 }
 
 export function approveStage(
   runId: string,
   stageId: string,
+  options: HttpOptions = {},
 ): Promise<{ ok: boolean }> {
-  return http.post<{ ok: boolean }>(`/api/runs/${runId}/approve`, { stageId });
+  return http.post<{ ok: boolean }>(`/api/runs/${runId}/approve`, { stageId }, {...options,throwOnUnauthorized:true});
 }
 
 export function rejectStage(
   runId: string,
   stageId: string,
+  options: HttpOptions = {},
 ): Promise<{ ok: boolean }> {
-  return http.post<{ ok: boolean }>(`/api/runs/${runId}/reject`, { stageId });
+  return http.post<{ ok: boolean }>(`/api/runs/${runId}/reject`, { stageId }, {...options,throwOnUnauthorized:true});
 }
 
 // ─── (Re-)diagnose a failed run ───────────────────────────────────────────────
@@ -266,8 +274,8 @@ export function rejectStage(
 // 422 if the run is not in failed state; 404 if run not found.
 // Any LLM failure yields 200 + status=unavailable — never 500, never secrets.
 
-export function diagnoseRun(id: string): Promise<DiagnosisDTO> {
-  return http.post<DiagnosisDTO>(`/api/runs/${id}/diagnose`);
+export function diagnoseRun(id: string, options?: HttpOptions): Promise<DiagnosisDTO> {
+  return http.post<DiagnosisDTO>(`/api/runs/${id}/diagnose`, undefined, {...options,throwOnUnauthorized:true});
 }
 
 // ─── Success/fail diff (Story 7-3 frozen contract — FR-25) ────────────────────
@@ -303,8 +311,8 @@ export interface RunDiffDTO {
   summary: string;
 }
 
-export function getRunDiff(id: string): Promise<RunDiffDTO> {
-  return http.get<RunDiffDTO>(`/api/runs/${id}/diff`);
+export function getRunDiff(id: string, options?: HttpOptions): Promise<RunDiffDTO> {
+  return http.get<RunDiffDTO>(`/api/runs/${id}/diff`, options);
 }
 
 // ─── Diagnosis feedback loop (Story 7-5 frozen contract — FR-26) ──────────────
@@ -325,10 +333,12 @@ export interface DiagnosisFeedbackInput {
 export function submitDiagnosisFeedback(
   id: string,
   input: DiagnosisFeedbackInput,
+  options?: HttpOptions,
 ): Promise<{ ok: boolean }> {
   return http.post<{ ok: boolean }>(
     `/api/runs/${id}/diagnosis/feedback`,
     input,
+    {...options,throwOnUnauthorized:true},
   );
 }
 
@@ -348,8 +358,9 @@ export interface TriggerManualInput {
 export function triggerManual(
   projectId: string,
   input: TriggerManualInput,
+  options?:HttpOptions,
 ): Promise<RunDetail> {
-  return http.post<RunDetail>(`/api/projects/${projectId}/runs`, input);
+  return http.post<RunDetail>(`/api/projects/${projectId}/runs`, input, options);
 }
 
 // ─── Run logs (Story 3-6 frozen contract) ─────────────────────────────────────
@@ -381,9 +392,9 @@ export interface RunLogsResponse {
   complete: boolean;
 }
 
-export function getRunLogs(id: string, sinceSeq = 0): Promise<RunLogsResponse> {
+export function getRunLogs(id: string, sinceSeq = 0, options?: HttpOptions): Promise<RunLogsResponse> {
   const qs = sinceSeq > 0 ? `?sinceSeq=${sinceSeq}` : "";
-  return http.get<RunLogsResponse>(`/api/runs/${id}/logs${qs}`);
+  return http.get<RunLogsResponse>(`/api/runs/${id}/logs${qs}`, options);
 }
 
 // ─── Run artifacts (Story 3-4 frozen contract — FR-6) ─────────────────────────
@@ -397,8 +408,8 @@ export interface RunArtifactsResponse {
   artifacts: ArtifactDTO[];
 }
 
-export function getRunArtifacts(id: string): Promise<RunArtifactsResponse> {
-  return http.get<RunArtifactsResponse>(`/api/runs/${id}/artifacts`);
+export function getRunArtifacts(id: string, options?: HttpOptions): Promise<RunArtifactsResponse> {
+  return http.get<RunArtifactsResponse>(`/api/runs/${id}/artifacts`, options);
 }
 
 // ─── Test report + quality gate (Epic 8 · Story 8-6 — FR-8-6) ────────────────
@@ -437,8 +448,8 @@ export interface RunTestReportResponse {
   gate: GateVerdict;
 }
 
-export function getRunTestReport(id: string): Promise<RunTestReportResponse> {
-  return http.get<RunTestReportResponse>(`/api/runs/${id}/test-report`);
+export function getRunTestReport(id: string, options?: HttpOptions): Promise<RunTestReportResponse> {
+  return http.get<RunTestReportResponse>(`/api/runs/${id}/test-report`, options);
 }
 
 // ─── SSH deploy execution (Story 4-2 frozen contract — FR-10) ─────────────────
@@ -503,8 +514,9 @@ export interface DeployRunResponse {
 export function deployRun(
   id: string,
   input: DeployRunInput,
+  options?: HttpOptions,
 ): Promise<DeployRunResponse> {
-  return http.post<DeployRunResponse>(`/api/runs/${id}/deploy`, input);
+  return http.post<DeployRunResponse>(`/api/runs/${id}/deploy`, input, options);
 }
 
 export interface DeployBatchItemInput {
@@ -545,35 +557,39 @@ export interface DeployBatch {
 export function deployBatch(
   runId: string,
   input: DeployBatchInput,
+  options?: HttpOptions,
 ): Promise<DeployBatch> {
-  return http.post<DeployBatch>(`/api/runs/${runId}/deploy/batches`, input);
+  return http.post<DeployBatch>(`/api/runs/${runId}/deploy/batches`, input, options);
 }
 
 export function listDeployBatches(
   runId: string,
+  options?: HttpOptions,
 ): Promise<{ batches: DeployBatch[] }> {
   return http.get<{ batches: DeployBatch[] }>(
-    `/api/runs/${runId}/deploy/batches`,
+    `/api/runs/${runId}/deploy/batches`, options,
   );
 }
 
 export function retryDeployBatch(
   runId: string,
   batchId: string,
+  options?: HttpOptions,
 ): Promise<DeployBatch> {
   return http.post<DeployBatch>(
     `/api/runs/${runId}/deploy/batches/${batchId}/retry`,
-    {},
+    {}, options,
   );
 }
 
 export function continueDeployBatch(
   runId: string,
   batchId: string,
+  options?: HttpOptions,
 ): Promise<DeployBatch> {
   return http.post<DeployBatch>(
     `/api/runs/${runId}/deploy/batches/${batchId}/continue`,
-    {},
+    {}, options,
   );
 }
 
@@ -600,8 +616,9 @@ export interface RetryFailedDeployInput {
 export function retryFailedDeploy(
   id: string,
   input: RetryFailedDeployInput,
+  options?: HttpOptions,
 ): Promise<DeployRunResponse> {
-  return http.post<DeployRunResponse>(`/api/runs/${id}/deploy/retry`, input);
+  return http.post<DeployRunResponse>(`/api/runs/${id}/deploy/retry`, input, options);
 }
 
 // ─── Interactive batch deploy: continue / abort (P0) ──────────────────────────
@@ -622,12 +639,13 @@ export interface ContinueDeployInput {
 export function continueDeploy(
   id: string,
   input: ContinueDeployInput,
+  options?: HttpOptions,
 ): Promise<DeployRunResponse> {
-  return http.post<DeployRunResponse>(`/api/runs/${id}/deploy/continue`, input);
+  return http.post<DeployRunResponse>(`/api/runs/${id}/deploy/continue`, input, options);
 }
 
-export function abortDeploy(id: string): Promise<DeployRunResponse> {
-  return http.post<DeployRunResponse>(`/api/runs/${id}/deploy/abort`, {});
+export function abortDeploy(id: string, options?: HttpOptions): Promise<DeployRunResponse> {
+  return http.post<DeployRunResponse>(`/api/runs/${id}/deploy/abort`, {}, options);
 }
 
 // ─── SSE subscription ────────────────────────────────────────────────────────
@@ -651,12 +669,14 @@ export interface SseHandlers {
   onStep: (e: SseStepEvent) => void;
   onLog?: (e: SseLogEvent) => void;
   onError?: (err: Event) => void;
+  onAuthorizationError?: (err: HttpError) => void;
 }
 
 /** Returns a cleanup function; call it to unsubscribe. */
 export function subscribeRunEvents(
   runId: string,
   handlers: SseHandlers,
+  options: HttpOptions = {},
 ): () => void {
   const url = `/api/runs/${runId}/events`;
 
@@ -664,13 +684,15 @@ export function subscribeRunEvents(
   let es: EventSource | null = null;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let closed = false;
+  const controller=new AbortController();
+  options.signal?.addEventListener("abort",cleanup,{once:true});
 
   function startPolling(): void {
     if (closed || pollTimer !== null) return;
     // Poll every 3s as graceful degradation — no error surfaced to caller
     pollTimer = setInterval(() => {
       if (closed) return;
-      getRun(runId)
+      getRun(runId,{...options,signal:controller.signal,throwOnUnauthorized:true})
         .then((run) => {
           if (closed) return;
           // Synthesize a status event from polled data
@@ -680,14 +702,15 @@ export function subscribeRunEvents(
             handlers.onStep({ runId, step });
           }
         })
-        .catch(() => {
+        .catch((error:unknown) => {
+          if(error instanceof HttpError&&[401,403].includes(error.status)){cleanup();handlers.onAuthorizationError?.(error)}
           // Polling failure is silent — backend may not be ready yet
         });
     }, 3000);
   }
 
   function cleanup(): void {
-    closed = true;
+    closed = true;controller.abort();options.signal?.removeEventListener("abort",cleanup);
     if (es) {
       es.close();
       es = null;
@@ -698,6 +721,27 @@ export function subscribeRunEvents(
     }
   }
 
+  if(options.signal?.aborted){cleanup();return cleanup}
+  // EventSource cannot carry the selected-team header. Authenticated team
+  // streams use fetch while legacy clients retain the original EventSource path.
+  if(new Headers(options.headers).has('X-Pipewright-Team')) {
+    void (async()=>{
+      const headers=new Headers(options.headers);headers.set('Accept','text/event-stream');
+      const response=await fetch(url,{credentials:'same-origin',cache:'no-store',headers,signal:controller.signal});
+      if(!response.ok)throw new HttpError(response.status,null,'Stream unavailable');
+      if(!response.body||!response.headers.get('content-type')?.includes('text/event-stream'))throw new Error('Invalid stream');
+      const reader=response.body.getReader(),decoder=new TextDecoder();
+      const parse=sseParser(event=>{if(closed)return;try{
+        if(event.type==='status')handlers.onStatus(event.data as SseStatusEvent);
+        else if(event.type==='step')handlers.onStep(event.data as SseStepEvent);
+        else if(event.type==='log')handlers.onLog?.(event.data as SseLogEvent);
+      }catch{/* Ignore malformed events, preserving the stream lifetime. */}});
+      try{while(!closed){const part=await reader.read();if(part.done)break;parse(decoder.decode(part.value,{stream:true}))}if(!closed)parse(decoder.decode())}
+      finally{await reader.cancel().catch(()=>undefined);reader.releaseLock()}
+      if(!closed)startPolling();
+    })().catch((error:unknown)=>{if(closed)return;if(error instanceof HttpError&&[401,403].includes(error.status)){cleanup();handlers.onAuthorizationError?.(error);return}handlers.onError?.(new Event('error'));startPolling()});
+    return cleanup;
+  }
   try {
     es = new EventSource(url);
 

@@ -3,6 +3,8 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"io"
 	"net/http"
 	"time"
@@ -86,6 +88,10 @@ func toAIConfigDTO(c *ai.Config) aiConfigDTO {
 // writeAIError 把领域错误映射为契约错误码/状态码;绝不回显 apiKey 明文/密文。
 func writeAIError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, configstate.ErrConflict):
+		writeError(w, http.StatusConflict, "revision_conflict", "Configuration changed; reload before saving")
+	case errors.Is(err, tenancy.ErrForbidden):
+		writeError(w, http.StatusForbidden, "forbidden", "Permission denied")
 	case errors.Is(err, ai.ErrInvalidProvider):
 		writeError(w, http.StatusUnprocessableEntity, "invalid_provider", "provider 只能为 claude、openai 或 ollama")
 	case errors.Is(err, ai.ErrBaseURLRequired):

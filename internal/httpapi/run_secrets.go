@@ -39,6 +39,12 @@ func (s *RunSecretSource) MaskerForRun(ctx context.Context, runID string) *mask.
 	if s == nil || s.runs == nil {
 		return m
 	}
+	if handled, err := vault.RegisterRelatedMaskSecrets(ctx, s.vault, "run", runID, m); handled {
+		if err != nil {
+			m.Block()
+		}
+		return m
+	}
 	rn, err := s.runs.Get(ctx, runID)
 	if err != nil || rn == nil || rn.ProjectID == "" {
 		return m
@@ -54,6 +60,12 @@ func (s *RunSecretSource) MaskerForProject(ctx context.Context, projectID string
 	m := mask.NewMasker()
 	m.RegisterSecret(run.StubFailureSecret)
 	if s == nil || projectID == "" {
+		return m
+	}
+	if handled, err := vault.RegisterRelatedMaskSecrets(ctx, s.vault, "project", projectID, m); handled {
+		if err != nil {
+			m.Block()
+		}
 		return m
 	}
 	s.registerProjectSecrets(ctx, m, projectID)

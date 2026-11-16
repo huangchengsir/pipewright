@@ -1,3 +1,4 @@
+import type {AuthorizedRequestScope} from './useAuthorizedRequestScope'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { getCurrentUpdateTask, getUpdateTask, resumeUpdateTask, startUpdateTask, type UpgradeTask, type ReleaseSource } from '../api/version'
 import { HttpError } from '../api/http'
@@ -25,7 +26,10 @@ function requestId(): string {
 function validID(value: unknown): value is string {
  return typeof value === 'string' && opaqueID.test(value)
 }
-export function useSelfUpdate() {
+export function useSelfUpdate(scope?: AuthorizedRequestScope, userId?: string) {
+ const pendingStorageKey=userId ? storageKey+'.'+encodeURIComponent(userId) : storageKey
+ const authorized=()=>!scope||scope.active()
+ const scoped=<T>(work:()=>Promise<T>)=>scope ? scope.run(work) : work()
  const task = ref<UpgradeTask | null>(null)
  const connectionUnknown = ref(false)
  const submitting = ref(false)
@@ -38,7 +42,7 @@ export function useSelfUpdate() {
  let disposed = false
 
  try {
-  const saved = JSON.parse(sessionStorage.getItem(storageKey) || 'null')
+  const saved = JSON.parse(sessionStorage.getItem(pendingStorageKey) || 'null')
   if (saved && validID(saved.requestId) && typeof saved.target === 'string' && targetTag.test(saved.target) && (saved.source === undefined || saved.source === 'github' || saved.source === 'gitee')) {
    const taskId = validID(saved.taskId) ? saved.taskId : undefined
    const resumeId = validID(saved.resumeId) ? saved.resumeId : undefined
@@ -51,8 +55,8 @@ export function useSelfUpdate() {
 
  function remember() {
   try {
-   if (pending.value) sessionStorage.setItem(storageKey, JSON.stringify(pending.value))
-   else sessionStorage.removeItem(storageKey)
+   if (pending.value) sessionStorage.setItem(pendingStorageKey, JSON.stringify(pending.value))
+   else sessionStorage.removeItem(pendingStorageKey)
   } catch { /* Only opaque action identifiers are stored. */ }
  }
  function stop() {
@@ -79,12 +83,13 @@ export function useSelfUpdate() {
  })
 
  async function read(gen: number): Promise<void> {
+ if(disposed||!authorized())return
   controller = new AbortController()
   try {
    const value = pending.value?.taskId
-    ? await getUpdateTask(pending.value.taskId, { signal: controller.signal })
-    : await getCurrentUpdateTask({ signal: controller.signal })
-   if (disposed || gen !== generation) return
+    ? await scoped(()=>getUpdateTask(pending.value!.taskId!, { ...scope?.requestOptions, signal: controller!.signal }))
+    : await scoped(()=>getCurrentUpdateTask({ ...scope?.requestOptions, signal: controller!.signal }))
+   if (disposed || !authorized() || gen !== generation) return
    task.value = value
    const saved = pending.value
    if (value && saved?.requestId === value.requestId) {
@@ -102,12 +107,13 @@ export function useSelfUpdate() {
    }
    connectionUnknown.value = !!pending.value && (!value || value.requestId !== pending.value.requestId || !!pending.value.unconfirmedAction)
   } catch {
-   if (!disposed && gen === generation) connectionUnknown.value = true
+   if (!disposed && authorized() && gen === generation) connectionUnknown.value = true
   } finally {
-   if (!disposed && gen === generation && (active.value || connectionUnknown.value)) timer = setTimeout(() => void read(gen), 1500)
+   if (!disposed && authorized() && gen === generation && (active.value || connectionUnknown.value)) timer = setTimeout(() => void read(gen), 1500)
   }
  }
  async function recheck(): Promise<void> {
+ if(disposed||!authorized())return
   stop()
   await read(generation)
  }
@@ -120,13 +126,14 @@ export function useSelfUpdate() {
   } else connectionUnknown.value = true
  }
  function writerSettled(gen: number) {
-  if (disposed) return
+  if (disposed||!authorized()) return
   // Recheck replaces query generations, not this instance's only write. Its
   // stale response cannot replace a new query, but settling must release busy.
   submitting.value = false
   if (gen === generation) void read(gen)
  }
  async function start(target: string, source: ReleaseSource = 'github'): Promise<void> {
+ if(disposed||!authorized())return
   if (submitting.value) return
   if (pending.value?.unconfirmedAction === 'resume') {
    await recoverOriginal()
@@ -142,8 +149,9 @@ export function useSelfUpdate() {
   // Persist before dispatch: refresh/unmount can happen before any catch runs.
   remember()
   try {
-   const result = await startUpdateTask({ requestId: pending.value.requestId, target: pending.value.target, source: pending.value.source })
-   if (disposed || gen !== generation) return
+   const input={requestId:pending.value.requestId,target:pending.value.target,source:pending.value.source}
+   const result=await scoped(()=>scope ? startUpdateTask(input,scope.requestOptions) : startUpdateTask(input))
+   if (disposed || !authorized() || gen !== generation) return
    if (result.status === 'manual') {
     manual.value = { command: result.command, reason: result.reason }
     pending.value = null
@@ -157,10 +165,11 @@ export function useSelfUpdate() {
    connectionUnknown.value = false
    remember()
   } catch (error) {
-   if (!disposed && gen === generation) submissionFailed(error)
+   if (!disposed && authorized() && gen === generation) submissionFailed(error)
   } finally { writerSettled(gen) }
  }
  async function submitContinuation(saved: Pending): Promise<void> {
+ if(disposed||!authorized())return
   const taskId = saved.taskId
   const resumeId = saved.resumeId
   if (!taskId || !resumeId || submitting.value) return
@@ -171,8 +180,8 @@ export function useSelfUpdate() {
   saved.unconfirmedAction = 'resume'
   remember()
   try {
-   const result = await resumeUpdateTask(taskId, resumeId)
-   if (disposed || gen !== generation) return
+   const result=await scoped(()=>scope ? resumeUpdateTask(taskId,resumeId,scope.requestOptions) : resumeUpdateTask(taskId,resumeId))
+   if (disposed || !authorized() || gen !== generation) return
    if (!result?.id) throw new Error('Missing continuation task')
    task.value = result
    saved.unconfirmedAction = null
@@ -180,10 +189,11 @@ export function useSelfUpdate() {
    connectionUnknown.value = false
    remember()
   } catch (error) {
-   if (!disposed && gen === generation) submissionFailed(error)
+   if (!disposed && authorized() && gen === generation) submissionFailed(error)
   } finally { writerSettled(gen) }
  }
  async function resume(): Promise<void> {
+ if(disposed||!authorized())return
   const value = task.value
   if (!value || submitting.value || !resumable.includes(value.state)) return
   if (pending.value?.unconfirmedAction) {
@@ -194,6 +204,7 @@ export function useSelfUpdate() {
   await submitContinuation(pending.value)
  }
  async function recoverOriginal(): Promise<void> {
+ if(disposed||!authorized())return
   if (submitting.value || !canRecoverOriginal.value) return
   const saved = pending.value
   if (saved?.unconfirmedAction === 'resume') {

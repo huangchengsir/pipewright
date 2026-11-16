@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { i18n } from '../../i18n'
 import AiOpsServerPicker from './AiOpsServerPicker.vue'
 import AiOpsComposer from './AiOpsComposer.vue'
 import AiOpsExecArgs from './AiOpsExecArgs.vue'
@@ -51,6 +52,42 @@ const confirmation: Confirmation = {
   ],
 }
 describe('ops components', () => {
+  it('dispatches only permitted draft actions from the composer controls', async () => {
+    const wrapper = mount(AiOpsComposer, {
+      props: {
+        draft: 'test draft', draftStatus: 'saved', tools: [], disabled: false,
+        active: false, modelAvailable: true, hasTargets: true, pending: false,
+      },
+    })
+    try {
+      const t = (key: string) => i18n.global.t('opsChat.' + key)
+      const find = (key: string) => wrapper.findAll('button').find(
+        button => button.attributes('aria-label') === t(key) || button.text() === t(key),
+      )
+      const click = async (key: string, event: string) => {
+        const button = find(key)
+        expect(button, key).toBeDefined()
+        await button!.trigger('click')
+        expect(wrapper.emitted(event)).toHaveLength(1)
+      }
+      await click('send', 'send')
+      await wrapper.setProps({ draftStatus: 'failed', active: true })
+      await click('save', 'save')
+      await click('stop', 'stop')
+      await wrapper.setProps({ draftStatus: 'conflict', active: false })
+      await click('useRemote', 'remote')
+      await click('keepLocal', 'local')
+      await wrapper.setProps({ pending: true })
+      await click('retrySubmission', 'resend')
+      await wrapper.setProps({ canEdit: false, canSubmit: false, canCancel: false, active: true })
+      for (const key of ['send', 'save', 'stop', 'keepLocal', 'retrySubmission']) {
+        expect(find(key), key).toBeUndefined()
+      }
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
   it('has matching exec keys in all eight locales', () => {
     for (const locale of [en, de, es, fr, ja, ko, zhCN, zhTW]) {
       expect(Object.keys(locale.exec).sort()).toEqual(Object.keys(en.exec).sort())
@@ -172,6 +209,41 @@ describe('ops components', () => {
       expect(w.emitted('confirm')).toBeUndefined()
     } finally { w.unmount() }
   })
+  it('selects only the clicked session and stages rename without allowing unavailable actions', async () => {
+    const wrapper = mount(AiOpsSessionList, {
+      attachTo: document.body,
+      props: {
+        sessions: [
+          { id: 'a', title: 'A', updatedAt: '' },
+          { id: 'b', title: 'B', updatedAt: '' },
+        ] as never,
+        currentId: 'a',
+        disabled: false,
+      },
+    })
+    try {
+      await wrapper.findAll('button.session-row')[1]!.trigger('click')
+      expect(wrapper.emitted('select')).toEqual([['b']])
+      await wrapper.get('[aria-label="重命名"]').trigger('click')
+      await wrapper.get('input').setValue('discard this title')
+      await wrapper.get('form button[type="button"]').trigger('click')
+      expect(wrapper.find('form').exists()).toBe(false)
+      expect(wrapper.emitted('rename')).toBeUndefined()
+      await wrapper.get('[aria-label="重命名"]').trigger('click')
+      await wrapper.get('input').setValue(' Current draft ')
+      wrapper.get<HTMLButtonElement>('form button:not([type])').element.click()
+      await wrapper.vm.$nextTick()
+      expect(wrapper.emitted('rename')).toEqual([['Current draft']])
+      await wrapper.get('.ops-danger').trigger('click')
+      expect(wrapper.emitted('remove')).toHaveLength(1)
+      await wrapper.setProps({ canEdit: false, canDelete: false })
+      expect(wrapper.find('[aria-label="重命名"]').exists()).toBe(false)
+      expect(wrapper.find('.ops-danger').exists()).toBe(false)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
   it('switching sessions clears a previous rename edit', async () => {
     const w = mount(AiOpsSessionList, {
       props: {
@@ -239,6 +311,22 @@ describe('ops components', () => {
     expect(w.text()).toContain('停止')
     w.unmount()
   })
+  it('cancels exactly the pending run and removes the control when cancel is revoked', async () => {
+    const wrapper = mount(AiOpsConfirmation, {
+      props: { confirmation, calls: { c: call }, disabled: false },
+    })
+    try {
+      const cancel = wrapper.get('.ops-row button:not(.ops-primary)')
+      await cancel.trigger('click')
+      expect(wrapper.emitted('cancel')).toEqual([['r']])
+      expect(wrapper.emitted('confirm')).toBeUndefined()
+      await wrapper.setProps({ canCancel: false })
+      expect(wrapper.find('.ops-row button:not(.ops-primary)').exists()).toBe(false)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
   it('expired batch only offers reissue; no approval auto-sent', async () => {
     const w = mount(AiOpsConfirmation, {
       props: {

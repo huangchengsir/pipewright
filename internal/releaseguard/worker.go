@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"time"
 
 	"github.com/huangchengsir/pipewright/internal/deployattempt"
@@ -17,7 +18,15 @@ func (s *Service) launchLocked(id, project string) {
 	if _, ok := s.workers[id]; ok {
 		return
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	approved := s.observationContexts[id]
+	if approved == nil {
+		on, err := tenancy.Enabled(context.Background(), s.db)
+		if err != nil || on {
+			return
+		}
+		approved = context.Background()
+	}
+	ctx, cancel := context.WithCancel(approved)
 	s.workers[id] = cancel
 	s.wg.Add(1)
 	go s.work(ctx, project, id)
@@ -81,6 +90,10 @@ func (s *Service) collectLogs(ctx context.Context, project, id, targetID string)
 	select {
 	case s.sshSem <- struct{}{}:
 	case <-ctx.Done():
+		return
+	}
+	if err := tenancy.VerifyExecution(ctx); err != nil {
+		<-s.sshSem
 		return
 	}
 	text, truncated, reason := s.observer.Logs(ctx, cap, cid, from, now)
@@ -190,6 +203,11 @@ func (s *Service) work(ctx context.Context, project, id string) {
 				status, reason = "stopped", "user_stopped"
 			}
 			s.finishLocked(context.Background(), d, status, reason)
+			s.mu.Unlock()
+			return
+		}
+		if err = tenancy.VerifyExecution(ctx); err != nil {
+			s.finishLocked(context.Background(), d, "blocked", "authorization_changed")
 			s.mu.Unlock()
 			return
 		}
@@ -352,6 +370,9 @@ func (s *Service) inspect(ctx context.Context, cap target.ConnectionSnapshot, id
 	defer cancel()
 	if ctx.Err() != nil {
 		return cancelled()
+	}
+	if err := tenancy.VerifyExecution(ctx); err != nil {
+		return RuntimeSnapshot{Outcome: "unavailable", Reason: "authorization_changed", CollectedAt: s.now().UTC(), RepoDigests: []string{}}
 	}
 	if baseline {
 		return s.observer.Baseline(ctx, cap, id)

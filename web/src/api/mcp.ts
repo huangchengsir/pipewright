@@ -1,4 +1,4 @@
-import { http } from './http'
+import { http, type HttpOptions } from './http'
 
 export const MCP_CONFIG_SECTIONS = ['project', 'pipeline', 'build', 'step_limits', 'source_and_impact', 'kubernetes'] as const
 export const MCP_CONFIG_OPERATIONS = ['project.set_name', 'project.set_default_branch', 'stage.rename', 'job.rename', 'step.set_limits', 'build.set', 'kubernetes.add', 'kubernetes.update'] as const
@@ -36,16 +36,16 @@ export interface CreateMCPToken {
   configGrants?: MCPConfigGrant[]
 }
 
-export async function listMCPTokens(): Promise<MCPToken[]> {
-  return (await http.get<{ tokens: MCPToken[] }>('/api/settings/mcp/tokens')).tokens
+export async function listMCPTokens(options?: HttpOptions): Promise<MCPToken[]> {
+  return (await http.get<{ tokens: MCPToken[] }>('/api/settings/mcp/tokens', {...options,throwOnUnauthorized:true})).tokens
 }
 
-export function createMCPToken(input: CreateMCPToken): Promise<{ token: string; item: MCPToken }> {
-  return http.post('/api/settings/mcp/tokens', input)
+export function createMCPToken(input: CreateMCPToken, options?: HttpOptions): Promise<{ token: string; item: MCPToken }> {
+  return http.post('/api/settings/mcp/tokens', input, {...options,throwOnUnauthorized:true})
 }
 
-export function revokeMCPToken(id: string): Promise<void> {
-  return http.delete(`/api/settings/mcp/tokens/${encodeURIComponent(id)}`)
+export function revokeMCPToken(id: string, options?: HttpOptions): Promise<void> {
+  return http.delete(`/api/settings/mcp/tokens/${encodeURIComponent(id)}`, {...options,throwOnUnauthorized:true})
 }
 
 export function mcpTokenState(token: MCPToken, now: number): 'active' | 'expired' | 'revoked' {

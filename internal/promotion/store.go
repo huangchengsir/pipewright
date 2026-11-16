@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
 // Store 持久化环境链 / 环境变量 / 晋级记录(参数化 SQL)。
@@ -23,7 +24,7 @@ type Store struct {
 func NewStore(db *sql.DB) *Store { return &Store{db: db} }
 
 // GetChain 取某项目的环境链。未配置 → ErrChainNotConfigured。
-func (s *Store) GetChain(ctx context.Context, projectID string) (Chain, error) {
+func (s *Store) getChain(ctx context.Context, projectID string) (Chain, error) {
 	var chainJSON string
 	err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
 		`SELECT chain_json FROM project_environments WHERE project_id = ?`, projectID).Scan(&chainJSON)
@@ -45,95 +46,8 @@ func (s *Store) GetChain(ctx context.Context, projectID string) (Chain, error) {
 	return Chain{Environments: envs}, nil
 }
 
-// SaveChain upsert 某项目的环境链(校验非空/无重名)。项目不存在 → ErrProjectNotFound。
-func (s *Store) SaveChain(ctx context.Context, projectID string, c Chain) (Chain, error) {
-	valid, err := validateChain(c)
-	if err != nil {
-		return Chain{}, err
-	}
-	raw, err := json.Marshal(valid.Environments)
-	if err != nil {
-		return Chain{}, fmt.Errorf("promotion: encode chain: %w", err)
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	err = configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
-		_, writeErr := q.ExecContext(txctx,
-			store.InsertSQL(store.DialectOf(s.db), "project_environments",
-				[]string{"project_id", "chain_json", "updated_at"}, []string{"?", "?", "?"},
-				[]string{"project_id"}, []string{"chain_json", "updated_at"}),
-			projectID, string(raw), now,
-		)
-		return writeErr
-	})
-	if err != nil {
-		if isForeignKeyErr(err) || errors.Is(err, configstate.ErrNotFound) {
-			return Chain{}, ErrProjectNotFound
-		}
-		return Chain{}, fmt.Errorf("promotion: save chain: %w", err)
-	}
-	return valid, nil
-}
-
-// SetVariables 覆盖某项目某环境的全部作用域变量(整批替换;单事务)。
-// secret 变量须给 credentialId(不存明文);非 secret 存明文 value。空 key → ErrVarKeyEmpty;
-// 同环境内 key 重复 → ErrVarKeyDuplicate。项目不存在 → ErrProjectNotFound。
-func (s *Store) SetVariables(ctx context.Context, projectID, env string, vars []Variable) error {
-	env = strings.TrimSpace(env)
-	if env == "" {
-		return ErrInvalidEnvName
-	}
-	seen := map[string]struct{}{}
-	for i := range vars {
-		vars[i].Key = strings.TrimSpace(vars[i].Key)
-		if vars[i].Key == "" {
-			return ErrVarKeyEmpty
-		}
-		if _, dup := seen[vars[i].Key]; dup {
-			return ErrVarKeyDuplicate
-		}
-		seen[vars[i].Key] = struct{}{}
-	}
-
-	err := configstate.MutateProject(ctx, s.db, projectID, func(txctx context.Context, q configstate.DBTX) error {
-		if _, err := q.ExecContext(txctx,
-			`DELETE FROM environment_variables WHERE project_id = ? AND environment = ?`,
-			projectID, env); err != nil {
-			return fmt.Errorf("promotion: clear vars: %w", err)
-		}
-		now := time.Now().UTC().Format(time.RFC3339)
-		for _, v := range vars {
-			value, credID := v.Value, ""
-			isSecret := 0
-			if v.Secret {
-				isSecret = 1
-				value = "" // secret 绝不存明文
-				credID = strings.TrimSpace(v.CredentialID)
-			}
-			if _, err := q.ExecContext(txctx,
-				`INSERT INTO environment_variables
-			   (id, project_id, environment, var_key, value, is_secret, credential_id, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-				uuid.NewString(), projectID, env, v.Key, value, isSecret, credID, now,
-			); err != nil {
-				if isForeignKeyErr(err) {
-					return ErrProjectNotFound
-				}
-				return fmt.Errorf("promotion: insert var: %w", err)
-			}
-		}
-		return nil
-	})
-	if errors.Is(err, configstate.ErrNotFound) {
-		return ErrProjectNotFound
-	}
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
 // ListVariables 取某项目某环境的全部变量(掩码视图:secret 仅 credentialId,绝无明文)。
-func (s *Store) ListVariables(ctx context.Context, projectID, env string) ([]Variable, error) {
+func (s *Store) listVariables(ctx context.Context, projectID, env string) ([]Variable, error) {
 	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx,
 		`SELECT var_key, value, is_secret, credential_id
 		 FROM environment_variables WHERE project_id = ? AND environment = ?
@@ -263,7 +177,7 @@ func (s *Store) createRecord(ctx context.Context, rec Record) (string, error) {
 // decideRecord 把某记录置为终态(promoted/rejected)+ 记决定时刻 + 决定人。
 func (s *Store) decideRecord(ctx context.Context, id, status, by string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := s.db.ExecContext(ctx,
+	res, err := configstate.Queryer(ctx, s.db).ExecContext(ctx,
 		`UPDATE run_promotions SET status = ?, decided_at = ?, promoted_by = ? WHERE id = ? AND status = ?`,
 		status, now, by, id, StatusPending)
 	if err != nil {
@@ -277,6 +191,9 @@ func (s *Store) decideRecord(ctx context.Context, id, status, by string) error {
 
 // ListRecordsForRun 返回某源运行的全部晋级记录(按 created_at 升序)。
 func (s *Store) ListRecordsForRun(ctx context.Context, runID string) ([]Record, error) {
+	if err := tenancy.Check(ctx, s.db, "run.read", "run", runID); err != nil {
+		return nil, err
+	}
 	return s.queryRecords(ctx, `WHERE COALESCE((SELECT a.root_id FROM run_retry_attempts a WHERE a.run_id=run_promotions.source_run_id),source_run_id)=COALESCE((SELECT a.root_id FROM run_retry_attempts a WHERE a.run_id=?),?)`, runID, runID)
 }
 
@@ -286,6 +203,23 @@ func (s *Store) ListRecordsForProject(ctx context.Context, projectID string) ([]
 }
 
 func (s *Store) queryRecords(ctx context.Context, clause string, args ...any) ([]Record, error) {
+	predicate, err := tenancy.QueryPredicate(ctx, s.db, "run.read", "run_promotions.source_run_id")
+	if err != nil {
+		return nil, err
+	}
+	envPredicate, err := tenancy.EnvironmentPredicate(ctx, s.db, "environment.read", "run_promotions.project_id", "run_promotions.target_environment")
+	if err != nil {
+		return nil, err
+	}
+	order := ""
+	if i := strings.Index(clause, " ORDER BY"); i >= 0 {
+		order = clause[i:]
+		clause = clause[:i]
+	}
+	clause += " AND (" + predicate.SQL + ") AND (" + envPredicate.SQL + ")" + order
+	args = append(args, predicate.Args...)
+	args = append(args, envPredicate.Args...)
+
 	q := `SELECT id, project_id, source_run_id, from_environment, target_environment,
 	             status, approval_stage, promoted_by, created_at, decided_at
 	      FROM run_promotions ` + clause

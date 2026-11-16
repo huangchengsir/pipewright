@@ -1,0 +1,204 @@
+<script setup lang="ts">
+/**
+ * RunnerPanel — 远程构建 runner 选择(FR-8-14 续).
+ *
+ * 选一台已登记的服务器作该项目的远程构建机:配置后构建下沉到该机执行(控制机本地克隆 → 经 SSH 传
+ * 工作区 → 远程容器跑;token 只在控制机)。「本地构建」= 不下沉(默认)。自包含 load/save。
+ */
+import { computed, ref, onMounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { getRunner, saveRunner } from '../api/runner'
+import { listServers, type Server } from '../api/servers'
+import { HttpError } from '../api/http'
+import {useAuthorizedRequestScope} from '../composables/useAuthorizedRequestScope'
+import {usePermission,usePermissions} from '../composables/usePermission'
+import PermissionGate from './PermissionGate.vue'
+import { configRevisionOf } from '../api/configRevision'
+import { useProjectConfigRevisionParticipant } from '../composables/useProjectConfigRevisions'
+
+const props = defineProps<{ projectId: string }>()
+
+const { t } = useI18n()
+
+type LoadState = 'idle' | 'loading' | 'error'
+const loadState = ref<LoadState>('idle')
+const loadError = ref('')
+
+const servers = ref<Server[]>([])
+const selected = ref('') // '' = 本地构建
+const saveSubmitting = ref(false)
+const saveBanner = ref('')
+const saveSuccess = ref(false)
+const configRevision = ref<string>()
+const revisionSync = useProjectConfigRevisionParticipant({
+  projectId: () => props.projectId,
+  read: () => configRevision.value,
+  advance: (_from, to) => { configRevision.value = to },
+  ready: () => loadState.value === 'idle' && !saveSubmitting.value,
+  reload: load,
+})
+
+let loadGeneration = 0
+async function load(): Promise<void> {
+  if (!scope.active()) return
+  const generation = ++loadGeneration
+  const id = props.projectId
+  const initial = revisionSync.isInitialRead(id)
+  if (!initial) loadState.value = 'loading'
+  loadError.value = ''
+  try {
+    const [cfg, srv] = await scope.run(()=>Promise.all([getRunner(id,scope.requestOptions), listServers(scope.requestOptions)]))
+    if (!scope.active() || id !== props.projectId || generation !== loadGeneration) return
+    if (initial && !revisionSync.canAcceptInitialRead()) return
+    configRevision.value = configRevisionOf(cfg)
+    selected.value = cfg.runnerServerId
+    servers.value = srv
+    loadState.value = 'idle'
+  } catch (err) {
+    if (!scope.active() || id !== props.projectId || generation !== loadGeneration) return
+    if (initial) return
+    loadState.value = 'error'
+    loadError.value = err instanceof HttpError ? err.message : t('projectPanels.runner.errLoad')
+  }
+}
+
+async function handleSave(): Promise<void> {
+  if (!canSave.value || !scope.active() || saveSubmitting.value) return
+  const id = props.projectId
+  const previousRevision = configRevision.value
+  saveBanner.value = ''
+  saveSuccess.value = false
+  saveSubmitting.value = true
+  try {
+    const cfg = await scope.run(()=>saveRunner(id, selected.value, configRevision.value,scope.requestOptions))
+    if (!scope.active() || id !== props.projectId) return
+    revisionSync.committed(previousRevision, cfg, id)
+    configRevision.value = configRevisionOf(cfg)
+    selected.value = cfg.runnerServerId
+    saveSuccess.value = true
+    saveBanner.value = selected.value ? t('projectPanels.runner.setRemote') : t('projectPanels.runner.setLocal')
+  } catch (err) {
+    if (!scope.active() || id !== props.projectId) return
+    saveSuccess.value = false
+    saveBanner.value =
+      err instanceof HttpError ? (err.apiError?.message ?? t('projectPanels.runner.errSaveFailed')) : t('projectPanels.runner.errSaveRetry')
+  } finally {
+    saveSubmitting.value = false
+  }
+}
+
+const edit=usePermission({action:'pipeline.edit',resourceId:props.projectId})
+const canEdit=computed(()=>edit.allowed.value)
+const scope=useAuthorizedRequestScope({action:'pipeline.read',resourceId:props.projectId},()=>{
+ loadGeneration++;configRevision.value=undefined;saveBanner.value='';saveSuccess.value=false;servers.value=[];selected.value=''
+})
+const savePermission=usePermissions(()=>[{action:'pipeline.edit',resourceId:props.projectId},...(selected.value?[{action:'server.use',resourceId:selected.value}]:[])])
+const canSave=computed(()=>savePermission.allowed.value)
+onMounted(load)
+watch(() => props.projectId, load)
+</script>
+
+<template>
+  <section class="config-card" aria-labelledby="runner-heading">
+    <div class="card-head">
+      <span class="card-icon" aria-hidden="true">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+          <rect x="2" y="4" width="20" height="6" rx="1" /><rect x="2" y="14" width="20" height="6" rx="1" />
+          <path d="M6 7h.01M6 17h.01" />
+        </svg>
+      </span>
+      <h2 id="runner-heading" class="card-title">{{ t('projectPanels.runner.title') }}</h2>
+      <span class="card-sub">{{ t('projectPanels.runner.sub') }}</span>
+    </div>
+    <div class="card-body card-body--pad">
+      <p v-if="loadState === 'loading'" class="runner-loading">{{ t('projectPanels.runner.loading') }}</p>
+      <p v-else-if="loadState === 'error'" class="runner-error" role="alert">{{ loadError }}</p>
+      <template v-else>
+        <label class="runner-field-label" for="runner-select">{{ t('projectPanels.runner.whereLabel') }}</label>
+        <select id="runner-select" v-model="selected" class="runner-select" @change="saveSuccess = false" :disabled="!canEdit">
+          <option value="">{{ t('projectPanels.runner.optionLocal') }}</option>
+          <option v-for="s in servers" :key="s.id" :value="s.id">{{ t('projectPanels.runner.optionRemote', { name: s.name, host: s.host }) }}</option>
+        </select>
+        <p class="runner-hint">
+          {{ t('projectPanels.runner.hint') }}
+        </p>
+        <p
+          v-if="saveBanner"
+          class="runner-banner"
+          :class="saveSuccess ? 'runner-banner--ok' : 'runner-banner--err'"
+          role="status"
+        >{{ saveBanner }}</p>
+        <div class="runner-save">
+          <PermissionGate :query="{action:'pipeline.edit',resourceId:props.projectId}"><button class="btn-primary" :disabled="!canSave || saveSubmitting" :aria-busy="saveSubmitting" @click="handleSave">
+            <span v-if="saveSubmitting" class="spinner" aria-hidden="true" />
+            {{ saveSubmitting ? t('projectPanels.runner.saving') : t('projectPanels.runner.save') }}
+          </button></PermissionGate>
+        </div>
+      </template>
+    </div>
+  </section>
+</template>
+
+<style scoped>
+.config-card {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-card);
+  overflow: hidden;
+}
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--color-border);
+  flex-wrap: wrap;
+}
+.card-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--rounded-md);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  flex: none;
+}
+.card-title { font-size: 14px; font-weight: 650; color: var(--color-text); }
+.card-sub { font-size: 0.76rem; color: var(--color-faint); flex: 1; min-width: 0; }
+.card-body--pad { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.runner-loading, .runner-error { margin: 0; font-size: 0.82rem; }
+.runner-error { color: var(--color-danger, #dc2626); }
+.runner-loading { color: var(--color-faint); }
+.runner-field-label { font-size: 0.8rem; font-weight: 600; color: var(--color-text); }
+.runner-select {
+  width: 100%;
+  height: 36px;
+  padding: 0 11px;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--color-text);
+  background: var(--color-bg-subtle, var(--color-card));
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--rounded-md);
+  box-sizing: border-box;
+}
+.runner-select:focus { outline: none; border-color: var(--color-primary); }
+.runner-hint { margin: 0; font-size: 0.7rem; color: var(--color-faint); line-height: 1.45; }
+.runner-banner { margin: 0; font-size: 0.8rem; font-weight: 500; }
+.runner-banner--ok { color: var(--color-success, #16a34a); }
+.runner-banner--err { color: var(--color-danger, #dc2626); }
+.runner-save { display: flex; justify-content: flex-end; }
+@media (max-width: 640px) {
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+    min-height: 44px;
+    font-size: 16px;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+  button {
+    min-height: 44px;
+    white-space: normal;
+  }
+}
+</style>

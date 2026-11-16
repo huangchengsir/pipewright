@@ -1,4 +1,15 @@
 export default {
+  "memberAccountTitle": "{provider} アカウントの連携",
+  "viewAvailability": "詳細を見る",
+  "memberUnavailableTitle": "ログインはまだ利用できません",
+  "memberPausedTitle": "ログインは停止中です",
+  "memberUnconfiguredHint": "管理者がまだ {provider} ログインを設定していません。設定と有効化が完了すると、ここで自分のアカウントを連携できます。",
+  "memberDisabledHint": "管理者が {provider} ログインを停止しています。再度有効になると連携できます。既存の連携は保持されます。",
+  "memberHint": "管理者がプロバイダーを設定した後、自分のアカウントを連携できます。連携と解除は本人のみに適用されます。",
+  "manageBinding": "連携を管理",
+  "memberBindingHint": "返されたアカウントを確認してください。現在の従業員アカウントのみと連携し、全体のログイン設定は変更しません。",
+  "confirmPersonalBind": "連携を確認",
+
   "section": "外部アカウントでログイン",
   "sectionHint": "連携済みのアカウントを使用します。表示とログインの有効化は別々に管理します。",
   "alternate": "その他のログイン方法",

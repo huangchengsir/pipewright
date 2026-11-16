@@ -70,6 +70,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/runretry"
 	"github.com/huangchengsir/pipewright/internal/store"
 	"github.com/huangchengsir/pipewright/internal/target"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"github.com/huangchengsir/pipewright/internal/terminalhttp"
 	"github.com/huangchengsir/pipewright/internal/trigger"
 	"github.com/huangchengsir/pipewright/internal/vault"
@@ -93,6 +94,10 @@ func runPlatform() (restart func()) {
 		}
 	}
 
+	requestedMode, modeErr := config.LoadMultiTenantMode()
+	if modeErr != nil {
+		log.Fatalf("config: %v", modeErr)
+	}
 	cfg := config.Load()
 	masterKey, masterKeyErr := config.LoadMasterKey()
 	currentDatabase, recoveryRuntime, bootErr := databaseBoot(&cfg, masterKey)
@@ -171,6 +176,14 @@ func runPlatform() (restart func()) {
 	authSvc := auth.NewService(st.DB, nil)
 	if err := authSvc.Bootstrap(cfg.AdminUsername, cfg.AdminPassword); err != nil {
 		log.Fatalf("auth bootstrap: %v", err)
+	}
+	access, accessErr := assembleAccess(context.Background(), st.DB, authSvc, requestedMode, tenancyRuntimeCoverageReady)
+	if accessErr != nil {
+		log.Fatalf("[access] cannot start with requested mode: %v", accessErr)
+	}
+	legacyAccountOption := httpapi.WithAccount(authSvc)
+	if access.mode.Enabled {
+		legacyAccountOption = httpapi.WithAccount(nil)
 	}
 	// 启动时清理 DB 中遗留的过期会话(惰性删除可能遗漏)。
 	if n, err := authSvc.PurgeExpiredSessions(); err != nil {
@@ -251,7 +264,13 @@ func runPlatform() (restart func()) {
 	// 注入分支→环境解析器(#56):手动/定时/串联触发未显式带环境时,据项目分支映射补解析
 	// 环境 + 目标服务器,与 webhook 接收路径一致(否则 build_image 不知推哪个 registry、
 	// 部署节点 pull 不到镜像)。复用 trigger 包同一套 matchBranch glob。
-	runSvc := run.New(st.DB, run.WithReleaseCancellation(kubernetesSvc.CancelReleaseRun), run.WithEnvResolver(trigger.NewEnvironmentResolver(st.DB)), run.WithConfigInitializer(func(ctx context.Context, projectID string) error {
+	sourceReader := httpapi.NewSourceReader()
+	snapshotReader, snapshotSupported := sourceReader.(httpapi.PipelineSnapshotReader)
+	if !snapshotSupported {
+		log.Fatalf("[access] fixed source reader unavailable")
+	}
+	executionAccess := &runAccessCompiler{db: st.DB, projects: projectSvc, pipelines: pipelineSvc, settings: pipelineSettingsSvc, vault: credVault, source: snapshotReader, kubernetes: kubernetesSvc, pacGlobal: strings.TrimSpace(os.Getenv("PIPEWRIGHT_PAC_RUNTIME")) == "1"}
+	runSvc := run.New(st.DB, run.WithExecutionAuthorizer(executionAccess), run.WithReleaseCancellation(kubernetesSvc.CancelReleaseRun), run.WithEnvResolver(trigger.NewEnvironmentResolver(st.DB)), run.WithConfigInitializer(func(ctx context.Context, projectID string) error {
 		for _, service := range []any{pipelineSvc, pipelineSettingsSvc} {
 			initializer, ok := service.(interface {
 				EnsureStoredDefault(context.Context, string) error
@@ -270,6 +289,7 @@ func runPlatform() (restart func()) {
 
 	retryBindings := &nodeRetryBindings{db: st.DB, runs: runSvc, projects: projectSvc, settings: pipelineSettingsSvc, kubernetes: kubernetesSvc}
 	retrySvc := newNodeRetryService(st.DB, credVault, retryBindings)
+	executionAccess.recovery = retrySvc
 	if err := retrySvc.ReconcileStartup(context.Background()); err != nil {
 		log.Fatalf("recover node retries: local ledger unavailable")
 	}
@@ -357,6 +377,7 @@ func runPlatform() (restart func()) {
 	// 目标服务器(SSH 执行层)+ 远程构建 runner 配置(FR-8-14 续):项目可指定一台 server 作远程构建机,
 	// 配置后该项目构建下沉到远程执行(控制机本地克隆 → 经 SSH 传工作区 → 远程容器跑;token 只在控制机)。
 	targetSvc := target.New(st.DB, credVault, nil)
+	executionAccess.targets = targetSvc
 	var privateSSH target.SecretExecutor
 	if transport, ok := targetSvc.(target.SecretExecutor); ok {
 		privateSSH = transport
@@ -367,7 +388,7 @@ func runPlatform() (restart func()) {
 		if e != nil || credentialType != vault.TypeRegistry {
 			return kubernetes.ErrDenied
 		}
-		plain, e := credVault.Reveal(id)
+		plain, e := vault.Use(ctx, credVault, id)
 		if e != nil {
 			return kubernetes.ErrDenied
 		}
@@ -404,6 +425,7 @@ func runPlatform() (restart func()) {
 		}
 	}
 	runnerSvc := runner.New(st.DB, targetExister{targetSvc})
+	executionAccess.runners = runnerSvc
 	retryBindings.runners = runnerSvc
 
 	// 制品库(Story 8-16 / FR-8-16):构建后把 jar/dist 真字节归档,部署时取真字节上传目标机
@@ -702,7 +724,7 @@ func runPlatform() (restart func()) {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 		for {
-			_ = kubernetesSvc.DeliverReleaseContinuations(releaseDispatchCtx, kubernetesProcessOwner, pool.Enqueue)
+			_ = kubernetesSvc.DeliverReleaseContinuations(releaseDispatchCtx, kubernetesProcessOwner, executionAccess.continuationContext, pool.Enqueue)
 			select {
 			case <-releaseDispatchCtx.Done():
 				return
@@ -756,7 +778,7 @@ func runPlatform() (restart func()) {
 
 	// 装配只读源码读取器(Story 3.6;FR-4 预埋):go-git 浅克隆读 tree/blob;严格 SSRF 收口;
 	// 克隆失败优雅降级(不致命)。无 init 副作用/不驻留。
-	sourceReader := httpapi.NewSourceReader()
+	// sourceReader is shared with frozen run preparation above.
 
 	// 装配目标服务器服务(Story 4.1;internal/target,FR-14):通用 SSH exec/session 基座,
 	// 供 Epic 4 部署 + Epic 6 运维共享。SSH 私钥/口令经 vault 即用即弃,绝不入库/日志/响应/错误。
@@ -838,7 +860,7 @@ func runPlatform() (restart func()) {
 			return audit.AppendLocalTx(ctx, q, auditMasker, e)
 		},
 	})
-	mcpTokens := auth.NewMCPTokenStore(st.DB)
+	mcpTokens := assembleMCPTokens(st.DB)
 	mcpHandler, err := httpapi.NewMCPHandler(mcpTokens, pmcp.Dependencies{
 		Projects: projectSvc, Pipelines: pipelineSvc, Runs: runSvc, Parameters: parameterSvc, Audit: auditRec, Masker: auditMasker, Configs: configDrafts, RegisterSecrets: registerConfigSecrets,
 	}, httpapi.MCPHTTPOptions{AllowedHosts: strings.Split(os.Getenv("PIPEWRIGHT_MCP_ALLOWED_HOSTS"), ",")})
@@ -852,7 +874,7 @@ func runPlatform() (restart func()) {
 	go terminalManager.Run(terminalCtx)
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithDatabaseMigration(migrationRuntime), httpapi.WithSelfUpdate(selfUpdater), httpapi.WithReleaseSources(releaseSources, releaseSourceSettings), httpapi.WithKubernetes(kubernetesSvc, kubernetesController), httpapi.WithKubernetesReleases(kubernetesReleases, kubernetesProcessOwner), httpapi.WithKubernetesRollback((kubernetesRollbackCoordinator{db: st.DB, releases: kubernetesSvc, controller: kubernetesReleases, retries: retrySvc, runs: runSvc, owner: kubernetesProcessOwner}).Start), httpapi.WithOnboarding(onboarding.New(st.DB, onboardingCapabilities)), httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithRunRetry(retrySvc), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithPlatformLogin(platformLogin), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithTerminalHTTP(terminalManager), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithReleaseGuard(guardSvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc), httpapi.WithOpsChat(opsChatSvc), httpapi.WithMCP(mcpHandler, mcpTokens), httpapi.WithConfigManagement(st.DB, configDrafts, configApplyEnabled)),
+		Handler:           access.Guard(httpapi.New(webFS, access.authenticator, httpapi.WithTenancyAccounts(access.accounts), httpapi.WithTenancyRepository(access.repository), httpapi.WithDatabaseMigration(migrationRuntime), httpapi.WithSelfUpdate(selfUpdater), httpapi.WithReleaseSources(releaseSources, releaseSourceSettings), httpapi.WithKubernetes(kubernetesSvc, kubernetesController), httpapi.WithKubernetesReleases(kubernetesReleases, kubernetesProcessOwner), httpapi.WithKubernetesRollback((kubernetesRollbackCoordinator{db: st.DB, releases: kubernetesSvc, controller: kubernetesReleases, retries: retrySvc, runs: runSvc, targets: targetSvc, owner: kubernetesProcessOwner}).Start), httpapi.WithOnboarding(onboarding.New(st.DB, onboardingCapabilities)), httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithRunRetry(retrySvc), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), legacyAccountOption, httpapi.WithPlatformLogin(platformLogin), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithTerminalHTTP(terminalManager), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithReleaseGuard(guardSvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc), httpapi.WithOpsChat(opsChatSvc), httpapi.WithMCP(mcpHandler, mcpTokens), httpapi.WithConfigManagement(st.DB, configDrafts, configApplyEnabled))),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;
@@ -895,7 +917,15 @@ func runPlatform() (restart func()) {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					if _, err := anomalySvc.Check(ctx); err != nil && ctx.Err() == nil {
+					var err error
+					if scheduled, ok := anomalySvc.(interface {
+						CheckScheduled(context.Context) ([]*anomaly.Alert, error)
+					}); ok {
+						_, err = scheduled.CheckScheduled(ctx)
+					} else {
+						_, err = anomalySvc.Check(ctx)
+					}
+					if err != nil && ctx.Err() == nil {
 						log.Printf("[anomaly] Scheduled detection failed (this cycle was skipped): %v", err)
 					}
 				}
@@ -915,16 +945,33 @@ func runPlatform() (restart func()) {
 				case <-ctx.Done():
 					return
 				case t := <-ticker.C:
-					snaps, err := metricsSampleCollector.Collect(ctx, nil)
-					if err != nil {
-						if ctx.Err() == nil {
-							log.Printf("[metrics] Sampling failed (this cycle was skipped): %v", err)
+					var sampleErr error
+					if access.mode.Enabled {
+						if approved, ok := targetSvc.(target.MetricsAutomationService); ok {
+							sampleErr = approved.CollectApproved(ctx, func(principal context.Context, id string, fixed target.Service) error {
+								snapshots, e := httpapi.NewAnomalyCollector(fixed).Collect(principal, []string{id})
+								if e != nil {
+									return e
+								}
+								if e = tenancy.VerifyExecution(principal); e != nil {
+									return e
+								}
+								return metricsHist.Record(principal, httpapi.SamplesFromSnapshots(snapshots, t.UTC()))
+							})
+						} else {
+							sampleErr = tenancy.ErrNotReady
 						}
-						continue
+					} else {
+						snapshots, e := metricsSampleCollector.Collect(ctx, nil)
+						sampleErr = e
+						if e == nil {
+							sampleErr = metricsHist.Record(ctx, httpapi.SamplesFromSnapshots(snapshots, t.UTC()))
+						}
 					}
-					if err := metricsHist.Record(ctx, httpapi.SamplesFromSnapshots(snaps, t.UTC())); err != nil && ctx.Err() == nil {
-						log.Printf("[metrics] Sample write failed: %v", err)
+					if sampleErr != nil && ctx.Err() == nil {
+						log.Printf("[metrics] sampling incomplete; unverified samples discarded")
 					}
+
 					// 顺手清理过期样本(保留窗口外)。
 					if n, err := metricsHist.Sweep(ctx, t.UTC().AddDate(0, 0, -metricsRetentionDays)); err != nil && ctx.Err() == nil {
 						log.Printf("[metrics] Expired sample cleanup failed: %v", err)
@@ -1149,6 +1196,20 @@ func (t targetExister) Exists(ctx context.Context, id string) bool {
 // (带 DNS 提供商引用)。避免 dnsprovider import proxy 形成环 —— 适配器在 main 装配层桥接。
 type proxyRouteCreator struct{ proxy proxy.Service }
 
+func (c *proxyRouteCreator) PrepareDNS01Route(ctx context.Context, server string) (dnsprovider.RouteCreator, func(context.Context) error, error) {
+	preparer, ok := c.proxy.(interface {
+		PrepareDNSRoute(context.Context, string) (proxy.Service, func(context.Context) error, error)
+	})
+	if !ok {
+		return nil, nil, tenancy.ErrForbidden
+	}
+	bound, verify, err := preparer.PrepareDNSRoute(ctx, server)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &proxyRouteCreator{proxy: bound}, verify, nil
+}
+
 func (c *proxyRouteCreator) CreateDNS01Route(ctx context.Context, in dnsprovider.CreateDNS01RouteInput) (string, error) {
 	route, err := c.proxy.Create(ctx, proxy.CreateInput{
 		ServerID:          in.ServerID,
@@ -1224,8 +1285,9 @@ func (r *previewRepoResolver) Resolve(ctx context.Context, projectID string) (st
 	}
 	token := ""
 	if r.vault != nil && strings.TrimSpace(proj.CredentialID) != "" {
-		if tok, terr := r.vault.Reveal(proj.CredentialID); terr == nil {
-			token = tok
+		token, err = vault.Use(ctx, r.vault, proj.CredentialID)
+		if err != nil {
+			return "", "", err
 		}
 	}
 	return proj.RepoURL, token, nil

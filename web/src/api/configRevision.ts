@@ -1,3 +1,4 @@
+import type {HttpOptions} from './http'
 /** A revision belongs to the DTO that was actually read, never a global latest cache. */
 const revisionKey = Symbol('pipewright-config-revision')
 
@@ -15,6 +16,9 @@ export function configRevisionOf(value: unknown): string | undefined {
   return typeof revision === 'string' && /^cfg-[0-9]+$/.test(revision) ? revision : undefined
 }
 
-export function configWriteOptions(revision?: string): RequestInit | undefined {
-  return revision ? { headers: { 'If-Match': revision } } : undefined
+export function configWriteOptions(revision?: string, options?: HttpOptions): HttpOptions | undefined {
+  if (!options) return revision ? { headers: { 'If-Match': revision } } : undefined
+  const headers = new Headers(options.headers)
+  if (revision) headers.set('If-Match', revision)
+  return {...options, headers:Object.fromEntries(headers.entries())}
 }

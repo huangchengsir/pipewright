@@ -118,6 +118,7 @@ type GrantInput struct {
 	Enabled         bool     `json:"enabled"`
 }
 type Grant struct {
+	EnvironmentID   string   `json:"environmentId,omitempty"`
 	ID              string   `json:"id"`
 	ConnectionID    string   `json:"connectionId"`
 	Revision        int64    `json:"revision"`

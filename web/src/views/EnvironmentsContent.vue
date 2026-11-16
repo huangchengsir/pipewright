@@ -1,0 +1,723 @@
+<!--
+  Environments.vue — 环境一等公民(对标 GitLab environments)。
+
+  把「环境」做成可观测的一等对象:
+    · 按环境聚合部署历史(哪个 run、何时、什么产物、成功/失败、目标机、谁触发)。
+    · 每环境一张卡:醒目的「当前活跃版本」头部 + 时间线轨道(最近 N 次部署)。
+    · 一键回滚:回滚到「上一次成功部署」(当前活跃版本之前最近一次全成功),复用既有部署链路重发。
+    · URL 即状态:projectId 落 query,可分享、可前进后退(web-patterns「URL as state」)。
+
+  数据为既有运行数据上的**只读聚合**(无新表):部署 = 实际向某环境执行过部署(有 deploy_targets)
+  的 run;活跃版本 = 最近一次全机成功;回滚目标 = 活跃之前最近一次全机成功。
+-->
+<script setup lang="ts">
+import { computed, onMounted, onBeforeUnmount, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
+import { useRoute, useRouter } from "vue-router";
+import {
+  listEnvironmentDeployments,
+ listEnvironmentProjects,
+  rollbackEnvironment,
+  type EnvironmentTimeline,
+} from "../api/environments";
+import {
+  canRollback,
+  previousSuccess,
+  shortCommit,
+  toBadgeStatus,
+} from "../api/environments.helpers";
+import {useIdentityRequestScope} from "../composables/useAuthorizedRequestScope";
+import PermissionGate from "../components/PermissionGate.vue";
+import { usePermissionStore } from "../stores/permissions";
+import { HttpError } from "../api/http";
+import { useConfirm } from "../composables/useConfirm";
+import { useToast } from "../composables/useToast";
+import AppButton from "../components/ui/AppButton.vue";
+import ErrorState from "../components/ui/ErrorState.vue";
+import EmptyState from "../components/ui/EmptyState.vue";
+import SkeletonBlock from "../components/ui/SkeletonBlock.vue";
+import StatusBadge from "../components/ui/StatusBadge.vue";
+import AppSelect from "../components/ui/AppSelect.vue";
+import "../styles/kubernetes.css";
+import ReleaseGuardPanel from "../components/run/ReleaseGuardPanel.vue";
+
+type LoadState = "idle" | "loading" | "error";
+
+const route = useRoute();
+const router = useRouter();
+const confirm = useConfirm();
+const toast = useToast();
+const permissions = usePermissionStore();
+function rollbackPermission(tl:EnvironmentTimeline) { return {action:"release.rollback",resourceId:tl.environmentId??"",environmentId:tl.environmentId??""}; }
+const { t } = useI18n();
+
+const loadState = ref<LoadState>("idle");
+const loadError = ref("");
+const timelines = ref<EnvironmentTimeline[]>([]);
+const projects = ref<{id:string;name:string}[]>([]);
+/** 正在回滚中的环境名(禁用按钮 + loading)。 */
+const rollingBack = ref<string>("");
+
+// ─── URL as state ───────────────────────────────────────────────────────────
+
+const projectId = computed<string>(() => {
+  const p = route.query.projectId;
+  return typeof p === "string" ? p : "";
+});
+
+function setProject(id: string): void {
+  const next: Record<string, string> = {
+    ...(route.query as Record<string, string>),
+  };
+  if (id) next.projectId = id;
+  else delete next.projectId;
+  void router.replace({ query: next });
+}
+
+// ─── derived display ──────────────────────────────────────────────────────────
+
+function formatWhen(iso: string): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
+}
+
+// ─── load ─────────────────────────────────────────────────────────────────────
+
+let alive = true,
+  loadGeneration = 0,
+  loadController = new AbortController();
+const scope=useIdentityRequestScope(()=>{
+ loadGeneration++;loadController.abort();timelines.value=[];projects.value=[];rollingBack.value='';loadError.value='';loadState.value='idle';
+});
+onBeforeUnmount(() => {
+  alive = false;
+  loadGeneration++;
+  loadController.abort();
+});
+async function load(): Promise<void> {
+  if(!scope.active()) return;
+  loadController.abort();
+  loadController = new AbortController();
+  const signal = loadController.signal,
+    generation = ++loadGeneration,
+    id = projectId.value;
+  if (!id) {
+    timelines.value = [];
+    loadState.value = "idle";
+    return;
+  }
+  loadState.value = "loading";
+  loadError.value = "";
+  try {
+    const data = await scope.run(()=>listEnvironmentDeployments(id, signal,scope.requestOptions));
+    if (!alive || !scope.active() || signal.aborted || generation !== loadGeneration) return;
+    timelines.value = data;
+    loadState.value = "idle";
+  } catch (err) {
+    if (!alive || !scope.active() || signal.aborted || generation !== loadGeneration) return;
+    if (err instanceof HttpError) {
+      loadError.value =
+        err.status === 0
+          ? t("environments.errNetwork")
+          : (err.apiError?.message ??
+            t("environments.errLoad", { status: err.status }));
+    } else {
+      loadError.value = t("environments.errLoadRetry");
+    }
+    loadState.value = "error";
+  }
+}
+
+async function loadProjects(): Promise<void> {
+  try {
+    const data = await scope.run(()=>listEnvironmentProjects(scope.requestOptions));
+    if (!alive || !scope.active()) return;
+    projects.value = data;
+    // 未选项目且有项目 → 默认选首个(环境历史强依赖某个项目)。
+    if (!projectId.value && projects.value.length > 0) {
+      setProject(projects.value[0].id);
+    }
+  } catch {
+    if (alive) projects.value = [];
+  }
+}
+
+// ─── rollback ───────────────────────────────────────────────────────────────
+
+let selectionGeneration = 0;
+async function onRollback(tl: EnvironmentTimeline): Promise<void> {
+  const initiatingProject = projectId.value;
+  const selection = selectionGeneration;
+  const prev = previousSuccess(tl);
+  if (!scope.active() || !prev || !canRollback(tl) || !permissions.allowed(permissions.activeTeam,rollbackPermission(tl))) return;
+  const expected = {expectedCurrentRunId: tl.active?.runId ?? "", expectedTargetRunId: prev.runId};
+  const ok = await confirm.open({
+    title: t("environments.rollbackTitle", { env: tl.environment }),
+    body: t("environments.rollbackBody", {
+      commit: shortCommit(prev.commit),
+      when: formatWhen(prev.deployedAt),
+    }),
+    confirmLabel: t("environments.rollbackConfirm"),
+    variant: "danger",
+  });
+  if (!ok || !alive || !scope.active() || initiatingProject !== projectId.value || !permissions.allowed(permissions.activeTeam,rollbackPermission(tl))) return;
+
+  const current = timelines.value.find(item => item.environment === tl.environment && item.environmentId === tl.environmentId);
+  if (selection !== selectionGeneration || !current || current.active?.runId !== expected.expectedCurrentRunId || previousSuccess(current)?.runId !== expected.expectedTargetRunId) {
+    toast.error(t("environments.rollbackTargetChanged")); return;
+  }
+  rollingBack.value = tl.environment;
+  try {
+    const res = await scope.run(()=>rollbackEnvironment(initiatingProject, tl.environment,scope.requestOptions,expected));
+    if (!alive || !scope.active() || selection !== selectionGeneration || !permissions.allowed(permissions.activeTeam,rollbackPermission(tl)) || initiatingProject !== projectId.value) return;
+    const failed = res.targets.filter(
+      (tg) => tg.status === "failed" || tg.status === "rolled_back",
+    ).length;
+    if (failed === 0) {
+      toast.success(
+        t("environments.toastRolledBack", { env: tl.environment }),
+        {
+          detail: t("environments.toastRolledBackDetail", {
+            n: res.targets.length,
+          }),
+        },
+      );
+    } else {
+      toast.error(
+        t("environments.toastRollbackPartial", { env: tl.environment }),
+        {
+          detail: t("environments.toastRollbackPartialDetail", {
+            failed,
+            total: res.targets.length,
+          }),
+        },
+      );
+    }
+    await load();
+  } catch (err) {
+    if (!alive || !scope.active() || selection !== selectionGeneration || !permissions.allowed(permissions.activeTeam,rollbackPermission(tl)) || initiatingProject !== projectId.value) return;
+    const msg =
+      err instanceof HttpError && err.apiError?.code === "rollback_target_changed" ? t("environments.rollbackTargetChanged") :
+      err instanceof HttpError
+        ? (err.apiError?.message ??
+          t("environments.rollbackFailedStatus", { status: err.status }))
+        : t("environments.rollbackFailedRetry");
+    toast.error(
+      t("environments.toastRollbackFailed", { env: tl.environment }),
+      { detail: msg },
+    );
+  } finally {
+    if (alive && selection === selectionGeneration && initiatingProject === projectId.value) rollingBack.value = "";
+  }
+}
+
+// query 变化 → 重新拉取(URL 即状态的单一数据流)。
+watch(projectId, () => { selectionGeneration++; rollingBack.value = ""; void load(); }, {flush: "sync"});
+
+onMounted(() => {
+  void loadProjects();
+  if (projectId.value) void load();
+});
+</script>
+
+<template>
+  <div class="env-view">
+    <header class="view-header">
+      <div class="view-header__text">
+        <h1 class="view-title">{{ t("environments.title") }}</h1>
+        <p class="view-sub">
+          {{ t("environments.subtitle") }}
+        </p>
+      </div>
+      <AppButton
+        variant="default"
+        :loading="loadState === 'loading'"
+        @click="load"
+        >{{ t("common.refresh") }}</AppButton
+      >
+    </header>
+
+    <!-- Project filter -->
+    <div class="env-controls">
+      <label class="env-controls__field">
+        <span class="env-controls__label">{{ t("environments.project") }}</span>
+        <AppSelect
+          class="select"
+          :model-value="projectId"
+          :options="projects.map((p) => ({ value: p.id, label: p.name }))"
+          :placeholder="t('environments.selectProject')"
+          :aria-label="t('environments.filterByProject')"
+          min-width="220px"
+          @update:model-value="setProject"
+        />
+      </label>
+    </div>
+
+    <!-- No project selected -->
+    <EmptyState
+      v-if="!projectId"
+      :title="t('environments.emptySelectTitle')"
+      :description="t('environments.emptySelectDesc')"
+    />
+
+    <!-- Error -->
+    <ErrorState
+      v-else-if="loadState === 'error'"
+      :title="t('environments.errLoadTitle')"
+      :description="loadError"
+      @retry="load"
+    />
+
+    <!-- Loading skeleton -->
+    <div
+      v-else-if="loadState === 'loading' && timelines.length === 0"
+      class="env-grid"
+      aria-busy="true"
+    >
+      <div v-for="n in 2" :key="n" class="skeleton-card">
+        <SkeletonBlock :height="16" width="30%" />
+        <SkeletonBlock :height="40" width="70%" />
+        <SkeletonBlock :height="14" width="90%" />
+        <SkeletonBlock :height="14" width="60%" />
+      </div>
+    </div>
+
+    <!-- Empty -->
+    <EmptyState
+      v-else-if="timelines.length === 0"
+      :title="t('environments.emptyTitle')"
+      :description="t('environments.emptyDesc')"
+    />
+
+    <!-- Content -->
+    <div v-else class="env-grid">
+      <article v-for="tl in timelines" :key="tl.environment" class="env-card">
+        <!-- Active version hero -->
+        <div class="env-card__head">
+          <div class="env-card__name-row">
+            <h2 class="env-card__name">{{ tl.environment }}</h2>
+            <span
+              v-if="tl.active"
+              class="env-card__live"
+              :title="t('environments.activeVersionTitle')"
+              >● {{ t("environments.active") }}</span
+            >
+            <span
+              v-else
+              class="env-card__stale"
+              :title="t('environments.noFullSuccessTitle')"
+              >{{ t("environments.noActiveVersion") }}</span
+            >
+          </div>
+
+          <div v-if="tl.active" class="env-card__active">
+            <div class="env-card__active-meta">
+              <code class="env-card__commit">{{
+                shortCommit(tl.active.commit)
+              }}</code>
+              <span class="env-card__branch">{{
+                tl.active.branch || "—"
+              }}</span>
+              <StatusBadge :status="toBadgeStatus(tl.active.status)" />
+            </div>
+            <div class="env-card__active-sub">
+              <span>{{ formatWhen(tl.active.deployedAt) }}</span>
+              <span class="env-card__dot" aria-hidden="true">·</span>
+              <span>{{ tl.active.triggeredBy || "—" }}</span>
+              <span class="env-card__dot" aria-hidden="true">·</span>
+              <span>{{
+                t(
+                  tl.active.kubernetes?.length
+                    ? "kubernetes.targetCount"
+                    : "environments.targetCount",
+                  {
+                    n:
+                      tl.active.targets.length +
+                      (tl.active.kubernetes?.length ?? 0),
+                  },
+                )
+              }}</span>
+            </div>
+          </div>
+
+          <PermissionGate :query="rollbackPermission(tl)">
+<AppButton
+            variant="default"
+            :disabled="!canRollback(tl) || rollingBack === tl.environment"
+            :loading="rollingBack === tl.environment"
+            :title="
+              canRollback(tl)
+                ? t('environments.rollbackEnabledTitle')
+                : t('environments.rollbackDisabledTitle')
+            "
+            @click="onRollback(tl)"
+          >
+            {{ t("environments.rollback") }}
+          </AppButton>
+</PermissionGate>
+        </div>
+
+        <p
+          v-if="
+            tl.active?.kubernetes?.length ||
+            previousSuccess(tl)?.kubernetes?.length
+          "
+          class="kube-note"
+        >
+          {{ t("kubernetes.noRollback") }}
+        </p>
+        <!-- Deployment timeline rail -->
+        <ol
+          class="env-timeline"
+          :aria-label="t('environments.timelineAria', { env: tl.environment })"
+        >
+          <li
+            v-for="dep in tl.deployments"
+            :key="dep.runId"
+            class="env-timeline__item"
+            :class="{
+              'env-timeline__item--active': dep.active,
+              'env-timeline__item--failed': dep.status === 'failed',
+              'env-timeline__item--partial': dep.status === 'partial_failed',
+            }"
+          >
+            <span class="env-timeline__node" aria-hidden="true" />
+            <div class="env-timeline__body">
+              <div class="env-timeline__line1">
+                <code class="env-timeline__commit">{{
+                  shortCommit(dep.commit)
+                }}</code>
+                <StatusBadge :status="toBadgeStatus(dep.status)" />
+                <span v-if="dep.active" class="env-timeline__tag">{{
+                  t("environments.active")
+                }}</span>
+              </div>
+              <div class="env-timeline__line2">
+                <span>{{ formatWhen(dep.deployedAt) }}</span>
+                <span class="env-card__dot" aria-hidden="true">·</span>
+                <span>{{ dep.triggeredBy || "—" }}</span>
+                <span class="env-card__dot" aria-hidden="true">·</span>
+                <span class="env-timeline__servers">{{
+                  dep.targets.map((t) => t.serverName).join(", ") || "—"
+                }}</span>
+              </div>
+              <div
+                v-if="dep.artifacts.length > 0"
+                class="env-timeline__artifacts"
+              >
+                <span
+                  v-for="a in dep.artifacts"
+                  :key="a.id"
+                  class="env-timeline__artifact"
+                >
+                  {{ a.type }}:{{ a.name }}
+                </span>
+              </div>
+              <div
+                v-for="target in dep.kubernetes ?? []"
+                :key="target.releaseId || target.operationId"
+                class="kube-card kube-surface"
+              >
+                <template v-if="target.version === 2"
+                  ><strong>Kubernetes · {{ target.mode }}</strong>
+                  <p>
+                    {{ t("kubernetes.release.states." + target.state) }} ·
+                    {{ t("kubernetes.cleanup." + target.cleanup) }}
+                  </p>
+                  <ul>
+                    <li
+                      v-for="resource in target.resources ?? []"
+                      :key="resource.kind + resource.namespace + resource.name"
+                    >
+                      {{ resource.kind }} · {{ resource.namespace }}/{{
+                        resource.name
+                      }}
+                    </li>
+                  </ul></template
+                ><strong v-else
+                  >Kubernetes · {{ target.namespace }}/{{
+                    target.deployment
+                  }}</strong
+                >
+                <p v-if="target.version !== 2">
+                  {{ target.container }} ·
+                  {{ t("kubernetes.business." + target.business) }} ·
+                  {{ t("kubernetes.cleanup." + target.cleanup) }}
+                </p>
+                <p v-if="target.version !== 2">
+                  <code>{{ target.image }}</code>
+                </p>
+                <p v-if="target.adopted" class="kube-muted">
+                  {{ t("kubernetes.adopted") }}
+                  <RouterLink
+                    :to="{
+                      name: 'run-detail',
+                      params: { id: target.sourceRunId },
+                    }"
+                    >{{ t("kubernetes.sourceRun") }}</RouterLink
+                  >
+                </p>
+                <p v-if="target.version !== 2" class="kube-muted">
+                  {{ t("kubernetes.rolloutOnly") }}
+                </p>
+              </div>
+              <ReleaseGuardPanel
+                :run-id="dep.runId"
+                :project-id="projectId"
+                :environment="tl.environment"
+                :has-deployment-targets="dep.targets.length > 0"
+                compact
+              />
+            </div>
+          </li>
+        </ol>
+      </article>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.env-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.view-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+.view-title {
+  font-size: var(--text-display);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+.view-sub {
+  margin: var(--space-1) 0 0;
+  color: var(--color-dim);
+  font-size: var(--text-body);
+}
+
+.env-controls {
+  display: flex;
+  gap: var(--space-4);
+  align-items: flex-end;
+}
+.env-controls__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.env-controls__label {
+  font-size: var(--text-label);
+  color: var(--color-dim);
+  font-weight: 600;
+}
+.select {
+  appearance: none;
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-md);
+  color: var(--color-text);
+  padding: 8px 32px 8px 12px;
+  font-size: var(--text-body);
+  min-width: 220px;
+}
+
+.env-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: var(--space-4);
+}
+
+.env-card {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-card);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Active version hero */
+.env-card__head {
+  padding: var(--space-4);
+  background: linear-gradient(180deg, var(--color-card-2), var(--color-card));
+  border-bottom: 1px solid var(--color-border);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  gap: var(--space-3);
+  align-items: center;
+}
+.env-card__name-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  grid-column: 1 / 2;
+}
+.env-card__name {
+  margin: 0;
+  font-size: var(--text-kpi);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.env-card__live {
+  font-size: var(--text-micro);
+  font-weight: 700;
+  color: var(--color-green);
+  letter-spacing: 0.02em;
+}
+.env-card__stale {
+  font-size: var(--text-micro);
+  color: var(--color-faint);
+}
+.env-card__active {
+  grid-column: 1 / 2;
+  grid-row: 2 / 3;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.env-card__active-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.env-card__commit {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-body);
+  font-weight: 600;
+  color: var(--color-text);
+}
+.env-card__branch {
+  font-size: var(--text-label);
+  color: var(--color-dim);
+}
+.env-card__active-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: var(--text-label);
+  color: var(--color-dim);
+}
+.env-card__dot {
+  color: var(--color-faint);
+}
+/* Rollback button spans both rows on the right. */
+.env-card__head > :deep(button) {
+  grid-column: 2 / 3;
+  grid-row: 1 / 3;
+}
+
+/* Timeline rail */
+.env-timeline {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  position: relative;
+}
+.env-timeline::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--space-4) + 5px);
+  top: var(--space-4);
+  bottom: var(--space-4);
+  width: 2px;
+  background: var(--color-border);
+}
+.env-timeline__item {
+  position: relative;
+  display: flex;
+  gap: var(--space-3);
+  padding-left: var(--space-4);
+}
+.env-timeline__node {
+  position: absolute;
+  left: 0;
+  top: 4px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--color-card);
+  border: 2px solid var(--color-border-strong);
+  z-index: 1;
+}
+.env-timeline__item--active .env-timeline__node {
+  background: var(--color-green);
+  border-color: var(--color-green);
+  box-shadow: 0 0 0 4px color-mix(in oklch, var(--color-green) 22%, transparent);
+}
+.env-timeline__item--failed .env-timeline__node {
+  border-color: var(--color-red);
+}
+.env-timeline__item--partial .env-timeline__node {
+  border-color: var(--color-primary);
+}
+.env-timeline__body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.env-timeline__line1 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.env-timeline__commit {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-label);
+  font-weight: 600;
+}
+.env-timeline__tag {
+  font-size: var(--text-micro);
+  font-weight: 700;
+  color: var(--color-green);
+}
+.env-timeline__line2 {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: var(--text-micro);
+  color: var(--color-dim);
+}
+.env-timeline__servers {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+.env-timeline__artifacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+.env-timeline__artifact {
+  font-size: var(--text-micro);
+  background: var(--color-inset);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-sm);
+  padding: 1px 6px;
+  color: var(--color-dim);
+}
+
+.skeleton-card {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rounded-card);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+</style>

@@ -20,7 +20,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/store"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"strings"
 	"time"
 
@@ -184,7 +186,25 @@ func (r *recorder) Record(ctx context.Context, e Entry) error {
 		ip = e.IP
 	}
 
-	_, err := r.db.ExecContext(ctx,
+	q := configstate.Queryer(ctx, r.db)
+	var owned *sql.Tx
+	if q == r.db {
+		var err error
+		owned, err = r.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer owned.Rollback()
+		q = owned
+	}
+	actor, err := tenancy.AppendAuditOwnership(ctx, q, id, e.TargetType, e.TargetID)
+	if err != nil {
+		return fmt.Errorf("audit: attribution: %w", err)
+	}
+	if actor != "" {
+		e.Actor = actor
+	}
+	_, err = q.ExecContext(ctx,
 		`INSERT INTO audit_log (id, timestamp, actor, action, target_type, target_id, detail_json, ip, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, nowStr, e.Actor, e.Action, e.TargetType, targetID, detailJSON, ip, nowStr,
@@ -193,6 +213,11 @@ func (r *recorder) Record(ctx context.Context, e Entry) error {
 		return fmt.Errorf("audit: insert: %w", err)
 	}
 
+	if owned != nil {
+		if err = owned.Commit(); err != nil {
+			return fmt.Errorf("audit: commit: %w", err)
+		}
+	}
 	// 远端 sink:本地成功后同步一份;失败仅降级记录,不阻断主操作。
 	if r.sink != nil {
 		rec := Record{
@@ -205,14 +230,26 @@ func (r *recorder) Record(ctx context.Context, e Entry) error {
 			Detail:     detail,
 			IP:         e.IP,
 		}
-		if serr := r.sink.Send(ctx, rec); serr != nil && r.onSinkError != nil {
-			r.onSinkError(serr)
+		send := func() {
+			if serr := r.sink.Send(ctx, rec); serr != nil && r.onSinkError != nil {
+				r.onSinkError(serr)
+			}
+		}
+		if owned != nil {
+			send()
+		} else {
+			configstate.AfterCommit(ctx, send)
 		}
 	}
 	return nil
 }
 
 func (r *recorder) List(ctx context.Context, f ListFilter) (*ListResult, error) {
+	predicate, err := tenancy.AuditPredicate(ctx, r.db)
+	if err != nil {
+		return nil, err
+	}
+	q := configstate.Queryer(ctx, r.db)
 	limit := f.Limit
 	if limit <= 0 {
 		limit = defaultLimit
@@ -222,23 +259,24 @@ func (r *recorder) List(ctx context.Context, f ListFilter) (*ListResult, error) 
 	}
 
 	var (
-		conds []string
-		args  []any
+		conds = []string{"(" + predicate.SQL + ")"}
+		args  = append([]any{}, predicate.Args...)
 	)
 	if f.Action != "" {
-		conds = append(conds, "action = ?")
+		conds = append(conds, "al.action = ?")
 		args = append(args, f.Action)
 	}
 	if f.TargetType != "" {
-		conds = append(conds, "target_type = ?")
+		conds = append(conds, "al.target_type = ?")
 		args = append(args, f.TargetType)
 	}
 	// 游标:before=上一页最后一条 id。以 (timestamp,id) 复合次序定位,稳定分页
 	// (同毫秒多条时仍按 id 二级排序确定边界)。
 	if f.Before != "" {
 		var ts string
-		err := r.db.QueryRowContext(ctx,
-			`SELECT timestamp FROM audit_log WHERE id = ?`, f.Before,
+		cursorArgs := append([]any{f.Before}, predicate.Args...)
+		err := q.QueryRowContext(ctx,
+			`SELECT al.timestamp FROM audit_log al WHERE al.id = ? AND (`+predicate.SQL+`)`, cursorArgs...,
 		).Scan(&ts)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
@@ -246,7 +284,7 @@ func (r *recorder) List(ctx context.Context, f ListFilter) (*ListResult, error) 
 		case err != nil:
 			return nil, fmt.Errorf("audit: resolve cursor: %w", err)
 		default:
-			conds = append(conds, "(timestamp < ? OR (timestamp = ? AND id < ?))")
+			conds = append(conds, "(al.timestamp < ? OR (al.timestamp = ? AND al.id < ?))")
 			args = append(args, ts, ts, f.Before)
 		}
 	}
@@ -257,11 +295,11 @@ func (r *recorder) List(ctx context.Context, f ListFilter) (*ListResult, error) 
 	}
 	// 多取一条以判断是否还有下一页。
 	args = append(args, limit+1)
-	query := `SELECT id, timestamp, actor, action, target_type, target_id, detail_json, ip
-	          FROM audit_log ` + where + `
-	          ORDER BY timestamp DESC, id DESC` + store.Limit(store.DialectOf(r.db), "?")
+	query := `SELECT al.id, al.timestamp, al.actor, al.action, al.target_type, al.target_id, al.detail_json, al.ip
+	          FROM audit_log al ` + where + `
+	          ORDER BY al.timestamp DESC, al.id DESC` + store.Limit(store.DialectOf(r.db), "?")
 
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("audit: list: %w", err)
 	}

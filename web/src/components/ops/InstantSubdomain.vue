@@ -9,17 +9,22 @@
   本组件只负责发起分配与展示结果;serverId 由父(单机面板)提供。分配成功后
   emit('allocated', 新路由) 让父把新路由插进列表。
 */
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RouterLink } from 'vue-router'
 import { NIcon } from 'naive-ui'
 import { Wand, World, ExternalLink, X, Confetti, ArrowRight } from '@vicons/tabler'
 import { allocateSubdomain, type ProxyRoute } from '../../api/reverseProxy'
-import { listDnsProviders, type DnsProvider } from '../../api/dnsProviders'
+import { listUsableDnsProviders, type UsableDnsProvider } from '../../api/dnsProviders'
 import type { ContainerInfo } from '../../api/containers'
 import { HttpError } from '../../api/http'
 import { useToast } from '../../composables/useToast'
 
+import PermissionGate from '../PermissionGate.vue'
+import { useIdentityRequestScope } from '../../composables/useAuthorizedRequestScope'
+import { usePermission, usePermissions } from '../../composables/usePermission'
+import { usePermissionStore } from '../../stores/permissions'
+import { useSessionStore } from '../../stores/session'
 const props = defineProps<{
   serverId: string
   /** Containers on this host, for the upstream selector + default-port inference. */
@@ -31,33 +36,61 @@ const emit = defineEmits<{
   (e: 'allocated', route: ProxyRoute): void
 }>()
 
+const serverId = props.serverId
+const hostQueries = [
+  { action: 'proxy.manage', resourceId: serverId },
+  { action: 'server.use', resourceId: serverId },
+]
+const hostRights = usePermissions(hostQueries)
+const permissionStore = usePermissionStore()
+const session = useSessionStore()
+const canConfigureDns = computed(() => Boolean(session.user && (!session.user.multiTenant || session.user.instanceAdmin)))
 const { t } = useI18n()
 const toast = useToast()
 
 const open = ref(false)
-
-// ─── DNS 提供商 ────────────────────────────────────────────────────────────────
-const providers = ref<DnsProvider[]>([])
+const providers = ref<UsableDnsProvider[]>([])
 const providersLoaded = ref(false)
-async function loadProviders(): Promise<void> {
-  try {
-    providers.value = await listDnsProviders()
-  } catch {
-    providers.value = []
-  } finally {
-    providersLoaded.value = true
-  }
-}
-onMounted(loadProviders)
-
-const hasProviders = computed(() => providers.value.length > 0)
-
-// ─── 表单 ──────────────────────────────────────────────────────────────────────
 const providerId = ref('')
 const upstreamContainer = ref('')
 const upstreamPort = ref('')
 const allocating = ref(false)
+const result = ref<ProxyRoute | null>(null)
+let allocation: AbortController | undefined
 
+function resetAllocation() {
+  allocation?.abort()
+  allocation = undefined
+  allocating.value = false
+  result.value = null
+}
+const scope = useIdentityRequestScope(() => {
+  resetAllocation()
+  open.value = false
+  providers.value = []
+  providersLoaded.value = false
+  providerId.value = ''
+  upstreamContainer.value = ''
+  upstreamPort.value = ''
+}, () => props.serverId === serverId && hostRights.allowed.value, () => permissionStore.invalidate())
+
+async function loadProviders(): Promise<void> {
+  try {
+    providers.value = await scope.run(() => listUsableDnsProviders(scope.requestOptions))
+  } catch {
+    if (scope.active()) providers.value = []
+  } finally {
+    if (scope.active()) providersLoaded.value = true
+  }
+}
+watch(() => scope.active(), (active) => { if (active) void loadProviders() }, { immediate: true })
+const hasProviders = computed(() => providers.value.length > 0)
+
+const dnsQuery = computed(() => ({ action: 'dns.use', resourceId: providerId.value }))
+const dnsPermission = usePermission(dnsQuery)
+watch([providerId, dnsPermission.allowed], () => {
+  if (allocation || result.value) resetAllocation()
+}, { flush: 'sync' })
 const selectedProvider = computed(() => providers.value.find((p) => p.id === providerId.value))
 
 const runningContainers = computed(() =>
@@ -86,16 +119,14 @@ const portValid = computed(
 )
 const canAllocate = computed(
   () =>
-    !allocating.value &&
-    providerId.value.length > 0 &&
+    open.value && scope.active() && dnsPermission.allowed.value && !allocating.value &&
+    !!selectedProvider.value &&
     upstreamContainer.value.trim().length > 0 &&
     portValid.value,
 )
 
-// ─── 结果(庆祝态) ───────────────────────────────────────────────────────────────
-const result = ref<ProxyRoute | null>(null)
-
 function openModal(): void {
+  if (!scope.active()) return
   providerId.value = providers.value.length === 1 ? providers.value[0].id : ''
   upstreamContainer.value = ''
   upstreamPort.value = ''
@@ -110,18 +141,25 @@ function closeModal(): void {
 
 async function allocate(): Promise<void> {
   if (!canAllocate.value) return
+  const selected = providerId.value
+  const controller = new AbortController()
+  allocation = controller
   allocating.value = true
+  const current = () => allocation === controller && !controller.signal.aborted &&
+    open.value && scope.active() && providerId.value === selected && dnsPermission.allowed.value
   try {
-    const route = await allocateSubdomain({
-      providerId: providerId.value,
-      serverId: props.serverId,
+    const route = await scope.run(() => allocateSubdomain({
+      providerId: selected,
+      serverId,
       upstreamContainer: upstreamContainer.value.trim(),
       upstreamPort: portNum.value,
-    })
+    }, { ...scope.requestOptions, signal: controller.signal }))
+    if (!current()) return
     result.value = route
     emit('allocated', route)
     toast.success(t('reverseProxy.sub.allocated'), { detail: route.domain })
   } catch (err) {
+    if (!current()) return
     toast.error(t('reverseProxy.sub.allocateFail'), {
       detail:
         err instanceof HttpError
@@ -129,7 +167,10 @@ async function allocate(): Promise<void> {
           : t('reverseProxy.errNetwork'),
     })
   } finally {
-    allocating.value = false
+    if (allocation === controller) {
+      allocation = undefined
+      allocating.value = false
+    }
   }
 }
 </script>
@@ -137,10 +178,10 @@ async function allocate(): Promise<void> {
 <template>
   <div class="isub">
     <!-- 招牌入口 -->
-    <button class="isub__cta" :title="t('reverseProxy.sub.title')" @click="openModal">
+    <PermissionGate :query="hostQueries"><button class="isub__cta" :title="t('reverseProxy.sub.title')" @click="openModal">
       <span class="isub__cta-ic"><NIcon :size="16"><Wand /></NIcon></span>
       {{ t('reverseProxy.sub.cta') }}
-    </button>
+    </button></PermissionGate>
   </div>
 
   <Teleport to="body">
@@ -207,7 +248,7 @@ async function allocate(): Promise<void> {
           <div v-if="providersLoaded && !hasProviders" class="noprov">
             <NIcon :size="18" class="noprov__ic"><World /></NIcon>
             <p class="noprov__txt">{{ t('reverseProxy.sub.noProvider') }}</p>
-            <RouterLink to="/settings/dns-providers" class="noprov__link">
+            <RouterLink v-if="canConfigureDns" to="/settings/dns-providers" class="noprov__link">
               {{ t('reverseProxy.sub.manageProviders') }}
             </RouterLink>
           </div>
@@ -263,11 +304,11 @@ async function allocate(): Promise<void> {
 
             <div class="modal-footer">
               <button type="button" class="btn-secondary" :disabled="allocating" @click="closeModal">{{ t('reverseProxy.sub.cancel') }}</button>
-              <button type="submit" class="btn-primary" :disabled="!canAllocate" :aria-busy="allocating">
+              <PermissionGate :query="dnsQuery"><button type="submit" class="btn-primary" :disabled="!canAllocate" :aria-busy="allocating">
                 <span v-if="allocating" class="spinner" aria-hidden="true" />
                 <NIcon v-else :size="14"><Wand /></NIcon>
                 {{ allocating ? t('reverseProxy.sub.allocating') : t('reverseProxy.sub.allocate') }}
-              </button>
+              </button></PermissionGate>
             </div>
           </form>
         </template>

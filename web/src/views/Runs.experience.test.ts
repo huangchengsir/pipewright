@@ -1,3 +1,5 @@
+import {createPinia,setActivePinia} from 'pinia'
+import {useSessionStore} from '../stores/session'
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createMemoryHistory, createRouter, RouterView } from "vue-router";
@@ -40,6 +42,7 @@ async function setup(path: string) {
 }
 describe("server-backed run list context", () => {
   beforeEach(() => {
+    setActivePinia(createPinia());useSessionStore().setUser({username:'admin',multiTenant:false});
     vi.clearAllMocks();
     api.list.mockResolvedValue({ items: [row("current")], total: 65, page: 2 });
     api.projects.mockResolvedValue([{ id: "p1", name: "Project" }]);
@@ -133,6 +136,6 @@ describe("server-backed run list context", () => {
     await w.find('#trigger-branch').setValue('main')
     await w.find('.modal-form').trigger('submit'); await flushPromises()
     expect(router.currentRoute.value.params.id).toBe('manual-created'); expect(router.currentRoute.value.query.returnTo).toBe(back)
-    expect(api.trigger).toHaveBeenCalledWith('p1', { branch: 'main' }); w.unmount()
+    expect(api.trigger).toHaveBeenCalledWith('p1', { branch: 'main' },expect.objectContaining({signal:expect.any(AbortSignal),throwOnUnauthorized:true})); w.unmount()
   })
 });

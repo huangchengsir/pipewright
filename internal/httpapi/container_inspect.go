@@ -66,6 +66,7 @@ type containerInspectDTO struct {
 
 // dockerInspectRaw 仅声明我们关心的字段,映射 `docker inspect` 数组元素;其余字段被忽略。
 type dockerInspectRaw struct {
+	ID      string   `json:"Id"`
 	Created string   `json:"Created"`
 	Path    string   `json:"Path"`
 	Args    []string `json:"Args"`
@@ -262,6 +263,10 @@ func makeContainerInspectHandler(svc target.Service) http.HandlerFunc {
 			return
 		}
 
+		if _, err := svc.Get(r.Context(), id); err != nil {
+			writeServerError(w, err)
+			return
+		}
 		parsed, perr := parseContainerInspect(res.Stdout)
 		if perr != nil {
 			// 解析失败(输出非预期)→ reachable:false,绝不回显原始输出(可能含密钥)。
@@ -271,6 +276,21 @@ func makeContainerInspectHandler(svc target.Service) http.HandlerFunc {
 			return
 		}
 
+		if !target.CanRevealContainerConfig(r.Context(), svc, id) {
+			for i, value := range parsed.Env {
+				key, _, _ := strings.Cut(value, "=")
+				parsed.Env[i] = key + "=••••••"
+			}
+			if parsed.Command != "" {
+				parsed.Command = "••••••"
+			}
+			for key := range parsed.Labels {
+				parsed.Labels[key] = "••••••"
+			}
+			for i := range parsed.Mounts {
+				parsed.Mounts[i].Source = "••••••"
+			}
+		}
 		parsed.ServerID = id
 		parsed.ContainerID = containerID
 		writeJSON(w, http.StatusOK, parsed)

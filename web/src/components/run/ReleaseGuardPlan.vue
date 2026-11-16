@@ -2,6 +2,9 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppButton from '../ui/AppButton.vue'
+import PermissionGate from '../PermissionGate.vue'
+import {usePermission} from '../../composables/usePermission'
+import { useIdentityRequestScope } from '../../composables/useAuthorizedRequestScope'
 import GuardImageIdentity from './GuardImageIdentity.vue'
 import { HttpError } from '../../api/http'
 import {
@@ -20,6 +23,7 @@ import {
 const props = withDefaults(
   defineProps<{
     projectId: string
+    runId?: string
     attemptId?: string
     attachedInput?: AttachedGuardInput
     parentGuardId?: string
@@ -38,6 +42,9 @@ const { t, locale } = useI18n()
 const duration = ref<GuardDuration>(props.initialDurationSeconds)
 const includeLogs = ref(props.initialIncludeLogs)
 const plan = ref<GuardPlan | null>(null)
+const permissionQuery = computed(() => ({action:'guard.observe',resourceId:props.attachedInput?.runId || props.runId || plan.value?.runId || ''}))
+const permission = usePermission(permissionQuery)
+
 const loading = ref(false)
 const starting = ref(false)
 const error = ref('')
@@ -69,7 +76,8 @@ const canStart = computed(
         JSON.stringify(
           plan.value.targets.map((target) => target.serverId).sort(),
         ) === JSON.stringify([...props.attachedInput.serverIds].sort())
-      : plan.value.attemptId === props.attemptId) &&
+      : plan.value.attemptId === props.attemptId &&
+        (!props.runId || plan.value.runId === props.runId)) &&
     plan.value.mode === mode.value &&
     plan.value.durationSeconds === duration.value &&
     plan.value.includeLogs === includeLogs.value &&
@@ -90,7 +98,27 @@ const incomplete = computed(
     false,
 )
 
+function resetPlan(): void {
+  generation++
+  controller?.abort()
+  if (starting.value) {
+    outcomeUnknown.value = true
+    error.value = 'releaseGuard.startUnknown'
+  }
+  plan.value = null
+  loading.value = false
+  starting.value = false
+}
+const scope = useIdentityRequestScope(resetPlan)
+watch(permission.allowed, (allowed) => {
+  if (!allowed) {
+    resetPlan()
+    return
+  }
+  if (!plan.value && !loading.value && !starting.value) void preview()
+}, { flush: 'sync' })
 async function preview(): Promise<void> {
+  if (!scope.active() || !permission.allowed.value) return
   if (starting.value || outcomeUnknown.value) return
   const ticket = ++generation
   controller?.abort()
@@ -101,7 +129,7 @@ async function preview(): Promise<void> {
   error.value = ''
   idempotencyKey = ''
   try {
-    const result = await previewGuardPlan(
+    const result = await scope.run(() => previewGuardPlan(
       props.projectId,
       {
         ...(props.attachedInput
@@ -111,8 +139,8 @@ async function preview(): Promise<void> {
         includeLogs: includeLogs.value,
         ...(props.parentGuardId ? { parentGuardId: props.parentGuardId } : {}),
       },
-      { signal: request.signal },
-    )
+      { ...scope.requestOptions, signal: request.signal },
+    ))
     if (!alive || ticket !== generation || request.signal.aborted) return
     plan.value = result
     now.value = Date.now()
@@ -124,6 +152,7 @@ async function preview(): Promise<void> {
   }
 }
 async function start(): Promise<void> {
+  if (!scope.active() || !permission.allowed.value) return
   if (!canStart.value || !plan.value) return
   if (props.attachedInput) {
     emit('prepared', plan.value)
@@ -132,24 +161,28 @@ async function start(): Promise<void> {
   starting.value = true
   error.value = ''
   if (!idempotencyKey) idempotencyKey = crypto.randomUUID()
+  const ticket = generation
+  const input = { planId: plan.value.id, planHash: plan.value.hash, idempotencyKey }
   const request = new AbortController()
   controller = request
   try {
-    const result = await startReleaseGuard(
+    const result = await scope.run(() => startReleaseGuard(
       props.projectId,
-      { planId: plan.value.id, planHash: plan.value.hash, idempotencyKey },
-      { signal: request.signal },
-    )
-    if (alive) emit('started', result)
+      input,
+      { ...scope.requestOptions, signal: request.signal },
+    ))
+    if (alive && ticket === generation && !request.signal.aborted &&
+        result.projectId === props.projectId && (!props.runId || result.runId === props.runId))
+      emit('started', result)
   } catch (cause) {
-    if (!alive || request.signal.aborted) return
+    if (!alive || ticket !== generation || request.signal.aborted) return
     outcomeUnknown.value = cause instanceof HttpError && cause.status === 0
     error.value = outcomeUnknown.value
       ? 'releaseGuard.startUnknown'
       : 'releaseGuard.requestFailed'
     emit('refresh')
   } finally {
-    if (alive) starting.value = false
+    if (alive && ticket === generation) starting.value = false
   }
 }
 function close(): void {
@@ -333,12 +366,12 @@ onBeforeUnmount(() => {
         </p>
       </template>
       <footer class="guard-plan__actions">
-        <AppButton
+        <PermissionGate :query="permissionQuery"><AppButton
           v-if="!outcomeUnknown"
           :disabled="loading || starting"
           @click="preview"
           >{{ t('releaseGuard.previewAgain') }}</AppButton
-        ><AppButton
+        ></PermissionGate><PermissionGate :query="permissionQuery"><AppButton
           variant="primary"
           :disabled="!canStart"
           :loading="starting"
@@ -348,7 +381,7 @@ onBeforeUnmount(() => {
               `releaseGuard.${mode === 'attached' ? 'usePlan' : 'startObservation'}`,
             )
           }}</AppButton
-        >
+        ></PermissionGate>
       </footer>
     </section>
   </div>

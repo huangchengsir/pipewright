@@ -1,11 +1,16 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import OnboardingFlow from '../components/onboarding/OnboardingFlow.vue'
-import { useOnboardingStatus, dismissOnboarding } from '../composables/useOnboarding'
+import { useOnboardingStatus, dismissOnboarding, canUseInstanceOnboarding } from '../composables/useOnboarding'
 const router = useRouter()
+const { t } = useI18n()
+const allowed = computed(canUseInstanceOnboarding)
 const { snapshot, loading, error, flow, refresh, select } = useOnboardingStatus()
 function skip(): void { dismissOnboarding(); void router.push('/') }
 function navigate(to: string): void {
+  if (!allowed.value) return
   const resolved = router.resolve(to)
   if (resolved.name === 'project-pipeline' || /\/projects\/[^/]+\/pipeline$/.test(resolved.path)) {
     void router.push({ path: resolved.path, query: { ...resolved.query,
@@ -15,6 +20,7 @@ function navigate(to: string): void {
 </script>
 
 <template>
-  <OnboardingFlow :snapshot="snapshot" :loading="loading" :error="error" :flow="flow"
+  <OnboardingFlow v-if="allowed" :snapshot="snapshot" :loading="loading" :error="error" :flow="flow"
     @select="select" @retry="refresh" @skip="skip" @navigate="navigate" />
+  <p v-else role="status">{{ t('runExperience.forbidden') }}</p>
 </template>

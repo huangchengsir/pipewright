@@ -11,6 +11,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/releasesource"
 	"github.com/huangchengsir/pipewright/internal/selfupdate"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"github.com/huangchengsir/pipewright/internal/version"
 	"io"
 	"net/http"
@@ -75,6 +76,12 @@ func updateError(w http.ResponseWriter, e error) {
 	}
 	if errors.Is(e, configstate.ErrMaintenance) {
 		code, status = "update_migration_active", 409
+	}
+	if errors.Is(e, tenancy.ErrForbidden) {
+		code, status = "forbidden", 403
+	}
+	if errors.Is(e, tenancy.ErrConflict) {
+		code, status = "conflict", 409
 	}
 	writeError(w, status, code, "升级任务暂不可用，请核对原任务状态")
 }

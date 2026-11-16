@@ -28,15 +28,19 @@ var (
 
 // MCPToken contains only administration metadata, never the stored digest.
 type MCPToken struct {
-	ID            string           `json:"id"`
-	Name          string           `json:"name"`
-	ProjectIDs    []string         `json:"projectIds"`
-	CanTrigger    bool             `json:"canTrigger"`
-	CreatedAt     string           `json:"createdAt"`
-	ExpiresAt     string           `json:"expiresAt"`
-	RevokedAt     *string          `json:"revokedAt"`
-	ConfigGrants  []MCPConfigGrant `json:"configGrants"`
-	AuthzRevision int64            `json:"authzRevision"`
+	ID              string           `json:"id"`
+	OwnerUserID     string           `json:"-"`
+	OwnerTeamID     string           `json:"-"`
+	OwnerModeEpoch  uint64           `json:"-"`
+	OwnerGeneration uint64           `json:"-"`
+	Name            string           `json:"name"`
+	ProjectIDs      []string         `json:"projectIds"`
+	CanTrigger      bool             `json:"canTrigger"`
+	CreatedAt       string           `json:"createdAt"`
+	ExpiresAt       string           `json:"expiresAt"`
+	RevokedAt       *string          `json:"revokedAt"`
+	ConfigGrants    []MCPConfigGrant `json:"configGrants"`
+	AuthzRevision   int64            `json:"authzRevision"`
 }
 
 func (t *MCPToken) Allows(projectID string, trigger bool) bool {
@@ -194,9 +198,73 @@ func NormalizeMCPConfigGrants(projectIDs []string, in []MCPConfigGrant) ([]MCPCo
 	return out, nil
 }
 
-type MCPTokenStore struct{ db *sql.DB }
+// MCPAuthorization is implemented by the tenancy service, keeping auth free of
+// a reverse import. All callbacks run with the same DB transaction as the action.
+type MCPAuthorization interface {
+	Admission(context.Context) context.Context
+	Create(context.Context, configstate.DBTX, *MCPToken) error
+	Manage(context.Context, configstate.DBTX, *MCPToken) error
+	Verify(context.Context, configstate.DBTX, *MCPToken) error
+	ListFilter(context.Context, configstate.DBTX) (string, []any, error)
+	Bind(context.Context, *MCPToken) (context.Context, error)
+}
+type MCPTokenStore struct {
+	db            *sql.DB
+	authorization MCPAuthorization
+}
 
-func NewMCPTokenStore(db *sql.DB) *MCPTokenStore { return &MCPTokenStore{db: db} }
+func NewMCPTokenStore(db *sql.DB, authorization ...MCPAuthorization) *MCPTokenStore {
+	s := &MCPTokenStore{db: db}
+	if len(authorization) > 0 {
+		s.authorization = authorization[0]
+	}
+	return s
+}
+func (s *MCPTokenStore) Bind(ctx context.Context, token *MCPToken) (context.Context, error) {
+	if s.authorization != nil {
+		return s.authorization.Bind(ctx, token)
+	}
+	return ctx, s.legacyOnly(ctx, configstate.Queryer(ctx, s.db))
+}
+func (s *MCPTokenStore) legacyOnly(ctx context.Context, q configstate.DBTX) error {
+	var enabled int
+	err := q.QueryRowContext(ctx, `SELECT enabled FROM access_control WHERE id=1`).Scan(&enabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		var count int
+		if err = q.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM access_users)+(SELECT COUNT(*) FROM access_teams)+(SELECT COUNT(*) FROM access_roles)+(SELECT COUNT(*) FROM access_role_seeds)`).Scan(&count); err != nil {
+			return err
+		}
+		if count != 0 {
+			return ErrMCPForbidden
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if enabled != 0 {
+		return ErrMCPForbidden
+	}
+	return nil
+}
+func (s *MCPTokenStore) admission(ctx context.Context) context.Context {
+	if s.authorization != nil {
+		return s.authorization.Admission(ctx)
+	}
+	return ctx
+}
+func (s *MCPTokenStore) manage(ctx context.Context, q configstate.DBTX, t *MCPToken) error {
+	if s.authorization != nil {
+		return s.authorization.Manage(ctx, q, t)
+	}
+	return s.legacyOnly(ctx, q)
+}
+func (s *MCPTokenStore) verifyOwner(ctx context.Context, q configstate.DBTX, t *MCPToken) error {
+	if s.authorization != nil {
+		return s.authorization.Verify(ctx, q, t)
+	}
+	return s.legacyOnly(ctx, q)
+}
 
 func (s *MCPTokenStore) Create(ctx context.Context, in MCPTokenInput) (string, *MCPToken, error) {
 	in.Name = strings.TrimSpace(in.Name)
@@ -220,52 +288,65 @@ func (s *MCPTokenStore) Create(ctx context.Context, in MCPTokenInput) (string, *
 	if err != nil {
 		return "", nil, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", nil, err
-	}
-	defer tx.Rollback()
-	var count int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM mcp_tokens`).Scan(&count); err != nil {
-		return "", nil, err
-	}
-	if count >= 500 {
-		// Reclaim only ended access tokens; durable run-request identities are separate.
-		if _, err := tx.ExecContext(ctx, `DELETE FROM mcp_tokens WHERE revoked_at IS NOT NULL OR expires_at <= ?`, time.Now().UTC().Format(time.RFC3339)); err != nil {
-			return "", nil, err
-		}
+	var token *MCPToken
+	var plaintext string
+	err = configstate.WithWriteTxContext(s.admission(ctx), s.db, func(ctx context.Context, tx configstate.DBTX) error {
+		var count int
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM mcp_tokens`).Scan(&count); err != nil {
-			return "", nil, err
+			return err
 		}
 		if count >= 500 {
-			return "", nil, ErrMCPTokenInput
+			// Reclaim only ended access tokens; durable run-request identities are separate.
+			if _, err := tx.ExecContext(ctx, `DELETE FROM mcp_tokens WHERE revoked_at IS NOT NULL OR expires_at <= ?`, time.Now().UTC().Format(time.RFC3339)); err != nil {
+				return err
+			}
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM mcp_tokens`).Scan(&count); err != nil {
+				return err
+			}
+			if count >= 500 {
+				return ErrMCPTokenInput
+			}
 		}
-	}
-	for _, id := range ids {
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM projects WHERE id = ?`, id).Scan(&count); err != nil {
-			return "", nil, err
+		var raw [32]byte
+		if _, err := rand.Read(raw[:]); err != nil {
+			return err
 		}
-		if count != 1 {
-			return "", nil, ErrMCPTokenInput
+		plaintext = hex.EncodeToString(raw[:])
+		stamp := time.Now().UTC()
+		token = &MCPToken{ID: uuid.NewString(), Name: in.Name, ProjectIDs: ids, CanTrigger: in.CanTrigger, CreatedAt: stamp.Format(time.RFC3339), ExpiresAt: stamp.Add(time.Duration(in.ExpiresInDays) * 24 * time.Hour).Format(time.RFC3339), ConfigGrants: grants}
+		if s.authorization != nil {
+			if err := s.authorization.Create(ctx, tx, token); err != nil {
+				return err
+			}
+		} else if err := s.legacyOnly(ctx, tx); err != nil {
+			return err
 		}
-	}
-	var raw [32]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return "", nil, err
-	}
-	plaintext := hex.EncodeToString(raw[:])
-	stamp := time.Now().UTC()
-	token := &MCPToken{ID: uuid.NewString(), Name: in.Name, ProjectIDs: ids, CanTrigger: in.CanTrigger, CreatedAt: stamp.Format(time.RFC3339), ExpiresAt: stamp.Add(time.Duration(in.ExpiresInDays) * 24 * time.Hour).Format(time.RFC3339), ConfigGrants: grants}
-	blob, _ := json.Marshal(ids)
-	grantsJSON, _ := json.Marshal(grants)
-	_, err = tx.ExecContext(ctx, `INSERT INTO mcp_tokens (id, name, token_hash, project_ids_json, can_trigger, created_at, expires_at,config_grants_json,authz_revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?,0)`, token.ID, token.Name, mcpDigest(plaintext), string(blob), token.CanTrigger, token.CreatedAt, token.ExpiresAt, string(grantsJSON))
+		for _, id := range ids {
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM projects WHERE id = ?`, id).Scan(&count); err != nil {
+				return err
+			}
+			if count != 1 {
+				return ErrMCPTokenInput
+			}
+		}
+		blob, _ := json.Marshal(ids)
+		grantsJSON, _ := json.Marshal(grants)
+		_, err = tx.ExecContext(ctx, `INSERT INTO mcp_tokens (id, name, token_hash, project_ids_json, can_trigger, created_at, expires_at,config_grants_json,authz_revision,owner_user_id,owner_team_id,owner_mode_epoch,owner_generation) VALUES (?, ?, ?, ?, ?, ?, ?, ?,0,?,?,?,?)`, token.ID, token.Name, mcpDigest(plaintext), string(blob), token.CanTrigger, token.CreatedAt, token.ExpiresAt, string(grantsJSON), nullableMCPID(token.OwnerUserID), nullableMCPID(token.OwnerTeamID), token.OwnerModeEpoch, token.OwnerGeneration)
+		if err != nil {
+			return err
+		}
+		return nil
+	})
 	if err != nil {
-		return "", nil, err
-	}
-	if err := tx.Commit(); err != nil {
 		return "", nil, err
 	}
 	return plaintext, token, nil
+}
+func nullableMCPID(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 func mcpDigest(raw string) string {
@@ -273,14 +354,14 @@ func mcpDigest(raw string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-const mcpTokenColumns = `id, name, project_ids_json, can_trigger, created_at, expires_at, revoked_at,config_grants_json,authz_revision`
+const mcpTokenColumns = `id, name, project_ids_json, can_trigger, created_at, expires_at, revoked_at,config_grants_json,authz_revision,COALESCE(owner_user_id,''),COALESCE(owner_team_id,''),owner_mode_epoch,owner_generation`
 
 func scanMCPToken(row interface{ Scan(...any) error }) (*MCPToken, error) {
 	var t MCPToken
 	var ids string
 	var grants string
 	var revoked sql.NullString
-	if err := row.Scan(&t.ID, &t.Name, &ids, &t.CanTrigger, &t.CreatedAt, &t.ExpiresAt, &revoked, &grants, &t.AuthzRevision); err != nil {
+	if err := row.Scan(&t.ID, &t.Name, &ids, &t.CanTrigger, &t.CreatedAt, &t.ExpiresAt, &revoked, &grants, &t.AuthzRevision, &t.OwnerUserID, &t.OwnerTeamID, &t.OwnerModeEpoch, &t.OwnerGeneration); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal([]byte(ids), &t.ProjectIDs); err != nil {
@@ -315,6 +396,9 @@ func (s *MCPTokenStore) Verify(ctx context.Context, plaintext string) (*MCPToken
 		}
 		return nil, err
 	}
+	if err := s.verifyOwner(ctx, configstate.Queryer(ctx, s.db), t); err != nil {
+		return nil, err
+	}
 	return validateMCPToken(t)
 }
 
@@ -346,14 +430,21 @@ func LoadMCPToken(ctx context.Context, q configstate.DBTX, db *sql.DB, id string
 	return validateMCPToken(t)
 }
 func (s *MCPTokenStore) VerifyByIDTx(ctx context.Context, q configstate.DBTX, id string) (*MCPToken, error) {
-	return LoadMCPToken(ctx, q, s.db, id, true)
+	t, err := LoadMCPToken(ctx, q, s.db, id, true)
+	if err == nil {
+		err = s.verifyOwner(ctx, q, t)
+	}
+	return t, err
 }
 
 func (s *MCPTokenStore) UpdateConfigGrants(ctx context.Context, id string, expected int64, grants []MCPConfigGrant) (*MCPToken, error) {
 	var out *MCPToken
-	err := configstate.WithWriteTxContext(ctx, s.db, func(ctx context.Context, q configstate.DBTX) error {
+	err := configstate.WithWriteTxContext(s.admission(ctx), s.db, func(ctx context.Context, q configstate.DBTX) error {
 		t, err := LoadMCPToken(ctx, q, s.db, id, true)
 		if err != nil {
+			return err
+		}
+		if err := s.manage(ctx, q, t); err != nil {
 			return err
 		}
 		if t.AuthzRevision != expected {
@@ -362,6 +453,13 @@ func (s *MCPTokenStore) UpdateConfigGrants(ctx context.Context, id string, expec
 		normalized, err := NormalizeMCPConfigGrants(t.ProjectIDs, grants)
 		if err != nil {
 			return err
+		}
+		candidate := *t
+		candidate.ConfigGrants = normalized
+		if s.authorization != nil {
+			if err := s.authorization.Create(ctx, q, &candidate); err != nil {
+				return err
+			}
 		}
 		blob, _ := json.Marshal(normalized)
 		r, err := q.ExecContext(ctx, "UPDATE mcp_tokens SET config_grants_json=?,authz_revision=authz_revision+1 WHERE id=? AND authz_revision=? AND revoked_at IS NULL", string(blob), id, expected)
@@ -382,7 +480,16 @@ func (s *MCPTokenStore) UpdateConfigGrants(ctx context.Context, id string, expec
 }
 
 func (s *MCPTokenStore) List(ctx context.Context) ([]MCPToken, error) {
-	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx, `SELECT `+mcpTokenColumns+` FROM mcp_tokens ORDER BY created_at DESC, id`+store.Limit(store.DialectOf(s.db), "500"))
+	filter, args, err := "1=1", []any{}, error(nil)
+	if s.authorization != nil {
+		filter, args, err = s.authorization.ListFilter(ctx, configstate.Queryer(ctx, s.db))
+	} else {
+		err = s.legacyOnly(ctx, configstate.Queryer(ctx, s.db))
+	}
+	if err != nil {
+		return nil, err
+	}
+	rows, err := configstate.Queryer(ctx, s.db).QueryContext(ctx, `SELECT `+mcpTokenColumns+` FROM mcp_tokens WHERE `+filter+` ORDER BY created_at DESC, id`+store.Limit(store.DialectOf(s.db), "500"), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -399,26 +506,37 @@ func (s *MCPTokenStore) List(ctx context.Context) ([]MCPToken, error) {
 }
 
 func (s *MCPTokenStore) Revoke(ctx context.Context, id string) error {
-	q := configstate.Queryer(ctx, s.db)
-	res, err := q.ExecContext(ctx, `UPDATE mcp_tokens SET authz_revision=CASE WHEN revoked_at IS NULL THEN authz_revision+1 ELSE authz_revision END,revoked_at = COALESCE(revoked_at, ?) WHERE id = ?`, time.Now().UTC().Format(time.RFC3339), id)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		// MySQL may report zero changed rows for an already-revoked token.
-		var exists int
-		if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM mcp_tokens WHERE id = ?`, id).Scan(&exists); err != nil {
-			return err
-		}
-		if exists == 0 {
+	return configstate.WithWriteTxContext(s.admission(ctx), s.db, func(ctx context.Context, q configstate.DBTX) error {
+		t, err := scanMCPToken(q.QueryRowContext(ctx, `SELECT `+mcpTokenColumns+` FROM mcp_tokens WHERE id=?`, id))
+		if errors.Is(err, sql.ErrNoRows) {
 			return ErrMCPTokenNotFound
 		}
-	}
-	return nil
+		if err != nil {
+			return err
+		}
+		if err = s.manage(ctx, q, t); err != nil {
+			return err
+		}
+		res, err := q.ExecContext(ctx, `UPDATE mcp_tokens SET authz_revision=CASE WHEN revoked_at IS NULL THEN authz_revision+1 ELSE authz_revision END,revoked_at = COALESCE(revoked_at, ?) WHERE id = ?`, time.Now().UTC().Format(time.RFC3339), id)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			// MySQL may report zero changed rows for an already-revoked token.
+			var exists int
+			if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM mcp_tokens WHERE id = ?`, id).Scan(&exists); err != nil {
+				return err
+			}
+			if exists == 0 {
+				return ErrMCPTokenNotFound
+			}
+		}
+		return nil
+	})
 }
 
 // Kubernetes configuration is a separately granted section and operation.

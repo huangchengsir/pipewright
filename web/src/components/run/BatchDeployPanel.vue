@@ -5,8 +5,11 @@ import { type ArtifactDTO, type DeployBatch, deployBatch, listDeployBatches, ret
 import { listServers, type Server } from '../../api/servers'
 import { HttpError } from '../../api/http'
 import AppSelect from '../ui/AppSelect.vue'
+import { usePermission } from '../../composables/usePermission'
+import { useIdentityRequestScope } from '../../composables/useAuthorizedRequestScope'
+import { useSessionStore } from '../../stores/session'
 
-const props = defineProps<{ runId: string; artifacts: ArtifactDTO[]; canCreate: boolean }>()
+const props = defineProps<{ runId: string; artifacts: ArtifactDTO[]; canCreate: boolean; projectId?: string; environmentId?: string }>()
 const emit = defineEmits<{ completed: [] }>()
 const { t } = useI18n()
 
@@ -18,6 +21,33 @@ const busy = ref(false)
 const error = ref('')
 const idempotencyKey = ref('')
 let poll: ReturnType<typeof setInterval> | undefined
+const session = useSessionStore()
+const readPermission = usePermission(() => ({ action: 'run.read', resourceId: props.runId }))
+const deployPermission = usePermission(() => ({ action: 'deployment.execute', resourceId: props.environmentId ?? '', environmentId: props.environmentId ?? '' }))
+const editPermission = usePermission(() => ({ action: 'pipeline.edit', resourceId: props.projectId ?? '' }))
+const canDeploy = computed(() => readPermission.allowed.value && deployPermission.allowed.value && (session.user?.multiTenant !== true || !!props.environmentId))
+const canEdit = computed(() => canDeploy.value && editPermission.allowed.value && props.canCreate && (session.user?.multiTenant !== true || !!props.projectId))
+let generation = 0
+let refreshSequence = 0
+let requestController = new AbortController()
+const scope = useIdentityRequestScope(resetContext)
+function resetContext() {
+  generation++
+  refreshSequence++
+  requestController.abort()
+  requestController = new AbortController()
+  clearInterval(poll)
+  poll = undefined
+  rows.value = []
+  servers.value = []
+  batches.value = []
+  idempotencyKey.value = ''
+  error.value = ''
+  busy.value = false
+}
+function requestOptions() { return { ...scope.requestOptions, signal: requestController.signal } }
+function current(ticket: number) { return ticket === generation && scope.active() && readPermission.allowed.value }
+
 
 const fileArtifacts = computed(() => props.artifacts.filter((a) => a.type !== 'image'))
 const artifactOptions = computed(() => fileArtifacts.value.map((a) => ({
@@ -26,25 +56,38 @@ const artifactOptions = computed(() => fileArtifacts.value.map((a) => ({
 })))
 
 function addRow(): void {
+  if (!scope.active() || !canEdit.value) return
   rows.value.push({ key: crypto.randomUUID(), artifactId: fileArtifacts.value[0]?.id ?? '', serverIds: [], path: '' })
 }
 
+function removeRow(key: string): void {
+  if (!scope.active() || !canEdit.value || busy.value) return
+  const index = rows.value.findIndex((row) => row.key === key)
+  if (index !== -1) rows.value.splice(index, 1)
+}
+
 function toggleServer(row: DraftItem, id: string): void {
+  if (!scope.active() || !canEdit.value || busy.value) return
   row.serverIds = row.serverIds.includes(id) ? row.serverIds.filter((value) => value !== id) : [...row.serverIds, id]
 }
 
 async function refresh(): Promise<void> {
-  const response = await listDeployBatches(props.runId)
-  batches.value = response.batches
+  if (!scope.active() || !readPermission.allowed.value) return
+  const ticket = generation, sequence = ++refreshSequence, id = props.runId
+  const response = await scope.run(() => listDeployBatches(id, requestOptions()))
+  if (current(ticket) && sequence === refreshSequence) batches.value = response.batches
 }
 
 async function load(): Promise<void> {
+  if (!scope.active() || !readPermission.allowed.value) return
+  const ticket = generation
   try {
-    const [available, history] = await Promise.all([listServers(), listDeployBatches(props.runId)])
-    servers.value = available
-    batches.value = history.batches
+    await refresh()
+    if (!current(ticket) || !canEdit.value) return
+    const available = await scope.run(() => listServers(requestOptions()))
+    if (current(ticket) && canEdit.value) servers.value = available
   } catch (cause) {
-    error.value = message(cause)
+    if (current(ticket)) error.value = message(cause)
   }
 }
 
@@ -74,68 +117,80 @@ function validate(): boolean {
 }
 
 async function submit(): Promise<void> {
-  if (busy.value || !validate()) return
+  if (!scope.active() || !readPermission.allowed.value || !canEdit.value || busy.value || !validate()) return
+  const ticket = generation, id = props.runId
   busy.value = true
   error.value = ''
   if (!idempotencyKey.value) idempotencyKey.value = crypto.randomUUID()
   try {
-    await deployBatch(props.runId, {
+    await scope.run(() => deployBatch(id, {
       idempotencyKey: idempotencyKey.value,
       items: rows.value.map((row) => ({
         artifactId: row.artifactId,
         serverIds: [...row.serverIds],
         deployConfig: { path: row.path.trim() },
       })),
-    })
+    }, requestOptions()))
+    if (!current(ticket) || !canEdit.value) return
     idempotencyKey.value = ''
     rows.value = []
     await refresh()
-    emit('completed')
+    if (current(ticket) && canDeploy.value) emit('completed')
   } catch (cause) {
+    if (!current(ticket)) return
     error.value = message(cause)
     await refresh().catch(() => undefined)
   } finally {
-    busy.value = false
+    if (current(ticket)) busy.value = false
   }
 }
 
 async function resume(batch: DeployBatch, mode: 'retry' | 'continue'): Promise<void> {
-  if (busy.value) return
+  if (!scope.active() || !readPermission.allowed.value || !canDeploy.value || busy.value) return
+  const ticket = generation, id = props.runId
   busy.value = true
   error.value = ''
   try {
-    if (mode === 'retry') await retryDeployBatch(props.runId, batch.id)
-    else await continueDeployBatch(props.runId, batch.id)
+    if (mode === 'retry') await scope.run(() => retryDeployBatch(id, batch.id, requestOptions()))
+    else await scope.run(() => continueDeployBatch(id, batch.id, requestOptions()))
+    if (!current(ticket) || !canDeploy.value) return
     await refresh()
-    emit('completed')
+    if (current(ticket) && canDeploy.value) emit('completed')
   } catch (cause) {
+    if (!current(ticket)) return
     error.value = message(cause)
     await refresh().catch(() => undefined)
   } finally {
-    busy.value = false
+    if (current(ticket)) busy.value = false
   }
 }
 
 watch(rows, () => { idempotencyKey.value = '' }, { deep: true })
-watch(() => props.runId, () => { rows.value = []; batches.value = []; void load() })
-onMounted(() => {
+watch(() => props.runId, () => { resetContext(); start() }, { flush: 'sync' })
+watch(readPermission.allowed, allowed => { if (!allowed) resetContext(); else start() }, { flush: 'sync' })
+watch(canEdit, allowed => { if (!allowed) { rows.value = []; servers.value = []; idempotencyKey.value = '' } else void load() }, { flush: 'sync' })
+watch(canDeploy, allowed => { if (!allowed) { generation++; busy.value = false; error.value = '' } }, { flush: 'sync' })
+function start() {
+  if (!scope.active() || !readPermission.allowed.value) return
   void load()
+  clearInterval(poll)
   poll = setInterval(() => { if (!busy.value) void refresh().catch(() => undefined) }, 5000)
-})
-onUnmounted(() => { if (poll) clearInterval(poll) })
+}
+onMounted(start)
+onUnmounted(resetContext)
 </script>
 
 <template>
   <section class="batch-deploy" :aria-label="t('batchDeploy.title')">
     <div class="batch-head">
       <h2>{{ t('batchDeploy.title') }}</h2>
-      <button v-if="canCreate && fileArtifacts.length" type="button" class="batch-button" :disabled="busy" @click="addRow">+ {{ t('batchDeploy.add') }}</button>
+      <button v-if="canEdit && fileArtifacts.length" type="button" class="batch-button" :disabled="busy" @click="addRow">+ {{ t('batchDeploy.add') }}</button>
     </div>
-    <div v-if="rows.length" class="batch-form">
+    <div v-if="canEdit && rows.length" class="batch-form">
       <div v-for="(row, index) in rows" :key="row.key" class="batch-row">
         <div class="row-head">
           <strong>{{ t('batchDeploy.item', { n: index + 1 }) }}</strong>
-          <button type="button" class="remove-button" :aria-label="t('batchDeploy.remove')" :disabled="busy" @click="rows.splice(index, 1)">×</button>
+          <button type="button" class="remove-button" :aria-label="t('batchDeploy.remove')" :disabled="busy" @click="removeRow(row.key)">×</button>
         </div>
         <div class="row-fields">
           <label>
@@ -164,8 +219,8 @@ onUnmounted(() => { if (poll) clearInterval(poll) })
         <div class="history-head">
           <span>{{ new Date(batch.createdAt).toLocaleString() }} · {{ t(`batchDeploy.status_${batch.status}`) }}</span>
           <div class="history-actions">
-            <button v-if="batch.items.some((item) => item.status === 'failed' || item.status === 'rolled_back')" type="button" :disabled="busy" @click="resume(batch, 'retry')">{{ t('batchDeploy.retry') }}</button>
-            <button v-if="batch.items.some((item) => item.status === 'pending')" type="button" :disabled="busy" @click="resume(batch, 'continue')">{{ t('batchDeploy.continue') }}</button>
+            <button v-if="canDeploy && batch.items.some((item) => item.status === 'failed' || item.status === 'rolled_back')" type="button" :disabled="busy" @click="resume(batch, 'retry')">{{ t('batchDeploy.retry') }}</button>
+            <button v-if="canDeploy && batch.items.some((item) => item.status === 'pending')" type="button" :disabled="busy" @click="resume(batch, 'continue')">{{ t('batchDeploy.continue') }}</button>
           </div>
         </div>
         <div v-for="item in batch.items" :key="item.id" class="result-row">

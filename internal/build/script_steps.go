@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"strings"
 	"time"
 
@@ -53,6 +54,9 @@ func scriptSteps(settings *pipeline.Settings) []pipeline.PipelineStep {
 // ordinal 是该步在整次运行步骤计划里的序号(已 StepRunning)。返回 nil=成功;
 // 非零退出 → ErrBuildFailed(调用方置 failed + SetFailureLog);ctx 取消 → run.ErrCanceled。
 func (b *Builder) runScriptStep(ctx context.Context, sink run.StepSink, ordinal int, step pipeline.PipelineStep, workspace string, cache ...jobCacheConfig) error {
+	if err := tenancy.VerifyExecution(ctx); err != nil {
+		return err
+	}
 	onLine := b.lineSink(sink, ordinal)
 
 	// env:非 secret → 明文 K=V;secret → vault.Reveal 明文 K=V(注入容器,绝不回显值)。
@@ -118,6 +122,9 @@ func scriptRunOptions(ctx context.Context) (ToolchainRunOptions, error) {
 // 重试(step.Retries>0):整步非零退出/容器启动失败时重跑,达上限(共 1+Retries 次尝试)才判失败。
 // run.ErrCanceled(取消)绝不重试。每次重试前再查一次 parent ctx。
 func (b *Builder) runScriptStepWithOpts(ctx context.Context, sink run.StepSink, ordinal int, step pipeline.PipelineStep, workspace string, cache ...jobCacheConfig) error {
+	if err := tenancy.VerifyExecution(ctx); err != nil {
+		return err
+	}
 	onLine := b.lineSink(sink, ordinal)
 	attempts := step.Retries + 1
 	if attempts < 1 {
@@ -126,6 +133,9 @@ func (b *Builder) runScriptStepWithOpts(ctx context.Context, sink run.StepSink, 
 
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
+		if err := tenancy.VerifyExecution(ctx); err != nil {
+			return err
+		}
 		if ctx.Err() != nil {
 			return run.ErrCanceled
 		}

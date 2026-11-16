@@ -3,11 +3,13 @@ import { computed, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Copy, Refresh, Stars, Terminal2 } from '@vicons/tabler'
 import type { Call } from '../../api/opsChat'
-const props = defineProps<{
+const props = withDefaults(defineProps<{
+  canSubmit?: boolean
+  canTerminal?: (id: string) => boolean
   call: Call
   disabled: boolean
   modelAvailable: boolean
-}>()
+}>(), { canSubmit: true, canTerminal: () => true })
 const emit = defineEmits<{
   copy: [text: string]
   retry: [id: string]
@@ -127,7 +129,7 @@ const bytes = (n: number): string =>
         <Copy />
       </button>
       <button
-        v-if="retryable"
+        v-if="retryable && canSubmit"
         class="ops-btn ops-icon"
         :disabled="disabled"
         :title="t('opsChat.retryFailed')"
@@ -139,6 +141,7 @@ const bytes = (n: number): string =>
       <button
         class="ops-btn ops-icon"
         :disabled="disabled || !modelAvailable || !call.collectedAt"
+        v-if="canSubmit"
         :title="t('opsChat.analyze')"
         :aria-label="t('opsChat.analyze')"
         @click="emit('analyze', call.callId)"
@@ -147,9 +150,10 @@ const bytes = (n: number): string =>
       </button>
       <button
         class="ops-btn ops-icon"
+        v-if="canTerminal(call.serverId)"
         :title="t('opsChat.terminal')"
         :aria-label="t('opsChat.terminal')"
-        @click="emit('terminal', call.serverId)"
+        @click="canTerminal(call.serverId) && emit('terminal', call.serverId)"
       >
         <Terminal2 />
       </button>

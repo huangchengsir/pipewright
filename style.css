@@ -40,9 +40,11 @@ a:focus-visible, button:focus-visible, input:focus-visible, [role="tabpanel"]:fo
 .skip:focus { transform: none; }
 
 .header { background: var(--surface); border-bottom: 1px solid var(--line); color: var(--ink); }
-.docs-page { --header-height: 67px; scroll-padding-top: var(--header-height); }
-.docs-page .header { position: sticky; top: 0; z-index: 5; }
+.docs-page { overflow: hidden; }
+.docs-page body { height: 100vh; height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr); }
 .docs-page .skip { position: fixed; }
+.docs-scroll { overflow-y: auto; }
+.docs-scroll:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .header-inner { min-height: 66px; display: flex; align-items: center; justify-content: space-between; gap: 10px 20px; flex-wrap: wrap; padding-block: 6px; }
 .brand { display: inline-flex; align-items: center; gap: 9px; color: inherit; font-size: 19px; font-weight: 760; line-height: 1; letter-spacing: -.045em; min-height: 44px; }
 .brand:hover { text-decoration: none; }
@@ -149,10 +151,9 @@ th { background: var(--soft); white-space: nowrap; }
   .workflows { grid-template-columns: minmax(210px, 1fr) minmax(0, 1.65fr); gap: 38px; padding-block: 66px 52px; }
   .next-step { flex-direction: row; align-items: center; padding: 26px 32px; }
   .docs-grid { grid-template-columns: 174px minmax(0, 1fr); align-items: start; gap: 24px; padding-top: 43px; }
-  .sidebar { position: sticky; top: calc(var(--header-height) + 20px); max-height: calc(100dvh - var(--header-height) - 40px); overflow: auto; display: grid; gap: 3px; }
+  .sidebar { position: sticky; top: 20px; overflow: auto; display: grid; gap: 3px; }
 }
 @media (min-width: 1000px) {
-  .docs-page { --header-height: 73px; }
   .header-inner { min-height: 72px; }
   .hero { padding-block: 63px 56px; }
   .wide-only { display: inline; }

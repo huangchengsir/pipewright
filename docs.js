@@ -1,9 +1,3 @@
-const header = document.querySelector('.header');
-new ResizeObserver(([entry]) => {
-  const height = Math.ceil(entry.target.getBoundingClientRect().height);
-  document.documentElement.style.setProperty('--header-height', height + 'px');
-}).observe(header);
-
 const searchBox = document.querySelector('#search-box');
 const search = document.querySelector('#search');
 const results = document.querySelector('#results');

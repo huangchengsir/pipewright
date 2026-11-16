@@ -10,6 +10,8 @@ one tool replacing the "CI + Ansible/Kamal + Portainer" trio.
 [![CI](https://github.com/huangchengsir/pipewright/actions/workflows/ci.yml/badge.svg)](https://github.com/huangchengsir/pipewright/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+[Website](https://huangchengsir.github.io/pipewright/) · [Quick start](https://huangchengsir.github.io/pipewright/docs/#quickstart)
+
 English | [简体中文](README.zh-CN.md)
 
 </div>

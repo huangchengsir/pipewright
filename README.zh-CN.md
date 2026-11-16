@@ -10,6 +10,8 @@
 [![CI](https://github.com/huangchengsir/pipewright/actions/workflows/ci.yml/badge.svg)](https://github.com/huangchengsir/pipewright/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+[项目官网](https://huangchengsir.github.io/pipewright/) · [快速开始](https://huangchengsir.github.io/pipewright/docs/#quickstart)
+
 [English](README.md) | 简体中文
 
 </div>

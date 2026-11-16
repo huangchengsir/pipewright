@@ -40,11 +40,13 @@ func TestTenantRepositoryOAuthPreservesTeamAndCredentialScope(t *testing.T) {
 		t.Fatal(e)
 	}
 	v := vault.New(f.db, testMasterKey())
+	// A documentation IP keeps endpoint validation independent of DNS.
+	const fixtureHost = "192.0.2.13"
 	mockCalls := 0
 	transport := settingsTransportFunc(func(req *http.Request) (*http.Response, error) {
 		mockCalls++
 		var body string
-		if req.URL.Host != "repository-provider.invalid" {
+		if req.URL.Host != fixtureHost {
 			t.Fatal("unexpected mock provider", req.URL.Host)
 		}
 		switch req.URL.Path {
@@ -60,7 +62,7 @@ func TestTenantRepositoryOAuthPreservesTeamAndCredentialScope(t *testing.T) {
 	oauthSvc := oauth.New(f.db, v, &http.Client{Transport: transport})
 	secret := "local-fixture"
 	adminCtx := tenancy.WithActor(ctx, admin.Actor, team)
-	if _, e = oauthSvc.SaveApp(adminCtx, oauth.SaveAppInput{Provider: "custom", ClientID: "fixture-app", ClientSecret: &secret, BaseURL: "https://repository-provider.invalid", Enabled: true}); e != nil {
+	if _, e = oauthSvc.SaveApp(adminCtx, oauth.SaveAppInput{Provider: "custom", ClientID: "fixture-app", ClientSecret: &secret, BaseURL: "https://" + fixtureHost, Enabled: true}); e != nil {
 		t.Fatal(e)
 	}
 	makeCredential := func(tenant, name string) string {
@@ -101,7 +103,7 @@ func TestTenantRepositoryOAuthPreservesTeamAndCredentialScope(t *testing.T) {
 	stateOf := func(t *testing.T, raw string) string {
 		t.Helper()
 		u, e := url.Parse(raw)
-		if e != nil || u.Host != "repository-provider.invalid" || u.Query().Get("state") == "" {
+		if e != nil || u.Host != fixtureHost || u.Query().Get("state") == "" {
 			t.Fatal("invalid redirect state", e)
 		}
 		return u.Query().Get("state")

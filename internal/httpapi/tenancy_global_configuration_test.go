@@ -47,9 +47,16 @@ func TestGlobalConfigurationHTTPAndDomainAuthorization(t *testing.T) {
 	migration := dbmigration.NewRuntime(control, dbmigration.ActiveConfig{Connection: dbmigration.Connection{Driver: "sqlite"}}, st, &key, false, func() error { return nil })
 	defer migration.Close()
 
+	// The probe validates the destination before calling the injected transport.
+	const fixtureHost = "192.0.2.12"
+	const fixtureBase = "https://" + fixtureHost
+
 	calls := 0
 	var after func()
-	client := &http.Client{Transport: settingsTransportFunc(func(*http.Request) (*http.Response, error) {
+	client := &http.Client{Transport: settingsTransportFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host != fixtureHost {
+			t.Fatalf("unexpected fixture address: %s", req.URL.Host)
+		}
 		calls++
 		if after != nil {
 			after()
@@ -97,7 +104,7 @@ func TestGlobalConfigurationHTTPAndDomainAuthorization(t *testing.T) {
 	user := tenancy.WithActor(ctx, login.Actor, team)
 	adminCtx := tenancy.WithActor(ctx, admin.Actor, team)
 	secret := "synthetic-settings-secret"
-	aIn := ai.SaveInput{Provider: "openai", BaseURL: "https://api.example.invalid", Model: "fixture", APIKey: &secret, Enabled: true}
+	aIn := ai.SaveInput{Provider: "openai", BaseURL: fixtureBase, Model: "fixture", APIKey: &secret, Enabled: true}
 	oIn := oauth.SaveAppInput{Provider: "github", ClientID: "fixture", ClientSecret: &secret, Enabled: true}
 	for _, fn := range []func() error{
 		func() error {
@@ -134,7 +141,7 @@ func TestGlobalConfigurationHTTPAndDomainAuthorization(t *testing.T) {
 		router.ServeHTTP(w, r)
 		return w
 	}
-	aBody := `{"provider":"openai","baseUrl":"https://api.example.invalid","model":"fixture","apiKey":"synthetic-settings-secret","enabled":true}`
+	aBody := `{"provider":"openai","baseUrl":"` + fixtureBase + `","model":"fixture","apiKey":"synthetic-settings-secret","enabled":true}`
 	oBody := `{"clientId":"fixture","clientSecret":"synthetic-settings-secret","enabled":true}`
 	for _, tc := range []struct{ method, path, body string }{{"GET", "/api/settings/database", ""}, {"POST", "/api/settings/database/test-connection", `{"driver":"postgres","host":"must-not-connect"}`}, {"POST", "/api/settings/database/preflight", "{}"}, {"POST", "/api/settings/database/start", `{"taskId":"missing","revision":1}`}, {"POST", "/api/settings/database/abort", `{"taskId":"missing","revision":1}`}, {"GET", "/api/version/check", ""}, {"GET", "/api/version/source-settings", ""}, {"PUT", "/api/version/source-settings", `{"source":"github","expectedRevision":1}`}, {"POST", "/api/version/update", "{}"}, {"POST", "/api/version/update-tasks", "{}"}, {"GET", "/api/version/update-tasks/current", ""}, {"GET", "/api/version/update-tasks/unknown", ""}, {"POST", "/api/version/update-tasks/unknown/resume", "{}"}, {"GET", "/api/retention/config", ""}, {"PUT", "/api/retention/config", `{"enabled":true,"keepPerProject":2}`}, {"GET", "/api/settings/ai", ""}, {"PUT", "/api/settings/ai", aBody}, {"POST", "/api/settings/ai/test", "{}"}, {"POST", "/api/settings/ai/models", "{}"}, {"GET", "/api/oauth/apps", ""}, {"PUT", "/api/oauth/apps/github", oBody}} {
 		w := request(tc.method, tc.path, tc.body, true)
@@ -246,7 +253,7 @@ func TestGlobalConfigurationHTTPAndDomainAuthorization(t *testing.T) {
 		}
 	}
 	provider := "claude"
-	base := "https://api.example.invalid"
+	base := fixtureBase
 	before := calls
 	result, e := ais.(ai.ModelLister).Models(adminCtx, ai.TestInput{Provider: &provider, BaseURL: &base, APIKey: &secret})
 	if !errors.Is(e, tenancy.ErrForbidden) || result != nil || calls != before+1 {

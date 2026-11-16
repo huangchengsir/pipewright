@@ -126,9 +126,28 @@ stages:
       <h3>SSH 部署</h3>
       <p>在凭据保险库保存 SSH 凭据，在「服务器」登记并检查目标机连接。给项目配置目标环境和服务器，再把 SSH 部署节点接在构建节点之后。首次发布建议选测试环境并打开节点日志核对实际目标。</p>
       </section>
+      <section class="doc-topic" id="deploy-command" data-keywords="ssh 纯命令 不上传产物 compose">
+      <h3>通过 SSH 只执行命令</h3>
+      <p>如果镜像已经推送到仓库，目标机也已经准备好 Compose 文件，可以用 YAML 配置 <code>deploy_ssh</code>，把节点的 <code>config.artifactType</code> 设为 <code>command</code>，在 <code>config.restartCommand</code> 写入要在目标机运行的命令。通过节点选择服务器，或在运行时选择已绑定服务器的环境。</p>
+      <div class="snippet"><pre><code>- name: 更新目标机服务
+  type: deploy_ssh
+  config:
+    artifactType: command
+    restartCommand: |
+      set -e
+      cd /opt/myapp
+      docker compose pull
+      docker compose up -d</code></pre><button class="copy" type="button" hidden aria-label="复制纯命令部署示例">复制</button></div>
+      <p>这是部署阶段 <code>jobs</code> 下的节点片段。<code>command</code> 模式不上传产物，命令退出码非零时该目标会失败。应用仍需确认镜像仓库权限和部署后的健康状态。v2.4.1 的画布下拉框暂未提供这一模式，请用「从 YAML 导入」或仓库中的 <code>.pipewright.yml</code> 配置。</p>
+      </section>
       <section class="doc-topic" id="deploy-docker" data-keywords="container registry 镜像 仓库">
       <h3>Docker 镜像部署</h3>
       <p>在有真实容器执行器的环境中构建镜像，并配置镜像仓库和推送节点。由目标机拉取待部署的镜像。优先使用本次构建的明确版本标识，便于从运行详情追溯实际部署内容。</p>
+      </section>
+      <section class="doc-topic" id="deploy-image-version" data-keywords="镜像 tag 跨阶段 变量 产物来源">
+      <h3>把构建生成的镜像交给部署节点</h3>
+      <p>使用「构建镜像 → 推送镜像 → SSH 部署」，让部署依赖推送所在阶段，部署产物类型设为「镜像」。推送节点将本次推送结果登记为镜像产物，部署可以直接使用该镜像引用。如果有多个镜像，在「产物来源」指定对应节点和产物。</p>
+      <p>同一阶段内，脚本可把 <code>KEY=VALUE</code> 追加到 <code>$PIPEWRIGHT_ENV</code>，供下游脚本读取。这个变量机制不能直接把脚本动态算出的 tag 交给另一个阶段的 SSH 部署配置。若要自己写部署命令，且 tag 在触发时已知，可以定义运行参数 <code>IMAGE_TAG</code>，在「重启 / 切换命令」中引用 <code>{{IMAGE_TAG}}</code>。</p>
       </section>
       <section class="doc-topic" id="deploy-kubernetes" data-keywords="k8s kubectl rollout">
       <h3>Kubernetes 部署</h3>
@@ -181,7 +200,7 @@ stages:
     </div>
   </article>
 </main>
-<footer><div class="wrap footer-inner"><a class="brand" href="../../"><span class="mark" aria-hidden="true">p&gt;</span>Pipewright</a><a href="https://github.com/huangchengsir/pipewright/issues">文档反馈 ↗</a></div></footer>
+<footer><div class="wrap footer-inner"><a class="brand" href="../../"><span class="mark" aria-hidden="true">p&gt;</span>Pipewright</a><a href="https://github.com/huangchengsir/pipewright/discussions">使用交流 ↗</a><a href="https://github.com/huangchengsir/pipewright/issues">文档反馈 ↗</a></div></footer>
 </div>
 </body>
 </html>

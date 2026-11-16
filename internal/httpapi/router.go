@@ -602,11 +602,14 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// GET 过 auth;PUT 为写方法,过 auth + CSRF。
 		pl := o.pipelines
 		ar.Get("/projects/{id}/pipeline", makeGetPipelineHandler(pl))
-		ar.Put("/projects/{id}/pipeline", makeSavePipelineHandler(pl))
+		ar.Get("/projects/{id}/pipeline/history", makePipelineHistoryListHandler(pl))
+		ar.Get("/projects/{id}/pipeline/history/{versionId}", makePipelineHistoryDetailHandler(pl))
+		ar.Post("/projects/{id}/pipeline/history/{versionId}/draft", makePipelineHistoryDraftHandler(pl))
+		ar.Put("/projects/{id}/pipeline", withPipelineHistoryAuthor(pipeline.HistorySourceCanvas, makeSavePipelineHandler(pl)))
 
 		// 流水线即代码导入/预览(FR-8-12):POST 收 .pipewright.yml 文档,解析+校验为同一套 spec。
 		// /pipeline/import 比 /pipeline 多一段,不会被吞;写方法,过 auth + CSRF。
-		ar.Post("/projects/{id}/pipeline/import", makeImportPipelineHandler(pl))
+		ar.Post("/projects/{id}/pipeline/import", withPipelineHistoryAuthor(pipeline.HistorySourceImport, makeImportPipelineHandler(pl)))
 
 		// 构建/部署配置(Story 2.4):独立表/端点,与 /pipeline(2-2 spec)各自路由;
 		// /pipeline/settings 比 /pipeline 多一段,不会被吞。GET 过 auth;PUT 写方法过 auth + CSRF。
@@ -734,7 +737,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 			customNodes: o.customNodes,
 		}
 		ar.Post("/projects/{id}/pipeline/ai-generate", makeAIGenerateHandler(aiGenDeps))
-		ar.Post("/projects/{id}/pipeline/ai-apply", makeAIApplyHandler(aiGenDeps))
+		ar.Post("/projects/{id}/pipeline/ai-apply", withPipelineHistoryAuthor(pipeline.HistorySourceAI, makeAIApplyHandler(aiGenDeps)))
 
 		// AI 脚本风险标注(护城河 · AI moat):对流水线脚本步骤(Epic 8 script step)做风险标注 —
 		// 确定性正则预扫(rm -rf /、curl|sh、chmod 777、明文密钥、latest 镜像)+ 可选 LLM 语义增强。
@@ -995,7 +998,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Post("/templates", makeCreatePipelineTemplateHandler(tpl, aud))
 		ar.Get("/templates/{id}", makeGetPipelineTemplateHandler(tpl))
 		ar.Delete("/templates/{id}", makeDeletePipelineTemplateHandler(tpl, aud))
-		ar.Post("/projects/{id}/pipeline/apply-template", makeApplyTemplateHandler(tpl, aud))
+		ar.Post("/projects/{id}/pipeline/apply-template", withPipelineHistoryAuthor(pipeline.HistorySourceTemplate, makeApplyTemplateHandler(tpl, aud)))
 
 		// 变量组(FR-8-13 复用基座):命名、可复用的变量集合(key=value + secret 引用)。
 		// vg 为 nil → handler 返回 503。GET 过 auth;POST/PUT/DELETE 为写方法,过 auth + CSRF + 审计。

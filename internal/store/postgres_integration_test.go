@@ -106,11 +106,14 @@ func TestPostgresUpgradeReopenAndMigrationRollback(t *testing.T) {
 		t.Fatal("reopen changed ciphertext", err)
 	}
 	var count int
-	if err := st.DB.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil || count != 66 {
+	if err := st.DB.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil || count != 67 {
 		t.Fatalf("migration count %d %v", count, err)
 	}
-	if err := st.DB.QueryRow("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_type='BASE TABLE'").Scan(&count); err != nil || count != 109 {
-		t.Fatalf("table count %d %v", count, err)
+	for _, name := range []string{"projects", "pipeline_configs", "pipeline_runs", "pipeline_config_versions",
+		"access_teams", "access_users", "access_ownership", "schema_migrations"} {
+		if err := st.DB.QueryRow("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_type='BASE TABLE' AND table_name=?", name).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("required PostgreSQL table %q missing: count=%d, error=%v", name, count, err)
+		}
 	}
 	if err := st.applyMigration("9999_rollback_test", `CREATE TABLE migration_rollback_probe (id BIGINT PRIMARY KEY); INSERT INTO migration_rollback_probe VALUES(1); INSERT INTO migration_rollback_probe VALUES(1);`); err == nil {
 		t.Fatal("failing migration succeeded")

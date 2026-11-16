@@ -161,3 +161,52 @@ export async function importPipeline(
   if (requestOptions) return http.post<PipelineDTO>(`/api/projects/${projectId}/pipeline/import`, { yaml, save }, requestOptions)
   return http.post<PipelineDTO>(`/api/projects/${projectId}/pipeline/import`, { yaml, save })
 }
+
+export interface PipelineHistoryVersion {
+  id: string
+  sequence: number
+  current?: boolean
+  previousId?: string
+  previousSequence?: number
+  createdAt: string
+  actor: string
+  source: 'baseline' | 'canvas' | 'yaml_import' | 'template' | 'ai' | 'mcp'
+  changeCount: number
+}
+
+export interface PipelineHistoryChange {
+  kind: 'stage' | 'job'
+  id: string
+  name: string
+  action: 'added' | 'removed' | 'changed' | 'moved' | 'renamed'
+  fields?: string[]
+  details?: Array<{ field: string; before?: string; after?: string }>
+}
+
+export interface PipelineHistoryDetail extends PipelineHistoryVersion {
+  changes: PipelineHistoryChange[]
+  draftAvailable: boolean
+}
+
+interface PipelineHistoryPage {
+  versions: PipelineHistoryVersion[]
+  nextBefore?: number
+}
+
+function pipelineHistoryPath(projectId: string): string {
+  return `/api/projects/${encodeURIComponent(projectId)}/pipeline/history`
+}
+
+export function listPipelineHistory(projectId: string, before?: number, options?: HttpOptions): Promise<PipelineHistoryPage> {
+  const query = new URLSearchParams({ limit: '20' })
+  if (before !== undefined) query.set('before', String(before))
+  return http.get<PipelineHistoryPage>(`${pipelineHistoryPath(projectId)}?${query}`, options)
+}
+
+export function getPipelineHistoryVersion(projectId: string, versionId: string, options?: HttpOptions): Promise<PipelineHistoryDetail> {
+  return http.get<PipelineHistoryDetail>(`${pipelineHistoryPath(projectId)}/${encodeURIComponent(versionId)}`, options)
+}
+
+export function loadPipelineHistoryDraft(projectId: string, versionId: string, options?: HttpOptions): Promise<PipelineDTO> {
+  return http.post<PipelineDTO>(`${pipelineHistoryPath(projectId)}/${encodeURIComponent(versionId)}/draft`, undefined, options)
+}

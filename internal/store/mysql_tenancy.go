@@ -50,3 +50,25 @@ func mysqlLegacyIDDefinition(dataType string, length int, charset, collation str
 	}
 	return "VARCHAR(64) CHARACTER SET utf8mb4 COLLATE " + collation + " NOT NULL", nil
 }
+
+// The existing pipeline key may predate changes to the database collation.
+func (s *Store) mysqlPipelineHistoryForeignKey(sqlText string) (string, error) {
+	var dataType, charset, collation string
+	var length int
+	err := s.DB.QueryRow(`SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, CHARACTER_SET_NAME, COLLATION_NAME
+	 FROM information_schema.COLUMNS
+	 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='pipeline_configs' AND COLUMN_NAME='project_id'`).
+		Scan(&dataType, &length, &charset, &collation)
+	if err != nil {
+		return "", err
+	}
+	definition, err := mysqlLegacyIDDefinition(dataType, length, charset, collation)
+	if err != nil {
+		return "", err
+	}
+	const declaration = "\n project_id VARCHAR(64) NOT NULL,"
+	if strings.Count(sqlText, declaration) != 1 {
+		return "", fmt.Errorf("unexpected history project ID migration declaration")
+	}
+	return strings.Replace(sqlText, declaration, "\n project_id "+definition+",", 1), nil
+}

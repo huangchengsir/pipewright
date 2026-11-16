@@ -160,7 +160,7 @@ func (c *runAccessCompiler) Prepare(ctx context.Context, projectID string, trigg
 	if trigger.Commit != "" && !strings.HasPrefix(strings.ToLower(source.CommitSHA), strings.ToLower(trigger.Commit)) {
 		return nil, tenancy.ErrConflict
 	}
-	configSource := runretry.ConfigSource{Kind: "stored", Ref: source.CommitSHA, Fallback: "disabled"}
+	configSource := runretry.ConfigSource{Kind: "stored", Ref: source.CommitSHA, Fallback: "disabled", HistoryVersionID: cfg.HistoryVersionID}
 	if proj.PacEnabled || c.pacGlobal {
 		configSource.Fallback = "no_file"
 		if source.Found {

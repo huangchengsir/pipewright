@@ -84,6 +84,7 @@ func cfgWith(stages ...pipeline.Stage) *pipeline.Config {
 // 经 SetSpecSource 透传给 sink:FromRepo → run.SpecSourceRepo + ref/file;回退 → stored + 原因。
 func TestRunnerForwardsSpecSourceToSink(t *testing.T) {
 	cfg := cfgWith(pipeline.Stage{ID: "src", Name: "源"})
+	cfg.HistoryVersionID = "history-v1"
 
 	// 仓库来源:loader 返回 FromRepo → sink 应收到 Source=repo + ref/file。
 	sink := newFakeSink()
@@ -95,7 +96,7 @@ func TestRunnerForwardsSpecSourceToSink(t *testing.T) {
 	if sink.specSrc == nil {
 		t.Fatal("Runner 未调用 SetSpecSource")
 	}
-	if sink.specSrc.Source != run.SpecSourceRepo || sink.specSrc.Ref != "feature/x" || sink.specSrc.File != ".pipewright.yml" {
+	if sink.specSrc.Source != run.SpecSourceRepo || sink.specSrc.Ref != "feature/x" || sink.specSrc.File != ".pipewright.yml" || sink.specSrc.HistoryVersionID != "" {
 		t.Fatalf("仓库来源透传错误: %+v", *sink.specSrc)
 	}
 
@@ -106,7 +107,7 @@ func TestRunnerForwardsSpecSourceToSink(t *testing.T) {
 		&run.Run{ProjectID: "p", Trigger: run.Trigger{Type: "manual", Branch: "main"}}, sink2); err != nil {
 		t.Fatalf("Run 失败: %v", err)
 	}
-	if sink2.specSrc == nil || sink2.specSrc.Source != run.SpecSourceStored || sink2.specSrc.Fallback != "invalid_yaml" {
+	if sink2.specSrc == nil || sink2.specSrc.Source != run.SpecSourceStored || sink2.specSrc.Fallback != "invalid_yaml" || sink2.specSrc.HistoryVersionID != "history-v1" {
 		t.Fatalf("库内回退来源透传错误: %+v", sink2.specSrc)
 	}
 }

@@ -1,0 +1,71 @@
+export default {
+  "tab": "Historique des modifications",
+  "records": "Versions enregistrées",
+  "version": "Version {n}",
+  "current": "Actuelle",
+  "unknownActor": "Auteur non enregistré",
+  "more": "Charger plus",
+  "loadError": "Impossible de charger l’historique.",
+  "empty": "Aucune version enregistrée.",
+  "versionError": "Impossible d’ouvrir cette version.",
+  "compare": "Comparée à la version {n}",
+  "changes": "Modifications",
+  "changeCount": "{n} modifications",
+  "baseline": "Cette version marque le début de l’historique.",
+  "before": "Avant",
+  "after": "Après",
+  "field": "Champ de configuration",
+  "valueHidden": "{field} a changé. Les valeurs sont masquées.",
+  "currentNote": "Version actuellement enregistrée.",
+  "draftNote": "Vérifiez le brouillon sur le canevas puis enregistrez-le pour l’appliquer.",
+  "draftUnavailable": "Cette version ne peut pas être chargée intégralement. Modifiez le canevas à partir des différences.",
+  "createDraft": "Créer un brouillon depuis cette version",
+  "draftLoaded": "Brouillon de la version {n} chargé. Vérifiez et enregistrez les modifications.",
+  "draftConflict": "La configuration a changé. Rechargez le canevas puis réessayez.",
+  "draftError": "Impossible de charger le brouillon. Réessayez.",
+  "openVersion": "Voir la version du canevas",
+  "notRecorded": "Version historique non enregistrée",
+  "sources": {
+    "baseline": "Version initiale",
+    "canvas": "Enregistrement du canevas",
+    "yaml_import": "Import YAML",
+    "template": "Modèle appliqué",
+    "ai": "IA appliquée",
+    "mcp": "MCP appliqué"
+  },
+  "kinds": {
+    "stage": "Étape",
+    "job": "Nœud"
+  },
+  "actions": {
+    "added": "Ajout",
+    "removed": "Suppression",
+    "changed": "Modification",
+    "moved": "Déplacement",
+    "renamed": "Renommage"
+  },
+  "fields": {
+    "name": "Nom",
+    "position": "Position",
+    "needs": "Dépendances",
+    "config": "Configuration",
+    "commands": "Commandes",
+    "summary": "Résumé",
+    "kind": "Type",
+    "when": "Conditions",
+    "matrix": "Matrice",
+    "post": "Étapes finales",
+    "services": "Services auxiliaires",
+    "stage": "Étape",
+    "type": "Type",
+    "gate": "Approbation",
+    "allowFailure": "Autoriser l’échec",
+    "variables": "Variables",
+    "references": "Références aux ressources",
+    "protected": "Configuration protégée"
+  },
+  "values": {
+    "true": "Oui",
+    "false": "Non"
+  }
+}

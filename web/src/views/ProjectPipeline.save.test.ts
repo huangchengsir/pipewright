@@ -68,7 +68,7 @@ let router: Router
 
 const CanvasStub = defineComponent({
   name: 'PipelineCanvas',
-  props: ['stages', 'projectName', 'project', 'environmentAutoPushPossible'],
+  props: ['stages', 'projectName', 'project', 'environmentAutoPushPossible', 'yaml'],
   emits: ['update'],
   setup: () => () => h('div', { class: 'canvas-stub' }),
 })
@@ -239,6 +239,83 @@ afterEach(() => {
   wrapper = undefined
   vi.restoreAllMocks()
   vi.useRealTimers()
+})
+
+describe('ProjectPipeline history drafts', () => {
+  async function openHistoricalVersion() {
+    storedPipeline.stages = [{ id: 'saved', name: 'Current stages', kind: 'build', jobs: [] }]
+    const version = {
+      id: 'old', sequence: 1, source: 'canvas', createdAt: '2026-11-17T00:00:00Z',
+      actor: 'editor', changeCount: 1,
+    }
+    const normalGet = vi.mocked(http.get).getMockImplementation()!
+    vi.mocked(http.get).mockImplementation((url, options) => {
+      if (url.startsWith(prefix + '/pipeline/history?')) return Promise.resolve({ versions: [version] })
+      if (url === prefix + '/pipeline/history/old') return Promise.resolve({
+        ...version, draftAvailable: true, changes: [
+          { kind: 'stage', id: 'past', name: 'Past stage', action: 'added', fields: [] },
+        ],
+      })
+      return normalGet(url, options)
+    })
+    const versions = versionedRequests()
+    await render('history')
+    expect(wrapper!.get('.history-detail').text()).toContain('Past stage')
+    return {
+      versions,
+      oldStages: [{ id: 'past', name: 'Past stage', kind: 'build', jobs: [] }] as PipelineStage[],
+      restore: async () => {
+        await wrapper!.get('.history-footer button').trigger('click')
+        await flushPromises()
+      },
+    }
+  }
+
+  it('places an older version in the canvas and waits for an explicit save', async () => {
+    const { versions, oldStages, restore } = await openHistoricalVersion()
+    vi.mocked(http.post).mockImplementation(async url => {
+      expect(url).toBe(prefix + '/pipeline/history/old/draft')
+      return bindConfigRevision({ ...storedPipeline, stages: oldStages, yaml: 'historical yaml' }, versions.current())
+    })
+    await restore()
+    expect(router.currentRoute.value.query.tab).toBe('canvas')
+    expect(wrapper!.get('#history-draft-notice').text()).toContain('1')
+    expect(wrapper!.get('.canvas-stub').isVisible()).toBe(true)
+    expect(wrapper!.findComponent(CanvasStub).props('stages')[0].id).toBe('past')
+    expect(wrapper!.findComponent(CanvasStub).props('yaml')).toBe('historical yaml')
+    expect(storedPipeline.stages[0].id).toBe('saved')
+    expect(http.put).not.toHaveBeenCalled()
+    await clickSave()
+    expect(storedPipeline.stages[0].id).toBe('past')
+    expect(wrapper!.find('#history-draft-notice').exists()).toBe(false)
+  })
+
+  it('asks before replacing unfinished edits and preserves them when canceled', async () => {
+    const { restore } = await openHistoricalVersion()
+    await switchTab('canvas')
+    wrapper!.findComponent(CanvasStub).vm.$emit('update', [
+      { id: 'unsaved', name: 'Unsaved changes', kind: 'build', jobs: [] },
+    ])
+    await switchTab('history')
+    await restore()
+    expect(window.confirm).toHaveBeenCalledTimes(1)
+    expect(http.post).not.toHaveBeenCalled()
+    await switchTab('canvas')
+    expect(wrapper!.findComponent(CanvasStub).props('stages')[0].id).toBe('unsaved')
+  })
+
+  it('leaves both the canvas and the stored config intact on a revision conflict', async () => {
+    const { oldStages, restore } = await openHistoricalVersion()
+    vi.mocked(http.post).mockImplementation(async () => {
+      return bindConfigRevision({ ...storedPipeline, stages: oldStages }, 'cfg-999')
+    })
+    await restore()
+    expect(wrapper!.get('.history-restore-error').text()).toContain(i18n.global.t('pipelineHistory.draftConflict'))
+    expect(router.currentRoute.value.query.tab).toBe('history')
+    expect(http.put).not.toHaveBeenCalled()
+    await switchTab('canvas')
+    expect(wrapper!.findComponent(CanvasStub).props('stages')[0].id).toBe('saved')
+  })
 })
 
 describe('ProjectPipeline draft save scope (#190/#193)', () => {

@@ -434,6 +434,13 @@ const specSourceBadge = computed(() => {
   return null;
 });
 
+const historyPermission = usePermission(() => ({ action: 'pipeline.read', resourceId: run.value?.projectId ?? '' }));
+const historyLink = computed(() => {
+  const item = run.value;
+  if (item?.specSource !== 'stored' || !item.historyVersionId || !historyPermission.allowed.value) return null;
+  return { name: 'project-pipeline', params: { id: item.projectId }, query: { tab: 'history', historyVersion: item.historyVersionId } };
+});
+
 async function ensureDeployServers(): Promise<void> {
   if(!scope.active())return;
   if (deployServersLoaded.value) return;
@@ -1309,9 +1316,10 @@ function nodeClass(status: StepStatus): string {
               · {{ run.trigger.actor }}</span
             >
           </div>
-          <div v-if="specSourceBadge" class="meta-item">
+          <div v-if="specSourceBadge || (run.finishedAt && !run.specSource)" class="meta-item">
             <span class="meta-key">{{ t("runDetail.metaSpecSource") }}</span>
             <span
+              v-if="specSourceBadge"
               class="spec-source-badge"
               :class="`spec-source-badge--${specSourceBadge.kind}`"
               :title="specSourceBadge.hint || undefined"
@@ -1324,6 +1332,10 @@ function nodeClass(status: StepStatus): string {
                 aria-hidden="true"
                 >⚠</span
               >
+            </span>
+            <router-link v-if="historyLink" :to="historyLink">{{ t('pipelineHistory.openVersion') }}</router-link>
+            <span v-else-if="run.finishedAt && !run.historyVersionId && (run.specSource === 'stored' || !run.specSource)" class="meta-val">
+              {{ t('pipelineHistory.notRecorded') }}
             </span>
           </div>
           <div class="meta-item">

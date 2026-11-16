@@ -40,6 +40,9 @@ func configHTTPFixture(t *testing.T) (*mcpFixture, *configdraft.Service, http.Ha
 		t.Fatal(err)
 	}
 	stamp := time.Now().UTC().Format(time.RFC3339)
+	if _, err := f.db.Exec(`INSERT INTO admin_user(id,username,password_hash,created_at,updated_at) VALUES (1,'fixture-admin','test-hash',?,?)`, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
 	raw := `{"stages":[{"id":"source","name":"Source","kind":"source","jobs":[{"id":"git","name":"Git","type":"git_source","config":{}}]},{"id":"test","name":"Tests","kind":"custom","needs":["source"],"jobs":[{"id":"script","name":"Test","type":"script","config":{"image":"alpine:3","commands":"echo private-script","timeoutSeconds":60}}]}]}`
 	if _, err := f.db.Exec(`INSERT INTO pipeline_configs(project_id,spec_json,spec_yaml,status,created_at,updated_at,saved_at) VALUES (?,?,'','saved',?,?,?)`, f.project, raw, stamp, stamp, stamp); err != nil {
 		t.Fatal(err)
@@ -52,7 +55,7 @@ func configHTTPFixture(t *testing.T) (*mcpFixture, *configdraft.Service, http.Ha
 		t.Fatal(err)
 	}
 	key := [32]byte{19, 23}
-	svc := configdraft.New(f.db, &configdraft.Options{Kubernetes: kubernetes.New(f.db, vault.New(f.db, &key)), Runtime: configdraft.RuntimeInfo{RunnerMode: "dag", ExecutorKind: "local_docker", Available: true}, ApplyEnabled: true, PrepareSecrets: func(context.Context) (func(string) string, error) { return func(v string) string { return v }, nil }, AuthorizeAdmin: ConfigAdminAuthorizer(f.db), RevalidateApprover: ConfigApproverVerifier(f.db)})
+	svc := configdraft.New(f.db, &configdraft.Options{Kubernetes: kubernetes.New(f.db, vault.New(f.db, &key)), Runtime: configdraft.RuntimeInfo{RunnerMode: "dag", ExecutorKind: "local_docker", Available: true}, ApplyEnabled: true, PrepareSecrets: func(context.Context) (func(string) string, error) { return func(v string) string { return v }, nil }, AuthorizeAdmin: ConfigAdminAuthorizer(f.db), RevalidateApprover: ConfigApproverVerifier(f.db), HistoryCipher: vault.New(f.db, &key), HistoryActor: ConfigHistoryApprover(f.db)})
 	f.handler, err = NewMCPHandler(f.tokens, pmcp.Dependencies{Configs: svc, Masker: mask.NewMasker()}, MCPHTTPOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +65,7 @@ func configHTTPFixture(t *testing.T) (*mcpFixture, *configdraft.Service, http.Ha
 	if err != nil {
 		t.Fatal(err)
 	}
-	admin := New(testWebFSAuth(), configSessionAuth{store: ss}, WithProjects(project.New(f.db, nil, nil)), WithConfigManagement(f.db, svc, true))
+	admin := New(testWebFSAuth(), configSessionAuth{store: ss}, WithProjects(project.New(f.db, nil, nil)), WithConfigManagement(f.db, svc, true), WithPipelines(pipeline.New(f.db, pipeline.WithHistoryCipher(vault.New(f.db, &key)))))
 	return f, svc, admin, sess, token
 }
 
@@ -97,7 +100,10 @@ func TestConfigurationMCPBrowserApprovalApplyAndReplay(t *testing.T) {
 	}
 	expectMCPError(t, f.call(t, f.readonly, "project_config_get", map[string]any{"projectId": f.project, "section": "project", "beginSnapshot": true}), "permission_denied")
 	snap := mcpOutput(t, f.call(t, token, "project_config_get", map[string]any{"projectId": f.project, "section": "project", "beginSnapshot": true}))
-	draft := mcpOutput(t, f.call(t, token, "config_draft_create", map[string]any{"projectId": f.project, "baseRevision": snap["baseRevision"], "policyVersion": snap["policyVersion"], "requestId": "integration-draft-1", "operations": []any{map[string]any{"type": "project.set_name", "value": "Reviewed project"}}}))
+	draft := mcpOutput(t, f.call(t, token, "config_draft_create", map[string]any{"projectId": f.project, "baseRevision": snap["baseRevision"], "policyVersion": snap["policyVersion"], "requestId": "integration-draft-1", "operations": []any{
+		map[string]any{"type": "project.set_name", "value": "Reviewed project"},
+		map[string]any{"type": "step.set_limits", "stageId": "test", "jobId": "script", "limits": map[string]int{"timeoutSeconds": 90}},
+	}}))
 	if strings.Contains(fmt.Sprint(draft), "private-script") {
 		t.Fatal("raw script exposed")
 	}
@@ -144,6 +150,27 @@ func TestConfigurationMCPBrowserApprovalApplyAndReplay(t *testing.T) {
 	_ = f.db.QueryRow(`SELECT approver FROM mcp_config_approvals WHERE id=?`, approval.ID).Scan(&approver)
 	if approver != auth.SessionID(sess.Token) || approver == sess.Token {
 		t.Fatal("session secret persisted")
+	}
+	if f.db.Stats().MaxOpenConnections != 1 {
+		t.Fatal("expected single-connection SQLite fixture")
+	}
+	path := "/api/projects/" + f.project + "/pipeline/history"
+	w = configAdminRequest(admin, sess, "GET", path, "", "", false)
+	var history pipeline.HistoryPage
+	if err := json.Unmarshal(w.Body.Bytes(), &history); err != nil || w.Code != 200 || len(history.Versions) != 2 {
+		t.Fatalf("history after MCP apply: %d %s %v", w.Code, w.Body, err)
+	}
+	v := history.Versions[0]
+	if !v.Current || v.Actor != "fixture-admin" || v.Source != "mcp" || v.ChangeCount != 1 {
+		t.Fatalf("wrong history provenance: %#v", v)
+	}
+	w = configAdminRequest(admin, sess, "GET", path+"/"+v.ID, "", "", false)
+	if w.Code != 200 || strings.Contains(w.Body.String(), "private-script") || !strings.Contains(w.Body.String(), "script") {
+		t.Fatalf("unsafe or incomplete history detail: %d %s", w.Code, w.Body)
+	}
+	w = configAdminRequest(admin, sess, "POST", path+"/"+v.ID+"/draft", "", "", false)
+	if w.Code != 403 {
+		t.Fatalf("history draft CSRF bypass: %d", w.Code)
 	}
 }
 

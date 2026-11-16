@@ -112,11 +112,12 @@ func (s Snapshot) ExecutionStages() ([]pipeline.Stage, error) {
 }
 
 type ConfigSource struct {
-	Kind     string `json:"kind"`
-	Ref      string `json:"ref,omitempty"`
-	File     string `json:"file,omitempty"`
-	BlobSHA  string `json:"blobSha,omitempty"`
-	Fallback string `json:"fallback,omitempty"`
+	HistoryVersionID string `json:"historyVersionId,omitempty"`
+	Kind             string `json:"kind"`
+	Ref              string `json:"ref,omitempty"`
+	File             string `json:"file,omitempty"`
+	BlobSHA          string `json:"blobSha,omitempty"`
+	Fallback         string `json:"fallback,omitempty"`
 }
 
 // The original identity tuple is retained; sanitized matrix labels are not keys.

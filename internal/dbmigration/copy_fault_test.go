@@ -53,7 +53,7 @@ func TestCopyInterruptionAfterCommittedBatches(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if len(report.Tables) != 120 {
+	if len(report.Tables) != 121 {
 		t.Fatal("resume incomplete")
 	}
 	var after int

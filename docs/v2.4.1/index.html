@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="zh-CN" class="docs-page">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Pipewright v2.4.1 的安装、流水线、部署与环境变量参考。">
+  <title>Pipewright 文档 · v2.4.1</title>
+  <link rel="stylesheet" href="../../style.css?v=5">
+  <script src="../../docs.js?v=4" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">跳到主内容</a>
+<header class="header"><div class="wrap header-inner">
+  <a class="brand" href="../../" aria-label="Pipewright 首页"><span class="mark" aria-hidden="true">p&gt;</span>Pipewright</a>
+  <nav aria-label="主导航"><a href="../../">首页</a><a href="./" aria-current="page">文档</a><a href="https://github.com/huangchengsir/pipewright">GitHub ↗</a></nav>
+</div></header>
+<div class="docs-scroll" role="region" aria-label="文档内容" tabindex="0">
+<main id="main" class="wrap docs-grid" tabindex="-1">
+  <nav class="sidebar" aria-label="文档章节">
+    <strong>使用文档</strong>
+    <a href="#quickstart">快速开始</a>
+    <a href="#pipeline">流水线 YAML</a>
+    <a href="#deploy">部署方式</a>
+    <a href="#config">环境变量</a>
+    <a href="#further">更多专题</a>
+  </nav>
+  <article class="docs">
+    <div class="docs-title"><h1>Pipewright 文档</h1><span class="version">v2.4.1</span></div>
+    <p>安装自托管实例、运行第一条流水线，再按场景配置部署与权限。</p>
+    <div class="search" id="search-box" hidden>
+      <label for="search">搜索本页文档</label>
+      <input type="search" id="search" placeholder="例如 Kubernetes、部署" autocomplete="off" aria-controls="search-matches">
+      <output id="results" for="search" aria-live="polite"></output>
+      <ol id="search-matches" class="search-matches" hidden></ol>
+    </div>
+    <div id="doc-sections">
+    <section class="doc-section" id="quickstart">
+      <h2>快速开始</h2>
+      <div class="start-options">
+        <a href="#start-compose"><strong>先体验控制台</strong><span>用 Docker Compose 启动并登录</span></a>
+        <a href="#start-linux"><strong>运行第一条流水线</strong><span>在 Linux 上用 Docker 执行脚本</span></a>
+      </div>
+      <section class="doc-topic" id="start-compose" data-keywords="compose docker install 安装">
+      <h3>用 Compose 体验控制台</h3>
+      <p>准备 Docker 和 Compose。将以下两个配置文件保存到同一个空目录，把 <code>.env.example</code> 复制为 <code>.env</code>。设置自己的管理员密码、填入 <code>openssl rand -base64 32</code> 生成的主密钥，并将 <code>PIPEWRIGHT_VERSION</code> 设为 <code>2.4.1</code>。保存主密钥和持久化卷，后续恢复凭据需要它们。</p>
+      <ul>
+        <li><a href="https://raw.githubusercontent.com/huangchengsir/pipewright/v2.4.1/docker-compose.yml">docker-compose.yml</a></li>
+        <li><a href="https://raw.githubusercontent.com/huangchengsir/pipewright/v2.4.1/.env.example">.env.example</a></li>
+      </ul>
+      <div class="snippet"><pre><code>docker compose up -d
+docker compose ps</code></pre><button class="copy" type="button" hidden aria-label="复制 Docker Compose 命令">复制</button></div>
+      <p>在浏览器打开 <code>http://localhost:8080</code>，用户名是 <code>admin</code>，密码使用刚刚设置的值。当 docker compose ps 显示服务正在运行，且能进入控制台，启动验证即完成。想验证实际脚本输出，请走下方 Linux 路径。</p>
+      </section>
+      <section class="doc-topic" id="start-linux" data-keywords="docker builder alpine install 安装 PIPEWRIGHT_BUILDER">
+      <h3>在 Linux 上启动真实构建</h3>
+      <p>准备带 Bash、curl、OpenSSL 和 Docker 的 Linux 主机，并确认运行 Pipewright 的账号能执行 <code>docker info</code>。下列命令在 Bash 中运行，<code>PIPEWRIGHT_BUILDER=real</code> 会在缺少容器 CLI 时报告错误。</p>
+      <div class="snippet"><pre><code>curl -fsSLo install-pipewright.sh \
+  https://raw.githubusercontent.com/huangchengsir/pipewright/v2.4.1/install.sh
+VERSION=v2.4.1 INSTALL_DIR="$HOME/.local/bin" sh ./install-pipewright.sh
+
+umask 077
+mkdir -p .pipewright
+test -s .pipewright/master.key || openssl rand -base64 32 &gt; .pipewright/master.key
+read -rsp '首次登录密码: ' PIPEWRIGHT_ADMIN_PASSWORD
+printf '\n'
+PIPEWRIGHT_ADMIN_PASSWORD="$PIPEWRIGHT_ADMIN_PASSWORD" \
+PIPEWRIGHT_MASTER_KEY_FILE="$PWD/.pipewright/master.key" \
+PIPEWRIGHT_ADDR=127.0.0.1:8080 \
+PIPEWRIGHT_BUILDER=real \
+  "$HOME/.local/bin/pipewright"</code></pre><button class="copy" type="button" hidden aria-label="复制 Linux 安装与启动命令">复制</button></div>
+      <p>启动后访问 <code>http://127.0.0.1:8080</code>，用 <code>admin</code> 和刚输入的密码登录，然后<a href="#first-run">运行示例流水线</a>。已有实例占用 8080 时，可为新实例选择另一个端口。后续启动继续使用同一工作目录和主密钥。</p>
+      </section>
+      <section class="doc-topic" id="first-run" data-keywords="pipeline example hello">
+      <h3>运行第一条流水线</h3>
+      <ol>
+        <li>准备一个自己可访问的测试 Git 仓库，把 <a href="#pipeline">示例 YAML</a> 保存成仓库根目录的 <code>.pipewright.yml</code> 并提交。</li>
+        <li>在 Pipewright 新建项目，填仓库地址和分支。私有仓库先在凭据保险库添加并绑定仓库凭据。</li>
+        <li>进入项目的流水线页，启用「流水线即代码」，保存后手动运行。</li>
+        <li>在运行详情打开脚本节点日志，确认出现 <code>Hello from Pipewright</code>。如实际脚本未执行，先核对运行日志中的构建器以及选中的分支。</li>
+      </ol>
+      </section>
+    </section>
+    <section class="doc-section" id="pipeline">
+      <h2>流水线 YAML</h2>
+      <p>项目启用流水线即代码后，读取本次构建分支仓库根目录中的 <code>.pipewright.yml</code>。文件缺失或无法解析时，使用项目已保存的画布配置。以下示例使用 Alpine 脚本镜像。</p>
+      <div class="snippet"><pre><code>version: 1
+stages:
+  - id: checkout
+    name: 拉取代码
+    kind: source
+    jobs:
+      - name: Git 源
+        type: git_source
+  - id: verify
+    name: 验证
+    kind: build
+    needs: [checkout]
+    jobs:
+      - name: 运行脚本
+        type: script
+        script:
+          image: alpine:3
+          commands:
+            - echo 'Hello from Pipewright'</code></pre><button class="copy" type="button" hidden aria-label="复制流水线 YAML">复制</button></div>
+      <div class="scroll-table"><table>
+      <thead><tr><th scope="col">字段</th><th scope="col">用途</th></tr></thead>
+      <tbody>
+        <tr><td><code>version</code></td><td>配置格式版本，此处使用 <code>1</code>。</td></tr>
+        <tr><td><code>stages[].id</code> / <code>needs</code></td><td>阶段标识与依赖。<code>needs</code> 引用阶段 ID。</td></tr>
+        <tr><td><code>kind</code> / <code>jobs[].type</code></td><td>阶段类别与任务类型。示例使用 <code>source</code>、<code>build</code>、<code>git_source</code> 和 <code>script</code>。</td></tr>
+        <tr><td><code>script.image</code> / <code>commands</code></td><td>脚本容器镜像与要运行的命令，可选 <code>workdir</code> 和 <code>env</code>。</td></tr>
+        <tr><td><code>gate</code> / <code>when.branches</code></td><td>阶段审批开关与分支过滤，完整写法见 README。</td></tr>
+      </tbody></table></div>
+      <p>触发规则、项目变量和缓存、环境与凭据仍在项目设置里管理。敏感值在平台中配置，提交的 YAML 使用引用或占位符。</p>
+      <p><a href="https://github.com/huangchengsir/pipewright/blob/v2.4.1/README.zh-CN.md">完整版 YAML 与流水线上下文</a></p>
+      <section class="doc-topic" id="pipeline-history" data-keywords="变更历史 版本 差异 草稿 MCP">
+        <h3>查看流水线变更历史</h3>
+        <p>打开项目的「流水线配置 → 变更历史」，选中一条保存记录，可查看操作者、保存时间和节点差异。命令、变量值及受保护配置只显示修改提示。</p>
+        <p>在运行详情中选择「查看画布版本」，可以回到当次运行采用的画布记录。来自仓库的流水线继续显示 YAML 来源。</p>
+        <p>选择可载入的旧版本，点击「从此版本创建草稿」。在画布核对内容后点击「保存配置」才会应用。没有可用快照或包含无法安全还原的配置时，可参照差异在画布中修改。</p>
+      </section>
+    </section>
+    <section class="doc-section" id="deploy">
+      <h2>部署方式</h2>
+      <section class="doc-topic" id="deploy-ssh" data-keywords="ssh">
+      <h3>SSH 部署</h3>
+      <p>在凭据保险库保存 SSH 凭据，在「服务器」登记并检查目标机连接。给项目配置目标环境和服务器，再把 SSH 部署节点接在构建节点之后。首次发布建议选测试环境并打开节点日志核对实际目标。</p>
+      </section>
+      <section class="doc-topic" id="deploy-docker" data-keywords="container registry 镜像 仓库">
+      <h3>Docker 镜像部署</h3>
+      <p>在有真实容器执行器的环境中构建镜像，并配置镜像仓库和推送节点。由目标机拉取待部署的镜像。优先使用本次构建的明确版本标识，便于从运行详情追溯实际部署内容。</p>
+      </section>
+      <section class="doc-topic" id="deploy-kubernetes" data-keywords="k8s kubectl rollout">
+      <h3>Kubernetes 部署</h3>
+      <p>配置 Kubernetes 凭据和连接，核对命名空间、执行位置以及项目的部署授权。部署节点按场景选择更新现有工作负载镜像或使用发布套件，并用运行回执查看结果。</p>
+      <p><a href="https://github.com/huangchengsir/pipewright/blob/v2.4.1/docs/kubernetes-release-suite.md">Kubernetes 发布套件</a> · <a href="https://github.com/huangchengsir/pipewright/blob/v2.4.1/docs/release-guard.md">发布护航</a></p>
+      </section>
+    </section>
+    <section class="doc-section" id="config">
+      <h2>环境变量</h2>
+      <div class="scroll-table"><table>
+      <thead><tr><th scope="col">变量</th><th scope="col">作用</th><th scope="col">默认或取值</th></tr></thead>
+      <tbody>
+        <tr><td><code>PIPEWRIGHT_ADDR</code></td><td>HTTP 监听地址</td><td><code>:8080</code></td></tr>
+        <tr><td><code>PIPEWRIGHT_ADMIN_PASSWORD</code></td><td>首次启动管理员密码</td><td>首次启动时设置</td></tr>
+        <tr><td><code>PIPEWRIGHT_MASTER_KEY</code><br><code>PIPEWRIGHT_MASTER_KEY_FILE</code></td><td>凭据保险库主密钥或密钥文件</td><td>32 字节密钥，以 Base64 保存</td></tr>
+        <tr><td><code>PIPEWRIGHT_BUILDER</code></td><td>容器构建方式</td><td><code>auto</code> 自动发现，<code>real</code> 要求可用 CLI，<code>stub</code> 使用模拟构建</td></tr>
+        <tr><td><code>PIPEWRIGHT_PUBLIC_URL</code></td><td>反代后的外部访问地址，用于 webhook 和 OAuth 回调等</td><td>按实例填写</td></tr>
+        <tr><td><code>PIPEWRIGHT_DB_DRIVER</code></td><td>数据库驱动</td><td><code>sqlite</code>，也可选 <code>mysql</code>、<code>postgres</code>、<code>sqlserver</code> 或选配的 <code>dm</code></td></tr>
+        <tr><td><code>PIPEWRIGHT_DB</code><br><code>PIPEWRIGHT_DB_DSN</code></td><td>SQLite 数据库文件路径或其他数据库连接串</td><td><code>pipewright.db</code> 或按引擎填写 DSN</td></tr>
+        <tr><td><code>PIPEWRIGHT_MULTI_TENANT</code></td><td>启用团队与权限</td><td>首次安装默认关闭，设 <code>true</code> 启用</td></tr>
+        <tr><td><code>PIPEWRIGHT_PAC_RUNTIME</code></td><td>为所有项目强制使用流水线即代码</td><td>默认关闭，设 <code>1</code> 开启</td></tr>
+      </tbody></table></div>
+      <p>使用 Compose 时，应用环境变量需要由 Compose 的 <code>environment</code> 或 <code>env_file</code> 传入容器。变更部署参数后，按部署方式重启服务或重新创建容器。</p>
+      <p><a href="https://github.com/huangchengsir/pipewright/blob/v2.4.1/README.zh-CN.md">完整配置说明</a> · <a href="https://github.com/huangchengsir/pipewright/blob/v2.4.1/docs/database-migration.md">数据库连接与迁移</a></p>
+    </section>
+    <section class="doc-section" id="further">
+      <h2>更多专题</h2>
+      <section class="doc-topic" id="topic-dockerfile" data-keywords="dockerfile 镜像 构建 build image">
+        <h3>Dockerfile 构建</h3>
+        <p>将 Dockerfile 提交到仓库，用真实容器执行器运行镜像构建节点。构建上下文和 Dockerfile 路径都应匹配本次检出的代码。</p>
+        <p><a href="#deploy-docker">查看镜像部署</a> · <a href="https://github.com/huangchengsir/pipewright/blob/v2.4.1/docs/build-cache.md">查看构建缓存说明</a></p>
+      </section>
+      <section class="doc-topic" id="topic-notifications" data-keywords="notify notification webhook email slack lark dingtalk 通知">
+        <h3>配置通知</h3>
+        <p>在设置中创建通知渠道并绑定事件，或在流水线添加通知节点。首次配置可以用测试运行确认失败或成功消息能送达。</p>
+        <p><a href="https://github.com/huangchengsir/pipewright/blob/v2.4.1/README.zh-CN.md">查看渠道和通知节点说明</a></p>
+      </section>
+      <section class="doc-topic" id="topic-rollback" data-keywords="rollback revert release guard 回滚">
+        <h3>回滚部署</h3>
+        <p>在对应环境的部署历史中核对当前版本，从可回滚的成功发布记录发起回滚，再查看运行和环境中的版本状态。</p>
+        <p><a href="https://github.com/huangchengsir/pipewright/blob/v2.4.1/docs/release-guard.md">查看发布护航报告说明</a></p>
+      </section>
+      <ul>
+        <li><a href="https://github.com/huangchengsir/pipewright/blob/v2.4.1/docs/access-control.md">团队与权限</a>，包括部署开关、员工、角色与第三方登录。</li>
+        <li><a href="https://github.com/huangchengsir/pipewright/blob/v2.4.1/docs/build-cache.md">构建缓存</a>，介绍多种语言的依赖缓存配置。</li>
+        <li><a href="https://github.com/huangchengsir/pipewright/blob/v2.4.1/docs/mcp.md">MCP 接入</a>，介绍连接、令牌和权限。</li>
+        <li><a href="https://github.com/huangchengsir/pipewright/blob/v2.4.1/README.md">English README</a> · <a href="https://github.com/huangchengsir/pipewright/releases/tag/v2.4.1">v2.4.1 发行说明</a></li>
+      </ul>
+    </section>
+    </div>
+  </article>
+</main>
+<footer><div class="wrap footer-inner"><a class="brand" href="../../"><span class="mark" aria-hidden="true">p&gt;</span>Pipewright</a><a href="https://github.com/huangchengsir/pipewright/issues">文档反馈 ↗</a></div></footer>
+</div>
+</body>
+</html>

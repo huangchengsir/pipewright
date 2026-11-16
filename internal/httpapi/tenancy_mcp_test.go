@@ -113,7 +113,7 @@ func TestMCPConfigurationIndependentApproverRevalidated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.Exec(`INSERT INTO admin_user(id,username,password_hash,created_at,updated_at) VALUES(1,'admin',?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, hash); err != nil {
+	if _, err = db.Exec(`UPDATE admin_user SET username='admin', password_hash=? WHERE id=1`, hash); err != nil {
 		t.Fatal(err)
 	}
 	repo := tenancy.NewRepository(db)

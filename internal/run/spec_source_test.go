@@ -43,14 +43,14 @@ func TestSpecSourceRoundTrip(t *testing.T) {
 
 	// 库内回退写入 → 回读 stored + fallback(ref/file 清空)。
 	if err := sink.SetSpecSource(context.Background(),
-		SpecSource{Source: SpecSourceStored, Fallback: "invalid_yaml"}); err != nil {
+		SpecSource{Source: SpecSourceStored, Fallback: "invalid_yaml", HistoryVersionID: "history-v1"}); err != nil {
 		t.Fatalf("SetSpecSource(stored): %v", err)
 	}
 	got, err = svc.Get(context.Background(), rn.ID)
 	if err != nil {
 		t.Fatalf("Get(stored): %v", err)
 	}
-	if got.SpecSource.Source != SpecSourceStored || got.SpecSource.Fallback != "invalid_yaml" {
+	if got.SpecSource.Source != SpecSourceStored || got.SpecSource.Fallback != "invalid_yaml" || got.SpecSource.HistoryVersionID != "history-v1" {
 		t.Fatalf("库内回退来源回读错误: %+v", got.SpecSource)
 	}
 }

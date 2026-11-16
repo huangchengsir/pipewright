@@ -171,6 +171,7 @@ export interface RunDetail {
   specSourceRef: string; // branch/ref used when specSource === 'repo'
   specSourceFile: string; // file name (.pipewright.yml) when specSource === 'repo'
   specSourceFallback: string; // fallback reason when stored config replaced an intended repo spec
+  historyVersionId?: string;
   artifacts: ArtifactDTO[]; // Story 3-4 fills (FR-6) — empty [] when no artifacts
   targets: DeployTarget[] | null; // Story 4-2 fills (FR-10) — deployed ⇒ array, else null
   diagnosis: DiagnosisDTO | null; // Epic 7 fills — slot owner: Story 7.x (Story 7-2 defines shape)

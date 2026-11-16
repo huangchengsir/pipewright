@@ -230,7 +230,7 @@ func runPlatform() (restart func()) {
 
 	// 装配流水线配置服务(Story 2.2):经 store 触库,惰性默认 + spec 校验 + YAML 渲染。
 	kubernetesSvc := kubernetes.New(st.DB, credVault)
-	pipelineSvc := pipeline.New(st.DB, pipeline.WithReleaseConfigProtector(kubernetesSvc))
+	pipelineSvc := pipeline.New(st.DB, pipeline.WithReleaseConfigProtector(kubernetesSvc), pipeline.WithHistoryCipher(credVault))
 
 	// 装配构建/部署配置服务(Story 2.4):独立于 2-2 spec;经 vault 校验 secret 引用存在性 +
 	// 回算掩码。master key 未配置时,涉及 secret 引用的保存降级为明确错误(不 panic)。
@@ -847,7 +847,9 @@ func runPlatform() (restart func()) {
 		configDraftKey = mac.Sum(nil)
 	}
 	configDrafts := configdraft.New(st.DB, &configdraft.Options{
-		Runtime: configRuntime, ApplyEnabled: configApplyEnabled, Kubernetes: kubernetesSvc, CursorKey: configDraftKey,
+		HistoryCipher: credVault,
+		HistoryActor:  httpapi.ConfigHistoryApprover(st.DB),
+		Runtime:       configRuntime, ApplyEnabled: configApplyEnabled, Kubernetes: kubernetesSvc, CursorKey: configDraftKey,
 		PrepareSecrets: func(ctx context.Context) (func(string) string, error) {
 			if err := registerConfigSecrets(ctx); err != nil {
 				return nil, err
@@ -1122,12 +1124,12 @@ func (r pacGitAuthResolver) AcquireGitAuth(ctx context.Context, id string) (stri
 // pacBlobFetcher adapts SourceReader for pacloader without exposing credentials.
 type pacBlobFetcher struct{ reader httpapi.SourceReader }
 
-func (b pacBlobFetcher) FetchBlob(ctx context.Context, repoURL, username, token, ref, file string) (string, bool, error) {
+func (b pacBlobFetcher) FetchBlob(ctx context.Context, repoURL, username, token, ref, file string) (string, string, bool, error) {
 	blob, err := b.reader.Blob(ctx, repoURL, username, token, ref, file)
 	if err != nil {
-		return "", false, err
+		return "", "", false, err
 	}
-	return blob.Content, blob.Degraded, nil
+	return blob.Content, blob.CommitSHA, blob.Degraded, nil
 }
 
 // pacSpecLoader 把 *pacloader.Loader 适配为 dagrun.SpecLoader:转换其同形的 SpecSource

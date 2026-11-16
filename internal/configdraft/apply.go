@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/auth"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/store"
 	"gopkg.in/yaml.v3"
 )
@@ -238,7 +239,15 @@ func (s *Service) Apply(ctx context.Context, tokenID string, in ApplyRequest) (*
 			if e != nil {
 				return ErrUnsupported
 			}
-			if _, e = q.ExecContext(work, `UPDATE pipeline_configs SET spec_json=?,spec_yaml=?,updated_at=?,saved_at=? WHERE project_id=?`, string(raw), yaml, stamp, stamp, r.project); e != nil {
+			actor := "MCP"
+			if s.opts.HistoryActor != nil {
+				actor, e = s.opts.HistoryActor(work, q, approver)
+				if e != nil {
+					return e
+				}
+			}
+			historyContext := pipeline.WithHistoryAuthor(work, actor, pipeline.HistorySourceMCP)
+			if e = pipeline.StoreHistoryGraph(historyContext, q, s.opts.HistoryCipher, r.project, raw, yaml, stamp); e != nil {
 				return e
 			}
 		}

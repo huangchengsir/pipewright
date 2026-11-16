@@ -24,7 +24,7 @@ function run(id: string, status: RunStatus = 'running'): RunDTO {
   return { id, projectId: 'project', projectName: `${id} project`, status, trigger: { type: 'manual', branch: 'main', commit: 'a'.repeat(40), actor: 'operator' }, steps: [{ id: `step-${id}`, name: `${id} task`, status: 'running', startedAt: null, finishedAt: null, durationMs: null }], createdAt: '2026-10-28T00:00:00Z', startedAt: null, finishedAt: null, durationMs: null, specSource: 'stored', specSourceRef: '', specSourceFile: '', specSourceFallback: '', artifacts: [], targets: null, diagnosis: null }
 }
 async function render(path = '/runs/root') {
-  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/runs/:id', name: 'run-detail', component: RunDetail }, { path: '/runs', name: 'runs', component: { template: '<div>Runs</div>' } }] })
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/runs/:id', name: 'run-detail', component: RunDetail }, { path: '/runs', name: 'runs', component: { template: '<div>Runs</div>' } }, { path: '/projects/:id/pipeline', name: 'project-pipeline', component: { template: '<div>Pipeline</div>' } }] })
   await router.push(path); await router.isReady()
   const wrapper = mount(RouterView, { global: { plugins: [router], stubs } }); wrappers.push(wrapper); await flushPromises(); return { wrapper, router }
 }
@@ -58,6 +58,24 @@ describe('existing RunDetail recovery integration', () => {
 
   beforeEach(() => { vi.useFakeTimers(); vi.clearAllMocks(); localStorage.clear(); sessionStorage.clear(); stops.length = 0; api.get.mockImplementation(async (id: string) => run(id)); api.subscribe.mockImplementation(() => { const stop = vi.fn(); stops.push(stop); return stop }); api.approvals.mockResolvedValue({ items: [] }); api.context.mockImplementation(async (id: string) => retryContext({ attemptRunId: id, headAttemptId: id })); api.attempts.mockResolvedValue({ items: [], total: 0, page: 1 }); api.plan.mockResolvedValue(retryPlan()) })
   afterEach(() => { wrappers.forEach(w => w.unmount()); wrappers = []; vi.useRealTimers() })
+  it('links the stored configuration version selected for this run', async () => {
+    api.get.mockResolvedValue({ ...run('root', 'success'), historyVersionId: 'history-id' })
+    const { wrapper, router } = await render()
+    const href = router.resolve({ name: 'project-pipeline', params: { id: 'project' },
+      query: { tab: 'history', historyVersion: 'history-id' } }).href
+    expect(wrapper.findAll('a').some(a => a.attributes('href') === href)).toBe(true)
+  })
+  it('keeps repository configurations and missing recorded versions distinct', async () => {
+    api.get.mockImplementation(async (id: string) => id === 'root'
+      ? { ...run('root', 'success'), finishedAt: '2026-11-16T00:00:00Z' }
+      : { ...run(id, 'success'), specSource: 'repo', specSourceRef: 'a'.repeat(40),
+          specSourceFile: '.pipewright.yml', finishedAt: '2026-11-16T00:00:00Z' })
+    const { wrapper, router } = await render()
+    expect(wrapper.text()).toContain('历史版本未记录')
+    await router.push('/runs/repo'); await flushPromises()
+    expect(wrapper.text()).not.toContain('历史版本未记录')
+    expect(wrapper.text()).toContain('.pipewright.yml')
+  })
   it.each<RunStatus>(['running', 'queued', 'success', 'failed', 'partial_failed', 'rolled_back', 'waiting_approval'])('exposes a frozen node plan in the %s branch', async status => {
     api.get.mockResolvedValue(run('root', status)); const { wrapper } = await render()
     const dag = wrapper.findComponent(Dag); expect(dag.exists()).toBe(true); expect(dag.props('recovery').attemptRunId).toBe('root')

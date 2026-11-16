@@ -1,0 +1,71 @@
+export default {
+  "tab": "變更歷史",
+  "records": "儲存記錄",
+  "version": "版本 {n}",
+  "current": "目前",
+  "unknownActor": "操作者未記錄",
+  "more": "載入更多",
+  "loadError": "無法載入變更歷史。",
+  "empty": "還沒有儲存記錄。",
+  "versionError": "無法開啟此版本。",
+  "compare": "比較版本 {n}",
+  "changes": "變更明細",
+  "changeCount": "{n} 項",
+  "baseline": "這是開始記錄時的畫布版本。",
+  "before": "變更前",
+  "after": "變更後",
+  "field": "設定欄位",
+  "valueHidden": "{field}已修改，內容已隱藏",
+  "currentNote": "這是畫布目前儲存的版本。",
+  "draftNote": "草稿將在畫布開啟，儲存後才會生效。",
+  "draftUnavailable": "此版本無法完整載入草稿，請參照差異在畫布中修改。",
+  "createDraft": "從此版本建立草稿",
+  "draftLoaded": "已載入版本 {n} 的草稿。確認後請儲存設定。",
+  "draftConflict": "目前設定已變更，請重新開啟畫布再試。",
+  "draftError": "無法建立歷史草稿，請重試。",
+  "openVersion": "查看畫布版本",
+  "notRecorded": "歷史版本未記錄",
+  "sources": {
+    "baseline": "基線",
+    "canvas": "畫布儲存",
+    "yaml_import": "YAML 匯入",
+    "template": "套用範本",
+    "ai": "套用 AI",
+    "mcp": "套用 MCP"
+  },
+  "kinds": {
+    "stage": "階段",
+    "job": "節點"
+  },
+  "actions": {
+    "added": "新增",
+    "removed": "移除",
+    "changed": "修改",
+    "moved": "移動",
+    "renamed": "重新命名"
+  },
+  "fields": {
+    "name": "名稱",
+    "position": "位置",
+    "needs": "相依性",
+    "config": "設定",
+    "commands": "指令",
+    "summary": "摘要",
+    "kind": "類型",
+    "when": "條件",
+    "matrix": "矩陣",
+    "post": "後置步驟",
+    "services": "附掛服務",
+    "stage": "所屬階段",
+    "type": "類型",
+    "gate": "審核",
+    "allowFailure": "允許失敗",
+    "variables": "變數",
+    "references": "資源引用",
+    "protected": "受保護設定"
+  },
+  "values": {
+    "true": "是",
+    "false": "否"
+  }
+}

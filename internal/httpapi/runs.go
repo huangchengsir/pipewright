@@ -52,6 +52,7 @@ type runDetailDTO struct {
 	SpecSourceRef      string `json:"specSourceRef"`
 	SpecSourceFile     string `json:"specSourceFile"`
 	SpecSourceFallback string `json:"specSourceFallback"`
+	HistoryVersionID   string `json:"historyVersionId,omitempty"`
 	// artifacts:Story 3.4 填(构建产物契约 / FR-6);成功/有产物时为数组,否则 []。形状冻结。
 	Artifacts []artifactDTO `json:"artifacts"`
 	// targets:Epic 4(Story 4.2)填(SSH 部署执行 / FR-10)。部署过 → 数组;否则 null。
@@ -170,6 +171,7 @@ func toRunDetailDTO(r *run.Run, artifacts []run.Artifact, targets []run.DeployTa
 		SpecSourceRef:      r.SpecSource.Ref,
 		SpecSourceFile:     r.SpecSource.File,
 		SpecSourceFallback: r.SpecSource.Fallback,
+		HistoryVersionID:   r.SpecSource.HistoryVersionID,
 
 		Artifacts: toArtifactDTOs(artifacts), // Story 3.4 填(FR-6);无产物 → []
 		Targets:   targetsSlot,               // Story 4.2 填(部署过 → 数组;否则 null);形状冻结

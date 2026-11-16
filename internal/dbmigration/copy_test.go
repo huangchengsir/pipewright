@@ -31,7 +31,7 @@ func database(t *testing.T, initialized bool) *store.Store {
 func TestManifestMatchesSchema(t *testing.T) {
 	s := database(t, true)
 	manifest := Manifest()
-	if len(manifest) != 120 {
+	if len(manifest) != 121 {
 		t.Fatal(len(manifest))
 	}
 	seen := map[string]bool{}
@@ -69,7 +69,7 @@ func TestManifestMatchesSchema(t *testing.T) {
 		}
 		cols += i
 	}
-	if cols != 975 {
+	if cols != 986 {
 		t.Fatal(cols)
 	}
 	var tables int
@@ -103,7 +103,7 @@ func TestCopyResumeAndDetectCorruption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first.Tables) != 120 {
+	if len(first.Tables) != 121 {
 		t.Fatal(len(first.Tables))
 	}
 	reopened, err := ResumeTarget(ctx, destination, task, target.Identity())

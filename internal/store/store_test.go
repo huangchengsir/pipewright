@@ -137,7 +137,7 @@ func TestConnectDoesNotInitializeSchema(t *testing.T) {
 	if err := s.Migrate(); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DB.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil || count != 66 {
+	if err := s.DB.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil || count != 67 {
 		t.Fatalf("explicit migration count=%d err=%v", count, err)
 	}
 }

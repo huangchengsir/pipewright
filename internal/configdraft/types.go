@@ -10,6 +10,7 @@ import (
 
 	"github.com/huangchengsir/pipewright/internal/audit"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/tenancy"
 )
 
@@ -67,10 +68,12 @@ type KubernetesConfigs interface {
 	ReleaseReviewConfig(context.Context, string, string, string) (map[string]any, error)
 }
 type Options struct {
-	Kubernetes   KubernetesConfigs
-	Runtime      RuntimeInfo
-	ApplyEnabled bool
-	Now          func() time.Time
+	HistoryCipher pipeline.HistoryCipher
+	HistoryActor  func(context.Context, configstate.DBTX, string) (string, error)
+	Kubernetes    KubernetesConfigs
+	Runtime       RuntimeInfo
+	ApplyEnabled  bool
+	Now           func() time.Time
 	// PrepareSecrets registers existing secrets locally and returns a scrubber.
 	// A missing or failed guard always fails closed for business data.
 	PrepareSecrets func(context.Context) (func(string) string, error)

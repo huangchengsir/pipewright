@@ -1,0 +1,71 @@
+export default {
+  "tab": "変更履歴",
+  "records": "保存済みバージョン",
+  "version": "バージョン {n}",
+  "current": "現在",
+  "unknownActor": "作成者の記録なし",
+  "more": "さらに読み込む",
+  "loadError": "変更履歴を読み込めませんでした。",
+  "empty": "保存済みバージョンはありません。",
+  "versionError": "このバージョンを開けませんでした。",
+  "compare": "バージョン {n} と比較",
+  "changes": "変更内容",
+  "changeCount": "{n} 件",
+  "baseline": "履歴記録を開始した時点のキャンバスです。",
+  "before": "変更前",
+  "after": "変更後",
+  "field": "設定項目",
+  "valueHidden": "{field}が変更されました。値は非表示です。",
+  "currentNote": "現在保存されているキャンバスです。",
+  "draftNote": "キャンバスで下書きを確認し、保存すると反映されます。",
+  "draftUnavailable": "このバージョンは完全な下書きとして読み込めません。差分を参照してキャンバスを編集してください。",
+  "createDraft": "このバージョンから下書きを作成",
+  "draftLoaded": "バージョン {n} の下書きを読み込みました。確認して保存してください。",
+  "draftConflict": "現在の設定が変わりました。キャンバスを再読み込みしてください。",
+  "draftError": "下書きを読み込めませんでした。もう一度お試しください。",
+  "openVersion": "キャンバスのバージョンを見る",
+  "notRecorded": "履歴バージョンの記録なし",
+  "sources": {
+    "baseline": "初期版",
+    "canvas": "キャンバスの保存",
+    "yaml_import": "YAML のインポート",
+    "template": "テンプレートを適用",
+    "ai": "AI を適用",
+    "mcp": "MCP を適用"
+  },
+  "kinds": {
+    "stage": "ステージ",
+    "job": "ノード"
+  },
+  "actions": {
+    "added": "追加",
+    "removed": "削除",
+    "changed": "変更",
+    "moved": "移動",
+    "renamed": "名前変更"
+  },
+  "fields": {
+    "name": "名前",
+    "position": "位置",
+    "needs": "依存関係",
+    "config": "設定",
+    "commands": "スクリプト",
+    "summary": "要約",
+    "kind": "種類",
+    "when": "条件",
+    "matrix": "マトリクス",
+    "post": "後処理",
+    "services": "サイドカーサービス",
+    "stage": "所属ステージ",
+    "type": "種類",
+    "gate": "承認",
+    "allowFailure": "失敗を許可",
+    "variables": "変数",
+    "references": "リソース参照",
+    "protected": "保護された設定"
+  },
+  "values": {
+    "true": "はい",
+    "false": "いいえ"
+  }
+}

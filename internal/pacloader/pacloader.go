@@ -86,7 +86,7 @@ var ErrCredentialUnavailable = errors.New("pacloader: managed Git credential una
 // BlobFetcher 按 ref 读仓库单文件内容(由 httpapi.SourceReader 适配)。
 // degraded=true 表示克隆失败的降级响应(非「真实空文件」),装饰器据此回退。
 type BlobFetcher interface {
-	FetchBlob(ctx context.Context, repoURL, username, token, ref, file string) (content string, degraded bool, err error)
+	FetchBlob(ctx context.Context, repoURL, username, token, ref, file string) (content, commitSHA string, degraded bool, err error)
 }
 
 // Loader 是 PAC 运行时覆盖装饰器:实现 dagrun.SpecLoader。
@@ -165,7 +165,7 @@ func (l *Loader) tryOverride(ctx context.Context, projectID, branch string) (cfg
 		ref = info.DefaultBranch
 	}
 
-	content, degraded, ferr := l.blobs.FetchBlob(ctx, info.RepoURL, username, token, ref, DefaultFile)
+	content, commitSHA, degraded, ferr := l.blobs.FetchBlob(ctx, info.RepoURL, username, token, ref, DefaultFile)
 	if ferr != nil {
 		// 文件不存在 / 克隆失败 → 回退(正常路径:多数项目没有 .pipewright.yml)。
 		debugf("project %s: %s was not found (falling back to stored configuration)", projectID, DefaultFile)
@@ -186,6 +186,9 @@ func (l *Loader) tryOverride(ctx context.Context, projectID, branch string) (cfg
 		return nil, fallbackInvalid, false
 	}
 	debugf("project %s: using repository %s (branch %s) for this run", projectID, DefaultFile, ref)
+	if commitSHA != "" {
+		ref = commitSHA
+	}
 	return &parsed, ref, true
 }
 

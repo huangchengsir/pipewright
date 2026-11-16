@@ -1,0 +1,71 @@
+export default {
+  "tab": "Änderungsverlauf",
+  "records": "Gespeicherte Versionen",
+  "version": "Version {n}",
+  "current": "Aktuell",
+  "unknownActor": "Autor nicht erfasst",
+  "more": "Mehr laden",
+  "loadError": "Der Änderungsverlauf konnte nicht geladen werden.",
+  "empty": "Noch keine gespeicherten Versionen.",
+  "versionError": "Diese Version konnte nicht geöffnet werden.",
+  "compare": "Vergleich mit Version {n}",
+  "changes": "Änderungen",
+  "changeCount": "{n} Änderungen",
+  "baseline": "Diese Version ist der Ausgangspunkt des Verlaufs.",
+  "before": "Vorher",
+  "after": "Nachher",
+  "field": "Konfigurationsfeld",
+  "valueHidden": "{field} wurde geändert. Die Werte sind ausgeblendet.",
+  "currentNote": "Dies ist die aktuell gespeicherte Pipeline.",
+  "draftNote": "Prüfen Sie den Entwurf im Editor und speichern Sie ihn, um ihn anzuwenden.",
+  "draftUnavailable": "Diese Version lässt sich nicht vollständig laden. Übernehmen Sie Änderungen manuell in die Arbeitsfläche.",
+  "createDraft": "Entwurf aus dieser Version erstellen",
+  "draftLoaded": "Entwurf aus Version {n} geladen. Prüfen und speichern Sie die Änderungen.",
+  "draftConflict": "Die Konfiguration hat sich geändert. Laden Sie den Editor neu und versuchen Sie es erneut.",
+  "draftError": "Der Entwurf konnte nicht geladen werden. Versuchen Sie es erneut.",
+  "openVersion": "Pipeline-Version anzeigen",
+  "notRecorded": "Verlaufsversion nicht erfasst",
+  "sources": {
+    "baseline": "Ausgangsversion",
+    "canvas": "Editor gespeichert",
+    "yaml_import": "YAML-Import",
+    "template": "Vorlage angewendet",
+    "ai": "KI angewendet",
+    "mcp": "MCP angewendet"
+  },
+  "kinds": {
+    "stage": "Phase",
+    "job": "Knoten"
+  },
+  "actions": {
+    "added": "Hinzugefügt",
+    "removed": "Entfernt",
+    "changed": "Geändert",
+    "moved": "Verschoben",
+    "renamed": "Umbenannt"
+  },
+  "fields": {
+    "name": "Name",
+    "position": "Position",
+    "needs": "Abhängigkeiten",
+    "config": "Konfiguration",
+    "commands": "Skriptbefehle",
+    "summary": "Zusammenfassung",
+    "kind": "Typ",
+    "when": "Bedingungen",
+    "matrix": "Matrix",
+    "post": "Nachgelagerte Schritte",
+    "services": "Begleitdienste",
+    "stage": "Phase",
+    "type": "Typ",
+    "gate": "Genehmigung",
+    "allowFailure": "Fehler zulassen",
+    "variables": "Variablen",
+    "references": "Ressourcenreferenzen",
+    "protected": "Geschützte Konfiguration"
+  },
+  "values": {
+    "true": "Ja",
+    "false": "Nein"
+  }
+}

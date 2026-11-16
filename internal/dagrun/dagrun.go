@@ -46,11 +46,12 @@ type SpecLoader interface {
 //   - FromRepo=false:由库内(网页编辑)配置驱动;若是「本想用仓库但回退了」,FallbackReason
 //     记回退原因(disabled|no_file|invalid_yaml|degraded|empty|lookup_failed),否则为空。
 type SpecSource struct {
-	Kind           string
-	FromRepo       bool
-	Ref            string
-	File           string
-	FallbackReason string
+	HistoryVersionID string
+	Kind             string
+	FromRepo         bool
+	Ref              string
+	File             string
+	FallbackReason   string
 }
 
 // SpecLoaderFunc 把任意「按 projectID 取配置」的库内 loader(如 pipeline.Service.Get,分支无关)
@@ -197,7 +198,7 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 	ex, recovering := runretry.ExecutionFrom(ctx)
 	if recovering {
 		snapshot := ex.Snapshot()
-		cfg = &pipeline.Config{Spec: snapshot.Spec}
+		cfg = &pipeline.Config{Spec: snapshot.Spec, HistoryVersionID: snapshot.Source.HistoryVersionID}
 		src = SpecSource{Kind: snapshot.Source.Kind, FromRepo: snapshot.Source.Kind == "repo", Ref: snapshot.Source.Ref, File: snapshot.Source.File, FallbackReason: snapshot.Source.Fallback}
 		copyRun := *rn
 		copyRun.Trigger.Type, copyRun.Trigger.Branch = snapshot.Trigger.Type, snapshot.Trigger.Branch
@@ -213,6 +214,9 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 	}
 	// 配置来源可见性(Slice 2):本次运行由仓库 `.pipewright.yml` 还是库内(网页)配置驱动,
 	// 经 sink 持久化到运行记录,供运行详情如实展示。best-effort:落库失败仅忽略,不阻断运行。
+	if !src.FromRepo && (src.Kind == "" || src.Kind == "stored") {
+		src.HistoryVersionID = cfg.HistoryVersionID
+	}
 	_ = sink.SetSpecSource(ctx, toSinkSpecSource(src))
 	// 矩阵展开(P1):把声明了 Matrix 的阶段在纯调度层展开成笛卡尔积的并行 cell 子阶段,
 	// 并重映射 needs(下游等所有 cell)。无 matrix 阶段时原样返回。展开后阶段集作为后续
@@ -695,7 +699,7 @@ func toSinkSpecSource(s SpecSource) run.SpecSource {
 	if s.FromRepo {
 		return run.SpecSource{Source: run.SpecSourceRepo, Ref: s.Ref, File: s.File}
 	}
-	return run.SpecSource{Source: run.SpecSourceStored, Fallback: s.FallbackReason}
+	return run.SpecSource{Source: run.SpecSourceStored, Fallback: s.FallbackReason, HistoryVersionID: s.HistoryVersionID}
 }
 
 // summarize 汇总各终态计数(用于失败错误信息,不含敏感内容)。

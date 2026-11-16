@@ -118,11 +118,12 @@ type Spec struct {
 
 // Config 是流水线配置领域模型(spec + 渲染 YAML + 状态 + 更新时间)。
 type Config struct {
-	Spec      Spec
-	YAML      string
-	Status    string
-	UpdatedAt time.Time
-	SavedAt   *time.Time
+	HistoryVersionID string
+	Spec             Spec
+	YAML             string
+	Status           string
+	UpdatedAt        time.Time
+	SavedAt          *time.Time
 }
 
 // Service 定义流水线配置领域对外接口。
@@ -150,6 +151,7 @@ func RenderYAML(spec Spec) (string, error) { return renderYAML(spec) }
 type service struct {
 	db               *sql.DB
 	releaseProtector ReleaseConfigProtector
+	historyCipher    HistoryCipher
 }
 
 // New 构造 Service(经参数化 SQL 触库)。不在此做任何重活
@@ -281,13 +283,7 @@ func (s *service) Save(ctx context.Context, projectID string, spec Spec) (*Confi
 		if err != nil {
 			return err
 		}
-		_, writeErr := q.ExecContext(txctx,
-			`UPDATE pipeline_configs
-		 SET spec_json = ?, spec_yaml = ?, status = ?, updated_at = ?, saved_at = ?
-		 WHERE project_id = ?`,
-			string(specJSON), renderedYAML, statusDraft, nowStr, nowStr, projectID,
-		)
-		return writeErr
+		return StoreHistoryGraph(txctx, q, s.historyCipher, projectID, specJSON, renderedYAML, nowStr)
 	})
 	if errors.Is(err, configstate.ErrNotFound) {
 		return nil, ErrProjectNotFound
@@ -311,11 +307,12 @@ func (s *service) load(ctx context.Context, projectID string) (*Config, error) {
 		status     string
 		updatedStr string
 		savedStr   sql.NullString
+		historyID  sql.NullString
 	)
 	err := configstate.Queryer(ctx, s.db).QueryRowContext(ctx,
-		`SELECT spec_json, spec_yaml, status, updated_at, saved_at
+		`SELECT spec_json, spec_yaml, status, updated_at, saved_at, history_version_id
 		 FROM pipeline_configs pc WHERE pc.project_id = ? AND `+predicate.SQL, append([]any{projectID}, predicate.Args...)...,
-	).Scan(&specJSON, &specYAML, &status, &updatedStr, &savedStr)
+	).Scan(&specJSON, &specYAML, &status, &updatedStr, &savedStr, &historyID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, sql.ErrNoRows
@@ -335,7 +332,7 @@ func (s *service) load(ctx context.Context, projectID string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pipeline: parse updated_at: %w", err)
 	}
-	cfg := &Config{Spec: spec, YAML: specYAML, Status: status, UpdatedAt: updated}
+	cfg := &Config{Spec: spec, YAML: specYAML, Status: status, UpdatedAt: updated, HistoryVersionID: historyID.String}
 	if savedStr.Valid {
 		saved, err := time.Parse(time.RFC3339, savedStr.String)
 		if err != nil {

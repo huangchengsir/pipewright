@@ -342,6 +342,14 @@ func (s *Store) applyMigration(version, sqlText string) error {
 		}
 	}
 
+	if s.Dialect == MySQL && version == "0068_pipeline_history" {
+		var err error
+		sqlText, err = s.mysqlPipelineHistoryForeignKey(sqlText)
+		if err != nil {
+			return fmt.Errorf("prepare migration %s: %w", version, err)
+		}
+	}
+
 	if s.Dialect == MySQL || s.Dialect == DM {
 		statements := splitStatements(sqlText)
 		if s.Dialect == DM {
@@ -350,6 +358,15 @@ func (s *Store) applyMigration(version, sqlText string) error {
 		for _, stmt := range statements {
 			if !hasSQLCode(stmt) {
 				continue
+			}
+			if version == "0068_pipeline_history" {
+				applied, err := s.pipelineHistoryAlterApplied(stmt)
+				if err != nil {
+					return fmt.Errorf("inspect partial migration %s: %w", version, err)
+				}
+				if applied {
+					continue
+				}
 			}
 			if _, err := s.DB.Exec(stmt); err != nil {
 				return fmt.Errorf("apply migration %s: %w", version, err)

@@ -592,7 +592,7 @@ func (s *service) getAuthorized(ctx context.Context, id string) (*Run, error) {
 		        pr.failure_log, pr.diagnosis_json, pr.params_json,
 		        pr.chain_source_run_id, pr.chain_depth,
 		        pr.resolved_environment, pr.resolved_target_server_ids,
-		        pr.spec_source, pr.spec_source_ref, pr.spec_source_file, pr.spec_source_fallback,
+		        pr.spec_source, pr.spec_source_ref, pr.spec_source_file, pr.spec_source_fallback, COALESCE(pr.history_version_id, ''),
 		        COALESCE(mr.dispatch_state, ''), pr.resolved_commit_sha, pr.resolved_commit_conflict, COALESCE(rr.execution_kind,'original'),COALESCE(rr.root_id,pr.id),COALESCE(rr.parent_id,''),COALESCE(rr.initiator,''),COALESCE(rr.revision,1)
 		 FROM pipeline_runs pr
 		 LEFT JOIN projects p ON p.id = pr.project_id
@@ -605,7 +605,7 @@ func (s *service) getAuthorized(ctx context.Context, id string) (*Run, error) {
 		&failureLog, &diagnosisJSON, &paramsJSON,
 		&r.Trigger.ChainSourceRunID, &r.Trigger.ChainDepth,
 		&r.Trigger.ResolvedEnvironment, &targetIDsJSON,
-		&r.SpecSource.Source, &r.SpecSource.Ref, &r.SpecSource.File, &r.SpecSource.Fallback,
+		&r.SpecSource.Source, &r.SpecSource.Ref, &r.SpecSource.File, &r.SpecSource.Fallback, &r.SpecSource.HistoryVersionID,
 		&r.DispatchState, &r.ResolvedCommitSHA, &r.ResolvedCommitConflict, &r.ExecutionKind, &r.LogicalRunID, &r.SourceRunID, &r.RetryInitiator, &r.AttemptNumber)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

@@ -63,6 +63,7 @@ type sourceBlobDTO struct {
 	Content        string `json:"content"`
 	Degraded       bool   `json:"degraded,omitempty"`
 	DegradedReason string `json:"degradedReason,omitempty"`
+	CommitSHA      string `json:"-"`
 }
 
 // SourceReader 抽象「按 ref 读仓库树/blob」能力(go-git 浅克隆只读;注入便于测试)。
@@ -195,7 +196,7 @@ func (g goGitSourceReader) Tree(ctx context.Context, repoURL, username, token, r
 func (g goGitSourceReader) Blob(ctx context.Context, repoURL, username, token, ref, file string) (sourceBlobDTO, error) {
 	out := sourceBlobDTO{Ref: ref, Path: file, Content: ""}
 
-	fs, err := g.cloneWorktree(ctx, repoURL, username, token, ref)
+	fs, sha, err := g.cloneSnapshot(ctx, repoURL, username, token, ref)
 	if err != nil {
 		return out, errSourceCloneFailed
 	}
@@ -205,6 +206,7 @@ func (g goGitSourceReader) Blob(ctx context.Context, repoURL, username, token, r
 		return out, errSourcePathNotFound
 	}
 	out.Size = info.Size()
+	out.CommitSHA = sha
 
 	f, oerr := fs.Open(file)
 	if oerr != nil {

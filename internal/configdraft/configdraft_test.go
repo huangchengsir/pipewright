@@ -121,6 +121,12 @@ func (f *fixture) stored(t *testing.T) string {
 
 func TestApprovedAtomicApplyPreservesHiddenStateAndIdentity(t *testing.T) {
 	f := setup(t)
+	f.svc.opts.HistoryActor = func(_ context.Context, _ configstate.DBTX, subject string) (string, error) {
+		if subject != "fixture-admin" {
+			return "", ErrForbidden
+		}
+		return "fixture-reviewer", nil
+	}
 	ctx := context.Background()
 	before := f.stored(t)
 	d := f.create(t, Operation{Type: "project.set_name", Value: str("New Project")}, timeoutOp(300))
@@ -163,6 +169,19 @@ func TestApprovedAtomicApplyPreservesHiddenStateAndIdentity(t *testing.T) {
 	query, e := f.svc.Operation(ctx, f.token, OperationRequest{ProjectID: f.project, RequestID: in.RequestID})
 	if e != nil || query.OperationID != op.OperationID {
 		t.Fatal("lost-response recovery unavailable", e)
+	}
+	var version, source, actor, changes string
+	err := f.db.QueryRow(`SELECT v.id,v.source,v.actor,v.changes_json FROM pipeline_configs c
+		 JOIN pipeline_config_versions v ON v.id=c.history_version_id WHERE c.project_id=?`, f.project).
+		Scan(&version, &source, &actor, &changes)
+	if err != nil || version == "" || source != "mcp" || actor != "fixture-reviewer" ||
+		strings.Contains(changes, "synthetic-secret") || !strings.Contains(changes, "script") {
+		t.Fatalf("MCP history provenance or masking: %v %q %q %q", err, version, source, actor)
+	}
+	var versions int
+	err = f.db.QueryRow(`SELECT COUNT(*) FROM pipeline_config_versions WHERE project_id=?`, f.project).Scan(&versions)
+	if err != nil || versions != 2 {
+		t.Fatalf("MCP should create a legacy baseline and one applied version including on replay: %v %d", err, versions)
 	}
 	var n int
 	_ = f.db.QueryRow(`SELECT COUNT(*) FROM mcp_config_operations WHERE state='applied'`).Scan(&n)

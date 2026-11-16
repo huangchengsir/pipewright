@@ -1,14 +1,14 @@
 <script setup lang="ts">
 /**
- * ProjectPipeline — 4-tab pipeline configuration editor.
+ * ProjectPipeline — pipeline configuration and history.
  * Tabs: 流水线编排 / 变量与缓存 / 触发设置 / 环境与凭据
- * URL state: ?tab=canvas|vars|triggers|envs  (shareable)
+ * URL state: ?tab=canvas|vars|triggers|envs|history  (shareable)
  */
 import { ref, shallowRef, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
 import { DeviceFloppy, FileImport, ListCheck, Robot, Stack2 } from '@vicons/tabler'
-import { getPipeline, savePipeline, type PipelineDTO, type PipelineStage } from '../api/pipeline'
+import { getPipeline, loadPipelineHistoryDraft, savePipeline, type PipelineDTO, type PipelineStage } from '../api/pipeline'
 import {
   getSettings,
   saveSettings,
@@ -27,6 +27,7 @@ import type { AIApplyResponse } from '../api/aiGenerate'
 import { bindConfigRevision, configRevisionOf } from '../api/configRevision'
 import { provideProjectConfigRevisions } from '../composables/useProjectConfigRevisions'
 import PipelineCanvas from '../components/pipeline/PipelineCanvas.vue'
+import PipelineHistoryPanel from '../components/pipeline/PipelineHistoryPanel.vue'
 import PipelineSaveStatus from '../components/pipeline/PipelineSaveStatus.vue'
 import PipelineGuide from '../components/onboarding/PipelineGuide.vue'
 import type { GuideContext, GuidePhase } from '../composables/pipelineGuideState'
@@ -43,7 +44,7 @@ import ProjectPreviewConfig from '../components/pipeline/ProjectPreviewConfig.vu
 import { usePipelineDraftSave, type PipelineDraftParticipant, type PipelineSaveContext, type PipelineSaveState } from '../composables/usePipelineDraftSave'
 import { useConfirm } from '../composables/useConfirm'
 import {usePermission} from '../composables/usePermission'
-import {useAuthorizedRequestScope} from '../composables/useAuthorizedRequestScope'
+import { useAuthorizedRequestScope, useIdentityRequestScope } from '../composables/useAuthorizedRequestScope'
 import PermissionGate from '../components/PermissionGate.vue'
 
 // ─── Route ────────────────────────────────────────────────────────────────────
@@ -63,24 +64,35 @@ function markInitialEdit(): void { initialTouched.value = true }
 
 // ─── Tabs ─────────────────────────────────────────────────────────────────────
 
-type TabKey = 'canvas' | 'vars' | 'triggers' | 'envs'
+type TabKey = 'canvas' | 'vars' | 'triggers' | 'envs' | 'history'
 
 const TABS = computed<Array<{ key: TabKey; label: string }>>(() => [
   { key: 'canvas',   label: t('projectPipeline.tabCanvas') },
   { key: 'vars',     label: t('projectPipeline.tabVars') },
   { key: 'triggers', label: t('projectPipeline.tabTriggers') },
   { key: 'envs',     label: t('projectPipeline.tabEnvs') },
+  { key: 'history',  label: t('pipelineHistory.tab') },
 ])
 
 const activeTab = computed<TabKey>(() => {
   const q = route.query.tab
-  if (q === 'canvas' || q === 'vars' || q === 'triggers' || q === 'envs') return q
+  if (q === 'canvas' || q === 'vars' || q === 'triggers' || q === 'envs' || q === 'history') return q
   return 'canvas'
 })
 
 function setTab(key: TabKey): void {
   if (!scope.active()) return
-  void router.replace({ query: { ...route.query, tab: key } })
+  const query: LocationQueryRaw = { ...route.query, tab: key }
+  if (key !== 'history') delete query.historyVersion
+  void router.replace({ query })
+}
+
+const historyVersion = computed(() => typeof route.query.historyVersion === 'string' ? route.query.historyVersion : undefined)
+
+function selectHistoryVersion(id: string): void {
+  if (scope.active() && activeTab.value === 'history') {
+    void router.replace({ query: { ...route.query, historyVersion: id } })
+  }
 }
 
 // ─── Load state ───────────────────────────────────────────────────────────────
@@ -97,6 +109,7 @@ const pipeline = ref<PipelineDTO | null>(null)
 /** Local editable stages; written back via savePipeline */
 const editStages = ref<PipelineStage[]>([])
 const persistedStages = shallowRef('')
+const historyDraft = shallowRef<{ sequence: number; yaml: string } | null>(null)
 const guideEnabled = computed(() => route.query.onboardingGuide === '1')
 const guideRef = ref<InstanceType<typeof PipelineGuide> | null>(null)
 const canvasRef = ref<InstanceType<typeof PipelineCanvas> | null>(null)
@@ -120,6 +133,7 @@ function closeGuide(): void {
 function applyPipeline(dto: PipelineDTO): void {
   pipeline.value = dto
   persistedStages.value = JSON.stringify(dto.stages)
+  historyDraft.value = null
   editStages.value = JSON.parse(JSON.stringify(dto.stages)) as PipelineStage[]
 }
 
@@ -317,6 +331,7 @@ const tabDirty = computed<Record<TabKey, boolean>>(() => ({
   vars: buildDirty.value,
   envs: environmentsDirty.value,
   triggers: !!triggersRef.value?.dirty || !!previewRef.value?.dirty,
+  history: false,
 }))
 const scopeLabels = computed<Record<string, string>>(() => ({
   canvas: t('projectPipeline.tabCanvas'),
@@ -447,6 +462,7 @@ async function saveStagesDraft(context?: PipelineSaveContext): Promise<boolean> 
   revisionCoordinator.commit(id, revision, dto)
   const committedRevision = configRevisionOf(dto)
   if (committedRevision) context?.onCommitted(committedRevision)
+  historyDraft.value = null
   if (JSON.stringify(editStages.value) === snapshot && JSON.stringify(dto.stages) !== snapshot) applyPipeline(dto)
   else {
     pipeline.value = dto
@@ -539,6 +555,7 @@ async function handleTemplateApplied(dto?: PipelineDTO): Promise<void> {
  * We jump to the canvas tab so the change is visible.
  */
 function handleImportPreview(dto: PipelineDTO): void {
+  historyDraft.value = null
   // Parsing YAML is not a read of the persisted editing baseline.
   pipeline.value = bindConfigRevision({ ...dto }, configRevisionOf(pipeline.value))
   editStages.value = JSON.parse(JSON.stringify(dto.stages)) as PipelineStage[]
@@ -735,6 +752,47 @@ const scope=useAuthorizedRequestScope({action:'pipeline.read',resourceId:project
  if(validationDebounce)clearTimeout(validationDebounce)
 })
 watch(canEdit,allowed=>{if(!allowed){aiWizardOpen.value=false;yamlImportOpen.value=false;templateModalOpen.value=false}})
+
+const historyEditScope = useIdentityRequestScope(() => {}, () => scope.active(), undefined, () => false)
+let historyDraftGeneration = 0
+watch([activeTab, historyVersion, canEdit], () => { historyDraftGeneration++ }, { flush: 'sync' })
+const canRestoreHistory = computed(() => canEdit.value && !saveSubmitting.value && loadState.value === 'idle' && !!pipeline.value)
+
+async function restoreHistoryDraft(versionId: string, sequence: number): Promise<string | undefined> {
+  if (!scope.active() || !historyEditScope.active() || !canRestoreHistory.value) return
+  const id = projectId.value
+  const revision = configRevisionOf(pipeline.value)
+  const editedBefore = JSON.stringify(editStages.value)
+  const generation = historyDraftGeneration
+  const current = () => generation === historyDraftGeneration && scope.active() &&
+    historyEditScope.active() && canEdit.value && activeTab.value === 'history' && id === projectId.value
+
+  if (!await confirmStageReplacement() || !current() || !canRestoreHistory.value) return
+  if (!revision || revision !== configRevisionOf(pipeline.value) || editedBefore !== JSON.stringify(editStages.value)) {
+    return t('pipelineHistory.draftConflict')
+  }
+  try {
+    const draft = await historyEditScope.run(() => loadPipelineHistoryDraft(id, versionId, historyEditScope.requestOptions))
+    if (!current()) return
+    if (!canRestoreHistory.value || revision !== configRevisionOf(pipeline.value) ||
+        revision !== configRevisionOf(draft) || editedBefore !== JSON.stringify(editStages.value)) {
+      return t('pipelineHistory.draftConflict')
+    }
+
+    editStages.value = draft.stages
+    historyDraft.value = { sequence, yaml: draft.yaml }
+    draftSave.resetOutcome()
+    const query: LocationQueryRaw = { ...route.query, tab: 'canvas' }
+    delete query.historyVersion
+    await router.replace({ query })
+    await nextTick()
+    if (scope.active()) document.getElementById('history-draft-notice')?.focus()
+  } catch (error) {
+    if (!current()) return
+    return t(error instanceof HttpError && error.apiError?.code === 'pipeline_history_draft_unavailable'
+      ? 'pipelineHistory.draftUnavailable' : 'pipelineHistory.draftError')
+  }
+}
 
 revisionCoordinator.synchronizeInitial(() => !initialTouched.value && !stagesDirty.value && !settingsDirty.value && !triggersRef.value?.dirty && !previewRef.value?.dirty && !draftSave.busy.value)
 </script>
@@ -940,6 +998,10 @@ revisionCoordinator.synchronizeInitial(() => !initialTouched.value && !stagesDir
           role="tabpanel"
           aria-labelledby="tab-canvas"
         >
+          <p v-if="historyDraft && stagesDirty" id="history-draft-notice" class="pipeline-banner" role="status" tabindex="-1">
+            {{ t('pipelineHistory.draftLoaded', { n: historyDraft.sequence }) }}
+          </p>
+
           <!-- Load error -->
           <div v-if="loadState === 'error'" class="pipeline-banner pipeline-banner--error" role="alert">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -970,7 +1032,7 @@ revisionCoordinator.synchronizeInitial(() => !initialTouched.value && !stagesDir
             :project="project ?? undefined"
             :environment-auto-push-possible="environmentAutoPushPossible"
             :stages="editStages"
-            :yaml="pipeline.yaml"
+            :yaml="historyDraft?.yaml ?? pipeline.yaml"
             :credentials="credentials"
             :servers="servers"
             :channels="channels"
@@ -1032,6 +1094,17 @@ revisionCoordinator.synchronizeInitial(() => !initialTouched.value && !stagesDir
             :servers="servers"
             :disabled="!canEdit || saveSubmitting || settingsLoadState !== 'idle'"
             @update="handleEnvsUpdate"
+          />
+        </div>
+
+        <div v-if="activeTab === 'history'" id="tabpanel-history" class="tab-panel tab-panel--history" role="tabpanel" aria-labelledby="tab-history">
+          <PipelineHistoryPanel
+            :key="projectId"
+            :project-id="projectId"
+            :version-id="historyVersion"
+            :can-restore="canRestoreHistory"
+            :restore-draft="restoreHistoryDraft"
+            @select="selectHistoryVersion"
           />
         </div>
 
@@ -1498,6 +1571,10 @@ revisionCoordinator.synchronizeInitial(() => !initialTouched.value && !stagesDir
 .tab-panel:not(.tab-panel--canvas) {
   overflow-y: auto;
   padding: var(--main-pad-top) var(--main-pad) var(--main-pad-bottom);
+}
+
+@media (max-width: 719px) {
+  .tab-panel--history:not(.tab-panel--canvas) { padding: 16px 12px 24px; }
 }
 
 /* 触发设置 tab:触发器面板 + PR 预览环境配置卡纵向堆叠 */

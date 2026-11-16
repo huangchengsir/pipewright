@@ -1,0 +1,71 @@
+export default {
+  "tab": "변경 이력",
+  "records": "저장된 버전",
+  "version": "버전 {n}",
+  "current": "현재",
+  "unknownActor": "작성자 기록 없음",
+  "more": "더 불러오기",
+  "loadError": "변경 이력을 불러오지 못했습니다.",
+  "empty": "저장된 버전이 없습니다.",
+  "versionError": "이 버전을 열지 못했습니다.",
+  "compare": "버전 {n}과 비교",
+  "changes": "변경 내용",
+  "changeCount": "{n}건",
+  "baseline": "이력 기록을 시작한 시점의 캔버스입니다.",
+  "before": "변경 전",
+  "after": "변경 후",
+  "field": "설정 항목",
+  "valueHidden": "{field} 변경됨. 값은 숨겨져 있습니다.",
+  "currentNote": "현재 저장된 캔버스입니다.",
+  "draftNote": "캔버스에서 초안을 확인한 후 저장하면 적용됩니다.",
+  "draftUnavailable": "이 버전을 전체 초안으로 불러올 수 없습니다. 변경 내역을 참고해 캔버스에서 수정하세요.",
+  "createDraft": "이 버전에서 초안 만들기",
+  "draftLoaded": "버전 {n}의 초안을 불러왔습니다. 확인하고 저장하세요.",
+  "draftConflict": "현재 설정이 변경되었습니다. 캔버스를 새로고침하세요.",
+  "draftError": "초안을 불러오지 못했습니다. 다시 시도하세요.",
+  "openVersion": "캔버스 버전 보기",
+  "notRecorded": "이력 버전 기록 없음",
+  "sources": {
+    "baseline": "기준 버전",
+    "canvas": "캔버스 저장",
+    "yaml_import": "YAML 가져오기",
+    "template": "템플릿 적용",
+    "ai": "AI 적용",
+    "mcp": "MCP 적용"
+  },
+  "kinds": {
+    "stage": "단계",
+    "job": "노드"
+  },
+  "actions": {
+    "added": "추가",
+    "removed": "삭제",
+    "changed": "수정",
+    "moved": "이동",
+    "renamed": "이름 변경"
+  },
+  "fields": {
+    "name": "이름",
+    "position": "위치",
+    "needs": "종속성",
+    "config": "설정",
+    "commands": "스크립트 명령",
+    "summary": "요약",
+    "kind": "유형",
+    "when": "조건",
+    "matrix": "매트릭스",
+    "post": "후처리",
+    "services": "사이드카 서비스",
+    "stage": "소속 단계",
+    "type": "유형",
+    "gate": "승인",
+    "allowFailure": "실패 허용",
+    "variables": "변수",
+    "references": "리소스 참조",
+    "protected": "보호된 구성"
+  },
+  "values": {
+    "true": "예",
+    "false": "아니요"
+  }
+}

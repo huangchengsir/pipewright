@@ -1,0 +1,71 @@
+export default {
+  "tab": "Change history",
+  "records": "Saved versions",
+  "version": "Version {n}",
+  "current": "Current",
+  "unknownActor": "Author not recorded",
+  "more": "Load more",
+  "loadError": "Could not load change history.",
+  "empty": "No saved versions yet.",
+  "versionError": "Could not open this version.",
+  "compare": "Compared with version {n}",
+  "changes": "Changes",
+  "changeCount": "{n} changes",
+  "baseline": "This canvas is the starting point of the history.",
+  "before": "Before",
+  "after": "After",
+  "field": "Configuration field",
+  "valueHidden": "{field} changed. Values are hidden.",
+  "currentNote": "This is the currently saved canvas.",
+  "draftNote": "Review the draft on the canvas and save it to apply.",
+  "draftUnavailable": "This version cannot be loaded in full. Use the changes above to edit the canvas.",
+  "createDraft": "Create a draft from this version",
+  "draftLoaded": "Draft loaded from version {n}. Review and save your changes.",
+  "draftConflict": "The current configuration changed. Reload the canvas and try again.",
+  "draftError": "Could not load the historical draft. Try again.",
+  "openVersion": "View canvas version",
+  "notRecorded": "History version not recorded",
+  "sources": {
+    "baseline": "Starting version",
+    "canvas": "Canvas save",
+    "yaml_import": "YAML import",
+    "template": "Template applied",
+    "ai": "AI applied",
+    "mcp": "MCP applied"
+  },
+  "kinds": {
+    "stage": "Stage",
+    "job": "Node"
+  },
+  "actions": {
+    "added": "Added",
+    "removed": "Removed",
+    "changed": "Changed",
+    "moved": "Moved",
+    "renamed": "Renamed"
+  },
+  "fields": {
+    "name": "Name",
+    "position": "Position",
+    "needs": "Dependencies",
+    "config": "Configuration",
+    "commands": "Script commands",
+    "summary": "Summary",
+    "kind": "Type",
+    "when": "Conditions",
+    "matrix": "Matrix",
+    "post": "Post steps",
+    "services": "Sidecar services",
+    "stage": "Stage",
+    "type": "Type",
+    "gate": "Approval",
+    "allowFailure": "Allow failure",
+    "variables": "Variables",
+    "references": "Resource references",
+    "protected": "Protected configuration"
+  },
+  "values": {
+    "true": "Yes",
+    "false": "No"
+  }
+}

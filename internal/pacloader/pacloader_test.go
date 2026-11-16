@@ -45,6 +45,7 @@ func (f *fakeTokens) GetGitAuth(id string) (string, string, error) {
 
 type fakeBlobs struct {
 	content     string
+	commitSHA   string
 	degraded    bool
 	err         error
 	gotRef      string
@@ -53,12 +54,12 @@ type fakeBlobs struct {
 	gotToken    string
 }
 
-func (f *fakeBlobs) FetchBlob(_ context.Context, _, username, token, ref, file string) (string, bool, error) {
+func (f *fakeBlobs) FetchBlob(_ context.Context, _, username, token, ref, file string) (string, string, bool, error) {
 	f.gotUsername = username
 	f.gotToken = token
 	f.gotRef = ref
 	f.gotFile = file
-	return f.content, f.degraded, f.err
+	return f.content, f.commitSHA, f.degraded, f.err
 }
 
 // ─── 夹具 ──────────────────────────────────────────────────────────────────────
@@ -125,6 +126,15 @@ func defaultInfo() ProjectInfo {
 }
 
 // ─── (a) 合法 .pipewright.yml → 用其 spec ───────────────────────────────────────
+
+func TestGet_UsesCommitCapturedWithRepoYAML(t *testing.T) {
+	blobs := &fakeBlobs{content: validYAML, commitSHA: "7b50e26c62164db59840a099088125ed69a01a25"}
+	l := newLoader(&storedLoader{cfg: storedCfg()}, fakeProjects{info: defaultInfo()}, nil, blobs)
+	cfg, src, err := l.Get(context.Background(), "project-1", "feature")
+	if err != nil || firstStage(cfg) != "from-repo" || !src.FromRepo || src.Ref != blobs.commitSHA || blobs.gotRef != "feature" {
+		t.Fatalf("expected actual snapshot SHA as source: cfg=%v source=%+v requested=%q err=%v", cfg, src, blobs.gotRef, err)
+	}
+}
 
 func TestGet_ValidRepoYAML_UsesRepoSpec(t *testing.T) {
 	stored := &storedLoader{cfg: storedCfg()}

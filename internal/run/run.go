@@ -201,10 +201,11 @@ type Run struct {
 //     其值为回退原因(disabled|no_file|invalid_yaml|degraded|empty|lookup_failed)。
 //   - Source="":未记录(老运行 / 桩 runner 未上报),前端按未知处理(不展示徽标)。
 type SpecSource struct {
-	Source   string // "" | repo | stored
-	Ref      string
-	File     string
-	Fallback string
+	HistoryVersionID string
+	Source           string // "" | repo | stored
+	Ref              string
+	File             string
+	Fallback         string
 }
 
 // 配置来源枚举(DB 存小写串)。

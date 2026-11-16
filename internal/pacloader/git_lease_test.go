@@ -26,11 +26,11 @@ type scopedPACBlob struct {
 	t      *testing.T
 }
 
-func (f scopedPACBlob) FetchBlob(context.Context, string, string, string, string, string) (string, bool, error) {
+func (f scopedPACBlob) FetchBlob(context.Context, string, string, string, string, string) (string, string, bool, error) {
 	if !f.tokens.active {
 		f.t.Fatal("PAC read did not hold credential generation")
 	}
-	return validYAML, false, nil
+	return validYAML, "", false, nil
 }
 func TestPACRetainsGitLeaseAndDoesNotFallbackAfterManagedFailure(t *testing.T) {
 	tokens := &scopedPACTokens{}

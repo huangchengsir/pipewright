@@ -208,15 +208,17 @@ func (b *nodeRetryBindings) capture(ctx context.Context, id string) (runretry.Sn
 		return runretry.Snapshot{}, err
 	}
 	kind := "stored"
+	historyVersionID := cfg.HistoryVersionID
 	if source.FromRepo {
 		kind = "repo"
+		historyVersionID = ""
 	}
 	snap := runretry.Snapshot{SchemaVersion: runretry.SchemaVersion, ScriptEntrypointMode: runretry.ScriptEntrypointClearV1, ProjectID: r.ProjectID, Spec: cfg.Spec,
 		Project: projectMap, Settings: settingsMap, RequestedRef: r.Trigger.Branch,
 		Trigger: runretry.Trigger{Type: r.Trigger.Type, Branch: r.Trigger.Branch, Commit: r.Trigger.Commit, Actor: r.Trigger.Actor,
 			Environment: r.Trigger.ResolvedEnvironment, TargetServerIDs: r.Trigger.ResolvedTargetServerIDs, Params: r.Trigger.Params,
 			ChainSourceRunID: r.Trigger.ChainSourceRunID, ChainDepth: r.Trigger.ChainDepth},
-		Source:     runretry.ConfigSource{Kind: kind, Ref: source.Ref, File: source.File, Fallback: source.FallbackReason},
+		Source:     runretry.ConfigSource{Kind: kind, Ref: source.Ref, File: source.File, Fallback: source.FallbackReason, HistoryVersionID: historyVersionID},
 		RunnerRefs: map[string]string{"serverId": config.RunnerServerID}}
 	if err := build.FreezeKubernetesPolicy(ctx, b.kubernetes, &snap); err != nil {
 		return runretry.Snapshot{}, err

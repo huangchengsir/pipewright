@@ -1,0 +1,71 @@
+export default {
+  "tab": "变更历史",
+  "records": "保存记录",
+  "version": "版本 {n}",
+  "current": "当前",
+  "unknownActor": "操作者未记录",
+  "more": "加载更多",
+  "loadError": "无法加载变更历史。",
+  "empty": "还没有保存记录。",
+  "versionError": "无法打开此版本。",
+  "compare": "对比版本 {n}",
+  "changes": "变更明细",
+  "changeCount": "{n} 项",
+  "baseline": "这是开始记录时的画布版本。",
+  "before": "变更前",
+  "after": "变更后",
+  "field": "配置字段",
+  "valueHidden": "{field}已修改，内容已隐藏",
+  "currentNote": "这是画布当前保存的版本。",
+  "draftNote": "草稿将在画布中打开，保存后才会生效。",
+  "draftUnavailable": "该版本无法完整载入草稿，请参照差异在画布中修改。",
+  "createDraft": "从此版本创建草稿",
+  "draftLoaded": "已载入版本 {n} 的草稿。核对后请保存配置。",
+  "draftConflict": "当前配置已变化，请重新打开画布后再试。",
+  "draftError": "无法创建历史草稿，请重试。",
+  "openVersion": "查看画布版本",
+  "notRecorded": "历史版本未记录",
+  "sources": {
+    "baseline": "基线",
+    "canvas": "画布保存",
+    "yaml_import": "YAML 导入",
+    "template": "模板应用",
+    "ai": "AI 应用",
+    "mcp": "MCP 应用"
+  },
+  "kinds": {
+    "stage": "阶段",
+    "job": "节点"
+  },
+  "actions": {
+    "added": "新增",
+    "removed": "删除",
+    "changed": "修改",
+    "moved": "移动",
+    "renamed": "改名"
+  },
+  "fields": {
+    "name": "名称",
+    "position": "位置",
+    "needs": "依赖",
+    "config": "配置",
+    "commands": "脚本命令",
+    "summary": "摘要",
+    "kind": "类型",
+    "when": "条件",
+    "matrix": "矩阵",
+    "post": "后置步骤",
+    "services": "旁挂服务",
+    "stage": "所属阶段",
+    "type": "类型",
+    "gate": "审批",
+    "allowFailure": "允许失败",
+    "variables": "变量",
+    "references": "资源引用",
+    "protected": "受保护配置"
+  },
+  "values": {
+    "true": "是",
+    "false": "否"
+  }
+}

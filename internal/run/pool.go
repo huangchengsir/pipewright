@@ -791,9 +791,9 @@ func (d *dbStepSink) SetFailureLog(_ context.Context, logText string) error {
 func (d *dbStepSink) SetSpecSource(_ context.Context, src SpecSource) error {
 	_, err := d.svc.db.ExecContext(context.Background(),
 		`UPDATE pipeline_runs
-		   SET spec_source = ?, spec_source_ref = ?, spec_source_file = ?, spec_source_fallback = ?
+		   SET spec_source = ?, spec_source_ref = ?, spec_source_file = ?, spec_source_fallback = ?, history_version_id = NULLIF(?, '')
 		 WHERE id = ?`,
-		src.Source, src.Ref, src.File, src.Fallback, d.runID)
+		src.Source, src.Ref, src.File, src.Fallback, src.HistoryVersionID, d.runID)
 	if err != nil {
 		return fmt.Errorf("run: set spec source: %w", err)
 	}

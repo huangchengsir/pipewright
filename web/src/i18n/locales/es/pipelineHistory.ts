@@ -1,0 +1,71 @@
+export default {
+  "tab": "Historial de cambios",
+  "records": "Versiones guardadas",
+  "version": "Versión {n}",
+  "current": "Actual",
+  "unknownActor": "Autor sin registrar",
+  "more": "Cargar más",
+  "loadError": "No se pudo cargar el historial.",
+  "empty": "Todavía no hay versiones guardadas.",
+  "versionError": "No se pudo abrir esta versión.",
+  "compare": "Comparada con la versión {n}",
+  "changes": "Cambios",
+  "changeCount": "{n} cambios",
+  "baseline": "Este lienzo es el punto de partida del historial.",
+  "before": "Antes",
+  "after": "Después",
+  "field": "Campo de configuración",
+  "valueHidden": "Cambió {field}. Los valores están ocultos.",
+  "currentNote": "Este es el lienzo guardado actualmente.",
+  "draftNote": "Revisa el borrador en el lienzo y guárdalo para aplicarlo.",
+  "draftUnavailable": "No se puede cargar toda esta versión. Usa los cambios para editar el lienzo.",
+  "createDraft": "Crear borrador desde esta versión",
+  "draftLoaded": "Borrador de la versión {n} cargado. Revisa y guarda los cambios.",
+  "draftConflict": "La configuración cambió. Recarga el lienzo y vuelve a intentarlo.",
+  "draftError": "No se pudo cargar el borrador. Inténtalo de nuevo.",
+  "openVersion": "Ver versión del lienzo",
+  "notRecorded": "Versión histórica sin registrar",
+  "sources": {
+    "baseline": "Versión inicial",
+    "canvas": "Guardado del lienzo",
+    "yaml_import": "Importación YAML",
+    "template": "Plantilla aplicada",
+    "ai": "IA aplicada",
+    "mcp": "MCP aplicado"
+  },
+  "kinds": {
+    "stage": "Etapa",
+    "job": "Nodo"
+  },
+  "actions": {
+    "added": "Añadido",
+    "removed": "Eliminado",
+    "changed": "Modificado",
+    "moved": "Movido",
+    "renamed": "Renombrado"
+  },
+  "fields": {
+    "name": "Nombre",
+    "position": "Posición",
+    "needs": "Dependencias",
+    "config": "Configuración",
+    "commands": "Comandos",
+    "summary": "Resumen",
+    "kind": "Tipo",
+    "when": "Condiciones",
+    "matrix": "Matriz",
+    "post": "Pasos posteriores",
+    "services": "Servicios auxiliares",
+    "stage": "Etapa",
+    "type": "Tipo",
+    "gate": "Aprobación",
+    "allowFailure": "Permitir fallos",
+    "variables": "Variables",
+    "references": "Referencias de recursos",
+    "protected": "Configuración protegida"
+  },
+  "values": {
+    "true": "Sí",
+    "false": "No"
+  }
+}

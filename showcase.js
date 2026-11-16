@@ -1,5 +1,6 @@
 const showcase = document.querySelector('.showcase');
 const controls = showcase.querySelector('.showcase-controls');
+const original = showcase.querySelector('.showcase-original');
 const rotation = controls.querySelector('.showcase-rotation');
 const tabs = [...controls.querySelectorAll('[role="tab"]')];
 const panels = tabs.map(tab => document.getElementById(tab.getAttribute('aria-controls')));
@@ -37,6 +38,7 @@ function show(index, moveFocus) {
     tab.tabIndex = selected ? 0 : -1;
     panels[position].hidden = !selected;
   });
+  original.href = panels[index].querySelector('img').src;
   if (moveFocus) tabs[index].focus();
   updateRotation();
 }

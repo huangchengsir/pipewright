@@ -163,3 +163,22 @@ th { background: var(--soft); white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
 }
+
+.showcase-footer { display: flex; justify-content: flex-end; padding: 0 12px 3px; }
+.showcase-original { display: inline-flex; align-items: center; gap: 5px; min-height: 44px; padding: 0 6px; font-size: .875rem; }
+
+.start-options { display: grid; gap: 8px; margin: 14px 0 22px; }
+.start-options a { display: grid; gap: 3px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); text-decoration: none; }
+.start-options a:hover { border-color: var(--focus); }
+.start-options strong { color: var(--ink); }
+.start-options span { font-size: .875rem; color: var(--muted); }
+.doc-topic { scroll-margin-top: 22px; }
+.doc-topic + .doc-topic { margin-top: 22px; }
+.search-matches { max-height: 17rem; overflow: auto; margin: 6px 0 0; padding-inline-start: 24px; }
+.search-matches li { margin: 0 0 6px; padding: 6px 4px; }
+.search-matches a { font-weight: 650; }
+.search-matches p { margin: 2px 0 0; color: var(--muted); font-size: .875rem; }
+
+@media (min-width: 700px) {
+  .start-options { grid-template-columns: 1fr 1fr; }
+}

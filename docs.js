@@ -1,44 +1,82 @@
 const searchBox = document.querySelector('#search-box');
 const search = document.querySelector('#search');
 const results = document.querySelector('#results');
-const sections = [...document.querySelectorAll('.doc-section')];
-const keywords = sections.map(section => section.textContent.toLowerCase());
+const matches = document.querySelector('#search-matches');
+const sections = [...document.querySelectorAll('.doc-section, .doc-topic')];
+const entries = sections.map(section => {
+  const content = section.cloneNode(true);
+  content.querySelectorAll('.doc-topic').forEach(topic => topic.remove());
+  const title = content.querySelector('h2, h3').textContent;
+  const summary = (content.querySelector('p')?.textContent || content.textContent.trim())
+    .replace(/\s+/g, ' ').slice(0, 120);
+  return {
+    id: section.id,
+    title,
+    heading: title.toLowerCase(),
+    summary,
+    terms: section.dataset.keywords?.toLowerCase() || '',
+    text: content.textContent.toLowerCase()
+  };
+});
 
-function filterSections() {
+function renderSearch() {
   const words = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  let matches = 0;
-  sections.forEach((section, index) => {
-    const match = words.every(word => keywords[index].includes(word));
-    section.hidden = !match;
-    if (match) matches += 1;
-  });
-  results.textContent = words.length ? (matches ? '找到 ' + matches + ' 个章节' : '没有匹配的章节，请试试其他词。') : '';
+  matches.replaceChildren();
+  matches.hidden = true;
+  if (!words.length) {
+    results.textContent = '';
+    return;
+  }
+
+  const hits = [];
+  for (const entry of entries) {
+    const scores = words.map(word => {
+      if (entry.heading.includes(word)) return 3;
+      if (entry.terms.includes(word)) return 2;
+      return Number(entry.text.includes(word));
+    });
+    if (scores.every(Boolean)) {
+      hits.push({ ...entry, score: scores.reduce((sum, score) => sum + score, 0) });
+    }
+  }
+  hits.sort((a, b) => b.score - a.score);
+
+  results.textContent = hits.length ? '找到 ' + hits.length + ' 项' : '没有匹配的结果，请试试其他词。';
+  for (const entry of hits) {
+    const item = document.createElement('li');
+    const link = document.createElement('a');
+    link.href = '#' + entry.id;
+    link.textContent = entry.title;
+    const summary = document.createElement('p');
+    summary.textContent = entry.summary;
+    item.append(link, summary);
+    matches.append(item);
+  }
+  matches.hidden = !hits.length;
 }
 
 searchBox.hidden = false;
-search.addEventListener('input', filterSections);
+search.addEventListener('input', renderSearch);
 const sectionLinks = [...document.querySelectorAll('.sidebar a[href^="#"]')];
 
 function updateCurrentSection() {
-  const hash = window.location.hash || '#quickstart';
-  sectionLinks.forEach(link => {
-    if (link.hash === hash) link.setAttribute('aria-current', 'location');
+  const id = window.location.hash.slice(1) || 'quickstart';
+  const section = document.getElementById(id)?.closest('.doc-section');
+  for (const link of sectionLinks) {
+    if (link.hash === '#' + section?.id) link.setAttribute('aria-current', 'location');
     else link.removeAttribute('aria-current');
-  });
+  }
 }
 
 updateCurrentSection();
-sectionLinks.forEach(link => link.addEventListener('click', () => {
-  if (!search.value) return;
-  search.value = '';
-  filterSections();
-}));
-window.addEventListener('hashchange', () => {
-  updateCurrentSection();
-  if (!search.value) return;
-  search.value = '';
-  filterSections();
-});
+for (const link of sectionLinks) {
+  link.addEventListener('click', () => {
+    if (!search.value) return;
+    search.value = '';
+    renderSearch();
+  });
+}
+window.addEventListener('hashchange', updateCurrentSection);
 
 if (navigator.clipboard && window.isSecureContext) {
   document.querySelectorAll('.copy').forEach(button => {

@@ -36,7 +36,7 @@ func loadAuthority(ctx context.Context, tx configstate.DBTX, actor Actor, teamID
 // loadSubjectAuthority is internal: callers must authenticate the requesting
 // actor and authorize access to this subject before using it for inspection.
 func loadSubjectAuthority(ctx context.Context, tx configstate.DBTX, user User, teamID string, draft *authz.Role) (Authority, error) {
- var err error
+	var err error
 	var teamEnabled int
 	if err = tx.QueryRowContext(ctx, `SELECT enabled FROM access_teams WHERE id=?`, teamID).Scan(&teamEnabled); err != nil || teamEnabled != 1 {
 		return Authority{}, ErrForbidden

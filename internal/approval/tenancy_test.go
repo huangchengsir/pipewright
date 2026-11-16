@@ -46,7 +46,11 @@ func TestApprovalEmployeeScopeRevocationAndDelivery(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
- for _,id:=range []string{"test","production"}{if _,e=st.DB.Exec(`INSERT INTO access_ownership(resource_kind,resource_id,tenant_id,project_id,environment_id) VALUES('environment',?,?,'p',?)`,id,team,id);e!=nil{t.Fatal(e)}}
+	for _, id := range []string{"test", "production"} {
+		if _, e = st.DB.Exec(`INSERT INTO access_ownership(resource_kind,resource_id,tenant_id,project_id,environment_id) VALUES('environment',?,?,'p',?)`, id, team, id); e != nil {
+			t.Fatal(e)
+		}
+	}
 	grants := []authz.Grant{{Action: "run.read", Scope: authz.Scope{Kind: authz.ScopeTeam}}, {Action: "run.approve", Scope: authz.Scope{Kind: authz.ScopeTeam}}}
 	role, e := repo.SaveRole(ctx, admin.Actor, team, "", tenancy.RoleInput{Name: "Approver", Pages: []string{"page.runs"}, Grants: grants, RequiresSelectedBinding: true})
 	if e != nil {

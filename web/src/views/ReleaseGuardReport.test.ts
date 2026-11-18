@@ -254,6 +254,27 @@ describe("release guard report", () => {
     expect(wrapper.findAll(".guard-evidence")).toHaveLength(0);
     wrapper.unmount();
   });
+  it("keeps historical candidate categories visible when their evidence expired", async () => {
+    const report = guardReport({ evidenceExpired: true });
+    report.investigation.candidates = [{
+      id: "candidate-1",
+      title: "docker_unhealthy",
+      supportingEvidenceIds: ["support"],
+      counterEvidenceIds: [],
+      missingEvidence: [],
+      nextReadOnlyCheck: "",
+    }];
+    api.get.mockResolvedValue(report);
+    const wrapper = page();
+    await flushPromises();
+    await wrapper.get("#guard-tab-investigation").trigger("click");
+    const candidate = wrapper.get(".guard-candidate");
+    const categories = candidate.findAll(":scope > div");
+    expect(categories[0].text()).toContain("证据已过期");
+    expect(categories[1].text()).toContain(i18n.global.t("releaseGuard.notProvided"));
+    expect(candidate.find("a").exists()).toBe(false);
+    expect(api.evidence).not.toHaveBeenCalled();
+  });
   it("discloses a removed health condition instead of calling revalidation unchanged", async () => {
     api.get.mockResolvedValue(
       guardReport({
@@ -401,7 +422,7 @@ describe("release guard report", () => {
     expect(
       wrapper.findAll(".guard-summary-secondary .guard-summary-metrics > div"),
     ).toHaveLength(2);
-    expect(wrapper.get(".guard-summary-secondary").text()).toContain(
+    expect(wrapper.get(".guard-boundaries").text()).toContain(
       "完整根因仍需独立证据",
     );
     expect(wrapper.get(".guard-verdict").attributes("data-result")).toBe(
@@ -491,6 +512,22 @@ describe("release guard report", () => {
     expect(api.evidence).toHaveBeenCalledTimes(1);
     expect(api.investigate).not.toHaveBeenCalled();
     expect(api.stop).not.toHaveBeenCalled();
+  });
+  it("collapses multiple retained citations without losing their targets", async () => {
+    const report = guardReport({ verificationResult: "passed" });
+    report.targets[0].conditions[0].evidenceIds = ["evidence-1", "evidence-2"];
+    api.get.mockResolvedValue(report);
+    api.evidence.mockResolvedValue({ items: [sample("evidence-1"), sample("evidence-2")], nextCursor: 2, hasMore: false });
+    const wrapper = page();
+    await flushPromises();
+    const group = wrapper.get<HTMLDetailsElement>(".guard-evidence-disclosure");
+    expect(group.element.open).toBe(false);
+    expect(group.get("summary").text()).toContain("2");
+    expect(wrapper.get(".guard-next").text()).not.toContain("先查看失败证据");
+    group.element.open = true;
+    await group.findAll("a")[1].trigger("click");
+    await flushPromises();
+    expect(document.activeElement?.id).toBe("guard-evidence-evidence-2");
   });
   it("refreshes only the current report from the report toolbar", async () => {
     const wrapper = page();
@@ -583,8 +620,9 @@ describe("release guard report", () => {
       .get(".guard-header-actions button:last-child")
       .trigger("click");
     await flushPromises();
-    await wrapper.get(".guard-failure-summary button").trigger("click");
-    expect(wrapper.get("#guard-reference-status").text()).toContain("已过期");
+    expect(wrapper.find(".guard-failure-summary button").exists()).toBe(false);
+    expect(wrapper.find(".guard-condition-list a").exists()).toBe(false);
+    expect(wrapper.get(".guard-context-meta").text()).toContain("已过期");
     expect(api.evidence).toHaveBeenCalledTimes(2);
     wrapper.unmount();
   });
@@ -760,11 +798,9 @@ describe("release guard report", () => {
     api.evidence.mockRejectedValueOnce(new HttpError(410, null, "expired"));
     const wrapper = page();
     await flushPromises();
-    await wrapper.get(".guard-failure-summary button").trigger("click");
-    expect(wrapper.get("#guard-reference-status").text()).toContain("已过期");
-    expect(wrapper.get("#guard-reference-status").find("button").exists()).toBe(
-      false,
-    );
+    expect(wrapper.find(".guard-failure-summary button").exists()).toBe(false);
+    expect(wrapper.find(".guard-condition-list a").exists()).toBe(false);
+    expect(wrapper.get(".guard-context-meta").text()).toContain("已过期");
     expect(wrapper.get(".guard-verdict").attributes("data-result")).toBe(
       "failed",
     );

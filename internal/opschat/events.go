@@ -101,17 +101,11 @@ func (s *Service) entryPage(ctx context.Context, q querier, id, cursor string, l
 		if rows.Scan(&e.Seq, &e.Kind, &e.RunID, &e.CallID, &b, &created) != nil {
 			return out, ErrStorage
 		}
-		var body struct {
-			Text        string
-			Status      string
-			Summary     *RunSummary
-			RefSeq      int64
-			RevisionSeq int64
-		}
+		var body entryBody
 		if err = s.open(b, &body); err != nil {
 			return out, err
 		}
-		e.Text, e.Status = body.Text, body.Status
+		e.Text, e.Status, e.Model = body.Text, body.Status, body.Model
 		e.Summary = body.Summary
 		e.ReplaceSeq = body.RefSeq
 		e.RevisionSeq = body.RevisionSeq
@@ -135,14 +129,11 @@ func (s *Service) entryPage(ctx context.Context, q querier, id, cursor string, l
 			if q.QueryRowContext(ctx, "SELECT body,kind FROM ops_chat_entries WHERE session_id=? AND seq=?", id, e.ReplaceSeq).Scan(&b, &kind) != nil {
 				return out, ErrStorage
 			}
-			var body struct {
-				Text, Status string
-				RevisionSeq  int64
-			}
+			var body entryBody
 			if err = s.open(b, &body); err != nil {
 				return out, err
 			}
-			e.Kind, e.Text, e.Status = kind, body.Text, body.Status
+			e.Kind, e.Text, e.Status, e.Model = kind, body.Text, body.Status, body.Model
 			e.RevisionSeq = body.RevisionSeq
 		}
 		if e.RunID != "" && (e.Kind == "assistant" || e.Kind == "analysis") {

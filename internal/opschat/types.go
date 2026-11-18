@@ -65,10 +65,11 @@ type ProviderInfo struct {
 	ConfigHash string `json:"configHash"`
 }
 type Capabilities struct {
-	Available      bool         `json:"available"`
-	ModelAvailable bool         `json:"modelAvailable"`
-	Provider       ProviderInfo `json:"provider"`
-	Limits         Limits       `json:"limits"`
+	Available      bool           `json:"available"`
+	ModelAvailable bool           `json:"modelAvailable"`
+	Provider       ProviderInfo   `json:"provider"`
+	Models         []ProviderInfo `json:"models,omitempty"`
+	Limits         Limits         `json:"limits"`
 }
 type Options struct {
 	DB       *sql.DB
@@ -197,6 +198,11 @@ type Model interface {
 	Analyze(context.Context, AnalysisRequest) (string, error)
 }
 
+// ModelCatalog lists locally configured bindings with the default first.
+type ModelCatalog interface {
+	Providers() []ProviderInfo
+}
+
 type StreamChunk struct {
 	Text     string
 	Fallback bool
@@ -285,9 +291,22 @@ type Entry struct {
 	RunID        string            `json:"runId,omitempty"`
 	CallID       string            `json:"callId,omitempty"`
 	Text         string            `json:"text,omitempty"`
+	Model        string            `json:"model,omitempty"`
 	Status       string            `json:"status,omitempty"`
 	CreatedAt    time.Time         `json:"createdAt"`
 }
+
+// entryBody is encrypted with the existing history payload; absent Model is
+// how rows written before model metadata (or without an AI response) are read.
+type entryBody struct {
+	Text        string
+	Status      string
+	Model       string `json:"Model,omitempty"`
+	Summary     *RunSummary
+	RefSeq      int64
+	RevisionSeq int64 `json:"RevisionSeq,omitempty"`
+}
+
 type EntryPage struct {
 	Entries   []Entry `json:"entries"`
 	Cursor    string  `json:"cursor"`

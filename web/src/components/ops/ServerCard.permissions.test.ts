@@ -166,7 +166,10 @@ it.each(['connect-revoke','disconnect-cancel','disconnect-revoke'] as const)('ch
  allowed.add('container.operate');vi.mocked(api.getServerNetworks).mockResolvedValue({...group,networks:[{id:'net-a',name:'A',driver:'bridge',scope:'local'}]});vi.mocked(api.getNetworkContainers).mockResolvedValue({serverId:'server',network:'A',reachable:true,error:'',containers:mode==='connect-revoke'?[]:[{id:'cid',name:'app',ipv4:''}]});vi.mocked(api.connectNetwork).mockClear();vi.mocked(api.disconnectNetwork).mockClear();const w=card();await flushPromises();await w.findAll('[role="tab"]')[4]!.trigger('click');await flushPromises();await w.get('.netexp').trigger('click');await flushPromises();if(mode==='connect-revoke')await w.get('.connadd__sel').setValue('app');const b=w.get(mode==='connect-revoke'?'.connadd button':'.connrow button');if(mode==='disconnect-cancel')confirm.mockResolvedValue(false);else{allowed.delete('container.operate');usePermissionStore().invalidate();await flushPromises()}await b.trigger('click');await flushPromises();expect(api.connectNetwork).not.toHaveBeenCalled();expect(api.disconnectNetwork).not.toHaveBeenCalled();
 });
 it.each([['inspect','inspectTitle','container.inspect'],['diagnose','aiDiagnoseTitle','container.diagnose'],['logs','logsTitle','container.inspect']] as const)('clicks parent %s with exact container and hides denied entry',async(event,title,action)=>{
- allowed.add(action);const w=card();await flushPromises();const selector=`[title="opsServer.card.${title}"]`;await w.get(selector).trigger('click');expect(w.emitted(event)).toEqual([[group.containers[0]]]);
+ allowed.add(action);const w=card();await flushPromises();const selector=`[title="opsServer.card.${title}"]`;const button = w.get(selector);
+ await button.trigger('click');
+ const args = event === 'diagnose' ? [group.containers[0], button.element] : [group.containers[0]];
+ expect(w.emitted(event)).toEqual([args]);
  allowed.delete(action);usePermissionStore().invalidate();await flushPromises();expect(w.find(selector).exists()).toBe(false);expect(w.emitted(event)).toHaveLength(1);
 });
 it('clicks containers tab to refresh only with inspect permission',async()=>{

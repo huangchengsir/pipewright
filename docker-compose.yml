@@ -26,6 +26,7 @@ services:
       # 运行执行器:默认 DAG(真按 UI 可视化流水线 stages 执行)。仅需回退旧版固定流程时
       # 显式设 PIPEWRIGHT_RUNNER=legacy(clone→对仓库根 docker build→deploy,不跑可视化流水线)。
       PIPEWRIGHT_RUNNER: ${PIPEWRIGHT_RUNNER:-}
+      PIPEWRIGHT_OPS_CHAT_MODELS: ${PIPEWRIGHT_OPS_CHAT_MODELS:-}
     volumes:
       - pipewright-data:/data
       # 隔离构建 / 镜像部署需要 Docker:取消下一行挂宿主 docker.sock(注意:等同授予宿主 root 级权限,

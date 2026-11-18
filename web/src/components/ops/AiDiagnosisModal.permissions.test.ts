@@ -9,8 +9,7 @@ import { useSessionStore } from '../../stores/session'
 
 vi.mock('../../api/access',()=>({access:{decisions:vi.fn()}}))
 vi.mock('../../api/containers',()=>({diagnoseContainer:vi.fn()}))
-const { success, error }=vi.hoisted(()=>({success:vi.fn(),error:vi.fn()}))
-vi.mock('../../composables/useToast',()=>({useToast:()=>({success,error})}))
+
 let w: VueWrapper | undefined
 const diag:ContainerDiagnosis={
   status:'ready',reason:'',hypothesis:'A scoped finding',confidence:'high',
@@ -60,15 +59,14 @@ it('copies only the current diagnosis and suppresses late feedback after withdra
     const copy=view.get('.copy')
     await copy.trigger('click'); await flushPromises()
     expect(writeText).toHaveBeenCalledWith('echo fixture')
-    expect(success).toHaveBeenCalledOnce()
+    expect(view.get('.copy-status').text()).not.toBe('')
     await copy.trigger('click')
     usePermissionStore().reject('a',{action:'container.diagnose',resourceId:'server'})
     copy.element.dispatchEvent(new MouseEvent('click',{bubbles:true}))
     finish()
     await flushPromises()
     expect(writeText).toHaveBeenCalledTimes(2)
-    expect(success).toHaveBeenCalledOnce()
-    expect(error).not.toHaveBeenCalled()
+    expect(view.find('.copy-status').exists()).toBe(false)
   } finally {
     vi.unstubAllGlobals()
   }

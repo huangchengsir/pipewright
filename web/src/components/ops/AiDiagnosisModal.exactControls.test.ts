@@ -9,8 +9,7 @@ import { useSessionStore } from '../../stores/session'
 
 vi.mock('../../api/access',()=>({access:{decisions:vi.fn()}}))
 vi.mock('../../api/containers',()=>({diagnoseContainer:vi.fn()}))
-const { success, error }=vi.hoisted(()=>({success:vi.fn(),error:vi.fn()}))
-vi.mock('../../composables/useToast',()=>({useToast:()=>({success,error})}))
+
 let w: VueWrapper | undefined
 const diag:ContainerDiagnosis={
   status:'ready',reason:'',hypothesis:'A scoped finding',confidence:'high',
@@ -34,7 +33,7 @@ async function open() {
   return w
 }
 
-it.each(['scrim', 'header', 'footer'])('closes the current container diagnosis via %s without another request', async control => {
+it.each(['scrim', 'header', 'footer', 'escape'])('closes the current container diagnosis via %s without another request', async control => {
   const view = await open()
   expect(view.text()).toContain('A scoped finding')
   await view.get('.modal').trigger('click')
@@ -42,7 +41,12 @@ it.each(['scrim', 'header', 'footer'])('closes the current container diagnosis v
   const selectors: Record<string, string> = {
     scrim: '.modal-scrim', header: '.modal__close', footer: '.modal__foot .btn--primary',
   }
-  await view.get(selectors[control]!).trigger('click')
+  await view.get('.modal').trigger('pointerdown')
+  await view.get('dialog').trigger('click')
+  expect(view.emitted('close')).toBeUndefined()
+  if (control === 'scrim') await view.get('dialog').trigger('pointerdown')
+  if (control === 'escape') await view.get('dialog').trigger('cancel')
+  else await view.get(selectors[control]!).trigger('click')
   expect(view.emitted('close')).toEqual([[]])
   expect(diagnoseContainer).toHaveBeenCalledOnce()
 })

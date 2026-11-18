@@ -43,6 +43,7 @@ const requestOptions = () => ({ throwOnUnauthorized: true, headers: { 'X-Pipewri
 const permissionScope = () => JSON.stringify([authSession.user?.userId ?? authSession.user?.username, authSession.user?.multiTenant, authSession.user?.mustChangePassword, authSession.isNetworkError, permissions.activeTeam])
 const requestActive = computed(() => props.active && !!authSession.user && !authSession.isNetworkError && !authSession.user.mustChangePassword && (authSession.user.multiTenant === false || (authSession.user.multiTenant === true && !!permissions.activeTeam)))
 const actionQuery = (action: string, id = chatMemory.state.currentId) => ({ action: 'opschat.' + action, resourceId: action === 'create' ? 'new-resource' : id, ...(action === 'create' ? { create: true } : {}) })
+const canConfigureModel = usePermission(() => ({ action: 'system.manage', resourceId: 'instance' }))
 const actionPermissions = Object.fromEntries(['read', 'create', 'edit', 'delete', 'submit', 'confirm', 'cancel'].map(action => [action, usePermission(() => actionQuery(action))]))
 const can = (action: string, id: string) => permissions.allowed(permissions.activeTeam, { action, resourceId: id, ...(action === 'opschat.create' ? { create: true } : {}) })
 const chat = useOpsChat({
@@ -99,12 +100,33 @@ watch(
   },
   { flush: 'post' },
 )
+const selectedModelHash = shallowRef('')
+const models = computed(() => {
+  const cap = capabilities.value
+  return cap?.modelAvailable ? cap.models ?? [cap.provider] : []
+})
+const selectedProvider = computed(() => selectedModelHash.value
+  ? models.value.find(model => model.configHash === selectedModelHash.value)
+  : capabilities.value?.provider,
+)
+const activeModelHash = computed(() => selectedProvider.value?.configHash ?? '')
+const modelReady = computed(() =>
+  Boolean(capabilities.value?.modelAvailable && (!selectedModelHash.value || selectedProvider.value)),
+)
+function analyze(callIds: string[], runId?: string): void {
+  if (!modelReady.value) return
+  if (selectedModelHash.value) void chat.analyze(callIds, runId, selectedProvider.value)
+  else if (runId) void chat.analyze(callIds, runId)
+  else void chat.analyze(callIds)
+}
+
 const historyOpen = shallowRef(false),
   manualCopy = shallowRef<string | null>(null)
 let disposed = false
 const terminalWaiters=new Set<()=>void>()
 const unAuthCopy = onOpsAuthReset(() => {
   manualCopy.value = null
+  selectedModelHash.value = ''
   terminalReference.value = null
   for(const cancel of terminalWaiters)cancel()
 })
@@ -114,8 +136,9 @@ onBeforeUnmount(() => {
   manualCopy.value = null
   unAuthCopy()
 })
+const sending = shallowRef(false)
 const disabled = computed(
-  () => busy.value || loading.value || !capabilities.value?.available,
+  () => sending.value || busy.value || loading.value || !capabilities.value?.available,
 )
 const waiting = computed(() => {
   if (
@@ -257,7 +280,7 @@ function terminalTarget(): string | null {
     props.terminalEpoch,
     session.value.id,
     session.value.serverIds,
-    capabilities.value?.provider,
+    selectedProvider.value,
   ])
 }
 watch(
@@ -266,7 +289,7 @@ watch(
       props.terminalEpoch,
       session.value?.id,
       session.value?.serverIds,
-      capabilities.value?.provider,
+      selectedProvider.value,
     ]),
   () => {
     terminalReference.value = null
@@ -321,19 +344,27 @@ function attachTerminal(text: string, binding: string): boolean {
   return true
 }
 async function send(): Promise<boolean> {
+  if (!modelReady.value || sending.value) return false
   const reference = terminalReference.value
-  if (!reference) return chat.send()
-  const valid = () =>
-    !disposed &&
-    reference === terminalReference.value &&
-    reference.binding === terminalTarget()
-  if (!valid()) {
-    terminalReference.value = null
-    return false
+  const selection = selectedModelHash.value ? selectedProvider.value : undefined
+  sending.value = true
+  try {
+    if (!reference) return await (selection ? chat.send(undefined, selection) : chat.send())
+    const valid = () =>
+      !disposed &&
+      reference === terminalReference.value &&
+      reference.binding === terminalTarget()
+    if (!valid()) {
+      terminalReference.value = null
+      return false
+    }
+    const context = { text: reference.text, valid }
+    const accepted = selection ? await chat.send(context, selection) : await chat.send(context)
+    if (accepted || pending.value) terminalReference.value = null
+    return accepted
+  } finally {
+    sending.value = false
   }
-  const accepted = await chat.send({ text: reference.text, valid })
-  if (accepted || pending.value) terminalReference.value = null
-  return accepted
 }
 defineExpose({ close, terminalTarget, prepareTerminal, attachTerminal })
 
@@ -341,6 +372,7 @@ defineExpose({ close, terminalTarget, prepareTerminal, attachTerminal })
 <template>
   <aside class="ops-panel" data-testid="ops-panel">
     <header class="ops-section ops-row ops-header" data-testid="ops-header">
+      <span class="ops-brand" aria-hidden="true">p&gt;</span>
       <div class="ops-grow">
         <strong
           class="ops-wrap ops-heading"
@@ -436,14 +468,14 @@ defineExpose({ close, terminalTarget, prepareTerminal, attachTerminal })
           :optimistic="optimistic"
           :waiting="waiting"
           :disabled="disabled || !actionPermissions.submit?.allowed.value || !!session?.activeRunId || !!pending"
-          :model-available="(capabilities?.modelAvailable ?? false) && (actionPermissions.submit?.allowed.value ?? false)"
+          :model-available="modelReady && (actionPermissions.submit?.allowed.value ?? false)"
           :has-history="!!historyCursor"
           :can-submit="actionPermissions.submit?.allowed.value ?? false"
           :can-terminal="canTerminal"
           @copy="copy"
           @retry="(id) => chat.retry([id])"
-          @analyze="chat.analyze"
-          @analyze-run="(runId) => chat.analyze([], runId)"
+          @analyze="analyze"
+          @analyze-run="(runId) => analyze([], runId)"
           @terminal="terminal"
           @history="preserveHistory(chat.history)"
         />
@@ -479,6 +511,10 @@ defineExpose({ close, terminalTarget, prepareTerminal, attachTerminal })
       :can-cancel="actionPermissions.cancel?.allowed.value ?? false"
       :active="!!session?.activeRunId"
       :model-available="capabilities?.modelAvailable ?? false"
+      :models="models"
+      :can-configure-model="canConfigureModel.allowed.value"
+      :model-value="activeModelHash"
+      @model="selectedModelHash = $event"
       :has-targets="!!session?.serverIds?.length"
       :pending="!!pending"
       @edit="chat.editDraft"
@@ -509,6 +545,17 @@ defineExpose({ close, terminalTarget, prepareTerminal, attachTerminal })
 .ops-header {
   flex: none;
   flex-wrap: nowrap;
+}
+.ops-brand {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: white;
+  background: var(--color-primary);
+  flex: none;
+  font-weight: 750;
 }
 .ops-heading {
   display: -webkit-box;

@@ -20,6 +20,7 @@ export default {
   snapshotScope:
     '送信ごとに選択・承認したスナップショットのみを解説します。全レポートの分析や自動調査は行いません。',
   nextTitle: '次の操作',
+  nextExpired: '新しい観察期間の証拠を収集するには、再検証してください。',
   nextDescription: '失敗の証拠を確認し、変更調査や再観測を検討します。',
   investigateAction: '関連する変更を調査',
   why: '検証が失敗した理由',
@@ -35,6 +36,7 @@ export default {
   reportMissing: 'レポートが見つかりません。',
   technicalDetails: '技術詳細',
   reportDetails: 'レポートの元データ',
+  evidenceGroup: '証拠を表示（{n} 件）',
   evidenceReference: '証拠 {n} を表示',
   evidenceLoaded: '{n} 件読込済み。読み込み済みの証拠のみの件数です。',
   continueFinding: 'この証拠の検索を続ける',

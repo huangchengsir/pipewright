@@ -21,6 +21,7 @@ export default {
   snapshotScope:
     'Interprète uniquement l’instantané choisi et autorisé pour chaque envoi. N’analyse pas tout le rapport et ne lance pas d’enquête automatique.',
   nextTitle: 'Prochaines étapes',
+  nextExpired: 'Lancez une nouvelle vérification pour recueillir des preuves sur une autre période.',
   nextDescription:
     'Consultez les preuves avant d’enquêter ou de répéter l’observation.',
   investigateAction: 'Examiner les changements associés',
@@ -38,6 +39,7 @@ export default {
   reportMissing: 'Ce rapport est introuvable.',
   technicalDetails: 'Détails techniques',
   reportDetails: 'Données originales du rapport',
+  evidenceGroup: 'Voir les preuves ({n})',
   evidenceReference: 'Voir la preuve {n}',
   evidenceLoaded: '{n} chargées ; seules les preuves chargées sont comptées.',
   continueFinding: 'Poursuivre la recherche de cette preuve',

@@ -12,6 +12,32 @@ afterEach(() => {
 })
 
 describe('AppSelect portal menu', () => {
+  it('associates the focused combobox with each enabled option and clears it on Escape', async () => {
+    wrapper = mount(AppSelect, {
+      attachTo: document.body,
+      props: {
+        modelValue: 'one',
+        options: [
+          { value: 'one', label: 'One' },
+          { value: 'two', label: 'Two', disabled: true },
+          { value: 'three', label: 'Three' },
+        ],
+      },
+    })
+    const trigger = wrapper.get('.app-select__trigger')
+    await trigger.trigger('keydown', { key: 'ArrowDown' })
+    const list = wrapper.get('[role="listbox"]')
+    const options = list.findAll('[role="option"]')
+    expect(trigger.attributes('aria-controls')).toBe(list.attributes('id'))
+    expect(trigger.attributes('aria-activedescendant')).toBe(options[0].attributes('id'))
+    await trigger.trigger('keydown', { key: 'ArrowDown' })
+    expect(trigger.attributes('aria-activedescendant')).toBe(options[2].attributes('id'))
+    await trigger.trigger('keydown', { key: 'Escape' })
+    expect(document.activeElement).toBe(trigger.element)
+    expect(trigger.attributes('aria-activedescendant')).toBeUndefined()
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+  })
+
   it('keeps a portal in its native dialog and tracks nested scrolling', async () => {
     const dialog = document.createElement('dialog')
     dialog.open = true
@@ -124,6 +150,8 @@ describe('AppSelect portal menu', () => {
     })
     await wrapper.get('.app-select__trigger').trigger('click')
     await wrapper.get('input').setValue('beta:1')
+    const visibleOption = wrapper.get('[role="option"]')
+    expect(wrapper.get('input').attributes('aria-activedescendant')).toBe(visibleOption.attributes('id'))
     expect(wrapper.findAll('[role="option"]')).toHaveLength(1)
     await wrapper.get('input').trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('update:modelValue')?.[0]).toEqual([

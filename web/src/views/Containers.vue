@@ -233,10 +233,10 @@ function openTerminal(serverId: string, c: ContainerInfo): void {
 const showAi = ref(false)
 
 // AI 诊断弹窗。
-const diagnoseTarget = ref<{ serverId: string; name: string } | null>(null)
-function openDiagnose(serverId: string, c: ContainerInfo): void {
+const diagnoseTarget = ref<{ serverId: string; name: string; opener: HTMLElement } | null>(null)
+function openDiagnose(serverId: string, c: ContainerInfo, opener: HTMLElement): void {
  if(!can('container.diagnose',serverId)) return
-  diagnoseTarget.value = { serverId, name: c.names }
+  diagnoseTarget.value = { serverId, name: c.names, opener }
 }
 
 // 容器详情 inspect 弹窗。
@@ -438,7 +438,7 @@ onUnmounted(() => {
           @changed="load"
           @logs="(c) => openLogs(g.serverId, c)"
           @terminal="(c) => openTerminal(g.serverId, c)"
-          @diagnose="(c) => openDiagnose(g.serverId, c)"
+          @diagnose="(c, opener) => openDiagnose(g.serverId, c, opener)"
           @inspect="(c) => openInspect(g.serverId, c)"
         /></PermissionGate></template>
       </section>
@@ -466,6 +466,7 @@ onUnmounted(() => {
       v-if="diagnoseTarget"
       :server-id="diagnoseTarget.serverId"
       :container-name="diagnoseTarget.name"
+      :opener="diagnoseTarget.opener"
       @close="diagnoseTarget = null"
     />
 

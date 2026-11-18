@@ -519,10 +519,12 @@ function toggleExpanded(): void {
 .has-onboarding .main-inner {
   padding-bottom: max(var(--main-pad-bottom), 132px);
 }
-@media (min-width: 768px) {
+@media (min-width: 768px) and (min-height: 420px) {
   /* Settings alone owns a viewport-height pane. Other pages keep document scrolling. */
   .main-area--settings { height: 100vh; height: 100dvh; min-height: 0; overflow: clip; }
   .main-area--settings .main-inner { height: 100%; min-height: 0; display: flex; flex-direction: column; }
+}
+@media (min-width: 768px) {
   .rail-edge-toggle {
     top: 23px;
     left: calc(var(--rail-width) - 13px);

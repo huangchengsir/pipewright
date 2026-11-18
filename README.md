@@ -241,6 +241,7 @@ A normal install only needs the first two (plus `PIPEWRIGHT_PUBLIC_URL` if you r
 | `PIPEWRIGHT_ADMIN_PASSWORD` | Admin password on first launch | none (must be set) |
 | `PIPEWRIGHT_MASTER_KEY` | Credential vault master key (base64-encoded 32 bytes); or use `PIPEWRIGHT_MASTER_KEY_FILE` to point to a file | vault disabled if unset |
 | `PIPEWRIGHT_ADDR` | HTTP listen address | `:8080` |
+| `PIPEWRIGHT_OPS_CHAT_MODELS` | Optional comma-separated list of up to 31 additional model IDs for the AI operations assistant. All use the AI endpoint and credentials configured in Settings. Changes take effect after restart | configured default model only |
 | `PIPEWRIGHT_DATA_DIR` | Persistent process-identity directory for Kubernetes restart recovery; keep it stable across restarts | `.pipewright` |
 | `PIPEWRIGHT_PUBLIC_URL` | Externally reachable base URL (e.g. `https://ci.example.com`). Required for webhook callbacks, OAuth redirects, signed approval links in notifications, and PR status links | none |
 | `PIPEWRIGHT_ADMIN_USERNAME` | Admin username on first launch | `admin` |

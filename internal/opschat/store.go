@@ -224,12 +224,11 @@ func (s *Service) approval(ctx context.Context, q querier, session, run string) 
 }
 func (s *Service) append(ctx context.Context, tx *sql.Tx, e Entry, visible, allowed bool) error {
 	e.CreatedAt = time.Now().UTC()
-	b, err := s.seal(struct {
-		Text    string
-		Status  string
-		Summary *RunSummary
-		RefSeq  int64
-	}{e.Text, e.Status, e.Summary, e.ReplaceSeq})
+	e.Model = s.scrub(e.Model, 256)
+	b, err := s.seal(entryBody{
+		Text: e.Text, Status: e.Status, Model: e.Model,
+		Summary: e.Summary, RefSeq: e.ReplaceSeq,
+	})
 	if err != nil {
 		return err
 	}
@@ -240,7 +239,7 @@ func (s *Service) append(ctx context.Context, tx *sql.Tx, e Entry, visible, allo
 	if allowed {
 		a = 1
 	}
-	size := len(e.Text)
+	size := len(e.Text) + len(e.Model)
 	if e.Summary != nil {
 		encoded, _ := json.Marshal(e.Summary)
 		size += len(encoded)

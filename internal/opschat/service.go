@@ -86,15 +86,63 @@ func New(o Options) (*Service, error) {
 	}
 	return s, nil
 }
-func (s *Service) Capabilities() Capabilities {
-	p := ProviderInfo{}
-	if s.model != nil {
-		p = s.model.Info()
+func (s *Service) providerChoices() []ProviderInfo {
+	var candidates []ProviderInfo
+	if catalog, ok := s.model.(ModelCatalog); ok {
+		candidates = catalog.Providers()
+	} else if s.model != nil {
+		candidates = []ProviderInfo{s.model.Info()}
 	}
+	var choices []ProviderInfo
+	for i, candidate := range candidates {
+		if !validProvider(candidate) || s.scrub(candidate.Model, 256) != candidate.Model || s.scrub(candidate.Provider, 256) != candidate.Provider {
+			if i == 0 {
+				return nil
+			}
+			continue
+		}
+		choices = append(choices, candidate)
+	}
+	return choices
+}
+
+func (s *Service) resolveProvider(requested ProviderInfo) (ProviderInfo, error) {
+	choices := s.providerChoices()
+	if len(choices) == 0 || !validProvider(choices[0]) {
+		return ProviderInfo{}, ErrUnavailable
+	}
+	if requested == (ProviderInfo{}) {
+		return choices[0], nil
+	}
+	for _, info := range choices {
+		if info == requested && validProvider(info) {
+			return info, nil
+		}
+	}
+	return ProviderInfo{}, ErrConsent
+}
+
+func (s *Service) Available() bool {
 	s.mu.Lock()
-	available := s.started && !s.closing && !s.lost
-	s.mu.Unlock()
-	return Capabilities{Available: available, ModelAvailable: s.model != nil && validProvider(p), Provider: p, Limits: resourceLimits}
+	defer s.mu.Unlock()
+	return s.started && !s.closing && !s.lost
+}
+
+func (s *Service) Capabilities() Capabilities {
+	return s.CapabilitiesContext(context.Background())
+}
+
+func (s *Service) CapabilitiesContext(ctx context.Context) Capabilities {
+	capabilities := Capabilities{Available: s.Available(), Limits: resourceLimits}
+	if err := s.registerSecrets(ctx); err != nil {
+		return capabilities
+	}
+	capabilities.Models = s.providerChoices()
+	if len(capabilities.Models) > 0 {
+		capabilities.Provider = capabilities.Models[0]
+		capabilities.ModelAvailable = true
+	}
+	return capabilities
 }
 func (s *Service) ready() error {
 	s.mu.Lock()
@@ -310,10 +358,7 @@ func (s *Service) Submit(ctx context.Context, id string, in TurnInput) (*Run, er
 	if old, err := s.duplicate(ctx, id, in.ClientRequestID, hash); old != nil || err != nil {
 		return old, err
 	}
-	if in.ToolID == "" && (s.model == nil || !validProvider(s.model.Info())) {
-		return nil, ErrUnavailable
-	}
-	if in.AnalyzeResults && (in.ToolID != "" || s.model == nil || !validProvider(in.Provider) || in.Provider != s.model.Info()) {
+	if in.AnalyzeResults && (in.ToolID != "" || !validProvider(in.Provider)) {
 		return nil, ErrConsent
 	}
 	if in.ToolID != "" && s.executor == nil {
@@ -322,6 +367,13 @@ func (s *Service) Submit(ctx context.Context, id string, in TurnInput) (*Run, er
 	chat, err := s.Get(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	var provider ProviderInfo
+	if in.ToolID == "" {
+		provider, err = s.resolveProvider(in.Provider)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if chat.Revision != in.Revision {
 		return nil, ErrConflict
@@ -353,10 +405,6 @@ func (s *Service) Submit(ctx context.Context, id string, in TurnInput) (*Run, er
 		}
 	}
 	in.Text = s.scrub(in.Text, 8<<10)
-	provider := in.Provider
-	if in.ToolID == "" && !in.AnalyzeResults {
-		provider = s.model.Info()
-	}
 	return s.enqueue(ctx, id, in.ClientRequestID, hash, runBody{Turn: in, Targets: snapshots, Provider: provider, AnalysisAuthorized: in.AnalyzeResults, Question: in.Text}, in.Revision)
 }
 func (s *Service) enqueue(ctx context.Context, id, request, hash string, body runBody, revision int64) (*Run, error) {

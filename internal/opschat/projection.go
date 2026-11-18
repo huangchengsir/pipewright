@@ -8,6 +8,7 @@ func (s *Service) publicSession(c Session) Session {
 
 func (s *Service) publicEntry(e Entry) Entry {
 	e.Text = s.masker.ScrubTruncated(e.Text)
+	e.Model = s.scrub(e.Model, 256)
 	if e.TargetNames != nil {
 		names := map[string]string{}
 		for alias, name := range e.TargetNames {

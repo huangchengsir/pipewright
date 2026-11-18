@@ -76,7 +76,7 @@ const emit = defineEmits<{
   (e: 'changed'): void
   (e: 'logs', c: ContainerInfo): void
   (e: 'terminal', c: ContainerInfo): void
-  (e: 'diagnose', c: ContainerInfo): void
+  (e: 'diagnose', c: ContainerInfo, opener: HTMLElement): void
   (e: 'inspect', c: ContainerInfo): void
   (e: 'toggle-select', name: string): void
 }>()
@@ -888,7 +888,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
                 {{ a.label }}
               </button></PermissionGate>
               <PermissionGate :query="permissionQuery('container.inspect')"><button class="op op--ghost" :title="t('opsServer.card.inspectTitle')" @click="can('container.inspect') && emit('inspect', c)">{{ t('opsServer.card.detail') }}</button></PermissionGate>
-              <PermissionGate :query="permissionQuery('container.diagnose')"><button class="op op--ai" :title="t('opsServer.card.aiDiagnoseTitle')" @click="can('container.diagnose') && emit('diagnose', c)">{{ t('opsServer.card.ai') }}</button></PermissionGate>
+              <PermissionGate :query="permissionQuery('container.diagnose')"><button class="op op--ai" :title="t('opsServer.card.aiDiagnoseTitle')" @click="can('container.diagnose') && emit('diagnose', c, $event.currentTarget as HTMLElement)">{{ t('opsServer.card.ai') }}</button></PermissionGate>
               <PermissionGate :query="permissionQuery('container.inspect')"><button class="op op--ghost" :title="t('opsServer.card.logsTitle')" @click="can('container.inspect') && emit('logs', c)">{{ t('opsServer.card.logs') }}</button></PermissionGate>
               <PermissionGate :query="permissionQuery('container.terminal')"><button class="op op--ghost" :disabled="rowBusy(c.id)" :title="t('opsServer.card.terminalTitle')" @click="can('container.terminal') && emit('terminal', c)">{{ t('opsServer.card.terminal') }}</button></PermissionGate>
             </div>

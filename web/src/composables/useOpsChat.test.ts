@@ -173,6 +173,20 @@ afterEach(() => {
   vi.useRealTimers()
 })
 describe('local ops lifecycle and concurrency', () => {
+  it('submits the selected model binding and refuses selections that disappeared from capabilities', async () => {
+    const fallback = { provider: 'test', model: 'default', configHash: 'default-version' }
+    const alternate = { provider: 'test', model: 'alternate', configHash: 'alternate-version' }
+    const capabilities = { available: true, modelAvailable: true, provider: fallback, limits: {} }
+    vi.mocked(opsApi.capabilities).mockResolvedValue({ ...capabilities, models: [fallback, alternate] })
+    await open()
+    chat.editDraft('What is running?')
+    expect(await chat.send(undefined, { ...alternate, configHash: 'stale' })).toBe(false)
+    expect(opsApi.turn).not.toHaveBeenCalled()
+    expect(await chat.send(undefined, alternate)).toBe(true)
+    expect(opsApi.turn).toHaveBeenCalledWith('chat', expect.objectContaining({
+      text: 'What is running?', analyzeResults: true, provider: alternate,
+    }))
+  })
   it.each(['assistant', 'analysis'])('recovers omitted %s text by revision without downgrading newer replies', async (kind) => {
     const partial: Entry = {sessionId:'chat',seq:1,revisionSeq:1,kind,text:'partial',status:'partial',createdAt:stamp}
     db.chat!.watermark=1

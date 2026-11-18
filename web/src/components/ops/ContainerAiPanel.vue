@@ -12,11 +12,7 @@ const panel = useTemplateRef('panel'),
   drawer = useTemplateRef<HTMLElement>('drawer')
 let previous: HTMLElement | null = null
 function keyboard(e: KeyboardEvent): void {
-  if (
-    e.defaultPrevented ||
-    document.querySelector('.copy-dialog, [role="listbox"]')
-  )
-    return
+  if (e.defaultPrevented || document.querySelector('.copy-dialog')) return
   if (e.key === 'Escape') {
     e.preventDefault()
     e.stopPropagation()
@@ -25,7 +21,7 @@ function keyboard(e: KeyboardEvent): void {
   if (e.key === 'Tab') {
     const list = [
       ...(drawer.value?.querySelectorAll<HTMLElement>(
-        'button:not(:disabled),textarea:not(:disabled),input:not(:disabled),summary,[tabindex="0"]',
+        'button:not(:disabled),textarea:not(:disabled),input:not(:disabled),a[href],summary,[tabindex="0"]',
       ) ?? []),
     ].filter((el) => el.getClientRects().length > 0)
     const first = list[0],
@@ -94,7 +90,7 @@ onBeforeUnmount(() => {
   justify-content: flex-end;
 }
 .ops-drawer {
-  width: min(560px, 100vw);
+  width: min(640px, 100%);
   height: 100%;
   min-width: 0;
   background: var(--color-card);

@@ -414,7 +414,7 @@ func runPlatform() (restart func()) {
 	var opsChatSvc *opschat.Service
 	if limited, ok := targetSvc.(target.LimitedExecutor); ok {
 		chat, err := opschat.New(opschat.Options{DB: st.DB, Vault: credVault, Executor: limited,
-			Model: ai.NewOpsModel(aiSvc, opsMasker), Masker: opsMasker, LocalRecorder: audit.New(st.DB, opsMasker, nil)})
+			Model: ai.NewOpsModel(aiSvc, opsMasker, strings.Split(os.Getenv("PIPEWRIGHT_OPS_CHAT_MODELS"), ",")...), Masker: opsMasker, LocalRecorder: audit.New(st.DB, opsMasker, nil)})
 		if err == nil {
 			err = chat.Start(context.Background())
 		}

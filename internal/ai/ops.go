@@ -41,17 +41,34 @@ type opsModel struct {
 	configuration bool // Only settings probes; execution models retain their scoped authorization.
 	service       *service
 	masker        *mask.Masker
+	extraModels   []string
 	lookupIP      func(context.Context, string) ([]net.IPAddr, error)
 	dialContext   func(context.Context, string, string) (net.Conn, error)
 }
 
 // NewOpsModel preserves the existing suggestion-only Service interface.
-func NewOpsModel(existing Service, masker *mask.Masker) opschat.Model {
+func NewOpsModel(existing Service, masker *mask.Masker, extraModels ...string) opschat.Model {
 	s, ok := existing.(*service)
 	if !ok || s == nil || masker == nil {
 		return nil
 	}
-	return &opsModel{service: s, masker: masker}
+	// Model IDs are administrator-supplied. Keep the catalogue bounded and
+	// treat repetitions as one choice.
+	seen := make(map[string]bool)
+	models := make([]string, 0, min(len(extraModels), 31))
+	for _, id := range extraModels {
+		id = strings.TrimSpace(id)
+		if id == "" || len(id) > 256 || !utf8.ValidString(id) ||
+			strings.ContainsFunc(id, unicode.IsSpace) || strings.ContainsFunc(id, unicode.IsControl) || seen[id] {
+			continue
+		}
+		models = append(models, id)
+		seen[id] = true
+		if len(models) == 31 {
+			break
+		}
+	}
+	return &opsModel{service: s, masker: masker, extraModels: models}
 }
 
 func opsProvider(cfg *Config, sealed []byte) opschat.ProviderInfo {
@@ -71,16 +88,42 @@ func opsProvider(cfg *Config, sealed []byte) opschat.ProviderInfo {
 }
 
 func (m *opsModel) Info() opschat.ProviderInfo {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	cfg, sealed, err := m.service.load(ctx)
+	models := m.Providers()
+	if len(models) == 0 {
+		return opschat.ProviderInfo{}
+	}
+	return models[0]
+}
+
+func (m *opsModel) Providers() []opschat.ProviderInfo {
+	_, key, base, err := m.snapshot(context.Background())
 	if err != nil {
-		return opschat.ProviderInfo{}
+		return nil
 	}
-	if _, err = m.register(sealed); err != nil {
-		return opschat.ProviderInfo{}
+	return m.providerChoices(base, key)
+}
+
+func (m *opsModel) providerChoices(base opschat.ProviderInfo, key string) []opschat.ProviderInfo {
+	isPublicModel := func(id string) bool {
+		// Scrub intentionally ignores short secrets, so also check the saved key directly.
+		return (key == "" || !strings.Contains(id, key)) && m.masker.ScrubTruncated(id) == id
 	}
-	return opsProvider(cfg, sealed)
+	if base.ConfigHash == "" || !isPublicModel(base.Model) {
+		return nil
+	}
+	models := []opschat.ProviderInfo{base}
+	for _, id := range m.extraModels {
+		if id == base.Model || !isPublicModel(id) {
+			continue
+		}
+		// Include the complete default config binding. Changing the saved endpoint,
+		// default model, or credentials invalidates the alternative too.
+		hash := sha256.Sum256([]byte(base.ConfigHash + "\x00" + id))
+		models = append(models, opschat.ProviderInfo{
+			Provider: base.Provider, Model: id, ConfigHash: hex.EncodeToString(hash[:]),
+		})
+	}
+	return models
 }
 
 func (m *opsModel) register(sealed []byte) (string, error) {
@@ -131,6 +174,28 @@ func (m *opsModel) snapshot(ctx context.Context) (*Config, string, opschat.Provi
 	return cfg, key, info, nil
 }
 
+func (m *opsModel) snapshotProvider(ctx context.Context, requested opschat.ProviderInfo) (*Config, string, opschat.ProviderInfo, error) {
+	cfg, key, base, err := m.snapshot(ctx)
+	if err != nil {
+		return nil, "", opschat.ProviderInfo{}, err
+	}
+	choices := m.providerChoices(base, key)
+	if len(choices) == 0 {
+		return nil, "", opschat.ProviderInfo{}, opschat.ErrUnavailable
+	}
+	if requested == (opschat.ProviderInfo{}) {
+		requested = choices[0]
+	}
+	for _, info := range choices {
+		if info == requested {
+			selected := *cfg
+			selected.Model = info.Model
+			return &selected, key, info, nil
+		}
+	}
+	return nil, "", opschat.ProviderInfo{}, opschat.ErrConsent
+}
+
 func (m *opsModel) Plan(ctx context.Context, in opschat.PlanRequest) (opschat.Plan, error) {
 	return m.plan(ctx, in, nil)
 }
@@ -158,12 +223,9 @@ func (m *opsModel) plan(ctx context.Context, in opschat.PlanRequest, emit func(o
 			return out, opschat.ErrInvalid
 		}
 	}
-	cfg, key, info, err := m.snapshot(ctx)
+	cfg, key, _, err := m.snapshotProvider(ctx, in.Provider)
 	if err != nil {
 		return out, err
-	}
-	if in.Provider.ConfigHash != "" && in.Provider != info {
-		return out, opschat.ErrConsent
 	}
 	// The catalogue is server-owned; callers cannot introduce tools through a prompt.
 	in.Tools = opschat.Tools()
@@ -425,12 +487,12 @@ func (m *opsModel) analyze(ctx context.Context, in opschat.AnalysisRequest, emit
 	if len(in.Items) == 0 || len(in.Items) > 24 || in.MaxResponseBytes < 1 || in.MaxResponseBytes > 16<<10 {
 		return "", opschat.ErrInvalid
 	}
-	cfg, key, info, err := m.snapshot(ctx)
+	if in.Provider == (opschat.ProviderInfo{}) {
+		return "", opschat.ErrConsent
+	}
+	cfg, key, _, err := m.snapshotProvider(ctx, in.Provider)
 	if err != nil {
 		return "", err
-	}
-	if info != in.Provider {
-		return "", opschat.ErrConsent
 	}
 	prompt, err := m.analysisPrompt(in)
 	if err != nil {

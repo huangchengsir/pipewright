@@ -86,6 +86,10 @@ type opsModelStub struct{ calls atomic.Int32 }
 func (m *opsModelStub) Info() opschat.ProviderInfo {
 	return opschat.ProviderInfo{Provider: "test", Model: "test", ConfigHash: strings.Repeat("a", 64)}
 }
+func (m *opsModelStub) Providers() []opschat.ProviderInfo {
+	return []opschat.ProviderInfo{m.Info(), {Provider: "test", Model: "alternate", ConfigHash: strings.Repeat("b", 64)}}
+}
+
 func (m *opsModelStub) Plan(context.Context, opschat.PlanRequest) (opschat.Plan, error) {
 	m.calls.Add(1)
 	return opschat.Plan{Text: "advice", Actions: []opschat.Action{}}, nil
@@ -280,10 +284,22 @@ func TestOpsTurnsIdempotenceCrossSessionAndAnalysisConsent(t *testing.T) {
 	call := snap.Calls[0]
 	opsHTTP(t, h, "GET", base+"/calls/"+call.ID, "", 200)
 	opsHTTP(t, h, "GET", "/api/ai/ops/sessions/"+other.ID+"/calls/"+call.ID, "", 404)
-	w = opsHTTP(t, h, "GET", base+"/analysis/preview?callIds="+call.ID, "", 200)
+	previewPath := base + "/analysis/preview?callIds=" + call.ID
+	w = opsHTTP(t, h, "GET", previewPath, "", 200)
+	var defaultPreview opschat.AnalysisPreview
+	if err := json.Unmarshal(w.Body.Bytes(), &defaultPreview); err != nil || defaultPreview.Provider != m.Info() {
+		t.Fatalf("default preview binding: %+v, %v", defaultPreview.Provider, err)
+	}
+	alternate := m.Providers()[1]
+	alternatePath := previewPath + "&modelBinding=" + alternate.ConfigHash
+	opsHTTP(t, h, "GET", previewPath+"&modelBinding=", "", 422)
+	opsHTTP(t, h, "GET", previewPath+"&modelBinding="+strings.Repeat("z", 64), "", 422)
+	opsHTTP(t, h, "GET", previewPath+"&modelBinding="+strings.Repeat("f", 64), "", 409)
+	opsHTTP(t, h, "GET", alternatePath+"&modelBinding="+alternate.ConfigHash, "", 422)
+	w = opsHTTP(t, h, "GET", alternatePath, "", 200)
 	var preview opschat.AnalysisPreview
-	if err := json.Unmarshal(w.Body.Bytes(), &preview); err != nil {
-		t.Fatal(err)
+	if err := json.Unmarshal(w.Body.Bytes(), &preview); err != nil || preview.Provider != alternate || preview.Hash == defaultPreview.Hash {
+		t.Fatalf("alternate preview binding: %+v, %v", preview.Provider, err)
 	}
 	if m.calls.Load() != 0 {
 		t.Fatal("preview called provider")
@@ -292,7 +308,7 @@ func TestOpsTurnsIdempotenceCrossSessionAndAnalysisConsent(t *testing.T) {
 	raw, _ := json.Marshal(input)
 	opsHTTP(t, h, "POST", base+"/analysis", string(raw), 409)
 	input.Consent = true
-	input.PreviewHash = strings.Repeat("b", 64)
+	input.PreviewHash = defaultPreview.Hash
 	raw, _ = json.Marshal(input)
 	opsHTTP(t, h, "POST", base+"/analysis", string(raw), 409)
 	input.PreviewHash = preview.Hash
@@ -300,8 +316,10 @@ func TestOpsTurnsIdempotenceCrossSessionAndAnalysisConsent(t *testing.T) {
 	w = opsHTTP(t, h, "POST", base+"/analysis", string(raw), 202)
 	_ = json.Unmarshal(w.Body.Bytes(), &run)
 	opsWait(t, s, c.ID, run.ID, opschat.Succeeded)
-	if m.calls.Load() != 1 {
-		t.Fatal(m.calls.Load())
+	w = opsHTTP(t, h, "POST", base+"/analysis", string(raw), 202)
+	_ = json.Unmarshal(w.Body.Bytes(), &duplicate)
+	if duplicate.ID != run.ID || m.calls.Load() != 1 {
+		t.Fatal("duplicate analysis dispatched")
 	}
 	opsHTTP(t, h, "GET", base+"/analysis/preview?callIds="+call.ID+"&callIds=x", "", 422)
 	opsHTTP(t, h, "POST", base+"/retry", fmt.Sprintf(`{"clientRequestId":%q,"revision":%d,"callIds":[%q]}`, uuid.NewString(), snap.Session.Revision, call.ID), 409)

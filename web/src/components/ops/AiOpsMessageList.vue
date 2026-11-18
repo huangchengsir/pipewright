@@ -147,13 +147,16 @@ const visible = computed(() => {
         class="message"
         :class="{
           user: row.entry.kind === 'user',
-          copyable:
-            row.entry.kind === 'assistant' || row.entry.kind === 'analysis',
         }"
         :data-entry-seq="row.entry.seq"
         :data-entry-status="row.entry.status"
         :data-request-id="row.entry.requestId"
       >
+        <div v-if="row.entry.kind === 'assistant' || row.entry.kind === 'analysis'" class="message-heading">
+          <span class="message-brand" aria-hidden="true">p&gt;</span>
+          <strong>{{ t('opsChat.title') }}</strong>
+          <span v-if="row.entry.model" class="ops-muted ops-wrap">{{ row.entry.model }}</span>
+        </div>
         <AiOpsMarkdown
           v-if="
             (row.entry.kind === 'assistant' || row.entry.kind === 'analysis') &&
@@ -194,25 +197,38 @@ const visible = computed(() => {
 <style scoped src="./opsChat.css"></style>
 <style scoped>
 .messages {
-  padding: 16px;
+  width: min(100%, 590px);
+  margin-inline: auto;
+  padding: 20px 16px;
   display: flex;
   flex-direction: column;
   gap: 14px;
   min-width: 0;
 }
 .message {
-  position: relative;
-  padding: 10px 12px;
-  border-left: 2px solid var(--color-border-strong);
+  padding: 8px 0;
   min-width: 0;
 }
-.message.copyable {
-  padding-bottom: 44px;
+.message-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.message-brand {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--color-primary);
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
 }
 .message-copy {
-  position: absolute;
-  right: 10px;
-  bottom: 8px;
+  margin-top: 6px;
   width: 28px;
   height: 28px;
   min-height: 28px;
@@ -237,8 +253,14 @@ const visible = computed(() => {
   line-height: 1.65;
 }
 .message.user {
+  align-self: flex-end;
+  max-width: 88%;
+  padding: 8px 12px;
   background: var(--color-primary-soft);
-  border-left-color: var(--color-primary);
-  border-radius: 4px;
+  border-radius: 12px 12px 3px 12px;
+}
+@media (max-width: 600px), (pointer: coarse) {
+  .message { font-size: 15px; }
+  .message-copy { width: 44px; height: 44px; min-height: 44px; }
 }
 </style>

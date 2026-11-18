@@ -12,8 +12,11 @@ import (
 
 func (s *Service) requestPlan(ctx context.Context, r runRecord, continuation bool) (Plan, []callRecord, error) {
 	var plan Plan
-	if s.model == nil || s.model.Info() != r.Body.Provider {
+	if r.Body.Provider == (ProviderInfo{}) {
 		return plan, nil, ErrConsent
+	}
+	if _, err := s.resolveProvider(r.Body.Provider); err != nil {
+		return plan, nil, err
 	}
 	messages, err := s.contextMessages(ctx, r.View.SessionID)
 	if err != nil {
@@ -164,7 +167,7 @@ func (s *Service) publishContinuation(ctx context.Context, r runRecord, plan Pla
 		}
 		text := s.planText(plan)
 		if text != "" {
-			if err = s.append(c, tx, Entry{SessionID: r.View.SessionID, RunID: r.View.ID, Kind: "assistant", Text: text}, true, len(plan.Actions) == 0); err != nil {
+			if err = s.append(c, tx, Entry{SessionID: r.View.SessionID, RunID: r.View.ID, Kind: "assistant", Text: text, Model: current.Body.Provider.Model}, true, len(plan.Actions) == 0); err != nil {
 				return err
 			}
 		}

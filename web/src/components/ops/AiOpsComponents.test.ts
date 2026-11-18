@@ -52,6 +52,35 @@ const confirmation: Confirmation = {
   ],
 }
 describe('ops components', () => {
+  it('requires an available selected model and preserves IME confirmation and multiline Enter', async () => {
+    const wrapper = mount(AiOpsComposer, {
+      props: {
+        draft: '排查', draftStatus: 'saved', tools: [], disabled: false,
+        active: false, hasTargets: true, pending: false, modelAvailable: true,
+        modelValue: 'stale',
+        models: [
+          { provider: 'fixture', model: 'default', configHash: 'a' },
+          { provider: 'fixture', model: 'alternate', configHash: 'b' },
+        ],
+      },
+    })
+    try {
+      const input = wrapper.get('textarea')
+      await input.trigger('keydown', { key: 'Enter' })
+      expect(wrapper.emitted('send')).toBeUndefined()
+      await wrapper.setProps({ modelValue: 'b' })
+      await input.trigger('keydown', { key: 'Enter', isComposing: true })
+      await input.trigger('keydown', { key: 'Enter', keyCode: 229 })
+      await input.trigger('keydown', { key: 'Enter', shiftKey: true })
+      expect(wrapper.emitted('send')).toBeUndefined()
+      await input.trigger('keydown', { key: 'Enter' })
+      expect(wrapper.emitted('send')).toEqual([[]])
+      await wrapper.setProps({ active: true })
+      expect(wrapper.get('[role="combobox"]').attributes('disabled')).toBeDefined()
+    } finally {
+      wrapper.unmount()
+    }
+  })
   it('dispatches only permitted draft actions from the composer controls', async () => {
     const wrapper = mount(AiOpsComposer, {
       props: {

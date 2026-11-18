@@ -41,7 +41,8 @@ function toggle(id: string): void {
       @toggle="expanded = ($event.target as HTMLDetailsElement).open"
     >
       <summary class="server-summary">
-        {{ t('opsChat.selectedLimit', { count: selected.length, limit }) }}
+        <span>{{ t('opsChat.selectedLimit', { count: selected.length, limit }) }}</span>
+        <span class="server-chevron" aria-hidden="true"></span>
       </summary>
       <div class="server-list" tabindex="0" :aria-label="t('opsChat.targets')">
         <label v-for="server in servers" :key="server.id" class="server-choice">
@@ -101,9 +102,35 @@ function toggle(id: string): void {
   flex: none;
 }
 .server-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: fit-content;
+  padding: 5px 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--rounded);
+  background: var(--color-card-2);
   cursor: pointer;
-  min-height: 28px;
+  min-height: 34px;
   overflow-wrap: anywhere;
+}
+.server-summary::-webkit-details-marker { display: none; }
+.server-chevron {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-inline-end: 1.5px solid;
+  border-block-end: 1.5px solid;
+  color: var(--color-dim);
+  transform: translateY(-2px) rotate(45deg);
+}
+.server-details[open] .server-chevron {
+  color: var(--color-primary);
+  transform: translateY(2px) rotate(225deg);
+}
+@media (max-width: 600px), (pointer: coarse) {
+  .server-summary { min-height: 44px; }
 }
 .server-list {
   /* Native details content does not reliably participate in flex shrinking. */

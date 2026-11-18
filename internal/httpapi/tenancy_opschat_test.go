@@ -106,7 +106,9 @@ func TestTenantOpsChatHTTPPrivateActions(t *testing.T) {
 			t.Fatal("list leakage", w.Body.String())
 		}
 		request(row.u, "GET", "/sessions/"+row.own, "", false, 200)
-		for _, tail := range []string{"", "/entries", "/events", "/analysis/preview?callIds=" + uuid.NewString(), "/calls/" + uuid.NewString()} {
+		for _, tail := range []string{"", "/entries", "/events", "/analysis/preview?callIds=" + uuid.NewString(),
+			"/analysis/preview?callIds=" + uuid.NewString() + "&modelBinding=" + strings.Repeat("f", 64),
+			"/calls/" + uuid.NewString()} {
 			request(row.u, "GET", "/sessions/"+row.foreign+tail, "", false, 403)
 		}
 		for _, tail := range []string{"/activate", "/turns", "/retry", "/calls/confirm", "/analysis", "/runs/" + uuid.NewString() + "/cancel", "/runs/" + uuid.NewString() + "/confirmation"} {

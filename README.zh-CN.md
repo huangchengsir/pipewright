@@ -192,6 +192,7 @@ v2 节点通过本地 Linux Docker 或固定 SSH 执行器支持镜像 digest �
 | `PIPEWRIGHT_ADMIN_PASSWORD` | 首次启动管理员口令 | 无(须设置) |
 | `PIPEWRIGHT_MASTER_KEY` | 凭据保险库主密钥(base64 的 32 字节);或用 `PIPEWRIGHT_MASTER_KEY_FILE` 指文件 | 未配则保险库禁用 |
 | `PIPEWRIGHT_ADDR` | HTTP 监听地址 | `:8080` |
+| `PIPEWRIGHT_OPS_CHAT_MODELS` | AI 运维助手可选的额外模型 ID，逗号分隔，最多 31 个。使用设置中当前的 AI 连接与凭据，重启后生效 | 仅当前默认模型 |
 | `PIPEWRIGHT_DATA_DIR` | Kubernetes 重启恢复使用的持久进程身份目录，重启前后保持路径和内容稳定 | `.pipewright` |
 | `PIPEWRIGHT_PUBLIC_URL` | 外部可访问的基址(如 `https://ci.example.com`)。webhook 回调、OAuth 回跳、通知里的签名审批链接、PR 状态跳转链接都需要它 | 无 |
 | `PIPEWRIGHT_ADMIN_USERNAME` | 首次启动管理员用户名 | `admin` |

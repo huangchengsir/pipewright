@@ -58,7 +58,7 @@ func opsHandler(s *opschat.Service, operation string) http.HandlerFunc {
 				writeJSON(w, 200, opschat.Capabilities{})
 				return
 			}
-			writeJSON(w, 200, s.Capabilities())
+			writeJSON(w, 200, s.CapabilitiesContext(r.Context()))
 			return
 		}
 		if operation == "tools" {
@@ -154,8 +154,14 @@ func opsHandler(s *opschat.Service, operation string) http.HandlerFunc {
 				status = http.StatusAccepted
 			}
 		case "preview":
-			if err = opsQuery(r, "callIds"); err == nil {
-				value, err = s.AnalysisPreview(r.Context(), id, strings.Split(r.URL.Query().Get("callIds"), ","))
+			if err = opsQuery(r, "callIds", "modelBinding"); err == nil {
+				query := r.URL.Query()
+				ids := strings.Split(query.Get("callIds"), ",")
+				if query.Has("modelBinding") {
+					value, err = s.AnalysisPreviewForModel(r.Context(), id, ids, query.Get("modelBinding"))
+				} else {
+					value, err = s.AnalysisPreview(r.Context(), id, ids)
+				}
 			}
 		case "analysis":
 			var in opschat.AnalysisInput
@@ -343,7 +349,7 @@ func opsEventsHandler(s *opschat.Service, authn auth.Authenticator, interval tim
 					if !authorized() {
 						return
 					}
-					if !s.Capabilities().Available {
+					if !s.Available() {
 						write("unavailable", "", map[string]string{"code": "ops_unavailable"})
 						return
 					}

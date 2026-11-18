@@ -13,6 +13,7 @@ import type {
   Entry,
   Patch,
   Preview,
+  Provider,
   Retry,
   Session,
   Snapshot,
@@ -785,18 +786,24 @@ export function useOpsChat(options: {
     return submitPending()
     } finally {preparing=false;if(!state.pending[t.id]&&!state.snapshot?.runs?.some(r=>r.clientRequestId===clientRequestId))state.optimistic=state.optimistic.filter(e=>e.requestId!==clientRequestId)}
   }
-  async function send(context?: { text: string; valid: () => boolean }): Promise<boolean> {
+  function modelForRequest(selection?: Provider): Provider | undefined {
+    const cap = capabilities.value
+    if (!cap?.modelAvailable) return undefined
+    if (!selection) return cap.provider
+    return (cap.models ?? [cap.provider]).find(model =>
+      model.configHash === selection.configHash &&
+      model.provider === selection.provider &&
+      model.model === selection.model,
+    )
+  }
+  async function send(context?: { text: string; valid: () => boolean }, selection?: Provider): Promise<boolean> {
     if (!permitted('opschat.submit')) { error.value = 'forbidden'; return false }
     if(context && !context.valid()) return false
     const text = context ? [draft.value, context.text].filter(Boolean).join('\n\n') : draft.value
-    if (!session.value?.serverIds?.length) return false
-    if (
-      !text.trim() ||
-      utf8Bytes(text) > 8192 ||
-      !capabilities.value?.modelAvailable
-    )
+    const provider = modelForRequest(selection)
+    if (!session.value?.serverIds?.length || !provider || !text.trim() || utf8Bytes(text) > 8192)
       return false
-    return submit('turn', { text, analyzeResults:true, provider:capabilities.value.provider }, text, undefined, context?.valid)
+    return submit('turn', { text, analyzeResults: true, provider }, text, undefined, context?.valid)
   }
   async function tool(toolId: string, args: ToolArgs): Promise<boolean> {
     if (!permitted('opschat.submit')) { error.value = 'forbidden'; return false }
@@ -844,26 +851,28 @@ export function useOpsChat(options: {
     const id = state.currentId
     return localAction(() => api.reissue(id, runId))
   }
-  async function analyzePreview(ids: string[]): Promise<void> {
+  async function analyzePreview(ids: string[], selection?: Provider): Promise<void> {
     if (!capabilities.value?.modelAvailable || busy.value || pending.value)
       return
+    if (selection && !modelForRequest(selection)) return
     const t = token(),
       previewToken = ++previewGeneration
     preview.value = null
     try {
-      const value = await api.preview(t.id, ids)
+      const value = await api.preview(t.id, ids, selection?.configHash)
       if (valid(t.g, t.auth) && previewToken === previewGeneration)
         preview.value = value
     } catch (e) {
       if (valid(t.g, t.auth) && previewToken === previewGeneration) fail(e)
     }
   }
-  async function analyze(callIds: string[] = [],runId?: string): Promise<boolean> {
+  async function analyze(callIds: string[] = [], runId?: string, selection?: Provider): Promise<boolean> {
     if (!permitted('opschat.submit')) { error.value = 'forbidden'; return false }
-    if(!capabilities.value?.modelAvailable || (!callIds.length&&!runId))return false
+    const provider = modelForRequest(selection)
+    if (!provider || (!callIds.length && !runId)) return false
     return submit('analysis', {
-      ...(runId?{runId}:{callIds}),
-      provider: capabilities.value.provider,
+      ...(runId ? { runId } : { callIds }),
+      provider,
       analyzeResults:true,
     })
   }

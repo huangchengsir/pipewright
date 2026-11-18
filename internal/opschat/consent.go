@@ -3,11 +3,13 @@ package opschat
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/huangchengsir/pipewright/internal/maintenance"
 	"github.com/huangchengsir/pipewright/internal/tenancy"
-	"time"
 )
 
 func bound(c Call) BoundCall {
@@ -252,19 +254,43 @@ func validProvider(p ProviderInfo) bool {
 	return p.Provider != "" && p.Model != "" && len(p.Provider) <= 256 && len(p.Model) <= 256 && len(p.ConfigHash) == 64
 }
 func (s *Service) AnalysisPreview(ctx context.Context, id string, ids []string) (*AnalysisPreview, error) {
-	return s.analysisPreview(ctx, id, ids, "")
+	return s.analysisPreview(ctx, id, ids, "", ProviderInfo{})
 }
-func (s *Service) analysisPreview(ctx context.Context, id string, ids []string, ownRun string) (*AnalysisPreview, error) {
+
+// AnalysisPreviewForModel accepts a catalogue binding without accepting model names in the query.
+func (s *Service) AnalysisPreviewForModel(ctx context.Context, id string, ids []string, modelBinding string) (*AnalysisPreview, error) {
+	if len(modelBinding) != 64 {
+		return nil, ErrInvalid
+	}
+	if _, err := hex.DecodeString(modelBinding); err != nil {
+		return nil, ErrInvalid
+	}
+	if err := s.authorizeSession(ctx, s.db, id, "opschat.read"); err != nil {
+		return nil, err
+	}
 	if err := s.registerSecrets(ctx); err != nil {
 		return nil, err
 	}
-	if s.model == nil {
-		return nil, ErrUnavailable
+	for _, provider := range s.providerChoices() {
+		if provider.ConfigHash == modelBinding {
+			return s.buildAnalysisPreview(ctx, id, ids, "", provider)
+		}
 	}
-	p := s.model.Info()
-	if !validProvider(p) {
-		return nil, ErrUnavailable
+	return nil, ErrConsent
+}
+
+func (s *Service) analysisPreview(ctx context.Context, id string, ids []string, ownRun string, requested ProviderInfo) (*AnalysisPreview, error) {
+	if err := s.registerSecrets(ctx); err != nil {
+		return nil, err
 	}
+	p, providerErr := s.resolveProvider(requested)
+	if providerErr != nil {
+		return nil, providerErr
+	}
+	return s.buildAnalysisPreview(ctx, id, ids, ownRun, p)
+}
+
+func (s *Service) buildAnalysisPreview(ctx context.Context, id string, ids []string, ownRun string, p ProviderInfo) (*AnalysisPreview, error) {
 	out := &AnalysisPreview{CallIDs: append([]string{}, ids...), Items: []AnalysisItem{}, Provider: p}
 	if len(ids) == 0 || len(ids) > 24 {
 		return nil, ErrInvalid
@@ -409,7 +435,7 @@ func (s *Service) Analyze(ctx context.Context, id string, in AnalysisInput) (*Ru
 			}
 		}
 	}
-	preview, err := s.AnalysisPreview(ctx, id, ids)
+	preview, err := s.analysisPreview(ctx, id, ids, "", in.Provider)
 	if err != nil {
 		return nil, err
 	}

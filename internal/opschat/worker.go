@@ -574,7 +574,7 @@ func (s *Service) work(parent context.Context, id, run string) {
 				return ErrConflict
 			}
 			if text != "" {
-				if e = s.append(c, tx, Entry{SessionID: id, RunID: run, Kind: "assistant", Text: text}, true, len(plan.Actions) == 0); e != nil {
+				if e = s.append(c, tx, Entry{SessionID: id, RunID: run, Kind: "assistant", Text: text, Model: current.Body.Provider.Model}, true, len(plan.Actions) == 0); e != nil {
 					return e
 				}
 			}
@@ -774,7 +774,7 @@ func (s *Service) work(parent context.Context, id, run string) {
 		for _, c := range cs {
 			ids = append(ids, c.Body.View.ID)
 		}
-		preview, e := s.analysisPreview(ctx, id, ids, run)
+		preview, e := s.analysisPreview(ctx, id, ids, run, current.Body.Provider)
 		if e != nil || preview.Provider != current.Body.Provider {
 			s.analysisFailure(id, run, toolStatus, e)
 			return
@@ -813,7 +813,7 @@ func (s *Service) analyzeWorkStatus(ctx context.Context, id, run string, r runRe
 	if r.Body.AnalysisStarted {
 		ownRun = run
 	}
-	preview, err := s.analysisPreview(ctx, id, r.Body.Analysis.CallIDs, ownRun)
+	preview, err := s.analysisPreview(ctx, id, r.Body.Analysis.CallIDs, ownRun, r.Body.Analysis.Provider)
 	if err != nil || preview.Hash != r.Body.Analysis.Hash || preview.Provider != r.Body.Analysis.Provider {
 		s.analysisFailure(id, run, finalStatus, err)
 		return
@@ -885,7 +885,7 @@ func (s *Service) analyzeWorkStatus(ctx context.Context, id, run string, r runRe
 		}
 		// Derived analysis is excluded from every future planning context.
 		if reply.seq == 0 {
-			if e = s.append(c, tx, Entry{SessionID: id, RunID: run, Kind: "analysis", Text: s.scrub(text, 16<<10)}, true, false); e != nil {
+			if e = s.append(c, tx, Entry{SessionID: id, RunID: run, Kind: "analysis", Text: s.scrub(text, 16<<10), Model: preview.Provider.Model}, true, false); e != nil {
 				return e
 			}
 		}

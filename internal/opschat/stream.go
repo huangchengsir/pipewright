@@ -86,23 +86,27 @@ func (p *replySink) flush(status string, allowed bool) error {
 			allowed = false
 		}
 		if p.seq == 0 {
-			if e = s.append(ctx, tx, Entry{SessionID: p.id, RunID: p.run, Kind: p.kind, Text: text, Status: status}, true, allowed); e != nil {
+			if e = s.append(ctx, tx, Entry{SessionID: p.id, RunID: p.run, Kind: p.kind, Text: text, Status: status, Model: r.Body.Provider.Model}, true, allowed); e != nil {
 				return e
 			}
 			return tx.QueryRowContext(ctx, "SELECT seq FROM ops_chat_sessions WHERE id=?", p.id).Scan(&createdSeq)
 		}
 		var oldSize int
-		if tx.QueryRowContext(ctx, "SELECT body_size FROM ops_chat_entries WHERE session_id=? AND seq=? AND run_id=?", p.id, p.seq, p.run).Scan(&oldSize) != nil {
+		var previous []byte
+		if tx.QueryRowContext(ctx, "SELECT body_size,body FROM ops_chat_entries WHERE session_id=? AND seq=? AND run_id=?", p.id, p.seq, p.run).Scan(&oldSize, &previous) != nil {
 			return ErrStorage
 		}
 		var revision int64
 		if tx.QueryRowContext(ctx, "SELECT seq+1 FROM ops_chat_sessions WHERE id=?", p.id).Scan(&revision) != nil {
 			return ErrStorage
 		}
-		body, e := s.seal(struct {
-			Text, Status string
-			RevisionSeq  int64
-		}{text, status, revision})
+		var data entryBody
+		if e = s.open(previous, &data); e != nil {
+			return e
+		}
+		data.Text, data.Status, data.RevisionSeq = text, status, revision
+		newSize := len(text) + len(data.Model)
+		body, e := s.seal(data)
 		if e != nil {
 			return e
 		}
@@ -110,10 +114,10 @@ func (p *replySink) flush(status string, allowed bool) error {
 		if allowed {
 			a = 1
 		}
-		if _, e = tx.ExecContext(ctx, "UPDATE ops_chat_entries SET body=?,body_size=?,context_allowed=? WHERE session_id=? AND seq=?", body, len(text), a, p.id, p.seq); e != nil {
+		if _, e = tx.ExecContext(ctx, "UPDATE ops_chat_entries SET body=?,body_size=?,context_allowed=? WHERE session_id=? AND seq=?", body, newSize, a, p.id, p.seq); e != nil {
 			return ErrStorage
 		}
-		if _, e = tx.ExecContext(ctx, "UPDATE ops_chat_sessions SET body_bytes=body_bytes+? WHERE id=?", len(text)-oldSize, p.id); e != nil {
+		if _, e = tx.ExecContext(ctx, "UPDATE ops_chat_sessions SET body_bytes=body_bytes+? WHERE id=?", newSize-oldSize, p.id); e != nil {
 			return ErrStorage
 		}
 		return s.append(ctx, tx, Entry{SessionID: p.id, RunID: p.run, Kind: "entry_updated", ReplaceSeq: p.seq}, false, false)
@@ -136,7 +140,7 @@ func (s *Service) interruptReplies(ctx context.Context, tx *sql.Tx, r runRecord)
 	}
 	type pending struct {
 		seq  int64
-		text string
+		body entryBody
 	}
 	updates := []pending{}
 	for rows.Next() {
@@ -146,13 +150,13 @@ func (s *Service) interruptReplies(ctx context.Context, tx *sql.Tx, r runRecord)
 			rows.Close()
 			return ErrStorage
 		}
-		var body struct{ Text, Status string }
+		var body entryBody
 		if err = s.open(b, &body); err != nil {
 			rows.Close()
 			return err
 		}
 		if body.Status == "partial" {
-			updates = append(updates, pending{seq, body.Text})
+			updates = append(updates, pending{seq, body})
 		}
 	}
 	err = rows.Err()
@@ -165,10 +169,8 @@ func (s *Service) interruptReplies(ctx context.Context, tx *sql.Tx, r runRecord)
 		if tx.QueryRowContext(ctx, "SELECT seq+1 FROM ops_chat_sessions WHERE id=?", r.View.SessionID).Scan(&revision) != nil {
 			return ErrStorage
 		}
-		b, err := s.seal(struct {
-			Text, Status string
-			RevisionSeq  int64
-		}{u.text, Interrupted, revision})
+		u.body.Status, u.body.RevisionSeq = Interrupted, revision
+		b, err := s.seal(u.body)
 		if err != nil {
 			return err
 		}

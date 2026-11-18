@@ -22,6 +22,7 @@ export interface Capabilities {
   available: boolean
   modelAvailable: boolean
   provider: Provider
+  models?: Provider[]
   limits: Record<string, number>
 }
 export interface Session {
@@ -117,6 +118,7 @@ export interface Confirmation {
   valid: boolean
 }
 export interface Entry {
+  model?: string
   targetNames?: Record<string, string>
 	 replaceSeq?: number
 	 revisionSeq?: number
@@ -244,9 +246,9 @@ export function createOpsApi(options: HttpOptions = {}) {
       `${path(id)}/runs/${encodeURIComponent(run)}/confirmation`,
       {},
     ),
-  preview: (id: string, callIds: string[]) =>
+  preview: (id: string, callIds: string[], modelBinding?: string) =>
     scoped.get<Preview>(
-      `${path(id)}/analysis/preview?callIds=${encodeURIComponent(callIds.join(','))}`,
+      `${path(id)}/analysis/preview?callIds=${encodeURIComponent(callIds.join(','))}${modelBinding ? `&modelBinding=${encodeURIComponent(modelBinding)}` : ''}`,
     ),
   analyze: (id: string, input: Analysis) =>
     scoped.post<Run>(`${path(id)}/analysis`, input),

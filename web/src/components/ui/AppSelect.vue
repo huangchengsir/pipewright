@@ -59,6 +59,8 @@ const selected = computed(() =>
   props.options.find((option) => option.value === props.modelValue),
 )
 const query = ref('')
+let typedPrefix = ''
+let lastTypeAt = 0
 const visibleOptions = computed(() =>
   props.searchable && query.value
     ? props.options.filter((option) =>
@@ -96,9 +98,10 @@ function positionMenu(): void {
   const rect = root.value.getBoundingClientRect()
   const availableBelow = window.innerHeight - rect.bottom - 8
   const availableAbove = rect.top - 8
+  const touch = window.matchMedia?.('(max-width: 600px), (pointer: coarse)')?.matches ?? (window.innerWidth <= 600)
   const desiredHeight = Math.min(
     240,
-    props.options.length * 38 + 12 + (props.searchable ? 38 : 0),
+    props.options.length * (touch ? 44 : 38) + 12 + (props.searchable ? 38 : 0),
   )
   const above =
     availableBelow < desiredHeight && availableAbove > availableBelow
@@ -140,6 +143,7 @@ function close(): void {
   open.value = false
   activeIndex.value = -1
   query.value = ''
+  typedPrefix = ''
 }
 
 function toggle(): void {
@@ -198,6 +202,27 @@ function handleKeydown(event: KeyboardEvent): void {
     event.preventDefault()
     close()
     trigger.value?.focus()
+  } else if (!props.searchable && (event.key === 'Home' || event.key === 'End')) {
+    event.preventDefault()
+    if (!open.value) toggle()
+    const options = visibleOptions.value
+    activeIndex.value = event.key === 'Home'
+      ? options.findIndex(option => !option.disabled)
+      : options.findLastIndex(option => !option.disabled)
+    revealActive()
+  } else if (!props.searchable && event.key.length === 1 && event.key !== ' ' &&
+             !event.altKey && !event.ctrlKey && !event.metaKey) {
+    const now = performance.now()
+    typedPrefix = (now - lastTypeAt < 550 ? typedPrefix : '') + event.key.toLocaleLowerCase()
+    lastTypeAt = now
+    const index = visibleOptions.value.findIndex(
+      option => !option.disabled && option.label.toLocaleLowerCase().startsWith(typedPrefix),
+    )
+    if (index < 0) return
+    event.preventDefault()
+    if (!open.value) toggle()
+    activeIndex.value = index
+    revealActive()
   }
 }
 
@@ -431,6 +456,8 @@ onBeforeUnmount(() => {
   text-align: left;
   cursor: pointer;
 }
+.app-select__option > span { min-width: 0; overflow-wrap: anywhere; }
+.app-select__check { flex: none; }
 .app-select__option:hover,
 .app-select__option--active {
   background: var(--color-inset);
@@ -456,5 +483,8 @@ onBeforeUnmount(() => {
   font: inherit;
   position: sticky;
   top: 0;
+}
+@media (max-width: 600px), (pointer: coarse) {
+  .app-select__option { min-height: 44px; }
 }
 </style>

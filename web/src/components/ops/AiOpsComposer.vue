@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, shallowRef } from 'vue'
+import { computed, shallowRef, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Send, PlayerStop, Refresh } from '@vicons/tabler'
 import AppSelect from '../ui/AppSelect.vue'
 import AiOpsExecArgs from './AiOpsExecArgs.vue'
-import { isValidExecArgv, utf8Bytes, type Tool, type ToolArgs } from '../../api/opsChat'
+import { isValidExecArgv, utf8Bytes, type Provider, type Tool, type ToolArgs } from '../../api/opsChat'
 const props = withDefaults(defineProps<{
   canEdit?: boolean
   canSubmit?: boolean
@@ -16,10 +16,14 @@ const props = withDefaults(defineProps<{
   disabled: boolean
   active: boolean
   modelAvailable: boolean
+  canConfigureModel?: boolean
+  models?: Provider[]
+  modelValue?: string
   hasTargets: boolean
   pending: boolean
 }>(), { canEdit: true, canSubmit: true, canCancel: true })
 const emit = defineEmits<{
+  model: [value: string]
   edit: [value: string]
   send: []
   tool: [id: string, args: ToolArgs]
@@ -45,6 +49,28 @@ const selectedTool = computed(() => props.tools.find((tool) => tool.toolId === t
 const mutation = computed(() => selectedTool.value?.mutation ?? false)
 const needsAction = computed(() => ['docker_action', 'systemd_action'].includes(toolId.value))
 const formBusy = computed(() => props.disabled || !props.canSubmit || props.active || props.pending)
+const modelOptions = computed(() => (props.models ?? []).map(model => ({
+  value: model.configHash,
+  label: model.model,
+})))
+const canSend = computed(() =>
+  !formBusy.value && props.modelAvailable && props.hasTargets &&
+  (!props.models?.length || modelOptions.value.some(option => option.value === props.modelValue)) &&
+  !!(props.draft.trim() || props.contextText) &&
+  utf8Bytes([props.draft, props.contextText].filter(Boolean).join('\n\n')) <= 8192,
+)
+const editor = useTemplateRef('editor')
+function send(): void {
+  if (!canSend.value) return
+  editor.value?.focus({ preventScroll: true })
+  emit('send')
+}
+function sendOnEnter(event: KeyboardEvent): void {
+  if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.altKey ||
+      event.metaKey || event.isComposing || event.keyCode === 229 || !canSend.value) return
+  event.preventDefault()
+  if (!event.repeat) send()
+}
 const toolDisabled = computed(() =>
   formBusy.value || !props.hasTargets || !selectedTool.value ||
   ((needsContainer.value || needsUnit.value) && !object.value.trim()) ||
@@ -140,38 +166,59 @@ function run(): void {
     </details>
     <p v-if="!modelAvailable" class="ops-muted">
       {{ t('opsChat.modelUnavailable') }}
+      <RouterLink v-if="canConfigureModel" :to="{ name: 'settings-ai' }">
+        {{ t('settingsHub.navAi') }}
+      </RouterLink>
     </p>
     <p v-if="!hasTargets" class="ops-muted" role="status">
       {{ t('opsChat.noTargets') }}
     </p>
-    <div class="input-row">
+    <div class="composer-input">
       <textarea
+        ref="editor"
         class="ops-input draft"
         rows="3"
         :value="draft"
         :placeholder="t('opsChat.message')"
         :aria-label="t('opsChat.message')"
-        :disabled="disabled || !canEdit"
-        @input="canEdit && emit('edit', ($event.target as HTMLTextAreaElement).value)"
+        :readonly="disabled || !canEdit"
+        @input="!disabled && canEdit && emit('edit', ($event.target as HTMLTextAreaElement).value)"
+        @keydown="sendOnEnter"
       />
-      <button
-        class="ops-btn ops-icon ops-primary"
-        :disabled="
-          disabled ||
-          active ||
-          pending ||
-          !modelAvailable ||
-          !hasTargets ||
-          (!draft.trim() && !contextText) ||
-          utf8Bytes([draft,contextText].filter(Boolean).join('\n\n')) > 8192
-        "
-        :title="t(hasTargets ? 'opsChat.send' : 'opsChat.noTargets')"
-        :aria-label="t('opsChat.send')"
-        v-if="canSubmit"
-        @click="canSubmit && emit('send')"
-      >
-        <Send />
-      </button>
+      <div v-if="canSubmit || (active && canCancel)" class="composer-actions ops-row">
+        <div v-if="canSubmit && modelOptions.length" class="composer-model">
+          <span class="ops-muted">{{ t('settingsAI.modelLabel') }}</span>
+          <AppSelect
+            :model-value="modelValue ?? ''"
+            :options="modelOptions"
+            :placeholder="t('settingsAI.availableModels')"
+            :aria-label="t('settingsAI.modelLabel')"
+            :disabled="formBusy || (modelOptions.length === 1 && modelOptions[0]?.value === modelValue)"
+            min-width="0"
+            height="34px"
+            portal
+            @update:model-value="emit('model', $event)"
+          />
+        </div>
+        <button
+          v-if="active && canCancel"
+          class="ops-btn ops-danger composer-send"
+          :disabled="disabled"
+          @click="canCancel && emit('stop')"
+        >
+          <PlayerStop />{{ t('opsChat.stop') }}
+        </button>
+        <button
+          v-else-if="canSubmit"
+          class="ops-btn ops-primary composer-send"
+          :disabled="!canSend"
+          :title="t(hasTargets ? 'opsChat.send' : 'opsChat.noTargets')"
+          :aria-label="t('opsChat.send')"
+          @click="send"
+        >
+          {{ t('opsChat.send') }} <Send />
+        </button>
+      </div>
     </div>
     <div class="ops-row">
       <span class="ops-muted ops-grow" role="status"
@@ -184,14 +231,6 @@ function run(): void {
         @click="canEdit && emit('save')"
       >
         {{ t('opsChat.save') }}
-      </button>
-      <button
-        v-if="active && canCancel"
-        class="ops-btn ops-danger"
-        :disabled="disabled"
-        @click="canCancel && emit('stop')"
-      >
-        <PlayerStop />{{ t('opsChat.stop') }}
       </button>
     </div>
     <div v-if="draftStatus === 'conflict'" class="ops-row">
@@ -231,18 +270,32 @@ function run(): void {
   gap: 8px;
   padding: 6px 0;
 }
-.input-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  min-width: 0;
+.composer-input {
+  background: var(--color-inset);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 12px;
+  padding: 8px;
 }
+.composer-input:focus-within { border-color: var(--color-primary); }
+.composer-actions { justify-content: space-between; margin-top: 6px; }
+.composer-model { display: flex; align-items: center; flex: 1 1 136px; gap: 8px; min-width: 0; }
+.composer-model > span { flex: none; }
+.composer-model :deep(.app-select) { max-width: 220px; }
+.composer-send { margin-inline-start: auto; }
+:global([data-theme='dark'] .ops-composer .ops-primary) { color: #0c1421; }
 .draft {
+  display: block;
   resize: vertical;
-  min-height: 72px;
+  min-height: 54px;
   max-height: 140px;
-  flex: 1;
-  line-height: 1.5;
+  padding: 6px;
+  border: 0;
+  background: transparent;
+  line-height: 1.55;
+}
+@media (max-width: 600px), (pointer: coarse) {
+  .composer-send,
+  .composer-model :deep(.app-select__trigger) { min-height: 44px; }
 }
 @media (max-width: 600px) {
   .composer input,

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { useRunRetry } from "../../composables/useRunRetry";
 import {
@@ -70,6 +70,31 @@ const mode = ref<"details" | "plan" | "history" | "logs">("details");
 const nodeKey = ref<string>();
 const logNodeKeys = ref<string[]>([]);
 const logStageName = ref("");
+const logViewport = typeof window.matchMedia === "function"
+  ? window.matchMedia("(max-width: 639px)")
+  : undefined;
+const compactLogs = ref(logViewport?.matches ?? false);
+function updateLogViewport() {
+  const focused = document.activeElement;
+  const inDialog = dialog.value?.contains(focused);
+  const hadStepFocus = inDialog && focused?.closest(".retry-log-tabs, .retry-log-select");
+  const hadExcerptFocus = inDialog && focused?.closest(".term-excerpt-disclosure");
+  compactLogs.value = logViewport?.matches ?? false;
+  if (hadStepFocus || hadExcerptFocus) {
+    void nextTick(() => {
+      if (!open.value || mode.value !== "logs") return;
+      const selector = compactLogs.value
+        ? ".retry-log-select"
+        : ".retry-log-tabs [aria-selected='true']";
+      const excerpt = compactLogs.value ? ".term-excerpt-disclosure summary" : ".term-excerpt input";
+      const target = dialog.value?.querySelector<HTMLElement>(hadExcerptFocus ? excerpt : selector)
+        ?? dialog.value?.querySelector<HTMLElement>(".retry-log-step");
+      target?.focus({ preventScroll: true });
+    });
+  }
+}
+onMounted(() => logViewport?.addEventListener?.("change", updateLogViewport));
+onBeforeUnmount(() => logViewport?.removeEventListener?.("change", updateLogViewport));
 const logTabs = computed(() =>
   logNodeKeys.value.map((key) => {
     const node = context.value?.nodes.find((n) => n.node.key === key);
@@ -217,6 +242,15 @@ async function selectLogTab(index: number, moveFocus = false) {
       ?.querySelector<HTMLButtonElement>(`#retry-log-tab-${index}`)
       ?.focus();
   }
+}
+function logStatus(tab: (typeof logTabs.value)[number]): string {
+  if (tab.reused) return t("runRetry.reusedShort");
+  if (tab.status === "outcome_unknown") return t("runRetry.unknownShort");
+  return statusLabel(tab.status);
+}
+function changeLogStep(event: Event) {
+  const selector = event.currentTarget as HTMLSelectElement;
+  void selectLogTab(selector.selectedIndex);
 }
 function tabKeydown(event: KeyboardEvent, index: number) {
   let next = index;
@@ -508,10 +542,21 @@ async function confirmPlan() {
           <section
             v-if="mode === 'logs'"
             class="retry-log-view"
-            :class="{ 'retry-log-view--kube': isKube && logTabs.length <= 1 }"
+            :class="{ 'retry-log-view--single': compactLogs || (isKube && logTabs.length <= 1) }"
           >
+            <select
+              v-if="compactLogs && logTabs.length > 1"
+              class="retry-log-select"
+              :aria-label="t('runRetry.logSteps')"
+              :value="nodeKey"
+              @change="changeLogStep"
+            >
+              <option v-for="step in logTabs" :key="step.key" :value="step.key">
+                {{ step.label }} · {{ logStatus(step) }}
+              </option>
+            </select>
             <div
-              v-if="logTabs.length && (!isKube || logTabs.length > 1)"
+              v-if="!compactLogs && logTabs.length && (!isKube || logTabs.length > 1)"
               class="retry-log-tabs"
               role="tablist"
               aria-orientation="vertical"
@@ -531,21 +576,15 @@ async function confirmPlan() {
                 @keydown="tabKeydown($event, index)"
               >
                 <span class="retry-log-tab-name">{{ tab.label }}</span>
-                <span class="retry-log-tab-status">{{
-                  tab.reused
-                    ? t("runRetry.reusedShort")
-                    : tab.status === "outcome_unknown"
-                      ? t("runRetry.unknownShort")
-                      : statusLabel(tab.status)
-                }}</span>
+                <span class="retry-log-tab-status">{{ logStatus(tab) }}</span>
               </button>
             </div>
             <div
               id="retry-log-panel"
               class="retry-log-step"
-              :role="isKube && logTabs.length <= 1 ? 'region' : 'tabpanel'"
+              :role="compactLogs || (isKube && logTabs.length <= 1) ? 'region' : 'tabpanel'"
               :aria-labelledby="
-                activeTabIndex >= 0 && (!isKube || logTabs.length > 1)
+                !compactLogs && activeTabIndex >= 0 && (!isKube || logTabs.length > 1)
                   ? `retry-log-tab-${activeTabIndex}`
                   : 'retry-dialog-title'
               "
@@ -600,6 +639,7 @@ async function confirmPlan() {
                     :run-id="logSource.runId"
                     :live="logSource.live"
                     :filter-ordinal="logSource.ordinal"
+                  :compact-tools="compactLogs"
                     :kubernetes-phase="phase"
                     @kubernetes-phases="kubePhaseLogs = $event" /></template
               ></KubeOperationPanel>
@@ -609,6 +649,7 @@ async function confirmPlan() {
                   :run-id="logSource.runId"
                   :live="logSource.live"
                   :filter-ordinal="logSource.ordinal"
+                    :compact-tools="compactLogs"
                   @kubernetes-phases="kubePhaseLogs = $event"
                 />
               </div>
@@ -1357,7 +1398,19 @@ code {
 }
 
 /* Kubernetes jobs are single-job stages; use the phase navigation once. */
-.retry-log-view.retry-log-view--kube {
+.retry-log-select {
+  width: 100%;
+  min-height: 44px;
+  min-width: 0;
+  padding: 6px 10px;
+  color: var(--color-text);
+  background: var(--color-card-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--rounded);
+  font: inherit;
+  font-size: 16px;
+}
+.retry-log-view.retry-log-view--single {
   grid-template-columns: minmax(0, 1fr);
 }
 </style>

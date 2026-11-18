@@ -138,6 +138,7 @@ function navigate(event: Event): void {
 
 <style scoped>
 .settings-view {
+  container: settings-view / inline-size;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -181,33 +182,56 @@ function navigate(event: Event): void {
   flex: 1;
   min-width: 0;
 }
-@media (min-width: 768px) {
+@media (min-width: 768px) and (min-height: 420px) {
   .settings-view { flex: 1; min-height: 0; overflow: hidden; }
   .view-header { flex-shrink: 0; }
-  .settings-content { min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable; padding: 2px 6px 16px 2px; }
-
-  .settings-nav-select {
-    display: none;
-  }
-  .settings-layout {
-    display: grid;
-    grid-template-columns: 172px minmax(0, 1fr);
-    gap: 28px;
-    align-items: stretch;
-    flex: 1;
-    min-height: 0;
-  }
-  .settings-nav {
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-    border-right: 1px solid var(--color-border);
-    padding-right: 16px;
+  .settings-nav-select { flex-shrink: 0; }
+  .settings-content {
     min-height: 0;
     overflow-y: auto;
     overscroll-behavior-y: contain;
-    scrollbar-width: thin;
+    scrollbar-gutter: stable;
+    padding: 2px 6px 16px 2px;
   }
+  .settings-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    flex: 1;
+    min-height: 0;
+  }
+}
+.settings-nav {
+  flex-direction: column;
+  gap: 20px;
+  border-inline-end: 1px solid var(--color-border);
+  padding-inline-end: 16px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+.settings-nav:hover {
+  scrollbar-color: var(--color-dim) transparent;
+}
+:global([data-theme='dark'] .settings-view .settings-nav) {
+  color-scheme: dark;
+}
+/* Keep the content wide enough after reserving room for the secondary rail. */
+@container settings-view (min-width: 790px) {
+  .settings-nav-select { display: none; }
+  .settings-layout { display: grid; grid-template-columns: 172px minmax(0, 1fr); gap: 28px; }
+  .settings-nav { display: flex; }
+}
+@supports not (container-type: inline-size) {
+  @media (min-width: 1120px) {
+    .settings-nav-select { display: none; }
+    .settings-layout { display: grid; grid-template-columns: 172px minmax(0, 1fr); gap: 28px; }
+    .settings-nav { display: flex; }
+  }
+}
+@media (min-width: 768px) {
   .settings-nav-group {
     display: flex;
     flex-direction: column;
@@ -241,6 +265,13 @@ function navigate(event: Event): void {
   .settings-nav-item:focus-visible {
     outline: 2px solid var(--color-primary);
     outline-offset: 2px;
+  }
+}
+@media (pointer: coarse) {
+  .settings-nav-item {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
   }
 }
 </style>

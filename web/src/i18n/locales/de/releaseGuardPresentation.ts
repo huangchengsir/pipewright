@@ -21,6 +21,7 @@ export default {
   snapshotScope:
     'Wertet nur den für jede Übermittlung ausgewählten und bestätigten Schnappschuss aus. Analysiert nicht den gesamten Bericht und untersucht nicht automatisch.',
   nextTitle: 'Nächste Schritte',
+  nextExpired: 'Eine erneute Prüfung erfasst Belege in einem neuen Beobachtungsfenster.',
   nextDescription:
     'Prüfen Sie die Fehlerbelege vor einer Untersuchung oder erneuten Beobachtung.',
   investigateAction: 'Zugehörige Änderungen untersuchen',
@@ -38,6 +39,7 @@ export default {
   reportMissing: 'Dieser Bericht wurde nicht gefunden.',
   technicalDetails: 'Technische Details',
   reportDetails: 'Ursprüngliche Berichtsdaten',
+  evidenceGroup: 'Belege anzeigen ({n})',
   evidenceReference: 'Beleg {n} anzeigen',
   evidenceLoaded: '{n} geladen; gezählt werden nur bereits geladene Belege.',
   continueFinding: 'Diesen Beleg weitersuchen',

@@ -133,7 +133,7 @@ onBeforeUnmount(() => {
             ?.serverName || t('releaseGuardPresentation.unknownTarget')
         }}</strong>
         <p>{{ fact(baseline.status) }}</p>
-        <p v-if="baseline.evidenceId">
+        <p v-if="baseline.evidenceId && !report.evidenceExpired">
           <a
             href="#guard-evidence-section"
             @click.prevent="emit('locateEvidence', baseline.evidenceId)"

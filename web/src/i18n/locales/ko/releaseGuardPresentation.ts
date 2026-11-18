@@ -20,6 +20,7 @@ export default {
   snapshotScope:
     '매번 선택하고 승인한 스냅샷만 해석합니다. 전체 보고서를 분석하거나 자동 조사하지 않습니다.',
   nextTitle: '다음 단계',
+  nextExpired: '새 관찰 기간의 증거를 수집하려면 다시 검증하세요.',
   nextDescription: '실패 증거를 확인한 후 변경 조사 또는 재관찰을 결정하세요.',
   investigateAction: '관련 변경 조사',
   why: '검증 실패 이유',
@@ -35,6 +36,7 @@ export default {
   reportMissing: '보고서를 찾을 수 없습니다.',
   technicalDetails: '기술 세부 정보',
   reportDetails: '보고서 원본 데이터',
+  evidenceGroup: '증거 보기 ({n}개)',
   evidenceReference: '증거 {n} 보기',
   evidenceLoaded: '{n}개 로드됨. 현재 로드된 증거만 포함합니다.',
   continueFinding: '이 증거 계속 찾기',

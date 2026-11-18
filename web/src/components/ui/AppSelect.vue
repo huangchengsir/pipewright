@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 
 defineOptions({ inheritAttrs: false })
 
@@ -42,6 +42,14 @@ const emit = defineEmits<{
 }>()
 
 const root = ref<HTMLElement | null>(null)
+const trigger = ref<HTMLButtonElement | null>(null)
+const search = ref<HTMLInputElement | null>(null)
+const id = useId()
+const listId = computed(() => (props.inputId ?? id) + '-options')
+const activeOptionId = computed(() => {
+  const option = visibleOptions.value[activeIndex.value]
+  return open.value && option && !option.disabled ? optionId(option) : undefined
+})
 const menu = ref<HTMLElement | null>(null)
 const portalTarget = ref<string | HTMLElement>("body")
 const open = ref(false)
@@ -107,6 +115,27 @@ function positionMenu(): void {
   }
 }
 
+function optionId(option: SelectOption): string {
+  return listId.value + '-' + props.options.indexOf(option)
+}
+
+function revealActive(): void {
+  void nextTick(() => {
+    const list = menu.value
+    if (!list || !activeOptionId.value) return
+    const active = list.ownerDocument.getElementById(activeOptionId.value)
+    if (!active || !list.contains(active)) return
+    const optionBounds = active.getBoundingClientRect()
+    const listBounds = list.getBoundingClientRect()
+    const visibleTop = Math.max(listBounds.top, search.value?.getBoundingClientRect().bottom ?? 0)
+    if (optionBounds.top < visibleTop) {
+      list.scrollTop += optionBounds.top - visibleTop
+    } else if (optionBounds.bottom > listBounds.bottom) {
+      list.scrollTop += optionBounds.bottom - listBounds.bottom
+    }
+  })
+}
+
 function close(): void {
   open.value = false
   activeIndex.value = -1
@@ -125,6 +154,10 @@ function toggle(): void {
   open.value = true
   const selectedIndex = visibleOptions.value.findIndex(option => option.value === props.modelValue && !option.disabled)
   activeIndex.value = selectedIndex >= 0 ? selectedIndex : visibleOptions.value.findIndex(option => !option.disabled)
+  if (props.searchable) {
+    void nextTick(() => search.value?.focus())
+  }
+  revealActive()
 }
 
 function choose(option: SelectOption): void {
@@ -132,6 +165,7 @@ function choose(option: SelectOption): void {
   emit('update:modelValue', option.value)
   emit('change')
   close()
+  trigger.value?.focus()
 }
 
 function moveActive(direction: 1 | -1): void {
@@ -149,16 +183,21 @@ function handleKeydown(event: KeyboardEvent): void {
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
     event.preventDefault()
     if (!open.value) toggle()
-    else moveActive(event.key === 'ArrowDown' ? 1 : -1)
+    else {
+      moveActive(event.key === 'ArrowDown' ? 1 : -1)
+      revealActive()
+    }
   } else if ((event.key === 'Enter' || event.key === ' ') && open.value) {
     event.preventDefault()
     const option = visibleOptions.value[activeIndex.value]
     if (option) choose(option)
   } else if (event.key === 'Tab' && open.value) {
+    if (event.target === search.value) trigger.value?.focus()
     close()
   } else if (event.key === 'Escape' && open.value) {
     event.preventDefault()
     close()
+    trigger.value?.focus()
   }
 }
 
@@ -192,6 +231,7 @@ onBeforeUnmount(() => {
     :style="{ minWidth, '--app-select-height': height }"
   >
     <button
+      ref="trigger"
       v-bind="$attrs"
       :id="inputId"
       type="button"
@@ -199,7 +239,8 @@ onBeforeUnmount(() => {
       role="combobox"
       :aria-label="ariaLabel"
       :aria-expanded="open"
-      :aria-controls="inputId ? `${inputId}-options` : undefined"
+      :aria-controls="open ? listId : undefined"
+      :aria-activedescendant="activeOptionId"
       aria-haspopup="listbox"
       :disabled="disabled"
       @click="toggle"
@@ -225,58 +266,68 @@ onBeforeUnmount(() => {
     <Teleport :to="portalTarget" :disabled="!portal">
       <div
         v-if="open"
-        :id="inputId ? `${inputId}-options` : undefined"
+        :id="searchable ? undefined : listId"
         ref="menu"
         class="app-select__menu"
         :class="{ 'app-select__menu--portal': portal }"
         :style="portal ? menuStyle : undefined"
-        role="listbox"
+        :role="searchable ? undefined : 'listbox'"
       >
         <input
           v-if="searchable"
+          ref="search"
           v-model="query"
           class="app-select__search"
           type="search"
-          :aria-label="searchPlaceholder"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded="true"
+          :aria-controls="listId"
+          :aria-activedescendant="activeOptionId"
+          :aria-label="searchPlaceholder || ariaLabel"
           :placeholder="searchPlaceholder"
           @keydown="
-            ['ArrowDown', 'ArrowUp', 'Enter', 'Escape'].includes($event.key) &&
+            ['ArrowDown', 'ArrowUp', 'Enter', 'Escape', 'Tab'].includes($event.key) &&
             handleKeydown($event)
           "
         />
-        <button
-          v-for="(option, index) in visibleOptions"
-          :key="option.value"
-          type="button"
-          class="app-select__option"
-          :class="{
-            'app-select__option--active': index === activeIndex,
-            'app-select__option--selected': option.value === modelValue,
-          }"
-          role="option"
-          :aria-selected="option.value === modelValue"
-          :aria-disabled="!!option.disabled"
-          :disabled="option.disabled"
-          @mouseenter="!option.disabled && (activeIndex = index)"
-          @click="choose(option)"
-        >
-          <span>{{ option.label }}</span>
-          <svg
-            v-if="option.value === modelValue"
-            class="app-select__check"
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2.5"
-            aria-hidden="true"
+        <div :id="searchable ? listId : undefined" :role="searchable ? 'listbox' : undefined">
+          <button
+            v-for="(option, index) in visibleOptions"
+            :key="option.value"
+            :id="optionId(option)"
+            type="button"
+            tabindex="-1"
+            class="app-select__option"
+            :class="{
+              'app-select__option--active': index === activeIndex,
+              'app-select__option--selected': option.value === modelValue,
+            }"
+            role="option"
+            :aria-selected="option.value === modelValue"
+            :aria-disabled="!!option.disabled"
+            :disabled="option.disabled"
+            @mouseenter="!option.disabled && (activeIndex = index)"
+            @click="choose(option)"
           >
-            <path d="m5 12 4 4L19 6" />
-          </svg>
-        </button>
-        <div v-if="!visibleOptions.length" class="app-select__empty">
-          {{ placeholder }}
+            <span>{{ option.label }}</span>
+            <svg
+              v-if="option.value === modelValue"
+              class="app-select__check"
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+              aria-hidden="true"
+            >
+              <path d="m5 12 4 4L19 6" />
+            </svg>
+          </button>
+          <div v-if="!visibleOptions.length" class="app-select__empty">
+            {{ placeholder }}
+          </div>
         </div>
       </div>
     </Teleport>

@@ -3,7 +3,7 @@
   AiDiagnosisModal.vue — 容器 AI 诊断 / 看日志。取容器最近日志 → ai.Diagnose,
   展示根因假说 + 置信度 + 修复建议 + 可粘贴修复脚本 + 证据行。AI 未配/失败优雅降级。
 */
-import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import PermissionGate from '../PermissionGate.vue'
 import { usePermission } from '../../composables/usePermission'
 import { usePermissionStore } from '../../stores/permissions'
@@ -11,9 +11,9 @@ import { useSessionStore } from '../../stores/session'
 import { useI18n } from 'vue-i18n'
 import { diagnoseContainer, type ContainerDiagnosis } from '../../api/containers'
 import { HttpError } from '../../api/http'
-import { useToast } from '../../composables/useToast'
 
-const props = defineProps<{ serverId: string; containerName: string }>()
+
+const props = defineProps<{ serverId: string; containerName: string; opener?: HTMLElement }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
 
 const permissionQuery=computed(()=>({action:'container.diagnose',resourceId:props.serverId}))
@@ -21,7 +21,7 @@ const permission=usePermission(permissionQuery)
 const permissions=usePermissionStore()
 const session=useSessionStore()
 const { t } = useI18n()
-const toast = useToast()
+const copyStatus = ref<'success' | 'error' | null>(null)
 const state = ref<'loading' | 'done' | 'error'>('loading')
 const errorMsg = ref('')
 const diag = ref<ContainerDiagnosis | null>(null)
@@ -41,6 +41,7 @@ function resetTransport() {
   transport = undefined
   diag.value = null
   errorMsg.value = ''
+  copyStatus.value = null
 }
 async function run(): Promise<void> {
  if(!permission.allowed.value) return
@@ -74,13 +75,14 @@ async function copyScript(): Promise<void> {
   if (!diag.value?.fixScript || !permission.allowed.value) return
   const ticket = generation
   const script = diag.value.fixScript
+  copyStatus.value = null
   try {
     await navigator.clipboard.writeText(script)
     if (ticket !== generation || !permission.allowed.value) return
-    toast.success(t('opsContainer.diag.scriptCopied'))
+    copyStatus.value = 'success'
   } catch {
     if (ticket !== generation || !permission.allowed.value) return
-    toast.error(t('opsContainer.copyFailed'), { detail: t('opsContainer.needHttps') })
+    copyStatus.value = 'error'
   }
 }
 
@@ -88,17 +90,42 @@ watch([permission.allowed,()=>permissions.activeTeam,()=>session.user,()=>props.
   if (permission.allowed.value) void run()
   else resetTransport()
 },{immediate:true,flush:'sync'})
-onBeforeUnmount(resetTransport)
+const modal = ref<HTMLDialogElement | null>(null)
+let opener: HTMLElement | null = null
+let pointerStartedOnScrim = false
+
+function dismissFromScrim(): void {
+  if (pointerStartedOnScrim) emit('close')
+  pointerStartedOnScrim = false
+}
+
+onMounted(() => {
+  opener = props.opener ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null)
+  modal.value?.showModal?.()
+})
+onBeforeUnmount(() => {
+  resetTransport()
+  if (modal.value?.open) modal.value.close()
+  if (opener?.isConnected) opener.focus({ preventScroll: true })
+})
 </script>
 
 <template>
-  <div class="modal-scrim" @click.self="emit('close')">
-    <div class="modal" role="dialog" :aria-label="t('opsContainer.diag.dialogAria')">
+  <dialog
+    ref="modal"
+    class="modal-scrim container-diagnosis"
+    :aria-label="t('opsContainer.diag.dialogAria')"
+    @cancel.prevent="emit('close')"
+    @pointerdown="pointerStartedOnScrim = $event.target === $event.currentTarget"
+    @pointercancel="pointerStartedOnScrim = false"
+    @click.self="dismissFromScrim"
+  >
+    <div class="modal">
       <header class="modal__head">
         <h3 class="modal__title">
           <span class="ai-spark">✦</span> {{ t('opsContainer.diag.title') }} · <span class="mono">{{ containerName }}</span>
         </h3>
-        <button class="modal__close" :aria-label="t('opsContainer.close')" @click="emit('close')">✕</button>
+        <button class="modal__close" type="button" autofocus :aria-label="t('opsContainer.close')" @click="emit('close')">✕</button>
       </header>
 
       <div class="modal__body">
@@ -141,6 +168,9 @@ onBeforeUnmount(resetTransport)
               <PermissionGate :query="permissionQuery"><button class="copy" @click="copyScript">{{ t('opsContainer.copy') }}</button></PermissionGate>
             </div>
             <pre class="script mono">{{ diag.fixScript }}</pre>
+            <p class="copy-status" role="status">
+              {{ copyStatus === 'success' ? t('opsContainer.diag.scriptCopied') : copyStatus === 'error' ? t('opsContainer.logs.copyFailedDetail') : '' }}
+            </p>
           </section>
 
           <section v-if="diag.alternateCauses.length" class="block">
@@ -170,23 +200,37 @@ onBeforeUnmount(resetTransport)
         <button class="btn btn--primary" @click="emit('close')">{{ t('opsContainer.close') }}</button>
       </footer>
     </div>
-  </div>
+  </dialog>
 </template>
 
 <style scoped>
+:global(html:has(.container-diagnosis[open])) {
+  overflow: hidden;
+}
 .modal-scrim {
   position: fixed;
   inset: 0;
-  z-index: 500;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  border: 0;
+  color: var(--color-text);
+  background: transparent;
+  padding: 16px;
+}
+.modal-scrim[open] {
+  display: grid;
+  place-items: center;
+}
+.modal-scrim::backdrop {
   background: oklch(0% 0 0 / 0.45);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
 }
 .modal {
-  width: min(640px, 96vw);
-  max-height: 88vh;
+  width: min(640px, 100%);
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
   display: flex;
   flex-direction: column;
   background: var(--color-card);
@@ -202,6 +246,8 @@ onBeforeUnmount(resetTransport)
   border-bottom: 1px solid var(--color-border);
 }
 .modal__title {
+  min-width: 0;
+  overflow-wrap: anywhere;
   margin: 0;
   font-size: var(--text-section);
   font-weight: 700;
@@ -211,6 +257,7 @@ onBeforeUnmount(resetTransport)
   color: var(--color-primary);
 }
 .modal__close {
+  flex: none;
   width: 28px;
   height: 28px;
   border-radius: var(--rounded-sm);
@@ -218,6 +265,23 @@ onBeforeUnmount(resetTransport)
   background: transparent;
   color: var(--color-dim);
   cursor: pointer;
+}
+@media (max-width: 639px), (pointer: coarse) {
+  .modal__foot {
+    flex-wrap: wrap;
+  }
+  .foot-hint {
+    flex: 1 0 100%;
+  }
+  .copy,
+  .modal__foot .btn {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .modal__close {
+    min-width: 44px;
+    min-height: 44px;
+  }
 }
 .modal__close:hover {
   color: var(--color-text);
@@ -395,5 +459,15 @@ onBeforeUnmount(resetTransport)
 }
 .btn--primary:hover {
   background: var(--color-primary-press);
+}
+.copy-status {
+  margin: 0;
+  color: var(--color-dim);
+  font-size: var(--text-label);
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
 }
 </style>

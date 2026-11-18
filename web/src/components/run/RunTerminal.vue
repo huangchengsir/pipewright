@@ -39,6 +39,7 @@ const props = defineProps<{
   /** 仅显示该步骤序号(stepOrdinal)的日志;null/undefined = 全部步骤。点步骤详情切换。 */
   filterOrdinal?: number | null
   kubernetesPhase?: KubePhase
+  compactTools?: boolean
 }>()
 
 const emit = defineEmits<{ kubernetesPhases: [texts: string[]] }>()
@@ -453,30 +454,33 @@ function lineKey(line: RunLogLine): number {
     </div>
     <p v-if="searchResult.queryTooLong" class="term-search-limit" role="status">{{ t('runExperience.queryTooLong', { n: 200 }) }}</p>
     <p v-else-if="searchResult.truncated" class="term-search-limit" role="status">{{ t('runExperience.hitsLimited', { n: hits.length }) }}</p>
-    <div class="term-tools term-excerpt">
-      <label
-        >{{ t("runExperience.fromSeq")
-        }}<input
-          v-model="selectedStart"
-          type="number"
-          min="1"
-          :aria-label="t('runExperience.fromSeq')"
-      /></label>
-      <label
-        >{{ t("runExperience.toSeq")
-        }}<input
-          v-model="selectedEnd"
-          type="number"
-          min="1"
-          :aria-label="t('runExperience.toSeq')"
-      /></label>
-      <button type="button" @click="copyExcerpt">
-        {{ t("runExperience.copyExcerpt") }}
-      </button>
-      <span v-if="copyMessage" class="term-copy-status" role="status">{{
-        copyMessage
-      }}</span>
-    </div>
+    <component :is="props.compactTools ? 'details' : 'div'" class="term-excerpt-disclosure">
+      <summary v-if="props.compactTools">{{ t("runExperience.copyExcerpt") }}</summary>
+      <div class="term-tools term-excerpt">
+        <label
+          >{{ t("runExperience.fromSeq")
+          }}<input
+            v-model="selectedStart"
+            type="number"
+            min="1"
+            :aria-label="t('runExperience.fromSeq')"
+        /></label>
+        <label
+          >{{ t("runExperience.toSeq")
+          }}<input
+            v-model="selectedEnd"
+            type="number"
+            min="1"
+            :aria-label="t('runExperience.toSeq')"
+        /></label>
+        <button type="button" @click="copyExcerpt">
+          {{ t("runExperience.copyExcerpt") }}
+        </button>
+        <span v-if="copyMessage" class="term-copy-status" role="status">{{
+          copyMessage
+        }}</span>
+      </div>
+    </component>
     <textarea
       v-if="manualCopy"
       ref="manualCopyEl"
@@ -891,6 +895,17 @@ function lineKey(line: RunLogLine): number {
 .term-hits {
   font-variant-numeric: tabular-nums;
 }
+.term-excerpt-disclosure summary {
+  display: list-item;
+  min-height: 44px;
+  align-content: center;
+  padding: 0 10px;
+  border-bottom: 1px solid #2b3039;
+  color: #c3c9d2;
+  background: #111318;
+  cursor: pointer;
+  font-size: 12px;
+}
 .term-excerpt label {
   display: flex;
   align-items: center;
@@ -966,6 +981,7 @@ function lineKey(line: RunLogLine): number {
     font-size: 16px;
   }
   .term-tools button {
+    min-width: 44px;
     min-height: 44px;
   }
   .term-excerpt label {
@@ -978,6 +994,12 @@ function lineKey(line: RunLogLine): number {
   }
 }
 
+@media (pointer: coarse) {
+  .term-tools button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
 @container (max-width:300px) {
   .term-hits { flex: 0 0 auto; white-space: nowrap; }
   .term-action { padding-inline: 6px; }

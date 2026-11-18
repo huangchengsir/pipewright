@@ -521,12 +521,12 @@ onBeforeUnmount(() => {
         <div class="guard-summary-layout">
           <div class="guard-summary-primary">
             <p class="guard-eyebrow">
-              {{ t('releaseGuard.basicVerification') }} ·
+              {{ t('releaseGuard.basicVerification') }}
               <strong
+                v-if="summaryTitle !== result(report.verificationResult)"
                 class="guard-result"
                 :data-result="report.verificationResult"
-                >{{ result(report.verificationResult) }}</strong
-              >
+              > · {{ result(report.verificationResult) }}</strong>
             </p>
             <h2>
               <NIcon :size="24" aria-hidden="true"
@@ -558,7 +558,7 @@ onBeforeUnmount(() => {
                     {{ fact(item.reason) }}
                   </p>
                   <button
-                    v-for="(id, index) in item.evidenceIds"
+                    v-for="(id, index) in report.evidenceExpired ? [] : item.evidenceIds"
                     :key="id"
                     type="button"
                     class="guard-citation"
@@ -595,10 +595,6 @@ onBeforeUnmount(() => {
                 }}</span>
               </div>
             </div>
-            <div class="guard-summary-unknown">
-              <strong>{{ t('releaseGuardPresentation.unknownTitle') }}</strong>
-              <p>{{ t('releaseGuardPresentation.unknownScope') }}</p>
-            </div>
           </div>
         </div>
         <div class="guard-facts">
@@ -628,22 +624,32 @@ onBeforeUnmount(() => {
         </div>
       </section>
       <section class="guard-context">
-        <p>
-          <strong>{{
-            active
-              ? t('releaseGuard.observationWindow')
+        <div class="guard-context-meta">
+          <p>
+            <strong>{{
+              active
+                ? t('releaseGuard.observationWindow')
               : t('releaseGuard.historicalReport')
-          }}</strong>
-          · {{ when(report.startedAt) }} →
-          {{
-            report.finishedAt
-              ? when(report.finishedAt)
-              : t('releaseGuard.windowInProgress')
-          }}
-        </p>
+            }}</strong>
+            · {{ when(report.startedAt) }} →
+            {{
+              report.finishedAt
+                ? when(report.finishedAt)
+                : t('releaseGuard.windowInProgress')
+            }}
+          </p>
+          <span v-if="report.evidenceExpired" class="guard-expired">
+            {{ t('releaseGuardPresentation.timeline.evidenceExpired') }}
+          </span>
+        </div>
         <details class="guard-boundaries">
           <summary>{{ t('releaseGuardPresentation.boundaryDetails') }}</summary>
           <div>
+            <p>
+              <strong>{{ t('releaseGuardPresentation.unknownTitle') }}</strong>
+              {{ t('releaseGuardPresentation.unknownScope') }}
+            </p>
+            <p v-if="report.evidenceExpired">{{ t('releaseGuard.evidenceExpired') }}</p>
             <p v-if="report.plan.mode === 'from_now'">
               {{ t('releaseGuard.fromNowGap') }}
             </p>
@@ -659,9 +665,6 @@ onBeforeUnmount(() => {
             </p>
           </div>
         </details>
-        <p v-if="report.evidenceExpired" class="guard-notice">
-          {{ t('releaseGuard.evidenceExpired') }}
-        </p>
         <template v-if="report.parentGuardId"
           ><RouterLink
             :to="guardReportLocation(projectId, report.parentGuardId)"
@@ -734,7 +737,6 @@ onBeforeUnmount(() => {
         <div class="guard-verification-layout">
           <div class="guard-checks">
             <h2>{{ t('releaseGuard.targetChecks') }}</h2>
-            <p class="guard-muted">{{ t('releaseGuard.sampledOnly') }}</p>
             <div class="guard-table-wrap">
               <table>
                 <thead>
@@ -803,19 +805,34 @@ onBeforeUnmount(() => {
                     result(item.result)
                   }}</span>
                   <p v-if="item.reason">{{ fact(item.reason) }}</p>
-                  <span class="guard-evidence-links"
-                    ><a
-                      v-for="(id, index) in item.evidenceIds"
-                      :key="id"
-                      href="#guard-evidence-section"
-                      @click.prevent="locateEvidence(id)"
+                  <details
+                    v-if="item.evidenceIds.length > 1 && !report.evidenceExpired"
+                    class="guard-evidence-disclosure"
+                  >
+                    <summary>
+                      {{ t('releaseGuardPresentation.evidenceGroup', {
+                        n: guardNumber(item.evidenceIds.length, locale),
+                      }) }}
+                    </summary>
+                    <span class="guard-evidence-links">
+                      <a
+                        v-for="(id, index) in item.evidenceIds"
+                        :key="id"
+                        href="#guard-evidence-section"
+                        @click.prevent="locateEvidence(id)"
                       >{{
                         t('releaseGuardPresentation.evidenceReference', {
                           n: guardNumber(index + 1, locale),
                         })
-                      }}</a
-                    ></span
-                  >
+                      }}</a>
+                    </span>
+                  </details>
+                  <a
+                    v-else-if="item.evidenceIds.length === 1 && !report.evidenceExpired"
+                    class="guard-evidence-single"
+                    href="#guard-evidence-section"
+                    @click.prevent="locateEvidence(item.evidenceIds[0])"
+                  >{{ t('releaseGuardPresentation.evidenceReference', { n: guardNumber(1, locale) }) }}</a>
                 </li>
               </ul>
               <ul v-if="target.limitations.length" class="guard-limitations">
@@ -827,7 +844,12 @@ onBeforeUnmount(() => {
           </div>
           <aside class="guard-next">
             <h2>{{ t('releaseGuardPresentation.nextTitle') }}</h2>
-            <p>{{ t('releaseGuardPresentation.nextDescription') }}</p>
+            <p v-if="report.evidenceExpired && !active && observePermission.allowed.value">
+              {{ t('releaseGuardPresentation.nextExpired') }}
+            </p>
+            <p v-else-if="!report.evidenceExpired && report.verificationResult === 'failed'">
+              {{ t('releaseGuardPresentation.nextDescription') }}
+            </p>
             <AppButton @click="openTab('investigation')"
               ><NIcon :size="16" aria-hidden="true"><Search /></NIcon
               >{{ t('releaseGuardPresentation.investigateAction') }}</AppButton
@@ -860,7 +882,7 @@ onBeforeUnmount(() => {
                 · {{ fact(event.summary) }}</template
               >
             </p>
-            <span class="guard-evidence-links"
+            <span v-if="!report.evidenceExpired" class="guard-evidence-links"
               ><a
                 v-for="(id, index) in event.evidenceIds"
                 :key="id"
@@ -914,7 +936,10 @@ onBeforeUnmount(() => {
             <span v-if="!candidate.supportingEvidenceIds.length">{{
               t('releaseGuard.notProvided')
             }}</span
-            ><span class="guard-evidence-links"
+            ><span v-else-if="report.evidenceExpired">{{
+              t('releaseGuardPresentation.timeline.evidenceExpired')
+            }}</span
+            ><span v-else class="guard-evidence-links"
               ><a
                 v-for="(id, index) in candidate.supportingEvidenceIds"
                 :key="id"
@@ -940,7 +965,10 @@ onBeforeUnmount(() => {
             <span v-if="!candidate.counterEvidenceIds.length">{{
               t('releaseGuard.notProvided')
             }}</span
-            ><span class="guard-evidence-links"
+            ><span v-else-if="report.evidenceExpired">{{
+              t('releaseGuardPresentation.timeline.evidenceExpired')
+            }}</span
+            ><span v-else class="guard-evidence-links"
               ><a
                 v-for="(id, index) in candidate.counterEvidenceIds"
                 :key="id"
@@ -1267,20 +1295,6 @@ summary:focus-visible {
 .guard-summary-metrics span {
   color: var(--color-dim);
 }
-.guard-summary-unknown {
-  margin-top: 12px;
-  border-left: 2px solid var(--color-border-strong);
-  padding-left: 12px;
-  color: var(--color-dim);
-  font-size: 12px;
-}
-.guard-summary-unknown strong {
-  font-weight: 500;
-}
-.guard-summary-unknown p {
-  margin-top: 3px;
-  line-height: 1.6;
-}
 .guard-facts {
   display: flex;
   flex-wrap: wrap;
@@ -1292,7 +1306,31 @@ summary:focus-visible {
 }
 .guard-context {
   display: grid;
-  gap: 10px;
+  gap: 8px;
+}
+.guard-context-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  font-size: 13px;
+}
+.guard-expired {
+  padding: 4px 8px;
+  border-radius: var(--rounded);
+  background: var(--color-inset);
+  color: var(--color-dim);
+}
+.guard-evidence-disclosure summary {
+  display: list-item;
+  width: fit-content;
+  color: var(--color-primary);
+}
+.guard-evidence-single {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  font-size: 12px;
 }
 .guard-muted {
   color: var(--color-dim);
@@ -1626,14 +1664,6 @@ pre {
     align-items: baseline;
     gap: 4px 16px;
   }
-  .guard-summary-unknown {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 8px;
-  }
-  .guard-summary-unknown p {
-    margin: 0;
-  }
   .guard-verdict,
   .guard-content {
     padding: 20px;
@@ -1665,6 +1695,7 @@ pre {
 @media (min-width: 1024px) {
   .guard-verification-layout {
     grid-template-columns: minmax(0, 1.85fr) minmax(230px, 1fr);
+    align-items: start;
   }
   .guard-failure-summary ul {
     max-height: 160px;
@@ -1709,6 +1740,12 @@ pre {
   }
   .guard-report__header > div {
     min-width: 0;
+  }
+}
+@media (pointer: coarse) {
+  .guard-evidence-disclosure > summary,
+  .guard-condition-list .guard-evidence-single {
+    min-height: 44px;
   }
 }
 </style>

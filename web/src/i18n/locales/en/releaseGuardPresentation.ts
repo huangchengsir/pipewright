@@ -21,6 +21,7 @@ export default {
   snapshotScope:
     'Interprets only the snapshot selected and approved for each send. It does not analyze the full report or investigate automatically.',
   nextTitle: 'What to do next',
+  nextExpired: 'Recheck to collect evidence in a new observation window.',
   nextDescription:
     'Review failure evidence before investigating changes or repeating observation.',
   investigateAction: 'Investigate related changes',
@@ -38,6 +39,7 @@ export default {
   reportMissing: 'This release guard report was not found.',
   technicalDetails: 'Technical details',
   reportDetails: 'Original report data',
+  evidenceGroup: 'View evidence ({n})',
   evidenceReference: 'View evidence {n}',
   evidenceLoaded: '{n} loaded; this count covers only loaded evidence.',
   continueFinding: 'Continue finding this evidence',

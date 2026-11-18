@@ -10,6 +10,7 @@ const { t } = useI18n()
 const id = useId()
 const tablist = ref<HTMLElement | null>(null)
 const activeClient = ref('codex')
+const wrapConfig = ref(false)
 const clients = computed(() => [
   {
     id: 'codex', name: 'Codex', path: '~/.codex/config.toml', format: 'TOML',
@@ -44,13 +45,20 @@ function onTabKey(event: KeyboardEvent, index: number) {
       <header class="mcp-client__header">
         <code class="mcp-client__path">{{ client.path }}</code>
         <span class="mcp-client__format">{{ client.format }}</span>
-      </header>
-      <div class="mcp-client__body">
-        <pre class="mcp-client__code">{{ client.config }}</pre>
         <AppTooltip class="mcp-client__copy-wrap" :content="`${t('settingsMCP.copy')} ${client.name}`">
           <button type="button" class="mcp-client__copy" :aria-label="`${t('settingsMCP.copy')} ${client.name}`" @click="emit('copy', client.config)"><Copy aria-hidden="true" /></button>
         </AppTooltip>
-      </div>
+        <button type="button" class="mcp-client__wrap" :aria-pressed="wrapConfig" @click="wrapConfig = !wrapConfig">
+          {{ t('runExperience.wrap') }}
+        </button>
+      </header>
+      <pre
+        class="mcp-client__code"
+        :class="{ 'mcp-client__code--wrap': wrapConfig }"
+        role="region"
+        tabindex="0"
+        :aria-label="client.path"
+      >{{ client.config }}</pre>
     </section>
   </details>
 </template>
@@ -64,16 +72,42 @@ function onTabKey(event: KeyboardEvent, index: number) {
 .mcp-client-tabs button:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 .mcp-client { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .mcp-client[hidden] { display: none; }
-.mcp-client__header { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; }
+.mcp-client__header { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; }
 .mcp-client__path { min-width: 0; overflow-wrap: anywhere; color: var(--color-dim); font-family: var(--font-mono); font-size: 12px; }
 .mcp-client__format { margin-inline-start: auto; font-size: 11px; color: var(--color-dim); }
-.mcp-client__body { position: relative; min-width: 0; background: var(--color-inset); padding: 12px 54px 12px 12px; border: 1px solid var(--color-border); border-radius: 6px; }
-.mcp-client__code { margin: 0; font-family: var(--font-mono); font-size: 12px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
-.mcp-client__copy-wrap { position: absolute; top: 8px; right: 8px; }
+.mcp-client__code {
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  background: var(--color-inset);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre;
+}
+.mcp-client__code--wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+.mcp-client__wrap {
+  padding-inline: 8px;
+  min-height: 32px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-dim);
+  font: inherit;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.mcp-client__wrap[aria-pressed="true"] {
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
 .mcp-client__copy-wrap :deep(.tooltip-bubble) { left: auto; right: 0; translate: none; }
 .mcp-client__copy-wrap :deep(.tooltip-bubble::after) { left: auto; right: 10px; translate: none; }
 .mcp-client__copy { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--color-border); border-radius: 6px; background: transparent; color: var(--color-dim); cursor: pointer; }
 .mcp-client__copy svg { width: 16px; height: 16px; }
-.mcp-client__copy:focus-visible, .mcp-client:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
-@media (max-width: 639px), (pointer: coarse) { .mcp-client-tabs button, .mcp-client__copy { min-width: 44px; min-height: 44px; } .mcp-client__body { padding-right: 64px; } }
+.mcp-client__copy:focus-visible, .mcp-client__code:focus-visible, .mcp-client:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+@media (max-width: 639px), (pointer: coarse) { .mcp-client-tabs button, .mcp-client__copy, .mcp-client__wrap { min-width: 44px; min-height: 44px; } }
 </style>

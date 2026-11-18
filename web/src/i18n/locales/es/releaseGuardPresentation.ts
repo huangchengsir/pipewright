@@ -21,6 +21,7 @@ export default {
   snapshotScope:
     'Interpreta solo la instantánea elegida y autorizada en cada envío. No analiza todo el informe ni investiga automáticamente.',
   nextTitle: 'Próximos pasos',
+  nextExpired: 'Vuelve a comprobar para recopilar evidencias en una nueva ventana de observación.',
   nextDescription:
     'Revisa las pruebas antes de investigar o repetir la observación.',
   investigateAction: 'Investigar cambios relacionados',
@@ -38,6 +39,7 @@ export default {
   reportMissing: 'No se encontró este informe.',
   technicalDetails: 'Detalles técnicos',
   reportDetails: 'Datos originales del informe',
+  evidenceGroup: 'Ver evidencias ({n})',
   evidenceReference: 'Ver prueba {n}',
   evidenceLoaded: '{n} cargadas; solo cuenta las pruebas cargadas.',
   continueFinding: 'Seguir buscando esta prueba',

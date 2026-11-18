@@ -58,4 +58,11 @@ const displayText = computed(() =>
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
+@media (max-width: 639px), (pointer: coarse) {
+  .theme-toggle {
+    box-sizing: border-box;
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
 </style>

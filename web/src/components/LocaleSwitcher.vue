@@ -96,4 +96,11 @@ function onSelect(key: string): void {
 .locale-switcher__chev {
   opacity: 0.6;
 }
+@media (max-width: 639px), (pointer: coarse) {
+  .locale-switcher {
+    box-sizing: border-box;
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
 </style>

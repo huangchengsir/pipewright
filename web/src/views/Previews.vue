@@ -328,7 +328,7 @@ async function reclaim(env: PreviewEnv): Promise<void> {
           :options="projects.map((p) => ({ value: p.id, label: p.name }))"
           :placeholder="t('previewEnvs.board.projectPick')"
           :aria-label="t('previewEnvs.board.projectAria')"
-          min-width="200px"
+          min-width="0"
           @update:model-value="selectProject"
         />
       </label>
@@ -411,8 +411,9 @@ async function reclaim(env: PreviewEnv): Promise<void> {
           v-else
           class="pcard__url pcard__url--dead mono"
           :title="env.subdomain"
-          >{{ env.subdomain }}</span
         >
+          <span class="pcard__url-txt">{{ env.subdomain }}</span>
+        </span>
 
         <dl class="pcard__meta">
           <div class="pcard__meta-row">
@@ -554,10 +555,13 @@ async function reclaim(env: PreviewEnv): Promise<void> {
 }
 .pvb__field {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
+  max-inline-size: 100%;
 }
 .pvb__field-lbl {
+  flex: none;
   font-size: var(--text-micro);
   font-weight: 600;
   color: var(--color-faint);
@@ -571,7 +575,7 @@ async function reclaim(env: PreviewEnv): Promise<void> {
   color: var(--color-text);
   font-size: var(--text-label);
   cursor: pointer;
-  min-width: 200px;
+  inline-size: min(200px, 100%);
 }
 .pvb__select:focus {
   outline: none;
@@ -607,7 +611,7 @@ async function reclaim(env: PreviewEnv): Promise<void> {
 /* 卡片网格 */
 .pvb__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
   gap: 16px;
 }
 
@@ -722,6 +726,10 @@ a.pcard__url:hover {
   color: var(--color-faint);
   text-decoration: line-through;
   cursor: default;
+}
+.pcard__url--dead .pcard__url-txt {
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 .pcard__url--dead .pcard__url-txt,
 .pcard__url--dead {

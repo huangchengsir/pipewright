@@ -497,9 +497,12 @@ onUnmounted(() => {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 16px;
 }
 .view-header__text {
+  flex: 1 1 16rem;
+  min-inline-size: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -508,7 +511,8 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
-  flex-shrink: 0;
+  flex-wrap: wrap;
+  max-inline-size: 100%;
 }
 .view-title {
   margin: 0;
@@ -548,7 +552,7 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   flex: 0 1 320px;
-  min-width: 200px;
+  min-width: min(200px, 100%);
 }
 .search-box__input {
   width: 100%;
@@ -682,7 +686,7 @@ onUnmounted(() => {
 /* KPI 条 */
 .kpi-strip {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr));
   gap: 12px;
 }
 .kpi {

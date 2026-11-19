@@ -534,7 +534,7 @@ onMounted(() => {
 .env-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr));
-  align-items: start;
+  align-items: stretch;
   gap: var(--space-4);
 }
 

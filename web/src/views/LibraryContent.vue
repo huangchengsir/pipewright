@@ -889,7 +889,7 @@ onMounted(() => {
   padding: 0;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(290px, 100%), 1fr));
-  align-items: start;
+  align-items: stretch;
   gap: 1rem;
 }
 

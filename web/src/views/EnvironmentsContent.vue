@@ -248,7 +248,7 @@ onMounted(() => {
           :options="projects.map((p) => ({ value: p.id, label: p.name }))"
           :placeholder="t('environments.selectProject')"
           :aria-label="t('environments.filterByProject')"
-          min-width="220px"
+          min-width="0"
           @update:model-value="setProject"
         />
       </label>
@@ -296,7 +296,7 @@ onMounted(() => {
         <!-- Active version hero -->
         <div class="env-card__head">
           <div class="env-card__name-row">
-            <h2 class="env-card__name">{{ tl.environment }}</h2>
+            <h2 class="env-card__name" :title="tl.environment">{{ tl.environment }}</h2>
             <span
               v-if="tl.active"
               class="env-card__live"
@@ -316,7 +316,7 @@ onMounted(() => {
               <code class="env-card__commit">{{
                 shortCommit(tl.active.commit)
               }}</code>
-              <span class="env-card__branch">{{
+              <span class="env-card__branch" :title="tl.active.branch">{{
                 tl.active.branch || "—"
               }}</span>
               <StatusBadge :status="toBadgeStatus(tl.active.status)" />
@@ -324,7 +324,7 @@ onMounted(() => {
             <div class="env-card__active-sub">
               <span>{{ formatWhen(tl.active.deployedAt) }}</span>
               <span class="env-card__dot" aria-hidden="true">·</span>
-              <span>{{ tl.active.triggeredBy || "—" }}</span>
+              <span class="env-card__actor">{{ tl.active.triggeredBy || "—" }}</span>
               <span class="env-card__dot" aria-hidden="true">·</span>
               <span>{{
                 t(
@@ -358,120 +358,123 @@ onMounted(() => {
 </PermissionGate>
         </div>
 
-        <p
-          v-if="
-            tl.active?.kubernetes?.length ||
-            previousSuccess(tl)?.kubernetes?.length
-          "
-          class="kube-note"
-        >
-          {{ t("kubernetes.noRollback") }}
-        </p>
-        <!-- Deployment timeline rail -->
-        <ol
-          class="env-timeline"
+        <div
+          class="env-history"
+          role="region"
+          tabindex="0"
           :aria-label="t('environments.timelineAria', { env: tl.environment })"
         >
-          <li
-            v-for="dep in tl.deployments"
-            :key="dep.runId"
-            class="env-timeline__item"
-            :class="{
-              'env-timeline__item--active': dep.active,
-              'env-timeline__item--failed': dep.status === 'failed',
-              'env-timeline__item--partial': dep.status === 'partial_failed',
-            }"
+          <p
+            v-if="
+              tl.active?.kubernetes?.length ||
+              previousSuccess(tl)?.kubernetes?.length
+            "
+            class="kube-note"
           >
-            <span class="env-timeline__node" aria-hidden="true" />
-            <div class="env-timeline__body">
-              <div class="env-timeline__line1">
-                <code class="env-timeline__commit">{{
-                  shortCommit(dep.commit)
-                }}</code>
-                <StatusBadge :status="toBadgeStatus(dep.status)" />
-                <span v-if="dep.active" class="env-timeline__tag">{{
-                  t("environments.active")
-                }}</span>
-              </div>
-              <div class="env-timeline__line2">
-                <span>{{ formatWhen(dep.deployedAt) }}</span>
-                <span class="env-card__dot" aria-hidden="true">·</span>
-                <span>{{ dep.triggeredBy || "—" }}</span>
-                <span class="env-card__dot" aria-hidden="true">·</span>
-                <span class="env-timeline__servers">{{
-                  dep.targets.map((t) => t.serverName).join(", ") || "—"
-                }}</span>
-              </div>
-              <div
-                v-if="dep.artifacts.length > 0"
-                class="env-timeline__artifacts"
-              >
-                <span
-                  v-for="a in dep.artifacts"
-                  :key="a.id"
-                  class="env-timeline__artifact"
+            {{ t("kubernetes.noRollback") }}
+          </p>
+          <ol class="env-timeline">
+            <li
+              v-for="dep in tl.deployments"
+              :key="dep.runId"
+              class="env-timeline__item"
+              :class="{
+                'env-timeline__item--active': dep.active,
+                'env-timeline__item--failed': dep.status === 'failed',
+                'env-timeline__item--partial': dep.status === 'partial_failed',
+              }"
+            >
+              <span class="env-timeline__node" aria-hidden="true" />
+              <div class="env-timeline__body">
+                <div class="env-timeline__line1">
+                  <code class="env-timeline__commit">{{
+                    shortCommit(dep.commit)
+                  }}</code>
+                  <StatusBadge :status="toBadgeStatus(dep.status)" />
+                  <span v-if="dep.active" class="env-timeline__tag">{{
+                    t("environments.active")
+                  }}</span>
+                </div>
+                <div class="env-timeline__line2">
+                  <span>{{ formatWhen(dep.deployedAt) }}</span>
+                  <span class="env-card__dot" aria-hidden="true">·</span>
+                  <span>{{ dep.triggeredBy || "—" }}</span>
+                  <span class="env-card__dot" aria-hidden="true">·</span>
+                  <span class="env-timeline__servers">{{
+                    dep.targets.map((t) => t.serverName).join(", ") || "—"
+                  }}</span>
+                </div>
+                <div
+                  v-if="dep.artifacts.length > 0"
+                  class="env-timeline__artifacts"
                 >
-                  {{ a.type }}:{{ a.name }}
-                </span>
-              </div>
-              <div
-                v-for="target in dep.kubernetes ?? []"
-                :key="target.releaseId || target.operationId"
-                class="kube-card kube-surface"
-              >
-                <template v-if="target.version === 2"
-                  ><strong>Kubernetes · {{ target.mode }}</strong>
-                  <p>
-                    {{ t("kubernetes.release.states." + target.state) }} ·
+                  <span
+                    v-for="a in dep.artifacts"
+                    :key="a.id"
+                    class="env-timeline__artifact"
+                  >
+                    {{ a.type }}:{{ a.name }}
+                  </span>
+                </div>
+                <div
+                  v-for="target in dep.kubernetes ?? []"
+                  :key="target.releaseId || target.operationId"
+                  class="kube-card kube-surface"
+                >
+                  <template v-if="target.version === 2"
+                    ><strong>Kubernetes · {{ target.mode }}</strong>
+                    <p>
+                      {{ t("kubernetes.release.states." + target.state) }} ·
+                      {{ t("kubernetes.cleanup." + target.cleanup) }}
+                    </p>
+                    <ul>
+                      <li
+                        v-for="resource in target.resources ?? []"
+                        :key="resource.kind + resource.namespace + resource.name"
+                      >
+                        {{ resource.kind }} · {{ resource.namespace }}/{{
+                          resource.name
+                        }}
+                      </li>
+                    </ul></template
+                  ><strong v-else
+                    >Kubernetes · {{ target.namespace }}/{{
+                      target.deployment
+                    }}</strong
+                  >
+                  <p v-if="target.version !== 2">
+                    {{ target.container }} ·
+                    {{ t("kubernetes.business." + target.business) }} ·
                     {{ t("kubernetes.cleanup." + target.cleanup) }}
                   </p>
-                  <ul>
-                    <li
-                      v-for="resource in target.resources ?? []"
-                      :key="resource.kind + resource.namespace + resource.name"
+                  <p v-if="target.version !== 2">
+                    <code>{{ target.image }}</code>
+                  </p>
+                  <p v-if="target.adopted" class="kube-muted">
+                    {{ t("kubernetes.adopted") }}
+                    <RouterLink
+                      :to="{
+                        name: 'run-detail',
+                        params: { id: target.sourceRunId },
+                      }"
+                      >{{ t("kubernetes.sourceRun") }}</RouterLink
                     >
-                      {{ resource.kind }} · {{ resource.namespace }}/{{
-                        resource.name
-                      }}
-                    </li>
-                  </ul></template
-                ><strong v-else
-                  >Kubernetes · {{ target.namespace }}/{{
-                    target.deployment
-                  }}</strong
-                >
-                <p v-if="target.version !== 2">
-                  {{ target.container }} ·
-                  {{ t("kubernetes.business." + target.business) }} ·
-                  {{ t("kubernetes.cleanup." + target.cleanup) }}
-                </p>
-                <p v-if="target.version !== 2">
-                  <code>{{ target.image }}</code>
-                </p>
-                <p v-if="target.adopted" class="kube-muted">
-                  {{ t("kubernetes.adopted") }}
-                  <RouterLink
-                    :to="{
-                      name: 'run-detail',
-                      params: { id: target.sourceRunId },
-                    }"
-                    >{{ t("kubernetes.sourceRun") }}</RouterLink
-                  >
-                </p>
-                <p v-if="target.version !== 2" class="kube-muted">
-                  {{ t("kubernetes.rolloutOnly") }}
-                </p>
+                  </p>
+                  <p v-if="target.version !== 2" class="kube-muted">
+                    {{ t("kubernetes.rolloutOnly") }}
+                  </p>
+                </div>
+                <ReleaseGuardPanel
+                  :run-id="dep.runId"
+                  :project-id="projectId"
+                  :environment="tl.environment"
+                  :has-deployment-targets="dep.targets.length > 0"
+                  compact
+                />
               </div>
-              <ReleaseGuardPanel
-                :run-id="dep.runId"
-                :project-id="projectId"
-                :environment="tl.environment"
-                :has-deployment-targets="dep.targets.length > 0"
-                compact
-              />
-            </div>
-          </li>
-        </ol>
+            </li>
+          </ol>
+        </div>
       </article>
     </div>
   </div>
@@ -489,6 +492,11 @@ onMounted(() => {
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.view-header__text {
+  flex: 1 1 12rem;
+  min-inline-size: 0;
 }
 .view-title {
   font-size: var(--text-display);
@@ -511,6 +519,8 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  inline-size: min(100%, 220px);
+  min-inline-size: 0;
 }
 .env-controls__label {
   font-size: var(--text-label);
@@ -518,19 +528,13 @@ onMounted(() => {
   font-weight: 600;
 }
 .select {
-  appearance: none;
-  background: var(--color-card);
-  border: 1px solid var(--color-border);
-  border-radius: var(--rounded-md);
-  color: var(--color-text);
-  padding: 8px 32px 8px 12px;
-  font-size: var(--text-body);
-  min-width: 220px;
+  inline-size: 100%;
 }
 
 .env-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr));
+  align-items: stretch;
   gap: var(--space-4);
 }
 
@@ -542,6 +546,9 @@ onMounted(() => {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  min-inline-size: 0;
+  max-block-size: clamp(24rem, 68vh, 36rem);
+  max-block-size: clamp(24rem, 68dvh, 36rem);
 }
 
 /* Active version hero */
@@ -549,21 +556,24 @@ onMounted(() => {
   padding: var(--space-4);
   background: linear-gradient(180deg, var(--color-card-2), var(--color-card));
   border-bottom: 1px solid var(--color-border);
-  display: grid;
-  grid-template-columns: 1fr auto;
-  grid-template-rows: auto auto;
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
   gap: var(--space-3);
   align-items: center;
 }
 .env-card__name-row {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  grid-column: 1 / 2;
+  gap: var(--space-2);
+  flex: 1 1 9rem;
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
+  min-inline-size: 0;
 }
 .env-card__name {
   margin: 0;
-  font-size: var(--text-kpi);
+  font-size: var(--text-heading);
   font-weight: 700;
   letter-spacing: -0.01em;
 }
@@ -578,16 +588,18 @@ onMounted(() => {
   color: var(--color-faint);
 }
 .env-card__active {
-  grid-column: 1 / 2;
-  grid-row: 2 / 3;
+  order: 1;
+  flex-basis: 100%;
+  min-inline-size: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 .env-card__active-meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
 }
 .env-card__commit {
   font-family: var(--font-mono, monospace);
@@ -596,6 +608,7 @@ onMounted(() => {
   color: var(--color-text);
 }
 .env-card__branch {
+  flex: 1 1 6rem;
   font-size: var(--text-label);
   color: var(--color-dim);
 }
@@ -609,10 +622,48 @@ onMounted(() => {
 .env-card__dot {
   color: var(--color-faint);
 }
-/* Rollback button spans both rows on the right. */
+/* Keep the environment controls above the scrollable history. */
 .env-card__head > :deep(button) {
-  grid-column: 2 / 3;
-  grid-row: 1 / 3;
+  margin-inline-start: auto;
+  max-inline-size: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.env-card__name,
+.env-card__branch {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.env-card__name,
+.env-card__branch,
+.env-card__actor {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.env-card__actor {
+  max-inline-size: 100%;
+  white-space: nowrap;
+}
+.env-card__active-sub,
+.env-timeline__body {
+  overflow-wrap: anywhere;
+}
+.env-history > .kube-note {
+  overflow-wrap: anywhere;
+  margin: var(--space-2) var(--space-4) 0;
+}
+.env-history {
+  flex: 1 1 auto;
+  min-block-size: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+.env-history:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
 }
 
 /* Timeline rail */
@@ -666,12 +717,19 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  flex: 1;
   min-width: 0;
 }
 .env-timeline__line1 {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-3);
+}
+.env-timeline__line1 :deep(.badge) {
+  max-inline-size: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .env-timeline__commit {
   font-family: var(--font-mono, monospace);
@@ -691,10 +749,8 @@ onMounted(() => {
   color: var(--color-dim);
 }
 .env-timeline__servers {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 220px;
+  max-inline-size: 100%;
+  overflow-wrap: anywhere;
 }
 .env-timeline__artifacts {
   display: flex;
@@ -703,6 +759,7 @@ onMounted(() => {
   margin-top: 2px;
 }
 .env-timeline__artifact {
+  max-inline-size: 100%;
   font-size: var(--text-micro);
   background: var(--color-inset);
   border: 1px solid var(--color-border);
@@ -719,5 +776,16 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+}
+
+@media (max-width: 360px) {
+  /* Leave space for the timeline when translated labels wrap above it. */
+  .env-card {
+    max-block-size: 27rem;
+  }
+  .env-card__head {
+    padding: var(--space-3);
+    gap: var(--space-2);
+  }
 }
 </style>

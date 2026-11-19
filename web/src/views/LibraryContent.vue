@@ -807,6 +807,7 @@ onMounted(() => {
 
 .page-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   justify-content: space-between;
   gap: 1rem;
@@ -828,6 +829,8 @@ onMounted(() => {
 /* Segmented control — intentional active state with sliding underline feel */
 .seg {
   display: inline-flex;
+  max-inline-size: 100%;
+  flex-wrap: wrap;
   gap: 0.25rem;
   padding: 0.25rem;
   background: var(--color-inset);
@@ -837,6 +840,8 @@ onMounted(() => {
 }
 .seg-item {
   display: inline-flex;
+  max-inline-size: 100%;
+  text-align: start;
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem 1rem;
@@ -858,6 +863,7 @@ onMounted(() => {
   box-shadow: var(--shadow);
 }
 .seg-count {
+  flex: none;
   display: inline-grid;
   place-items: center;
   min-width: 1.4rem;
@@ -882,7 +888,8 @@ onMounted(() => {
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(290px, 100%), 1fr));
+  align-items: stretch;
   gap: 1rem;
 }
 
@@ -945,6 +952,16 @@ onMounted(() => {
   color: var(--color-dim);
   line-height: 1.45;
   min-height: 1.2em;
+  max-block-size: 5.8em;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  scrollbar-width: thin;
+}
+.tpl-desc:focus-visible,
+.vg-desc:focus-visible,
+.cn-desc:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
 }
 
 /* Custom-node config preview — mirrors the variable-group var list */
@@ -1169,7 +1186,7 @@ onMounted(() => {
 /* Skeleton */
 .skeleton-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(290px, 100%), 1fr));
   gap: 1rem;
 }
 .skeleton-card {

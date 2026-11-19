@@ -846,7 +846,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
         </div>
         <p v-if="group.total === 0" class="panel__hint">{{ t('opsServer.card.noContainers') }}</p>
         <p v-else-if="visibleContainers.length === 0" class="panel__hint">{{ emptyContainersHint }}</p>
-        <ul v-else class="clist" role="list">
+        <ul v-else class="clist" role="list" tabindex="0" :aria-label="t('opsServer.card.tabContainers')">
           <li v-for="c in visibleContainers" :key="c.id" class="crow" :class="{ 'crow--busy': rowBusy(c.id), 'crow--bulk': bulkMode }">
             <label v-if="bulkMode && can('container.operate')" class="crow__check">
               <input
@@ -911,7 +911,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
         <p v-if="imgState === 'error'" class="panel__hint panel__hint--down">⚠ {{ imgError }}</p>
         <p v-else-if="imgState === 'loading' && images.length === 0" class="panel__hint">{{ t('opsServer.card.loadingImages') }}</p>
         <p v-else-if="images.length === 0" class="panel__hint">{{ t('opsServer.card.noImages') }}</p>
-        <ul v-else class="ilist" role="list">
+        <ul v-else class="ilist" role="list" tabindex="0" :aria-label="t('opsServer.card.tabImages')">
           <li v-for="img in images" :key="img.id + repoTag(img)" class="irow" :class="{ 'irow--busy': busyImage === img.id }">
             <div class="irow__main">
               <div class="irow__tag" :title="repoTag(img)">{{ repoTag(img) }}</div>
@@ -966,7 +966,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
         <p v-if="stackState === 'error'" class="panel__hint panel__hint--down">⚠ {{ stackError }}</p>
         <p v-else-if="stackState === 'loading' && stacks.length === 0" class="panel__hint">{{ t('opsServer.card.loadingStacks') }}</p>
         <p v-else-if="stacks.length === 0" class="panel__hint">{{ t('opsServer.card.noStacks') }}</p>
-        <ul v-else class="ilist" role="list">
+        <ul v-else class="ilist" role="list" tabindex="0" :aria-label="t('opsServer.card.tabStacks')">
           <li
             v-for="s in stacks"
             :key="s.name"
@@ -1058,7 +1058,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
         <p v-if="volState === 'error'" class="panel__hint panel__hint--down">⚠ {{ volError }}</p>
         <p v-else-if="volState === 'loading' && volumes.length === 0" class="panel__hint">{{ t('opsServer.card.loadingVolumes') }}</p>
         <p v-else-if="volumes.length === 0" class="panel__hint">{{ t('opsServer.card.noVolumes') }}</p>
-        <ul v-else class="ilist" role="list">
+        <ul v-else class="ilist" role="list" tabindex="0" :aria-label="t('opsServer.card.tabVolumes')">
           <li v-for="v in volumes" :key="v.name" class="srow" :class="{ 'irow--busy': busyVol === v.name }">
             <div class="srow__main">
               <div class="srow__name">{{ v.name }}</div>
@@ -1084,7 +1084,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
         <p v-if="netState === 'error'" class="panel__hint panel__hint--down">⚠ {{ netError }}</p>
         <p v-else-if="netState === 'loading' && networks.length === 0" class="panel__hint">{{ t('opsServer.card.loadingNetworks') }}</p>
         <p v-else-if="networks.length === 0" class="panel__hint">{{ t('opsServer.card.noNetworks') }}</p>
-        <ul v-else class="ilist" role="list">
+        <ul v-else class="ilist" role="list" tabindex="0" :aria-label="t('opsServer.card.tabNetworks')">
           <li v-for="n in networks" :key="n.id">
             <div class="srow" :class="{ 'irow--busy': busyNet === n.id }">
               <PermissionGate :query="permissionQuery('container.inspect')"><button class="srow__main netexp" @click="toggleNetDetail(n)">
@@ -1157,6 +1157,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
 }
 .panel__head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
@@ -1166,17 +1167,20 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
 }
 .panel__id {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 10px;
   min-width: 0;
 }
 .panel__name {
   margin: 0;
+  overflow-wrap: anywhere;
   font-size: var(--text-section);
   font-weight: 700;
   color: var(--color-text);
 }
 .panel__host {
+  max-inline-size: 100%;
   font-size: var(--text-micro);
   color: var(--color-faint);
   white-space: nowrap;
@@ -1185,9 +1189,10 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
 }
 .panel__meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
-  flex-shrink: 0;
+  max-inline-size: 100%;
 }
 .panel__count {
   font-size: var(--text-micro);
@@ -1237,6 +1242,7 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
 /* 卡片内 tab */
 .card-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 0 12px;
   border-bottom: 1px solid var(--color-border);
@@ -1264,6 +1270,20 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
   font-size: var(--text-micro);
   color: var(--color-faint);
   font-variant-numeric: tabular-nums;
+}
+
+/* Keep long inventories below their server header and tab controls. */
+.clist,
+.ilist {
+  max-block-size: clamp(17rem, 55vh, 30rem);
+  max-block-size: clamp(17rem, 55dvh, 30rem);
+  overflow: auto;
+  scrollbar-width: thin;
+}
+.clist:focus-visible,
+.ilist:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
 }
 
 /* 容器行 */
@@ -1759,8 +1779,23 @@ async function doRemoveImage(img: ImageInfo): Promise<void> {
 .op:disabled { opacity: 0.45; cursor: not-allowed; }
 .op--busy { opacity: 0.6; pointer-events: none; }
 
+@media (721px <= width <= 960px) {
+  .crow__actions {
+    grid-column: 2 / -1;
+    justify-content: flex-start;
+  }
+}
+
 @media (max-width: 720px) {
-  .crow, .crow--bulk, .irow { grid-template-columns: 1fr; gap: 8px; }
-  .crow__actions { justify-content: flex-start; }
+  .crow, .crow--bulk, .irow, .srow:not(.srow--stack), .srow__head, .svc__row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+  .srow__name, .srow__status {
+    overflow-wrap: anywhere;
+  }
+  .crow__actions, .srow__act {
+    justify-content: flex-start;
+  }
 }
 </style>

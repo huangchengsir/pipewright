@@ -933,7 +933,7 @@ const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('pr
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                 <path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>
               </svg>
-              <span class="branch-name mono">{{ project.defaultBranch || '—' }}</span>
+              <span class="branch-name mono" :title="project.defaultBranch">{{ project.defaultBranch || '—' }}</span>
             </div>
           </div>
 
@@ -1702,11 +1702,13 @@ const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('pr
 .page-header {
   display: flex;
   align-items: flex-start;
+  flex-wrap: wrap;
   gap: 16px;
 }
 
 .page-header-text {
-  flex: 1;
+  flex: 1 1 12rem;
+  min-inline-size: 0;
 }
 
 .page-title {
@@ -1735,7 +1737,7 @@ const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('pr
 .search-wrap {
   position: relative;
   flex: 1;
-  min-width: 200px;
+  min-width: min(100%, 200px);
   max-width: 380px;
 }
 
@@ -1778,6 +1780,7 @@ const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('pr
 
 .filter-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   background: var(--color-inset);
   border-radius: var(--rounded);
@@ -1825,7 +1828,7 @@ const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('pr
 /* ─── project grid ──────────────────────────────────────────────────────────── */
 .project-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
   gap: var(--card-gap);
   list-style: none;
 }
@@ -1970,6 +1973,11 @@ const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('pr
 }
 
 .branch-name {
+  min-inline-size: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 0.72rem;
   color: var(--color-dim);
 }
@@ -2037,6 +2045,7 @@ const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('pr
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  flex-wrap: wrap;
   margin-top: auto;
   padding-top: 10px;
   border-top: 1px solid var(--color-border);
@@ -2049,6 +2058,7 @@ const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('pr
 
 .card-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 5px;
 }
 

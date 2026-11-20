@@ -59,6 +59,18 @@ func TestCompareLocalUsesCachedDeploymentEndpointsOnly(t *testing.T) {
 	if !got.Available || got.BaseSHA != base || got.CurrentSHA != current || got.ComparisonKind != "direct_trees" || !reflect.DeepEqual(got.Files, want) || got.Truncated {
 		t.Fatalf("cached direct endpoint diff=%+v", got)
 	}
+	loopback := "http://localhost:3000/team/demo.git"
+	if err := os.Rename(c.mirrorPath(dir), c.mirrorPath(loopback)); err != nil {
+		t.Fatal(err)
+	}
+	blocked := c.CompareLocal(context.Background(), loopback, base, current)
+	if blocked.Available || blocked.Reason != "source_cache_unavailable" {
+		t.Fatalf("loopback mirror should remain unavailable: %+v", blocked)
+	}
+	if err := os.Rename(c.mirrorPath(loopback), c.mirrorPath(dir)); err != nil {
+		t.Fatal(err)
+	}
+
 	body, _ := json.Marshal(got)
 	if strings.Contains(string(body), "DO_NOT_EXPORT_SOURCE_PASSWORD") {
 		t.Fatal("source text exported")

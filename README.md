@@ -288,6 +288,17 @@ See [database deployment and migration](docs/database-migration.md) for connecti
 | `PIPEWRIGHT_PAC_RUNTIME` | `1` forces pipeline-as-code on for **all** projects, ignoring the per-project toggle | off |
 | `PIPEWRIGHT_CHAIN_MAX_DEPTH` | Max pipeline-chaining depth (hard stop against runaway chains) | `5` |
 
+#### Gitea on the same machine
+
+For a native deployment with Pipewright and Gitea on the same machine, set these variables in the Pipewright service environment and restart Pipewright:
+
+    PIPEWRIGHT_LOCAL_GITEA_ORIGIN=http://localhost:3000
+    PIPEWRIGHT_LOCAL_GITEA_REPOS=team/demo.git,team/tools.git
+
+Use the exact clone URL in the project (for example, http://localhost:3000/team/demo.git). Register one HTTP(S) loopback origin and a comma-separated list of repositories in owner/repo.git format. The origin must point to a listener reachable via loopback from the Pipewright process. For an IPv6-only listener, use [::1] in both the configured origin and clone URL. HTTPS requires a certificate trusted by the Pipewright host and valid for the configured hostname or IP.
+
+Select an existing Git credential in the project for private repositories. Use the Gitea account name with a read-only token. Keep the two variables unset to leave local Gitea access disabled. After changing the list, restart Pipewright for the change to apply. Local Git reads require the registered address, including when repository caching is enabled.
+
 Maven script/toolchain builds with an enabled `.m2/repository` (or `.m2`) cache use the workspace repository, even with a script subdirectory. Explicit repository options win; empty/disabled cache settings leave commands unchanged. This does not configure Maven inside Dockerfile builds. See [build cache configuration](docs/build-cache.md).
 
 **Integrations**

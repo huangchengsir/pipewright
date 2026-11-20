@@ -124,6 +124,7 @@ export default {
   errNameRequired: 'Veuillez saisir un nom de projet',
   errRepoRequired: 'Veuillez saisir une URL de dépôt',
   errRepoFormat: 'Saisissez une URL de dépôt HTTP ou HTTPS valide',
+  errRepoPolicy: 'La politique d’accès bloque cette URL. Un administrateur doit inscrire les dépôts Gitea locaux dans la configuration du déploiement.',
   errRepoProtocol: 'Seules les URL HTTP(S) et Git SSH sont prises en charge',
   repoSSHKnownHosts: 'Ajoutez d’abord la clé de l’hôte SSH au known_hosts du compte de service. Utilisez une URL ssh:// pour un port personnalisé.',
   repoHttpWarning: 'HTTP transmet les identifiants sans chiffrement du transport. Utilisez HTTPS si possible.',

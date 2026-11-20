@@ -68,6 +68,8 @@ func writeProjectError(w http.ResponseWriter, err error) {
 	case errors.Is(err, project.ErrCredentialError),
 		errors.Is(err, project.ErrCredentialNotFound):
 		writeError(w, http.StatusUnprocessableEntity, "credential_error", "凭据无效或无权限,无法访问该仓库")
+	case errors.Is(err, project.ErrRepoPolicyBlocked):
+		writeError(w, http.StatusUnprocessableEntity, "repo_policy_blocked", "仓库地址被访问策略拒绝。使用本机 Gitea 时，请管理员登记对应仓库")
 	case errors.Is(err, project.ErrRepoUnreachable):
 		writeError(w, http.StatusUnprocessableEntity, "repo_unreachable", "仓库地址不可达,请检查地址")
 	case errors.Is(err, project.ErrUnsupportedRepoProtocol):

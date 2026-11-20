@@ -2,12 +2,14 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/huangchengsir/pipewright/internal/build"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/repocache"
 	"github.com/huangchengsir/pipewright/internal/vault"
@@ -67,6 +69,14 @@ func makeListRefsHandler(projects project.Service, v vault.Vault, lister RefsLis
 		token = "" //nolint:ineffassign // 尽早清明文引用
 		_ = token
 		if !recheckRepositoryRead(w, r.Context(), projects, v, proj) {
+			return
+		}
+		if errors.Is(lerr, repocache.ErrCacheDisabled) {
+			writeError(w, http.StatusServiceUnavailable, "repocache_disabled", "代码管理区未启用,无法列分支")
+			return
+		}
+		if errors.Is(lerr, build.ErrRepoBlocked) {
+			writeProjectError(w, project.ErrRepoPolicyBlocked)
 			return
 		}
 		if lerr != nil {
@@ -132,6 +142,14 @@ func makeListCommitsHandler(projects project.Service, v vault.Vault, lister Refs
 		token = ""
 		_ = token
 		if !recheckRepositoryRead(w, r.Context(), projects, v, proj) {
+			return
+		}
+		if errors.Is(lerr, repocache.ErrCacheDisabled) {
+			writeError(w, http.StatusServiceUnavailable, "repocache_disabled", "代码管理区未启用,无法列提交")
+			return
+		}
+		if errors.Is(lerr, build.ErrRepoBlocked) {
+			writeProjectError(w, project.ErrRepoPolicyBlocked)
 			return
 		}
 		if lerr != nil {

@@ -12,6 +12,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/huangchengsir/pipewright/internal/gitauth"
 	"github.com/huangchengsir/pipewright/internal/releaseguard"
 )
 
@@ -36,7 +37,7 @@ func (c *Cache) CompareLocal(ctx context.Context, repoURL, base, current string)
 		out.CurrentSHA = ""
 		return unavailable("full_commit_required")
 	}
-	if c == nil || repoURL == "" {
+	if c == nil || repoURL == "" || gitauth.IsLocalGitAddress(repoURL) {
 		return unavailable("source_cache_unavailable")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)

@@ -104,8 +104,13 @@ func (g goGitSourceReader) cloneSnapshot(ctx context.Context, repoURL, username,
 	if repoURL == "" {
 		return nil, "", errSourceCloneFailed
 	}
-	if !g.allowInsecure && !validSourceURL(repoURL) {
-		return nil, "", errSourceCloneFailed
+	networkURL := repoURL
+	if !g.allowInsecure {
+		var err error
+		networkURL, err = gitauth.ResolveRepoURL(repoURL)
+		if err != nil {
+			return nil, "", errSourceCloneFailed
+		}
 	}
 
 	fs := memfs.New()
@@ -119,7 +124,7 @@ func (g goGitSourceReader) cloneSnapshot(ctx context.Context, repoURL, username,
 	defer cancel()
 
 	opts := &gogit.CloneOptions{
-		URL:          repoURL,
+		URL:          networkURL,
 		Auth:         auth,
 		Depth:        1,
 		SingleBranch: true,

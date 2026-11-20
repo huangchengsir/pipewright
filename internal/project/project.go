@@ -38,6 +38,8 @@ var (
 	ErrCredentialError = errors.New("project: credential error")
 	// ErrRepoUnreachable 表示仓库地址不可达/不存在/网络错误。
 	ErrRepoUnreachable = errors.New("project: repo unreachable")
+	// ErrRepoPolicyBlocked identifies an address rejected before Git connects.
+	ErrRepoPolicyBlocked = fmt.Errorf("project: repository address denied: %w", ErrRepoUnreachable)
 	// ErrUnsupportedRepoProtocol 表示仓库地址使用了尚未支持的 Git 协议。
 	ErrUnsupportedRepoProtocol = errors.New("project: unsupported repo protocol")
 	// ErrVaultUnconfigured 表示保险库未配置 master key,无法取凭据做校验。

@@ -124,6 +124,7 @@ export default {
   errNameRequired: 'Bitte gib einen Projektnamen ein',
   errRepoRequired: 'Bitte gib eine Repository-URL ein',
   errRepoFormat: 'Gültige HTTP- oder HTTPS-Repository-URL eingeben',
+  errRepoPolicy: 'Die Zugriffsrichtlinie blockiert diese Repository-URL. Ein Administrator muss lokale Gitea-Repositories in der Bereitstellungskonfiguration eintragen.',
   errRepoProtocol: 'Nur HTTP(S)- und Git-SSH-Repository-URLs werden unterstützt',
   repoSSHKnownHosts: 'Den SSH-Hostschlüssel zuerst in known_hosts des Dienstkontos hinterlegen. Für eigene Ports eine ssh:// URL verwenden.',
   repoHttpWarning: 'HTTP überträgt Repository-Zugangsdaten unverschlüsselt. Verwende nach Möglichkeit HTTPS.',

@@ -227,6 +227,17 @@ v2 节点通过本地 Linux Docker 或固定 SSH 执行器支持镜像 digest �
 | `PIPEWRIGHT_PAC_RUNTIME` | `1` 对**所有项目**强开流水线即代码,无视各项目开关 | 关 |
 | `PIPEWRIGHT_CHAIN_MAX_DEPTH` | 流水线串联深度上限(防无限链的硬兜底) | `5` |
 
+#### 同机 Gitea
+
+Pipewright 和 Gitea 在同一台机器原生运行时，在 Pipewright 服务环境中设置以下变量，然后重启 Pipewright。
+
+    PIPEWRIGHT_LOCAL_GITEA_ORIGIN=http://localhost:3000
+    PIPEWRIGHT_LOCAL_GITEA_REPOS=team/demo.git,team/tools.git
+
+在项目中填写与登记内容完全一致的克隆地址，例如 http://localhost:3000/team/demo.git。仅登记一个 HTTP(S) 回环服务及按逗号分隔的 owner/repo.git 仓库列表。服务须可从 Pipewright 进程通过回环地址访问。如果服务仅监听 IPv6，请在服务地址与克隆地址中都使用 [::1]。使用 HTTPS 时，证书须受 Pipewright 宿主信任，并与登记的主机名或 IP 匹配。
+
+私有仓库请在项目中选择由 Gitea 账号名和只读令牌组成的 Git 凭据。两个变量都留空时，同机访问默认关闭。修改登记内容后重启生效，开启仓库缓存时也会检查登记范围。
+
 Maven 脚本或工具链构建启用 `.m2/repository`（或 `.m2`）缓存后，使用工作区根目录的仓库，不受脚本子目录影响。显式仓库选项优先，空值或禁用缓存不改变命令；不影响 Dockerfile 内的 Maven 构建。详见[构建缓存配置](docs/build-cache.md)。
 
 **集成**

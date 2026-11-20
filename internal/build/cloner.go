@@ -59,8 +59,13 @@ func (c *Cloner) Clone(ctx context.Context, repoURL, username, token, branch, co
 	if repoURL == "" {
 		return nil, ErrCloneFailed
 	}
-	if !c.allowInsecure && !validRepoURL(repoURL) {
-		return nil, ErrRepoBlocked
+	networkURL := repoURL
+	if !c.allowInsecure {
+		var err error
+		networkURL, err = gitauth.ResolveRepoURL(repoURL)
+		if err != nil {
+			return nil, ErrRepoBlocked
+		}
 	}
 
 	cctx, cancel := context.WithTimeout(ctx, cloneTimeout)
@@ -74,7 +79,7 @@ func (c *Cloner) Clone(ctx context.Context, repoURL, username, token, branch, co
 	branch = strings.TrimSpace(branch)
 
 	opts := &gogit.CloneOptions{
-		URL:  repoURL,
+		URL:  networkURL,
 		Auth: auth,
 		Tags: gogit.NoTags,
 	}
@@ -93,6 +98,16 @@ func (c *Cloner) Clone(ctx context.Context, repoURL, username, token, branch, co
 		return nil, ErrCloneFailed
 	}
 
+	if networkURL != repoURL {
+		cfg, err := repo.Config()
+		if err != nil {
+			return nil, ErrCloneFailed
+		}
+		cfg.Remotes["origin"].URLs = []string{repoURL}
+		if err := repo.SetConfig(cfg); err != nil {
+			return nil, ErrCloneFailed
+		}
+	}
 	if commit != "" {
 		wt, werr := repo.Worktree()
 		if werr != nil {
@@ -125,15 +140,6 @@ func ResolveRepositoryHead(repo *gogit.Repository) (*CloneResolved, error) {
 		CommitAuthor:  strings.TrimSpace(strings.ReplaceAll(commit.Author.Name, "\x00", "")),
 		MetadataReady: true,
 	}, nil
-}
-
-// IsRepoURLAllowed 是 validRepoURL 的导出包装(供 repocache 等复用同款 SSRF 收口,不重复实现)。
-func IsRepoURLAllowed(repoURL string) bool { return validRepoURL(repoURL) }
-
-// validRepoURL 对仓库地址做 SSRF 收口(生产路径),复用全平台同款策略:
-// 仅 http/https;拒云元数据/链路本地/回环;私网放行(自托管内网 Git 友好)。
-func validRepoURL(repoURL string) bool {
-	return gitauth.AllowedRepoURL(repoURL)
 }
 
 // shortSHA 取 commit 的前 7 位(短 sha);不足 7 位原样返回。

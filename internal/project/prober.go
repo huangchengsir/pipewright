@@ -23,8 +23,8 @@ const probeTimeout = 15 * time.Second
 // 纯 Go,不要求宿主装 git;HTTP(S) 或 SSH 凭据经参数化 API 传入。
 // 全程在内存进行(memory.NewStorage),不落任何工作区/对象到磁盘。
 //
-// SSRF 收口:生产路径仅允许 HTTP(S) 或 Git SSH;拒云元数据/链路本地/回环地址;
-// 私网 IP(自托管内网 Git)放行。allowInsecureSchemes 仅供测试注入(放行 file:// 等本地夹具),
+// 共享地址策略拒绝云元数据、链路本地和回环地址。管理员登记的同机 Gitea 仓库经
+// 独立只读传输访问。allowInsecureSchemes 仅供测试注入(放行 file:// 等本地夹具),
 // 生产构造(project.New 默认)永远为 false。
 type goGitProber struct {
 	// allowInsecureSchemes 仅供测试:为 true 时跳过 scheme/host SSRF 校验(放行 file:// 夹具)。
@@ -42,15 +42,18 @@ func (p goGitProber) Probe(ctx context.Context, repoURL, username, token string)
 		return "", ErrRepoUnreachable
 	}
 
+	networkURL := repoURL
 	if !p.allowInsecureSchemes {
-		if err := validateRepoURL(repoURL); err != nil {
+		var err error
+		networkURL, err = resolveProbeRepoURL(repoURL)
+		if err != nil {
 			return "", err
 		}
 	}
 
 	rem := gogit.NewRemote(memory.NewStorage(), &gogitconfig.RemoteConfig{
 		Name: "origin",
-		URLs: []string{repoURL},
+		URLs: []string{networkURL},
 	})
 
 	auth, err := gitauth.AuthMethod(repoURL, username, token)
@@ -70,20 +73,17 @@ func (p goGitProber) Probe(ctx context.Context, repoURL, username, token string)
 	return defaultBranchFromRefs(refs), nil
 }
 
-// validateRepoURL 对仓库地址做 SSRF 收口(生产路径):
-//   - scheme 仅允许 HTTP(S) 和 Git SSH(拒 file://、git:// 等);
-//   - 解析 host:拒云元数据/链路本地(169.254.0.0/16、fe80::/10)与回环(127.0.0.0/8、::1);
-//   - 私网 IP(10/172.16/192.168、fc00::/7)放行(自托管内网 Git 友好)。
-//
-// 不支持的协议返回 ErrUnsupportedRepoProtocol；地址和主机错误仍返回 ErrRepoUnreachable。
-func validateRepoURL(repoURL string) error {
-	if gitauth.AllowedRepoURL(repoURL) {
-		return nil
+// resolveProbeRepoURL reports policy rejection separately from network and credential errors.
+func resolveProbeRepoURL(repoURL string) (string, error) {
+	resolved, err := gitauth.ResolveRepoURL(repoURL)
+	if err == nil {
+		return resolved, nil
 	}
+	repoURL = strings.ToLower(strings.TrimSpace(repoURL))
 	if strings.Contains(repoURL, "://") && !strings.HasPrefix(repoURL, "http://") && !strings.HasPrefix(repoURL, "https://") && !gitauth.IsSSH(repoURL) {
-		return ErrUnsupportedRepoProtocol
+		return "", ErrUnsupportedRepoProtocol
 	}
-	return ErrRepoUnreachable
+	return "", ErrRepoPolicyBlocked
 }
 
 // classifyProbeErr 把 go-git/transport 错误映射为干净领域错误(不携带底层文本)。

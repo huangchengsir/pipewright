@@ -124,6 +124,7 @@ export default {
   errNameRequired: '请输入项目名称',
   errRepoRequired: '请输入仓库地址',
   errRepoFormat: '请输入有效的 HTTP(S) 或 Git SSH 仓库地址',
+  errRepoPolicy: '访问策略拦截了此仓库地址。同机 Gitea 仓库需要管理员在部署配置中登记。',
   errRepoProtocol: '仅支持 HTTP(S) 和 Git SSH 仓库地址',
   repoSSHKnownHosts: 'SSH 主机公钥须预先写入服务运行账号的 known_hosts；自定义端口请使用 ssh:// 协议地址。',
   repoHttpWarning: 'HTTP 会明文传输仓库凭据,建议使用 HTTPS。',

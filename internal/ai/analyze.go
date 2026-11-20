@@ -95,8 +95,11 @@ func (a goGitAnalyzer) Analyze(ctx context.Context, repoURL, username, token str
 		return RepoAnalysis{Cloned: false, Signals: []string{}, DegradeReason: "仓库地址为空,无法克隆分析"}
 	}
 
+	networkURL := repoURL
 	if !a.allowInsecure {
-		if !validRepoURL(repoURL) {
+		var err error
+		networkURL, err = gitauth.ResolveRepoURL(repoURL)
+		if err != nil {
 			// SSRF 拒绝:同样走降级(绝不泄漏 URL 细节),不报致命错。
 			return RepoAnalysis{Cloned: false, Signals: []string{}, DegradeReason: "仓库地址不可达或不被允许"}
 		}
@@ -114,7 +117,7 @@ func (a goGitAnalyzer) Analyze(ctx context.Context, repoURL, username, token str
 	defer cancel()
 
 	_, err := gogit.CloneContext(cctx, storer, fs, &gogit.CloneOptions{
-		URL:          repoURL,
+		URL:          networkURL,
 		Auth:         auth,
 		Depth:        1,
 		SingleBranch: true,

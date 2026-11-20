@@ -44,6 +44,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/deployattempt"
 	"github.com/huangchengsir/pipewright/internal/dnsprovider"
 	"github.com/huangchengsir/pipewright/internal/environments"
+	"github.com/huangchengsir/pipewright/internal/gitauth"
 	"github.com/huangchengsir/pipewright/internal/httpapi"
 	"github.com/huangchengsir/pipewright/internal/kubernetes"
 	"github.com/huangchengsir/pipewright/internal/kubernetesowner"
@@ -97,6 +98,9 @@ func runPlatform() (restart func()) {
 	requestedMode, modeErr := config.LoadMultiTenantMode()
 	if modeErr != nil {
 		log.Fatalf("config: %v", modeErr)
+	}
+	if err := gitauth.ConfigureLocalGitea(os.Getenv("PIPEWRIGHT_LOCAL_GITEA_ORIGIN"), os.Getenv("PIPEWRIGHT_LOCAL_GITEA_REPOS")); err != nil {
+		log.Fatalf("config: %v", err)
 	}
 	cfg := config.Load()
 	masterKey, masterKeyErr := config.LoadMasterKey()
@@ -488,6 +492,8 @@ func runPlatform() (restart func()) {
 	if repoCache != nil {
 		clonerOpt = build.WithCloner(repoCache)
 		refsLister = repoCache
+	} else if gitauth.LocalGiteaEnabled() {
+		refsLister = repocache.NewLocalRefs()
 	}
 
 	// 构建依赖缓存(若启用)做成 Builder 选项;未启用 → 无操作(避免 typed-nil 接口陷阱)。

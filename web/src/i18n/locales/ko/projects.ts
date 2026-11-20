@@ -124,6 +124,7 @@ export default {
   errNameRequired: '프로젝트 이름을 입력하세요',
   errRepoRequired: '저장소 URL을 입력하세요',
   errRepoFormat: '유효한 HTTP 또는 HTTPS 저장소 URL을 입력하세요',
+  errRepoPolicy: '접근 정책에 따라 이 저장소 URL이 차단되었습니다. 같은 호스트의 Gitea 저장소는 관리자가 배포 설정에 등록해야 합니다.',
   errRepoProtocol: 'HTTP(S) 및 Git SSH 저장소 URL만 지원합니다',
   repoSSHKnownHosts: 'SSH 호스트 키를 서비스 계정의 known_hosts에 먼저 등록하세요. 사용자 지정 포트는 ssh:// URL을 사용합니다.',
   repoHttpWarning: 'HTTP는 저장소 자격 증명을 암호화하지 않고 전송합니다. 가능하면 HTTPS를 사용하세요.',

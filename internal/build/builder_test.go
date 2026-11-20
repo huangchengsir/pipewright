@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/huangchengsir/pipewright/internal/gitauth"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/run"
@@ -506,16 +507,16 @@ func TestPushFailureSetsFailureLog(t *testing.T) {
 
 // TestSSRFBlocksMetadataIP 验证 SSRF 收口拒绝云元数据 IP(生产 cloner)。
 func TestSSRFBlocksMetadataIP(t *testing.T) {
-	if validRepoURL("http://169.254.169.254/latest/meta-data/") {
+	if gitauth.AllowedRepoURL("http://169.254.169.254/latest/meta-data/") {
 		t.Fatalf("metadata IP must be blocked")
 	}
-	if validRepoURL("http://127.0.0.1/repo.git") {
+	if gitauth.AllowedRepoURL("http://127.0.0.1/repo.git") {
 		t.Fatalf("loopback must be blocked")
 	}
-	if !validRepoURL("https://gitee.com/u/r.git") {
+	if !gitauth.AllowedRepoURL("https://gitee.com/u/r.git") {
 		t.Fatalf("public host must be allowed")
 	}
-	if validRepoURL("file:///tmp/repo") {
+	if gitauth.AllowedRepoURL("file:///tmp/repo") {
 		t.Fatalf("file scheme must be blocked")
 	}
 }

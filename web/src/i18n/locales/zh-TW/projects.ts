@@ -124,6 +124,7 @@ export default {
   errNameRequired: '請輸入專案名稱',
   errRepoRequired: '請輸入倉庫位址',
   errRepoFormat: '請輸入有效的 HTTP 或 HTTPS 倉庫位址',
+  errRepoPolicy: '存取原則已封鎖此倉庫位址。同機 Gitea 倉庫須由管理員在部署設定中登記。',
   errRepoProtocol: '僅支援 HTTP(S) 與 Git SSH 倉庫位址',
   repoSSHKnownHosts: '請先將 SSH 主機金鑰加入服務帳號的 known_hosts；自訂連接埠請使用 ssh:// 協定網址。',
   repoHttpWarning: 'HTTP 會以明文傳輸倉庫憑證,建議使用 HTTPS。',

@@ -152,6 +152,21 @@ func TestTestCloneRepoUnreachable422(t *testing.T) {
 	assertErrCode(t, resp, "repo_unreachable")
 }
 
+func TestProjectRepoPolicyBlocked422(t *testing.T) {
+	srv, client, csrf, _ := setupProjectServer(t, stubProber{err: project.ErrRepoPolicyBlocked})
+	credID := newGitCred(t, client, srv.URL, csrf, "fixture-token")
+	body := `{"name":"repo","repoUrl":"http://localhost:3000/team/demo.git","credentialId":"` + credID + `"}`
+	for _, path := range []string{"/api/projects/test-clone", "/api/projects"} {
+		resp := doJSON(t, client, http.MethodPost, srv.URL+path, csrf, body)
+		if resp.StatusCode != http.StatusUnprocessableEntity {
+			resp.Body.Close()
+			t.Fatalf("%s status = %d, want 422", path, resp.StatusCode)
+		}
+		assertErrCode(t, resp, "repo_policy_blocked")
+		resp.Body.Close()
+	}
+}
+
 func TestTestCloneSuccess(t *testing.T) {
 	srv, client, csrf, _ := setupProjectServer(t, stubProber{branch: "develop"})
 	credID := newGitCred(t, client, srv.URL, csrf, "tok")

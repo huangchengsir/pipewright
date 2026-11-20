@@ -57,8 +57,8 @@ func TestProberSSRFRejectsMetadataAndLoopback(t *testing.T) {
 		"https://127.0.0.1/repo.git",
 		"http://[::1]/repo.git",
 	} {
-		if _, err := pr.Probe(context.Background(), u, "", "tok"); !errors.Is(err, ErrRepoUnreachable) {
-			t.Fatalf("%s 应被拒为 ErrRepoUnreachable, got %v", u, err)
+		if _, err := pr.Probe(context.Background(), u, "", "tok"); !errors.Is(err, ErrRepoPolicyBlocked) {
+			t.Fatalf("%s 应被地址策略拒绝, got %v", u, err)
 		}
 	}
 }
@@ -72,7 +72,7 @@ func TestProberSSRFAllowsPrivateIP(t *testing.T) {
 		"http://172.16.3.4/repo.git",
 		"https://192.168.1.10/repo.git",
 	} {
-		if err := validateRepoURL(u); err != nil {
+		if _, err := resolveProbeRepoURL(u); err != nil {
 			t.Fatalf("私网 %s 应放行,got %v", u, err)
 		}
 	}

@@ -136,9 +136,13 @@ func (d goGitDiffer) Diff(ctx context.Context, repoURL, username, token, baselin
 		return RunDiff{Available: false, Reason: "缺少可对比的提交,无法计算差异", Files: []FileDiff{}}
 	}
 
-	if !d.allowInsecure && !validRepoURL(repoURL) {
-		// SSRF 拒绝:走降级(绝不泄漏 URL 细节),不报致命错。
-		return RunDiff{Available: false, Reason: "仓库地址不可达或不被允许", Files: []FileDiff{}}
+	networkURL := repoURL
+	if !d.allowInsecure {
+		var err error
+		networkURL, err = gitauth.ResolveRepoURL(repoURL)
+		if err != nil {
+			return RunDiff{Available: false, Reason: "仓库地址不可达或不被允许", Files: []FileDiff{}}
+		}
 	}
 
 	cctx, cancel := context.WithTimeout(ctx, diffCloneTimeout)
@@ -152,7 +156,7 @@ func (d goGitDiffer) Diff(ctx context.Context, repoURL, username, token, baselin
 		return RunDiff{Available: false, Reason: "仓库凭据不可用", Files: []FileDiff{}}
 	}
 	repo, err := gogit.CloneContext(cctx, storer, memfs.New(), &gogit.CloneOptions{
-		URL:  repoURL,
+		URL:  networkURL,
 		Auth: auth,
 		Tags: gogit.NoTags,
 	})
@@ -188,8 +192,13 @@ func (d goGitDiffer) DiffCommit(ctx context.Context, repoURL, username, token, c
 	if commit == "" {
 		return RunDiff{Available: false, Reason: "本次运行无提交信息,无可对比的代码差异", Files: []FileDiff{}}, ""
 	}
-	if !d.allowInsecure && !validRepoURL(repoURL) {
-		return RunDiff{Available: false, Reason: "仓库地址不可达或不被允许", Files: []FileDiff{}}, ""
+	networkURL := repoURL
+	if !d.allowInsecure {
+		var err error
+		networkURL, err = gitauth.ResolveRepoURL(repoURL)
+		if err != nil {
+			return RunDiff{Available: false, Reason: "仓库地址不可达或不被允许", Files: []FileDiff{}}, ""
+		}
 	}
 
 	cctx, cancel := context.WithTimeout(ctx, diffCloneTimeout)
@@ -201,7 +210,7 @@ func (d goGitDiffer) DiffCommit(ctx context.Context, repoURL, username, token, c
 		return RunDiff{Available: false, Reason: "仓库凭据不可用", Files: []FileDiff{}}, ""
 	}
 	repo, err := gogit.CloneContext(cctx, storer, memfs.New(), &gogit.CloneOptions{
-		URL:  repoURL,
+		URL:  networkURL,
 		Auth: auth,
 		Tags: gogit.NoTags,
 	})

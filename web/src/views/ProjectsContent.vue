@@ -64,6 +64,16 @@ function goToPipeline(projectId: string): void {
   void router.push({ name: 'project-pipeline', params: { id: projectId } })
 }
 
+// A service-local checkout URL would open the viewer's own machine.
+function isLoopbackRepoLink(repoUrl: string): boolean {
+  try {
+    const host = new URL(repoUrl).hostname
+    return host === 'localhost' || host === '[::1]' || host.startsWith('127.')
+  } catch {
+    return false
+  }
+}
+
 // Story 7-4: read-only code browsing (FR-4)
 function goToCode(projectId: string): void {
   if (!can("project.read",projectId)) return
@@ -356,6 +366,8 @@ async function handleTestClone(): Promise<void> {
         testError.value = t('projects.testErrCredential')
       } else if (code === 'unsupported_repo_protocol') {
         testError.value = t('projects.errRepoProtocol')
+      } else if (code === 'repo_policy_blocked') {
+        testError.value = t('projects.errRepoPolicy')
       } else if (code === 'repo_unreachable') {
         testError.value = t('projects.testErrUnreachable')
       } else if (code === 'vault_unconfigured') {
@@ -399,6 +411,9 @@ async function handleCreateSubmit(): Promise<void> {
       if (code === 'credential_error') {
         createErrors.value.credentialId = t('projects.createErrCredField')
         createBanner.value = t('projects.createErrCredBanner')
+      } else if (code === 'repo_policy_blocked') {
+        createErrors.value.repoUrl = t('projects.errRepoPolicy')
+        createBanner.value = t('projects.errRepoPolicy')
       } else if (code === 'repo_unreachable') {
         createErrors.value.repoUrl = t('projects.createErrRepoField')
         createBanner.value = t('projects.createErrRepoBanner')
@@ -484,6 +499,8 @@ async function handleRenameSubmit(): Promise<void> {
     if (err instanceof HttpError) {
       if (err.status === 0) {
         renameBanner.value = t('projects.errNetworkRetry')
+      } else if (err.apiError?.code === 'repo_policy_blocked') {
+        renameBanner.value = t('projects.errRepoPolicy')
       } else {
         renameBanner.value = err.apiError?.message ?? t('projects.renameErrStatus', { status: err.status })
       }
@@ -562,7 +579,7 @@ function openTriggerModal(p: Project, loadReferences = true): void {
   if (!can("run.start",p.id,true)) return
   triggerLoadReferences = loadReferences
   referenceLoadSeq++
-  commitLoadSeq++
+  cancelCommitOptions()
   branchOptions.value = []
   commitOptions.value = []
   triggerProject.value     = p
@@ -604,21 +621,46 @@ async function loadBranchOptions(projectId: string): Promise<void> {
   if (scope.active() && can("run.start",projectId,true) && seq === referenceLoadSeq && triggerLoadReferences) void loadCommitOptions(projectId, triggerForm.value.branch)
 }
 
-// 据当前分支拉最近 commit 供 commit 下拉(分支变化时刷新);失败静默。
+// Load commit suggestions after branch typing settles. Superseded reads can
+// otherwise keep downloading private Gitea history after navigation.
 let commitLoadSeq = 0
+let commitLoadTimer: ReturnType<typeof setTimeout> | undefined
+let commitLoadRequest: AbortController | undefined
+
+function cancelCommitOptions(): void {
+  commitLoadSeq++
+  clearTimeout(commitLoadTimer)
+  commitLoadRequest?.abort()
+  commitLoadRequest = undefined
+}
+
 async function loadCommitOptions(projectId: string, ref: string): Promise<void> {
-  const seq = ++commitLoadSeq
+  cancelCommitOptions()
+  const seq = commitLoadSeq
+  const controller = new AbortController()
+  commitLoadRequest = controller
   try {
-    const commits = await scope.run(()=>listCommits(projectId,ref,30,scope.requestOptions))
+    const commits = await scope.run(() => listCommits(projectId, ref, 30, { ...scope.requestOptions, signal: controller.signal }))
     if (scope.active() && can("run.start",projectId,true) && seq === commitLoadSeq) commitOptions.value = commits
   } catch {
     if (scope.active() && can("run.start",projectId,true) && seq === commitLoadSeq) commitOptions.value = []
+  } finally {
+    if (commitLoadRequest === controller) commitLoadRequest = undefined
   }
 }
 
 function onTriggerBranchInput(): void {
   triggerBranchError.value = ''
-  if (triggerLoadReferences && triggerProject.value) void loadCommitOptions(triggerProject.value.id, triggerForm.value.branch)
+  cancelCommitOptions()
+  commitOptions.value = []
+  const projectId = triggerProject.value?.id
+  if (triggerLoadReferences && projectId) {
+    commitLoadTimer = setTimeout(() => {
+      if (scope.active() && can("run.start",projectId,true) && triggerProject.value?.id === projectId) {
+        void loadCommitOptions(projectId, triggerForm.value.branch)
+      }
+    }, 250)
+  }
 }
 
 function closeTriggerModal(): void {
@@ -626,7 +668,7 @@ function closeTriggerModal(): void {
   triggerModalOpen.value = false
   triggerProject.value   = null
   referenceLoadSeq++
-  commitLoadSeq++
+  cancelCommitOptions()
 }
 
 function consumeOnboardingQuery(): void {
@@ -685,6 +727,8 @@ async function handleTriggerSubmit(): Promise<void> {
     if(!can("run.start",id,true)||triggerProject.value?.id!==id)return
     triggerModalOpen.value = false
     triggerProject.value   = null
+    referenceLoadSeq++
+    cancelCommitOptions()
     void router.push(`/runs/${run.id}`)
   } catch (err) {
     if(!scope.active())return
@@ -730,7 +774,7 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
   '排队中': { dot: 'var(--color-faint)',  bg: 'var(--color-card-2)',      border: 'var(--color-border-strong)', text: 'var(--color-dim)', pulse: false },
 }
 const scope=useIdentityRequestScope(()=>{
- projects.value=[];credentials.value=[];referenceLoadSeq++;commitLoadSeq++
+ projects.value=[];credentials.value=[];referenceLoadSeq++;cancelCommitOptions()
  createModalOpen.value=false;renameModalOpen.value=false;deleteModalOpen.value=false;triggerModalOpen.value=false
  renamingProject.value=null;deletingProject.value=null;triggerProject.value=null
  inlineCredentialForm.value.secret='';createForm.value={name:'',repoUrl:'',credentialId:'',defaultBranch:''}
@@ -744,7 +788,7 @@ watch(()=>[createPermission.allowed.value,credentialCreatePermission.allowed.val
  if(!credentialCreatePermission.allowed.value){inlineCredentialOpen.value=false;inlineCredentialForm.value.secret=''}
  if(renamingProject.value&&!can('project.edit',renamingProject.value.id)){renameModalOpen.value=false;renamingProject.value=null}
  if(deletingProject.value&&!can('project.delete',deletingProject.value.id)){deleteModalOpen.value=false;deletingProject.value=null}
- if(triggerProject.value&&!can('run.start',triggerProject.value.id,true)){triggerModalOpen.value=false;triggerProject.value=null;referenceLoadSeq++;commitLoadSeq++;triggerDefs.value=[];triggerParams.value={}}
+ if(triggerProject.value&&!can('run.start',triggerProject.value.id,true)){triggerModalOpen.value=false;triggerProject.value=null;referenceLoadSeq++;cancelCommitOptions();triggerDefs.value=[];triggerParams.value={}}
 })
 const visibleCount=computed(()=>projects.value.filter(p=>can('project.read',p.id)).length)
 const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('project.read',p.id)).length)
@@ -921,7 +965,9 @@ const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('pr
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                 <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/>
               </svg>
+              <span v-if="isLoopbackRepoLink(project.repoUrl)" class="repo-url mono" :title="project.repoUrl">{{ project.repoUrl }}</span>
               <a
+                v-else
                 class="repo-url mono"
                 :href="project.repoUrl"
                 target="_blank"

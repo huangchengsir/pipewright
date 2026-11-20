@@ -4,8 +4,9 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { reactive } from 'vue'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import Projects from './Projects.vue'
-import { listProjects, updateProject, createProject, type Project } from '../api/projects'
+import { listProjects, updateProject, createProject, testClone, type Project } from '../api/projects'
 import { listCredentials } from '../api/credentials'
+import { HttpError } from '../api/http'
 import { listRefs, listCommits } from '../api/refs'
 import { triggerManual } from '../api/runs'
 import { getParameters } from '../api/parameters'
@@ -58,6 +59,59 @@ describe('onboarding project navigation only opens existing dialogs', () => {
     expect(view.find('[role="dialog"]').exists()).toBe(false)
     expect(createProject).not.toHaveBeenCalled()
   })
+  it('explains how to register a same-machine Gitea repository after policy denial', async () => {
+    const blocked = new HttpError(422, { code: 'repo_policy_blocked', message: 'untranslated fallback' }, 'blocked')
+    vi.mocked(testClone).mockRejectedValueOnce(blocked)
+    vi.mocked(createProject).mockRejectedValueOnce(blocked)
+    const view = await open({ onboardingCreate: '1' })
+    await view.get('#proj-name').setValue('Gitea test')
+    await view.get('#proj-repo').setValue('http://localhost:3000/team/demo.git')
+    await view.get('#proj-cred').trigger('click')
+    await view.get('[role="option"]').trigger('click')
+    await view.get('.test-clone-row button').trigger('click')
+    await flushPromises()
+    expect(view.get('.test-result--error').text()).toContain('部署配置中登记')
+    await view.get('.modal-form').trigger('submit')
+    await flushPromises()
+    expect(view.get('#proj-repo').attributes('aria-invalid')).toBe('true')
+    expect(view.get('#proj-repo-err').text()).toContain('部署配置中登记')
+    expect(view.text()).not.toContain('untranslated fallback')
+  })
+  it('keeps the server-local Gitea address as text', async () => {
+    const repoUrl = 'http://localhost/team/demo.git'
+    vi.mocked(listProjects).mockResolvedValueOnce([{ ...p, repoUrl }])
+    const view = await open({})
+    const address = view.get('.repo-url')
+    expect(address.text()).toBe(repoUrl)
+    expect(address.attributes('href')).toBeUndefined()
+  })
+
+  it('cancels superseded commit reads and loads only the last typed branch', async () => {
+    vi.mocked(listCommits).mockImplementationOnce(() => new Promise(() => {}))
+    const view = await open({})
+    await view.get('.action-btn--run').trigger('click')
+    await flushPromises()
+    const initial = vi.mocked(listCommits).mock.calls[0]?.[3]?.signal
+    expect(initial).toBeDefined()
+    vi.mocked(listCommits).mockClear()
+    vi.useFakeTimers()
+    try {
+      const input = view.get('#trigger-branch')
+      await input.setValue('dev')
+      expect(initial?.aborted).toBe(true)
+      await input.setValue('develop')
+      expect(listCommits).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(250)
+      expect(listCommits).toHaveBeenCalledExactlyOnceWith('a', 'develop', 30, expect.any(Object))
+      await input.setValue('not-yet-queried')
+      await view.get('.modal-footer .btn-secondary').trigger('click')
+      await vi.advanceTimersByTimeAsync(250)
+      expect(listCommits).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('consumes run query preserving other parameters without refs, commits or task submission', async () => {
     const view = await open({ onboardingRun: 'a', keep: 'yes' })
     expect(view.find('[role="dialog"]').exists()).toBe(true)

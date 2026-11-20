@@ -124,6 +124,7 @@ export default {
   errNameRequired: 'プロジェクト名を入力してください',
   errRepoRequired: 'リポジトリ URL を入力してください',
   errRepoFormat: '有効な HTTP または HTTPS のリポジトリ URL を入力してください',
+  errRepoPolicy: 'アクセスポリシーにより、このリポジトリ URL はブロックされました。同じホストの Gitea リポジトリは管理者がデプロイ設定に登録してください。',
   errRepoProtocol: 'HTTP(S) と Git SSH のリポジトリ URL のみ対応しています',
   repoSSHKnownHosts: 'SSH ホスト鍵をサービスアカウントの known_hosts に登録してください。独自ポートは ssh:// 形式を使用します。',
   repoHttpWarning: 'HTTP では認証情報が暗号化されずに送信されます。可能なら HTTPS を使用してください。',

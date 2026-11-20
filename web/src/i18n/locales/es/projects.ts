@@ -124,6 +124,7 @@ export default {
   errNameRequired: 'Introduce un nombre de proyecto',
   errRepoRequired: 'Introduce una URL del repositorio',
   errRepoFormat: 'Introduce una URL de repositorio HTTP o HTTPS válida',
+  errRepoPolicy: 'La política de acceso bloqueó esta URL. Un administrador debe registrar los repositorios locales de Gitea en la configuración de despliegue.',
   errRepoProtocol: 'Solo se admiten repositorios HTTP(S) y Git SSH',
   repoSSHKnownHosts: 'Añade primero la clave del host SSH al known_hosts de la cuenta de servicio. Usa una URL ssh:// para un puerto personalizado.',
   repoHttpWarning: 'HTTP transmite las credenciales sin cifrado de transporte. Usa HTTPS cuando sea posible.',

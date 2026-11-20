@@ -25,8 +25,10 @@ import (
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/storage/memory"
 
 	"github.com/huangchengsir/pipewright/internal/build"
 	"github.com/huangchengsir/pipewright/internal/gitauth"
@@ -46,7 +48,7 @@ type Cache struct {
 	fallback networkCloner
 	locks    sync.Map // repoKey → *sync.Mutex
 	// allowInsecure 仅供测试:为 true 时跳过 SSRF scheme/host 校验(放行本地夹具仓库)。
-	// 生产构造(New)绝不设置;镜像仅对 build.IsRepoURLAllowed 通过的 URL 进行(同款 SSRF 收口)。
+	// 生产构造(New)绝不设置;共享镜像使用全平台地址策略，同机仓库独立读取。
 	allowInsecure bool
 }
 
@@ -61,6 +63,12 @@ func New(root string, fallback networkCloner) (*Cache, error) {
 	}
 	return &Cache{root: root, fallback: fallback}, nil
 }
+
+// ErrCacheDisabled indicates that shared mirrors are unavailable for ordinary repositories.
+var ErrCacheDisabled = errors.New("repocache: shared mirrors unavailable")
+
+// NewLocalRefs supports authenticated refs for local Gitea with no shared cache.
+func NewLocalRefs() *Cache { return &Cache{} }
 
 // Ref 是一条仓库引用(分支或 tag)+ 其指向的 commit。
 type Ref struct {
@@ -90,10 +98,11 @@ func (c *Cache) repoLock(repoURL string) *sync.Mutex {
 // ensureMirror 确保本地 bare 镜像存在并增量更新到最新(首次 mirror 克隆,后续 fetch)。
 // 返回镜像目录;失败返回 error(调用方回退直连克隆)。已是最新(ErrAlreadyUpToDate)视为成功。
 func (c *Cache) ensureMirror(ctx context.Context, repoURL, username, token string) (string, error) {
-	// SSRF 收口:生产仅镜像 http/https 且非元数据/回环/链路本地的仓库(复用 build 同款校验)。
-	// 不通过 → 返回错误,由 Clone 回退直连(build.Cloner 同样会拒,净效果=拦截)。
-	if !c.allowInsecure && !build.IsRepoURLAllowed(repoURL) {
-		return "", errors.New("repocache: repo url not allowed")
+	if !c.allowInsecure {
+		repoURL = strings.TrimSpace(repoURL)
+		if gitauth.IsLocalGitAddress(repoURL) || !gitauth.AllowedRepoURL(repoURL) {
+			return "", build.ErrRepoBlocked
+		}
 	}
 	mirror := c.mirrorPath(repoURL)
 	auth, err := gitauth.AuthMethod(repoURL, username, token)
@@ -132,12 +141,25 @@ func (c *Cache) ensureMirror(ctx context.Context, repoURL, username, token strin
 // Clone 实现 build 的克隆契约:经本地镜像出工作区(命中走本地、镜像不可用回退直连)。
 // branch/commit 语义同 build.Cloner.Clone:commit 优先,否则 branch,皆空则默认分支。
 func (c *Cache) Clone(ctx context.Context, repoURL, username, token, branch, commit, destDir string) (*build.CloneResolved, error) {
+	if !c.allowInsecure && gitauth.IsLocalGitAddress(repoURL) {
+		if _, err := gitauth.ResolveRepoURL(repoURL); err != nil {
+			return nil, build.ErrRepoBlocked
+		}
+		// Local Gitea is credential-scoped and never seeds the shared mirror.
+		if c.fallback != nil {
+			return c.fallback.Clone(ctx, repoURL, username, token, branch, commit, destDir)
+		}
+		return build.NewCloner().Clone(ctx, repoURL, username, token, branch, commit, destDir)
+	}
 	lock := c.repoLock(repoURL)
 	lock.Lock()
 	defer lock.Unlock()
 
 	mirror, err := c.ensureMirror(ctx, repoURL, username, token)
 	if err != nil {
+		if errors.Is(err, build.ErrRepoBlocked) {
+			return nil, err
+		}
 		// 镜像不可用(首次拉取失败 / 损坏)→ 回退直连网络克隆,绝不让构建挂。
 		if c.fallback != nil {
 			return c.fallback.Clone(ctx, repoURL, username, token, branch, commit, destDir)
@@ -191,32 +213,101 @@ func (c *Cache) checkoutFromMirror(ctx context.Context, mirror, branch, commit, 
 	return build.ResolveRepositoryHead(repo)
 }
 
-// ListRefs 列出某仓库的分支与 tag(确保镜像最新后从本地镜像读;供前端下拉,不每次触网克隆)。
-func (c *Cache) ListRefs(ctx context.Context, repoURL, username, token string) (*Refs, error) {
+// refsNetworkURL routes registered local repositories directly, even with the
+// shared cache disabled. The boolean distinguishes a private transport.
+func (c *Cache) refsNetworkURL(repoURL string) (string, bool, error) {
+	if !c.allowInsecure && gitauth.IsLocalGitAddress(repoURL) {
+		resolved, err := gitauth.ResolveRepoURL(repoURL)
+		if err != nil {
+			return "", false, build.ErrRepoBlocked
+		}
+		return resolved, true, nil
+	}
+	if c.root == "" {
+		return "", false, ErrCacheDisabled
+	}
+	return repoURL, false, nil
+}
+
+// openMirror opens a refreshed mirror and holds its lock through the read.
+func (c *Cache) openMirror(ctx context.Context, repoURL, username, token string) (*gogit.Repository, func(), error) {
 	lock := c.repoLock(repoURL)
 	lock.Lock()
-	defer lock.Unlock()
-
 	mirror, err := c.ensureMirror(ctx, repoURL, username, token)
+	if err != nil {
+		lock.Unlock()
+		return nil, nil, err
+	}
+	repo, err := gogit.PlainOpen(mirror)
+	if err != nil {
+		lock.Unlock()
+		return nil, nil, err
+	}
+	return repo, lock.Unlock, nil
+}
+
+// openLocalHistory holds private objects only in a request-local directory.
+func openLocalHistory(ctx context.Context, repoURL, networkURL, username, token string) (*gogit.Repository, func(), error) {
+	auth, err := gitauth.AuthMethod(repoURL, username, token)
+	if err != nil {
+		return nil, nil, errors.New("repocache: invalid git credential")
+	}
+	dir, err := os.MkdirTemp("", "pipewright-gitea-history-*")
+	if err != nil {
+		return nil, nil, errors.New("repocache: temporary repository unavailable")
+	}
+	cleanup := func() { _ = os.RemoveAll(dir) }
+	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+	defer cancel()
+
+	repo, err := gogit.PlainCloneContext(ctx, dir, true, &gogit.CloneOptions{URL: networkURL, Auth: auth, Mirror: true})
+	if err != nil {
+		cleanup()
+		return nil, nil, build.ErrCloneFailed
+	}
+	return repo, cleanup, nil
+}
+
+// ListRefs lists branches and tags using the mirror or authenticated local ref discovery.
+func (c *Cache) ListRefs(ctx context.Context, repoURL, username, token string) (*Refs, error) {
+	url, local, err := c.refsNetworkURL(repoURL)
 	if err != nil {
 		return nil, err
 	}
-	repo, oerr := gogit.PlainOpen(mirror)
-	if oerr != nil {
-		return nil, oerr
+	var refs []*plumbing.Reference
+	if local {
+		auth, err := gitauth.AuthMethod(repoURL, username, token)
+		if err != nil {
+			return nil, errors.New("repocache: invalid git credential")
+		}
+		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		remote := gogit.NewRemote(memory.NewStorage(), &config.RemoteConfig{Name: "origin", URLs: []string{url}})
+		refs, err = remote.ListContext(ctx, &gogit.ListOptions{Auth: auth})
+		if err != nil {
+			return nil, build.ErrCloneFailed
+		}
+	} else {
+		repo, unlock, err := c.openMirror(ctx, repoURL, username, token)
+		if err != nil {
+			return nil, err
+		}
+		defer unlock()
+		if iter, err := repo.References(); err == nil {
+			_ = iter.ForEach(func(ref *plumbing.Reference) error {
+				refs = append(refs, ref)
+				return nil
+			})
+		}
 	}
 	out := &Refs{}
-	if bIter, berr := repo.Branches(); berr == nil {
-		_ = bIter.ForEach(func(r *plumbing.Reference) error {
-			out.Branches = append(out.Branches, Ref{Name: r.Name().Short(), Commit: r.Hash().String()})
-			return nil
-		})
-	}
-	if tIter, terr := repo.Tags(); terr == nil {
-		_ = tIter.ForEach(func(r *plumbing.Reference) error {
-			out.Tags = append(out.Tags, Ref{Name: r.Name().Short(), Commit: r.Hash().String(), IsTag: true})
-			return nil
-		})
+	for _, ref := range refs {
+		name := ref.Name()
+		if name.IsBranch() {
+			out.Branches = append(out.Branches, Ref{Name: name.Short(), Commit: ref.Hash().String()})
+		} else if name.IsTag() && !strings.HasSuffix(string(name), "^{}") {
+			out.Tags = append(out.Tags, Ref{Name: name.Short(), Commit: ref.Hash().String(), IsTag: true})
+		}
 	}
 	sort.Slice(out.Branches, func(i, j int) bool { return out.Branches[i].Name < out.Branches[j].Name })
 	sort.Slice(out.Tags, func(i, j int) bool { return out.Tags[i].Name < out.Tags[j].Name })
@@ -241,18 +332,21 @@ func (c *Cache) ListCommits(ctx context.Context, repoURL, username, token, ref s
 	if limit > 200 {
 		limit = 200
 	}
-	lock := c.repoLock(repoURL)
-	lock.Lock()
-	defer lock.Unlock()
-
-	mirror, err := c.ensureMirror(ctx, repoURL, username, token)
+	url, local, err := c.refsNetworkURL(repoURL)
 	if err != nil {
 		return nil, err
 	}
-	repo, oerr := gogit.PlainOpen(mirror)
-	if oerr != nil {
-		return nil, oerr
+	var repo *gogit.Repository
+	var cleanup func()
+	if local {
+		repo, cleanup, err = openLocalHistory(ctx, repoURL, url, username, token)
+	} else {
+		repo, cleanup, err = c.openMirror(ctx, repoURL, username, token)
 	}
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
 
 	// 解析起点 hash:ref 是分支/tag 名 → 解析其引用;否则当 commit sha;空 → HEAD。
 	var from plumbing.Hash

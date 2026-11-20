@@ -100,7 +100,7 @@ func runPlatform() (restart func()) {
 		log.Fatalf("config: %v", modeErr)
 	}
 	if err := gitauth.ConfigureLocalGitea(os.Getenv("PIPEWRIGHT_LOCAL_GITEA_ORIGIN"), os.Getenv("PIPEWRIGHT_LOCAL_GITEA_REPOS")); err != nil {
-		log.Fatalf("[git] invalid same-machine Gitea configuration: %v", err)
+		log.Fatalf("config: %v", err)
 	}
 	cfg := config.Load()
 	masterKey, masterKeyErr := config.LoadMasterKey()

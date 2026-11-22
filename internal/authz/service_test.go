@@ -135,7 +135,7 @@ func TestPresetsExplicitAndClosedUntilBound(t *testing.T) {
 			if len(g.Scope.EnvironmentIDs) > 0 || len(g.Scope.ProjectIDs) > 0 || len(g.Scope.ResourceIDs) > 0 {
 				t.Fatal("preset chose user resources")
 			}
-			if i == 3 && g.Action != "environment.read" && g.Action != "project.read" && g.Action != "run.read" && g.Action != "guard.read" && g.Action != "dashboard.read" && g.Action != "template.read" && g.Action != "variable_group.read" && g.Action != "custom_node.read" && g.Action != "dora.read" {
+			if i == 3 && g.Action != "environment.read" && g.Action != "project.read" && g.Action != "business_project.read" && g.Action != "product.read" && g.Action != "run.read" && g.Action != "guard.read" && g.Action != "dashboard.read" && g.Action != "template.read" && g.Action != "variable_group.read" && g.Action != "custom_node.read" && g.Action != "dora.read" {
 				t.Fatal("viewer action")
 			}
 		}

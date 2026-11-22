@@ -384,7 +384,20 @@ func (r *Repository) resourceChoices(ctx context.Context, q configstate.DBTX) ([
 			args = append(args, predicate.Args...)
 		}
 		label := "o.resource_id"
+		ancestor := ""
 		switch kind {
+		case "business_project":
+			label = "COALESCE((SELECT b.name FROM workspace_business_projects b WHERE b.id=o.resource_id),o.resource_id)"
+		case "product":
+			label = "COALESCE((SELECT p.name FROM workspace_products p WHERE p.id=o.resource_id),o.resource_id)"
+			predicate, err := QueryPredicate(ctx, r.db, "business_project.read", "b.id")
+			if err != nil {
+				return nil, err
+			}
+			ancestor = ` AND EXISTS (SELECT 1 FROM workspace_products p JOIN workspace_business_projects b
+				ON b.id=p.business_project_id WHERE p.id=o.resource_id AND (` + predicate.SQL + `))`
+			args = append(args, predicate.Args...)
+
 		case "template":
 			label = "COALESCE((SELECT l.name FROM pipeline_templates l WHERE l.id=o.resource_id),o.resource_id)"
 		case "variable_group":
@@ -408,7 +421,7 @@ func (r *Repository) resourceChoices(ctx context.Context, q configstate.DBTX) ([
 		case "member":
 			label = "COALESCE((SELECT u.display_name FROM access_members m JOIN access_users u ON u.id=m.user_id WHERE m.id=o.resource_id),o.resource_id)"
 		}
-		rows, err := q.QueryContext(ctx, `SELECT o.resource_id,`+label+` FROM access_ownership o WHERE o.resource_kind=? AND (`+strings.Join(clauses, " OR ")+`) ORDER BY o.resource_id`, args...)
+		rows, err := q.QueryContext(ctx, `SELECT o.resource_id,`+label+` FROM access_ownership o WHERE o.resource_kind=? AND (`+strings.Join(clauses, " OR ")+`)`+ancestor+` ORDER BY o.resource_id`, args...)
 		if err != nil {
 			return nil, err
 		}

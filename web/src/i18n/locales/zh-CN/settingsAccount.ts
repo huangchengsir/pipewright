@@ -1,4 +1,18 @@
 export default {
+  preferencesTitle: '使用偏好',
+  projectMode: {
+    title: '项目显示模式',
+    single: '单项目',
+    singleDescription: '沿用原有项目卡片、搜索和项目操作。',
+    multi: '多项目',
+    multiDescription: '按业务项目、产品和应用分组管理。',
+    loading: '正在读取项目显示模式…',
+    loadFailed: '无法读取项目显示模式。',
+    saveFailed: '无法保存项目显示模式。已保存的模式仍然生效。',
+    saved: '项目显示模式已保存。',
+    save: '保存',
+  },
+
   identityTitle: '身份',
   identitySub: '查看当前账户身份与登录信息。',
   roleAdmin: '管理员',

@@ -56,6 +56,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/trigger"
 	"github.com/huangchengsir/pipewright/internal/vault"
 	"github.com/huangchengsir/pipewright/internal/version"
+	"github.com/huangchengsir/pipewright/internal/workspace"
 )
 
 const (
@@ -73,6 +74,9 @@ const contextKeySession contextKey = 1
 type Option func(*options)
 
 type options struct {
+	workspace             *workspace.Service
+	productReleaseRoutes  func(chi.Router, audit.Recorder)
+	projectDisplayModeDB  *sql.DB
 	accessAccounts        *tenancy.Accounts
 	accessRepository      *tenancy.Repository
 	databaseMigration     *dbmigration.Runtime
@@ -510,7 +514,12 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		mountDatabaseMigration(ar, o.databaseMigration)
 		mountPlatformAccount(ar, o.platformLogin, svc, o.audit)
 		mountTenancyAccounts(ar, o.accessAccounts, o.audit, policy)
+		mountProjectDisplayMode(ar, o.projectDisplayModeDB, o.audit)
 		mountTenancyManagement(ar, o.accessRepository, o.audit)
+		mountWorkspace(ar, o.workspace, o.audit)
+		if o.productReleaseRoutes != nil {
+			o.productReleaseRoutes(ar, o.audit)
+		}
 		mountOpsChat(ar, o.opsChat, svc)
 
 		// 审计 Recorder(Story 1.4):传给既有敏感操作 handler,业务成功后追加审计行。

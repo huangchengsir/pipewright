@@ -22,6 +22,8 @@ import { useToast } from '../../composables/useToast'
 import { useConfirm } from '../../composables/useConfirm'
 import { resetOnboarding, canUseInstanceOnboarding } from '../../composables/useOnboarding'
 import { useSessionStore } from '../../stores/session'
+import { PROJECT_MODES } from '../../api/projectMode'
+import { useProjectModeStore } from '../../stores/projectMode'
 import {usePermissionStore} from '../../stores/permissions'
 import { HttpError } from '../../api/http'
 import { access } from '../../api/access'
@@ -37,6 +39,13 @@ const toast = useToast()
 const confirm = useConfirm()
 const router = useRouter()
 const sessionStore = useSessionStore()
+const projectMode = useProjectModeStore()
+const projectModeDraft = ref(projectMode.mode)
+watch(
+  [() => projectMode.mode, () => projectMode.loaded],
+  ([mode]) => { projectModeDraft.value = mode },
+  { flush: 'sync' },
+)
 const platformPermissions=usePermissionStore()
 const platformIdentityKey=computed(()=>JSON.stringify([sessionStore.user,sessionStore.isNetworkError,platformPermissions.activeTeam]))
 
@@ -241,6 +250,62 @@ onMounted(loadSessions)
           <div class="acct-identity__role">{{ multiTenant ? (sessionStore.user?.instanceAdmin ? t('access.instanceAdmin') : t('access.employee')) : t('settingsAccount.roleAdmin') }}</div>
         </div>
       </div>
+    </section>
+
+    <section v-if="projectMode.available" class="acct-card" aria-labelledby="acct-preferences-h">
+      <header class="acct-card__h">
+        <h2 id="acct-preferences-h" class="acct-card__title">{{ t('settingsAccount.preferencesTitle') }}</h2>
+      </header>
+      <form class="acct-form" aria-labelledby="acct-preferences-h" @submit.prevent="projectMode.save(projectModeDraft)">
+        <fieldset class="project-mode-options" :disabled="!projectMode.loaded || projectMode.saveStatus === 'saving'">
+          <legend>{{ t('settingsAccount.projectMode.title') }}</legend>
+          <label
+            v-for="mode in PROJECT_MODES" :for="'acct-project-mode-choice-' + mode"
+            :key="mode"
+            class="project-mode-choice"
+            :class="{ 'project-mode-choice--selected': projectModeDraft === mode }"
+          >
+            <input
+              v-model="projectModeDraft" :id="'acct-project-mode-choice-' + mode"
+              type="radio"
+              name="projectMode"
+              :value="mode"
+              :aria-labelledby="'acct-project-mode-' + mode"
+              :aria-describedby="'acct-project-mode-desc-' + mode"
+            />
+            <span>
+              <strong :id="'acct-project-mode-' + mode">{{ t('settingsAccount.projectMode.' + mode) }}</strong>
+              <span :id="'acct-project-mode-desc-' + mode">{{ t('settingsAccount.projectMode.' + mode + 'Description') }}</span>
+            </span>
+          </label>
+        </fieldset>
+
+        <p v-if="projectMode.loadStatus === 'failed'" class="acct-sessions__error" role="alert">
+          {{ t('settingsAccount.projectMode.loadFailed') }}
+          <button type="button" class="acct-link" @click="projectMode.reload()">{{ t('settingsAccount.retry') }}</button>
+        </p>
+        <p v-else-if="projectMode.saveStatus === 'failed'" class="acct-sessions__error" role="alert">
+          {{ t('settingsAccount.projectMode.saveFailed') }}
+        </p>
+
+        <div class="acct-form__actions project-mode-actions">
+          <span class="project-mode-status" role="status">
+            <template v-if="projectMode.loading">{{ t('settingsAccount.projectMode.loading') }}</template>
+            <template v-else-if="projectMode.saveStatus === 'saved' && projectModeDraft === projectMode.mode">
+              {{ t('settingsAccount.projectMode.saved') }}
+            </template>
+          </span>
+          <AppButton
+            class="project-mode-save"
+            variant="primary"
+            type="submit"
+            :loading="projectMode.saveStatus === 'saving'"
+            :disabled="!projectMode.loaded || projectModeDraft === projectMode.mode"
+          >
+            {{ t('settingsAccount.projectMode.save') }}
+          </AppButton>
+        </div>
+      </form>
     </section>
 
     <SettingsPlatformLogin v-if="!mustChange && sessionStore.user && !sessionStore.isNetworkError" :key="platformIdentityKey" :current-source="sessions.find(s => s.current)?.source" @changed="loadSessions" />
@@ -476,6 +541,68 @@ onMounted(loadSessions)
 .field-input--error:focus {
   border-color: var(--color-red);
   box-shadow: 0 0 0 3px var(--color-red-soft);
+}
+
+.project-mode-options {
+  display: grid;
+  gap: 8px;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.project-mode-options legend {
+  margin-block-end: 8px;
+  padding: 0;
+  font-weight: 600;
+}
+.project-mode-choice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  min-block-size: 44px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--rounded);
+  background: var(--color-inset);
+  cursor: pointer;
+}
+.project-mode-choice--selected,
+.project-mode-choice:focus-within {
+  border-color: var(--color-primary);
+}
+.project-mode-choice input {
+  flex: none;
+  margin: 0;
+  accent-color: var(--color-primary);
+}
+.project-mode-options:disabled .project-mode-choice {
+  cursor: default;
+}
+.project-mode-choice strong,
+.project-mode-choice span span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.project-mode-choice span span,
+.project-mode-status {
+  color: var(--color-dim);
+  font-size: var(--settings-text-size);
+}
+:global([data-theme='dark'] .project-mode-save) {
+  color: var(--color-bg);
+}
+.project-mode-actions {
+  align-items: center;
+  flex-wrap: wrap;
+}
+.project-mode-status {
+  flex: 1;
+}
+@media (max-width: 600px), (pointer: coarse) {
+  .project-mode-save {
+    min-block-size: 44px;
+  }
 }
 
 /* sessions */

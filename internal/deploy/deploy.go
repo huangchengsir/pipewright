@@ -377,6 +377,9 @@ func (s *service) DeployForStage(ctx context.Context, runID string, serverIDs []
 	if len(serverIDs) == 0 {
 		return nil, ErrNoServers
 	}
+	if run.IsProductReleaseExecution(ctx) && (cfg["artifactType"] != "image" || NormalizeStrategy(strategy) != StrategyRolling || LocalDockerEnabled(cfg) || strings.TrimSpace(cfg["restartCommand"]) != "" || strings.TrimSpace(cfg["runArgs"]) != "") {
+		return nil, ErrNotDispatched
+	}
 	// 「命令型」部署(artifactType=command):不取构建产物,直接在目标机执行 cfg["restartCommand"]。
 	// 供「配置类」流水线用(如 frp 隧道:就地 upsert frpc.ini + reload)。与产物发布完全隔离——
 	// **真实产物部署(artifactType != command)绝不进此分支**,既有部署/策略/健康检查路径零影响。
@@ -402,6 +405,9 @@ func (s *service) DeployForStage(ctx context.Context, runID string, serverIDs []
 	}
 	if artifact == nil {
 		return nil, ErrArtifactNotFound
+	}
+	if run.IsProductReleaseExecution(ctx) && !pinnedProductArtifact(*artifact, runID) {
+		return nil, ErrNotDispatched
 	}
 
 	servers := make([]*target.Server, 0, len(serverIDs))

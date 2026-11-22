@@ -13,6 +13,12 @@ import (
 // Other graphs retain the existing DAG executor and receive a compatibility notice.
 func WithGitSourceContext() Option { return func(r *Runner) { r.gitSourceContext = true } }
 
+// HasFixedGitSource checks the same strict Git topology as the worker. A batch
+// must never switch to the legacy source path once the plan is confirmed.
+func HasFixedGitSource(stages []pipeline.Stage) bool {
+	return gitSourceCompatibilityReason(stages, pipeline.StageDependencies(stages)) == ""
+}
+
 const gitSourceCompatibilityPrefix = "Git context compatibility mode: "
 
 // Eligibility uses the expanded stages and the same dependencies as scheduling,

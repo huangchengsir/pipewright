@@ -15,6 +15,7 @@ import (
 // caller-provided team. Legacy owners remain unknown rather than impersonating
 // the administrator performing the upgrade.
 var legacyRoots = []struct{ table, kind string }{
+	{"workspace_business_projects", "business_project"}, {"workspace_products", "product"},
 	{"projects", "project"}, {"credentials", "credential"}, {"servers", "server"},
 	{"pipeline_templates", "template"}, {"variable_groups", "variable_group"}, {"custom_nodes", "custom_node"},
 	{"k8s_connections", "kubernetes"}, {"k8s_credentials", "kubernetes_credential"},

@@ -14,6 +14,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/huangchengsir/pipewright/internal/authz"
 	"github.com/huangchengsir/pipewright/internal/configstate"
 	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"time"
@@ -210,6 +211,12 @@ func (s *service) probe(ctx context.Context, repoURL, credentialID string) (stri
 }
 
 func (s *service) Create(ctx context.Context, in CreateInput) (*Project, error) {
+	return s.CreateWithAssociation(ctx, in, nil)
+}
+
+// CreateWithAssociation performs the repository probe outside the transaction
+// and persists the application and its association together.
+func (s *service) CreateWithAssociation(ctx context.Context, in CreateInput, associate func(context.Context, configstate.DBTX, string) error) (*Project, error) {
 	if err := validateCreate(in); err != nil {
 		return nil, err
 	}
@@ -232,6 +239,8 @@ func (s *service) Create(ctx context.Context, in CreateInput) (*Project, error) 
 
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
+	var associated *Project
+	var associationErr error
 
 	err = configstate.WithWriteTxContext(ctx, s.db, func(txctx context.Context, q configstate.DBTX) error {
 		if err := tenancy.LockAuthorization(txctx, s.db); err != nil {
@@ -254,9 +263,22 @@ func (s *service) Create(ctx context.Context, in CreateInput) (*Project, error) 
 		if err := tenancy.RecordOwnership(txctx, s.db, "project", id, id); err != nil {
 			return err
 		}
-		return configstate.EnsureProject(txctx, q, s.db, id)
+		if err := configstate.EnsureProject(txctx, q, s.db, id); err != nil {
+			return err
+		}
+		if associate != nil {
+			if associationErr = associate(txctx, q, id); associationErr != nil {
+				return associationErr
+			}
+			associated, associationErr = s.Get(txctx, id)
+			return associationErr
+		}
+		return nil
 	})
 	if err != nil {
+		if associationErr != nil {
+			return nil, associationErr
+		}
 		// 外键失败(凭据在校验后被删等竞态)归为凭据不存在;其余为内部错误。
 		if isForeignKeyErr(err) {
 			return nil, ErrCredentialNotFound
@@ -264,6 +286,9 @@ func (s *service) Create(ctx context.Context, in CreateInput) (*Project, error) 
 		return nil, fmt.Errorf("project: insert: %w", err)
 	}
 
+	if associated != nil {
+		return associated, nil
+	}
 	return s.Get(ctx, id)
 }
 
@@ -298,10 +323,31 @@ func (s *service) ListPaged(ctx context.Context, page, pageSize int) (*ListResul
 	})
 	return result, err
 }
+
+// ListFiltered applies a server-generated storage predicate after application
+// authorization and before counting or paging.
+func (s *service) ListFiltered(ctx context.Context, page, pageSize int, filter authz.Predicate) (*ListResult, error) {
+	var result *ListResult
+	err := configstate.WithReadTxContext(ctx, s.db, func(txctx context.Context, _ configstate.DBTX) error {
+		var err error
+		result, err = s.listFiltered(txctx, page, pageSize, filter)
+		return err
+	})
+	return result, err
+}
+
 func (s *service) listPaged(ctx context.Context, page, pageSize int) (*ListResult, error) {
+	return s.listFiltered(ctx, page, pageSize, authz.Predicate{})
+}
+
+func (s *service) listFiltered(ctx context.Context, page, pageSize int, filter authz.Predicate) (*ListResult, error) {
 	predicate, err := tenancy.QueryPredicate(ctx, s.db, "project.read", "p.id")
 	if err != nil {
 		return nil, err
+	}
+	if filter.SQL != "" {
+		predicate.SQL = "(" + predicate.SQL + ") AND (" + filter.SQL + ")"
+		predicate.Args = append(predicate.Args, filter.Args...)
 	}
 	page, pageSize = normalizePage(page, pageSize)
 
@@ -527,6 +573,9 @@ func (s *service) Delete(ctx context.Context, id string) error {
 			return err
 		}
 		if _, err := q.ExecContext(txctx, `DELETE FROM access_environments WHERE project_id=?`, id); err != nil {
+			return err
+		}
+		if _, err := q.ExecContext(txctx, `DELETE FROM workspace_applications WHERE application_id=?`, id); err != nil {
 			return err
 		}
 		r, err := q.ExecContext(txctx, `DELETE FROM projects WHERE id=?`, id)

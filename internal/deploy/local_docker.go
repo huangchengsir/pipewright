@@ -198,7 +198,8 @@ func (s *service) validateLocalDockerRuntime(a run.Artifact, cfg map[string]stri
 }
 
 const localDockerCWD = `cd "$1" && shift && exec "$@"`
-const localDockerImageProjection = `{"id":{{json .Id}},"os":{{json .Os}},"architecture":{{json .Architecture}},"variant":{{with index . "Variant"}}{{json .}}{{else}}""{{end}}}`
+const dockerImageIdentityFields = `"id":{{json .Id}},"os":{{json .Os}},"architecture":{{json .Architecture}},"variant":{{with index . "Variant"}}{{json .}}{{else}}""{{end}}`
+const localDockerImageProjection = `{` + dockerImageIdentityFields + `}`
 const localDockerContainerProjection = `{"containerId":{{json .Id}},"configId":{{json .Image}},"createdAt":{{json .Created}},"startedAt":{{json .State.StartedAt}}}`
 
 type localDockerPinnedExecutor interface {

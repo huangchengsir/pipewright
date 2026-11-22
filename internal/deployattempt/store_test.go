@@ -30,6 +30,30 @@ func targetInput() TargetInput {
 	return TargetInput{ArtifactID: "a", ArtifactName: "app", ServerID: "s", ServerName: "server", ContainerName: "app", ConnectionFingerprint: strings.Repeat("f", 64), ExpectedImage: ExpectedImage{Reference: "reg.invalid/app@sha256:" + strings.Repeat("a", 64), Repository: "reg.invalid/app", Digest: "sha256:" + strings.Repeat("a", 64), DigestKind: DigestRepositoryUnknown}}
 }
 
+func TestReceiptUsesPersistedCheckoutUnderDeploymentScope(t *testing.T) {
+	st := storetest.Open(t)
+	s := seedLedger(t, st)
+	ctx := t.Context()
+	sha := strings.Repeat("a", 40)
+	if _, err := st.DB.ExecContext(ctx, `UPDATE pipeline_runs SET resolved_commit_sha=? WHERE id=?`, sha, "r"); err != nil {
+		t.Fatal(err)
+	}
+	a, err := s.Begin(ctx, BeginInput{RunID: "r", StageID: "deploy", Initiator: "stage"})
+	if err != nil || a.Source.ResolvedFullSHA != sha {
+		t.Fatal("verified checkout missing from deployment receipt", a, err)
+	}
+	if _, err = s.Begin(ctx, BeginInput{RunID: "r", ResolvedFullSHA: strings.Repeat("b", 40)}); !errors.Is(err, ErrInvalid) {
+		t.Fatal("receipt accepted checkout different from the run", err)
+	}
+	if _, err = st.DB.ExecContext(ctx, `UPDATE pipeline_runs SET resolved_commit_conflict=1 WHERE id=?`, "r"); err != nil {
+		t.Fatal(err)
+	}
+	a, err = s.Begin(ctx, BeginInput{RunID: "r", ResolvedFullSHA: sha})
+	if err != nil || a.Source.ResolvedFullSHA != "" {
+		t.Fatal("conflicting checkout was recorded as verified", a, err)
+	}
+}
+
 func TestReceiptHistoryAndRuntimeDigestTypes(t *testing.T) {
 	storetest.ForEachDialect(t, func(t *testing.T, st *store.Store) {
 		s := seedLedger(t, st)

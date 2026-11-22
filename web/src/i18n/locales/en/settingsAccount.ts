@@ -1,4 +1,18 @@
 export default {
+  preferencesTitle: 'Usage preferences',
+  projectMode: {
+    title: 'Project display mode',
+    single: 'Single project',
+    singleDescription: 'Use the existing project cards, search, and actions.',
+    multi: 'Multiple projects',
+    multiDescription: 'Organize applications by business project and product.',
+    loading: 'Loading project display mode…',
+    loadFailed: 'Could not load the project display mode.',
+    saveFailed: 'Could not save the project display mode. The saved mode remains active.',
+    saved: 'Project display mode saved.',
+    save: 'Save',
+  },
+
   identityTitle: 'Identity',
   identitySub: 'View your current account identity and sign-in details.',
   roleAdmin: 'Administrator',

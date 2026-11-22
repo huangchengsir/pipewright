@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onBeforeUnmount, onMounted, watch, watchEffect } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { createWorkspaceApplication, listWorkspaceApplications, type WorkspaceApplication, type WorkspaceCardScope } from '../api/workspace'
 import { useI18n } from 'vue-i18n'
 import {
   listProjects,
@@ -32,6 +33,17 @@ import { selectCreatedOnboardingProject } from '../composables/useOnboarding'
 // ─── i18n ─────────────────────────────────────────────────────────────────────
 
 const { t } = useI18n()
+const props = defineProps<{
+  workspace?: WorkspaceCardScope
+  workspaceCanCreate?: boolean
+  workspaceAssignmentPermissions?: (application: WorkspaceApplication) => PermissionQuery[]
+}>()
+const emit = defineEmits<{
+  (event: 'open-application', application: WorkspaceApplication): void
+  (event: 'open-product', id: string): void
+  (event: 'assign-application', application: WorkspaceApplication): void
+  (event: 'workspace-changed'): void
+}>()
 
 // Map the Chinese-keyed project RunStatus to the shared `runStatus.*` i18n keys.
 const RUN_STATUS_KEY: Record<RunStatus, string> = {
@@ -87,6 +99,14 @@ type LoadState = 'idle' | 'loading' | 'error'
 const loadState = ref<LoadState>('idle')
 const loadError = ref('')
 const projects = ref<Project[]>([])
+const workspaceItems = ref<Record<string, WorkspaceApplication>>({})
+const page = ref(1)
+const total = ref(0)
+const pageSize = 24
+const pageCount = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
+const searchBox = ref<HTMLInputElement>()
+let requestGeneration = 0
+let searchTimer: ReturnType<typeof setTimeout> | undefined
 
 // ─── search + filter ─────────────────────────────────────────────────────────
 
@@ -105,6 +125,7 @@ const STATUS_OPTIONS = computed<Array<{ value: RunStatus | 'all'; label: string 
 
 const filteredProjects = computed(() => {
   let list = projects.value
+  if (props.workspace) return list
   const q = searchQuery.value.trim().toLowerCase()
   if (q) {
     list = list.filter(
@@ -143,14 +164,29 @@ async function loadCredentials(): Promise<void> {
 // ─── data loading ──────────────────────────────────────────────────────────────
 
 async function loadProjects(): Promise<void> {
+  const generation = ++requestGeneration
   loadState.value = 'loading'
   loadError.value = ''
   try {
-    projects.value = await scope.run(()=>listProjects(scope.requestOptions))
+    if (props.workspace) {
+      const selection = props.workspace
+      const result = await scope.run(() => listWorkspaceApplications(selection, page.value, pageSize, searchQuery.value.trim(), statusFilter.value, scope.requestOptions))
+      if (generation !== requestGeneration || !scope.active()) return
+      total.value = result.total
+      if (page.value > pageCount.value) {
+        page.value = pageCount.value
+        await loadProjects()
+        return
+      }
+      workspaceItems.value = Object.fromEntries(result.items.map(item => [item.id, item]))
+      projects.value = result.items
+    } else {
+      projects.value = await scope.run(()=>listProjects(scope.requestOptions))
+    }
     loadState.value = 'idle'
     consumeOnboardingQuery()
   } catch (err) {
-    if(!scope.active())return
+    if(!scope.active() || generation !== requestGeneration)return
     if (err instanceof HttpError) {
       if (err.status === 0) {
         loadError.value = t('projects.errLoadNetwork')
@@ -162,6 +198,39 @@ async function loadProjects(): Promise<void> {
     }
     loadState.value = 'error'
   }
+}
+
+watch([searchQuery, statusFilter], () => {
+  if (!props.workspace) return
+  page.value = 1
+  ++requestGeneration
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => void loadProjects(), 150)
+})
+onBeforeUnmount(() => clearTimeout(searchTimer))
+function changeWorkspacePage(next: number): void {
+  if (next < 1 || next > pageCount.value) return
+  page.value = next
+  clearTimeout(searchTimer)
+  void loadProjects()
+}
+function clearWorkspaceSearch(): void {
+  searchQuery.value = ''
+  searchBox.value?.focus()
+}
+function ownerName(id: string): string {
+  const item = workspaceItems.value[id]
+  return item?.productId && item.businessProjectId && can('product.read', item.productId) && can('business_project.read', item.businessProjectId)
+    ? props.workspace?.productNames[item.productId] ?? ''
+    : ''
+}
+function visibleStatus(project: Project): RunStatus | null {
+  const runId = workspaceItems.value[project.id]?.latestRun?.runId
+  return !props.workspace || (runId && can('run.read', runId)) ? project.lastRunStatus : null
+}
+function visibleDeployment(id: string): WorkspaceApplication['productionDeployment'] {
+  const deployment = workspaceItems.value[id]?.productionDeployment
+  return deployment && can('run.read', deployment.runId) ? deployment : undefined
 }
 
 onMounted(async () => {
@@ -399,9 +468,18 @@ async function handleCreateSubmit(): Promise<void> {
   }
 
   try {
-    const created = await scope.run(()=>createProject(input,scope.requestOptions))
+    const productId = props.workspace?.kind === 'product' ? props.workspace.id : undefined
+    if (props.workspace && !props.workspaceCanCreate) return
+    const created = await scope.run(() => productId
+      ? createWorkspaceApplication(productId, input, scope.requestOptions)
+      : createProject(input, scope.requestOptions))
     if(!can("project.create","",true)||!can("credential.use",input.credentialId))return
-    projects.value = [created, ...projects.value]
+    if (props.workspace) {
+      await loadProjects()
+      emit('workspace-changed')
+    } else {
+      projects.value = [created, ...projects.value]
+    }
     selectCreatedOnboardingProject(created.id)
     createModalOpen.value = false
   } catch (err) {
@@ -491,7 +569,8 @@ async function handleRenameSubmit(): Promise<void> {
     const id=renamingProject.value.id
     const updated=await scope.run(()=>updateProject(id,input,revision,scope.requestOptions))
     if(!can("project.edit",id)||renamingProject.value?.id!==id)return
-    projects.value = projects.value.map((p) => (p.id === updated.id ? updated : p))
+    if (props.workspace) await loadProjects()
+    else projects.value = projects.value.map((p) => (p.id === updated.id ? updated : p))
     renameModalOpen.value = false
     renamingProject.value = null
   } catch (err) {
@@ -543,7 +622,12 @@ async function confirmDelete(): Promise<void> {
     const revision = configRevisionOf(deletingProject.value)
     await scope.run(()=>deleteProject(id,revision,scope.requestOptions))
     if(!can("project.delete",id)||deletingProject.value?.id!==id)return
-    projects.value = projects.value.filter((p) => p.id !== id)
+    if (props.workspace) {
+      await loadProjects()
+      emit('workspace-changed')
+    } else {
+      projects.value = projects.value.filter((p) => p.id !== id)
+    }
     deleteModalOpen.value = false
     deletingProject.value = null
   } catch (err) {
@@ -792,12 +876,24 @@ watch(()=>[createPermission.allowed.value,credentialCreatePermission.allowed.val
 })
 const visibleCount=computed(()=>projects.value.filter(p=>can('project.read',p.id)).length)
 const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('project.read',p.id)).length)
+watchEffect(onCleanup => {
+  if (!props.workspace) return
+  const retained: Array<() => void> = []
+  for (const item of Object.values(workspaceItems.value)) {
+    if (item.latestRun) retained.push(permissions.retain(team, query('run.read', item.latestRun.runId)))
+    if (item.productionDeployment) retained.push(permissions.retain(team, query('run.read', item.productionDeployment.runId)))
+    if (item.productId) retained.push(permissions.retain(team, query('product.read', item.productId)))
+    if (item.businessProjectId) retained.push(permissions.retain(team, query('business_project.read', item.businessProjectId)))
+  }
+  onCleanup(() => retained.forEach(release => release()))
+})
+defineExpose({ openCreateModal, openTriggerModal, loadProjects })
 </script>
 
 <template>
   <div class="projects-root">
     <!-- ─── Page header ─────────────────────────────────────────────────── -->
-    <header class="page-header">
+    <header v-if="!workspace" class="page-header">
       <div class="page-header-text">
         <h1 class="page-title">{{ t('projects.title') }}</h1>
         <p class="page-sub">{{ t('projects.subtitle') }}</p>
@@ -829,7 +925,7 @@ const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('pr
 
     <!-- ─── Search + Filter toolbar ─────────────────────────────────────── -->
     <div
-      v-if="loadState === 'idle' && projects.length > 0"
+      v-if="workspace || (loadState === 'idle' && projects.length > 0)"
       class="toolbar"
       role="search"
       :aria-label="t('projects.searchFilterAria')"
@@ -840,12 +936,15 @@ const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('pr
           <circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/>
         </svg>
         <input
+          ref="searchBox"
           v-model="searchQuery"
           type="search"
           class="search-input"
           :placeholder="t('projects.searchPlaceholder')"
           :aria-label="t('projects.searchAria')"
+          :aria-describedby="workspace && (searchQuery || statusFilter !== 'all') ? 'workspace-search-scope' : undefined"
         />
+        <button v-if="workspace && searchQuery" type="button" class="workspace-clear-search" :aria-label="t('workspace.clearSearch')" @click="clearWorkspaceSearch">×</button>
       </div>
 
       <!-- Status filter -->
@@ -862,6 +961,10 @@ const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('pr
         </button>
       </div>
     </div>
+
+    <p v-if="workspace && (searchQuery || statusFilter !== 'all')" id="workspace-search-scope" class="result-count">
+      {{ t('workspace.scope', { scope: workspace.label }) }}
+    </p>
 
     <!-- ─── Loading skeleton ─────────────────────────────────────────────── -->
     <template v-if="loadState === 'loading'">
@@ -881,7 +984,7 @@ const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('pr
     </template>
 
     <!-- ─── Empty state ──────────────────────────────────────────────────── -->
-    <template v-else-if="loadState === 'idle' && projects.length === 0">
+    <template v-else-if="loadState === 'idle' && projects.length === 0 && (!workspace || (!searchQuery && statusFilter === 'all'))">
       <div class="empty-state" role="status">
         <div class="empty-icon" aria-hidden="true">
           <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
@@ -891,7 +994,7 @@ const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('pr
         </div>
         <p class="empty-label">{{ t('projects.emptyTitle') }}</p>
         <p class="empty-hint">{{ t('projects.emptyHint') }}</p>
-        <PermissionGate :query="query('project.create','',true)"><button class="btn-primary" @click="openCreateModal">
+        <PermissionGate v-if="!workspace || workspaceCanCreate" :query="query('project.create','',true)"><button class="btn-primary" @click="openCreateModal">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
             <path d="M12 5v14M5 12h14"/>
           </svg>
@@ -920,8 +1023,8 @@ const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('pr
     <!-- ─── Project grid ─────────────────────────────────────────────────── -->
     <template v-else-if="loadState === 'idle'">
       <p class="result-count" aria-live="polite">
-        {{ t('projects.resultCount', { n: filteredVisibleCount }) }}
-        <template v-if="searchQuery || statusFilter !== 'all'">
+        {{ t('projects.resultCount', { n: workspace ? total : filteredVisibleCount }) }}
+        <template v-if="!workspace && (searchQuery || statusFilter !== 'all')">
           {{ t('projects.resultCountTotal', { total: visibleCount }) }}
         </template>
       </p>
@@ -936,26 +1039,29 @@ const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('pr
                 <path d="M10 14a5 5 0 1 1-7 4.6"/>
               </svg>
             </div>
-            <h2 class="project-name" :title="project.name">{{ project.name }}</h2>
+            <h2 v-if="workspace" class="project-name workspace-app-name">
+              <button class="workspace-card-link" type="button" :title="project.name" @click="emit('open-application', workspaceItems[project.id])">{{ project.name }}</button>
+            </h2>
+            <h2 v-else class="project-name" :title="project.name">{{ project.name }}</h2>
 
             <!-- Status badge: only if we have a run status -->
             <div
-              v-if="project.lastRunStatus"
+              v-if="visibleStatus(project)"
               class="status-pill"
               :style="{
-                background: STATUS_CONFIG[project.lastRunStatus].bg,
-                border: `1px solid ${STATUS_CONFIG[project.lastRunStatus].border}`,
-                color: STATUS_CONFIG[project.lastRunStatus].text,
+                background: STATUS_CONFIG[visibleStatus(project)!].bg,
+                border: `1px solid ${STATUS_CONFIG[visibleStatus(project)!].border}`,
+                color: STATUS_CONFIG[visibleStatus(project)!].text,
               }"
-              :aria-label="t('projects.runStatusAria', { status: runStatusLabel(project.lastRunStatus) })"
+              :aria-label="t('projects.runStatusAria', { status: runStatusLabel(visibleStatus(project)!) })"
             >
               <span
                 class="status-dot"
-                :class="{ 'status-dot--pulse': STATUS_CONFIG[project.lastRunStatus].pulse }"
-                :style="{ background: STATUS_CONFIG[project.lastRunStatus].dot }"
+                :class="{ 'status-dot--pulse': STATUS_CONFIG[visibleStatus(project)!].pulse }"
+                :style="{ background: STATUS_CONFIG[visibleStatus(project)!].dot }"
                 aria-hidden="true"
               />
-              {{ runStatusLabel(project.lastRunStatus) }}
+              {{ runStatusLabel(visibleStatus(project)!) }}
             </div>
           </div>
 
@@ -990,14 +1096,14 @@ const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('pr
           <div class="card-meta-row">
             <span class="meta-label">{{ t('projects.lastRun') }}</span>
             <span
-              v-if="!project.lastRunStatus"
+              v-if="!visibleStatus(project)"
               class="meta-empty"
             >{{ t('projects.noRun') }}</span>
             <span
               v-else
               class="meta-value"
-              :style="{ color: STATUS_CONFIG[project.lastRunStatus].text }"
-            >{{ runStatusLabel(project.lastRunStatus) }}</span>
+              :style="{ color: STATUS_CONFIG[visibleStatus(project)!].text }"
+            >{{ runStatusLabel(visibleStatus(project)!) }}</span>
           </div>
 
           <!-- Target servers: empty placeholder or list -->
@@ -1020,6 +1126,21 @@ const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('pr
             </span>
           </div>
 
+          <template v-if="workspace">
+            <div v-if="workspace.kind === 'all' || workspace.kind === 'business'" class="card-meta-row">
+              <span class="meta-label">{{ t('workspace.owner') }}</span>
+              <button v-if="ownerName(project.id)" type="button" class="workspace-card-link" :title="ownerName(project.id)" @click="emit('open-product', workspaceItems[project.id].productId!)">{{ ownerName(project.id) }}</button>
+              <span v-else class="meta-empty">{{ t('workspace.unassigned') }}</span>
+            </div>
+            <div class="card-meta-row">
+              <span class="meta-label">{{ t('workspace.deployment') }}</span>
+              <span v-if="visibleDeployment(project.id)" class="meta-value mono" :title="visibleDeployment(project.id)?.commit">
+                {{ visibleDeployment(project.id)?.commit.slice(0, 12) || visibleDeployment(project.id)?.environment }}
+              </span>
+              <span v-else class="meta-empty">{{ t('workspace.undeployed') }}</span>
+            </div>
+          </template>
+
           <!-- Card footer: updatedAt + actions -->
           <div class="card-footer">
             <span class="card-time" :title="project.updatedAt">
@@ -1027,6 +1148,14 @@ const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('pr
             </span>
 
             <div class="card-actions">
+              <PermissionGate
+                v-if="workspace && workspaceAssignmentPermissions && workspaceItems[project.id]"
+                :query="workspaceAssignmentPermissions(workspaceItems[project.id])"
+              >
+                <button type="button" class="action-btn" :title="t('workspace.assign')" :aria-label="t('workspace.assign')" @click="emit('assign-application', workspaceItems[project.id])">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7h7l2 2h9v11H3z"/></svg>
+                </button>
+              </PermissionGate>
               <!-- Manual trigger / Run -->
               <PermissionGate :query="query('run.start',project.id,true)"><button
                 class="action-btn action-btn--run"
@@ -1096,6 +1225,11 @@ const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('pr
         </li></PermissionGate>
       </ul>
     </template>
+    <nav v-if="workspace && pageCount > 1" class="workspace-pagination" :aria-label="t('workspace.page', { page })">
+      <button type="button" class="btn-secondary" :disabled="page <= 1 || loadState === 'loading'" @click="changeWorkspacePage(page - 1)">{{ t('workspace.previous') }}</button>
+      <span>{{ t('workspace.page', { page }) }}</span>
+      <button type="button" class="btn-secondary" :disabled="page >= pageCount || loadState === 'loading'" @click="changeWorkspacePage(page + 1)">{{ t('workspace.next') }}</button>
+    </nav>
   </div>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
@@ -1274,7 +1408,7 @@ const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('pr
             </svg>
           </div>
           <div>
-            <h3 class="modal-title">{{ t('projects.newProject') }}</h3>
+            <h3 class="modal-title">{{ t(workspace ? 'workspace.newApplication' : 'projects.newProject') }}</h3>
             <p class="modal-sub">{{ t('projects.createSub') }}</p>
           </div>
           <button
@@ -1737,6 +1871,27 @@ const filteredVisibleCount=computed(()=>filteredProjects.value.filter(p=>can('pr
 </template>
 
 <style scoped>
+.workspace-app-name { min-width: 0; }
+.workspace-card-link {
+  color: var(--color-primary);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  border: 0;
+  background: none;
+  padding: 0;
+  text-align: start;
+  cursor: pointer;
+  display: block;
+  max-width: 100%;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.workspace-card-link:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
+.workspace-clear-search { margin-inline-start: auto; border: 0; background: transparent; color: var(--color-dim); cursor: pointer; min-width: 34px; min-height: 34px; }
+.workspace-pagination { display: flex; justify-content: flex-end; align-items: center; gap: 10px; }
 /* ─── root layout ──────────────────────────────────────────────────────────── */
 .projects-root {
   display: flex;

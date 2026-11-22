@@ -22,6 +22,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/vault"
 	"maps"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -60,6 +61,10 @@ type preparedRunAccess struct {
 
 func triggerIdentity(t run.Trigger) string { data, _ := json.Marshal(t); return string(data) }
 func (c *runAccessCompiler) Prepare(ctx context.Context, projectID string, trigger run.Trigger) (*run.PreparedExecution, error) {
+	return c.prepare(ctx, projectID, trigger, false)
+}
+
+func (c *runAccessCompiler) prepare(ctx context.Context, projectID string, trigger run.Trigger, storedOnly bool) (*run.PreparedExecution, error) {
 	if c.db == nil || c.projects == nil || c.pipelines == nil || c.settings == nil || c.source == nil || c.recovery == nil {
 		return nil, tenancy.ErrForbidden
 	}
@@ -147,7 +152,17 @@ func (c *runAccessCompiler) Prepare(ctx context.Context, projectID string, trigg
 	if err != nil {
 		return nil, err
 	}
-	source, sourceErr := c.source.PipelineSnapshot(preparation, proj.RepoURL, auth.Username, auth.Token, trigger.Branch)
+	var source httpapi.PipelineSourceSnapshot
+	var sourceErr error
+	if storedOnly {
+		if proj.PacEnabled || c.pacGlobal {
+			release()
+			return nil, tenancy.ErrConflict
+		}
+		source.CommitSHA, sourceErr = c.source.PipelineBranchCommit(preparation, proj.RepoURL, auth.Username, auth.Token, trigger.Branch)
+	} else {
+		source, sourceErr = c.source.PipelineSnapshot(preparation, proj.RepoURL, auth.Username, auth.Token, trigger.Branch)
+	}
 	release()
 	auth.Username = ""
 	auth.Token = ""
@@ -231,6 +246,12 @@ func (c *runAccessCompiler) Verify(ctx context.Context, runID string) error {
 	if err := tenancy.CheckRunBoundary(ctx, c.db, runID); err != nil {
 		return err
 	}
+	return c.VerifyPrepared(ctx, runID)
+}
+
+// VerifyPrepared rechecks saved execution input revisions for a legacy
+// single-administrator product run, and also supplements multi-tenant grants.
+func (c *runAccessCompiler) VerifyPrepared(ctx context.Context, runID string) error {
 	snapshot, err := c.recovery.FrozenSnapshotForRelease(ctx, runID)
 	if err != nil {
 		return err
@@ -238,6 +259,32 @@ func (c *runAccessCompiler) Verify(ctx context.Context, runID string) error {
 	// IDs alone do not freeze an execution target: host/user/credential changes
 	// after approval must never redirect an already-approved command.
 	for key, expected := range snapshot.RunnerRefs {
+		if strings.HasPrefix(key, "product-target/") {
+			t, ok := c.targets.(interface {
+				Capture(context.Context, string) (target.ConnectionSnapshot, error)
+			})
+			if !ok {
+				return tenancy.ErrForbidden
+			}
+			server, err := t.Capture(ctx, strings.TrimPrefix(key, "product-target/"))
+			if err != nil || server.Fingerprint() != expected {
+				return tenancy.ErrConflict
+			}
+			continue
+		}
+		if strings.HasPrefix(key, "product-epoch/") {
+			name := strings.TrimPrefix(key, "product-epoch/")
+			switch name {
+			case configstate.EpochPolicy, configstate.EpochSecrets, configstate.EpochExecutor:
+			default:
+				return tenancy.ErrConflict
+			}
+			current, e := configstate.ReadEpoch(ctx, configstate.Queryer(ctx, c.db), name)
+			if e != nil || strconv.FormatInt(current, 10) != expected {
+				return tenancy.ErrConflict
+			}
+			continue
+		}
 		if strings.HasPrefix(key, "preview/") {
 			version, e := previewenv.ExecutionVersion(ctx, c.db, strings.TrimPrefix(key, "preview/"))
 			if e != nil {
@@ -391,14 +438,20 @@ func (c *runAccessCompiler) planPermissions(ctx context.Context, proj *project.P
 		}
 	}
 	if deploy {
-		var env string
 		if trigger.ResolvedEnvironment == "" {
 			return nil, tenancy.ErrInvalidInput
 		}
-		if err = configstate.Queryer(ctx, c.db).QueryRowContext(ctx, `SELECT id FROM access_environments WHERE project_id=? AND name=?`, proj.ID, trigger.ResolvedEnvironment).Scan(&env); err != nil {
-			return nil, tenancy.ErrForbidden
+		enabled, e := tenancy.Enabled(ctx, c.db)
+		if e != nil {
+			return nil, e
 		}
-		add("deployment.execute", env, env)
+		var env string
+		if enabled {
+			if err = configstate.Queryer(ctx, c.db).QueryRowContext(ctx, `SELECT id FROM access_environments WHERE project_id=? AND name=?`, proj.ID, trigger.ResolvedEnvironment).Scan(&env); err != nil {
+				return nil, tenancy.ErrForbidden
+			}
+			add("deployment.execute", env, env)
+		}
 		for _, stage := range snap.Spec.Stages {
 			for _, job := range stage.Jobs {
 				if job.Type == pipeline.KubernetesJobType {

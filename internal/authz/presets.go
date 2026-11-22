@@ -24,10 +24,10 @@ type Role struct {
 // additionally requires an explicitly marked test environment and a binding that
 // names that exact environment; no production access is inherited.
 func Presets(tenantID string) []Role {
-	read := []string{"project.read", "environment.read", "run.read", "guard.read", "dashboard.read", "template.read", "variable_group.read", "custom_node.read", "dora.read"}
+	read := []string{"project.read", "business_project.read", "product.read", "environment.read", "run.read", "guard.read", "dashboard.read", "template.read", "variable_group.read", "custom_node.read", "dora.read"}
 	release := append(append([]string{}, read...), "run.start", "run.retry", "run.cancel", "deployment.execute", "release.promote", "guard.observe", "guard.stop", "guard.investigate")
-	maintain := append(append([]string{}, release...), "project.edit", "pipeline.read", "pipeline.edit", "template.create", "variable_group.create", "variable_group.edit", "custom_node.create", "custom_node.edit", "artifact.download", "guard.analyze")
-	admin := append(append([]string{}, maintain...), "project.create", "project.delete", "guard.delete", "template.delete", "variable_group.delete", "custom_node.delete", "server.inspect", "container.inspect", "credential.metadata", "member.read", "member.manage", "role.read", "role.manage", "audit.read", "preview.read", "certificate.read", "anomaly.read", "notification.read")
+	maintain := append(append([]string{}, release...), "project.edit", "product.manage", "pipeline.read", "pipeline.edit", "template.create", "variable_group.create", "variable_group.edit", "custom_node.create", "custom_node.edit", "artifact.download", "guard.analyze")
+	admin := append(append([]string{}, maintain...), "project.create", "business_project.create", "business_project.manage", "product.create", "project.delete", "guard.delete", "template.delete", "variable_group.delete", "custom_node.delete", "server.inspect", "container.inspect", "credential.metadata", "member.read", "member.manage", "role.read", "role.manage", "audit.read", "preview.read", "certificate.read", "anomaly.read", "notification.read")
 	specs := []struct {
 		key  string
 		ids  []string

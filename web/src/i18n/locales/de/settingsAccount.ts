@@ -1,4 +1,18 @@
 export default {
+  preferencesTitle: 'Nutzungseinstellungen',
+  projectMode: {
+    title: 'Projektansicht',
+    single: 'Einzelprojekt',
+    singleDescription: 'Vorhandene Projektkarten, Suche und Projektaktionen verwenden.',
+    multi: 'Mehrere Projekte',
+    multiDescription: 'Anwendungen nach Geschäftsprojekt und Produkt gruppieren.',
+    loading: 'Projektansicht wird geladen…',
+    loadFailed: 'Die Projektansicht konnte nicht geladen werden.',
+    saveFailed: 'Die Projektansicht konnte nicht gespeichert werden. Die gespeicherte Ansicht bleibt aktiv.',
+    saved: 'Projektansicht gespeichert.',
+    save: 'Speichern',
+  },
+
   identityTitle: 'Identität',
   identitySub: 'Aktuelle Kontodaten und Anmeldeinformationen anzeigen.',
   roleAdmin: 'Administrator',

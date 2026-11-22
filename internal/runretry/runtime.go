@@ -100,6 +100,14 @@ func (s *Service) Prepare(ctx context.Context, runID string) (context.Context, e
 		if known > 0 {
 			return ctx, ErrUnavailable
 		}
+		// A confirmed product release must never fall through to a provider
+		// that loads current (rather than confirmed) inputs.
+		if err := s.q(ctx).QueryRowContext(ctx, `SELECT COUNT(*) FROM mcp_run_requests WHERE run_id=? AND scope LIKE 'product-release:%'`, runID).Scan(&known); err != nil {
+			return ctx, err
+		}
+		if known > 0 {
+			return ctx, ErrUnavailable
+		}
 	}
 	if errors.Is(e, ErrUnavailable) && s.provider != nil {
 		snap, err := s.provider(ctx, runID)

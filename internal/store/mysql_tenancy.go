@@ -72,3 +72,26 @@ func (s *Store) mysqlPipelineHistoryForeignKey(sqlText string) (string, error) {
 	}
 	return strings.Replace(sqlText, declaration, "\n project_id "+definition+",", 1), nil
 }
+
+// Workspace applications reference the unchanged projects ID, whose collation
+// can differ from the default in effect when the workspace tables are added.
+func (s *Store) mysqlWorkspaceForeignKey(sqlText string) (string, error) {
+	var dataType, charset, collation string
+	var length int
+	err := s.DB.QueryRow(`SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, CHARACTER_SET_NAME, COLLATION_NAME
+	 FROM information_schema.COLUMNS
+	 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='projects' AND COLUMN_NAME='id'`).
+		Scan(&dataType, &length, &charset, &collation)
+	if err != nil {
+		return "", err
+	}
+	definition, err := mysqlLegacyIDDefinition(dataType, length, charset, collation)
+	if err != nil {
+		return "", err
+	}
+	const declaration = "\n    application_id VARCHAR(64) NOT NULL,"
+	if strings.Count(sqlText, declaration) != 1 {
+		return "", fmt.Errorf("unexpected workspace application ID declaration")
+	}
+	return strings.Replace(sqlText, declaration, "\n    application_id "+definition+",", 1), nil
+}

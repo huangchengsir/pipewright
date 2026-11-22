@@ -25,11 +25,13 @@ import (
 
 // imageState 是一台机的 image 蓝绿中间态(stageImageOne 产出,activateImageOne 消费)。
 type imageState struct {
-	name      string   // 容器名(cfg["containerName"] 优先,否则 sanitizeName(产物名))
-	ref       string   // 本次新镜像 ref(repo:tag / image id)
-	prevImage string   // 切换前容器所用镜像(回滚目标;"" = 无上一容器,首次部署)
-	runArgs   []string // docker run 的附加参数(端口映射 / env 等;由 cfg 解析,参数自由)
-	receipt   *imageReceipt
+	name              string   // 容器名(cfg["containerName"] 优先,否则 sanitizeName(产物名))
+	ref               string   // 本次新镜像 ref(repo:tag / image id)
+	prevImage         string   // 切换前容器所用镜像(回滚目标;"" = 无上一容器,首次部署)
+	runArgs           []string // docker run 的附加参数(端口映射 / env 等;由 cfg 解析,参数自由)
+	receipt           *imageReceipt
+	productImage      *productImageIdentity
+	productPreviousID string
 }
 
 var deploymentImageDigest = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -145,7 +147,15 @@ func (s *service) stageImageOne(ctx context.Context, srv *target.Server, a run.A
 	execCtx := ctx
 
 	// 探测当前同名容器所用镜像(供回滚);无容器 / 读失败 → 空(首次部署,无可回滚)。
-	st.prevImage = s.readContainerImage(execCtx, srv.ID, st.name)
+	if run.IsProductReleaseExecution(ctx) {
+		var previous productContainerIdentity
+		if s.productInspect(execCtx, srv.ID, []string{"docker", "container", "inspect", "--format", productContainerProjection, st.name}, &previous) &&
+			deployattempt.ValidContainerID(previous.ID) && deploymentImageDigest.MatchString(previous.Image) {
+			st.productPreviousID, st.prevImage = previous.ID, previous.Image
+		}
+	} else {
+		st.prevImage = s.readContainerImage(execCtx, srv.ID, st.name)
+	}
 	if st.receipt != nil {
 		st.receipt.previous = cleanPreviousImage(st.prevImage)
 	}
@@ -154,6 +164,14 @@ func (s *service) stageImageOne(ctx context.Context, srv *target.Server, a run.A
 	if failMsg, ok := s.runStep(execCtx, srv.ID, [][]string{{"docker", "pull", st.ref}}); !ok {
 		s.imageEvent(ctx, st, deployattempt.DeployFailed, "not_run", "pull_failed")
 		return st, failMsg, false
+	}
+	if run.IsProductReleaseExecution(ctx) {
+		image, ok := s.inspectProductImage(ctx, srv.ID, st.ref)
+		if !ok || st.receipt == nil {
+			s.imageEvent(ctx, st, deployattempt.DeployFailed, "not_run", "pinned_product_image_unavailable")
+			return st, "无法核对本次推送的镜像，未切换容器", false
+		}
+		st.productImage = &image
 	}
 	return st, "", true
 }
@@ -192,10 +210,17 @@ func (s *service) activateImageOne(ctx context.Context, srv *target.Server, a ru
 	}
 
 	// 切换:移除同名旧容器(幂等)→ 后台起新镜像容器(带 cfg 解析的端口 / run 参数)。
-	swap := [][]string{
-		{"docker", "rm", "-f", st.name},
-		dockerRunCmd(st.name, st.runArgs, st.ref),
+	start := dockerRunCmd(st.name, st.runArgs, st.ref)
+	swap := [][]string{{"docker", "rm", "-f", st.name}}
+	if st.productImage != nil {
+		start = productPinnedStart(start)
+		swap = nil
+		if st.productPreviousID != "" {
+			swap = append(swap, []string{"docker", "rm", "-f", st.productPreviousID})
+		}
 	}
+	swap = append(swap, start)
+	missingIdentity := ""
 	for i, cmd := range swap {
 		out, err := s.exec(execCtx, srv.ID, cmd)
 		if err != nil || out != nil && out.ExitCode != 0 {
@@ -208,16 +233,20 @@ func (s *service) activateImageOne(ctx context.Context, srv *target.Server, a ru
 			}
 			return s.rollbackImage(execCtx, srv, res, st, msg)
 		}
-		if i == 1 && st.receipt != nil {
+		if i == len(swap)-1 && st.receipt != nil {
 			id := ""
 			if out != nil {
 				id = strings.TrimSpace(out.Stdout)
 			}
 			if deployattempt.ValidContainerID(id) {
 				st.receipt.actual.ContainerID = id
-				if s.imageEvent(ctx, st, deployattempt.Activated, "not_run", "") {
+				if st.productImage != nil && !s.verifyProductContainer(ctx, srv.ID, id, st) {
+					missingIdentity = "product_container_unverified"
+				} else if s.imageEvent(ctx, st, deployattempt.Activated, "not_run", "") {
 					s.afterImage(ctx, st)
 				}
+			} else if st.productImage != nil {
+				missingIdentity = "container_id_unavailable"
 			} else {
 				st.receipt.unknown = true
 				s.imageEvent(ctx, st, deployattempt.OutcomeUnknown, "not_run", "container_id_unavailable")
@@ -230,6 +259,9 @@ func (s *service) activateImageOne(ctx context.Context, srv *target.Server, a ru
 		if herr := s.runHealthCheck(execCtx, srv.ID, hc); herr != nil {
 			if st.receipt != nil {
 				st.receipt.gate = "failed"
+			}
+			if missingIdentity != "" {
+				s.imageEvent(ctx, st, deployattempt.OutcomeUnknown, "failed", missingIdentity)
 			}
 			return s.rollbackImage(execCtx, srv, res, st, herr.Error())
 		}
@@ -250,7 +282,13 @@ func (s *service) activateImageOne(ctx context.Context, srv *target.Server, a ru
 	if hc.enabled() {
 		gate = "passed"
 	}
-	s.imageEvent(ctx, st, deployattempt.Succeeded, gate, "")
+	if missingIdentity != "" {
+		s.imageEvent(ctx, st, deployattempt.OutcomeUnknown, gate, missingIdentity)
+		return finishFailed(res, "容器已启动，未取得匹配镜像的回执")
+	}
+	if !s.imageEvent(ctx, st, deployattempt.Succeeded, gate, "") && st.productImage != nil {
+		return finishFailed(res, "容器已启动，部署回执未持久化")
+	}
 	return res
 }
 
@@ -271,10 +309,20 @@ func (s *service) rollbackImage(ctx context.Context, srv *target.Server, res Tar
 		s.imageEvent(ctx, st, deployattempt.DeployFailed, gate, "rollback_unavailable")
 		return res
 	}
+	removeID := st.name
+	restart := dockerRunCmd(st.name, st.runArgs, st.prevImage)
+	if st.productImage != nil {
+		if st.receipt == nil || !deployattempt.ValidContainerID(st.receipt.actual.ContainerID) || !deploymentImageDigest.MatchString(st.prevImage) {
+			s.imageEvent(ctx, st, deployattempt.OutcomeUnknown, gate, "rollback_identity_unavailable")
+			return finishFailed(res, "缺少可核对的容器或上一镜像身份")
+		}
+		removeID = st.receipt.actual.ContainerID
+		restart = productPinnedStart(restart)
+	}
 	var rbErr error
 	for i, cmd := range [][]string{
-		{"docker", "rm", "-f", st.name},
-		dockerRunCmd(st.name, st.runArgs, st.prevImage),
+		{"docker", "rm", "-f", removeID},
+		restart,
 	} {
 		out, e := s.execChecked(ctx, srv.ID, cmd)
 		if e != nil {

@@ -25,6 +25,9 @@ func WithRetryRuntime(runtime RetryRuntime) PoolOption {
 func (s *service) prepareRetryAttempt(ctx context.Context, id string) (context.Context, error) {
 	rr := s.retryRuntime
 	if rr == nil {
+		if IsProductReleaseExecution(ctx) {
+			return ctx, ErrSourceUnavailable
+		}
 		return ctx, nil
 	}
 	retry, err := rr.IsRetry(ctx, id)
@@ -34,6 +37,9 @@ func (s *service) prepareRetryAttempt(ctx context.Context, id string) (context.C
 	captured, err := rr.HasManifest(ctx, id)
 	if err != nil {
 		return ctx, err
+	}
+	if IsProductReleaseExecution(ctx) && !captured {
+		return ctx, ErrSourceUnavailable
 	}
 	prepared, err := rr.Prepare(ctx, id)
 	if err == nil {

@@ -94,6 +94,9 @@ func deepMigration(t *testing.T, source, dest *store.Store) {
 	}
 	insert("credentials", map[string]any{"id": "credential", "name": "凭据😀  ", "type": "git_token", "scope": "", "ciphertext": credentialCipher, "masked_value": "***", "created_at": stamp, "updated_at": stamp, "username": "用户😀  "})
 	insert("projects", map[string]any{"id": "project", "name": "迁移项目😀  ", "repo_url": "https://invalid.example/repo", "default_branch": "main", "credential_id": "credential", "created_at": stamp, "updated_at": stamp})
+	insert("workspace_business_projects", map[string]any{"id": "workspace-business", "name": "迁移工作区😀", "revision": int64(3)})
+	insert("workspace_products", map[string]any{"id": "workspace-product", "business_project_id": "workspace-business", "name": "迁移多仓库产品", "revision": int64(2)})
+	insert("workspace_applications", map[string]any{"application_id": "project", "product_id": "workspace-product", "revision": int64(5)})
 	spec := pipeline.Spec{Stages: []pipeline.Stage{{ID: "build", Name: "构建😀", Kind: "build", Jobs: []pipeline.Job{{ID: "compile", Name: "编译", Type: "script"}, {ID: "package", Name: "打包", Type: "script", Needs: []string{"compile"}}}}}}
 	specJSON, e := json.Marshal(spec)
 	if e != nil {

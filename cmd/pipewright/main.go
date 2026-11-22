@@ -59,6 +59,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/pacloader"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/previewenv"
+	"github.com/huangchengsir/pipewright/internal/productrelease"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/promotion"
 	"github.com/huangchengsir/pipewright/internal/proxy"
@@ -76,6 +77,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/trigger"
 	"github.com/huangchengsir/pipewright/internal/vault"
 	"github.com/huangchengsir/pipewright/internal/version"
+	"github.com/huangchengsir/pipewright/internal/workspace"
 )
 
 func main() {
@@ -869,8 +871,15 @@ func runPlatform() (restart func()) {
 		},
 	})
 	mcpTokens := assembleMCPTokens(st.DB)
+	workspaceSvc := workspace.New(st.DB, projectSvc).WithEnvironments(environmentsSvc)
+	productTargets, targetCaptureAvailable := targetSvc.(target.LimitedExecutor)
+	releaseController := &productReleaseController{
+		db: st.DB, workspace: workspaceSvc, compiler: executionAccess, runs: runSvc, targets: productTargets, attempts: attemptLedger,
+		ready: masterKey != nil && targetCaptureAvailable && pool != nil && retryBindings.real && !onboardingCapabilities.Legacy,
+	}
+	productReleases := productrelease.New(st.DB, releaseController, releaseController)
 	mcpHandler, err := httpapi.NewMCPHandler(mcpTokens, pmcp.Dependencies{
-		Projects: projectSvc, Pipelines: pipelineSvc, Runs: runSvc, Parameters: parameterSvc, Audit: auditRec, Masker: auditMasker, Configs: configDrafts, RegisterSecrets: registerConfigSecrets,
+		Projects: projectSvc, Workspace: workspaceSvc, Pipelines: pipelineSvc, Runs: runSvc, Parameters: parameterSvc, Audit: auditRec, Masker: auditMasker, Configs: configDrafts, RegisterSecrets: registerConfigSecrets,
 	}, httpapi.MCPHTTPOptions{AllowedHosts: strings.Split(os.Getenv("PIPEWRIGHT_MCP_ALLOWED_HOSTS"), ",")})
 	if err != nil {
 		log.Fatalf("configure MCP: %v", err)
@@ -882,7 +891,7 @@ func runPlatform() (restart func()) {
 	go terminalManager.Run(terminalCtx)
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           access.Guard(httpapi.New(webFS, access.authenticator, httpapi.WithTenancyAccounts(access.accounts), httpapi.WithTenancyRepository(access.repository), httpapi.WithDatabaseMigration(migrationRuntime), httpapi.WithSelfUpdate(selfUpdater), httpapi.WithReleaseSources(releaseSources, releaseSourceSettings), httpapi.WithKubernetes(kubernetesSvc, kubernetesController), httpapi.WithKubernetesReleases(kubernetesReleases, kubernetesProcessOwner), httpapi.WithKubernetesRollback((kubernetesRollbackCoordinator{db: st.DB, releases: kubernetesSvc, controller: kubernetesReleases, retries: retrySvc, runs: runSvc, targets: targetSvc, owner: kubernetesProcessOwner}).Start), httpapi.WithOnboarding(onboarding.New(st.DB, onboardingCapabilities)), httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithRunRetry(retrySvc), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), legacyAccountOption, httpapi.WithPlatformLogin(platformLogin), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithTerminalHTTP(terminalManager), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithReleaseGuard(guardSvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc), httpapi.WithOpsChat(opsChatSvc), httpapi.WithMCP(mcpHandler, mcpTokens), httpapi.WithConfigManagement(st.DB, configDrafts, configApplyEnabled))),
+		Handler:           access.Guard(httpapi.New(webFS, access.authenticator, httpapi.WithTenancyAccounts(access.accounts), httpapi.WithTenancyRepository(access.repository), httpapi.WithDatabaseMigration(migrationRuntime), httpapi.WithSelfUpdate(selfUpdater), httpapi.WithReleaseSources(releaseSources, releaseSourceSettings), httpapi.WithKubernetes(kubernetesSvc, kubernetesController), httpapi.WithKubernetesReleases(kubernetesReleases, kubernetesProcessOwner), httpapi.WithKubernetesRollback((kubernetesRollbackCoordinator{db: st.DB, releases: kubernetesSvc, controller: kubernetesReleases, retries: retrySvc, runs: runSvc, targets: targetSvc, owner: kubernetesProcessOwner}).Start), httpapi.WithOnboarding(onboarding.New(st.DB, onboardingCapabilities)), httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithProjectDisplayMode(st.DB), httpapi.WithWorkspace(workspaceSvc), httpapi.WithProductReleases(productReleases), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithRunRetry(retrySvc), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), legacyAccountOption, httpapi.WithPlatformLogin(platformLogin), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithTerminalHTTP(terminalManager), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithReleaseGuard(guardSvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc), httpapi.WithOpsChat(opsChatSvc), httpapi.WithMCP(mcpHandler, mcpTokens), httpapi.WithConfigManagement(st.DB, configDrafts, configApplyEnabled))),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;

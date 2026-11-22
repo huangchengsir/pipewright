@@ -17,6 +17,7 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/huangchengsir/pipewright/internal/configstate"
+	"github.com/huangchengsir/pipewright/internal/productrelease"
 	"github.com/huangchengsir/pipewright/internal/store"
 	"github.com/huangchengsir/pipewright/internal/tenancy"
 	"time"
@@ -211,6 +212,13 @@ func (s *Service) deleteChunk(ctx context.Context, ids []string) (int, error) {
 			}
 			if _, err := configstate.LockProject(txctx, q, s.db, project); err != nil {
 				return err
+			}
+			held, err := productrelease.HoldsRun(txctx, q, id)
+			if err != nil {
+				return err
+			}
+			if held {
+				continue
 			}
 			var holds int
 			err = q.QueryRowContext(txctx, `SELECT

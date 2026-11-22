@@ -21,6 +21,10 @@ func TestPipelineSnapshotBindsSameCloneHEADAndUntruncatedYAML(t *testing.T) {
 			reader := goGitSourceReader{allowInsecure: true}
 			result, err := reader.PipelineSnapshot(context.Background(), repo, "", "", "main")
 			if tc.rejected {
+				commit, storedErr := reader.PipelineBranchCommit(context.Background(), repo, "", "", "main")
+				if storedErr != nil || len(commit) != 40 {
+					t.Fatalf("stored pipeline source checkout rejected irrelevant YAML: %q %v", commit, storedErr)
+				}
 				if !errors.Is(err, ErrPipelineSnapshot) || result.CommitSHA != "" || result.YAML != "" {
 					t.Fatal("unsafe snapshot accepted", err)
 				}

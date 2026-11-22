@@ -19,6 +19,7 @@ type PipelineSourceSnapshot struct {
 }
 type PipelineSnapshotReader interface {
 	PipelineSnapshot(context.Context, string, string, string, string) (PipelineSourceSnapshot, error)
+	PipelineBranchCommit(context.Context, string, string, string, string) (string, error)
 }
 
 func NewPipelineSnapshotReader() PipelineSnapshotReader { return goGitSourceReader{} }
@@ -50,4 +51,11 @@ func (g goGitSourceReader) PipelineSnapshot(ctx context.Context, repoURL, userna
 	result.Found = true
 	result.YAML = string(data)
 	return result, nil
+}
+func (g goGitSourceReader) PipelineBranchCommit(ctx context.Context, repoURL, username, token, branch string) (string, error) {
+	_, commit, err := g.cloneSnapshot(ctx, repoURL, username, token, branch)
+	if err != nil {
+		return "", ErrPipelineSnapshot
+	}
+	return commit, nil
 }

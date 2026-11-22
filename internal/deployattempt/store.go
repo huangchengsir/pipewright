@@ -55,12 +55,28 @@ func (s *Store) Begin(ctx context.Context, in BeginInput) (*Attempt, error) {
 	a.Source = Source{RunID: in.RunID, StageID: in.StageID, Initiator: in.Initiator, ResolvedFullSHA: in.ResolvedFullSHA}
 	// Source project/environment are authoritative local run facts, never values
 	// supplied by a browser or inferred from a server/container name.
-	err := s.db.QueryRowContext(ctx, `SELECT r.project_id,r.resolved_environment,COALESCE(v.revision,0) FROM pipeline_runs r LEFT JOIN project_config_versions v ON v.project_id=r.project_id WHERE r.id=?`, in.RunID).Scan(&a.Source.ProjectID, &a.Source.Environment, &a.Source.ConfigRevision)
+	var checkout string
+	var checkoutConflict bool
+	err := s.db.QueryRowContext(ctx, `SELECT r.project_id,r.resolved_environment,COALESCE(v.revision,0),
+		r.resolved_commit_sha,r.resolved_commit_conflict
+		FROM pipeline_runs r LEFT JOIN project_config_versions v ON v.project_id=r.project_id WHERE r.id=?`, in.RunID).
+		Scan(&a.Source.ProjectID, &a.Source.Environment, &a.Source.ConfigRevision, &checkout, &checkoutConflict)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("deployattempt: source: %w", err)
+	}
+	// The ledger binds the verified checkout without widening the deployment
+	// actor's run metadata projection.
+	switch {
+	case checkoutConflict:
+		a.Source.ResolvedFullSHA = ""
+	case checkout != "":
+		if !fullSHA.MatchString(checkout) || (in.ResolvedFullSHA != "" && in.ResolvedFullSHA != checkout) {
+			return nil, ErrInvalid
+		}
+		a.Source.ResolvedFullSHA = checkout
 	}
 	body, _ := json.Marshal(a.Source)
 	_, err = s.db.ExecContext(ctx, `INSERT INTO deployment_attempts(id,run_id,project_id,created_at,source_json) VALUES(?,?,?,?,?)`, a.ID, a.Source.RunID, a.Source.ProjectID, a.CreatedAt.UnixMilli(), string(body))

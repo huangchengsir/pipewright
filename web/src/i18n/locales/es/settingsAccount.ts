@@ -1,4 +1,18 @@
 export default {
+  preferencesTitle: 'Preferencias de uso',
+  projectMode: {
+    title: 'Vista de proyectos',
+    single: 'Proyecto único',
+    singleDescription: 'Usa las tarjetas, la búsqueda y las acciones de proyecto existentes.',
+    multi: 'Varios proyectos',
+    multiDescription: 'Organiza las aplicaciones por proyecto de negocio y producto.',
+    loading: 'Cargando la vista de proyectos…',
+    loadFailed: 'No se pudo cargar la vista de proyectos.',
+    saveFailed: 'No se pudo guardar la vista de proyectos. La vista guardada sigue activa.',
+    saved: 'Vista de proyectos guardada.',
+    save: 'Guardar',
+  },
+
   identityTitle: 'Identidad',
   identitySub: 'Consulta tu cuenta actual y los datos de inicio de sesión.',
   roleAdmin: 'Administrador',

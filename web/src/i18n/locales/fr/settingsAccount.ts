@@ -1,4 +1,18 @@
 export default {
+  preferencesTitle: 'Préférences d’utilisation',
+  projectMode: {
+    title: 'Mode d’affichage des projets',
+    single: 'Projet unique',
+    singleDescription: 'Utilise les cartes, la recherche et les actions de projet existantes.',
+    multi: 'Plusieurs projets',
+    multiDescription: 'Regroupe les applications par projet métier et par produit.',
+    loading: 'Chargement du mode d’affichage des projets…',
+    loadFailed: 'Impossible de charger le mode d’affichage des projets.',
+    saveFailed: 'Impossible d’enregistrer le mode d’affichage. Le mode enregistré reste actif.',
+    saved: 'Mode d’affichage des projets enregistré.',
+    save: 'Enregistrer',
+  },
+
   identityTitle: 'Identité',
   identitySub: 'Consultez votre compte actuel et vos informations de connexion.',
   roleAdmin: 'Administrateur',

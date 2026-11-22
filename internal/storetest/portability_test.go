@@ -125,7 +125,7 @@ func TestDatabasePortabilityContract(t *testing.T) {
 		if _, err = st.DB.Exec("INSERT INTO projects(id,name,repo_url,credential_id,created_at,updated_at) VALUES(?,?,?,?,?,?)", "orphan", "orphan", "url", "missing", "now", "now"); !store.IsForeignKeyErr(err) {
 			t.Fatalf("foreign key classification: %v", err)
 		}
-		if err = st.DB.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&revision); err != nil || revision != 67 {
+		if err = st.DB.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&revision); err != nil || revision != 71 {
 			t.Fatalf("migrations=%d %v", revision, err)
 		}
 		if st.Dialect == store.PostgreSQL {

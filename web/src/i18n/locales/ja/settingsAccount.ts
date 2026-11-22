@@ -1,4 +1,18 @@
 export default {
+  preferencesTitle: '利用設定',
+  projectMode: {
+    title: 'プロジェクトの表示モード',
+    single: '単一プロジェクト',
+    singleDescription: '既存のプロジェクトカード、検索、操作を使います。',
+    multi: '複数プロジェクト',
+    multiDescription: '業務プロジェクトや製品ごとにアプリケーションを整理します。',
+    loading: 'プロジェクトの表示モードを読み込んでいます…',
+    loadFailed: 'プロジェクトの表示モードを読み込めませんでした。',
+    saveFailed: 'プロジェクトの表示モードを保存できませんでした。保存済みのモードが引き続き適用されます。',
+    saved: 'プロジェクトの表示モードを保存しました。',
+    save: '保存',
+  },
+
   identityTitle: 'アイデンティティ',
   identitySub: '現在のアカウントとログイン情報を確認します。',
   roleAdmin: '管理者',

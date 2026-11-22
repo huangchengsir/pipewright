@@ -10,6 +10,12 @@ export const permissionActions = new Set<string>([
 
   "mcp.approve",
   "mcp.issue",
+  "business_project.read",
+  "business_project.create",
+  "business_project.manage",
+  "product.read",
+  "product.create",
+  "product.manage",
   "project.read",
   "project.create",
   "project.edit",

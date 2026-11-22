@@ -428,6 +428,13 @@ func (p *WorkerPool) execute(runID string) {
 
 	// Verify the persistent principal before reading configuration or secrets.
 	enabled, authErr := tenancy.Enabled(runCtx, p.svc.db)
+	var productRelease int
+	if authErr == nil {
+		authErr = p.svc.db.QueryRowContext(runCtx, `SELECT COUNT(*) FROM mcp_run_requests m WHERE m.scope LIKE 'product-release:%' AND (m.run_id=? OR EXISTS (SELECT 1 FROM run_retry_attempts a WHERE a.run_id=? AND a.root_id=m.run_id))`, runID, runID).Scan(&productRelease)
+		if authErr == nil && productRelease != 0 {
+			runCtx = context.WithValue(runCtx, productReleaseKey{}, true)
+		}
+	}
 	if authErr == nil && !enabled {
 		var managed int
 		authErr = p.svc.db.QueryRowContext(runCtx, `SELECT COUNT(*) FROM access_run_authorizations WHERE run_id=?`, runID).Scan(&managed)
@@ -450,6 +457,18 @@ func (p *WorkerPool) execute(runID string) {
 					authErr = tenancy.CheckRunPermission(runCtx, p.svc.db, admission, runID, "")
 				}
 			}
+		}
+	}
+	if authErr == nil && !enabled && productRelease != 0 {
+		checker, ok := p.svc.executionAuthorizer.(interface {
+			VerifyPrepared(context.Context, string) error
+		})
+		if !ok {
+			authErr = tenancy.ErrForbidden
+		} else {
+			verify := func(ctx context.Context) error { return checker.VerifyPrepared(ctx, runID) }
+			authErr = verify(runCtx)
+			runCtx = tenancy.WithActionBoundary(runCtx, verify)
 		}
 	}
 	if authErr != nil {
@@ -936,4 +955,13 @@ func (d *dbStepSink) publish(ordinal int, status string, started, finished *time
 			FinishedAt: finished,
 		},
 	})
+}
+
+type productReleaseKey struct{}
+
+// IsProductReleaseExecution is set only by the worker from durable server-owned
+// admission identity, never from the browser, MCP, or pipeline parameters.
+func IsProductReleaseExecution(ctx context.Context) bool {
+	on, _ := ctx.Value(productReleaseKey{}).(bool)
+	return on
 }

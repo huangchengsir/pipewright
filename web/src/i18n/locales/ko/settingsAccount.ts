@@ -1,4 +1,18 @@
 export default {
+  preferencesTitle: '사용 환경설정',
+  projectMode: {
+    title: '프로젝트 표시 모드',
+    single: '단일 프로젝트',
+    singleDescription: '기존 프로젝트 카드, 검색, 작업을 사용합니다.',
+    multi: '다중 프로젝트',
+    multiDescription: '업무 프로젝트와 제품별로 애플리케이션을 정리합니다.',
+    loading: '프로젝트 표시 모드를 불러오는 중…',
+    loadFailed: '프로젝트 표시 모드를 불러올 수 없습니다.',
+    saveFailed: '프로젝트 표시 모드를 저장할 수 없습니다. 저장된 모드가 계속 적용됩니다.',
+    saved: '프로젝트 표시 모드를 저장했습니다.',
+    save: '저장',
+  },
+
   identityTitle: '신원',
   identitySub: '현재 계정과 로그인 정보를 확인합니다.',
   roleAdmin: '관리자',

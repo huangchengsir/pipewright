@@ -1,4 +1,18 @@
 export default {
+  preferencesTitle: '使用偏好',
+  projectMode: {
+    title: '專案顯示模式',
+    single: '單一專案',
+    singleDescription: '沿用原有的專案卡片、搜尋和專案操作。',
+    multi: '多專案',
+    multiDescription: '依業務專案、產品和應用程式分組管理。',
+    loading: '正在載入專案顯示模式…',
+    loadFailed: '無法載入專案顯示模式。',
+    saveFailed: '無法儲存專案顯示模式。已儲存的模式仍然有效。',
+    saved: '已儲存專案顯示模式。',
+    save: '儲存',
+  },
+
   identityTitle: '身分',
   identitySub: '檢視目前帳戶身分與登入資訊。',
   roleAdmin: '管理員',

@@ -249,3 +249,7 @@ func TestRunAccessCompilerRejectsChangedTriggerAndConfiguration(t *testing.T) {
 		t.Fatal("changed config", err)
 	}
 }
+func (r *accessSourceReader) PipelineBranchCommit(ctx context.Context, repo, user, token, branch string) (string, error) {
+	source, err := r.PipelineSnapshot(ctx, repo, user, token, branch)
+	return source.CommitSHA, err
+}

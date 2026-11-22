@@ -226,7 +226,20 @@ func AuthorizeManualStart(ctx context.Context, svc Service, projectID string) er
 	return nil
 }
 
+// CreatePrepared is the controller-only admission for a previously sealed
+// product plan. Guard executes under normal project and authorization locks.
+// No HTTP request or workflow configuration can supply the prepared object.
+func CreatePrepared(ctx context.Context, svc Service, projectID string, trigger Trigger, prepared *PreparedExecution, guard func(context.Context) error) (*Run, error) {
+	s, ok := svc.(*service)
+	if !ok || prepared == nil || guard == nil || s.executionAuthorizer == nil || !strings.HasPrefix(trigger.IdempotencyScope, "product-release:") || !validIdempotency(trigger) || configstate.Queryer(ctx, s.db) != s.db {
+		return nil, ErrIdempotencyUnavailable
+	}
+	return s.create(ctx, projectID, trigger, prepared, guard)
+}
 func (s *service) Create(ctx context.Context, projectID string, trigger Trigger) (*Run, error) {
+	return s.create(ctx, projectID, trigger, nil, nil)
+}
+func (s *service) create(ctx context.Context, projectID string, trigger Trigger, prepared *PreparedExecution, guard func(context.Context) error) (*Run, error) {
 	idempotent := trigger.IdempotencyScope != "" || trigger.IdempotencyKey != "" || trigger.IdempotencyFingerprint != ""
 	if idempotent {
 		if !validIdempotency(trigger) {
@@ -269,12 +282,11 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 	var created *Run
 	now := time.Now().UTC()
 	id := uuid.NewString()
-	var prepared *PreparedExecution
 	enabled, err := tenancy.Enabled(ctx, s.db)
 	if err != nil {
 		return nil, err
 	}
-	if enabled {
+	if enabled && prepared == nil {
 		if err = tenancy.CheckRunAdmission(ctx, s.db, projectID, id); err != nil {
 			return nil, err
 		}
@@ -311,7 +323,7 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 		if err != nil {
 			return err
 		}
-		if enabled && s.executionAuthorizer == nil {
+		if enabled && (s.executionAuthorizer == nil || prepared == nil) {
 			return tenancy.ErrForbidden
 		}
 		if err := configstate.LockEpochs(txctx, q, s.db, configstate.EpochPolicy, configstate.EpochSecrets, configstate.EpochExecutor); err != nil {
@@ -337,6 +349,11 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 				if len(trigger.ResolvedTargetServerIDs) == 0 {
 					trigger.ResolvedTargetServerIDs = servers
 				}
+			}
+		}
+		if guard != nil {
+			if err := guard(txctx); err != nil {
+				return err
 			}
 		}
 		targetIDs := trigger.ResolvedTargetServerIDs
@@ -370,13 +387,17 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 			if err = tenancy.RecordOwnership(txctx, s.db, "run", id, projectID); err != nil {
 				return err
 			}
+		}
+		if prepared != nil {
 			digest, permissions, planErr := s.executionAuthorizer.Approve(txctx, id, projectID, trigger, prepared)
 			if planErr != nil {
 				return planErr
 			}
-			permissions = append(permissions, tenancy.ExecutionPermission{Action: "run.start", ResourceID: id})
-			if err = tenancy.ApproveRun(txctx, s.db, id, projectID, digest, permissions); err != nil {
-				return err
+			if enabled {
+				permissions = append(permissions, tenancy.ExecutionPermission{Action: "run.start", ResourceID: id})
+				if err = tenancy.ApproveRun(txctx, s.db, id, projectID, digest, permissions); err != nil {
+					return err
+				}
 			}
 		}
 		_, err = configstate.AcquireActivityTx(txctx, q, s.db, configstate.Activity{ID: id, ProjectID: projectID, RunID: id, OwnerEpoch: s.activityOwner, Kind: "run", Phase: "queued"})

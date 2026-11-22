@@ -58,6 +58,7 @@ type AuditWriter interface {
 type VerifyFunc func(context.Context) (*auth.MCPToken, error)
 
 type Dependencies struct {
+	Workspace       WorkspaceReader
 	BindToken       func(context.Context, *auth.MCPToken) (context.Context, error)
 	Configs         *configdraft.Service
 	Projects        ProjectReader
@@ -364,6 +365,9 @@ func NewServer(d Dependencies, verify VerifyFunc, requestContexts ...context.Con
 	if d.Configs != nil {
 		addConfigTools(s, d.Configs, verify)
 	}
+	if d.Workspace != nil {
+		addWorkspaceTools(s, d, verify)
+	}
 	return s
 }
 
@@ -391,7 +395,7 @@ func addTool[In any](s *sdk.Server, name string, readonly bool, input map[string
 			return toolError(auth.ErrMCPTokenInvalid), nil
 		}
 		var in In
-		if isConfigTool(name) && (len(req.Params.Arguments) > 16*1024 || !utf8.Valid(req.Params.Arguments) || !uniqueJSONKeys(req.Params.Arguments)) {
+		if (isConfigTool(name) || name == "workspace_application_get") && (len(req.Params.Arguments) > 16*1024 || !utf8.Valid(req.Params.Arguments) || !uniqueJSONKeys(req.Params.Arguments)) {
 			return toolError(ErrInvalidArgument), nil
 		}
 		if !bytes.HasPrefix(bytes.TrimSpace(req.Params.Arguments), []byte("{")) {
@@ -436,12 +440,13 @@ func addTool[In any](s *sdk.Server, name string, readonly bool, input map[string
 }
 
 var toolDescriptions = map[string]string{
-	"projects_list":    "List only projects authorized by this access token. Use the returned project ID for subsequent calls.",
-	"pipeline_get":     "Read the stored pipeline's stage/job summary and approval gates, without scripts or secrets. Pipeline-as-code projects may execute repository configuration instead.",
-	"pipeline_trigger": "Run an authorized project's existing pipeline, which may deploy. Supply a stable requestId for this intended run; repeat the same ID after a lost response, never a fresh ID. Human approvals remain required.",
-	"run_get":          "Read a known authorized run's current status and steps. Building successfully is not proof that deployment succeeded; inspect deployments_get as well.",
-	"run_wait":         "Wait up to waitSeconds for a terminal state or human approval. A timeout/cancel stops only this wait, not the run. Continue with the same runId.",
-	"deployments_get":  "Read per-server deployment records for a run, including partial failure and rollback. Artifact versions are candidates, not verified current versions; liveVerified is false.",
+	"workspace_application_get": "Read the organization assignment of one application already authorized by this token. projectId retains its existing pipeline/application identity. This tool does not list directories, count other applications, change assignments or release products.",
+	"projects_list":             "List only projects authorized by this access token. Use the returned project ID for subsequent calls.",
+	"pipeline_get":              "Read the stored pipeline's stage/job summary and approval gates, without scripts or secrets. Pipeline-as-code projects may execute repository configuration instead.",
+	"pipeline_trigger":          "Run an authorized project's existing pipeline, which may deploy. Supply a stable requestId for this intended run; repeat the same ID after a lost response, never a fresh ID. Human approvals remain required.",
+	"run_get":                   "Read a known authorized run's current status and steps. Building successfully is not proof that deployment succeeded; inspect deployments_get as well.",
+	"run_wait":                  "Wait up to waitSeconds for a terminal state or human approval. A timeout/cancel stops only this wait, not the run. Continue with the same runId.",
+	"deployments_get":           "Read per-server deployment records for a run, including partial failure and rollback. Artifact versions are candidates, not verified current versions; liveVerified is false.",
 }
 
 func toolError(err error) *sdk.CallToolResult {

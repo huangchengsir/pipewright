@@ -264,6 +264,10 @@ func (r *Runner) Run(ctx context.Context, rn *run.Run, sink run.StepSink) error 
 		ctx, sourceCompatibility = prepareGitSource(ctx, rn, stages, deps, recovering)
 	}
 
+	if run.IsProductReleaseExecution(ctx) && (!recovering || !r.gitSourceContext || sourceCompatibility != "") {
+		return run.ErrSourceUnavailable
+	}
+
 	order := graph.TopoOrder()
 	stageByID := make(map[string]pipeline.Stage, len(stages))
 	for _, st := range stages {

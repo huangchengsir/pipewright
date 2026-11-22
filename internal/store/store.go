@@ -350,6 +350,14 @@ func (s *Store) applyMigration(version, sqlText string) error {
 		}
 	}
 
+	if s.Dialect == MySQL && version == "0069_workspace_hierarchy" {
+		var err error
+		sqlText, err = s.mysqlWorkspaceForeignKey(sqlText)
+		if err != nil {
+			return fmt.Errorf("prepare migration %s: %w", version, err)
+		}
+	}
+
 	if s.Dialect == MySQL || s.Dialect == DM {
 		statements := splitStatements(sqlText)
 		if s.Dialect == DM {

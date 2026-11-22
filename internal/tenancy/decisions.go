@@ -59,7 +59,7 @@ func (r *Repository) Decisions(ctx context.Context, actor Actor, team string, qu
 				// Only actual creation contracts can use synthetic resources. Editing an
 				// existing object cannot bypass its ownership lookup by toggling create.
 				switch input.Action {
-				case "template.create", "variable_group.create", "custom_node.create", "project.create", "server.create", "credential.create", "kubernetes.create", "kubernetes_credential.create", "role.manage", "member.manage":
+				case "template.create", "variable_group.create", "custom_node.create", "project.create", "business_project.create", "product.create", "server.create", "credential.create", "kubernetes.create", "kubernetes_credential.create", "role.manage", "member.manage":
 				default:
 					continue
 				}
